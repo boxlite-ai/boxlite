@@ -1373,6 +1373,36 @@ impl VolumeFlags {
                 }
 
                 crate::volumespec::MountOrigin::Anonymous => {
+                    // `-v /data` is still a host bind of a directory the CLI
+                    // makes here, *not* a managed volume, even though the two
+                    // now share `{home}/volumes/`. The runtime's volume store
+                    // never learns about it, and everything that store owns is
+                    // therefore missing from it:
+                    //
+                    // - no id, name or sidecar, so `volume ls`, `get` and `rm`
+                    //   cannot see it or reach it (`is_valid_volume_dir` wants
+                    //   a `_data/` payload this directory does not have); the
+                    //   only way to reclaim one is `rm -rf` on the path;
+                    // - `remove_volume`'s holder scan matches on
+                    //   `managed_volume`, which is `None` here, so this mount
+                    //   never protects anything and nothing tracks it;
+                    // - `resolve_managed_volumes` skips it for the same
+                    //   reason, so a clone or a same-machine import keeps this
+                    //   very path and shares the source box's directory, while
+                    //   an import on another machine fails at boot with
+                    //   "Volume host path does not exist";
+                    // - a REST runtime refuses it as a host bind
+                    //   (`BoxOptions::sanitize_remote`), since what reaches it
+                    //   is a path on the caller's disk;
+                    // - `:ro` is accepted, unlike `-v my-data:/data:ro`,
+                    //   precisely because this is an ordinary bind.
+                    //
+                    // Because the directory sits under `{home}/volumes/`,
+                    // `LocalVolumeStore::list` warns about it on every scan.
+                    // Making `-v /data` mint a real volume is what closes all
+                    // of this at once; until then the divergence is deliberate,
+                    // not an oversight.
+                    //
                     // Random id for the directory name (same approach as Podman:
                     // cryptographically random to avoid collisions under any load).
                     let unique = ulid::Ulid::new().to_string();

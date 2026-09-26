@@ -648,42 +648,94 @@ impl BoxOptions {
             port.validate_publishable()?;
         }
 
-        for volume in &self.volumes {
-            volume.validate()?;
-        }
-
         Ok(())
     }
 
     /// Validate a persisted box without requiring ingestion sources to remain.
+    ///
+    /// Mounts are judged in their resolved shape (`validate_in_persisted`): a
+    /// managed mount that has been through `resolve_managed_volumes` carries
+    /// both its reference and its payload path, which the request rule in
+    /// [`Self::sanitize`] would refuse as two origins. Runs at boot
+    /// (`BoxBuilder::new`) and on the options an archive carries.
     pub(crate) fn sanitize_persisted(&self) -> BoxliteResult<()> {
         self.sanitize_common()?;
+
+        for volume in &self.volumes {
+            volume.validate_in_persisted()?;
+        }
 
         if let Some(kernel) = &self.advanced.kernel {
             kernel.sanitize_persisted()?;
         }
+
         Ok(())
     }
 
-    pub fn sanitize(&mut self) -> BoxliteResult<()> {
+    /// Validate the options an archive carries: the third stance, after the
+    /// request and the persisted one. Mounts are judged in their resolved
+    /// shape, since export writes the box's config and `provision_box`
+    /// re-resolves the references against this runtime's store. A custom
+    /// kernel is judged as a *source* the way create judges it, because an
+    /// archive bundles neither the kernel file nor the box's staged copy, so
+    /// the imported box has to stage it again at its first boot; a kernel this
+    /// host cannot stage is refused here rather than at that boot. Derives the
+    /// fsize limit like `sanitize`, so an archive's own value never survives.
+    pub(crate) fn sanitize_import(&mut self) -> BoxliteResult<()> {
         self.sanitize_common()?;
+
+        for volume in &self.volumes {
+            volume.validate_in_persisted()?;
+        }
 
         if let Some(kernel) = &self.advanced.kernel {
             kernel.sanitize()?;
         }
 
-        // The jailed shim is the sole writer of this box's qcow2 disks, so its
-        // per-file RLIMIT_FSIZE caps their growth: a write past it fails with
-        // `EFBIG` and takes the guest down. `SecurityOptions::default()` cannot
-        // pick that number — it runs for a box that does not exist yet and
-        // cannot see `disk_size_gb` — which is how a fixed 1 GiB ceiling ended
-        // up contradicting every larger disk (#1152). Derive it here, next to
-        // the size it comes from.
-        //
-        // `FSIZE_DISK_MULTIPLIER` is deliberately loose: this is a
-        // runaway-write backstop, not a capacity policy. Capacity is the qcow2
-        // virtual size, where a guest that fills its disk gets a clean `ENOSPC`
-        // inside the box rather than a host-side `SIGXFSZ` that kills the VM.
+        self.rederive_fsize_limit()?;
+
+        Ok(())
+    }
+
+    /// Validate a create request and derive the settings that follow from it.
+    ///
+    /// Mounts are judged as requested (`validate_in_request`): exactly one
+    /// origin. Not for persisted options, which carry the resolved shape —
+    /// see [`Self::sanitize_persisted`].
+    pub fn sanitize(&mut self) -> BoxliteResult<()> {
+        self.sanitize_common()?;
+
+        for volume in &self.volumes {
+            volume.validate_in_request()?;
+        }
+
+        if let Some(kernel) = &self.advanced.kernel {
+            kernel.sanitize()?;
+        }
+
+        self.rederive_fsize_limit()?;
+
+        Ok(())
+    }
+
+    /// Derive the shim's `RLIMIT_FSIZE` from `disk_size_gb`.
+    ///
+    /// The jailed shim is the sole writer of this box's qcow2 disks, so its
+    /// per-file RLIMIT_FSIZE caps their growth: a write past it fails with
+    /// `EFBIG` and takes the guest down. `SecurityOptions::default()` cannot
+    /// pick that number — it runs for a box that does not exist yet and
+    /// cannot see `disk_size_gb` — which is how a fixed 1 GiB ceiling ended
+    /// up contradicting every larger disk (#1152). Derive it here, next to
+    /// the size it comes from.
+    ///
+    /// `FSIZE_DISK_MULTIPLIER` is deliberately loose: this is a
+    /// runaway-write backstop, not a capacity policy. Capacity is the qcow2
+    /// virtual size, where a guest that fills its disk gets a clean `ENOSPC`
+    /// inside the box rather than a host-side `SIGXFSZ` that kills the VM.
+    ///
+    /// Assigns outright, so running it twice is idempotent; import calls it
+    /// again after resetting an upload's security settings to the defaults.
+    pub(crate) fn rederive_fsize_limit(&mut self) -> BoxliteResult<()> {
         self.advanced.security.resource_limits.max_file_size = Some(
             Bytes::from_gib(
                 self.disk_size_gb
@@ -727,13 +779,17 @@ pub struct VolumeSpec {
     /// Managed volume to mount, addressed by its server-assigned id **or** by
     /// its name — the server resolves either.
     ///
-    /// Managed volumes need a REST runtime, since the local runtime has no
-    /// volume backend to resolve a reference against.
+    /// A local runtime resolves it against its own volume store when the box
+    /// is created; a REST runtime forwards it to the server as-is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_volume: Option<String>,
 
-    /// Host directory or file to bind into the box. Empty when
-    /// `managed_volume` is set.
+    /// Host directory or file to bind into the box.
+    ///
+    /// In a request this is empty whenever `managed_volume` is set: the caller
+    /// names a volume, not a path. Once a local runtime has created the box it
+    /// holds the volume's payload directory, so a persisted managed mount
+    /// carries both fields — that is the resolved shape, not two origins.
     #[serde(default)]
     pub host_path: String,
 
@@ -765,11 +821,14 @@ impl VolumeSpec {
         }
     }
 
-    /// Reject a mount that names no origin, both origins, or an empty one.
+    /// Judge a mount as requested: exactly one origin — a managed volume or a
+    /// host path. Both origins, or an empty reference, are refused.
     ///
     /// FFI callers (C/Go) and hand-built literals can reach either invalid
     /// shape, so this runs at create rather than only in the constructors.
-    pub fn validate(&self) -> BoxliteResult<()> {
+    /// Persisted mounts are judged by [`Self::validate_in_persisted`] instead:
+    /// after resolution a managed mount legitimately carries both fields.
+    pub fn validate_in_request(&self) -> BoxliteResult<()> {
         let guest_path = &self.guest_path;
         match &self.managed_volume {
             Some(volume) if !self.host_path.is_empty() => Err(
@@ -793,6 +852,24 @@ impl VolumeSpec {
             ),
             None => Ok(()),
         }
+    }
+
+    /// Judge a mount as the runtime persisted it: the one thing boot needs is
+    /// the host path it will share, so that must be present, and a reference
+    /// beside it is the resolved shape rather than a conflict. A reference
+    /// with no path is a mount that skipped resolution and cannot boot.
+    ///
+    /// Archives and clones carry this shape, which is why import validates
+    /// with this rule and not the request one.
+    pub fn validate_in_persisted(&self) -> BoxliteResult<()> {
+        let managed_volume = &self.managed_volume;
+        let guest_path = &self.guest_path;
+        if self.host_path.is_empty() {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                format!("volume mount {managed_volume:?} to {guest_path:?} needs a host_path"),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -1914,6 +1991,51 @@ mod tests {
         };
         let err = empty_reference.sanitize().unwrap_err().to_string();
         assert!(err.contains("empty managed_volume"), "{err}");
+    }
+
+    /// `sanitize` judges a request, where a mount names one origin and the
+    /// runtime fills in the rest. `sanitize_persisted` judges what the runtime
+    /// wrote: every mount has the path boot will share, a managed mount keeps
+    /// the id it holds, and a reference without a path never made it through
+    /// resolution.
+    #[test]
+    fn sanitize_persisted_accepts_resolved_mounts_and_requires_their_path() {
+        let resolved = |volumes: Vec<VolumeSpec>| BoxOptions {
+            volumes,
+            ..Default::default()
+        };
+
+        resolved(vec![VolumeSpec::bind_mount("/tmp/data", "/data")])
+            .sanitize_persisted()
+            .expect("a host bind persists as it was requested");
+        resolved(vec![VolumeSpec {
+            host_path: "/home/u/.boxlite/volumes/AbCdEfGhIjKl/_data".into(),
+            ..VolumeSpec::managed_volume("AbCdEfGhIjKl", "/data")
+        }])
+        .sanitize_persisted()
+        .expect("a resolved managed mount carries its id and its path");
+
+        let unresolved_managed = resolved(vec![VolumeSpec::managed_volume("my-data", "/data")])
+            .sanitize_persisted()
+            .expect_err("a reference without a path cannot be booted");
+        assert!(
+            unresolved_managed.to_string().contains("my-data"),
+            "{unresolved_managed}"
+        );
+        resolved(vec![VolumeSpec {
+            guest_path: "/data".into(),
+            ..Default::default()
+        }])
+        .sanitize_persisted()
+        .expect_err("a mount with no origin at all is still invalid");
+
+        // The request-side rule is unchanged: a request may not name two origins.
+        let mut request = resolved(vec![VolumeSpec {
+            host_path: "/tmp/data".into(),
+            ..VolumeSpec::managed_volume("my-data", "/data")
+        }]);
+        let err = request.sanitize().unwrap_err().to_string();
+        assert!(err.contains("exactly one"), "{err}");
     }
 
     /// A box persisted before `managed_volume` existed carries only

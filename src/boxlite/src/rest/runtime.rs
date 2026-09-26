@@ -170,7 +170,7 @@ impl BoxOptions {
         // leak, not a diagnostic.
 
         for volume in &self.volumes {
-            volume.validate()?;
+            volume.validate_in_request()?;
         }
 
         if self

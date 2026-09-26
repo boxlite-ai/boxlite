@@ -333,10 +333,14 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
     // User volumes. Directories are shared directly, so grant the VMM access.
     // Single files are staged under shared_dir (granted above), so they need no
     // grant here — this also keeps the file's host siblings out of the sandbox.
-    // A managed volume names no host path, so there is nothing to grant; the
-    // local runtime rejects one before boot anyway (`resolve_user_volumes`).
+    // A managed mount the runtime has resolved carries its payload directory
+    // in `host_path` and is granted like any other directory share —
+    // `{home}/volumes/` is not otherwise reachable. The reference it keeps
+    // beside the path is bookkeeping, not a reason to skip it. Only a mount
+    // with no path yet has nothing to grant; boot refuses that one in
+    // `resolve_user_volumes`.
     for vol in volumes {
-        if vol.managed_volume.is_some() {
+        if vol.host_path.is_empty() && vol.managed_volume.is_some() {
             continue;
         }
         let p = PathBuf::from(&vol.host_path);
@@ -1050,6 +1054,50 @@ mod tests {
 
         let rw_vol = vol_paths.iter().find(|p| p.path == vol_rw).unwrap();
         assert!(rw_vol.writable, "RW volume should be writable");
+    }
+
+    /// A managed mount the runtime has resolved is a directory the VMM must
+    /// be allowed to share, exactly like a host bind: `{home}/volumes/` is
+    /// not otherwise granted. The reference it keeps is bookkeeping, not a
+    /// reason to skip it; only a reference with no path yet is skipped, and
+    /// boot refuses that one anyway.
+    #[test]
+    fn test_build_path_access_grants_a_resolved_managed_volume() {
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+        let payload = dir
+            .path()
+            .join("volumes")
+            .join("AbCdEfGhIjKl")
+            .join("_data");
+        std::fs::create_dir_all(&payload).unwrap();
+
+        let volumes = vec![
+            VolumeSpec {
+                managed_volume: Some("AbCdEfGhIjKl".to_string()),
+                host_path: payload.to_string_lossy().to_string(),
+                guest_path: "/data".to_string(),
+                read_only: false,
+            },
+            VolumeSpec {
+                managed_volume: Some("unresolved".to_string()),
+                host_path: String::new(),
+                guest_path: "/late".to_string(),
+                read_only: false,
+            },
+        ];
+
+        let paths = build_path_access(&layout, &volumes);
+
+        let granted = paths
+            .iter()
+            .find(|p| p.path == payload)
+            .expect("the resolved payload directory must be granted to the VMM");
+        assert!(granted.writable, "a read-write mount is granted writable");
+        assert!(
+            !paths.iter().any(|p| p.path.as_os_str().is_empty()),
+            "an unresolved mount grants nothing: {paths:?}"
+        );
     }
 
     #[test]

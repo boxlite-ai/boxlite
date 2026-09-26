@@ -693,17 +693,18 @@ BOXLITE_SERVE_API_KEY="$KEY" boxlite serve --host 127.0.0.1
 
 **Synopsis:** `boxlite volume <create|ls|get|rm>`
 
-Manage managed persistent volumes. Volumes are a REST-runtime capability — the
-local runtime has no volume backend, so every subcommand returns
-`named volumes are not supported yet` against it. See
-[Connecting to the cloud](#connecting-to-the-cloud).
+Manage managed persistent volumes. Against the local runtime a volume is a
+directory under `{home}/volumes/{id}/`: its name and creation time in a
+sidecar, its payload in `_data/`, which is the only part a box mounts. Against
+a REST runtime every subcommand is forwarded to `/v1/volumes` (see
+[Connecting to the cloud](#connecting-to-the-cloud)).
 
 | Subcommand | Synopsis | Notes |
 |---|---|---|
 | `create` | `boxlite volume create [--name NAME]` | Prints the new id |
 | `ls` (`list`) | `boxlite volume ls [-q \| --format FORMAT]` | `table`, `json`, or `yaml` (default `table`); quiet and format conflict |
-| `get` (`inspect`) | `boxlite volume get ID [--format FORMAT]` | `table`, `json`, or `yaml` (default `table`); by id |
-| `rm` (`delete`) | `boxlite volume rm ID... [--force]` | By id; `--force` ignores missing volumes |
+| `get` (`inspect`) | `boxlite volume get VOLUME [--format FORMAT]` | `table`, `json`, or `yaml` (default `table`); by id, or by name against the local runtime |
+| `rm` (`delete`) | `boxlite volume rm VOLUME... [--force]` | By id, or by name against the local runtime; `--force` ignores missing volumes. A volume a persisted box mounts is refused, `--force` included |
 
 **`--name`** is mountable in place of the id, so a box can ask for the volume it
 wants without knowing the id:
@@ -721,7 +722,8 @@ the source as a host path; a `:` would split the spec into the wrong fields.
 Neither name could ever be mounted. Without `--name` the server names the
 volume after its id, which stays mountable.
 
-`get` and `rm` take an id only; mounting is what accepts either.
+`get` and `rm` take the id, or the name against the local runtime (`boxlite
+serve` included); mounting accepts either everywhere.
 
 ---
 
@@ -885,16 +887,28 @@ means the same thing on every machine:
 
 **Options:** `ro` (read-only) or `rw` (read-write, default). Other options are ignored. Relative host paths are canonicalized at parse time; missing host paths fail with `volume host path ...`.
 
-**Runtime support.** Managed volumes require a REST runtime — the local runtime
-has no volume backend and rejects them at create. Host binds are the mirror
-image: they name a path on the machine running the box, so a REST runtime
-refuses them. Manage volumes with [`boxlite volume`](#boxlite-volume).
+**Runtime support.** Managed volumes work on both runtimes: the local runtime
+resolves the id or name against its own store under `{home}/volumes/` when the
+box is created, a REST runtime forwards it to the server. Host binds are the
+mirror image: they name a path on the machine running the box, so a REST
+runtime refuses them. Manage volumes with [`boxlite volume`](#boxlite-volume).
+
+An anonymous `-v /data` is neither. The CLI makes a plain host directory for it
+under `{home}/volumes/anonymous/<ulid>` and binds that, so it is a host bind
+that happens to live beside the volumes — not a managed volume. It therefore
+has no id and no name, `boxlite volume ls` does not list it and `volume rm`
+cannot reclaim it (`rm -rf` on the path is the only way), a REST runtime
+refuses it like any other host bind, and `:ro` is accepted for it even though
+`-v my-data:/data:ro` is not. A clone, or an import on the same machine, keeps
+the path and so shares the source box's directory; an import on another machine
+fails at boot with `Volume host path does not exist`.
 
 > **Behavior change.** A bare relative source is no longer a bind mount:
 > `-v data:/app` now means the managed volume `data`, not `./data`. Write
 > `./data:/app` for the bind. Unlike Docker, a mistyped name cannot silently
-> create an empty volume — boxlite never auto-creates, so an unknown reference
-> fails with "Volume 'data' not found".
+> create an empty volume: every runtime — the local one, `boxlite serve` on top
+> of it, and the hosted API — answers not found for an unknown id or name, so
+> create the volume first with `boxlite volume create --name data`.
 
 **Single-character names are not addressable via `-v`.** The parser cannot
 distinguish `a:` from a drive letter, so `-v a:/data` is read as one field and

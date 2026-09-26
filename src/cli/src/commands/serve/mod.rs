@@ -2957,12 +2957,19 @@ mod tests {
     /// The managed-volume shape is refused by the same gate, and reaches it
     /// through the same deserialization — an archive naming someone else's
     /// volume must not provision a box either.
+    ///
+    /// The mount carries a `host_path` because that is what an export writes:
+    /// the box's config after resolution, a reference beside the payload path
+    /// of the machine it came from. An archive that named a reference with no
+    /// path never went through resolution, and `sanitize_import` refuses that
+    /// shape before the policy gate is reached.
     #[tokio::test]
     async fn serve_import_rejects_managed_volume_archive_before_provisioning() {
         assert_uploaded_archive_rejected_before_provisioning(
             serde_json::json!({
                 "volumes": [{
                     "managed_volume": "someone-elses-data",
+                    "host_path": "/",
                     "guest_path": "/data",
                     "read_only": false
                 }]

@@ -903,7 +903,7 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
 - `boxlite_options_add_volume` is renamed `boxlite_options_add_bind_mount`, and
   the new `boxlite_options_add_managed_volume` mounts a managed volume by its
   server-assigned id or its name. The two mount origins are distinct: a host
-  path is local-runtime only, a managed volume REST-runtime only.
+  path is local-runtime only, a managed volume works on either runtime.
 - `boxlite_volume_create` takes a new `const char *name` as its second
   argument, before the callback. Pass `NULL` for an unnamed volume. A non-NULL
   name that is not valid UTF-8 returns `InvalidArgument` rather than silently
@@ -940,7 +940,7 @@ After:
 ```c
 /* host bind (local runtime) */
 boxlite_options_add_bind_mount(opts, "/host/data", "/data", 0);
-/* managed volume by id or name (REST runtime) */
+/* managed volume by id or name (either runtime) */
 boxlite_options_add_managed_volume(opts, "my-data", "/data", 0);
 
 boxlite_volume_create(handle, "my-data", on_created, user_data, &err);
