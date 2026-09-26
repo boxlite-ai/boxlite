@@ -3,6 +3,25 @@
 
 //! Architectural values supplied by the machine's boot loader.
 
+/// One CPUID response; the VMM selects guest features and topology.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct X86CpuidEntry {
+    pub leaf: u32,
+    pub subleaf: u32,
+    pub subleaf_required: bool,
+    pub eax: u32,
+    pub ebx: u32,
+    pub ecx: u32,
+    pub edx: u32,
+}
+
+/// One model-specific register write selected by the VMM.
+#[derive(Clone, Copy, Debug)]
+pub struct X86Msr {
+    pub index: u32,
+    pub value: u64,
+}
+
 /// A decoded x86 segment descriptor, independent of the host API.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct X86Segment {

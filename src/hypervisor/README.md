@@ -20,7 +20,7 @@ machine layout and device emulation belong to `boxlite-vmm`.
 | `memory` | `MemoryRegion`: host memory mapped into the guest |
 | `error` | `Error`: the failed operation, its resource, and the host cause |
 | `hvf` / `hvf::syndrome` | HVF operations and ARM exception decoding (not implemented yet) |
-| `kvm` | x86_64 VM creation, memory slots, entry registers, vCPU execution, kicks and pending-I/O completion; CPUID/MSRs and arm64 follow |
+| `kvm` | x86_64 VM creation, memory slots, registers, CPUID/MSRs, execution, kicks and pending-I/O completion; arm64 follows |
 | `whp` / `whp::emulator` | WHP operations and x86 instruction decoding for memory-access exits (reserved for M10) |
 
 Three boundaries decide placement when a case is ambiguous: KVM memory-slot
@@ -46,7 +46,14 @@ check that register through XSAVE. Values
 and guest addresses come from the VMM; no Linux memory layout lives in KVM.
 Call it before first entry and discard the vCPU after any configuration error,
 because multiple host writes cannot be rolled back atomically. Secondary vCPUs
-retain reset state until INIT/SIPI. CPUID/MSR setup follows separately.
+retain reset state until INIT/SIPI.
+
+The VMM derives guest CPU features from `KvmVm::supported_cpuid`, adjusts topology,
+and calls `KvmVcpu::set_cpu_features` before entry. `X86CpuidEntry` preserves
+subleaf matching without leaking the KVM ABI; legacy stateful CPUID is rejected.
+MSRs are explicit index/value writes. A short KVM write is an error identifying
+the first rejected MSR, never a successful partially configured CPU. Host feature
+discovery is a ceiling, not permission to add unsupported instructions.
 
 `KvmVcpu::handle()` can kick a worker before or during guest entry; stale handles
 do nothing. `KvmVm::new()` reserves `SIGRTMIN + 1` on each worker, or the application
