@@ -275,6 +275,58 @@ mod tests {
 
     #[test]
     #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn boot_registers_round_trip_through_kvm() {
+        use crate::{X86BootRegisters, X86Segment};
+
+        let vm = KvmVm::new().unwrap();
+        let mut vcpu = vm.create_vcpu(0).unwrap();
+        let code = X86Segment {
+            limit: u32::MAX,
+            selector: 8,
+            attributes: 0xa09b,
+            ..Default::default()
+        };
+        vcpu.set_boot_registers(&X86BootRegisters {
+            rip: 0x10_0200,
+            rsp: 0x8ff0,
+            rsi: 0x7000,
+            rflags: 2,
+            cr0: 0x8000_0001,
+            cr3: 0x9000,
+            cr4: 0x20,
+            efer: 0x500,
+            code,
+            data: X86Segment {
+                selector: 16,
+                attributes: 0xc093,
+                ..code
+            },
+            gdt_base: 0x500,
+            gdt_limit: 23,
+            ..Default::default()
+        })
+        .unwrap();
+        let regs = vcpu.fd.get_regs().unwrap();
+        assert_eq!(
+            (regs.rip, regs.rsp, regs.rsi, regs.rflags),
+            (0x10_0200, 0x8ff0, 0x7000, 2)
+        );
+        let special = vcpu.fd.get_sregs().unwrap();
+        assert_eq!(
+            (special.cr0, special.cr3, special.cr4, special.efer),
+            (0x8000_0001, 0x9000, 0x20, 0x500)
+        );
+        assert_eq!(
+            (special.cs.selector, special.cs.l, special.ds.selector),
+            (8, 1, 16)
+        );
+        assert_eq!((special.gdt.base, special.gdt.limit), (0x500, 23));
+        let fpu = vcpu.fd.get_fpu().unwrap();
+        assert_eq!((fpu.fcw, fpu.mxcsr), (0x37f, 0x1f80));
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
     fn kick_interrupts_a_guest_that_has_entered_kvm() {
         let (ready, receive_ready) = mpsc::sync_channel(1);
         let (release, receive_release) = mpsc::sync_channel(1);
