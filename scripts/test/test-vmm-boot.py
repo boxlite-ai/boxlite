@@ -4,15 +4,20 @@
 import hashlib
 import os
 from pathlib import Path
+import shlex
+import signal
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "scripts/build/build-vmm-boot.sh"
+BUILD_TIMEOUT_SECONDS = 1800
 ARTIFACTS = (
     "vmlinux", "bzImage", "test-initramfs.cpio", "kernel.config", "build-info.txt",
 )
@@ -84,6 +89,73 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertEqual(result.returncode, 42)
         self.assertNotIn("Boot artifacts:", result.stdout)
 
+    def test_build_timeout_terminates_the_process_group(self):
+        child = self.path / "build-child.py"
+        child.write_text(
+            "import os, socket\n"
+            "client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+            "client.connect(os.environ['BOXLITE_BUILD_GROUP_TEST_SOCKET'])\n"
+            "client.recv(1)\n"
+            "client.sendall(b'alive')\n"
+        )
+        builder = self.path / "build.sh"
+        builder.write_text(f"#!/bin/sh\npython3 {shlex.quote(str(child))} &\nwait\n")
+        builder.chmod(0o755)
+        checks = (qualify_artifacts, check_reproducibility)
+
+        for check in checks:
+            with self.subTest(check=check.__name__):
+                socket_path = Path(tempfile.gettempdir()) / (
+                    f"blt-{os.getpid()}-{check.__name__}.sock"
+                )
+                socket_path.unlink(missing_ok=True)
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                    listener.bind(str(socket_path))
+                    listener.listen(1)
+                    listener.settimeout(0.5)
+                    actual_run = subprocess.run
+
+                    def bounded_build(command, *args, **kwargs):
+                        if command[:2] == ["bash", str(builder)]:
+                            kwargs["timeout"] = 0.05
+                        return actual_run(command, *args, **kwargs)
+
+                    with (
+                        patch.dict(
+                            os.environ,
+                            {"BOXLITE_BUILD_GROUP_TEST_SOCKET": str(socket_path)},
+                        ),
+                        patch(__name__ + ".BUILD", builder),
+                        patch(__name__ + ".shutil.which", return_value="/bin/true"),
+                        patch.object(
+                            sys.modules[__name__],
+                            "BUILD_TIMEOUT_SECONDS",
+                            0.05,
+                            create=True,
+                        ),
+                        patch(__name__ + ".subprocess.run", side_effect=bounded_build),
+                    ):
+                        with self.assertRaises(subprocess.TimeoutExpired):
+                            check()
+
+                    try:
+                        client, _ = listener.accept()
+                    except TimeoutError:
+                        continue
+                    with client:
+                        client.settimeout(0.5)
+                        try:
+                            client.sendall(b"x")
+                            response = client.recv(5)
+                        except (BrokenPipeError, ConnectionResetError):
+                            response = b""
+                        self.assertNotEqual(
+                            response,
+                            b"alive",
+                            "build child survived its timed-out parent",
+                        )
+                socket_path.unlink(missing_ok=True)
+
 
 def verify_checksums(output):
     checksums = {}
@@ -98,17 +170,40 @@ def verify_checksums(output):
             raise RuntimeError(f"checksum mismatch: {output / name}")
 
 
+def run_build(output, *, rebuild=False):
+    command = ["bash", str(BUILD)]
+    if rebuild:
+        command.append("--rebuild")
+    command.extend(("--output", str(output)))
+    process = subprocess.Popen(command, start_new_session=True)
+    try:
+        process.wait(timeout=BUILD_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        raise
+    if process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, command)
+
+
 def qualify_artifacts():
     qemu = shutil.which("qemu-system-x86_64")
     if not qemu:
         raise RuntimeError("qemu-system-x86_64 is required for artifact qualification")
     with tempfile.TemporaryDirectory(prefix="boxlite boot qualification ") as directory:
         output = Path(directory) / "artifacts"
-        subprocess.run(
-            ["bash", str(BUILD), "--output", str(output)],
-            check=True,
-            timeout=1800,
-        )
+        run_build(output)
         verify_checksums(output)
         result = subprocess.run(
             [
@@ -134,11 +229,7 @@ def check_reproducibility():
     with tempfile.TemporaryDirectory(prefix="boxlite boot reproducibility ") as directory:
         builds = [Path(directory) / name for name in ("first", "second")]
         for output in builds:
-            subprocess.run(
-                ["bash", str(BUILD), "--rebuild", "--output", str(output)],
-                check=True,
-                timeout=1800,
-            )
+            run_build(output, rebuild=True)
             verify_checksums(output)
         for name in (*ARTIFACTS, "SHA256SUMS"):
             if (builds[0] / name).read_bytes() != (builds[1] / name).read_bytes():
