@@ -103,11 +103,12 @@ function ensureDocker() {
   })
 
   if (result.status !== 0) {
+    const details = trimOutput(result.stderr || result.stdout || result.error?.message)
     throw new Error(
       [
         'Docker is required for the local Dex E2E environment.',
         'Start Docker Desktop, then run this command again.',
-        trimOutput(result.stderr || result.stdout),
+        details,
       ]
         .filter(Boolean)
         .join(os.EOL),
@@ -540,5 +541,5 @@ function bindShutdown(child) {
 }
 
 function trimOutput(output) {
-  return output.trim().split(/\r?\n/).slice(-8).join(os.EOL)
+  return output?.trim().split(/\r?\n/).slice(-8).join(os.EOL) || ''
 }
