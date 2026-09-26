@@ -4912,16 +4912,15 @@ components:
         maxCpuPerBox: 6.027456183070403
         maxMemoryPerBox: 1.4658129805029452
         maxDiskPerBox: 5.962133916683182
-        templateDeactivationTimeoutMinutes: 5.637376656633329
         boxLimitedNetworkEgress: true
         defaultRegionId: defaultRegionId
-        authenticatedRateLimit: 2.3021358869347655
-        boxCreateRateLimit: 7.061401241503109
-        boxLifecycleRateLimit: 9.301444243932576
+        authenticatedRateLimit: 5.637376656633329
+        boxCreateRateLimit: 2.3021358869347655
+        boxLifecycleRateLimit: 7.061401241503109
         experimentalConfig: "{}"
-        authenticatedRateLimitTtlSeconds: 3.616076749251911
-        boxCreateRateLimitTtlSeconds: 2.027123023002322
-        boxLifecycleRateLimitTtlSeconds: 4.145608029883936
+        authenticatedRateLimitTtlSeconds: 9.301444243932576
+        boxCreateRateLimitTtlSeconds: 3.616076749251911
+        boxLifecycleRateLimitTtlSeconds: 2.027123023002322
       properties:
         id:
           description: Organization ID
@@ -4974,10 +4973,6 @@ components:
           type: number
         maxDiskPerBox:
           description: Max disk per box
-          type: number
-        templateDeactivationTimeoutMinutes:
-          default: 20160
-          description: Time in minutes before an unused template is deactivated
           type: number
         boxLimitedNetworkEgress:
           description: Box default network block all
@@ -5035,7 +5030,6 @@ components:
       - suspendedUntil
       - suspensionCleanupGracePeriodHours
       - suspensionReason
-      - templateDeactivationTimeoutMinutes
       - updatedAt
       type: object
     UpdateOrganizationName:
@@ -6036,6 +6030,8 @@ components:
         state: started
         errorReason: Failed to pull artifact image
         recoverable: true
+        imageDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+        imageSizeBytes: 123456789
       properties:
         state:
           description: The new state for the box
@@ -6063,6 +6059,15 @@ components:
           description: Whether the box is recoverable
           example: true
           type: boolean
+        imageDigest:
+          description: Registry digest of the image the box booted from
+          example: sha256:0000000000000000000000000000000000000000000000000000000000000000
+          type: string
+        imageSizeBytes:
+          description: "Declared on-registry size of that image, in bytes"
+          example: 123456789
+          format: int64
+          type: integer
       required:
       - state
       type: object

@@ -3,6 +3,7 @@ use crate::*;
 use boxlite::BoxliteError;
 use boxlite::runtime::BoxliteRuntime;
 use std::ffi::{CStr, CString};
+use std::mem::MaybeUninit;
 use std::os::raw::{c_int, c_void};
 use std::path::PathBuf;
 use std::ptr;
@@ -376,12 +377,8 @@ fn assert_null_cb_rejected(code: BoxliteErrorCode, error: &mut FFIError) {
 fn create_box_rejects_null_callback() {
     let (runtime, home_dir) = unsafe { new_test_runtime_handle("null-cb-create") };
 
-    let image = CString::new("alpine:latest").expect("image cstring");
-    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let opts = unsafe { new_test_options() };
     let mut error = FFIError::default();
-    let opts_code =
-        unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
-    assert_eq!(opts_code, BoxliteErrorCode::Ok);
 
     let code =
         unsafe { boxlite_create_box(runtime, opts, None, ptr::null_mut(), &mut error as *mut _) };
@@ -399,13 +396,7 @@ fn create_box_rejects_null_callback() {
 #[test]
 #[allow(deprecated)]
 fn auto_remove_and_auto_delete_use_last_call_wins() {
-    let image = CString::new("alpine:latest").unwrap();
-    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
-    let mut error = FFIError::default();
-    assert_eq!(
-        unsafe { boxlite_options_new(image.as_ptr(), &mut opts, &mut error) },
-        BoxliteErrorCode::Ok
-    );
+    let opts = unsafe { new_test_options() };
     unsafe {
         boxlite_options_set_auto_delete_interval(opts, 60);
         boxlite_options_set_auto_remove(opts, 0);
@@ -425,18 +416,8 @@ fn auto_remove_and_auto_delete_use_last_call_wins() {
 
 #[test]
 fn capability_lists_default_empty_and_preserve_custom_values() {
-    let image = CString::new("alpine:latest").expect("image cstring");
-    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
-    let mut advanced: *mut CAdvancedBoxOptions = ptr::null_mut();
-    let mut error = FFIError::default();
-    assert_eq!(
-        unsafe { boxlite_options_new(image.as_ptr(), &mut opts, &mut error) },
-        BoxliteErrorCode::Ok
-    );
-    assert_eq!(
-        unsafe { boxlite_advanced_options_new(&mut advanced, &mut error) },
-        BoxliteErrorCode::Ok
-    );
+    let opts = unsafe { new_test_options() };
+    let advanced = unsafe { new_test_advanced_options() };
 
     unsafe {
         assert!((*advanced).options.capabilities().is_none());
@@ -488,18 +469,8 @@ fn capability_lists_default_empty_and_preserve_custom_values() {
 
 #[test]
 fn null_capability_element_cannot_weaken_policy() {
-    let image = CString::new("alpine:latest").unwrap();
-    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
-    let mut advanced: *mut CAdvancedBoxOptions = ptr::null_mut();
-    let mut error = FFIError::default();
-    assert_eq!(
-        unsafe { boxlite_options_new(image.as_ptr(), &mut opts, &mut error) },
-        BoxliteErrorCode::Ok
-    );
-    assert_eq!(
-        unsafe { boxlite_advanced_options_new(&mut advanced, &mut error) },
-        BoxliteErrorCode::Ok
-    );
+    let opts = unsafe { new_test_options() };
+    let advanced = unsafe { new_test_advanced_options() };
 
     let malformed = [ptr::null()];
     unsafe {
@@ -519,18 +490,8 @@ fn null_capability_element_cannot_weaken_policy() {
 
 #[test]
 fn invalid_utf8_capability_cannot_weaken_policy() {
-    let image = CString::new("alpine:latest").unwrap();
-    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
-    let mut advanced: *mut CAdvancedBoxOptions = ptr::null_mut();
-    let mut error = FFIError::default();
-    assert_eq!(
-        unsafe { boxlite_options_new(image.as_ptr(), &mut opts, &mut error) },
-        BoxliteErrorCode::Ok
-    );
-    assert_eq!(
-        unsafe { boxlite_advanced_options_new(&mut advanced, &mut error) },
-        BoxliteErrorCode::Ok
-    );
+    let opts = unsafe { new_test_options() };
+    let advanced = unsafe { new_test_advanced_options() };
 
     let invalid_utf8 = [0xff_u8, 0];
     let malformed = [invalid_utf8.as_ptr().cast::<std::os::raw::c_char>()];
@@ -551,12 +512,7 @@ fn invalid_utf8_capability_cannot_weaken_policy() {
 
 #[test]
 fn invalid_capability_count_and_null_array_fail_closed() {
-    let mut advanced: *mut CAdvancedBoxOptions = ptr::null_mut();
-    let mut error = FFIError::default();
-    assert_eq!(
-        unsafe { boxlite_advanced_options_new(&mut advanced, &mut error) },
-        BoxliteErrorCode::Ok
-    );
+    let advanced = unsafe { new_test_advanced_options() };
 
     unsafe {
         assert_eq!(
@@ -585,22 +541,12 @@ fn invalid_capability_count_and_null_array_fail_closed() {
 fn set_advanced_applies_security_profile_to_options() {
     use boxlite::SecurityOptions;
 
-    let image = CString::new("alpine:latest").expect("image cstring");
-    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
-    let mut error = FFIError::default();
-    let code =
-        unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
-    assert_eq!(code, BoxliteErrorCode::Ok);
+    let opts = unsafe { new_test_options() };
 
     let handle = opts;
 
     let apply_security = |enabled: c_int| {
-        let mut advanced: *mut CAdvancedBoxOptions = ptr::null_mut();
-        let mut advanced_error = FFIError::default();
-        let code = unsafe {
-            boxlite_advanced_options_new(&mut advanced as *mut _, &mut advanced_error as *mut _)
-        };
-        assert_eq!(code, BoxliteErrorCode::Ok);
+        let advanced = unsafe { new_test_advanced_options() };
         unsafe { boxlite_advanced_options_set_security_enabled(advanced, enabled) };
         unsafe { boxlite_options_set_advanced(opts, advanced) };
         unsafe { boxlite_advanced_options_free(advanced) };
@@ -656,18 +602,35 @@ fn shutdown_rejects_null_callback() {
     let _ = std::fs::remove_dir_all(home_dir);
 }
 
+// The out-slot is MaybeUninit, not a pointer set to ptr::null_mut(). CodeQL's
+// invalid-pointer query follows a null initialiser through the out-parameter
+// into every test that reads the result, and no null check after the call
+// stops it. Both constructors write the slot whenever they return Ok.
 unsafe fn new_test_options() -> *mut CBoxliteOptions {
     let image = CString::new("alpine:latest").expect("image cstring");
-    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut slot = MaybeUninit::<*mut CBoxliteOptions>::uninit();
     let mut error = FFIError::default();
-    let code =
-        unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
+    let code = unsafe { boxlite_options_new(image.as_ptr(), slot.as_mut_ptr(), &mut error) };
     assert_eq!(code, BoxliteErrorCode::Ok);
+    let opts = unsafe { slot.assume_init() };
     assert!(
         !opts.is_null(),
         "boxlite_options_new returned null options pointer"
     );
     opts
+}
+
+unsafe fn new_test_advanced_options() -> *mut CAdvancedBoxOptions {
+    let mut slot = MaybeUninit::<*mut CAdvancedBoxOptions>::uninit();
+    let mut error = FFIError::default();
+    let code = unsafe { boxlite_advanced_options_new(slot.as_mut_ptr(), &mut error) };
+    assert_eq!(code, BoxliteErrorCode::Ok);
+    let advanced = unsafe { slot.assume_init() };
+    assert!(
+        !advanced.is_null(),
+        "boxlite_advanced_options_new returned null options pointer"
+    );
+    advanced
 }
 
 #[test]
@@ -763,14 +726,8 @@ fn add_port_rejects_zero_guest_port_and_null_options() {
 // API, stored as `osUser`, and never applied.
 #[test]
 fn options_set_user_lands_on_box_options() {
-    let image = CString::new("alpine:latest").expect("image cstring");
     let user = CString::new("1000:1000").expect("user cstring");
-    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
-    let mut error = FFIError::default();
-
-    let code =
-        unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
-    assert_eq!(code, BoxliteErrorCode::Ok, "options_new must succeed");
+    let opts = unsafe { new_test_options() };
 
     assert!(
         unsafe { (*opts).options.user.is_none() },
@@ -792,12 +749,9 @@ fn options_set_user_lands_on_box_options() {
 // value — the same contract every other nullable string setter here keeps.
 #[test]
 fn options_set_user_ignores_a_null_pointer() {
-    let image = CString::new("alpine:latest").expect("image cstring");
     let user = CString::new("nobody").expect("user cstring");
-    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
-    let mut error = FFIError::default();
+    let opts = unsafe { new_test_options() };
 
-    unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
     unsafe { boxlite_options_set_user(opts, user.as_ptr()) };
     unsafe { boxlite_options_set_user(opts, ptr::null()) };
 

@@ -57,7 +57,9 @@ pub(crate) async fn import_box(
         .map_err(|e| BoxliteError::Internal(format!("Import install task panicked: {}", e)))??;
 
     let litebox = runtime
-        .provision_box(staging_dir, name, options, BoxStatus::Stopped)
+        // An archive carries the box's options but not what its image resolved
+        // to, so an imported box has no record until one is rebuilt.
+        .provision_box(staging_dir, name, options, BoxStatus::Stopped, None)
         .await?;
 
     tracing::info!(

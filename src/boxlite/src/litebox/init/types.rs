@@ -313,6 +313,15 @@ pub struct InitPipelineContext {
     pub layout: Option<BoxFilesystemLayout>,
     pub boot_assets: Option<PreparedBootAssets>,
     pub container_image_config: Option<ContainerImageConfig>,
+    /// Set by the container-rootfs task when this build made a new disk from a
+    /// registry image. Absent on a restart, which reuses the disk, and when the
+    /// box booted from a rootfs path.
+    pub resolved_image: Option<crate::images::ResolvedImage>,
+    /// The build the box's existing disk was made from, as recorded when it was
+    /// built. Read by a restart, which keeps that disk and so has to take the
+    /// image config from the same build. `None` for a box that has never built
+    /// a disk from a registry image, and for one older than the record.
+    pub built_from: Option<crate::images::ResolvedImage>,
     pub container_disk: Option<Disk>,
     pub guest_disk: Option<Disk>,
     pub volume_mgr: Option<GuestVolumeManager>,
@@ -339,6 +348,7 @@ impl InitPipelineContext {
         runtime: SharedRuntimeImpl,
         reuse_rootfs: bool,
         skip_guest_wait: bool,
+        built_from: Option<crate::images::ResolvedImage>,
     ) -> Self {
         let guard = CleanupGuard::new(runtime.clone(), config.id.clone());
         Self {
@@ -350,6 +360,8 @@ impl InitPipelineContext {
             layout: None,
             boot_assets: None,
             container_image_config: None,
+            resolved_image: None,
+            built_from,
             container_disk: None,
             guest_disk: None,
             volume_mgr: None,

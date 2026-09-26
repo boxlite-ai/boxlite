@@ -255,6 +255,18 @@ pub struct BoxState {
     /// Serde default keeps existing DB rows readable without migration.
     #[serde(default)]
     pub started_at: Option<DateTime<Utc>>,
+    /// What the box's image reference resolved to when its disk was built.
+    /// `None` for a box booted from a local rootfs path, for one imported from
+    /// an archive (which does not carry it), and for one whose disk was built
+    /// before this was recorded. A clone inherits its source's.
+    ///
+    /// Written by the start that builds the disk and by no other. A restart
+    /// keeps the disk but reads the image again by reference, and a moving tag
+    /// may by then resolve to a different build than the disk was made from.
+    ///
+    /// Serde default keeps existing DB rows readable without migration.
+    #[serde(default)]
+    pub resolved_image: Option<crate::images::ResolvedImage>,
 }
 
 /// Health status of a box.
@@ -355,6 +367,19 @@ impl BoxState {
             error_reason: None,
             exit_code: None,
             started_at: None,
+            resolved_image: None,
+        }
+    }
+
+    /// Record what the box's disk was built from, as reported by the start that
+    /// built it. `None` — a start that reused the disk — leaves the record alone;
+    /// a rebuilt disk replaces it.
+    pub(crate) fn record_resolved_image(
+        &mut self,
+        built_from: Option<crate::images::ResolvedImage>,
+    ) {
+        if let Some(resolved) = built_from {
+            self.resolved_image = Some(resolved);
         }
     }
 
@@ -750,6 +775,50 @@ mod tests {
         let state: BoxState = serde_json::from_str(legacy).expect("legacy row deserializes");
         assert_eq!(state.status, BoxStatus::Running);
         assert!(state.error_reason.is_none());
+    }
+
+    /// The resolved image is a fact about the box's disk, so it has to come
+    /// back when the box is reloaded — `list_info` builds from these rows — and
+    /// a row written before the field existed has to load without it.
+    #[test]
+    fn box_state_persists_the_resolved_image() {
+        let mut state = BoxState::new();
+        state.resolved_image = Some(crate::images::ResolvedImage {
+            manifest_digest:
+                "sha256:0a7ed0d449b9318548e66674610d757de19b7645759f74b587b610b59d6b43fd"
+                    .to_string(),
+            total_layer_size: 3_974_501,
+        });
+
+        let json = serde_json::to_string(&state).unwrap();
+        let reloaded: BoxState = serde_json::from_str(&json).unwrap();
+        assert_eq!(reloaded.resolved_image, state.resolved_image);
+
+        let legacy = r#"{
+            "status":"stopped",
+            "pid":null,
+            "container_id":null,
+            "last_updated":"2026-05-13T23:37:57.965434066Z",
+            "lock_id":null
+        }"#;
+        let state: BoxState = serde_json::from_str(legacy).expect("legacy row deserializes");
+        assert!(state.resolved_image.is_none());
+    }
+
+    #[test]
+    fn a_start_that_reused_the_disk_keeps_the_record() {
+        let built = |digest: &str| crate::images::ResolvedImage {
+            manifest_digest: digest.to_string(),
+            total_layer_size: 1,
+        };
+        let mut state = BoxState::new();
+
+        state.record_resolved_image(Some(built("sha256:first")));
+        state.record_resolved_image(None);
+        assert_eq!(state.resolved_image, Some(built("sha256:first")));
+
+        state.record_resolved_image(Some(built("sha256:rebuilt")));
+        assert_eq!(state.resolved_image, Some(built("sha256:rebuilt")));
     }
 
     #[test]

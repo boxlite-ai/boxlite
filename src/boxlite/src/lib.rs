@@ -43,6 +43,7 @@ pub use boxlite_shared::BoxByteStream;
 pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use disk::DiskInfo;
 pub use event_listener::{AuditEvent, AuditEventKind, AuditEventListener, EventListener};
+pub use images::ResolvedImage;
 pub use litebox::SnapshotHandle;
 pub use litebox::archive::ArchiveManifest;
 pub use litebox::snapshot_mgr::SnapshotInfo;

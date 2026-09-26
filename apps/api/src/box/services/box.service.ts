@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
+import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
@@ -19,7 +20,9 @@ import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
-import { assertSupportedImage } from '../constants/curated-images.constant'
+import { ImageAdmissionService } from '../../image/services/image-admission.service'
+import { ImageResolverService } from '../../image/services/image-resolver.service'
+import { ImageRegistrarService, ReportedImage } from '../../image/services/image-registrar.service'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { WarmPoolEvents } from '../constants/warmpool-events.constants'
@@ -77,6 +80,7 @@ import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
+import { isCuratedSelector } from '../../image/utils/image-ref.util'
 import {
   AUTO_DELETE_DISABLED,
   AUTO_STOP_DISABLED,
@@ -85,8 +89,11 @@ import {
   MIN_AUTO_STOP_SECONDS,
 } from '../constants/box-lifecycle.constants'
 
-// TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
-// these mirror the Box entity column defaults until image resolution is rebuilt.
+// An image does not decide how large a box is. These once stood in for values
+// the removed image subsystem supplied, and resolution is back now without
+// them changing hands — deliberately, because the alternative is that rotating
+// an image silently resizes every box booted from it. They are the contract,
+// not a stopgap.
 const DEFAULT_BOX_CPU = 1
 const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
@@ -120,6 +127,9 @@ export class BoxService {
     @InjectRepository(Job)
     private readonly jobRepository: Repository<Job>,
     private readonly jobService: JobService,
+    private readonly imageAdmissionService: ImageAdmissionService,
+    private readonly imageResolverService: ImageResolverService,
+    private readonly imageRegistrarService: ImageRegistrarService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -165,12 +175,27 @@ export class BoxService {
   }
 
   async createForWarmPool(warmPoolItem: WarmPool): Promise<Box> {
+    // The far side of `requiresFreshBox`'s image rule. A warm box is created
+    // with no organization and handed to whichever one claims it, so a pool row
+    // naming a tenant's image would put that image's contents in front of
+    // another tenant. Logged as well as thrown: a top-up arrives as an event, and
+    // the loop that fires it collects rejections with `allSettled`, so a throw
+    // alone would leave an operator with a pool that silently never fills.
+    if (!isCuratedSelector(warmPoolItem.image)) {
+      const message = `Warm pool ${warmPoolItem.id} names '${warmPoolItem.image}', which is not a curated image`
+      this.logger.error(message)
+      throw new BoxError(message)
+    }
+
     const box = new Box(warmPoolItem.target)
 
     box.organizationId = BOX_WARM_POOL_UNASSIGNED_ORGANIZATION
 
     box.class = warmPoolItem.class
     box.image = warmPoolItem.image
+    // Asserted curated a few lines up, so this is not a second opinion — it is
+    // the same one, written down before the curated set can move under it.
+    box.imageIsOrgOwned = false
     //  TODO: default user should be configurable
     box.osUser = 'boxlite'
     box.env = warmPoolItem.env || {}
@@ -197,9 +222,6 @@ export class BoxService {
     try {
       const boxClass = this.getValidatedOrDefaultClass(createBoxDto.class)
 
-      // TODO(image-rewrite): image resolution removed; boxes can no
-      // longer resolve an image at create time. Resource sizing falls back to request values
-      // (or Box entity defaults). Rebuild image resolution here.
       const cpu = createBoxDto.cpu ?? DEFAULT_BOX_CPU
       const mem = createBoxDto.memory ?? DEFAULT_BOX_MEM
       const disk = createBoxDto.disk ?? DEFAULT_BOX_DISK
@@ -207,12 +229,22 @@ export class BoxService {
       // Reject over-limit requests at the boundary (the "security option"
       // per-box ceilings) rather than persisting out-of-range values.
       assertWithinPerBoxLimits(cpu, mem, disk, organization)
-      // Restrict box creation to the supported pinned images; reject anything else
-      // at the request boundary (defaults undefined -> base image).
-      const image = assertSupportedImage(createBoxDto.image)
-      const needsFreshBox = requiresFreshBox(createBoxDto, organization)
-
       this.organizationService.assertOrganizationIsNotSuspended(organization)
+
+      // Admission decides whether this organization may boot from this image at
+      // all; it is the gate that replaced "curated images only". It runs after
+      // the suspension check, and before the resolver, so a refused image never
+      // reaches the catalog query.
+      await this.imageAdmissionService.assert(organization, createBoxDto.image)
+      // Resolution turns what the caller asked for into the ref a runner is
+      // given: the curated set answers its own selectors without a query, and
+      // anything else is looked up in this organization's catalog — pinned to
+      // the digest it first resolved to if the catalog knows it, passed through
+      // as typed if it does not, which is how an image gets pulled the first
+      // time.
+      const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
+      const image = resolvedImage.ref
+      const needsFreshBox = requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
@@ -277,6 +309,9 @@ export class BoxService {
       box.labels = createBoxDto.labels || {}
 
       box.image = image
+      // The resolver decided this, against the curated set as it stood when the
+      // caller asked. Recomputing it later answers a different question.
+      box.imageIsOrgOwned = resolvedImage.isOrgOwned
       box.cpu = cpu
       box.gpu = gpu
       box.mem = mem
@@ -314,14 +349,20 @@ export class BoxService {
       // falling back to "cozy-otter-{boxId}" if it collides with the per-org
       // @Unique(['organizationId', 'name']) constraint. Only the insert retries:
       // the chosen runner is still fine, it was the name that collided.
-      const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, () =>
-        createBoxDto.name
+      //
+      // The cold-pull budget is spent in here, once a runner is chosen and just
+      // before the insert: it has no way to give a slot back, so a create its
+      // own input or placement refuses must not spend one. Only the box limit
+      // and a name collision, which the insert itself settles, come after it.
+      const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
+        await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
+        return createBoxDto.name
           ? this.boxRepository.insert(box, options.maxCreatedBoxes)
           : persistWithGeneratedBoxName(box.id, (name) => {
               box.name = name
               return this.boxRepository.insert(box, options.maxCreatedBoxes)
-            }),
-      )
+            })
+      })
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
@@ -1360,13 +1401,46 @@ export class BoxService {
 
   // used by internal services to update the state of a box to resolve domain and runner state mismatch
   // notably, when a box instance stops or errors on the runner, the domain state needs to be updated to reflect the actual state
-  async updateState(boxId: string, newState: BoxState, recoverable = false, errorReason?: string): Promise<void> {
+  async updateState(
+    boxId: string,
+    newState: BoxState,
+    recoverable = false,
+    errorReason?: string,
+    reportedImage?: ReportedImage,
+  ): Promise<void> {
     const box = await this.boxRepository.findOne({
       where: { id: boxId },
     })
 
     if (!box) {
       throw new NotFoundException(`Box with ID ${boxId} not found`)
+    }
+
+    // Before any state handling, and deliberately not inside it: this is a fact
+    // about the box's image, not a transition. The runner may well be telling
+    // us a state we already have — the control plane also learns a box is up by
+    // polling the runner — and the early returns below would drop the report.
+    //
+    // Only a report that says the box is up: a failed pull reports ERROR, and
+    // an image that never booted must not appear in the catalog as if it had.
+    // It is the report that is filtered, not the outcome — the state machine
+    // below may still refuse this transition, and a box that pulled an image
+    // and started it did so either way.
+    if (reportedImage && newState === BoxState.STARTED && box.image) {
+      try {
+        await this.imageRegistrarService.onBoxStarted(
+          box.organizationId,
+          { ref: box.image, isOrgOwned: boxImageIsOrgOwned(box), runnerId: box.runnerId },
+          reportedImage,
+        )
+      } catch (error) {
+        // A lost registration costs the next create one re-resolution, which
+        // is the documented trade; one refused for the image limit leaves the
+        // name unrecorded, so admission refuses the next create of it. Failing
+        // the state update instead would leave the control plane believing a
+        // running box is still starting.
+        this.logger.error(`Failed to register image for box ${boxId}: ${error}`)
+      }
     }
 
     if (box.state === newState) {

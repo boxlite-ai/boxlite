@@ -202,7 +202,6 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.BILLING_WALLET)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.LIMITS)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.PRICING)} element={<Navigate to={RoutePath.BILLING} replace />} />
-        {/* TODO(image-rewrite): legacy /dashboard/templates route removed with the templates page. */}
         {/* Pathless layout route: a single BoxSessionProvider fiber
             persists across the three box routes, so activation state
             (e.g. "terminal connected") survives navigation between the

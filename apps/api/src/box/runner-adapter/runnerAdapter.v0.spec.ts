@@ -30,7 +30,7 @@ describe('RunnerAdapterV0 createBox', () => {
       region: undefined,
     } as any
 
-    await adapter.createBox(box)
+    await adapter.createBox(box, 'base')
 
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -39,6 +39,18 @@ describe('RunnerAdapterV0 createBox', () => {
         ],
       }),
     )
+  })
+
+  /** The caller may pin a curated tag to the build this runner already has. */
+  it('sends the image it is handed rather than the one on the box', async () => {
+    const adapter = new RunnerAdapterV0()
+    const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
+    ;(adapter as any).boxApiClient = { create }
+    const pinned = `ghcr.io/boxlite-ai/boxlite-agent-base@sha256:${'a'.repeat(64)}`
+
+    await adapter.createBox({ id: 'box-1', image: 'base' } as any, pinned)
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ image: pinned }))
   })
 
   it('passes secrets through to the runner recover body', async () => {

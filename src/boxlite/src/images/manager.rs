@@ -9,6 +9,7 @@
 //! - `ImageStore` handles all locking internally
 //! - `ImageObject` uses `BlobSource` for blob access
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -116,22 +117,59 @@ impl ImageManager {
     /// concurrent pulls of the same image will only download once.
     pub async fn pull(&self, image_ref: &str) -> BoxliteResult<ImageObject> {
         let manifest = self.store.pull(image_ref).await?;
+        Ok(self.image_object(image_ref, manifest).await)
+    }
+
+    /// Resolve an image reference against its registry, even when it is cached.
+    ///
+    /// The cache is keyed by the ref string, so a tag answers with whatever it
+    /// pointed at when this host first pulled it. This asks the registry again
+    /// and reuses every layer already stored. When no answer comes back — the
+    /// registry cannot be reached, fails on its side, or throttles — the cached
+    /// image stands in, so an offline host still starts what it has.
+    pub async fn refresh(&self, image_ref: &str) -> BoxliteResult<ImageObject> {
+        let manifest = self.store.refresh(image_ref).await?;
+        Ok(self.image_object(image_ref, manifest).await)
+    }
+
+    #[cfg(test)]
+    pub(super) fn store(&self) -> &ImageStore {
+        &self.store
+    }
+
+    async fn image_object(&self, image_ref: &str, manifest: ImageManifest) -> ImageObject {
         let storage = self.store.storage().await;
         let blob_source = BlobSource::Store(StoreBlobSource::new(storage));
-
-        Ok(ImageObject::new(
-            image_ref.to_string(),
-            manifest,
-            blob_source,
-        ))
+        ImageObject::new(image_ref.to_string(), manifest, blob_source)
     }
 
     /// List all cached images.
+    ///
+    /// A pull indexes its build under its own digest as well as the ref it was
+    /// pulled by, so a pinned pull can find it. That `repository@<build>` entry
+    /// is not a second image: it is listed only when no other entry of the same
+    /// repository names the build — a tag, a tag pinned to it, or the index
+    /// digest a multi-platform image was pulled by — and then with no tag.
     pub async fn list(&self) -> BoxliteResult<Vec<ImageInfo>> {
         let raw_images = self.store.list().await?;
+        let named: HashSet<(String, String)> = raw_images
+            .iter()
+            .filter_map(|(reference, cached)| {
+                let parsed = Reference::from_str(reference).ok()?;
+                (!is_build_alias(&parsed, &cached.manifest_digest))
+                    .then(|| (repository_of(&parsed), cached.manifest_digest.clone()))
+            })
+            .collect();
 
         let mut images = Vec::with_capacity(raw_images.len());
         for (reference, cached) in raw_images {
+            let folded = Reference::from_str(&reference).is_ok_and(|parsed| {
+                is_build_alias(&parsed, &cached.manifest_digest)
+                    && named.contains(&(repository_of(&parsed), cached.manifest_digest.clone()))
+            });
+            if folded {
+                continue;
+            }
             // If parsing fails, default to UNIX_EPOCH to signal error
             let cached_at = DateTime::parse_from_rfc3339(&cached.cached_at)
                 .map(|dt| dt.with_timezone(&Utc))
@@ -141,10 +179,14 @@ impl ImageManager {
                 });
 
             let (repository, tag) = match Reference::from_str(&reference) {
-                Ok(r) => (
-                    r.repository().to_string(),
-                    r.tag().unwrap_or("latest").to_string(),
-                ),
+                Ok(r) => {
+                    let tag = match (r.tag(), r.digest()) {
+                        (Some(tag), _) => tag,
+                        (None, Some(_)) => "<none>",
+                        (None, None) => "latest",
+                    };
+                    (r.repository().to_string(), tag.to_string())
+                }
                 Err(_) => {
                     // Fallback if reference stored in DB is invalid
                     (reference.clone(), "<none>".to_string())
@@ -198,5 +240,134 @@ impl ImageManager {
         let blob_source = BlobSource::LocalBundle(LocalBundleBlobSource::new(path, cache_dir));
 
         Ok(ImageObject::new(reference, manifest, blob_source))
+    }
+}
+
+/// Whether `reference` is the entry a pull writes under its own build's
+/// digest: no tag, and pinned to exactly `build`.
+fn is_build_alias(reference: &Reference, build: &str) -> bool {
+    reference.tag().is_none() && reference.digest() == Some(build)
+}
+
+fn repository_of(reference: &Reference) -> String {
+    format!("{}/{}", reference.registry(), reference.repository())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ImageManager;
+    use crate::db::Database;
+    use crate::images::store::tests::seed_cached_build;
+
+    const FIRST: &str = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0";
+    const NEWER: &str = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee1";
+
+    /// A pulled tag and the digest entry its pull wrote are one image; a build
+    /// no tag names still takes disk, so it is listed, with no tag.
+    #[tokio::test]
+    async fn a_pulled_tag_is_listed_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).unwrap();
+        let images = ImageManager::new(dir.path().join("images"), db, vec![]).unwrap();
+        seed_cached_build(images.store(), "quay.io/acme/app:v1", FIRST).await;
+        seed_cached_build(images.store(), &format!("quay.io/acme/app@{FIRST}"), FIRST).await;
+        seed_cached_build(images.store(), &format!("quay.io/acme/app@{NEWER}"), NEWER).await;
+
+        let listed = images.list().await.unwrap();
+        let rows: Vec<(&str, &str)> = listed
+            .iter()
+            .map(|image| (image.tag.as_str(), image.id.as_str()))
+            .collect();
+
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows.contains(&("v1", FIRST)), "{rows:?}");
+        assert!(rows.contains(&("<none>", NEWER)), "{rows:?}");
+    }
+
+    /// A multi-platform image pulled by its index digest names one build twice:
+    /// by the index the caller asked for and by the platform manifest it
+    /// resolved to. Listed once, under what the caller pulled.
+    #[tokio::test]
+    async fn an_image_pulled_by_its_index_digest_is_listed_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).unwrap();
+        let images = ImageManager::new(dir.path().join("images"), db, vec![]).unwrap();
+        let index = format!("sha256:{}", "a".repeat(64));
+        let pulled = format!("quay.io/acme/app@{index}");
+        seed_cached_build(images.store(), &pulled, FIRST).await;
+        seed_cached_build(images.store(), &format!("quay.io/acme/app@{FIRST}"), FIRST).await;
+
+        let listed = images.list().await.unwrap();
+        let rows: Vec<&str> = listed
+            .iter()
+            .map(|image| image.reference.as_str())
+            .collect();
+
+        assert_eq!(rows, vec![pulled.as_str()]);
+    }
+
+    async fn listed(seeds: &[(&str, &str)]) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).unwrap();
+        let images = ImageManager::new(dir.path().join("images"), db, vec![]).unwrap();
+        for (reference, build) in seeds {
+            seed_cached_build(images.store(), reference, build).await;
+        }
+        let mut rows: Vec<String> = images
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|image| image.reference)
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    /// Pinned as `name:tag@digest`, a pull keys its build by that ref and by
+    /// the bare digest; the second is the alias.
+    #[tokio::test]
+    async fn a_tag_pinned_to_a_digest_is_listed_once() {
+        let pinned = format!("quay.io/acme/app:v1@{FIRST}");
+        let rows = listed(&[
+            (&pinned, FIRST),
+            (&format!("quay.io/acme/app@{FIRST}"), FIRST),
+        ])
+        .await;
+
+        assert_eq!(rows, vec![pinned]);
+    }
+
+    /// Mirrors share digests. A build another repository names does not hide
+    /// the one a caller pulled from here.
+    #[tokio::test]
+    async fn the_same_build_in_another_repository_is_listed_there_too() {
+        let index = format!("sha256:{}", "a".repeat(64));
+        let hub = format!("docker.io/library/alpine@{index}");
+        let ecr = format!("public.ecr.aws/docker/library/alpine@{FIRST}");
+        let rows = listed(&[
+            (&hub, FIRST),
+            (&format!("docker.io/library/alpine@{FIRST}"), FIRST),
+            (&ecr, FIRST),
+        ])
+        .await;
+
+        assert_eq!(rows, vec![hub, ecr]);
+    }
+
+    /// Only the alias is folded away: an index digest the caller pulled stays
+    /// listed beside the tag that names the same build.
+    #[tokio::test]
+    async fn an_index_digest_the_caller_pulled_is_listed_beside_its_tag() {
+        let index = format!("sha256:{}", "a".repeat(64));
+        let pulled = format!("quay.io/acme/app@{index}");
+        let rows = listed(&[
+            ("quay.io/acme/app:v1", FIRST),
+            (&pulled, FIRST),
+            (&format!("quay.io/acme/app@{FIRST}"), FIRST),
+        ])
+        .await;
+
+        assert_eq!(rows, vec!["quay.io/acme/app:v1".to_string(), pulled]);
     }
 }

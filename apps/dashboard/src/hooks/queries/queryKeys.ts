@@ -72,7 +72,6 @@ export const queryKeys = {
         ...(page !== undefined && perPage !== undefined ? [{ page, perPage }] : []),
       ] as const,
   },
-  // TODO(image-rewrite): template query keys removed with the image/template subsystem.
   volumes: {
     all: ['volumes'] as const,
     list: (organizationId: string) => [...queryKeys.volumes.all, organizationId, 'list'] as const,

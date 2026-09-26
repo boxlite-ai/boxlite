@@ -88,12 +88,17 @@ relies on — read-write host volumes + host port mapping — is pinned by
 | All API calls `401` | `PROXY_API_KEY` empty in `apps/api/.env` | set it non-empty |
 | Runner: `Another BoxliteRuntime is already using directory` | a stale runner holds `.apps-local/boxlite-runner/.lock` | `lsof` the lock, kill the stale PID |
 | Any L1 box misbehaving | its stateful in-box process is wedged | `make restart COMPONENTS=<box>` |
-| "Create Box" from the UI is incomplete | image resolution is mid-rewrite upstream + the picker is PostHog flag-gated | known limitation; use `POST /api/box` directly |
+| "Create Box" from the UI only offers three images | the picker is hardcoded (`CreateBoxDialog.tsx:30-34`); a catalog-backed one is a later change | `POST /api/box` for any other ref |
 
-> **Box boot is unverified on this stack** — image resolution is mid-rewrite
-> upstream (`TODO(image-rewrite)` in `apps/api/src/box/services/box.service.ts`)
-> and the dashboard image picker was removed. L1 services, API, runner, auth, and
-> the dashboard all work.
+> **Box boot is unverified on this stack** — the UI picker offers only the three
+> curated images hardcoded in `CreateBoxDialog.tsx`, so any other ref goes
+> through the API. Image resolution itself is in place: a curated name resolves
+> from the curated set, and any other ref is checked against the registry
+> allowlist. This stack sets no `BOXLITE_IMAGE_REGISTRY_ALLOWLIST`, so the API
+> falls back to the public registries and refuses the local registry at
+> `127.0.0.1:25000` — set the variable in `apps/api/.env` to boot a box from it.
+> (`INSECURE_REGISTRIES` in `compose/native.py` is the runner's own setting, not
+> this gate.) L1 services, API, runner, auth, and the dashboard all work.
 
 ## Layout
 

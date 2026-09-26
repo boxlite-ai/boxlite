@@ -529,6 +529,15 @@ pub struct BoxInfo {
     /// from an older producer readable.
     #[serde(default)]
     pub last_activity_at: Option<DateTime<Utc>>,
+    /// What `image` resolved to when this box's disk was built — the build the
+    /// box actually runs, where `image` is the reference as given. `None` for a
+    /// box booted from a local rootfs path, for one imported from an archive,
+    /// for one whose disk predates the record, and from a backend that does not
+    /// know it.
+    ///
+    /// Serde default keeps metadata from an older producer readable.
+    #[serde(default)]
+    pub resolved_image: Option<crate::images::ResolvedImage>,
 }
 
 impl BoxInfo {
@@ -575,6 +584,7 @@ impl BoxInfo {
             started_at: state.started_at,
             // Activity is recorded by the control plane, not by a local box.
             last_activity_at: None,
+            resolved_image: state.resolved_image.clone(),
         }
     }
 }
@@ -594,6 +604,7 @@ impl PartialEq for BoxInfo {
             && self.auto_delete == other.auto_delete
             && self.auto_resume == other.auto_resume
             && self.health_status == other.health_status
+            && self.resolved_image == other.resolved_image
     }
 }
 
@@ -835,6 +846,36 @@ mod tests {
             published_ports(&info).is_some_and(<[PublishedPort]>::is_empty),
             "a box with no requested mappings is known-empty"
         );
+    }
+
+    /// `info()` and `list_info()` both build through `BoxInfo::new`, so this is
+    /// the one place the record reaches either of them.
+    #[test]
+    fn box_info_reports_what_the_disk_was_built_from() {
+        let config = BoxConfig {
+            id: BoxID::parse("01HJK4TNRPQSXYZ8WM6NCVT9R5").unwrap(),
+            name: None,
+            created_at: Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions::default(),
+            engine_kind: crate::vmm::VmmKind::Libkrun,
+            box_home: PathBuf::from("/tmp/box"),
+        };
+        let mut state = BoxState::new();
+        state.resolved_image = Some(crate::images::ResolvedImage {
+            manifest_digest:
+                "sha256:0a7ed0d449b9318548e66674610d757de19b7645759f74b587b610b59d6b43fd"
+                    .to_string(),
+            total_layer_size: 3_974_501,
+        });
+
+        assert_eq!(
+            BoxInfo::new(&config, &state).resolved_image,
+            state.resolved_image
+        );
+        assert_eq!(BoxInfo::new(&config, &BoxState::new()).resolved_image, None);
     }
 
     #[test]

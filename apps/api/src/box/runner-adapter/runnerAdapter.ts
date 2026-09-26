@@ -46,7 +46,8 @@ export interface RunnerAdapter {
   runnerInfo(signal?: AbortSignal): Promise<RunnerInfo>
 
   boxInfo(boxId: string): Promise<RunnerBoxInfo>
-  createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined>
+  /** `image` is the ref the runner pulls, which may be pinned tighter than `box.image`. */
+  createBox(box: Box, image: string, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined>
   startBox(
     boxId: string,
     authToken: string,

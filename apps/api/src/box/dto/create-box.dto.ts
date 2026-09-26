@@ -21,7 +21,7 @@ export class CreateBoxDto {
 
   @ApiPropertyOptional({
     description:
-      'Image to boot the box from: a supported image name (e.g. "base") or its full OCI ref. Omit for the default.',
+      'Image to boot the box from: a curated image name (e.g. "base"), or any OCI ref on an allowed public registry. Omit for the default.',
     example: 'base',
   })
   @IsOptional()

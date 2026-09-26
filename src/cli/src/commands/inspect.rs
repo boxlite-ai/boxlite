@@ -265,6 +265,7 @@ mod tests {
             exit_code: None,
             started_at,
             last_activity_at: None,
+            resolved_image: None,
         }
     }
 

@@ -27,7 +27,6 @@ const client = new Client({
 const organizationColumns = [
   legacyRename('organization', 'max_snapshot_size', 'max_template_size'),
   legacyRename('organization', 'snapshot_quota', 'template_quota'),
-  legacyRename('organization', 'snapshot_deactivation_timeout_minutes', 'template_deactivation_timeout_minutes'),
   addColumn('organization', 'defaultRegionId', 'character varying'),
   addColumn('organization', 'max_cpu_per_sandbox', "integer NOT NULL DEFAULT '4'"),
   addColumn('organization', 'max_memory_per_sandbox', "integer NOT NULL DEFAULT '8'"),
@@ -46,9 +45,6 @@ const organizationColumns = [
   addColumn('organization', 'suspensionReason', 'character varying'),
   addColumn('organization', 'suspensionCleanupGracePeriodHours', "integer NOT NULL DEFAULT '24'"),
   addColumn('organization', 'suspendedUntil', 'TIMESTAMP WITH TIME ZONE'),
-  addColumn('organization', 'template_deactivation_timeout_minutes', "integer NOT NULL DEFAULT '20160'", [
-    'snapshot_deactivation_timeout_minutes',
-  ]),
   addColumn('organization', 'sandboxLimitedNetworkEgress', 'boolean NOT NULL DEFAULT false'),
   addColumn('organization', 'experimentalConfig', 'jsonb'),
 ]

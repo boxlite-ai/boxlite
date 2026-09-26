@@ -131,6 +131,15 @@ pub struct CBoxInfo {
     ///
     /// [`free_box_info`] releases it.
     pub exit_code: *mut c_int,
+    /// Manifest digest `image` resolved to when this box's disk was built —
+    /// the build the box runs. Null when unknown: a box booted from a local
+    /// rootfs path, one imported from an archive, one whose disk predates the
+    /// record, or a backend that does not know it. Owned and freed with the
+    /// rest of this struct.
+    pub resolved_image_digest: *mut c_char,
+    /// Declared on-registry size, in bytes, of that image; `0` when
+    /// [`Self::resolved_image_digest`] is null.
+    pub resolved_image_size: i64,
 }
 
 #[repr(C)]
@@ -353,6 +362,15 @@ impl CBoxInfo {
                 .map(|at| at.timestamp_millis())
                 .unwrap_or(0),
             exit_code: exit_code_to_c_ptr(info.exit_code),
+            resolved_image_digest: info
+                .resolved_image
+                .as_ref()
+                .map(|resolved| to_c_str(&resolved.manifest_digest))
+                .unwrap_or(ptr::null_mut()),
+            resolved_image_size: info
+                .resolved_image
+                .as_ref()
+                .map_or(0, |resolved| resolved.total_layer_size),
         }
     }
 }
@@ -367,6 +385,7 @@ pub unsafe fn free_box_info(info: *mut CBoxInfo) {
         free_str(info_ref.name);
         free_str(info_ref.image);
         free_str(info_ref.status);
+        free_str(info_ref.resolved_image_digest);
         free_network_info(info_ref.network);
         free_exit_code(info_ref.exit_code);
     }
@@ -610,8 +629,50 @@ mod tests {
     use crate::options::BoxlitePortProtocol;
     use crate::{FREE_STR_CALLS, FREE_STR_LOCK};
 
-    use super::{BoxliteNetworkMode, CBoxInfo, CNetworkInfo, free_network_info, network_to_c_ptr};
+    use super::{
+        BoxliteNetworkMode, CBoxInfo, CNetworkInfo, free_box_info, free_network_info,
+        network_to_c_ptr,
+    };
     use std::ffi::c_char;
+
+    /// The digest reaches a C caller as a string it owns and frees with the
+    /// rest of the struct, and an unknown one is null rather than an empty
+    /// string a caller would report as a digest.
+    #[test]
+    fn box_info_carries_the_resolved_image() {
+        let _guard = FREE_STR_LOCK.lock().unwrap();
+        let digest = "sha256:0a7ed0d449b9318548e66674610d757de19b7645759f74b587b610b59d6b43fd";
+
+        let mut resolved = box_info_with_exit_code(None);
+        resolved.resolved_image = Some(boxlite::ResolvedImage {
+            manifest_digest: digest.to_string(),
+            total_layer_size: 3_974_501,
+        });
+        let mut known = CBoxInfo::from_box_info(&resolved);
+        assert_eq!(
+            unsafe { CStr::from_ptr(known.resolved_image_digest) }
+                .to_str()
+                .unwrap(),
+            digest
+        );
+        assert_eq!(known.resolved_image_size, 3_974_501);
+
+        let mut unknown = CBoxInfo::from_box_info(&box_info_with_exit_code(None));
+        assert!(unknown.resolved_image_digest.is_null());
+        assert_eq!(unknown.resolved_image_size, 0);
+
+        let before = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+        unsafe { free_box_info(&mut known) };
+        let freed_known = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst) - before;
+        let before = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+        unsafe { free_box_info(&mut unknown) };
+        let freed_unknown = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst) - before;
+        assert_eq!(
+            freed_known,
+            freed_unknown + 1,
+            "the digest string must be freed with the struct"
+        );
+    }
 
     /// Callers compiled against the pre-split header read `mode`,
     /// `allow_net`, `allow_net_count` and `published_ports` at the offsets
@@ -801,6 +862,7 @@ mod tests {
             exit_code,
             started_at: None,
             last_activity_at: None,
+            resolved_image: None,
         }
     }
 

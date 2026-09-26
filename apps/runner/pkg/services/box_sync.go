@@ -21,6 +21,9 @@ import (
 // narrow so the sync loop can be exercised without a live runtime.
 type boxStateReader interface {
 	ListInfo(ctx context.Context) ([]sdkboxlite.BoxInfo, error)
+	// What a box this runner created resolved its image to, until reported.
+	PendingImageReport(boxId string) (blclient.PulledImage, bool)
+	ClearPendingImageReport(boxId string)
 }
 
 type BoxSyncServiceConfig struct {
@@ -157,13 +160,28 @@ func (s *BoxSyncService) fetchRunnerBoxes(
 }
 
 func (s *BoxSyncService) SyncBoxState(ctx context.Context, boxId string, localState enums.BoxState) error {
-	_, err := s.client.BoxAPI.UpdateBoxState(ctx, boxId).UpdateBoxStateDto(*apiclient.NewUpdateBoxStateDto(
-		string(s.convertToApiState(localState)),
-	)).Execute()
+	dto := apiclient.NewUpdateBoxStateDto(string(s.convertToApiState(localState)))
+
+	// Carry what the image resolved to, on the one report that says the box is
+	// up.
+	pulled, owed := s.boxlite.PendingImageReport(boxId)
+	carriesReport := owed && localState == enums.BoxStateStarted
+	if carriesReport {
+		dto.SetImageDigest(pulled.Digest)
+		dto.SetImageSizeBytes(pulled.SizeBytes)
+	}
+
+	_, err := s.client.BoxAPI.UpdateBoxState(ctx, boxId).UpdateBoxStateDto(*dto).Execute()
 	if err != nil {
 		return fmt.Errorf("failed to get box %s: %w", boxId, err)
 	}
 
+	// Only the push that actually carried it. A box that reaches STOPPED or
+	// ERROR before anyone reported its image would otherwise have the report
+	// dropped by a push that never contained it.
+	if carriesReport {
+		s.boxlite.ClearPendingImageReport(boxId)
+	}
 	return nil
 }
 
@@ -187,12 +205,23 @@ func (s *BoxSyncService) PerformSync(ctx context.Context) error {
 
 		convertedRemoteState := s.convertFromApiState(remoteState)
 
-		if local.state != convertedRemoteState {
+		// A box this runner just created owes one report of what its image
+		// resolved to, and a state mismatch cannot be relied on to carry it:
+		// the control plane also learns a box is up by polling this runner, so
+		// whichever observation lands first leaves the other with nothing to
+		// say. That report is pushed on its own.
+		_, owesImageReport := s.boxlite.PendingImageReport(boxId)
+
+		if local.state != convertedRemoteState || owesImageReport {
 			if !s.canReport(local, remoteState) {
 				continue
 			}
 
-			s.log.InfoContext(ctx, "State mismatch for box", "boxId", boxId, "localState", local.state, "remoteState", convertedRemoteState)
+			if local.state != convertedRemoteState {
+				s.log.InfoContext(ctx, "State mismatch for box", "boxId", boxId, "localState", local.state, "remoteState", convertedRemoteState)
+			} else {
+				s.log.InfoContext(ctx, "Pushing an owed image report for box", "boxId", boxId, "state", local.state)
+			}
 
 			err := s.SyncBoxState(ctx, boxId, local.state)
 			if err != nil {
