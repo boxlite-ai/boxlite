@@ -154,7 +154,7 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Boxes and preview access</b> · 19 routes</summary>
+<summary><b>Boxes and preview access</b> · 23 routes</summary>
 
 | Method | Path                                                                    | What it does                                          |
 | ------ | ----------------------------------------------------------------------- | ----------------------------------------------------- |
@@ -177,6 +177,10 @@ serves and the events it emits are catalogued below alongside its routes.
 | `GET`  | `/api/preview/{boxId}/validate/{authToken}`                             | Validates a box preview authentication token.         |
 | `GET`  | `/api/preview/{boxId}/access`                                           | Checks whether the caller may preview a box.          |
 | `GET`  | `/api/preview/{signedPreviewToken}/{port}/box-id`                       | Resolves a signed preview token and port to a box ID. |
+| `GET` | `/api/box-endpoints` | Lists official hostname bindings in the selected organization. |
+| `PUT` | `/api/box-endpoints/{name}` | Binds a name to `{boxIdOrName, port}`; requires `write:boxes`. |
+| `DELETE` | `/api/box-endpoints/{name}` | Revokes a binding, retaining its name reservation; requires `write:boxes`. |
+| `GET` | `/api/box-endpoints/resolve/{name}` | Proxy-only resolution, scoped to the region for regional credentials. |
 
 </details>
 
@@ -466,17 +470,17 @@ registered by `server.go`; this catalog follows runtime registration.
 ## Preview proxy API
 
 **Service:** `apps/proxy` · **Base host:** `proxy.<domain>` and
-`<port>-<box>.proxy.<domain>` · **Port:** `4000` in deployments (`PROXY_PORT`
+`<port>-<box>.proxy.<domain>` or `app-<name>.proxy.<domain>` · **Port:** `4000` in deployments (`PROXY_PORT`
 environment variable, required)
 
-The proxy is host-routed: a host whose first label parses as `<port>-<box>`
-selects the preview forwarding paths, and any other host serves the base-host
-utility routes. The preview-warning acceptance route is handled before host
-routing, so it works on every host. How the proxy authenticates these requests
+The proxy is host-routed: `<port>-<box>` selects a preview target, while
+`app-<name>` resolves an API-managed binding before entering the same forwarding
+paths. Other hosts serve the base-host utility routes. Unknown or revoked `app-`
+hosts return 404, including on utility paths. How the proxy authenticates these requests
 and tunnels them to guest ports is in [`proxy/README.md`](./proxy/README.md).
 
 <details>
-<summary><b>Proxy routes</b> · 5 routes</summary>
+<summary><b>Proxy routes</b> · 7 routes</summary>
 
 | Method    | Host and path                                              | What it does                                                                                     |
 | --------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -485,6 +489,8 @@ and tunnels them to guest ports is in [`proxy/README.md`](./proxy/README.md).
 | `POST`    | `<any host>/accept-boxlite-preview-warning?redirect={url}` | Records preview-warning acceptance and redirects the browser.                                    |
 | `ANY`     | `<port>-<box>.proxy.<domain>/{path...}`                    | Reverse-proxies HTTP and WebSocket traffic to the selected box port after preview access checks. |
 | `CONNECT` | `<port>-<box>.proxy.<domain>`                              | Opens a bidirectional TCP tunnel through the runner; allowed for public boxes only.              |
+| `ANY` | `app-<name>.proxy.<domain>/{path...}` | Resolves a binding and forwards HTTP/WebSocket traffic with existing box access checks. |
+| `CONNECT` | `app-<name>.proxy.<domain>` | Resolves a binding and opens a tunnel for a public box. |
 
 </details>
 
