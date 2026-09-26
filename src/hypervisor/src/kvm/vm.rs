@@ -154,15 +154,55 @@ impl KvmVm {
             source,
         })
     }
+
+    /// Sets a GSI on the in-kernel interrupt controller, from any thread.
+    pub fn set_irq_line(&self, line: u32, level: bool) -> Result<()> {
+        self.fd
+            .set_irq_line(line, level)
+            .map_err(|source| Error::SetIrqLine {
+                line,
+                source: source.into(),
+            })
+    }
+}
+
+impl crate::Vm for KvmVm {
+    type Vcpu = KvmVcpu;
+
+    unsafe fn map_memory(&self, region: &MemoryRegion) -> Result<()> {
+        // SAFETY: the trait caller guarantees the same backing-memory contract.
+        unsafe { Self::map_memory(self, region) }
+    }
+
+    fn unmap_memory(&self, region: &MemoryRegion) -> Result<()> {
+        Self::unmap_memory(self, region)
+    }
+
+    fn create_vcpu(&self, id: u32) -> Result<Self::Vcpu> {
+        Self::create_vcpu(self, id)
+    }
+
+    fn set_irq_line(&self, line: u32, level: bool) -> Result<()> {
+        Self::set_irq_line(self, line, level)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::ptr::NonNull;
+    use std::sync::{
+        atomic::{AtomicU8, Ordering},
+        mpsc,
+    };
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
 
     use kvm_bindings::{KVM_IRQCHIP_IOAPIC, kvm_irqchip, kvm_regs};
 
     use super::*;
+    use crate::{VcpuExit, VcpuHandle};
 
     struct Ram(NonNull<u8>);
 
@@ -211,6 +251,91 @@ mod tests {
         vm.fd
             .get_pit2()
             .expect("KvmVm::new must create the in-kernel PIT");
+        crate::Vm::set_irq_line(&vm, 4, true).unwrap();
+        crate::Vm::set_irq_line(&vm, 4, false).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn kick_before_entry_preserves_registers_and_dropped_handles_are_inert() {
+        let vm = KvmVm::new().unwrap();
+        let mut vcpu = crate::Vm::create_vcpu(&vm, 0).unwrap();
+        let before = vcpu.fd.get_regs().unwrap();
+        let handle = crate::Vcpu::handle(&vcpu);
+        handle.kick().unwrap();
+        assert!(matches!(
+            crate::Vcpu::run(&mut vcpu).unwrap(),
+            VcpuExit::Interrupted
+        ));
+        assert_eq!(vcpu.fd.get_regs().unwrap().rip, before.rip);
+        crate::Vcpu::complete_pending_io(&mut vcpu).unwrap();
+        drop(vcpu);
+        handle.kick().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn kick_interrupts_a_guest_that_has_entered_kvm() {
+        let (ready, receive_ready) = mpsc::sync_channel(1);
+        let (release, receive_release) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let ram = Ram::new();
+            // Real mode: mov byte ptr [0x1800],1; jmp to self.
+            let program = [0xc6, 0x06, 0x00, 0x18, 0x01, 0xeb, 0xfe];
+            // SAFETY: the guest cannot access the mapping before registration.
+            unsafe {
+                std::ptr::copy_nonoverlapping(program.as_ptr(), ram.0.as_ptr(), program.len())
+            };
+            let vm = KvmVm::new().unwrap();
+            // SAFETY: ram outlives vm/vcpu, including during unwinding.
+            unsafe { crate::Vm::map_memory(&vm, &ram.region()) }.unwrap();
+            let mut vcpu = crate::Vm::create_vcpu(&vm, 0).unwrap();
+            let mut segments = vcpu.fd.get_sregs().unwrap();
+            segments.cs.base = 0;
+            segments.cs.selector = 0;
+            vcpu.fd.set_sregs(&segments).unwrap();
+            vcpu.fd
+                .set_regs(&kvm_regs {
+                    rip: 0x1000,
+                    rflags: 2,
+                    ..Default::default()
+                })
+                .unwrap();
+            let marker_address = ram.0.as_ptr() as usize + 0x800;
+            ready
+                .send((crate::Vcpu::handle(&vcpu), marker_address))
+                .unwrap();
+            let outcome =
+                crate::Vcpu::run(&mut vcpu).map(|exit| matches!(exit, VcpuExit::Interrupted));
+            // Keep RAM alive even if KVM returns an unexpected error before the
+            // marker. The parent releases it after its last atomic load.
+            let _ = receive_release.recv();
+            outcome
+        });
+        let (handle, marker_address) = receive_ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        // SAFETY: the worker holds RAM until release. x86 byte stores are atomic;
+        // there are no overlapping non-atomic host accesses to this marker.
+        let marker = unsafe { AtomicU8::from_ptr(marker_address as *mut u8) };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let entered = loop {
+            if marker.load(Ordering::Relaxed) == 1 {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            thread::yield_now();
+        };
+        let kicked = handle.kick();
+        release.send(()).unwrap();
+        let outcome = worker.join().unwrap();
+        assert!(entered, "the guest never reached its spin loop");
+        kicked.unwrap();
+        assert!(
+            outcome.unwrap(),
+            "the running guest did not return Interrupted"
+        );
+        handle.kick().unwrap();
     }
 
     #[test]

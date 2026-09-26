@@ -33,8 +33,9 @@ The backend modules are selected by host OS and architecture, and a host with
 no backend fails the build rather than producing a library that exposes no VM
 operations. The traits are exported from the crate root. Linux x86_64 also
 exports `KvmVm` and thread-bound `KvmVcpu`, with creation, memory registration,
-`run` and `complete_pending_io`. Shared trait implementations await the kick
-integration; `run` blocks on an idle guest until interrupted. Boot registers are not exposed yet.
+`run` and `complete_pending_io`. `KvmVm` and `KvmVcpu` implement the shared `Vm`
+and `Vcpu` traits, including IRQ forwarding and cross-thread kick handles.
+`run` blocks on an idle guest until interrupted. Boot registers are not exposed yet.
 
 `KvmVcpu::handle()` can kick a worker before or during guest entry; stale handles
 do nothing. `KvmVm::new()` reserves `SIGRTMIN + 1` on each worker, or the application
@@ -42,6 +43,8 @@ can select a realtime signal with `with_kick_signal`. Keep that signal unblocked
 and at its default disposition before vCPU creation; do not reuse it while the
 vCPU lives. No process-wide handler is installed. KVM temporarily unmasks the
 signal during entry, and vCPU drop drains pending kicks before restoring its bit.
+Hardware qualification covers kicks queued before entry and kicks sent after
+guest code publishes an atomic marker, plus inert handles after vCPU destruction.
 
 `make test:unit:vmm` checks memory-slot validation and rollback without KVM.
 On Linux x86_64, `make test:integration:vmm:kvm` requires read/write access to
