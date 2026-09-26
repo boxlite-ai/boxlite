@@ -20,7 +20,7 @@ machine layout and device emulation belong to `boxlite-vmm`.
 | `memory` | `MemoryRegion`: host memory mapped into the guest |
 | `error` | `Error`: the failed operation, its resource, and the host cause |
 | `hvf` / `hvf::syndrome` | HVF operations and ARM exception decoding (not implemented yet) |
-| `kvm` | x86_64 VM creation, memory slots, vCPU execution and pending-I/O completion; boot registers, kicks and arm64 follow |
+| `kvm` | x86_64 VM creation, memory slots, vCPU execution, kicks and pending-I/O completion; boot registers and arm64 follow |
 | `whp` / `whp::emulator` | WHP operations and x86 instruction decoding for memory-access exits (reserved for M10) |
 
 Three boundaries decide placement when a case is ambiguous: KVM memory-slot
@@ -34,7 +34,14 @@ no backend fails the build rather than producing a library that exposes no VM
 operations. The traits are exported from the crate root. Linux x86_64 also
 exports `KvmVm` and thread-bound `KvmVcpu`, with creation, memory registration,
 `run` and `complete_pending_io`. Shared trait implementations await the kick
-handle; `run` can block on an idle guest. Boot registers are not exposed yet.
+integration; `run` blocks on an idle guest until interrupted. Boot registers are not exposed yet.
+
+`KvmVcpu::handle()` can kick a worker before or during guest entry; stale handles
+do nothing. `KvmVm::new()` reserves `SIGRTMIN + 1` on each worker, or the application
+can select a realtime signal with `with_kick_signal`. Keep that signal unblocked
+and at its default disposition before vCPU creation; do not reuse it while the
+vCPU lives. No process-wide handler is installed. KVM temporarily unmasks the
+signal during entry, and vCPU drop drains pending kicks before restoring its bit.
 
 `make test:unit:vmm` checks memory-slot validation and rollback without KVM.
 On Linux x86_64, `make test:integration:vmm:kvm` requires read/write access to
