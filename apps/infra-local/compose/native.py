@@ -27,6 +27,7 @@ from pathlib import Path
 
 from . import _local_arm64
 from . import orchestrator
+from . import registries
 from .config import InfraConfig, worktree_home
 from .doctor import _lsof_owner
 from .services import SERVICES
@@ -528,11 +529,10 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
         if name not in ALL_COMPONENTS:
             err(f"unknown component: {name} (valid: {' '.join(ALL_COMPONENTS)})")
             return 2
-    # 0. Apple-Silicon bootstrap (idempotent no-ops once done): thread docker.io
-    # + ghcr.io creds through to L1 + runner, build the native lib.
+    # 0. Export registry credentials for L1 and runner, then bootstrap local tools.
     _local_arm64.ensure_tools_on_path()
-    _local_arm64.export_dockerhub_env()
-    _local_arm64.export_ghcr_env()
+    registries.export_dockerhub_env()
+    registries.export_ghcr_env()
     _ensure_installed(p)
     _local_arm64.ensure_native_lib()
 

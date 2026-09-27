@@ -113,6 +113,7 @@ apps/infra-local/
     ├── config.py     # InfraConfig (single source of truth)
     ├── services.py   # the L1 ServiceSpec registry + SERVICES
     ├── orchestrator.py  # L1 box lifecycle (BoxLite SDK)
+    ├── registries.py  # registry credentials for L1 and runner
     ├── native.py     # L2 native-process supervision (subprocess/pidfiles/signals)
     ├── doctor.py     # preflight checks
     └── _sdk.py       # BoxLite SDK import shim
