@@ -61,6 +61,9 @@ source of truth — `python -m compose --help`):
 | caddy (unified entry) | `http://127.0.0.1:28080/` | reverse-proxies all of the above |
 | Dashboard / API | `http://localhost:3000` / `:3001/api` | login via Dex |
 
+For example, Caddy forwards `3000-d-<hex-box-id>.localhost:28080` to the local
+proxy with its Host header intact; the proxy decodes the box ID.
+
 Inside a box, reach the host via `host.boxlite.internal:<port>` (gvproxy DNS —
 only resolvable in a box). `InfraConfig` in `compose/config.py` is the source of
 truth; `BOXLITE_*` env vars override credentials/paths only — **host ports are

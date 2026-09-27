@@ -553,13 +553,13 @@ each of the other services below carries one of its own.
 | ------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------- |
 | `postgres`    | `25432` → `5432`                                      | PostgreSQL wire protocol; `postgresql://boxlite:boxlite@127.0.0.1:25432/boxlite`. |
 | `redis`       | `26379` → `6379`                                      | Redis protocol, backing caches, the Socket.IO adapter, and proxy lookups.         |
-| `minio`       | `29000` → `9000`, `29001` → `9001`                    | S3-compatible object storage API and console UI; probed at `/minio/health/live`.  |
-| `minio-init`  | none                                                  | One-shot `minio/mc` job that creates the `boxlite` bucket; no listener.           |
+| `minio`       | `29000` → `9000`, `29001` → `9001`                    | S3-compatible object storage API and console UI from `ghcr.io/teableio/minio`; probed at `/minio/health/live`. |
+| `minio-init`  | none                                                  | One-shot `ghcr.io/teableio/minio-mc` job that creates the `boxlite` bucket; no listener. |
 | `registry`    | `25000` → `5000`                                      | Docker registry v2 API; probed at `/v2/`.                                         |
 | `registry-ui` | `25052` → `80`                                        | Registry browser UI.                                                              |
 | `dex`         | `25556` → `5556`                                      | OIDC provider served under the `/dex` issuer path.                                |
 | `jaeger`      | `26686` → `16686`, `26687` → `4317`                   | Trace UI, plus an OTLP/gRPC receiver fed by the local collector.                  |
-| `pgadmin`     | `25051` → `80`                                        | Postgres administration UI; probed at `/misc/ping`.                               |
+| `pgadmin`     | `25051` → `5050`                                      | Postgres administration UI; probed at `/misc/ping`.                               |
 | `maildev`     | `25053` → `1080`, `25054` → `1025`                    | Caught-mail UI and the SMTP sink the API sends to; probed at `/healthz`.          |
 | `otel`        | `24317` → `4317`, `24318` → `4318`, `23133` → `13133` | OTLP gRPC and HTTP receivers, plus a `health_check` extension at `/`.             |
 

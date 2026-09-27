@@ -112,7 +112,7 @@ SPEC_REDIS = ServiceSpec(
 
 SPEC_MINIO = ServiceSpec(
     name="minio",
-    image="minio/minio:latest",
+    image="ghcr.io/teableio/minio:RELEASE.2025-04-22T22-12-26Z",
     cpus=1,
     memory_mib=512,
     ports=[(29000, 9000), (29001, 9001)],
@@ -146,7 +146,7 @@ echo "init: ok - boxlite bucket ready"
 
 SPEC_MINIO_INIT = ServiceSpec(
     name="minio-init",
-    image="minio/mc:latest",
+    image="ghcr.io/teableio/minio-mc:RELEASE.2025-04-16T18-13-26Z",
     cpus=1,
     memory_mib=128,
     ports=[],
@@ -290,14 +290,15 @@ SPEC_PGADMIN = ServiceSpec(
     image="dpage/pgadmin4:9.2.0",
     cpus=1,
     memory_mib=512,
-    ports=[(25051, 80)],
+    ports=[(25051, 5050)],
     env=lambda cfg: {
         "PGADMIN_DEFAULT_EMAIL": cfg.pgadmin_email,
         "PGADMIN_DEFAULT_PASSWORD": cfg.pgadmin_password,
         # Skip the password-setup wizard so probes don't redirect forever.
         "PGADMIN_CONFIG_SERVER_MODE": "False",
         "PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED": "False",
-        # Force IPv4 bind (image default is [::]:80 dual-stack).
+        "PGADMIN_LISTEN_PORT": "5050",
+        # Force IPv4 bind (image default is [::] dual-stack).
         "PGADMIN_LISTEN_ADDRESS": "0.0.0.0",
     },
     depends_on=["postgres"],
@@ -449,12 +450,12 @@ def _caddyfile(cfg) -> str:
 }}
 
 :80 {{
-\t# Box port-preview proxy: hostnames look like `<port>-<token>.localhost:28080`.
+\t# Preview hosts use `<port>-<token>` or `<port>-d-<encoded-box-id>`.
 \t# The dashboard's terminal iframe loads URLs in this shape (returned by
 \t# `/api/box/:boxIdOrName/ports/:port/signed-preview-url`). Forward any host that
 \t# starts with `<digits>-` to the apps/proxy service on the host (port 4000),
 \t# which resolves the token → box → runner and proxies through.
-\t@signed_port_preview_host header_regexp Host ^[0-9]+-[a-z0-9]+\\.
+\t@signed_port_preview_host header_regexp Host ^[0-9]+-(?:d-)?[a-z0-9]+\\.
 \thandle @signed_port_preview_host {{
 \t\treverse_proxy {cfg.host_hub}:4000 {{
 \t\t\theader_up Host {{http.request.host}}
