@@ -19,6 +19,11 @@ name = "boxlite"
 path = "src/lib.rs"
 crate-type = ["rlib"]
 
+[[bin]]
+name = "boxlite-infra-image"
+path = "src/bin/infra_image.rs"
+required-features = ["infra-local-image"]
+
 [features]
 default = ["embedded-runtime", "krunfw", "e2fsprogs", "bubblewrap"]
 gvproxy = ["dep:libgvproxy-sys"]                             # Shim-side libgvproxy CGO shared library
@@ -29,6 +34,7 @@ krun = ["krunfw", "libkrun-sys/krun"]                        # Build + staticall
 rest = ["dep:hyper-rustls", "dep:reqwest", "dep:rustls", "dep:urlencoding", "dep:tokio-tungstenite"]  # REST API client backend
 embedded-runtime = []                                        # Embed runtime binaries via include_bytes!
 test-support = []                                            # Expose internal constructors for cross-crate tests
+infra-local-image = []                                       # Internal image-disk tool; excluded from normal SDK builds
 
 [dependencies]
 boxlite-shared.workspace = true

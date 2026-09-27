@@ -4,6 +4,9 @@ pub(crate) mod backend;
 pub mod constants;
 pub mod id;
 pub mod images;
+#[cfg(feature = "infra-local-image")]
+#[doc(hidden)]
+pub mod internal_image_tool;
 pub mod layout;
 pub(crate) mod lock;
 pub mod options;

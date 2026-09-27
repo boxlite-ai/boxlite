@@ -105,6 +105,11 @@ relies on — read-write host volumes + host port mapping — is pinned by
 
 ## Layout
 
+The internal `boxlite-infra-image` tool is built by `make infra-local-image-tool`.
+Its `path` mode reports the ext4 cache path for each image; `prepare` creates
+missing disks. `compose.image_prebuild` validates the tool's result before the
+startup flow uses it. This tool is not part of the public BoxLite CLI or SDK.
+
 Everything is the `compose` package + four root files (no `scripts/`, no `configs/`):
 
 ```text
@@ -119,6 +124,7 @@ apps/infra-local/
     ├── services.py   # the L1 ServiceSpec registry + SERVICES
     ├── orchestrator.py  # L1 box lifecycle (BoxLite SDK)
     ├── registries.py  # registry credentials for L1 and runner
+    ├── image_prebuild.py  # internal OCI image disk tool wrapper
     ├── native.py     # L2 native-process supervision (subprocess/pidfiles/signals)
     ├── doctor.py     # preflight checks
     └── _sdk.py       # BoxLite SDK import shim

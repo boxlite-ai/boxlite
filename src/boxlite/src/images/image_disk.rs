@@ -70,6 +70,12 @@ impl ImageDiskManager {
         }
     }
 
+    /// Cache location for the ext4 disk derived from this resolved image.
+    #[cfg(feature = "infra-local-image")]
+    pub(crate) fn cache_path_for(&self, image: &ImageObject) -> PathBuf {
+        self.disk_path(&image.compute_image_digest())
+    }
+
     /// Get or create an ext4 disk image for the given OCI image.
     ///
     /// Returns a persistent `Disk` (won't be cleaned up on drop).

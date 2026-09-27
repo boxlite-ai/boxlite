@@ -1,4 +1,4 @@
-PHONY_TARGETS += guest shim runtime vmm cli cli\:release skillbox-image build\:apps
+PHONY_TARGETS += guest shim runtime vmm cli cli\:release infra-local-image-tool skillbox-image build\:apps
 
 vmm:
 	@cargo build -p boxlite-hypervisor -p boxlite-vmm
@@ -29,6 +29,16 @@ cli\:release: runtime
 	@echo "🔨 Building boxlite CLI (release)..."
 	@cargo build -p boxlite-cli --release
 	@echo "✅ CLI built: ./target/release/boxlite"
+
+INFRA_LOCAL_IMAGE_TOOL := .apps-local/bin/boxlite-infra-image
+INFRA_LOCAL_IMAGE_SOURCES := $(shell find src/boxlite/src -name '*.rs' -type f)
+
+$(INFRA_LOCAL_IMAGE_TOOL): $(INFRA_LOCAL_IMAGE_SOURCES) src/boxlite/build.rs src/boxlite/Cargo.toml Cargo.toml Cargo.lock
+	@cargo build -p boxlite --bin boxlite-infra-image --features infra-local-image
+	@mkdir -p $(dir $@)
+	@cp target/debug/boxlite-infra-image $@
+
+infra-local-image-tool: $(INFRA_LOCAL_IMAGE_TOOL)
 
 # Build the apps/ workspace (api, dashboard, runner, proxy, libs…) via the
 # repo's own blessed script (nx run-many --target=build --all). The webpack
