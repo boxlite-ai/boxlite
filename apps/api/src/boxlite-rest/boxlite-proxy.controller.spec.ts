@@ -139,8 +139,8 @@ describe('BoxliteProxyController', () => {
 
     expect(boxService.getNetworkTunnelUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
     expect(tunnelService.declarePublic).toHaveBeenCalledWith('box-uuid', 3000)
-    expect(tunnelService.declarePublic.mock.invocationCallOrder[0]).toBeLessThan(
-      boxService.getNetworkTunnelUrl.mock.invocationCallOrder[0],
+    expect(boxService.getNetworkTunnelUrl.mock.invocationCallOrder[0]).toBeLessThan(
+      tunnelService.declarePublic.mock.invocationCallOrder[0],
     )
     expect(result).toEqual({ uri: 'https://3000-box.proxy.test' })
   })
@@ -160,7 +160,17 @@ describe('BoxliteProxyController', () => {
     await expect(
       controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, tunnelRes as never),
     ).rejects.toThrow('database unavailable')
-    expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
+    expect(boxService.getNetworkTunnelUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
+  })
+
+  it('does not declare a public port when tunnel URL resolution fails', async () => {
+    const { controller, boxService, tunnelService, tunnelRes } = makeHarness()
+    boxService.getNetworkTunnelUrl.mockRejectedValue(new Error('region unavailable'))
+
+    await expect(
+      controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, tunnelRes as never),
+    ).rejects.toThrow('region unavailable')
+    expect(tunnelService.declarePublic).not.toHaveBeenCalled()
   })
 
   it('rejects a tunnel request for a private box with 409', async () => {

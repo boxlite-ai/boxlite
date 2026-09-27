@@ -269,8 +269,8 @@ export class BoxliteProxyController {
       await this.resumeForTunnel(box.id, authContext, res)
     }
 
-    await this.tunnelService.declarePublic(box.id, port)
     const uri = await this.boxService.getNetworkTunnelUrl(boxId, authContext.organizationId, port)
+    await this.tunnelService.declarePublic(box.id, port)
     return { uri }
   }
 
