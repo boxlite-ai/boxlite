@@ -543,8 +543,8 @@ mode and `token_hash` are reserved for later.
 | `created_at` | `timestamptz` | creation time |
 | `revoked_at` | `timestamptz` | null while active |
 
-**Unique:** `(box_id, port)`. A revoked row can be reactivated by an authorized
-tunnel request.
+**Unique:** `(box_id, port)`. Repeating an authorized tunnel request keeps the
+declaration active.
 
 The migration creates no declarations for existing boxes. Existing preview and
 tunnel hostnames become reachable only after the owner prepares that port with

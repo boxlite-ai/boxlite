@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common'
+import { ConflictException, Injectable } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { IsNull, Repository } from 'typeorm'
+import { Repository } from 'typeorm'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Tunnel } from '../entities/tunnel.entity'
 
@@ -26,23 +26,6 @@ export class TunnelService {
     if (rows.length === 0) {
       throw new ConflictException('Port already has a non-public tunnel')
     }
-  }
-
-  async revoke(boxId: string, port: number): Promise<void> {
-    this.assertPort(port)
-    const result = await this.tunnels.update({ boxId, port, accessMode: 'public' }, { revokedAt: new Date() })
-    if (!result.affected) {
-      throw new NotFoundException('Tunnel not found')
-    }
-  }
-
-  async listActivePublicPorts(boxId: string): Promise<number[]> {
-    const tunnels = await this.tunnels.find({
-      select: { port: true },
-      where: { boxId, accessMode: 'public', revokedAt: IsNull() },
-      order: { port: 'ASC' },
-    })
-    return tunnels.map((tunnel) => tunnel.port)
   }
 
   async isPublicAccessAllowed(boxId: string, port: number): Promise<boolean> {

@@ -274,27 +274,6 @@ export class BoxliteProxyController {
     return { uri }
   }
 
-  @Delete(':boxId/network/tunnel')
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  @HttpCode(HttpStatus.NO_CONTENT)
-  async revokeNetworkTunnel(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxId') boxId: string,
-    @Query('port', ParseIntPipe) port: number,
-  ): Promise<void> {
-    const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
-    await this.tunnelService.revoke(box.id, port)
-  }
-
-  @Get(':boxId/network/tunnels')
-  async listNetworkTunnels(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxId') boxId: string,
-  ): Promise<number[]> {
-    const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
-    return this.tunnelService.listActivePublicPorts(box.id)
-  }
-
   // A resume that outlives its window is a "come back later", not a client
   // error: POL-352 asks for 504 + Retry-After so a caller (or an SDK mapping
   // this to BoxResumeTimeoutError) can retry the same request instead of

@@ -37,8 +37,6 @@ function makeHarness() {
   const autoResume = { ensureReady: jest.fn().mockResolvedValue(undefined) }
   const tunnelService = {
     declarePublic: jest.fn().mockResolvedValue(undefined),
-    revoke: jest.fn().mockResolvedValue(undefined),
-    listActivePublicPorts: jest.fn().mockResolvedValue([3000]),
   }
   const tunnelRes = { setHeader: jest.fn() }
   const controller = new (BoxliteProxyController as any)(
@@ -54,16 +52,11 @@ describe('BoxliteProxyController', () => {
   beforeEach(() => jest.clearAllMocks())
   afterEach(() => jest.useRealTimers())
 
-  it('requires box write permission to declare or revoke a public port', () => {
+  it('requires box write permission to declare a public port', () => {
     const reflector = new Reflector()
-    for (const handler of [
-      BoxliteProxyController.prototype.proxyNetworkTunnel,
-      BoxliteProxyController.prototype.revokeNetworkTunnel,
-    ]) {
-      expect(reflector.get(RequiredOrganizationResourcePermissions, handler)).toEqual([
-        OrganizationResourcePermission.WRITE_BOXES,
-      ])
-    }
+    expect(
+      reflector.get(RequiredOrganizationResourcePermissions, BoxliteProxyController.prototype.proxyNetworkTunnel),
+    ).toEqual([OrganizationResourcePermission.WRITE_BOXES])
   })
 
   it('rewrites public box ids to internal box ids before proxying exec', async () => {
@@ -144,23 +137,6 @@ describe('BoxliteProxyController', () => {
       tunnelService.declarePublic.mock.invocationCallOrder[0],
     )
     expect(result).toEqual({ uri: 'https://3000-box.proxy.test' })
-  })
-
-  it('lists only the owning box’s declared ports', async () => {
-    const { controller, boxService, tunnelService } = makeHarness()
-
-    await expect(controller.listNetworkTunnels(activeAuth as never, 'public-box')).resolves.toEqual([3000])
-    expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
-    expect(tunnelService.listActivePublicPorts).toHaveBeenCalledWith('box-uuid')
-  })
-
-  it('revokes only a port belonging to the owning box', async () => {
-    const { controller, boxService, tunnelService } = makeHarness()
-
-    await controller.revokeNetworkTunnel(activeAuth as never, 'public-box', 3000)
-
-    expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
-    expect(tunnelService.revoke).toHaveBeenCalledWith('box-uuid', 3000)
   })
 
   it('does not return a tunnel URI when the declaration cannot be saved', async () => {
