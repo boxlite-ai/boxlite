@@ -8,7 +8,7 @@
 VENV ?= ../../.venv-infra
 PY ?= $(VENV)/bin/python
 
-.PHONY: help install up down status logs restart reset nuke
+.PHONY: help install test up down status logs restart reset nuke
 
 help:      ## show this help
 	@awk -F':.*## ' '/^[a-zA-Z][a-zA-Z0-9_-]*:.*## / { printf "  %-9s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -22,6 +22,9 @@ $(VENV)/bin/python:
 	$(VENV)/bin/pip install -q -e .
 
 install: $(VENV)/bin/python   ## create the venv + install the package (editable)
+
+test:   ## run focused compose unit tests
+	python3 -m unittest discover -s tests -p 'test_*.py'
 
 up: $(VENV)/bin/python   ## ensure L1 boxes + start L2 (COMPONENTS="api runner")
 	$(PY) -m compose up $(COMPONENTS)

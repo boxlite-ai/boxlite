@@ -35,13 +35,14 @@ def ghcr_creds() -> tuple[str | None, str | None]:
     if shutil.which("gh"):
         try:
             token = subprocess.run(["gh", "auth", "token"], capture_output=True,
-                                   text=True, timeout=5).stdout.strip()
+                                   text=True, timeout=5, check=True).stdout.strip()
             user = subprocess.run(["gh", "api", "user", "--jq", ".login"],
-                                  capture_output=True, text=True, timeout=5).stdout.strip()
+                                  capture_output=True, text=True, timeout=5,
+                                  check=True).stdout.strip()
             if token and user:
                 return user, token
-        except Exception:
-            pass
+        except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            return _credstore_get("ghcr.io")
     return _credstore_get("ghcr.io")
 
 

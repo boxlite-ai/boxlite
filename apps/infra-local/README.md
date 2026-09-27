@@ -71,11 +71,16 @@ fixed** as the `ServiceSpec.ports` literals in `services.py`.
 
 ## Validating it works
 
-There is no infra-local test suite — the stack is its own smoke test:
+Run the credential fallback unit tests before the full stack smoke test:
 
 ```bash
+make test
 make up && make status   # every L1 + L2 row green
 ```
+
+GHCR credentials come from explicit environment variables, then GitHub CLI, then
+Docker's credential store. If GitHub CLI fails or times out, the lookup tries
+Docker's credential store; unexpected programming errors remain visible.
 
 The app's browser E2E (`npm run e2e:local` from `apps/`) covers the SDK → API →
 runner path against a separate Docker stack. The direct-SDK capability this stack
