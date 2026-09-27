@@ -101,6 +101,27 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 			return nil, err
 		}
 	}
+	if targetPort != TERMINAL_PORT {
+		port, err := strconv.ParseUint(targetPort, 10, 16)
+		if err != nil || port == 0 {
+			wrappedErr := fmt.Errorf("invalid target port %q", targetPort)
+			ctx.Error(common_errors.NewBadRequestError(wrappedErr))
+			return nil, wrappedErr
+		}
+		if isDirectHost && *isPublic {
+			allowed, err := p.hasPublicTunnelAccess(ctx.Request.Context(), boxId, uint16(port))
+			if err != nil {
+				wrappedErr := fmt.Errorf("check tunnel access: %w", err)
+				ctx.Error(common_errors.NewInternalServerError(wrappedErr))
+				return nil, wrappedErr
+			}
+			if !allowed {
+				wrappedErr := errors.New("tunnel not found")
+				ctx.Error(common_errors.NewNotFoundError(wrappedErr))
+				return nil, wrappedErr
+			}
+		}
+	}
 
 	// Stamp the API's span vocabulary (boxlite.* — see the API's
 	// ObservabilityContextInterceptor) so one key filters a box across
@@ -134,25 +155,6 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 	}
 
 	if targetPort != TERMINAL_PORT {
-		port, err := strconv.ParseUint(targetPort, 10, 16)
-		if err != nil || port == 0 {
-			wrappedErr := fmt.Errorf("invalid target port %q", targetPort)
-			ctx.Error(common_errors.NewBadRequestError(wrappedErr))
-			return nil, wrappedErr
-		}
-		if isDirectHost && *isPublic {
-			allowed, err := p.hasPublicTunnelAccess(ctx.Request.Context(), boxId, uint16(port))
-			if err != nil {
-				wrappedErr := fmt.Errorf("check tunnel access: %w", err)
-				ctx.Error(common_errors.NewInternalServerError(wrappedErr))
-				return nil, wrappedErr
-			}
-			if !allowed {
-				wrappedErr := errors.New("tunnel not found")
-				ctx.Error(common_errors.NewNotFoundError(wrappedErr))
-				return nil, wrappedErr
-			}
-		}
 		target, err := url.Parse("http://" + net.JoinHostPort(boxId, targetPort) + targetPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse guest target URL: %w", err)

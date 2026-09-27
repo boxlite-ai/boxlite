@@ -64,6 +64,9 @@ func TestUndeclaredTunnelRejectsHTTP(t *testing.T) {
 	if err == nil || target != nil {
 		t.Fatalf("undeclared HTTP port reached proxy target: target=%v err=%v", target, err)
 	}
+	if _, started := ctx.Get(ACTIVITY_POLL_STOP_KEY); started {
+		t.Fatal("undeclared HTTP port started activity polling")
+	}
 }
 
 func TestUndeclaredTunnelRejectsConnect(t *testing.T) {
