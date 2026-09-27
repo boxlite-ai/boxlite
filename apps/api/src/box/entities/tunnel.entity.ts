@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn, Unique } from 'typeorm'
+import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn, Unique } from 'typeorm'
 import { Box } from './box.entity'
 
 @Entity('tunnel')
@@ -23,9 +23,6 @@ export class Tunnel {
 
   @Column({ name: 'token_hash', type: 'character varying', nullable: true })
   tokenHash: string | null
-
-  @CreateDateColumn({ name: 'created_at', type: 'timestamp with time zone' })
-  createdAt: Date
 
   @Column({ name: 'revoked_at', type: 'timestamp with time zone', nullable: true })
   revokedAt: Date | null
