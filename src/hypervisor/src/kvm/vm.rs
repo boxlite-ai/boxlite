@@ -31,12 +31,7 @@ impl KvmVm {
     /// Selects an application-reserved realtime signal for vCPU workers.
     /// It must retain its default disposition and be unblocked before creation.
     pub fn with_kick_signal(signal: i32) -> Result<Self> {
-        if !(libc::SIGRTMIN()..=libc::SIGRTMAX()).contains(&signal) {
-            return Err(Error::CreateVm(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "KVM kick signal must be realtime",
-            )));
-        }
+        super::kick::validate_signal(signal).map_err(Error::CreateVm)?;
         Self::create(signal).map_err(Error::CreateVm)
     }
 
@@ -255,6 +250,9 @@ mod tests {
         vcpu.complete_pending_io().unwrap();
         assert_eq!(vcpu.fd.get_regs().unwrap().rip, 0x1006);
         assert_eq!(vcpu.fd.get_kvm_run().immediate_exit, 0);
+        vcpu.handle().kick().unwrap();
+        assert!(matches!(vcpu.run().unwrap(), crate::VcpuExit::Interrupted));
+        assert!(matches!(vcpu.run().unwrap(), crate::VcpuExit::Halted));
         // Stop this user of the backing page before removing its guest mapping.
         drop(vcpu);
         vm.unmap_memory(&ram.region()).unwrap();
