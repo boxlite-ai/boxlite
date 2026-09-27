@@ -250,7 +250,7 @@ mod tests {
         vcpu.complete_pending_io().unwrap();
         assert_eq!(vcpu.fd.get_regs().unwrap().rip, 0x1006);
         assert_eq!(vcpu.fd.get_kvm_run().immediate_exit, 0);
-        vcpu.handle().kick().unwrap();
+        crate::VcpuHandle::kick(&vcpu.handle()).unwrap();
         assert!(matches!(vcpu.run().unwrap(), crate::VcpuExit::Interrupted));
         assert!(matches!(vcpu.run().unwrap(), crate::VcpuExit::Halted));
         // Stop this user of the backing page before removing its guest mapping.
