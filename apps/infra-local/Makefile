@@ -23,8 +23,8 @@ $(VENV)/bin/python:
 
 install: $(VENV)/bin/python   ## create the venv + install the package (editable)
 
-test:   ## run focused compose unit tests
-	python3 -m unittest discover -s tests -p 'test_*.py'
+test: $(VENV)/bin/python  ## run infra-local unit tests
+	$(PY) -m unittest discover -s tests -p 'test_*.py' -v
 
 up: $(VENV)/bin/python   ## ensure L1 boxes + start L2 (COMPONENTS="api runner")
 	$(PY) -m compose up $(COMPONENTS)

@@ -535,8 +535,13 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
     registries.export_ghcr_env()
     _ensure_installed(p)
     _local_arm64.ensure_native_lib()
+    subprocess.run(["make", "infra-local-image-tool"], cwd=cfg.repo_root, check=True)
 
-    # 1. ensure L1 boxes (single asyncio.run; brings L1 up if postgres is down)
+    # Build missing OCI-derived ext4 disks before any L1 box starts.
+    from .image_prebuild import ensure_l1_image_disks
+    orchestrator.ensure_home_env(cfg)
+    ensure_l1_image_disks(cfg)
+    # 1. ensure L1 boxes (brings L1 up if postgres is down)
     l1_recreated = asyncio.run(_ensure_l1_async(cfg))
 
     # 2. a surviving L2 proc is stale once L1 was just (re)created — restart fresh

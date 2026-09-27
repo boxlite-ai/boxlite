@@ -15,7 +15,7 @@ BoxLite is an embeddable virtual machine runtime for secure, isolated code execu
 |---------|---------|--------|
 | **Isolation** | Hardware VM (KVM/Hypervisor.framework) | Container (namespaces/cgroups) |
 | **Daemon** | No daemon required | Requires Docker daemon |
-| **Root** | No root required | Typically needs root/sudo |
+| **Root** | No root for the VM runtime; some OCI image preparation needs root | Typically needs root/sudo |
 | **Architecture** | Embeddable library | Client-server architecture |
 | **Use Case** | Embedded sandboxing, AI agents | Application deployment, CI/CD |
 | **Startup** | ~1-2 seconds | ~100-500ms |
@@ -35,7 +35,9 @@ BoxLite is an embeddable virtual machine runtime for secure, isolated code execu
 
 ### Do I need root or sudo?
 
-**No.** BoxLite doesn't require root privileges.
+The VM runtime itself does not require root privileges. Preparing an ext4 disk
+from an OCI image with restrictive file permissions can require root. The
+`infra-local` cold-start workflow elevates only that image preparation step.
 
 **macOS:** Hypervisor.framework is available to all users (no special permissions)
 

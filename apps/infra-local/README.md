@@ -10,9 +10,8 @@ BoxLite. One Python orchestrator (`compose`) drives both layers:
   Proxy (Go, `:4000`), Dashboard (Vite, `:3000`) — via `subprocess` supervision
   (`native.py`).
 
-All generated state lives under one gitignored dir, `<repo>/.apps-local/`
-(`data/` volumes, `boxlite/` L1 SDK home, `boxlite-runner/` L3 home, `bin/`
-binaries, `logs/`).
+Data volumes, binaries, and logs live under `<repo>/.apps-local/`; BoxLite
+homes default to `~/.bl/<worktree-hash>/h` (L1) and `/r` (runner).
 
 ## Quick start
 
@@ -26,8 +25,21 @@ make status    # one-screen health across L1 + L2
 make down      # stop L2 (add ARGS=--all to also stop L1)
 ```
 
-First run pulls 12 images (~5–7 min); later runs reuse the cache (~30–60 s). Log
-in at <http://localhost:3000> through Dex (`admin@boxlite.dev` / `password`).
+On `make up`, infra-local checks the ext4 cache for each L1 service image.
+It builds the project-internal `boxlite-infra-image` tool from this checkout;
+the tool is separate from the public Python SDK.
+Missing disks are built from OCI in a short-lived `sudo` process; cached disks
+need no root access. The resulting disks are installed in the developer's cache,
+and the L1 boxes and L2 processes continue under the developer's account.
+A cold start invokes `sudo` once, even when several image disks are missing.
+Log in at <http://localhost:3000>
+through Dex (`admin@boxlite.dev` / `password`).
+
+The L2 runner has a separate image cache. If it must pull a new OCI image and
+convert it to a filesystem at runtime, **start the runner with root privileges**
+(or prebuild that image's disk as root in its cache). The L1 startup step does
+not prepare arbitrary images requested later through the runner. Reusing an
+already built runner image disk does not require root for this conversion.
 
 ## Commands
 
@@ -71,7 +83,7 @@ fixed** as the `ServiceSpec.ports` literals in `services.py`.
 
 ## Validating it works
 
-Run the credential fallback unit tests before the full stack smoke test:
+Run the image preparation and credential fallback tests, then smoke-test the stack:
 
 ```bash
 make test
@@ -94,7 +106,7 @@ relies on — read-write host volumes + host port mapping — is pinned by
 | Dashboard `Unauthorized` / `401` right after login | dex box clock drifted behind the host after the Mac slept → tokens are born expired | `make restart COMPONENTS=dex` + clear browser storage |
 | Box `pulling` stuck for minutes | registry box's process hung (TCP still listens) | `make restart COMPONENTS=registry` |
 | All API calls `401` | `PROXY_API_KEY` empty in `apps/api/.env` | set it non-empty |
-| Runner: `Another BoxliteRuntime is already using directory` | a stale runner holds `.apps-local/boxlite-runner/.lock` | `lsof` the lock, kill the stale PID |
+| Runner: `Another BoxliteRuntime is already using directory` | a stale runner holds `~/.bl/<worktree-hash>/r/.lock` by default | `lsof` the lock, stop the stale runner process |
 | Any L1 box misbehaving | its stateful in-box process is wedged | `make restart COMPONENTS=<box>` |
 | "Create Box" from the UI is incomplete | image resolution is mid-rewrite upstream + the picker is PostHog flag-gated | known limitation; use `POST /api/box` directly |
 
@@ -110,7 +122,7 @@ Its `path` mode reports the ext4 cache path for each image; `prepare` creates
 missing disks. `compose.image_prebuild` validates the tool's result before the
 startup flow uses it. This tool is not part of the public BoxLite CLI or SDK.
 
-Everything is the `compose` package + four root files (no `scripts/`, no `configs/`):
+The orchestrator is the `compose` package; its tests live alongside it:
 
 ```text
 apps/infra-local/
@@ -118,16 +130,17 @@ apps/infra-local/
 ├── README.md
 ├── pyproject.toml
 ├── api.env           # API .env template (copied to apps/api/.env on first `up`)
-└── compose/
-    ├── __main__.py   # the `python -m compose` CLI (up/down/status/logs/restart/reset/nuke)
-    ├── config.py     # InfraConfig (single source of truth)
-    ├── services.py   # the L1 ServiceSpec registry + SERVICES
-    ├── orchestrator.py  # L1 box lifecycle (BoxLite SDK)
-    ├── registries.py  # registry credentials for L1 and runner
-    ├── image_prebuild.py  # internal OCI image disk tool wrapper
-    ├── native.py     # L2 native-process supervision (subprocess/pidfiles/signals)
-    ├── doctor.py     # preflight checks
-    └── _sdk.py       # BoxLite SDK import shim
+├── compose/
+│   ├── __main__.py   # the `python -m compose` CLI (up/down/status/logs/restart/reset/nuke)
+│   ├── config.py     # InfraConfig (single source of truth)
+│   ├── services.py   # the L1 ServiceSpec registry + SERVICES
+│   ├── orchestrator.py  # L1 box lifecycle (BoxLite SDK)
+│   ├── image_prebuild.py  # root-only OCI-to-ext4 preparation for L1
+│   ├── registries.py  # image registry credentials for L1 and runner
+│   ├── native.py     # L2 native-process supervision (subprocess/pidfiles/signals)
+│   ├── doctor.py     # preflight checks
+│   └── _sdk.py       # BoxLite SDK import shim
+└── tests/            # image preparation and credential fallback tests
 ```
 
 **Add an L1 service**: one `ServiceSpec` + a `SERVICES` entry in `services.py`;

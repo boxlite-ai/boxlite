@@ -112,7 +112,8 @@ def ensure_home_env(config: InfraConfig) -> None:
 
 def get_runtime():
     Boxlite, _ = import_sdk()
-    # BoxLite does not read ~/.docker/config.json; pass registry credentials explicitly.
+    # The BoxLite puller does not read ~/.docker/config.json. The internal
+    # image tool inherits these exported credentials for cache preparation.
     from . import registries
     image_registries = registries.image_registries()
     if image_registries:
