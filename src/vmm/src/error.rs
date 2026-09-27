@@ -6,7 +6,7 @@
 use std::{error, fmt};
 
 /// Result of a VMM operation.
-pub type Result<T, E = Error> = std::result::Result<T, E>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// A failure that ends the VM.
 ///

@@ -206,12 +206,12 @@ impl IoBus {
     /// Finds the window whose ports fully contain `[port, port + len)`.
     ///
     /// As on [`Bus::window`], the greatest base at or below `port` is the
-    /// only candidate because windows never overlap. Plain addition is
-    /// exact: `insert` confines stored ends to the 16-bit port space plus
-    /// one, and an access buffer cannot be long enough to wrap the `u64`
-    /// sum.
+    /// only candidate because windows never overlap. The end sum is
+    /// checked, like [`Bus::window`]: `insert` confines stored ends to
+    /// the 16-bit port space, and a checked add keeps a hostile or
+    /// absurdly wide access from wrapping.
     fn window(&self, port: u16, len: u64) -> Result<(u64, &Arc<Mutex<dyn BusDevice + Send>>)> {
-        let end = u64::from(port) + len;
+        let end = u64::from(port).checked_add(len).ok_or(Error::IoUnmapped { port })?;
         let (base, (size, device)) = self
             .ranges
             .range(..=port)

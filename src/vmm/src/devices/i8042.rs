@@ -288,7 +288,18 @@ impl I8042 {
                 Some(byte) => self.resp.push_front((byte, true)),
                 None => self.push_kbd(&[KBD_ACK]),
             },
-            KBD_READ_ID => self.push_kbd(&[KBD_ACK, 0xAB, 0x00]),
+            KBD_READ_ID => {
+                // QEMU's ps2.c (hw/input/ps2.c:613-614) answers GET_ID with
+                // 0xAB followed by 0x41 in translation mode, 0x83 in raw
+                // mode — the same translation bit that governs the scan-set
+                // query. A BIOS-clean controller boots with translation on.
+                let id = if (self.command & CONTROL_TRANSLATION) != 0 {
+                    0x41
+                } else {
+                    0x83
+                };
+                self.push_kbd(&[KBD_ACK, 0xAB, id]);
+            }
             KBD_ECHO => self.push_kbd(&[KBD_ECHO]),
             // Deliberate leniency: acknowledge anything else (enable,
             // disable, make/break modes, stray bytes) so a driver probe
@@ -379,11 +390,11 @@ mod tests {
         // Fresh controller: self-test OK, no pending byte.
         assert_eq!(read_status(&mut dev), STATUS_SELF_TEST_OK);
         write_data(&mut dev, KBD_READ_ID);
-        assert_eq!(read_status(&mut dev) & STATUS_OUT_DATA, STATUS_OUT_DATA);
         assert_eq!(read_data(&mut dev), KBD_ACK);
         assert_eq!(read_data(&mut dev), 0xAB);
-        assert_eq!(read_data(&mut dev), 0x00);
+        assert_eq!(read_data(&mut dev), 0x41); // MF2 ID, translated mode
         // Drained: the data-ready bit drops again.
+        assert_eq!(read_data(&mut dev), 0x00);
         assert_eq!(read_status(&mut dev) & STATUS_OUT_DATA, 0);
         // Reading past the end answers zero, never a panic.
         assert_eq!(read_data(&mut dev), 0);
@@ -452,6 +463,26 @@ mod tests {
     }
 
     #[test]
+    fn read_id_is_translation_aware() {
+        // QEMU's ps2.c answers GET_ID with 0xAB,0x41 when the controller's
+        // translation bit is set and 0xAB,0x83 when it is clear. The boot
+        // default is translation on.
+        let (mut dev, _) = controller();
+        write_data(&mut dev, KBD_READ_ID);
+        assert_eq!(read_data(&mut dev), KBD_ACK);
+        assert_eq!(read_data(&mut dev), 0xAB);
+        assert_eq!(read_data(&mut dev), 0x41);
+
+        // Turn translation off: the second ID byte switches to 0x83.
+        write_command(&mut dev, CMD_WRITE_CONTROL);
+        write_data(&mut dev, CONTROL_KBD_INTERRUPT | CONTROL_AUX_INTERRUPT);
+        write_data(&mut dev, KBD_READ_ID);
+        assert_eq!(read_data(&mut dev), KBD_ACK);
+        assert_eq!(read_data(&mut dev), 0xAB);
+        assert_eq!(read_data(&mut dev), 0x83);
+    }
+
+    #[test]
     fn reset_commands_restore_scan_set_two() {
         let (mut dev, _) = controller();
         // Move to set 3 first, then every reset path must bring set 2 back.
@@ -482,7 +513,7 @@ mod tests {
         // keyboard byte ahead of the unread remainder, no clearing.
         write_data(&mut dev, KBD_RESEND);
         assert_eq!(read_data(&mut dev), 0xAB);
-        assert_eq!(read_data(&mut dev), 0x00);
+        assert_eq!(read_data(&mut dev), 0x41);
         // A resend with no history yet acknowledges instead.
         let (mut fresh, _) = controller();
         write_data(&mut fresh, KBD_RESEND);
@@ -523,7 +554,7 @@ mod tests {
         write_data(&mut dev, KBD_READ_ID);
         assert_eq!(read_data(&mut dev), KBD_ACK);
         assert_eq!(read_data(&mut dev), 0xAB);
-        assert_eq!(read_data(&mut dev), 0x00);
+        assert_eq!(read_data(&mut dev), 0x41);
     }
 
     #[test]
@@ -601,7 +632,7 @@ mod tests {
         assert_eq!(data[1..4], [0, 0, 0]);
         assert_eq!(data[4] & STATUS_OUT_DATA, STATUS_OUT_DATA); // ID bytes queued
         assert_eq!(read_data(&mut dev), 0xAB);
-        assert_eq!(read_data(&mut dev), 0x00);
+        assert_eq!(read_data(&mut dev), 0x41);
         // A write walk that crosses both ports: replies, never a panic.
         dev.write(0, &[0x00; 8]);
         assert_eq!(read_status(&mut dev) & STATUS_OUT_DATA, STATUS_OUT_DATA);

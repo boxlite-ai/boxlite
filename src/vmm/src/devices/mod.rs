@@ -24,7 +24,7 @@ mod tests {
     };
 
     use crate::{
-        bus::{BusDevice, IoBus},
+        bus::IoBus,
         devices::{i8042::I8042, rtc::CmosRtc, serial::Serial},
         error::Error,
         irq::{InterruptTarget, IrqSender},
@@ -70,12 +70,6 @@ mod tests {
         }
     }
 
-    /// Boxes a concrete device for bus registration.
-    fn as_bus_device<T: BusDevice + Send + 'static>(
-        device: Arc<Mutex<T>>,
-    ) -> Arc<Mutex<dyn BusDevice + Send>> {
-        device
-    }
 
     /// 2026-09-22T12:34:56Z (a Tuesday), the fixed wall clock the probe reads.
     const PROBE_NOW: u64 = 1_790_080_496;
@@ -112,14 +106,14 @@ mod tests {
         bus.insert(
             Serial::PORT_BASE,
             Serial::PORT_WINDOW,
-            as_bus_device(serial.clone()),
+            serial.clone(),
         )
         .unwrap();
-        bus.insert(CmosRtc::PORT_INDEX, 2, as_bus_device(rtc))
+        bus.insert(CmosRtc::PORT_INDEX, 2, rtc)
             .unwrap();
         // One five-port window at 0x60 covers the data port (offset 0) and
         // the command/status port (offset 4), as libkrun registers it.
-        bus.insert(I8042::PORT_BASE, I8042::PORT_WINDOW, as_bus_device(kbd))
+        bus.insert(I8042::PORT_BASE, I8042::PORT_WINDOW, kbd)
             .unwrap();
 
         Machine {

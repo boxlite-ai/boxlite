@@ -161,7 +161,7 @@ impl CmosRtc {
     /// Rendering for the live register `reg` at epoch time `now`, or `None`
     /// for anything else (those read as stored NVRAM).
     fn live(&self, reg: usize, now: u64) -> Option<u8> {
-        if !matches!(reg, 0x00 | 0x02 | 0x04 | 0x06 | 0x07 | 0x08 | 0x09) {
+        if !matches!(reg, 0x00 | 0x02 | 0x04 | 0x06 | 0x07 | 0x08 | 0x09 | 0x32) {
             return None;
         }
         let c = civil(now);
@@ -174,6 +174,7 @@ impl CmosRtc {
             0x06 => encode(day_of_week(now / 86_400) + 1, binary), // CMOS: 1 = Sunday
             0x07 => encode(c.day, binary),
             0x08 => encode(c.month, binary),
+            0x32 => (c.year / 100) as u8, // century: always binary (no BCD)
             _ => encode((c.year % 100) as u32, binary), // 0x09: year of century
         })
     }
@@ -344,8 +345,8 @@ mod tests {
         let mut rtc = rtc_at(NOW);
         write_reg(&mut rtc, 0x2A, 0x5A);
         assert_eq!(read_reg(&mut rtc, 0x2A), 0x5A);
-        write_reg(&mut rtc, 0x32, 0x20); // the century byte
-        assert_eq!(read_reg(&mut rtc, 0x32), 0x20);
+        write_reg(&mut rtc, 0x33, 0x20); // NVRAM byte (not a live register)
+        assert_eq!(read_reg(&mut rtc, 0x33), 0x20);
         write_reg(&mut rtc, 0x7F, 0x11);
         assert_eq!(read_reg(&mut rtc, 0x7F), 0x11);
     }
@@ -377,6 +378,27 @@ mod tests {
         assert_eq!(read_reg(&mut rtc, 0x08), 2);
         assert_eq!(read_reg(&mut rtc, 0x06), 5); // Thursday = 5 (1 = Sunday)
         assert_eq!(read_reg(&mut rtc, 0x09), 24);
+    }
+
+    #[test]
+    fn century_register_live_renders() {
+        // Register 0x32 is the century byte Linux's mc146818_get_time reads
+        // to form the full year (0x09 + 0x32*100). It is always binary, so
+        // the BCD/binary bit in register B does not apply.
+        let mut rtc = rtc_at(NOW); // 2026-09-22
+        write_reg(&mut rtc, 0x0B, B_24H); // BCD mode for the other registers
+        assert_eq!(read_reg(&mut rtc, 0x32), 20);
+        assert_eq!(read_reg(&mut rtc, 0x09), 0x26); // year of century, BCD
+
+        // Across a century boundary: 2100-01-01T00:00:00Z.
+        let mut y2100 = rtc_at(4_102_444_800);
+        write_reg(&mut y2100, 0x0B, B_24H);
+        assert_eq!(read_reg(&mut y2100, 0x32), 21);
+        assert_eq!(read_reg(&mut y2100, 0x09), 0x00);
+
+        // A guest write is overwritten by the live value on read.
+        write_reg(&mut rtc, 0x32, 0x42);
+        assert_eq!(read_reg(&mut rtc, 0x32), 20);
     }
 
     #[test]

@@ -167,4 +167,20 @@ mod tests {
         sender.clone().set_level(4, true).unwrap();
         assert_eq!(calls(&target), vec![(4, true)]);
     }
+
+    #[test]
+    fn set_level_propagates_a_failure() {
+        let (target, shared) = failing(4, true);
+        let sender = IrqSender::new(shared);
+
+        let error = sender.set_level(4, true).unwrap_err();
+        // No call landed: the target failed before recording.
+        assert!(calls(&target).is_empty());
+        assert_eq!(error.to_string(), "failed to set interrupt line 4");
+        let cause = error
+            .source()
+            .and_then(|cause| cause.downcast_ref::<io::Error>())
+            .expect("host cause");
+        assert_eq!(cause.to_string(), "injected");
+    }
 }

@@ -160,6 +160,7 @@ impl Serial {
     fn sync_line(&mut self) -> Result<()> {
         let want = self.rx_irq_armed() && !self.rx.is_empty();
         if want == self.raised {
+            self.pending_line = None;
             return Ok(());
         }
         match self.irq.set_level(self.gsi, want) {
@@ -645,5 +646,39 @@ mod tests {
         let mut data = [0u8; 1];
         serial.read(5, &mut data);
         assert_eq!(data[0], LSR_IDLE);
+    }
+
+    #[test]
+    fn failed_raise_then_drain_clears_pending_line() {
+        // A failed raise leaves pending_line = Some(true). When the guest
+        // drains the RX byte, want drops to false — which already equals
+        // raised (false) — so sync_line takes the early-return path. That
+        // path must clear pending_line, or every later access retries a
+        // transition that no longer applies.
+        let sink = Sink::default();
+        let fail: Arc<dyn InterruptTarget> = {
+            let concrete: Arc<FailFirstRaise> = Arc::new(FailFirstRaise(Mutex::new(true)));
+            concrete
+        };
+        let mut serial = Serial::new(Arc::new(Mutex::new(sink)), IrqSender::new(fail), 4);
+        serial.ier = IER_ERDAI;
+        serial.mcr = MCR_OUT2;
+
+        // The raise fails; pending_line remembers the target.
+        assert!(serial.push_rx(b'x').is_err());
+        assert_eq!(serial.pending_line, Some(true));
+        assert!(!serial.raised);
+
+        // Drain the RX: want becomes false == raised (false). The early
+        // return must clear pending_line, not leave it stale.
+        let mut data = [0u8; 1];
+        serial.read(0, &mut data);
+        assert_eq!(data[0], b'x');
+        assert!(serial.rx.is_empty());
+        assert!(serial.pending_line.is_none(), "early-return must clear pending_line");
+
+        // A subsequent access must not retry anything: no spurious calls.
+        serial.read(5, &mut data);
+        assert!(serial.pending_line.is_none());
     }
 }
