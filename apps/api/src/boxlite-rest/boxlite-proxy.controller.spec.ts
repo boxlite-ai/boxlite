@@ -37,6 +37,7 @@ function makeHarness() {
   const autoResume = { ensureReady: jest.fn().mockResolvedValue(undefined) }
   const tunnelService = {
     declarePublic: jest.fn().mockResolvedValue(undefined),
+    revoke: jest.fn().mockResolvedValue(undefined),
     listActivePublicPorts: jest.fn().mockResolvedValue([3000]),
   }
   const tunnelRes = { setHeader: jest.fn() }
@@ -151,6 +152,15 @@ describe('BoxliteProxyController', () => {
     await expect(controller.listNetworkTunnels(activeAuth as never, 'public-box')).resolves.toEqual([3000])
     expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
     expect(tunnelService.listActivePublicPorts).toHaveBeenCalledWith('box-uuid')
+  })
+
+  it('revokes only a port belonging to the owning box', async () => {
+    const { controller, boxService, tunnelService } = makeHarness()
+
+    await controller.revokeNetworkTunnel(activeAuth as never, 'public-box', 3000)
+
+    expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
+    expect(tunnelService.revoke).toHaveBeenCalledWith('box-uuid', 3000)
   })
 
   it('does not return a tunnel URI when the declaration cannot be saved', async () => {
