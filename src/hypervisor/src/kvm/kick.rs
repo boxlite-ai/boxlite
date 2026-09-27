@@ -265,7 +265,7 @@ mod tests {
             let signal = libc::SIGRTMIN() + 1;
             assert!(!blocked(signal));
             let (owner, _) = WorkerSignal::reserve(7, signal).unwrap();
-            assert!(blocked(signal));
+            assert!(blocked(signal) && format!("{owner:?}").starts_with("WorkerSignal"));
             assert!(WorkerSignal::reserve(8, signal).is_err());
             handles.send(owner.handle()).unwrap();
             receive_resume.recv().unwrap();
