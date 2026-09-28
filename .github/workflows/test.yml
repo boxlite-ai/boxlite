@@ -38,6 +38,8 @@ on:
       - 'rust-toolchain.toml'
       - 'sdks/**'
       - 'apps/api/**'
+      - 'apps/dashboard/**'
+      - 'apps/libs/api-client/**'
       - 'apps/runner/**'
       - 'apps/go.work'
       - 'apps/go.work.sum'
