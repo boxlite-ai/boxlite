@@ -258,6 +258,21 @@ export class BoxDto {
   lastActivityAt?: string
 
   @ApiPropertyOptional({
+    description:
+      "How the box's main command ended, present once the box has stopped and the runtime " +
+      'recorded it: its own code when it exited, or `128 + n` when a signal ended it. Stopping ' +
+      'a box signals that command, so a stop is recorded here too. `0` is a real value, so a ' +
+      'client must tell the missing field from a zero one. Only reading a single box carries ' +
+      'it: this schema is shared with the box list and with the ' +
+      'replies that change a box, which leave it out whether or not one was recorded.',
+    example: 137,
+    type: 'integer',
+    required: false,
+  })
+  @IsOptional()
+  exitCode?: number
+
+  @ApiPropertyOptional({
     description: 'The class of the box',
     enum: BoxClass,
     example: Object.values(BoxClass)[0],
@@ -295,7 +310,15 @@ export class BoxDto {
   // same-named relation is a `BoxLastActivity` row that read paths do not join.
   // It is reported raw, without the auto-stop sweeper's fallback to
   // `updatedAt` — that fallback is a stop policy, not recorded activity.
-  static fromBox(box: Box, toolboxProxyUrl: string, lastActivityAt?: Date | null): BoxDto {
+  // `exitCode` arrives as an argument for the same reason `lastActivityAt`
+  // does: the control plane does not store it. It is read from the runner that
+  // owns the box, and an unreadable one degrades to absent.
+  static fromBox(
+    box: Box,
+    toolboxProxyUrl: string,
+    lastActivityAt?: Date | null,
+    exitCode?: number,
+  ): BoxDto {
     return {
       id: box.id,
       organizationId: box.organizationId,
@@ -317,6 +340,10 @@ export class BoxDto {
       desiredState: box.desiredState,
       errorReason: box.errorReason,
       recoverable: box.recoverable,
+      // Absent, never null: the runner read yields a number or nothing, and
+      // that is what the generated clients type against. `0` is a real exit
+      // code, so this passes the value through rather than testing it.
+      exitCode,
       autoStop: box.autoStop,
       autoDelete: box.autoDelete,
       autoResume: box.autoResume,

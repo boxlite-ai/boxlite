@@ -34,10 +34,8 @@ fn pre_split_network_spec_source_shape_still_compiles() {
     };
     assert!(matches!(opts.network, NetworkSpec::Disabled));
 
-    // The direction the pre-split API could not express defaults to public.
-    assert!(
-        matches!(opts.inbound_network, NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty())
-    );
+    // The direction the pre-split API could not express defaults to private.
+    assert!(matches!(opts.inbound_network, NetworkSpec::Disabled));
 }
 
 /// The two directions are independent: a box can refuse egress while the
@@ -57,7 +55,7 @@ fn directions_are_independent() {
 }
 
 /// Already-persisted box configs predate `inbound_network`; the missing
-/// field must default rather than fail the load.
+/// field must default to private rather than fail the load.
 #[test]
 fn pre_split_persisted_json_still_deserializes() {
     let json = r#"{
@@ -71,7 +69,7 @@ fn pre_split_persisted_json_still_deserializes() {
     assert!(
         matches!(opts.network, NetworkSpec::Enabled { ref allow_net } if allow_net == &["api.openai.com".to_string()])
     );
-    assert!(matches!(opts.inbound_network, NetworkSpec::Enabled { .. }));
+    assert!(matches!(opts.inbound_network, NetworkSpec::Disabled));
 }
 
 use std::time::{Duration, Instant};

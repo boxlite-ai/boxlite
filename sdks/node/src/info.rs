@@ -183,6 +183,15 @@ pub struct JsBoxStateInfo {
 
     /// Process ID of the VMM subprocess (undefined if not running)
     pub pid: Option<u32>,
+
+    /// How the box's main command ended, set once the runtime recorded it and
+    /// undefined otherwise. Stopping a box signals that command, so this also
+    /// carries what the stop produced.
+    ///
+    /// `0` is a real value here — it is what separates a command that
+    /// succeeded from one that did not — so callers must check for
+    /// `undefined` rather than for falsiness.
+    pub exit_code: Option<i32>,
 }
 
 fn status_to_string(status: BoxStatus) -> String {
@@ -204,6 +213,7 @@ impl From<BoxStateInfo> for JsBoxStateInfo {
             status: status_to_string(state_info.status),
             running: state_info.running,
             pid: state_info.pid,
+            exit_code: state_info.exit_code,
         }
     }
 }
@@ -333,6 +343,21 @@ mod tests {
             started_at: None,
             last_activity_at: None,
         }
+    }
+
+    // 0 is a real exit code — it is what separates a command that succeeded
+    // from one that did not — so the binding has to carry it as a value rather
+    // than fold it into "nothing recorded".
+    #[test]
+    fn box_info_conversion_carries_the_main_command_exit_code() {
+        for code in [0, 42] {
+            let mut info = core_info(None);
+            info.exit_code = Some(code);
+
+            assert_eq!(JsBoxInfo::from(info).state.exit_code, Some(code));
+        }
+
+        assert_eq!(JsBoxInfo::from(core_info(None)).state.exit_code, None);
     }
 
     #[test]

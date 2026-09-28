@@ -113,6 +113,28 @@ test('a stage on another cloud is refused, because one session writes both', asy
   )
 })
 
+test('a name every object inherits is not a stage to promote to', async () => {
+  /*
+   * Both stage names reach maps parsed out of the stage file, which inherit
+   * `toString`; a lookup through the chain takes that function for a
+   * declaration and reads `.home` off it rather than refusing the name.
+   *
+   * The two arrive at different guards, so both are asked. Only `--to` is
+   * scope-resolved; `--from` reaches `destinationFor` with nothing in front
+   * of it, which is why that guard is not redundant with this one.
+   */
+  await assert.rejects(
+    async () => drive(cloud({ dev: [ARCHIVE, `${ARCHIVE}.sha256`] }), ['--tag', REF, '--from', 'toString', '--to', 'prod']),
+    /no stage "toString" is declared/,
+    'the source stage was taken from the prototype chain',
+  )
+  await assert.rejects(
+    async () => drive(cloud({ dev: [ARCHIVE, `${ARCHIVE}.sha256`] }), ['--tag', REF, '--from', 'dev', '--to', 'toString']),
+    /Stage "toString" \(from --stage\) is not declared/,
+    'the destination stage was taken from the prototype chain',
+  )
+})
+
 test('it addresses bytes, and refuses a name that is not one', async () => {
   await assert.rejects(
     async () => drive(cloud({}), ['--tag', 'v0.10.0', '--from', 'dev', '--to', 'prod']),

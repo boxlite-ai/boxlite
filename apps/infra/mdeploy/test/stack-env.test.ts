@@ -62,6 +62,14 @@ test('a tag that is not one full commit sha is refused', () => {
   // cannot pull — after the apply had already created resources.
   assert.throws(() => read({ ...complete, BOXLITE_IMAGE_TAG: 'main' }), /must be one full lowercase commit SHA/)
   assert.throws(() => read({ ...complete, BOXLITE_IMAGE_TAG: SHA.toUpperCase() }), /lowercase/)
+  // The release build of that commit is a different image at a different
+  // address, and it has to reach an apply. This check used to carry its own
+  // copy of mbuild's tag pattern, so a release image would have published fine
+  // and then been refused here; it reads mbuild's constant now.
+  assert.equal(read({ ...complete, BOXLITE_IMAGE_TAG: `v1.2.3-${SHA}` }).tag, `v1.2.3-${SHA}`)
+  for (const rejected of [`v1.2.3-${SHA.slice(1)}`, `1.2.3-${SHA}`, `v1.2.3-v1.2.3-${SHA}`, `${SHA}-v1.2.3`, `release-${SHA}`]) {
+    assert.throws(() => read({ ...complete, BOXLITE_IMAGE_TAG: rejected }), StackEnvError, `${rejected} was accepted`)
+  }
 })
 
 test('the runner binary is not read from the environment at all', () => {

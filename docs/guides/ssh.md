@@ -8,6 +8,13 @@ anything. REST operations follow the server’s autoResume policy; a stopped box
 with autoResume disabled must be started explicitly. CLI commands use the same
 SDK startup and autoResume behavior.
 SSH does not publish a host port; configure network forwarding separately when needed.
+For component diagrams and implementation details, see
+[Guest SSH architecture](../../src/guest/src/service/ssh/README.md).
+
+SSH starts disabled. Control it through the existing host-only guest gRPC connection
+at the box's `sockets/box.sock`, after `Guest.Init` succeeds. There is no LiteBox,
+CLI, or language SDK SSH control API. SSH does not publish a host port; configure
+network forwarding separately when needed.
 
 ## CLI quick start
 

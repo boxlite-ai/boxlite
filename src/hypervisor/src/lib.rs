@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Host hypervisor backends. The [`Vm`] and [`Vcpu`] traits are the contract
-//! every backend implements; vCPU register access and the HVF, KVM and WHP
-//! backends themselves are not implemented yet.
+//! every backend implements. KVM x86_64 currently provides VM creation and
+//! memory registration, vCPU execution and kicks; boot configuration, HVF and
+//! WHP are not implemented yet.
 //!
 //! This crate owns host-specific mechanisms; `boxlite-vmm` owns the guest
 //! machine configuration, memory backing, execution policy, and devices.
@@ -31,6 +32,9 @@ mod hvf;
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 mod kvm;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use kvm::{KvmVcpu, KvmVcpuHandle, KvmVm};
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod whp;

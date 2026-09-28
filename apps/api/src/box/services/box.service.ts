@@ -14,6 +14,7 @@ import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { GetRunnerParams, RunnerService } from './runner.service'
+import { BoxExitCodeService } from './box-exit-code.service'
 import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
@@ -105,6 +106,7 @@ export class BoxService {
     @InjectRepository(Runner)
     private readonly runnerRepository: Repository<Runner>,
     private readonly runnerService: RunnerService,
+    private readonly boxExitCodeService: BoxExitCodeService,
     private readonly volumeService: VolumeService,
     private readonly configService: TypedConfigService,
     private readonly warmPoolService: BoxWarmPoolService,
@@ -280,9 +282,7 @@ export class BoxService {
       box.mem = mem
       box.disk = disk
 
-      // POL-205: default private. A caller who never mentions visibility gets
-      // a box that is not reachable from the public internet, rather than
-      // silently anonymously public.
+      // POL-205: an unset public value on the internal create DTO defaults private.
       box.public = createBoxDto.public ?? false
 
       if (createBoxDto.networkBlockAll !== undefined) {
@@ -1098,17 +1098,51 @@ export class BoxService {
    * between "unknown" and "idle" decides whether a box is stopped.
    */
   async toBoxDto(box: Box): Promise<BoxDto> {
-    const [toolboxProxyUrl, lastActivityAt] = await Promise.all([
+    const [toolboxProxyUrl, lastActivityAt] = await this.resolveDtoMetadata(box)
+    return BoxDto.fromBox(box, toolboxProxyUrl, lastActivityAt)
+  }
+
+  /** The two out-of-entity values every conversion needs, read together. */
+  private async resolveDtoMetadata(box: Box): Promise<[string, Date | null]> {
+    return Promise.all([
       this.resolveToolboxProxyUrl(box.region),
       this.boxActivityService.getLastActivityAt(box.id).catch((err) => {
         this.logger.warn(`Failed to read last activity for box ${box.id}: ${err}`)
         return null
       }),
     ])
-    return BoxDto.fromBox(box, toolboxProxyUrl, lastActivityAt)
   }
 
-  /** Degrades a failed activity read to absent, as {@link toBoxDto} does. */
+  /**
+   * A box as a tenant asked to read it, with the main command's exit code.
+   *
+   * Separate from {@link toBoxDto} because the code comes from the box's
+   * runner, and that is a cross-service call. `toBoxDto` is on the event path:
+   * every `BoxEvents.STATE_UPDATED` converts through it
+   * (`NotificationService`), as does every resolution in
+   * `BoxStateWaiterService`. A box reaching STOPPED is exactly what fires
+   * those, so reading there would put a runner round trip in front of every
+   * stop notification — and make each one wait out the timeout precisely when
+   * the runner is the thing that went wrong.
+   *
+   * Only the two endpoints that answer a tenant's read use this.
+   */
+  async toBoxDtoWithExitCode(box: Box): Promise<BoxDto> {
+    const [[toolboxProxyUrl, lastActivityAt], exitCode] = await Promise.all([
+      this.resolveDtoMetadata(box),
+      this.boxExitCodeService.getExitCode(box),
+    ])
+    return BoxDto.fromBox(box, toolboxProxyUrl, lastActivityAt, exitCode)
+  }
+
+  /**
+   * Degrades a failed activity read to absent, as {@link toBoxDto} does.
+   *
+   * Exit codes are deliberately left out here. Reading one means asking the
+   * runner that owns the box, so a list would fan out to one call per box; the
+   * field is optional in the spec, so omitting it on a list is conformant. A
+   * client that needs it reads the box itself.
+   */
   async toBoxDtos(boxes: Box[]): Promise<BoxDto[]> {
     const [urlMap, activityMap] = await Promise.all([
       this.resolveToolboxProxyUrls(boxes.map((s) => s.region)),

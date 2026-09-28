@@ -118,6 +118,19 @@ pub struct CBoxInfo {
     /// AutoStop measures idleness against; `0` when nothing was recorded, which
     /// is always the case for local runtimes.
     pub last_activity_at: i64,
+    /// Owned record of how the box's main command ended; null when the runtime
+    /// recorded none. Stopping a box signals that command, so this carries what
+    /// the stop produced as well as a self-chosen exit.
+    ///
+    /// Absence cannot be a sentinel the way it is for [`Self::pid`] and
+    /// [`Self::started_at`]: `0` is the exit code of every command that
+    /// succeeded, so a reader that took `0` for "nothing recorded" would
+    /// report every clean exit as an absent one. A pointer makes that reading
+    /// impossible rather than merely wrong — there is no value to mistake —
+    /// and follows [`Self::network`], the struct's other owned optional.
+    ///
+    /// [`free_box_info`] releases it.
+    pub exit_code: *mut c_int,
 }
 
 #[repr(C)]
@@ -297,6 +310,23 @@ fn status_to_str(status: BoxStatus) -> &'static str {
     }
 }
 
+/// Move an optional exit code onto the heap for [`CBoxInfo::exit_code`],
+/// returning null for `None`. Mirrors [`network_to_c_ptr`].
+pub(crate) fn exit_code_to_c_ptr(exit_code: Option<i32>) -> *mut c_int {
+    exit_code
+        .map(|code| Box::into_raw(Box::new(code as c_int)))
+        .unwrap_or(ptr::null_mut())
+}
+
+/// Release an exit code allocated by [`exit_code_to_c_ptr`]. Null-tolerant, so
+/// a box that recorded none frees like any other.
+pub(crate) unsafe fn free_exit_code(exit_code: *mut c_int) {
+    if exit_code.is_null() {
+        return;
+    }
+    unsafe { drop(Box::from_raw(exit_code)) };
+}
+
 impl CBoxInfo {
     pub fn from_box_info(info: &boxlite::runtime::types::BoxInfo) -> Self {
         CBoxInfo {
@@ -322,6 +352,7 @@ impl CBoxInfo {
                 .last_activity_at
                 .map(|at| at.timestamp_millis())
                 .unwrap_or(0),
+            exit_code: exit_code_to_c_ptr(info.exit_code),
         }
     }
 }
@@ -337,6 +368,7 @@ pub unsafe fn free_box_info(info: *mut CBoxInfo) {
         free_str(info_ref.image);
         free_str(info_ref.status);
         free_network_info(info_ref.network);
+        free_exit_code(info_ref.exit_code);
     }
 }
 
@@ -578,7 +610,7 @@ mod tests {
     use crate::options::BoxlitePortProtocol;
     use crate::{FREE_STR_CALLS, FREE_STR_LOCK};
 
-    use super::{BoxliteNetworkMode, CNetworkInfo, free_network_info, network_to_c_ptr};
+    use super::{BoxliteNetworkMode, CBoxInfo, CNetworkInfo, free_network_info, network_to_c_ptr};
     use std::ffi::c_char;
 
     /// Callers compiled against the pre-split header read `mode`,
@@ -743,5 +775,59 @@ mod tests {
 
         let after = FREE_STR_CALLS.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(after - before, 2, "nested network strings must be freed");
+    }
+    fn box_info_with_exit_code(exit_code: Option<i32>) -> boxlite::runtime::types::BoxInfo {
+        use boxlite::runtime::id::BoxID;
+        use boxlite::{BoxStatus, HealthStatus};
+        use std::collections::HashMap;
+        use std::time::SystemTime;
+
+        boxlite::runtime::types::BoxInfo {
+            id: BoxID::parse("box-c-info").unwrap(),
+            name: None,
+            status: BoxStatus::Stopped,
+            created_at: SystemTime::UNIX_EPOCH.into(),
+            last_updated: SystemTime::UNIX_EPOCH.into(),
+            pid: None,
+            image: "alpine:latest".to_string(),
+            cpus: 1,
+            memory_mib: 256,
+            network: None,
+            labels: HashMap::new(),
+            auto_stop: 0,
+            auto_delete: 0,
+            auto_resume: false,
+            health_status: HealthStatus::default(),
+            exit_code,
+            started_at: None,
+            last_activity_at: None,
+        }
+    }
+
+    // The C struct is where `Option<i32>` crosses into C, and `0` is a real
+    // exit code that cannot double as "nothing recorded". A null pointer is
+    // the absence; `Some(0)` is the case that separates the two encodings, so
+    // it is the one that fails first if absence ever becomes a value again.
+    #[test]
+    fn box_info_carries_exit_code_as_owned_pointer_null_when_absent() {
+        // Freeing the strings below moves the shared counter the event-queue
+        // tests assert exact values on; they serialize on this lock, so this
+        // test has to as well.
+        let _guard = FREE_STR_LOCK.lock().unwrap();
+
+        for (exit_code, want) in [(None, None), (Some(0), Some(0)), (Some(42), Some(42))] {
+            let mut info = CBoxInfo::from_box_info(&box_info_with_exit_code(exit_code));
+
+            // SAFETY: `from_box_info` either allocated this pointer or left it
+            // null, and nothing has freed it yet. `as_ref` maps both cases onto
+            // an Option, so one assertion compares what crossed the boundary
+            // against what went in — null against `None` included.
+            let got = unsafe { info.exit_code.as_ref() }.copied();
+            assert_eq!(got, want, "exit_code for {exit_code:?}");
+
+            // Frees the exit code too; running under Miri or a leak checker is
+            // what makes this line load-bearing rather than incidental.
+            unsafe { super::free_box_info(&mut info) };
+        }
     }
 }

@@ -189,7 +189,7 @@ const ensureRuntimeBoundary = async ({ aws, scope, log }: { aws: Aws; scope: Doc
  * The role GitHub Actions deploys as.
  *
  * Trust is per stage: every job that assumes this declares `environment:
- * <stage>` (mdeploy.yml), so GitHub's `sub` claim carries `environment:<stage>`
+ * <stage>` (mdeploy-all.yml), so GitHub's `sub` claim carries `environment:<stage>`
  * rather than the branch form — a role trusting only the branch form rejects
  * them all with `Not authorized to perform sts:AssumeRoleWithWebIdentity`,
  * which reads as a missing role rather than as the claim mismatch it is.

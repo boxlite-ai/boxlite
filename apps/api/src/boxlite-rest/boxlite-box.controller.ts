@@ -152,7 +152,7 @@ export class BoxliteBoxController {
     @Param('boxId') boxId: string,
   ): Promise<BoxResponseDto> {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
-    const dto = await this.boxService.toBoxDto(box)
+    const dto = await this.boxService.toBoxDtoWithExitCode(box)
     return boxToBoxResponse(dto)
   }
 

@@ -91,7 +91,7 @@ const BUCKET_PREFIX = /^[a-z0-9][a-z0-9-]{1,40}$/
  */
 const VOLUME_PREFIX = 'boxlite-volume'
 
-const DATABASE_SIZES: DatabaseSize[] = ['small', 'medium']
+const DATABASE_SIZES: DatabaseSize[] = ['small', 'standard', 'medium']
 const CACHE_SIZES: CacheSize[] = ['small', 'medium']
 const RUNNER_SIZES: RunnerSize[] = ['small', 'medium', 'large']
 const CLICKHOUSE_MODES: ClickHouseMode[] = ['self-hosted', 'managed', 'disabled']

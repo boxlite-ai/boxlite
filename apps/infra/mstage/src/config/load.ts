@@ -80,9 +80,9 @@ export type StageConfig = {
    * Declared because the reads a promotion makes are granted on the *source*
    * and held by *this* stage's accounts, so `bootstrap` cannot make them
    * without being told which stage the source is — and on GCP that is another
-   * project, which nothing else in this block names. `mdeploy-all` picks a
-   * source per dispatch in `auto_promote_from` and defaults to the same answer;
-   * this is the standing one, and the only one a bootstrap can act on.
+   * project, which nothing else in this block names. A rollout makes no such
+   * choice: `mdeploy-all` promotes from dev. This is the declaration a
+   * bootstrap acts on, and the only place the source is named.
    */
   promoteFrom: string | null
   roleArn: string | null
@@ -495,12 +495,15 @@ export const parseConfig = ({
  * Shared, so every caller reports an unknown stage the same way.
  */
 export const stageIn = (config: Pick<MstageConfig, 'stages' | 'path'>, stage: string): StageConfig => {
-  const declared = config.stages[stage]
-  if (!declared) {
+  // Own properties only. The name comes from `--stage` and the map from
+  // `JSON.parse`, so a lookup through the prototype chain answers "declared"
+  // for `toString` and hands back a function — a caller then reads `.home` off
+  // it and fails somewhere with no stage name in the message.
+  if (!Object.hasOwn(config.stages, stage)) {
     const known = Object.keys(config.stages).join(', ')
     throw new ConfigError(`${config.path} declares no stage "${stage}". Declared: ${known}`)
   }
-  return declared
+  return config.stages[stage]!
 }
 
 /**

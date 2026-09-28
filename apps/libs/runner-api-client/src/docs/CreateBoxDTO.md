@@ -24,6 +24,7 @@ Name | Type | Description | Notes
 **regionId** | **string** |  | [optional] [default to undefined]
 **registry** | [**RegistryDTO**](RegistryDTO.md) |  | [optional] [default to undefined]
 **runAsUser** | **string** |  | [optional] [default to undefined]
+**secrets** | [**Array&lt;DtoSecretDTO&gt;**](DtoSecretDTO.md) |  | [optional] [default to undefined]
 **skipStart** | **boolean** |  | [optional] [default to undefined]
 **storageQuota** | **number** |  | [optional] [default to undefined]
 **volumes** | [**Array&lt;DtoVolumeDTO&gt;**](DtoVolumeDTO.md) |  | [optional] [default to undefined]
@@ -54,6 +55,7 @@ const instance: CreateBoxDTO = {
     regionId,
     registry,
     runAsUser,
+    secrets,
     skipStart,
     storageQuota,
     volumes,

@@ -129,6 +129,10 @@ export interface Box {
      */
     'lastActivityAt'?: string;
     /**
+     * How the box\'s main command ended, present once the box has stopped and the runtime recorded it: its own code when it exited, or `128 + n` when a signal ended it. Stopping a box signals that command, so a stop is recorded here too. `0` is a real value, so a client must tell the missing field from a zero one. Only reading a single box carries it: this schema is shared with the box list and with the replies that change a box, which leave it out whether or not one was recorded.
+     */
+    'exitCode'?: number;
+    /**
      * The class of the box
      * @deprecated
      */

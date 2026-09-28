@@ -219,7 +219,7 @@ const DEPLOYER_ROLES = [
    * Reading back what mbuild published, before an apply that cannot pull.
    *
    * The preflight gate runs `mbuild verify` as this identity rather than as
-   * the publisher (`mdeploy.yml`'s "Verify the images"), and the read under it
+   * the publisher (`mdeploy-all.yml`'s "Verify the images"), and the read under it
    * — `gcloud artifacts docker images list` — needs
    * `artifactregistry.repositories.get`. Nothing else in this list reaches
    * Artifact Registry, so the gate is refused and `publish.ts`'s `unreadable`
@@ -358,6 +358,22 @@ const POLICY_BACKOFF_MS = 250
 /** What losing the race looks like, as opposed to being refused the write. */
 const isPolicyConflict = (stderr: string): boolean =>
   /concurrent policy changes|subject of a conflict/i.test(stderr)
+
+/**
+ * Every binding this file makes says out loud that it carries no condition.
+ *
+ * `add-iam-policy-binding` reads the policy, edits it and writes it back; when
+ * the policy it read already holds a condition it refuses to edit in a binding
+ * that carries none, unless the absence is explicit, and so never reaches the
+ * write. A terminal prompts for one instead; `--quiet`
+ * over the closed stdin `execRun` gives every call is the error. This run never
+ * reads a policy before writing to it and so can never know which case it is
+ * in, and one of them does hold a condition whenever its stage stages a runner
+ * binary rather than installing a release: the deploy attaches
+ * `runner-artifacts-only` to that stage's artifacts bucket, which is the bucket
+ * a promotion reads from.
+ */
+const UNCONDITIONAL = '--condition=None'
 
 const gcloudFor = ({
   run,
@@ -587,7 +603,7 @@ const ensurePool = async ({
      * No `--allowed-audiences`. An explicit list replaces GCP's default rather
      * than adding to it, and the default is the provider's own resource URL —
      * exactly what `google-github-actions/auth` requests when no `audience:`
-     * input is given, as none is in `.github/workflows/mdeploy.yml` or
+     * input is given, as none is in `.github/workflows/mdeploy-all.yml` or
      * `mbuild.yml`. Pinning the `projects/-` spelling instead would reject
      * every token the action actually mints.
      */
@@ -728,8 +744,7 @@ const grantProjectRoles = async ({
       project,
       `--member=serviceAccount:${email}`,
       `--role=${role}`,
-      // Without this gcloud prompts for a condition, which never returns in CI.
-      '--condition=None',
+      UNCONDITIONAL,
     ])
   }
   log(`    ${roles.length} project roles granted`)
@@ -767,6 +782,7 @@ const allowImpersonation = async ({
     email,
     `--member=${member}`,
     '--role=roles/iam.workloadIdentityUser',
+    UNCONDITIONAL,
   ])
 }
 
@@ -918,7 +934,7 @@ export const promotionSourceFor = ({
  * account names, because it just created them.
  *
  * Two accounts, not one. The legs authenticate differently — `mbuild.yml`
- * federates `GCP_IMAGE_PUBLISHER` and `mrunner.yml` `GCP_DEPLOYER` — so a grant
+ * federates `GCP_IMAGE_PUBLISHER` and `mdeploy-all.yml` `GCP_DEPLOYER` — so a grant
  * to one of them leaves the other half of a promotion failing, which is the
  * shape this was written for.
  *
@@ -956,15 +972,14 @@ const grantPromotionReads = async ({
        * repository is a change that has to be proved against a real registry
        * rather than assumed here.
        */
-      what: `granting ${publisherEmail} read on ${source.project}`,
+      what: `grant ${publisherEmail} read on ${source.project}`,
       args: [
         'projects',
         'add-iam-policy-binding',
         source.project,
         `--member=serviceAccount:${publisherEmail}`,
         '--role=roles/artifactregistry.reader',
-        // Without this gcloud prompts for a condition, which never returns in CI.
-        '--condition=None',
+        UNCONDITIONAL,
       ],
     },
     {
@@ -975,7 +990,7 @@ const grantPromotionReads = async ({
        * which is what keeps this off `storage.buckets.get` and so off every
        * role wider than this one.
        */
-      what: `granting ${deployerEmail} read on gs://${source.bucket}`,
+      what: `grant ${deployerEmail} read on gs://${source.bucket}`,
       args: [
         'storage',
         'buckets',
@@ -983,6 +998,7 @@ const grantPromotionReads = async ({
         `gs://${source.bucket}`,
         `--member=serviceAccount:${deployerEmail}`,
         '--role=roles/storage.objectViewer',
+        UNCONDITIONAL,
       ],
     },
   ]
@@ -993,7 +1009,7 @@ const grantPromotionReads = async ({
       await gcloud.applyPolicy(`Could not ${grant.what}`, grant.args)
     } catch (error) {
       refused.push(`gcloud ${grant.args.join(' ')} --project ${source.project}`)
-      log(`    ${grant.what}: ${(error as Error).message}`)
+      log(`    ${(error as Error).message}`)
     }
   }
   if (refused.length === 0) {

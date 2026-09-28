@@ -622,6 +622,10 @@ const docTemplate = `{
                 "daemonVersion": {
                     "type": "string"
                 },
+                "exitCode": {
+                    "description": "ExitCode is how the box's main command ended, present once the runtime\nrecorded it: its own code when it exited, or 128 + n when a signal ended\nit. Stopping a box signals that command, so a stop is recorded here too.\nAbsence, not 0, is what says \"not recorded\": 0 is the exit code of every\ncommand that succeeded, so a reader has to tell a missing field from a\nzero one.",
+                    "type": "integer"
+                },
                 "state": {
                     "$ref": "#/definitions/enums.BoxState"
                 }
@@ -959,20 +963,6 @@ const docTemplate = `{
                 }
             }
         },
-        "dto.VolumeDTO": {
-            "type": "object",
-            "properties": {
-                "mountPath": {
-                    "type": "string"
-                },
-                "subpath": {
-                    "type": "string"
-                },
-                "volumeId": {
-                    "type": "string"
-                }
-            }
-        },
         "dto.SecretDTO": {
             "type": "object",
             "required": [
@@ -993,6 +983,20 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "dto.VolumeDTO": {
+            "type": "object",
+            "properties": {
+                "mountPath": {
+                    "type": "string"
+                },
+                "subpath": {
+                    "type": "string"
+                },
+                "volumeId": {
                     "type": "string"
                 }
             }

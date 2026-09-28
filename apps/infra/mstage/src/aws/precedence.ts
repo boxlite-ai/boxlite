@@ -58,7 +58,8 @@ const resolveStage = (options: Options, config: MstageConfig, environment: NodeJ
     throw new ScopeError(`--stage is required. ${config.path} declares: ${known}`)
   }
   const [source, name] = chosen as [string, string]
-  if (!(name in config.stages)) {
+  // `in` finds `toString`; see `stageIn`.
+  if (!Object.hasOwn(config.stages, name)) {
     const known = Object.keys(config.stages).join(', ')
     throw new ScopeError(
       `Stage "${name}" (from ${source}) is not declared in ${config.path}. Declared stages: ${known}`,

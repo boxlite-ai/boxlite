@@ -1178,7 +1178,7 @@ async function bootstrapGcpStage({
   )
 
   console.log(
-    `done. Preview next: gh workflow run mdeploy.yml --repo ${repo} --ref main -f stage=${stage} -f apply=false`,
+    `done. Preview next: gh workflow run mdeploy-all.yml --repo ${repo} --ref main -f stage=${stage} -f apply=false`,
   )
 }
 

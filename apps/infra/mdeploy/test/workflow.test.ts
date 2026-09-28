@@ -8,13 +8,17 @@
  */
 
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { load } from 'js-yaml'
 import { parseBase } from 'mstage/config'
 import { variableNameFor } from 'mstage/config-variable'
 
-const workflow = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mdeploy.yml', import.meta.url)), 'utf8')
+const workflow = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mdeploy-all.yml', import.meta.url)), 'utf8')
 const ENV_CONFIG = fileURLToPath(new URL('../../mstage.env.json', import.meta.url))
 
 /** What the workflow runs, with the commentary that discusses it removed. */
@@ -71,7 +75,7 @@ test('both clouds can be federated, and each only when it is the one', () => {
  * with a message about a stale local session on a machine nobody signed in on
  * — far enough from the cause to be worth naming here.
  */
-const GCP_FEDERATING_WORKFLOWS = ['mdeploy.yml', 'mbuild.yml']
+const GCP_FEDERATING_WORKFLOWS = ['mdeploy-all.yml', 'mbuild.yml', 'mbuild-release.yml']
 
 test('a GCP identity is federated by the action that also gives gcloud its own credential', () => {
   for (const name of GCP_FEDERATING_WORKFLOWS) {
@@ -115,14 +119,19 @@ test('a GCP identity is federated by the action that also gives gcloud its own c
  * Both new workflows are checked here so the two cannot drift apart.
  */
 test('the AWS role is composed from the account id, as every other workflow does', () => {
-  const mbuild = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mbuild.yml', import.meta.url)), 'utf8')
+  const read = (name: string) => readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)), 'utf8')
   for (const [name, source] of [
-    ['mdeploy.yml', workflow],
-    ['mbuild.yml', mbuild],
+    ['mdeploy-all.yml', workflow],
+    ['mbuild.yml', read('mbuild.yml')],
+    ['mbuild-release.yml', read('mbuild-release.yml')],
   ] as const) {
+    // The stage half may be an expression or a literal — mbuild-release's two
+    // jobs each serve one fixed stage, and naming it is clearer there than
+    // threading an input through. What must not vary is the rest: the account
+    // from `vars.AWS_ACCOUNT_ID`, and the role name bootstrap actually creates.
     assert.match(
       source,
-      /role-to-assume: arn:aws:iam::\$\{\{ vars\.AWS_ACCOUNT_ID \}\}:role\/boxlite-\$\{\{ [^}]+ \}\}-github-deploy/,
+      /role-to-assume: arn:aws:iam::\$\{\{ vars\.AWS_ACCOUNT_ID \}\}:role\/boxlite-(?:\$\{\{ [^}]+ \}\}|[a-z0-9-]+)-github-deploy/,
       `${name} does not compose the role ARN`,
     )
     assert.doesNotMatch(source, /vars\.AWS_DEPLOY_ROLE_ARN|vars\.AWS_ECR_PUSH_ROLE_ARN/, `${name} reads an undefined variable`)
@@ -182,13 +191,12 @@ test('a protected stage is confirmed, and the confirmation reaches mdeploy', () 
 })
 
 test('every job that reads a declaration is given one first', () => {
-  const mbuild = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mbuild.yml', import.meta.url)), 'utf8')
+  const read = (file: string) => readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${file}`, import.meta.url)), 'utf8')
   const name = variableNameFor(parseBase('mstage.env.json', readFileSync(ENV_CONFIG, 'utf8')).app)
-  const mrunner = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mrunner.yml', import.meta.url)), 'utf8')
   for (const [file, source] of [
-    ['mdeploy.yml', workflow],
-    ['mbuild.yml', mbuild],
-    ['mrunner.yml', mrunner],
+    ['mdeploy-all.yml', workflow],
+    ['mbuild.yml', read('mbuild.yml')],
+    ['mbuild-release.yml', read('mbuild-release.yml')],
   ] as const) {
     /*
      * Every tool below reads `.mstage.config.json`, and on a runner the only
@@ -217,10 +225,11 @@ test('every job that reads a declaration is given one first', () => {
   }
 })
 
-test('both mdeploy dispatches share one concurrency group, which the state requires', () => {
+test('one rollout per stage at a time, which the state requires', () => {
   // An app and stage keep one checkpoint. Two applies against one stage read
-  // and write the same file, and the second to finish erases the first.
-  assert.match(workflow, /group: mdeploy-\$\{\{ inputs\.stage \}\}/)
+  // and write the same file, and the second to finish erases the first. There
+  // is one dispatch left to serialise, so the group is this workflow's own.
+  assert.match(workflow, /group: mdeploy-all-\$\{\{ inputs\.stage \}\}/)
   assert.match(workflow, /cancel-in-progress: false/)
 })
 
@@ -248,10 +257,170 @@ test('every staged-runner question names the commit, the way the image question 
    * across every call rather than at the two sites, because the next one added
    * would otherwise inherit the same default.
    */
-  const source = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mdeploy-all.yml', import.meta.url)), 'utf8')
-  const checks = [...source.matchAll(/runner:build -- [^\n|]*--check[^\n|]*/g)].map((match) => match[0])
-  assert.ok(checks.length >= 2, `expected both staged-runner questions, found ${checks.length}`)
+  const checks = [...workflow.matchAll(/runner:build -- [^\n|]*--check[^\n|]*/g)].map((match) => match[0])
+  assert.ok(checks.length >= 1, `expected the staged-runner question, found ${checks.length}`)
   for (const call of checks) {
-    assert.match(call, /--tag "\$\{\{ needs\.ref\.outputs\.sha \}\}"|--tag "\$SHA"/, `asks about the checkout: ${call}`)
+    assert.match(call, /--tag "\$SHA"/, `asks about the checkout: ${call}`)
+  }
+})
+
+test('every deploy-path ref is pinned to the branch it was dispatched from', () => {
+  /*
+   * `resolve-ref` took a 40-character string on trust: it matched the shape and
+   * became the deploy's commit without anything asking whether this repository
+   * had ever held it. A typo then travelled as far as the registry, which
+   * answered that the images were missing — true, and about the wrong commit.
+   *
+   * The branch is the second half. A commit on an abandoned branch, or on one
+   * force-pushed away, still resolves and still names bytes, and deploying it
+   * puts a stage on something no branch here will produce again. Asserted
+   * across every call in the deploy workflows, because the guard is only worth
+   * as much as the call site that forgets it.
+   */
+  // mbuild.yml is absent deliberately: it is callee-only and no longer
+  // resolves anything. Its caller hands it a SHA already resolved and already
+  // proved — and for a pull request that proof cannot be a branch, because a
+  // merge commit sits on none. What mbuild.yml owes instead is asserted below.
+  const workflows = ['mdeploy-all.yml', 'mbuild-release.yml']
+  for (const name of workflows) {
+    const text = readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)), 'utf8')
+    const uses = [...text.matchAll(/uses: \.\/\.github\/actions\/resolve-ref\n\s*with:\n((?:\s{10}\S[^\n]*\n)+)/g)]
+    assert.ok(uses.length > 0, `${name} resolves no ref`)
+    for (const [, block] of uses) {
+      assert.match(block, /branch: \$\{\{ github\.ref_name \}\}/, `${name} resolves a ref against no branch:\n${block}`)
+    }
+  }
+})
+
+test('a callee trusts no ref it was handed, and resolves none of its own', () => {
+  /*
+   * What `mbuild.yml` owes now that the branch pin above cannot cover it.
+   *
+   * It is reachable only by call, and its one caller resolves a tag, a commit
+   * or a pull request into a single SHA and refuses each shape for its own
+   * reasons. Resolving again here would be a second answer to "which commit",
+   * and for a pull request it could not reach the same one at all — the merge
+   * commit sits on no branch, so the check would refuse the very ref the
+   * caller just proved.
+   *
+   * So the rule is: no resolution, and no trust either. The shape is re-checked
+   * where the value enters, which is what `build-apps-api-image.yml` does with
+   * the same guarantee from the same caller.
+   */
+  const mbuild = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mbuild.yml', import.meta.url)), 'utf8')
+  assert.doesNotMatch(mbuild, /^ {2}workflow_dispatch:$/m, 'a dispatcher could hand it an unproved ref')
+  assert.match(mbuild, /^ {2}workflow_call:$/m, 'nothing can reach it at all')
+  assert.doesNotMatch(mbuild, /actions\/resolve-ref/, 'it resolves a ref its caller already resolved')
+  assert.match(
+    mbuild,
+    /if \[\[ ! "\$TAG" =~ \^\[0-9a-f\]\{40\}\$ \]\]/,
+    'it takes the caller’s tag without re-checking its shape',
+  )
+})
+
+test('the only stage a deploy workflow runs for off main is dev', () => {
+  /*
+   * dev is shaken out from the branch that is changing it, so its jobs run
+   * wherever they were dispatched. Every other stage reaches a protected
+   * Environment and the cloud role behind it, and runs from main alone.
+   *
+   * Written as an allow-list on the escape rather than a deny-list on prod: a
+   * stage added to the choice list later is main-only until an edit here says
+   * otherwise, where `!= 'prod'` would have admitted it silently.
+   */
+  // mbuild-release.yml is deliberately absent: a release is what prod promotes
+  // from, so it has no dev escape at all and the assertion below would refuse
+  // exactly the workflow that is strictest.
+  const workflows = ['mdeploy-all.yml', 'mbuild.yml']
+  for (const name of workflows) {
+    const text = readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)), 'utf8')
+    const guards = [...text.matchAll(/^\s*if: [^\n]*(?:\n\s{6}[^\n]*)*/gm)]
+      .map((match) => match[0])
+      .filter((guard) => guard.includes('refs/heads/main'))
+    assert.ok(guards.length > 0, `${name} guards no job by branch`)
+    for (const guard of guards) {
+      assert.match(guard, /== 'dev'/, `${name} leaves main for a stage it does not name:\n${guard}`)
+      assert.equal(
+        /!= 'prod'/.test(guard),
+        false,
+        `${name} denies prod instead of allowing dev, so the next stage added is admitted:\n${guard}`,
+      )
+    }
+  }
+})
+
+test('the checks that decide an apply run in the job that applies, not beside it', () => {
+  /*
+   * One job, because a second one costs a second approval. The reads — which
+   * commit the refs name, whether the stage holds those images, whether its
+   * configuration still matches its own fingerprint, whether a protected stage
+   * was confirmed — used to be a `preflight` job binding the same Environment,
+   * so a dispatch waited on this stage's reviewers twice to perform checks that
+   * change nothing.
+   *
+   * Asserted as a count of the jobs that bind the target stage and act on it,
+   * rather than by name: splitting the checks out again under any name brings
+   * the second wait back. `plan` and `build-runner` bind it too and are counted
+   * — each buys something an apply cannot do for itself, and `build-runner` is
+   * skipped outright on the release line — but nothing may join the apply.
+   */
+  const applying = [...workflow.matchAll(/\n {2}([a-z][a-z-]*):\n([\s\S]*?)(?=\n {2}[a-z][a-z-]*:\n|$)/g)]
+    .filter(([, , body]) => /npm run mdeploy -- --stage/.test(body!))
+    .map(([, name]) => name)
+  assert.deepEqual(applying, ['deploy'], 'a second job runs the apply, so a refusal in one cannot guard the other')
+
+  const binding = [...workflow.matchAll(/\n {2}([a-z][a-z-]*):\n([\s\S]*?)(?=\n {2}[a-z][a-z-]*:\n|$)/g)]
+    .filter(([, , body]) => /^ {4}environment: \$\{\{ inputs\.stage \}\}$/m.test(body!))
+    .map(([, name]) => name)
+  assert.deepEqual(
+    binding.sort(),
+    ['build-runner', 'deploy', 'plan'],
+    'a job binding this Environment is a wait on its reviewers; this set is the reviewed one',
+  )
+
+  // And the order that makes one job equivalent to the two: every check still
+  // runs before the apply it guards.
+  const apply = workflow.indexOf('- name: Apply')
+  for (const check of ['Verify the stage configuration', 'Verify the images', 'Confirm a protected stage']) {
+    const at = workflow.indexOf(check)
+    assert.notEqual(at, -1, `${check} is gone rather than moved`)
+    assert.ok(at < apply, `${check} runs after the apply it guards`)
+  }
+})
+
+test('the failure summary renders for a run that failed before it addressed anything', () => {
+  /*
+   * `Report` is `if: always()` and `set -Eeuo pipefail`, and the values it
+   * prints are written to `GITHUB_ENV` by "Address what this deploy installs".
+   * A checkout, a setup or the addressing step itself failing leaves them
+   * unwritten, and under `set -u` a bare expansion aborts the step — the
+   * summary goes missing in exactly the runs it exists for.
+   *
+   * Run rather than read: the abort is the shell's, so only a shell can say
+   * whether it still happens. GitHub substitutes every `${{ }}` before bash
+   * sees the script, and the `env:` block is applied whether or not earlier
+   * steps ran, so both are stood in for here; what is deliberately absent is
+   * everything the unreached step would have exported.
+   */
+  const jobs = (load(workflow) as { jobs: Record<string, { steps: { name?: string; run?: string }[] }> }).jobs
+  const report = jobs.deploy?.steps.find((step) => step.name === 'Report')?.run
+  assert.ok(report, 'the deploy job no longer reports')
+
+  const directory = mkdtempSync(join(tmpdir(), 'mdeploy-report-'))
+  try {
+    const summary = join(directory, 'summary.md')
+    const ran = spawnSync('bash', ['-c', report.replace(/\$\{\{[^}]*\}\}/g, 'x')], {
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH ?? '', GITHUB_STEP_SUMMARY: summary, LINE: 'commit', SHA: 'a'.repeat(40) },
+    })
+    assert.equal(ran.status, 0, `the report aborted rather than reporting: ${ran.stderr}`)
+
+    const rendered = readFileSync(summary, 'utf8')
+    for (const row of ['| commit |', '| images |', '| runner |', '| result |']) {
+      assert.ok(rendered.includes(row), `the summary dropped ${row}:\n${rendered}`)
+    }
+    assert.ok(rendered.includes('a'.repeat(40)), 'the rows it did know are missing from the summary')
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
   }
 })

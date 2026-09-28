@@ -26,6 +26,7 @@ const infraLocalNative = readFileSync(new URL('../../infra-local/compose/native.
 const readme = [
   readFileSync(new URL('../README.md', import.meta.url), 'utf8'),
   readFileSync(new URL('../docs/deployment.md', import.meta.url), 'utf8'),
+  readFileSync(new URL('../docs/aws/deployment.md', import.meta.url), 'utf8'),
 ].join('\n')
 
 // Every assertion over sst.config.ts in this file pins behavior, so the decision to strip both

@@ -19,6 +19,10 @@ import type { EnumsBoxState } from './enums-box-state';
 
 export interface BoxInfoResponse {
     'daemonVersion'?: string;
+    /**
+     * ExitCode is how the box\'s main command ended, present once the runtime recorded it: its own code when it exited, or 128 + n when a signal ended it. Stopping a box signals that command, so a stop is recorded here too. Absence, not 0, is what says \"not recorded\": 0 is the exit code of every command that succeeded, so a reader has to tell a missing field from a zero one.
+     */
+    'exitCode'?: number;
     'state'?: EnumsBoxState;
 }
 

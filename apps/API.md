@@ -102,13 +102,14 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Organizations, membership, and invitations</b> · 23 routes</summary>
+<summary><b>Organizations, membership, and invitations</b> · 24 routes</summary>
 
 | Method   | Path                                                                     | What it does                                             |
 | -------- | ------------------------------------------------------------------------ | -------------------------------------------------------- |
 | `GET`    | `/api/organizations`                                                     | Lists organizations available to the caller.             |
 | `POST`   | `/api/organizations`                                                     | Creates an organization.                                 |
 | `GET`    | `/api/organizations/{organizationId}`                                    | Gets an organization by ID.                              |
+| `GET`    | `/api/organizations/{organizationId}/referral-code`                      | Gets or initializes the organization's invitation code. |
 | `GET`    | `/api/organizations/{organizationId}/concurrency`                        | Gets a bounded concurrency timeline from usage periods.  |
 | `DELETE` | `/api/organizations/{organizationId}`                                    | Deletes an organization.                                 |
 | `PATCH`  | `/api/organizations/{organizationId}/name`                               | Changes an organization's name.                          |
