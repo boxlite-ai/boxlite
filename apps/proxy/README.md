@@ -52,9 +52,9 @@ flowchart TB
     class runner_process scope_execution
 ```
 
-The proxy asks the API whether the box is public, whether the caller may reach it, which runner
-hosts it, and records activity. It then opens a tunnel through that runner to the guest port.
-The web terminal still requires authentication, including for private boxes.
+The proxy asks the API whether the box is public and whether the requested guest port has an
+active public tunnel. It resolves the box's runner and records activity before forwarding.
+The web terminal uses the runner's terminal endpoint and always requires authentication.
 
 ## Preview hosts
 
@@ -71,11 +71,11 @@ A host without a `<port>-` label serves only the utility routes listed in
 
 ## Request paths
 
-| Request                                    | Upstream                                                        | Authentication                    |
-| ------------------------------------------ | --------------------------------------------------------------- | --------------------------------- |
-| HTTP or WebSocket to a declared port       | Reverse proxy over a runner CONNECT tunnel to the guest port    | Public box and active tunnel declaration |
-| Port 22222                                 | The runner's web terminal at `/boxes/<id>/toolbox/proxy/22222`  | Always                            |
-| `CONNECT`                                  | Raw TCP tunnel through the runner                               | Active public tunnel; others are denied |
+| Request                          | Upstream                                                      | Access rule                              |
+| -------------------------------- | ------------------------------------------------------------- | ---------------------------------------- |
+| HTTP or WebSocket to a guest port | Reverse proxy over a runner CONNECT tunnel to the guest port  | Public box and active tunnel declaration |
+| Port 22222                       | Runner's `/boxes/<id>/toolbox/proxy/22222` terminal endpoint  | Authenticated; no tunnel declaration     |
+| Raw `CONNECT` to a guest port    | TCP tunnel through the runner                                 | Public box and active tunnel declaration |
 
 The HTTP path in code:
 
@@ -83,13 +83,13 @@ The HTTP path in code:
   StartProxy (— · apps/proxy/pkg/proxy/proxy.go:78) — registers the catch-all route for preview hosts
     └─ NewProxyRequestHandler (— · apps/libs/common-go/pkg/proxy/proxy.go:113) — reverse proxy for one request
       ├─ GetProxyTarget (Proxy · apps/proxy/pkg/proxy/get_box_target.go:49) — choose the upstream
-        ├─ parseHost (Proxy · apps/proxy/pkg/proxy/get_box_target.go:353) — canonical port plus box ID or signed token
-        ├─ getBoxPublic (Proxy · apps/proxy/pkg/proxy/get_box_target.go:244) — ask the API, cached 3 s
-        ├─ Authenticate (Proxy · apps/proxy/pkg/proxy/auth.go:18) — resolve signed hosts or authorize terminal access
+        ├─ parseHost (Proxy · apps/proxy/pkg/proxy/get_box_target.go:354) — canonical port plus box ID or signed token
+        ├─ getBoxPublic (Proxy · apps/proxy/pkg/proxy/get_box_target.go:245) — ask the API, cached 3 s
+        ├─ Authenticate (Proxy · apps/proxy/pkg/proxy/auth.go:18) — resolve signed hosts or authorize private/terminal access
         ├─ hasPublicTunnelAccess (Proxy · apps/proxy/pkg/proxy/tunnel_access.go:15) — check every guest service port
-        └─ updateLastActivity (Proxy · apps/proxy/pkg/proxy/get_box_target.go:424) — renew activity every 50 s
-      └─ dialGuestPort (Proxy · apps/proxy/pkg/proxy/get_box_target.go:159) — dial each new upstream connection
-        ├─ getBoxRunnerInfo (Proxy · apps/proxy/pkg/proxy/get_box_target.go:205) — runner URL and key, cached 2 min
+        └─ updateLastActivity (Proxy · apps/proxy/pkg/proxy/get_box_target.go:425) — renew activity every 50 s
+      └─ dialGuestPort (Proxy · apps/proxy/pkg/proxy/get_box_target.go:160) — dial each new upstream connection
+        ├─ getBoxRunnerInfo (Proxy · apps/proxy/pkg/proxy/get_box_target.go:206) — runner URL and key, cached 2 min
         └─ dialRunnerTunnel (— · apps/proxy/pkg/proxy/tunnel.go:124) — CONNECT through the runner to the guest port
 ```
 
@@ -98,15 +98,14 @@ The upstream URL `http://<box ID>:<port>` is only a routing key. `dialGuestPort`
 pooling reuses tunnels per box and port. Raw `CONNECT` requests skip this router and go to
 `handleTunnelConnect` in [`tunnel.go`](pkg/proxy/tunnel.go).
 
-The proxy checks each new HTTP/WebSocket guest service request and CONNECT against the
-API without caching the answer itself. The API caches each verdict in Redis for
-3 seconds, like its other preview checks, so a revoked tunnel or a box made
-private stops admitting new requests within 3 seconds across proxy instances. A
-newly declared port is reachable immediately, because declaring clears its
-cached refusal. Connections already established continue until they close. If
-the API cannot answer, both
-paths fail closed with 502. The proxy compares ports in canonical form, so
-`022222` is the terminal port too; it is unavailable to raw CONNECT tunnels.
+Every new HTTP/WebSocket guest service request and raw CONNECT checks the API's public tunnel
+endpoint. It requires an unrevoked public declaration, a public box, and a box outside the
+destroying/archiving states. The API caches allowed and denied verdicts in Redis for 3 seconds;
+the proxy does not cache tunnel verdicts. Declaring a port clears its cached denial. A revoked
+tunnel or a box made private can still admit new requests until a cached allowance expires;
+existing connections continue until they close. If the tunnel check fails, both paths return
+502. Ports are parsed as numbers, so `022222` is still the terminal port and cannot be used
+for raw CONNECT.
 
 ## Authentication
 
@@ -133,6 +132,7 @@ re-checks it with the API.
 | ---------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------- |
 | The box is private and the port is not 22222               | `404` after credential resolution; private service previews are unavailable | `403`, whatever the credential |
 | The public box has no active declaration for the port      | `404`, including for a signed preview URL | `404` |
+| The tunnel access API is unavailable                       | `502`                                     | `502` |
 | The host has no `<port>-<id>` label                        | `404`, except the utility routes                                    | `400`                        |
 | The API still fails the visibility check after its retries | `400`                                                               | `502`                        |
 | The runner or the guest port is unreachable                | `502`                                                               | `502`                        |
