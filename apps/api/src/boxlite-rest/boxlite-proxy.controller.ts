@@ -29,6 +29,7 @@ import {
 import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
 import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
 import { Request, Response, NextFunction } from 'express'
+import type { ClientRequest } from 'node:http'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
@@ -41,6 +42,8 @@ import { BoxState } from '../box/enums/box-state.enum'
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
 const OBSERVATION_ONLY: ProxyActivityPolicy = { activity: false, autoResume: false }
+const RUNNER_CONNECT_TIMEOUT_MS = 5_000
+const RUNNER_CONNECT_TIMEOUT_CODE = 'ERR_RUNNER_CONNECT_TIMEOUT'
 
 // States a tunnel request may wait out: either the box is stopped (or on its
 // way there) and can be started again, or it is already on its way up. Every
@@ -338,6 +341,7 @@ export class BoxliteProxyController {
     if (!targetUrl) {
       throw new NotFoundException(`Runner endpoint for box ${boxId} not found`)
     }
+    const target = new URL(targetUrl)
 
     const proxyOptions: Options = {
       target: targetUrl,
@@ -348,6 +352,7 @@ export class BoxliteProxyController {
       pathRewrite: () => targetPathForRunnerBox(box.id),
       on: {
         proxyReq: (proxyReq: any, originalReq: any) => {
+          this.startRunnerConnectDeadline(proxyReq, target)
           proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)
           fixRequestBody(proxyReq, originalReq)
         },
@@ -359,11 +364,67 @@ export class BoxliteProxyController {
             res.setHeader('x-boxlite-source-is-dir', shape)
           }
         },
+        error: (err, _req, response) => {
+          if ((err as NodeJS.ErrnoException).code !== RUNNER_CONNECT_TIMEOUT_CODE) {
+            if (!('writeHead' in response)) {
+              response.destroy()
+              return
+            }
+            if (!response.headersSent) {
+              const code = (err as NodeJS.ErrnoException).code
+              const status = ['ECONNRESET', 'ENOTFOUND', 'ECONNREFUSED', 'ETIMEDOUT'].includes(code ?? '')
+                ? HttpStatus.GATEWAY_TIMEOUT
+                : HttpStatus.INTERNAL_SERVER_ERROR
+              response.writeHead(status)
+            }
+            response.end('Error occurred while trying to proxy')
+            return
+          }
+          if (!('writeHead' in response)) {
+            response.destroy()
+            return
+          }
+          if (!response.headersSent) {
+            response.writeHead(HttpStatus.GATEWAY_TIMEOUT, { 'Content-Type': 'text/plain' })
+          }
+          response.end(err.message)
+        },
       },
       proxyTimeout: opts?.proxyTimeoutMs ?? 5 * 60 * 1000,
     }
 
-    return createProxyMiddleware(proxyOptions)(req, res, next)
+    return createProxyMiddleware(proxyOptions)(req, res, (err) => {
+      // HPM v4 calls next(err) even after its error event has sent a response.
+      if (!res.writableEnded) next(err)
+    })
+  }
+
+  private startRunnerConnectDeadline(proxyReq: ClientRequest, target: URL): void {
+    const socket = proxyReq.socket
+    if (!socket?.connecting) return
+
+    const connectedEvent = target.protocol === 'https:' ? 'secureConnect' : 'connect'
+    const defaultPort = target.protocol === 'https:' ? 443 : 80
+    const endpoint = target.port ? target.host : `${target.host}:${defaultPort}`
+    const stop = (): void => {
+      clearTimeout(timer)
+      socket.off(connectedEvent, stop)
+      socket.off('close', stop)
+      proxyReq.off('error', stop)
+    }
+    const timer = setTimeout(() => {
+      stop()
+      const error = new Error(
+        `cannot reach runner at ${endpoint} (connect timed out after ${RUNNER_CONNECT_TIMEOUT_MS / 1000}s)`,
+      ) as NodeJS.ErrnoException
+      error.code = RUNNER_CONNECT_TIMEOUT_CODE
+      proxyReq.destroy(error)
+    }, RUNNER_CONNECT_TIMEOUT_MS)
+    timer.unref()
+
+    socket.once(connectedEvent, stop)
+    socket.once('close', stop)
+    proxyReq.once('error', stop)
   }
 
   private startActivityHeartbeat(boxId: string, autoStopSeconds: number): () => void {
