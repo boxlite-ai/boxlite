@@ -347,7 +347,7 @@ silently restarting it, because restarting would run the command a second time.
 | `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--network <enabled\|disabled>` | | Outbound network mode (default `enabled`) |
 | `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IP, or CIDR; repeatable and implies enabled networking |
-| `--inbound <enabled\|disabled>` | | Inbound network mode (default `enabled`) |
+| `--inbound <enabled\|disabled>` | | Inbound network mode (default `disabled`) |
 | `--net-tx-kbps KBPS` | | Cap what the box sends, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
 | `--net-rx-kbps KBPS` | | Cap what reaches the box, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
 | `--name NAME` | | Name the box |
@@ -409,7 +409,7 @@ default, and `exec` still starts it on demand.
 | `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--network <enabled\|disabled>` | | Outbound network mode (default `enabled`) |
 | `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IP, or CIDR; repeatable and implies enabled networking |
-| `--inbound <enabled\|disabled>` | | Inbound network mode (default `enabled`) |
+| `--inbound <enabled\|disabled>` | | Inbound network mode (default `disabled`) |
 | `--net-tx-kbps KBPS` | | Cap what the box sends, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
 | `--net-rx-kbps KBPS` | | Cap what reaches the box, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
 | `--auto-stop DURATION` | | Stop the box after this much inactivity; `0` disables; requires a REST server |

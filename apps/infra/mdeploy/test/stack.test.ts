@@ -106,7 +106,6 @@ const clickHouseFake = (active: boolean): ClickHouse =>
         database: 'otel',
         writer: { username: 'otel_writer', passwordRef: out('writer-ref'), credentialVersion: out('v1') },
         reader: { username: 'otel_reader', passwordRef: out('reader-ref'), credentialVersion: out('v1') },
-        binding: { cloud: 'aws', clientGrant: out('sg-clickhouse') },
         id: out('i-clickhouse'),
         ready: ['clickhouse'],
       }

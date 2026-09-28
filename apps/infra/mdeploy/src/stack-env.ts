@@ -25,6 +25,7 @@ import { OTEL_GROUP, PROXY_GROUP, RUNNER_GROUP, serviceSecretsFrom, splitService
 import type { RunnerSlot } from '../stack/runners.ts'
 import { runnerNameFor } from '../stack/runners.ts'
 import type { Cloud } from 'mstage/config'
+import { IMAGE_TAG } from 'mbuild/address'
 
 export class StackEnvError extends Error {
   constructor(message: string) {
@@ -274,7 +275,12 @@ export const readStackEnvironment = ({
   home: Cloud
 }): StackEnvironment => {
   const tag = required(environment, 'BOXLITE_IMAGE_TAG', 'a deploy names the exact commit it ships')
-  if (!/^[0-9a-f]{40}$/.test(tag)) throw new StackEnvError('BOXLITE_IMAGE_TAG must be one full lowercase commit SHA')
+  // mbuild's constant, not a copy of it. The copy that used to live here was
+  // the same rule written twice, and the two would have disagreed the moment
+  // mbuild learned to tag a release build.
+  if (!IMAGE_TAG.test(tag)) {
+    throw new StackEnvError('BOXLITE_IMAGE_TAG must be one full lowercase commit SHA, optionally prefixed "v<X.Y.Z>-"')
+  }
   const proxyDomain = required(environment, 'PROXY_DOMAIN', 'every box is a name under this zone')
   // A default rather than a requirement: the proxy speaks to a box inside the
   // network, and `http` there is the shape every stage has used. What must

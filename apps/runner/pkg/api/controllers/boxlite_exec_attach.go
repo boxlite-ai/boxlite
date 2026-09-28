@@ -53,7 +53,52 @@ const (
 	// single binary channel multiplexes both pipes.
 	chanStdout byte = 0x01
 	chanStderr byte = 0x02
+
+	// wsPeerCloseWait bounds how long the connection stays open after the
+	// server has sent its own Close frame, waiting for the peer's.
+	//
+	// RFC 6455 §5.5.1 makes the close a handshake: an endpoint drops the TCP
+	// connection once it has both sent and received a Close. Dropping it in
+	// the same millisecond we send ours also strands whatever is still
+	// relaying our 101 to the client, which reads as an upgrade that never
+	// completed — Google's external Application Load Balancer logs exactly
+	// that connection as `websocket_handshake_failed` and answers the client
+	// 502. It is why an exec whose command exits inside one round trip
+	// (`echo hello`) intermittently loses its output: upgrade, backlog
+	// replay, exit frame and close all land in ~20ms, well inside a
+	// handshake the balancer has not finished.
+	//
+	// Costs nothing in the common case — a client answers or drops the
+	// socket as soon as it has the exit frame, about one round trip. This
+	// bound covers only a peer that does neither.
+	wsPeerCloseWaitDefault = 5 * time.Second
 )
+
+// wsPeerCloseWait is a package var for the same reason wsKeepaliveInterval is:
+// a test cannot spend the real bound to prove the bound exists.
+var (
+	wsPeerCloseWait   = wsPeerCloseWaitDefault
+	wsPeerCloseWaitMu sync.RWMutex
+)
+
+func peerCloseWait() time.Duration {
+	wsPeerCloseWaitMu.RLock()
+	defer wsPeerCloseWaitMu.RUnlock()
+	return wsPeerCloseWait
+}
+
+// setPeerCloseWaitForTest is the synchronized setter used by tests.
+func setPeerCloseWaitForTest(d time.Duration) (restore func()) {
+	wsPeerCloseWaitMu.Lock()
+	prev := wsPeerCloseWait
+	wsPeerCloseWait = d
+	wsPeerCloseWaitMu.Unlock()
+	return func() {
+		wsPeerCloseWaitMu.Lock()
+		wsPeerCloseWait = prev
+		wsPeerCloseWaitMu.Unlock()
+	}
+}
 
 // attachExec is the surface of an exec session needed by the WebSocket
 // handler. *boxlite.ManagedExec implements it via a thin adapter; tests
@@ -178,12 +223,22 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 	// down — releasing the single-attach slot for the next client.
 	pongWait := 3 * keepaliveInterval()
 	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
-	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(pongWait))
-	})
 
 	loopCtx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
+
+	// Set after loopCtx because it has to stop pushing once the loop is
+	// cancelled. gorilla calls this from advanceFrame for every Pong, the drain
+	// after our own Close included, and a push there would move the deadline
+	// pongWait out — past the close-wait bound, and past the near deadline the
+	// teardown sets before waiting on this goroutine. A peer that keeps ponging
+	// would otherwise hold the socket and the single-attach slot behind it.
+	conn.SetPongHandler(func(string) error {
+		if loopCtx.Err() != nil {
+			return nil
+		}
+		return conn.SetReadDeadline(time.Now().Add(pongWait))
+	})
 
 	var (
 		writeMu   sync.Mutex     // serializes ALL writes to the WebSocket
@@ -191,6 +246,10 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		sideWg    sync.WaitGroup // reader + keepalive goroutines
 		closeOnce sync.Once
 	)
+	// Closed when the reader goroutine ends, which is how both teardown paths —
+	// the normal one below and the deferred panic branch — know the peer has
+	// answered our Close or dropped the socket.
+	readerDone := make(chan struct{})
 	closeWS := func(code int, reason string) {
 		closeOnce.Do(func() {
 			_ = writeCloseFrame(conn, &writeMu, code, reason)
@@ -212,11 +271,15 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		if r := recover(); r != nil {
 			fail(fmt.Errorf("attach loop panic: %v", r))
 			closeWS(websocket.CloseInternalServerErr, "")
-		} else {
-			// Already-closed by Done branch is a no-op; this catches the
-			// failure-driven exit paths where no exit frame was sent.
-			closeWS(websocket.CloseGoingAway, "")
+			// A panic unwinds past the wait in the normal flow, and this Close
+			// is as owed a handshake as any other — a client that is still
+			// there would otherwise get the teardown this whole path avoids.
+			awaitPeerClose(conn, readerDone)
 		}
+		// Every non-panic path has already sent its Close and completed the
+		// handshake by the time this runs, so nothing is sent here: closeOnce
+		// would make it a no-op, and a second Close after a completed handshake
+		// is not something to leave the shape of behind.
 		_ = conn.Close()
 		// Tear down the subscriber FIRST so the broadcaster stops fanning
 		// chunks into now-dead channels; then release the single-attach
@@ -243,10 +306,12 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		}()
 	}
 
-	// reader (client → server)
+	// reader (client → server). It is the only thing that observes the peer's
+	// Close frame, so its ending is what the close handshake waits on.
 	sideWg.Add(1)
 	go func() {
 		defer sideWg.Done()
+		defer close(readerDone)
 		readClientFrames(loopCtx, conn, exec, &writeMu, pongWait, fail)
 	}()
 
@@ -294,13 +359,24 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		} else {
 			closeWS(websocket.CloseInternalServerErr, "pump drain timed out")
 		}
+	} else {
+		// The failure exits send their Close here rather than leaving it to the
+		// deferred cleanup, so that every path that sends one goes on to
+		// complete the handshake below. A cancelled loop is not always a dead
+		// peer — a pump write that failed, or an exec that ended badly, leaves
+		// a client that is still there and still owed the close.
+		closeWS(websocket.CloseGoingAway, "")
 	}
 
-	// Cancel reader/keepalive goroutines that are still running.
-	// Set a near read deadline BEFORE cancel so conn.ReadMessage() in
-	// the reader goroutine unblocks — it does not respect context
-	// cancellation and would hang until TCP keepalive timeout otherwise.
+	// Cancel before waiting: past our own Close the reader may only drain,
+	// never answer. RFC 6455 §5.5.1 forbids a data frame after a Close, and
+	// handleControlFrame's error replies are data frames.
 	cancel()
+	awaitPeerClose(conn, readerDone)
+
+	// Set a near read deadline so conn.ReadMessage() in the reader goroutine
+	// unblocks — it does not respect context cancellation and would hang until
+	// the TCP keepalive timeout otherwise.
 	_ = conn.SetReadDeadline(time.Now())
 	sideWg.Wait()
 }
@@ -342,9 +418,6 @@ func pumpSubscriberChannel(ctx context.Context, conn *websocket.Conn, writeMu *s
 // the pong cadence alone.
 func readClientFrames(ctx context.Context, conn *websocket.Conn, exec attachExec, writeMu *sync.Mutex, pongWait time.Duration, fail func(error)) {
 	for {
-		if ctx.Err() != nil {
-			return
-		}
 		mt, data, err := conn.ReadMessage()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -352,6 +425,30 @@ func readClientFrames(ctx context.Context, conn *websocket.Conn, exec attachExec
 			}
 			fail(fmt.Errorf("read client frame: %w", err))
 			return
+		}
+		// Past cancellation this loop only drains, and draining is the point:
+		// both branches below write, which §5.5.1 forbids after the Close the
+		// caller has already sent — but the reader has to stay on the socket so
+		// the peer's own Close can still arrive and end the handshake. Ending
+		// the loop on the first frame instead would hand a client still sending
+		// stdin exactly the teardown this avoids.
+		//
+		// Those frames are dropped, not queued, and the two cancellation causes
+		// lose nothing by it. After a clean exit the exec is finished and
+		// ManagedExec.AttachWriteStdin refuses the write on its own, so
+		// forwarding would produce only the error reply this guard suppresses.
+		// After a failure the exec may still be live, but the session is going
+		// down either way, and releasing its attach slot is what lets the
+		// client come back and resend.
+		//
+		// The deadline is deliberately NOT extended here. A live session pushes
+		// it out by pongWait on every frame, which is how an idle client is
+		// told from a dead one; a draining one leaves the caller's deadline
+		// standing. Together with the pong handler's own cancellation guard
+		// that makes the bound absolute, rather than something a talkative peer
+		// can keep moving.
+		if ctx.Err() != nil {
+			continue
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 
@@ -462,6 +559,26 @@ func writeCloseFrame(conn *websocket.Conn, mu *sync.Mutex, code int, reason stri
 	defer mu.Unlock()
 	deadline := time.Now().Add(wsWriteDeadline)
 	return conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), deadline)
+}
+
+// awaitPeerClose completes the closing handshake started by our own Close
+// frame: it holds the connection until the peer answers, drops the socket, or
+// wsPeerCloseWait elapses. See the constant for why the wait exists at all.
+func awaitPeerClose(conn *websocket.Conn, readerDone <-chan struct{}) {
+	// A peer Close frame, a FIN and a reset all surface in the reader's
+	// ReadMessage, so the reader ending is the handshake completing. Nothing
+	// extends this deadline once the loop is cancelled — neither the reader nor
+	// the pong handler — so it is what ends the wait for a peer that answers
+	// with nothing. The timer covers the rest: a read deadline is only consulted
+	// when a read is outstanding.
+	bound := peerCloseWait()
+	_ = conn.SetReadDeadline(time.Now().Add(bound))
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	select {
+	case <-readerDone:
+	case <-timer.C:
+	}
 }
 
 func channelName(c byte) string {

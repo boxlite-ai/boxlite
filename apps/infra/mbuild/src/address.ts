@@ -19,8 +19,38 @@
 
 import { registryFor, type BuildConfig } from './config.ts'
 
-/** The tag is a full lowercase commit SHA, so a deploy names exact bytes. */
-export const IMAGE_TAG = /^[0-9a-f]{40}$/
+/**
+ * A released version as a git tag spells it: `v` then a stable X.Y.Z.
+ *
+ * Written once and used by both constants below, so the two cannot drift into
+ * disagreeing about what a version looks like.
+ */
+const VERSION = 'v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)'
+
+/** What `mbuild --version` accepts, and what a release's git tag must be. */
+export const RELEASE_VERSION = new RegExp(`^${VERSION}$`)
+
+/**
+ * A full lowercase commit SHA, so a deploy names exact bytes, carrying the
+ * version in front of it when the bytes are a release build.
+ *
+ * The two builds are different bytes. A commit build is whatever the deploy
+ * path needed at the time; a release build is the image a version was cut
+ * from, and `.github/workflows/mbuild-release.yml` refuses to write one twice.
+ * Sharing one address would leave a stage that means to admit only released
+ * images with nothing to read — the registry cannot say which run produced the
+ * bytes it holds.
+ *
+ * The version rather than a bare marker, because "which release is this" is
+ * the question an operator actually asks of a running stage, and a marker
+ * would send them back to a build log to answer it. Same shape as
+ * `build-apps-api-image.yml`'s `v<version>-<ref>`, which this supersedes.
+ *
+ * `mdeploy/src/stack-env.ts` validates the deployed tag against this same
+ * constant. It used to carry its own copy, which is how a release image would
+ * have published fine and then been refused at the apply.
+ */
+export const IMAGE_TAG = new RegExp(`^(?:${VERSION}-)?[0-9a-f]{40}$`)
 
 /**
  * Everything needed to write an address, and nothing to look up again.
@@ -55,13 +85,42 @@ export class ImageAddressError extends Error {
 
 export const assertTag = (tag: string): string => {
   if (!IMAGE_TAG.test(tag)) {
-    throw new ImageAddressError(`An image tag must be one full lowercase commit SHA; got ${JSON.stringify(tag)}`)
+    throw new ImageAddressError(
+      `An image tag must be one full lowercase commit SHA, optionally prefixed "v<X.Y.Z>-"; got ${JSON.stringify(tag)}`,
+    )
   }
   return tag
 }
 
+/**
+ * The release build's tag: the version a release was cut at, and the commit it
+ * was cut from.
+ *
+ * Composed here for the reason every other address in this module is: a caller
+ * that concatenates its own is a second place the convention lives, and the
+ * first typo in it publishes bytes nothing will ever look for. The one caller
+ * that does compose it, `mdeploy-all.yml`, only ever hands the result to
+ * `mbuild verify` and `BOXLITE_IMAGE_TAG`, and both refuse a tag this module
+ * would not have produced — so a slip there is a refusal rather than a publish
+ * under a name nothing pulls.
+ *
+ * Both halves are required. The version alone would move when a release is
+ * re-cut, and everything downstream treats an image tag as an identity it
+ * never looks inside; the commit alone is the commit build's own address.
+ */
+export const releaseTagFor = ({ version, sha }: { version: string; sha: string }): string => {
+  if (!RELEASE_VERSION.test(version)) {
+    throw new ImageAddressError(`A release version is "v" and a stable X.Y.Z; got ${JSON.stringify(version)}`)
+  }
+  if (!/^[0-9a-f]{40}$/.test(sha)) {
+    throw new ImageAddressError(`A release names the commit it was cut from, as a full lowercase SHA; got ${JSON.stringify(sha)}`)
+  }
+  return assertTag(`${version}-${sha}`)
+}
+
+/** Own properties only, for the reason `onlyArtifact` says: `in` finds `toString`. */
 const assertArtifact = (config: BuildConfig, artifact: string): string => {
-  if (!(artifact in config.artifacts)) {
+  if (!Object.hasOwn(config.artifacts, artifact)) {
     const known = Object.keys(config.artifacts).join(', ')
     throw new ImageAddressError(`${config.path} declares no artifact "${artifact}". Declared: ${known}`)
   }

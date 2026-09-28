@@ -343,11 +343,22 @@ pub struct OutboundNetworkInfo {
 /// Records whether the guest's exposed ports/preview are publicly reachable.
 /// `allow_net` is always empty today — an inbound allowlist is not yet
 /// enforced by any layer.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InboundNetworkInfo {
     pub mode: NetworkMode,
     #[serde(default)]
     pub allow_net: Vec<String>,
+}
+
+/// Metadata that omits inbound reads as private, matching the inbound
+/// default of [`BoxOptions`](crate::runtime::options::BoxOptions).
+impl Default for InboundNetworkInfo {
+    fn default() -> Self {
+        Self {
+            mode: NetworkMode::Disabled,
+            allow_net: Vec::new(),
+        }
+    }
 }
 
 /// Public network metadata for a box.
@@ -488,8 +499,11 @@ pub struct BoxInfo {
     /// Health status.
     pub health_status: HealthStatus,
 
-    /// Exit code of the container's init process, when the box stopped
-    /// because its main command exited (docker semantics).
+    /// How the container's init process ended, once the runtime recorded it
+    /// (docker semantics). Stopping a box signals that process, so this
+    /// carries what the stop produced as well as a self-chosen exit: the
+    /// process's own code when it handles `SIGTERM`, and `128 + n` when a
+    /// signal ends it.
     pub exit_code: Option<i32>,
 
     /// When the box most recently entered [`BoxStatus::Running`] (docker's
@@ -602,7 +616,8 @@ pub struct BoxStateInfo {
     /// Process ID of the VMM subprocess (None if not running).
     pub pid: Option<u32>,
 
-    /// Init exit code, when the box stopped because its command exited.
+    /// How init ended, once the runtime recorded it — its own code, or
+    /// `128 + n` when a signal ended it, as stopping a box does.
     pub exit_code: Option<i32>,
 }
 
@@ -694,8 +709,9 @@ mod tests {
             network.outbound.allow_net,
             vec!["api.example.com".to_string()]
         );
-        // The direction the pre-split shape could not express takes its default.
-        assert_eq!(network.inbound, InboundNetworkInfo::default());
+        // The direction the pre-split shape could not express reads as private.
+        assert_eq!(network.inbound.mode, NetworkMode::Disabled);
+        assert!(network.inbound.allow_net.is_empty());
         // And the deprecated mirrors follow outbound.
         assert_eq!(network.mode, NetworkMode::Disabled);
         assert_eq!(network.allow_net, vec!["api.example.com".to_string()]);
@@ -853,13 +869,13 @@ mod tests {
         );
         assert_eq!(
             network.inbound.mode,
-            crate::runtime::options::NetworkMode::Enabled
+            crate::runtime::options::NetworkMode::Disabled
         );
         assert_eq!(network.published_ports, Some(Vec::new()));
 
         let serialized = serde_json::to_value(&info).unwrap();
         assert_eq!(serialized["network"]["outbound"]["mode"], "enabled");
-        assert_eq!(serialized["network"]["inbound"]["mode"], "enabled");
+        assert_eq!(serialized["network"]["inbound"]["mode"], "disabled");
         assert_eq!(
             serialized["network"]["published_ports"],
             serde_json::json!([])

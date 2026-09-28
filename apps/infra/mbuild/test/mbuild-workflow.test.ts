@@ -97,7 +97,11 @@ test('a promotion names both stages, a publish only the one it writes to', () =>
  * good: the registry's tags are immutable and a burned one cannot be replaced.
  */
 test('a publish moves onto the commit it tags before it installs or builds', () => {
-  const moved = commands.indexOf('ref: ${{ steps.ref.outputs.sha }}')
+  // The caller's already-resolved SHA, not one this workflow resolved for
+  // itself: `mdeploy-all` turns a tag, a commit or a pull request into one
+  // commit, and a pull request's merge commit sits on no branch — the branch
+  // check this workflow used to make could only have refused it.
+  const moved = commands.indexOf('ref: ${{ inputs.tag }}')
   assert.notEqual(moved, -1, 'nothing checks out the commit being published')
   assert.ok(moved < commands.indexOf('setup-infra'), 'the install must come from that commit, not from this ref')
   assert.ok(moved < commands.indexOf('mbuild publish'), 'and so must the build context')

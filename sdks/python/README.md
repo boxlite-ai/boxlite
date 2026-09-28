@@ -256,7 +256,7 @@ Configuration options for creating a box.
 `NetworkSpec` uses:
 
 - `outbound: OutboundNetworkSpec` - Guest egress policy
-- `inbound: InboundNetworkSpec` - Service access policy
+- `inbound: InboundNetworkSpec` - Service access policy (default: `mode="disabled"`, private)
 
 The pre-split form `NetworkSpec(mode=..., allow_net=...)` still works and
 configures the outbound direction, positionally as well as by keyword.
@@ -675,7 +675,7 @@ boxlite.BoxOptions(image="postgres")
 boxlite.BoxOptions(
     image="postgres",
     disk_size_gb=20,  # 20 GB disk
-    auto_delete=0,    # keep the box after stop
+    auto_delete=0,  # keep the box after stop
 )
 ```
 

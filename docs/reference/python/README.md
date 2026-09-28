@@ -287,7 +287,7 @@ Metadata about a box.
 |-------|------|-------------|
 | `id` | `str` | Unique box identifier (ULID) |
 | `name` | `str \| None` | Optional user-assigned name |
-| `state` | `BoxStateInfo` | Runtime state with `status`, `running`, and nullable `pid` fields |
+| `state` | `BoxStateInfo` | Runtime state with `status`, `running`, and nullable `pid` and `exit_code` fields. `exit_code` is how the main command ended — its own code, or `128 + n` when a signal ended it; stopping a box signals that command, so a stop is recorded here too; `0` is a real value, so test for `None` rather than falsiness |
 | `created_at` | `str` | ISO 8601 creation timestamp |
 | `started_at` | `str \| None` | Time when the box most recently entered `Running` (RFC 3339); `None` if not recorded or unavailable over REST |
 | `last_activity_at` | `str \| None` | Time the box was last active (RFC 3339), the clock AutoStop measures idleness against; `None` for a local box, which records no activity |

@@ -36,6 +36,7 @@ import { instanceFor } from 'naming'
  */
 export const MACHINE = {
   small: { tier: 'db-f1-micro', edition: 'ENTERPRISE' },
+  standard: { tier: 'db-g1-small', edition: 'ENTERPRISE' },
   medium: { tier: 'db-custom-2-7680', edition: 'ENTERPRISE' },
 } as const
 

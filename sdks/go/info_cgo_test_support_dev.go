@@ -80,3 +80,43 @@ func cNetworkInfoTraversalTestFixtures() [4]*NetworkInfo {
 		cNetworkInfoToGo(&populated),
 	}
 }
+
+// cBoxInfoExitCodeTestFixtures runs the owned pointer the C struct carries
+// back through the real decode. `0` and "not recorded" are the two the design
+// turns on, and nothing above this layer can tell them apart if this hop ever
+// derives presence from the value instead of the pointer.
+func cBoxInfoExitCodeTestFixtures() [3]*int {
+	id := C.CString("box-1")
+	defer C.free(unsafe.Pointer(id))
+	image := C.CString("alpine:latest")
+	defer C.free(unsafe.Pointer(image))
+	status := C.CString("stopped")
+	defer C.free(unsafe.Pointer(status))
+
+	withCode := func(code *C.int) *int {
+		info := C.CBoxInfo{
+			id:        id,
+			image:     image,
+			status:    status,
+			exit_code: code,
+		}
+		boxInfo := cBoxInfoToGo(&info)
+		return boxInfo.ExitCode
+	}
+
+	// Allocated the way the real struct's owner does, so the decode sees a
+	// genuine pointer rather than the address of a Go local.
+	cleanExit := (*C.int)(C.malloc(C.sizeof_int))
+	defer C.free(unsafe.Pointer(cleanExit))
+	*cleanExit = 0
+
+	failedExit := (*C.int)(C.malloc(C.sizeof_int))
+	defer C.free(unsafe.Pointer(failedExit))
+	*failedExit = 42
+
+	return [3]*int{
+		withCode(nil),
+		withCode(cleanExit),
+		withCode(failedExit),
+	}
+}

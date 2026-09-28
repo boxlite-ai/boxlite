@@ -232,6 +232,18 @@ pub(in crate::commands::serve) async fn resize_tty(
 const ATTACH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const ATTACH_WRITE_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// How long the session stays on the socket after sending its own Close,
+/// waiting for the peer's.
+///
+/// RFC 6455 §5.5.1 makes the close a handshake, and the reader is what observes
+/// the peer's half. Aborting it the moment the writer is done also stops it
+/// draining, so anything the client still had in flight sits unread — and
+/// closing a socket with unread data makes the kernel send RST instead of FIN,
+/// which discards our own queued bytes, the exit frame among them. Costs
+/// nothing in the common case: tungstenite answers a Close as soon as it reads
+/// one, about a round trip.
+const ATTACH_PEER_CLOSE_WAIT: Duration = Duration::from_secs(5);
+
 /// Whether this WebSocket client may write into the session.
 ///
 /// A per-socket property, never a session one: the main session's upstream
@@ -632,7 +644,11 @@ async fn run_attach_session(
     let writer_active = Arc::clone(&active);
     let mut ping_interval = tokio::time::interval(ATTACH_KEEPALIVE_INTERVAL);
     ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Yields whether a Close actually went out: the teardown may only wait
+    // for the peer's half of a handshake this side opened. Every other exit
+    // from the loop below leaves without sending one.
     let mut writer = tokio::spawn(async move {
+        let mut close_sent = false;
         async fn ws_send<S>(sink: &mut S, msg: Message) -> bool
         where
             S: SinkExt<Message> + Unpin,
@@ -706,7 +722,7 @@ async fn run_attach_session(
                         }
                         Some(CtrlOut::ClosePolicyViolation(text)) => {
                             let _ = ws_send(&mut sink, Message::Text(text.into())).await;
-                            let _ = ws_send(
+                            close_sent = ws_send(
                                 &mut sink,
                                 Message::Close(Some(axum::extract::ws::CloseFrame {
                                     code: 1008,
@@ -741,8 +757,9 @@ async fn run_attach_session(
                 "exit_code": writer_active.exit_code(),
             });
             let _ = ws_send(&mut sink, Message::Text(exit.to_string().into())).await;
-            let _ = ws_send(&mut sink, Message::Close(None)).await;
+            close_sent = ws_send(&mut sink, Message::Close(None)).await;
         }
+        close_sent
     });
 
     // Canonical axum bidi WS pattern (examples/websockets/src/main.rs:180-195):
@@ -755,11 +772,37 @@ async fn run_attach_session(
     // it to completion, and a second poll on a finished JoinHandle panics
     // with "JoinHandle polled after completion". Only join the aborted side
     // so its task wind-down completes before mark_disconnected runs.
-    let aborted = tokio::select! {
-        _ = &mut reader => { writer.abort(); writer }
-        _ = &mut writer => { reader.abort(); reader }
-    };
-    let _ = aborted.await;
+    // Each arm joins only the side it aborted, which is always the side that
+    // lost. The wait below is the other way a handle reaches completion, and
+    // the branch it completes is deliberately the one that joins nothing.
+    tokio::select! {
+        _ = &mut reader => {
+            writer.abort();
+            let _ = writer.await;
+        }
+        sent = &mut writer => {
+            // Only a Close this side actually sent earns the wait. A writer that
+            // broke out of its loop on a failed send never opened a handshake,
+            // and waiting on one would just delay mark_disconnected while the
+            // reader kept taking stdin. The flag tracks the Close alone: an
+            // exit frame that went out behind a failed Close skips the wait,
+            // which is harmless because a peer not reading the Close was not
+            // reading the frame either.
+            if !matches!(sent, Ok(true)) {
+                reader.abort();
+                let _ = reader.await;
+            } else if tokio::time::timeout(ATTACH_PEER_CLOSE_WAIT, &mut reader)
+                .await
+                .is_err()
+            {
+                // The reader ends on its own once the peer's Close arrives (it
+                // breaks on Message::Close) and keeps draining until then; this
+                // bound is for a peer that neither answers nor drops.
+                reader.abort();
+                let _ = reader.await;
+            }
+        }
+    }
     active.mark_disconnected().await;
 }
 
@@ -768,12 +811,12 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use super::StdinPolicy;
+    use super::{ATTACH_PEER_CLOSE_WAIT, StdinPolicy};
 
     use axum::extract::ws::WebSocketUpgrade;
     use axum::routing::get;
     use boxlite::BoxliteRuntime;
-    use futures::SinkExt;
+    use futures::{SinkExt, StreamExt};
     use tokio::sync::RwLock;
 
     use super::super::super::{ActiveExecution, AppState, SessionKind};
@@ -876,5 +919,248 @@ mod tests {
         );
 
         server.abort();
+    }
+
+    /// Build an attach session on a real socket and return the client half plus
+    /// the stub's senders, so a test can end the exec and watch the teardown.
+    #[allow(clippy::type_complexity)]
+    async fn attach_session_on_a_socket() -> (
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        tokio::sync::mpsc::UnboundedSender<String>,
+        tokio::sync::mpsc::UnboundedSender<String>,
+        tokio::sync::mpsc::UnboundedSender<boxlite::ExecResult>,
+        tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+        Arc<ActiveExecution>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let state = Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+                "http://127.0.0.1:1".to_string(),
+            ))
+            .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        });
+
+        let (exec, stdout_tx, stderr_tx, stdin_rx, result_tx) =
+            boxlite::Execution::stub("container-1");
+        let active = ActiveExecution::new("closing-box".to_string(), SessionKind::Main, exec, None);
+        // Handed back so the caller holds it: a dropped stdin receiver makes
+        // every stdin write fail, which is a different teardown than the one
+        // under test.
+        let session = Arc::clone(&active);
+        // Claim the single-attach slot the way `upgrade_to_attach_session`
+        // does, so a test can tell whether the teardown released it.
+        assert!(
+            session.mark_connected().await,
+            "a fresh execution must have a free attach slot"
+        );
+
+        let app = axum::Router::new().route(
+            "/attach",
+            get(move |ws: WebSocketUpgrade| async move {
+                ws.on_upgrade(move |socket| {
+                    run_attach_session(socket, active, state, StdinPolicy::Allow)
+                })
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let (socket, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/attach"))
+            .await
+            .expect("the attach session must accept a websocket client");
+        (
+            socket, stdout_tx, stderr_tx, result_tx, stdin_rx, session, server,
+        )
+    }
+
+    /// End the exec: the wait task awaits the output pumps before it flips done,
+    /// so every stub sender has to go for the writer to reach its exit frame.
+    fn finish_exec(
+        result_tx: tokio::sync::mpsc::UnboundedSender<boxlite::ExecResult>,
+        stdout_tx: tokio::sync::mpsc::UnboundedSender<String>,
+        stderr_tx: tokio::sync::mpsc::UnboundedSender<String>,
+        exit_code: i32,
+    ) {
+        let _ = result_tx.send(boxlite::ExecResult {
+            exit_code,
+            error_message: None,
+        });
+        drop(result_tx);
+        drop(stdout_tx);
+        drop(stderr_tx);
+    }
+
+    /// Read until the exit frame, or report what arrived instead.
+    async fn exit_code_from(
+        read: &mut (
+                 impl futures::StreamExt<
+            Item = Result<
+                tokio_tungstenite::tungstenite::Message,
+                tokio_tungstenite::tungstenite::Error,
+            >,
+        > + Unpin
+             ),
+    ) -> Result<i64, String> {
+        use tokio_tungstenite::tungstenite::Message as ClientMessage;
+        let read_all = async {
+            while let Some(frame) = read.next().await {
+                match frame {
+                    Ok(ClientMessage::Text(text)) => {
+                        let parsed: serde_json::Value =
+                            serde_json::from_str(&text).map_err(|e| e.to_string())?;
+                        if parsed["type"] == "exit" {
+                            return parsed["exit_code"]
+                                .as_i64()
+                                .ok_or_else(|| "exit frame without a code".to_string());
+                        }
+                    }
+                    Ok(ClientMessage::Close(_)) => {
+                        return Err("close arrived before the exit frame".to_string());
+                    }
+                    Ok(_) => continue,
+                    Err(e) => return Err(format!("transport error before the exit frame: {e}")),
+                }
+            }
+            Err("stream ended before the exit frame".to_string())
+        };
+        match tokio::time::timeout(std::time::Duration::from_secs(10), read_all).await {
+            Ok(result) => result,
+            Err(_) => Err("timed out before the exit frame".to_string()),
+        }
+    }
+
+    /// A client still uploading stdin when its command exits must still be told
+    /// the exit code.
+    ///
+    /// The writer sends the exit frame and Close, and the teardown used to abort
+    /// the reader immediately. Anything the client had in flight then sat unread
+    /// in the receive buffer, and closing a socket with unread data makes the
+    /// kernel send RST rather than FIN — which discards the server's own queued
+    /// bytes, the exit frame among them. The client saw a broken pipe and no
+    /// exit code.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn exit_frame_survives_stdin_still_in_flight() {
+        use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+        let (socket, stdout_tx, stderr_tx, result_tx, _stdin_rx, _session, server) =
+            attach_session_on_a_socket().await;
+        let (mut write, mut read) = socket.split();
+
+        // 64 KiB a frame, so the server cannot drain its receive buffer as fast
+        // as the client fills it.
+        let flood = tokio::spawn(async move {
+            let payload = vec![b'x'; 64 * 1024];
+            loop {
+                if write
+                    .send(ClientMessage::Binary(payload.clone().into()))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        finish_exec(result_tx, stdout_tx, stderr_tx, 7);
+
+        // Come back to read well after the teardown started but inside
+        // ATTACH_PEER_CLOSE_WAIT, which is the window the fix creates: the
+        // frame has to survive in the socket rather than being caught in
+        // flight by a still-draining client. Waiting for the teardown to
+        // *finish* would read past the bound, where the reader is aborted and
+        // the RST returns by design — a different claim than the one here.
+        //
+        // The delay is bounded on both sides, and only the upper one is
+        // derived: too late and the test reads past the bound, too early and
+        // it catches the frame in flight and passes against broken code. If
+        // ATTACH_PEER_CLOSE_WAIT is ever cut to something short, give this its
+        // own value rather than letting the fraction follow it down.
+        tokio::time::sleep(ATTACH_PEER_CLOSE_WAIT / 3).await;
+        let outcome = exit_code_from(&mut read).await;
+
+        flood.abort();
+        server.abort();
+        assert_eq!(
+            outcome,
+            Ok(7),
+            "a client with stdin in flight lost the exit code to the teardown"
+        );
+    }
+
+    /// The control for the test above: same delayed read, nothing in flight.
+    /// If this one ever fails, the cause is the teardown's timing and not the
+    /// unread stdin the other test is about.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn exit_frame_survives_a_client_that_reads_late() {
+        let (socket, stdout_tx, stderr_tx, result_tx, _stdin_rx, _session, server) =
+            attach_session_on_a_socket().await;
+        let (_write, mut read) = socket.split();
+
+        finish_exec(result_tx, stdout_tx, stderr_tx, 7);
+        tokio::time::sleep(ATTACH_PEER_CLOSE_WAIT / 3).await;
+        let outcome = exit_code_from(&mut read).await;
+
+        server.abort();
+        assert_eq!(
+            outcome,
+            Ok(7),
+            "a quiet client must still get its exit code"
+        );
+    }
+
+    /// The other half of the wait: a peer that *does* answer the Close.
+    ///
+    /// This is the common path — tungstenite replies as soon as it reads a
+    /// Close — and it is the one that must not be traded for the lost exit
+    /// frame. If the teardown polls the reader handle a second time after the
+    /// wait already drove it to completion, the session panics with "JoinHandle
+    /// polled after completion" before `mark_disconnected` runs, and the attach
+    /// slot stays claimed forever: `upgrade_to_attach_session` names exactly
+    /// that outcome as the thing to prevent. A freed slot is the observable, so
+    /// this test fails on the wedge rather than on the panic text.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_peer_that_answers_the_close_frees_the_attach_slot() {
+        let (socket, stdout_tx, stderr_tx, result_tx, _stdin_rx, session, server) =
+            attach_session_on_a_socket().await;
+        let (_write, mut read) = socket.split();
+
+        finish_exec(result_tx, stdout_tx, stderr_tx, 7);
+
+        // Keep polling past the exit frame: reading the server's Close is what
+        // makes tungstenite send its own, completing the handshake.
+        let drained = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while read.next().await.is_some() {}
+        })
+        .await;
+        assert!(drained.is_ok(), "the server never closed the connection");
+
+        // The session releases the slot only after its teardown runs to the
+        // end. Poll rather than assume it has landed.
+        let freed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if session.mark_connected().await {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        server.abort();
+        assert!(
+            freed.is_ok(),
+            "the attach slot stayed claimed after the peer answered the close, \
+             so the execution is unattachable and unreapable"
+        );
     }
 }

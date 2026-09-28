@@ -101,11 +101,6 @@ jobs:
           if [ -n "$INPUT_PR" ]; then
             [[ "$INPUT_PR" =~ ^[0-9]+$ ]] || { echo "pr must be a PR number" >&2; exit 1; }
             pr_json="$(gh pr view "$INPUT_PR" --json state,headRefOid,isCrossRepository,mergeable,potentialMergeCommit)"
-            state="$(jq -r '.state' <<<"$pr_json")"
-            [ "$state" = "OPEN" ] || {
-              echo "PR #$INPUT_PR is $state, not open" >&2
-              exit 1
-            }
             # The MERGE, not the head. This workflow's definition comes from main while this job
             # decides what gets checked out, so deploying the head pairs main's YAML with the
             # tooling the branch happens to carry — which is how a components=api dispatch reached
@@ -121,21 +116,33 @@ jobs:
             # Mergeability is computed lazily, so UNKNOWN is a "not yet", not a verdict; retry it
             # rather than failing a dispatch on a cold cache. There is no event to await here —
             # the answer only exists once GitHub recomputes it — so this polls.
+            #
+            # Every field is read inside the loop, so the verdict below is about the request as it
+            # stands when the loop leaves: one closed while this waited is not a request to roll
+            # out, whatever the first response said.
             for attempt in 1 2 3 4 5; do
+              state="$(jq -r '.state' <<<"$pr_json")"
               mergeable="$(jq -r '.mergeable' <<<"$pr_json")"
               sha="$(jq -r '.potentialMergeCommit.oid // empty' <<<"$pr_json")"
-              [ "$mergeable" = "UNKNOWN" ] || [ -z "$sha" ] || break
-              [ "$attempt" -lt 5 ] || break
+              if [ "$state" != "OPEN" ]; then break; fi
+              if [ "$mergeable" != "UNKNOWN" ] && [ -n "$sha" ]; then break; fi
+              if [ "$attempt" -eq 5 ]; then break; fi
               sleep 5
               pr_json="$(gh pr view "$INPUT_PR" --json state,headRefOid,isCrossRepository,mergeable,potentialMergeCommit)"
             done
+            [ "$state" = "OPEN" ] || {
+              echo "PR #$INPUT_PR is $state, not open" >&2
+              exit 1
+            }
             [ "$mergeable" != "CONFLICTING" ] || {
               echo "PR #$INPUT_PR conflicts with main, so it has no merge commit to deploy." >&2
               echo "Resolve the conflict and redispatch." >&2
               exit 1
             }
-            [ -n "$sha" ] || {
-              echo "PR #$INPUT_PR has no merge commit yet (mergeable=$mergeable) after 5 attempts." >&2
+            # MERGEABLE, not "anything but CONFLICTING": UNKNOWN can arrive beside a merge commit
+            # computed before the last push, and deploying that installs a tree neither side has.
+            { [ "$mergeable" = "MERGEABLE" ] && [ -n "$sha" ]; } || {
+              echo "PR #$INPUT_PR has no merge commit this run can trust (mergeable=$mergeable) after 5 attempts." >&2
               echo "GitHub computes this lazily; open the PR once to force it, then redispatch." >&2
               exit 1
             }

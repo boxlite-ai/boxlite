@@ -96,7 +96,7 @@ test('the prefix this refuses to vary is the one the API actually names', () => 
 })
 
 test('a size no provider answers to is refused here rather than at the apply', () => {
-  assert.throws(() => parse({ database: { ...valid.database, size: 'enormous' } }), /must be one of small, medium/)
+  assert.throws(() => parse({ database: { ...valid.database, size: 'enormous' } }), /must be one of small, standard, medium/)
   assert.throws(() => parse({ runners: { size: 'tiny', rootDiskGb: 100 } }), /must be one of small, medium, large/)
 })
 

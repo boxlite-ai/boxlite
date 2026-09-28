@@ -39,3 +39,7 @@ ignore:
   - "src/deps/**/vendor/**" # Third-party sources, not BoxLite's networking bridge
   - "**/tests/**"         # Test files themselves
   - "src/test-utils/**"   # Test scaffolding pulled in by the core crate's tests
+  # `coverage:go` measures the whole runner module with -coverpkg=./..., and
+  # this package is generated. Codecov resolves the module's import paths back
+  # to repo-relative ones, which is what the glob matches.
+  - "apps/runner/pkg/api/docs/**" # swaggo/swag output, "DO NOT EDIT"

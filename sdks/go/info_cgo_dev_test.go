@@ -71,3 +71,33 @@ func TestCNetworkInfoToGoTraversesNativeStruct(t *testing.T) {
 		})
 	}
 }
+
+func TestCBoxInfoToGoCarriesTheMainCommandExitCode(t *testing.T) {
+	fixtures := cBoxInfoExitCodeTestFixtures()
+	tests := []struct {
+		name string
+		got  *int
+		want *int
+	}{
+		{name: "no exit code recorded", got: fixtures[0]},
+		// A clean exit and an unrecorded one would be the same C int; only the
+		// pointer being non-null separates them, which is why it is a pointer.
+		{name: "main command succeeded", got: fixtures[1], want: intPtr(0)},
+		{name: "main command failed", got: fixtures[2], want: intPtr(42)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			switch {
+			case tt.want == nil && tt.got != nil:
+				t.Fatalf("ExitCode = %d, want nil", *tt.got)
+			case tt.want != nil && tt.got == nil:
+				t.Fatalf("ExitCode = nil, want %d", *tt.want)
+			case tt.want != nil && *tt.got != *tt.want:
+				t.Fatalf("ExitCode = %d, want %d", *tt.got, *tt.want)
+			}
+		})
+	}
+}
+
+func intPtr(v int) *int { return &v }

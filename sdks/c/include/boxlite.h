@@ -388,6 +388,19 @@ typedef struct CBoxInfo {
   // AutoStop measures idleness against; `0` when nothing was recorded, which
   // is always the case for local runtimes.
   int64_t last_activity_at;
+  // Owned record of how the box's main command ended; null when the runtime
+  // recorded none. Stopping a box signals that command, so this carries what
+  // the stop produced as well as a self-chosen exit.
+  //
+  // Absence cannot be a sentinel the way it is for [`Self::pid`] and
+  // [`Self::started_at`]: `0` is the exit code of every command that
+  // succeeded, so a reader that took `0` for "nothing recorded" would
+  // report every clean exit as an absent one. A pointer makes that reading
+  // impossible rather than merely wrong — there is no value to mistake —
+  // and follows [`Self::network`], the struct's other owned optional.
+  //
+  // [`free_box_info`] releases it.
+  int *exit_code;
 } CBoxInfo;
 
 // Box info completion. On success the callback owns the non-null metadata and
@@ -993,13 +1006,13 @@ void boxlite_options_set_network_disabled(CBoxliteOptions *opts);
 // range is refused unless an IP or CIDR rule covers it.
 void boxlite_options_add_network_allow(CBoxliteOptions *opts, const char *host);
 
-// Marks services the box exposes as publicly reachable (the default).
+// Marks services the box exposes as publicly reachable.
 // Mirrors `boxlite_options_set_network_enabled` for the inbound direction.
 void boxlite_options_set_network_inbound_enabled(CBoxliteOptions *opts);
 
 // Marks services the box exposes as private — unreachable from outside the
-// box. Mirrors `boxlite_options_set_network_disabled` for the inbound
-// direction.
+// box (the default). Mirrors `boxlite_options_set_network_disabled` for the
+// inbound direction.
 void boxlite_options_set_network_inbound_disabled(CBoxliteOptions *opts);
 
 void boxlite_options_add_secret(CBoxliteOptions *opts,

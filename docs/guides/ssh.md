@@ -7,6 +7,23 @@ SSH can therefore also start the box. Creating the handle alone does not start
 anything. The REST backend returns `Unsupported`; CLI and other language SDKs
 have no SSH control API.
 SSH does not publish a host port; configure network forwarding separately when needed.
+For component diagrams and implementation details, see
+[Guest SSH architecture](../../src/guest/src/service/ssh/README.md).
+
+SSH starts disabled. Control it through the existing host-only guest gRPC connection
+at the box's `sockets/box.sock`, after `Guest.Init` succeeds. There is no LiteBox,
+CLI, or language SDK SSH control API. SSH does not publish a host port; configure
+network forwarding separately when needed.
+
+`boxlite.v1.Ssh` exposes `Configure`, `Status`, and `Disable`. The complete schema
+is in `src/shared/proto/boxlite/v1/service.proto`.
+
+Callers must regenerate their protocol bindings and send `SshConfigureRequest.config`
+using field number 4. The legacy string fields `listen_address`, `ca_public_key`,
+and `principal` (field numbers 1–3) are reserved and ignored when decoding. After
+Guest.Init succeeds, a legacy-only request returns `InvalidArgument` because
+`config` is missing, without changing the current SSH service. There is no legacy
+request conversion or protocol version negotiation.
 
 ```rust,ignore
 use boxlite::{SshAccount, SshConfig};

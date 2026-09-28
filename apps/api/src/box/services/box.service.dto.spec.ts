@@ -12,11 +12,14 @@ import { BoxService } from './box.service'
 describe('BoxService DTO conversion', () => {
   const activityFailure = new Error('READONLY You cannot write against a read only replica')
 
-  function createService(boxActivityService: unknown): BoxService {
+  const exitCodeReader = (code?: number) => ({ getExitCode: jest.fn().mockResolvedValue(code) })
+
+  function createService(boxActivityService: unknown, boxExitCodeService: unknown = exitCodeReader()): BoxService {
     const service = Object.create(BoxService.prototype) as BoxService
     Object.assign(service as any, {
       logger: { warn: jest.fn(), error: jest.fn() },
       boxActivityService,
+      boxExitCodeService,
       resolveToolboxProxyUrl: jest.fn().mockResolvedValue('https://proxy.test/toolbox'),
       resolveToolboxProxyUrls: jest.fn(
         async (regionIds: string[]) => new Map(regionIds.map((id) => [id, `https://${id}.test/toolbox`])),
@@ -53,5 +56,50 @@ describe('BoxService DTO conversion', () => {
     ;(service as any).resolveToolboxProxyUrl = jest.fn().mockRejectedValue(new Error('region lookup failed'))
 
     await expect(service.toBoxDto(box)).rejects.toThrow('region lookup failed')
+  })
+
+  // toBoxDto is on the event path: NotificationService converts through it for
+  // every BoxEvents.STATE_UPDATED, and BoxStateWaiterService for every
+  // resolution. A box reaching STOPPED fires both, so a runner call here would
+  // put a cross-service round trip in front of every stop notification and
+  // stall it for the timeout exactly when the runner is what failed. The code
+  // belongs on the tenant's read, and nowhere else.
+  it('does not ask the runner for an exit code on the event path', async () => {
+    const box = new Box('us', 'data-loader')
+    const reader = exitCodeReader(137)
+    const service = createService({ getLastActivityAt: jest.fn().mockResolvedValue(null) }, reader)
+
+    const dto = await service.toBoxDto(box)
+
+    expect(reader.getExitCode).not.toHaveBeenCalled()
+    expect(dto.exitCode).toBeUndefined()
+  })
+
+  it('asks the runner when a tenant reads the box', async () => {
+    const box = new Box('us', 'data-loader')
+    const reader = exitCodeReader(137)
+    const service = createService({ getLastActivityAt: jest.fn().mockResolvedValue(null) }, reader)
+
+    const dto = await service.toBoxDtoWithExitCode(box)
+
+    expect(reader.getExitCode).toHaveBeenCalledWith(box)
+    expect(dto.exitCode).toBe(137)
+  })
+
+  // 0 is a value; absence has to survive serialization as a missing field,
+  // which is the contract the REST mapper and the generated clients read.
+  it.each([
+    ['a main command that succeeded', 0, 0],
+    ['a box that recorded none', undefined, undefined],
+  ])('reads %s', async (_case, read, expected) => {
+    const box = new Box('us', 'data-loader')
+    const service = createService({ getLastActivityAt: jest.fn().mockResolvedValue(null) }, exitCodeReader(read))
+
+    const dto = await service.toBoxDtoWithExitCode(box)
+
+    expect(dto.exitCode).toBe(expected)
+    if (expected === undefined) {
+      expect(JSON.parse(JSON.stringify(dto))).not.toHaveProperty('exitCode')
+    }
   })
 })

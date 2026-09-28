@@ -1,10 +1,14 @@
+## TL;DR
+
+The proxy authorizes box access through the control plane and tunnels traffic through the box's runner.
+
 # BoxLite preview proxy
 
 `apps/proxy` is the Go service behind `https://<port>-<box>.proxy.<domain>`. It checks with the
 control-plane API that the caller may reach the box, then forwards the request to that port inside
-the box through the box's runner. The SST stack runs it as an ECS service on port 4000 behind a
-network load balancer that terminates TLS for `proxy.<domain>` and `*.proxy.<domain>`
-([`edge.ts`](../infra/stack/edge.ts)); [`apps/infra/mdeploy`](../infra/mdeploy/) deploys it too.
+the box through the box's runner. GCP runs two replicas on GKE Autopilot; AWS uses ECS Fargate.
+Both expose port 4000 behind a load balancer that terminates public TLS.
+See [infrastructure networking](../infra/docs/networking.md) and [architecture](../infra/docs/architecture.md).
 
 - Routes: [`apps/API.md`](../API.md#preview-proxy-api)
 - Place in the platform: [`apps/README.md`](../README.md)

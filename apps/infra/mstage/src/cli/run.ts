@@ -133,6 +133,9 @@ const LOGIN_PROVIDERS: Record<string, { check: ProviderCheck; summary: string }>
   auth0: { check: checkAuth0 as ProviderCheck, summary: 'The auth0 CLI session, and its active tenant' },
 }
 
+/** Every provider `login` can check, named once so nothing keeps a second list. */
+export const LOGIN_PROVIDER_NAMES = Object.keys(LOGIN_PROVIDERS)
+
 const LOGIN_CHECKS: Record<string, ProviderCheck> = Object.fromEntries(
   Object.entries(LOGIN_PROVIDERS).map(([key, provider]) => [key, provider.check]),
 )
@@ -334,7 +337,11 @@ const runLogin = async ({
     throw new UsageError(`${STAGE_FILENAME} declares no login providers on any stage, so there is nothing to check`)
   }
   for (const provider of Object.keys(declared)) {
-    if (!(provider in checks)) {
+    // Own properties only, here and below: a provider name reaches these maps
+    // from argv and from the parsed stage file, and `in` answers for every
+    // name an object inherits — `toString` would pass both guards and be
+    // called as a check, or padded as a report line that has no width.
+    if (!Object.hasOwn(checks, provider)) {
       throw new UsageError(
         `${STAGE_FILENAME} declares "${provider}", which mstage cannot check. Known: ${Object.keys(checks).join(', ')}`,
       )
@@ -342,7 +349,7 @@ const runLogin = async ({
   }
   const wanted = command === null ? Object.keys(declared) : [command]
   for (const provider of wanted) {
-    if (!(provider in declared)) {
+    if (!Object.hasOwn(declared, provider)) {
       throw new UsageError(
         `No stage here uses "${provider}". ${STAGE_FILENAME} declares: ${Object.keys(declared).join(', ')}`,
       )

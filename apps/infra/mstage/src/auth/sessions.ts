@@ -281,16 +281,15 @@ const GCP_CREDENTIALS = [
  * `gcloud config get-value project` reported usable credentials as "not signed
  * in" over a setting the work never consults.
  *
- * No quota project is needed either — `auth login --update-adc` writes none, so
- * quota falls to the project owning the resource, and `home.ts` constructs
- * `GoogleAuth` with an explicit `projectId`.
+ * The quota project is not checked either. `application-default login` writes
+ * one — the reason the sign-in is two commands — but ADC carrying the wrong one
+ * is not something a token mint can show, so this check does not claim to catch
+ * it; `home.ts` constructs `GoogleAuth` with an explicit `projectId`.
  *
  * `checkAws` is the mirror: it proves the credential resolves and leaves the
  * region to the stage.
  */
 export const checkGcp = async ({ runCommand }: { runCommand?: RunCommand } = {} as any) => {
-  // From the registry rather than spelled out again: `--update-adc` is what
-  // makes one sign-in cover both stores, so advice must name the same flags.
   // From the registry rather than spelled out again, and both steps, because
   // either one alone leaves the store this is about to refuse.
   const advice = `Sign in with: ${PROVIDER_TOOLS.gcp!.signIn.map((argv) => argv.join(' ')).join(' then ')}`

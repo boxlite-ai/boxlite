@@ -24,13 +24,13 @@ import { gcpImages } from '../../image.ts'
 import { gcpAlarmProvider } from './alarms.ts'
 import { gcpApiProvider } from './api.ts'
 import { gcpCacheProvider } from './cache.ts'
-import { CLICKHOUSE_CALLERS, gcpClickHouseProvider } from './clickhouse.ts'
+import { gcpClickHouseProvider } from './clickhouse.ts'
 import { gcpClusterProvider } from './cluster.ts'
 import { gcpCollectorProvider } from './collector.ts'
 import { gcpDatabaseProvider } from './database.ts'
 import { gcpEdgeProvider } from './edge.ts'
 import { gcpMailProvider } from './mail.ts'
-import { gcpNetworkProvider } from './network.ts'
+import { CLOUDRUN_EGRESS_CIDR, gcpNetworkProvider } from './network.ts'
 import { gcpRunnerProvider } from './runners.ts'
 import { gcpStorageProvider } from './storage.ts'
 
@@ -143,11 +143,12 @@ export const gcpStackProviders = ({
         region,
         zone,
         appShort,
-        // The collector writes and the API reads; both carry an account, and
-        // the firewall admits those two and nothing else. The roles come from
-        // the module that owns the rule, so this cannot hand over one identity
-        // while that comment claims two — which is exactly what it used to do.
-        callers: CLICKHOUSE_CALLERS.map((role) => placement(network, role).serviceAccount),
+        // The collector writes and the API reads, and the rule admits those two
+        // and nothing else. By range because both are Cloud Run services, which
+        // arrive with neither an account nor a tag a rule can match; the subnet
+        // holds exactly those two, so one range cannot name half of them the way
+        // a hand-written caller list once did.
+        callerRanges: [CLOUDRUN_EGRESS_CIDR],
         // The one project allowed to connect an endpoint. Today the console is
         // deployed into this same project, so the producer's own id is the
         // accept list; the identity that reads the password is stage

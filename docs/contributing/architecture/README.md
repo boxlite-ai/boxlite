@@ -9,6 +9,8 @@ How the BoxLite runtime's code fits together, for contributors. The user-level p
 - [Jailer network permissions](jailer-network-permissions.md): guest networking, host IP grants,
   and the AF_UNIX control plane.
 - [Container capabilities](container-capabilities.md): the Linux capability API.
+- [Guest SSH](../../../src/guest/src/service/ssh/README.md): russh APIs, authentication,
+  container workloads, forwarding, and shutdown ownership.
 - [Jailer threat model](../../../src/boxlite/src/jailer/THREAT_MODEL.md).
 
 ## Source map

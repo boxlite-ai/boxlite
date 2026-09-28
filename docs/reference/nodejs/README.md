@@ -238,7 +238,7 @@ Metadata about a box.
 |-------|------|-------------|
 | `id` | `string` | Unique box identifier (ULID) |
 | `name` | `string \| undefined` | User-defined name |
-| `state` | `JsBoxStateInfo` | Runtime state with `status`, `running`, and optional `pid` fields |
+| `state` | `JsBoxStateInfo` | Runtime state with `status`, `running`, and optional `pid` and `exitCode` fields. `exitCode` is how the main command ended — its own code, or `128 + n` when a signal ended it; stopping a box signals that command, so a stop is recorded here too; `0` is a real value, so test for `undefined` rather than falsiness |
 | `createdAt` | `string` | Creation timestamp (ISO 8601) |
 | `startedAt` | `string \| undefined` | Time when the box most recently entered `Running` (RFC 3339); absent if not recorded or unavailable over REST |
 | `lastActivityAt` | `string \| undefined` | Time the box was last active (RFC 3339), the clock AutoStop measures idleness against; absent for a local box, which records no activity |

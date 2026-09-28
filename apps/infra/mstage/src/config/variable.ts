@@ -57,12 +57,14 @@ export const blockFor = ({
   stage: string
   where: string
 }): Record<string, unknown> => {
-  const declared = stages[stage]
-  if (declared === undefined) {
+  // Own properties only. `stages` came out of `JSON.parse`, so an `undefined`
+  // check passes for `toString` — a function, not undefined — and this would
+  // hand back that function as the stage's declaration.
+  if (!Object.hasOwn(stages, stage)) {
     const known = Object.keys(stages).join(', ') || '(none)'
     throw new ConfigVariableError(`${where} declares no stage "${stage}". Declared: ${known}`)
   }
-  return { [stage]: declared }
+  return { [stage]: stages[stage] }
 }
 
 /** The `stages` map out of a stage-file document, refusing anything else. */
@@ -125,7 +127,9 @@ export const resolveConfig = ({
       throw new ConfigVariableError(`${name} must hold an object`)
     }
     const block = parsed as Record<string, unknown>
-    if (!(stage in block)) {
+    // Own properties only: `block` came out of `JSON.parse`, so `in` would
+    // find `toString` and carry a function through as this stage's block.
+    if (!Object.hasOwn(block, stage)) {
       const known = Object.keys(block).join(', ') || '(none)'
       throw new ConfigVariableError(`${name} holds no stage "${stage}". It holds: ${known}`)
     }

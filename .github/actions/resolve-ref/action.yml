@@ -27,6 +27,13 @@ inputs:
     description: Used when `ref` is empty — normally github.sha.
     required: false
     default: ''
+  branch:
+    description: >-
+      The branch the resolved commit must be on — normally github.ref_name. A
+      commit that branch does not contain is refused. Empty skips the check.
+      Needs the caller's checkout to carry that branch, so `fetch-depth: 0`.
+    required: false
+    default: ''
 
 outputs:
   sha:
@@ -44,6 +51,7 @@ runs:
       env:
         REF: ${{ inputs.ref }}
         FALLBACK: ${{ inputs.fallback }}
+        BRANCH: ${{ inputs.branch }}
       run: |
         set -euo pipefail
         candidate="${REF:-$FALLBACK}"
@@ -52,24 +60,51 @@ runs:
           exit 1
         fi
         if [[ "$candidate" =~ ^[0-9a-f]{40}$ ]]; then
-          printf 'sha=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
-          printf 'resolved-from=\n' >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        sha="$(git rev-parse --verify --quiet "$candidate^{commit}" || true)"
-        if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
-          # Which of the two it is, rather than a guess. A checkout with no tags
-          # at all is the shallow one; a checkout that has tags and not this one
-          # is a name that does not exist, and telling that caller to raise its
-          # fetch-depth sends them to a setting that is already correct.
-          if [ -z "$(git tag --list | head -n 1)" ]; then
-            echo "::error title=resolve-ref::'$candidate' is not a commit SHA and this checkout carries no tags at all; the caller needs fetch-depth: 0" >&2
-          else
-            near="$(git tag --list "*$candidate*" | head -n 3 | tr '\n' ' ')"
-            echo "::error title=resolve-ref::'$candidate' is not a commit SHA and no ref of that name exists here${near:+ (did you mean: $near)}" >&2
+          sha="$candidate"
+          resolved_from=""
+        else
+          sha="$(git rev-parse --verify --quiet "$candidate^{commit}" || true)"
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            # Which of the two it is, rather than a guess. A checkout with no
+            # tags at all is the shallow one; a checkout that has tags and not
+            # this one is a name that does not exist, and telling that caller to
+            # raise its fetch-depth sends them to a setting already correct.
+            if [ -z "$(git tag --list | head -n 1)" ]; then
+              echo "::error title=resolve-ref::'$candidate' is not a commit SHA and this checkout carries no tags at all; the caller needs fetch-depth: 0" >&2
+            else
+              near="$(git tag --list "*$candidate*" | head -n 3 | tr '\n' ' ')"
+              echo "::error title=resolve-ref::'$candidate' is not a commit SHA and no ref of that name exists here${near:+ (did you mean: $near)}" >&2
+            fi
+            exit 1
           fi
+          resolved_from="$candidate"
+        fi
+
+        # A 40-character string is a shape, not a commit. Taken on trust the
+        # deploy went on to ask a registry and a bucket about bytes for a commit
+        # that was never here, and reported their absence rather than the typo.
+        if ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+          echo "::error title=resolve-ref::'$candidate' is not a commit in this checkout" >&2
           exit 1
         fi
+
+        if [ -n "$BRANCH" ]; then
+          head="$(git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH^{commit}" \
+            || git rev-parse --verify --quiet "refs/heads/$BRANCH^{commit}" || true)"
+          if [ -z "$head" ]; then
+            echo "::error title=resolve-ref::this checkout does not carry branch '$BRANCH'; the caller needs fetch-depth: 0" >&2
+            exit 1
+          fi
+          # Contained, not merely existing. A commit on an abandoned branch, or
+          # on one that was force-pushed away, still resolves and still names
+          # bytes — and deploying it puts a stage on something no branch here
+          # will ever produce again.
+          if ! git merge-base --is-ancestor "$sha" "$head"; then
+            echo "::error title=resolve-ref::'$candidate' resolves to $sha, which branch '$BRANCH' does not contain" >&2
+            exit 1
+          fi
+        fi
+
         printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
-        printf 'resolved-from=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
+        printf 'resolved-from=%s\n' "$resolved_from" >> "$GITHUB_OUTPUT"
         echo "resolved $candidate to $sha"

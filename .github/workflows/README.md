@@ -1,3 +1,7 @@
+## TL;DR
+
+Use this index to find CI checks, artifact publication and deployment workflows, with infrastructure procedures linked to their runbook.
+
 # CI/CD workflows
 
 Every GitHub Actions workflow in the repository: the pull-request checks, the SDK build and
@@ -20,10 +24,12 @@ RELEASE CHAIN (workflow_run)            build-c ──▶ build-go
 RELEASE (release event)                 build-runtime · build-c · build-node · build-wheels
                                         apps/box-images/v* tag ──▶ release-box-images
 
-DEPLOY (manual dispatch)                deploy-infra ─┬─▶ build-apps-api-image
+LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api-image
                                                       ├─▶ build-c ──▶ build-runner-binary
                                                       └─▶ e2e-cloud
                                         deploy-release   (no builds; consumes published artifacts)
+DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ mbuild         (a commit or #<n> ──▶ <sha> images, dev)
+                                                     └─▶ mbuild-release (v<X.Y.Z> ──▶ v<X.Y.Z>-<sha>, dev then prod)
 
 CONFIG                                  ci-config action ◀── lint, test, config workflow
                                         config workflow ◀── build workflows
@@ -31,8 +37,9 @@ CONFIG                                  ci-config action ◀── lint, test, c
 
 ## Workflows
 
-**Callable** marks a workflow another one can invoke with `uses:`. `config.yml` is the only one that
-is *exclusively* callable; workflows with `workflow_dispatch` can also run on their own.
+**Callable** marks a workflow another one can invoke with `uses:`. `config.yml` and `mbuild.yml` are
+the two that are *exclusively* callable; workflows with `workflow_dispatch` can also run on their
+own.
 
 | Workflow | Triggers | Callable | Purpose |
 | --- | --- | --- | --- |
@@ -48,14 +55,13 @@ is *exclusively* callable; workflows with `workflow_dispatch` can also run on th
 | `build-node.yml` | release, dispatch | — | Node.js SDK, napi-rs addon and platform packages |
 | `build-wheels.yml` | release, dispatch | — | Builds Python wheels and verifies their native extension in cibuildwheel before publishing |
 | `build-runner-binary.yml` | `workflow_run`, dispatch, `workflow_call` | yes | Linux amd64 runner binary; automatic builds follow successful C SDK releases |
-| `build-apps-api-image.yml` | dispatch, `workflow_call` | yes | The `apps/api` image: build a commit, build a release, or promote one between stages |
-| `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. The normal deploy path |
-| `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing |
+| `build-apps-api-image.yml` | dispatch, `workflow_call` | yes | The `apps/api` image: build a commit, build a release, or promote one between stages. Retained legacy AWS path |
+| `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
+| `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
 | `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage. Run by `deploy-infra` after it applies |
-| `mdeploy-all.yml` | dispatch | yes | One dispatch: have the artifacts this commit needs, then deploy it. Calls the three below |
-| `mbuild.yml` | dispatch, `workflow_call` | yes | Every container image a commit produces: publish them, or promote them between stages |
-| `mrunner.yml` | dispatch, `workflow_call` | yes | The runner binary for a commit: build it for a stage, or promote the one another stage serves |
-| `mdeploy.yml` | dispatch, `workflow_call` | yes | Applies the stack for a commit whose artifacts are already in place |
+| `mdeploy-all.yml` | dispatch | — | Current mdeploy orchestration for prepared GCP/AWS stages. A commit SHA builds for dev, and so does `#<number>` — a pull request, by the commit it would merge to; a release tag publishes into dev or promotes to prod, and is all prod accepts. Applies the stack itself |
+| `mbuild.yml` | `workflow_call` | call-only | The commit line's images, for a dev rollout. Callee only: nobody publishes a commit by hand |
+| `mbuild-release.yml` | dispatch, `workflow_call` | yes | The release line's images, tagged `v<X.Y.Z>-<sha>`: publish a version into dev, or promote it to prod. One job per artifact, and a version the target already holds is refused rather than skipped |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted EC2 runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
 | `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | The only workflow that writes to GHCR |
@@ -90,6 +96,9 @@ Python runs all four supported versions on Linux x64 and the latest on macOS and
 and bypass change filters. Combined Rust and CLI coverage runs on all three platforms, including
 non-VM integration tests and Linux guest tests. Codecov requires 90% coverage of changed lines
 and reports total coverage.
+
+Linux x64 also runs the native KVM hardware tests and adds their profiles before
+the Rust coverage upload. Missing `/dev/kvm` access fails this qualification.
 
 When none of the coverage suites is selected on a PR or merge group, the
 `Codecov (no coverage changes)` job runs a validated `empty-upload`. Codecov
@@ -249,48 +258,38 @@ silently stops the chain — no error, the downstream workflow simply never fire
 
 ## Adding a stage
 
-`stage` inputs are allowlists rather than free text, so a required-reviewers Environment cannot be
-targeted by an unbootstrapped or misspelled name. Each list is independent — it names the stages
-*that* path is meant to reach. Today `deploy-infra.yml` lists `dev`, while `deploy-release.yml` and
-`build-apps-api-image.yml` (`stage` and `source_stage`) list `dev` and `prod`. Bootstrapping a
-stage means adding it to whichever lists should reach it.
+Define the stage in `.mstage.config.json`, bootstrap its intended cloud/path, and publish its declaration
+with `npm run mstage config put -- --stage <stage>`. The GitHub Environment name must match the stage.
 
-Two edits, not one: the lists above, and `ENVIRONMENTS` in
-`apps/infra/deployment/release-safety.test.ts`, which is what refuses an option with no deployment
-Environment behind it. An Environment is where a stage's declaration lives, so an option naming a
-stage that has none reaches a job with no configuration at all rather than a clear refusal.
+Manual workflow choices are allowlists: mdeploy-all currently exposes `dev` and `prod`, with distinct
+commit/release policies. A new stage requires reviewing dispatch choices, ref-resolution/promotion
+policy and the associated workflow tests, including `apps/infra/deployment/release-safety.test.ts`.
+Declaring a stage locally does not make every workflow accept it.
 
-The `m*` workflows read that stage's declaration rather than anything written here, so adding one
-to their lists is the whole change on this side — but the declaration has to be somewhere they can
-read it. `npm run mstage config put -- --stage <stage>` puts it in that stage's Environment, and
-`.github/actions/setup-infra` restores it on the runner. A promotion reads two stages and a job
-binds to one Environment, so the source's block is read by a job bound to the source's Environment
-and carried to the other as an output — which is why `mbuild.yml`, `mrunner.yml` and
-`mdeploy-all.yml` each have a small `declaration` job.
-
-Each stage also needs its GitHub Environment to exist under exactly the stage name — the deploy
-role's trust policy pins `repo:<owner>/<repo>:environment:<stage>` — and that is where required
-reviewers are enforced.
+Promotion needs both source and destination declarations. The source job reads its own Environment
+and carries the declaration to the destination job; setup-infra restores the needed blocks.
+Verify live reviewers and cloud federation trust after bootstrap. For retained legacy workflows,
+review their independent `stage`/`source_stage` choices and capability checks as well.
 
 ## Deploy configuration
 
-Per stage, on the GitHub side:
+The current [deployment runbook](../../apps/infra/docs/deployment.md) owns setup and apply instructions.
+Stage declarations travel through `BOXLITE_MSTAGE_BOXLITE_APP_CONFIG` on the matching GitHub Environment;
+[setup-infra](../actions/setup-infra/action.yml) restores the ignored `.mstage.config.json` for each job.
 
-- **Environment variables** `AWS_ACCOUNT_ID` and `AWS_REGION`. Neither can live in the stage's SST
-  secret store, because `configure-aws-credentials` reads them before any AWS credentials exist.
-  - `AWS_ACCOUNT_ID` is **required**. The workflows compose
-    `arn:aws:iam::<id>:role/boxlite-<stage>-github-deploy` from it; only the account id is unknown,
-    since the role name follows from the stage.
-  - `AWS_REGION` is **optional**, and only for a stage outside the default. The workflows fall back
-    to `DEFAULT_AWS_REGION`, pinned to the code by a test.
-- **Environment secrets** `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_DEFAULT_ACCOUNT_ID`. These cannot
-  move to the SST secret store either: reading that store initializes the Cloudflare provider, so a
-  token kept there would be needed in order to read itself.
+| Cloud/path | GitHub inputs established by bootstrap |
+| --- | --- |
+| GCP | `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEPLOYER`, `GCP_IMAGE_PUBLISHER` Environment variables |
+| AWS | `AWS_ACCOUNT_ID`, `AWS_REGION` Environment variables for federated credentials |
+| Legacy AWS wrapper | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_DEFAULT_ACCOUNT_ID` Environment secrets |
 
-Everything else for a stage lives in its SST secret store, seeded by `npm run bootstrap` and read
-by `apps/infra/deployment/sst.ts`. `npm run bootstrap` also reconciles the scoped role, permissions
-boundary, immutable API ECR repository and private runner artifact bucket, from the documents in
-`apps/infra/bootstrap/aws/`.
+mdeploy reads application values from the encrypted stage store through mstage. The retained legacy
+AWS wrapper uses its SST manifest and bootstrap credential copies. AWS bootstrap still prepares
+legacy `boxlite` resources while mdeploy names `boxlite-app`; read the
+[compatibility boundary](../../apps/infra/bootstrap/aws/README.md#aws-mdeploy-compatibility) before switching.
+
+[Configuration](../../apps/infra/docs/configuration.md) explains groups, digests and secret handling;
+[security](../../apps/infra/docs/security.md) distinguishes workflow gates from live IAM and Environment settings.
 
 ## Publishing secrets
 

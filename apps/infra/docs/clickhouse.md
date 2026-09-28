@@ -1,60 +1,66 @@
-# ClickHouse observability
+## TL;DR
 
-ClickHouse stores direct OTLP logs, traces, and metrics from the existing collector. ECS
-`stdout`/`stderr` remains in CloudWatch.
+Select the telemetry backend with shared inputs, then use the chosen cloud’s lifecycle and access procedures.
 
-`CLICKHOUSE_MODE` selects the backend:
+# Shared observability configuration
 
-- `self-hosted` (default): one private `m6a.large` with an encrypted 50 GiB gp3 data volume.
-- `managed`: an existing ClickHouse service and two Secrets Manager password secrets.
-- `disabled`: no ClickHouse resources or exporter.
+[Infrastructure index](../README.md)
 
-Self-hosted sizing and schema are deliberately fixed: `m6a.large`, 50 GiB gp3, 72-hour retention,
-database `otel`, and the `otel_writer` / `otel_reader` principals.
+| Cloud | Guide |
+| --- | --- |
+| AWS | [CloudWatch, EBS and private UI access](aws/clickhouse.md) |
+| GCP | [Cloud Logging, Hyperdisk and ClickStack PSC](gcp/clickhouse.md) |
 
-When upgrading from an earlier configuration, remove the old instance, disk, retention, database,
-and username keys from `apps/infra/.env`, then rerun `npm run bootstrap -- --stage <stage>`. The
-deploy fails closed while the SST stage store still names one of those removed keys.
+## Two telemetry paths
 
-The self-hosted rollout is automatic: database readiness, collector rollout, a real OTLP log smoke
-test, then the API rollout. Managed mode waits for the collector before the API but needs a manual
-synthetic-event check because the deployment runner may not be allowed to reach the managed endpoint.
+Application OTLP travels through `apps/otel-collector`, which supports BoxLite organization export
+and optional ClickHouse export. Platform stdout/stderr, load-balancer health and cloud logs remain
+in the selected cloud’s logging service. Disabling ClickHouse does not disable platform logging
+or organization-configured OTLP destinations.
 
-Managed mode uses one endpoint with separate principals:
+## Select a backend
 
-```dotenv
-CLICKHOUSE_MODE=managed
-CLICKHOUSE_URL=https://example.clickhouse.cloud:8443
-CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN=arn:aws:secretsmanager:...
-CLICKHOUSE_READER_PASSWORD_SECRET_ARN=arn:aws:secretsmanager:...
-```
+Set `stages.<stage>.deploy.clickhouse.mode` in `.mstage.config.json` for mdeploy.
 
-The URL must be an origin only, with no path, query, fragment, or credentials; this prevents the
-collector and API clients from interpreting one connection string differently. Both secret ARNs
-must be distinct, in the deployment's AWS region and account, and have names beginning
-`boxlite-<stage>-`, matching the runtime permissions boundary.
+| Mode | Resources owned by this stack | Operator responsibility |
+| --- | --- | --- |
+| `self-hosted` | VM, boot/data disks, credentials and private endpoint | Capacity, retention, recovery and schema lifecycle |
+| `managed` | Runtime references to an existing endpoint and credentials | Provision compatible schema/users and network reachability |
+| `disabled` | No ClickHouse backend/exporter | Use other telemetry destinations as needed |
 
-The managed database must already contain the schema in
-`clickhouse/otel-schema-v0.144.0.sql` with the same database and principals. Managed mode relies on
-the collector and API service health; after switching, verify both OTLP ingestion as `otel_writer`
-and a query as `otel_reader`.
+Self-hosted size and disk capacity come from `deploy.clickhouse.instanceSize` and `dataGb`.
+The vendored schema currently renders 72-hour retention.
+Keep database/user settings aligned with the bundled schema and boot scripts;
+`otel`, `otel_writer` and `otel_reader` are the example's supported baseline.
 
-## Private UI
+## Managed endpoint
 
-Find the current self-hosted instance and forward its HTTP port:
+Supply these three values together in the encrypted stage store:
 
-```sh
-INSTANCE_ID=$(aws ec2 describe-instances \
-  --filters 'Name=tag:Name,Values=boxlite-<stage>-clickhouse' 'Name=instance-state-name,Values=running' \
-  --query 'Reservations[0].Instances[0].InstanceId' --output text)
-aws ssm start-session --target "$INSTANCE_ID" \
-  --document-name AWS-StartPortForwardingSession \
-  --parameters '{"portNumber":["8123"],"localPortNumber":["18123"]}'
-```
+| Key | Value |
+| --- | --- |
+| `CLICKHOUSE_URL` | HTTPS origin of the managed service |
+| `CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN` | Writer credential reference for the stage's cloud |
+| `CLICKHOUSE_READER_PASSWORD_SECRET_ARN` | Distinct reader credential reference for the stage's cloud |
 
-Open `http://127.0.0.1:18123/clickstack` and use the `otel_reader` secret. The embedded UI is for
-search and debugging; saved HyperDX state is not retained.
+The historical `_ARN` suffix remains part of the shared input contract. The selected cloud’s guide
+defines its credential-address format and rotation behavior. Keep passwords out of the URL.
+Provision the [bundled schema](../clickhouse/otel-schema-v0.144.0.sql) and appropriate reader/writer
+grants before deploying; the collector does not create tables automatically.
 
-The EC2 instance may be replaced by bootstrap changes, but its data volume is retained and
-reattached. Switching to managed or disabled mode detaches and retains the old volume outside SST;
-take an EBS snapshot before deleting or restoring that retained data.
+## Retained data
+
+Retained disks can outlive the instance or a switch to another backend mode. Take a verified backup
+before intentional deletion or migration, and inventory detached disks during teardown.
+A healthy VM does not prove tables exist or that the collector can insert into them.
+
+## Verify ingestion and queries
+
+1. Emit a uniquely identified test log/trace from a test box or service.
+2. Check collector export errors and backend reachability.
+3. Confirm the event exists using the reader path available to the API.
+4. Verify timestamps and retention, then check any organization OTLP destination separately.
+
+Inspect platform logs and application telemetry independently.
+
+Sources: [shared contract](../mdeploy/stack/clickhouse.ts), [schema renderer](../mdeploy/stack/clickhouse-host.ts), [collector](../../otel-collector/config.yaml).

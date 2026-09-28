@@ -58,8 +58,9 @@ const destinationFor = ({
   run: RunCommand
   home: string
 }): Destination => {
-  const declared = config.stages[stage]
-  if (!declared) throw new RunnerBuildError(`no stage "${stage}" is declared`)
+  // Own properties only; the same reason as `mstage/config`'s `stageIn`.
+  if (!Object.hasOwn(config.stages, stage)) throw new RunnerBuildError(`no stage "${stage}" is declared`)
+  const declared = config.stages[stage]!
   if (declared.home !== home) {
     throw new RunnerBuildError(
       `cannot promote between clouds: this session is on ${home} and "${stage}" lives on ${declared.home}. ` +

@@ -4,12 +4,15 @@
  */
 
 import { ForbiddenException } from '@nestjs/common'
+import { plainToInstance } from 'class-transformer'
 import { BoxService } from './box.service'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BoxEvents } from '../constants/box-events.constants'
+import { CreateBoxDto as RestCreateBoxDto } from '../../boxlite-rest/dto/create-box.dto'
+import { createBoxToCreateBox } from '../../boxlite-rest/mappers/box-to-box.mapper'
 
 // ensureStartedForProxy only touches boxRepository + eventEmitter +
 // organizationService; every other injected dependency is irrelevant.
@@ -33,6 +36,7 @@ function makeService() {
     boxRepository, // boxRepository
     noop, // runnerRepository
     noop, // runnerService
+    noop, // boxExitCodeService
     noop, // volumeService
     noop, // configService
     noop, // warmPoolService
@@ -74,6 +78,7 @@ function makePreviewUrlService() {
     noop, // boxRepository
     noop, // runnerRepository
     noop, // runnerService
+    noop, // boxExitCodeService
     noop, // volumeService
     configService, // configService
     noop, // warmPoolService
@@ -277,7 +282,8 @@ function makeNetworkTunnelService() {
   const service = new BoxService(
     noop,
     noop,
-    noop,
+    noop, // runnerService
+    noop, // boxExitCodeService
     noop,
     configService,
     noop,
@@ -356,6 +362,21 @@ describe('BoxService public defaults', () => {
     const { service, boxRepository } = makeCreateService()
 
     await service.create({ name: 'fresh-box', public: requestedPublic } as any, { id: 'org-1' } as any)
+
+    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ public: expectedPublic }), undefined)
+  })
+
+  it.each([
+    ['network omitted', undefined, false],
+    ['legacy flat network', { mode: 'enabled' }, false],
+    ['nested outbound only', { outbound: { mode: 'enabled' } }, false],
+    ['inbound enabled', { inbound: { mode: 'enabled' } }, true],
+    ['inbound disabled', { inbound: { mode: 'disabled' } }, false],
+  ])('persists REST %s with the expected public value', async (_label, network, expectedPublic) => {
+    const { service, boxRepository } = makeCreateService()
+    const restDto = plainToInstance(RestCreateBoxDto, { name: 'rest-box', image: 'base', network })
+
+    await service.create(createBoxToCreateBox(restDto), { id: 'org-1' } as any)
 
     expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ public: expectedPublic }), undefined)
   })

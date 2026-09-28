@@ -1791,6 +1791,32 @@ components:
           type: boolean
           default: true
           description: Whether the box automatically resumes when accessed after AutoStop
+        exit_code:
+          type: integer
+          description: |
+            How the box's main command ended, present once the box has
+            stopped and the runtime recorded it. A command that exited on its
+            own reports its own code; one ended by a signal reports
+            `128 + n`. Stopping a box signals that command — `SIGTERM`, then
+            `SIGKILL` after a grace period — so a stop is recorded here too:
+            the command's own code when it handles `SIGTERM`, and `137`
+            when it does not. Absent while the box is running, because
+            starting one clears it, and absent when nothing was recorded: a
+            box that never reached its command, or one whose exit went
+            unobserved.
+
+            `0` is a real value here: it is how a command that succeeded is
+            told apart from one that did not. Absence, not `0`, is what
+            means "no exit code recorded", so a client must distinguish the
+            missing field from a zero one.
+
+            A server may leave it out of any response other than a direct
+            read of one box — listing boxes, and the replies to create, start,
+            stop, clone and import — because the code lives with the runner
+            that owns the box, and fetching it per box does not scale to a
+            list. So absence in those responses says nothing either way: read
+            the box itself to find out.
+          example: 137
 
     BoxStatus:
       type: string
@@ -1891,6 +1917,12 @@ components:
             $ref: "#/components/schemas/VolumeSpec"
         network:
           $ref: "#/components/schemas/NetworkSpec"
+          description: |
+            Optional network policy. Omitting `network` defaults inbound
+            service access to `disabled` (private).
+          default:
+            inbound:
+              mode: disabled
         secrets:
           type: array
           items:
@@ -2085,6 +2117,12 @@ components:
           $ref: "#/components/schemas/OutboundNetworkSpec"
         inbound:
           $ref: "#/components/schemas/InboundNetworkSpec"
+          description: |
+            Optional inbound service access policy. Omission means
+            `mode=disabled` (private), including for legacy flat network
+            requests. Send `mode=enabled` to make the box public.
+          default:
+            mode: disabled
         mode:
           deprecated: true
           type: string

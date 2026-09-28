@@ -69,10 +69,10 @@ tooling_install_is_valid() {
   [[ "$record" =~ ^[0-9a-f]{40}$ ]] || return 1
   verify="$common_git_dir/agent-tooling/$record/plugins/boxlite-agent-tooling/scripts/verify-installation.sh"
   [[ -x "$verify" ]] || return 1
-  "$verify" "$repo_root" >/dev/null 2>&1
+  "$verify" "$repo_root" >/dev/null
 }
 
-if ! tooling_install_is_valid; then
+if ! tooling_install_is_valid 2>/dev/null; then
   install_output=""
   if install_output="$(cd "$repo_root" && AGENT_TOOLING_SYNC_ACTIVE=1 /usr/bin/env bash "$installer" 2>&1)"; then
     :
@@ -83,6 +83,7 @@ if ! tooling_install_is_valid; then
     exit "$status"
   fi
   tooling_install_is_valid || {
+    [[ -z "$install_output" ]] || printf '%s\n' "$install_output" >&2
     printf 'agent-tooling: automatic tooling installation did not produce a valid local installation\n' >&2
     exit 1
   }
@@ -117,6 +118,7 @@ refresh_adopted_tooling() {
     return "$status"
   fi
   tooling_install_is_valid || {
+    [[ -z "$output" ]] || printf '%s\n' "$output" >&2
     printf 'agent-tooling: tooling refresh did not produce a valid local installation\n' >&2
     return 1
   }

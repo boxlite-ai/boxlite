@@ -137,4 +137,33 @@ describe('BoxLite container process options mapper', () => {
     expect(mapped.entrypoint).toBeUndefined()
     expect(mapped.cmd).toBeUndefined()
   })
+
+  // Exit code 0 is what separates a command that succeeded from one that did
+  // not, so the mapper has to publish it rather than drop it the way a falsy
+  // check would.
+  it.each([
+    ['a main command ended by a signal', 137, 137],
+    ['a main command that succeeded', 0, 0],
+  ])('reports the exit code of %s', (_case, read, expected) => {
+    const response = boxToBoxResponse({
+      id: 'box-1',
+      state: BoxState.STOPPED,
+      labels: {},
+      exitCode: read,
+    } as any)
+
+    expect(response.exit_code).toBe(expected)
+  })
+
+  it('omits exit_code when the box has none', () => {
+    const response = boxToBoxResponse({
+      id: 'box-1',
+      state: BoxState.STARTED,
+      labels: {},
+      exitCode: undefined,
+    } as any)
+
+    expect(response.exit_code).toBeUndefined()
+    expect(JSON.parse(JSON.stringify(response))).not.toHaveProperty('exit_code')
+  })
 })

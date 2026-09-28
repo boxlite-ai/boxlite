@@ -78,14 +78,14 @@ func waitForBoxState(ctx context.Context, t *testing.T, client *Client, boxId st
 	deadline := time.Now().Add(60 * time.Second)
 	var last enums.BoxState
 	for time.Now().Before(deadline) {
-		state, err := client.GetBoxState(ctx, boxId)
+		info, err := client.GetBoxInfo(ctx, boxId)
 		if err != nil {
-			t.Fatalf("GetBoxState(%s): %v", boxId, err)
+			t.Fatalf("GetBoxInfo(%s): %v", boxId, err)
 		}
-		if state == want {
+		if info.BoxState == want {
 			return
 		}
-		last = state
+		last = info.BoxState
 		time.Sleep(250 * time.Millisecond)
 	}
 	t.Fatalf("box %s never reached %s (last seen %s)", boxId, want, last)

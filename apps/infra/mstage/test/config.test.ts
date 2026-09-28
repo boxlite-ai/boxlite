@@ -56,9 +56,9 @@ test('a stage may pin the zone its machines are created in', () => {
  * `promoteFrom`: the standing answer to a question only a whole file can hold.
  *
  * The reads a promotion makes are granted on the *source* and held by the
- * destination's accounts, so `bootstrap` has to be told which stage that is —
- * `mdeploy-all`'s `auto_promote_from` is a dispatch input and reaches nothing
- * that runs on a workstation.
+ * destination's accounts, so `bootstrap` has to be told which stage that is.
+ * A rollout cannot answer it: `mdeploy-all` promotes from dev and reaches
+ * nothing that runs on a workstation.
  */
 test('a stage names the stage it is promoted from', () => {
   const config = parse({
@@ -130,6 +130,23 @@ test('a stage that lives in gcp must name its project', () => {
 
 test('homeFor refuses a stage the config never declared rather than guessing the default', () => {
   assert.throws(() => homeFor(parse({}), 'dve'), /declares no stage "dve"\. Declared: dev, prod/)
+})
+
+test('a name every object inherits is not a stage the file declares', () => {
+  /*
+   * The stage name comes from `--stage` and the map comes out of `JSON.parse`,
+   * so it carries `Object.prototype` with it. A lookup that reads through the
+   * chain answers "declared" for `toString` and returns a function; the caller
+   * then reads `.home` or `.region` off it and fails somewhere downstream with
+   * no stage name in the message.
+   */
+  for (const inherited of ['toString', 'constructor', 'hasOwnProperty']) {
+    assert.throws(
+      () => homeFor(parse({}), inherited),
+      new RegExp(`declares no stage "${inherited}"\\. Declared: dev, prod`),
+      `${inherited} resolved to a home`,
+    )
+  }
 })
 
 test('a GCP stage declares the project it lives in; an AWS stage declares no tenant at all', () => {

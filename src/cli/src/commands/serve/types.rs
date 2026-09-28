@@ -163,8 +163,9 @@ pub(super) struct BoxResponse {
     pub auto_stop: u32,
     pub auto_delete: u32,
     pub auto_resume: bool,
-    /// The status the box's main command exited with, once it has. `None`
-    /// while it is still running — a remote `inspect` must be able to tell
+    /// How the box's main command ended, once the runtime recorded it —
+    /// including what a stop produced, since that signals the command. `None`
+    /// while it is still running: a remote `inspect` must be able to tell
     /// "not finished" apart from "finished with 0".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,

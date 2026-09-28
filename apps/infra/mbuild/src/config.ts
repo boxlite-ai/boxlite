@@ -76,11 +76,11 @@ export type ArtifactConfig = {
  * Where the dependencies that ship are locked, and what locks them.
  *
  * Declared rather than assumed, because "the repository root is an npm
- * workspace" is true of the repository mbuild was written in and false of this
- * one: the images here build from `apps/`, whose lockfile is a Yarn 4 one, and
- * the root holds no JavaScript lockfile at all. `npm audit` against it exits
- * non-zero with ENOLOCK — a gate that can never pass, which is the same as no
- * gate once someone routes around it.
+ * workspace" is a property of the repository mbuild was written in, not of
+ * every repository that uses it. Where the lockfile lives under a
+ * subdirectory, or is a Yarn one, `npm audit` against the root exits non-zero
+ * with ENOLOCK — a gate that can never pass, which is the same as no gate once
+ * someone routes around it.
  *
  * Absent means what it has always meant: npm, at the repository root.
  */
@@ -467,21 +467,38 @@ export const loadBuildConfig = ({
  * create a repository nothing ever pulls from.
  */
 export const stageIn = (config: BuildConfig, stage: string): StageConfig => {
-  const declared = config.stages[stage]
-  if (!declared) {
+  if (!Object.hasOwn(config.stages, stage)) {
     throw new BuildConfigError(
       `${config.path} declares no stage "${stage}". Declared: ${Object.keys(config.stages).join(', ')}`,
     )
   }
-  return declared
+  return config.stages[stage]!
 }
 
 /** One stage's registry. */
 export const registryFor = (config: BuildConfig, stage: string): RegistryConfig => stageIn(config, stage).registry
 
-/** The region a stage's registry is addressed in, which every address needs. */
-export const regionFor = (config: BuildConfig, stage: string): string => {
-  const { region } = stageIn(config, stage)
-  if (!region) throw new BuildConfigError(`${config.path} gives stage "${stage}" no region`)
-  return region
+/**
+ * The same config with one declared artifact left in it.
+ *
+ * Every operation in `publish.ts` iterates `config.artifacts`, so narrowing the
+ * config is all it takes to publish, verify or promote one image rather than
+ * the set — which is what lets a workflow give each artifact its own job
+ * instead of building three in sequence inside one.
+ *
+ * Refuses a name the file does not declare rather than returning an empty set:
+ * an empty one publishes nothing and reports success, and the typo would only
+ * surface as a stage missing an image nobody noticed was never built.
+ *
+ * Own properties only. These keys come from argv, and every plain object
+ * inherits `toString` and `constructor` — a lookup that reads the prototype
+ * chain answers "declared" for names the file has never heard of, and what
+ * comes back is a function rather than an artifact.
+ */
+export const onlyArtifact = (config: BuildConfig, artifact: string): BuildConfig => {
+  if (!Object.hasOwn(config.artifacts, artifact)) {
+    const known = Object.keys(config.artifacts).join(', ')
+    throw new BuildConfigError(`${config.path} declares no artifact "${artifact}". Declared: ${known}`)
+  }
+  return { ...config, artifacts: { [artifact]: config.artifacts[artifact]! } }
 }
