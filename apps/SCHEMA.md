@@ -76,6 +76,7 @@ flowchart LR
     t_tunnel ==>|"box_id"| t_box
 
     t_orguser -.->|"userId"| t_user
+    t_user -.->|"referredByOrganizationId"| t_org
     t_apikey -.->|"organizationId, userId"| t_org
     t_webhook -.->|"organizationId"| t_org
     t_audit -.->|"organizationId"| t_org
@@ -106,8 +107,8 @@ the most widely joined column in the system — is a bare `uuid` or
 
 The practical consequence: deleting an `organization` row cascades its roles,
 users, invitations, and role assignments, and leaves its boxes, API
-keys, audit entries, regions, volumes, and usage history pointing at an id
-that no longer resolves.
+keys, audit entries, regions, volumes, usage history, and the users it
+referred pointing at an id that no longer resolves.
 
 | From                                     | Column(s)                    | To                             | Enforcement | On delete |
 | ---------------------------------------- | ---------------------------- | ------------------------------ | ----------- | --------- |
@@ -122,6 +123,7 @@ that no longer resolves.
 | `box_migration`                          | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
 | `tunnel`                                 | `box_id`                     | `box.id`                       | foreign key | `CASCADE` |
 | `organization_user`                      | `userId`                     | `user.id`                      | application | — |
+| `user`                                   | `referredByOrganizationId`   | `organization.id`              | application | — |
 | `api_key`                                | `organizationId`, `userId`   | `organization.id`, `user.id`   | application | — |
 | `webhook_initialization`                 | `organizationId`             | `organization.id`              | application | — |
 | `audit_log`                              | `organizationId`             | `organization.id`              | application | — |
@@ -198,7 +200,10 @@ Identity, keyed by the subject the IdP issues rather than a generated uuid.
 | `role` | `enum` | `admin` \| `user`, default `user` |
 | `publicKeys` | `simple-json` | |
 | `keyPair` | `simple-json` | nullable; deprecated — written on user creation, read by nothing since the SSH gateway was removed |
+| `referredByOrganizationId` | `uuid` | nullable; organization whose invitation created the account; no FK |
 | `createdAt` | `timestamptz` | |
+
+**Partial index:** `user_referred_by_organization_idx (referredByOrganizationId)` where `referredByOrganizationId IS NOT NULL`.
 
 ### `organization_user`
 
