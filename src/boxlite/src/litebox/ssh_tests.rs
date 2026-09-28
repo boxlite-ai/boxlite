@@ -27,6 +27,8 @@ struct Mock {
 }
 
 impl Mock {
+    /// Record each RPC before injecting a blocked, rejected, or incomplete response.
+    /// The notification lets tests cancel or advance time after the RPC arrives.
     #[expect(
         clippy::result_large_err,
         reason = "mock returns the tonic service error type"
@@ -55,6 +57,7 @@ struct MockService(Arc<Mock>);
 
 #[tonic::async_trait]
 impl proto::Ssh for MockService {
+    /// Capture the decoded configuration so assertions cover the serialization boundary.
     async fn configure(
         &self,
         request: Request<proto::SshConfigureRequest>,
@@ -64,6 +67,7 @@ impl proto::Ssh for MockService {
             status: self.0.reply("configure").await?,
         }))
     }
+    /// Use the shared response controls to exercise status errors and cancellation.
     async fn status(
         &self,
         _: Request<proto::SshStatusRequest>,
@@ -72,6 +76,7 @@ impl proto::Ssh for MockService {
             status: self.0.reply("status").await?,
         }))
     }
+    /// Exercise disable's RPC path without simulating guest listener lifecycle.
     async fn disable(
         &self,
         _: Request<proto::SshDisableRequest>,
@@ -84,6 +89,7 @@ impl proto::Ssh for MockService {
 
 #[tonic::async_trait]
 impl proto::Container for MockService {
+    /// Reject reinitialization: the fixture already represents a booted guest.
     async fn init(
         &self,
         _: Request<proto::ContainerInitRequest>,
@@ -91,6 +97,7 @@ impl proto::Container for MockService {
         unreachable!("fixture already has an initialized LiveState")
     }
 
+    /// Gate or fail container startup independently of the subsequent SSH request.
     async fn start(
         &self,
         request: Request<proto::ContainerStartRequest>,
@@ -115,15 +122,19 @@ impl proto::Container for MockService {
 
 struct TestHandler;
 impl VmmHandler for TestHandler {
+    /// Allow normal backend cleanup without stopping a real VM.
     fn stop(&mut self) -> BoxliteResult<()> {
         Ok(())
     }
+    /// Supply neutral metrics because these tests exercise RPCs, not hypervisor accounting.
     fn metrics(&self) -> BoxliteResult<VmmMetrics> {
         Ok(VmmMetrics::default())
     }
+    /// Model a live VM while tests independently control the container's startup state.
     fn is_running(&self) -> bool {
         true
     }
+    /// Use a sentinel PID because the fixture never spawns a VMM process.
     fn pid(&self) -> u32 {
         0
     }
@@ -137,15 +148,19 @@ struct Fixture {
     _home: tempfile::TempDir,
 }
 impl Drop for Fixture {
+    /// Abort the socket server so blocked mock RPCs do not outlive the fixture.
     fn drop(&mut self) {
         self.server.abort();
     }
 }
 
+/// Skip startup to isolate SSH request, response, and deadline behavior.
 async fn fixture() -> Fixture {
     fixture_with_container(true).await
 }
 
+/// Connect a local box backend to mock guest services over its real Unix socket path.
+/// Optionally leave Container.Start pending so tests can observe the startup boundary.
 async fn fixture_with_container(started: bool) -> Fixture {
     let home = tempfile::TempDir::new_in("/tmp").unwrap();
     let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
@@ -218,6 +233,7 @@ async fn fixture_with_container(started: bool) -> Fixture {
     }
 }
 
+/// Populate every credential field with recognizable sentinels for wire and redaction checks.
 fn config() -> SshConfig {
     SshConfig {
         listen_address: "0.0.0.0:2222".into(),
@@ -233,6 +249,7 @@ fn config() -> SshConfig {
     }
 }
 
+/// Preserve configuration fields and guest status across serialization for all three RPCs.
 #[tokio::test]
 async fn ssh_requests_and_responses_cross_wire() {
     let f = fixture().await;
@@ -266,6 +283,8 @@ async fn ssh_requests_and_responses_cross_wire() {
     );
 }
 
+/// Guest rejections retain their error categories; missing status is an error, and
+/// neither failure causes an extra request that could repeat a configuration change.
 #[tokio::test]
 async fn ssh_errors_missing_status_and_no_retry() {
     let f = fixture().await;
@@ -305,6 +324,7 @@ async fn ssh_errors_missing_status_and_no_retry() {
     assert_eq!(f.mock.requests.lock().unwrap().len(), 15);
 }
 
+/// Apply the same lifecycle assertions to configure (0), status (1), and disable (2).
 async fn operate(ssh: SshHandle, operation: usize) -> BoxliteResult<SshStatus> {
     match operation {
         0 => ssh.configure(config()).await,
@@ -313,6 +333,8 @@ async fn operate(ssh: SshHandle, operation: usize) -> BoxliteResult<SshStatus> {
     }
 }
 
+/// Handle creation is lazy; RPCs wait for container startup, whose duration must not
+/// consume the SSH deadline even when startup exceeds five seconds.
 #[tokio::test]
 async fn ssh_waits_for_container_start_without_charging_rpc_deadline() {
     for operation in 0..3 {
@@ -347,6 +369,7 @@ async fn ssh_waits_for_container_start_without_charging_rpc_deadline() {
     }
 }
 
+/// A startup failure must reach the caller before any SSH request is sent.
 #[tokio::test]
 async fn ssh_container_start_failure_sends_no_ssh_rpc() {
     for operation in 0..3 {
@@ -363,6 +386,7 @@ async fn ssh_container_start_failure_sends_no_ssh_rpc() {
     }
 }
 
+/// Runtime shutdown must interrupt pending startup without reaching the SSH service.
 #[tokio::test]
 async fn ssh_shutdown_cancels_container_start() {
     for operation in 0..3 {
@@ -384,6 +408,7 @@ async fn ssh_shutdown_cancels_container_start() {
     }
 }
 
+/// Neither a spent live-state handle nor a cancelled backend may send another SSH RPC.
 #[tokio::test]
 async fn ssh_spent_and_cancelled_handles_send_nothing() {
     let f = fixture().await;
@@ -405,6 +430,7 @@ async fn ssh_spent_and_cancelled_handles_send_nothing() {
     assert!(f.mock.requests.lock().unwrap().is_empty());
 }
 
+/// Bound an unanswered RPC by the deadline or shutdown signal, without retrying it.
 #[tokio::test]
 async fn ssh_timeout_and_runtime_shutdown() {
     for operation in 0..3 {
@@ -442,12 +468,15 @@ async fn ssh_timeout_and_runtime_shutdown() {
     }
 }
 
+/// Nested account and CA credentials must stay out of configuration debug output.
 #[test]
 fn ssh_debug_redacts_credentials() {
     let debug = format!("{:?}", config());
     assert!(!debug.contains("sentinel"), "{debug}");
 }
 
+/// A peer accepting the socket but stalling HTTP/2 must not bypass the SSH deadline
+/// or shutdown cancellation while the interface is being acquired.
 #[tokio::test]
 async fn ssh_deadline_and_shutdown_include_connection_handshake() {
     for cancel in [false, true] {

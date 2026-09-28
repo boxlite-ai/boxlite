@@ -789,6 +789,8 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
         .unwrap();
 }
 
+/// Exercise the public API against a real SSH client: runtime reconnection preserves
+/// a live listener, invalid configuration leaves it intact, and a VM restart resets it.
 #[tokio::test]
 async fn runtime_ssh_control_and_recovered_handle() {
     let home = common::home::PerTestBoxHome::new();

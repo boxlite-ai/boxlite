@@ -10,12 +10,15 @@ pub(crate) struct SshInterface {
 }
 
 impl SshInterface {
+    /// Reuse an established guest channel; connection setup belongs to the session.
     pub(crate) fn new(channel: Channel) -> Self {
         Self {
             client: proto::SshClient::new(channel),
         }
     }
 
+    /// Send the complete replacement configuration once, leaving validation to the guest.
+    /// Retrying could disconnect clients by replacing the listener a second time.
     pub(crate) async fn configure(&mut self, config: SshConfig) -> BoxliteResult<SshStatus> {
         let response = self
             .client
@@ -27,6 +30,7 @@ impl SshInterface {
         status_from_proto("configure", response.into_inner().status)
     }
 
+    /// Read the guest's current listener state without exposing its credentials.
     pub(crate) async fn status(&mut self) -> BoxliteResult<SshStatus> {
         let response = self
             .client
@@ -36,6 +40,7 @@ impl SshInterface {
         status_from_proto("status", response.into_inner().status)
     }
 
+    /// Request guest-side SSH teardown and return its reported state without retrying.
     pub(crate) async fn disable(&mut self) -> BoxliteResult<SshStatus> {
         let response = self
             .client
@@ -46,6 +51,7 @@ impl SshInterface {
     }
 }
 
+/// Preserve each login's credentials when crossing from the public API to the wire.
 fn config_to_proto(config: SshConfig) -> proto::SshConfig {
     proto::SshConfig {
         listen_address: config.listen_address,
@@ -65,6 +71,7 @@ fn config_to_proto(config: SshConfig) -> proto::SshConfig {
     }
 }
 
+/// Reject a missing status instead of treating an incomplete reply as disabled SSH.
 fn status_from_proto(name: &str, status: Option<proto::SshStatus>) -> BoxliteResult<SshStatus> {
     let status = status
         .ok_or_else(|| BoxliteError::Internal(format!("SSH {name}: response missing status")))?;
@@ -77,6 +84,7 @@ fn status_from_proto(name: &str, status: Option<proto::SshStatus>) -> BoxliteRes
     })
 }
 
+/// Preserve actionable guest error categories and include the failed SSH operation.
 fn map_tonic_err(name: &str, status: tonic::Status) -> BoxliteError {
     let message = format!("SSH {name}: {status}");
     match status.code() {

@@ -1404,6 +1404,7 @@ mod tests {
         RestBox::new(client_for(port), resp.to_box_info().expect("to_box_info"))
     }
 
+    /// An owned SSH handle must reject every REST operation even after LiteBox is dropped.
     #[tokio::test]
     async fn ssh_control_is_unsupported_on_rest() {
         let backend = Arc::new(rest_box_for(1, "ssh-test"));

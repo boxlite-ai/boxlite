@@ -34,6 +34,7 @@ pub struct SshCaConfig {
 }
 
 impl fmt::Debug for SshConfig {
+    /// Retain the listener address for diagnostics without exposing the host key.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SshConfig")
             .field("listen_address", &self.listen_address)
@@ -44,6 +45,7 @@ impl fmt::Debug for SshConfig {
 }
 
 impl fmt::Debug for SshAccount {
+    /// Identify the login while redacting its authorized keys and CA credentials.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SshAccount")
             .field("login", &self.login)
@@ -54,6 +56,7 @@ impl fmt::Debug for SshAccount {
 }
 
 impl fmt::Debug for SshCaConfig {
+    /// Redact both the CA key and principal from credential diagnostics.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SshCaConfig")
             .field("public_key", &"[REDACTED]")
@@ -84,6 +87,7 @@ pub struct SshHandle {
 }
 
 impl fmt::Debug for SshHandle {
+    /// Identify the box without traversing backend state or guest credentials.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SshHandle")
             .field("box_id", self.backend.id())
@@ -92,6 +96,7 @@ impl fmt::Debug for SshHandle {
 }
 
 impl SshHandle {
+    /// Retain the backend without starting it; operations check local support.
     pub(super) fn new(backend: Arc<dyn BoxBackend>) -> Self {
         Self { backend }
     }
@@ -184,6 +189,7 @@ impl SshHandle {
 }
 
 const _: () = {
+    /// Reject public SSH types that cannot be shared across async tasks.
     const fn assert_send_sync<T: Send + Sync>() {}
     let _ = assert_send_sync::<SshHandle>;
     let _ = assert_send_sync::<SshConfig>;
