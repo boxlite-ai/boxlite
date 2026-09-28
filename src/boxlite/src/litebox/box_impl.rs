@@ -1075,6 +1075,7 @@ impl BoxImpl {
 
     /// Ensure the VM and container main process are running and share their session.
     pub(crate) async fn guest_session(&self) -> BoxliteResult<GuestSession> {
+        self.ensure_usable_without_rerunning_main("control SSH on")?;
         Ok(self.live_state().await?.guest_session.clone())
     }
 

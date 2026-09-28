@@ -9,6 +9,211 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
+use tokio_stream::StreamExt;
+
+#[derive(Clone, Copy, Debug)]
+enum SshOperation {
+    Configure,
+    Status,
+    Disable,
+}
+
+impl SshOperation {
+    async fn call(
+        self,
+        sandbox: &boxlite::LiteBox,
+        config: &boxlite::SshConfig,
+    ) -> boxlite::BoxliteResult<boxlite::SshStatus> {
+        let ssh = sandbox.ssh();
+        match self {
+            Self::Configure => ssh.configure(config.clone()).await,
+            Self::Status => ssh.status().await,
+            Self::Disable => ssh.disable().await,
+        }
+    }
+}
+
+/// Wait for the main command's write before inspecting its host-mounted record.
+async fn start_recorded_main(sandbox: &boxlite::LiteBox) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        sandbox.start().await.unwrap();
+        let mut execution = sandbox
+            .attach(boxlite::AttachOptions::main().read_only())
+            .await
+            .unwrap();
+        let mut stdout = execution.stdout().unwrap();
+        let mut output = String::new();
+        while let Some(chunk) = stdout.next().await {
+            output.push_str(&chunk);
+            if output.contains("main-recorded\n") {
+                return;
+            }
+        }
+        panic!("main command exited before recording its execution: {output}");
+    })
+    .await
+    .expect("main command must record its execution within 30 seconds");
+}
+
+/// Recovered stopped handles must not bypass the explicit-main-command guard.
+async fn check_ssh_requires_start(
+    mut options: boxlite::BoxOptions,
+    initial_state: boxlite::BoxStatus,
+    operation: SshOperation,
+) {
+    let home = common::home::PerTestBoxHome::new();
+    let files = tempfile::TempDir::new_in("/tmp").unwrap();
+    let host_key = files.path().join("host");
+    let user_key = files.path().join("user");
+    generate_key(&host_key, "host").await;
+    generate_key(&user_key, "user").await;
+    let config = boxlite::SshConfig {
+        listen_address: "0.0.0.0:2222".into(),
+        host_private_key: std::fs::read_to_string(&host_key).unwrap(),
+        accounts: vec![boxlite::SshAccount {
+            login: "alice".into(),
+            authorized_keys: vec![std::fs::read_to_string(user_key.with_extension("pub")).unwrap()],
+            ca: None,
+        }],
+    };
+    let record = files.path().join("runs");
+    std::fs::write(&record, "").unwrap();
+    options.volumes = vec![boxlite::runtime::options::VolumeSpec {
+        managed_volume: None,
+        host_path: files.path().to_str().unwrap().into(),
+        guest_path: "/proof".into(),
+        read_only: false,
+    }];
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+    let mut sandbox = runtime.create(options, None).await.unwrap();
+    let expected_record = if initial_state == boxlite::BoxStatus::Stopped {
+        start_recorded_main(&sandbox).await;
+        sandbox.stop().await.unwrap();
+        let id = sandbox.id().to_string();
+        // A retained backend's cancelled token would hide the missing guard.
+        drop(sandbox);
+        sandbox = runtime.get(&id).await.unwrap().unwrap();
+        "run\n"
+    } else {
+        ""
+    };
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), expected_record);
+    let before = sandbox.info().await.unwrap();
+    assert_eq!(before.status, initial_state);
+    assert_eq!(before.pid, None);
+
+    let result = operation.call(&sandbox, &config).await;
+    let after = sandbox.info().await.unwrap();
+    let recorded = std::fs::read_to_string(&record).unwrap();
+    if !matches!(&result, Err(boxlite::BoxliteError::InvalidState(_))) {
+        sandbox.stop().await.unwrap();
+        runtime
+            .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+            .await
+            .unwrap();
+        panic!("{operation:?} on {initial_state:?} must return InvalidState, got {result:?}");
+    }
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("start the box explicitly")
+    );
+    assert_eq!(after.status, before.status);
+    assert_eq!(after.pid, before.pid);
+    assert_eq!(recorded, expected_record);
+
+    start_recorded_main(&sandbox).await;
+    let running = sandbox.info().await.unwrap();
+    let status = operation.call(&sandbox, &config).await.unwrap();
+    assert_eq!(status.enabled, matches!(operation, SshOperation::Configure));
+    assert_eq!(sandbox.info().await.unwrap().pid, running.pid);
+    assert_eq!(
+        std::fs::read_to_string(&record).unwrap(),
+        format!("{expected_record}run\n")
+    );
+    sandbox.stop().await.unwrap();
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}
+
+macro_rules! ssh_main_guard_test {
+    ($name:ident, $state:ident, $command:ident, $operation:ident) => {
+        #[tokio::test]
+        async fn $name() {
+            let mut options = common::alpine_opts();
+            options.$command = Some(
+                [
+                    "sh",
+                    "-c",
+                    "printf 'run\\n' >> /proof/runs; printf 'main-recorded\\n'; exec sleep 300",
+                ]
+                .map(String::from)
+                .to_vec(),
+            );
+            check_ssh_requires_start(
+                options,
+                boxlite::BoxStatus::$state,
+                SshOperation::$operation,
+            )
+            .await;
+        }
+    };
+}
+
+ssh_main_guard_test!(
+    runtime_ssh_configured_cmd_configure,
+    Configured,
+    cmd,
+    Configure
+);
+ssh_main_guard_test!(runtime_ssh_configured_cmd_status, Configured, cmd, Status);
+ssh_main_guard_test!(runtime_ssh_configured_cmd_disable, Configured, cmd, Disable);
+ssh_main_guard_test!(runtime_ssh_stopped_cmd_configure, Stopped, cmd, Configure);
+ssh_main_guard_test!(runtime_ssh_stopped_cmd_status, Stopped, cmd, Status);
+ssh_main_guard_test!(runtime_ssh_stopped_cmd_disable, Stopped, cmd, Disable);
+ssh_main_guard_test!(
+    runtime_ssh_configured_entrypoint_configure,
+    Configured,
+    entrypoint,
+    Configure
+);
+ssh_main_guard_test!(
+    runtime_ssh_configured_entrypoint_status,
+    Configured,
+    entrypoint,
+    Status
+);
+ssh_main_guard_test!(
+    runtime_ssh_configured_entrypoint_disable,
+    Configured,
+    entrypoint,
+    Disable
+);
+ssh_main_guard_test!(
+    runtime_ssh_stopped_entrypoint_configure,
+    Stopped,
+    entrypoint,
+    Configure
+);
+ssh_main_guard_test!(
+    runtime_ssh_stopped_entrypoint_status,
+    Stopped,
+    entrypoint,
+    Status
+);
+ssh_main_guard_test!(
+    runtime_ssh_stopped_entrypoint_disable,
+    Stopped,
+    entrypoint,
+    Disable
+);
 
 async fn connect_rpc(
     socket: std::path::PathBuf,

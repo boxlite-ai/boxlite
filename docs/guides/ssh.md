@@ -1,11 +1,16 @@
 # Guest SSH control
 
 SSH starts disabled. The local Rust runtime exposes `LiteBox::ssh()` to configure,
-query, or disable it. Each operation ensures the VM and container main process
-are running, starting them implicitly when needed. Querying status and disabling
-SSH can therefore also start the box. Creating the handle alone does not start
-anything. The REST backend returns `Unsupported`; CLI and other language SDKs
-have no SSH control API.
+query, or disable it. All three operations follow the same implicit-start policy
+as exec, metrics, and file copying. A `Configured` or `Stopped` box using the
+image's default command can start implicitly, including on status queries and
+disable calls. If `BoxOptions.cmd` or `entrypoint` explicitly sets the main
+command, these states return `InvalidState`; call `start()` first. Running boxes
+support all three operations. For example, querying SSH on a stopped box with
+`cmd = ["python", "job.py"]` cannot run the job again.
+
+Creating the handle alone does not start anything. The REST backend returns
+`Unsupported`; CLI and other language SDKs have no SSH control API.
 SSH does not publish a host port; configure network forwarding separately when needed.
 For component diagrams and implementation details, see
 [Guest SSH architecture](../../src/guest/src/service/ssh/README.md).
@@ -36,6 +41,8 @@ whole operation, including startup. Operations are not automatically retried.
 Timeout or cancellation does not undo changes the guest may already have applied.
 Invalidated handles return `Stopped`; drop all references to the old box and
 obtain a fresh handle with `runtime.get()` to restart it.
+The fresh handle still follows the same startup policy: a stopped box with an
+explicit main command requires `start()` before any SSH operation.
 
 The internal host-only `boxlite.v1.Ssh` gRPC service remains available on
 `sockets/box.sock` after `Guest.Init` succeeds. It exposes `Configure`, `Status`,

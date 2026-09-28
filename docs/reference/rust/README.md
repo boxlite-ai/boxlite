@@ -190,9 +190,11 @@ pub struct LiteBox {
 #### SSH control
 
 `LiteBox::ssh()` returns an owned, cloneable `SshHandle` without starting the box.
-All three operations ensure the VM and container main process are running,
-starting them implicitly when needed. This includes status queries and disabling
-SSH. A fresh handle reuses a running VM; the REST backend returns `Unsupported`.
+All three operations use the same implicit-start guard as exec, metrics, and
+file copying. `Configured` and `Stopped` boxes using image defaults can start
+implicitly. With an explicit `BoxOptions.cmd` or `entrypoint`, these states
+return `InvalidState`; call `start()` before controlling SSH. A fresh handle
+reuses a running VM; the REST backend returns `Unsupported`.
 
 | Method | Signature |
 |--------|-----------|
@@ -217,7 +219,8 @@ After VM and container startup, obtaining the SSH interface and making the RPC
 share a 5-second deadline. Runtime shutdown cancels the whole operation, including
 startup; operations are not retried. Cancellation/timeout cannot guarantee
 rollback. Invalidated handles return `Stopped`; drop all references to the old box
-and use `runtime.get()` to obtain a fresh handle for restart. Guest
+and use `runtime.get()` to obtain a fresh handle for restart. Recovered stopped
+boxes with an explicit main command still require `start()` before SSH control. Guest
 `InvalidArgument`, `FailedPrecondition`, and `Unimplemented` map to `InvalidArgument`, `InvalidState`, and `Unsupported`; other RPC failures
 retain operation and gRPC status context. Missing response status is `Internal`.
 
@@ -231,7 +234,7 @@ validation, reconfiguration, disable, and generation semantics.
 | `id` | `fn id(&self) -> &BoxID` | Get box ID |
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
-| `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH, implicitly starting the local box as needed |
+| `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH under the local box's implicit-start policy |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |

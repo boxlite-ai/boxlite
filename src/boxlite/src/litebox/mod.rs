@@ -230,7 +230,7 @@ impl LiteBox {
     }
 
     /// Create an SSH control handle without starting the box.
-    /// Its operations start the VM and container main process as needed.
+    /// Its operations follow the implicit-start policy described on [`SshHandle`].
     pub fn ssh(&self) -> SshHandle {
         SshHandle::new(Arc::clone(&self.box_backend))
     }

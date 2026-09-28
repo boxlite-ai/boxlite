@@ -1,4 +1,4 @@
-//! SSH control with implicit startup for local boxes.
+//! SSH control following the local box's implicit-start policy.
 
 use std::{fmt, sync::Arc, time::Duration};
 
@@ -75,7 +75,12 @@ pub struct SshStatus {
     pub host_key_fingerprint: String,
 }
 
-/// Owned SSH control handle. Operations start the VM and container as needed.
+/// Owned SSH control handle following the box's implicit-start policy.
+///
+/// Operations may start boxes using the image's default command. With an explicit
+/// `BoxOptions.cmd` or `entrypoint`, a Configured or Stopped box returns
+/// `InvalidState`: call `LiteBox::start()` first. This also applies to fresh
+/// handles obtained through `runtime.get()` after stopping the box.
 ///
 /// After startup, SSH interface acquisition and the RPC share a 5-second deadline.
 /// Runtime shutdown cancels the whole operation, including startup. Operations
@@ -102,7 +107,7 @@ impl SshHandle {
     }
 
     /// Validate and replace SSH configuration, disconnecting existing clients.
-    /// Starts the VM and container main process as needed.
+    /// Startup follows the policy described on [`SshHandle`].
     pub async fn configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
         let backend = self
             .backend
@@ -130,7 +135,7 @@ impl SshHandle {
         }
     }
 
-    /// Query SSH state, starting the VM and container as needed.
+    /// Query SSH state. Startup follows the policy described on [`SshHandle`].
     pub async fn status(&self) -> BoxliteResult<SshStatus> {
         let backend = self
             .backend
@@ -159,7 +164,7 @@ impl SshHandle {
     }
 
     /// Stop SSH and disconnect clients. Repeated calls are supported.
-    /// Starts the VM and container main process as needed, even if SSH is disabled.
+    /// Startup follows the policy described on [`SshHandle`], even if SSH is disabled.
     pub async fn disable(&self) -> BoxliteResult<SshStatus> {
         let backend = self
             .backend
