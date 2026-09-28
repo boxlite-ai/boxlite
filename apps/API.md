@@ -370,7 +370,7 @@ organization authorization; identity discovery at `GET /api/v1/me` can return
 </details>
 
 <details>
-<summary><b>Execution, files, metrics, and networking</b> · 10 routes</summary>
+<summary><b>Execution, files, metrics, and networking</b> · 11 routes</summary>
 
 | Method   | Path                                                          | What it does                                            |
 | -------- | ------------------------------------------------------------- | ------------------------------------------------------- |
@@ -384,6 +384,7 @@ organization authorization; identity discovery at `GET /api/v1/me` can return
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/files?path={path}`          | Downloads a box path as a tar stream.                   |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/metrics`                    | Returns metrics for one box without marking it active.  |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Returns the runner tunnel URI for a guest TCP port.     |
+| `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Makes a box public or private (needs `write:boxes`).    |
 
 The exec, signal, resize, files, and metrics handlers are registered as
 catch-all reverse proxies to the box's assigned runner; the methods shown are

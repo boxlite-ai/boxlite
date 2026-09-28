@@ -7,6 +7,9 @@
 import 'reflect-metadata'
 import { BadRequestException, ValidationPipe } from '@nestjs/common'
 import { PIPES_METADATA } from '@nestjs/common/constants'
+import { Reflector } from '@nestjs/core'
+import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
+import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { CreateBoxDto } from './dto/create-box.dto'
 
@@ -132,5 +135,19 @@ describe('BoxliteBoxController request validation', () => {
     )
 
     expect(dto.volumes?.[0]?.managed_volume).toBe(selector)
+  })
+})
+
+// Making a box public exposes its services to anyone, so this route must ask
+// for the same permission as the dashboard's toggle. Read off the real
+// handler, as the pipe above is, so deleting the decorator fails here.
+describe('BoxliteBoxController permissions', () => {
+  it('requires WRITE_BOXES to change inbound access', () => {
+    const required = new Reflector().get(
+      RequiredOrganizationResourcePermissions,
+      BoxliteBoxController.prototype.updateInboundNetwork,
+    )
+
+    expect(required).toEqual([OrganizationResourcePermission.WRITE_BOXES])
   })
 })

@@ -1033,6 +1033,10 @@ paths:
         host upgrades each accepted `CONNECT` into one connection to
         the in-box service. `CONNECT` is a transport handshake on the
         URI's host, not an operation of this API.
+
+        Returns 409 while the box's inbound access is `disabled`. Enable it
+        with `network.inbound.mode` at create, or later with
+        `PUT /{prefix}/boxes/{box_id}/network/inbound`.
       tags: [Network]
       parameters:
         - name: port
@@ -1051,6 +1055,44 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TunnelDescriptor"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/network/inbound:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    put:
+      operationId: updateInboundNetwork
+      summary: Change a box's inbound access
+      description: |
+        Makes an existing box public (`enabled`) or private (`disabled`),
+        the policy `network.inbound` sets at create. `enabled` makes the
+        box's services reachable through the remote proxy without
+        authentication. `prepareTunnel` follows the new mode at once; the
+        proxy applies it to new connections once its visibility cache
+        expires, and does not close connections already open.
+
+        Servers that support this advertise
+        `capabilities.inbound_update_enabled` in `GET /config`.
+      tags: [Network]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InboundNetworkSpec"
+      responses:
+        "200":
+          description: The box's inbound access after the change
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InboundNetworkSpec"
         "400":
           $ref: "#/components/responses/BadRequestError"
         "404":
@@ -1529,6 +1571,10 @@ components:
             export_enabled:
               type: boolean
               description: Whether box export is supported
+              example: true
+            inbound_update_enabled:
+              type: boolean
+              description: Whether `PUT /{prefix}/boxes/{box_id}/network/inbound` is supported
               example: true
             idempotency_key_lifetime:
               type: string
