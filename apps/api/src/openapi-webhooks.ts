@@ -73,7 +73,6 @@ export function addWebhookDocumentation(document: OpenAPIObject): OpenAPIObjectW
           },
         },
       },
-      // TODO(image-rewrite): TEMPLATE_* webhook docs removed with box_template.
       [WebhookEvent.VOLUME_CREATED]: {
         post: {
           requestBody: {

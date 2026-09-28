@@ -81,7 +81,6 @@ export const MOCK_ORGANIZATION: Organization = {
   maxCpuPerBox: 8,
   maxMemoryPerBox: 16,
   maxDiskPerBox: 100,
-  templateDeactivationTimeoutMinutes: 0,
   boxLimitedNetworkEgress: false,
   authenticatedRateLimit: null,
   boxCreateRateLimit: null,

@@ -20,5 +20,4 @@ pub(crate) mod rt_impl;
 pub use auth::{AuthHandle, Principal};
 pub use core::BoxliteRuntime;
 pub use images::ImageHandle;
-pub(crate) use rt_impl::SharedRuntimeImpl;
 pub use volumes::VolumeHandle;

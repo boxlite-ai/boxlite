@@ -7,19 +7,26 @@
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 
 /**
- * Curated-image gate: boxes may only boot from a fixed, operator-controlled set of images,
- * because the runner pulls with whatever registry credentials it was deployed with and must
- * never be handed an arbitrary user-supplied image. The gate is deliberately thin and sits only at the request
- * boundary (BoxService create / warm-pool); everything downstream treats the resolved ref as
- * an opaque OCI ref. When per-org custom images land, delete this file and its call sites --
- * no other layer knows the curated set exists.
+ * The operator-chosen images, which a box boots from by default and which any caller may
+ * select by short name. This was once the only thing a box could boot from; admission now
+ * decides that, and a tenant may name any image it allows. What stays here is the curated
+ * set itself: it is env-driven so refs rotate with no code change, it is the default when no
+ * image is given, and it is the one path that reaches no database and no rate limit --
+ * which is why the selector check has to be exact rather than a host prefix.
+ *
+ * Everything downstream still treats the resolved ref as an opaque OCI ref.
  *
  * Each image has a short `name` and an OCI `ref`; a caller may select either (undefined picks
  * the default -- the first entry, `base`). The set is the three built-ins plus any operator
  * additions, both configured via env so refs rotate and images are added without a code deploy:
  *   BOXLITE_SYSTEM_{BASE,PYTHON,NODE}_IMAGE  -- rotate a built-in's ref
  *   BOXLITE_SYSTEM_IMAGES                     -- add images, comma-separated `name=ref`
- *                                                e.g. "hermes=sam2026go/hermes-agent:boxlite"
+ *                                                e.g. "hermes=ghcr.io/acme/hermes-agent:v3"
+ *
+ * A curated image must be public, because a runner holds no registry credential, and should
+ * not live on docker.io: each runner asks the registry once per curated ref before its boxes
+ * are pinned to that build (CuratedImagePinService), and Docker Hub's anonymous limit is
+ * shared by every box on a runner's address.
  */
 export type SupportedImage = {
   name: string

@@ -401,6 +401,15 @@ typedef struct CBoxInfo {
   //
   // [`free_box_info`] releases it.
   int *exit_code;
+  // Manifest digest `image` resolved to when this box's disk was built —
+  // the build the box runs. Null when unknown: a box booted from a local
+  // rootfs path, one imported from an archive, one whose disk predates the
+  // record, or a backend that does not know it. Owned and freed with the
+  // rest of this struct.
+  char *resolved_image_digest;
+  // Declared on-registry size, in bytes, of that image; `0` when
+  // [`Self::resolved_image_digest`] is null.
+  int64_t resolved_image_size;
 } CBoxInfo;
 
 // Box info completion. On success the callback owns the non-null metadata and

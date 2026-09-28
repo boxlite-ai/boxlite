@@ -120,3 +120,13 @@ func cBoxInfoExitCodeTestFixtures() [3]*int {
 		withCode(failedExit),
 	}
 }
+
+// cBoxInfoResolvedImageTestFixtures converts a native BoxInfo that carries a
+// resolved image and one that does not.
+func cBoxInfoResolvedImageTestFixtures() (known, unknown BoxInfo) {
+	digest := C.CString("sha256:0a7ed0d449b9318548e66674610d757de19b7645759f74b587b610b59d6b43fd")
+	defer C.free(unsafe.Pointer(digest))
+	withDigest := C.CBoxInfo{resolved_image_digest: digest, resolved_image_size: 3974501}
+	withoutDigest := C.CBoxInfo{resolved_image_size: 0}
+	return cBoxInfoToGo(&withDigest), cBoxInfoToGo(&withoutDigest)
+}

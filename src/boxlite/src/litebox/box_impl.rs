@@ -1224,7 +1224,11 @@ impl BoxImpl {
         // operations succeed. If any operation fails, the guard's Drop will
         // cleanup the VM process and directory.
         let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
-        let (live_state, mut cleanup_guard) = builder.build().await?;
+        let crate::litebox::init::BuiltBox {
+            live: live_state,
+            guard: mut cleanup_guard,
+            resolved_image,
+        } = builder.build().await?;
 
         // The box is up. If we adopted one whose init was already running, that
         // init needs no `Container.Start`; recording it now keeps
@@ -1280,6 +1284,8 @@ impl BoxImpl {
             // clears ExitCode on start too). The guest drops its matching
             // exit file in Container.Init.
             state.exit_code = None;
+
+            state.record_resolved_image(resolved_image);
 
             // Initialize health status if health check is configured
             if self.config.options.advanced.health_check.is_some() {

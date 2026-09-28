@@ -11,6 +11,12 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BoxEvents } from '../constants/box-events.constants'
+import Redis from 'ioredis'
+import { Repository } from 'typeorm'
+import { Image } from '../../image/entities/image.entity'
+import { ImageVersion } from '../../image/entities/image-version.entity'
+import { ImageAdmissionService } from '../../image/services/image-admission.service'
+import { ImageResolverService } from '../../image/services/image-resolver.service'
 import { CreateBoxDto as RestCreateBoxDto } from '../../boxlite-rest/dto/create-box.dto'
 import { createBoxToCreateBox } from '../../boxlite-rest/mappers/box-to-box.mapper'
 
@@ -49,6 +55,9 @@ function makeService() {
     noop, // boxActivityService
     noop, // jobRepository
     noop, // jobService
+    noop, // imageAdmissionService
+    noop, // imageResolverService
+    noop, // imageRegistrarService
   )
   return { service, boxRepository, eventEmitter, organizationService }
 }
@@ -91,6 +100,9 @@ function makePreviewUrlService() {
     noop, // boxActivityService
     noop, // jobRepository
     noop, // jobService
+    noop, // imageAdmissionService
+    noop, // imageResolverService
+    noop, // imageRegistrarService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -296,6 +308,9 @@ function makeNetworkTunnelService() {
     noop,
     noop, // jobRepository
     noop, // jobService
+    noop, // imageAdmissionService
+    noop, // imageResolverService
+    noop, // imageRegistrarService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -314,8 +329,92 @@ describe('BoxService network tunnel URLs', () => {
   })
 })
 
+describe('BoxService image reporting', () => {
+  function makeService(boxState: BoxState, imageIsOrgOwned: boolean | null = true) {
+    const box = {
+      id: 'box-1',
+      organizationId: 'org-1',
+      runnerId: 'runner-1',
+      image: 'quay.io/acme/app:v1',
+      imageIsOrgOwned,
+      state: boxState,
+    }
+    const service = Object.create(BoxService.prototype) as BoxService
+    Object.assign(service as any, {
+      // The ERROR case runs on past the image report into the real state
+      // update, so the write it ends with has to exist.
+      boxRepository: { findOne: jest.fn().mockResolvedValue(box), updateWhere: jest.fn() },
+      logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+      imageRegistrarService: { onBoxStarted: jest.fn().mockResolvedValue(undefined) },
+    })
+    return { service, registrar: (service as any).imageRegistrarService }
+  }
+
+  const reported = { digest: `sha256:${'a'.repeat(64)}`, sizeBytes: 4096 }
+
+  /**
+   * The report arrives on a state the control plane usually already has: it
+   * also learns a box is up by polling the runner, and whichever observation
+   * lands first makes the other a no-op transition. Recording the image has to
+   * survive that, or the catalog fills only when the race happens to go one way.
+   */
+  it('records the image even when the reported state is the one already stored', async () => {
+    const { service, registrar } = makeService(BoxState.STARTED)
+
+    await service.updateState('box-1', BoxState.STARTED, false, undefined, reported)
+
+    expect(registrar.onBoxStarted).toHaveBeenCalledWith(
+      'org-1',
+      { ref: 'quay.io/acme/app:v1', isOrgOwned: true, runnerId: 'runner-1' },
+      reported,
+    )
+  })
+
+  /**
+   * The registrar is told whose image this is rather than deciding, and what it
+   * is told is what the box recorded when it was created. Passing the recorded
+   * `false` through is the whole fix: recomputing here would ask the curated
+   * set as it stands now, which is not the set this box was created against.
+   */
+  it('passes on the ownership the box recorded, not a fresh look at the curated set', async () => {
+    const { service, registrar } = makeService(BoxState.STARTED, false)
+
+    await service.updateState('box-1', BoxState.STARTED, false, undefined, reported)
+
+    expect(registrar.onBoxStarted).toHaveBeenCalledWith(
+      'org-1',
+      { ref: 'quay.io/acme/app:v1', isOrgOwned: false, runnerId: 'runner-1' },
+      reported,
+    )
+  })
+
+  /**
+   * A pull that failed reports ERROR. An image that never booted must not be in
+   * the catalog, where it would count against the organization's limit and be
+   * handed to the next box as if it had worked.
+   */
+  it('records nothing when the box is reporting an error', async () => {
+    const { service, registrar } = makeService(BoxState.STARTED)
+
+    await service.updateState('box-1', BoxState.ERROR, false, 'Failed to pull artifact image', reported)
+
+    expect(registrar.onBoxStarted).not.toHaveBeenCalled()
+  })
+
+  /**
+   * The state update is what the control plane acts on; a lost registration
+   * only costs the next create one re-resolution.
+   */
+  it('does not fail the state update when registration throws', async () => {
+    const { service, registrar } = makeService(BoxState.STARTED)
+    registrar.onBoxStarted.mockRejectedValue(new Error('conflict'))
+
+    await expect(service.updateState('box-1', BoxState.STARTED, false, undefined, reported)).resolves.toBeUndefined()
+  })
+})
+
 describe('BoxService public defaults', () => {
-  function makeCreateService() {
+  function makeCreateService(overrides: Record<string, unknown> = {}) {
     const boxRepository = { insert: jest.fn(async (box: any) => box) } as any
     const warmPoolService = { fetchWarmPoolBox: jest.fn().mockResolvedValue(undefined) }
     const runner = { id: 'runner-1', draining: false, state: RunnerState.READY }
@@ -334,9 +433,295 @@ describe('BoxService public defaults', () => {
       boxRepository,
       eventEmitter: { emitAsync: jest.fn().mockResolvedValue(undefined) },
       toBoxDto: jest.fn((box) => box),
+      imageAdmissionService: {
+        assert: jest.fn().mockResolvedValue(undefined),
+        spendColdPullBudget: jest.fn().mockResolvedValue(undefined),
+      },
+      imageResolverService: {
+        resolve: jest.fn().mockResolvedValue({ ref: 'quay.io/acme/app@sha256:resolved', isOrgOwned: true }),
+      },
+      ...overrides,
     })
     return { service, boxRepository, runnerService, warmPoolService }
   }
+
+  /**
+   * Two collaborators now stand between the request and the box: admission
+   * decides whether this image may be used at all, and the resolver decides
+   * which ref a runner is handed. What is asserted here is the seam — both are
+   * asked, and the box records the resolver's answer rather than what the
+   * caller typed. Which ref the resolver picks is its own specification's job.
+   */
+  it('stores the ref the resolver returned, not the selector the caller sent', async () => {
+    const { service, boxRepository } = makeCreateService()
+
+    await service.create({ name: 'tenant-box', image: 'quay.io/acme/app:v1' } as any, { id: 'org-1' } as any)
+
+    expect((service as any).imageAdmissionService.assert).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'org-1' }),
+      'quay.io/acme/app:v1',
+    )
+    expect((service as any).imageResolverService.resolve).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'org-1' }),
+      'quay.io/acme/app:v1',
+    )
+    expect(boxRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ image: 'quay.io/acme/app@sha256:resolved' }),
+      undefined,
+    )
+  })
+
+  /**
+   * The one path every existing caller takes, and the only one asserted through
+   * the real resolver: a mocked one would make this a test of the mock. The
+   * repository throws, so a curated selector reaching the database fails here
+   * rather than merely costing a query.
+   */
+  it('still resolves a curated selector to its operator-configured ref', async () => {
+    const repository = {
+      createQueryBuilder: () => {
+        throw new Error('a curated selector must not query the catalog')
+      },
+    } as unknown as Repository<ImageVersion>
+    const { service, boxRepository } = makeCreateService({
+      imageResolverService: new ImageResolverService(repository),
+    })
+
+    await service.create({ name: 'curated-box', image: 'python' } as any, { id: 'org-1' } as any)
+
+    expect(boxRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ image: expect.stringContaining('boxlite-agent-python') }),
+      undefined,
+    )
+  })
+
+  /**
+   * The pool holds boxes created with no organization, so an image one
+   * organization owns must not be served from it. Asserted on the collaborators
+   * rather than on the returned box: a fresh box is what a warm miss produces
+   * too, so the outcome alone cannot tell the two apart.
+   *
+   * The Redis key matters on its own. `warm-pool:skip:<image>` is named after
+   * the image, so reaching that line with a tenant-supplied ref would let a
+   * caller decide a key's name.
+   */
+  it('neither consults the warm pool nor names a skip key for an org image', async () => {
+    const { service, warmPoolService } = makeCreateService()
+
+    await service.create({ name: 'tenant-box', image: 'quay.io/acme/app:v1' } as any, { id: 'org-1' } as any)
+
+    expect((service as any).redis.exists).not.toHaveBeenCalled()
+    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+  })
+
+  it('still consults the warm pool for a curated image', async () => {
+    const { service, warmPoolService } = makeCreateService({
+      imageResolverService: {
+        resolve: jest
+          .fn()
+          .mockResolvedValue({ ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0', isOrgOwned: false }),
+      },
+      // No skip key: the default fixture has one, which would keep the pool
+      // out of this test for a reason that has nothing to do with the image.
+      redis: { exists: jest.fn().mockResolvedValue(0) },
+    })
+
+    await service.create({ name: 'curated-box', image: 'base' } as any, { id: 'org-1' } as any)
+
+    expect((service as any).redis.exists).toHaveBeenCalled()
+    expect(warmPoolService.fetchWarmPoolBox).toHaveBeenCalled()
+  })
+
+  /**
+   * The other side of the same rule. A pool row is filled by a background
+   * top-up, not by a request, so nothing upstream of here has checked its
+   * image — and the box it creates belongs to no organization until one claims
+   * it.
+   */
+  it('refuses to fill a warm pool row that names an image an organization owns', async () => {
+    const { service, boxRepository } = makeCreateService()
+
+    await expect(
+      service.createForWarmPool({ id: 'pool-7', image: 'quay.io/acme/app:v1', target: 'region-1' } as any),
+    ).rejects.toThrow(/pool-7/)
+    expect(boxRepository.insert).not.toHaveBeenCalled()
+  })
+
+  it('fills a warm pool row that names a curated image', async () => {
+    const { service, boxRepository } = makeCreateService()
+
+    await service.createForWarmPool({
+      id: 'pool-8',
+      image: 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0',
+      target: 'region-1',
+      class: 'small',
+      cpu: 2,
+      mem: 4,
+      disk: 10,
+      gpu: 0,
+      osUser: 'boxlite',
+      env: {},
+    } as any)
+
+    expect(boxRepository.insert).toHaveBeenCalled()
+  })
+
+  it('asks admission before the resolver, and spends the budget on its answer', async () => {
+    const { service } = makeCreateService()
+    const order: string[] = []
+    const resolved = { ref: 'quay.io/acme/app@sha256:resolved', isOrgOwned: true }
+    ;(service as any).imageAdmissionService.assert.mockImplementation(async () => void order.push('admission'))
+    ;(service as any).imageResolverService.resolve.mockImplementation(async () => {
+      order.push('resolver')
+      return resolved
+    })
+    ;(service as any).imageAdmissionService.spendColdPullBudget.mockImplementation(
+      async () => void order.push('budget'),
+    )
+
+    await service.create({ name: 'ordered-box', image: 'quay.io/acme/app:v1' } as any, { id: 'org-1' } as any)
+
+    // A refused image must not reach a catalog query.
+    expect(order).toEqual(['admission', 'resolver', 'budget'])
+    expect((service as any).imageAdmissionService.spendColdPullBudget).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'org-1' }),
+      resolved,
+    )
+  })
+
+  /**
+   * A cold pull is a ref the catalog could not answer. A hit is handed out by
+   * digest, a build this deployment already pulled and booted, so charging it
+   * too capped how fast any organization could create boxes from its own images.
+   * Driven through the real admission service: which creates spend the budget
+   * is decided by the seam between it and the resolver, not by either alone.
+   */
+  describe('cold-pull budget', () => {
+    function withRealAdmission(resolved: object, overrides: Record<string, unknown> = {}) {
+      const redis = { incr: jest.fn().mockResolvedValue(1), expire: jest.fn(), ttl: jest.fn() }
+      const images = { exists: jest.fn().mockResolvedValue(true), count: jest.fn().mockResolvedValue(0) }
+      const { service } = makeCreateService({
+        imageAdmissionService: new ImageAdmissionService(
+          redis as unknown as Redis,
+          images as unknown as Repository<Image>,
+        ),
+        imageResolverService: { resolve: jest.fn().mockResolvedValue(resolved) },
+        ...overrides,
+      })
+      return { service, redis }
+    }
+
+    let allowlistBefore: string | undefined
+    beforeEach(() => {
+      allowlistBefore = process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
+      process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = 'quay.io'
+    })
+
+    afterEach(() => {
+      if (allowlistBefore === undefined) {
+        delete process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
+      } else {
+        process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = allowlistBefore
+      }
+    })
+
+    it('spends none on a ref the catalog already pinned', async () => {
+      const pinned = { ref: `quay.io/acme/app@sha256:${'a'.repeat(64)}`, isOrgOwned: true, imageId: 'image-1' }
+      const { service, redis } = withRealAdmission(pinned)
+
+      await service.create({ name: 'pinned-box', image: 'quay.io/acme/app:v1' } as any, { id: 'org-1' } as any)
+
+      expect(redis.incr).not.toHaveBeenCalled()
+    })
+
+    /**
+     * Nothing returns a pull slot: the counter has no decrement, because the
+     * API never learns a pull ended. Spending one on a create that was going to
+     * be refused would charge an organization for a box it cannot have.
+     */
+    it('spends none on a create the image limit refuses', async () => {
+      const { service, redis } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
+      const images = (service as any).imageAdmissionService.imageRepository
+      images.exists.mockResolvedValue(false)
+      images.count.mockResolvedValue(20)
+
+      await expect(
+        service.create(
+          { name: 'over-box', image: 'quay.io/acme/app:v1' } as any,
+          { id: 'org-1', imageCountLimit: 20 } as any,
+        ),
+      ).rejects.toThrow(/limit of 20 images/)
+
+      expect(redis.incr).not.toHaveBeenCalled()
+    })
+
+    /** A volume the create names but cannot have refuses it after resolution. */
+    it('spends none on a create whose volume is refused', async () => {
+      const { service, redis } = withRealAdmission(
+        { ref: 'quay.io/acme/app:v1', isOrgOwned: true },
+        { volumeService: { validateVolumes: jest.fn().mockRejectedValue(new Error('no such volume')) } },
+      )
+
+      await expect(
+        service.create(
+          {
+            name: 'volume-box',
+            image: 'quay.io/acme/app:v1',
+            volumes: [{ volumeId: 'missing', mountPath: '/data' }],
+          } as any,
+          { id: 'org-1' } as any,
+        ),
+      ).rejects.toThrow(/no such volume/)
+
+      expect(redis.incr).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['a negative auto-stop interval', { autoStop: -5 }],
+      ['a network allow list that is not one', { networkAllowList: 'bad host!' }],
+    ])('spends none on a create refused for %s', async (_reason, input) => {
+      const { service, redis } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
+
+      await expect(
+        service.create({ name: 'refused-box', image: 'quay.io/acme/app:v1', ...input } as any, { id: 'org-1' } as any),
+      ).rejects.toThrow(BadRequestError)
+
+      expect(redis.incr).not.toHaveBeenCalled()
+    })
+
+    it('spends none on a create no runner can take', async () => {
+      const { service, redis } = withRealAdmission(
+        { ref: 'quay.io/acme/app:v1', isOrgOwned: true },
+        { runnerService: { getRandomAvailableRunner: jest.fn().mockRejectedValue(new Error('no runner')) } },
+      )
+
+      await expect(
+        service.create({ name: 'unplaced-box', image: 'quay.io/acme/app:v1' } as any, { id: 'org-1' } as any),
+      ).rejects.toThrow(/no runner/)
+
+      expect(redis.incr).not.toHaveBeenCalled()
+    })
+
+    it('inserts no box when the budget refuses the create', async () => {
+      const { service, redis } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
+      redis.incr.mockResolvedValue(7)
+      redis.ttl.mockResolvedValue(30)
+
+      await expect(
+        service.create({ name: 'over-budget-box', image: 'quay.io/acme/app:v1' } as any, { id: 'org-1' } as any),
+      ).rejects.toThrow(/Too many image pulls/)
+
+      expect((service as any).boxRepository.insert).not.toHaveBeenCalled()
+    })
+
+    it('spends one on a ref the catalog has not seen', async () => {
+      const { service, redis } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
+
+      await service.create({ name: 'first-box', image: 'quay.io/acme/app:v1' } as any, { id: 'org-1' } as any)
+
+      expect(redis.incr).toHaveBeenCalledTimes(1)
+    })
+  })
 
   it.each([
     [{ networkBlockAll: true }, { boxLimitedNetworkEgress: false }, { networkBlockAll: true }],

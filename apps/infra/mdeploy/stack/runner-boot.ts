@@ -77,7 +77,7 @@ export type BootPlatform = {
    *
    * A wrapper rather than a one-time fetch so a `systemctl restart` picks up a
    * rotated credential, and fail-closed so a host that cannot read one refuses
-   * to start rather than falling back to anonymous pulls.
+   * to start rather than running without a secret it was given.
    */
   startWrapper: { script: string; path: string } | null
   /** `Environment=` lines the unit needs and only this cloud can name. */

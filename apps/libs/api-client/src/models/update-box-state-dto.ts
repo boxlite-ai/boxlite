@@ -27,6 +27,14 @@ export interface UpdateBoxStateDto {
      * Whether the box is recoverable
      */
     'recoverable'?: boolean;
+    /**
+     * Registry digest of the image the box booted from
+     */
+    'imageDigest'?: string;
+    /**
+     * Declared on-registry size of that image, in bytes
+     */
+    'imageSizeBytes'?: number;
 }
 
 export const UpdateBoxStateDtoStateEnum = {

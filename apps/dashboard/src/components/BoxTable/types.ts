@@ -77,7 +77,6 @@ export const convertTableSortingToApiSorting = (sorting: SortingState): BoxSorti
     case 'state':
       field = ListBoxesPaginatedSortEnum.STATE
       break
-    // TODO(image-rewrite): template sort removed with the image/template subsystem.
     case 'region':
     case 'target':
       field = ListBoxesPaginatedSortEnum.REGION
@@ -113,7 +112,6 @@ export const convertTableFiltersToApiFilters = (columnFilters: ColumnFiltersStat
           filters.states = filter.value as ListBoxesPaginatedStatesEnum[]
         }
         break
-      // TODO(image-rewrite): template filter removed with the image/template subsystem.
       case 'region':
       case 'target':
         if (Array.isArray(filter.value) && filter.value.length > 0) {
@@ -195,7 +193,6 @@ export const convertApiSortingToTableSorting = (sorting: BoxSorting): SortingSta
     case ListBoxesPaginatedSortEnum.STATE:
       id = 'state'
       break
-    // TODO(image-rewrite): template sort removed with the image/template subsystem.
     case ListBoxesPaginatedSortEnum.REGION:
       id = 'region'
       break
@@ -221,8 +218,6 @@ export const convertApiFiltersToTableFilters = (filters: BoxFilters): ColumnFilt
   if (filters.states && filters.states.length > 0) {
     columnFilters.push({ id: 'state', value: filters.states })
   }
-
-  // TODO(image-rewrite): template filter removed with the image/template subsystem.
 
   if (filters.regions && filters.regions.length > 0) {
     columnFilters.push({ id: 'region', value: filters.regions })
