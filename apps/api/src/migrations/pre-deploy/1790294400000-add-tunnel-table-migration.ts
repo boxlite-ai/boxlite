@@ -13,11 +13,11 @@ export class AddTunnelTable1790294400000 implements MigrationInterface {
         "token_hash" character varying,
         "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
         "revoked_at" TIMESTAMP WITH TIME ZONE,
-        CONSTRAINT "tunnel_pkey" PRIMARY KEY ("id"),
+        CONSTRAINT "tunnel_id_pk" PRIMARY KEY ("id"),
         CONSTRAINT "tunnel_box_port_unique" UNIQUE ("box_id", "port"),
         CONSTRAINT "tunnel_port_range" CHECK ("port" BETWEEN 1 AND 65535),
         CONSTRAINT "tunnel_mode_token" CHECK (("access_mode" = 'public' AND "token_hash" IS NULL) OR ("access_mode" = 'private' AND "token_hash" IS NOT NULL)),
-        CONSTRAINT "tunnel_box_fk" FOREIGN KEY ("box_id") REFERENCES "box"("id") ON DELETE CASCADE
+        CONSTRAINT "tunnel_box_id_fk" FOREIGN KEY ("box_id") REFERENCES "box"("id") ON DELETE CASCADE
       )
     `)
   }
