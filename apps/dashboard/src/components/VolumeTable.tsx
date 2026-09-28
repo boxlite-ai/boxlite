@@ -20,6 +20,7 @@ import { OrganizationRolePermissionsEnum, VolumeDto, VolumeState } from '@boxlit
 import {
   ColumnDef,
   ColumnFiltersState,
+  RowSelectionState,
   flexRender,
   getCoreRowModel,
   getFacetedRowModel,
@@ -32,7 +33,7 @@ import {
 } from '@tanstack/react-table'
 import { AlertTriangle, CheckCircle, HardDrive, Loader2, MoreHorizontal, Timer } from '@/components/ui/icon'
 import { AnimatePresence } from 'motion/react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { TableEmptyState } from './TableEmptyState'
 import { VolumeBulkAction, VolumeBulkActionAlertDialog } from './VolumeTable/BulkActionAlertDialog'
 import { getVolumeBulkActionCounts, isVolumeDeletable } from './VolumeTable/volumeBulkActions'
@@ -55,6 +56,8 @@ export function VolumeTable({ data, loading, processingVolumeAction, onDelete, o
 
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
+  // Controlled so the effect below can prune it when the data moves on.
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
 
   const columns = getColumns({
     onDelete,
@@ -75,7 +78,9 @@ export function VolumeTable({ data, loading, processingVolumeAction, onDelete, o
     state: {
       sorting,
       columnFilters,
+      rowSelection,
     },
+    onRowSelectionChange: setRowSelection,
     // Delete is the only bulk action, so a volume that cannot be deleted has
     // nothing to be selected for. Leaving it selectable lets the toast offer
     // "Delete 0" and hand an empty list to onBulkDelete.
@@ -87,6 +92,19 @@ export function VolumeTable({ data, loading, processingVolumeAction, onDelete, o
       },
     },
   })
+  // A refresh can move a selected volume into a state it cannot be deleted
+  // from. `enableRowSelection` stops it being picked again but does not drop a
+  // selection already made, which would leave "Delete 0" armed on the toast.
+  useEffect(() => {
+    const deletableIds = new Set(data.filter(isVolumeDeletable).map((volume) => volume.id))
+    setRowSelection((selection) => {
+      const kept = Object.entries(selection).filter(([id]) => deletableIds.has(id))
+      // Same reference when nothing went stale, so an idle poll does not
+      // re-render the table.
+      return kept.length === Object.keys(selection).length ? selection : Object.fromEntries(kept)
+    })
+  }, [data])
+
   const selectedRows = table.getSelectedRowModel().rows
   const hasSelection = selectedRows.length > 0
   const selectedVolumes = selectedRows.map((row) => row.original)

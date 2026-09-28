@@ -7,7 +7,7 @@
 import { VolumeDto, VolumeState } from '@boxlite-ai/api-client'
 import { act, createElement, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { VolumeTable } from './VolumeTable'
 
 // The bulk toast animates out, and AnimatePresence keeps an exiting element
@@ -26,10 +26,13 @@ vi.mock('motion/react', () => ({
   ),
 }))
 
+// Each test says whether its member may delete volumes.
+const org = vi.hoisted(() => ({ canDelete: true }))
+
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: { id: 'org-1' },
-    authenticatedUserHasPermission: () => true,
+    authenticatedUserHasPermission: () => org.canDelete,
   }),
 }))
 
@@ -67,6 +70,10 @@ describe('VolumeTable bulk selection', () => {
         addEventListener: () => undefined,
         removeEventListener: () => undefined,
       }) as unknown as MediaQueryList
+  })
+
+  beforeEach(() => {
+    org.canDelete = true
   })
 
   afterEach(() => {
@@ -149,5 +156,18 @@ describe('VolumeTable bulk selection', () => {
     // the toast up at "Delete 0" and confirm into an empty onBulkDelete.
     expect(bulkActionButton()).toBeUndefined()
     expect(onBulkDelete).not.toHaveBeenCalled()
+  })
+
+  it('arms nothing for a member who cannot delete volumes', () => {
+    org.canDelete = false
+    render([volume('live', VolumeState.READY)])
+
+    // Selection exists only to arm the bulk delete, so without the permission
+    // the checkbox is inert: present in the column, but not a way in.
+    const [row] = rowCheckboxes()
+    expect(row.hasAttribute('disabled')).toBe(true)
+
+    act(() => row.click())
+    expect(bulkActionButton()).toBeUndefined()
   })
 })
