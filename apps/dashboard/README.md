@@ -38,6 +38,19 @@ cost paid on every table change. Search belongs to the table that owns the data;
 actions belong to the row. If an action is hard to reach, fix the page.
 
 
+## Selection follows the action, not the row count
+
+A table's checkbox column exists to arm a bulk action, so a row that no bulk
+action can touch is not selectable. `VolumeTable` is the worked example: delete
+is its only bulk action, so `enableRowSelection` asks
+`isVolumeDeletable(row.original)` and the checkbox renders disabled for volumes
+already deleted or on their way out.
+
+Gating only the count instead — leaving the row selectable and filtering later —
+produces a toast that offers "Delete 0" and a confirmation for "these 0 selected
+volumes". If a new bulk action arrives with a different eligibility rule, the
+predicate becomes the union of them; it must never go back to a bare boolean.
+
 ## Empty states carry the first action
 
 A resource table with no rows is not a blank page and not a takeover: it keeps

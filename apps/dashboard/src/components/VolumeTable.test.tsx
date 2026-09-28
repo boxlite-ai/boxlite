@@ -113,4 +113,41 @@ describe('VolumeTable bulk selection', () => {
     expect(document.body.textContent).toContain('delete')
     expect(onBulkDelete).not.toHaveBeenCalled()
   })
+
+  it('does not offer a bulk delete when the only selected volume is already deleted', () => {
+    render([volume('gone', VolumeState.DELETED)])
+
+    const [deletedRow] = rowCheckboxes()
+    expect(deletedRow).toBeDefined()
+    act(() => deletedRow.click())
+
+    // A DELETED volume cannot be deleted again, so selecting it must not arm
+    // the bulk action — otherwise the toast offers "Delete 0" and confirming
+    // calls onBulkDelete([]).
+    expect(bulkActionButton()).toBeUndefined()
+  })
+
+  it('counts only deletable volumes when the selection mixes states', () => {
+    render([volume('live', VolumeState.READY), volume('gone', VolumeState.DELETED)])
+
+    rowCheckboxes().forEach((checkbox) => act(() => checkbox.click()))
+
+    expect(bulkActionButton()?.textContent).toBe('Delete 1')
+  })
+
+  it('drops a selection when a refresh moves that volume out of a deletable state', () => {
+    const { onBulkDelete, rerender } = render([volume('doomed', VolumeState.READY)])
+
+    const [row] = rowCheckboxes()
+    act(() => row.click())
+    expect(bulkActionButton()?.textContent).toBe('Delete 1')
+
+    // The volume is deleted elsewhere and the next poll reports it.
+    rerender([volume('doomed', VolumeState.DELETED)])
+
+    // Disabling the checkbox is not enough: a selection already made would keep
+    // the toast up at "Delete 0" and confirm into an empty onBulkDelete.
+    expect(bulkActionButton()).toBeUndefined()
+    expect(onBulkDelete).not.toHaveBeenCalled()
+  })
 })

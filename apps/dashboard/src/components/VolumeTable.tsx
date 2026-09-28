@@ -76,7 +76,10 @@ export function VolumeTable({ data, loading, processingVolumeAction, onDelete, o
       sorting,
       columnFilters,
     },
-    enableRowSelection: deletePermitted,
+    // Delete is the only bulk action, so a volume that cannot be deleted has
+    // nothing to be selected for. Leaving it selectable lets the toast offer
+    // "Delete 0" and hand an empty list to onBulkDelete.
+    enableRowSelection: deletePermitted ? (row) => isVolumeDeletable(row.original) : false,
     getRowId: (row) => row.id,
     initialState: {
       pagination: {
@@ -281,6 +284,7 @@ const getColumns = ({
         return (
           <Checkbox
             checked={row.getIsSelected()}
+            disabled={!row.getCanSelect()}
             onCheckedChange={(value) => row.toggleSelected(!!value)}
             aria-label="Select row"
             className="translate-y-[2px]"
