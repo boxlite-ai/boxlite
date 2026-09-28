@@ -232,3 +232,58 @@ describe('BoxTable pagination controls', () => {
     expect(onPaginationChange).toHaveBeenCalledWith({ pageIndex: 2, pageSize: 25 })
   })
 })
+
+describe('BoxTable empty state', () => {
+  let root: Root | null = null
+
+  beforeAll(() => {
+    ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  })
+
+  afterEach(() => {
+    act(() => {
+      root?.unmount()
+    })
+    root = null
+    document.body.innerHTML = ''
+    vi.clearAllMocks()
+  })
+
+  function renderEmpty(overrides: Partial<BoxTableProps> = {}) {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const props: BoxTableProps = { ...baseProps, data: [], totalItems: 0, pageCount: 0, ...overrides }
+
+    act(() => {
+      root = createRoot(host)
+      root.render(<BoxTable {...props} />)
+    })
+
+    return props
+  }
+
+  function quickstartButtons() {
+    return Array.from(document.querySelectorAll('button')).filter((button) =>
+      button.textContent?.startsWith('Open Quickstart'),
+    )
+  }
+
+  it('offers the quickstart from the empty state when there is a guide to open', () => {
+    const onOpenQuickstart = vi.fn()
+    renderEmpty({ onOpenQuickstart })
+
+    // Desktop table and mobile card list each render the empty state.
+    const buttons = quickstartButtons()
+    expect(buttons.length).toBeGreaterThan(0)
+
+    buttons.forEach((button) => act(() => button.click()))
+    expect(onOpenQuickstart).toHaveBeenCalledTimes(buttons.length)
+  })
+
+  it('still explains itself when no guide is available to open', () => {
+    renderEmpty()
+
+    expect(quickstartButtons()).toHaveLength(0)
+    expect(document.body.textContent).toContain('Your agent creates them through the SDK')
+  })
+})
