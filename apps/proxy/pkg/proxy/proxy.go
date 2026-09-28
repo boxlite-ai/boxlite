@@ -38,7 +38,7 @@ const BOX_AUTH_KEY_HEADER = "X-BoxLite-Preview-Token"
 const BOX_AUTH_KEY_QUERY_PARAM = "BOXLITE_BOX_AUTH_KEY"
 const BOX_AUTH_COOKIE_NAME = "boxlite-box-auth-"
 const ACTIVITY_POLL_STOP_KEY = "boxlite-activity-poll-stop"
-const TERMINAL_PORT = "22222"
+const TERMINAL_PORT uint16 = 22222
 
 type activityPollController struct {
 	done chan struct{}

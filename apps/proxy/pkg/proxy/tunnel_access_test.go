@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -13,10 +14,11 @@ import (
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
+	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
 	"github.com/gin-gonic/gin"
 )
 
-func newTunnelProxy(t *testing.T, accessStatus int) (*Proxy, func()) {
+func newTunnelProxy(t *testing.T, accessStatus int) *Proxy {
 	t.Helper()
 	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == "/api/preview/AbCdEf123456/tunnels/3000" {
@@ -25,6 +27,7 @@ func newTunnelProxy(t *testing.T, accessStatus int) (*Proxy, func()) {
 		}
 		writer.WriteHeader(http.StatusNotFound)
 	}))
+	t.Cleanup(api.Close)
 	clientConfig := apiclient.NewConfiguration()
 	clientConfig.Servers[0].URL = api.URL + "/api"
 	clientConfig.AddDefaultHeader("Authorization", "Bearer proxy-key")
@@ -48,12 +51,11 @@ func newTunnelProxy(t *testing.T, accessStatus int) (*Proxy, func()) {
 		boxRunnerCache:             runnerCache,
 		boxLastActivityUpdateCache: activityCache,
 	}
-	return proxy, api.Close
+	return proxy
 }
 
 func TestUndeclaredTunnelRejectsHTTP(t *testing.T) {
-	proxy, closeAPI := newTunnelProxy(t, http.StatusNotFound)
-	defer closeAPI()
+	proxy := newTunnelProxy(t, http.StatusNotFound)
 	request := httptest.NewRequest(http.MethodGet, "http://3000-d-416243644566313233343536.proxy.test/", nil)
 	response := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(response)
@@ -70,8 +72,7 @@ func TestUndeclaredTunnelRejectsHTTP(t *testing.T) {
 }
 
 func TestUndeclaredTunnelRejectsConnect(t *testing.T) {
-	proxy, closeAPI := newTunnelProxy(t, http.StatusNotFound)
-	defer closeAPI()
+	proxy := newTunnelProxy(t, http.StatusNotFound)
 	request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
 	request.Host = "3000-d-416243644566313233343536.proxy.test:443"
 	response := httptest.NewRecorder()
@@ -83,8 +84,7 @@ func TestUndeclaredTunnelRejectsConnect(t *testing.T) {
 }
 
 func TestUndeclaredTunnelRejectsRawBoxIDHost(t *testing.T) {
-	proxy, closeAPI := newTunnelProxy(t, http.StatusNotFound)
-	defer closeAPI()
+	proxy := newTunnelProxy(t, http.StatusNotFound)
 	request := httptest.NewRequest(http.MethodGet, "http://3000-AbCdEf123456.proxy.test/", nil)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = request
@@ -97,8 +97,7 @@ func TestUndeclaredTunnelRejectsRawBoxIDHost(t *testing.T) {
 }
 
 func TestDeclaredTunnelAllowsHTTP(t *testing.T) {
-	proxy, closeAPI := newTunnelProxy(t, http.StatusOK)
-	defer closeAPI()
+	proxy := newTunnelProxy(t, http.StatusOK)
 	request := httptest.NewRequest(http.MethodGet, "http://3000-d-416243644566313233343536.proxy.test/", nil)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = request
@@ -111,8 +110,7 @@ func TestDeclaredTunnelAllowsHTTP(t *testing.T) {
 }
 
 func TestAuthenticatedPrivatePreviewKeepsWorking(t *testing.T) {
-	proxy, closeAPI := newTunnelProxy(t, http.StatusNotFound)
-	defer closeAPI()
+	proxy := newTunnelProxy(t, http.StatusNotFound)
 	ctx := context.Background()
 	if err := proxy.boxPublicCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
 		t.Fatal(err)
@@ -132,9 +130,25 @@ func TestAuthenticatedPrivatePreviewKeepsWorking(t *testing.T) {
 	}
 }
 
-func TestTunnelAccessAPIErrorFailsClosed(t *testing.T) {
-	proxy, closeAPI := newTunnelProxy(t, http.StatusServiceUnavailable)
-	defer closeAPI()
+func TestTunnelAccessAPIErrorFailsHTTPWithBadGateway(t *testing.T) {
+	proxy := newTunnelProxy(t, http.StatusServiceUnavailable)
+	request := httptest.NewRequest(http.MethodGet, "http://3000-d-416243644566313233343536.proxy.test/", nil)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = request
+
+	target, err := proxy.GetProxyTarget(ctx)
+	stopActivityPoll(ctx)
+	if err == nil || target != nil {
+		t.Fatalf("access API failure reached proxy target: target=%v err=%v", target, err)
+	}
+	var customErr *common_errors.CustomError
+	if len(ctx.Errors) != 1 || !errors.As(ctx.Errors[0].Err, &customErr) || customErr.StatusCode != http.StatusBadGateway {
+		t.Fatalf("access API failure recorded %v, want 502", ctx.Errors)
+	}
+}
+
+func TestTunnelAccessAPIErrorFailsConnectWithBadGateway(t *testing.T) {
+	proxy := newTunnelProxy(t, http.StatusServiceUnavailable)
 	request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
 	request.Host = "3000-d-416243644566313233343536.proxy.test:443"
 	response := httptest.NewRecorder()
@@ -145,7 +159,7 @@ func TestTunnelAccessAPIErrorFailsClosed(t *testing.T) {
 	}
 }
 
-func TestTunnelRevocationBlocksNextAccessCheck(t *testing.T) {
+func TestProxyDoesNotCacheTunnelAccess(t *testing.T) {
 	var status atomic.Int32
 	status.Store(http.StatusOK)
 	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

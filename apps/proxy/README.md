@@ -83,14 +83,14 @@ The HTTP path in code:
   StartProxy (— · apps/proxy/pkg/proxy/proxy.go:78) — registers the catch-all route for preview hosts
     └─ NewProxyRequestHandler (— · apps/libs/common-go/pkg/proxy/proxy.go:113) — reverse proxy for one request
       ├─ GetProxyTarget (Proxy · apps/proxy/pkg/proxy/get_box_target.go:49) — choose the upstream
-        ├─ parseHost (Proxy · apps/proxy/pkg/proxy/get_box_target.go:357) — port plus box ID or signed token
-        ├─ getBoxPublic (Proxy · apps/proxy/pkg/proxy/get_box_target.go:250) — ask the API, cached 3 s
+        ├─ parseHost (Proxy · apps/proxy/pkg/proxy/get_box_target.go:353) — canonical port plus box ID or signed token
+        ├─ getBoxPublic (Proxy · apps/proxy/pkg/proxy/get_box_target.go:244) — ask the API, cached 3 s
         ├─ Authenticate (Proxy · apps/proxy/pkg/proxy/auth.go:18) — private box or terminal port only
-        ├─ hasPublicTunnelAccess — check direct public guest ports before proxying
-        └─ updateLastActivity (Proxy · apps/proxy/pkg/proxy/get_box_target.go:430) — renew activity every 50 s
-      └─ dialGuestPort (Proxy · apps/proxy/pkg/proxy/get_box_target.go:165) — dial each new upstream connection
-        ├─ getBoxRunnerInfo (Proxy · apps/proxy/pkg/proxy/get_box_target.go:211) — runner URL and key, cached 2 min
-        └─ dialRunnerTunnel (— · apps/proxy/pkg/proxy/tunnel.go:117) — CONNECT through the runner to the guest port
+        ├─ hasPublicTunnelAccess (Proxy · apps/proxy/pkg/proxy/tunnel_access.go:15) — public box guest ports only
+        └─ updateLastActivity (Proxy · apps/proxy/pkg/proxy/get_box_target.go:424) — renew activity every 50 s
+      └─ dialGuestPort (Proxy · apps/proxy/pkg/proxy/get_box_target.go:159) — dial each new upstream connection
+        ├─ getBoxRunnerInfo (Proxy · apps/proxy/pkg/proxy/get_box_target.go:205) — runner URL and key, cached 2 min
+        └─ dialRunnerTunnel (— · apps/proxy/pkg/proxy/tunnel.go:124) — CONNECT through the runner to the guest port
 ```
 
 The upstream URL `http://<box ID>:<port>` is only a routing key. `dialGuestPort` is the transport's
@@ -98,12 +98,15 @@ The upstream URL `http://<box ID>:<port>` is only a routing key. `dialGuestPort`
 pooling reuses tunnels per box and port. Raw `CONNECT` requests skip this router and go to
 `handleTunnelConnect` in [`tunnel.go`](pkg/proxy/tunnel.go).
 
-The proxy checks each new direct HTTP/WebSocket request and CONNECT against the
-API without caching the verdict itself. The API caches allowed and denied tunnel
-checks in Redis for 3 seconds and clears a denial when a port is declared.
-Revocation can still admit new requests until a cached allowance expires;
-established connections continue until they close. The terminal port is
-unavailable to raw CONNECT tunnels.
+The proxy checks each new public HTTP/WebSocket request and CONNECT against the
+API without caching the answer itself. The API caches each verdict in Redis for
+3 seconds, like its other preview checks, so a revoked tunnel or a box made
+private stops admitting new requests within 3 seconds across proxy instances. A
+newly declared port is reachable immediately, because declaring clears its
+cached refusal. Connections already established continue until they close. If
+the API cannot answer, both
+paths fail closed with 502. The proxy compares ports in canonical form, so
+`022222` is the terminal port too; it is unavailable to raw CONNECT tunnels.
 
 ## Authentication
 

@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -97,14 +96,10 @@ func (p *Proxy) tunnelTarget(request *http.Request) (string, uint16, error) {
 	} else if ok {
 		boxID = decoded
 	}
-	value, err := strconv.ParseUint(port, 10, 16)
-	if err != nil || value == 0 {
-		return "", 0, fmt.Errorf("invalid tunnel port")
-	}
-	if strconv.FormatUint(value, 10) == TERMINAL_PORT {
+	if port == TERMINAL_PORT {
 		return "", 0, fmt.Errorf("terminal port is reserved")
 	}
-	return boxID, uint16(value), nil
+	return boxID, port, nil
 }
 
 func decodeTunnelBoxID(value string) (string, bool, error) {
