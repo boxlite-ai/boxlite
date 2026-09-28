@@ -6,11 +6,8 @@
 
 import { EventEmitter } from 'node:events'
 import { ForbiddenException, RequestTimeoutException } from '@nestjs/common'
-import { Reflector } from '@nestjs/core'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
-import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
-import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -35,29 +32,14 @@ function makeHarness() {
     findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
   }
   const autoResume = { ensureReady: jest.fn().mockResolvedValue(undefined) }
-  const tunnelService = {
-    declarePublic: jest.fn().mockResolvedValue(undefined),
-  }
   const tunnelRes = { setHeader: jest.fn() }
-  const controller = new (BoxliteProxyController as any)(
-    boxService,
-    runnerService,
-    autoResume,
-    tunnelService,
-  ) as BoxliteProxyController
-  return { controller, boxService, autoResume, tunnelService, tunnelRes }
+  const controller = new BoxliteProxyController(boxService as never, runnerService as never, autoResume as never)
+  return { controller, boxService, autoResume, tunnelRes }
 }
 
 describe('BoxliteProxyController', () => {
   beforeEach(() => jest.clearAllMocks())
   afterEach(() => jest.useRealTimers())
-
-  it('requires box write permission to declare a public port', () => {
-    const reflector = new Reflector()
-    expect(
-      reflector.get(RequiredOrganizationResourcePermissions, BoxliteProxyController.prototype.proxyNetworkTunnel),
-    ).toEqual([OrganizationResourcePermission.WRITE_BOXES])
-  })
 
   it('rewrites public box ids to internal box ids before proxying exec', async () => {
     const proxyHandler = jest.fn()
@@ -127,36 +109,12 @@ describe('BoxliteProxyController', () => {
   })
 
   it('returns the public endpoint for JSON tunnel requests', async () => {
-    const { controller, boxService, tunnelService, tunnelRes } = makeHarness()
+    const { controller, boxService, tunnelRes } = makeHarness()
 
     const result = await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, tunnelRes as never)
 
     expect(boxService.getNetworkTunnelUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
-    expect(tunnelService.declarePublic).toHaveBeenCalledWith('box-uuid', 3000)
-    expect(boxService.getNetworkTunnelUrl.mock.invocationCallOrder[0]).toBeLessThan(
-      tunnelService.declarePublic.mock.invocationCallOrder[0],
-    )
     expect(result).toEqual({ uri: 'https://3000-box.proxy.test' })
-  })
-
-  it('does not return a tunnel URI when the declaration cannot be saved', async () => {
-    const { controller, boxService, tunnelService, tunnelRes } = makeHarness()
-    tunnelService.declarePublic.mockRejectedValue(new Error('database unavailable'))
-
-    await expect(
-      controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, tunnelRes as never),
-    ).rejects.toThrow('database unavailable')
-    expect(boxService.getNetworkTunnelUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
-  })
-
-  it('does not declare a public port when tunnel URL resolution fails', async () => {
-    const { controller, boxService, tunnelService, tunnelRes } = makeHarness()
-    boxService.getNetworkTunnelUrl.mockRejectedValue(new Error('region unavailable'))
-
-    await expect(
-      controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, tunnelRes as never),
-    ).rejects.toThrow('region unavailable')
-    expect(tunnelService.declarePublic).not.toHaveBeenCalled()
   })
 
   it('rejects a tunnel request for a private box with 409', async () => {

@@ -174,7 +174,6 @@ serves and the events it emits are catalogued below alongside its routes.
 | `POST` | `/api/box/{boxIdOrName}/ports/{port}/signed-preview-url/{token}/expire` | Expires a signed preview URL token.                   |
 | `GET`  | `/api/box/{boxId}/toolbox-proxy-url`                                    | Returns the box toolbox proxy URL.                    |
 | `GET`  | `/api/preview/{boxId}/public`                                           | Reports whether a box is publicly reachable.          |
-| `GET`  | `/api/preview/{boxId}/tunnels/{port}`                                   | Checks an active public tunnel for the proxy.          |
 | `GET`  | `/api/preview/{boxId}/validate/{authToken}`                             | Validates a box preview authentication token.         |
 | `GET`  | `/api/preview/{boxId}/access`                                           | Checks whether the caller may preview a box.          |
 | `GET`  | `/api/preview/{signedPreviewToken}/{port}/box-id`                       | Resolves a signed preview token and port to a box ID. |

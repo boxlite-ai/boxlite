@@ -13,8 +13,8 @@ The model is implementation-grounded:
   entity files are the complete list of mapped tables.
 - Column types, constraints, and index definitions come from the migrations in
   [`api/src/migrations`](./api/src/migrations/): the baseline
-  `1741087887225-migration.ts` and the
-  [`pre-deploy`](./api/src/migrations/pre-deploy/) set create the tables.
+  `1741087887225-migration.ts` creates 17 tables, and the
+  [`pre-deploy`](./api/src/migrations/pre-deploy/) set adds 5 more.
 - Satellite stores come from [`dex/config.yaml`](./dex/config.yaml),
   [`otel-collector/config.yaml`](./otel-collector/config.yaml), and the
   ClickHouse queries in
@@ -27,7 +27,7 @@ control plane only through `runner` telemetry columns and `job` results.
 
 ## Overview
 
-The tables sort into three planes. **Tenancy** is who a caller is and what
+The 21 tables sort into three planes. **Tenancy** is who a caller is and what
 they may do; **fleet** is the microVMs and the machines that run them;
 **metering** is what gets billed.
 
@@ -50,7 +50,6 @@ flowchart LR
         t_box["box"]
         t_activity["box_last_activity"]
         t_migration["box_migration"]
-        t_tunnel["tunnel"]
         t_runner["runner"]
         t_region["region"]
         t_volume["volume"]
@@ -73,7 +72,6 @@ flowchart LR
     t_assigninv ==>|"roleId"| t_role
     t_activity ==>|"boxId"| t_box
     t_migration ==>|"boxId"| t_box
-    t_tunnel ==>|"box_id"| t_box
 
     t_orguser -.->|"userId"| t_user
     t_apikey -.->|"organizationId, userId"| t_org
@@ -98,8 +96,8 @@ box request is matched against the pool by shape, not by id.
 
 ## Referential integrity
 
-The schema declares foreign keys within the control plane. They live
-inside the tenancy cluster or on tables owned outright by a box.
+The schema declares **9 foreign keys across 21 tables**. All of them live
+inside the tenancy cluster or on the two tables owned outright by a box.
 Every edge that crosses a plane boundary — including `box.organizationId`,
 the most widely joined column in the system — is a bare `uuid` or
 `character varying` column with no constraint behind it.
@@ -120,7 +118,6 @@ that no longer resolves.
 | `organization_role_assignment_invitation`| `roleId`                     | `organization_role.id`         | foreign key | `NO ACTION` |
 | `box_last_activity`                      | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
 | `box_migration`                          | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
-| `tunnel`                                 | `box_id`                     | `box.id`                       | foreign key | `CASCADE` |
 | `organization_user`                      | `userId`                     | `user.id`                      | application | — |
 | `api_key`                                | `organizationId`, `userId`   | `organization.id`, `user.id`   | application | — |
 | `webhook_initialization`                 | `organizationId`             | `organization.id`              | application | — |
@@ -527,29 +524,6 @@ type deliberately matches `box.updatedAt`: narrower precision would round the
 copy and fail the comparison it exists for.
 
 **Index:** `(state)`.
-
-### `tunnel`
-
-One access declaration per box port. Only public access is enabled; private
-mode and `token_hash` are reserved for later.
-
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `box_id` | `character varying(12)` | FK → `box.id`, cascades on hard deletion |
-| `port` | `integer` | 1–65535 |
-| `access_mode` | `character varying` | `public` or reserved `private` |
-| `token_hash` | `character varying` | null for public; non-null for private |
-| `created_at` | `timestamptz` | creation time |
-| `revoked_at` | `timestamptz` | null while active |
-
-**Unique:** `(box_id, port)`. Repeating an authorized tunnel request keeps the
-declaration active.
-
-The migration creates no declarations for existing boxes. Existing preview and
-tunnel hostnames become reachable only after the owner prepares that port with
-`POST /api/v1/boxes/{boxId}/network/tunnel?port={port}`. Rows survive box
-stop/start and proxy restart; hard deletion of a box removes its rows.
 
 ### `box_last_activity`
 
