@@ -63,7 +63,7 @@ Bootstrap creates prerequisites; it does not deploy application services or prov
 
 Follow the shared [GitHub Actions workflow](../deployment.md#deploy-through-github-actions)
 or [local preview/apply commands](../deployment.md#deploy-an-existing-stack).
-mdeploy uses Pulumi with GCS state. API/dashboard and collector run on Cloud Run,
+mdeploy uses Pulumi with GCS state. API/dashboard, collector and registry proxy run on Cloud Run,
 the proxy runs on GKE Autopilot, and runners use Compute Engine; see [architecture](architecture.md).
 Cloudflare credentials come from the encrypted `deploy` group.
 

@@ -106,6 +106,11 @@ func run() int {
 		}
 	}
 
+	registryProxy := blclient.RegistryProxy{
+		Host:     cfg.RegistryProxyHost,
+		Username: cfg.RegistryProxyUsername,
+		Password: cfg.RegistryProxyPassword,
+	}
 	boxliteClient, err := blclient.NewClient(ctx, blclient.ClientConfig{
 		Logger:                       logger,
 		HomeDir:                      cfg.BoxliteHomeDir,
@@ -114,6 +119,7 @@ func run() int {
 		GhcrToken:                    cfg.GhcrToken,
 		DockerHubUsername:            cfg.DockerHubUsername,
 		DockerHubToken:               cfg.DockerHubToken,
+		RegistryProxy:                registryProxy,
 		AWSRegion:                    cfg.AWSRegion,
 		AWSEndpointUrl:               cfg.AWSEndpointUrl,
 		AWSAccessKeyId:               cfg.AWSAccessKeyId,

@@ -20,7 +20,7 @@ func findRegistry(registries []boxlite.ImageRegistry, host string) (boxlite.Imag
 // auth that lets boxlite-core pull private images directly (no self-hosted
 // mirror). The asserted data is produced by the production helper, not the test body.
 func TestBuildImageRegistries_GhcrAuthAddedWhenCredsPresent(t *testing.T) {
-	registries := buildImageRegistries([]string{"10.0.0.5:5000"}, "boxlite-ci", "ghp_secret")
+	registries := buildImageRegistries([]string{"10.0.0.5:5000"}, "boxlite-ci", "ghp_secret", RegistryProxy{})
 
 	insecure, ok := findRegistry(registries, "10.0.0.5:5000")
 	if !ok {
@@ -48,7 +48,7 @@ func TestBuildImageRegistries_GhcrAuthAddedWhenCredsPresent(t *testing.T) {
 // Absent (or partial) creds must reproduce the legacy behavior exactly: no ghcr.io entry,
 // so shipping this dark cannot change anything until GHCR_USERNAME+GHCR_TOKEN are set.
 func TestBuildImageRegistries_NoGhcrWhenCredsAbsent(t *testing.T) {
-	registries := buildImageRegistries([]string{"10.0.0.5:5000"}, "", "")
+	registries := buildImageRegistries([]string{"10.0.0.5:5000"}, "", "", RegistryProxy{})
 	if _, ok := findRegistry(registries, "ghcr.io"); ok {
 		t.Errorf("ghcr.io must NOT be added when creds absent, got %+v", registries)
 	}
@@ -56,7 +56,7 @@ func TestBuildImageRegistries_NoGhcrWhenCredsAbsent(t *testing.T) {
 		t.Errorf("expected only the insecure registry, got %d: %+v", len(registries), registries)
 	}
 
-	partial := buildImageRegistries(nil, "boxlite-ci", "")
+	partial := buildImageRegistries(nil, "boxlite-ci", "", RegistryProxy{})
 	if _, ok := findRegistry(partial, "ghcr.io"); ok {
 		t.Errorf("ghcr.io must NOT be added with partial creds (username only), got %+v", partial)
 	}

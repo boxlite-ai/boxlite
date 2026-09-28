@@ -25,7 +25,7 @@ from .config import InfraConfig
 from .doctor import DoctorError
 from .orchestrator import ensure_home_env
 
-_COMPONENTS = "api|runner|proxy|dashboard"
+_COMPONENTS = "|".join(native.ALL_COMPONENTS)
 
 
 def _build_parser() -> argparse.ArgumentParser:
