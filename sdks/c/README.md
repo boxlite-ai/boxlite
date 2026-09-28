@@ -452,7 +452,7 @@ typedef struct BoxliteCommand {
     int env_count;
     const char* workdir;      // Working directory, or NULL
     const char* user;         // User spec (e.g., "nobody", "1000:1000"), or NULL
-    double timeout_secs;      // 0.0 = no timeout
+    double timeout_secs;      // 0.0 = runtime default (300 seconds)
     int tty;                  // 0 = no TTY, non-zero = TTY
 } BoxliteCommand;
 

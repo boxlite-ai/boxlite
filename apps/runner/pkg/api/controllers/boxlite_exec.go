@@ -67,9 +67,8 @@ func BoxliteExec(ctx *gin.Context) {
 		startOpts.WorkingDir = *req.WorkingDir
 	}
 	if req.TimeoutSeconds != nil {
-		// The Rust C-FFI treats `timeout_secs <= 0` as unbounded (see
-		// `sdks/c/src/exec/command.rs`), so a 0 or negative value here
-		// is equivalent to omitting the field — pass it straight through.
+		// The C-FFI maps zero to an omitted timeout, selecting the runtime's
+		// 300-second default. Positive values override that default.
 		startOpts.Timeout = time.Duration(*req.TimeoutSeconds * float64(time.Second))
 	}
 

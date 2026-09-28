@@ -166,7 +166,8 @@ class SyncSimpleBox:
             env: Environment variables as dict
             user: User to run as (format: <name|uid>[:<group|gid>], like docker exec --user).
                   If None, uses the container's default user from image config.
-            timeout: Execution timeout in seconds (default: no timeout).
+            timeout: Execution timeout in seconds (default: runtime policy, 300s locally).
+                Local 0 disables it; remote behavior follows the server's policy.
             cwd: Working directory inside the container (default: container's configured workdir).
 
         Returns:

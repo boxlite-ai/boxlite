@@ -265,6 +265,8 @@ impl crate::runtime::backend::ExecBackend for ExecutionInterface {
 struct ExecProtocol;
 
 impl ExecProtocol {
+    const DEFAULT_EXEC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
     fn build_exec_request(command: &BoxCommand) -> ExecRequest {
         use boxlite_shared::TtyConfig;
 
@@ -279,7 +281,10 @@ impl ExecProtocol {
                 .into_iter()
                 .collect(),
             workdir: command.working_dir.clone().unwrap_or_default(),
-            timeout_ms: command.timeout.map(|d| d.as_millis() as u64).unwrap_or(0),
+            timeout_ms: command
+                .timeout
+                .unwrap_or(Self::DEFAULT_EXEC_TIMEOUT)
+                .as_millis() as u64,
             tty: if command.tty {
                 let (rows, cols) = crate::util::get_terminal_size();
                 Some(TtyConfig {
@@ -875,6 +880,27 @@ impl OutputTracker {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn exec_request_defaults_missing_timeout_to_five_minutes() {
+        let request = ExecProtocol::build_exec_request(&BoxCommand::new("sleep"));
+
+        assert_eq!(request.timeout_ms, 300_000);
+    }
+
+    #[test]
+    fn exec_request_preserves_explicit_timeouts() {
+        for (timeout, expected_ms) in [
+            (Duration::from_millis(1500), 1500),
+            (Duration::from_secs(600), 600_000),
+            (Duration::ZERO, 0),
+        ] {
+            let command = BoxCommand::new("sleep").timeout(timeout);
+            let request = ExecProtocol::build_exec_request(&command);
+
+            assert_eq!(request.timeout_ms, expected_ms, "timeout: {timeout:?}");
+        }
+    }
 
     /// Test that CancellationToken correctly signals cancelled state.
     #[tokio::test]

@@ -65,9 +65,8 @@ type ExecutionOptions struct {
 	// WorkingDir is the directory the process starts in. Empty inherits
 	// the container default.
 	WorkingDir string
-	// Timeout bounds the wall-clock lifetime of the execution. Zero
-	// means no timeout (the C side treats `timeout_secs <= 0` as
-	// unbounded — see `sdks/c/src/exec/command.rs`).
+	// Timeout bounds execution time. Zero uses the runtime default (300 seconds).
+	// Use a larger positive duration for long-running commands.
 	Timeout time.Duration
 }
 
@@ -527,7 +526,7 @@ func (b *Box) Command(name string, arg ...string) *Cmd {
 // on the struct before invoking Run/Output/CombinedOutput. Zero-value
 // fields inherit the container default — same semantics as os/exec.Cmd
 // with the addition of Timeout, which bounds wall-clock lifetime
-// (zero = unbounded, matching the C-FFI's `timeout_secs <= 0` convention).
+// (zero = runtime default of 300 seconds, matching the C-FFI).
 type Cmd struct {
 	Path   string
 	Args   []string
@@ -539,7 +538,7 @@ type Cmd struct {
 	// Dir is the working directory inside the container. Empty inherits
 	// the container default. Named Dir (not WorkingDir) to match os/exec.
 	Dir string
-	// Timeout bounds wall-clock lifetime. Zero = no timeout.
+	// Timeout bounds execution time. Zero = runtime default (300 seconds).
 	Timeout time.Duration
 
 	box      *Box

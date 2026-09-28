@@ -77,6 +77,9 @@ impl BoxCommand {
     }
 
     /// Set execution timeout.
+    ///
+    /// The embedded runtime defaults to 300 seconds when unset. Zero disables
+    /// the timeout. REST clients leave an unset timeout to the server's policy.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self

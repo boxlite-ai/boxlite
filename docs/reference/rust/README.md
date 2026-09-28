@@ -402,6 +402,18 @@ Dropping the final handle requests cancellation.
 
 Command builder for running programs in a box.
 
+When no timeout is specified, the embedded runtime applies a 300-second
+execution timeout. Explicit durations override it; `Duration::ZERO` disables
+the timeout. The guest starts the timer after spawning the command, sends
+SIGTERM at the deadline, and escalates to SIGKILL after a two-second grace
+period if the process is still alive. Box startup is outside this deadline.
+REST clients leave omitted timeouts to the server; the new default requires
+the execution server to use the updated runtime.
+
+The C and Go SDKs map zero to an omitted timeout, so zero also selects the
+300-second default on those paths, including the hosted runner. Use a larger
+positive timeout for long tasks on these interfaces.
+
 ```rust
 use boxlite::BoxCommand;
 use std::time::Duration;

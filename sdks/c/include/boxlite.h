@@ -214,7 +214,7 @@ typedef void (*CBoxCopyCb)(CBoxliteError*, void*);
 // C-compatible command descriptor with all BoxCommand options.
 //
 // All string fields are nullable — NULL means "use default".
-// `timeout_secs` of 0.0 means no timeout.
+// `timeout_secs` of 0.0 uses the runtime default (300 seconds).
 typedef struct BoxliteCommand {
   // Command to execute (required, must not be NULL).
   const char *command;
@@ -230,7 +230,7 @@ typedef struct BoxliteCommand {
   const char *workdir;
   // User spec (e.g., "nobody", "1000:1000"). NULL = container default.
   const char *user;
-  // Timeout in seconds. 0.0 = no timeout.
+  // Timeout in seconds. 0.0 = runtime default (300 seconds).
   double timeout_secs;
   // Enable TTY mode for interactive programs.
   int tty;

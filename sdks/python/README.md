@@ -436,7 +436,9 @@ Context manager for basic execution with automatic cleanup.
   Execute command and wait for result
   - `env`: Dict of environment variables (e.g., `{"FOO": "bar"}`)
   - `user`: Run as user (format: `name` or `uid:gid`, like `docker exec --user`)
-  - `timeout`: Timeout in seconds (default: no timeout)
+  - `timeout`: Execution timeout in seconds (default: runtime policy, 300s locally).
+    Local `0` disables it; remote zero handling follows the server's
+    [timeout contract](../../docs/reference/rust/README.md#boxcommand).
   - `cwd`: Working directory inside the container
 
 **Example:**

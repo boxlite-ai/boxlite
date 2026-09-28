@@ -219,6 +219,12 @@ process inside a VM. The endpoints below split create / status / kill
 | `POST` | `executions/:id/resize` | `BoxliteExecResize` | Resize TTY (cols, rows) — TTY-only |
 | `DELETE` | `executions/:id` | `BoxliteExecKill` | Atomic kill + evict |
 
+With the updated runtime, omitted or zero `timeout_seconds` selects a
+300-second execution timeout through the runner's Go/C bindings. Set a larger
+positive value for long tasks. At the deadline, the guest sends SIGTERM, then
+SIGKILL after two seconds if the process is still alive. See the
+[runtime timeout contract](../../docs/reference/rust/README.md#boxcommand).
+
 #### Call graph
 
 Layered view: HTTP route → controller → `ExecManager` registry → SDK
