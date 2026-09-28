@@ -34,7 +34,17 @@ function makeHarness() {
   const autoResume = { ensureReady: jest.fn().mockResolvedValue(undefined) }
   const tunnelRes = { setHeader: jest.fn() }
   const controller = new BoxliteProxyController(boxService as never, runnerService as never, autoResume as never)
-  return { controller, boxService, autoResume, tunnelRes }
+  return { controller, boxService, runnerService, autoResume, tunnelRes }
+}
+
+function makeConnectingProxyRequest() {
+  const socket = Object.assign(new EventEmitter(), { connecting: true })
+  const proxyReq = Object.assign(new EventEmitter(), {
+    socket,
+    setHeader: jest.fn(),
+    destroy: jest.fn(),
+  })
+  return { proxyReq, socket }
 }
 
 describe('BoxliteProxyController', () => {
@@ -55,7 +65,7 @@ describe('BoxliteProxyController', () => {
     const pathRewrite = proxyOptions.pathRewrite as (path: string, req: unknown) => string
     expect(pathRewrite('/api/v1/boxes/public-box/exec', req)).toBe('/v1/boxes/box-uuid/exec')
     expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
-    expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
+    expect(proxyHandler).toHaveBeenCalledWith(req, res, expect.any(Function))
   })
 
   it('disables the runner timeout for files only', async () => {
@@ -69,6 +79,100 @@ describe('BoxliteProxyController', () => {
     const execOptions = jest.mocked(createProxyMiddleware).mock.calls[1][0]
     expect(fileOptions.proxyTimeout).toBe(0)
     expect(execOptions.proxyTimeout).toBe(300000)
+  })
+
+  it('returns 504 with the runner endpoint when connection setup times out', async () => {
+    jest.useFakeTimers()
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller, runnerService } = makeHarness()
+    runnerService.findOne.mockResolvedValue({
+      apiUrl: 'http://10.20.0.2:3003',
+      apiKey: 'runner-key',
+    })
+    const next = jest.fn()
+    const res = { headersSent: false, writableEnded: false, writeHead: jest.fn(), end: jest.fn() }
+
+    await controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, res as never, next)
+
+    const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
+    const { proxyReq } = makeConnectingProxyRequest()
+    proxyOptions.on?.proxyReq?.(proxyReq as never, {} as never, {} as never, proxyOptions)
+
+    jest.advanceTimersByTime(4_999)
+    expect(proxyReq.destroy).not.toHaveBeenCalled()
+    jest.advanceTimersByTime(1)
+
+    const timeoutError = proxyReq.destroy.mock.calls[0][0]
+    proxyOptions.on?.error?.(timeoutError, {} as never, res as never)
+    res.writableEnded = true
+    const proxyHandler = jest.mocked(createProxyMiddleware).mock.results[0].value as jest.Mock
+    proxyHandler.mock.calls[0][2](timeoutError)
+
+    expect(timeoutError).toMatchObject({
+      code: 'ERR_RUNNER_CONNECT_TIMEOUT',
+      message: 'cannot reach runner at 10.20.0.2:3003 (connect timed out after 5s)',
+    })
+    expect(res.writeHead).toHaveBeenCalledWith(504, { 'Content-Type': 'text/plain' })
+    expect(res.end).toHaveBeenCalledWith(timeoutError.message)
+    expect(next).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['http://runner.local:3003', 'connect'],
+    ['https://runner.local:3443', 'secureConnect'],
+  ])('cancels the connect deadline after %s emits %s', async (apiUrl, connectedEvent) => {
+    jest.useFakeTimers()
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller, runnerService } = makeHarness()
+    runnerService.findOne.mockResolvedValue({ apiUrl, apiKey: 'runner-key' })
+
+    await controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn())
+
+    const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
+    const { proxyReq, socket } = makeConnectingProxyRequest()
+    proxyOptions.on?.proxyReq?.(proxyReq as never, {} as never, {} as never, proxyOptions)
+
+    socket.emit(connectedEvent)
+    jest.advanceTimersByTime(5_001)
+
+    expect(proxyReq.destroy).not.toHaveBeenCalled()
+    expect(socket.listenerCount(connectedEvent)).toBe(0)
+  })
+
+  it('clears the deadline when the socket closes before connecting', async () => {
+    jest.useFakeTimers()
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller } = makeHarness()
+    await controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, {} as never, jest.fn())
+
+    const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
+    const { proxyReq, socket } = makeConnectingProxyRequest()
+    proxyOptions.on?.proxyReq?.(proxyReq as never, {} as never, {} as never, proxyOptions)
+    socket.emit('close')
+    jest.advanceTimersByTime(5_001)
+
+    expect(proxyReq.destroy).not.toHaveBeenCalled()
+    expect(socket.listenerCount('connect')).toBe(0)
+  })
+
+  it('does not mislabel other proxy failures as runner connect timeouts', async () => {
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller } = makeHarness()
+    const next = jest.fn()
+    const res = { headersSent: false, writableEnded: false, writeHead: jest.fn(), end: jest.fn() }
+    await controller.proxyExec(activeAuth as never, 'public-box', { url: '/exec' } as never, res as never, next)
+
+    const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
+    const failure = Object.assign(new Error('connection reset'), { code: 'ECONNRESET' })
+
+    proxyOptions.on?.error?.(failure, {} as never, res as never)
+    res.writableEnded = true
+    const proxyHandler = jest.mocked(createProxyMiddleware).mock.results[0].value as jest.Mock
+    proxyHandler.mock.calls[0][2](failure)
+
+    expect(next).not.toHaveBeenCalled()
+    expect(res.writeHead).toHaveBeenCalledWith(504)
+    expect(res.end).toHaveBeenCalledWith('Error occurred while trying to proxy')
   })
 
   // This hook is the only hop carrying the archive-shape hint through the
