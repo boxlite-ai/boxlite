@@ -96,9 +96,10 @@ export function BoxPreviewUrlDialog({
               <CopyButton value={url} size="icon-xs" tooltipText="Copy URL" className="flex-none" />
             </div>
 
-            {/* Show the box's access setting beside the URL being copied. */}
+            {/* Who can use it matters at the moment of copying, which is here
+                rather than back on the sheet. */}
             <p className="text-[11px] uppercase tracking-[1px] text-muted-foreground">
-              {isPublic ? 'public box' : 'only your organization can open it'}
+              {isPublic ? 'anyone with this url can open it' : 'only your organization can open it'}
             </p>
 
             {/* Stated here because it cannot be diagnosed afterwards: the URL
