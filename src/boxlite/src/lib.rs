@@ -33,6 +33,9 @@ mod rest;
 mod rootfs;
 mod volumes;
 
+#[cfg(test)]
+mod default_runtime_dir;
+
 pub use litebox::{
     BoxConnection, BoxReader, BoxTunnel, BoxWriter, LiteBox, SocketAddress, TunnelForwarder,
 };

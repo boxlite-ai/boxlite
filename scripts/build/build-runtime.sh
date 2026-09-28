@@ -305,6 +305,55 @@ assemble_runtime() {
     print_success "Runtime directory assembled"
 }
 
+# Point target/<profile>/runtime at the authoritative cargo outputs.
+# Symlinks, not copies: make cli rebuilds shim/guest then refreshes these links.
+# Bare `cargo build -p boxlite-cli` does not run this step.
+publish_stable_runtime() {
+    echo ""
+    print_section "Publishing stable runtime dir..."
+
+    source "$SCRIPT_DIR/util.sh"
+
+    local stable_dir="$PROJECT_ROOT/target/$PROFILE/runtime"
+    rm -rf "$stable_dir"
+    mkdir -p "$stable_dir"
+
+    relative_link() {
+        local dest="$1"
+        local link_name="$2"
+        local rel
+        rel=$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' \
+            "$dest" "$stable_dir")
+        ln -sfn "$rel" "$stable_dir/$link_name"
+    }
+
+    relative_link "$SHIM_BINARY" "boxlite-shim"
+    relative_link "$GUEST_BINARY" "boxlite-guest"
+    relative_link "$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/mke2fs" "guest-mke2fs"
+    relative_link "$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/resize2fs" "guest-resize2fs"
+
+    local filename
+    for file in "$RUNTIME_LIBS_DIR"/*; do
+        [ -e "$file" ] || continue
+        filename=$(basename "$file")
+        case "$filename" in
+            boxlite-shim|boxlite-guest|guest-mke2fs|guest-resize2fs|*.tar.gz|*.tgz)
+                continue
+                ;;
+        esac
+        relative_link "$file" "$filename"
+    done
+
+    # assemble_runtime signs the OUT_DIR copy; the stable link points at cargo's
+    # boxlite-shim, which needs the same entitlements on macOS.
+    if [ "$OS" = "macos" ] && [ -f "$SHIM_BINARY" ]; then
+        print_section "Signing cargo boxlite-shim..."
+        "$SCRIPT_BUILD_DIR/sign.sh" "$SHIM_BINARY"
+    fi
+
+    print_success "Stable runtime: $stable_dir"
+}
+
 # Display runtime directory contents
 show_summary() {
     echo ""
@@ -346,6 +395,7 @@ main() {
     echo "Destination: $RUNTIME_LIBS_DIR"
 
     assemble_runtime
+    publish_stable_runtime
     show_summary
 
     echo ""
