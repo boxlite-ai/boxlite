@@ -99,10 +99,11 @@ pooling reuses tunnels per box and port. Raw `CONNECT` requests skip this router
 `handleTunnelConnect` in [`tunnel.go`](pkg/proxy/tunnel.go).
 
 The proxy checks each new direct HTTP/WebSocket request and CONNECT against the
-API without caching an allowed declaration. Revocation blocks the next request
-after its database commit, across proxy instances and restarts. Connections
-already established continue until they close. The terminal port is unavailable
-to raw CONNECT tunnels.
+API without caching the verdict itself. The API caches allowed and denied tunnel
+checks in Redis for 3 seconds and clears a denial when a port is declared.
+Revocation can still admit new requests until a cached allowance expires;
+established connections continue until they close. The terminal port is
+unavailable to raw CONNECT tunnels.
 
 ## Authentication
 
