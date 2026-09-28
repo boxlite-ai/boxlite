@@ -117,7 +117,7 @@ describe('BoxliteProxyController', () => {
     expect(result).toEqual({ uri: 'https://3000-box.proxy.test' })
   })
 
-  it('rejects a tunnel request for a private box with 409', async () => {
+  it('rejects a tunnel request for a private box with 409 naming the command that fixes it', async () => {
     const { controller, boxService, tunnelRes } = makeHarness()
     boxService.findOneByIdOrName.mockResolvedValue({
       id: 'box-uuid',
@@ -131,6 +131,7 @@ describe('BoxliteProxyController', () => {
       controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, tunnelRes as never),
     ).rejects.toMatchObject({
       status: 409,
+      message: expect.stringContaining('boxlite update public-box --inbound enabled'),
     })
     expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
   })

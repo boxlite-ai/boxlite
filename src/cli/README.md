@@ -484,6 +484,13 @@ Restart one or more boxes.
 
 **Usage:** `boxlite restart BOX [BOX ...]`
 
+### `boxlite update`
+
+Make an existing remote box public or private, so `boxlite network tunnel` can
+reach it. `enabled` exposes the box's services without authentication.
+
+**Usage:** `boxlite update BOX --inbound <enabled|disabled>`
+
 ### `boxlite rm`
 
 Remove one or more boxes.

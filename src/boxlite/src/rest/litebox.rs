@@ -22,7 +22,7 @@ use crate::litebox::{
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
 use crate::runtime::id::BoxID;
-use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
+use crate::runtime::options::{CloneOptions, ExportOptions, NetworkMode, SnapshotOptions};
 
 use super::client::{ApiClient, WsStream, transport_error};
 use super::error::map_http_body;
@@ -544,6 +544,13 @@ impl BoxNetworkBackend for RestBox {
         let endpoint = self.client.prepare_box_tunnel(&box_id, port).await?;
         let connection = self.client.connect_box_network_tunnel(&endpoint).await?;
         Ok(BoxTunnel::remote(endpoint, connection))
+    }
+
+    async fn set_inbound(&self, mode: NetworkMode) -> BoxliteResult<()> {
+        // A server without the route answers a bare 404, which would read as
+        // "box not found"; the capability check names the real problem.
+        self.client.require_inbound_update_enabled().await?;
+        self.client.set_box_inbound(self.box_id_str(), mode).await
     }
 }
 

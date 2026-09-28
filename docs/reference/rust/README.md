@@ -384,6 +384,7 @@ pub struct BoxState {
 | Connect | `BoxTunnel::connect(self) -> BoxliteResult<BoxConnection>` | Consume the prepared tunnel into its byte stream |
 | Split | `BoxConnection::into_split(self) -> (BoxReader, BoxWriter)` | Halves that read and write concurrently |
 | Half-close | `BoxWriter::shutdown(&mut self) -> BoxliteResult<()>` | Signal EOF; a peer that already hung up is success, not an error |
+| Inbound access | `async fn set_inbound(&self, mode: NetworkMode) -> BoxliteResult<()>` | Make a remote box public (`Enabled`) or private (`Disabled`); `Unsupported` for a local box or a server without `inbound_update_enabled` |
 
 `BoxTunnel` remains one-shot: choose either `connect()` or `forward()`. A
 forwarder privately prepares a fresh tunnel for each later accepted client.

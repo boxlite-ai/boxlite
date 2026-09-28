@@ -41,7 +41,8 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	if !*isPublic {
-		http.Error(writer, "box is not public", http.StatusForbidden)
+		message := fmt.Sprintf("box %s is not public; run `boxlite update %s --inbound enabled` or make it public in the dashboard", boxID, boxID)
+		http.Error(writer, message, http.StatusForbidden)
 		return
 	}
 
