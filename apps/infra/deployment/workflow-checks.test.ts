@@ -131,7 +131,7 @@ for (const result of ['skipped', 'success', 'failure', 'cancelled']) {
 }
 
 const coverageWorkflow: any = loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows/test.yml'), 'utf8'))
-const coverageSuites = ['rust', 'python', 'node', 'go', 'api']
+const coverageSuites = ['rust', 'python', 'node', 'go', 'api', 'dashboard']
 
 function selectsEmptyCoverage(outputs: Record<string, string>, result = 'success', event = 'pull_request') {
   const job = coverageWorkflow.jobs['coverage-empty']

@@ -52,13 +52,15 @@ import { BoxActivityService } from './services/box-activity.service'
 import { BoxStateWaiterService } from './services/box-state-waiter.service'
 import { BoxMigrationService } from './services/box-migration.service'
 import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.service'
+import { Tunnel } from './entities/tunnel.entity'
+import { TunnelService } from './services/tunnel.service'
 
 @Module({
   imports: [
     UserModule,
     OrganizationModule,
     RegionModule,
-    TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, Region, Job, BoxLastActivity, BoxMigration]),
+    TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, Region, Job, BoxLastActivity, BoxMigration, Tunnel]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
   providers: [
@@ -84,6 +86,7 @@ import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.s
     BoxMigrationService,
     BoxMigrationManager,
     BoxMigrationJobReceiver,
+    TunnelService,
     BoxAccessGuard,
     RunnerAccessGuard,
     RegionRunnerAccessGuard,
@@ -101,6 +104,7 @@ import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.s
   ],
   exports: [
     BoxService,
+    TunnelService,
     RunnerService,
     RedisLockProvider,
     VolumeService,

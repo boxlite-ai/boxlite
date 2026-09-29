@@ -33,6 +33,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [AdvancedBoxOptions](#advancedboxoptions)
   - [RootfsSpec](#rootfsspec)
   - [VolumeSpec](#volumespec)
+  - [MountSpec](#mountspec)
   - [NetworkSpec](#networkspec)
   - [NetworkRateLimit](#networkratelimit)
   - [PortSpec](#portspec)
@@ -746,6 +747,46 @@ The two origins are not interchangeable across runtimes:
 | --- | --- | --- |
 | `VolumeSpec::managed_volume` | rejected — no volume backend | mounted |
 | `VolumeSpec::bind_mount` | mounted | rejected — the path is the server's, not yours |
+
+### MountSpec
+
+A typed mount. `BoxOptions` does not take one yet. Where a `VolumeSpec` infers
+its origin from which field is set, a `MountSpec` states it in `mount_type`.
+
+```rust
+pub struct MountSpec {
+    /// `MountType::Volume` or `MountType::Bind`; serialized as `"type"`.
+    pub mount_type: MountType,
+
+    /// A volume id or name for `Volume`, a host path for `Bind`; required by both.
+    pub source: Option<String>,
+
+    /// Mount point inside the box; an absolute path.
+    pub target: String,
+
+    /// Mount as read-only
+    pub read_only: bool,
+
+    /// `Volume` only: a prefix to mount instead of the whole volume.
+    pub sub_path: Option<String>,
+}
+```
+
+```rust
+use boxlite::runtime::options::MountSpec;
+
+let prefix = MountSpec {
+    read_only: true,
+    sub_path: Some("foo/bar".to_string()),
+    ..MountSpec::volume_mount("run42", "/workspace")
+};
+let bind = MountSpec::bind_mount("/tmp/data", "/data");
+```
+
+`MountType` parses from and displays as `"volume"` and `"bind"` exactly. No
+CLI, SDK or REST API carries a `MountSpec` yet.
+`MountSpec::validate` refuses a relative `target`, a missing `source`,
+`sub_path` on a `Bind`, and an empty `sub_path`.
 
 ### NetworkSpec
 

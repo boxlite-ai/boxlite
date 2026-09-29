@@ -1038,7 +1038,7 @@ paths:
         - name: port
           in: query
           required: true
-          description: TCP port the service listens on inside the box
+          description: TCP port the service listens on inside the box; terminal port 22222 is reserved
           schema:
             type: integer
             minimum: 1

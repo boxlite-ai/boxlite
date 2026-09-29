@@ -81,6 +81,25 @@ export default defineConfig((mode) => ({
   optimizeDeps: {
     exclude: ['tar'],
   },
+  // Presence of this block is what makes @nx/vite infer the `test` target, so
+  // `nx run dashboard:test` exists at all. Specs pick their own environment
+  // with a `// @vitest-environment jsdom` pragma; the default stays node so a
+  // pure-logic spec pays nothing for a DOM it never touches.
+  test: {
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: [
+        'src/**/*.{test,spec}.{ts,tsx}',
+        'src/**/*.stories.tsx',
+        'src/mocks/**', // MSW handlers and fixtures: test scaffolding.
+        'src/vendor/**', // Third-party widgets vendored in as-is.
+      ],
+      reporter: ['text', ['lcov', { projectRoot: '../..' }]],
+      reportsDirectory: '../../target/coverage/dashboard',
+    },
+  },
   build: {
     outDir,
     emptyOutDir: true,
