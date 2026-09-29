@@ -8,7 +8,7 @@ use clap::Args;
 /// Show details for a volume.
 #[derive(Args, Debug)]
 pub struct GetArgs {
-    /// Volume id.
+    /// Volume id (or name, against the local runtime).
     pub id: String,
 
     /// Output format (table, json, yaml).

@@ -8,7 +8,7 @@ pub struct RmArgs {
     #[arg(short, long)]
     pub force: bool,
 
-    /// Id(s) of the volume(s) to remove.
+    /// Id(s) of the volume(s) to remove (names work against the local runtime).
     #[arg(required = true, num_args = 1..)]
     pub ids: Vec<String>,
 }

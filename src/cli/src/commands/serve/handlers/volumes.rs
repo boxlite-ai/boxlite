@@ -1,8 +1,10 @@
 //! Named-volume handlers (`/v1/volumes`).
 //!
-//! These mirror the box handlers, delegating to `runtime.volumes()`. The
-//! concrete backend returns `Unsupported` for now, so every operation currently
-//! responds `400 UnsupportedError`.
+//! These mirror the box handlers, delegating to `runtime.volumes()`, which the
+//! local runtime backs with its store under `{home}/volumes/`. An unknown id
+//! or name is `404 NotFoundError`; a name already taken is `409
+//! AlreadyExistsError`; removing a volume a box still mounts is `409
+//! InvalidStateError`, `force` included.
 
 use std::sync::Arc;
 
