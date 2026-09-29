@@ -11,8 +11,10 @@ BoxLite. One Python orchestrator (`compose`) drives both layers:
   (`native.py`).
 
 Data volumes, binaries, logs, and the L1 BoxLite home live under
-`<repo>/.apps-local/`; the L1 home defaults to `.apps-local/.bl/h`, including
-its ext4 image cache. The runner's separate home defaults to `~/.bl/<worktree-hash>/r`.
+`<repo>/.apps-local/`. The L1 home defaults to `<repo>/.apps-local/.bl/h`:
+pulled OCI images are cached in `<repo>/.apps-local/.bl/h/images/`, and ext4
+disks in `<repo>/.apps-local/.bl/h/images/disk-images/`. The runner's separate
+home defaults to `~/.bl/<worktree-hash>/r`.
 
 ## Quick start
 
@@ -30,7 +32,7 @@ On `make up`, infra-local checks the ext4 cache for each L1 service image.
 It builds the project-internal `boxlite-infra-image` tool from this checkout;
 the tool is separate from the public Python SDK.
 Missing disks are built from OCI in a short-lived `sudo` process; cached disks
-need no root access. The resulting disks are installed in the developer's cache,
+need no root access. The resulting disks are installed in the L1 ext4 cache above,
 and the L1 boxes and L2 processes continue under the developer's account.
 A cold start invokes `sudo` once, even when several image disks are missing.
 Log in at <http://localhost:3000>
