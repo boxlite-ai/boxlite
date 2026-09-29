@@ -12,8 +12,6 @@ import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
-import { RunnerService } from '../box/services/runner.service'
-import { BoxAutoResumeService } from './box-auto-resume.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteConfigController } from './boxlite-config.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
@@ -57,10 +55,12 @@ describe('BoxLite REST routing', () => {
           provide: CommerceBoxLimitService,
           useValue: {},
         },
-        { provide: RunnerService, useValue: {} },
-        { provide: BoxAutoResumeService, useValue: {} },
       ],
     })
+      // The proxy controller is here only for its routes. Mock whatever it
+      // injects, so a constructor dependency added later (#1723 added
+      // TunnelService) cannot stop these routing tests from building.
+      .useMocker(() => ({}))
       .overrideGuard(CombinedAuthGuard)
       .useValue({
         canActivate: (context: any) => {
