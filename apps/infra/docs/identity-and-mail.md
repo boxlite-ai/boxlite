@@ -128,6 +128,27 @@ retroactively gate independently validating Commerce/Analytics services.
 A social login has to reach the same BoxLite account as the password sign-up
 that owns the address (POL-555).
 
+### The settings
+
+`OIDC_ACCOUNT_LINK_REDIRECT_SECRET` turns the link on by being set. It is the
+HS256 key the Post-Login Action and the API sign every hop between them with.
+
+Generate it once per stage, at least 32 characters (RFC 7518 §3.2 wants
+256 bits for HS256), and never reuse one stage's value in another.
+
+`OIDC_ACCOUNT_LINK_CLIENT_ID` and `OIDC_ACCOUNT_LINK_CLIENT_SECRET` are the
+client the API checks the password through. The API refuses to boot with the
+secret set and either missing.
+
+The token, sign-up and password-reset endpoints hang off
+`OIDC_ISSUER_BASE_URL`; `/continue` is on `PUBLIC_OIDC_DOMAIN`, else the
+issuer. Both must be https, since the password and the link client's secret
+are posted there, and an issuer with a path is refused at boot, since Auth0
+always serves from the root of its domain. The link itself is a Management API call, so
+`OIDC_MANAGEMENT_API_ENABLED` must be true; that client's `read:users` and
+`update:users` grants cover the lookup, the link and marking an address
+verified.
+
 ### What the link moves
 
 When the social identity already had a BoxLite user — it signed in before this
