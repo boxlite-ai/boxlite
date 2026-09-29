@@ -33,6 +33,21 @@ describe('sanitizeBoxError', () => {
     expect(errorReason).toBe(failedPull('ghcr.io/acme/app:1', 'https://ghcr.io/v2/acme/app/manifests/1'))
   })
 
+  // Before any manifest, the registry client asks the proxy's /v2/ for its
+  // authentication challenge, and an unreachable proxy fails that request by
+  // its URL. That URL names no image, and the fault is the proxy's rather than
+  // ghcr.io's, so it reads as the proxy without its address.
+  it('names an unreachable registry proxy without its address', () => {
+    process.env.REGISTRY_PROXY_HOST = PROXY
+    const unreachable = (proxied: string, url: string) =>
+      `Failed to pull image '${proxied}' after trying 1 registry:\n` +
+      `  - ${proxied}: failed to pull a registry token: error sending request for url (${url})`
+
+    const { errorReason } = sanitizeBoxError(unreachable(`${PROXY}/${ORG}/ghcr.io/acme/app:1`, `https://${PROXY}/v2/`))
+
+    expect(errorReason).toBe(unreachable('ghcr.io/acme/app:1', 'the registry proxy'))
+  })
+
   // A runner wraps a reason it thinks recoverable in JSON; the reason inside
   // reaches the tenant just the same.
   it('names the upstream image inside a recoverable error too', () => {
