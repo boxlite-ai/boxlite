@@ -6,6 +6,7 @@
 import { ConflictException, NotFoundException } from '@nestjs/common'
 import { Organization } from '../entities/organization.entity'
 import { OrganizationService } from './organization.service'
+import { OrganizationController } from '../controllers/organization.controller'
 
 const organization = (overrides: Partial<Organization> = {}): Organization =>
   Object.assign(new Organization(), {
@@ -45,6 +46,35 @@ const makeService = (found: Organization | null) => {
 
   return { service, organizationRepository, entityManager }
 }
+
+describe('OrganizationService exec timeout', () => {
+  it.each([1800, 0, null])('persists and returns the organization default %s', async (timeout) => {
+    const stored = organization({ defaultExecTimeoutSeconds: 60 })
+    const { service, organizationRepository } = makeService(stored)
+    const controller = new OrganizationController(service, {} as never, {} as never, {} as never, {} as never)
+
+    const updated = await controller.updateDefaultExecTimeout('org-1', { defaultExecTimeoutSeconds: timeout })
+
+    expect(organizationRepository.findOne).toHaveBeenCalledWith({ where: { id: 'org-1' } })
+    expect(organizationRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultExecTimeoutSeconds: timeout }),
+    )
+    expect(updated).toMatchObject({ id: 'org-1', defaultExecTimeoutSeconds: timeout })
+  })
+
+  it('rejects a missing organization without saving', async () => {
+    const { service, organizationRepository } = makeService(null)
+    await expect(service.updateDefaultExecTimeout('missing', 1800)).rejects.toThrow(NotFoundException)
+    expect(organizationRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('propagates a failed save instead of reporting success', async () => {
+    const { service, organizationRepository } = makeService(organization())
+    const failure = new Error('database unavailable')
+    organizationRepository.save.mockRejectedValueOnce(failure)
+    await expect(service.updateDefaultExecTimeout('org-1', 1800)).rejects.toBe(failure)
+  })
+})
 
 describe('OrganizationService.getReferralCode', () => {
   it('returns an existing code without writing', async () => {

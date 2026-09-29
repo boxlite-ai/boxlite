@@ -3,12 +3,19 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ExecutionContext } from '@nestjs/common'
+import { ExecutionContext, ValidationPipe } from '@nestjs/common'
 import { GUARDS_METADATA, PATH_METADATA } from '@nestjs/common/constants'
 import { Reflector } from '@nestjs/core'
 import { SystemActionGuard } from '../../auth/system-action.guard'
 import { RequiredApiRole, RequiredSystemRole } from '../../common/decorators/required-role.decorator'
 import { SystemRole } from '../../user/enums/system-role.enum'
+import { AuthGuard } from '@nestjs/passport'
+import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
+import { AUDIT_CONTEXT_KEY, AuditContext } from '../../audit/decorators/audit.decorator'
+import { AuditAction } from '../../audit/enums/audit-action.enum'
+import { UpdateOrganizationDefaultExecTimeoutDto } from '../dto/update-organization-default-exec-timeout.dto'
+import { OrganizationMemberRole } from '../enums/organization-member-role.enum'
+import { OrganizationActionGuard } from '../guards/organization-action.guard'
 import { OrganizationController } from './organization.controller'
 
 // suspend/unsuspend moved from @RequiredSystemRole(ADMIN) to
@@ -78,5 +85,53 @@ describe('OrganizationController referral code endpoint', () => {
       'SystemActionGuard',
       'OrganizationActionGuard',
     ])
+  })
+})
+
+describe('Organization exec timeout API', () => {
+  const handler = OrganizationController.prototype.updateDefaultExecTimeout
+  const pipe = new ValidationPipe({ transform: true })
+  const metadata = { type: 'body' as const, metatype: UpdateOrganizationDefaultExecTimeoutDto }
+
+  it.each([null, 0, 1800, 2147483647])('accepts %s seconds', async (defaultExecTimeoutSeconds) => {
+    await expect(pipe.transform({ defaultExecTimeoutSeconds }, metadata)).resolves.toMatchObject({
+      defaultExecTimeoutSeconds,
+    })
+  })
+
+  it.each([undefined, -1, 1.5, '300', true, 2147483648, NaN, Infinity])('rejects invalid seconds %s', async (value) => {
+    await expect(pipe.transform({ defaultExecTimeoutSeconds: value }, metadata)).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('registers authentication, rate limiting, organization authorization and auditing', () => {
+    expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe('/:organizationId/default-exec-timeout')
+    const guards = Reflect.getMetadata(GUARDS_METADATA, handler)
+    expect(guards).toEqual([AuthGuard('jwt'), AuthenticatedRateLimitGuard, OrganizationActionGuard])
+    const audit = Reflect.getMetadata(AUDIT_CONTEXT_KEY, handler) as AuditContext
+    expect(audit.action).toBe(AuditAction.UPDATE)
+    expect(audit.requestMetadata.body({ body: { defaultExecTimeoutSeconds: 0 } } as never)).toEqual({
+      defaultExecTimeoutSeconds: 0,
+    })
+  })
+
+  it.each([
+    [SystemRole.USER, OrganizationMemberRole.OWNER, true],
+    [SystemRole.USER, OrganizationMemberRole.MEMBER, false],
+    [SystemRole.USER, undefined, false],
+    [SystemRole.ADMIN, undefined, true],
+  ])('authorizes system role %s and membership %s: %s', async (role, membership, allowed) => {
+    const guard = new OrganizationActionGuard(
+      { findOne: jest.fn().mockResolvedValue({ id: 'org-1' }) } as never,
+      { findOne: jest.fn().mockResolvedValue(membership ? { role: membership } : null) } as never,
+      new Reflector(),
+    )
+    Object.assign(guard, { redis: { get: jest.fn().mockResolvedValue(null), set: jest.fn() } })
+    const request = { params: { organizationId: 'org-1' }, user: { role, userId: 'user-1' } }
+    const context = {
+      getHandler: () => handler,
+      switchToHttp: () => ({ getRequest: () => request }),
+    } as unknown as ExecutionContext
+
+    await expect(guard.canActivate(context)).resolves.toBe(allowed)
   })
 })

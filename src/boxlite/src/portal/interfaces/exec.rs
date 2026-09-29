@@ -876,6 +876,22 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    #[test]
+    fn exec_request_preserves_timeout_policy() {
+        for (timeout, expected_ms) in [
+            (None, 0),
+            (Some(Duration::from_millis(1500)), 1500),
+            (Some(Duration::from_secs(600)), 600_000),
+            (Some(Duration::ZERO), 0),
+        ] {
+            let mut command = BoxCommand::new("sleep");
+            command.timeout = timeout;
+            let request = ExecProtocol::build_exec_request(&command);
+
+            assert_eq!(request.timeout_ms, expected_ms, "timeout: {timeout:?}");
+        }
+    }
+
     /// Test that CancellationToken correctly signals cancelled state.
     #[tokio::test]
     async fn test_cancellation_token_basic() {

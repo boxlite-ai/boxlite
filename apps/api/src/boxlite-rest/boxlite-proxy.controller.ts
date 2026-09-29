@@ -41,6 +41,7 @@ import { BoxState } from '../box/enums/box-state.enum'
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
 const OBSERVATION_ONLY: ProxyActivityPolicy = { activity: false, autoResume: false }
+const DEFAULT_EXEC_TIMEOUT_SECONDS = 300
 
 // States a tunnel request may wait out: either the box is stopped (or on its
 // way there) and can be started again, or it is already on its way up. Every
@@ -80,6 +81,9 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
+    if (req.method === 'POST' && req.body && typeof req.body === 'object' && !Array.isArray(req.body)) {
+      req.body.timeout_seconds ??= authContext.organization.defaultExecTimeoutSeconds ?? DEFAULT_EXEC_TIMEOUT_SECONDS
+    }
     return this.proxyToRunner(
       authContext,
       boxId,

@@ -243,6 +243,18 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     return this.organizationRepository.save(organization)
   }
 
+  async updateDefaultExecTimeout(
+    organizationId: string,
+    defaultExecTimeoutSeconds: number | null,
+  ): Promise<Organization> {
+    const organization = await this.organizationRepository.findOne({ where: { id: organizationId } })
+    if (!organization) {
+      throw new NotFoundException(`Organization with ID ${organizationId} not found`)
+    }
+    organization.defaultExecTimeoutSeconds = defaultExecTimeoutSeconds
+    return this.organizationRepository.save(organization)
+  }
+
   /**
    * Lists all available regions for the organization.
    *

@@ -11,6 +11,7 @@ import { OrganizationInvitation } from '../entities/organization-invitation.enti
 import { OrganizationRole } from '../entities/organization-role.entity'
 import { OrganizationUser } from '../entities/organization-user.entity'
 import { OrganizationService } from './organization.service'
+import { AddOrganizationExecTimeout1790640000000 } from '../../migrations/pre-deploy/1790640000000-add-organization-exec-timeout-migration'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const schemaName = `org_referral_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -66,6 +67,47 @@ describeIfDatabase('OrganizationService.getReferralCode (integration, real Postg
   })
 
   afterEach(() => jest.restoreAllMocks())
+
+  it('exec timeout migration inherits, accepts overrides and rolls back', async () => {
+    const runner = dataSource.createQueryRunner()
+    await runner.connect()
+    try {
+      await runner.startTransaction()
+      await runner.query('CREATE TEMP TABLE "organization" ("id" integer PRIMARY KEY) ON COMMIT DROP')
+      await runner.query('INSERT INTO "organization" ("id") VALUES (1)')
+      const migration = new AddOrganizationExecTimeout1790640000000()
+      await migration.up(runner)
+      await runner.query('INSERT INTO "organization" ("id") VALUES (2)')
+      expect(await runner.query('SELECT "defaultExecTimeoutSeconds" FROM "organization"')).toEqual([
+        { defaultExecTimeoutSeconds: null },
+        { defaultExecTimeoutSeconds: null },
+      ])
+      for (const seconds of [1800, 0, 2147483647, null]) {
+        await runner.query('UPDATE "organization" SET "defaultExecTimeoutSeconds" = $1 WHERE "id" = 1', [seconds])
+        const [stored] = await runner.query('SELECT "defaultExecTimeoutSeconds" FROM "organization" WHERE "id" = 1')
+        expect(stored.defaultExecTimeoutSeconds).toBe(seconds)
+      }
+      await runner.query('SAVEPOINT invalid_timeout')
+      await expect(runner.query('UPDATE "organization" SET "defaultExecTimeoutSeconds" = -1')).rejects.toMatchObject({
+        code: '23514',
+      })
+      await runner.query('ROLLBACK TO SAVEPOINT invalid_timeout')
+      await migration.down(runner)
+      expect(await runner.query('SELECT * FROM "organization" ORDER BY "id"')).toEqual([{ id: 1 }, { id: 2 }])
+    } finally {
+      if (runner.isTransactionActive) await runner.rollbackTransaction()
+      await runner.release()
+    }
+  })
+
+  it('persists and clears the exec timeout without changing another organization', async () => {
+    const other = await organizations.save({ name: 'Other organization', createdBy: 'timeout-test' })
+    for (const seconds of [1800, 0, null]) {
+      await service.updateDefaultExecTimeout(organizationId, seconds)
+      expect((await organizations.findOneByOrFail({ id: organizationId })).defaultExecTimeoutSeconds).toBe(seconds)
+      expect((await organizations.findOneByOrFail({ id: other.id })).defaultExecTimeoutSeconds).toBeNull()
+    }
+  })
 
   it('returns and persists one code for two independent concurrent transactions', async () => {
     const transaction = organizations.manager.transaction.bind(organizations.manager)
