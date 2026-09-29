@@ -7,7 +7,7 @@
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { cn, pluralize } from '@/lib/utils'
-import { CommandIcon, XIcon } from '@/components/ui/icon'
+import { TrashIcon, XIcon } from '@/components/ui/icon'
 import { motion } from 'motion/react'
 
 export function SelectionToast({
@@ -15,10 +15,14 @@ export function SelectionToast({
   selectedCount,
   onClearSelection,
   onActionClick,
+  actionLabel,
 }: {
   className?: string
   selectedCount: number
+  /** Runs the action directly. It used to open the command palette, which is
+   *  where the bulk action then had to be found. */
   onActionClick: () => void
+  actionLabel: string
   onClearSelection: () => void
 }) {
   return (
@@ -40,8 +44,8 @@ export function SelectionToast({
         <Separator orientation="vertical" className="h-5" />
 
         <Button variant="ghost" size="sm" className="h-8" onClick={onActionClick}>
-          <CommandIcon className="size-3.5" />
-          <span className="text-sm">Actions</span>
+          <TrashIcon className="size-3.5" />
+          <span className="text-sm">{actionLabel}</span>
         </Button>
       </div>
     </motion.div>

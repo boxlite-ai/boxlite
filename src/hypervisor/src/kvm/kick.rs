@@ -16,6 +16,16 @@ struct Target {
     pending: bool,
 }
 
+pub(super) fn validate_signal(signal: i32) -> io::Result<()> {
+    if !(libc::SIGRTMIN()..=libc::SIGRTMAX()).contains(&signal) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "KVM kick signal must be realtime",
+        ));
+    }
+    Ok(())
+}
+
 thread_local! {
     static KICK_TARGETS: ThreadExitGuard = const { ThreadExitGuard(RefCell::new(Vec::new())) };
 }
@@ -110,12 +120,7 @@ impl WorkerSignal {
     }
 
     pub(super) fn reserve(id: u32, signal: i32) -> io::Result<Self> {
-        if !(libc::SIGRTMIN()..=libc::SIGRTMAX()).contains(&signal) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "KVM kick signal must be a realtime signal",
-            ));
-        }
+        validate_signal(signal)?;
         // SAFETY: these C structs permit zero initialization and each pointer
         // refers to a live, correctly sized local object.
         let (mut action, mut blocked, mut original) = unsafe {
@@ -258,7 +263,7 @@ mod tests {
             let signal = libc::SIGRTMIN() + 1;
             assert!(!blocked(signal));
             let owner = WorkerSignal::reserve(7, signal).unwrap();
-            assert!(blocked(signal));
+            assert!(blocked(signal) && format!("{owner:?}").starts_with("WorkerSignal"));
             assert!(WorkerSignal::reserve(8, signal).is_err());
             handles.send(owner.handle()).unwrap();
             receive_resume.recv().unwrap();
@@ -308,6 +313,10 @@ mod tests {
                     io::ErrorKind::InvalidInput
                 );
             }
+            assert!(matches!(
+                crate::KvmVm::with_kick_signal(libc::SIGKILL).unwrap_err(),
+                Error::CreateVm(source) if source.kind() == io::ErrorKind::InvalidInput
+            ));
         })
         .join()
         .unwrap();

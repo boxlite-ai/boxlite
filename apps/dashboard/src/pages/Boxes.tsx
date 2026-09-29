@@ -10,9 +10,6 @@ import { OnboardingGuideDialog } from '@/components/OnboardingGuideDialog'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import { BoxTable } from '@/components/BoxTable'
 import { Plus, Search } from '@/components/ui/icon'
-import { QuickstartAgentHandoff } from '@/components/QuickstartAgentHandoff'
-import { CODING_AGENT_MARKS } from '@/assets/AgentLogos'
-import { getRestApiUrl } from '@/lib/environment'
 
 import {
   AlertDialog,
@@ -166,7 +163,6 @@ const Boxes: React.FC = () => {
   const hasBoxes = (boxesData?.items.length ?? 0) > 0 || (boxesData?.total ?? 0) > 0
   // Zero boxes and no filter narrowing the view: nothing to list, so the page
   // leads with how boxes get made.
-  const restApiUrl = getRestApiUrl(config.apiUrl, undefined, config.oidc.issuer)
 
   useEffect(() => {
     if (boxesDataError) {
@@ -667,9 +663,6 @@ const Boxes: React.FC = () => {
     enabled: !!orgId,
     staleTime: 10_000,
   })
-  // Same source as the auto-open signals above, so the two can never disagree
-  // about whether the account is empty.
-  const firstRun = totalBoxesQuery.isSuccess && (totalBoxesQuery.data ?? 0) === 0 && !filters.idOrName
   const runningBoxesQuery = useQuery({
     queryKey: ['boxesCount', orgId, 'running'],
     queryFn: async () =>
@@ -706,23 +699,18 @@ const Boxes: React.FC = () => {
     const skipOnboardingKey = `${LocalStorageKey.SkipOnboardingPrefix}${userId}`
 
     const requestedByUrl = searchParams.get('onboarding') === '1'
-    // An explicit request (the nav entry) always opens the dialog. Only the
-    // *automatic* open yields to the inline quickstart on an empty account.
     if (
-      requestedByUrl ||
-      (!firstRun &&
-        shouldAutoOpenOnboarding({
-          requestedByUrl,
-          dismissedInThisBrowser: getLocalStorageItem(skipOnboardingKey) === 'true',
-          accountStateLoaded: apiKeysQuery.isSuccess && totalBoxesQuery.isSuccess,
-          hasApiKeys: (apiKeysQuery.data?.length ?? 0) > 0,
-          hasBoxes: (totalBoxesQuery.data ?? 0) > 0,
-        }))
+      shouldAutoOpenOnboarding({
+        requestedByUrl,
+        dismissedInThisBrowser: getLocalStorageItem(skipOnboardingKey) === 'true',
+        accountStateLoaded: apiKeysQuery.isSuccess && totalBoxesQuery.isSuccess,
+        hasApiKeys: (apiKeysQuery.data?.length ?? 0) > 0,
+        hasBoxes: (totalBoxesQuery.data ?? 0) > 0,
+      })
     ) {
       setShowOnboardingDialog(true)
     }
   }, [
-    firstRun,
     apiKeysQuery.data,
     apiKeysQuery.isSuccess,
     searchParams,
@@ -765,26 +753,6 @@ const Boxes: React.FC = () => {
         </div>
       )}
 
-      {/* first run: the quickstart is the page, not a dialog over it */}
-      {firstRun && (
-        <section className="mt-2 border border-border">
-          <div className="border-b border-border px-8 pb-6 pt-7">
-            <h2 className="font-display text-section font-semibold text-foreground">
-              Hand the job to your coding agent.
-            </h2>
-            <p className="mt-1.5 text-body text-muted-foreground">
-              One prompt. Your agent builds it, BoxLite puts it online — and it shows up below.
-            </p>
-            <div className="mt-5 flex items-center gap-6 text-foreground/70">
-              {CODING_AGENT_MARKS.map(({ label, Mark }) => (
-                <Mark key={label} className="size-[22px]" />
-              ))}
-            </div>
-          </div>
-          <QuickstartAgentHandoff restApiUrl={restApiUrl} onProgressChange={updateOnboardingProgress} />
-        </section>
-      )}
-
       {/* toolbar */}
       <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-stretch lg:mt-[26px]">
         <div className="flex h-11 w-full min-w-0 items-center gap-[11px] border border-dashed border-border bg-card px-[14px] sm:h-9 sm:max-w-[380px] sm:flex-none">
@@ -821,43 +789,40 @@ const Boxes: React.FC = () => {
         )}
       </div>
 
-      {/* table — on first run the section above already says "nothing yet";
-          an empty grid under it would say it twice. */}
-      {!firstRun && (
-        <div className="mt-[14px] flex min-h-0 flex-1 flex-col">
-          <BoxTable
-            boxIsLoading={boxIsLoading}
-            boxStateIsTransitioning={boxStateIsTransitioning}
-            handleStart={handleStart}
-            handleStop={handleStop}
-            handleDelete={(id: string) => {
-              setBoxToDelete(id)
-              setShowDeleteDialog(true)
-            }}
-            handleBulkDelete={handleBulkDelete}
-            handleBulkStart={handleBulkStart}
-            handleBulkStop={handleBulkStop}
-            data={boxesData?.items || []}
-            loading={boxesDataIsLoading}
-            isPageFetching={boxesDataIsPlaceholderData}
-            onRowClick={(box: Box) => {
-              navigate(generatePath(RoutePath.BOX_DETAILS, { boxId: getBoxRouteId(box) }))
-            }}
-            pageCount={boxesData?.totalPages || 0}
-            totalItems={boxesData?.total || 0}
-            onPaginationChange={handlePaginationChange}
-            pagination={{
-              pageIndex: paginationParams.pageIndex,
-              pageSize: paginationParams.pageSize,
-            }}
-            sorting={sorting}
-            onSortingChange={handleSortingChange}
-            filters={filters}
-            onFiltersChange={handleFiltersChange}
-            handleRecover={handleRecover}
-          />
-        </div>
-      )}
+      <div className="mt-[14px] flex min-h-0 flex-1 flex-col">
+        <BoxTable
+          boxIsLoading={boxIsLoading}
+          boxStateIsTransitioning={boxStateIsTransitioning}
+          handleStart={handleStart}
+          handleStop={handleStop}
+          handleDelete={(id: string) => {
+            setBoxToDelete(id)
+            setShowDeleteDialog(true)
+          }}
+          handleBulkDelete={handleBulkDelete}
+          handleBulkStart={handleBulkStart}
+          handleBulkStop={handleBulkStop}
+          data={boxesData?.items || []}
+          loading={boxesDataIsLoading}
+          isPageFetching={boxesDataIsPlaceholderData}
+          onRowClick={(box: Box) => {
+            navigate(generatePath(RoutePath.BOX_DETAILS, { boxId: getBoxRouteId(box) }))
+          }}
+          pageCount={boxesData?.totalPages || 0}
+          totalItems={boxesData?.total || 0}
+          onPaginationChange={handlePaginationChange}
+          pagination={{
+            pageIndex: paginationParams.pageIndex,
+            pageSize: paginationParams.pageSize,
+          }}
+          sorting={sorting}
+          onSortingChange={handleSortingChange}
+          filters={filters}
+          onFiltersChange={handleFiltersChange}
+          handleRecover={handleRecover}
+          onOpenQuickstart={() => setShowOnboardingDialog(true)}
+        />
+      </div>
 
       {boxToDelete && (
         <AlertDialog

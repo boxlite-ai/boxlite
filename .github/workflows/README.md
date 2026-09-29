@@ -100,6 +100,14 @@ and reports total coverage.
 Linux x64 also runs the native KVM hardware tests and adds their profiles before
 the Rust coverage upload. Missing `/dev/kvm` access fails this qualification.
 
+`Dashboard Tests` runs the dashboard's vitest suite on one Linux runner and
+uploads v8 coverage under the `dashboard` flag. `@nx/vite` infers the project's
+`test` target from the `test` block in `apps/dashboard/vite.config.mts`; without
+that block the target does not exist, nothing runs the suite, and a
+dashboard-only change reaches Codecov with no report — which the patch status
+rejects as a missing report rather than as low coverage. Specs choose their own
+environment with a `// @vitest-environment jsdom` pragma.
+
 When none of the coverage suites is selected on a PR or merge group, the
 `Codecov (no coverage changes)` job runs a validated `empty-upload`. Codecov
 checks the changed files before publishing a passing or failing status; the

@@ -290,6 +290,37 @@ count_applicable_plugins() {
   )' <<< "$plugin_json")
 }
 
+# In a linked worktree, `claude plugin update --scope project` resolves the main
+# checkout's record (Claude Code 2.1.283), so it can report success while this
+# checkout's record stays stale. Uninstall and install resolve this checkout.
+# Uninstall also drops the plugin from the tracked project settings, so they are
+# restored byte-for-byte whether or not the install succeeds.
+reinstall_project_plugin() {
+  local settings_backup="$state_dir/$session_id.settings" output status
+  cp -p -- "$settings_file" "$settings_backup" \
+    || hook_fail "could not back up Claude project settings before reinstalling: $settings_file"
+  output="$(claude plugin uninstall boxlite-agent-tooling@boxlite-agent-tooling --scope project --keep-data 2>&1)"
+  status="$?"
+  if [[ "$status" == 0 ]]; then
+    output="$(claude plugin install boxlite-agent-tooling@boxlite-agent-tooling --scope project --yes 2>&1)"
+    status="$?"
+  fi
+  if ! cmp -s -- "$settings_backup" "$settings_file"; then
+    cp -p -- "$settings_backup" "$settings_file" \
+      || hook_fail "could not restore Claude project settings from $settings_backup"
+  fi
+  rm -f -- "$settings_backup"
+  if [[ "$status" != 0 ]]; then
+    [[ -z "$output" ]] || printf '%s\n' "$output" >&2
+    hook_fail "could not reinstall Claude plugin boxlite-agent-tooling@boxlite-agent-tooling for $repo_root"
+  fi
+  read_plugins
+  plugins="$plugin_list"
+  count_applicable_plugins "$plugins"
+  [[ "$applicable_plugin_count" == 1 ]] \
+    || hook_fail "Claude did not report one boxlite-agent-tooling installation after reinstall for $repo_root"
+}
+
 read_plugins
 plugins="$plugin_list"
 count_applicable_plugins "$plugins"
@@ -341,8 +372,9 @@ if [[ "$applicable_plugin_version" != "$expected_plugin_version" ]]; then
   count_applicable_plugins "$plugins"
   [[ "$applicable_plugin_count" == 1 ]] \
     || hook_fail "Claude did not report one boxlite-agent-tooling installation after update for $repo_root"
+  [[ "$applicable_plugin_version" == "$expected_plugin_version" ]] || reinstall_project_plugin
   [[ "$applicable_plugin_version" == "$expected_plugin_version" ]] \
-    || hook_fail "Claude plugin stayed at $applicable_plugin_version after update; expected $expected_plugin_version"
+    || hook_fail "Claude plugin stayed at $applicable_plugin_version after update and reinstall; expected $expected_plugin_version"
   [[ "$applicable_plugin_enabled" == "$enabled_before" ]] \
     || hook_fail "Claude plugin update changed the enabled state"
   changed=1
