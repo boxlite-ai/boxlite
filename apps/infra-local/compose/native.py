@@ -109,10 +109,7 @@ class _Paths:
 
     @property
     def runner_home(self) -> Path:
-        # Anchored at the machine-global short root (NOT under .apps-local): the
-        # runner's box sockets live at <home>/boxes/<id>/sockets/ready.sock and
-        # macOS caps unix socket paths at 104 bytes (SUN_LEN), which a deep
-        # worktree path overflows. See config.worktree_home.
+        # The runner keeps its per-worktree home separate from the L1 SDK home.
         return Path(os.environ.get("BOXLITE_HOME_DIR") or worktree_home(self.repo_root, "r"))
 
 

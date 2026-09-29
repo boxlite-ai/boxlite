@@ -10,8 +10,9 @@ BoxLite. One Python orchestrator (`compose`) drives both layers:
   Proxy (Go, `:4000`), Dashboard (Vite, `:3000`) — via `subprocess` supervision
   (`native.py`).
 
-Data volumes, binaries, and logs live under `<repo>/.apps-local/`; BoxLite
-homes default to `~/.bl/<worktree-hash>/h` (L1) and `/r` (runner).
+Data volumes, binaries, logs, and the L1 BoxLite home live under
+`<repo>/.apps-local/`; the L1 home defaults to `.apps-local/.bl/h`, including
+its ext4 image cache. The runner's separate home defaults to `~/.bl/<worktree-hash>/r`.
 
 ## Quick start
 

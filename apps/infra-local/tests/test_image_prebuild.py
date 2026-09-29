@@ -12,10 +12,20 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from compose import image_prebuild
+from compose import config, image_prebuild
 
 
 class ImagePrebuildTests(unittest.TestCase):
+    def test_l1_image_cache_uses_repo_local_home_by_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            with patch.object(config, "_detect_repo_root", return_value=repo), \
+                 patch.dict(os.environ, {"BOXLITE_HOME": ""}):
+                self.assertEqual(config.InfraConfig.load().boxlite_home, repo / ".apps-local" / ".bl" / "h")
+            with patch.object(config, "_detect_repo_root", return_value=repo), \
+                 patch.dict(os.environ, {"BOXLITE_HOME": str(repo / "custom-home")}):
+                self.assertEqual(config.InfraConfig.load().boxlite_home, repo / "custom-home")
+
     def test_cache_hit_does_not_call_root_builder(self):
         with tempfile.TemporaryDirectory() as directory:
             cache = Path(directory) / "image.ext4"
