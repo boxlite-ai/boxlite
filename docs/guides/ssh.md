@@ -1,13 +1,19 @@
 # Guest SSH control
 
 SSH starts disabled. The local Rust runtime exposes `LiteBox::ssh()` to configure,
-query, or disable it. All three operations follow the same implicit-start policy
-as exec, metrics, and file copying. A `Configured` or `Stopped` box using the
-image's default command can start implicitly, including on status queries and
-disable calls. If `BoxOptions.cmd` or `entrypoint` explicitly sets the main
-command, these states return `InvalidState`; call `start()` first. Running boxes
-support all three operations. For example, querying SSH on a stopped box with
-`cmd = ["python", "job.py"]` cannot run the job again.
+query, or disable it. Only `configure()` follows the implicit-start policy of
+exec, metrics, and file copying. A `Configured` or `Stopped` box using the image's
+default command can start implicitly. If `BoxOptions.cmd` or `entrypoint`
+explicitly sets the main command, configuration returns `InvalidState` in these
+states; call `start()` first.
+
+`status()` and `disable()` never start the VM or container main command. Valid
+`Configured` or `Stopped` handles return disabled status with generation zero and
+empty address and host identity fields, regardless of the configured command.
+Running boxes send requests to the existing guest, including after `attach()`
+before `start()` and after runtime recovery. Other lifecycle states return
+`InvalidState`. Results describe the state observed by the call; a concurrent
+`configure()` can subsequently enable SSH.
 
 Creating the handle alone does not start anything. The REST backend returns
 `Unsupported`; CLI and other language SDKs have no SSH control API.
@@ -45,9 +51,9 @@ before cancellation is returned, so detached boxes remain recoverable; container
 startup retains its own cancellation. Operations are not automatically retried.
 Timeout or cancellation does not undo changes the guest may already have applied.
 Invalidated handles return `Stopped`; drop all references to the old box and
-obtain a fresh handle with `runtime.get()` to restart it.
-The fresh handle still follows the same startup policy: a stopped box with an
-explicit main command requires `start()` before any SSH operation.
+obtain a fresh handle with `runtime.get()`. That handle can query or disable SSH
+without restarting the box. A stopped box with an explicit main command still
+requires `start()` before `configure()`.
 
 The internal host-only `boxlite.v1.Ssh` gRPC service remains available on
 `sockets/box.sock` after `Guest.Init` succeeds. It exposes `Configure`, `Status`,

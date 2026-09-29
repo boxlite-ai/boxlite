@@ -334,6 +334,91 @@ async fn operate(ssh: SshHandle, operation: usize) -> BoxliteResult<SshStatus> {
     }
 }
 
+/// Cold handles observe lifecycle state regardless of the configured main command.
+#[tokio::test]
+async fn ssh_observation_does_not_start_idle_boxes() {
+    let f = fixture().await;
+    for status in [
+        BoxStatus::Configured,
+        BoxStatus::Stopped,
+        BoxStatus::Unknown,
+        BoxStatus::Stopping,
+        BoxStatus::Paused,
+        BoxStatus::Failed,
+    ] {
+        for command in [None, Some("cmd"), Some("entrypoint")] {
+            let mut config = f.backend.config.clone();
+            match command {
+                Some("cmd") => config.options.cmd = Some(vec!["main".into()]),
+                Some(_) => config.options.entrypoint = Some(vec!["main".into()]),
+                None => {}
+            }
+            let mut state = BoxState::new();
+            state.status = status;
+            let backend = Arc::new(BoxImpl::new(
+                config,
+                state,
+                f.backend.runtime.clone(),
+                f.backend.runtime.shutdown_token.child_token(),
+            ));
+            let ssh = SshHandle::new(backend.clone());
+            for operation in 1..3 {
+                let result = operate(ssh.clone(), operation).await;
+                if matches!(status, BoxStatus::Configured | BoxStatus::Stopped) {
+                    assert_eq!(
+                        result.unwrap(),
+                        SshStatus {
+                            enabled: false,
+                            generation: 0,
+                            listen_address: String::new(),
+                            host_public_key: String::new(),
+                            host_key_fingerprint: String::new(),
+                        }
+                    );
+                } else {
+                    assert!(matches!(result, Err(BoxliteError::InvalidState(_))));
+                }
+                assert_eq!(backend.state.read().status, status);
+                assert_eq!(backend.state.read().pid, None);
+                assert!(!backend.live.initialized());
+                assert!(!backend.container_start.initialized());
+            }
+            backend.shutdown_token.cancel();
+            for operation in 1..3 {
+                assert!(matches!(
+                    operate(ssh.clone(), operation).await,
+                    Err(BoxliteError::Stopped(_))
+                ));
+            }
+        }
+    }
+    assert!(f.mock.requests.lock().unwrap().is_empty());
+}
+
+/// An attached or recovered VM serves SSH without initializing its main command.
+#[tokio::test]
+async fn ssh_observation_uses_existing_vm_without_container_start() {
+    let f = fixture_with_container(false).await;
+    let recovered = Arc::new(BoxImpl::new(
+        f.backend.config.clone(),
+        f.backend.state.read().clone(),
+        f.backend.runtime.clone(),
+        f.backend.runtime.shutdown_token.child_token(),
+    ));
+    for backend in [&f.backend, &recovered] {
+        let ssh = SshHandle::new(backend.clone());
+        for operation in 1..3 {
+            assert_eq!(operate(ssh.clone(), operation).await.unwrap().generation, 7);
+            assert!(!backend.container_start.initialized());
+        }
+    }
+    assert!(!recovered.live.initialized());
+    assert_eq!(
+        *f.mock.requests.lock().unwrap(),
+        ["status", "disable", "status", "disable"]
+    );
+}
+
 /// Allow legitimate guest work beyond five seconds and preserve its drain error.
 #[tokio::test]
 async fn ssh_waits_for_guest_response_within_total_deadline() {
@@ -369,88 +454,93 @@ async fn ssh_waits_for_guest_response_within_total_deadline() {
     }
 }
 
-/// Handle creation is lazy; RPCs wait for container startup, whose duration must not
+/// Configure waits for container startup, whose duration must not
 /// consume the SSH deadline even when startup exceeds fifteen seconds.
 #[tokio::test]
-async fn ssh_waits_for_container_start_without_charging_rpc_deadline() {
-    for operation in 0..3 {
-        let f = fixture_with_container(false).await;
-        assert!(
-            !f.backend.container_start.initialized(),
-            "creating a handle must not start"
-        );
-        *f.mock.start_block.lock().unwrap() = true;
-        *f.mock.block.lock().unwrap() = true;
-        let call = tokio::spawn(operate(f.ssh.clone(), operation));
-        tokio::select! {
-            _ = f.mock.start_entered.notified() => {}
-            _ = f.mock.entered.notified() => panic!("SSH RPC sent before Container.Start"),
-        }
-        tokio::time::pause();
-        tokio::time::advance(Duration::from_secs(16)).await;
-        tokio::task::yield_now().await;
-        assert!(
-            !call.is_finished(),
-            "startup must not consume the SSH deadline"
-        );
-        assert!(f.mock.requests.lock().unwrap().is_empty());
-        tokio::time::resume();
-        f.mock.start_release.notify_one();
-        f.mock.entered.notified().await;
-        tokio::time::pause();
-        tokio::time::advance(Duration::from_secs(6)).await;
-        tokio::task::yield_now().await;
-        tokio::time::resume();
-        f.mock.release.notify_one();
-        tokio::time::timeout(Duration::from_secs(5), call)
+async fn ssh_configure_waits_for_container_start_without_charging_rpc_deadline() {
+    let f = fixture_with_container(false).await;
+    assert!(
+        !f.backend.container_start.initialized(),
+        "creating a handle must not start"
+    );
+    *f.mock.start_block.lock().unwrap() = true;
+    *f.mock.block.lock().unwrap() = true;
+    let call = tokio::spawn(operate(f.ssh.clone(), 0));
+    tokio::select! {
+        _ = f.mock.start_entered.notified() => {}
+        _ = f.mock.entered.notified() => panic!("SSH RPC sent before Container.Start"),
+    }
+    // Running is already published, but configure is still waiting for main startup.
+    *f.mock.block.lock().unwrap() = false;
+    for operation in 1..3 {
+        tokio::time::timeout(Duration::from_secs(1), operate(f.ssh.clone(), operation))
             .await
             .unwrap()
-            .unwrap()
             .unwrap();
-        assert!(f.backend.container_start.initialized());
-        assert_eq!(f.mock.requests.lock().unwrap().len(), 1);
+        assert!(!f.backend.container_start.initialized());
     }
+    f.mock.requests.lock().unwrap().clear();
+    f.mock.entered.notified().await;
+    *f.mock.block.lock().unwrap() = true;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(16)).await;
+    tokio::task::yield_now().await;
+    assert!(
+        !call.is_finished(),
+        "startup must not consume the SSH deadline"
+    );
+    assert!(f.mock.requests.lock().unwrap().is_empty());
+    tokio::time::resume();
+    f.mock.start_release.notify_one();
+    f.mock.entered.notified().await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(6)).await;
+    tokio::task::yield_now().await;
+    tokio::time::resume();
+    f.mock.release.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), call)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(f.backend.container_start.initialized());
+    assert_eq!(f.mock.requests.lock().unwrap().len(), 1);
 }
 
 /// A startup failure must reach the caller before any SSH request is sent.
 #[tokio::test]
-async fn ssh_container_start_failure_sends_no_ssh_rpc() {
-    for operation in 0..3 {
-        let f = fixture_with_container(false).await;
-        *f.mock.start_fail.lock().unwrap() = true;
-        let error = operate(f.ssh.clone(), operation).await.unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("injected Container.Start failure"),
-            "{error}"
-        );
-        assert!(f.mock.requests.lock().unwrap().is_empty());
-    }
+async fn ssh_configure_container_start_failure_sends_no_ssh_rpc() {
+    let f = fixture_with_container(false).await;
+    *f.mock.start_fail.lock().unwrap() = true;
+    let error = operate(f.ssh.clone(), 0).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("injected Container.Start failure"),
+        "{error}"
+    );
+    assert!(f.mock.requests.lock().unwrap().is_empty());
 }
 
 /// Container.Start retains its own cancellation after VM initialization completes.
 #[tokio::test]
-async fn ssh_shutdown_cancels_container_start() {
-    for operation in 0..3 {
-        let f = fixture_with_container(false).await;
-        *f.mock.start_block.lock().unwrap() = true;
-        let call = tokio::spawn(operate(f.ssh.clone(), operation));
-        tokio::select! {
-            _ = f.mock.start_entered.notified() => {}
-            _ = f.mock.entered.notified() => panic!("SSH RPC sent before Container.Start"),
-        }
-        f.backend.runtime.shutdown_token.cancel();
-        let error = tokio::time::timeout(Duration::from_secs(1), call)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap_err();
-        assert!(matches!(error, BoxliteError::Stopped(_)));
-        let name = ["configure", "status", "disable"][operation];
-        assert!(error.to_string().contains(&format!("SSH {name}:")));
-        assert!(f.mock.requests.lock().unwrap().is_empty());
+async fn ssh_configure_shutdown_cancels_container_start() {
+    let f = fixture_with_container(false).await;
+    *f.mock.start_block.lock().unwrap() = true;
+    let call = tokio::spawn(operate(f.ssh.clone(), 0));
+    tokio::select! {
+        _ = f.mock.start_entered.notified() => {}
+        _ = f.mock.entered.notified() => panic!("SSH RPC sent before Container.Start"),
     }
+    f.backend.runtime.shutdown_token.cancel();
+    let error = tokio::time::timeout(Duration::from_secs(1), call)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(error, BoxliteError::Stopped(_)));
+    assert!(error.to_string().contains("SSH configure:"));
+    assert!(f.mock.requests.lock().unwrap().is_empty());
 }
 
 /// Neither a spent live-state handle nor a cancelled backend may send another SSH RPC.

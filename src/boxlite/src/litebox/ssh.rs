@@ -1,4 +1,4 @@
-//! SSH control following the local box's implicit-start policy.
+//! SSH control with implicit startup restricted to configuration.
 
 use std::{fmt, future::Future, sync::Arc, time::Duration};
 
@@ -10,6 +10,11 @@ use crate::runtime::backend::BoxBackend;
 
 // Allow guest cleanup plus communication and scheduling overhead after startup.
 const SSH_TIMEOUT: Duration = Duration::from_secs(DRAIN_TIMEOUT.as_secs() + 5);
+
+enum StartupPolicy {
+    AllowStart,
+    ExistingVmOnly,
+}
 
 /// Complete guest SSH configuration. Keys are never persisted by the runtime.
 #[derive(Clone)]
@@ -76,12 +81,19 @@ pub struct SshStatus {
     pub host_key_fingerprint: String,
 }
 
-/// Owned SSH control handle following the box's implicit-start policy.
+/// Owned SSH control handle; only configuration may implicitly start the box.
 ///
-/// Operations may start boxes using the image's default command. With an explicit
+/// `configure()` may start boxes using the image's default command. With an explicit
 /// `BoxOptions.cmd` or `entrypoint`, a Configured or Stopped box returns
 /// `InvalidState`: call `LiteBox::start()` first. This also applies to fresh
 /// handles obtained through `runtime.get()` after stopping the box.
+///
+/// `status()` and `disable()` never start the VM or its main command. Valid
+/// Configured or Stopped handles return disabled status with generation zero and
+/// empty address and host identity fields. Running handles use the existing guest,
+/// including after runtime recovery or attach before start. Spent handles return
+/// `Stopped`; other lifecycle states return `InvalidState`. Status is an observation
+/// at call time and does not prevent a concurrent `configure()` from enabling SSH.
 ///
 /// After startup, each operation has a total 15-second budget: the guest's
 /// 10-second cleanup limit plus 5 seconds for communication and scheduling.
@@ -117,27 +129,41 @@ impl SshHandle {
     pub async fn configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
         self.run(
             "configure",
+            StartupPolicy::AllowStart,
             |mut ssh| async move { ssh.configure(config).await },
         )
         .await
     }
 
-    /// Query SSH state. Startup follows the policy described on [`SshHandle`].
+    /// Query SSH state without starting the VM or container main command.
     pub async fn status(&self) -> BoxliteResult<SshStatus> {
-        self.run("status", |mut ssh| async move { ssh.status().await })
-            .await
+        self.run(
+            "status",
+            StartupPolicy::ExistingVmOnly,
+            |mut ssh| async move { ssh.status().await },
+        )
+        .await
     }
 
     /// Stop SSH and disconnect clients. Repeated calls are supported.
-    /// Startup follows the policy described on [`SshHandle`], even if SSH is disabled.
+    /// Never starts the VM or container main command.
     pub async fn disable(&self) -> BoxliteResult<SshStatus> {
-        self.run("disable", |mut ssh| async move { ssh.disable().await })
-            .await
+        self.run(
+            "disable",
+            StartupPolicy::ExistingVmOnly,
+            |mut ssh| async move { ssh.disable().await },
+        )
+        .await
     }
 
     /// Share control policy without cancelling VM initialization midway through
     /// its transfer of resources into LiveState, matching exec's startup boundary.
-    async fn run<F, Fut>(&self, name: &str, op: F) -> BoxliteResult<SshStatus>
+    async fn run<F, Fut>(
+        &self,
+        name: &str,
+        startup: StartupPolicy,
+        op: F,
+    ) -> BoxliteResult<SshStatus>
     where
         F: FnOnce(SshInterface) -> Fut,
         Fut: Future<Output = BoxliteResult<SshStatus>>,
@@ -155,7 +181,11 @@ impl SshHandle {
         if backend.shutdown_token.is_cancelled() {
             return Err(stopped());
         }
-        let session = backend.ssh_session().await.map_err(|error| match error {
+        let session = match startup {
+            StartupPolicy::AllowStart => backend.ssh_session().await.map(Some),
+            StartupPolicy::ExistingVmOnly => backend.existing_ssh_session(),
+        }
+        .map_err(|error| match error {
             BoxliteError::Stopped(_) => stopped(),
             error => error,
         })?;
@@ -163,6 +193,15 @@ impl SshHandle {
             biased;
             _ = backend.shutdown_token.cancelled() => Err(stopped()),
             result = tokio::time::timeout(SSH_TIMEOUT, async {
+                let Some(session) = session else {
+                    return Ok(SshStatus {
+                        enabled: false,
+                        generation: 0,
+                        listen_address: String::new(),
+                        host_public_key: String::new(),
+                        host_key_fingerprint: String::new(),
+                    });
+                };
                 op(session.ssh().await?).await
             }) => result.unwrap_or_else(|_| Err(BoxliteError::Rpc(format!(
                 "SSH {name}: timed out after {} seconds for box {}",
