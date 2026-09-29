@@ -219,8 +219,10 @@ After VM and container startup, each operation has a total 15-second budget:
 the guest's 10-second cleanup limit plus 5 seconds for communication and scheduling.
 Obtaining the SSH interface, connection setup, queueing, and the RPC consume this
 same budget, so delays can leave less than 10 seconds for guest cleanup.
-Runtime shutdown cancels the whole operation, including
-startup; operations are not retried. Cancellation/timeout cannot guarantee
+Runtime shutdown rejects new operations and cancels interface acquisition and RPCs.
+In-progress VM initialization finishes before cancellation is returned, preserving
+recovery of detached boxes; container startup retains its own cancellation.
+Operations are not retried. Cancellation/timeout cannot guarantee
 rollback. Invalidated handles return `Stopped`; drop all references to the old box
 and use `runtime.get()` to obtain a fresh handle for restart. Recovered stopped
 boxes with an explicit main command still require `start()` before SSH control. Guest

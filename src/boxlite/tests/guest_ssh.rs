@@ -33,6 +33,86 @@ impl SshOperation {
     }
 }
 
+/// Shutdown must let VM initialization publish a recoverable detached box.
+#[tokio::test]
+async fn runtime_ssh_shutdown_during_vm_startup() {
+    for operation in [
+        SshOperation::Configure,
+        SshOperation::Status,
+        SshOperation::Disable,
+    ] {
+        let home = common::home::PerTestBoxHome::new();
+        let options = BoxliteOptions {
+            home_dir: home.path.clone(),
+            image_registries: common::test_registries(),
+        };
+        let runtime = BoxliteRuntime::new(options.clone()).unwrap();
+        let mut box_options = common::alpine_opts();
+        box_options.detach = true;
+        let sandbox = runtime.create(box_options, None).await.unwrap();
+        let id = sandbox.id().to_string();
+        let pid_file = home.path.join("boxes").join(&id).join("shim.pid");
+        // Configure must be cancelled before the guest can validate credentials.
+        let config = boxlite::SshConfig {
+            listen_address: "0.0.0.0:2222".into(),
+            host_private_key: String::new(),
+            accounts: vec![],
+        };
+        let result = {
+            let call = operation.call(&sandbox, &config);
+            tokio::pin!(call);
+            tokio::time::timeout(Duration::from_secs(30), async {
+                while !pid_file.exists() {
+                    tokio::select! {
+                        biased;
+                        result = &mut call => panic!("SSH completed before VM spawn: {result:?}"),
+                        _ = tokio::task::yield_now() => {}
+                    }
+                }
+            })
+            .await
+            .expect("VM must spawn while SSH startup is pending");
+            assert_eq!(
+                sandbox.info().await.unwrap().status,
+                boxlite::BoxStatus::Configured,
+                "shutdown must happen before initialization publishes Running"
+            );
+            runtime
+                .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(30), call)
+                .await
+                .expect("SSH must return after VM initialization")
+        };
+        let initialized = sandbox.info().await.unwrap();
+        drop(sandbox);
+        drop(runtime);
+
+        let runtime = BoxliteRuntime::new(options).unwrap();
+        let recovered = runtime.get(&id).await.unwrap().unwrap();
+        let recovered_state = recovered.info().await.unwrap();
+        let status = recovered.ssh().status().await;
+        let reattached = recovered.info().await.unwrap();
+        recovered.stop().await.unwrap();
+        runtime
+            .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(result, Err(boxlite::BoxliteError::Stopped(_))),
+            "{operation:?}: {result:?}"
+        );
+        assert_eq!(initialized.status, boxlite::BoxStatus::Running);
+        assert_eq!(recovered_state.status, boxlite::BoxStatus::Running);
+        assert!(initialized.pid.is_some());
+        assert_eq!(reattached.pid, initialized.pid);
+        assert!(!status.unwrap().enabled);
+        assert!(common::home::live_shim_pids(&home.path.join("boxes")).is_empty());
+    }
+}
+
 /// Wait for the main command's write before inspecting its host-mounted record.
 async fn start_recorded_main(sandbox: &boxlite::LiteBox) {
     tokio::time::timeout(Duration::from_secs(30), async {

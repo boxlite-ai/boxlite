@@ -429,7 +429,7 @@ async fn ssh_container_start_failure_sends_no_ssh_rpc() {
     }
 }
 
-/// Runtime shutdown must interrupt pending startup without reaching the SSH service.
+/// Container.Start retains its own cancellation after VM initialization completes.
 #[tokio::test]
 async fn ssh_shutdown_cancels_container_start() {
     for operation in 0..3 {
@@ -447,6 +447,8 @@ async fn ssh_shutdown_cancels_container_start() {
             .unwrap()
             .unwrap_err();
         assert!(matches!(error, BoxliteError::Stopped(_)));
+        let name = ["configure", "status", "disable"][operation];
+        assert!(error.to_string().contains(&format!("SSH {name}:")));
         assert!(f.mock.requests.lock().unwrap().is_empty());
     }
 }
@@ -465,10 +467,10 @@ async fn ssh_spent_and_cancelled_handles_send_nothing() {
     f.backend.state.write().status = BoxStatus::Running;
     f.backend.shutdown_token.cancel();
     for operation in 0..3 {
-        assert!(matches!(
-            operate(f.ssh.clone(), operation).await,
-            Err(BoxliteError::Stopped(_))
-        ));
+        let error = operate(f.ssh.clone(), operation).await.unwrap_err();
+        assert!(matches!(error, BoxliteError::Stopped(_)));
+        let name = ["configure", "status", "disable"][operation];
+        assert!(error.to_string().contains(&format!("SSH {name}:")));
     }
     assert!(f.mock.requests.lock().unwrap().is_empty());
 }
@@ -503,6 +505,8 @@ async fn ssh_timeout_and_runtime_shutdown() {
                 .expect("SSH operation must finish within its 15-second deadline")
                 .unwrap()
                 .unwrap_err();
+            let name = ["configure", "status", "disable"][operation];
+            assert!(error.to_string().contains(&format!("SSH {name}:")));
             if cancel {
                 assert!(matches!(error, BoxliteError::Stopped(_)));
             } else {

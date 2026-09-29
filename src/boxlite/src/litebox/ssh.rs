@@ -1,10 +1,11 @@
 //! SSH control following the local box's implicit-start policy.
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{fmt, future::Future, sync::Arc, time::Duration};
 
 use boxlite_shared::{BoxliteError, BoxliteResult, constants::ssh::DRAIN_TIMEOUT};
 
 use super::box_impl::BoxImpl;
+use crate::portal::interfaces::SshInterface;
 use crate::runtime::backend::BoxBackend;
 
 // Allow guest cleanup plus communication and scheduling overhead after startup.
@@ -86,9 +87,11 @@ pub struct SshStatus {
 /// 10-second cleanup limit plus 5 seconds for communication and scheduling.
 /// Interface acquisition, connection setup, queueing, and the RPC consume this
 /// same budget; VM and container startup do not. Guest `DeadlineExceeded` remains
-/// [`BoxliteError::Rpc`] with the original status context. Runtime shutdown cancels
-/// the whole operation, including startup. Operations are not retried. Timeout or
-/// cancellation does not undo a configuration already applied by the guest.
+/// [`BoxliteError::Rpc`] with the original status context. Runtime shutdown rejects
+/// new operations and cancels interface acquisition and RPCs. In-progress VM
+/// initialization finishes before cancellation is returned; container startup
+/// retains its own cancellation. Operations are not retried. Timeout or cancellation
+/// does not undo a configuration already applied by the guest.
 #[derive(Clone)]
 pub struct SshHandle {
     backend: Arc<dyn BoxBackend>,
@@ -112,63 +115,33 @@ impl SshHandle {
     /// Validate and replace SSH configuration, disconnecting existing clients.
     /// Startup follows the policy described on [`SshHandle`].
     pub async fn configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
-        let backend = self
-            .backend
-            .clone()
-            .as_any_arc()
-            .downcast::<BoxImpl>()
-            .map_err(|_| {
-                BoxliteError::Unsupported("SSH control requires the local backend".into())
-            })?;
-        tokio::select! {
-            biased;
-            _ = backend.shutdown_token.cancelled() => Err(BoxliteError::Stopped(format!(
-                "SSH configure: box {} stopped", backend.config.id
-            ))),
-            result = async {
-                let session = backend.guest_session().await?;
-                tokio::time::timeout(SSH_TIMEOUT, async {
-                    let mut ssh = session.ssh().await?;
-                    ssh.configure(config).await
-                }).await.unwrap_or_else(|_| Err(BoxliteError::Rpc(format!(
-                    "SSH configure: timed out after {} seconds for box {}",
-                    SSH_TIMEOUT.as_secs(), backend.config.id
-                ))))
-            } => result,
-        }
+        self.run(
+            "configure",
+            |mut ssh| async move { ssh.configure(config).await },
+        )
+        .await
     }
 
     /// Query SSH state. Startup follows the policy described on [`SshHandle`].
     pub async fn status(&self) -> BoxliteResult<SshStatus> {
-        let backend = self
-            .backend
-            .clone()
-            .as_any_arc()
-            .downcast::<BoxImpl>()
-            .map_err(|_| {
-                BoxliteError::Unsupported("SSH control requires the local backend".into())
-            })?;
-        tokio::select! {
-            biased;
-            _ = backend.shutdown_token.cancelled() => Err(BoxliteError::Stopped(format!(
-                "SSH status: box {} stopped", backend.config.id
-            ))),
-            result = async {
-                let session = backend.guest_session().await?;
-                tokio::time::timeout(SSH_TIMEOUT, async {
-                    let mut ssh = session.ssh().await?;
-                    ssh.status().await
-                }).await.unwrap_or_else(|_| Err(BoxliteError::Rpc(format!(
-                    "SSH status: timed out after {} seconds for box {}",
-                    SSH_TIMEOUT.as_secs(), backend.config.id
-                ))))
-            } => result,
-        }
+        self.run("status", |mut ssh| async move { ssh.status().await })
+            .await
     }
 
     /// Stop SSH and disconnect clients. Repeated calls are supported.
     /// Startup follows the policy described on [`SshHandle`], even if SSH is disabled.
     pub async fn disable(&self) -> BoxliteResult<SshStatus> {
+        self.run("disable", |mut ssh| async move { ssh.disable().await })
+            .await
+    }
+
+    /// Share control policy without cancelling VM initialization midway through
+    /// its transfer of resources into LiveState, matching exec's startup boundary.
+    async fn run<F, Fut>(&self, name: &str, op: F) -> BoxliteResult<SshStatus>
+    where
+        F: FnOnce(SshInterface) -> Fut,
+        Fut: Future<Output = BoxliteResult<SshStatus>>,
+    {
         let backend = self
             .backend
             .clone()
@@ -177,21 +150,24 @@ impl SshHandle {
             .map_err(|_| {
                 BoxliteError::Unsupported("SSH control requires the local backend".into())
             })?;
+        let stopped =
+            || BoxliteError::Stopped(format!("SSH {name}: box {} stopped", backend.config.id));
+        if backend.shutdown_token.is_cancelled() {
+            return Err(stopped());
+        }
+        let session = backend.ssh_session().await.map_err(|error| match error {
+            BoxliteError::Stopped(_) => stopped(),
+            error => error,
+        })?;
         tokio::select! {
             biased;
-            _ = backend.shutdown_token.cancelled() => Err(BoxliteError::Stopped(format!(
-                "SSH disable: box {} stopped", backend.config.id
-            ))),
-            result = async {
-                let session = backend.guest_session().await?;
-                tokio::time::timeout(SSH_TIMEOUT, async {
-                    let mut ssh = session.ssh().await?;
-                    ssh.disable().await
-                }).await.unwrap_or_else(|_| Err(BoxliteError::Rpc(format!(
-                    "SSH disable: timed out after {} seconds for box {}",
-                    SSH_TIMEOUT.as_secs(), backend.config.id
-                ))))
-            } => result,
+            _ = backend.shutdown_token.cancelled() => Err(stopped()),
+            result = tokio::time::timeout(SSH_TIMEOUT, async {
+                op(session.ssh().await?).await
+            }) => result.unwrap_or_else(|_| Err(BoxliteError::Rpc(format!(
+                "SSH {name}: timed out after {} seconds for box {}",
+                SSH_TIMEOUT.as_secs(), backend.config.id
+            )))),
         }
     }
 }
