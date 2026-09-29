@@ -39,6 +39,7 @@ import { Audit, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
+import { Auth0ManagementService } from './auth0-management.service'
 
 @ApiTags('users')
 @Controller('users')
@@ -51,6 +52,7 @@ export class UserController {
   constructor(
     private readonly userService: UserService,
     private readonly configService: TypedConfigService,
+    private readonly auth0Management: Auth0ManagementService,
   ) {}
 
   @Get('/me')
@@ -345,29 +347,11 @@ export class UserController {
     return UserDto.fromUser(user)
   }
 
-  private async getManagementApiToken(): Promise<string> {
-    try {
-      const body = new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: this.configService.getOrThrow('oidc.managementApi.clientId'),
-        client_secret: this.configService.getOrThrow('oidc.managementApi.clientSecret'),
-        audience: this.configService.getOrThrow('oidc.managementApi.audience'),
-      })
-      const tokenResponse = await axios.post(this.configService.getOrThrow('oidc.managementApi.tokenUrl'), body, {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        maxRedirects: 0,
-      })
-      return tokenResponse.data.access_token
-    } catch (error) {
-      this.logger.error('Failed to get OIDC Management API token', error?.message || String(error))
-      throw new UnauthorizedException()
-    }
+  private getManagementApiToken(): Promise<string> {
+    return this.auth0Management.accessToken()
   }
 
   private managementApiUrl(...pathSegments: string[]): string {
-    const path = pathSegments.map(encodeURIComponent).join('/')
-    return `${this.configService.getOrThrow('oidc.managementApi.baseUrl')}/${path}`
+    return this.auth0Management.url(...pathSegments)
   }
 }
