@@ -131,7 +131,13 @@ that owns the address (POL-555).
 ### The settings
 
 `OIDC_ACCOUNT_LINK_REDIRECT_SECRET` turns the link on by being set. It is the
-HS256 key the Post-Login Action and the API sign every hop between them with.
+HS256 key the Post-Login Action and the API sign every hop between them with —
+Auth0's `encodeToken` and `validateToken` accept only a shared secret:
+
+| Token | Signed by | Checked by | Stops |
+| --- | --- | --- | --- |
+| session token, Action → `/start` | the Action | the API | a forged social id being linked into someone else's password account |
+| outcome, `/password` → `/continue` | the API | the Action | a forged "linked" outcome naming an arbitrary primary account |
 
 Generate it once per stage, at least 32 characters (RFC 7518 §3.2 wants
 256 bits for HS256), and never reuse one stage's value in another.
@@ -144,10 +150,11 @@ The token, sign-up and password-reset endpoints hang off
 `OIDC_ISSUER_BASE_URL`; `/continue` is on `PUBLIC_OIDC_DOMAIN`, else the
 issuer. Both must be https, since the password and the link client's secret
 are posted there, and an issuer with a path is refused at boot, since Auth0
-always serves from the root of its domain. The link itself is a Management API call, so
-`OIDC_MANAGEMENT_API_ENABLED` must be true; that client's `read:users` and
-`update:users` grants cover the lookup, the link and marking an address
-verified.
+always serves from the root of its domain. The Action tells the API the
+database connection inside the signed session token. The link itself is a
+Management API call, so `OIDC_MANAGEMENT_API_ENABLED` must be true; that
+client's `read:users` and `update:users` grants cover the lookup, the link and
+marking an address verified.
 
 ### What the link moves
 
