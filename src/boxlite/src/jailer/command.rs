@@ -187,6 +187,7 @@ mod tests {
                 host_path: "/data".to_string(),
                 guest_path: "/mnt/data".to_string(),
                 read_only: true,
+                ..Default::default()
             })
             .build_with(sandbox)
             .unwrap();

@@ -432,12 +432,14 @@ mod tests {
                 host_path: "/data".to_string(),
                 guest_path: "/mnt/data".to_string(),
                 read_only: true,
+                ..Default::default()
             })
             .with_volume(VolumeSpec {
                 managed_volume: None,
                 host_path: "/output".to_string(),
                 guest_path: "/mnt/output".to_string(),
                 read_only: false,
+                ..Default::default()
             })
             .build()
             .expect("Should build successfully");
