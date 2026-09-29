@@ -91,6 +91,7 @@ export * from './trace-span';
 export * from './trace-summary';
 export * from './update-box-state-dto';
 export * from './update-job-status';
+export * from './update-organization-default-exec-timeout';
 export * from './update-organization-default-region';
 export * from './update-organization-invitation';
 export * from './update-organization-member-access';

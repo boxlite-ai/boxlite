@@ -23,6 +23,7 @@ Name | Type | Description | Notes
 **templateDeactivationTimeoutMinutes** | **number** | Time in minutes before an unused template is deactivated | [default to 20160]
 **boxLimitedNetworkEgress** | **boolean** | Box default network block all | [default to undefined]
 **defaultRegionId** | **string** | Default region ID | [optional] [default to undefined]
+**defaultExecTimeoutSeconds** | **number** | Default execution timeout in seconds; null inherits the platform default, zero disables the timer | [default to undefined]
 **authenticatedRateLimit** | **number** | Authenticated rate limit per minute | [default to undefined]
 **boxCreateRateLimit** | **number** | Box create rate limit per minute | [default to undefined]
 **boxLifecycleRateLimit** | **number** | Box lifecycle rate limit per minute | [default to undefined]
@@ -55,6 +56,7 @@ const instance: Organization = {
     templateDeactivationTimeoutMinutes,
     boxLimitedNetworkEgress,
     defaultRegionId,
+    defaultExecTimeoutSeconds,
     authenticatedRateLimit,
     boxCreateRateLimit,
     boxLifecycleRateLimit,

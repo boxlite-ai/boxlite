@@ -49,6 +49,7 @@ describeIfDatabase('OrganizationService.getReferralCode (integration, real Postg
       {} as any,
       {} as any,
     )
+    Object.assign(service, { redis: { del: jest.fn().mockResolvedValue(0) } })
   })
 
   afterAll(async () => {

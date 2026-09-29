@@ -102,7 +102,7 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Organizations, membership, and invitations</b> · 24 routes</summary>
+<summary><b>Organizations, membership, and invitations</b> · 25 routes</summary>
 
 | Method   | Path                                                                     | What it does                                             |
 | -------- | ------------------------------------------------------------------------ | -------------------------------------------------------- |
@@ -114,6 +114,7 @@ serves and the events it emits are catalogued below alongside its routes.
 | `DELETE` | `/api/organizations/{organizationId}`                                    | Deletes an organization.                                 |
 | `PATCH`  | `/api/organizations/{organizationId}/name`                               | Changes an organization's name.                          |
 | `PATCH`  | `/api/organizations/{organizationId}/default-region`                     | Sets the organization's default region.                  |
+| `PATCH`  | `/api/organizations/{organizationId}/default-exec-timeout`               | Sets the organization's default execution timeout.       |
 | `POST`   | `/api/organizations/{organizationId}/leave`                              | Removes the caller from the organization.                |
 | `POST`   | `/api/organizations/{organizationId}/suspend`                            | Suspends the organization.                               |
 | `POST`   | `/api/organizations/{organizationId}/unsuspend`                          | Restores a suspended organization.                       |
@@ -344,6 +345,20 @@ through `GET /api/v1/me`. Except for configuration discovery, these routes use
 combined bearer authentication. The box and volume resource routes also apply
 organization authorization; identity discovery at `GET /api/v1/me` can return
 `path_prefix: null` for an authenticated user with no organization membership.
+
+Hosted executions resolve `timeout_seconds` from the explicit request value,
+then the organization's `defaultExecTimeoutSeconds`, then 300 seconds. An
+omitted or null request timeout inherits the default; zero disables the timer.
+This hosted default does not change local runtime execution defaults.
+
+Organization owners and system administrators can set the default with
+`PATCH /api/organizations/{organizationId}/default-exec-timeout`, passing
+`{"defaultExecTimeoutSeconds": 1800}`. The field accepts integers from 0 through
+2147483647, or null to restore the platform default. The audited update saves
+the setting and awaits eviction of the organization's cached snapshot. If
+eviction fails, the update still succeeds and logs a warning; cached values
+expire after 10 seconds. An organization read already in flight can also
+finish with the previous snapshot. Existing executions retain their timeout.
 
 <details>
 <summary><b>Discovery</b> · 2 routes</summary>

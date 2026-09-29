@@ -89,6 +89,10 @@ export interface Organization {
      */
     'defaultRegionId'?: string;
     /**
+     * Default execution timeout in seconds; null inherits the platform default, zero disables the timer
+     */
+    'defaultExecTimeoutSeconds': number | null;
+    /**
      * Authenticated rate limit per minute
      */
     'authenticatedRateLimit': number | null;

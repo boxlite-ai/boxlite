@@ -59,6 +59,8 @@ type Organization struct {
 	BoxLimitedNetworkEgress bool `json:"boxLimitedNetworkEgress"`
 	// Default region ID
 	DefaultRegionId *string `json:"defaultRegionId,omitempty"`
+	// Default execution timeout in seconds; null inherits the platform default, zero disables the timer
+	DefaultExecTimeoutSeconds NullableInt32 `json:"defaultExecTimeoutSeconds"`
 	// Authenticated rate limit per minute
 	AuthenticatedRateLimit NullableFloat32 `json:"authenticatedRateLimit"`
 	// Box create rate limit per minute
@@ -82,7 +84,7 @@ type _Organization Organization
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOrganization(id string, name string, createdBy string, isDefaultForAuthenticatedUser bool, personal bool, createdAt time.Time, updatedAt time.Time, suspended bool, suspendedAt time.Time, suspensionReason string, suspendedUntil time.Time, suspensionCleanupGracePeriodHours float32, maxCpuPerBox float32, maxMemoryPerBox float32, maxDiskPerBox float32, templateDeactivationTimeoutMinutes float32, boxLimitedNetworkEgress bool, authenticatedRateLimit NullableFloat32, boxCreateRateLimit NullableFloat32, boxLifecycleRateLimit NullableFloat32, experimentalConfig map[string]interface{}, authenticatedRateLimitTtlSeconds NullableFloat32, boxCreateRateLimitTtlSeconds NullableFloat32, boxLifecycleRateLimitTtlSeconds NullableFloat32) *Organization {
+func NewOrganization(id string, name string, createdBy string, isDefaultForAuthenticatedUser bool, personal bool, createdAt time.Time, updatedAt time.Time, suspended bool, suspendedAt time.Time, suspensionReason string, suspendedUntil time.Time, suspensionCleanupGracePeriodHours float32, maxCpuPerBox float32, maxMemoryPerBox float32, maxDiskPerBox float32, templateDeactivationTimeoutMinutes float32, boxLimitedNetworkEgress bool, defaultExecTimeoutSeconds NullableInt32, authenticatedRateLimit NullableFloat32, boxCreateRateLimit NullableFloat32, boxLifecycleRateLimit NullableFloat32, experimentalConfig map[string]interface{}, authenticatedRateLimitTtlSeconds NullableFloat32, boxCreateRateLimitTtlSeconds NullableFloat32, boxLifecycleRateLimitTtlSeconds NullableFloat32) *Organization {
 	this := Organization{}
 	this.Id = id
 	this.Name = name
@@ -101,6 +103,7 @@ func NewOrganization(id string, name string, createdBy string, isDefaultForAuthe
 	this.MaxDiskPerBox = maxDiskPerBox
 	this.TemplateDeactivationTimeoutMinutes = templateDeactivationTimeoutMinutes
 	this.BoxLimitedNetworkEgress = boxLimitedNetworkEgress
+	this.DefaultExecTimeoutSeconds = defaultExecTimeoutSeconds
 	this.AuthenticatedRateLimit = authenticatedRateLimit
 	this.BoxCreateRateLimit = boxCreateRateLimit
 	this.BoxLifecycleRateLimit = boxLifecycleRateLimit
@@ -564,6 +567,32 @@ func (o *Organization) SetDefaultRegionId(v string) {
 	o.DefaultRegionId = &v
 }
 
+// GetDefaultExecTimeoutSeconds returns the DefaultExecTimeoutSeconds field value
+// If the value is explicit nil, the zero value for int32 will be returned
+func (o *Organization) GetDefaultExecTimeoutSeconds() int32 {
+	if o == nil || o.DefaultExecTimeoutSeconds.Get() == nil {
+		var ret int32
+		return ret
+	}
+
+	return *o.DefaultExecTimeoutSeconds.Get()
+}
+
+// GetDefaultExecTimeoutSecondsOk returns a tuple with the DefaultExecTimeoutSeconds field value
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *Organization) GetDefaultExecTimeoutSecondsOk() (*int32, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.DefaultExecTimeoutSeconds.Get(), o.DefaultExecTimeoutSeconds.IsSet()
+}
+
+// SetDefaultExecTimeoutSeconds sets field value
+func (o *Organization) SetDefaultExecTimeoutSeconds(v int32) {
+	o.DefaultExecTimeoutSeconds.Set(&v)
+}
+
 // GetAuthenticatedRateLimit returns the AuthenticatedRateLimit field value
 // If the value is explicit nil, the zero value for float32 will be returned
 func (o *Organization) GetAuthenticatedRateLimit() float32 {
@@ -774,6 +803,7 @@ func (o Organization) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.DefaultRegionId) {
 		toSerialize["defaultRegionId"] = o.DefaultRegionId
 	}
+	toSerialize["defaultExecTimeoutSeconds"] = o.DefaultExecTimeoutSeconds.Get()
 	toSerialize["authenticatedRateLimit"] = o.AuthenticatedRateLimit.Get()
 	toSerialize["boxCreateRateLimit"] = o.BoxCreateRateLimit.Get()
 	toSerialize["boxLifecycleRateLimit"] = o.BoxLifecycleRateLimit.Get()
@@ -811,6 +841,7 @@ func (o *Organization) UnmarshalJSON(data []byte) (err error) {
 		"maxDiskPerBox",
 		"templateDeactivationTimeoutMinutes",
 		"boxLimitedNetworkEgress",
+		"defaultExecTimeoutSeconds",
 		"authenticatedRateLimit",
 		"boxCreateRateLimit",
 		"boxLifecycleRateLimit",
@@ -865,6 +896,7 @@ func (o *Organization) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "templateDeactivationTimeoutMinutes")
 		delete(additionalProperties, "boxLimitedNetworkEgress")
 		delete(additionalProperties, "defaultRegionId")
+		delete(additionalProperties, "defaultExecTimeoutSeconds")
 		delete(additionalProperties, "authenticatedRateLimit")
 		delete(additionalProperties, "boxCreateRateLimit")
 		delete(additionalProperties, "boxLifecycleRateLimit")

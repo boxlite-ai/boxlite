@@ -16,6 +16,10 @@ describe('Hosted exec timeout HTTP forwarding', () => {
   beforeAll(async () => {
     const echo = express().use(express.raw({ type: 'application/json' }))
     echo.use((req, res) => {
+      if (!Buffer.isBuffer(req.body)) {
+        res.sendStatus(400)
+        return
+      }
       res.json({
         body: JSON.parse(req.body.toString()),
         length: req.headers['content-length'],
@@ -33,6 +37,7 @@ describe('Hosted exec timeout HTTP forwarding', () => {
       } as never,
       { findOne: jest.fn().mockResolvedValue({ apiUrl: target, apiKey: 'test-runner-key' }) } as never,
       {} as never,
+      { declarePublic: jest.fn() } as never,
     )
     const api = express().use(express.json())
     api.post(['/v1/boxes/:boxId/exec', '/v1/:prefix/boxes/:boxId/exec'], (req, res, next) => {

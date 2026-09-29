@@ -35,6 +35,7 @@ All URIs are relative to *http://localhost:3000*
 |[**updateAccessForOrganizationMember**](#updateaccessfororganizationmember) | **POST** /organizations/{organizationId}/users/{userId}/access | Update access for organization member|
 |[**updateBoxDefaultLimitedNetworkEgress**](#updateboxdefaultlimitednetworkegress) | **POST** /organizations/{organizationId}/box-default-limited-network-egress | Update box default limited network egress|
 |[**updateExperimentalConfig**](#updateexperimentalconfig) | **PUT** /organizations/{organizationId}/experimental-config | Update experimental configuration|
+|[**updateOrganizationDefaultExecTimeout**](#updateorganizationdefaultexectimeout) | **PATCH** /organizations/{organizationId}/default-exec-timeout | Update organization default execution timeout|
 |[**updateOrganizationInvitation**](#updateorganizationinvitation) | **PUT** /organizations/{organizationId}/invitations/{invitationId} | Update organization invitation|
 |[**updateOrganizationName**](#updateorganizationname) | **PATCH** /organizations/{organizationId}/name | Update organization name|
 |[**updateOrganizationRole**](#updateorganizationrole) | **PUT** /organizations/{organizationId}/roles/{roleId} | Update organization role|
@@ -1626,6 +1627,60 @@ void (empty response body)
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** |  |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **updateOrganizationDefaultExecTimeout**
+> Organization updateOrganizationDefaultExecTimeout(updateOrganizationDefaultExecTimeout)
+
+
+### Example
+
+```typescript
+import {
+    OrganizationsApi,
+    Configuration,
+    UpdateOrganizationDefaultExecTimeout
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new OrganizationsApi(configuration);
+
+let organizationId: string; //Organization ID
+let updateOrganizationDefaultExecTimeout: UpdateOrganizationDefaultExecTimeout; //
+
+const { status, data } = await apiInstance.updateOrganizationDefaultExecTimeout(
+    organizationId,
+    updateOrganizationDefaultExecTimeout
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **updateOrganizationDefaultExecTimeout** | **UpdateOrganizationDefaultExecTimeout**|  | |
+| **organizationId** | [**string**] | Organization ID | |
+
+
+### Return type
+
+**Organization**
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** | Execution timeout default updated |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
