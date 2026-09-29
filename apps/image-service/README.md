@@ -64,7 +64,9 @@ These refs are the API's and the runner's alone. The API writes
 `<proxy>/<org>/ghcr.io/acme/app:1.2` for a box whose image an organization's
 login covers, and a tenant never reads it back: the box's image is
 `ghcr.io/acme/app:1.2`, and a pull that fails is recorded with that name, in
-both the ref and the `/v2/` URL a registry client prints.
+both the ref and the `/v2/` URL a registry client prints. A failure that names
+only this proxy, such as its `/v2/` being unreachable, reads as "the registry
+proxy", without its address.
 
 ## What a pull passes through
 
