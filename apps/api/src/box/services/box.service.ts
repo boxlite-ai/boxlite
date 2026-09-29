@@ -81,7 +81,7 @@ import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
-import { isCuratedSelector } from '../../image/utils/image-ref.util'
+import { isCuratedSelector, withUpstreamRefs } from '../../image/utils/image-ref.util'
 import {
   AUTO_DELETE_DISABLED,
   AUTO_STOP_DISABLED,
@@ -1512,7 +1512,8 @@ export class BoxService {
     }
 
     if (errorReason !== undefined) {
-      updateData.errorReason = errorReason
+      // The runner's words, which can name the registry proxy ref it pulled.
+      updateData.errorReason = withUpstreamRefs(errorReason)
       if (newState === BoxState.ERROR) {
         updateData.recoverable = recoverable
       }
