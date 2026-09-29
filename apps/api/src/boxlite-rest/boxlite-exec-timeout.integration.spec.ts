@@ -23,7 +23,7 @@ describe('Hosted exec timeout HTTP forwarding', () => {
       res.json({
         body: JSON.parse(req.body.toString()),
         length: req.headers['content-length'],
-        bytes: req.body.length,
+        bytes: Buffer.byteLength(req.body),
         path: req.url,
       })
     })
