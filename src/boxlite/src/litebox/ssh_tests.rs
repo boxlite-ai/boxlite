@@ -20,6 +20,7 @@ struct Mock {
     missing: Mutex<bool>,
     block: Mutex<bool>,
     entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
     start_entered: tokio::sync::Notify,
     start_release: tokio::sync::Notify,
     start_block: Mutex<bool>,
@@ -38,7 +39,7 @@ impl Mock {
         self.entered.notify_one();
         let block = *self.block.lock().unwrap();
         if block {
-            std::future::pending::<()>().await;
+            self.release.notified().await;
         }
         if let Some(code) = *self.error.lock().unwrap() {
             return Err(Status::new(code, "mock rejection"));
@@ -333,8 +334,43 @@ async fn operate(ssh: SshHandle, operation: usize) -> BoxliteResult<SshStatus> {
     }
 }
 
+/// Allow legitimate guest work beyond five seconds and preserve its drain error.
+#[tokio::test]
+async fn ssh_waits_for_guest_response_within_total_deadline() {
+    for operation in 0..3 {
+        for (seconds, code) in [(6, None), (10, Some(tonic::Code::DeadlineExceeded))] {
+            let f = fixture().await;
+            *f.mock.block.lock().unwrap() = true;
+            *f.mock.error.lock().unwrap() = code;
+            let call = tokio::spawn(operate(f.ssh.clone(), operation));
+            f.mock.entered.notified().await;
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_secs(seconds)).await;
+            tokio::task::yield_now().await;
+            tokio::time::resume();
+            f.mock.release.notify_one();
+            let result = tokio::time::timeout(Duration::from_secs(1), call)
+                .await
+                .unwrap()
+                .unwrap();
+            if let Some(code) = code {
+                let error = result.unwrap_err();
+                assert!(matches!(error, BoxliteError::Rpc(_)), "{error}");
+                assert!(
+                    error.to_string().contains(&format!("status: {code:?}")),
+                    "{error}"
+                );
+                assert!(error.to_string().contains("mock rejection"), "{error}");
+            } else {
+                assert!(result.unwrap().enabled);
+            }
+            assert_eq!(f.mock.requests.lock().unwrap().len(), 1);
+        }
+    }
+}
+
 /// Handle creation is lazy; RPCs wait for container startup, whose duration must not
-/// consume the SSH deadline even when startup exceeds five seconds.
+/// consume the SSH deadline even when startup exceeds fifteen seconds.
 #[tokio::test]
 async fn ssh_waits_for_container_start_without_charging_rpc_deadline() {
     for operation in 0..3 {
@@ -344,13 +380,14 @@ async fn ssh_waits_for_container_start_without_charging_rpc_deadline() {
             "creating a handle must not start"
         );
         *f.mock.start_block.lock().unwrap() = true;
+        *f.mock.block.lock().unwrap() = true;
         let call = tokio::spawn(operate(f.ssh.clone(), operation));
         tokio::select! {
             _ = f.mock.start_entered.notified() => {}
             _ = f.mock.entered.notified() => panic!("SSH RPC sent before Container.Start"),
         }
         tokio::time::pause();
-        tokio::time::advance(Duration::from_secs(6)).await;
+        tokio::time::advance(Duration::from_secs(16)).await;
         tokio::task::yield_now().await;
         assert!(
             !call.is_finished(),
@@ -359,6 +396,12 @@ async fn ssh_waits_for_container_start_without_charging_rpc_deadline() {
         assert!(f.mock.requests.lock().unwrap().is_empty());
         tokio::time::resume();
         f.mock.start_release.notify_one();
+        f.mock.entered.notified().await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(6)).await;
+        tokio::task::yield_now().await;
+        tokio::time::resume();
+        f.mock.release.notify_one();
         tokio::time::timeout(Duration::from_secs(5), call)
             .await
             .unwrap()
@@ -450,17 +493,21 @@ async fn ssh_timeout_and_runtime_shutdown() {
                 f.backend.runtime.shutdown_token.cancel();
             } else {
                 tokio::time::pause();
-                tokio::time::advance(Duration::from_secs(6)).await;
+                tokio::time::advance(Duration::from_secs(14)).await;
+                tokio::task::yield_now().await;
+                assert!(!call.is_finished(), "SSH must have a 15-second budget");
+                tokio::time::advance(Duration::from_secs(1)).await;
             }
             let error = tokio::time::timeout(Duration::from_millis(100), call)
                 .await
-                .expect("SSH operation must finish within its 5-second deadline")
+                .expect("SSH operation must finish within its 15-second deadline")
                 .unwrap()
                 .unwrap_err();
             if cancel {
                 assert!(matches!(error, BoxliteError::Stopped(_)));
             } else {
-                assert!(error.to_string().contains("timed out after 5 seconds"));
+                assert!(matches!(error, BoxliteError::Rpc(_)));
+                assert!(error.to_string().contains("timed out after 15 seconds"));
                 tokio::time::resume();
             }
             assert_eq!(f.mock.requests.lock().unwrap().len(), 1);
@@ -479,36 +526,41 @@ fn ssh_debug_redacts_credentials() {
 /// or shutdown cancellation while the interface is being acquired.
 #[tokio::test]
 async fn ssh_deadline_and_shutdown_include_connection_handshake() {
-    for cancel in [false, true] {
-        let mut f = fixture().await;
-        f.server.abort();
-        let _ = (&mut f.server).await;
-        let proto::BoxTransport::Unix { socket_path } = f.backend.config.transport() else {
-            unreachable!()
-        };
-        std::fs::remove_file(&socket_path).unwrap();
-        let listener = tokio::net::UnixListener::bind(socket_path).unwrap();
-        let ssh = f.ssh.clone();
-        let call = tokio::spawn(async move { ssh.status().await });
-        // Accept the transport but never answer the HTTP/2 handshake.
-        let (_connection, _) = listener.accept().await.unwrap();
-        if cancel {
-            f.backend.runtime.shutdown_token.cancel();
-        } else {
-            tokio::time::pause();
-            tokio::time::advance(Duration::from_secs(6)).await;
+    for operation in 0..3 {
+        for cancel in [false, true] {
+            let mut f = fixture().await;
+            f.server.abort();
+            let _ = (&mut f.server).await;
+            let proto::BoxTransport::Unix { socket_path } = f.backend.config.transport() else {
+                unreachable!()
+            };
+            std::fs::remove_file(&socket_path).unwrap();
+            let listener = tokio::net::UnixListener::bind(socket_path).unwrap();
+            let call = tokio::spawn(operate(f.ssh.clone(), operation));
+            // Accept the transport but never answer the HTTP/2 handshake.
+            let (_connection, _) = listener.accept().await.unwrap();
+            if cancel {
+                f.backend.runtime.shutdown_token.cancel();
+            } else {
+                tokio::time::pause();
+                tokio::time::advance(Duration::from_secs(14)).await;
+                tokio::task::yield_now().await;
+                assert!(!call.is_finished(), "SSH must have a 15-second budget");
+                tokio::time::advance(Duration::from_secs(1)).await;
+            }
+            let error = tokio::time::timeout(Duration::from_millis(100), call)
+                .await
+                .expect("SSH operation must finish within its 15-second deadline")
+                .unwrap()
+                .unwrap_err();
+            if cancel {
+                assert!(matches!(error, BoxliteError::Stopped(_)));
+            } else {
+                assert!(matches!(error, BoxliteError::Rpc(_)));
+                assert!(error.to_string().contains("timed out after 15 seconds"));
+                tokio::time::resume();
+            }
+            assert!(f.mock.requests.lock().unwrap().is_empty());
         }
-        let error = tokio::time::timeout(Duration::from_millis(100), call)
-            .await
-            .expect("SSH operation must finish within its 5-second deadline")
-            .unwrap()
-            .unwrap_err();
-        if cancel {
-            assert!(matches!(error, BoxliteError::Stopped(_)));
-        } else {
-            assert!(error.to_string().contains("timed out after 5 seconds"));
-            tokio::time::resume();
-        }
-        assert!(f.mock.requests.lock().unwrap().is_empty());
     }
 }

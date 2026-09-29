@@ -215,14 +215,18 @@ Configuration fields are explicit; the runtime neither generates keys nor stores
 configuration nor publishes ports. All types are `Clone + Debug + Send + Sync`;
 configuration Debug output redacts credentials, and status supports `PartialEq + Eq`.
 
-After VM and container startup, obtaining the SSH interface and making the RPC
-share a 5-second deadline. Runtime shutdown cancels the whole operation, including
+After VM and container startup, each operation has a total 15-second budget:
+the guest's 10-second cleanup limit plus 5 seconds for communication and scheduling.
+Obtaining the SSH interface, connection setup, queueing, and the RPC consume this
+same budget, so delays can leave less than 10 seconds for guest cleanup.
+Runtime shutdown cancels the whole operation, including
 startup; operations are not retried. Cancellation/timeout cannot guarantee
 rollback. Invalidated handles return `Stopped`; drop all references to the old box
 and use `runtime.get()` to obtain a fresh handle for restart. Recovered stopped
 boxes with an explicit main command still require `start()` before SSH control. Guest
-`InvalidArgument`, `FailedPrecondition`, and `Unimplemented` map to `InvalidArgument`, `InvalidState`, and `Unsupported`; other RPC failures
-retain operation and gRPC status context. Missing response status is `Internal`.
+`InvalidArgument`, `FailedPrecondition`, and `Unimplemented` map to `InvalidArgument`, `InvalidState`, and `Unsupported`; other RPC failures,
+including guest `DeadlineExceeded`, map to `BoxliteError::Rpc` and retain operation
+and gRPC status context. Missing response status is `Internal`.
 
 See the [SSH guide](../../guides/ssh.md) for an implicit-start example,
 validation, reconfiguration, disable, and generation semantics.

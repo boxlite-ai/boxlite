@@ -2,13 +2,13 @@
 
 use std::{fmt, sync::Arc, time::Duration};
 
-use boxlite_shared::{BoxliteError, BoxliteResult};
+use boxlite_shared::{BoxliteError, BoxliteResult, constants::ssh::DRAIN_TIMEOUT};
 
 use super::box_impl::BoxImpl;
 use crate::runtime::backend::BoxBackend;
 
-// Deadline for SSH interface acquisition and RPC, after VM/container startup.
-const SSH_TIMEOUT: Duration = Duration::from_secs(5);
+// Allow guest cleanup plus communication and scheduling overhead after startup.
+const SSH_TIMEOUT: Duration = Duration::from_secs(DRAIN_TIMEOUT.as_secs() + 5);
 
 /// Complete guest SSH configuration. Keys are never persisted by the runtime.
 #[derive(Clone)]
@@ -82,10 +82,13 @@ pub struct SshStatus {
 /// `InvalidState`: call `LiteBox::start()` first. This also applies to fresh
 /// handles obtained through `runtime.get()` after stopping the box.
 ///
-/// After startup, SSH interface acquisition and the RPC share a 5-second deadline.
-/// Runtime shutdown cancels the whole operation, including startup. Operations
-/// are not retried. Timeout or cancellation
-/// does not undo a configuration already applied by the guest.
+/// After startup, each operation has a total 15-second budget: the guest's
+/// 10-second cleanup limit plus 5 seconds for communication and scheduling.
+/// Interface acquisition, connection setup, queueing, and the RPC consume this
+/// same budget; VM and container startup do not. Guest `DeadlineExceeded` remains
+/// [`BoxliteError::Rpc`] with the original status context. Runtime shutdown cancels
+/// the whole operation, including startup. Operations are not retried. Timeout or
+/// cancellation does not undo a configuration already applied by the guest.
 #[derive(Clone)]
 pub struct SshHandle {
     backend: Arc<dyn BoxBackend>,

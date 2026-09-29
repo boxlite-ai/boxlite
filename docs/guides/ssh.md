@@ -35,8 +35,11 @@ ssh.disable().await?;
 
 `SshHandle` owns its backend reference and can outlive the `LiteBox` borrow.
 A fresh handle to a running VM can query SSH without calling `start()` again.
-After startup, obtaining the SSH interface and making the RPC share a 5-second
-deadline; VM and container startup time is excluded. Runtime shutdown cancels the
+After startup, each operation has a total 15-second budget: the guest's 10-second
+cleanup limit plus 5 seconds for communication and scheduling. Obtaining the SSH
+interface, connection setup, queueing, and the RPC all consume this budget; VM and
+container startup time is excluded. Connection or queueing delays can leave less
+than 10 seconds for guest cleanup. Runtime shutdown cancels the
 whole operation, including startup. Operations are not automatically retried.
 Timeout or cancellation does not undo changes the guest may already have applied.
 Invalidated handles return `Stopped`; drop all references to the old box and
@@ -90,7 +93,8 @@ Every valid Configure fully restarts SSH, even if the configuration is identical
 validate → stop listener → disconnect all clients → wait for SSH execution and
 forwarding cleanup → bind new listener. Invalid configuration returns a sanitized
 `InvalidArgument` error and leaves the old service running. If stopping takes
-longer than ten seconds, the request returns `DeadlineExceeded`; cleanup remains
+longer than ten seconds, the request returns `DeadlineExceeded`, which the Rust
+runtime preserves as `BoxliteError::Rpc` with the original gRPC status; cleanup remains
 tracked and a later Configure must finish draining it before starting another
 listener. A bind failure returns `Unavailable` and leaves SSH disabled, without
 restoring the old configuration. Disable performs the same drain and is idempotent.

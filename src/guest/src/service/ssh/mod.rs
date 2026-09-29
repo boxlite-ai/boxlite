@@ -20,6 +20,7 @@ pub(crate) use workload::{BoxliteWorkloadExecutor, SshWorkload};
 use crate::service::server::GuestServer;
 use auth::SshAuthorizer;
 use backoff::Backoff;
+use boxlite_shared::constants::ssh::DRAIN_TIMEOUT;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::net::{Shutdown, SocketAddr};
 use std::sync::{Arc, OnceLock, Weak};
@@ -205,7 +206,7 @@ impl SshManager {
                 Ok(())
             }
         };
-        let listener_result = tokio::time::timeout(limits::CONTROL_CALL_TIMEOUT, draining)
+        let listener_result = tokio::time::timeout(DRAIN_TIMEOUT, draining)
             .await
             .map_err(|_| {
                 tonic::Status::deadline_exceeded("timed out waiting for SSH sessions to stop")
