@@ -123,6 +123,21 @@ API deploy. The API then rejects old unverified `auth0|...` access tokens across
 HTTP, Socket.IO, and the WebSocket proxy. It does not revoke refresh tokens or
 retroactively gate independently validating Commerce/Analytics services.
 
+## Account linking at login
+
+A social login has to reach the same BoxLite account as the password sign-up
+that owns the address (POL-555).
+
+### What the link moves
+
+When the social identity already had a BoxLite user — it signed in before this
+flow existed — the API moves that user's organization memberships, role
+assignments, and API keys to the password account, in one transaction. Moving
+is idempotent: a second move finds nothing left to move. Boxes, volumes, and
+usage belong to organizations and stay where they are. The password account
+keeps its own default organization; the moved one becomes its default only
+when the password account had none. Organizations are never merged.
+
 ## Outbound mail
 
 Use the [GCP SMTP procedure](gcp/identity-and-mail.md#application-mail) or
