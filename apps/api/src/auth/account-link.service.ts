@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { hkdfSync } from 'node:crypto'
 import { Injectable, Logger } from '@nestjs/common'
 import axios from 'axios'
-import { JWTPayload, SignJWT, decodeJwt, jwtVerify } from 'jose'
+import { EncryptJWT, JWTPayload, SignJWT, decodeJwt, jwtDecrypt, jwtVerify } from 'jose'
 import { TypedConfigService } from '../config/typed-config.service'
 import { Auth0ManagementService } from '../user/auth0-management.service'
 import { LinkedIdentityService } from '../user/linked-identity.service'
@@ -52,6 +53,15 @@ export type PasswordAttempt =
   | { kind: 'refused'; message: string; retry: boolean }
 
 /**
+ * How long the password page stays usable.
+ *
+ * It bounds one password entry, a few retries, or a reset email read in
+ * another tab. The login transaction Auth0 holds open expires on a similar
+ * order, so a longer window here would only keep a dead transaction alive.
+ */
+const LINK_STATE_TTL_SECONDS = 600
+
+/**
  * How long the token carried back to `/continue` stays acceptable. The browser
  * follows that redirect immediately, so this only has to outlast one hop.
  */
@@ -86,12 +96,15 @@ export function readAccountLinkSession(payload: JWTPayload): AccountLinkSession 
 }
 
 /**
- * The login-time account link on the API side: every token it mints or
- * accepts, and every call it makes to the tenant.
+ * The login-time account link, end to end on the API side.
+ *
+ * The controller only moves requests, pages and redirects; every token this
+ * flow mints or accepts, and every call it makes to the tenant, is here.
  *
  * One secret keys the tokens. The two Auth0 reads or writes are HS256 under
  * the secret itself, because that is all `encodeToken` and `validateToken`
- * accept.
+ * accept. The state only this service reads is encrypted instead, under a key
+ * derived from the secret, so signing and encryption never share key bytes.
  *
  * Passwords pass through here on their way to Auth0 and nowhere else: they
  * are never logged, stored, or put in an error message.
@@ -110,6 +123,48 @@ export class AccountLinkService {
   async readSession(sessionToken: string): Promise<AccountLinkSession> {
     const { payload } = await jwtVerify(sessionToken, this.signingKey(), { algorithms: ['HS256'] })
     return readAccountLinkSession(payload)
+  }
+
+  /**
+   * Open the password page for this session.
+   *
+   * The state it returns is what the page posts back. The browser carries it
+   * but cannot open it, and it — never the form — says which address the
+   * password is for.
+   */
+  async beginLink(
+    session: AccountLinkSession,
+    transactionState: string,
+  ): Promise<{ state: LinkPageState; token: string }> {
+    const state: LinkPageState = {
+      ...session,
+      transactionState,
+      signUp: !(await this.hasDatabaseAccount(session)),
+    }
+    const token = await new EncryptJWT({
+      tx: transactionState,
+      email: session.email,
+      connection: session.connection,
+      sign_up: state.signUp,
+    })
+      .setProtectedHeader({ alg: 'dir', enc: 'A256GCM' })
+      .setSubject(session.socialUserId)
+      .setIssuedAt()
+      .setExpirationTime(`${LINK_STATE_TTL_SECONDS}s`)
+      .encrypt(this.stateKey())
+    return { state, token }
+  }
+
+  /** Accept only a state this service encrypted. */
+  async readPageState(token: string): Promise<LinkPageState> {
+    const { payload } = await jwtDecrypt(token, this.stateKey())
+    if (typeof payload.tx !== 'string' || payload.tx === '') {
+      throw new Error('state carries no Auth0 transaction')
+    }
+    if (typeof payload.sign_up !== 'boolean') {
+      throw new Error('state does not say whether the page signs up')
+    }
+    return { ...readAccountLinkSession(payload), transactionState: payload.tx, signUp: payload.sign_up }
   }
 
   /**
@@ -200,6 +255,12 @@ export class AccountLinkService {
     return url.toString()
   }
 
+  /** Whether the address already has a password account to prove. */
+  private async hasDatabaseAccount(session: Pick<AccountLinkSession, 'email' | 'connection'>): Promise<boolean> {
+    const users = await this.auth0Management.usersByEmail(session.email)
+    return users.some((user) => user.identities?.some((identity) => identity.connection === session.connection))
+  }
+
   /**
    * The password account the password opens, verified to hold the address.
    *
@@ -278,6 +339,18 @@ export class AccountLinkService {
 
   private signingKey(): Uint8Array {
     return new TextEncoder().encode(this.configService.getOrThrow('oidc.accountLink.redirectSecret'))
+  }
+
+  private stateKey(): Uint8Array {
+    return new Uint8Array(
+      hkdfSync(
+        'sha256',
+        this.configService.getOrThrow('oidc.accountLink.redirectSecret'),
+        new Uint8Array(),
+        'boxlite-account-link-state',
+        32,
+      ),
+    )
   }
 }
 

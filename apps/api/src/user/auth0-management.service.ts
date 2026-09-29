@@ -7,6 +7,20 @@ import { Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import axios from 'axios'
 import { TypedConfigService } from '../config/typed-config.service'
 
+/** The part of an Auth0 user record the login-time link reads. */
+export interface Auth0UserIdentity {
+  provider: string
+  user_id: string
+  connection: string
+}
+
+export interface Auth0User {
+  user_id: string
+  email?: string
+  email_verified?: boolean
+  identities?: Auth0UserIdentity[]
+}
+
 /**
  * The tenant's Management API, reached with the client-credentials grant the
  * `oidc.managementApi` settings describe.
@@ -61,6 +75,22 @@ export class Auth0ManagementService {
       { email_verified: true },
       { headers: { Authorization: `Bearer ${token}` }, maxRedirects: 0 },
     )
+  }
+
+  /**
+   * Every tenant user holding this address, across connections.
+   *
+   * Auth0 lowercases the address before matching, so the caller does not need
+   * to normalise it.
+   */
+  async usersByEmail(email: string): Promise<Auth0User[]> {
+    const token = await this.accessToken()
+    const response = await axios.get<Auth0User[]>(this.url('users-by-email'), {
+      params: { email },
+      headers: { Authorization: `Bearer ${token}` },
+      maxRedirects: 0,
+    })
+    return response.data
   }
 
   /**

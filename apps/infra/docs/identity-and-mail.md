@@ -128,6 +128,14 @@ retroactively gate independently validating Commerce/Analytics services.
 A social login has to reach the same BoxLite account as the password sign-up
 that owns the address (POL-555).
 
+The password page is BoxLite's own. Auth0's password page lets the address be
+edited and never says it is linking, and changing it takes page templates,
+which the dev tenant's plan refuses (the Management API answers 402). The page
+shows the social login's address as text and asks for that account's
+password, or for a new one when no password account holds the address. The
+address comes from the encrypted state the form posts back, never from the
+form.
+
 The API checks the password with Auth0's password-realm grant on the database
 connection, through a confidential client made for this step
 ([Resource Owner Password Flow](https://auth0.com/docs/get-started/authentication-and-authorization-flow/resource-owner-password-flow/call-your-api-using-resource-owner-password-flow)).
@@ -135,11 +143,10 @@ It sends the browser's address in `auth0-forwarded-for`, which Auth0 honours
 only for a client with Trust Token Endpoint IP Header on, so brute-force
 protection counts attempts per person rather than per API host
 ([Attack Protection](https://auth0.com/docs/get-started/authentication-and-authorization-flow/resource-owner-password-flow/avoid-common-issues-with-resource-owner-password-flow-and-attack-protection)).
-A wrong password can be tried again. `mfa_required` comes back as a message
-that an account with MFA cannot link this way yet, and a blocked account and
-other refusals with Auth0's reason; none of them can be retried. An address with no password account gets one,
-signed up with the password typed, and a forgotten password can be reset by
-an email Auth0 sends to the same address.
+A wrong password shows the page again. `mfa_required` shows that an account
+with MFA cannot link this way yet, and a blocked account and other refusals
+show Auth0's reason; either way only Cancel is left. Forgot password? asks
+Auth0 to email a reset link to the fixed address.
 
 The social provider, or the email-verification Form the Action shows first
 when the provider has not verified the address, has proven the address. So an
@@ -149,7 +156,12 @@ password opens must be a database account holding that address, in an ID
 token this tenant issued to the link client; anything else ends the login
 with no token.
 
-The password is never logged or stored, and goes only to Auth0.
+The password is never logged or stored, and goes only to Auth0. The browser
+signs in once, on the domain it started on, so the paused login keeps its
+session. An earlier design ran a second Universal Login sign-in instead, and
+on dev one on the paused login's own domain left `/continue` with no
+transaction to resume: Auth0 logged
+`A user has attempted to access a login page directly`.
 
 ### The settings
 
@@ -160,6 +172,7 @@ Auth0's `encodeToken` and `validateToken` accept only a shared secret:
 | Token | Signed by | Checked by | Stops |
 | --- | --- | --- | --- |
 | session token, Action → `/start` | the Action | the API | a forged social id being linked into someone else's password account |
+| state, `/start` → `/password` | the API, encrypted under a key derived from the secret | the API | changing the address the password is checked for, or the transaction it carries |
 | outcome, `/password` → `/continue` | the API | the Action | a forged "linked" outcome naming an arbitrary primary account |
 
 Generate it once per stage, at least 32 characters (RFC 7518 §3.2 wants
@@ -193,6 +206,19 @@ organizations and stay where they are. The password account keeps its own
 default organization; the moved one becomes its default only when the
 password account had none, which is the case for an account the link just
 signed up. Organizations are never merged.
+
+### Endpoints
+
+`GET /api/auth/link/start` verifies the Action's session token and answers
+with the password page. `POST /api/auth/link/password` decrypts its own state
+and, by the button pressed, checks or sets the password and links, emails a
+reset link, or cancels. Every ending returns the browser to `/continue` with
+the outcome — failures included, so the Action can refuse the login on the
+page the person is looking at.
+
+Both answer 404 while the secret is unset, and 400 for a token that is
+missing, expired, or signed with anything else. Those tokens are the tenant's,
+not the user's, so the reason goes to the log rather than the response.
 
 ## Outbound mail
 
