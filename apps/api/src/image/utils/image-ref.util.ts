@@ -196,6 +196,32 @@ export function upstreamRefOf(ref: string): string {
   return upstream || ref
 }
 
+/** The organization segment of a registry proxy ref: an organization id, a UUID. */
+const PROXY_ORGANIZATION_SEGMENT = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+
+/**
+ * `text` with every registry proxy ref in it written as the upstream ref it
+ * stands for: {@link upstreamRefOf} for prose rather than a single ref.
+ *
+ * A pull that fails through the proxy is reported in the runtime's words, and
+ * those name what the runner was handed — `<proxy>/<org>/ghcr.io/acme/app:1`,
+ * and in the registry client's request URL `https://<proxy>/v2/<org>/ghcr.io/…`.
+ * The tenant named `ghcr.io/acme/app:1` and reads the proxy nowhere else.
+ *
+ * The URL form goes first, and the organization is matched as the UUID it
+ * always is, so the URL's `v2` is never taken for an organization.
+ */
+export function withUpstreamRefs(text: string): string {
+  const proxyHost = registryProxyHost()
+  if (!proxyHost) {
+    return text
+  }
+  const proxy = proxyHost.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return text
+    .replace(new RegExp(`${proxy}/v2/${PROXY_ORGANIZATION_SEGMENT}/([^/\\s]+)/`, 'g'), '$1/v2/')
+    .replace(new RegExp(`${proxy}/${PROXY_ORGANIZATION_SEGMENT}/`, 'g'), '')
+}
+
 /**
  * Refuse a ref a tenant wrote against the registry proxy itself.
  *

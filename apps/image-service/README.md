@@ -60,6 +60,12 @@ The organization comes from the path and only from the path. A caller's own
 credential says which runner is calling, never which organization: runners are
 shared and belong to none.
 
+These refs are the API's and the runner's alone. The API writes
+`<proxy>/<org>/ghcr.io/acme/app:1.2` for a box whose image an organization's
+login covers, and a tenant never reads it back: the box's image is
+`ghcr.io/acme/app:1.2`, and a pull that fails is recorded with that name, in
+both the ref and the `/v2/` URL a registry client prints.
+
 ## What a pull passes through
 
 ```
