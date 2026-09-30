@@ -128,6 +128,29 @@ retroactively gate independently validating Commerce/Analytics services.
 A social login has to reach the same BoxLite account as the password sign-up
 that owns the address (POL-555).
 
+The API checks the password with Auth0's password-realm grant on the database
+connection, through a confidential client made for this step
+([Resource Owner Password Flow](https://auth0.com/docs/get-started/authentication-and-authorization-flow/resource-owner-password-flow/call-your-api-using-resource-owner-password-flow)).
+It sends the browser's address in `auth0-forwarded-for`, which Auth0 honours
+only for a client with Trust Token Endpoint IP Header on, so brute-force
+protection counts attempts per person rather than per API host
+([Attack Protection](https://auth0.com/docs/get-started/authentication-and-authorization-flow/resource-owner-password-flow/avoid-common-issues-with-resource-owner-password-flow-and-attack-protection)).
+A wrong password can be tried again. `mfa_required` comes back as a message
+that an account with MFA cannot link this way yet, and a blocked account and
+other refusals with Auth0's reason; none of them can be retried. An address with no password account gets one,
+signed up with the password typed, and a forgotten password can be reset by
+an email Auth0 sends to the same address.
+
+The social provider, or the email-verification Form the Action shows first
+when the provider has not verified the address, has proven the address. So an
+account the link signs up, or a password account that never verified its
+address, is marked verified once the password is proven. The account the
+password opens must be a database account holding that address, in an ID
+token this tenant issued to the link client; anything else ends the login
+with no token.
+
+The password is never logged or stored, and goes only to Auth0.
+
 ### The settings
 
 `OIDC_ACCOUNT_LINK_REDIRECT_SECRET` turns the link on by being set. It is the
@@ -160,11 +183,16 @@ marking an address verified.
 
 When the social identity already had a BoxLite user — it signed in before this
 flow existed — the API moves that user's organization memberships, role
-assignments, and API keys to the password account, in one transaction. Moving
-is idempotent: a second move finds nothing left to move. Boxes, volumes, and
-usage belong to organizations and stay where they are. The password account
-keeps its own default organization; the moved one becomes its default only
-when the password account had none. Organizations are never merged.
+assignments, and API keys to the password account, in one transaction, and
+only then links the identities at Auth0. The order matters: once linked, later
+social logins reach the password account directly and never pass the password
+page again, so a move left undone then would stay undone. A link that fails
+after the move leaves the social login unlinked, so the next one runs the flow
+again, and moving is idempotent. Boxes, volumes, and usage belong to
+organizations and stay where they are. The password account keeps its own
+default organization; the moved one becomes its default only when the
+password account had none, which is the case for an account the link just
+signed up. Organizations are never merged.
 
 ## Outbound mail
 
