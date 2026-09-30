@@ -45,6 +45,10 @@ service Guest {
   // Thaw previously quiesced filesystems (FITHAW ioctl).
   // Must be called after SIGCONT to unblock writes.
   rpc Thaw(ThawRequest) returns (ThawResponse);
+
+  // Discard free space on all writable filesystems (FITRIM ioctl), so the
+  // host can reclaim it from the disk images. Best effort.
+  rpc Trim(TrimRequest) returns (TrimResponse);
 }
 
 // In-memory SSH control; requires successful Guest.Init.
@@ -217,6 +221,13 @@ message ThawRequest {}
 message ThawResponse {
   // Number of filesystems successfully thawed
   uint32 thawed_count = 1;
+}
+
+message TrimRequest {}
+
+message TrimResponse {
+  // Bytes the filesystems reported as trimmed
+  uint64 trimmed_bytes = 1;
 }
 
 // ============================================================================

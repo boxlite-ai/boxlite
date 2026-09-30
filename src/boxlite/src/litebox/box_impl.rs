@@ -1370,7 +1370,8 @@ impl BoxImpl {
 impl BoxImpl {
     /// Execute a future with the VM quiesced for point-in-time consistency.
     ///
-    /// Follows the QEMU+libvirt quiesce protocol:
+    /// Follows the QEMU+libvirt quiesce protocol, preceded by a trim:
+    ///   0. Guest Trim RPC (FITRIM — so deleted data is not captured in the disk)
     ///   1. Guest Quiesce RPC (FIFREEZE — flush dirty pages + block new writes)
     ///   2. SIGSTOP shim process (pause vCPUs)
     ///   3. `fut` — caller's operation (disk copy, export, etc.)
@@ -1406,6 +1407,9 @@ impl BoxImpl {
         };
 
         let t0 = Instant::now();
+
+        // Phase 0: Trim guest free space (best-effort, 10s timeout)
+        self.guest_trim().await;
 
         // Phase 1: Freeze guest I/O (best-effort, 5s timeout)
         let t_quiesce = Instant::now();
@@ -1467,6 +1471,32 @@ impl BoxImpl {
         );
 
         result
+    }
+
+    /// Best-effort guest filesystem trim (FITRIM) with timeout.
+    async fn guest_trim(&self) {
+        let Ok(live) = self.live_state().await else {
+            tracing::warn!("Cannot trim: LiveState not available");
+            return;
+        };
+
+        let result = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut guest = live.guest_session.guest().await?;
+            guest.trim().await
+        })
+        .await;
+
+        match result {
+            Ok(Ok(bytes)) => {
+                tracing::debug!(trimmed_bytes = bytes, "Guest filesystems trimmed");
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("Guest trim RPC failed: {}", e);
+            }
+            Err(_) => {
+                tracing::warn!("Guest trim timed out");
+            }
+        }
     }
 
     /// Best-effort guest filesystem quiesce (FIFREEZE) with timeout.

@@ -49,12 +49,17 @@ const SKIP_FS_TYPES: &[&str] = &[
     "overlay",
 ];
 
-/// Freeze all writable filesystems.
+/// A writable, non-virtual mount from `/proc/mounts`.
+pub(crate) struct WritableMount {
+    pub source: String,
+    pub mount_point: String,
+    pub fs_type: String,
+}
+
+/// List writable, non-virtual mounts from `/proc/mounts`.
 ///
-/// Parses `/proc/mounts` to find writable, non-virtual filesystems,
-/// then calls FIFREEZE on each. Returns the list of mount points
-/// that were successfully frozen.
-pub fn freeze_filesystems() -> Vec<PathBuf> {
+/// The same filesystem can appear more than once (bind mounts).
+pub(crate) fn writable_mounts() -> Vec<WritableMount> {
     let mounts = match std::fs::read_to_string("/proc/mounts") {
         Ok(content) => content,
         Err(e) => {
@@ -62,8 +67,11 @@ pub fn freeze_filesystems() -> Vec<PathBuf> {
             return Vec::new();
         }
     };
+    parse_writable_mounts(&mounts)
+}
 
-    let mut frozen = Vec::new();
+fn parse_writable_mounts(mounts: &str) -> Vec<WritableMount> {
+    let mut result = Vec::new();
 
     for line in mounts.lines() {
         let fields: Vec<&str> = line.split_whitespace().collect();
@@ -71,7 +79,6 @@ pub fn freeze_filesystems() -> Vec<PathBuf> {
             continue;
         }
 
-        let mount_point = fields[1];
         let fs_type = fields[2];
         let options = fields[3];
 
@@ -84,6 +91,28 @@ pub fn freeze_filesystems() -> Vec<PathBuf> {
         if options.split(',').any(|opt| opt == "ro") {
             continue;
         }
+
+        result.push(WritableMount {
+            source: fields[0].to_string(),
+            mount_point: fields[1].to_string(),
+            fs_type: fs_type.to_string(),
+        });
+    }
+
+    result
+}
+
+/// Freeze all writable filesystems.
+///
+/// Parses `/proc/mounts` to find writable, non-virtual filesystems,
+/// then calls FIFREEZE on each. Returns the list of mount points
+/// that were successfully frozen.
+pub fn freeze_filesystems() -> Vec<PathBuf> {
+    let mut frozen = Vec::new();
+
+    for mount in writable_mounts() {
+        let mount_point = mount.mount_point.as_str();
+        let fs_type = mount.fs_type.as_str();
 
         match do_fsfreeze(mount_point) {
             Ok(()) => {
@@ -153,4 +182,33 @@ fn do_fsthaw(mount_point: &str) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_writable_mounts_skips_virtual_and_read_only() {
+        let mounts = "\
+/dev/vda / ext4 ro,relatime 0 0
+proc /proc proc rw,nosuid 0 0
+tmpfs /tmp tmpfs rw 0 0
+/dev/vdb /run/boxlite/shared/rootfs ext4 rw,noatime,discard 0 0
+/dev/vdb /run/boxlite/containers/c1/rootfs ext4 rw,noatime,discard 0 0
+shared /run/boxlite/shared virtiofs rw 0 0
+";
+        let parsed = parse_writable_mounts(mounts);
+        let points: Vec<_> = parsed.iter().map(|m| m.mount_point.as_str()).collect();
+        assert_eq!(
+            points,
+            [
+                "/run/boxlite/shared/rootfs",
+                "/run/boxlite/containers/c1/rootfs",
+                "/run/boxlite/shared",
+            ]
+        );
+        assert_eq!(parsed[0].source, "/dev/vdb");
+        assert_eq!(parsed[2].fs_type, "virtiofs");
+    }
 }

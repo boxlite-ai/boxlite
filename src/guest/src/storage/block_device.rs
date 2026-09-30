@@ -73,7 +73,8 @@ impl BlockDeviceMount {
         let mount_flags = MsFlags::MS_NOATIME | MsFlags::MS_NODIRATIME;
 
         // `discard`: tell the disk about freed blocks as files are deleted, so the host can
-        // punch holes in the image and reclaim the space.
+        // punch holes in the image and reclaim the space. Space freed before this option was
+        // set is picked up by FITRIM (see `storage::fstrim`).
         mount(
             Some(device),
             mount_point,
