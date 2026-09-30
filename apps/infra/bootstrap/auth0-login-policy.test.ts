@@ -325,6 +325,7 @@ test('parseAuth0LoginPolicyOptions defaults to preview and requires exact tenant
       allowTestEmailProvider: false,
       replaceAction: false,
       accountLinkApiOrigin: undefined,
+      accountLinkSecret: undefined,
     },
   )
   assert.equal(
@@ -342,10 +343,14 @@ test('parseAuth0LoginPolicyOptions defaults to preview and requires exact tenant
   assert.throws(() => parseAuth0LoginPolicyOptions(['--tenant', 'tenant.us.auth0.com']), /--client-id is required/)
 })
 
+const LINK_KEY = 'k'.repeat(32)
+
 test('parseAuth0LoginPolicyOptions takes the account link API origin only as a bare https origin', () => {
   const required = ['--tenant', 'tenant.us.auth0.com', '--client-id', 'spa_123', '--connection', 'boxlite-users']
   const origin = (value: string) =>
-    parseAuth0LoginPolicyOptions([...required, '--account-link-api-origin', value]).accountLinkApiOrigin
+    parseAuth0LoginPolicyOptions([...required, '--account-link-api-origin', value], {
+      AUTH0_ACCOUNT_LINK_SECRET: LINK_KEY,
+    }).accountLinkApiOrigin
 
   assert.equal(origin('https://api.example.com'), 'https://api.example.com')
   for (const refused of [
@@ -356,6 +361,34 @@ test('parseAuth0LoginPolicyOptions takes the account link API origin only as a b
   ]) {
     assert.throws(() => origin(refused), /must be a bare https origin/, refused)
   }
+})
+
+test('parseAuth0LoginPolicyOptions reads the account link key from the environment, never argv', () => {
+  const linked = [
+    '--tenant',
+    'tenant.us.auth0.com',
+    '--client-id',
+    'spa_123',
+    '--connection',
+    'boxlite-users',
+    '--account-link-api-origin',
+    'https://api.example.com',
+  ]
+
+  assert.equal(
+    parseAuth0LoginPolicyOptions(linked, { AUTH0_ACCOUNT_LINK_SECRET: LINK_KEY }).accountLinkSecret,
+    LINK_KEY,
+  )
+  for (const key of [undefined, 'k'.repeat(31), ` ${LINK_KEY}`]) {
+    assert.throws(
+      () => parseAuth0LoginPolicyOptions(linked, { AUTH0_ACCOUNT_LINK_SECRET: key }),
+      /AUTH0_ACCOUNT_LINK_SECRET must hold at least 32 characters/,
+    )
+  }
+  assert.throws(
+    () => parseAuth0LoginPolicyOptions([...linked, '--account-link-secret', LINK_KEY], {}),
+    /Unknown option/,
+  )
 })
 
 test('Auth0CliManagementClient sends sensitive bodies over stdin, never process argv', () => {
@@ -866,18 +899,23 @@ function fakeTenant() {
         Object.assign(state.form, options.data)
         return state.form
       }
+      // Auth0 keeps a secret's value to itself and answers with its name only.
+      const keepSecrets = (secrets: Array<{ name: string; value: string }> | undefined) => {
+        if (!secrets) return
+        state.action.secrets = secrets.map(({ name }) => ({ name }))
+        state.actionSecretValues = Object.fromEntries(secrets.map(({ name, value }) => [name, value]))
+      }
       if (method === 'post' && path === 'actions/actions') {
-        state.action = {
-          id: 'act_policy',
-          ...options.data,
-          secrets: [],
-          all_changes_deployed: false,
-        }
+        const { secrets, ...definition } = options.data as Record<string, any>
+        state.action = { id: 'act_policy', ...definition, secrets: [], all_changes_deployed: false }
+        keepSecrets(secrets)
         return state.action
       }
       if (method === 'patch' && path === 'actions/actions/act_policy') {
         // A patch edits the draft; only a deploy changes what runs.
-        Object.assign(state.action, options.data, { all_changes_deployed: false })
+        const { secrets, ...definition } = options.data as Record<string, any>
+        Object.assign(state.action, definition, { all_changes_deployed: false })
+        keepSecrets(secrets)
         return state.action
       }
       if (method === 'post' && path === 'actions/actions/act_policy/deploy') {
@@ -886,7 +924,7 @@ function fakeTenant() {
           code: state.action.code,
           runtime: state.action.runtime,
           deployed: true,
-          secrets: [],
+          secrets: state.action.secrets,
         }
         return {}
       }
@@ -1210,7 +1248,7 @@ test('login policy apply leaves an Action with an undeployed draft alone, and a 
   }
 })
 
-function linkConfigurator(tenant: ReturnType<typeof fakeTenant>) {
+function linkConfigurator(tenant: ReturnType<typeof fakeTenant>, accountLinkSecret = LINK_KEY) {
   return new Auth0LoginPolicyConfigurator(
     {
       tenant: 'tenant.us.auth0.com',
@@ -1219,6 +1257,7 @@ function linkConfigurator(tenant: ReturnType<typeof fakeTenant>) {
       apply: true,
       allowTestEmailProvider: false,
       accountLinkApiOrigin: 'https://api.example.com',
+      accountLinkSecret,
     },
     tenant.client,
     {
@@ -1303,6 +1342,62 @@ test('login policy apply without an API origin creates no account link client', 
       tenant.calls.some((call) => call.method === 'post' && call.path === 'clients'),
       false,
     )
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
+})
+
+test('login policy apply keys the Action with the account link secrets and journals none of them', () => {
+  const tenant = fakeTenant()
+  try {
+    const result = linkConfigurator(tenant).apply()
+
+    assert.deepEqual(tenant.state.actionSecretValues, {
+      ACCOUNT_LINK_CLIENT_ID: 'lnk_123',
+      ACCOUNT_LINK_CLIENT_SECRET: 'link-client-secret',
+      ACCOUNT_LINK_SECRET: LINK_KEY,
+    })
+    assert.deepEqual(
+      tenant.state.action.deployed_version.secrets.map((secret: { name: string }) => secret.name),
+      ['ACCOUNT_LINK_CLIENT_ID', 'ACCOUNT_LINK_CLIENT_SECRET', 'ACCOUNT_LINK_SECRET'],
+    )
+    const journal = readFileSync(result.journal as string, 'utf8')
+    assert.doesNotMatch(journal, new RegExp(LINK_KEY))
+    assert.doesNotMatch(journal, /link-client-secret/)
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
+})
+
+test('login policy apply rewrites a rotated account link key, and rollback restores only the code', () => {
+  const tenant = fakeTenant()
+  const rotated = 'r'.repeat(40)
+  try {
+    linkConfigurator(tenant).apply()
+    const ran = tenant.state.action.deployed_version.code
+    const result = linkConfigurator(tenant, rotated).apply()
+
+    assert.equal(tenant.state.actionSecretValues.ACCOUNT_LINK_SECRET, rotated)
+    assert.equal(tenant.state.action.all_changes_deployed, true)
+    assert.doesNotMatch(readFileSync(result.journal as string, 'utf8'), new RegExp(rotated))
+
+    tenant.state.action.code = tenant.state.action.deployed_version.code = '// something newer'
+    Auth0LoginPolicyConfigurator.rollback(result.journal as string, () => tenant.client)
+    assert.equal(tenant.state.action.deployed_version.code, ran)
+    assert.equal(tenant.state.actionSecretValues.ACCOUNT_LINK_SECRET, rotated)
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
+})
+
+test('login policy apply refuses an Action carrying a secret the account link does not set', () => {
+  const tenant = fakeTenant()
+  try {
+    upgradeConfigurator(tenant).apply()
+    tenant.state.action.secrets = [{ name: 'SOMETHING_ELSE' }]
+    tenant.state.action.deployed_version.secrets = [{ name: 'SOMETHING_ELSE' }]
+
+    assert.throws(() => upgradeConfigurator(tenant).apply(), /contains secrets/)
   } finally {
     rmSync(tenant.journalDirectory, { recursive: true, force: true })
   }
