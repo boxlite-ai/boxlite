@@ -5,12 +5,13 @@
 
 jest.mock('axios', () => ({
   __esModule: true,
-  default: { post: jest.fn(), patch: jest.fn() },
+  default: { get: jest.fn(), post: jest.fn(), patch: jest.fn() },
 }))
 
 import axios from 'axios'
 import { Auth0ManagementService } from './auth0-management.service'
 
+const get = axios.get as jest.Mock
 const post = axios.post as jest.Mock
 const patch = axios.patch as jest.Mock
 
@@ -41,6 +42,7 @@ function managementPosts() {
 }
 
 beforeEach(() => {
+  get.mockReset()
   post.mockReset()
   patch.mockReset()
   post.mockImplementation(async (url: string) =>
@@ -81,5 +83,21 @@ describe('Auth0ManagementService.markEmailVerified', () => {
       { email_verified: true },
       { headers: { Authorization: 'Bearer management-token' }, maxRedirects: 0 },
     )
+  })
+})
+
+describe('Auth0ManagementService.usersByEmail', () => {
+  it('asks for every user holding the address, across connections', async () => {
+    const users = [
+      { user_id: 'auth0|primary', identities: [{ provider: 'auth0', user_id: 'primary', connection: 'db' }] },
+    ]
+    get.mockResolvedValue({ data: users })
+
+    await expect(makeService().usersByEmail('ada@example.com')).resolves.toEqual(users)
+    expect(get).toHaveBeenCalledWith(`${BASE_URL}/users-by-email`, {
+      params: { email: 'ada@example.com' },
+      headers: { Authorization: 'Bearer management-token' },
+      maxRedirects: 0,
+    })
   })
 })
