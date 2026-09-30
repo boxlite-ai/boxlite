@@ -200,7 +200,9 @@ provider as a suffix, such as `ci (google-oauth2)`, numbered when that name is
 taken too. Boxes, volumes, and usage belong to organizations and stay where
 they are. The password account keeps its own default organization; the moved
 one becomes its default only when the password account had none. Organizations
-are never merged.
+are never merged. The dashboard reopens the organization last chosen, else the
+default one; someone in more than one sees them all under Organization
+Settings, where Switch opens another.
 
 ## Outbound mail
 
