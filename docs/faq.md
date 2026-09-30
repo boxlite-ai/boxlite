@@ -387,7 +387,7 @@ async def run_100_boxes():
 - Limited by host storage
 
 **CPUs:**
-- Range: 1 to host CPU count
+- Range: 1 to 16 (the bundled guest kernel brings up at most 16 vCPUs)
 - Can oversubscribe (shares-based)
 
 **Tested configurations:**

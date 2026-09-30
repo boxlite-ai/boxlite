@@ -62,6 +62,11 @@ pub mod vm_defaults {
     /// Default number of CPUs allocated to a Box
     pub const DEFAULT_CPUS: u8 = 1;
 
+    /// Most vCPUs the bundled guest kernel brings online: libkrunfw is built
+    /// with `CONFIG_NR_CPUS=16`. libkrun still creates any extra vCPUs, but the
+    /// guest ignores them. Raise together with the kernel config.
+    pub const MAX_CPUS: u8 = 16;
+
     /// Default memory in MiB allocated to a Box
     pub const DEFAULT_MEMORY_MIB: u32 = 1024;
 

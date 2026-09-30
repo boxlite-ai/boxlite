@@ -169,7 +169,8 @@ Number of CPU cores allocated to the box.
 
 **Default:** 1
 
-**Range:** 1 to host CPU count
+**Range:** 1 to 16 — the bundled guest kernel brings up at most 16 vCPUs, so
+create rejects larger values (see [Resource limits](../guides/resource-limits.md#cpu-configuration)).
 
 **Example:**
 ```python

@@ -1772,6 +1772,7 @@ async fn sanitize_local_options(
     options: BoxOptions,
 ) -> BoxliteResult<BoxOptions> {
     reject_local_unsupported_options(&options)?;
+    options.validate_cpus()?;
     features.require_for_options(&options)?;
     tokio::task::spawn_blocking(move || {
         let mut options = options;
@@ -2005,6 +2006,64 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("my-data"), "{message}");
         assert!(message.contains("REST runtime"), "{message}");
+    }
+
+    /// The bundled guest kernel brings up at most `MAX_CPUS` vCPUs. Without
+    /// this guard a larger request boots anyway and the guest silently runs
+    /// on fewer CPUs than the box reports.
+    #[tokio::test]
+    async fn local_runtime_rejects_cpus_outside_guest_kernel_range() {
+        let features = ExperimentalFeatures::default();
+        for cpus in [0, 17, 24] {
+            let options = BoxOptions {
+                cpus: Some(cpus),
+                ..Default::default()
+            };
+            let error = sanitize_local_options(&features, options)
+                .await
+                .expect_err("cpus outside 1..=16 must be rejected at create");
+
+            assert!(
+                matches!(error, BoxliteError::InvalidArgument(_)),
+                "{error:?}"
+            );
+            let message = error.to_string();
+            assert!(message.contains("cpus"), "{message}");
+            assert!(message.contains("16"), "{message}");
+        }
+
+        for cpus in [None, Some(1), Some(16)] {
+            let options = BoxOptions {
+                cpus,
+                ..Default::default()
+            };
+            sanitize_local_options(&features, options)
+                .await
+                .unwrap_or_else(|error| panic!("cpus {cpus:?} must be accepted: {error}"));
+        }
+    }
+
+    /// A custom kernel may be built with a larger `CONFIG_NR_CPUS`, so the
+    /// bundled kernel's ceiling must not apply to it.
+    #[tokio::test]
+    async fn custom_kernel_is_not_bound_by_bundled_kernel_cpu_limit() {
+        let mut options = BoxOptions {
+            cpus: Some(24),
+            ..Default::default()
+        };
+        options.advanced.kernel = Some(KernelOptions::new("/definitely/missing/vmlinux"));
+        let enabled = ExperimentalFeatures::parse("custom-kernel").unwrap();
+
+        // The missing kernel file still fails validation; reaching that check
+        // proves the cpu ceiling let the request through.
+        let error = sanitize_local_options(&enabled, options)
+            .await
+            .expect_err("a missing kernel file must still fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("custom kernel must be a regular file"),
+            "{message}"
+        );
     }
 
     #[test]

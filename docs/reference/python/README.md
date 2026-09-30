@@ -125,7 +125,7 @@ Configuration options for creating a box.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `image` | `str` | Required | OCI image URI (e.g., `"python:slim"`, `"alpine:latest"`) |
-| `cpus` | `int` | `1` | Number of CPU cores (1 to host CPU count) |
+| `cpus` | `int` | `1` | Number of CPU cores (1–16, the guest kernel's limit) |
 | `memory_mib` | `int` | `512` | Memory limit in MiB (128-65536) |
 | `disk_size_gb` | `int \| None` | `None` | Container disk size in GB, never smaller than the image (None = image size) |
 | `working_dir` | `str` | `"/root"` | Working directory inside container |

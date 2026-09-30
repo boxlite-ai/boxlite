@@ -356,10 +356,16 @@ pub unsafe fn options_set_name(handle: *mut OptionsHandle, name: *const c_char) 
     }
 }
 
+/// Convert a C `cpus` value, leaving an oversized one out of range (saturated)
+/// so the runtime's vCPU check rejects it rather than a wrapped small value.
+pub(crate) fn cpus_from_c(cpus: c_int) -> Option<u8> {
+    (cpus > 0).then(|| u8::try_from(cpus).unwrap_or(u8::MAX))
+}
+
 pub unsafe fn options_set_cpus(handle: *mut OptionsHandle, cpus: c_int) {
     unsafe {
         if !handle.is_null() && cpus > 0 {
-            (*handle).options.cpus = Some(cpus as u8);
+            (*handle).options.cpus = cpus_from_c(cpus);
         }
     }
 }

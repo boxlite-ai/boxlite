@@ -34,6 +34,14 @@ describe('assertWithinPerBoxLimits', () => {
 
   it('treats a non-positive limit as unset (not enforced)', () => {
     const unset = { maxCpuPerBox: 0, maxMemoryPerBox: 0, maxDiskPerBox: 0 }
-    expect(() => assertWithinPerBoxLimits(999, 999, 999, unset)).not.toThrow()
+    expect(() => assertWithinPerBoxLimits(16, 999, 999, unset)).not.toThrow()
+  })
+
+  it('rejects cpu above the guest kernel limit even when the org limit allows it', () => {
+    const generous = { maxCpuPerBox: 64, maxMemoryPerBox: 0, maxDiskPerBox: 0 }
+    const unset = { maxCpuPerBox: 0, maxMemoryPerBox: 0, maxDiskPerBox: 0 }
+    expect(() => assertWithinPerBoxLimits(16, 1, 1, generous)).not.toThrow()
+    expect(() => assertWithinPerBoxLimits(17, 1, 1, generous)).toThrow(/cpu 17 .*limit of 16/)
+    expect(() => assertWithinPerBoxLimits(24, 1, 1, unset)).toThrow(BadRequestException)
   })
 })

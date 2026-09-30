@@ -234,7 +234,7 @@ Configuration options for creating a box.
 **Parameters:**
 
 - `image: str` - OCI image URI (default: `"python:slim"`)
-- `cpus: int` - Number of CPUs (default: 1, max: host CPU count)
+- `cpus: int` - Number of CPUs (default: 1, range: 1–16, the guest kernel's limit)
 - `memory_mib: int` - Memory in MiB (default: 512, range: 128-65536)
 - `disk_size_gb: int | None` - Container disk size in GB, never smaller than the image (default: None, the image size)
 - `working_dir: str` - Working directory in container (default: `"/root"`)

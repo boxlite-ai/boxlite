@@ -12,7 +12,11 @@ boxlite.BoxOptions(
 )
 ```
 
-**Range:** 1 to host CPU count
+**Range:** 1 to 16. The bundled guest kernel is built with `CONFIG_NR_CPUS=16`
+and brings up at most 16 vCPUs, so creating a box with `cpus` outside this
+range fails with an invalid-argument error. A box created with a custom kernel
+(experimental) is not bound by this limit. A box created with more than 16
+vCPUs before this check still starts, logs a warning, and runs on 16.
 
 **Behavior:**
 - Proportional scheduling (shares-based)

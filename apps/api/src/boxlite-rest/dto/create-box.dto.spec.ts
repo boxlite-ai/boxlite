@@ -20,6 +20,21 @@ import { createBoxToCreateBox } from '../mappers/box-to-box.mapper'
 // drop a decorator and the matching case goes red. (The global ValidationPipe
 // in main.ts turns these constraint violations into HTTP 400s; that wiring is
 // verified live, not here.)
+describe('CreateBoxDto cpu ceiling', () => {
+  it('rejects cpus past the guest kernel limit with a max constraint', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { cpus: 17 }))
+
+    const fieldError = errors.find((e) => e.property === 'cpus')
+    expect(fieldError?.constraints).toHaveProperty('max')
+  })
+
+  it('accepts cpus exactly at the guest kernel limit', async () => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { cpus: 16 }))
+
+    expect(errors).toHaveLength(0)
+  })
+})
+
 describe('CreateBoxDto resource minimums', () => {
   it.each([
     ['cpus', { cpus: 0 }],

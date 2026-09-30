@@ -785,7 +785,7 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Type | Description |
 |------|------|-------------|
-| `--cpus N` | u32 | Number of CPUs (capped at 255; values above 255 log a warning) |
+| `--cpus N` | u8 | Number of CPUs, 1–16 with the bundled guest kernel; larger values are rejected at create |
 | `--memory MiB` | u32 | Memory limit in mebibytes |
 | `--disk-size GB` | u64 | Sparse root filesystem disk size in gigabytes |
 
