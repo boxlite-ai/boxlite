@@ -196,9 +196,14 @@ The Action depends on three things outside its code:
   `OIDC_ACCOUNT_LINK_SECRET`, and the link client's `ACCOUNT_LINK_CLIENT_ID`
   and `ACCOUNT_LINK_CLIENT_SECRET`.
 
-The configurator provisions none of them yet. It hydrates the tenant domain
-into the Action's code and leaves the API origin and the link Form's id empty,
-so the link is off.
+An apply given `--account-link-api-origin https://<api host>`, a bare https
+origin the Action can reach from Auth0's cloud, creates the link client as
+`boxlite-account-link` with the database connection enabled and those three
+scopes granted. It journals the client and its grant, so `--rollback` deletes
+them, reuses them on later runs, and refuses a same-named client with other
+settings. It hydrates the origin and the tenant domain into the Action's code.
+The link Form and the secrets are not provisioned yet, so the link Form's id
+stays empty and the link is off.
 
 ### What the link moves
 

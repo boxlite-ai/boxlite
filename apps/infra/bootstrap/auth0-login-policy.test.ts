@@ -324,6 +324,7 @@ test('parseAuth0LoginPolicyOptions defaults to preview and requires exact tenant
       apply: false,
       allowTestEmailProvider: false,
       replaceAction: false,
+      accountLinkApiOrigin: undefined,
     },
   )
   assert.equal(
@@ -339,6 +340,22 @@ test('parseAuth0LoginPolicyOptions defaults to preview and requires exact tenant
     true,
   )
   assert.throws(() => parseAuth0LoginPolicyOptions(['--tenant', 'tenant.us.auth0.com']), /--client-id is required/)
+})
+
+test('parseAuth0LoginPolicyOptions takes the account link API origin only as a bare https origin', () => {
+  const required = ['--tenant', 'tenant.us.auth0.com', '--client-id', 'spa_123', '--connection', 'boxlite-users']
+  const origin = (value: string) =>
+    parseAuth0LoginPolicyOptions([...required, '--account-link-api-origin', value]).accountLinkApiOrigin
+
+  assert.equal(origin('https://api.example.com'), 'https://api.example.com')
+  for (const refused of [
+    'http://api.example.com',
+    'https://api.example.com/',
+    'https://api.example.com/api',
+    'api.example.com',
+  ]) {
+    assert.throws(() => origin(refused), /must be a bare https origin/, refused)
+  }
 })
 
 test('Auth0CliManagementClient sends sensitive bodies over stdin, never process argv', () => {
@@ -740,6 +757,9 @@ function fakeTenant() {
     },
     action: null,
     bindings: [{ action: { id: 'act_legacy' }, display_name: 'boxlite-custom-claims' }],
+    linkClient: null,
+    linkGrant: null,
+    linkClientConnectionEnabled: false,
   }
   state.flows = [
     {
@@ -780,8 +800,12 @@ function fakeTenant() {
         const reads: Record<string, any> = {
           'clients/spa_123': state.client,
           'clients/m2m_123': { ...state.managementClient, client_secret: 'vault-setup-only' },
+          'clients/lnk_123': state.linkClient && { ...state.linkClient, client_secret: 'link-client-secret' },
           'clients/spa_123/connections': {
             connections: state.clientConnectionEnabled ? [state.connection] : [],
+          },
+          'clients/lnk_123/connections': {
+            connections: state.linkClientConnectionEnabled ? [state.connection] : [],
           },
           connections: [state.connection],
           'connections/con_123': state.connection,
@@ -790,8 +814,8 @@ function fakeTenant() {
           'email-templates/verify_email_by_code': { enabled: true },
           'email-templates/reset_email_by_code': { enabled: true },
           prompts: state.prompt,
-          clients: [state.client, state.managementClient],
-          'client-grants': [state.grant],
+          clients: [state.client, state.managementClient, ...(state.linkClient ? [state.linkClient] : [])],
+          'client-grants': [state.grant, ...(state.linkGrant ? [state.linkGrant] : [])],
           'flows/vault/connections': [state.vault],
           'flows/vault/connections/ac_123': state.vault,
           flows: state.flows,
@@ -812,9 +836,25 @@ function fakeTenant() {
         Object.assign(state.connection, options.data)
       }
       if (method === 'patch' && path === 'connections/con_123/clients') {
-        const update = options.data?.find((candidate: any) => candidate.client_id === 'spa_123')
-        state.clientConnectionEnabled = update?.status === true
+        for (const update of (options.data ?? []) as Array<Record<string, any>>) {
+          if (update.client_id === 'spa_123') state.clientConnectionEnabled = update.status === true
+          if (update.client_id === 'lnk_123') state.linkClientConnectionEnabled = update.status === true
+        }
       }
+      if (method === 'post' && path === 'clients') {
+        state.linkClient = { client_id: 'lnk_123', ...options.data }
+        return { ...state.linkClient, client_secret: 'link-client-secret' }
+      }
+      if (
+        method === 'post' &&
+        path === 'client-grants' &&
+        (options.data as Record<string, any>)?.client_id === 'lnk_123'
+      ) {
+        state.linkGrant = { id: 'cgr_link', ...options.data }
+        return state.linkGrant
+      }
+      if (method === 'delete' && path === 'clients/lnk_123') state.linkClient = null
+      if (method === 'delete' && path === 'client-grants/cgr_link') state.linkGrant = null
       if (method === 'patch' && path === 'prompts') state.prompt = { ...state.prompt, ...options.data }
       if (method === 'patch' && path === 'client-grants/cgr_123') Object.assign(state.grant, options.data)
       if (method === 'patch' && path.startsWith('flows/')) {
@@ -1165,6 +1205,104 @@ test('login policy apply leaves an Action with an undeployed draft alone, and a 
     const result = upgradeConfigurator(tenant, true).apply()
     Auth0LoginPolicyConfigurator.rollback(result.journal as string, () => tenant.client)
     assert.equal(tenant.state.action.deployed_version.code, ran)
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
+})
+
+function linkConfigurator(tenant: ReturnType<typeof fakeTenant>) {
+  return new Auth0LoginPolicyConfigurator(
+    {
+      tenant: 'tenant.us.auth0.com',
+      clientId: 'spa_123',
+      connectionName: 'boxlite-users',
+      apply: true,
+      allowTestEmailProvider: false,
+      accountLinkApiOrigin: 'https://api.example.com',
+    },
+    tenant.client,
+    {
+      actionCode: POLICY_SOURCE,
+      emailVerificationTemplate: tenant.template,
+      journalDirectory: tenant.journalDirectory,
+    },
+  )
+}
+
+test('login policy apply with an API origin creates the account link client, and rollback deletes it', async () => {
+  const tenant = fakeTenant()
+  try {
+    const result = linkConfigurator(tenant).apply()
+
+    assert.deepEqual(tenant.state.linkClient, {
+      client_id: 'lnk_123',
+      name: 'boxlite-account-link',
+      app_type: 'regular_web',
+      token_endpoint_auth_method: 'client_secret_post',
+      grant_types: ['client_credentials', 'http://auth0.com/oauth/grant-type/password-realm'],
+      is_token_endpoint_ip_header_trusted: true,
+      client_metadata: { boxlite_login_policy: 'account-link-v1' },
+    })
+    assert.deepEqual(tenant.state.linkGrant, {
+      id: 'cgr_link',
+      client_id: 'lnk_123',
+      audience: 'https://tenant.us.auth0.com/api/v2/',
+      scope: ['create:users', 'read:users', 'update:users'],
+    })
+    assert.equal(tenant.state.linkClientConnectionEnabled, true)
+    assert.doesNotMatch(readFileSync(result.journal as string, 'utf8'), /link-client-secret/)
+
+    // The origin reaches the Action, but with no link Form the link stays off.
+    const deployed: Record<string, ActionHandler> = {}
+    runInNewContext(tenant.state.action.deployed_version.code, { exports: deployed })
+    const capture = actionApi()
+    await deployed.onExecutePostLogin(
+      {
+        ...managedEvent(),
+        connection: { name: 'google-oauth2', strategy: 'google-oauth2' },
+        user: { user_id: 'google-oauth2|103', email: 'person@example.com', email_verified: true, name: 'Person' },
+      },
+      capture.api,
+    )
+    assert.match(tenant.state.action.code, /const ACCOUNT_LINK_API_ORIGIN = "https:\/\/api\.example\.com"/)
+    assert.deepEqual(capture.rendered, [])
+    assert.deepEqual(capture.denied, [])
+
+    Auth0LoginPolicyConfigurator.rollback(result.journal as string, () => tenant.client)
+    assert.equal(tenant.state.linkClient, null)
+    assert.equal(tenant.state.linkGrant, null)
+    assert.equal(tenant.state.linkClientConnectionEnabled, false)
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
+})
+
+test('login policy apply reuses the account link client, and refuses a same-named one with other settings', () => {
+  const tenant = fakeTenant()
+  try {
+    linkConfigurator(tenant).apply()
+    const creations = () =>
+      tenant.calls.filter((call) => call.method === 'post' && ['clients', 'client-grants'].includes(call.path)).length
+    const afterFirst = creations()
+    linkConfigurator(tenant).apply()
+    assert.equal(creations(), afterFirst)
+
+    tenant.state.linkClient.grant_types = ['http://auth0.com/oauth/grant-type/password-realm']
+    assert.throws(() => linkConfigurator(tenant).preview(), /not the dedicated BoxLite account link application/)
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
+})
+
+test('login policy apply without an API origin creates no account link client', () => {
+  const tenant = fakeTenant()
+  try {
+    upgradeConfigurator(tenant).apply()
+    assert.equal(tenant.state.linkClient, null)
+    assert.equal(
+      tenant.calls.some((call) => call.method === 'post' && call.path === 'clients'),
+      false,
+    )
   } finally {
     rmSync(tenant.journalDirectory, { recursive: true, force: true })
   }
