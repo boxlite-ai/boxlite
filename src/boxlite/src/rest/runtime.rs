@@ -459,28 +459,35 @@ mod tests {
     }
 
     // A server that never advertised the route must not see a PUT: its bare
-    // 404 would surface as "box not found".
+    // 404 would surface as "box not found". Its config may omit the flag or
+    // the whole capabilities object.
     #[tokio::test]
     async fn set_inbound_requires_the_server_to_advertise_it() {
-        let (port, server) = json_server(vec![BOX_RESPONSE, r#"{"capabilities":{}}"#]).await;
-        let runtime =
-            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
-        let litebox = RuntimeBackend::get(&runtime, "named")
-            .await
-            .unwrap()
-            .unwrap();
+        for config in [r#"{"capabilities":{}}"#, "{}"] {
+            let (port, server) = json_server(vec![BOX_RESPONSE, config]).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+            let litebox = RuntimeBackend::get(&runtime, "named")
+                .await
+                .unwrap()
+                .unwrap();
 
-        let err = litebox
-            .network()
-            .set_inbound(NetworkMode::Enabled)
-            .await
-            .unwrap_err();
+            let err = litebox
+                .network()
+                .set_inbound(NetworkMode::Enabled)
+                .await
+                .unwrap_err();
 
-        assert!(matches!(err, BoxliteError::Unsupported(_)), "{err}");
-        assert_eq!(
-            server.await.unwrap(),
-            ["GET /v1/boxes/named HTTP/1.1", "GET /v1/config HTTP/1.1"]
-        );
+            assert!(
+                matches!(err, BoxliteError::Unsupported(_)),
+                "{config}: {err}"
+            );
+            assert_eq!(
+                server.await.unwrap(),
+                ["GET /v1/boxes/named HTTP/1.1", "GET /v1/config HTTP/1.1"]
+            );
+        }
     }
 
     #[tokio::test]
