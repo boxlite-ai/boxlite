@@ -707,9 +707,10 @@ impl BoxOptions {
 
     /// Reject a vCPU count the box cannot run with.
     ///
-    /// Create-time only, deliberately outside `sanitize_common`: that also
-    /// validates persisted boxes on restart, and a box created before this
-    /// limit must keep starting (boot warns via `cpus_beyond_guest_kernel`).
+    /// Checked only when a new box is created, deliberately outside
+    /// `sanitize_common`: that also validates persisted boxes on restart and
+    /// reuse, and a box created before this limit must keep starting (boot
+    /// warns via `cpus_beyond_guest_kernel`).
     pub(crate) fn validate_cpus(&self) -> BoxliteResult<()> {
         match self.cpus {
             Some(cpus) if cpus == 0 || self.cpus_beyond_guest_kernel().is_some() => Err(

@@ -19,6 +19,10 @@ describe('assertWithinPerBoxLimits', () => {
     expect(() => assertWithinPerBoxLimits(999, 8, 20, limits)).toThrow(BadRequestException)
   })
 
+  it('rejects cpu above the org limit that the guest kernel would still allow', () => {
+    expect(() => assertWithinPerBoxLimits(8, 8, 20, limits)).toThrow(/cpu 8 exceeds the per-box limit of 4/)
+  })
+
   it('rejects memory above the per-box limit (the 8 PiB leak)', () => {
     // 8_192_000_000 MiB === the absurd value that used to be persisted.
     expect(() => assertWithinPerBoxLimits(4, 8_192_000_000, 20, limits)).toThrow(BadRequestException)
