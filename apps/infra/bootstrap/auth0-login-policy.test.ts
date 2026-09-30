@@ -326,6 +326,7 @@ test('parseAuth0LoginPolicyOptions defaults to preview and requires exact tenant
       replaceAction: false,
       accountLinkApiOrigin: undefined,
       accountLinkSecret: undefined,
+      disableAccountLink: false,
     },
   )
   assert.equal(
@@ -388,6 +389,10 @@ test('parseAuth0LoginPolicyOptions reads the account link key from the environme
   assert.throws(
     () => parseAuth0LoginPolicyOptions([...linked, '--account-link-secret', LINK_KEY], {}),
     /Unknown option/,
+  )
+  assert.throws(
+    () => parseAuth0LoginPolicyOptions([...linked, '--disable-account-link'], { AUTH0_ACCOUNT_LINK_SECRET: LINK_KEY }),
+    /cannot be combined/,
   )
 })
 
@@ -793,6 +798,7 @@ function fakeTenant() {
     linkClient: null,
     linkGrant: null,
     linkClientConnectionEnabled: false,
+    linkForm: null,
   }
   state.flows = [
     {
@@ -854,8 +860,9 @@ function fakeTenant() {
           flows: state.flows,
           'flows/fl_generate': state.flows[0],
           'flows/fl_verify': state.flows[1],
-          forms: [state.form],
+          forms: [state.form, ...(state.linkForm ? [state.linkForm] : [])],
           'forms/ap_verify': state.form,
+          'forms/ap_link': state.linkForm,
           'actions/actions': state.action ? [state.action] : [],
           'actions/actions/act_policy': state.action,
           'actions/triggers/post-login/bindings': { bindings: state.bindings },
@@ -886,6 +893,11 @@ function fakeTenant() {
         state.linkGrant = { id: 'cgr_link', ...options.data }
         return state.linkGrant
       }
+      if (method === 'post' && path === 'forms') {
+        state.linkForm = { id: 'ap_link', ...(options.data as Record<string, any>) }
+        return state.linkForm
+      }
+      if (method === 'delete' && path === 'forms/ap_link') state.linkForm = null
       if (method === 'delete' && path === 'clients/lnk_123') state.linkClient = null
       if (method === 'delete' && path === 'client-grants/cgr_link') state.linkGrant = null
       if (method === 'patch' && path === 'prompts') state.prompt = { ...state.prompt, ...options.data }
@@ -1248,6 +1260,8 @@ test('login policy apply leaves an Action with an undeployed draft alone, and a 
   }
 })
 
+const LINK_FORM = JSON.parse(readFileSync(new URL('./auth0/account-link-form.json', import.meta.url), 'utf8'))
+
 function linkConfigurator(tenant: ReturnType<typeof fakeTenant>, accountLinkSecret = LINK_KEY) {
   return new Auth0LoginPolicyConfigurator(
     {
@@ -1263,6 +1277,7 @@ function linkConfigurator(tenant: ReturnType<typeof fakeTenant>, accountLinkSecr
     {
       actionCode: POLICY_SOURCE,
       emailVerificationTemplate: tenant.template,
+      accountLinkForm: LINK_FORM,
       journalDirectory: tenant.journalDirectory,
     },
   )
@@ -1291,26 +1306,21 @@ test('login policy apply with an API origin creates the account link client, and
     assert.equal(tenant.state.linkClientConnectionEnabled, true)
     assert.doesNotMatch(readFileSync(result.journal as string, 'utf8'), /link-client-secret/)
 
-    // The origin reaches the Action, but with no link Form the link stays off.
-    const deployed: Record<string, ActionHandler> = {}
-    runInNewContext(tenant.state.action.deployed_version.code, { exports: deployed })
-    const capture = actionApi()
-    await deployed.onExecutePostLogin(
-      {
-        ...managedEvent(),
-        connection: { name: 'google-oauth2', strategy: 'google-oauth2' },
-        user: { user_id: 'google-oauth2|103', email: 'person@example.com', email_verified: true, name: 'Person' },
-      },
-      capture.api,
+    // The origin and the link Form's id in the deployed code turn the link on.
+    assert.deepEqual(
+      { name: tenant.state.linkForm.name, nodes: tenant.state.linkForm.nodes },
+      { name: 'BoxLite account link', nodes: LINK_FORM.nodes },
     )
-    assert.match(tenant.state.action.code, /const ACCOUNT_LINK_API_ORIGIN = "https:\/\/api\.example\.com"/)
-    assert.deepEqual(capture.rendered, [])
-    assert.deepEqual(capture.denied, [])
+    assert.match(
+      tenant.state.action.deployed_version.code,
+      /const ACCOUNT_LINK_API_ORIGIN = "https:\/\/api\.example\.com"\nconst ACCOUNT_LINK_FORM_ID = "ap_link"/,
+    )
 
     Auth0LoginPolicyConfigurator.rollback(result.journal as string, () => tenant.client)
     assert.equal(tenant.state.linkClient, null)
     assert.equal(tenant.state.linkGrant, null)
     assert.equal(tenant.state.linkClientConnectionEnabled, false)
+    assert.equal(tenant.state.linkForm, null)
   } finally {
     rmSync(tenant.journalDirectory, { recursive: true, force: true })
   }
@@ -1398,6 +1408,60 @@ test('login policy apply refuses an Action carrying a secret the account link do
     tenant.state.action.deployed_version.secrets = [{ name: 'SOMETHING_ELSE' }]
 
     assert.throws(() => upgradeConfigurator(tenant).apply(), /contains secrets/)
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
+})
+
+test('login policy apply refuses a link Form edited outside this tool', () => {
+  const tenant = fakeTenant()
+  try {
+    linkConfigurator(tenant).apply()
+    tenant.state.linkForm.nodes[0].config.components.splice(2, 1)
+
+    assert.throws(
+      () => linkConfigurator(tenant).preview(),
+      /'BoxLite account link' already exists with unmanaged contents/,
+    )
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
+})
+
+test('login policy apply keeps a linked Action unless told to turn the link off', () => {
+  const tenant = fakeTenant()
+  const disabling = () =>
+    new Auth0LoginPolicyConfigurator(
+      {
+        tenant: 'tenant.us.auth0.com',
+        clientId: 'spa_123',
+        connectionName: 'boxlite-users',
+        apply: true,
+        allowTestEmailProvider: false,
+        disableAccountLink: true,
+      },
+      tenant.client,
+      {
+        actionCode: POLICY_SOURCE,
+        emailVerificationTemplate: tenant.template,
+        journalDirectory: tenant.journalDirectory,
+      },
+    )
+  try {
+    linkConfigurator(tenant).apply()
+    assert.throws(() => upgradeConfigurator(tenant).apply(), /--disable-account-link/)
+
+    disabling().apply()
+    assert.match(tenant.state.action.deployed_version.code, /const ACCOUNT_LINK_FORM_ID = ""/)
+    assert.doesNotThrow(() => upgradeConfigurator(tenant).apply())
+    assert.deepEqual(
+      tenant.state.action.secrets.map((secret: { name: string }) => secret.name),
+      ['ACCOUNT_LINK_CLIENT_ID', 'ACCOUNT_LINK_CLIENT_SECRET', 'ACCOUNT_LINK_SECRET'],
+    )
+
+    // A later apply with the origin turns the link back on.
+    linkConfigurator(tenant).apply()
+    assert.match(tenant.state.action.deployed_version.code, /const ACCOUNT_LINK_FORM_ID = "ap_link"/)
   } finally {
     rmSync(tenant.journalDirectory, { recursive: true, force: true })
   }
