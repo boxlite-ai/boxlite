@@ -178,14 +178,18 @@ The flow:
 A wrong password, or a new one the connection's policy refuses, shows the Form
 again with the reason. A sign-up that finds the address signed up meanwhile
 asks for that account's password instead; one refused for any other reason
-lets the login through unlinked, as a failed lookup does. `mfa_required`, a
-blocked account, or an API or tenant error ends the login with a message, and
-the next social login starts over; moving the data again is harmless.
+lets the login through unlinked, as a failed lookup does. Ticking the Form's
+reset box instead has Auth0 email the address a link to reset the password,
+and ends the login. `mfa_required`, a blocked account, or an API or tenant
+error ends the login with a message, and the next social login starts over;
+moving the data again is harmless.
 
 The Action depends on three things outside its code:
 
-- **The link Form**: one Password field with the id `password`. The Action
-  renders it with the vars `email`, `lead` and `error`.
+- **The link Form**: a Password field with the id `password`, optional so the
+  reset box can be ticked alone, and a Boolean field with the id `reset`,
+  defined in `bootstrap/auth0/account-link-form.json`. The Action renders it
+  with the vars `email`, `lead` and `error`.
 - **The link client**: a confidential client allowed the password-realm grant,
   with Trust Token Endpoint IP Header on so Auth0 honours
   `auth0-forwarded-for`, and granted `read:users` (the lookup), `update:users`
@@ -220,8 +224,14 @@ printf %s "$AUTH0_ACCOUNT_LINK_SECRET" |
   npm run mstage env set -- OIDC_ACCOUNT_LINK_SECRET --stage <stage>
 ```
 
-The link Form is not provisioned yet, so its id stays empty and the link is
-off.
+The same apply creates the link Form as `BoxLite account link`, journals it
+so `--rollback` deletes it, and refuses a same-named Form edited outside this
+tool. With the origin, the Form's id and the secrets in the Action, the link
+is on. An apply without `--account-link-api-origin` refuses an Action that
+runs the link rather than unlinking every later social login; pass
+`--disable-account-link` to rewrite its code with the link off. Its secrets,
+the link client and the Form stay in place, and a later apply with the origin
+turns the link back on.
 
 ### What the link moves
 

@@ -11,13 +11,13 @@
  *
  * A social login is linked into the password account holding its address, or
  * into a new one, before any token is issued (POL-555), without leaving
- * Auth0: an Auth0 Form asks for that account's password (or a new one), the
- * password-realm grant checks it (or the Management API creates the account),
- * the BoxLite API moves the social user's data, and the Management API links
- * the identities so the token names the password account. An address the
- * provider has not verified is proven with the email Form first. With no API
- * origin or link Form configured the step is off, and social logins keep
- * their own identity.
+ * Auth0: an Auth0 Form asks for that account's password (or a new one, or a
+ * reset email), the password-realm grant checks it (or the Management API
+ * creates the account), the BoxLite API moves the social user's data, and the
+ * Management API links the identities so the token names the password
+ * account. An address the provider has not verified is proven with the email
+ * Form first. With no API origin or link Form configured the step is off, and
+ * social logins keep their own identity.
  */
 
 const BROWSER_PROTOCOLS = new Set(['oidc-basic-profile', 'oidc-hybrid-profile', 'oidc-implicit-profile'])
@@ -160,6 +160,24 @@ async function signUp(event, api, password) {
 }
 
 /**
+ * Auth0 emails the address a link to reset the password account's password,
+ * on behalf of the BoxLite app, so the email and the page after it are the
+ * app's rather than the link client's.
+ */
+async function sendPasswordReset(event) {
+  const response = await fetch(`https://${AUTH0_DOMAIN}/dbconnections/change_password`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      client_id: BOXLITE_CLIENT_ID,
+      email: event.user.email.toLowerCase(),
+      connection: BOXLITE_DB_CONNECTION,
+    }),
+  })
+  if (!response.ok) throw new Error(`the password reset request answered ${response.status}`)
+}
+
+/**
  * The password-realm grant, through the link client. The browser's address
  * rides in `auth0-forwarded-for`, which Auth0 honours because the link client
  * trusts that header, so brute-force protection counts attempts per person
@@ -259,13 +277,19 @@ async function offerLinkForm(event, api) {
 }
 
 /**
- * The Form came back with a password. Local data moves before the tenant
- * link: once linked, later social logins reach the password account directly
- * and never pass here again, so anything not yet moved would stay stranded,
- * while a failed link is simply retried at the next login.
+ * The Form came back with a password, or with the reset box ticked. Local
+ * data moves before the tenant link: once linked, later social logins reach
+ * the password account directly and never pass here again, so anything not
+ * yet moved would stay stranded, while a failed link is simply retried at the
+ * next login.
  */
 async function finishAccountLink(event, api) {
   const account = await findPasswordAccount(event, api)
+  if (account && event.prompt?.fields?.reset === true) {
+    await sendPasswordReset(event)
+    api.access.deny(`We emailed ${event.user.email} a link to reset the password. Set a new one, then sign in again.`)
+    return
+  }
   const password = event.prompt?.fields?.password
   if (typeof password !== 'string' || password === '') {
     renderLinkForm(event, api, { signUp: !account, error: 'Enter the password.' })

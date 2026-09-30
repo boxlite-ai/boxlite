@@ -1,0 +1,72 @@
+{
+  "name": "BoxLite account link",
+  "languages": {
+    "primary": "en"
+  },
+  "start": {
+    "next_node": "step_link",
+    "coordinates": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  "nodes": [
+    {
+      "id": "step_link",
+      "type": "STEP",
+      "coordinates": {
+        "x": 300,
+        "y": 0
+      },
+      "alias": "Link your sign-in",
+      "config": {
+        "components": [
+          {
+            "id": "intro",
+            "category": "BLOCK",
+            "type": "RICH_TEXT",
+            "config": {
+              "content": "<h2>Link your sign-in</h2><p>{{vars.lead}}</p><p><strong>{{vars.email}}</strong></p><p>{{vars.error}}</p>"
+            }
+          },
+          {
+            "id": "password",
+            "category": "FIELD",
+            "type": "PASSWORD",
+            "label": "Password",
+            "required": false,
+            "sensitive": true,
+            "config": {}
+          },
+          {
+            "id": "reset",
+            "category": "FIELD",
+            "type": "BOOLEAN",
+            "label": "Forgot the password? Email me a link to reset it instead.",
+            "required": false,
+            "sensitive": false,
+            "config": {
+              "default_value": false
+            }
+          },
+          {
+            "id": "continue_button",
+            "category": "BLOCK",
+            "type": "NEXT_BUTTON",
+            "config": {
+              "text": "Continue"
+            }
+          }
+        ],
+        "next_node": "$ending"
+      }
+    }
+  ],
+  "ending": {
+    "resume_flow": true,
+    "coordinates": {
+      "x": 600,
+      "y": 0
+    }
+  }
+}
