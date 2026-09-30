@@ -112,6 +112,7 @@ async fn run_cli(cli: Cli) -> i32 {
         cli::Commands::Start(args) => commands::start::execute(args, &global).await.map(|_| 0),
         cli::Commands::Stop(args) => commands::stop::execute(args, &global).await.map(|_| 0),
         cli::Commands::Restart(args) => commands::restart::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Update(args) => commands::update::execute(args, &global).await.map(|_| 0),
         cli::Commands::Pull(args) => commands::pull::execute(args, &global).await.map(|_| 0),
         cli::Commands::Images(args) => commands::images::execute(args, &global).await.map(|_| 0),
         cli::Commands::Inspect(args) => commands::inspect::execute(args, &global).await.map(|_| 0),
