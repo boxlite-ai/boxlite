@@ -8,18 +8,59 @@
  * created. Existing unverified database users are sent through the configured
  * Auth0 Form during an interactive browser login. Refresh-token, device-code,
  * and other non-browser exchanges cannot render Forms, so they fail closed.
+ *
+ * A social login whose address already has a password account is linked into
+ * it before any token is issued (POL-555), without leaving Auth0: an Auth0
+ * Form asks for that account's password, the password-realm grant checks it,
+ * the BoxLite API moves the social user's data, and the Management API links
+ * the identities so the token names the password account. An address the
+ * provider has not verified is proven with the email Form first. With no API
+ * origin or link Form configured the step is off, and social logins keep
+ * their own identity.
  */
 
 const BROWSER_PROTOCOLS = new Set(['oidc-basic-profile', 'oidc-hybrid-profile', 'oidc-implicit-profile'])
 const BOXLITE_CLIENT_ID = __BOXLITE_CLIENT_ID_JSON__
 const BOXLITE_DB_CONNECTION = __BOXLITE_DB_CONNECTION_JSON__
 const EMAIL_VERIFICATION_FORM_ID = __EMAIL_VERIFICATION_FORM_ID_JSON__
+// Where the BoxLite API is served, and the Form that asks for the password.
+// Either one empty turns the account link off.
+const ACCOUNT_LINK_API_ORIGIN = __ACCOUNT_LINK_API_ORIGIN_JSON__
+const ACCOUNT_LINK_FORM_ID = __ACCOUNT_LINK_FORM_ID_JSON__
+// The tenant's own domain: its token endpoint and Management API answer there
+// whichever domain the login itself runs on.
+const AUTH0_DOMAIN = __AUTH0_DOMAIN_JSON__
+
+// The API refuses an adopt request signed for any other audience.
+const ADOPT_AUDIENCE = 'boxlite-account-link-adopt'
+const PASSWORD_REALM_GRANT = 'http://auth0.com/oauth/grant-type/password-realm'
+
+function isBoxLiteBrowserLogin(event) {
+  return event.client?.client_id === BOXLITE_CLIENT_ID && BROWSER_PROTOCOLS.has(event.transaction?.protocol)
+}
 
 function isManagedDatabaseLogin(event) {
   return (
     event.client?.client_id === BOXLITE_CLIENT_ID &&
     event.connection?.strategy === 'auth0' &&
     event.connection?.name === BOXLITE_DB_CONNECTION
+  )
+}
+
+/**
+ * An interactive BoxLite browser login through anything but the database
+ * connection, whose user is not a password account yet. Once linked, Auth0
+ * answers the same social login with the password account's `auth0|` user, so
+ * this stops matching by itself. A token refresh or other exchange keeps the
+ * identity it has until the next browser login: it cannot show a Form, and the
+ * Management API lookup would otherwise run on every refresh.
+ */
+function needsAccountLink(event) {
+  return (
+    Boolean(ACCOUNT_LINK_API_ORIGIN && ACCOUNT_LINK_FORM_ID && AUTH0_DOMAIN) &&
+    isBoxLiteBrowserLogin(event) &&
+    event.connection?.strategy !== 'auth0' &&
+    !String(event.user?.user_id ?? '').startsWith('auth0|')
   )
 }
 
@@ -30,7 +71,225 @@ function setIdentityClaims(event, api, emailVerified = event.user?.email_verifie
   api.accessToken.setCustomClaim('name', event.user?.name)
 }
 
+async function tokenEndpoint(body, headers = {}) {
+  return fetch(`https://${AUTH0_DOMAIN}/oauth/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  })
+}
+
+/** A Management API token for the link client, cached for the tenant's other logins. */
+async function managementToken(event, api) {
+  const cached = api.cache.get('account-link-management-token')
+  if (cached?.value) return cached.value
+  const response = await tokenEndpoint({
+    grant_type: 'client_credentials',
+    client_id: event.secrets.ACCOUNT_LINK_CLIENT_ID,
+    client_secret: event.secrets.ACCOUNT_LINK_CLIENT_SECRET,
+    audience: `https://${AUTH0_DOMAIN}/api/v2/`,
+  })
+  if (!response.ok) throw new Error(`the Management API token request answered ${response.status}`)
+  const { access_token: token, expires_in: expiresIn } = await response.json()
+  // A minute short of its expiry, so no call starts with a token about to lapse.
+  api.cache.set('account-link-management-token', token, { ttl: Math.max(expiresIn - 60, 1) * 1000 })
+  return token
+}
+
+async function management(event, api, method, path, body) {
+  const response = await fetch(`https://${AUTH0_DOMAIN}/api/v2${path}`, {
+    method,
+    headers: { authorization: `Bearer ${await managementToken(event, api)}`, 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  const text = await response.text()
+  return { status: response.status, body: text ? JSON.parse(text) : null }
+}
+
+/** The database account that holds this login's address, or null. */
+async function findPasswordAccount(event, api) {
+  const email = encodeURIComponent(event.user.email.toLowerCase())
+  const { status, body } = await management(event, api, 'GET', `/users-by-email?email=${email}`)
+  if (status !== 200) throw new Error(`users-by-email answered ${status}`)
+  return (
+    body.find(
+      (user) =>
+        String(user.user_id).startsWith('auth0|') &&
+        user.identities?.some((identity) => identity.connection === BOXLITE_DB_CONNECTION),
+    ) ?? null
+  )
+}
+
+function renderLinkForm(event, api, error = '') {
+  api.prompt.render(ACCOUNT_LINK_FORM_ID, {
+    vars: {
+      email: event.user.email,
+      lead: 'This address already has a BoxLite account. Enter its password to link this sign-in to it.',
+      error,
+    },
+  })
+}
+
+/**
+ * The password-realm grant, through the link client. The browser's address
+ * rides in `auth0-forwarded-for`, which Auth0 honours because the link client
+ * trusts that header, so brute-force protection counts attempts per person
+ * rather than against the Action's shared addresses.
+ */
+async function checkPassword(event, password) {
+  const response = await tokenEndpoint(
+    {
+      grant_type: PASSWORD_REALM_GRANT,
+      client_id: event.secrets.ACCOUNT_LINK_CLIENT_ID,
+      client_secret: event.secrets.ACCOUNT_LINK_CLIENT_SECRET,
+      realm: BOXLITE_DB_CONNECTION,
+      username: event.user.email.toLowerCase(),
+      password,
+      scope: 'openid',
+    },
+    { 'auth0-forwarded-for': event.request?.ip ?? '' },
+  )
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) return { ok: false, error: body.error, message: body.error_description }
+  return { ok: true, claims: idTokenClaims(event, body.id_token) }
+}
+
+/**
+ * The ID token the grant returned. It came straight from the token endpoint
+ * over TLS, so the signature needs no check (OIDC Core 3.1.3.7); the issuer,
+ * audience and expiry still do.
+ */
+function idTokenClaims(event, idToken) {
+  const claims = JSON.parse(Buffer.from(String(idToken).split('.')[1] ?? '', 'base64url').toString('utf8') || '{}')
+  const valid =
+    claims.iss === `https://${AUTH0_DOMAIN}/` &&
+    claims.aud === event.secrets.ACCOUNT_LINK_CLIENT_ID &&
+    typeof claims.exp === 'number' &&
+    claims.exp * 1000 > Date.now()
+  return valid ? claims : null
+}
+
+/** An HS256 token the API checks before it moves anything. */
+function signAdoptRequest(event, primaryUserId) {
+  const crypto = require('crypto')
+  const now = Math.floor(Date.now() / 1000)
+  const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url')
+  const claims = {
+    sub: event.user.user_id,
+    primary_user_id: primaryUserId,
+    aud: ADOPT_AUDIENCE,
+    iat: now,
+    exp: now + 60,
+  }
+  const unsigned = `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode(claims)}`
+  const signature = crypto.createHmac('sha256', event.secrets.ACCOUNT_LINK_SECRET).update(unsigned).digest('base64url')
+  return `${unsigned}.${signature}`
+}
+
+async function linkIdentity(event, api, primaryUserId) {
+  const separator = event.user.user_id.indexOf('|')
+  const { status } = await management(event, api, 'POST', `/users/${encodeURIComponent(primaryUserId)}/identities`, {
+    provider: event.user.user_id.slice(0, separator),
+    user_id: event.user.user_id.slice(separator + 1),
+  })
+  if (status !== 201) throw new Error(`linking answered ${status}`)
+}
+
+async function startAccountLink(event, api) {
+  let account = null
+  try {
+    account = event.user?.email ? await findPasswordAccount(event, api) : null
+  } catch (error) {
+    // A throttled or unreachable Management API must not lock social logins
+    // out: this one goes through unlinked, and the next one looks again.
+    console.log(`Account link lookup failed, continuing unlinked: ${error?.message ?? error}`)
+  }
+  // No address, or no password account holding it: nothing to link to.
+  if (!account) {
+    setIdentityClaims(event, api)
+    return
+  }
+  // An address only the provider vouches for is not proof enough to be handed
+  // a password account, so it is proven the same way a new sign-up is.
+  if (event.user.email_verified !== true) {
+    if (!EMAIL_VERIFICATION_FORM_ID) {
+      api.access.deny('Email verification is unavailable')
+      return
+    }
+    api.prompt.render(EMAIL_VERIFICATION_FORM_ID)
+    return
+  }
+  renderLinkForm(event, api)
+}
+
+/**
+ * The Form came back with a password. Local data moves before the tenant
+ * link: once linked, later social logins reach the password account directly
+ * and never pass here again, so anything not yet moved would stay stranded,
+ * while a failed link is simply retried at the next login.
+ */
+async function finishAccountLink(event, api) {
+  const password = event.prompt?.fields?.password
+  if (typeof password !== 'string' || password === '') {
+    renderLinkForm(event, api, 'Enter the password.')
+    return
+  }
+  const account = await findPasswordAccount(event, api)
+  if (!account) {
+    api.access.deny('Account linking failed')
+    return
+  }
+  const check = await checkPassword(event, password)
+  if (check.ok && check.claims?.sub !== account.user_id) {
+    console.log('Account link password check returned an ID token for another account')
+    api.access.deny('Account linking failed')
+    return
+  }
+  if (!check.ok) {
+    if (check.error === 'invalid_grant') {
+      renderLinkForm(event, api, 'That password is not right. Try again.')
+      return
+    }
+    console.log(`Account link password check refused: ${check.error}`)
+    api.access.deny(
+      check.error === 'mfa_required'
+        ? 'This account uses multi-factor authentication, which account linking does not support yet'
+        : check.message || 'Account linking failed',
+    )
+    return
+  }
+  // The social provider or the email Form proved the address already.
+  if (account.email_verified !== true) {
+    const path = `/users/${encodeURIComponent(account.user_id)}`
+    const { status } = await management(event, api, 'PATCH', path, { email_verified: true })
+    if (status !== 200) throw new Error(`marking the address verified answered ${status}`)
+  }
+  const adopted = await fetch(`${ACCOUNT_LINK_API_ORIGIN}/api/auth/link/adopt`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${signAdoptRequest(event, account.user_id)}` },
+  })
+  if (adopted.status !== 204) throw new Error(`the BoxLite API answered ${adopted.status} to adopt`)
+  await linkIdentity(event, api, account.user_id)
+  api.authentication.setPrimaryUser(account.user_id)
+  setIdentityClaims(event, api, true)
+}
+
+/** Any failure to reach Auth0 or BoxLite ends the login; the next one retries. */
+async function withAccountLink(api, step) {
+  try {
+    await step()
+  } catch (error) {
+    console.log(`Account link failed: ${error?.message ?? error}`)
+    api.access.deny('Account linking is unavailable right now. Try again in a moment.')
+  }
+}
+
 exports.onExecutePostLogin = async (event, api) => {
+  if (needsAccountLink(event)) {
+    await withAccountLink(api, () => startAccountLink(event, api))
+    return
+  }
+
   if (!isManagedDatabaseLogin(event)) {
     setIdentityClaims(event, api)
     return
@@ -57,6 +316,21 @@ exports.onExecutePostLogin = async (event, api) => {
 
 exports.onContinuePostLogin = async (event, api) => {
   const formId = EMAIL_VERIFICATION_FORM_ID
+
+  if (needsAccountLink(event)) {
+    if (event.prompt?.id === ACCOUNT_LINK_FORM_ID) {
+      await withAccountLink(api, () => finishAccountLink(event, api))
+      return
+    }
+    // Back from the email Form: the address is proven, so the link can be offered.
+    if (formId && event.prompt?.id === formId) {
+      renderLinkForm(event, api)
+      return
+    }
+    api.access.deny('Account linking failed')
+    return
+  }
+
   if (!isManagedDatabaseLogin(event) || !formId || event.prompt?.id !== formId) {
     api.access.deny('Email verification failed')
     return
