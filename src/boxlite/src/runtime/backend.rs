@@ -161,8 +161,9 @@ pub(crate) trait BoxNetworkBackend: Send + Sync {
 
     /// Make the box's services public (`Enabled`) or private (`Disabled`).
     ///
-    /// Default is `Unsupported`: only a remote server enforces inbound access,
-    /// and a local box cannot change its options after create.
+    /// For now only REST runtimes implement this. The local runtime keeps
+    /// the `Unsupported` default: it never enforces inbound access, and a
+    /// local box cannot change its options after create.
     async fn set_inbound(&self, _mode: NetworkMode) -> BoxliteResult<()> {
         Err(BoxliteError::Unsupported(
             "changing inbound access is only supported by REST runtimes".into(),
