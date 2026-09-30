@@ -23,11 +23,12 @@ const getOrganizationDisplayName = (name?: string) => {
 
 const OrganizationSettings: React.FC = () => {
   const { axiosInstance } = useApi()
-  const { refreshOrganizations } = useOrganizations()
-  const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
+  const { organizations, refreshOrganizations } = useOrganizations()
+  const { selectedOrganization, authenticatedUserOrganizationMember, onSelectOrganization } = useSelectedOrganization()
 
   const [organizationName, setOrganizationName] = useState('')
   const [renamingOrganization, setRenamingOrganization] = useState(false)
+  const [switchingTo, setSwitchingTo] = useState<string | null>(null)
   const [copied, copyToClipboard] = useCopyToClipboard()
 
   useEffect(() => {
@@ -60,6 +61,20 @@ const OrganizationSettings: React.FC = () => {
       setRenamingOrganization(false)
     }
   }
+
+  // The dashboard reopens the organization last chosen, else the default one;
+  // this list is where someone in several picks another.
+  const handleSwitchOrganization = async (organizationId: string) => {
+    setSwitchingTo(organizationId)
+    try {
+      await onSelectOrganization(organizationId)
+    } finally {
+      setSwitchingTo(null)
+    }
+  }
+
+  const badgeClass =
+    'flex-none border border-border px-2 py-[3px] font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground'
 
   const inputClass =
     'w-full border border-border bg-card px-[14px] py-[11px] font-mono text-[13px] text-foreground outline-none focus:border-brand disabled:opacity-60'
@@ -130,6 +145,45 @@ const OrganizationSettings: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Only someone in more than one organization, such as after a linked
+          social login brought its own along, has anywhere else to go. */}
+      {organizations.length > 1 && (
+        <div className="mt-6 border border-border">
+          <div className="border-b border-border px-5 py-[15px] font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">
+            Your Organizations
+          </div>
+          <ul>
+            {organizations.map((organization) => (
+              <li
+                key={organization.id}
+                data-organization-id={organization.id}
+                className="flex items-center gap-3 border-b border-border px-5 py-4 last:border-b-0"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px] font-semibold">
+                    {getOrganizationDisplayName(organization.name)}
+                  </div>
+                  <div className="truncate font-mono text-[11px] text-muted-foreground">{organization.id}</div>
+                </div>
+                {organization.isDefaultForAuthenticatedUser && <span className={badgeClass}>Default</span>}
+                {organization.id === selectedOrganization.id ? (
+                  <span className={badgeClass}>Current</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchOrganization(organization.id)}
+                    disabled={switchingTo !== null}
+                    className="flex-none border border-border px-[14px] py-[7px] text-[12px] font-semibold transition-colors hover:border-brand disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    Switch
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }

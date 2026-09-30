@@ -224,9 +224,11 @@ page again, so a move left undone then would stay undone. A link that fails
 after the move leaves the social login unlinked, so the next one runs the flow
 again, and moving is idempotent. Boxes, volumes, and usage belong to
 organizations and stay where they are. The password account keeps its own
-default organization; the moved one becomes its default only when the
-password account had none, which is the case for an account the link just
-signed up. Organizations are never merged.
+default organization; the moved one becomes its default only when the password
+account had none, which is the case for an account the link just signed up.
+Organizations are never merged. The dashboard reopens the organization last
+chosen, else the default one; someone in more than one sees them all under
+Organization Settings, where Switch opens another.
 
 ### Endpoints
 
