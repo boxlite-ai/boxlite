@@ -202,8 +202,26 @@ origin the Action can reach from Auth0's cloud, creates the link client as
 scopes granted. It journals the client and its grant, so `--rollback` deletes
 them, reuses them on later runs, and refuses a same-named client with other
 settings. It hydrates the origin and the tenant domain into the Action's code.
-The link Form and the secrets are not provisioned yet, so the link Form's id
-stays empty and the link is off.
+
+The same apply keys the Action with the three secrets: the client's id and
+secret, read from the tenant, and the key from `AUTH0_ACCOUNT_LINK_SECRET`,
+which the configurator reads from its environment, never argv, and refuses
+under 32 characters. Auth0 never returns a secret's value, so every such apply
+rewrites all three; that is how a rotated key arrives. The journal keeps the
+Action's code and no secret, so `--rollback` restores the code and leaves the
+secrets in place. Give the API the same key:
+
+```bash
+export AUTH0_ACCOUNT_LINK_SECRET="$(openssl rand -base64 48)"
+npm run auth0:configure-login -- --tenant <tenant.auth0.com> \
+  --client-id <boxlite-spa-client-id> --connection <database-connection-name> \
+  --account-link-api-origin https://api.<stage domain> --apply
+printf %s "$AUTH0_ACCOUNT_LINK_SECRET" |
+  npm run mstage env set -- OIDC_ACCOUNT_LINK_SECRET --stage <stage>
+```
+
+The link Form is not provisioned yet, so its id stays empty and the link is
+off.
 
 ### What the link moves
 
