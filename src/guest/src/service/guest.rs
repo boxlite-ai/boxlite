@@ -1,13 +1,14 @@
 //! Guest service implementation.
 //!
 //! Handles guest initialization and management (Init, Ping, Shutdown,
-//! Quiesce, Thaw RPCs).
+//! Quiesce, Thaw, Trim RPCs).
 
 use crate::service::server::GuestServer;
 use boxlite_shared::{
     guest_init_response, Guest as GuestService, GuestInitError, GuestInitRequest,
     GuestInitResponse, GuestInitSuccess, PingRequest, PingResponse, QuiesceRequest,
-    QuiesceResponse, ShutdownRequest, ShutdownResponse, ThawRequest, ThawResponse,
+    QuiesceResponse, ShutdownRequest, ShutdownResponse, ThawRequest, ThawResponse, TrimRequest,
+    TrimResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
@@ -166,6 +167,15 @@ impl GuestService for GuestServer {
             nix::libc::sync();
         }
 
+        // Step 4: Trim free space so the host can reclaim it from the disk images.
+        // Best effort and bounded: a slow trim must not hold up the shutdown.
+        const TRIM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+        info!("Trimming filesystems...");
+        let trim = tokio::task::spawn_blocking(crate::storage::fstrim::trim_filesystems);
+        if tokio::time::timeout(TRIM_TIMEOUT, trim).await.is_err() {
+            warn!("Filesystem trim did not finish in {TRIM_TIMEOUT:?}; continuing shutdown");
+        }
+
         // Report the degraded quiesce only now that containers are stopped,
         // exit records are written and the filesystems are synced.
         if let Err(error) = quiesce {
@@ -209,6 +219,17 @@ impl GuestService for GuestServer {
         stored.clear();
 
         Ok(Response::new(ThawResponse { thawed_count }))
+    }
+
+    /// Trim free space on all writable filesystems (FITRIM ioctl).
+    async fn trim(&self, _request: Request<TrimRequest>) -> Result<Response<TrimResponse>, Status> {
+        info!("Received trim request — trimming filesystems");
+
+        let trimmed_bytes = tokio::task::spawn_blocking(crate::storage::fstrim::trim_filesystems)
+            .await
+            .map_err(|e| Status::internal(format!("trim task failed: {e}")))?;
+
+        Ok(Response::new(TrimResponse { trimmed_bytes }))
     }
 }
 

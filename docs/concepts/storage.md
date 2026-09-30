@@ -45,6 +45,9 @@ Deleting files inside a Box shrinks its `disk.qcow2` on the host:
 2. The disk passes the discard to the qcow2 layer, which marks the clusters as zero and punches
    holes for them in the host file (`fallocate(PUNCH_HOLE)`), returning the space to the host
    filesystem.
+3. Space freed without a discard reaching the disk (deleted by a Box created before `discard`
+   was enabled, or discards lost to a crash) is reclaimed by a trim: the guest agent runs FITRIM
+   on its writable filesystems when the Box stops, and before a snapshot, clone, or export.
 
 The host file's apparent size (`ls -l`) does not shrink; its allocated size (`du`) does.
 

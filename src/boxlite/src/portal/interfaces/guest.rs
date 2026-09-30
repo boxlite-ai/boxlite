@@ -2,8 +2,8 @@
 
 use boxlite_shared::{
     BlockDeviceSource, BoxliteError, BoxliteResult, Filesystem, GuestClient, GuestInitRequest,
-    NetworkInit, PingRequest, QuiesceRequest, ShutdownRequest, ThawRequest, VirtiofsSource, Volume,
-    guest_init_response,
+    NetworkInit, PingRequest, QuiesceRequest, ShutdownRequest, ThawRequest, TrimRequest,
+    VirtiofsSource, Volume, guest_init_response,
 };
 use tonic::transport::Channel;
 
@@ -101,6 +101,15 @@ impl GuestInterface {
     pub async fn thaw(&mut self) -> BoxliteResult<u32> {
         let response = self.client.thaw(ThawRequest {}).await?.into_inner();
         Ok(response.thawed_count)
+    }
+
+    /// Trim guest filesystems (FITRIM).
+    ///
+    /// Discards free space so the host can reclaim it from the disk images.
+    /// Returns the number of bytes trimmed.
+    pub async fn trim(&mut self) -> BoxliteResult<u64> {
+        let response = self.client.trim(TrimRequest {}).await?.into_inner();
+        Ok(response.trimmed_bytes)
     }
 }
 

@@ -334,11 +334,11 @@ test\:guest-perms:
 	echo "🔐 Running privileged guest ownership tests..."; \
 	if [ "$$(id -u)" -eq 0 ]; then \
 		unshare --mount --propagation private -- \
-			"$$test_binary" 'storage::perms::tests::privileged_' \
+			"$$test_binary" 'storage::perms::tests::privileged_' 'storage::fstrim::tests::privileged_' \
 			--ignored --test-threads=1; \
 	elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then \
 		sudo -n unshare --mount --propagation private -- \
-			"$$test_binary" 'storage::perms::tests::privileged_' \
+			"$$test_binary" 'storage::perms::tests::privileged_' 'storage::fstrim::tests::privileged_' \
 			--ignored --test-threads=1; \
 	else \
 		echo "❌ Privileged ownership tests require root or passwordless sudo"; \
