@@ -48,6 +48,7 @@ import { TypedConfigService } from '../../config/typed-config.service'
 import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
 import { UpdateOrganizationDefaultRegionDto } from '../dto/update-organization-default-region.dto'
 import { UpdateOrganizationNameDto } from '../dto/update-organization-name.dto'
+import { UpdateOrganizationDefaultExecTimeoutDto } from '../dto/update-organization-default-exec-timeout.dto'
 import { RequireFlagsEnabled } from '@openfeature/nestjs-sdk'
 import { OrGuard } from '../../auth/or.guard'
 import { OtelCollectorGuard } from '../../auth/otel-collector.guard'
@@ -245,6 +246,37 @@ export class OrganizationController {
     @Body() updateOrganizationNameDto: UpdateOrganizationNameDto,
   ): Promise<OrganizationDto> {
     const organization = await this.organizationService.updateName(organizationId, updateOrganizationNameDto.name)
+    return OrganizationDto.fromOrganization(organization)
+  }
+
+  @Patch('/:organizationId/default-exec-timeout')
+  @ApiOperation({
+    summary: 'Update organization default execution timeout',
+    operationId: 'updateOrganizationDefaultExecTimeout',
+  })
+  @ApiResponse({ status: 200, description: 'Execution timeout default updated', type: OrganizationDto })
+  @ApiParam({ name: 'organizationId', description: 'Organization ID', type: 'string' })
+  @ApiBody({ type: UpdateOrganizationDefaultExecTimeoutDto, required: true })
+  @UseGuards(AuthGuard('jwt'), AuthenticatedRateLimitGuard, OrganizationActionGuard)
+  @RequiredOrganizationMemberRole(OrganizationMemberRole.OWNER)
+  @Audit({
+    action: AuditAction.UPDATE,
+    targetType: AuditTarget.ORGANIZATION,
+    targetIdFromRequest: (req) => String(req.params.organizationId),
+    requestMetadata: {
+      body: (req: TypedRequest<UpdateOrganizationDefaultExecTimeoutDto>) => ({
+        defaultExecTimeoutSeconds: req.body?.defaultExecTimeoutSeconds,
+      }),
+    },
+  })
+  async updateDefaultExecTimeout(
+    @Param('organizationId') organizationId: string,
+    @Body() updateDto: UpdateOrganizationDefaultExecTimeoutDto,
+  ): Promise<OrganizationDto> {
+    const organization = await this.organizationService.updateDefaultExecTimeout(
+      organizationId,
+      updateDto.defaultExecTimeoutSeconds,
+    )
     return OrganizationDto.fromOrganization(organization)
   }
 

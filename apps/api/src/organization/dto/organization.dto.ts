@@ -104,6 +104,15 @@ export class OrganizationDto {
   defaultRegionId?: string
 
   @ApiProperty({
+    description: 'Default execution timeout in seconds; null inherits the platform default, zero disables the timer',
+    type: 'integer',
+    nullable: true,
+    minimum: 0,
+    maximum: 2147483647,
+  })
+  defaultExecTimeoutSeconds: number | null
+
+  @ApiProperty({
     description: 'Authenticated rate limit per minute',
     nullable: true,
   })
@@ -175,6 +184,7 @@ export class OrganizationDto {
       templateDeactivationTimeoutMinutes: organization.templateDeactivationTimeoutMinutes,
       boxLimitedNetworkEgress: organization.boxLimitedNetworkEgress,
       defaultRegionId: organization.defaultRegionId,
+      defaultExecTimeoutSeconds: organization.defaultExecTimeoutSeconds ?? null,
       authenticatedRateLimit: organization.authenticatedRateLimit,
       boxCreateRateLimit: organization.boxCreateRateLimit,
       boxLifecycleRateLimit: organization.boxLifecycleRateLimit,

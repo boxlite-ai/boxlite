@@ -3,9 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ConflictException, NotFoundException } from '@nestjs/common'
+import { ConflictException, ExecutionContext, Logger, NotFoundException } from '@nestjs/common'
 import { Organization } from '../entities/organization.entity'
 import { OrganizationService } from './organization.service'
+import { OrganizationController } from '../controllers/organization.controller'
+import { OrganizationAccessGuard } from '../guards/organization-access.guard'
+import { SystemRole } from '../../user/enums/system-role.enum'
 
 const organization = (overrides: Partial<Organization> = {}): Organization =>
   Object.assign(new Organization(), {
@@ -31,6 +34,12 @@ const makeService = (found: Organization | null) => {
     },
   }
   const configService = { getOrThrow: jest.fn().mockReturnValue(false), get: jest.fn() }
+  const cache = new Map<string, string>()
+  const redis = {
+    get: jest.fn(async (key: string) => cache.get(key) ?? null),
+    set: jest.fn(async (key: string, value: string) => cache.set(key, value)),
+    del: jest.fn(async (key: string) => Number(cache.delete(key))),
+  }
 
   const service = new OrganizationService(
     organizationRepository as any,
@@ -43,8 +52,69 @@ const makeService = (found: Organization | null) => {
     {} as any,
   )
 
-  return { service, organizationRepository, entityManager }
+  Object.assign(service, { redis })
+  return { service, organizationRepository, entityManager, redis, cache }
 }
+
+describe('OrganizationService exec timeout', () => {
+  afterEach(() => jest.restoreAllMocks())
+
+  it.each([1800, 0, null])('refreshes cached execution defaults after updating to %s', async (timeout) => {
+    const { service, redis, cache } = makeService(organization({ defaultExecTimeoutSeconds: 60 }))
+    const guard = new OrganizationAccessGuard(service, {} as never)
+    Object.assign(guard, { redis })
+    const request = { params: { organizationId: 'org-1' }, user: { role: SystemRole.ADMIN } }
+    const context = { switchToHttp: () => ({ getRequest: () => request }) } as ExecutionContext
+    await guard.canActivate(context)
+    cache.set('organization:other', 'unrelated cached organization')
+
+    await service.updateDefaultExecTimeout('org-1', timeout)
+    await guard.canActivate(context)
+
+    expect(request.user).toMatchObject({ organization: { defaultExecTimeoutSeconds: timeout } })
+    expect(cache.get('organization:other')).toBe('unrelated cached organization')
+  })
+
+  it.each([1800, 0, null])('persists and returns the organization default %s', async (timeout) => {
+    const stored = organization({ defaultExecTimeoutSeconds: 60 })
+    const { service, organizationRepository } = makeService(stored)
+    const controller = new OrganizationController(service, {} as never, {} as never, {} as never, {} as never)
+
+    const updated = await controller.updateDefaultExecTimeout('org-1', { defaultExecTimeoutSeconds: timeout })
+
+    expect(organizationRepository.findOne).toHaveBeenCalledWith({ where: { id: 'org-1' } })
+    expect(organizationRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultExecTimeoutSeconds: timeout }),
+    )
+    expect(updated).toMatchObject({ id: 'org-1', defaultExecTimeoutSeconds: timeout })
+  })
+
+  it('rejects a missing organization without saving', async () => {
+    const { service, organizationRepository, redis } = makeService(null)
+    await expect(service.updateDefaultExecTimeout('missing', 1800)).rejects.toThrow(NotFoundException)
+    expect(organizationRepository.save).not.toHaveBeenCalled()
+    expect(redis.del).not.toHaveBeenCalled()
+  })
+
+  it('propagates a failed save instead of reporting success', async () => {
+    const { service, organizationRepository, redis } = makeService(organization())
+    const failure = new Error('database unavailable')
+    organizationRepository.save.mockRejectedValueOnce(failure)
+    await expect(service.updateDefaultExecTimeout('org-1', 1800)).rejects.toBe(failure)
+    expect(redis.del).not.toHaveBeenCalled()
+  })
+
+  it('returns the saved default and warns if cache invalidation fails', async () => {
+    const { service, redis } = makeService(organization())
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
+    redis.del.mockRejectedValueOnce(new Error('redis unavailable'))
+
+    await expect(service.updateDefaultExecTimeout('org-1', 1800)).resolves.toMatchObject({
+      defaultExecTimeoutSeconds: 1800,
+    })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('org-1'), expect.any(Error))
+  })
+})
 
 describe('OrganizationService.getReferralCode', () => {
   it('returns an existing code without writing', async () => {

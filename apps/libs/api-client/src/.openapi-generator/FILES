@@ -128,6 +128,7 @@ docs/TraceSpan.md
 docs/TraceSummary.md
 docs/UpdateBoxStateDto.md
 docs/UpdateJobStatus.md
+docs/UpdateOrganizationDefaultExecTimeout.md
 docs/UpdateOrganizationDefaultRegion.md
 docs/UpdateOrganizationInvitation.md
 docs/UpdateOrganizationMemberAccess.md
@@ -244,6 +245,7 @@ models/trace-span.ts
 models/trace-summary.ts
 models/update-box-state-dto.ts
 models/update-job-status.ts
+models/update-organization-default-exec-timeout.ts
 models/update-organization-default-region.ts
 models/update-organization-invitation.ts
 models/update-organization-member-access.ts
