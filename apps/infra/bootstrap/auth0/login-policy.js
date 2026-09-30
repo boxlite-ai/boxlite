@@ -9,9 +9,10 @@
  * Auth0 Form during an interactive browser login. Refresh-token, device-code,
  * and other non-browser exchanges cannot render Forms, so they fail closed.
  *
- * A social login whose address already has a password account is linked into
- * it before any token is issued (POL-555), without leaving Auth0: an Auth0
- * Form asks for that account's password, the password-realm grant checks it,
+ * A social login is linked into the password account holding its address, or
+ * into a new one, before any token is issued (POL-555), without leaving
+ * Auth0: an Auth0 Form asks for that account's password (or a new one), the
+ * password-realm grant checks it (or the Management API creates the account),
  * the BoxLite API moves the social user's data, and the Management API links
  * the identities so the token names the password account. An address the
  * provider has not verified is proven with the email Form first. With no API
@@ -120,14 +121,42 @@ async function findPasswordAccount(event, api) {
   )
 }
 
-function renderLinkForm(event, api, error = '') {
+function renderLinkForm(event, api, { signUp = false, error = '' } = {}) {
   api.prompt.render(ACCOUNT_LINK_FORM_ID, {
     vars: {
       email: event.user.email,
-      lead: 'This address already has a BoxLite account. Enter its password to link this sign-in to it.',
+      lead: signUp
+        ? 'BoxLite accounts sign in with a password. Choose one for this address, and this sign-in will be linked to the new account.'
+        : 'This address already has a BoxLite account. Enter its password to link this sign-in to it.',
       error,
     },
   })
+}
+
+/**
+ * A password account for an address no database account holds yet, created
+ * with the link client's `create:users` grant on the Management API. The
+ * social provider or the email Form has proven the address, so it starts
+ * verified; a password the connection's policy refuses comes back as the
+ * reason to show.
+ */
+async function signUp(event, api, password) {
+  const { status, body } = await management(event, api, 'POST', '/users', {
+    connection: BOXLITE_DB_CONNECTION,
+    email: event.user.email.toLowerCase(),
+    password,
+    email_verified: true,
+  })
+  if (status === 201) return { userId: body.user_id }
+  // The connection's password policy answers 400 with a PasswordStrengthError,
+  // PasswordDictionaryError and the like; any other 400 is not the person's to fix.
+  const message = String(body?.message ?? '')
+  if (status === 400 && /^Password\w*Error\b/.test(message)) {
+    return { refused: `Choose another password: ${message.replace(/^Password\w*Error:\s*/, '')}` }
+  }
+  // Another login signed the address up first: link to that account instead.
+  if (status === 409) return { taken: true }
+  return { failed: `creating the password account answered ${status}: ${message}` }
 }
 
 /**
@@ -196,16 +225,8 @@ async function linkIdentity(event, api, primaryUserId) {
 }
 
 async function startAccountLink(event, api) {
-  let account = null
-  try {
-    account = event.user?.email ? await findPasswordAccount(event, api) : null
-  } catch (error) {
-    // A throttled or unreachable Management API must not lock social logins
-    // out: this one goes through unlinked, and the next one looks again.
-    console.log(`Account link lookup failed, continuing unlinked: ${error?.message ?? error}`)
-  }
-  // No address, or no password account holding it: nothing to link to.
-  if (!account) {
+  // Without an address there is no password account to link to or create.
+  if (!event.user?.email) {
     setIdentityClaims(event, api)
     return
   }
@@ -219,7 +240,22 @@ async function startAccountLink(event, api) {
     api.prompt.render(EMAIL_VERIFICATION_FORM_ID)
     return
   }
-  renderLinkForm(event, api)
+  await offerLinkForm(event, api)
+}
+
+/** The link Form, asking for the password account's password or for a new one. */
+async function offerLinkForm(event, api) {
+  let account
+  try {
+    account = await findPasswordAccount(event, api)
+  } catch (error) {
+    // A throttled or unreachable Management API must not lock social logins
+    // out: this one goes through unlinked, and the next one looks again.
+    console.log(`Account link lookup failed, continuing unlinked: ${error?.message ?? error}`)
+    setIdentityClaims(event, api)
+    return
+  }
+  renderLinkForm(event, api, { signUp: !account })
 }
 
 /**
@@ -229,26 +265,38 @@ async function startAccountLink(event, api) {
  * while a failed link is simply retried at the next login.
  */
 async function finishAccountLink(event, api) {
+  const account = await findPasswordAccount(event, api)
   const password = event.prompt?.fields?.password
   if (typeof password !== 'string' || password === '') {
-    renderLinkForm(event, api, 'Enter the password.')
+    renderLinkForm(event, api, { signUp: !account, error: 'Enter the password.' })
     return
   }
-  const account = await findPasswordAccount(event, api)
-  if (!account) {
-    api.access.deny('Account linking failed')
-    return
-  }
+  const primaryUserId = account
+    ? await provePassword(event, api, account, password)
+    : await createPasswordAccount(event, api, password)
+  if (!primaryUserId) return
+  const adopted = await fetch(`${ACCOUNT_LINK_API_ORIGIN}/api/auth/link/adopt`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${signAdoptRequest(event, primaryUserId)}` },
+  })
+  if (adopted.status !== 204) throw new Error(`the BoxLite API answered ${adopted.status} to adopt`)
+  await linkIdentity(event, api, primaryUserId)
+  api.authentication.setPrimaryUser(primaryUserId)
+  setIdentityClaims(event, api, true)
+}
+
+/** The account's id once its password checks out; otherwise the Form or a denial has answered. */
+async function provePassword(event, api, account, password) {
   const check = await checkPassword(event, password)
   if (check.ok && check.claims?.sub !== account.user_id) {
     console.log('Account link password check returned an ID token for another account')
     api.access.deny('Account linking failed')
-    return
+    return null
   }
   if (!check.ok) {
     if (check.error === 'invalid_grant') {
-      renderLinkForm(event, api, 'That password is not right. Try again.')
-      return
+      renderLinkForm(event, api, { error: 'That password is not right. Try again.' })
+      return null
     }
     console.log(`Account link password check refused: ${check.error}`)
     api.access.deny(
@@ -256,7 +304,7 @@ async function finishAccountLink(event, api) {
         ? 'This account uses multi-factor authentication, which account linking does not support yet'
         : check.message || 'Account linking failed',
     )
-    return
+    return null
   }
   // The social provider or the email Form proved the address already.
   if (account.email_verified !== true) {
@@ -264,14 +312,24 @@ async function finishAccountLink(event, api) {
     const { status } = await management(event, api, 'PATCH', path, { email_verified: true })
     if (status !== 200) throw new Error(`marking the address verified answered ${status}`)
   }
-  const adopted = await fetch(`${ACCOUNT_LINK_API_ORIGIN}/api/auth/link/adopt`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${signAdoptRequest(event, account.user_id)}` },
-  })
-  if (adopted.status !== 204) throw new Error(`the BoxLite API answered ${adopted.status} to adopt`)
-  await linkIdentity(event, api, account.user_id)
-  api.authentication.setPrimaryUser(account.user_id)
-  setIdentityClaims(event, api, true)
+  return account.user_id
+}
+
+/** The new account's id; otherwise the Form has asked again. */
+async function createPasswordAccount(event, api, password) {
+  const created = await signUp(event, api, password)
+  if (created.failed) {
+    // No other password would fix it: this login goes through unlinked, and
+    // the next one tries again.
+    console.log(`Account link sign-up failed, continuing unlinked: ${created.failed}`)
+    setIdentityClaims(event, api)
+    return null
+  }
+  if (created.refused) renderLinkForm(event, api, { signUp: true, error: created.refused })
+  if (created.taken) {
+    renderLinkForm(event, api, { error: 'This address has a password account now. Enter its password.' })
+  }
+  return created.userId ?? null
 }
 
 /** Any failure to reach Auth0 or BoxLite ends the login; the next one retries. */
@@ -324,7 +382,7 @@ exports.onContinuePostLogin = async (event, api) => {
     }
     // Back from the email Form: the address is proven, so the link can be offered.
     if (formId && event.prompt?.id === formId) {
-      renderLinkForm(event, api)
+      await withAccountLink(api, () => offerLinkForm(event, api))
       return
     }
     api.access.deny('Account linking failed')

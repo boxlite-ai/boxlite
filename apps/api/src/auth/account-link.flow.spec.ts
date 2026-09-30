@@ -43,6 +43,7 @@ function tenant(
   options: {
     account?: boolean
     lookup?: number
+    signUp?: { status: number; body?: unknown }
     verified?: boolean
     grantError?: string
     idTokenSub?: string
@@ -91,8 +92,11 @@ function tenant(
       if (options.lookup) return { status: options.lookup, body: { error: 'too_many_requests' } }
       return { status: 200, body: options.account === false ? [] : [account] }
     }
-    if (call.url === `https://${DOMAIN}/api/v2/users/${encodeURIComponent(PRIMARY)}/identities`) {
+    if (call.url.startsWith(`https://${DOMAIN}/api/v2/users/`) && call.url.endsWith('/identities')) {
       return { status: 201, body: [] }
+    }
+    if (call.url === `https://${DOMAIN}/api/v2/users` && call.method === 'POST') {
+      return options.signUp ?? { status: 201, body: { user_id: 'auth0|new' } }
     }
     if (call.url === `https://${DOMAIN}/api/v2/users/${encodeURIComponent(PRIMARY)}` && call.method === 'PATCH') {
       return { status: 200, body: {} }
@@ -234,14 +238,107 @@ describe('login-time account link, Action and API together', () => {
     expect(calls.some((call) => call.url.endsWith('/identities'))).toBe(false)
   })
 
-  it('leaves a social login its own identity when no password account holds the address', async () => {
+  it('offers a new password when no password account holds the address', async () => {
     const { action } = tenant({ account: false })
     const step = transaction()
 
     await action.onExecutePostLogin(socialLogin(), step.api)
 
+    expect(step.seen.renders).toEqual([
+      { id: 'ap_link', vars: expect.objectContaining({ lead: expect.stringMatching(/Choose one/) }) },
+    ])
+  })
+
+  it('creates the password account with the chosen password, then moves and links into it', async () => {
+    const { action, calls, adopt } = tenant({ account: false })
+    const step = transaction()
+
+    await action.onContinuePostLogin(
+      socialLogin({ prompt: { id: 'ap_link', fields: { password: PASSWORD } } }),
+      step.api,
+    )
+
+    const created = calls.find((call) => call.url === `https://${DOMAIN}/api/v2/users`)
+    expect(created?.body).toEqual({
+      connection: 'boxlite-users',
+      email: 'ada@example.com',
+      password: PASSWORD,
+      email_verified: true,
+    })
+    expect(adopt).toHaveBeenCalledWith('auth0|new', SOCIAL)
+    expect(step.seen.primary).toEqual(['auth0|new'])
+  })
+
+  it('asks again with the reason Auth0 gives for a weak new password', async () => {
+    const { action, adopt } = tenant({
+      account: false,
+      signUp: { status: 400, body: { message: 'PasswordStrengthError: Password is too weak' } },
+    })
+    const step = transaction()
+
+    await action.onContinuePostLogin(
+      socialLogin({ prompt: { id: 'ap_link', fields: { password: 'short' } } }),
+      step.api,
+    )
+
+    expect(step.seen.renders).toEqual([
+      { id: 'ap_link', vars: expect.objectContaining({ error: expect.stringMatching(/too weak/) }) },
+    ])
+    expect(adopt).not.toHaveBeenCalled()
+  })
+
+  it('asks for the existing password when another login signed the address up first', async () => {
+    const { action, adopt } = tenant({
+      account: false,
+      signUp: { status: 409, body: { message: 'The user already exists.' } },
+    })
+    const step = transaction()
+
+    await action.onContinuePostLogin(
+      socialLogin({ prompt: { id: 'ap_link', fields: { password: PASSWORD } } }),
+      step.api,
+    )
+
+    expect(step.seen.renders).toEqual([
+      {
+        id: 'ap_link',
+        vars: expect.objectContaining({
+          lead: expect.stringMatching(/already has/),
+          error: expect.stringMatching(/now/),
+        }),
+      },
+    ])
+    expect(adopt).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a disabled connection', { status: 400, body: { message: 'Payload validation error: connection is disabled' } }],
+    [
+      'a link client without create:users',
+      { status: 403, body: { message: 'Insufficient scope, expected any of: create:users' } },
+    ],
+  ])('lets the login through unlinked when Auth0 refuses the sign-up over %s', async (_reason, signUp) => {
+    const { action, adopt } = tenant({ account: false, signUp })
+    const step = transaction()
+
+    await action.onContinuePostLogin(
+      socialLogin({ prompt: { id: 'ap_link', fields: { password: PASSWORD } } }),
+      step.api,
+    )
+
     expect(step.seen.renders).toEqual([])
     expect(step.seen.denied).toEqual([])
+    expect(adopt).not.toHaveBeenCalled()
+  })
+
+  it('leaves a social login without an address its own identity', async () => {
+    const { action, calls } = tenant()
+    const step = transaction()
+
+    await action.onExecutePostLogin(socialLogin({ user: { ...socialLogin().user, email: undefined } }), step.api)
+
+    expect(step.seen.renders).toEqual([])
+    expect(calls).toEqual([])
   })
 
   it('proves an address the provider did not verify with the email Form first', async () => {
@@ -254,6 +351,18 @@ describe('login-time account link, Action and API together', () => {
     const second = transaction()
     await action.onContinuePostLogin({ ...unverified, prompt: { id: 'ap_verify', fields: {} } }, second.api)
     expect(second.seen.renders.map((render) => render.id)).toEqual(['ap_link'])
+  })
+
+  it('asks for a new password after the email Form when no password account holds the address', async () => {
+    const { action } = tenant({ account: false })
+    const unverified = socialLogin({ user: { ...socialLogin().user, email_verified: false } })
+    const step = transaction()
+
+    await action.onContinuePostLogin({ ...unverified, prompt: { id: 'ap_verify', fields: {} } }, step.api)
+
+    expect(step.seen.renders).toEqual([
+      { id: 'ap_link', vars: expect.objectContaining({ lead: expect.stringMatching(/Choose one/) }) },
+    ])
   })
 
   it('marks an unverified password account verified before moving and linking', async () => {
