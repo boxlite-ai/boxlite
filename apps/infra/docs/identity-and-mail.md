@@ -126,7 +126,18 @@ retroactively gate independently validating Commerce/Analytics services.
 ## Account linking at login
 
 A social login has to reach the same BoxLite account as the password sign-up
-that owns the address (POL-555).
+that owns the address (POL-555). The link happens inside Auth0: the Post-Login
+Action asks for that account's password on an Auth0 Form, checks it, links the
+identities, and makes the password account the token's subject. BoxLite never
+receives the password.
+
+Moving BoxLite's own rows is the one step Auth0 cannot take. Before it links,
+the Action asks the API with `POST /api/auth/link/adopt`, a server-to-server
+call carrying an HS256 bearer token signed with `OIDC_ACCOUNT_LINK_SECRET`. The
+token names the social user as `sub` and the password account as
+`primary_user_id`, with the audience `boxlite-account-link-adopt`, and is
+refused once it is older than a minute. Without the secret the endpoint answers
+404; a key shorter than 32 characters stops the API at boot.
 
 ### What the link moves
 
