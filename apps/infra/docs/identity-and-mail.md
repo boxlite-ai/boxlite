@@ -109,6 +109,17 @@ receipts are the proof required to reuse the otherwise opaque Auth0 Vault connec
 If a same-named Form or Flow differs from the checked-in graph, apply fails before
 writing instead of backing up arbitrary remote payloads.
 
+The post-login Action is upgraded in place instead. Every Action the
+configurator writes ends with a stamp, a SHA-256 of the code above it. An apply
+rewrites an existing `boxlite-login-policy` Action when that stamp still
+matches, the code names this client, and the tenant runs exactly that code with
+no draft pending. The journal keeps the deployed code, so `--rollback`
+redeploys what ran before.
+
+Any other Action under that name, such as one edited in the dashboard or
+written before the stamp existed, stops the apply until it is removed or
+`--replace-action` is passed; that flag journals its deployed code the same way.
+
 Before deploying the BoxLite API JWT guard, run all five live canaries against
 the Auth0 tenant:
 

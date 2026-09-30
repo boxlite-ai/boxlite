@@ -2,6 +2,7 @@
 // Copyright (c) 2026 BoxLite AI
 
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -20,6 +21,9 @@ const RESOURCE_NAMES = {
   vaultConnection: 'BoxLite Forms Auth0 Management API',
 } as const
 const LEGACY_ACTION_NAME = 'boxlite-custom-claims'
+// The last line of every Action this tool generates: a hash of the code above
+// it. A stamp that still matches shows nobody has edited the code since.
+const ACTION_STAMP_PREFIX = '// boxlite-login-policy sha256:'
 
 const MANAGEMENT_AUDIENCE_SUFFIX = '/api/v2/'
 const MANAGEMENT_CLIENT_SCOPES = ['update:users']
@@ -106,6 +110,8 @@ export interface Auth0LoginPolicyOptions {
   connectionName: string
   apply: boolean
   allowTestEmailProvider: boolean
+  /** Overwrite a login policy Action this tool cannot show it generated. */
+  replaceAction?: boolean
 }
 
 export function parseAuth0LoginPolicyOptions(argv: string[]): Auth0LoginPolicyOptions {
@@ -118,6 +124,7 @@ export function parseAuth0LoginPolicyOptions(argv: string[]): Auth0LoginPolicyOp
       connection: { type: 'string' },
       apply: { type: 'boolean', default: false },
       'allow-test-email-provider': { type: 'boolean', default: false },
+      'replace-action': { type: 'boolean', default: false },
     },
   })
 
@@ -132,6 +139,7 @@ export function parseAuth0LoginPolicyOptions(argv: string[]): Auth0LoginPolicyOp
     connectionName,
     apply: values.apply ?? false,
     allowTestEmailProvider: values['allow-test-email-provider'] ?? false,
+    replaceAction: values['replace-action'] ?? false,
   }
 }
 
@@ -335,7 +343,17 @@ export function hydrateLoginPolicyAction(
   )
   const unresolved = hydrated.match(/__[A-Z_]+_JSON__/)
   if (unresolved) throw new Error(`unresolved Auth0 Action placeholder: ${unresolved[0]}`)
-  return hydrated
+  return stampActionCode(hydrated)
+}
+
+function stampActionCode(code: string): string {
+  const body = code.endsWith('\n') ? code : `${code}\n`
+  return `${body}${ACTION_STAMP_PREFIX}${createHash('sha256').update(body).digest('hex')}\n`
+}
+
+function carriesOwnStamp(code: string): boolean {
+  const at = code.lastIndexOf(ACTION_STAMP_PREFIX)
+  return at > 0 && stampActionCode(code.slice(0, at)) === code
 }
 
 export interface Auth0ManagementClient {
@@ -566,8 +584,8 @@ export class Auth0LoginPolicyConfigurator {
       const form = this.ensureForm(hydratedTemplate.form, state.form)
 
       this.enableConnectionForClient(connection, state.clientConnections)
-      const action = this.ensureAction(requireResourceId('verification form', form), state.action)
-      if (!state.action) this.deployAction(action)
+      const { action, changed } = this.ensureAction(requireResourceId('verification form', form), state.action)
+      if (changed) this.deployAction(action)
       this.bindAction(action, state.bindings)
 
       const readBack = this.readState()
@@ -832,11 +850,13 @@ export class Auth0LoginPolicyConfigurator {
 
     if (state.action) {
       if (!state.form) throw new Error(`Auth0 Action '${RESOURCE_NAMES.action}' has no managed verification Form`)
-      assertManagedActionMatches(
-        state.action,
-        this.actionPayload(requireResourceId('verification form', state.form)),
-        true,
-      )
+      if (!this.isManagedAction(state.action) && !this.options.replaceAction) {
+        assertManagedActionMatches(
+          state.action,
+          this.actionPayload(requireResourceId('verification form', state.form)),
+          true,
+        )
+      }
     }
   }
 
@@ -1046,7 +1066,7 @@ export class Auth0LoginPolicyConfigurator {
     this.client.request('patch', 'prompts', { data: update })
   }
 
-  private ensureAction(formId: string, existing: JsonObject | null): JsonObject {
+  private ensureAction(formId: string, existing: JsonObject | null): { action: JsonObject; changed: boolean } {
     const payload = this.actionPayload(formId)
     if (!existing) {
       const created = requireObject(
@@ -1054,11 +1074,52 @@ export class Auth0LoginPolicyConfigurator {
         this.client.request('post', 'actions/actions', { data: payload }),
       )
       this.recordCreated('login policy action', 'actions/actions', requireResourceId('login policy action', created))
-      return created
+      return { action: created, changed: true }
     }
 
-    assertManagedActionMatches(existing, payload, true)
-    return existing
+    if (actionIsCurrent(existing, payload)) return { action: existing, changed: false }
+    if (!this.isManagedAction(existing) && !this.options.replaceAction) {
+      assertManagedActionMatches(existing, payload, true)
+    }
+
+    // Journal what the tenant ran, the deployed version rather than any draft,
+    // so a rollback redeploys exactly that.
+    const id = requireResourceId('login policy action', existing)
+    const ran = existing.deployed_version ?? existing
+    this.recordAdopted(
+      'login policy action',
+      'actions/actions',
+      id,
+      { code: ran.code, runtime: ran.runtime, supported_triggers: existing.supported_triggers },
+      true,
+    )
+    const updated = requireObject(
+      'login policy action',
+      this.client.request('patch', `actions/actions/${id}`, { data: { code: payload.code, runtime: payload.runtime } }),
+    )
+    return { action: updated, changed: true }
+  }
+
+  /**
+   * A post-login Action this tool generated for this client, from this or an
+   * earlier `login-policy.js`, that nobody has changed since: its code still
+   * carries the stamp hydration wrote, and the tenant runs exactly that code
+   * with no draft pending. Anything else under the name, such as an edit made
+   * in the dashboard, has to match this apply exactly, be removed by hand, or
+   * be overwritten with `--replace-action`.
+   */
+  private isManagedAction(action: JsonObject): boolean {
+    const code = String(action.code ?? '')
+    return (
+      action.name === RESOURCE_NAMES.action &&
+      action.runtime === 'node22' &&
+      sameJson(action.supported_triggers, [{ id: 'post-login', version: 'v3' }]) &&
+      carriesOwnStamp(code) &&
+      code.includes(`const BOXLITE_CLIENT_ID = ${JSON.stringify(this.options.clientId)}`) &&
+      action.all_changes_deployed === true &&
+      action.deployed_version?.code === code &&
+      (action.secrets?.length ?? 0) === 0
+    )
   }
 
   private actionPayload(formId: string): JsonObject {
@@ -1350,10 +1411,20 @@ function bindingsSnapshot(bindings: JsonObject[]): JsonObject[] {
     .map((binding) => ({ ref: { type: 'action_id', value: binding.action.id }, display_name: binding.display_name }))
 }
 
+/** Whether the tenant already runs exactly what this apply would write. */
+function actionIsCurrent(action: JsonObject, desired: JsonObject): boolean {
+  try {
+    assertManagedActionMatches(action, desired, true)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function assertManagedActionMatches(action: JsonObject, desired: JsonObject, requireDeployed: boolean): void {
   if (!containsJson(action, desired)) {
     throw new Error(
-      `Auth0 Action '${RESOURCE_NAMES.action}' already exists with unmanaged contents; remove it or restore its BoxLite-managed definition before applying`,
+      `Auth0 Action '${RESOURCE_NAMES.action}' already exists with unmanaged contents; remove it, restore its BoxLite-managed definition, or pass --replace-action to overwrite it`,
     )
   }
   if ((action.secrets?.length ?? 0) > 0 || (action.deployed_version?.secrets?.length ?? 0) > 0) {
