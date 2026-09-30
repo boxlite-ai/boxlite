@@ -126,7 +126,19 @@ retroactively gate independently validating Commerce/Analytics services.
 ## Account linking at login
 
 A social login has to reach the same BoxLite account as the password sign-up
-that owns the address (POL-555).
+that owns the address (POL-555). Linking happens before Auth0 issues a token,
+so every token names the password account (`auth0|…`) and BoxLite never
+provisions a second user or organization for the social identity.
+
+```text
+social login ─▶ Post-Login Action ─▶ GET /api/auth/link/start
+                                        BoxLite page: the address, fixed; why a password is asked
+                                      ─▶ POST /api/auth/link/password
+                                           password account exists: password-realm grant
+                                           none yet: /dbconnections/signup with that password
+                                           → move local data → Management API link
+                                      ─▶ /continue ─▶ Action: setPrimaryUser → token sub = auth0|…
+```
 
 The password page is BoxLite's own. Auth0's password page lets the address be
 edited and never says it is linking, and changing it takes page templates,
@@ -162,6 +174,11 @@ session. An earlier design ran a second Universal Login sign-in instead, and
 on dev one on the paused login's own domain left `/continue` with no
 transaction to resume: Auth0 logged
 `A user has attempted to access a login page directly`.
+
+This is Auth0's documented shape for linking during login: an Action redirects
+to an external app that re-authenticates the target account, then validates
+that app's answer and switches the primary user
+([Link User Accounts](https://auth0.com/docs/manage-users/user-accounts/user-account-linking/link-user-accounts)).
 
 ### The settings
 
@@ -214,7 +231,8 @@ with the password page. `POST /api/auth/link/password` decrypts its own state
 and, by the button pressed, checks or sets the password and links, emails a
 reset link, or cancels. Every ending returns the browser to `/continue` with
 the outcome — failures included, so the Action can refuse the login on the
-page the person is looking at.
+page the person is looking at. The Action logs why it refused an outcome token
+to its execution log.
 
 Both answer 404 while the secret is unset, and 400 for a token that is
 missing, expired, or signed with anything else. Those tokens are the tenant's,

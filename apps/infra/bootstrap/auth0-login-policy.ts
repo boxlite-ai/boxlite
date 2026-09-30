@@ -311,15 +311,17 @@ export function hydrateEmailVerificationTemplate(template: JsonObject, ids: Emai
 
 export function hydrateLoginPolicyAction(
   source: string,
-  values: { clientId: string; connectionName: string; formId: string },
+  values: { clientId: string; connectionName: string; formId: string; accountLinkApiOrigin: string },
 ): string {
   const replacements: Record<string, string> = {
     __BOXLITE_CLIENT_ID_JSON__: JSON.stringify(values.clientId),
     __BOXLITE_DB_CONNECTION_JSON__: JSON.stringify(values.connectionName),
     __EMAIL_VERIFICATION_FORM_ID_JSON__: JSON.stringify(values.formId),
+    // An empty origin is the off switch: the Action then leaves social logins alone.
+    __ACCOUNT_LINK_API_ORIGIN_JSON__: JSON.stringify(values.accountLinkApiOrigin),
   }
   const hydrated = source.replace(
-    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID)_JSON__/g,
+    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN)_JSON__/g,
     (placeholder) => replacements[placeholder],
   )
   const unresolved = hydrated.match(/__[A-Z_]+_JSON__/)
@@ -1058,6 +1060,8 @@ export class Auth0LoginPolicyConfigurator {
         clientId: this.options.clientId,
         connectionName: this.options.connectionName,
         formId,
+        // The account link stays off until an apply is given its origin.
+        accountLinkApiOrigin: '',
       }),
       runtime: 'node22',
     }
@@ -1136,16 +1140,7 @@ export class Auth0LoginPolicyConfigurator {
     }
     assertManagedActionMatches(
       state.action,
-      {
-        name: RESOURCE_NAMES.action,
-        supported_triggers: [{ id: 'post-login', version: 'v3' }],
-        code: hydrateLoginPolicyAction(this.sources.actionCode, {
-          clientId: this.options.clientId,
-          connectionName: this.options.connectionName,
-          formId: requireResourceId('verification form', state.form),
-        }),
-        runtime: 'node22',
-      },
+      this.actionPayload(requireResourceId('verification form', state.form)),
       true,
     )
     if (!state.bindings.some((binding) => binding.action?.id === state.action?.id)) {
