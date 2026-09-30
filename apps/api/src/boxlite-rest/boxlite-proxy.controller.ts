@@ -246,7 +246,9 @@ export class BoxliteProxyController {
     // woken (ensureReady is a real resume, not a free status read) only to
     // be rejected here anyway.
     if (!box.public) {
-      throw new ConflictException(`Box ${boxId} is not public; set public: true before opening a tunnel`)
+      throw new ConflictException(
+        `Box ${boxId} is not public; run \`boxlite update ${boxId} --inbound enabled\` or make it public in the dashboard`,
+      )
     }
 
     // POL-326/POL-352: opening a tunnel is user activity, exactly like the
