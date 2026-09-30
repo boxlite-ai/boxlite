@@ -133,10 +133,13 @@ that owns the address (POL-555).
 When the social identity already had a BoxLite user — it signed in before this
 flow existed — the API moves that user's organization memberships, role
 assignments, and API keys to the password account, in one transaction. Moving
-is idempotent: a second move finds nothing left to move. Boxes, volumes, and
-usage belong to organizations and stay where they are. The password account
-keeps its own default organization; the moved one becomes its default only
-when the password account had none. Organizations are never merged.
+is idempotent: a second move finds nothing left to move. A moved key whose name
+the password account already uses in that organization gets the social
+provider as a suffix, such as `ci (google-oauth2)`, numbered when that name is
+taken too. Boxes, volumes, and usage belong to organizations and stay where
+they are. The password account keeps its own default organization; the moved
+one becomes its default only when the password account had none. Organizations
+are never merged.
 
 ## Outbound mail
 

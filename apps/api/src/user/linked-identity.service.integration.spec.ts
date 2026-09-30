@@ -211,6 +211,38 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     expect(names.sort()).toEqual(['ci', 'ci (google-oauth2)'])
   })
 
+  it('numbers the suffix when the primary already holds the suffixed name', async () => {
+    await user(PRIMARY)
+    await user(SOCIAL)
+    const shared = await organization(PRIMARY, 'shared')
+    await member(shared, PRIMARY, OrganizationMemberRole.OWNER, true)
+    await member(shared, SOCIAL, OrganizationMemberRole.MEMBER, true)
+    await apiKey(shared, PRIMARY, 'ci')
+    await apiKey(shared, PRIMARY, 'ci (google-oauth2)')
+    await apiKey(shared, SOCIAL, 'ci')
+
+    await service.adopt(PRIMARY, SOCIAL)
+
+    const names = (await dataSource.getRepository(ApiKey).find({ where: { userId: PRIMARY } })).map((key) => key.name)
+    expect(names.sort()).toEqual(['ci', 'ci (google-oauth2 2)', 'ci (google-oauth2)'])
+  })
+
+  it('keeps two moved keys apart when one is renamed onto the name of the other', async () => {
+    await user(PRIMARY)
+    await user(SOCIAL)
+    const shared = await organization(PRIMARY, 'shared')
+    await member(shared, PRIMARY, OrganizationMemberRole.OWNER, true)
+    await member(shared, SOCIAL, OrganizationMemberRole.MEMBER, true)
+    await apiKey(shared, PRIMARY, 'ci')
+    await apiKey(shared, SOCIAL, 'ci')
+    await apiKey(shared, SOCIAL, 'ci (google-oauth2)')
+
+    await service.adopt(PRIMARY, SOCIAL)
+
+    const names = (await dataSource.getRepository(ApiKey).find({ where: { userId: PRIMARY } })).map((key) => key.name)
+    expect(names.sort()).toEqual(['ci', 'ci (google-oauth2 2)', 'ci (google-oauth2)'])
+  })
+
   it('moves nothing the second time', async () => {
     await user(SOCIAL)
     const org = await organization(SOCIAL, 'social org')

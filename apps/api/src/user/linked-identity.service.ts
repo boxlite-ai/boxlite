@@ -154,26 +154,37 @@ export class LinkedIdentityService {
    *
    * A key's name is unique per user within an organization. When both
    * accounts named a key the same in one organization, the moved key keeps
-   * working under the secondary's provider as a suffix, rather than one of
-   * them being dropped.
+   * working under the secondary's provider as a suffix, numbered when the
+   * primary holds that name too, rather than one of them being dropped.
    */
   private async moveApiKeys(em: EntityManager, primaryUserId: string, secondaryUserId: string): Promise<number> {
     const provider = secondaryUserId.slice(0, secondaryUserId.indexOf('|'))
-    // TypeORM answers an UPDATE with [rows, affectedCount].
-    const [, movedCount]: [unknown[], number] = await em.query(
-      // Typed parameters: $1 is both assigned and compared, and Postgres will
-      // not deduce one type for it from those two positions on its own.
-      `UPDATE "api_key" AS moved
-       SET "userId" = $1::varchar,
-           "name" = CASE WHEN EXISTS (
-             SELECT 1 FROM "api_key" AS kept
-             WHERE kept."organizationId" = moved."organizationId"
-               AND kept."userId" = $1::varchar
-               AND kept."name" = moved."name"
-           ) THEN moved."name" || ' (' || $3::text || ')' ELSE moved."name" END
-       WHERE moved."userId" = $2::varchar`,
-      [primaryUserId, secondaryUserId, provider],
+    const keys: { organizationId: string; userId: string; name: string }[] = await em.query(
+      `SELECT "organizationId", "userId", "name" FROM "api_key" WHERE "userId" IN ($1, $2)`,
+      [primaryUserId, secondaryUserId],
     )
-    return movedCount
+    const slot = (organizationId: string, name: string) => `${organizationId}/${name}`
+    const held = new Set(
+      keys.filter((key) => key.userId === primaryUserId).map((key) => slot(key.organizationId, key.name)),
+    )
+    const incoming = keys.filter((key) => key.userId === secondaryUserId)
+    // Every moved key that keeps its name holds it before a renamed key picks one.
+    const taken = new Set([...held, ...incoming.map((key) => slot(key.organizationId, key.name))])
+
+    for (const key of incoming) {
+      let name = key.name
+      if (held.has(slot(key.organizationId, name))) {
+        name = `${key.name} (${provider})`
+        for (let n = 2; taken.has(slot(key.organizationId, name)); n++) {
+          name = `${key.name} (${provider} ${n})`
+        }
+        taken.add(slot(key.organizationId, name))
+      }
+      await em.query(
+        `UPDATE "api_key" SET "userId" = $1, "name" = $2 WHERE "organizationId" = $3 AND "userId" = $4 AND "name" = $5`,
+        [primaryUserId, name, key.organizationId, secondaryUserId, key.name],
+      )
+    }
+    return incoming.length
   }
 }
