@@ -20,6 +20,7 @@ function sources() {
     emailVerificationTemplate: JSON.parse(
       readFileSync(join(bootstrapRoot, 'auth0', 'email-verification-form.json'), 'utf8'),
     ),
+    accountLinkForm: JSON.parse(readFileSync(join(bootstrapRoot, 'auth0', 'account-link-form.json'), 'utf8')),
     journalDirectory: join(bootstrapRoot, '..', '.sst', 'auth0-backups'),
   }
 }

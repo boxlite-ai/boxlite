@@ -98,6 +98,9 @@ function tenant(
     if (call.url === `https://${DOMAIN}/api/v2/users` && call.method === 'POST') {
       return options.signUp ?? { status: 201, body: { user_id: 'auth0|new' } }
     }
+    if (call.url === `https://${DOMAIN}/dbconnections/change_password`) {
+      return { status: 200 }
+    }
     if (call.url === `https://${DOMAIN}/api/v2/users/${encodeURIComponent(PRIMARY)}` && call.method === 'PATCH') {
       return { status: 200, body: {} }
     }
@@ -328,6 +331,18 @@ describe('login-time account link, Action and API together', () => {
 
     expect(step.seen.renders).toEqual([])
     expect(step.seen.denied).toEqual([])
+    expect(adopt).not.toHaveBeenCalled()
+  })
+
+  it('emails a reset link instead of linking when the password is forgotten', async () => {
+    const { action, calls, adopt } = tenant()
+    const step = transaction()
+
+    await action.onContinuePostLogin(socialLogin({ prompt: { id: 'ap_link', fields: { reset: true } } }), step.api)
+
+    const reset = calls.find((call) => call.url === `https://${DOMAIN}/dbconnections/change_password`)
+    expect(reset?.body).toEqual({ client_id: 'spa_123', email: 'ada@example.com', connection: 'boxlite-users' })
+    expect(step.seen.denied).toEqual([expect.stringMatching(/reset the password/)])
     expect(adopt).not.toHaveBeenCalled()
   })
 
