@@ -38,6 +38,12 @@ const MANAGEMENT_CLIENT_METADATA = { boxlite_login_policy: 'email-verification-v
 const LINK_CLIENT_METADATA = { boxlite_login_policy: 'account-link-v1' }
 const LINK_CLIENT_GRANT_TYPES = ['client_credentials', 'http://auth0.com/oauth/grant-type/password-realm']
 const LINK_CLIENT_SCOPES = ['create:users', 'read:users', 'update:users']
+// The secrets a managed login policy Action may carry, all for the account
+// link: the key it signs the adopt request with, shared with the BoxLite API,
+// and the link client's credentials. Auth0 never returns a secret's value, so
+// an apply that keys the Action sends all three every time.
+const ACCOUNT_LINK_ACTION_SECRETS = ['ACCOUNT_LINK_CLIENT_ID', 'ACCOUNT_LINK_CLIENT_SECRET', 'ACCOUNT_LINK_SECRET']
+export const ACCOUNT_LINK_SECRET_ENV = 'AUTH0_ACCOUNT_LINK_SECRET'
 const IDENTIFIER_FIRST_PROPAGATION_ERROR = 'Email verification using otp is only compatible with Identifier First.'
 const DATABASE_CONNECTION_WRITE_ATTEMPTS = 4
 const LOGIN_POLICY_MANAGEMENT_SCOPES = [
@@ -128,9 +134,19 @@ export interface Auth0LoginPolicyOptions {
    * link client is created and the link stays off.
    */
   accountLinkApiOrigin?: string
+  /**
+   * The HS256 key the Action signs its adopt request with, the API's
+   * `OIDC_ACCOUNT_LINK_SECRET`. Read from `AUTH0_ACCOUNT_LINK_SECRET`, never
+   * argv: a command line is visible to every local process and lands in shell
+   * history.
+   */
+  accountLinkSecret?: string
 }
 
-export function parseAuth0LoginPolicyOptions(argv: string[]): Auth0LoginPolicyOptions {
+export function parseAuth0LoginPolicyOptions(
+  argv: string[],
+  environment: NodeJS.ProcessEnv = process.env,
+): Auth0LoginPolicyOptions {
   const { values } = parseArgs({
     args: argv,
     strict: true,
@@ -157,8 +173,24 @@ export function parseAuth0LoginPolicyOptions(argv: string[]): Auth0LoginPolicyOp
     apply: values.apply ?? false,
     allowTestEmailProvider: values['allow-test-email-provider'] ?? false,
     replaceAction: values['replace-action'] ?? false,
-    accountLinkApiOrigin: parseAccountLinkApiOrigin(values['account-link-api-origin']),
+    ...accountLinkOptions(values['account-link-api-origin'], environment[ACCOUNT_LINK_SECRET_ENV]),
   }
+}
+
+function accountLinkOptions(
+  apiOrigin: string | undefined,
+  secret: string | undefined,
+): Pick<Auth0LoginPolicyOptions, 'accountLinkApiOrigin' | 'accountLinkSecret'> {
+  const accountLinkApiOrigin = parseAccountLinkApiOrigin(apiOrigin)
+  if (!accountLinkApiOrigin) return { accountLinkApiOrigin, accountLinkSecret: undefined }
+  // RFC 7518 §3.2: an HS256 key holds at least 256 bits. The API trims the key
+  // it reads, so one with surrounding whitespace would never match it.
+  if (!secret || secret.length < 32 || secret !== secret.trim()) {
+    throw new Error(
+      `${ACCOUNT_LINK_SECRET_ENV} must hold at least 32 characters, without surrounding whitespace, when --account-link-api-origin is given`,
+    )
+  }
+  return { accountLinkApiOrigin, accountLinkSecret: secret }
 }
 
 // The Action calls this origin from Auth0's cloud, so it has to be public https.
@@ -621,12 +653,18 @@ export class Auth0LoginPolicyConfigurator {
       const form = this.ensureForm(hydratedTemplate.form, state.form)
 
       this.enableConnectionForClient(connection, state.clientConnections, this.options.clientId)
+      let linkSecrets: JsonObject[] | undefined
       if (this.options.accountLinkApiOrigin) {
         const linkClient = this.ensureLinkClient(state.linkClient)
         this.ensureClientGrant(linkClient, state.linkClientGrant, LINK_CLIENT_SCOPES, 'account link client grant')
         this.enableConnectionForClient(connection, state.linkClientConnections, requireClientId(linkClient))
+        linkSecrets = this.accountLinkSecrets(linkClient)
       }
-      const { action, changed } = this.ensureAction(requireResourceId('verification form', form), state.action)
+      const { action, changed } = this.ensureAction(
+        requireResourceId('verification form', form),
+        state.action,
+        linkSecrets,
+      )
       if (changed) this.deployAction(action)
       this.bindAction(action, state.bindings)
 
@@ -1077,17 +1115,7 @@ export class Auth0LoginPolicyConfigurator {
       return existing
     }
     const clientId = requireClientId(managementClient)
-    const clientWithSecret = managementClient.client_secret
-      ? managementClient
-      : requireObject(
-          'management client secret',
-          this.client.request('get', `clients/${clientId}`, {
-            query: { fields: 'client_id,client_secret', include_fields: 'true' },
-          }),
-        )
-    if (!clientWithSecret.client_secret) {
-      throw new Error(`Auth0 did not return the secret for management client '${clientId}'; rotate it, then retry`)
-    }
+    const clientSecret = this.clientSecret(managementClient, 'management client')
 
     const created = requireObject(
       'vault connection',
@@ -1098,7 +1126,7 @@ export class Auth0LoginPolicyConfigurator {
           setup: {
             type: 'OAUTH_APP',
             client_id: clientId,
-            client_secret: clientWithSecret.client_secret,
+            client_secret: clientSecret,
             domain: this.options.tenant,
             audience: `https://${this.options.tenant}${MANAGEMENT_AUDIENCE_SUFFIX}`,
           },
@@ -1166,18 +1194,30 @@ export class Auth0LoginPolicyConfigurator {
     this.client.request('patch', 'prompts', { data: update })
   }
 
-  private ensureAction(formId: string, existing: JsonObject | null): { action: JsonObject; changed: boolean } {
+  /**
+   * The Action this apply wants, created or rewritten in place.
+   *
+   * With secrets it is rewritten on every run: Auth0 returns their names but
+   * never their values, so sending them is the only way a rotated key arrives.
+   * The journal keeps the code, never a secret, so a rollback restores the code
+   * and leaves the secrets as they are.
+   */
+  private ensureAction(
+    formId: string,
+    existing: JsonObject | null,
+    secrets?: JsonObject[],
+  ): { action: JsonObject; changed: boolean } {
     const payload = this.actionPayload(formId)
     if (!existing) {
       const created = requireObject(
         'login policy action',
-        this.client.request('post', 'actions/actions', { data: payload }),
+        this.client.request('post', 'actions/actions', { data: { ...payload, ...(secrets && { secrets }) } }),
       )
       this.recordCreated('login policy action', 'actions/actions', requireResourceId('login policy action', created))
       return { action: created, changed: true }
     }
 
-    if (actionIsCurrent(existing, payload)) return { action: existing, changed: false }
+    if (!secrets && actionIsCurrent(existing, payload)) return { action: existing, changed: false }
     if (!this.isManagedAction(existing) && !this.options.replaceAction) {
       assertManagedActionMatches(existing, payload, true)
     }
@@ -1195,9 +1235,38 @@ export class Auth0LoginPolicyConfigurator {
     )
     const updated = requireObject(
       'login policy action',
-      this.client.request('patch', `actions/actions/${id}`, { data: { code: payload.code, runtime: payload.runtime } }),
+      this.client.request('patch', `actions/actions/${id}`, {
+        data: { code: payload.code, runtime: payload.runtime, ...(secrets && { secrets }) },
+      }),
     )
     return { action: updated, changed: true }
+  }
+
+  /** The Action's account-link secrets; the client's own is read from the tenant. */
+  private accountLinkSecrets(linkClient: JsonObject): JsonObject[] {
+    if (!this.options.accountLinkSecret) throw new Error(`${ACCOUNT_LINK_SECRET_ENV} is required for the account link`)
+    return [
+      { name: 'ACCOUNT_LINK_CLIENT_ID', value: requireClientId(linkClient) },
+      { name: 'ACCOUNT_LINK_CLIENT_SECRET', value: this.clientSecret(linkClient, 'account link client') },
+      { name: 'ACCOUNT_LINK_SECRET', value: this.options.accountLinkSecret },
+    ]
+  }
+
+  /** A client's secret: from the detail already read, else asked of the tenant. */
+  private clientSecret(client: JsonObject, kind: string): string {
+    const clientId = requireClientId(client)
+    const withSecret = client.client_secret
+      ? client
+      : requireObject(
+          `${kind} secret`,
+          this.client.request('get', `clients/${clientId}`, {
+            query: { fields: 'client_id,client_secret', include_fields: 'true' },
+          }),
+        )
+    if (!withSecret.client_secret) {
+      throw new Error(`Auth0 did not return the secret for ${kind} '${clientId}'; rotate it, then retry`)
+    }
+    return withSecret.client_secret
   }
 
   /**
@@ -1218,7 +1287,7 @@ export class Auth0LoginPolicyConfigurator {
       code.includes(`const BOXLITE_CLIENT_ID = ${JSON.stringify(this.options.clientId)}`) &&
       action.all_changes_deployed === true &&
       action.deployed_version?.code === code &&
-      (action.secrets?.length ?? 0) === 0
+      carriesOnlyLinkSecrets(action)
     )
   }
 
@@ -1325,6 +1394,9 @@ export class Auth0LoginPolicyConfigurator {
     )
     if (!state.bindings.some((binding) => binding.action?.id === state.action?.id)) {
       throw new Error('Auth0 login policy Action is not bound to post-login')
+    }
+    if (this.options.accountLinkApiOrigin && !sameJson(secretNames(state.action), ACCOUNT_LINK_ACTION_SECRETS)) {
+      throw new Error('Auth0 login policy Action read-back lacks the account link secrets')
     }
   }
 
@@ -1521,6 +1593,15 @@ function bindingsSnapshot(bindings: JsonObject[]): JsonObject[] {
     .map((binding) => ({ ref: { type: 'action_id', value: binding.action.id }, display_name: binding.display_name }))
 }
 
+function secretNames(action: JsonObject): string[] {
+  return (action.secrets ?? []).map((secret: JsonObject) => String(secret.name)).sort()
+}
+
+/** Secrets whose values this tool writes on every apply, and no others. */
+function carriesOnlyLinkSecrets(action: JsonObject): boolean {
+  return secretNames(action).every((name) => ACCOUNT_LINK_ACTION_SECRETS.includes(name))
+}
+
 /** A client grant holding exactly these scopes, and not every scope. */
 function hasExactScopes(grant: JsonObject, scopes: string[]): boolean {
   return sameJson([...(grant.scope ?? [])].sort(), [...scopes].sort()) && grant.allow_all_scopes !== true
@@ -1542,7 +1623,7 @@ function assertManagedActionMatches(action: JsonObject, desired: JsonObject, req
       `Auth0 Action '${RESOURCE_NAMES.action}' already exists with unmanaged contents; remove it, restore its BoxLite-managed definition, or pass --replace-action to overwrite it`,
     )
   }
-  if ((action.secrets?.length ?? 0) > 0 || (action.deployed_version?.secrets?.length ?? 0) > 0) {
+  if (!carriesOnlyLinkSecrets(action) || !carriesOnlyLinkSecrets(action.deployed_version ?? {})) {
     throw new Error(`Auth0 Action '${RESOURCE_NAMES.action}' contains secrets and cannot be adopted safely`)
   }
   if (
