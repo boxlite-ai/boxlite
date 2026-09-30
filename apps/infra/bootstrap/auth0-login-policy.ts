@@ -311,15 +311,26 @@ export function hydrateEmailVerificationTemplate(template: JsonObject, ids: Emai
 
 export function hydrateLoginPolicyAction(
   source: string,
-  values: { clientId: string; connectionName: string; formId: string },
+  values: {
+    clientId: string
+    connectionName: string
+    formId: string
+    // The account link (POL-555) runs only with both an API origin and a Form.
+    accountLinkApiOrigin?: string
+    accountLinkFormId?: string
+    tenant?: string
+  },
 ): string {
   const replacements: Record<string, string> = {
     __BOXLITE_CLIENT_ID_JSON__: JSON.stringify(values.clientId),
     __BOXLITE_DB_CONNECTION_JSON__: JSON.stringify(values.connectionName),
     __EMAIL_VERIFICATION_FORM_ID_JSON__: JSON.stringify(values.formId),
+    __ACCOUNT_LINK_API_ORIGIN_JSON__: JSON.stringify(values.accountLinkApiOrigin ?? ''),
+    __ACCOUNT_LINK_FORM_ID_JSON__: JSON.stringify(values.accountLinkFormId ?? ''),
+    __AUTH0_DOMAIN_JSON__: JSON.stringify(values.tenant ?? ''),
   }
   const hydrated = source.replace(
-    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID)_JSON__/g,
+    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN|ACCOUNT_LINK_FORM_ID|AUTH0_DOMAIN)_JSON__/g,
     (placeholder) => replacements[placeholder],
   )
   const unresolved = hydrated.match(/__[A-Z_]+_JSON__/)
@@ -1058,6 +1069,8 @@ export class Auth0LoginPolicyConfigurator {
         clientId: this.options.clientId,
         connectionName: this.options.connectionName,
         formId,
+        // No API origin or link Form yet, so the account link stays off.
+        tenant: this.options.tenant,
       }),
       runtime: 'node22',
     }
@@ -1136,16 +1149,7 @@ export class Auth0LoginPolicyConfigurator {
     }
     assertManagedActionMatches(
       state.action,
-      {
-        name: RESOURCE_NAMES.action,
-        supported_triggers: [{ id: 'post-login', version: 'v3' }],
-        code: hydrateLoginPolicyAction(this.sources.actionCode, {
-          clientId: this.options.clientId,
-          connectionName: this.options.connectionName,
-          formId: requireResourceId('verification form', state.form),
-        }),
-        runtime: 'node22',
-      },
+      this.actionPayload(requireResourceId('verification form', state.form)),
       true,
     )
     if (!state.bindings.some((binding) => binding.action?.id === state.action?.id)) {
