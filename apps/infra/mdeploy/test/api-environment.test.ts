@@ -2,7 +2,13 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { parseBase } from 'mstage/config'
-import { ApiEnvironmentError, BILLING_KEYS, STATUS_SYNC_KEYS, apiEnvironmentFrom } from '../src/api-environment.ts'
+import {
+  ACCOUNT_LINK_KEYS,
+  ApiEnvironmentError,
+  BILLING_KEYS,
+  STATUS_SYNC_KEYS,
+  apiEnvironmentFrom,
+} from '../src/api-environment.ts'
 import type { GroupDeclaration } from '../src/env.ts'
 
 const groups = (api: string[], secret?: string[]): GroupDeclaration => ({
@@ -186,7 +192,7 @@ test('every key these gates expect is one the store is declared to fetch', () =>
   const path = new URL('../../mstage.env.json', import.meta.url)
   const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
   const fetched = new Set(Object.values(declared.envSelectGroup).flat())
-  for (const key of [...BILLING_KEYS, ...STATUS_SYNC_KEYS]) {
+  for (const key of [...BILLING_KEYS, ...STATUS_SYNC_KEYS, ...ACCOUNT_LINK_KEYS]) {
     assert.ok(fetched.has(key), `${key} is read by api-environment.ts but no group in mstage.env.json fetches it`)
   }
 })
