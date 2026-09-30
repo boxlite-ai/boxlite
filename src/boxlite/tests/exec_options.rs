@@ -191,3 +191,119 @@ async fn test_working_dir_with_user() {
 
     tb.teardown().await;
 }
+
+/// The deadline must survive a leader that exits before it.
+///
+/// `sh -c "cmd &"` returns as soon as it has forked, so the leader is gone long
+/// before its own deadline while the workload it started keeps running and keeps
+/// the exec's pipes open. Both the group capture and the terminal observer have
+/// to account for that: a leader-anchored lookup would find nothing to signal,
+/// and retiring the timeout at leader exit would leave the survivor unbounded.
+#[tokio::test]
+async fn test_timeout_survives_a_leader_that_exits_before_its_deadline() {
+    let tb = TestBox::new().await;
+
+    let _execution = tb
+        .handle
+        .exec(
+            BoxCommand::new("sh")
+                .args(["-c", "sleep 300 &"])
+                .timeout(Duration::from_secs(2)),
+        )
+        .await
+        .expect("exec failed");
+
+    // Precondition: the workload outlived its leader, otherwise a pass below
+    // would prove nothing.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let before = run_stdout(
+        &tb.handle,
+        BoxCommand::new("sh").args(["-c", "ps | grep -c '[s]leep 300' || true"]),
+    )
+    .await;
+    assert_ne!(
+        before.trim(),
+        "0",
+        "precondition failed: no `sleep 300` running before the deadline"
+    );
+
+    // 2s deadline + 2s TIMEOUT_GRACE before SIGKILL, plus slack.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+
+    let survivors = run_stdout(
+        &tb.handle,
+        BoxCommand::new("sh").args(["-c", "ps | grep -c '[s]leep 300' || true"]),
+    )
+    .await;
+
+    assert_eq!(
+        survivors.trim(),
+        "0",
+        "exec timeout left {} orphaned `sleep 300` process(es) alive 6s after a \
+         2s deadline whose leader had already exited",
+        survivors.trim()
+    );
+
+    tb.teardown().await;
+}
+
+/// An exec timeout must bound the whole process tree, not just the spawned
+/// leader.
+///
+/// A forking workload leaves the real work in a child of the captured leader.
+/// Signalling that leader alone reaps the shell and reparents the child to
+/// init, where it outlives a deadline the caller was told is hard; the SIGKILL
+/// escalation cannot recover either, being anchored to a leader that no longer
+/// exists. The guest bounds the leader's process group instead — see
+/// `src/guest/src/service/exec/timeout.rs`.
+#[tokio::test]
+async fn test_timeout_kills_forked_child_not_just_leader() {
+    let tb = TestBox::new().await;
+
+    // `sleep 300 & wait` forces a fork: a bare `sh -c "sleep 300"` lets ash/dash
+    // exec into the sleep, which makes the leader the sleep itself and never
+    // exercises the orphan path this test is about.
+    let _execution = tb
+        .handle
+        .exec(
+            BoxCommand::new("sh")
+                .args(["-c", "sleep 300 & wait"])
+                .timeout(Duration::from_secs(2)),
+        )
+        .await
+        .expect("exec failed");
+
+    // Precondition: the workload really did fork, otherwise a pass below would
+    // be vacuous.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let before = run_stdout(
+        &tb.handle,
+        BoxCommand::new("sh").args(["-c", "ps | grep -c '[s]leep 300' || true"]),
+    )
+    .await;
+    assert_ne!(
+        before.trim(),
+        "0",
+        "precondition failed: no `sleep 300` running before the deadline"
+    );
+
+    // 2s deadline + 2s TIMEOUT_GRACE before SIGKILL, plus slack.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+
+    let survivors = run_stdout(
+        &tb.handle,
+        BoxCommand::new("sh").args(["-c", "ps | grep -c '[s]leep 300' || true"]),
+    )
+    .await;
+
+    assert_eq!(
+        survivors.trim(),
+        "0",
+        "exec timeout left {} orphaned `sleep 300` process(es) alive 6s after a \
+         2s deadline: the watcher signalled only the shell leader, so the forked \
+         child outlived its deadline",
+        survivors.trim()
+    );
+
+    tb.teardown().await;
+}

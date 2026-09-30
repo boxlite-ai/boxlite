@@ -132,6 +132,7 @@ impl Executor for GuestExecutor {
 fn spawn_with_pipes(req: &ExecRequest) -> BoxliteResult<ExecHandle> {
     use nix::unistd::Pid;
     use std::os::unix::io::{FromRawFd, IntoRawFd};
+    use std::os::unix::process::CommandExt;
     use std::process::Command;
 
     let mut cmd = Command::new(&req.program);
@@ -159,6 +160,22 @@ fn spawn_with_pipes(req: &ExecRequest) -> BoxliteResult<ExecHandle> {
         cmd.stdin(std::process::Stdio::from_raw_fd(stdin_read.into_raw_fd()));
         cmd.stdout(std::process::Stdio::from_raw_fd(stdout_write.into_raw_fd()));
         cmd.stderr(std::process::Stdio::from_raw_fd(stderr_write.into_raw_fd()));
+    }
+
+    // Lead a process group so a deadline can bound the whole job. Without this
+    // the child inherits the guest's group, `ProcessInstance::own_process_group`
+    // finds no group to address, and the exec timeout can only reach the leader
+    // -- letting a forking workload orphan its child past the deadline. The PTY
+    // branch gets the same property from its `setsid` below.
+    // SAFETY: `setpgid` is async-signal-safe and this closure allocates and
+    // locks nothing between fork and exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            if nix::libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
     }
 
     let mut child = cmd
@@ -313,6 +330,31 @@ fn terminate_child(child: &mut std::process::Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pipe path must leave every exec leading its own process group.
+    /// Without it `own_process_group()` finds nothing to address and the exec
+    /// timeout degrades to leader-only delivery, which a forking workload
+    /// outlives (see `service::exec::timeout`).
+    #[tokio::test]
+    async fn spawn_with_pipes_makes_the_child_a_process_group_leader() {
+        let _fence = crate::reaper::reap_fence();
+        let req = ExecRequest {
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), "sleep 30".to_string()],
+            ..Default::default()
+        };
+
+        let handle = spawn_with_pipes(&req).expect("spawn via pipes");
+        let pid = handle.pid();
+
+        assert_eq!(
+            nix::unistd::getpgid(Some(pid)).expect("read child pgid"),
+            pid,
+            "exec leader must lead its own process group"
+        );
+
+        let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+    }
 
     #[test]
     fn terminate_child_kills_and_reaps_process() {
