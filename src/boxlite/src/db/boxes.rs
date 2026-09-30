@@ -375,6 +375,7 @@ mod tests {
                 ..Default::default()
             },
             engine_kind: VmmKind::Libkrun,
+            rootfs_backend: Default::default(),
             box_home: PathBuf::from("/tmp/boxes/test"),
         }
     }
@@ -395,6 +396,56 @@ mod tests {
         let loaded = store.load_config(config.id.as_str()).unwrap();
         assert!(loaded.is_some());
         assert_eq!(loaded.unwrap().id, config.id);
+    }
+
+    #[test]
+    fn test_rootfs_backend_persistence_and_legacy_records() {
+        use crate::litebox::config::RootfsBackend;
+
+        let (store, _dir) = create_test_db();
+        let mut config = create_test_config(TEST_ID_1);
+        for (id, backend) in [
+            (TEST_ID_1, RootfsBackend::Legacy),
+            (TEST_ID_2, RootfsBackend::Overlaybd),
+        ] {
+            config.id = BoxID::parse(id).unwrap();
+            config.rootfs_backend = backend;
+            store.save(&config, &BoxState::new()).unwrap();
+            let loaded = store.load_config(config.id.as_str()).unwrap().unwrap();
+            assert_eq!(loaded.rootfs_backend, backend);
+        }
+
+        let mut old_record = serde_json::to_value(&config).unwrap();
+        old_record.as_object_mut().unwrap().remove("rootfs_backend");
+        store
+            .db
+            .conn()
+            .execute(
+                "UPDATE box_config SET json = ?1 WHERE id = ?2",
+                params![old_record.to_string(), config.id.as_str()],
+            )
+            .unwrap();
+        let loaded = store.load_config(config.id.as_str()).unwrap().unwrap();
+        assert_eq!(loaded.rootfs_backend, RootfsBackend::Legacy);
+    }
+
+    #[test]
+    fn test_rootfs_backend_unknown_value_is_rejected() {
+        let (store, _dir) = create_test_db();
+        let config = create_test_config(TEST_ID_1);
+        store.save(&config, &BoxState::new()).unwrap();
+        let mut row = serde_json::to_value(&config).unwrap();
+        row["rootfs_backend"] = serde_json::json!("unknown_backend");
+        store
+            .db
+            .conn()
+            .execute(
+                "UPDATE box_config SET json = ?1 WHERE id = ?2",
+                params![row.to_string(), config.id.as_str()],
+            )
+            .unwrap();
+
+        assert!(store.load_config(config.id.as_str()).is_err());
     }
 
     #[test]

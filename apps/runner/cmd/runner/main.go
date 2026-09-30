@@ -109,6 +109,7 @@ func run() int {
 	boxliteClient, err := blclient.NewClient(ctx, blclient.ClientConfig{
 		Logger:                       logger,
 		HomeDir:                      cfg.BoxliteHomeDir,
+		OverlayBDEnabled:             cfg.OverlayBDEnabled,
 		InsecureRegistries:           insecureRegs,
 		GhcrUsername:                 cfg.GhcrUsername,
 		GhcrToken:                    cfg.GhcrToken,
