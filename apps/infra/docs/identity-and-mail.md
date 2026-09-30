@@ -137,7 +137,10 @@ call carrying an HS256 bearer token signed with `OIDC_ACCOUNT_LINK_SECRET`. The
 token names the social user as `sub` and the password account as
 `primary_user_id`, with the audience `boxlite-account-link-adopt`, and is
 refused once it is older than a minute. Without the secret the endpoint answers
-404; a key shorter than 32 characters stops the API at boot.
+404; a key shorter than 32 characters stops the API at boot. The key reaches the
+API on both deploy paths: SST declares `OIDC_ACCOUNT_LINK_SECRET` as a secret
+that defaults to empty, and mdeploy fetches it from the stage's optional API
+group.
 
 ### The Action's part
 
