@@ -83,6 +83,13 @@ export async function deployStack() {
   const oidcClientId = new sst.Secret('OIDC_CLIENT_ID')
   const oidcMgmtClientId = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_ID')
   const oidcMgmtClientSecret = new sst.Secret('OIDC_MANAGEMENT_API_CLIENT_SECRET')
+  // The HS256 key the Post-Login Action and the Api sign the login-time
+  // account link's redirects with. Optional: empty leaves the link off.
+  const accountLinkRedirectSecret = new sst.Secret('OIDC_ACCOUNT_LINK_REDIRECT_SECRET', '')
+  // The client the Api checks the account link's password through. Required
+  // by the Api once the secret above is set.
+  const accountLinkClientId = new sst.Secret('OIDC_ACCOUNT_LINK_CLIENT_ID', '')
+  const accountLinkClientSecret = new sst.Secret('OIDC_ACCOUNT_LINK_CLIENT_SECRET', '')
   const posthogApiKey = new sst.Secret('POSTHOG_API_KEY', '')
   const svixAuthToken = new sst.Secret('SVIX_AUTH_TOKEN', '')
   // The API key the status sync presents to incident.io — scoped to alert
@@ -266,6 +273,9 @@ export async function deployStack() {
     oidcClientId,
     oidcMgmtClientId,
     oidcMgmtClientSecret,
+    accountLinkRedirectSecret,
+    accountLinkClientId,
+    accountLinkClientSecret,
     posthogApiKey,
     svixAuthToken,
     usageExportToken,

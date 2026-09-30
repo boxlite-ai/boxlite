@@ -209,6 +209,10 @@ Management API call, so `OIDC_MANAGEMENT_API_ENABLED` must be true; that
 client's `read:users` and `update:users` grants cover the lookup, the link and
 marking an address verified.
 
+All three reach the API on both deploy paths: SST declares them as secrets that
+default to empty, which keeps the link off, and mdeploy fetches them from the
+stage's optional API group.
+
 ### What the link moves
 
 When the social identity already had a BoxLite user — it signed in before this
