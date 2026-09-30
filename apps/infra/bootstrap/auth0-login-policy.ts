@@ -19,6 +19,7 @@ const RESOURCE_NAMES = {
   verifyFlow: 'BoxLite verify email OTP',
   managementClient: 'boxlite-forms-email-verification',
   vaultConnection: 'BoxLite Forms Auth0 Management API',
+  linkClient: 'boxlite-account-link',
 } as const
 const LEGACY_ACTION_NAME = 'boxlite-custom-claims'
 // The last line of every Action this tool generates: a hash of the code above
@@ -28,6 +29,15 @@ const ACTION_STAMP_PREFIX = '// boxlite-login-policy sha256:'
 const MANAGEMENT_AUDIENCE_SUFFIX = '/api/v2/'
 const MANAGEMENT_CLIENT_SCOPES = ['update:users']
 const MANAGEMENT_CLIENT_METADATA = { boxlite_login_policy: 'email-verification-v1' }
+// The client the Post-Login Action links a social login through (POL-555). It
+// checks the password with the password-realm grant, trusted to pass the
+// browser's address on in `auth0-forwarded-for`, which Auth0 honours only for
+// a client that authenticates; and it finds, creates, verifies and links users
+// through the Management API with its own client credentials.
+// https://auth0.com/docs/get-started/authentication-and-authorization-flow/resource-owner-password-flow/avoid-common-issues-with-resource-owner-password-flow-and-attack-protection
+const LINK_CLIENT_METADATA = { boxlite_login_policy: 'account-link-v1' }
+const LINK_CLIENT_GRANT_TYPES = ['client_credentials', 'http://auth0.com/oauth/grant-type/password-realm']
+const LINK_CLIENT_SCOPES = ['create:users', 'read:users', 'update:users']
 const IDENTIFIER_FIRST_PROPAGATION_ERROR = 'Email verification using otp is only compatible with Identifier First.'
 const DATABASE_CONNECTION_WRITE_ATTEMPTS = 4
 const LOGIN_POLICY_MANAGEMENT_SCOPES = [
@@ -112,6 +122,12 @@ export interface Auth0LoginPolicyOptions {
   allowTestEmailProvider: boolean
   /** Overwrite a login policy Action this tool cannot show it generated. */
   replaceAction?: boolean
+  /**
+   * Where the BoxLite API is served, for the login-time account link
+   * (POL-555): the Action asks it to move a social user's data. Unset, no
+   * link client is created and the link stays off.
+   */
+  accountLinkApiOrigin?: string
 }
 
 export function parseAuth0LoginPolicyOptions(argv: string[]): Auth0LoginPolicyOptions {
@@ -125,6 +141,7 @@ export function parseAuth0LoginPolicyOptions(argv: string[]): Auth0LoginPolicyOp
       apply: { type: 'boolean', default: false },
       'allow-test-email-provider': { type: 'boolean', default: false },
       'replace-action': { type: 'boolean', default: false },
+      'account-link-api-origin': { type: 'string' },
     },
   })
 
@@ -140,7 +157,23 @@ export function parseAuth0LoginPolicyOptions(argv: string[]): Auth0LoginPolicyOp
     apply: values.apply ?? false,
     allowTestEmailProvider: values['allow-test-email-provider'] ?? false,
     replaceAction: values['replace-action'] ?? false,
+    accountLinkApiOrigin: parseAccountLinkApiOrigin(values['account-link-api-origin']),
   }
+}
+
+// The Action calls this origin from Auth0's cloud, so it has to be public https.
+function parseAccountLinkApiOrigin(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const origin = requireExactValue('--account-link-api-origin', value)
+  const refusal = '--account-link-api-origin must be a bare https origin, such as https://api.example.com'
+  let url: URL
+  try {
+    url = new URL(origin)
+  } catch {
+    throw new Error(refusal)
+  }
+  if (url.protocol !== 'https:' || url.origin !== origin) throw new Error(refusal)
+  return origin
 }
 
 function requireExactValue(flag: string, value: string | undefined): string {
@@ -466,6 +499,9 @@ interface PolicyState {
   prompt: JsonObject
   managementClient: JsonObject | null
   clientGrant: JsonObject | null
+  linkClient: JsonObject | null
+  linkClientGrant: JsonObject | null
+  linkClientConnections: JsonObject[]
   vaultConnection: JsonObject | null
   generateFlow: JsonObject | null
   verifyFlow: JsonObject | null
@@ -542,6 +578,7 @@ export class Auth0LoginPolicyConfigurator {
         form: resourceStatus(state.form),
         action: resourceStatus(state.action),
         actionBound: state.bindings.some((binding) => binding.action?.id === state.action?.id),
+        accountLinkClient: this.options.accountLinkApiOrigin ? resourceStatus(state.linkClient) : 'not-configured',
       },
       readyToApply: emailReadiness.readyToApply,
     }
@@ -583,7 +620,12 @@ export class Auth0LoginPolicyConfigurator {
       })
       const form = this.ensureForm(hydratedTemplate.form, state.form)
 
-      this.enableConnectionForClient(connection, state.clientConnections)
+      this.enableConnectionForClient(connection, state.clientConnections, this.options.clientId)
+      if (this.options.accountLinkApiOrigin) {
+        const linkClient = this.ensureLinkClient(state.linkClient)
+        this.ensureClientGrant(linkClient, state.linkClientGrant, LINK_CLIENT_SCOPES, 'account link client grant')
+        this.enableConnectionForClient(connection, state.linkClientConnections, requireClientId(linkClient))
+      }
       const { action, changed } = this.ensureAction(requireResourceId('verification form', form), state.action)
       if (changed) this.deployAction(action)
       this.bindAction(action, state.bindings)
@@ -672,14 +714,23 @@ export class Auth0LoginPolicyConfigurator {
           this.client.request('get', `clients/${encodeURIComponent(requireClientId(managementClientSummary))}`),
         )
       : null
-    const grants = this.readAllResources('client-grants', 'client_grants')
-    const clientGrant = managementClient
-      ? (grants.find(
-          (grant) =>
-            grant.client_id === (managementClient.client_id ?? managementClient.id) &&
-            grant.audience === `https://${this.options.tenant}${MANAGEMENT_AUDIENCE_SUFFIX}`,
-        ) ?? null)
+    const linkClientSummary = uniqueNamed(clients, RESOURCE_NAMES.linkClient, 'account link client')
+    const linkClient = linkClientSummary
+      ? requireObject(
+          'account link client',
+          this.client.request('get', `clients/${encodeURIComponent(requireClientId(linkClientSummary))}`),
+        )
       : null
+    const grants = this.readAllResources('client-grants', 'client_grants')
+    const managementGrantOf = (grantee: JsonObject | null) =>
+      grantee
+        ? (grants.find(
+            (grant) =>
+              grant.client_id === requireClientId(grantee) &&
+              grant.audience === `https://${this.options.tenant}${MANAGEMENT_AUDIENCE_SUFFIX}`,
+          ) ?? null)
+        : null
+    const clientGrant = managementGrantOf(managementClient)
     const vaultConnections = this.readAllResources('flows/vault/connections', 'connections')
     const flows = this.readAllResources('flows', 'flows')
     const forms = this.readAllResources('forms', 'forms')
@@ -700,6 +751,9 @@ export class Auth0LoginPolicyConfigurator {
       prompt,
       managementClient,
       clientGrant,
+      linkClient,
+      linkClientGrant: managementGrantOf(linkClient),
+      linkClientConnections: linkClient ? this.readClientConnections(requireClientId(linkClient)) : [],
       vaultConnection: this.readResourceDetail(
         'vault connection',
         'flows/vault/connections',
@@ -752,7 +806,7 @@ export class Auth0LoginPolicyConfigurator {
     throw new Error(`Auth0 ${path} discovery exceeded 1,000 resources`)
   }
 
-  private readClientConnections(): JsonObject[] {
+  private readClientConnections(clientId: string = this.options.clientId): JsonObject[] {
     const connections: JsonObject[] = []
     let from: string | undefined
     for (let page = 0; page < 100; page += 1) {
@@ -760,14 +814,14 @@ export class Auth0LoginPolicyConfigurator {
       if (from) query.from = from
       const response = requireObject(
         'enabled client connections',
-        this.client.request('get', `clients/${encodeURIComponent(this.options.clientId)}/connections`, { query }),
+        this.client.request('get', `clients/${encodeURIComponent(clientId)}/connections`, { query }),
       )
       connections.push(...collection(response, 'connections'))
       if (!response.next) return connections
       if (response.next === from) throw new Error('Auth0 enabled-client connection pagination did not advance')
       from = response.next
     }
-    throw new Error(`Auth0 enabled connections for client '${this.options.clientId}' exceeded 100,000 resources`)
+    throw new Error(`Auth0 enabled connections for client '${clientId}' exceeded 100,000 resources`)
   }
 
   private readResourceDetail(kind: string, path: string, summary: JsonObject | null): JsonObject | null {
@@ -809,6 +863,7 @@ export class Auth0LoginPolicyConfigurator {
 
   private assertStateAdoptable(state: PolicyState): void {
     if (state.managementClient) this.assertManagementClientCompatible(state.managementClient)
+    if (this.options.accountLinkApiOrigin && state.linkClient) this.assertLinkClientCompatible(state.linkClient)
     if (state.vaultConnection) {
       if (!state.managementClient) {
         throw new Error(`Auth0 vault connection '${RESOURCE_NAMES.vaultConnection}' has no managed M2M client`)
@@ -899,16 +954,56 @@ export class Auth0LoginPolicyConfigurator {
     this.writeDatabaseConnection('patch', `connections/${id}`, update)
   }
 
-  private enableConnectionForClient(connection: JsonObject, clientConnections: JsonObject[]): void {
+  private enableConnectionForClient(connection: JsonObject, clientConnections: JsonObject[], clientId: string): void {
     const connectionId = requireResourceId('database connection', connection)
     if (clientConnections.some((candidate) => candidate.id === connectionId)) return
     const path = `connections/${connectionId}/clients`
-    this.recordAdopted('connection client binding', path, undefined, [
-      { client_id: this.options.clientId, status: false },
-    ])
+    this.recordAdopted('connection client binding', path, undefined, [{ client_id: clientId, status: false }])
     this.client.request('patch', path, {
-      data: [{ client_id: this.options.clientId, status: true }],
+      data: [{ client_id: clientId, status: true }],
     })
+  }
+
+  /**
+   * The client the Action links through. Created once and journaled, so a
+   * rollback deletes it; later runs reuse it, and a same-named client with
+   * other settings is refused rather than adopted.
+   */
+  private ensureLinkClient(existing: JsonObject | null): JsonObject {
+    if (existing) {
+      this.assertLinkClientCompatible(existing)
+      return existing
+    }
+
+    const created = requireObject(
+      'account link client',
+      this.client.request('post', 'clients', {
+        data: {
+          name: RESOURCE_NAMES.linkClient,
+          app_type: 'regular_web',
+          token_endpoint_auth_method: 'client_secret_post',
+          grant_types: LINK_CLIENT_GRANT_TYPES,
+          is_token_endpoint_ip_header_trusted: true,
+          client_metadata: LINK_CLIENT_METADATA,
+        },
+      }),
+    )
+    this.recordCreated('account link client', 'clients', requireClientId(created))
+    return created
+  }
+
+  private assertLinkClientCompatible(client: JsonObject): void {
+    if (
+      client.app_type !== 'regular_web' ||
+      client.token_endpoint_auth_method !== 'client_secret_post' ||
+      !sameJson([...(client.grant_types ?? [])].sort(), LINK_CLIENT_GRANT_TYPES) ||
+      client.is_token_endpoint_ip_header_trusted !== true ||
+      !containsJson(client.client_metadata, LINK_CLIENT_METADATA)
+    ) {
+      throw new Error(
+        `Auth0 client '${RESOURCE_NAMES.linkClient}' is not the dedicated BoxLite account link application`,
+      )
+    }
   }
 
   private ensureManagementClient(existing: JsonObject | null): JsonObject {
@@ -944,27 +1039,32 @@ export class Auth0LoginPolicyConfigurator {
     }
   }
 
-  private ensureClientGrant(managementClient: JsonObject, existing: JsonObject | null): void {
+  private ensureClientGrant(
+    grantee: JsonObject,
+    existing: JsonObject | null,
+    scopes: string[] = MANAGEMENT_CLIENT_SCOPES,
+    kind = 'client grant',
+  ): void {
     const audience = `https://${this.options.tenant}${MANAGEMENT_AUDIENCE_SUFFIX}`
     if (!existing) {
       const created = requireObject(
-        'client grant',
+        kind,
         this.client.request('post', 'client-grants', {
           data: {
-            client_id: requireClientId(managementClient),
+            client_id: requireClientId(grantee),
             audience,
-            scope: MANAGEMENT_CLIENT_SCOPES,
+            scope: scopes,
           },
         }),
       )
-      this.recordCreated('client grant', 'client-grants', requireResourceId('client grant', created))
+      this.recordCreated(kind, 'client-grants', requireResourceId(kind, created))
       return
     }
 
-    const id = requireResourceId('client grant', existing)
-    const desired = { scope: MANAGEMENT_CLIENT_SCOPES, allow_all_scopes: false }
-    if (sameJson(existing.scope ?? [], desired.scope) && existing.allow_all_scopes !== true) return
-    this.recordAdopted('client grant', 'client-grants', id, {
+    const id = requireResourceId(kind, existing)
+    const desired = { scope: scopes, allow_all_scopes: false }
+    if (hasExactScopes(existing, scopes)) return
+    this.recordAdopted(kind, 'client-grants', id, {
       scope: existing.scope ?? [],
       allow_all_scopes: existing.allow_all_scopes ?? false,
     })
@@ -1130,7 +1230,8 @@ export class Auth0LoginPolicyConfigurator {
         clientId: this.options.clientId,
         connectionName: this.options.connectionName,
         formId,
-        // No API origin or link Form yet, so the account link stays off.
+        // No link Form yet, so the account link stays off even with an origin.
+        accountLinkApiOrigin: this.options.accountLinkApiOrigin,
         tenant: this.options.tenant,
       }),
       runtime: 'node22',
@@ -1179,10 +1280,19 @@ export class Auth0LoginPolicyConfigurator {
     this.assertManagementClientCompatible(state.managementClient)
     if (
       state.clientGrant.audience !== `https://${this.options.tenant}${MANAGEMENT_AUDIENCE_SUFFIX}` ||
-      !sameJson(state.clientGrant.scope ?? [], MANAGEMENT_CLIENT_SCOPES) ||
-      state.clientGrant.allow_all_scopes === true
+      !hasExactScopes(state.clientGrant, MANAGEMENT_CLIENT_SCOPES)
     ) {
       throw new Error('Auth0 management client grant read-back lacks the required scope or audience')
+    }
+    if (this.options.accountLinkApiOrigin) {
+      if (!state.linkClient) throw new Error('Auth0 read-back is missing the account link client')
+      this.assertLinkClientCompatible(state.linkClient)
+      if (!state.linkClientGrant || !hasExactScopes(state.linkClientGrant, LINK_CLIENT_SCOPES)) {
+        throw new Error('Auth0 account link client grant read-back lacks the required scope or audience')
+      }
+      if (!state.linkClientConnections.some((candidate) => candidate.id === state.connection?.id)) {
+        throw new Error('Auth0 database connection read-back is not enabled for the account link client')
+      }
     }
     this.assertVaultConnectionOwned(state.vaultConnection)
 
@@ -1409,6 +1519,11 @@ function bindingsSnapshot(bindings: JsonObject[]): JsonObject[] {
   return bindings
     .filter((binding) => binding.action?.id)
     .map((binding) => ({ ref: { type: 'action_id', value: binding.action.id }, display_name: binding.display_name }))
+}
+
+/** A client grant holding exactly these scopes, and not every scope. */
+function hasExactScopes(grant: JsonObject, scopes: string[]): boolean {
+  return sameJson([...(grant.scope ?? [])].sort(), [...scopes].sort()) && grant.allow_all_scopes !== true
 }
 
 /** Whether the tenant already runs exactly what this apply would write. */
