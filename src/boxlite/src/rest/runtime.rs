@@ -199,6 +199,14 @@ impl BoxOptions {
             )));
         }
 
+        // REST runtimes send no typed mounts yet(TODO): refused here, before
+        // any request, rather than left out of it.
+        if !self.mounts.is_empty() {
+            return Err(BoxliteError::Unsupported(
+                "typed mounts are not supported by REST runtimes yet".to_string(),
+            ));
+        }
+
         Ok(())
     }
 }
@@ -653,6 +661,28 @@ mod tests {
             !error.to_string().contains("/tmp/secrets"),
             "the rejected host path must not be echoed back: {error}"
         );
+    }
+
+    /// Until REST runtimes send typed mounts, create refuses them before any
+    /// network I/O rather than leaving them out of the request.
+    #[tokio::test]
+    async fn create_refuses_typed_mounts_until_rest_sends_them() {
+        use crate::runtime::options::MountSpec;
+
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let box_options = BoxOptions {
+            mounts: vec![MountSpec::volume_mount("run42", "/workspace")],
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("typed mounts must be refused before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("typed mounts"), "{error}");
     }
 
     /// The server rejects `read_only: true` on a managed mount. Refusing it
