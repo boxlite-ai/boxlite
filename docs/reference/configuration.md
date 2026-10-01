@@ -291,6 +291,27 @@ volumes=[
 - Guest path is created automatically if missing
 - Changes to `rw` mounts are visible on host immediately
 
+### `mounts: List[Dict]`
+
+Typed mounts, beside `volumes`. Each names its `type` — `"volume"` for a
+managed volume by id or name, `"bind"` for a host path — plus `source`,
+`target`, and optionally `read_only` and, for a volume, `sub_path`. See the
+[Python reference](python/README.md#mount-format) for every field.
+
+**Default:** `[]` (no mounts)
+
+**Example:**
+```python
+mounts=[
+    {"type": "volume", "source": "run42", "target": "/workspace", "read_only": True, "sub_path": "foo/bar"},
+    {"type": "bind", "source": "/host/config", "target": "/etc/app/config", "read_only": True},
+]
+```
+
+**Notes:**
+- No runtime accepts `mounts` yet: both refuse a non-empty list at create (see the
+  [MountSpec reference](rust/README.md#mountspec))
+
 ### `ports: List[Tuple[int, int, str]]`
 
 Port forwarding as (host_port, guest_port, protocol) tuples.
