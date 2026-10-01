@@ -330,6 +330,10 @@ pub struct BoxOptions {
     pub env: Vec<(String, String)>,
     pub rootfs: RootfsSpec,
     pub volumes: Vec<VolumeSpec>,
+    /// Typed mounts, kept apart from `volumes` so the `-v` shorthand keeps its
+    /// meaning. A runtime refuses the mounts it does not take rather than
+    /// dropping them.
+    pub mounts: Vec<MountSpec>,
     pub network: NetworkSpec,
     /// Inbound reachability of the services this box exposes. A sibling of
     /// `network` rather than a field inside it: the two directions are
@@ -533,6 +537,7 @@ impl Default for BoxOptions {
             env: Vec::new(),
             rootfs: RootfsSpec::default(),
             volumes: Vec::new(),
+            mounts: Vec::new(),
             network: NetworkSpec::default(),
             inbound_network: NetworkSpec::disabled(),
             ports: Vec::new(),
@@ -575,6 +580,7 @@ impl BoxOptions {
     /// - `advanced.capabilities` contains well-formed Linux capability names
     /// - `advanced.security.network_enabled=false` is not mistaken for a
     ///   guest-networking switch (it gates host jailer grants only)
+    /// - every mount in `mounts` fits its type
     pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
@@ -650,6 +656,10 @@ impl BoxOptions {
 
         for volume in &self.volumes {
             volume.validate()?;
+        }
+
+        for mount in &self.mounts {
+            mount.validate()?;
         }
 
         Ok(())
@@ -799,9 +809,8 @@ impl VolumeSpec {
 /// What a [`MountSpec`]'s `source` names.
 ///
 /// Spelled `"volume"` and `"bind"` on every surface that carries a mount: the
-/// CLI(TODO), the SDK(TODO), the REST wire(TODO) and persisted box config(TODO). One
-/// spelling everywhere is what lets a mount written for one surface be read unchanged on
-/// another.
+/// CLI(TODO), the SDK(TODO), the REST wire(TODO) and persisted box config. One spelling
+/// everywhere is what lets a mount written for one surface be read unchanged on another.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MountType {
@@ -854,8 +863,8 @@ impl std::str::FromStr for MountType {
     }
 }
 
-/// A typed mount, for `BoxOptions::mounts`(TODO): what to mount (`mount_type`
-/// and `source`), where (`target`) and how (`read_only`, `sub_path`).
+/// A mount from [`BoxOptions::mounts`]: what to mount (`mount_type` and
+/// `source`), where (`target`) and how (`read_only`, `sub_path`).
 ///
 /// The typed sibling of [`VolumeSpec`]. A `VolumeSpec` infers its origin from
 /// which field is set; a `MountSpec` states it. Build one with
@@ -920,8 +929,8 @@ impl MountSpec {
     /// Reject a mount whose fields contradict its type.
     ///
     /// The constructors cannot build one, but the fields are public and the
-    /// SDKs fill them from caller input(TODO), so create runs this(TODO) for every
-    /// mount on both runtimes, before the options reach a backend.
+    /// SDKs fill them from caller input(TODO), so create runs this for every mount on
+    /// both runtimes, before the options reach a backend.
     pub fn validate(&self) -> BoxliteResult<()> {
         let mount_type = self.mount_type;
         let target = &self.target;
@@ -1343,10 +1352,9 @@ mod tests {
         }
     }
 
-    /// `MountSpec` is persisted as box config(TODO) and is the shape the
-    /// SDK(TODO) and the wire(TODO) share, so its JSON is a contract: `type`
-    /// rather than the Rust field name, lowercase type names, and no key for an
-    /// unset `sub_path`.
+    /// `MountSpec` is persisted as box config and is the shape the SDK(TODO) and
+    /// the wire(TODO) share, so its JSON is a contract: `type` rather than the
+    /// Rust field name, lowercase type names, and no key for an unset `sub_path`.
     #[test]
     fn mount_spec_json_uses_the_type_key_and_omits_an_unset_sub_path() {
         let prefixed = MountSpec {
@@ -1377,8 +1385,16 @@ mod tests {
             .expect_err("the persisted spelling is lowercase only");
     }
 
-    /// Every field that contradicts the type is refused at create(TODO), with
-    /// the target in the message so a caller with several mounts can find it.
+    /// Boxes written before `mounts` existed have no such key in their config;
+    /// they must load with no mounts rather than fail to load.
+    #[test]
+    fn box_options_without_a_mounts_key_load_with_no_mounts() {
+        let options: BoxOptions = serde_json::from_str(r#"{"cpus":2}"#).unwrap();
+        assert!(options.mounts.is_empty());
+    }
+
+    /// Every field that contradicts the type is refused at create, with the
+    /// target in the message so a caller with several mounts can find it.
     #[test]
     fn mount_spec_validate_refuses_fields_that_contradict_the_type() {
         let refused = [
@@ -1431,6 +1447,28 @@ mod tests {
         ] {
             accepted.validate().expect("the mount fits its type");
         }
+    }
+
+    /// `sanitize_common` is where create reaches `MountSpec::validate`, so an
+    /// invalid mount anywhere in the list fails the whole box.
+    #[test]
+    fn box_options_sanitize_checks_every_mount() {
+        let options = BoxOptions {
+            mounts: vec![
+                MountSpec::bind_mount("/srv/data", "/data"),
+                MountSpec {
+                    source: None,
+                    ..MountSpec::volume_mount("run42", "/workspace")
+                },
+            ],
+            ..Default::default()
+        };
+
+        let message = options
+            .sanitize_common()
+            .expect_err("the second mount has no source")
+            .to_string();
+        assert!(message.contains("/workspace"), "{message}");
     }
 
     #[test]
