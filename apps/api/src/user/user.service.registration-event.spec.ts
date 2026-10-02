@@ -19,7 +19,7 @@ describe('UserService registration events', () => {
   function makeService(transaction: jest.Mock, listenerResults: unknown[] = [], eventFailure?: Error) {
     const eventEmitter = { emitAsync: jest.fn().mockResolvedValue(listenerResults) }
     if (eventFailure) eventEmitter.emitAsync.mockRejectedValue(eventFailure)
-    const service = new UserService({} as never, eventEmitter as never, { transaction } as never)
+    const service = new UserService({} as never, eventEmitter as never, { transaction } as never, {} as never)
     return service
   }
 

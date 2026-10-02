@@ -25,6 +25,7 @@ import { RegionService } from '../region/services/region.service'
 import { SystemRole } from './enums/system-role.enum'
 import { UserCreatedEvent } from './events/user-created.event'
 import { User } from './user.entity'
+import { CommerceInternalClient } from '../commerce/commerce-internal.client'
 import { UserService } from './user.service'
 
 const integration = process.env.DB_HOST ? describe : describe.skip
@@ -76,6 +77,7 @@ integration.each(['user_id_pk', 'PK_cace4a159ff9f2512dd42373760'])(
         imports: [EventEmitterModule.forRoot()],
         providers: [
           UserService,
+          { provide: CommerceInternalClient, useValue: {} },
           OrganizationService,
           { provide: DataSource, useValue: db },
           { provide: getRepositoryToken(User), useValue: db.getRepository(User) },
