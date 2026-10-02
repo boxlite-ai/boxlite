@@ -107,6 +107,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
           defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
         },
         'user',
+        // Attribution is fixed at creation; later requests never read the header.
+        request.get(CustomHeaders.REFERRAL_CODE.name),
       )
       this.logger.debug(`Created new user with ID: ${userId}`)
     } else if (user.name === 'Unknown' || !user.email) {
