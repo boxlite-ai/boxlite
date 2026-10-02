@@ -1032,8 +1032,28 @@ test('each database size still names the tier its stages were sized against', ()
       small: 'db-f1-micro',
       standard: 'db-g1-small',
       medium: 'db-custom-2-7680',
+      large: 'db-perf-optimized-N-2',
     },
   )
+})
+
+test('only the tiers their edition allows are marked as pooling', () => {
+  /*
+   * Managed connection pooling is an Enterprise Plus feature, so `pools` is
+   * legal on exactly the tiers carrying that edition. The two are written side
+   * by side in one table precisely so they cannot drift; this is what says so.
+   *
+   * The failure it guards against is not a type error. Marking a shared-core
+   * tier as pooling compiles, and the API refuses it only at create time, on a
+   * stage that was until then deploying fine.
+   */
+  for (const [size, machine] of Object.entries(DATABASE_MACHINE)) {
+    assert.equal(
+      machine.pools,
+      machine.edition === 'ENTERPRISE_PLUS',
+      `${size} pools=${machine.pools} against edition ${machine.edition}`,
+    )
+  }
 })
 
 test('the instance is told to log connections, so a silent Postgres means something', () => {
@@ -1044,6 +1064,23 @@ test('the instance is told to log connections, so a silent Postgres means someth
    * a reachability question be answered rather than guessed at.
    */
   assert.match(sourceOf('database'), /name: 'log_connections', value: 'on'/)
+})
+
+test('the pooling block is written by the tier and not by every instance', () => {
+  /*
+   * The table test above holds `pools` against the edition; this holds the
+   * render against the table. Neither covers the other: deleting the spread, or
+   * misspelling `connectionPoolConfigs` inside it, leaves that test green and
+   * the compiler silent — excess-property checking does not reach a spread, so
+   * a typo here is a field Cloud SQL never receives and nothing reports.
+   *
+   * The condition is half the point. Written unconditionally, every existing
+   * ENTERPRISE stage would send a pooling block on its next apply, and whether
+   * one is accepted outside Enterprise Plus is not established here.
+   */
+  const database = sourceOf('database')
+  assert.match(database, /\.\.\.\(MACHINE\[request\.size\]\.pools\s*\?/)
+  assert.match(database, /connectionPoolConfigs: \[\{ connectionPoolingEnabled: true \}\]/)
 })
 
 test('the instance opens the private path Google-managed callers take', () => {
