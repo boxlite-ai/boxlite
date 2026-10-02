@@ -8,7 +8,8 @@ use boxlite::experimental::{
     EXPERIMENTAL_FEATURES_ENV, ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder,
 };
 use boxlite::runtime::options::{
-    InboundNetworkConfig, NetworkMode, OutboundNetworkConfig, PortProtocol, PortSpec, VolumeSpec,
+    InboundNetworkConfig, MountType, NetworkMode, OutboundNetworkConfig, PortProtocol, PortSpec,
+    VolumeSpec,
 };
 use boxlite::{
     BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime,
@@ -1394,6 +1395,50 @@ impl VolumeFlags {
 }
 
 // ============================================================================
+// MOUNT FLAGS
+// ============================================================================
+
+#[derive(Args, Debug, Clone)]
+pub struct MountFlags {
+    /// Mount by named fields: type=volume|bind,source=SOURCE,target=BOX_PATH,
+    /// optionally read_only=true|false and, for a volume, subpath=PREFIX. A
+    /// volume source is a volume id or name, a bind source a host path
+    #[arg(long = "mount", value_name = "MOUNT")]
+    pub mount: Vec<String>,
+}
+
+/// Make a relative bind source absolute.
+///
+/// `mountspec` parses without touching the filesystem, so a relative source is
+/// resolved here against the working directory and only the resolved path
+/// travels on, as `-v` does for a host bind.
+fn absolute_bind_source(path: String) -> anyhow::Result<String> {
+    if !std::path::Path::new(&path).is_relative()
+        || crate::volumespec::is_windows_drive_prefix(&path)
+    {
+        return Ok(path);
+    }
+    let absolute = std::fs::canonicalize(&path)
+        .map_err(|e| anyhow::anyhow!("bind mount source {path:?}: {e}"))?;
+    Ok(absolute.to_string_lossy().into_owned())
+}
+
+impl MountFlags {
+    /// Apply `--mount` flags to `opts.mounts`, beside whatever `-v` added to
+    /// `opts.volumes`.
+    pub fn apply_to(&self, opts: &mut BoxOptions) -> anyhow::Result<()> {
+        for value in &self.mount {
+            let mut mount = crate::mountspec::parse(value)?;
+            if mount.mount_type == MountType::Bind {
+                mount.source = mount.source.map(absolute_bind_source).transpose()?;
+            }
+            opts.mounts.push(mount);
+        }
+        Ok(())
+    }
+}
+
+// ============================================================================
 // MANAGEMENT FLAGS
 // ============================================================================
 
@@ -2631,6 +2676,103 @@ mod tests {
         assert_eq!(opts.volumes[1].guest_path, "/cache");
         assert!(opts.volumes[1].read_only);
         assert!(opts.volumes[1].host_path.contains("anonymous"));
+    }
+
+    /// `--mount` fills `opts.mounts` and leaves `opts.volumes` to `-v`, so the
+    /// two flags never rewrite each other's entries.
+    #[test]
+    fn test_mount_flags_apply_to_fills_mounts_not_volumes() {
+        use boxlite::runtime::options::MountSpec;
+
+        let flags = MountFlags {
+            mount: vec![
+                "type=volume,source=run42,target=/workspace,read_only=true,subpath=foo/bar"
+                    .to_string(),
+                "type=bind,source=/srv/data,target=/data".to_string(),
+            ],
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts).unwrap();
+
+        assert!(opts.volumes.is_empty());
+        assert_eq!(
+            opts.mounts,
+            vec![
+                MountSpec {
+                    read_only: true,
+                    sub_path: Some("foo/bar".to_string()),
+                    ..MountSpec::volume_mount("run42", "/workspace")
+                },
+                MountSpec::bind_mount("/srv/data", "/data"),
+            ]
+        );
+    }
+
+    /// A relative bind source is resolved against the working directory, the
+    /// way `-v` resolves a relative host path; a volume source is a name and
+    /// is never resolved.
+    #[test]
+    fn test_mount_flags_resolve_only_a_relative_bind_source() {
+        let flags = MountFlags {
+            mount: vec![
+                "type=bind,source=.,target=/data".to_string(),
+                "type=volume,source=src,target=/workspace".to_string(),
+            ],
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts).unwrap();
+
+        let cwd = std::fs::canonicalize(".").unwrap();
+        assert_eq!(opts.mounts[0].source.as_deref(), cwd.to_str());
+        assert_eq!(opts.mounts[1].source.as_deref(), Some("src"));
+    }
+
+    /// A Windows drive path is absolute even where `Path::is_relative` says
+    /// otherwise, so a `--mount` bind source keeps it as written, as `-v` does.
+    #[test]
+    fn test_mount_flags_keep_a_windows_drive_bind_source() {
+        let flags = MountFlags {
+            mount: vec![r"type=bind,source=C:\host\data,target=/data".to_string()],
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts).unwrap();
+
+        assert_eq!(opts.mounts[0].source.as_deref(), Some(r"C:\host\data"));
+    }
+
+    /// Both commands that build a box accept `--mount`, repeatedly.
+    #[test]
+    fn run_and_create_accept_repeated_mount_flags() {
+        let mounts = [
+            "--mount",
+            "type=volume,source=a,target=/a",
+            "--mount",
+            "type=volume,source=b,target=/b",
+        ];
+
+        let cli = Cli::try_parse_from(
+            ["boxlite", "run"]
+                .into_iter()
+                .chain(mounts)
+                .chain(["alpine"]),
+        )
+        .expect("run should parse");
+        let Commands::Run(run) = cli.command else {
+            panic!("expected Commands::Run");
+        };
+        assert_eq!(run.mount.mount.len(), 2);
+
+        let cli = Cli::try_parse_from(
+            ["boxlite", "create"]
+                .into_iter()
+                .chain(mounts)
+                .chain(["alpine"]),
+        )
+        .expect("create should parse");
+        let Commands::Create(create) = cli.command else {
+            panic!("expected Commands::Create");
+        };
+        assert_eq!(create.mount.mount.len(), 2);
     }
 
     // ─── auth subcommand parse tests ───────────────────────────────────────
