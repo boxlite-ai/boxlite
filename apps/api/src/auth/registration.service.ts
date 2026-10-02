@@ -24,7 +24,11 @@ export class RegistrationService {
     private readonly loginEvents: LoginEventRecorder,
   ) {}
 
-  async register(identity: JWTPayload, token: string): Promise<{ user: UserDto; created: boolean }> {
+  async register(
+    identity: JWTPayload,
+    token: string,
+    referralCode?: string,
+  ): Promise<{ user: UserDto; created: boolean }> {
     const id = jwtUserId(identity)!
     const existing = await this.users.findOne(id)
     if (existing) return { user: UserDto.fromUser(existing), created: false }
@@ -48,6 +52,7 @@ export class RegistrationService {
           defaultOrganizationDefaultRegionId: this.config.getOrThrow('defaultRegion.id'),
         },
         Context.user({ userId: id, authMethod: 'jwt' }),
+        referralCode,
       )
     } catch (error) {
       if (error instanceof UserAlreadyExistsException) {

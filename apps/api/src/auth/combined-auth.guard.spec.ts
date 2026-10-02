@@ -4,10 +4,34 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { UnauthorizedException } from '@nestjs/common'
+import { HttpStatus, UnauthorizedException } from '@nestjs/common'
 import { CombinedAuthGuard } from './combined-auth.guard'
 
+import { ReferralRegistrationException } from '../exceptions/referral-registration.exception'
+
 describe('CombinedAuthGuard.handleRequest', () => {
+  // Codes pinned as literals: clients branch on these exact strings.
+  it.each([
+    ['invalid_referral_code', HttpStatus.UNPROCESSABLE_ENTITY],
+    ['referral_unavailable', HttpStatus.SERVICE_UNAVAILABLE],
+  ] as const)('delivers a %s referral rejection to the client intact', (code, status) => {
+    const guard = new CombinedAuthGuard()
+    const rejection = new ReferralRegistrationException(code)
+
+    let thrown: unknown
+    try {
+      guard.handleRequest(rejection, false)
+    } catch (error) {
+      thrown = error
+    }
+
+    // A 401 would send the invitee through a login that cannot help, and count
+    // against their failed-authentication budget.
+    expect(thrown).toBe(rejection)
+    expect((thrown as ReferralRegistrationException).getStatus()).toBe(status)
+    expect((thrown as ReferralRegistrationException).getResponse()).toMatchObject({ code })
+  })
+
   it('flattens an ordinary strategy failure to a generic 401', () => {
     const guard = new CombinedAuthGuard()
 
