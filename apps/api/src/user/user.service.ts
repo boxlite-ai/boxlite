@@ -21,6 +21,17 @@ import { Context } from '../common/context/context'
 import { normalizeRegistrationEmail } from './registration-email'
 import { UserAlreadyExistsException } from './user-already-exists.exception'
 
+import { CommerceInternalClient } from '../commerce/commerce-internal.client'
+import { CommerceUnavailableError } from '../commerce/commerce.errors'
+import { ReferralRegistrationException } from '../exceptions/referral-registration.exception'
+
+function registrationExceptionType(error: unknown): string {
+  if (error instanceof ReferralRegistrationException) {
+    return error.code
+  }
+  return error instanceof UserAlreadyExistsException ? 'user_conflict' : 'internal'
+}
+
 @Injectable()
 export class UserService {
   constructor(
@@ -28,10 +39,17 @@ export class UserService {
     private readonly userRepository: Repository<User>,
     private readonly eventEmitter: EventEmitter2,
     private readonly dataSource: DataSource,
+    private readonly commerce: CommerceInternalClient,
   ) {}
 
-  /** Records the user.registration events of the new user, started by ctx. */
-  async create(createUserDto: CreateUserDto, ctx: Context): Promise<User> {
+  /**
+   * @param ctx the actor and reason recorded on registration business events.
+   * @param referralCode the raw referral code sent with the request creating the account.
+   * It is ignored when blank or when Commerce is not configured; otherwise it must
+   * resolve to the inviting organization, or no user is created.
+   * @throws ReferralRegistrationException when a referral code cannot be resolved.
+   */
+  async create(createUserDto: CreateUserDto, ctx: Context, referralCode?: string): Promise<User> {
     const email = createUserDto.email ? normalizeRegistrationEmail(createUserDto.email) : undefined
 
     const defaultOrganizationDefaultRegionId =
@@ -52,8 +70,9 @@ export class UserService {
 
     await recordOutcomes(
       { name: 'user.registration', correlationId: createUserDto.id, ctx },
-      () =>
-        this.dataSource.transaction(async (em) => {
+      async () => {
+        user.referredByOrganizationId = await this.resolveReferral(referralCode)
+        return this.dataSource.transaction(async (em) => {
           try {
             await em.insert(User, user)
           } catch (error) {
@@ -75,12 +94,33 @@ export class UserService {
             new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId),
           )
           return created.find((value): value is Organization => value instanceof Organization)
-        }),
-      (error) => (error instanceof UserAlreadyExistsException ? 'user_conflict' : 'internal'),
+        })
+      },
+      registrationExceptionType,
       (organization) => organization?.id,
     )
 
     return user
+  }
+
+  private async resolveReferral(referralCode: string | undefined): Promise<string | null> {
+    if (!referralCode?.trim() || !this.commerce.isConfigured()) {
+      return null
+    }
+
+    let organizationId: string | null
+    try {
+      organizationId = await this.commerce.resolveReferralCode(referralCode)
+    } catch (error) {
+      if (error instanceof CommerceUnavailableError) {
+        throw new ReferralRegistrationException('referral_unavailable')
+      }
+      throw error
+    }
+    if (!organizationId) {
+      throw new ReferralRegistrationException('invalid_referral_code')
+    }
+    return organizationId
   }
 
   async findAll(): Promise<User[]> {

@@ -130,17 +130,25 @@ describe('POST /api/auth/register', () => {
       .setProtectedHeader({ alg: 'RS256', kid: 'registration-test-key' })
       .sign(signingKey)
 
-  const post = async (body: unknown = { turnstileToken: CHALLENGE }, authorization?: string | null) => {
+  const post = async (
+    body: unknown = { turnstileToken: CHALLENGE },
+    authorization?: string | null,
+    referralCode?: string,
+  ) => {
     const header = authorization === undefined ? `Bearer ${await sign(identity)}` : authorization
     return axios.post(endpoint, body, {
-      headers: header ? { Authorization: header } : {},
+      headers: { Authorization: header, 'X-BoxLite-Referral-Code': referralCode },
       validateStatus: () => true,
       proxy: false,
     })
   }
 
   it('creates a user from verified JWT claims and returns only UserDto with 201', async () => {
-    const response = await post({ turnstileToken: CHALLENGE, id: 'spoofed', email: 'spoofed@gmail.com', role: 'admin' })
+    const response = await post(
+      { turnstileToken: CHALLENGE, id: 'spoofed', email: 'spoofed@gmail.com', role: 'admin' },
+      undefined,
+      'ABCD2345EF',
+    )
 
     expect(response.status).toBe(201)
     expect(response.data).toEqual({
@@ -159,6 +167,7 @@ describe('POST /api/auth/register', () => {
         defaultOrganizationDefaultRegionId: 'platform-default-region',
       },
       Context.user({ userId: storedUser.id, authMethod: 'jwt' }),
+      'ABCD2345EF',
     )
     expect(verifyJwt).toHaveBeenCalledWith(expect.any(String), expect.any(Function), {
       audience: AUDIENCE,
@@ -254,6 +263,7 @@ describe('POST /api/auth/register', () => {
         emailVerified: false,
       }),
       Context.user({ userId: 'okta-user', authMethod: 'jwt' }),
+      undefined,
     )
   })
 
@@ -263,6 +273,7 @@ describe('POST /api/auth/register', () => {
     expect(users.create).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Unknown' }),
       Context.user({ userId: storedUser.id, authMethod: 'jwt' }),
+      undefined,
     )
   })
 
@@ -318,6 +329,7 @@ describe('POST /api/auth/register', () => {
               },
             }),
         } as never,
+        {} as never,
       )
       users.create.mockImplementation((dto, ctx) => creator.create(dto, ctx))
       const response = await post()

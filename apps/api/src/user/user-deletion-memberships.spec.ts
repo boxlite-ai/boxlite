@@ -9,6 +9,7 @@ import { getRepositoryToken } from '@nestjs/typeorm'
 import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import { DataSource, FindOperator } from 'typeorm'
 import { User } from './user.entity'
+import { CommerceInternalClient } from '../commerce/commerce-internal.client'
 import { UserService } from './user.service'
 import { ApiKey } from '../api-key/api-key.entity'
 import { ApiKeyService } from '../api-key/api-key.service'
@@ -104,6 +105,7 @@ async function createServices(sharedDefault: boolean) {
     imports: [EventEmitterModule.forRoot()],
     providers: [
       UserService,
+      { provide: CommerceInternalClient, useValue: {} },
       OrganizationService,
       OrganizationUserService,
       ApiKeyService,

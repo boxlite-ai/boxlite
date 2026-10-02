@@ -22,6 +22,7 @@ it('creates users without generating or persisting an unused SSH key pair', asyn
       {
         transaction: async (callback) => callback({ insert, findOneByOrFail }),
       } as never,
+      {} as never,
     )
 
     const user = await service.create({ id: 'user-1', name: 'User', email: 'user@gmail.com' }, Context.user())

@@ -321,7 +321,7 @@ Identity, keyed by the subject the IdP issues rather than a generated uuid.
 | `emailVerified` | `boolean`           | default `false`                                                                                    |
 | `role`          | `enum`              | `admin` \| `user`, default `user`                                                                  |
 | `publicKeys`    | `simple-json`       |                                                                                                    |
-| `referredByOrganizationId` | `uuid` | nullable; organization whose invitation created the account; no FK |
+| `referredByOrganizationId` | `uuid` | nullable; organization whose invitation created the account, resolved from `X-BoxLite-Referral-Code` and written only at creation; no FK |
 | `createdAt`     | `timestamptz`       |                                                                                                    |
 
 **Partial index:** `user_referred_by_organization_idx (referredByOrganizationId)` where `referredByOrganizationId IS NOT NULL`.

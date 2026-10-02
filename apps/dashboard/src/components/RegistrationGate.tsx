@@ -31,7 +31,7 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
     queryKey: ['users', 'registration', user?.profile.sub],
     enabled: Boolean(turnstile?.sitekey),
     queryFn: ({ signal }) =>
-      api.userApi.getAuthenticatedUser({ signal, timeout: 10_000 }).then((response) => response.data),
+      api.userApi.getAuthenticatedUser(undefined, { signal, timeout: 10_000 }).then((response) => response.data),
     retry: false,
     placeholderData: undefined,
     refetchOnWindowFocus: false,
