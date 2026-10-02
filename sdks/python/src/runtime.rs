@@ -36,6 +36,11 @@ impl PyBoxlite {
         // subscriber). The default runtime uses `BoxliteOptions::default()`, so
         // we mirror its home_dir for the log location.
         let _ = boxlite::init_logging_for(&BoxliteOptions::default().home_dir);
+        match BoxliteRuntime::init_default_runtime(BoxliteOptions::default()) {
+            Ok(()) => {}
+            Err(boxlite::BoxliteError::AlreadyInitialized) => {}
+            Err(error) => return Err(map_err(error)),
+        }
         let runtime = BoxliteRuntime::default_runtime();
         Ok(Self {
             runtime: Arc::new(runtime.clone()),
