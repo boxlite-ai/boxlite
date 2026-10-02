@@ -14,7 +14,7 @@ describe('UserService registration events', () => {
 
   function makeService(transaction: jest.Mock) {
     const eventEmitter = { emitAsync: jest.fn().mockResolvedValue([]) }
-    const service = new UserService({} as never, eventEmitter as never, { transaction } as never)
+    const service = new UserService({} as never, eventEmitter as never, { transaction } as never, {} as never)
     jest.spyOn(service as never, 'generatePrivateKey').mockResolvedValue({
       privateKey: 'private-key',
       publicKey: 'public-key',
@@ -60,6 +60,21 @@ describe('UserService registration events', () => {
 
     await expect(service.create({ id: 'user-1', name: 'User One' } as never, Context.user())).rejects.toThrow()
 
+    expect(logged[1]).toEqual([
+      'user.registration exception',
+      expect.objectContaining({ 'exception.type': 'internal' }),
+    ])
+  })
+
+  it('records an internal exception when key generation fails, and rethrows', async () => {
+    const failure = new Error('key generation failed')
+    const transaction = committingTransaction()
+    const service = makeService(transaction)
+    jest.spyOn(service as never, 'generatePrivateKey').mockRejectedValue(failure as never)
+
+    await expect(service.create({ id: 'user-1', name: 'User One' } as never, Context.user())).rejects.toBe(failure)
+
+    expect(transaction).not.toHaveBeenCalled()
     expect(logged[1]).toEqual([
       'user.registration exception',
       expect.objectContaining({ 'exception.type': 'internal' }),
