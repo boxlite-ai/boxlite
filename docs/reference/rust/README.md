@@ -641,6 +641,9 @@ pub struct BoxOptions {
     /// Volume mounts
     pub volumes: Vec<VolumeSpec>,
 
+    /// Typed mounts, beside `volumes`
+    pub mounts: Vec<MountSpec>,
+
     /// Network policy, per direction
     pub network: NetworkSpec,
 
@@ -801,8 +804,8 @@ The two origins are not interchangeable across runtimes:
 
 ### MountSpec
 
-A typed mount. `BoxOptions` does not take one yet. Where a `VolumeSpec` infers
-its origin from which field is set, a `MountSpec` states it in `mount_type`.
+A typed mount for `BoxOptions::mounts`. Where a `VolumeSpec` infers its origin
+from which field is set, a `MountSpec` states it in `mount_type`.
 
 ```rust
 pub struct MountSpec {
@@ -834,10 +837,23 @@ let prefix = MountSpec {
 let bind = MountSpec::bind_mount("/tmp/data", "/data");
 ```
 
-`MountType` parses from and displays as `"volume"` and `"bind"` exactly. No
-CLI, SDK or REST API carries a `MountSpec` yet.
+`MountType` parses from and displays as `"volume"` and `"bind"` exactly, which
+is how the REST runtime spells it on the wire. No CLI flag or non-Rust SDK
+carries a `MountSpec` yet.
 `MountSpec::validate` refuses a relative `target`, a missing `source`,
-`sub_path` on a `Bind`, and an empty `sub_path`.
+`sub_path` on a `Bind`, and an empty `sub_path`; create runs it for every mount.
+A runtime refuses the mounts it does not take rather than dropping them; use
+`volumes` where it takes none:
+
+- A REST runtime sends a `Volume` mount in `mounts` and refuses a `Bind`, whose
+  path would name the server's filesystem. Unlike a managed `VolumeSpec`, a
+  `Volume` mount may be read-only and may name a `sub_path`. No server accepts
+  `mounts` yet, so for now such a create fails with the server's unknown-field
+  error.
+
+- The local runtime takes no typed mounts yet.
+
+- Importing an archive that carries mounts is not supported yet.
 
 ### NetworkSpec
 
