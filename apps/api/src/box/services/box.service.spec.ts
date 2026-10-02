@@ -410,6 +410,42 @@ describe('BoxService public defaults', () => {
     expect(boxRepository.insert).toHaveBeenCalled()
   })
 
+  it('rejects a non-boolean volume readOnly before storing the box', async () => {
+    const { service, boxRepository } = makeCreateService()
+    ;(service as any).volumeService = {
+      validateVolumes: jest.fn().mockResolvedValue(new Map([['vol-1', 'vol-1']])),
+    }
+
+    const create = service.create(
+      { name: 'ro-box', image: 'base', volumes: [{ volumeId: 'vol-1', mountPath: '/data', readOnly: 'true' }] } as any,
+      { id: 'org-1' } as any,
+    )
+
+    await expect(create).rejects.toThrow(BadRequestError)
+    await expect(create).rejects.toThrow(/Invalid readOnly "true" for volume vol-1 \(must be a boolean\)/)
+    expect(boxRepository.insert).not.toHaveBeenCalled()
+  })
+
+  // Some JSON clients serialize an unset optional field as null. The runner's
+  // Go decode leaves ReadOnly false for it, so the API must not refuse it.
+  it('accepts a null volume readOnly as omitted', async () => {
+    const { service, boxRepository } = makeCreateService()
+    ;(service as any).volumeService = {
+      validateVolumes: jest.fn().mockResolvedValue(new Map([['vol-1', 'vol-1']])),
+    }
+
+    await service.create(
+      {
+        name: 'null-ro-box',
+        image: 'base',
+        volumes: [{ volumeId: 'vol-1', mountPath: '/data', readOnly: null }],
+      } as any,
+      { id: 'org-1' } as any,
+    )
+
+    expect(boxRepository.insert).toHaveBeenCalled()
+  })
+
   it.each([
     [undefined, false],
     [true, true],
