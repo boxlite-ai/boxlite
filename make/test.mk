@@ -580,6 +580,18 @@ test\:e2e\:setup:
 test\:e2e:
 	@cd apps/e2e && python3 -m pytest cases/ -v
 
+PHONY_TARGETS += test\:e2e\:proxy test\:e2e\:proxy\:local
+E2E_PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
+
+# Explicit scenario: the deployed API/proxy must include official endpoints.
+test\:e2e\:proxy:
+	@mkdir -p target/e2e-proxy
+	@$(E2E_PYTHON) -m pytest apps/e2e/cases/official_endpoints.py -v \
+		--junitxml=target/e2e-proxy/junit.xml $(PYTEST_FILTER)
+
+test\:e2e\:proxy\:local:
+	@bash apps/e2e/run-proxy.sh
+
 test\:e2e\:two-sided:
 	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash apps/e2e/two_sided.sh
 

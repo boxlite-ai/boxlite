@@ -63,9 +63,21 @@ on:
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - '.gitmodules'
+      - 'apps/api/src/box/**'
+      - 'apps/api/src/migrations/**'
+      - 'apps/proxy/**'
+      - 'apps/e2e/**'
+      - 'make/test.mk'
       - '!**/*.md'
   workflow_dispatch:
     inputs:
+      suite:
+        description: 'runtime tests, or deploy API/runner/proxy and test official URLs (requires #1597)'
+        type: choice
+        default: runtime
+        options:
+          - runtime
+          - hosted-proxy
       debug:
         description: 'Open SSH session on failure (via tmate)'
         type: boolean
@@ -348,6 +360,7 @@ jobs:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
       HOME: /root
+      HOSTED_PROXY: ${{ inputs.suite == 'hosted-proxy' || contains(github.event.pull_request.labels.*.name, 'e2e-hosted-proxy') }}
     steps:
       - name: Clean workspace (persistent runner)
         run: |
@@ -510,6 +523,7 @@ jobs:
           echo "::warning::Runner does not report nested KVM; nested_virtualization_can_create_kvm_vm will not run."
 
       - name: Run integration tests
+        if: env.HOSTED_PROXY != 'true'
         env:
           GH_RUN_ID: ${{ github.run_id }}
           GH_RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -522,6 +536,27 @@ jobs:
           # The next run's Stage step rescues + uploads "$LOG_DIR".
           set -o pipefail
           make test:integration 2>&1 | tee "${LOG_DIR}/integration.log"
+
+      - name: Deploy and test official box endpoints
+        if: env.HOSTED_PROXY == 'true'
+        timeout-minutes: 40
+        run: |
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+          make test:e2e:proxy:local
+
+      - name: Stop hosted proxy test services
+        if: always() && env.HOSTED_PROXY == 'true'
+        run: sudo systemctl stop boxlite-proxy boxlite-runner boxlite-api
+
+      - name: Upload official endpoint test evidence
+        if: always() && env.HOSTED_PROXY == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-official-endpoints-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/e2e-proxy/
+          retention-days: 7
+          if-no-files-found: warn
 
       - name: Upload test logs on failure or cancellation
         # `failure()` alone misses cancelled jobs (concurrency cancellation,

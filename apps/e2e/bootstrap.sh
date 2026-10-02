@@ -81,9 +81,9 @@ yarn install >/dev/null
 [[ -L "$APPS/apps" ]] || ln -sfn . apps
 
 # ─── HOST_IP via IMDS — explicit warning if we're not on EC2 ────────────────
-TOK=$(curl -sX PUT 'http://169.254.169.254/latest/api/token' \
+TOK=$(curl --connect-timeout 2 --max-time 3 -sX PUT 'http://169.254.169.254/latest/api/token' \
     -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null) || TOK=""
-HOST_IP=$(curl -sH "X-aws-ec2-metadata-token: $TOK" \
+HOST_IP=$(curl --connect-timeout 2 --max-time 3 -sH "X-aws-ec2-metadata-token: $TOK" \
     http://169.254.169.254/latest/meta-data/local-ipv4 2>/dev/null) || HOST_IP=""
 if [[ -z "$HOST_IP" ]]; then
     HOST_IP=127.0.0.1
@@ -133,6 +133,11 @@ fi
 # the OIDC flow entirely — Google is just a known-fetchable issuer; no
 # Google credentials needed.
 echo "=== 6. write /etc/boxlite-api.env (always — preserves secrets, refreshes everything else) ==="
+RUNNER_PROXY_URL=http://localhost:3001
+if [[ "${BOXLITE_E2E_WITH_PROXY:-0}" == 1 ]]; then
+    # The preview proxy dials the runner's CONNECT endpoint, not itself.
+    RUNNER_PROXY_URL=http://localhost:8080
+fi
 sudo tee "$ENV_FILE" > /dev/null <<EOF
 NODE_ENV=development
 PORT=3000
@@ -189,12 +194,12 @@ DEFAULT_RUNNER_NAME=default
 DEFAULT_RUNNER_API_KEY=$DEFAULT_RUNNER_API_KEY
 DEFAULT_RUNNER_DOMAIN=$HOST_IP
 DEFAULT_RUNNER_API_URL=http://localhost:8080
-DEFAULT_RUNNER_PROXY_URL=http://localhost:3001
+DEFAULT_RUNNER_PROXY_URL=$RUNNER_PROXY_URL
 DEFAULT_RUNNER_API_VERSION=2
 AWS_REGION=us-east-1
 SKIP_CONNECTIONS=false
 EOF
-sudo chmod 644 "$ENV_FILE"
+sudo chmod 600 "$ENV_FILE"
 
 # ─── 7. boxlite-runner from working tree ────────────────────────────────────
 echo "=== 7. boxlite-runner from current source ==="
@@ -267,6 +272,13 @@ cd "$REPO"
 sudo mkdir -p /var/lib/boxlite
 sudo chown "$USER:$USER" /var/lib/boxlite
 
+if [[ "${BOXLITE_E2E_WITH_PROXY:-0}" == 1 ]]; then
+    echo "=== build preview proxy from current source ==="
+    (cd "$APPS/proxy" && go build -o /tmp/boxlite-proxy-build ./cmd/proxy)
+    sudo install -m 0755 /tmp/boxlite-proxy-build /usr/local/bin/boxlite-proxy
+    rm -f /tmp/boxlite-proxy-build
+fi
+
 # ─── 8. systemd units ───────────────────────────────────────────────────────
 # API runs via npx ts-node intentionally:
 #   - Production deploy uses webpack bundle; ts-node has minor differences
@@ -320,6 +332,32 @@ Environment=INSECURE_REGISTRIES=localhost:5000
 [Install]
 WantedBy=multi-user.target
 UNIT
+if [[ "${BOXLITE_E2E_WITH_PROXY:-0}" == 1 ]]; then
+    sudo tee /etc/systemd/system/boxlite-proxy.service > /dev/null <<UNIT
+[Unit]
+Description=BoxLite Preview Proxy (E2E)
+After=network.target boxlite-api.service boxlite-runner.service
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=/var/lib/boxlite
+EnvironmentFile=$ENV_FILE
+Environment=BOXLITE_API_URL=http://localhost:3000/api
+Environment=PROXY_PORT=3001
+Environment=PROXY_PROTOCOL=http
+Environment=OIDC_DOMAIN=https://accounts.google.com
+Environment=PREVIEW_WARNING_ENABLED=false
+Environment=SHUTDOWN_TIMEOUT_SEC=10
+ExecStart=/usr/local/bin/boxlite-proxy
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+fi
 sudo systemctl daemon-reload
 
 # ─── 9. Start services + real health checks ────────────────────────────────
@@ -358,6 +396,13 @@ if [[ $runner_ready -ne 1 ]]; then
     exit 1
 fi
 
+if [[ "${BOXLITE_E2E_WITH_PROXY:-0}" == 1 ]]; then
+    sudo systemctl restart boxlite-proxy
+    curl --fail --silent --show-error --retry 30 --retry-delay 2 \
+        --retry-connrefused --max-time 5 --retry-max-time 75 \
+        http://localhost:3001/health > /dev/null
+fi
+
 # ─── 10. End-to-end smoke ───────────────────────────────────────────────────
 # bootstrap "active" ≠ "real chain works". Probe /v1/me with the admin
 # key — that exercises auth + DB + Redis end-to-end and surfaces broken
@@ -387,6 +432,6 @@ echo ""
 echo "=== bootstrap complete ==="
 echo "api:    $(systemctl is-active boxlite-api)    :3000"
 echo "runner: $(systemctl is-active boxlite-runner) :8080"
-echo "admin api key:  $ADMIN_API_KEY    (also in $SECRETS_FILE)"
+echo "local test credentials: $SECRETS_FILE (not printed)"
 echo ""
 echo "Next:  python3 apps/e2e/fixture_setup.py"

@@ -69,6 +69,14 @@ own.
 Longer treatments live with their subject rather than here: [E2E local
 runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
 
+`E2E local` also accepts `suite=hosted-proxy` on manual dispatch. For PRs, add
+`e2e-hosted-proxy` before the maintainer applies `e2e-local`. This deploys the
+checkout's API, runner and proxy on the KVM test host and exercises official
+hostname bindings; it requires the endpoint feature from #1597. The [scenario
+runbook](../../apps/e2e/README.md#official-endpoint-deployment-scenario) describes
+the coverage, local DNS/TLS limits and result artifact. Fork approval remains
+bound to the labeled head SHA.
+
 ## Routine checks
 
 `lint` and `test` always report their required conclusion on PRs and merge groups. A newer PR
