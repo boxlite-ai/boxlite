@@ -1,7 +1,7 @@
 {
-  "_comment": "The single-step login screen, shown only when Identifier First is off; the wordmark already names BoxLite above it.",
+  "_comment": "The single-step login screen, shown only when Identifier First is off; it carries the same copy as login-id so the two variants never disagree when that toggle moves.",
   "login": {
-    "title": "Welcome back",
-    "description": "The cloud platform your agents run on"
+    "title": "Start building on BoxLite",
+    "description": "$100 in free credits with your new account."
   }
 }

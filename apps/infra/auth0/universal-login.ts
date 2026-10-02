@@ -19,6 +19,7 @@ export type JsonObject = { [key: string]: JsonValue }
 export interface BrandingTarget {
   stage: string
   stackOrigin: string
+  apiOrigin: string
   publicOidcIssuer: string
   auth0TenantDomain: string
 }
@@ -228,12 +229,13 @@ function parseTarget(catalog: JsonObject, stage: string): BrandingTarget {
   if (!STAGE_PATTERN.test(stage)) throw new Error(`stage '${stage}' must match ${STAGE_PATTERN}`)
   const raw = catalog[stage]
   if (!isObject(raw)) throw new Error(`stage '${stage}' is not configured in auth0/targets.json`)
-  const knownKeys = new Set(['stackOrigin', 'publicOidcIssuer', 'auth0TenantDomain'])
+  const knownKeys = new Set(['stackOrigin', 'apiOrigin', 'publicOidcIssuer', 'auth0TenantDomain'])
   const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.has(key))
   if (unknownKeys.length > 0) throw new Error(`stage '${stage}' has unknown target keys: ${unknownKeys.join(', ')}`)
   return {
     stage,
     stackOrigin: requireHttpsOrigin(`${stage}.stackOrigin`, raw.stackOrigin),
+    apiOrigin: requireHttpsOrigin(`${stage}.apiOrigin`, raw.apiOrigin),
     publicOidcIssuer: requireIssuer(raw.publicOidcIssuer),
     auth0TenantDomain: requireTenantDomain(raw.auth0TenantDomain),
   }
@@ -415,8 +417,7 @@ export class HttpBrandingVerifier implements BrandingVerifier {
   }
 
   private async verifyStackIdentity(target: BrandingTarget, signal?: AbortSignal) {
-    const stack = new URL(target.stackOrigin)
-    const configUrl = `https://api.${stack.hostname}/api/config`
+    const configUrl = `${target.apiOrigin}/api/config`
     let response: Response
     try {
       response = await this.fetch(configUrl, { method: 'GET', redirect: 'error', signal: this.requestSignal(signal) })

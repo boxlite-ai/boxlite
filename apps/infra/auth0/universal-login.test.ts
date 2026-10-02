@@ -3,9 +3,9 @@
 
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import test from 'node:test'
 
@@ -27,6 +27,7 @@ import {
 const TARGET = {
   stage: 'dev',
   stackOrigin: 'https://dev.example.com',
+  apiOrigin: 'https://api.dev.example.com',
   publicOidcIssuer: 'https://auth.dev.example.com/',
   auth0TenantDomain: 'tenant.us.auth0.com',
 }
@@ -273,6 +274,7 @@ test('the file source discovers one complete prompt document per language and pr
       JSON.stringify({
         dev: {
           stackOrigin: TARGET.stackOrigin,
+          apiOrigin: TARGET.apiOrigin,
           publicOidcIssuer: TARGET.publicOidcIssuer,
           auth0TenantDomain: TARGET.auth0TenantDomain,
         },
@@ -312,6 +314,7 @@ test('the checked-in source binds dev to the reviewed stack, issuer, tenant, and
   assert.deepEqual(source.target, {
     stage: 'dev',
     stackOrigin: 'https://dev.boxlite.ai',
+    apiOrigin: 'https://api.dev.boxlite.ai',
     publicOidcIssuer: 'https://auth.dev.boxlite.ai/',
     auth0TenantDomain: 'dev-j60pjpmu6neaeaga.us.auth0.com',
   })
@@ -323,8 +326,8 @@ test('the checked-in source binds dev to the reviewed stack, issuer, tenant, and
   assert.deepEqual([...copy.keys()].sort(), ['login', 'login-id', 'signup', 'signup-id'])
   // Identifier First serves login-id/signup-id, so both variants of each screen carry the same copy.
   for (const [prompt, title, description] of [
-    ['login-id', 'Welcome back', 'The cloud platform your agents run on'],
-    ['login', 'Welcome back', 'The cloud platform your agents run on'],
+    ['login-id', 'Start building on BoxLite', '$100 in free credits with your new account.'],
+    ['login', 'Start building on BoxLite', '$100 in free credits with your new account.'],
     ['signup-id', 'Welcome to BoxLite', 'Boxes your agents build in, and ship from.'],
     ['signup', 'Welcome to BoxLite', 'Boxes your agents build in, and ship from.'],
   ] as const) {
@@ -333,6 +336,20 @@ test('the checked-in source binds dev to the reviewed stack, issuer, tenant, and
   assert.equal(source.tenant.picture_url, 'https://dev.boxlite.ai/auth0/boxlite-black-12c2c991.png')
   assert.equal('_comment' in source.theme, false)
   assert.equal('_comment' in source.tenant, false)
+})
+
+test('the checked-in prod target checks stack identity on the prod API host', async () => {
+  const { target } = await new FileBrandingSource().load('prod')
+  const calls: string[] = []
+  const verifier = new HttpBrandingVerifier({
+    fetch: async (input) => {
+      calls.push(String(input))
+      return Response.json({ dashboardUrl: target.stackOrigin, oidc: { issuer: target.publicOidcIssuer } })
+    },
+  })
+
+  assert.deepEqual(await verifier.verify(target, []), ['stack identity', 'OIDC issuer'])
+  assert.deepEqual(calls, ['https://api.boxlite.ai/api/config'])
 })
 
 test('the dashboard ships only the documented content-addressed Auth0 assets', () => {
@@ -505,4 +522,22 @@ test('the Auth0 adapter treats only an explicit 404 as an absent resource', asyn
     },
   })
   await assert.rejects(() => unauthorized.getDefaultTheme(TARGET), /unauthorized/)
+})
+
+test('the Auth0 adapter closes the CLI stdin, so a write never waits on it', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'boxlite-auth0-stdin-'))
+  const previousPath = process.env.PATH
+  // `auth0 api` reads a piped request body from stdin before it sends; this
+  // stand-in drains stdin the same way, so it answers only once stdin ends.
+  writeFileSync(join(directory, 'auth0'), "#!/bin/sh\ncat >/dev/null\nprintf '{}'\n")
+  chmodSync(join(directory, 'auth0'), 0o755)
+  process.env.PATH = `${directory}${delimiter}${previousPath ?? ''}`
+
+  try {
+    await new Auth0ManagementCli().putPromptText(TARGET, 'login', 'en', PROMPTS[0].text, AbortSignal.timeout(5_000))
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
