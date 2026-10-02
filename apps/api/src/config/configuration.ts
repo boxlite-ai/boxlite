@@ -307,6 +307,76 @@ function oidcManagementApiConfig(env: NodeJS.ProcessEnv = process.env) {
   }
 }
 
+/**
+ * The login-time account link (POL-555), configured by one secret.
+ *
+ * `OIDC_ACCOUNT_LINK_REDIRECT_SECRET` is the HS256 key the Post-Login Action and
+ * this API sign every redirect between them with — the only way either side
+ * can tell a hop the other made from one a browser forged. Present means on;
+ * absent means off. Everything else is derived, because this is an Auth0-only
+ * flow (Actions, `/continue` and `setPrimaryUser` exist nowhere else):
+ *
+ * - the second sign-in goes through the dashboard's own client, so it is
+ *   `OIDC_CLIENT_ID`, and PKCE stands in for a client secret it cannot hold;
+ * - the tenant endpoints hang off the issuer the browser uses, which for Auth0
+ *   is always the root of its domain — an issuer with a path is refused rather
+ *   than guessed at, as `oidcManagementApiConfig` does for the same reason;
+ * - the link itself is a Management API call, so that client must be on.
+ *
+ * The callback URL and database connection are not settings either: the
+ * Action carries them in its signed session token, from the same values the
+ * tenant configurator registered, so the two cannot disagree.
+ */
+function oidcAccountLinkConfig(env: NodeJS.ProcessEnv = process.env) {
+  const redirectSecret = env.OIDC_ACCOUNT_LINK_REDIRECT_SECRET?.trim()
+  const off = {
+    enabled: false,
+    redirectSecret: undefined as string | undefined,
+    clientId: undefined as string | undefined,
+    issuer: undefined as string | undefined,
+    authorizeUrl: undefined as string | undefined,
+    tokenUrl: undefined as string | undefined,
+    continueUrl: undefined as string | undefined,
+  }
+  if (!redirectSecret) {
+    return off
+  }
+
+  // RFC 7518 §3.2: an HS256 key must be at least as long as the hash, 256 bits.
+  if (redirectSecret.length < 32) {
+    throw new Error('OIDC_ACCOUNT_LINK_REDIRECT_SECRET must hold at least 32 characters')
+  }
+  if (env.OIDC_MANAGEMENT_API_ENABLED !== 'true') {
+    throw new Error('OIDC_MANAGEMENT_API_ENABLED must be true when OIDC_ACCOUNT_LINK_REDIRECT_SECRET is set')
+  }
+  const clientId = (env.OIDC_CLIENT_ID || env.OID_CLIENT_ID)?.trim()
+  if (!clientId) {
+    throw new Error('OIDC_CLIENT_ID is required when OIDC_ACCOUNT_LINK_REDIRECT_SECRET is set')
+  }
+  const issuerKey = env.PUBLIC_OIDC_DOMAIN?.trim() ? 'PUBLIC_OIDC_DOMAIN' : 'OIDC_ISSUER_BASE_URL'
+  const issuerValue =
+    env.PUBLIC_OIDC_DOMAIN?.trim() || env.OIDC_ISSUER_BASE_URL?.trim() || env.OID_ISSUER_BASE_URL?.trim()
+  if (!issuerValue) {
+    throw new Error('OIDC_ISSUER_BASE_URL is required when OIDC_ACCOUNT_LINK_REDIRECT_SECRET is set')
+  }
+  const issuer = new URL(requiredHttpUrl(issuerValue, issuerKey))
+  if (issuer.pathname !== '/') {
+    throw new Error(`${issuerKey} must be the root of an Auth0 domain for account linking, not a path-based issuer`)
+  }
+
+  return {
+    ...off,
+    enabled: true,
+    redirectSecret,
+    clientId,
+    // Auth0 names itself with the trailing slash in the `iss` of every token.
+    issuer: `${issuer.origin}/`,
+    authorizeUrl: `${issuer.origin}/authorize`,
+    tokenUrl: `${issuer.origin}/oauth/token`,
+    continueUrl: `${issuer.origin}/continue`,
+  }
+}
+
 // The object-store key namespace migration archives land in by default, inside
 // whichever bucket each runner is configured with.
 const DEFAULT_MIGRATION_ARCHIVE_PREFIX = 'box-migrations/'
@@ -404,6 +474,7 @@ const configuration = {
     endSessionEndpoint: process.env.OIDC_END_SESSION_ENDPOINT,
     postLogoutRedirectAllowlist: process.env.OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST,
     managementApi: oidcManagementApiConfig(),
+    accountLink: oidcAccountLinkConfig(),
   },
   smtp: {
     host: process.env.SMTP_HOST,

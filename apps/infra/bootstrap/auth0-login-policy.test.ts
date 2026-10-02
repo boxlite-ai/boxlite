@@ -111,10 +111,7 @@ test('assertDatabaseConnectionCompatible rejects configurations that cannot safe
     () => assertDatabaseConnectionCompatible({ ...base, options: { customScripts: { login: 'return cb()' } } }, []),
     /custom database/,
   )
-  assert.throws(
-    () => assertDatabaseConnectionCompatible(base, []),
-    /activate Auth0's New Attributes Configuration/,
-  )
+  assert.throws(() => assertDatabaseConnectionCompatible(base, []), /activate Auth0's New Attributes Configuration/)
   assert.throws(
     () =>
       assertDatabaseConnectionCompatible(
@@ -278,7 +275,7 @@ test('hydrateEmailVerificationTemplate wires exact resource ids and leaves no pl
 test('hydrateLoginPolicyAction embeds exact non-secret resource identifiers safely', () => {
   const hydrated = hydrateLoginPolicyAction(
     'const client = __BOXLITE_CLIENT_ID_JSON__; const connection = __BOXLITE_DB_CONNECTION_JSON__; const form = __EMAIL_VERIFICATION_FORM_ID_JSON__;',
-    { clientId: 'spa_"quoted', connectionName: 'boxlite-users', formId: 'ap_verify' },
+    { clientId: 'spa_"quoted', connectionName: 'boxlite-users', formId: 'ap_verify', accountLinkApiOrigin: '' },
   )
 
   assert.match(hydrated, /"spa_\\"quoted"/)
@@ -302,9 +299,45 @@ test('parseAuth0LoginPolicyOptions defaults to preview and requires exact tenant
       connectionName: 'boxlite-users',
       apply: false,
       allowTestEmailProvider: false,
+      accountLink: undefined,
     },
   )
   assert.throws(() => parseAuth0LoginPolicyOptions(['--tenant', 'tenant.us.auth0.com']), /--client-id is required/)
+})
+
+const LINK_SECRET = 'x'.repeat(32)
+const BASE_ARGS = ['--tenant', 'tenant.us.auth0.com', '--client-id', 'spa_123', '--connection', 'boxlite-users']
+const LINK_ARGS = ['--account-link-api-origin', 'https://api.dev.example.com']
+
+test('parseAuth0LoginPolicyOptions reads the account link secret from the environment, never argv', () => {
+  const options = parseAuth0LoginPolicyOptions([...BASE_ARGS, ...LINK_ARGS], { AUTH0_ACCOUNT_LINK_SECRET: LINK_SECRET })
+
+  assert.deepEqual(options.accountLink, { apiOrigin: 'https://api.dev.example.com', secret: LINK_SECRET })
+})
+
+test('parseAuth0LoginPolicyOptions refuses a weakly keyed or path-carrying account link', () => {
+  assert.throws(
+    () => parseAuth0LoginPolicyOptions([...BASE_ARGS, ...LINK_ARGS], { AUTH0_ACCOUNT_LINK_SECRET: 'short' }),
+    /at least 32 characters/,
+  )
+  assert.throws(() => parseAuth0LoginPolicyOptions([...BASE_ARGS, ...LINK_ARGS], {}), /AUTH0_ACCOUNT_LINK_SECRET/)
+  assert.throws(
+    () =>
+      parseAuth0LoginPolicyOptions([...BASE_ARGS, '--account-link-api-origin', 'https://api.dev.example.com/api'], {
+        AUTH0_ACCOUNT_LINK_SECRET: LINK_SECRET,
+      }),
+    /bare origin/,
+  )
+})
+
+test('parseAuth0LoginPolicyOptions allows plain http only toward the local machine', () => {
+  const local = (origin: string) =>
+    parseAuth0LoginPolicyOptions([...BASE_ARGS, '--account-link-api-origin', origin], {
+      AUTH0_ACCOUNT_LINK_SECRET: LINK_SECRET,
+    })
+
+  assert.equal(local('http://localhost:3001').accountLink?.apiOrigin, 'http://localhost:3001')
+  assert.throws(() => local('http://api.dev.example.com'), /https, or http on localhost/)
 })
 
 test('Auth0CliManagementClient sends sensitive bodies over stdin, never process argv', () => {
@@ -641,9 +674,10 @@ test('database connection setup retries Identifier First propagation without add
     assert.equal(connectionPayload?.options.authentication_methods.email_otp, undefined)
     assert.deepEqual(
       calls
-        .filter((call) =>
-          (call.method === 'patch' && call.path === 'prompts') ||
-          (call.method === 'post' && call.path === 'connections'),
+        .filter(
+          (call) =>
+            (call.method === 'patch' && call.path === 'prompts') ||
+            (call.method === 'post' && call.path === 'connections'),
         )
         .map((call) => `${call.method} ${call.path}`),
       ['patch prompts', 'post connections', 'post connections'],
@@ -653,11 +687,19 @@ test('database connection setup retries Identifier First propagation without add
   }
 })
 
-test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals without credentials', () => {
+function secretNames(secrets: Array<{ name: string }> | undefined) {
+  return (secrets ?? []).map(({ name }) => ({ name }))
+}
+
+/**
+ * An in-memory tenant answering the Management API calls the configurator
+ * makes, with the email-verification resources already journal-owned.
+ */
+function fakeTenant(options: { propagationFailures?: number } = {}) {
   const journalDirectory = mkdtempSync(join(tmpdir(), 'boxlite-auth0-policy-'))
   const template = JSON.parse(readFileSync(new URL('./auth0/email-verification-form.json', import.meta.url), 'utf8'))
   const calls: Array<{ method: string; path: string; data?: Record<string, any> }> = []
-  let propagationFailures = 1
+  let propagationFailures = options.propagationFailures ?? 1
   const state: Record<string, any> = {
     client: { client_id: 'spa_123', name: 'boxlite-dashboard', app_type: 'spa' },
     connection: {
@@ -773,8 +815,13 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
         Object.assign(state.connection, options.data)
       }
       if (method === 'patch' && path === 'connections/con_123/clients') {
-        const update = options.data?.find((candidate: any) => candidate.client_id === 'spa_123')
-        state.clientConnectionEnabled = update?.status === true
+        for (const update of (options.data ?? []) as Record<string, any>[]) {
+          if (update.client_id === 'spa_123') state.clientConnectionEnabled = update.status === true
+        }
+      }
+      if (method === 'patch' && path === 'clients/spa_123') {
+        Object.assign(state.client, options.data)
+        return state.client
       }
       if (method === 'patch' && path === 'prompts') state.prompt = { ...state.prompt, ...options.data }
       if (method === 'patch' && path === 'client-grants/cgr_123') Object.assign(state.grant, options.data)
@@ -791,13 +838,18 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
         state.action = {
           id: 'act_policy',
           ...options.data,
-          secrets: [],
+          secrets: secretNames((options.data as Record<string, any>)?.secrets),
           all_changes_deployed: false,
         }
         return state.action
       }
       if (method === 'patch' && path === 'actions/actions/act_policy') {
-        Object.assign(state.action, options.data)
+        // Like Auth0, a patch without `secrets` leaves the Action's secrets alone.
+        const data = options.data as Record<string, any>
+        Object.assign(state.action, data, {
+          secrets: 'secrets' in data ? secretNames(data.secrets) : state.action.secrets,
+          all_changes_deployed: false,
+        })
         return state.action
       }
       if (method === 'post' && path === 'actions/actions/act_policy/deploy') {
@@ -806,7 +858,7 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
           code: state.action.code,
           runtime: state.action.runtime,
           deployed: true,
-          secrets: [],
+          secrets: state.action.secrets,
         }
         return {}
       }
@@ -820,6 +872,12 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
       return {}
     },
   }
+
+  return { journalDirectory, template, calls, state, client }
+}
+
+test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals without credentials', () => {
+  const { journalDirectory, template, calls, state, client } = fakeTenant()
 
   try {
     const configurator = new Auth0LoginPolicyConfigurator(
@@ -843,12 +901,8 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
       (call) => call.path === 'actions/triggers/post-login/bindings' && call.method === 'patch',
     )
     const promptCall = calls.findIndex((call) => call.path === 'prompts' && call.method === 'patch')
-    const connectionCall = calls.findIndex(
-      (call) => call.path === 'connections/con_123' && call.method === 'patch',
-    )
-    const grantCall = calls.findIndex(
-      (call) => call.path === 'client-grants/cgr_123' && call.method === 'patch',
-    )
+    const connectionCall = calls.findIndex((call) => call.path === 'connections/con_123' && call.method === 'patch')
+    const grantCall = calls.findIndex((call) => call.path === 'client-grants/cgr_123' && call.method === 'patch')
     const connectionBindingCall = calls.find(
       (call) => call.path === 'connections/con_123/clients' && call.method === 'patch',
     )
@@ -878,11 +932,9 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
 
     const reapplyStart = calls.length
     const reapplied = configurator.apply()
-    const reapplyPrerequisiteWrites = calls.slice(reapplyStart).filter(
-      (call) =>
-        call.method === 'patch' &&
-        (call.path === 'prompts' || call.path === 'connections/con_123'),
-    )
+    const reapplyPrerequisiteWrites = calls
+      .slice(reapplyStart)
+      .filter((call) => call.method === 'patch' && (call.path === 'prompts' || call.path === 'connections/con_123'))
 
     assert.equal(reapplied.mode, 'applied')
     assert.deepEqual(reapplyPrerequisiteWrites, [])
@@ -901,11 +953,18 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
 
 type ActionHandler = (event: any, api: any) => Promise<void>
 
-function loadAction(): { onExecutePostLogin: ActionHandler; onContinuePostLogin: ActionHandler } {
+function loadAction(
+  accountLinkApiOrigin = '',
+  formId = 'ap_verify',
+): {
+  onExecutePostLogin: ActionHandler
+  onContinuePostLogin: ActionHandler
+} {
   const source = hydrateLoginPolicyAction(readFileSync(new URL('./auth0/login-policy.js', import.meta.url), 'utf8'), {
     clientId: 'spa_123',
     connectionName: 'boxlite-users',
-    formId: 'ap_verify',
+    formId,
+    accountLinkApiOrigin,
   })
   const exports: Record<string, ActionHandler> = {}
   runInNewContext(source, { exports })
@@ -928,20 +987,58 @@ function managedEvent(overrides: Record<string, any> = {}) {
   }
 }
 
-function actionApi() {
+// The Action runs in its own vm context, so its object literals carry that
+// context's prototypes; a JSON round-trip compares them by value alone.
+const plain = <T>(value: T): T => JSON.parse(JSON.stringify(value))
+
+function actionApi(linkOutcome: (() => Record<string, unknown>) | null = null) {
   const claims: Record<string, unknown> = {}
   const rendered: string[] = []
   const denied: string[] = []
+  const redirects: { url: string; query: Record<string, string> }[] = []
+  const encoded: Record<string, any>[] = []
+  const validated: Record<string, any>[] = []
+  const primaryUsers: string[] = []
   return {
     claims,
     rendered,
     denied,
+    redirects,
+    encoded,
+    validated,
+    primaryUsers,
     api: {
       access: { deny: (reason: string) => denied.push(reason) },
       accessToken: { setCustomClaim: (name: string, value: unknown) => (claims[name] = value) },
       prompt: { render: (id: string) => rendered.push(id) },
+      redirect: {
+        encodeToken: (options: Record<string, any>) => {
+          encoded.push(plain(options))
+          return 'encoded-session-token'
+        },
+        sendUserTo: (url: string, options: { query: Record<string, string> }) =>
+          redirects.push(plain({ url, query: options.query })),
+        validateToken: (options: Record<string, any>) => {
+          validated.push(plain(options))
+          if (!linkOutcome) throw new Error('invalid token')
+          return linkOutcome()
+        },
+      },
+      authentication: { setPrimaryUser: (userId: string) => primaryUsers.push(userId) },
     },
   }
+}
+
+const API_ORIGIN = 'https://api.dev.example.com'
+const START_URL = `${API_ORIGIN}/api/auth/link/start`
+
+function socialEvent(overrides: Record<string, any> = {}) {
+  return managedEvent({
+    connection: { name: 'google-oauth2', strategy: 'google-oauth2' },
+    secrets: { ACCOUNT_LINK_SECRET: 'link-secret' },
+    user: { user_id: 'google-oauth2|103', email: 'person@example.com', email_verified: true, name: 'Person' },
+    ...overrides,
+  })
 }
 
 test('login policy copies claims for verified managed database users', async () => {
@@ -1007,4 +1104,286 @@ test('login policy continuation trusts only the exact verification form', async 
   assert.equal(success.claims.email_verified, true)
   assert.match(wrongForm.denied[0], /Email verification failed/)
   assert.deepEqual(wrongForm.claims, {})
+})
+
+test('account link sends an unlinked, verified social login to the BoxLite API before any token', async () => {
+  const { onExecutePostLogin } = loadAction(API_ORIGIN)
+  const capture = actionApi()
+
+  await onExecutePostLogin(socialEvent(), capture.api)
+
+  assert.deepEqual(capture.redirects, [{ url: START_URL, query: { session_token: 'encoded-session-token' } }])
+  assert.equal(capture.encoded[0].secret, 'link-secret')
+  // The API takes the connection and its own callback from here, so both are
+  // the values this configurator deployed rather than settings of their own.
+  assert.deepEqual(capture.encoded[0].payload, {
+    email: 'person@example.com',
+    connection: 'boxlite-users',
+    callback: `${API_ORIGIN}/api/auth/link/callback`,
+  })
+  assert.deepEqual(capture.claims, {})
+  assert.deepEqual(capture.denied, [])
+})
+
+test('account link proves an address the provider did not verify before linking it', async () => {
+  const { onExecutePostLogin, onContinuePostLogin } = loadAction(API_ORIGIN)
+  const github = { connection: { name: 'github', strategy: 'github' } }
+  const unverified = { user: { user_id: 'github|7', email: 'person@example.com', email_verified: false } }
+  const first = actionApi()
+  const afterForm = actionApi()
+
+  await onExecutePostLogin(socialEvent({ ...github, ...unverified }), first.api)
+  await onContinuePostLogin(
+    socialEvent({ ...github, ...unverified, prompt: { id: 'ap_verify', fields: {} } }),
+    afterForm.api,
+  )
+
+  assert.deepEqual(first.rendered, ['ap_verify'])
+  assert.deepEqual(first.redirects, [])
+  assert.deepEqual(afterForm.redirects, [{ url: START_URL, query: { session_token: 'encoded-session-token' } }])
+})
+
+test('account link makes the password account the token subject once the API reports a link', async () => {
+  const { onContinuePostLogin } = loadAction(API_ORIGIN)
+  const capture = actionApi(() => ({ outcome: 'linked', primary_user_id: 'auth0|primary' }))
+
+  await onContinuePostLogin(socialEvent({ request: { query: { link_token: 'signed' } } }), capture.api)
+
+  assert.deepEqual(capture.validated, [{ secret: 'link-secret', tokenParameterName: 'link_token' }])
+  assert.deepEqual(capture.primaryUsers, ['auth0|primary'])
+  assert.equal(capture.claims.email_verified, true)
+  assert.deepEqual(capture.denied, [])
+})
+
+for (const outcome of ['mismatch', 'cancelled', 'failed']) {
+  test(`account link refuses the login when the API reports ${outcome}`, async () => {
+    const { onContinuePostLogin } = loadAction(API_ORIGIN)
+    const capture = actionApi(() => ({ outcome }))
+
+    await onContinuePostLogin(socialEvent({ request: { query: { link_token: 'signed' } } }), capture.api)
+
+    assert.deepEqual(capture.primaryUsers, [])
+    assert.equal(capture.denied.length, 1)
+    assert.deepEqual(capture.claims, {})
+  })
+}
+
+test('account link refuses a continuation whose token does not verify', async () => {
+  const { onContinuePostLogin } = loadAction(API_ORIGIN)
+  const capture = actionApi(null)
+
+  await onContinuePostLogin(socialEvent({ request: { query: { link_token: 'forged' } } }), capture.api)
+
+  assert.deepEqual(capture.primaryUsers, [])
+  assert.match(capture.denied[0], /could not be verified/)
+})
+
+test('account link leaves a social login that already reaches a password account alone', async () => {
+  const { onExecutePostLogin } = loadAction(API_ORIGIN)
+  const capture = actionApi()
+
+  await onExecutePostLogin(
+    socialEvent({ user: { user_id: 'auth0|primary', email: 'person@example.com', email_verified: true } }),
+    capture.api,
+  )
+
+  assert.deepEqual(capture.redirects, [])
+  assert.equal(capture.claims.email_verified, true)
+})
+
+test('account link refuses an unlinked social login it cannot redirect', async () => {
+  const { onExecutePostLogin } = loadAction(API_ORIGIN)
+  const capture = actionApi()
+
+  await onExecutePostLogin(socialEvent({ transaction: { protocol: 'oauth2-refresh-token' } }), capture.api)
+
+  assert.deepEqual(capture.redirects, [])
+  assert.match(capture.denied[0], /Sign in through a browser/)
+})
+
+test('account link lets the BoxLite API’s second sign-in through: it is already the password account', async () => {
+  // The API runs it through the dashboard's own client, pinned to the database
+  // connection, so it arrives as the auth0| user the link is about to target.
+  const { onExecutePostLogin } = loadAction(API_ORIGIN)
+  const capture = actionApi()
+
+  await onExecutePostLogin(
+    managedEvent({ user: { user_id: 'auth0|primary', email: 'person@example.com', email_verified: true } }),
+    capture.api,
+  )
+
+  assert.deepEqual(capture.redirects, [])
+  assert.deepEqual(capture.denied, [])
+  assert.equal(capture.claims.email_verified, true)
+})
+
+test('account link refuses a social login that carries no email address to link', async () => {
+  const { onExecutePostLogin } = loadAction(API_ORIGIN)
+  const capture = actionApi()
+
+  await onExecutePostLogin(
+    socialEvent({ user: { user_id: 'github|7', email_verified: false, name: 'Person' } }),
+    capture.api,
+  )
+
+  assert.deepEqual(capture.redirects, [])
+  assert.match(capture.denied[0], /no email address/)
+})
+
+test('account link refuses an unverified address when no email Form is configured to prove it', async () => {
+  const { onExecutePostLogin } = loadAction(API_ORIGIN, '')
+  const capture = actionApi()
+
+  await onExecutePostLogin(
+    socialEvent({ user: { user_id: 'github|7', email: 'person@example.com', email_verified: false } }),
+    capture.api,
+  )
+
+  assert.deepEqual(capture.rendered, [])
+  assert.deepEqual(capture.redirects, [])
+  assert.match(capture.denied[0], /Email verification is unavailable/)
+})
+
+test('account link refuses a continuation that is neither the API’s answer nor the email Form', async () => {
+  const { onContinuePostLogin } = loadAction(API_ORIGIN)
+  const capture = actionApi()
+
+  await onContinuePostLogin(socialEvent({ request: { query: {} }, prompt: { id: 'some-other-form' } }), capture.api)
+
+  assert.deepEqual(capture.redirects, [])
+  assert.deepEqual(capture.primaryUsers, [])
+  assert.match(capture.denied[0], /Account linking failed/)
+})
+
+const ACCOUNT_LINK = { apiOrigin: 'https://api.dev.example.com', secret: 'y'.repeat(32) }
+const POLICY_SOURCE = readFileSync(new URL('./auth0/login-policy.js', import.meta.url), 'utf8')
+
+function linkConfigurator(tenant: ReturnType<typeof fakeTenant>, accountLink = ACCOUNT_LINK) {
+  return new Auth0LoginPolicyConfigurator(
+    {
+      tenant: 'tenant.us.auth0.com',
+      clientId: 'spa_123',
+      connectionName: 'boxlite-users',
+      apply: true,
+      allowTestEmailProvider: false,
+      accountLink,
+    },
+    tenant.client,
+    {
+      actionCode: POLICY_SOURCE,
+      emailVerificationTemplate: tenant.template,
+      journalDirectory: tenant.journalDirectory,
+    },
+  )
+}
+
+/** A deployed Action this tool wrote for spa_123 from an older login-policy.js. */
+function earlierManagedAction(): Record<string, any> {
+  const code = `${POLICY_SOURCE.split('\n').slice(0, 5).join('\n')}\nconst BOXLITE_CLIENT_ID = "spa_123"\n// older body\n`
+  return {
+    id: 'act_policy',
+    name: 'boxlite-login-policy',
+    supported_triggers: [{ id: 'post-login', version: 'v3' }],
+    runtime: 'node22',
+    code,
+    secrets: [],
+    all_changes_deployed: true,
+    deployed_version: { code, runtime: 'node22', deployed: true, secrets: [] },
+  }
+}
+
+test('account link apply registers the API callback on the SPA client and keys the Action, journaling no secret', () => {
+  const tenant = fakeTenant()
+  tenant.state.client.callbacks = ['https://dev.example.com']
+  try {
+    const result = linkConfigurator(tenant).apply()
+
+    assert.equal(result.mode, 'applied')
+    assert.deepEqual(tenant.state.client.callbacks, [
+      'https://dev.example.com',
+      'https://api.dev.example.com/api/auth/link/callback',
+    ])
+    assert.deepEqual(tenant.state.action.secrets, [{ name: 'ACCOUNT_LINK_SECRET' }])
+    assert.match(tenant.state.action.code, /const ACCOUNT_LINK_API_ORIGIN = "https:\/\/api\.dev\.example\.com"/)
+    const createAction = tenant.calls.find((call) => call.method === 'post' && call.path === 'actions/actions')
+    assert.deepEqual(createAction?.data?.secrets, [{ name: 'ACCOUNT_LINK_SECRET', value: ACCOUNT_LINK.secret }])
+    assert.equal(readFileSync(result.journal as string, 'utf8').includes(ACCOUNT_LINK.secret), false)
+
+    Auth0LoginPolicyConfigurator.rollback(result.journal as string, () => tenant.client)
+
+    assert.deepEqual(tenant.state.client.callbacks, ['https://dev.example.com'])
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
+})
+
+test('account link apply upgrades an earlier managed Action, and rollback redeploys the code it replaced', () => {
+  const tenant = fakeTenant()
+  const earlier = earlierManagedAction()
+  tenant.state.action = structuredClone(earlier)
+  tenant.state.bindings = [{ action: { id: 'act_policy' }, display_name: 'boxlite-login-policy' }]
+  try {
+    const result = linkConfigurator(tenant).apply()
+
+    assert.equal(result.mode, 'applied')
+    assert.equal(tenant.state.action.deployed_version.code.includes('ACCOUNT_LINK_API_ORIGIN'), true)
+    assert.deepEqual(tenant.state.action.deployed_version.secrets, [{ name: 'ACCOUNT_LINK_SECRET' }])
+
+    Auth0LoginPolicyConfigurator.rollback(result.journal as string, () => tenant.client)
+
+    // The key the apply added stays: the earlier code never reads it.
+    assert.equal(tenant.state.action.deployed_version.code, earlier.code)
+    assert.deepEqual(tenant.state.action.secrets, [{ name: 'ACCOUNT_LINK_SECRET' }])
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
+})
+
+test('account link apply still refuses an Action someone edited outside this tool', () => {
+  const tenant = fakeTenant()
+  const edited = earlierManagedAction()
+  edited.code = edited.deployed_version.code =
+    '// pasted in the dashboard\nexports.onExecutePostLogin = async () => {}\n'
+  tenant.state.action = edited
+  try {
+    assert.throws(() => linkConfigurator(tenant).apply(), /unmanaged contents/)
+    assert.equal(tenant.state.action.code, edited.code)
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
+})
+
+test('account link apply rewrites the Action key on every run, so a rotated secret reaches the tenant', () => {
+  const tenant = fakeTenant()
+  try {
+    linkConfigurator(tenant).apply()
+    const rotated = { ...ACCOUNT_LINK, secret: 'z'.repeat(32) }
+    tenant.calls.length = 0
+
+    linkConfigurator(tenant, rotated).apply()
+
+    const patch = tenant.calls.find((call) => call.method === 'patch' && call.path === 'actions/actions/act_policy')
+    assert.deepEqual(patch?.data?.secrets, [{ name: 'ACCOUNT_LINK_SECRET', value: rotated.secret }])
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
+})
+
+test('account link rollback restores the replaced code but leaves the key it cannot read back', () => {
+  const tenant = fakeTenant()
+  const earlier = earlierManagedAction()
+  earlier.secrets = [{ name: 'ACCOUNT_LINK_SECRET' }]
+  earlier.deployed_version.secrets = [{ name: 'ACCOUNT_LINK_SECRET' }]
+  tenant.state.action = structuredClone(earlier)
+  tenant.state.bindings = [{ action: { id: 'act_policy' }, display_name: 'boxlite-login-policy' }]
+  try {
+    const result = linkConfigurator(tenant).apply()
+
+    Auth0LoginPolicyConfigurator.rollback(result.journal as string, () => tenant.client)
+
+    assert.equal(tenant.state.action.deployed_version.code, earlier.code)
+    assert.deepEqual(tenant.state.action.secrets, [{ name: 'ACCOUNT_LINK_SECRET' }])
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
 })

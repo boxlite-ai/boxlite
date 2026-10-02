@@ -30,6 +30,7 @@ export interface ApiInputs {
   oidcClientId: sst.Secret
   oidcMgmtClientId: sst.Secret
   oidcMgmtClientSecret: sst.Secret
+  accountLinkRedirectSecret: sst.Secret
   posthogApiKey: sst.Secret
   svixAuthToken: sst.Secret
   usageExportToken: sst.Secret
@@ -65,6 +66,7 @@ export function buildApi(input: ApiInputs) {
     oidcClientId,
     oidcMgmtClientId,
     oidcMgmtClientSecret,
+    accountLinkRedirectSecret,
     posthogApiKey,
     svixAuthToken,
     usageExportToken,
@@ -233,6 +235,10 @@ export function buildApi(input: ApiInputs) {
             'when OIDC_MANAGEMENT_API_ENABLED=true',
           ),
         }),
+        // The login-time account link (POL-555) is configured by this one
+        // secret; empty leaves it off. It links through the Management API
+        // above, and the API refuses to boot with the secret set and that off.
+        OIDC_ACCOUNT_LINK_REDIRECT_SECRET: accountLinkRedirectSecret.value,
         // RP-initiated logout fallback. Safe to set unconditionally: the API
         // probes the IdP's discovery doc at startup and only exposes this URL
         // to the dashboard when the IdP itself lacks end_session_endpoint

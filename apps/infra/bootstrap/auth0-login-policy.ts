@@ -20,10 +20,16 @@ const RESOURCE_NAMES = {
   vaultConnection: 'BoxLite Forms Auth0 Management API',
 } as const
 const LEGACY_ACTION_NAME = 'boxlite-custom-claims'
+// The one secret a managed login policy Action may carry: the HS256 key it and
+// the BoxLite API sign the account link's redirect tokens with.
+const ACCOUNT_LINK_ACTION_SECRET = 'ACCOUNT_LINK_SECRET'
+const MANAGED_ACTION_SECRETS = [ACCOUNT_LINK_ACTION_SECRET]
 
 const MANAGEMENT_AUDIENCE_SUFFIX = '/api/v2/'
 const MANAGEMENT_CLIENT_SCOPES = ['update:users']
 const MANAGEMENT_CLIENT_METADATA = { boxlite_login_policy: 'email-verification-v1' }
+// The one path the BoxLite API serves the account link callback at.
+const ACCOUNT_LINK_CALLBACK_PATH = '/api/auth/link/callback'
 const IDENTIFIER_FIRST_PROPAGATION_ERROR = 'Email verification using otp is only compatible with Identifier First.'
 const DATABASE_CONNECTION_WRITE_ATTEMPTS = 4
 const LOGIN_POLICY_MANAGEMENT_SCOPES = [
@@ -100,15 +106,35 @@ export function missingLoginPolicyScopes(tenant: string, configPath: string = AU
   return LOGIN_POLICY_MANAGEMENT_SCOPES.filter((scope) => !held.has(scope))
 }
 
+/**
+ * The login-time account link (POL-555), off unless an API origin is given.
+ *
+ * The origin is where the BoxLite API is served: the Action sends the browser
+ * to its link endpoint, and its callback is registered on the SPA client.
+ * The secret the Action and the API sign with comes from the environment,
+ * never argv: a command line is visible to every local process and lands in
+ * shell history.
+ */
+export interface Auth0AccountLinkOptions {
+  apiOrigin: string
+  secret: string
+}
+
 export interface Auth0LoginPolicyOptions {
   tenant: string
   clientId: string
   connectionName: string
   apply: boolean
   allowTestEmailProvider: boolean
+  accountLink?: Auth0AccountLinkOptions
 }
 
-export function parseAuth0LoginPolicyOptions(argv: string[]): Auth0LoginPolicyOptions {
+export const ACCOUNT_LINK_SECRET_ENV = 'AUTH0_ACCOUNT_LINK_SECRET'
+
+export function parseAuth0LoginPolicyOptions(
+  argv: string[],
+  environment: NodeJS.ProcessEnv = process.env,
+): Auth0LoginPolicyOptions {
   const { values } = parseArgs({
     args: argv,
     strict: true,
@@ -118,6 +144,7 @@ export function parseAuth0LoginPolicyOptions(argv: string[]): Auth0LoginPolicyOp
       connection: { type: 'string' },
       apply: { type: 'boolean', default: false },
       'allow-test-email-provider': { type: 'boolean', default: false },
+      'account-link-api-origin': { type: 'string' },
     },
   })
 
@@ -132,7 +159,31 @@ export function parseAuth0LoginPolicyOptions(argv: string[]): Auth0LoginPolicyOp
     connectionName,
     apply: values.apply ?? false,
     allowTestEmailProvider: values['allow-test-email-provider'] ?? false,
+    accountLink: parseAccountLinkOptions(values['account-link-api-origin'], environment[ACCOUNT_LINK_SECRET_ENV]),
   }
+}
+
+function parseAccountLinkOptions(
+  apiOrigin: string | undefined,
+  secret: string | undefined,
+): Auth0AccountLinkOptions | undefined {
+  if (apiOrigin === undefined) return undefined
+  requireExactValue('--account-link-api-origin', apiOrigin)
+  const url = new URL(apiOrigin)
+  if (url.origin !== apiOrigin) {
+    throw new Error('--account-link-api-origin must be a bare origin, such as https://api.example.com')
+  }
+  // Plain http only toward the operator's own machine, for running the API
+  // locally against a tenant; the browser follows these redirects itself.
+  const isLoopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopback)) {
+    throw new Error('--account-link-api-origin must be https, or http on localhost')
+  }
+  // RFC 7518 §3.2: an HS256 key must be at least as long as the hash, 256 bits.
+  if (!secret || secret.length < 32) {
+    throw new Error(`${ACCOUNT_LINK_SECRET_ENV} must hold at least 32 characters when account linking is configured`)
+  }
+  return { apiOrigin, secret }
 }
 
 function requireExactValue(flag: string, value: string | undefined): string {
@@ -311,15 +362,17 @@ export function hydrateEmailVerificationTemplate(template: JsonObject, ids: Emai
 
 export function hydrateLoginPolicyAction(
   source: string,
-  values: { clientId: string; connectionName: string; formId: string },
+  values: { clientId: string; connectionName: string; formId: string; accountLinkApiOrigin: string },
 ): string {
   const replacements: Record<string, string> = {
     __BOXLITE_CLIENT_ID_JSON__: JSON.stringify(values.clientId),
     __BOXLITE_DB_CONNECTION_JSON__: JSON.stringify(values.connectionName),
     __EMAIL_VERIFICATION_FORM_ID_JSON__: JSON.stringify(values.formId),
+    // An empty origin is the off switch: the Action then leaves social logins alone.
+    __ACCOUNT_LINK_API_ORIGIN_JSON__: JSON.stringify(values.accountLinkApiOrigin),
   }
   const hydrated = source.replace(
-    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID)_JSON__/g,
+    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN)_JSON__/g,
     (placeholder) => replacements[placeholder],
   )
   const unresolved = hydrated.match(/__[A-Z_]+_JSON__/)
@@ -513,6 +566,13 @@ export class Auth0LoginPolicyConfigurator {
         form: resourceStatus(state.form),
         action: resourceStatus(state.action),
         actionBound: state.bindings.some((binding) => binding.action?.id === state.action?.id),
+        accountLinkCallback: this.options.accountLink
+          ? (state.client.callbacks ?? []).includes(
+              `${this.options.accountLink.apiOrigin}${ACCOUNT_LINK_CALLBACK_PATH}`,
+            )
+            ? 'registered'
+            : 'register'
+          : 'not-configured',
       },
       readyToApply: emailReadiness.readyToApply,
     }
@@ -555,8 +615,9 @@ export class Auth0LoginPolicyConfigurator {
       const form = this.ensureForm(hydratedTemplate.form, state.form)
 
       this.enableConnectionForClient(connection, state.clientConnections)
-      const action = this.ensureAction(requireResourceId('verification form', form), state.action)
-      if (!state.action) this.deployAction(action)
+      if (this.options.accountLink) this.registerAccountLinkCallback(this.options.accountLink, state.client)
+      const { action, changed } = this.ensureAction(requireResourceId('verification form', form), state.action)
+      if (changed) this.deployAction(action)
       this.bindAction(action, state.bindings)
 
       const readBack = this.readState()
@@ -821,11 +882,8 @@ export class Auth0LoginPolicyConfigurator {
 
     if (state.action) {
       if (!state.form) throw new Error(`Auth0 Action '${RESOURCE_NAMES.action}' has no managed verification Form`)
-      assertManagedActionMatches(
-        state.action,
-        this.actionPayload(requireResourceId('verification form', state.form)),
-        true,
-      )
+      const desired = this.actionPayload(requireResourceId('verification form', state.form))
+      if (!this.isManagedAction(state.action)) assertManagedActionMatches(state.action, desired, true)
     }
   }
 
@@ -877,6 +935,22 @@ export class Auth0LoginPolicyConfigurator {
     ])
     this.client.request('patch', path, {
       data: [{ client_id: this.options.clientId, status: true }],
+    })
+  }
+
+  /**
+   * Let the SPA client return to the BoxLite API's link callback.
+   *
+   * The second sign-in runs through the dashboard's own client, redeemed with
+   * PKCE, so the only tenant change it needs is this one allowed callback.
+   */
+  private registerAccountLinkCallback(accountLink: Auth0AccountLinkOptions, client: JsonObject): void {
+    const callbacks: string[] = client.callbacks ?? []
+    const callbackUrl = `${accountLink.apiOrigin}${ACCOUNT_LINK_CALLBACK_PATH}`
+    if (callbacks.includes(callbackUrl)) return
+    this.recordAdopted('SPA callbacks', 'clients', this.options.clientId, { callbacks })
+    this.client.request('patch', `clients/${encodeURIComponent(this.options.clientId)}`, {
+      data: { callbacks: [...callbacks, callbackUrl] },
     })
   }
 
@@ -1035,7 +1109,7 @@ export class Auth0LoginPolicyConfigurator {
     this.client.request('patch', 'prompts', { data: update })
   }
 
-  private ensureAction(formId: string, existing: JsonObject | null): JsonObject {
+  private ensureAction(formId: string, existing: JsonObject | null): { action: JsonObject; changed: boolean } {
     const payload = this.actionPayload(formId)
     if (!existing) {
       const created = requireObject(
@@ -1043,14 +1117,65 @@ export class Auth0LoginPolicyConfigurator {
         this.client.request('post', 'actions/actions', { data: payload }),
       )
       this.recordCreated('login policy action', 'actions/actions', requireResourceId('login policy action', created))
-      return created
+      return { action: created, changed: true }
     }
 
-    assertManagedActionMatches(existing, payload, true)
-    return existing
+    if (actionIsCurrent(existing, payload)) return { action: existing, changed: false }
+    if (!this.isManagedAction(existing)) {
+      assertManagedActionMatches(existing, payload, true)
+      return { action: existing, changed: false }
+    }
+
+    // An earlier BoxLite version, or this one with a key to rewrite: move it to
+    // this apply's payload, and journal the code it ran so a rollback redeploys
+    // exactly that. Secret values never come back from Auth0, so the restore
+    // leaves the secrets as they are rather than guessing them: code that does
+    // not read a secret ignores it, and code that does keeps its key.
+    const id = requireResourceId('login policy action', existing)
+    this.recordAdopted(
+      'login policy action',
+      'actions/actions',
+      id,
+      {
+        code: existing.code,
+        runtime: existing.runtime,
+        supported_triggers: existing.supported_triggers,
+      },
+      true,
+    )
+    const updated = requireObject(
+      'login policy action',
+      this.client.request('patch', `actions/actions/${id}`, {
+        data: { code: payload.code, runtime: payload.runtime, secrets: payload.secrets ?? [] },
+      }),
+    )
+    return { action: updated, changed: true }
+  }
+
+  /**
+   * A post-login Action this tool generated for this client, from this or an
+   * earlier `login-policy.js`.
+   *
+   * Recognised by what only a hydration of that file contains: the file's own
+   * opening lines, and this client's id written into it. Anything else under
+   * the name — say, an edit made in the dashboard — still has to match exactly
+   * or be removed by hand, as before.
+   */
+  private isManagedAction(action: JsonObject): boolean {
+    const header = this.sources.actionCode.split('\n').slice(0, 5).join('\n')
+    const code = String(action.code ?? '')
+    return (
+      action.name === RESOURCE_NAMES.action &&
+      action.runtime === 'node22' &&
+      sameJson(action.supported_triggers, [{ id: 'post-login', version: 'v3' }]) &&
+      code.startsWith(header) &&
+      code.includes(`const BOXLITE_CLIENT_ID = ${JSON.stringify(this.options.clientId)}`) &&
+      managedSecretNames(action).every((name) => MANAGED_ACTION_SECRETS.includes(name))
+    )
   }
 
   private actionPayload(formId: string): JsonObject {
+    const accountLink = this.options.accountLink
     return {
       name: RESOURCE_NAMES.action,
       supported_triggers: [{ id: 'post-login', version: 'v3' }],
@@ -1058,8 +1183,10 @@ export class Auth0LoginPolicyConfigurator {
         clientId: this.options.clientId,
         connectionName: this.options.connectionName,
         formId,
+        accountLinkApiOrigin: accountLink?.apiOrigin ?? '',
       }),
       runtime: 'node22',
+      ...(accountLink && { secrets: [{ name: ACCOUNT_LINK_ACTION_SECRET, value: accountLink.secret }] }),
     }
   }
 
@@ -1136,20 +1263,18 @@ export class Auth0LoginPolicyConfigurator {
     }
     assertManagedActionMatches(
       state.action,
-      {
-        name: RESOURCE_NAMES.action,
-        supported_triggers: [{ id: 'post-login', version: 'v3' }],
-        code: hydrateLoginPolicyAction(this.sources.actionCode, {
-          clientId: this.options.clientId,
-          connectionName: this.options.connectionName,
-          formId: requireResourceId('verification form', state.form),
-        }),
-        runtime: 'node22',
-      },
+      this.actionPayload(requireResourceId('verification form', state.form)),
       true,
     )
     if (!state.bindings.some((binding) => binding.action?.id === state.action?.id)) {
       throw new Error('Auth0 login policy Action is not bound to post-login')
+    }
+    const accountLink = this.options.accountLink
+    if (
+      accountLink &&
+      !(state.client.callbacks ?? []).includes(`${accountLink.apiOrigin}${ACCOUNT_LINK_CALLBACK_PATH}`)
+    ) {
+      throw new Error('Auth0 SPA client read-back lacks the BoxLite API account link callback')
     }
   }
 
@@ -1346,21 +1471,47 @@ function bindingsSnapshot(bindings: JsonObject[]): JsonObject[] {
     .map((binding) => ({ ref: { type: 'action_id', value: binding.action.id }, display_name: binding.display_name }))
 }
 
+function managedSecretNames(action: JsonObject): string[] {
+  return (action.secrets ?? []).map((secret: JsonObject) => String(secret.name)).sort()
+}
+
+/**
+ * Whether the tenant already runs exactly what this apply would write.
+ *
+ * Never, when the apply carries a secret: Auth0 returns secret names but not
+ * their values, so rewriting the Action is the only way a rotated key reaches
+ * it.
+ */
+function actionIsCurrent(action: JsonObject, desired: JsonObject): boolean {
+  if (((desired.secrets as JsonObject[] | undefined) ?? []).length > 0) return false
+  try {
+    assertManagedActionMatches(action, desired, true)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function assertManagedActionMatches(action: JsonObject, desired: JsonObject, requireDeployed: boolean): void {
-  if (!containsJson(action, desired)) {
+  const { secrets: desiredSecrets = [], ...shape } = desired
+  if (!containsJson(action, shape)) {
     throw new Error(
       `Auth0 Action '${RESOURCE_NAMES.action}' already exists with unmanaged contents; remove it or restore its BoxLite-managed definition before applying`,
     )
   }
-  if ((action.secrets?.length ?? 0) > 0 || (action.deployed_version?.secrets?.length ?? 0) > 0) {
-    throw new Error(`Auth0 Action '${RESOURCE_NAMES.action}' contains secrets and cannot be adopted safely`)
+  const wanted = (desiredSecrets as JsonObject[]).map((secret) => String(secret.name)).sort()
+  if (
+    !sameJson(managedSecretNames(action), wanted) ||
+    (action.deployed_version && !sameJson(managedSecretNames(action.deployed_version), wanted))
+  ) {
+    throw new Error(`Auth0 Action '${RESOURCE_NAMES.action}' carries secrets other than the managed ones`)
   }
   if (
     requireDeployed &&
     (action.all_changes_deployed !== true ||
       action.deployed_version?.deployed !== true ||
-      action.deployed_version?.code !== desired.code ||
-      action.deployed_version?.runtime !== desired.runtime)
+      action.deployed_version?.code !== shape.code ||
+      action.deployed_version?.runtime !== shape.runtime)
   ) {
     throw new Error(`Auth0 Action '${RESOURCE_NAMES.action}' read-back is not the deployed managed version`)
   }

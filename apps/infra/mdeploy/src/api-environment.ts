@@ -76,6 +76,13 @@ export const STATUS_SYNC_KEYS = [
 ]
 
 /**
+ * The same, for the login-time account link: its one secret, which switches
+ * the link on by being present. It travels like the rest of the API group — a
+ * value, until mstage.env.json declares a `secret` group that marks it.
+ */
+export const ACCOUNT_LINK_KEYS = ['OIDC_ACCOUNT_LINK_REDIRECT_SECRET']
+
+/**
  * The dashboard's two origins.
  *
  * They are different on purpose. Static assets are served through the CDN at
