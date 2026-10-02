@@ -139,6 +139,8 @@ function normalizeNetworkShape(value: unknown): NetworkSpecDto | unknown {
  * would name the *server's* filesystem, not the caller's, and this API mounts
  * managed volumes only. Recognised by the same first-character rule the CLI
  * classifies `-v` sources with, so the two agree on what a path looks like.
+ * Both `managed_volume` and a mount's `source` are checked with it, so a path
+ * is recognised the same way whichever list it arrives in.
  */
 const HOST_PATH_SELECTOR = /^(\.|\/|~|\\\\|[a-zA-Z]:[\\/])/
 
@@ -170,13 +172,73 @@ export class VolumeSpecDto {
   guest_path: string
 
   /**
-   * Read-only managed mounts are not implemented yet. Rejected rather than
-   * silently downgraded to read-write, which would hand the caller a writable
-   * mount they believe is protected.
+   * The `volumes` list takes no read-only flag; a read-only volume mount goes
+   * in `mounts[].read_only`. `true` is rejected rather than silently
+   * downgraded to read-write, which would hand the caller a writable mount
+   * they believe is protected.
    */
   @ValidateIf((_, value) => value !== undefined)
   @IsIn([false])
   read_only?: false
+}
+
+/**
+ * Refuses a path as a mount `source` with HOST_PATH_SELECTOR. A constraint of
+ * its own, not IsNotHostPathConstraint, because its message speaks of a mount
+ * source instead of `managed_volume`.
+ */
+@ValidatorConstraint({ name: 'isNotMountSourcePath', async: false })
+class IsNotMountSourcePathConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    return typeof value !== 'string' || !HOST_PATH_SELECTOR.test(value)
+  }
+
+  defaultMessage(): string {
+    return 'bind mounts are not supported by this API; a volume mount source is a volume id or name, not a path'
+  }
+}
+
+/** One entry of `mounts`, the typed sibling of `volumes`. */
+export class MountSpecDto {
+  /**
+   * Only `volume`: a `bind` would name a path on the runner's filesystem, not
+   * the caller's, so host binds are local-runtime only.
+   */
+  @IsIn(['volume'], { message: 'mount type must be "volume"; bind mounts are only supported by the local runtime' })
+  type: 'volume'
+
+  /**
+   * The volume's server-assigned id or its name - the server resolves either.
+   * IsNotEmpty so an explicit `source: ''` is refused here rather than
+   * reaching the lookup as a selector that can never match.
+   */
+  @IsString()
+  @IsNotEmpty()
+  @Validate(IsNotMountSourcePathConstraint)
+  source: string
+
+  @IsString()
+  target: string
+
+  /**
+   * Mount the volume read-only; omitted means read-write. ValidateIf (not
+   * IsOptional) so an explicit `null` is still a validation error: a null that
+   * quietly became read-write would hand the caller a writable mount they
+   * believe is protected.
+   */
+  @ValidateIf((_, value) => value !== undefined)
+  @IsBoolean()
+  read_only?: boolean
+
+  /**
+   * A prefix inside the volume to mount instead of the whole volume. Omitted
+   * mounts everything; an empty string is refused rather than read as the
+   * whole volume, since omitting the key already says that.
+   */
+  @ValidateIf((_, value) => value !== undefined)
+  @IsString()
+  @IsNotEmpty()
+  sub_path?: string
 }
 
 export class SecretSpecDto {
@@ -287,6 +349,12 @@ export class CreateBoxDto {
   @ValidateNested({ each: true })
   @Type(() => VolumeSpecDto)
   volumes?: VolumeSpecDto[]
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => MountSpecDto)
+  mounts?: MountSpecDto[]
 
   @IsOptional()
   @IsArray()

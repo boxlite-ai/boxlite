@@ -65,6 +65,17 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
     volumeId: volume.managed_volume,
     mountPath: volume.guest_path,
   }))
+  createDto.mounts = dto.mounts?.map((mount) => ({
+    type: mount.type,
+    // A volume id or name, resolved by the box service as `volumeId` is.
+    source: mount.source,
+    target: mount.target,
+    // Undefined when omitted, which the runner reads as the whole volume.
+    subPath: mount.sub_path,
+    // Undefined when omitted, so a stored mount without it reads as read-write
+    // and an explicit false stays distinguishable in the persisted jsonb.
+    readOnly: mount.read_only,
+  }))
   createDto.secrets = dto.secrets?.map((secret) => ({
     name: secret.name,
     value: secret.value,

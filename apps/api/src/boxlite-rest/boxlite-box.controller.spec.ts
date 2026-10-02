@@ -140,6 +140,35 @@ describe('BoxliteBoxController request validation', () => {
 
     expect(dto.volumes?.[0]?.managed_volume).toBe(selector)
   })
+
+  // Every field of the MountSpec shape survives the whitelist, beside volumes.
+  it('accepts a volume mount with every field, beside a volume', async () => {
+    const dto: CreateBoxDto = await pipe!.transform(
+      {
+        image: 'alpine:latest',
+        volumes: [{ managed_volume: 'my-volume', guest_path: '/data' }],
+        mounts: [{ type: 'volume', source: 'run42', target: '/workspace', read_only: true, sub_path: 'foo/bar' }],
+      },
+      meta,
+    )
+
+    expect(dto.mounts).toEqual([
+      { type: 'volume', source: 'run42', target: '/workspace', read_only: true, sub_path: 'foo/bar' },
+    ])
+    expect(dto.volumes?.[0]?.managed_volume).toBe('my-volume')
+  })
+
+  // `additionalProperties: false` holds inside a mount too: an unknown key
+  // such as Docker's `readonly` is refused rather than dropped, which would
+  // otherwise hand back a writable mount.
+  it('rejects an unrecognised field nested inside a mount', async () => {
+    await expect(
+      pipe!.transform(
+        { image: 'alpine:latest', mounts: [{ type: 'volume', source: 'run42', target: '/w', readonly: true }] },
+        meta,
+      ),
+    ).rejects.toThrow()
+  })
 })
 
 // Making a box public exposes its services to anyone, so this route must ask
