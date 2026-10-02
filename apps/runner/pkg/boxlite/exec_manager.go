@@ -83,6 +83,11 @@ type ExecManager struct {
 	shutdownGrace      time.Duration
 	maxSessionLifetime time.Duration
 
+	// mainOpenMu serializes main-session opens so the look-then-open in
+	// AttachMain cannot interleave. See AttachMain for why it has to be
+	// atomic, and what it costs.
+	mainOpenMu sync.Mutex
+
 	// stop signals cleanupLoop to exit (graceful shutdown / test teardown).
 	stopOnce sync.Once
 	stop     chan struct{}
@@ -98,6 +103,12 @@ type ManagedExec struct {
 	Err       error
 	TTY       bool
 	created   time.Time
+
+	// Main marks the box's main command session — the container's init,
+	// joined by AttachMain rather than started by Start. It is what lets a
+	// second attach find the session already open instead of asking the
+	// guest for a second stream on it.
+	Main bool
 
 	// handleMu serializes all operations on `execution` and `stdinW`
 	// against the deferred Close in the wait goroutine. Without this,
@@ -346,23 +357,7 @@ type StartOptions struct {
 }
 
 func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, opts StartOptions) (string, error) {
-	id := uuid.New().String()
-
-	now := time.Now()
-	exec := &ManagedExec{
-		ID:        id,
-		BoxID:     boxID,
-		stdoutBus: newStreamBus(streamBusBacklogCap),
-		stderrBus: newStreamBus(streamBusBacklogCap),
-		Done:      make(chan struct{}),
-		TTY:       opts.TTY,
-		created:   now,
-		// Start the reap clock from creation so a client that never
-		// calls /attach still escalates through SIGHUP→SIGTERM→SIGKILL
-		// at the reconnect_grace boundary. The first successful
-		// MarkConnected() zeros LastDisconnectAt, pausing the clock.
-		LastDisconnectAt: now,
-	}
+	exec := newManagedExec(uuid.New().String(), boxID, opts.TTY)
 
 	// Pass the streamBus sinks directly to the SDK — no io.Pipe between
 	// the producer and the fan-out. The SDK's pump calls bus.Write, which
@@ -380,31 +375,136 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, 
 	if err != nil {
 		return "", fmt.Errorf("failed to start execution: %w", err)
 	}
-	handle := sdkExec{inner: execution}
-	exec.execution = handle
-	exec.stdinW = execution.Stdin
+
+	m.adopt(exec, sdkExec{inner: execution}, execution.Stdin)
+	return exec.ID, nil
+}
+
+// AttachMain returns the box's main command session, opening it on the first
+// attach.
+//
+// `run IMAGE COMMAND` runs COMMAND *as* the container init, so the session the
+// client wants is the box itself — not something this manager started. Once
+// open it lives in the same registry as tenant execs under an ordinary
+// execution id, so reattach, single-attach claiming and reaping need no
+// special case, and the client addresses it through the usual
+// /executions/{id}/… routes.
+//
+// Opening is serialized because the guest binds init's streams to the first
+// Attach and refuses the next: without the lock two racing clients would each
+// try to open one, and the loser would be left holding a permanently silent
+// Execution instead of the 409 the contract promises.
+//
+// One lock for every box, not one per box. The invariant is per-box, so this
+// is coarser than it has to be: a cold box is booted inside the lock, and one
+// box's first attach waits on another's boot. Execs never wait — they do not
+// take this lock at all. Scoping it per box means a keyed map to create and
+// clean, and nothing has measured the wait, so the coarse lock stands; the
+// Rust server makes the same trade further still, holding its whole registry
+// lock across the open (serve/mod.rs, get_or_attach_main_session).
+//
+// It deliberately does not start the box first. The box's init IS the user's
+// command, so starting a finished one would silently run the job again;
+// attaching already does the right thing for every status by itself.
+func (m *ExecManager) AttachMain(ctx context.Context, bx *boxlite.Box, boxID string) (*ManagedExec, error) {
+	m.mainOpenMu.Lock()
+	defer m.mainOpenMu.Unlock()
+
+	if open := m.findMain(boxID); open != nil {
+		return open, nil
+	}
+
+	// TTY stays false: nothing the runner is told about a box says whether its
+	// init runs on one (CreateBoxDTO has no such field), and false is the
+	// answer that loses least — stderr is pumped separately, which is right
+	// for a non-TTY box and harmless for a TTY one, where it stays empty.
+	exec := newManagedExec(uuid.New().String(), boxID, false)
+	exec.Main = true
+
+	execution, err := bx.AttachMainSession(ctx, &boxlite.AttachOptions{
+		Stdout: exec.stdoutBus,
+		Stderr: exec.stderrBus,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to attach to box %s main session: %w", boxID, err)
+	}
+
+	m.adopt(exec, sdkExec{inner: execution}, execution.Stdin)
+	return exec, nil
+}
+
+// findMain returns the box's open main session, or nil. Callers must hold
+// mainOpenMu; a scan rather than a second index so eviction has only one map
+// to keep honest.
+//
+// isDone matters here in a way it never does for execs. A main session is
+// found by box id, and a box id survives a restart — so a finished session
+// from the previous run still matches, and for the whole done-retention window
+// an attach after a restart would be handed the old run's dead stream, its
+// stale backlog and its stale exit code, while the init actually running now
+// never gets a session at all. An exec cannot collide that way: it is looked
+// up by an id that is fresh every time.
+func (m *ExecManager) findMain(boxID string) *ManagedExec {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, e := range m.execs {
+		if e.Main && e.BoxID == boxID && !e.isDone() {
+			return e
+		}
+	}
+	return nil
+}
+
+// newManagedExec builds a registry entry: the two stream buses the SDK writes
+// into, and a reap clock that is already running.
+func newManagedExec(id, boxID string, tty bool) *ManagedExec {
+	now := time.Now()
+	return &ManagedExec{
+		ID:        id,
+		BoxID:     boxID,
+		stdoutBus: newStreamBus(streamBusBacklogCap),
+		stderrBus: newStreamBus(streamBusBacklogCap),
+		Done:      make(chan struct{}),
+		TTY:       tty,
+		created:   now,
+		// Start the reap clock from creation so a client that never
+		// calls /attach still escalates through SIGHUP→SIGTERM→SIGKILL
+		// at the reconnect_grace boundary. The first successful
+		// MarkConnected() zeros LastDisconnectAt, pausing the clock.
+		LastDisconnectAt: now,
+	}
+}
+
+// adopt takes ownership of a live SDK session: it wires the handle and stdin
+// into e, spawns the goroutine that records the exit and closes everything
+// down, and publishes e to the registry.
+//
+// Shared by Start and AttachMain because past the SDK call the two are the
+// same thing — an Execution whose streams have to be drained, whose exit has
+// to be recorded, and whose handle has to be closed exactly once.
+func (m *ExecManager) adopt(e *ManagedExec, handle sdkExec, stdin io.Writer) {
+	e.execution = handle
+	e.stdinW = stdin
 
 	go func() {
-		defer close(exec.Done)
-		defer exec.stdoutBus.close()
-		defer exec.stderrBus.close()
+		defer close(e.Done)
+		defer e.stdoutBus.close()
+		defer e.stderrBus.close()
 		defer func() {
-			exec.handleMu.Lock()
+			e.handleMu.Lock()
 			handle.Close()
-			exec.closed = true
-			exec.handleMu.Unlock()
+			e.closed = true
+			e.handleMu.Unlock()
 		}()
 
 		exitCode, err := handle.Wait(context.Background())
-		exec.ExitCode = exitCode
-		exec.Err = err
+		e.ExitCode = exitCode
+		e.Err = err
 	}()
 
 	m.mu.Lock()
-	m.execs[id] = exec
+	m.execs[e.ID] = e
 	m.mu.Unlock()
-
-	return id, nil
 }
 
 // Subscribe registers a fan-out subscriber on both the stdout and stderr
@@ -604,6 +704,17 @@ func (m *ExecManager) evaluateExec(now time.Time, e *ManagedExec, reconnectGrace
 		}
 		return
 	default:
+	}
+
+	// 1b) A main session is never an orphan and never stale: it is the box's
+	// init, so killing it powers the VM off and destroys the box. A client
+	// walking away from `docker attach` does not stop the container, and
+	// neither may this; nor may the lifetime cap, which exists to bound *exec*
+	// sessions, not the workload they run beside. Every branch below signals or
+	// kills, so Main stops here — the done-eviction above still applies to it,
+	// because evicting an init that has already exited kills nothing.
+	if e.Main {
+		return
 	}
 
 	// 2) Hard cap — kill regardless of attach state.
