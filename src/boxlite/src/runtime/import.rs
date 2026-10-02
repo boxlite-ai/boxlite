@@ -121,6 +121,11 @@ fn options_from_manifest(
     if !options.volumes.is_empty() {
         return Err(rejected_upload("volume mounts"));
     }
+    // Typed mounts, for the same reasons: a `bind` would select a path on the
+    // server's host, a `volume` storage the uploader does not necessarily own.
+    if !options.mounts.is_empty() {
+        return Err(rejected_upload("mounts"));
+    }
     options.advanced.security = SecurityOptions::default();
     // That reset also restores the default's hardcoded 1 GiB RLIMIT_FSIZE —
     // the ceiling #1152 is about — because it replaces the whole struct rather
@@ -411,6 +416,55 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
         assert!(error.to_string().contains("volume mounts"));
+    }
+
+    /// The typed mounts pass through the same gate, both types of them: a
+    /// `bind` names a path on the server's host, a `volume` storage the
+    /// uploader does not necessarily own.
+    #[test]
+    fn untrusted_import_rejects_every_mount_type() {
+        use crate::runtime::options::MountSpec;
+
+        for mount in [
+            MountSpec::bind_mount("/", "/host"),
+            MountSpec::volume_mount("someone-elses-data", "/data"),
+        ] {
+            let options = BoxOptions {
+                mounts: vec![mount.clone()],
+                ..Default::default()
+            };
+
+            let error =
+                options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                    .expect_err("untrusted archives must not select mounts");
+
+            assert!(
+                matches!(error, BoxliteError::Unsupported(_)),
+                "{mount:?}: {error:?}"
+            );
+            assert!(error.to_string().contains("mounts"), "{mount:?}: {error}");
+        }
+    }
+
+    /// A local import is the caller's own archive, so its mounts come back as
+    /// exported, like its volumes.
+    #[test]
+    fn trusted_import_preserves_mounts() {
+        use crate::runtime::options::MountSpec;
+
+        let mounts = vec![MountSpec {
+            read_only: true,
+            ..MountSpec::bind_mount("/srv/data", "/data")
+        }];
+        let options = BoxOptions {
+            mounts: mounts.clone(),
+            ..Default::default()
+        };
+
+        let resolved =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::Trusted).unwrap();
+
+        assert_eq!(resolved.mounts, mounts);
     }
 
     #[test]

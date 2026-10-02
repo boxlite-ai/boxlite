@@ -10,7 +10,7 @@ use crate::litebox::ports::LivePublishedPorts;
 use crate::portal::GuestSession;
 use crate::portal::interfaces::ContainerRootfsInitConfig;
 use crate::runtime::layout::BoxFilesystemLayout;
-use crate::runtime::options::VolumeSpec;
+use crate::runtime::options::{MountSpec, MountType, VolumeSpec};
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::vmm::{PreparedKernel, controller::VmmHandler};
 use crate::volumes::{ContainerMount, GuestVolumeManager, VolumeShare, classify_volume_share};
@@ -127,6 +127,121 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
             owner_uid,
             owner_gid,
             subpath,
+        });
+    }
+
+    Ok(resolved)
+}
+
+/// A `bind` entry of `BoxOptions::mounts`, with resolved paths and a generated tag.
+#[derive(Debug, Clone)]
+pub struct ResolvedMount {
+    pub tag: String,
+    /// The directory to share, or for a single-file mount the file itself.
+    pub host_path: PathBuf,
+    pub target: String,
+    pub read_only: bool,
+    /// Owner UID of the host path (for auto-idmap in guest).
+    pub owner_uid: u32,
+    /// Owner GID of the host path (for auto-idmap in guest).
+    pub owner_gid: u32,
+    /// For a single-file mount, the file's name (staged and bind-mounted on its
+    /// own); `None` for a whole-directory mount. Not a volume prefix: a bind
+    /// has none.
+    pub file_name: Option<String>,
+}
+
+/// Resolve the typed mounts of a box for the local runtime.
+///
+/// Tags are `usermount{i}`, a namespace apart from `uservol{i}`: both lists
+/// become virtio-fs shares of the same VM, and one tag naming two shares would
+/// hand one mount's directory to the other.
+pub fn resolve_user_mounts(mounts: &[MountSpec]) -> BoxliteResult<Vec<ResolvedMount>> {
+    let mut resolved = Vec::with_capacity(mounts.len());
+
+    for (i, mount) in mounts.iter().enumerate() {
+        let target = &mount.target;
+        let source = mount.source.as_deref().unwrap_or_default();
+
+        // A volume mount names storage on the server that owns the volume
+        // backend. Reported as such rather than falling through to the path
+        // checks, which would blame a host directory the caller never named.
+        if mount.mount_type == MountType::Volume {
+            return Err(BoxliteError::Unsupported(format!(
+                "volume mount of {source:?} requires a REST runtime; the local runtime has no \
+                 volume backend to resolve it against"
+            )));
+        }
+
+        // `MountSpec::validate` refuses this at create. A spec that reached
+        // boot without a source would otherwise fail below as a missing path
+        // with an empty name; this says what is actually wrong.
+        if source.is_empty() {
+            return Err(BoxliteError::InvalidArgument(format!(
+                "bind mount to {target:?} needs a source (a host path)"
+            )));
+        }
+
+        let host_path = PathBuf::from(source);
+        if !host_path.exists() {
+            return Err(BoxliteError::Config(format!(
+                "Bind mount source does not exist: {source}"
+            )));
+        }
+
+        let resolved_path = host_path.canonicalize().map_err(|e| {
+            BoxliteError::Config(format!(
+                "Failed to resolve bind mount source '{source}': {e}"
+            ))
+        })?;
+
+        // A directory is shared as-is; a single file is staged into a dedicated
+        // share dir later (see vmm_spawn), so virtio-fs never exposes the file's
+        // host siblings.
+        let (share_path, file_name) = match classify_volume_share(&resolved_path) {
+            Some(VolumeShare::Dir(dir)) => (dir, None),
+            Some(VolumeShare::File(name)) => (resolved_path.clone(), Some(name)),
+            None => {
+                return Err(BoxliteError::Config(format!(
+                    "Bind mount source is not a file or directory: {source}"
+                )));
+            }
+        };
+
+        let tag = format!("usermount{i}");
+
+        // Owner comes from the mount source itself (file or dir) for guest idmap.
+        let (owner_uid, owner_gid) = {
+            use std::os::unix::fs::MetadataExt;
+            let meta = std::fs::metadata(&resolved_path).map_err(|e| {
+                BoxliteError::Config(format!(
+                    "Failed to stat bind mount source '{}': {}",
+                    resolved_path.display(),
+                    e
+                ))
+            })?;
+            (meta.uid(), meta.gid())
+        };
+
+        tracing::debug!(
+            tag = %tag,
+            host_path = %share_path.display(),
+            file_name = ?file_name,
+            target = %target,
+            read_only = mount.read_only,
+            owner_uid,
+            owner_gid,
+            "Resolved user mount"
+        );
+
+        resolved.push(ResolvedMount {
+            tag,
+            host_path: share_path,
+            target: target.clone(),
+            read_only: mount.read_only,
+            owner_uid,
+            owner_gid,
+            file_name,
         });
     }
 
@@ -445,6 +560,84 @@ mod tests {
         assert_eq!(resolved[0].host_path, file_path.canonicalize().unwrap());
         assert_eq!(resolved[0].subpath, Some("app.conf".to_string()));
         assert_eq!(resolved[0].guest_path, "/etc/app.conf");
+    }
+
+    /// A bind mount resolves to its canonical directory with its own owner, and
+    /// its tag is `usermount{i}`, never a `uservol{i}` a volume of the same box
+    /// could also be given.
+    #[test]
+    fn resolve_bind_mount_gets_a_usermount_tag_and_owner() {
+        use crate::runtime::options::MountSpec;
+        use std::os::unix::fs::MetadataExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mounts = vec![MountSpec {
+            read_only: true,
+            ..MountSpec::bind_mount(tmp.path().to_str().unwrap(), "/data")
+        }];
+
+        let resolved = resolve_user_mounts(&mounts).unwrap();
+        assert_eq!(resolved.len(), 1);
+        let metadata = std::fs::metadata(tmp.path()).unwrap();
+        assert_eq!(resolved[0].tag, "usermount0");
+        assert_eq!(resolved[0].host_path, tmp.path().canonicalize().unwrap());
+        assert_eq!(resolved[0].target, "/data");
+        assert!(resolved[0].read_only);
+        assert_eq!(resolved[0].owner_uid, metadata.uid());
+        assert_eq!(resolved[0].owner_gid, metadata.gid());
+        assert_eq!(resolved[0].file_name, None);
+    }
+
+    #[test]
+    fn resolve_single_file_bind_mount_records_source_and_name() {
+        use crate::runtime::options::MountSpec;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let file_path = tmp.path().join("app.conf");
+        std::fs::write(&file_path, "key=value\n").unwrap();
+
+        let mounts = vec![MountSpec::bind_mount(
+            file_path.to_str().unwrap(),
+            "/etc/app.conf",
+        )];
+
+        let resolved = resolve_user_mounts(&mounts).unwrap();
+        assert_eq!(resolved[0].host_path, file_path.canonicalize().unwrap());
+        assert_eq!(resolved[0].file_name, Some("app.conf".to_string()));
+        assert_eq!(resolved[0].target, "/etc/app.conf");
+    }
+
+    #[test]
+    fn resolve_bind_mount_nonexistent_source_errors() {
+        use crate::runtime::options::MountSpec;
+
+        let mounts = vec![MountSpec::bind_mount("/nonexistent/path/12345", "/data")];
+
+        let message = resolve_user_mounts(&mounts)
+            .expect_err("a missing source cannot be shared")
+            .to_string();
+        assert!(message.contains("does not exist"), "{message}");
+    }
+
+    /// A volume mount needs the server's volume backend, and says so instead
+    /// of reporting the volume name as a missing host path.
+    #[test]
+    fn resolve_volume_mount_reports_the_missing_backend() {
+        use crate::runtime::options::MountSpec;
+
+        let mounts = vec![MountSpec::volume_mount("my-data", "/data")];
+
+        let error = resolve_user_mounts(&mounts)
+            .expect_err("the local runtime cannot resolve a volume mount");
+
+        assert!(
+            matches!(error, BoxliteError::Unsupported(_)),
+            "{error:?} should be Unsupported, not a config error about a path"
+        );
+        let message = error.to_string();
+        assert!(message.contains("my-data"), "{message}");
+        assert!(message.contains("REST runtime"), "{message}");
+        assert!(!message.contains("does not exist"), "{message}");
     }
 
     /// Reverting Drop to call `remove_box` (the pre-fix behavior) flips this red:
