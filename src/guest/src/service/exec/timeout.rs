@@ -31,7 +31,7 @@ impl TimeoutTarget {
     }
 
     fn signal_if_live(&self, signal: Signal) -> Result<bool, Errno> {
-        match self.process {
+        match &self.process {
             Some(process) => process.signal(signal, false),
             None => Ok(false),
         }
