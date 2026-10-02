@@ -1200,6 +1200,14 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         ));
     }
 
+    if let Some(mounts) = &req.mounts
+        && !mounts.is_empty()
+    {
+        return Err(boxlite::BoxliteError::InvalidArgument(
+            "mounts are not supported by boxlite serve".into(),
+        ));
+    }
+
     // An empty name or value can never substitute anything. Reject at the
     // boundary so this server agrees with the Cloud API's IsNotEmpty and the
     // runner's per-element `dive` required validation on what a secret is.
@@ -2092,6 +2100,28 @@ mod tests {
             matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("managed volumes")),
             "unexpected error: {err}"
         );
+    }
+
+    /// A `mounts` list deserializes, so the client learns that mounts are
+    /// unsupported rather than reading an unknown-field error, and is then
+    /// refused whatever its type.
+    #[test]
+    fn build_box_options_rejects_nonempty_mounts() {
+        for mount in [
+            r#"{"type":"volume","source":"run42","target":"/workspace"}"#,
+            r#"{"type":"bind","source":"/srv/data","target":"/data"}"#,
+        ] {
+            let req: super::types::CreateBoxRequest = serde_json::from_str(&format!(
+                r#"{{"image":"alpine:latest","mounts":[{mount}]}}"#
+            ))
+            .expect("body with mounts must deserialize (accepted, then rejected)");
+
+            let err = build_box_options(&req).expect_err("non-empty mounts must be rejected");
+            assert!(
+                matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("mounts are not supported")),
+                "{mount}: unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

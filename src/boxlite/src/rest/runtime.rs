@@ -7,7 +7,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::backend::RuntimeBackend;
-use crate::runtime::options::{BoxArchive, BoxOptions};
+use crate::runtime::options::{BoxArchive, BoxOptions, MountType};
 use crate::{BoxInfo, LiteBox};
 
 use super::client::ApiClient;
@@ -197,6 +197,30 @@ impl BoxOptions {
             return Err(BoxliteError::Unsupported(format!(
                 "read-only managed volumes are not supported yet; mount {volume:?} read-write"
             )));
+        }
+
+        // Typed mounts, by the same two rules: `MountSpec::validate` has no
+        // other chance to run on this path, and a `bind` names the server's
+        // filesystem, so only a `volume` mount may travel. The source is not
+        // quoted back, for the reason given above. Unlike a managed volume, a
+        // `volume` mount may be read-only: the server(TODO) carries its
+        // `read_only` to the runner, which binds it read-only. Until a server
+        // accepts `mounts` it rejects the whole request, so a read-only mount
+        // cannot land writable in the meantime.
+        for mount in &self.mounts {
+            mount.validate()?;
+        }
+
+        if self
+            .mounts
+            .iter()
+            .any(|mount| mount.mount_type == MountType::Bind)
+        {
+            return Err(BoxliteError::Unsupported(
+                "bind mounts are only supported by the local runtime; mount a managed volume \
+                 with type \"volume\" and its id or name as source instead"
+                    .to_string(),
+            ));
         }
 
         Ok(())
@@ -707,6 +731,92 @@ mod tests {
                 "managed volume {reference:?} must not be refused client-side: {error:?}"
             );
         }
+    }
+
+    /// A `bind` mount names the server's filesystem, so it is refused before
+    /// any network I/O, and the host path is not echoed back.
+    #[tokio::test]
+    async fn create_rejects_bind_mount_in_rest_mode() {
+        use crate::runtime::options::MountSpec;
+
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let box_options = BoxOptions {
+            mounts: vec![MountSpec::bind_mount("/tmp/secrets", "/mnt/ro")],
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("REST bind mounts must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("bind mounts"), "{error}");
+        assert!(
+            !error.to_string().contains("/tmp/secrets"),
+            "the rejected host path must not be echoed back: {error}"
+        );
+    }
+
+    /// A `volume` mount, read-only and with a prefix, clears client-side
+    /// validation; reaching the transport error is the proof.
+    #[tokio::test]
+    async fn create_accepts_volume_mount_with_read_only_and_sub_path() {
+        use crate::runtime::options::MountSpec;
+
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let box_options = BoxOptions {
+            mounts: vec![MountSpec {
+                read_only: true,
+                sub_path: Some("foo/bar".to_string()),
+                ..MountSpec::volume_mount("run42", "/workspace")
+            }],
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("no server is listening on localhost:1");
+
+        assert!(
+            !matches!(
+                error,
+                BoxliteError::Unsupported(_) | BoxliteError::InvalidArgument(_)
+            ),
+            "a volume mount must not be refused client-side: {error:?}"
+        );
+    }
+
+    /// `RuntimeBackend::create` is reachable without `sanitize_common`, so the
+    /// REST path runs `MountSpec::validate` itself: a volume mount without a
+    /// source never becomes a request with an empty selector.
+    #[tokio::test]
+    async fn create_rejects_volume_mount_without_a_source() {
+        use crate::runtime::options::MountSpec;
+
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let box_options = BoxOptions {
+            mounts: vec![MountSpec {
+                source: None,
+                ..MountSpec::volume_mount("run42", "/workspace")
+            }],
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("a mount without a source must be refused");
+
+        assert!(
+            matches!(error, BoxliteError::InvalidArgument(_)),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains("needs a source"), "{error}");
     }
 
     #[tokio::test]

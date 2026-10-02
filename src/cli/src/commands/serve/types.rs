@@ -63,6 +63,15 @@ pub(super) struct CreateBoxRequest {
     /// `build_box_options` when non-empty.
     #[serde(default)]
     pub volumes: Option<Vec<serde_json::Value>>,
+    /// Typed mounts, as the REST client sends them (`CreateBoxRequest.mounts`
+    /// in `src/boxlite/src/rest/types.rs`). Not supported either: this server
+    /// has no volume backend for a `volume` mount, and a `bind` would name the
+    /// server's filesystem, not the caller's, so every mount is refused.
+    /// Accepted here so the refusal names mounts rather than failing
+    /// deserialization on an unknown field; rejected explicitly in
+    /// `build_box_options` when non-empty.
+    #[serde(default)]
+    pub mounts: Option<Vec<serde_json::Value>>,
     // `security` / `security_settings` are intentionally absent from
     // the REST wire schema. Sandbox security is the operator's
     // policy, set server-side. Because the struct carries
