@@ -1,6 +1,6 @@
 use crate::cli::{
-    CapabilityFlags, GlobalFlags, KernelFlags, ManagementFlags, NetworkFlags, ProcessFlags,
-    PublishFlags, ResourceFlags, VolumeFlags,
+    CapabilityFlags, GlobalFlags, KernelFlags, ManagementFlags, MountFlags, NetworkFlags,
+    ProcessFlags, PublishFlags, ResourceFlags, VolumeFlags,
 };
 use crate::terminal::StreamManager;
 use crate::util::to_shell_exit_code;
@@ -24,6 +24,9 @@ pub struct RunArgs {
 
     #[command(flatten)]
     pub volume: VolumeFlags,
+
+    #[command(flatten)]
+    pub mount: MountFlags,
 
     #[command(flatten)]
     pub network: NetworkFlags,
@@ -100,6 +103,7 @@ fn build_options(
     args.management.apply_to(&mut options)?;
     args.publish.apply_to(&mut options)?;
     args.volume.apply_to(&mut options, home)?;
+    args.mount.apply_to(&mut options)?;
     args.network.apply_to(&mut options)?;
     args.process.apply_to(&mut options)?;
 
@@ -282,6 +286,43 @@ mod tests {
             Some(0),
             "a detached box keeps manual lifecycle control, so --rm is dropped"
         );
+    }
+
+    /// `run` hands `--mount` to `BoxOptions.mounts` and `-v` to `volumes`,
+    /// each in the order given.
+    #[test]
+    fn run_mount_and_volume_flags_fill_their_own_lists() {
+        use boxlite::runtime::options::MountSpec;
+
+        let cli = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "-v",
+            "/srv/in:/in",
+            "--mount",
+            "type=volume,source=run42,target=/workspace",
+            "--mount",
+            "type=bind,source=/srv/data,target=/data",
+            "alpine:latest",
+        ])
+        .expect("run --mount should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+        let (rootfs, command_args) = args.rootfs_and_command().expect("rootfs resolves");
+        let command_args = command_args.to_vec();
+
+        let opts = build_options(&args, None, rootfs, &command_args).expect("options build");
+
+        assert_eq!(
+            opts.mounts,
+            vec![
+                MountSpec::volume_mount("run42", "/workspace"),
+                MountSpec::bind_mount("/srv/data", "/data"),
+            ]
+        );
+        assert_eq!(opts.volumes.len(), 1);
+        assert_eq!(opts.volumes[0].guest_path, "/in");
     }
 
     #[test]
