@@ -5,14 +5,15 @@
 
 jest.mock('axios', () => ({
   __esModule: true,
-  default: { get: jest.fn() },
+  default: { get: jest.fn(), post: jest.fn() },
 }))
 
 import axios from 'axios'
 import { CommerceInternalClient } from './commerce-internal.client'
-import { CommerceUnavailableError } from './commerce.errors'
+import { CommerceConflictError, CommerceUnavailableError } from './commerce.errors'
 
 const get = axios.get as jest.Mock
+const post = axios.post as jest.Mock
 
 const INVITER_ID = '0b5f4d6e-8c1a-4f7b-9e2d-3a6c8b1f0e47'
 
@@ -37,16 +38,17 @@ function makeClient(settings: Record<string, unknown> = {}) {
   }
 }
 
-function httpFailure(status: number) {
+function httpFailure(status: number, data?: unknown) {
   // What axios rejects with: the request config, bearer token included, rides along.
   return Object.assign(new Error(`Request failed with status code ${status}`), {
-    response: { status },
+    response: { status, data },
     config: { headers: { authorization: 'Bearer shared-token' } },
   })
 }
 
 beforeEach(() => {
   get.mockReset()
+  post.mockReset()
 })
 
 describe('CommerceInternalClient', () => {
@@ -160,6 +162,121 @@ describe('CommerceInternalClient', () => {
 
       await expect(client.resolveReferralCode('ABCD2345EF')).rejects.toBeInstanceOf(CommerceUnavailableError)
       expect(get).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('acceptsInviteeEmail', () => {
+    it.each([
+      ['an address', 'invitee@example.com', true],
+      ['254 characters', `${'a'.repeat(242)}@example.com`, true],
+      ['255 characters', `${'a'.repeat(243)}@example.com`, false],
+      ['an empty string', '', false],
+      ['no value', undefined, false],
+      ['no @', 'invitee.example.com', false],
+      ['a C0 control character', 'invitee@example.com\n', false],
+      ['a C1 control character', 'invitee\u0085@example.com', false],
+    ])('follows Commerce for %s', (_label, email, accepted) => {
+      expect(makeClient().client.acceptsInviteeEmail(email)).toBe(accepted)
+    })
+  })
+
+  describe('publishReferralNewer', () => {
+    const INVITEE = {
+      id: 'google-oauth2|1234',
+      email: 'invitee@example.com',
+      createdAt: new Date('2026-10-02T10:34:13.123Z'),
+    }
+
+    it('posts the referral-newer event for the inviter on the bare origin with the service token', async () => {
+      post.mockResolvedValueOnce({ status: 202, data: { status: 'pending' } })
+
+      await expect(makeClient().client.publishReferralNewer(INVITER_ID, INVITEE)).resolves.toBeUndefined()
+
+      expect(post).toHaveBeenCalledTimes(1)
+      const [url, body, config] = post.mock.calls[0]
+      expect(url).toBe(`https://commerce.test/internal/organization/${INVITER_ID}/billing-events`)
+      // Commerce accepts exactly these fields. The eventId is pinned: another
+      // value for the same account would turn a retry into a new delivery.
+      expect(body).toEqual({
+        eventId: '433114d1-a44d-526b-bd6e-f4be7dabc8db',
+        type: 'referral-newer',
+        occurredAt: '2026-10-02T10:34:13.123Z',
+        data: { inviteeUserId: 'google-oauth2|1234', inviteeEmail: 'invitee@example.com' },
+      })
+      expect(config).toMatchObject({ timeout: 5_000, headers: { authorization: 'Bearer shared-token' } })
+      expect([200, 202, 204, 409].map(config.validateStatus)).toEqual([true, true, true, true])
+      expect([301, 400, 404, 500].map(config.validateStatus)).toEqual([false, false, false, false])
+    })
+
+    it('derives one eventId per account, in the format Commerce accepts', async () => {
+      post.mockResolvedValue({ status: 202 })
+      const { client } = makeClient()
+
+      await client.publishReferralNewer(INVITER_ID, INVITEE)
+      // A retry after a rollback inserts the account again, with a later createdAt.
+      await client.publishReferralNewer(INVITER_ID, { ...INVITEE, createdAt: new Date('2026-10-02T10:35:00.000Z') })
+      await client.publishReferralNewer(INVITER_ID, { ...INVITEE, id: 'google-oauth2|5678' })
+
+      const [first, retry, other] = post.mock.calls.map(([, body]) => body.eventId)
+      expect(retry).toBe(first)
+      expect(other).not.toBe(first)
+      expect(other).toMatch(/^[A-Za-z0-9_-]{1,200}$/)
+    })
+
+    it.each([200, 202])('treats HTTP %i as accepted without reading the body', async (status) => {
+      post.mockResolvedValueOnce({ status, data: '<html>' })
+
+      await expect(makeClient().client.publishReferralNewer(INVITER_ID, INVITEE)).resolves.toBeUndefined()
+    })
+
+    it('reports a 409 as another organization owning the referral', async () => {
+      post.mockResolvedValueOnce({ status: 409, data: { message: 'Conflict' } })
+
+      await expect(makeClient().client.publishReferralNewer(INVITER_ID, INVITEE)).rejects.toBeInstanceOf(
+        CommerceConflictError,
+      )
+    })
+
+    it.each([400, 413, 422])(
+      'logs HTTP %i once as a malformed event and reports Commerce unavailable',
+      async (status) => {
+        post.mockRejectedValueOnce(httpFailure(status, { message: 'inviteeEmail must contain 1 to 254 characters' }))
+        const { client, warn, error } = makeClient()
+
+        const caught = await client.publishReferralNewer(INVITER_ID, INVITEE).catch((rejection) => rejection)
+
+        expect(caught).toBeInstanceOf(CommerceUnavailableError)
+        expect(error).toHaveBeenCalledTimes(1)
+        expect(error).toHaveBeenCalledWith(expect.stringContaining(`(HTTP ${status}): inviteeEmail must contain`))
+        expect(warn).not.toHaveBeenCalled()
+        expect(JSON.stringify([caught.message, ...error.mock.calls])).not.toContain('shared-token')
+      },
+    )
+
+    it.each([
+      ['HTTP 401', httpFailure(401)],
+      ['HTTP 404', httpFailure(404)],
+      ['HTTP 500', httpFailure(500)],
+      ['HTTP 503', httpFailure(503)],
+      ['ECONNREFUSED', Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })],
+      ['ECONNABORTED', Object.assign(new Error('timeout of 5000ms exceeded'), { code: 'ECONNABORTED' })],
+    ])('reports %s as Commerce unavailable without leaking the token', async (reason, failure) => {
+      post.mockRejectedValueOnce(failure)
+      const { client, warn, error } = makeClient()
+
+      const caught = await client.publishReferralNewer(INVITER_ID, INVITEE).catch((rejection) => rejection)
+
+      expect(caught).toBeInstanceOf(CommerceUnavailableError)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(reason))
+      expect(error).not.toHaveBeenCalled()
+      expect(JSON.stringify([caught.message, ...warn.mock.calls])).not.toContain('shared-token')
+    })
+
+    it('refuses to run while Commerce is not configured', async () => {
+      const { client } = makeClient({ 'usageExport.token': undefined })
+
+      await expect(client.publishReferralNewer(INVITER_ID, INVITEE)).rejects.toBeInstanceOf(CommerceUnavailableError)
+      expect(post).not.toHaveBeenCalled()
     })
   })
 })
