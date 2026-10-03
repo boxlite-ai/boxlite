@@ -14,3 +14,14 @@ export class CommerceUnavailableError extends Error {
     this.name = 'CommerceUnavailableError'
   }
 }
+
+/**
+ * Commerce refused a referral event because another organization already
+ * referred the same invitee. Sending it again cannot succeed.
+ */
+export class CommerceConflictError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'CommerceConflictError'
+  }
+}
