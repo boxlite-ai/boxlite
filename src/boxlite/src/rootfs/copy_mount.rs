@@ -425,10 +425,17 @@ fn dir_copy(src_dir: &Path, dst_dir: &Path, options: CopyMountOptions) -> Boxlit
 fn copy_regular_file(src: &Path, dst: &Path, metadata: &fs::Metadata) -> BoxliteResult<()> {
     let mut reader = fs::File::open(src)
         .map_err(|e| BoxliteError::Storage(format!("Failed to open {}: {}", src.display(), e)))?;
+    // Keep ownership xattrs writable until copy_metadata applies the final mode.
+    let mode = metadata.mode() & 0o7777;
+    let creation_mode = if unsafe { libc::geteuid() } == 0 {
+        mode
+    } else {
+        mode | 0o600
+    };
     let mut writer = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(metadata.mode() & 0o7777)
+        .mode(creation_mode)
         .open(dst)
         .map_err(|e| BoxliteError::Storage(format!("Failed to create {}: {}", dst.display(), e)))?;
 
@@ -696,3 +703,7 @@ mod tests {
         copy_mount.unmount().unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "copy_mount_permission_tests.rs"]
+mod permission_tests;
