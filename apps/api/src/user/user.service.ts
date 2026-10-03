@@ -18,7 +18,7 @@ import { UserDeletedEvent } from './events/user-deleted.event'
 import { UserEmailVerifiedEvent } from './events/user-email-verified.event'
 import { recordBusinessEvent } from '../common/utils/business-event.util'
 import { CommerceInternalClient } from '../commerce/commerce-internal.client'
-import { CommerceUnavailableError } from '../commerce/commerce.errors'
+import { CommerceConflictError, CommerceUnavailableError } from '../commerce/commerce.errors'
 import { ReferralRegistrationException } from '../exceptions/referral-registration.exception'
 
 const PG_UNIQUE_VIOLATION = '23505'
@@ -28,6 +28,18 @@ function registrationExceptionType(error: unknown): string {
     return error.code
   }
   return (error as { code?: unknown })?.code === PG_UNIQUE_VIOLATION ? 'user_conflict' : 'internal'
+}
+
+// Commerce's answers refuse the sign-up with a code the client acts on; any
+// other failure is a bug and surfaces unchanged.
+function referralRefusal(error: unknown): unknown {
+  if (error instanceof CommerceConflictError) {
+    return new ReferralRegistrationException('referral_conflict')
+  }
+  if (error instanceof CommerceUnavailableError) {
+    return new ReferralRegistrationException('referral_unavailable')
+  }
+  return error
 }
 
 @Injectable()
@@ -45,8 +57,10 @@ export class UserService {
    * business events. Omitted for the boot-time admin seed, which is not a registration.
    * @param referralCode the raw referral code sent with the request creating the account.
    * It is ignored when blank or when Commerce is not configured; otherwise it must
-   * resolve to the inviting organization, or no user is created.
-   * @throws ReferralRegistrationException when a referral code cannot be resolved.
+   * resolve to the inviting organization, and Commerce must accept the referral
+   * event sent before the account commits, or no user is created.
+   * @throws ReferralRegistrationException when a referral code cannot be resolved,
+   * the account has no email Commerce accepts, or Commerce refuses the referral event.
    */
   async create(createUserDto: CreateUserDto, registeredBy?: 'user' | 'admin', referralCode?: string): Promise<User> {
     const defaultOrganizationDefaultRegionId =
@@ -76,7 +90,7 @@ export class UserService {
     try {
       // Resolve before the costly key generation: a refused referral leaves the
       // identity new, and its next request tries again.
-      user.referredByOrganizationId = await this.resolveReferral(referralCode)
+      user.referredByOrganizationId = await this.resolveReferral(referralCode, user.email)
       user.keyPair = await this.generatePrivateKey()
       await this.dataSource.transaction(async (em) => {
         user = await em.save(user)
@@ -87,6 +101,13 @@ export class UserService {
           new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId),
         )
         defaultOrganizationId = defaultOrganization?.id
+        // Last, so a sign-up the database refuses never reaches Commerce, and a
+        // refused event rolls back the account and its default organization.
+        if (user.referredByOrganizationId) {
+          await this.commerce.publishReferralNewer(user.referredByOrganizationId, user).catch((error: unknown) => {
+            throw referralRefusal(error)
+          })
+        }
       })
     } catch (error) {
       if (registration) {
@@ -101,19 +122,20 @@ export class UserService {
     return user
   }
 
-  private async resolveReferral(referralCode: string | undefined): Promise<string | null> {
+  private async resolveReferral(referralCode: string | undefined, email: string | undefined): Promise<string | null> {
     if (!referralCode?.trim() || !this.commerce.isConfigured()) {
       return null
+    }
+    // Commerce would refuse the referral event only after the key and rows exist.
+    if (!this.commerce.acceptsInviteeEmail(email)) {
+      throw new ReferralRegistrationException('referral_email_required')
     }
 
     let organizationId: string | null
     try {
       organizationId = await this.commerce.resolveReferralCode(referralCode)
     } catch (error) {
-      if (error instanceof CommerceUnavailableError) {
-        throw new ReferralRegistrationException('referral_unavailable')
-      }
-      throw error
+      throw referralRefusal(error)
     }
     if (!organizationId) {
       throw new ReferralRegistrationException('invalid_referral_code')
