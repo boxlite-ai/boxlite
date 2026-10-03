@@ -15,6 +15,7 @@ jest.mock('axios', () => ({
 
 import axios from 'axios'
 import { UserController } from './user.controller'
+import { Auth0ManagementService } from './auth0-management.service'
 
 const get = axios.get as jest.Mock
 const post = axios.post as jest.Mock
@@ -46,7 +47,11 @@ function makeController() {
   }
 
   return {
-    controller: new UserController(userService as any, configService as any),
+    controller: new UserController(
+      userService as any,
+      configService as any,
+      new Auth0ManagementService(configService as any),
+    ),
     configService,
     userService,
   }
