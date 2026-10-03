@@ -34,6 +34,12 @@ pub enum Error {
     },
     /// Creating a vCPU failed.
     CreateVcpu { id: u32, source: io::Error },
+    /// Writing architectural vCPU state failed; discard the partially configured CPU.
+    ConfigureVcpu {
+        id: u32,
+        operation: &'static str,
+        source: io::Error,
+    },
     /// Entering the guest failed.
     RunVcpu { id: u32, source: io::Error },
     /// Completing a handled device access without running the guest failed.
@@ -68,6 +74,9 @@ impl fmt::Display for Error {
                 "failed to unmap {size} bytes at guest address {guest_addr:#x}"
             ),
             Self::CreateVcpu { id, .. } => write!(f, "failed to create vCPU {id}"),
+            Self::ConfigureVcpu { id, operation, .. } => {
+                write!(f, "failed to configure vCPU {id}: {operation}")
+            }
             Self::RunVcpu { id, .. } => write!(f, "failed to run vCPU {id}"),
             Self::CompletePendingIo { id, .. } => {
                 write!(f, "failed to complete pending I/O for vCPU {id}")
@@ -88,6 +97,7 @@ impl error::Error for Error {
             | Self::MapMemory { source, .. }
             | Self::UnmapMemory { source, .. }
             | Self::CreateVcpu { source, .. }
+            | Self::ConfigureVcpu { source, .. }
             | Self::RunVcpu { source, .. }
             | Self::CompletePendingIo { source, .. }
             | Self::KickVcpu { source, .. }
