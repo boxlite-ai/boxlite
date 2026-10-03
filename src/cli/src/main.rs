@@ -4,6 +4,7 @@ mod config;
 mod credentials;
 mod defaults;
 mod formatter;
+mod query;
 pub mod terminal;
 pub mod util;
 mod volumespec;

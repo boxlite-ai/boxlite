@@ -7,6 +7,7 @@ pub mod images;
 pub mod layout;
 pub(crate) mod lock;
 pub mod options;
+pub mod query;
 pub(crate) mod signal_handler;
 pub mod types;
 pub mod volumes;
