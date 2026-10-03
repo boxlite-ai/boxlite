@@ -754,6 +754,93 @@ fn rootfs_fill_delete_fill_does_not_double_qcow2_footprint() {
     );
 }
 
+/// Bytes actually allocated on the host to the box's container disk
+/// (`st_blocks`, not the file's apparent size).
+fn container_disk_allocated(home: &Path, box_id: &str) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    let disk = home
+        .join("boxes")
+        .join(box_id)
+        .join("disks")
+        .join("disk.qcow2");
+    std::fs::metadata(&disk)
+        .unwrap_or_else(|e| panic!("stat {}: {e}", disk.display()))
+        .blocks()
+        * 512
+}
+
+/// Deleting files inside a box must give their space back on the host: ext4
+/// discards the freed blocks and the qcow2 layer punches holes for them. This
+/// covers one large file and many small files, each below a qcow2 cluster.
+#[test]
+fn deleted_files_are_reclaimed_from_host_qcow2() {
+    const MB: u64 = 1 << 20;
+    let home = PerTestBoxHome::new();
+    let box_id = start_box(home.path.as_path());
+    let _cleanup = BoxCleanup {
+        home: home.path.clone(),
+        id: box_id.clone(),
+    };
+    let allocated = || container_disk_allocated(home.path.as_path(), &box_id);
+    // ext4 sends online discards from a background worker after the journal
+    // commit, so give them a moment to reach the host.
+    let settled_below = |limit: u64| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            let now = allocated();
+            if now <= limit || std::time::Instant::now() >= deadline {
+                return now;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    };
+    let run = |script: &str| {
+        let out = exec_sh(
+            home.path.as_path(),
+            &box_id,
+            script,
+            Duration::from_secs(120),
+        );
+        assert!(
+            out.status.success(),
+            "`{script}` failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let base = allocated();
+
+    // One large file: freed in large extents, reclaimed by online discard.
+    run("dd if=/dev/zero of=/big bs=1M count=200 && sync");
+    let filled = allocated();
+    assert!(
+        filled >= base + 150 * MB,
+        "writing 200 MiB must grow the qcow2: base {base}, filled {filled}"
+    );
+    run("rm /big && sync");
+    let after_rm = settled_below(base + 30 * MB);
+    assert!(
+        after_rm <= base + 30 * MB,
+        "deleting the file must shrink the qcow2 back: base {base}, filled {filled}, \
+         after rm {after_rm}"
+    );
+
+    // Many small files, deleted in two interleaved passes so each free is
+    // smaller than a qcow2 cluster.
+    run(
+        "mkdir /small && for i in $(seq 4000); do head -c 16384 /dev/zero > /small/$i; done && sync",
+    );
+    run(
+        "for i in $(seq 1 2 4000); do rm /small/$i; done && sync && \
+         for i in $(seq 2 2 4000); do rm /small/$i; done && sync",
+    );
+    let after_small = settled_below(base + 30 * MB);
+    assert!(
+        after_small <= base + 30 * MB,
+        "deleting small files must shrink the qcow2 back: base {base}, \
+         after delete {after_small}"
+    );
+}
+
 /// Inode exhaustion and block exhaustion are independent ENOSPC paths. After
 /// mass-touch exhausts the rootfs's inodes, appending to a pre-existing file
 /// (which needs new data blocks, not a new inode) must still succeed — a

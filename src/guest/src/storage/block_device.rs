@@ -72,13 +72,14 @@ impl BlockDeviceMount {
         // workloads. Access time tracking is rarely needed in container contexts.
         let mount_flags = MsFlags::MS_NOATIME | MsFlags::MS_NODIRATIME;
 
-        // Mount using nix
+        // `discard`: tell the disk about freed blocks as files are deleted, so the host can
+        // punch holes in the image and reclaim the space.
         mount(
             Some(device),
             mount_point,
             Some(fs_name),
             mount_flags,
-            None::<&str>,
+            Some("discard"),
         )
         .map_err(|e| {
             BoxliteError::Storage(format!(
