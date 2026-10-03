@@ -1,0 +1,28 @@
+name: Publish Release Images
+run-name: publish ${{ github.event.release.tag_name }} images to dev
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  dispatch:
+    name: Dispatch mbuild-release from main
+    if: ${{ !github.event.release.prerelease }}
+    permissions:
+      actions: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release images to dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -Eeuo pipefail
+          gh workflow run mbuild-release.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f command=publish \
+            -f tag="$TAG"

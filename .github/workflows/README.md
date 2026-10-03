@@ -22,6 +22,7 @@ RELEASE CHAIN (workflow_run)            build-c ──▶ build-go
                                                 └──▶ build-runner-binary
 
 RELEASE (release event)                 build-runtime · build-c · build-node · build-wheels
+                                        mbuild-release-on-release ──▶ mbuild-release (images, dev)
                                         apps/box-images/v* tag ──▶ release-box-images
 
 LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api-image
@@ -62,6 +63,7 @@ own.
 | `mdeploy-all.yml` | dispatch | — | Current mdeploy orchestration for prepared GCP/AWS stages. A commit SHA builds for dev, and so does `#<number>` — a pull request, by the commit it would merge to; a release tag publishes into dev or promotes to prod, and is all prod accepts. Applies the stack itself |
 | `mbuild.yml` | `workflow_call` | call-only | The commit line's images, for a dev rollout. Callee only: nobody publishes a commit by hand |
 | `mbuild-release.yml` | dispatch, `workflow_call` | yes | The release line's images, tagged `v<X.Y.Z>-<sha>`: publish a version into dev, or promote it to prod. One job per artifact, and a version the target already holds is refused rather than skipped |
+| `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` to publish its application images into dev |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted EC2 runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
 | `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | The only workflow that writes to GHCR |
