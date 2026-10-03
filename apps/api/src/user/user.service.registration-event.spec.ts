@@ -11,7 +11,7 @@ jest.mock('../common/utils/business-event.util', () => ({ recordBusinessEvent: j
 describe('UserService registration events', () => {
   function makeService(transaction: jest.Mock) {
     const eventEmitter = { emitAsync: jest.fn().mockResolvedValue([{ id: 'org-1' }]) }
-    const service = new UserService({} as never, eventEmitter as never, { transaction } as never)
+    const service = new UserService({} as never, eventEmitter as never, { transaction } as never, {} as never)
     jest.spyOn(service as never, 'generatePrivateKey').mockResolvedValue({
       privateKey: 'private-key',
       publicKey: 'public-key',
@@ -48,6 +48,20 @@ describe('UserService registration events', () => {
       exceptionType: 'user_conflict',
     })
     expect(recordBusinessEvent).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: 'success' }))
+  })
+
+  it('records an internal exception when key generation fails, and rethrows', async () => {
+    const failure = new Error('key generation failed')
+    const transaction = committingTransaction()
+    const service = makeService(transaction)
+    jest.spyOn(service as never, 'generatePrivateKey').mockRejectedValue(failure as never)
+
+    await expect(service.create({ id: 'user-1', name: 'User One' } as never, 'user')).rejects.toBe(failure)
+
+    expect(transaction).not.toHaveBeenCalled()
+    expect(recordBusinessEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ outcome: 'exception', exceptionType: 'internal' }),
+    )
   })
 
   it('records nothing for a create that is not a registration', async () => {

@@ -123,11 +123,18 @@ import {
 const configuration = new Configuration();
 const apiInstance = new UsersApi(configuration);
 
-const { status, data } = await apiInstance.getAuthenticatedUser();
+let xBoxLiteReferralCode: string; //Referral code of the inviting organization; read only on the request that creates the account (optional) (default to undefined)
+
+const { status, data } = await apiInstance.getAuthenticatedUser(
+    xBoxLiteReferralCode
+);
 ```
 
 ### Parameters
-This endpoint does not have any parameters.
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **xBoxLiteReferralCode** | [**string**] | Referral code of the inviting organization; read only on the request that creates the account | (optional) defaults to undefined|
 
 
 ### Return type

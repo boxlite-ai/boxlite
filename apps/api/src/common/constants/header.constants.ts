@@ -38,4 +38,12 @@ export const CustomHeaders: {
       type: 'string',
     },
   },
+  REFERRAL_CODE: {
+    name: 'X-BoxLite-Referral-Code',
+    description: 'Referral code of the inviting organization; read only on the request that creates the account',
+    required: false,
+    schema: {
+      type: 'string',
+    },
+  },
 }

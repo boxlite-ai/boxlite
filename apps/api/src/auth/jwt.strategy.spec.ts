@@ -15,6 +15,7 @@ import {
   EMAIL_VERIFICATION_REQUIRED_CODE,
   EmailVerificationRequiredException,
 } from '../exceptions/email-verification-required.exception'
+import { ReferralRegistrationException } from '../exceptions/referral-registration.exception'
 
 const DEFAULT_REGION_ID = 'region-default-id'
 
@@ -61,6 +62,7 @@ describe('JwtStrategy.validate — auto-created user', () => {
     expect(userService.create).toHaveBeenCalledWith(
       expect.objectContaining({ defaultOrganizationDefaultRegionId: DEFAULT_REGION_ID }),
       'user',
+      undefined,
     )
   })
 
@@ -92,6 +94,47 @@ describe('JwtStrategy.validate — auto-created user', () => {
     await strategy.validate(request, payload)
 
     expect(loginEvents.recordFirstUse).toHaveBeenCalledWith('user-1', payload)
+  })
+
+  // The header name is pinned as a literal: OpenAPI publishes it to clients.
+  it('hands the raw referral header to account creation', async () => {
+    const { strategy, userService } = buildStrategy()
+    const request = {
+      get: jest.fn((name: string) => (name === 'X-BoxLite-Referral-Code' ? ' abcd2345ef ' : undefined)),
+    } as unknown as Request
+
+    await strategy.validate(request, { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true })
+
+    expect(userService.create).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }), 'user', ' abcd2345ef ')
+  })
+
+  it('does not read the referral header for an existing account', async () => {
+    const { strategy, userService } = buildStrategy()
+    jest.mocked(userService.findOne).mockResolvedValue({
+      id: 'user-1',
+      name: 'Existing User',
+      email: 'new@boxlite.dev',
+      emailVerified: true,
+      role: 'user',
+    } as never)
+    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
+
+    await strategy.validate(request, { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true })
+
+    expect(userService.create).not.toHaveBeenCalled()
+    expect(request.get).not.toHaveBeenCalledWith('X-BoxLite-Referral-Code')
+  })
+
+  it('refuses the request without recording a login when the referral is refused', async () => {
+    const { strategy, userService, loginEvents } = buildStrategy()
+    const refusal = new ReferralRegistrationException('invalid_referral_code')
+    jest.mocked(userService.create).mockRejectedValue(refusal)
+    const request = { get: jest.fn().mockReturnValue('ABCD2345EF') } as unknown as Request
+
+    await expect(
+      strategy.validate(request, { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true }),
+    ).rejects.toBe(refusal)
+    expect(loginEvents.recordFirstUse).not.toHaveBeenCalled()
   })
 
   // A rejected token is not a login, so nothing may be recorded for it.

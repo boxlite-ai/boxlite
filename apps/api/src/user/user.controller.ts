@@ -21,7 +21,7 @@ import {
 import { User } from './user.entity'
 import { UserService } from './user.service'
 import { CreateUserDto } from './dto/create-user.dto'
-import { ApiOAuth2, ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger'
+import { ApiOAuth2, ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiHeader } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { AuthContext as IAuthContext } from '../common/interfaces/auth-context.interface'
@@ -39,6 +39,7 @@ import { Audit, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
+import { CustomHeaders } from '../common/constants/header.constants'
 
 @ApiTags('users')
 @Controller('users')
@@ -58,6 +59,7 @@ export class UserController {
     summary: 'Get authenticated user',
     operationId: 'getAuthenticatedUser',
   })
+  @ApiHeader(CustomHeaders.REFERRAL_CODE)
   @ApiResponse({
     status: 200,
     description: 'User details',
