@@ -105,8 +105,15 @@ The JWT request that creates an account, whatever its route, may carry
 - With `BILLING_API_URL` set, the API resolves the code through
   [Commerce](#externally-served-apis) and saves the inviting organization in
   `user.referredByOrganizationId`. Case and surrounding spaces are ignored.
-- A malformed or unknown code returns 422 `invalid_referral_code`, and a Commerce
-  failure returns 503 `referral_unavailable`. Neither creates the account.
+- Before the account commits, the API sends Commerce a `referral-newer` event that
+  credits the inviting organization, whether or not the email is verified. Later
+  requests, including the one that verifies the email, send nothing.
+- A malformed or unknown code returns 422 `invalid_referral_code`, and an account
+  email Commerce cannot take (empty, over 254 characters, without `@`, or with
+  control characters) returns 422 `referral_email_required`. Commerce refusing
+  the event because another organization already referred the account returns
+  409 `referral_conflict`; any other Commerce failure returns 503
+  `referral_unavailable`. None of them creates the account.
 - Existing accounts, and deployments without `BILLING_API_URL`, ignore the header.
 
 </details>
@@ -666,7 +673,7 @@ is unset; the same document carries PostHog's key and host to the browser.
 | Billing API   | [`billingApiClient.ts`](./dashboard/src/billing-api/billingApiClient.ts), hand-written | `billingApiUrl`                  | 20 routes: wallet and top-ups, plans, payment methods, invoices, usage series and prices, coupons, billing emails, portal and checkout URLs.                                                               |
 | Box admission | [`commerce-box-limit.service.ts`](./api/src/boxlite-rest/commerce-box-limit.service.ts) | `billingApiUrl`                  | 2 server-side reads on Commerce: `GET /plan` and `GET /organization/{organizationId}/plan`, bearer `USAGE_EXPORT_TOKEN`, used by hosted CREATE BOX.                                                        |
 | Usage export  | [`api/src/usage/services`](./api/src/usage/services/), hand-written                    | `usageExport.url`                | 2 routes on the same Commerce service, server-side: `POST /internal/usage-events` and `POST /internal/allocation-snapshot`, bearer `USAGE_EXPORT_TOKEN`, which must equal Commerce's `USAGE_INGEST_TOKEN`. |
-| Referral code | [`commerce-internal.client.ts`](./api/src/commerce/commerce-internal.client.ts)        | `usageExport.url` or origin      | 1 server-side read on Commerce: `GET /internal/organization?referral-code=`, bearer `USAGE_EXPORT_TOKEN`, made when a JWT request creates an account with `X-BoxLite-Referral-Code`.                       |
+| Referral      | [`commerce-internal.client.ts`](./api/src/commerce/commerce-internal.client.ts)        | `usageExport.url` or origin      | 2 server-side routes on Commerce: `GET /internal/organization?referral-code=` and `POST /internal/organization/{organizationId}/billing-events`, bearer `USAGE_EXPORT_TOKEN`, at account creation.         |
 | PostHog       | `posthog-js` in the dashboard; `posthog-node` in the API                               | `posthog.apiKey`, `posthog.host` | Browser product analytics; server-side `api_*` operation events from the global metrics interceptor, two `groupIdentify` calls, and feature-flag evaluation.                                               |
 | Pylon         | [`App.tsx`](./dashboard/src/App.tsx) widget, production builds only                    | `pylonAppId`                     | Outbound support-chat widget; it registers no route here.                                                                                                                                                  |
 
@@ -677,7 +684,7 @@ routes, and the dashboard's box telemetry views call the analytics client only â
 they disable themselves when `analyticsApiUrl` is unset rather than falling back.
 Nothing in this directory registers the analytics or billing paths.
 
-The Billing API, Box admission, Usage export, and Referral code rows are the same
+The Billing API, Box admission, Usage export, and Referral rows are the same
 Commerce service reached four ways, on URLs that normally differ by path rather
 than host. The browser API and Box admission reads live under `/api/billing`, which
 `BILLING_API_URL` already includes; admission authenticates with the shared
@@ -692,13 +699,13 @@ and never derives it for export
 ([`configuration.ts`](./api/src/config/configuration.ts)); it is the SST stack
 that supplies a default of `BILLING_API_URL`'s origin
 ([`api.ts`](./infra/stack/api.ts)), so a deployment outside that stack must set
-it explicitly. The referral lookup uses `USAGE_EXPORT_URL` only while export or
+it explicitly. The referral client uses `USAGE_EXPORT_URL` only while export or
 snapshots are on, when startup has validated it, and `BILLING_API_URL`'s origin
 otherwise. The two stay separate settings because pointing the dashboard at
 a billing service and shipping usage to it remain separate decisions. One
 caveat on the credential: a `USAGE_EXPORT_URL` carrying userinfo makes Axios
 build Basic auth and drop the bearer header, so the publisher and the referral
-lookup then send the URL's credentials rather than `USAGE_EXPORT_TOKEN`. Commerce reaches back
+client then send the URL's credentials rather than `USAGE_EXPORT_TOKEN`. Commerce reaches back
 in one direction only: it resolves organization ownership against this control
 plane using the caller's own token. The `billing` API role and `BILLING_API_KEY`
 that widen [organization suspend/unsuspend](#control-plane-api) exist for
