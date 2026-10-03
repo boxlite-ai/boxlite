@@ -366,7 +366,7 @@ fn runtime_metrics_from_response(resp: &RuntimeMetricsResponse) -> RuntimeMetric
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::options::{PortProtocol, PortSpec};
+    use crate::runtime::options::{NetworkMode, PortProtocol, PortSpec};
 
     #[test]
     fn remote_runtime_rejects_host_port_publication_with_tunnel_guidance() {
@@ -405,7 +405,11 @@ mod tests {
         }
     }
 
-    async fn json_server(bodies: Vec<&'static str>) -> (u16, tokio::task::JoinHandle<Vec<String>>) {
+    /// Serves `bodies` in order, one connection each, and records every
+    /// request's line and body.
+    async fn recording_server(
+        bodies: Vec<&'static str>,
+    ) -> (u16, tokio::task::JoinHandle<Vec<(String, String)>>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move {
@@ -416,8 +420,18 @@ mod tests {
                 while !headers.ends_with(b"\r\n\r\n") {
                     headers.push(socket.read_u8().await.unwrap());
                 }
-                let request = String::from_utf8(headers).unwrap();
-                requests.push(request.lines().next().unwrap().to_string());
+                let headers = String::from_utf8(headers).unwrap();
+                let content_length = headers
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                    .map_or(0, |(_, value)| value.trim().parse::<usize>().unwrap());
+                let mut request_body = vec![0; content_length];
+                socket.read_exact(&mut request_body).await.unwrap();
+                requests.push((
+                    headers.lines().next().unwrap().to_string(),
+                    String::from_utf8(request_body).unwrap(),
+                ));
                 socket
                     .write_all(
                         format!(
@@ -433,6 +447,80 @@ mod tests {
             requests
         });
         (port, server)
+    }
+
+    async fn json_server(bodies: Vec<&'static str>) -> (u16, tokio::task::JoinHandle<Vec<String>>) {
+        let (port, server) = recording_server(bodies).await;
+        let lines = tokio::spawn(async move {
+            let requests = server.await.unwrap();
+            requests.into_iter().map(|(line, _)| line).collect()
+        });
+        (port, lines)
+    }
+
+    // A server that never advertised the route must not see a PUT: its bare
+    // 404 would surface as "box not found". Its config may omit the flag or
+    // the whole capabilities object.
+    #[tokio::test]
+    async fn set_inbound_requires_the_server_to_advertise_it() {
+        for config in [r#"{"capabilities":{}}"#, "{}"] {
+            let (port, server) = json_server(vec![BOX_RESPONSE, config]).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+            let litebox = RuntimeBackend::get(&runtime, "named")
+                .await
+                .unwrap()
+                .unwrap();
+
+            let err = litebox
+                .network()
+                .set_inbound(NetworkMode::Enabled)
+                .await
+                .unwrap_err();
+
+            assert!(
+                matches!(err, BoxliteError::Unsupported(_)),
+                "{config}: {err}"
+            );
+            assert_eq!(
+                server.await.unwrap(),
+                ["GET /v1/boxes/named HTTP/1.1", "GET /v1/config HTTP/1.1"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn set_inbound_puts_the_mode_on_the_canonical_box_id() {
+        let (port, server) = recording_server(vec![
+            BOX_RESPONSE,
+            r#"{"capabilities":{"inbound_update_enabled":true}}"#,
+            r#"{"mode":"enabled"}"#,
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let litebox = RuntimeBackend::get(&runtime, "named")
+            .await
+            .unwrap()
+            .unwrap();
+
+        litebox
+            .network()
+            .set_inbound(NetworkMode::Enabled)
+            .await
+            .expect("an advertising server accepts the update");
+
+        let requests = server.await.unwrap();
+        let (line, body) = &requests[2];
+        assert_eq!(
+            line,
+            "PUT /v1/boxes/01HJK4TNRPQSXYZ8WM6NCVT9R5/network/inbound HTTP/1.1"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(body).unwrap(),
+            serde_json::json!({ "mode": "enabled" })
+        );
     }
 
     #[tokio::test]

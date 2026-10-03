@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::runtime::backend::BoxNetworkBackend;
+use crate::runtime::options::NetworkMode;
 
 const MAX_FORWARD_CONNECTIONS: usize = 64;
 
@@ -400,6 +401,14 @@ impl NetworkHandle {
             .await
             .map(|tunnel| tunnel.with_opener(opener))
     }
+
+    /// Make the box's services public (`Enabled`) or private (`Disabled`).
+    ///
+    /// Only REST runtimes support this, and only against a server that
+    /// advertises it; every other case returns `Unsupported`.
+    pub async fn set_inbound(&self, mode: NetworkMode) -> BoxliteResult<()> {
+        self.network_backend.set_inbound(mode).await
+    }
 }
 
 /// A running local listener that opens one box tunnel per client.
@@ -742,6 +751,18 @@ mod tests {
 
     fn echo_network() -> NetworkHandle {
         NetworkHandle::new(Arc::new(EchoNetworkBackend))
+    }
+
+    // Local boxes rely on this default. They never enforce inbound access, so
+    // a silent `Ok` would report a change that did not happen.
+    #[tokio::test]
+    async fn set_inbound_is_unsupported_unless_the_backend_implements_it() {
+        let err = echo_network()
+            .set_inbound(NetworkMode::Enabled)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, BoxliteError::Unsupported(_)), "{err}");
     }
 
     struct FailSecondNetworkBackend {
