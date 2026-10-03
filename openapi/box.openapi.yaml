@@ -1387,7 +1387,7 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
           example:
             error:
-              message: "invalid argument: cpus must be between 1 and 32"
+              message: "invalid argument: cpus must be between 1 and 16"
               type: InvalidArgumentError
               code: invalid_argument
               request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
@@ -1527,7 +1527,7 @@ components:
             max_cpus:
               type: integer
               description: Maximum allowed vCPUs per box
-              example: 32
+              example: 16
             max_memory_mib:
               type: integer
               description: Maximum allowed memory in MiB
@@ -1920,7 +1920,7 @@ components:
         cpus:
           type: integer
           minimum: 1
-          maximum: 32
+          maximum: 16
           description: Number of vCPUs to allocate
           example: 2
         memory_mib:

@@ -1016,9 +1016,9 @@ impl CapabilityFlags {
 
 #[derive(Args, Debug, Clone)]
 pub struct ResourceFlags {
-    /// Number of CPUs
-    #[arg(long)]
-    pub cpus: Option<u32>,
+    /// Number of CPUs (1-16 with the bundled guest kernel)
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..))]
+    pub cpus: Option<u8>,
 
     /// Memory limit (in MiB)
     #[arg(long)]
@@ -1038,10 +1038,7 @@ pub struct ResourceFlags {
 impl ResourceFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) {
         if let Some(cpus) = self.cpus {
-            if cpus > 255 {
-                tracing::warn!("CPU limit capped at 255 (requested {})", cpus);
-            }
-            opts.cpus = Some(cpus.min(255) as u8);
+            opts.cpus = Some(cpus);
         }
         if let Some(mem) = self.memory {
             opts.memory_mib = Some(mem);
@@ -2058,18 +2055,26 @@ mod tests {
         assert!(opts.path_prefix.is_none());
     }
 
+    /// `--cpus` must reach the runtime unchanged: it owns the vCPU ceiling, and
+    /// clamping here used to turn `--cpus 1000` into a silent 255.
     #[test]
-    fn test_resource_flags_cpu_cap() {
-        let flags = ResourceFlags {
-            cpus: Some(1000),
-            memory: None,
-            disk_size_gb: None,
+    fn test_resource_flags_cpus_passed_through_unclamped() {
+        for bad in ["0", "1000"] {
+            assert!(
+                Cli::try_parse_from(["boxlite", "run", "--cpus", bad, "alpine"]).is_err(),
+                "--cpus {bad} must be rejected while parsing"
+            );
+        }
+
+        let cli = Cli::try_parse_from(["boxlite", "run", "--cpus", "24", "alpine"])
+            .expect("--cpus 24 parses; the runtime decides whether it fits");
+        let Commands::Run(run) = cli.command else {
+            panic!("expected run");
         };
-
         let mut opts = BoxOptions::default();
-        flags.apply_to(&mut opts);
+        run.resource.apply_to(&mut opts);
 
-        assert_eq!(opts.cpus, Some(255));
+        assert_eq!(opts.cpus, Some(24));
     }
 
     #[test]

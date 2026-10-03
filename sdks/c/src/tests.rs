@@ -396,6 +396,29 @@ fn create_box_rejects_null_callback() {
     let _ = std::fs::remove_dir_all(home_dir);
 }
 
+/// `cpus` arrives as a C int but the runtime takes a u8. Truncating would turn
+/// 272 into 16 and slip past the runtime's vCPU ceiling; an out-of-range value
+/// must stay out of range so create rejects it.
+#[test]
+fn set_cpus_saturates_instead_of_wrapping() {
+    let image = CString::new("alpine:latest").unwrap();
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+    assert_eq!(
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts, &mut error) },
+        BoxliteErrorCode::Ok
+    );
+    unsafe {
+        boxlite_options_set_cpus(opts, 16);
+        assert_eq!((*opts).options.cpus, Some(16));
+
+        boxlite_options_set_cpus(opts, 272);
+        assert_eq!((*opts).options.cpus, Some(u8::MAX));
+
+        boxlite_options_free(opts);
+    }
+}
+
 #[test]
 #[allow(deprecated)]
 fn auto_remove_and_auto_delete_use_last_call_wins() {

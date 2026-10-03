@@ -230,6 +230,7 @@ async fn build_config(
     // The box's one network backend: it produces the wire spec now, and is
     // threaded on to LiveState (via the init ctx) for runtime control.
     warn_unpublished_exposed_ports(container_image_config, options);
+    warn_cpus_beyond_guest_kernel(options);
     let network_backend = build_network_backend(options, layout, runtime)?;
     let network_backend_spec = network_backend.as_ref().map(|backend| backend.spec());
 
@@ -397,6 +398,18 @@ fn warn_unpublished_exposed_ports(image_config: &ContainerImageConfig, options: 
             ?guest_ports,
             "Image EXPOSE declarations are metadata only; publish these guest ports explicitly \
              with BoxOptions.ports (CLI: -p GUEST_PORT) or use a network tunnel"
+        );
+    }
+}
+
+/// Create rejects these counts, but a box persisted before that check (or an
+/// imported one) still boots — say that the guest runs on fewer vCPUs.
+fn warn_cpus_beyond_guest_kernel(options: &BoxOptions) {
+    if let Some(cpus) = options.cpus_beyond_guest_kernel() {
+        tracing::warn!(
+            requested = cpus,
+            usable = crate::runtime::constants::vm_defaults::MAX_CPUS,
+            "guest kernel brings up fewer vCPUs than this box requests; the rest stay idle"
         );
     }
 }

@@ -98,7 +98,7 @@ Configuration options for creating a box.
 |-------|------|---------|-------------|
 | `image` | `string` | - | OCI image URI |
 | `rootfsPath` | `string` | - | Pre-prepared rootfs directory (alternative to image) |
-| `cpus` | `number` | `1` | Number of CPU cores |
+| `cpus` | `number` | `1` | Number of CPU cores (1–16, the guest kernel's limit) |
 | `memoryMib` | `number` | `512` | Memory limit in MiB |
 | `diskSizeGb` | `number` | - | Container disk size in GB, never smaller than the image |
 | `workingDir` | `string` | `"/root"` | Working directory inside container |

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::disk::constants::qcow2::{DEFAULT_DISK_SIZE_GB, FSIZE_DISK_MULTIPLIER};
 use crate::runtime::advanced_options::AdvancedBoxOptions;
+use crate::runtime::constants::vm_defaults::MAX_CPUS;
 use crate::runtime::types::Bytes;
 use std::fmt;
 
@@ -694,6 +695,32 @@ impl BoxOptions {
         );
 
         Ok(())
+    }
+
+    /// The requested vCPU count when the bundled guest kernel cannot bring
+    /// all of them online. A custom kernel sets its own ceiling, so it never
+    /// exceeds this one.
+    pub(crate) fn cpus_beyond_guest_kernel(&self) -> Option<u8> {
+        self.cpus
+            .filter(|&cpus| cpus > MAX_CPUS && self.advanced.kernel.is_none())
+    }
+
+    /// Reject a vCPU count the box cannot run with.
+    ///
+    /// Checked only when a new box is created, deliberately outside
+    /// `sanitize_common`: that also validates persisted boxes on restart and
+    /// reuse, and a box created before this limit must keep starting (boot
+    /// warns via `cpus_beyond_guest_kernel`).
+    pub(crate) fn validate_cpus(&self) -> BoxliteResult<()> {
+        match self.cpus {
+            Some(cpus) if cpus == 0 || self.cpus_beyond_guest_kernel().is_some() => Err(
+                boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
+                    "cpus must be between 1 and {MAX_CPUS} (the guest kernel brings up at \
+                     most {MAX_CPUS} vCPUs), got {cpus}"
+                )),
+            ),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -1885,6 +1912,21 @@ mod tests {
 
         opts.sanitize_persisted().unwrap();
         assert!(opts.sanitize().is_err());
+    }
+
+    /// The vCPU ceiling is a create-time check. A box persisted (or exported)
+    /// with more vCPUs than the guest kernel supports must still restart and
+    /// import, so neither shared validation path may enforce it.
+    #[test]
+    fn persisted_and_imported_boxes_keep_cpus_beyond_guest_kernel() {
+        let mut opts = BoxOptions {
+            cpus: Some(24),
+            ..Default::default()
+        };
+
+        opts.sanitize_persisted().unwrap();
+        opts.sanitize().unwrap();
+        assert_eq!(opts.cpus_beyond_guest_kernel(), Some(24));
     }
 
     #[test]
