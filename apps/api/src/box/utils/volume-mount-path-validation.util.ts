@@ -55,6 +55,26 @@ export function validateMountPaths(volumes: BoxVolume[]): void {
 }
 
 /**
+ * Validates that each volume's readOnly flag is omitted or a boolean; the
+ * runner decodes it as a Go bool and would fail after the create was accepted.
+ * A null counts as omitted: the runner's decode leaves the flag unset for it.
+ * @param volumes - Array of BoxVolume objects to validate
+ * @throws Error naming each volume whose readOnly is not a boolean
+ */
+export function validateReadOnlyFlags(volumes: BoxVolume[]): void {
+  const errors = volumes
+    .filter((volume) => volume.readOnly != null && typeof volume.readOnly !== 'boolean')
+    .map(
+      (volume) =>
+        `Invalid readOnly ${JSON.stringify(volume.readOnly)} for volume ${volume.volumeId} (must be a boolean)`,
+    )
+
+  if (errors.length > 0) {
+    throw new Error(errors.join(', '))
+  }
+}
+
+/**
  * Validates subpaths for box volumes to ensure they are safe S3 key prefixes
  * @param volumes - Array of BoxVolume objects to validate
  * @throws Error with descriptive message if any subpath is invalid
