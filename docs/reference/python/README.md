@@ -131,6 +131,7 @@ Configuration options for creating a box.
 | `working_dir` | `str` | `"/root"` | Working directory inside container |
 | `env` | `List[Tuple[str, str]]` | `[]` | Environment variables as (key, value) pairs |
 | `volumes` | `List[Tuple \| Dict]` | `[]` | Volume mounts; tuple = host bind, dict = `managed_volume` or `host_path` |
+| `mounts` | `List[Mount \| Dict]` | `[]` | Typed mounts with a stated `type`; see [Mount format](#mount-format) |
 | `network` | `NetworkSpec \| None` | `None` | Structured network configuration. Omit for default enabled networking. |
 | `ports` | `List[Tuple \| Dict]` | `[]` | Local TCP forwarding; omit `host_port` in a dict for automatic allocation |
 | `secrets` | `List[Secret]` | `[]` | Outbound HTTPS secret substitution rules |
@@ -203,6 +204,42 @@ volumes=[
 
 Managed volumes require a REST runtime; host binds are local-runtime only.
 `read_only` is rejected on a managed mount - only host binds may be read-only.
+
+#### Mount format
+
+`mounts=` takes `boxlite.Mount` objects, or dicts with the same keys. `type`
+states what `source` names, so nothing is inferred from its spelling:
+
+```python
+from boxlite import BoxOptions, Mount
+
+opts = BoxOptions(
+    image="alpine:latest",
+    mounts=[
+        Mount(type="volume", source="run42", target="/workspace",
+              read_only=True, sub_path="foo/bar"),
+        {"type": "volume", "source": "scratch", "target": "/scratch"},
+    ],
+)
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `type` | `str` | Required | `"volume"` mounts a managed volume, `"bind"` a host path |
+| `source` | `str \| None` | `None` | The volume's id or name for `"volume"`, a host path for `"bind"`; required by both |
+| `target` | `str` | Required | Absolute mount point inside the box |
+| `read_only` | `bool` | `False` | Mount without write access |
+| `sub_path` | `str \| None` | `None` | For `"volume"` only: mount just that prefix of the volume |
+
+`Mount` takes keyword arguments only, and a misspelt `type` fails when the
+`Mount` is built. A dict with any other key is refused, and a misspelt `type`
+in a dict fails when the options are built. No runtime accepts `mounts` yet:
+both refuse a non-empty list at create (see the
+[MountSpec reference](../rust/README.md#mountspec)). Unlike a managed mount in
+`volumes`, a `"volume"` mount may be read-only. The rest is
+checked when the box is created: a missing `source`, a relative `target`,
+`sub_path` on a `"bind"`, or an empty `sub_path` (omit it to mount the whole
+volume).
 
 #### Port forwarding format
 
