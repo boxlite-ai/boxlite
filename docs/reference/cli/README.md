@@ -667,6 +667,8 @@ numeric addresses, and Unix socket paths must be absolute.
 
 Run a long-running REST API server. The server holds a single `BoxliteRuntime` and exposes the full REST surface for `boxlite --url ...` clients and the language SDKs' REST mode.
 
+It refuses a create request with a non-empty `mounts` list, with the error `mounts are not supported by boxlite serve`: it has no volume backend for a `volume` mount, and a `bind` would name the server's filesystem, not the caller's.
+
 **Options:**
 
 | Flag | Default | Description |

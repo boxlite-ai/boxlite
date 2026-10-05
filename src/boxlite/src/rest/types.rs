@@ -130,6 +130,13 @@ pub(crate) struct CreateBoxRequest {
     pub secrets: Option<Vec<CreateBoxSecret>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volumes: Option<Vec<CreateBoxVolumeSpec>>,
+    /// The OpenAPI schema does not declare `mounts` yet(TODO).
+    ///
+    /// Sent only when set. A server without `mounts` rejects the unknown key,
+    /// which is the right failure for a caller who asked for mounts; sending
+    /// an empty list would break every create against such a server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mounts: Option<Vec<CreateBoxMountSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detach: Option<bool>,
     /// A terminal for the main command (`run -t`). Only sent when asked for:
@@ -182,6 +189,17 @@ impl CreateBoxRequest {
                     .collect(),
             )
         };
+        let mounts = if options.mounts.is_empty() {
+            None
+        } else {
+            Some(
+                options
+                    .mounts
+                    .iter()
+                    .map(CreateBoxMountSpec::from)
+                    .collect(),
+            )
+        };
 
         // SecurityOptions is intentionally NOT carried on the wire.
         // Sandbox security is the operator's policy and is set
@@ -209,6 +227,7 @@ impl CreateBoxRequest {
             user: options.user.clone(),
             secrets,
             volumes,
+            mounts,
             detach: Some(options.detach),
             tty: options.tty.then_some(true),
             // Only the capability policy crosses the wire. Like `security`,
@@ -262,6 +281,38 @@ impl From<&crate::runtime::options::VolumeSpec> for CreateBoxVolumeSpec {
             managed_volume: volume.managed_volume.clone().unwrap_or_default(),
             guest_path: volume.guest_path.clone(),
             read_only: volume.read_only,
+        }
+    }
+}
+
+/// A typed mount on the wire, sent in `mounts` beside `volumes`; not in the
+/// OpenAPI schema yet(TODO). Only `volume` mounts travel:
+/// `BoxOptions::sanitize_remote` refuses a `bind` at create, because its path
+/// would name the server's filesystem, not the caller's.
+#[derive(Debug, Serialize)]
+pub(crate) struct CreateBoxMountSpec {
+    #[serde(rename = "type")]
+    pub mount_type: crate::runtime::options::MountType,
+    pub source: String,
+    pub target: String,
+    pub read_only: bool,
+    /// Omitted when unset, which the server(TODO) reads as the whole volume.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_path: Option<String>,
+}
+
+impl From<&crate::runtime::options::MountSpec> for CreateBoxMountSpec {
+    fn from(mount: &crate::runtime::options::MountSpec) -> Self {
+        Self {
+            mount_type: mount.mount_type,
+            // `MountSpec::validate` runs at create and refuses a mount without a
+            // source, so the default is unreachable rather than a fallback: an
+            // empty string would be a selector the server can never resolve.
+            // `From` cannot report that, which is why the check lives at create.
+            source: mount.source.clone().unwrap_or_default(),
+            target: mount.target.clone(),
+            read_only: mount.read_only,
+            sub_path: mount.sub_path.clone(),
         }
     }
 }
@@ -950,6 +1001,58 @@ mod tests {
                 json["volumes"][0]
             );
         }
+    }
+
+    /// A typed mount reaches the wire in `mounts` with the key `type`, the
+    /// spelling the server's schema(TODO) names; the Rust field name never leaks.
+    #[test]
+    fn mounts_reach_wire_under_the_type_key() {
+        use crate::runtime::options::{BoxOptions, MountSpec};
+
+        let opts = BoxOptions {
+            mounts: vec![MountSpec {
+                read_only: true,
+                sub_path: Some("foo/bar".to_string()),
+                ..MountSpec::volume_mount("run42", "/workspace")
+            }],
+            ..Default::default()
+        };
+        let json = serde_json::to_value(CreateBoxRequest::from_options(&opts, None)).unwrap();
+        assert_eq!(
+            json["mounts"],
+            serde_json::json!([{
+                "type": "volume",
+                "source": "run42",
+                "target": "/workspace",
+                "read_only": true,
+                "sub_path": "foo/bar",
+            }])
+        );
+        assert!(json.get("volumes").is_none(), "{json}");
+    }
+
+    /// Neither the list nor an unset prefix reaches the wire, so a create that
+    /// uses no mounts is byte-for-byte what a server without `mounts` accepts.
+    #[test]
+    fn mounts_and_an_unset_sub_path_are_omitted() {
+        use crate::runtime::options::{BoxOptions, MountSpec};
+
+        let json =
+            serde_json::to_value(CreateBoxRequest::from_options(&BoxOptions::default(), None))
+                .unwrap();
+        assert!(json.get("mounts").is_none(), "{json}");
+
+        let whole_volume = BoxOptions {
+            mounts: vec![MountSpec::volume_mount("run42", "/workspace")],
+            ..Default::default()
+        };
+        let json =
+            serde_json::to_value(CreateBoxRequest::from_options(&whole_volume, None)).unwrap();
+        assert!(
+            json["mounts"][0].get("sub_path").is_none(),
+            "an unset prefix must not reach the wire: {}",
+            json["mounts"][0]
+        );
     }
 
     #[test]
