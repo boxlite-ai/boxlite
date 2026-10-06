@@ -36,6 +36,10 @@ their interfaces are being established.
 
 ## Build
 
+`make vmm:boot` builds the x86_64 kernel and minimal test initramfs using Linux
+host tools. See [boot artifacts](boot/README.md) for dependencies, output files
+and reproducibility limits. This prepares artifacts; it does not boot a VM.
+
 From the repository root:
 
 ```sh
