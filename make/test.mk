@@ -1,9 +1,13 @@
 PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 PHONY_TARGETS += test\:integration\:vmm\:kvm _ensure-kvm
 PHONY_TARGETS += test\:vmm\:boot
+PHONY_TARGETS += test\:integration\:vmm\:kernel
 
 test\:vmm\:boot:
 	@python3 "$(SCRIPT_DIR)/../src/vmm/boot/tests/test_build.py"
+
+VMM_KERNEL ?= $(CURDIR)/target/vmm/boot/x86_64/vmlinux
+export VMM_KERNEL
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -281,6 +285,11 @@ _ensure-kvm:
 test\:integration\:vmm\:kvm: _ensure-kvm
 	@cargo test -p boxlite-hypervisor --lib --no-run
 	@timeout 60s cargo test -p boxlite-hypervisor --lib kvm::vm::tests:: -- --ignored --test-threads=1
+
+# Qualify kernel loading with an existing vmlinux; this does not boot Linux.
+test\:integration\:vmm\:kernel: _ensure-kvm
+	@cargo test -p boxlite-vmm --lib --no-run
+	@timeout 60s cargo test -p boxlite-vmm --lib memory::tests:: -- --ignored --test-threads=1 --nocapture
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
 # excluded from test:unit:rust because the zygote suite forks real processes.
