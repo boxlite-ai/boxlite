@@ -54,6 +54,10 @@ pub struct Principal {
 ///
 /// Implemented by backends with a meaningful notion of remote identity.
 /// Currently only `RestRuntime` implements this; local runtimes do not.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait AuthBackend: Send + Sync {
     /// Confirm the active credential and return its identity.

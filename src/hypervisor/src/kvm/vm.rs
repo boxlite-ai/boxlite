@@ -358,8 +358,8 @@ mod tests {
         assert_eq!((special.gdt.base, special.gdt.limit), (0x500, 23));
         let fpu = vcpu.fd.get_fpu().unwrap();
         assert_eq!(fpu.fcw, 0x37f);
-        // A fresh vCPU retains the architectural SSE reset value.
-        assert_eq!(fpu.mxcsr, 0x1f80);
+        // MXCSR is the seventh dword in the legacy SSE area of XSAVE.
+        assert_eq!(vcpu.fd.get_xsave().unwrap().region[6], 0x1f80);
     }
 
     #[test]

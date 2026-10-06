@@ -40,9 +40,10 @@ and `Vcpu` traits, including IRQ forwarding and cross-thread kick handles.
 `run` blocks on an idle guest until interrupted.
 
 `KvmVcpu::set_boot_registers` installs `X86BootRegisters`: general entry registers,
-segments, descriptor tables, control registers, and reset x87/SSE state (`FCW` is
-`0x037f`; `MXCSR` is `0x1f80`). Hardware tests read MXCSR back through
-`KVM_GET_FPU`.
+segments, descriptor tables, control registers, and the x87 control word (`FCW` is
+`0x037f`). A fresh vCPU's reset SSE state has `MXCSR` `0x1f80`. Hardware tests
+read MXCSR from the legacy SSE area returned by `KVM_GET_XSAVE`;
+`KVM_GET_FPU` does not return it.
 Values and guest addresses come from the VMM; no Linux memory layout lives in
 KVM.
 Call it before first entry and discard the vCPU after any configuration error,

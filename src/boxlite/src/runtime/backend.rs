@@ -26,6 +26,10 @@ use super::id::BoxID;
 ///
 /// This trait is `pub(crate)` — internal implementation detail.
 /// The public API (`BoxliteRuntime`) is unchanged.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait RuntimeBackend: Send + Sync {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox>;
@@ -69,6 +73,10 @@ pub(crate) trait RuntimeBackend: Send + Sync {
 ///
 /// Local backend is implemented directly by `BoxImpl`.
 /// REST backend delegates to HTTP API calls.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait BoxBackend: Send + Sync + Any {
     /// Owned downcast helper (`Arc` upcast), so callers can move the local
@@ -153,6 +161,10 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 ///
 /// Kept separate from `BoxBackend` so lifecycle/exec/file operations do not own
 /// network data-plane capabilities directly.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait BoxNetworkBackend: Send + Sync {
     /// Establish a one-shot tunnel to a service port inside the box.
@@ -164,6 +176,10 @@ pub(crate) trait BoxNetworkBackend: Send + Sync {
 /// Kept separate from `BoxBackend` so lifecycle/exec/file operations can evolve
 /// independently from snapshot/clone/export behavior.
 #[allow(dead_code)] // Snapshots temporarily disabled; will be re-enabled
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait SnapshotBackend: Send + Sync {
     async fn create(&self, options: SnapshotOptions, name: &str) -> BoxliteResult<SnapshotInfo>;
@@ -189,6 +205,10 @@ pub(crate) trait SnapshotBackend: Send + Sync {
 /// defaults to `signal(id, SIGKILL)`. Splitting them lets callers ask for
 /// SIGINT/SIGTERM/SIGHUP without the request body being silently coerced
 /// to SIGKILL on the server side (the historical bug).
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait ExecBackend: Send + Sync {
     async fn signal(&mut self, execution_id: &str, signal: i32) -> BoxliteResult<()>;

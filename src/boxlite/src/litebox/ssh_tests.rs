@@ -30,7 +30,7 @@ struct Mock {
 impl Mock {
     /// Record each RPC before injecting a blocked, rejected, or incomplete response.
     /// The notification lets tests cancel or advance time after the RPC arrives.
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "mock returns the tonic service error type"
     )]
