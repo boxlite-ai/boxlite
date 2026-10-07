@@ -377,6 +377,7 @@ async fn copy_integration() {
     follow_symlinks_true_dereferences(&bx, tmp.path()).await;
     include_parent_true_nests_dir(&bx, tmp.path()).await;
     include_parent_false_flattens(&bx, tmp.path()).await;
+    dot_suffix_copies_the_contents(&bx, tmp.path()).await;
     copy_in_creates_intermediate_dirs(&bx, tmp.path()).await;
     copy_out_nonexistent_errors(&bx, tmp.path()).await;
     concurrent_copy_roundtrip(&bx, tmp.path()).await;
@@ -765,6 +766,39 @@ async fn include_parent_false_flattens(bx: &LiteBox, tmp: &Path) {
 
     let out = exec_stdout(bx, BoxCommand::new("cat").args(["/root/flatdest/f.txt"])).await;
     assert_eq!(out, "flat\n");
+}
+
+/// `SRC/.` copies what is in the directory, both ways. The spelling is built
+/// as a string: anything that walks a path's components drops the trailing
+/// `.`, and the copy would then nest the directory instead.
+async fn dot_suffix_copies_the_contents(bx: &LiteBox, tmp: &Path) {
+    eprintln!("  [copy] dot_suffix_copies_the_contents");
+    let dir_src = tmp.join("dotdir");
+    std::fs::create_dir(&dir_src).unwrap();
+    std::fs::write(dir_src.join("f.txt"), "flat\n").unwrap();
+
+    let dotted = format!("{}/.", dir_src.display());
+    bx.copy_into(Path::new(&dotted), "/root/dotdest/", CopyOptions::default())
+        .await
+        .expect("copy_into SRC/.");
+
+    let out = exec_stdout(bx, BoxCommand::new("cat").args(["/root/dotdest/f.txt"])).await;
+    assert_eq!(out, "flat\n");
+
+    let host_out = tmp.join("dot-out");
+    std::fs::create_dir(&host_out).unwrap();
+    bx.copy_out("/root/dotdest/.", &host_out, CopyOptions::default())
+        .await
+        .expect("copy_out SRC/.");
+
+    assert_eq!(
+        std::fs::read_to_string(host_out.join("f.txt")).unwrap(),
+        "flat\n"
+    );
+    assert!(
+        !host_out.join("dotdest").exists(),
+        "the contents, not the directory, must land"
+    );
 }
 
 // ============================================================================

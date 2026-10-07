@@ -978,6 +978,9 @@ paths:
         Downloads files from the specified path inside the container
         as a tar archive. The box must be running.
 
+        A `path` ending in `/.` (`docker cp`'s spelling) asks for a
+        directory's contents rather than the directory itself.
+
         Transfer operates on the container's root filesystem. A source at or
         under a mount inside the container, or a directory containing one, is
         rejected with `400` — the archive would carry the underlying files
@@ -987,7 +990,9 @@ paths:
         - name: path
           in: query
           required: true
-          description: Source path inside the container
+          description: |
+            Source path inside the container. End a directory with `/.` to
+            download its contents rather than the directory itself.
           schema:
             type: string
           example: /app/output

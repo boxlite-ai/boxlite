@@ -553,6 +553,8 @@ boxlite inspect -l --format yaml
 **Synopsis:** `boxlite cp [OPTIONS] SRC DST`
 
 Copy files/folders between host and box. Exactly one of `SRC` or `DST` must be a `BOX:PATH` reference.
+End a directory `SRC` with `/.` to copy its contents rather than the directory itself, as
+`docker cp` does.
 
 **Options:**
 
@@ -587,6 +589,7 @@ owned by the box's exec user.
 boxlite cp ./script.py mybox:/work/script.py        # host -> box
 boxlite cp mybox:/var/log/app.log ./app.log         # box -> host
 boxlite cp --no-overwrite ./data/ mybox:/data/      # local runtime only
+boxlite cp ./dist/. mybox:/srv/www                  # the contents of ./dist
 ```
 
 ---

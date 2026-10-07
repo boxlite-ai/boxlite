@@ -335,7 +335,8 @@ impl BoxBackend for RestBox {
             host_src.to_path_buf(),
             boxlite_shared::tar::PackContext {
                 follow_symlinks: opts.follow_symlinks,
-                include_parent: opts.include_parent,
+                include_parent: opts.include_parent
+                    && !boxlite_shared::tar::specifies_current_dir(host_src.as_os_str()),
             },
         )
         .await?;
@@ -1745,6 +1746,49 @@ mod tests {
             "single file must land inside the destination directory"
         );
         server.await.unwrap();
+    }
+
+    /// A copy-out of `SRC/.` — docker's spelling for "the contents, not the
+    /// directory" — has to reach the server *as* `SRC/.`: the server's portal
+    /// reads the trailing dot off the raw path, so a client that normalized it
+    /// away would turn every contents-only copy into a nested one.
+    #[tokio::test]
+    async fn a_contents_only_source_reaches_the_wire_with_its_trailing_dot() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                head.push(socket.read_u8().await.unwrap());
+            }
+            socket
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\n\
+                      Content-Type: application/json\r\n\
+                      Content-Length: 2\r\n\
+                      Connection: close\r\n\r\n{}",
+                )
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&head)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let _ = rest_box_for(port, "box1")
+            .copy_out("/src/.", dir.path(), CopyOptions::default())
+            .await;
+
+        let request_line = server.await.unwrap();
+        assert!(
+            request_line.starts_with("GET ")
+                && request_line.contains("/boxes/box1/files?path=%2Fsrc%2F. "),
+            "the trailing dot must survive url-encoding: {request_line}"
+        );
     }
 
     /// A destination with a trailing slash names a directory even when it

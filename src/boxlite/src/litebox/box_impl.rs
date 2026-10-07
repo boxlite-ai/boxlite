@@ -884,7 +884,8 @@ impl BoxImpl {
             temp_tar.to_path_buf(),
             boxlite_shared::tar::PackContext {
                 follow_symlinks: opts.follow_symlinks,
-                include_parent: opts.include_parent,
+                include_parent: opts.include_parent
+                    && !boxlite_shared::tar::specifies_current_dir(host_src.as_os_str()),
             },
         )
         .await?;
