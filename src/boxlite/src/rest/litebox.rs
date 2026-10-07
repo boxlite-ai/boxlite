@@ -335,8 +335,7 @@ impl BoxBackend for RestBox {
             host_src.to_path_buf(),
             boxlite_shared::tar::PackContext {
                 follow_symlinks: opts.follow_symlinks,
-                include_parent: opts.include_parent
-                    && !boxlite_shared::tar::specifies_current_dir(host_src.as_os_str()),
+                include_parent: !boxlite_shared::tar::specifies_current_dir(host_src.as_os_str()),
             },
         )
         .await?;

@@ -884,8 +884,7 @@ impl BoxImpl {
             temp_tar.to_path_buf(),
             boxlite_shared::tar::PackContext {
                 follow_symlinks: opts.follow_symlinks,
-                include_parent: opts.include_parent
-                    && !boxlite_shared::tar::specifies_current_dir(host_src.as_os_str()),
+                include_parent: !boxlite_shared::tar::specifies_current_dir(host_src.as_os_str()),
             },
         )
         .await?;
@@ -957,7 +956,6 @@ impl BoxImpl {
             .download_tar(
                 container_src,
                 Some(self.container_id()),
-                opts.include_parent,
                 opts.follow_symlinks,
                 &temp_tar,
             )
@@ -1061,12 +1059,7 @@ impl BoxImpl {
         let live = self.live_state().await?;
         let mut files_iface = live.guest_session.files().await?;
         files_iface
-            .download_stream(
-                &container_src,
-                Some(&cid),
-                opts.include_parent,
-                opts.follow_symlinks,
-            )
+            .download_stream(&container_src, Some(&cid), opts.follow_symlinks)
             .await
     }
 

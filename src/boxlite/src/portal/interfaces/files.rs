@@ -99,12 +99,10 @@ impl FilesInterface {
         &mut self,
         container_src: &str,
         container_id: Option<&str>,
-        include_parent: bool,
         follow_symlinks: bool,
         tar_dest: &std::path::Path,
     ) -> BoxliteResult<()> {
-        let request =
-            download_request(container_src, container_id, include_parent, follow_symlinks);
+        let request = download_request(container_src, container_id, follow_symlinks);
 
         let mut stream = self
             .client
@@ -226,11 +224,9 @@ impl FilesInterface {
         &mut self,
         container_src: &str,
         container_id: Option<&str>,
-        include_parent: bool,
         follow_symlinks: bool,
     ) -> BoxliteResult<(BoxByteStream, CopySourceKind)> {
-        let request =
-            download_request(container_src, container_id, include_parent, follow_symlinks);
+        let request = download_request(container_src, container_id, follow_symlinks);
 
         let mut stream = self
             .client
@@ -277,14 +273,14 @@ impl FilesInterface {
 fn download_request(
     container_src: &str,
     container_id: Option<&str>,
-    include_parent: bool,
     follow_symlinks: bool,
 ) -> DownloadRequest {
     DownloadRequest {
         src_path: container_src.to_string(),
         container_id: container_id.unwrap_or_default().to_string(),
-        include_parent: include_parent
-            && !boxlite_shared::tar::specifies_current_dir(std::ffi::OsStr::new(container_src)),
+        include_parent: !boxlite_shared::tar::specifies_current_dir(std::ffi::OsStr::new(
+            container_src,
+        )),
         follow_symlinks,
     }
 }
@@ -320,11 +316,10 @@ mod tests {
     /// REST caller — goes through this translation.
     #[test]
     fn a_trailing_dot_asks_the_guest_for_the_contents() {
-        assert!(download_request("/app", None, true, false).include_parent);
-        assert!(download_request("/app/", None, true, false).include_parent);
-        assert!(!download_request("/app", None, false, false).include_parent);
+        assert!(download_request("/app", None, false).include_parent);
+        assert!(download_request("/app/", None, false).include_parent);
 
-        let contents = download_request("/app/.", Some("c1"), true, true);
+        let contents = download_request("/app/.", Some("c1"), true);
         assert!(!contents.include_parent);
         assert_eq!(
             contents.src_path, "/app/.",

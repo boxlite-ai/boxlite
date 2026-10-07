@@ -549,7 +549,6 @@ Copy files or directories between host and box.
 |--------|-------------|
 | `--follow-symlinks` | Follow symlinks when copying (local runtime only) |
 | `--no-overwrite` | Do not overwrite existing files (local runtime only) |
-| `--no-include-parent` | Copy directory contents without their parent (local runtime only) |
 
 **Examples:**
 

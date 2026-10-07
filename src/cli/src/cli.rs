@@ -1890,13 +1890,6 @@ mod tests {
             panic!("expected run");
         };
         assert_eq!(run.entrypoint.as_deref(), Some("/bin/sh"));
-
-        let cli = Cli::try_parse_from(["boxlite", "cp", "--no-include-parent", "box:/src", "/dst"])
-            .expect("inverse parent option parses");
-        let Commands::Cp(cp) = cli.command else {
-            panic!("expected cp");
-        };
-        assert!(cp.no_include_parent);
     }
     use std::path::PathBuf;
     use tempfile::TempDir;

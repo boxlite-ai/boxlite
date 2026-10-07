@@ -384,7 +384,6 @@ class SimpleBox:
         *,
         overwrite: bool = True,
         follow_symlinks: bool = False,
-        include_parent: bool = True,
     ) -> None:
         """
         Copy files/directories from host into the container.
@@ -394,7 +393,6 @@ class SimpleBox:
             container_dest: Destination path inside the container
             overwrite: If True, overwrite existing files (default: True)
             follow_symlinks: If True, follow symlinks when copying (default: False)
-            include_parent: If True, include parent directory in archive (default: True)
 
         Note:
             copy_in extracts files into the container rootfs layer. Destinations
@@ -424,6 +422,12 @@ class SimpleBox:
             Copy a directory::
 
                 await box.copy_in("/local/data/", "/app/data/")
+
+            Copy a directory's contents rather than the directory — end the
+            source with ``/.`` as ``docker cp`` does (build it as a string;
+            ``pathlib.Path`` drops the trailing ``.``)::
+
+                await box.copy_in("/local/data/.", "/app/data")
         """
         if not self._started:
             raise RuntimeError(
@@ -437,7 +441,6 @@ class SimpleBox:
             recursive=True,
             overwrite=overwrite,
             follow_symlinks=follow_symlinks,
-            include_parent=include_parent,
         )
         await self._box.copy_in(host_path, container_dest, opts)
 
@@ -448,7 +451,6 @@ class SimpleBox:
         *,
         overwrite: bool = True,
         follow_symlinks: bool = False,
-        include_parent: bool = True,
     ) -> None:
         """
         Copy files/directories from container to host.
@@ -458,7 +460,6 @@ class SimpleBox:
             host_dest: Destination path on the host filesystem
             overwrite: If True, overwrite existing files (default: True)
             follow_symlinks: If True, follow symlinks when copying (default: False)
-            include_parent: If True, include parent directory in archive (default: True)
 
         Note:
             copy_out reads the container rootfs layer. A source at or under a
@@ -478,6 +479,10 @@ class SimpleBox:
             Copy a directory::
 
                 await box.copy_out("/app/results/", "/local/results/")
+
+            Copy a directory's contents rather than the directory::
+
+                await box.copy_out("/app/results/.", "/local/results")
         """
         if not self._started:
             raise RuntimeError(
@@ -491,6 +496,5 @@ class SimpleBox:
             recursive=True,
             overwrite=overwrite,
             follow_symlinks=follow_symlinks,
-            include_parent=include_parent,
         )
         await self._box.copy_out(container_src, host_dest, opts)

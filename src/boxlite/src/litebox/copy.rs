@@ -39,6 +39,9 @@ impl CopySourceKind {
 }
 
 /// Options controlling copy behavior.
+///
+/// Whether a directory or its contents is copied is not an option: spell the
+/// source `SRC/.` for the contents, as `docker cp` does.
 #[derive(Debug, Clone)]
 pub struct CopyOptions {
     /// Recursively copy directories.
@@ -47,8 +50,6 @@ pub struct CopyOptions {
     pub overwrite: bool,
     /// Follow symlinks when archiving (otherwise include symlinks as links).
     pub follow_symlinks: bool,
-    /// When copying out, include the parent directory in the archive (docker cp semantics).
-    pub include_parent: bool,
 }
 
 impl Default for CopyOptions {
@@ -57,7 +58,6 @@ impl Default for CopyOptions {
             recursive: true,
             overwrite: true,
             follow_symlinks: false,
-            include_parent: true,
         }
     }
 }
@@ -75,11 +75,6 @@ impl CopyOptions {
 
     pub fn follow_symlinks(mut self, follow: bool) -> Self {
         self.follow_symlinks = follow;
-        self
-    }
-
-    pub fn include_parent(mut self, include: bool) -> Self {
-        self.include_parent = include;
         self
     }
 

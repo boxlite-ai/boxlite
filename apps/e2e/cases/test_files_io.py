@@ -3,9 +3,10 @@
 Verifies that the SDK → API → Runner → VM `copy_in` / `copy_out` chain:
   - round-trips text and binary files unchanged
   - recurses into directories
-  - propagates `include_parent` / `overwrite` options end-to-end
+  - honours the `SRC/.` "contents, not the directory" spelling and the
+    `overwrite` option end-to-end
 
-`copy.rs` covers 18 sub-cases at the local-FFI layer. Re-running all of
+`copy.rs` covers the full matrix at the local-FFI layer. Re-running all of
 those over the REST chain would burn ~10 boxes for low marginal
 coverage. This file keeps cost low (one shared box across cases) and
 focuses on the bytes-over-the-wire surface: the parts where the
@@ -87,10 +88,10 @@ async def test_copy_out_binary_roundtrips_sha256(box):
 
 
 @pytest.mark.asyncio
-async def test_copy_in_directory_include_parent_false(box):
-    """copy_in a directory with include_parent=False flattens its
-    contents into the destination dir. Pins the option-propagation
-    contract for the REST path."""
+async def test_copy_in_directory_contents_with_dot_suffix(box):
+    """copy_in of `SRC/.` lands the directory's contents in the
+    destination dir. The spelling rides the path itself, so this pins that
+    nothing on the REST path normalizes the trailing `.` away."""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir) / "tree"
         (root / "sub").mkdir(parents=True)
@@ -101,9 +102,9 @@ async def test_copy_in_directory_include_parent_false(box):
             recursive=True,
             overwrite=True,
             follow_symlinks=False,
-            include_parent=False,
         )
-        await box.copy_in(str(root), "/workspace/flatdest/", copy_options=opts)
+        # A plain string: `str(root / ".")` would drop the trailing dot.
+        await box.copy_in(f"{root}/.", "/workspace/flatdest/", copy_options=opts)
 
         ex = await box.exec(
             "sh", ["-c", "find /workspace/flatdest -type f | sort"], None,
@@ -143,7 +144,6 @@ async def test_copy_in_overwrite_false_rejects_conflict(rt, image):
                 recursive=False,
                 overwrite=False,
                 follow_symlinks=False,
-                include_parent=False,
             )
             # The FFI suite asserts this raises; over REST a non-raising
             # silent-keep is also a correct implementation. Accept both.

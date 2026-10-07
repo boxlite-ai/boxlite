@@ -14,10 +14,6 @@ pub struct CpArgs {
     #[arg(long, default_value_t = false)]
     pub no_overwrite: bool,
 
-    /// Copy directory contents without their parent directory (local runtime only)
-    #[arg(long)]
-    pub no_include_parent: bool,
-
     /// Source path (host path or BOX:PATH)
     #[arg(index = 1)]
     pub src: String,
@@ -36,7 +32,6 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
     let opts = CopyOptions {
         follow_symlinks: args.follow_symlinks,
         overwrite: !args.no_overwrite,
-        include_parent: !args.no_include_parent,
         ..Default::default()
     };
 
@@ -99,11 +94,10 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
 
 impl CpArgs {
     fn require_supported_backend(&self, targets_rest: bool) -> Result<()> {
-        if targets_rest && (self.follow_symlinks || self.no_overwrite || self.no_include_parent) {
+        if targets_rest && (self.follow_symlinks || self.no_overwrite) {
             anyhow::bail!(
-                "--follow-symlinks, --no-overwrite, and --no-include-parent are supported only \
-                 by the embedded local runtime; the REST copy protocol does not carry these \
-                 options"
+                "--follow-symlinks and --no-overwrite are supported only by the embedded local \
+                 runtime; the REST copy protocol does not carry these options"
             );
         }
         Ok(())
@@ -180,7 +174,6 @@ mod tests {
         CpArgs {
             follow_symlinks: false,
             no_overwrite: false,
-            no_include_parent: false,
             src: "box:/src".to_string(),
             dst: "/dst".to_string(),
         }
@@ -197,10 +190,6 @@ mod tests {
         let mut overwrite = args();
         overwrite.no_overwrite = true;
         assert!(overwrite.require_supported_backend(true).is_err());
-
-        let mut parent = args();
-        parent.no_include_parent = true;
-        assert!(parent.require_supported_backend(true).is_err());
     }
 
     #[test]
@@ -233,6 +222,22 @@ mod tests {
                 assert_eq!(box_path, "/etc/hosts");
                 assert_eq!(host, PathBuf::from("./hosts"));
             }
+            _ => panic!("wrong direction"),
+        }
+    }
+
+    /// `SRC/.` is read off the raw path further down, so parsing must hand it
+    /// over byte for byte on either side. Compared as `OsStr`: `PathBuf`
+    /// equality goes through components and would call `dist/.` and `dist`
+    /// the same path.
+    #[test]
+    fn a_trailing_dot_survives_parsing() {
+        match parse_direction("mybox:/app/.", "out").unwrap() {
+            Direction::BoxToHost { box_path, .. } => assert_eq!(box_path, "/app/."),
+            _ => panic!("wrong direction"),
+        }
+        match parse_direction("./dist/.", "mybox:/app").unwrap() {
+            Direction::HostToBox { host, .. } => assert_eq!(host.as_os_str(), "./dist/."),
             _ => panic!("wrong direction"),
         }
     }

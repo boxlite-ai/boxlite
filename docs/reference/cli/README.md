@@ -562,7 +562,6 @@ End a directory `SRC` with `/.` to copy its contents rather than the directory i
 |------|---------|-------------|
 | `--follow-symlinks` | `false` | Resolve symlink targets (embedded local runtime only) |
 | `--no-overwrite` | `false` | Refuse to overwrite destination files (embedded local runtime only) |
-| `--no-include-parent` | `false` | Copy directory contents without their parent (embedded local runtime only) |
 
 If a stopped box is safe to resume, it is started temporarily and restored to
 stopped state after the copy succeeds or fails. A job box whose start would run
