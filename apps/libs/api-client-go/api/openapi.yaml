@@ -395,6 +395,40 @@ paths:
       summary: Update organization name
       tags:
       - organizations
+  /organizations/{organizationId}/default-exec-timeout:
+    patch:
+      operationId: updateOrganizationDefaultExecTimeout
+      parameters:
+      - description: Organization ID
+        explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrganizationDefaultExecTimeout"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+          description: Execution timeout default updated
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Update organization default execution timeout
+      tags:
+      - organizations
   /organizations/{organizationId}/default-region:
     patch:
       operationId: setOrganizationDefaultRegion
@@ -4915,13 +4949,14 @@ components:
         templateDeactivationTimeoutMinutes: 5.637376656633329
         boxLimitedNetworkEgress: true
         defaultRegionId: defaultRegionId
-        authenticatedRateLimit: 2.3021358869347655
-        boxCreateRateLimit: 7.061401241503109
-        boxLifecycleRateLimit: 9.301444243932576
+        defaultExecTimeoutSeconds: 494379917
+        authenticatedRateLimit: 7.061401241503109
+        boxCreateRateLimit: 9.301444243932576
+        boxLifecycleRateLimit: 3.616076749251911
         experimentalConfig: "{}"
-        authenticatedRateLimitTtlSeconds: 3.616076749251911
-        boxCreateRateLimitTtlSeconds: 2.027123023002322
-        boxLifecycleRateLimitTtlSeconds: 4.145608029883936
+        authenticatedRateLimitTtlSeconds: 2.027123023002322
+        boxCreateRateLimitTtlSeconds: 4.145608029883936
+        boxLifecycleRateLimitTtlSeconds: 7.386281948385884
       properties:
         id:
           description: Organization ID
@@ -4985,6 +5020,13 @@ components:
         defaultRegionId:
           description: Default region ID
           type: string
+        defaultExecTimeoutSeconds:
+          description: "Default execution timeout in seconds; null inherits the platform\
+            \ default, zero disables the timer"
+          maximum: 2147483647
+          minimum: 0
+          nullable: true
+          type: integer
         authenticatedRateLimit:
           description: Authenticated rate limit per minute
           nullable: true
@@ -5022,6 +5064,7 @@ components:
       - boxLimitedNetworkEgress
       - createdAt
       - createdBy
+      - defaultExecTimeoutSeconds
       - experimentalConfig
       - id
       - isDefaultForAuthenticatedUser
@@ -5048,6 +5091,21 @@ components:
           type: string
       required:
       - name
+      type: object
+    UpdateOrganizationDefaultExecTimeout:
+      example:
+        defaultExecTimeoutSeconds: 1800
+      properties:
+        defaultExecTimeoutSeconds:
+          description: "Default execution timeout in seconds; null inherits the platform\
+            \ default, zero disables the timer"
+          example: 1800
+          maximum: 2147483647
+          minimum: 0
+          nullable: true
+          type: integer
+      required:
+      - defaultExecTimeoutSeconds
       type: object
     UpdateOrganizationDefaultRegion:
       example:

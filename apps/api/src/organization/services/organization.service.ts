@@ -51,6 +51,8 @@ import { boxLookupCacheKeyByAuthToken } from '../../box/utils/box-lookup-cache.u
 import { BoxRepository } from '../../box/repositories/box.repository'
 import { OrganizationReferralCodeDto } from '../dto/organization-referral-code.dto'
 import { OrganizationReferralCodeException } from '../../exceptions/organization-referral-code.exception'
+import { InjectRedis } from '@nestjs-modules/ioredis'
+import Redis from 'ioredis'
 
 const REFERRAL_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 const REFERRAL_UNIQUE_CONSTRAINT = 'organization_referral_code_uq'
@@ -65,6 +67,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
 
   activeJobs = new Set<string>()
   private readonly logger = new Logger(OrganizationService.name)
+  @InjectRedis() private readonly redis: Redis
   private defaultBoxLimitedNetworkEgress: boolean
 
   constructor(
@@ -241,6 +244,24 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     organization.name = trimmedName
 
     return this.organizationRepository.save(organization)
+  }
+
+  async updateDefaultExecTimeout(
+    organizationId: string,
+    defaultExecTimeoutSeconds: number | null,
+  ): Promise<Organization> {
+    const organization = await this.organizationRepository.findOne({ where: { id: organizationId } })
+    if (!organization) {
+      throw new NotFoundException(`Organization with ID ${organizationId} not found`)
+    }
+    organization.defaultExecTimeoutSeconds = defaultExecTimeoutSeconds
+    const saved = await this.organizationRepository.save(organization)
+    try {
+      await this.redis.del(`organization:${organizationId}`)
+    } catch (error) {
+      this.logger.warn(`Failed to invalidate organization cache for ${organizationId}`, error)
+    }
+    return saved
   }
 
   /**

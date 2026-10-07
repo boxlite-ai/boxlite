@@ -2368,7 +2368,8 @@ components:
           description: Environment variable overrides for this execution
         timeout_seconds:
           type: number
-          minimum: 0.1
+          minimum: 0
+          nullable: true
           description: Execution timeout in seconds
         working_dir:
           type: string

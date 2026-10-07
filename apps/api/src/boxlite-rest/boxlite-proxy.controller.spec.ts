@@ -76,6 +76,20 @@ describe('BoxliteProxyController', () => {
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
   })
 
+  it.each([
+    ['POST', undefined],
+    ['POST', null],
+    ['POST', []],
+    ['POST', 'invalid'],
+    ['GET', { command: 'sleep' }],
+  ])('leaves unsupported exec requests unchanged: %s %s', async (method, body) => {
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller } = makeHarness()
+    const req = { method, body: structuredClone(body) }
+    await controller.proxyExec(activeAuth as never, 'public-box', req as never, {} as never, jest.fn())
+    expect(req.body).toEqual(body)
+  })
+
   it('disables the runner timeout for files only', async () => {
     jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
     const { controller } = makeHarness()

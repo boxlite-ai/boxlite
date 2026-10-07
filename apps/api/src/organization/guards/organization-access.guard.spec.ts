@@ -45,6 +45,20 @@ function createGuard() {
 }
 
 describe('OrganizationAccessGuard', () => {
+  it('reads cached exec timeouts and refreshes misses with a ten-second TTL', async () => {
+    const { guard, mocks } = createGuard()
+    const stored = { id: 'org-123', defaultExecTimeoutSeconds: 0 }
+    mocks.organizationService.findOne.mockResolvedValue(stored)
+    mocks.redis.get.mockResolvedValueOnce(JSON.stringify({ ...stored, defaultExecTimeoutSeconds: 1800 }))
+    for (const expected of [1800, 0]) {
+      const request = { params: { organizationId: stored.id }, user: { role: SystemRole.ADMIN, userId: 'user-1' } }
+      await expect(guard.canActivate(httpContext(request))).resolves.toBe(true)
+      expect(request.user).toMatchObject({ organization: { defaultExecTimeoutSeconds: expected } })
+    }
+    expect(mocks.organizationService.findOne).toHaveBeenCalledTimes(1)
+    expect(mocks.redis.set).toHaveBeenCalledWith('organization:org-123', JSON.stringify(stored), 'EX', 10)
+  })
+
   it('resolves the legacy REST default prefix to the authenticated API-key organization', async () => {
     const { guard, mocks } = createGuard()
     const request = {

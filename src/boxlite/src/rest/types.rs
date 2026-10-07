@@ -1240,6 +1240,17 @@ mod tests {
     }
 
     #[test]
+    fn exec_request_preserves_server_timeout_default_and_explicit_zero() {
+        let command = crate::BoxCommand::new("sleep");
+        let omitted = serde_json::to_value(ExecRequest::from_command(&command)).unwrap();
+        assert!(omitted.get("timeout_seconds").is_none());
+
+        let command = command.timeout(std::time::Duration::ZERO);
+        let explicit = serde_json::to_value(ExecRequest::from_command(&command)).unwrap();
+        assert_eq!(explicit["timeout_seconds"], 0.0);
+    }
+
+    #[test]
     fn test_error_response_deserialization() {
         let json = r#"{
             "error": {

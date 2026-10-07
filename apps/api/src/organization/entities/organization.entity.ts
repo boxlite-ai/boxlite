@@ -4,13 +4,23 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Column, CreateDateColumn, Entity, OneToMany, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from 'typeorm'
+import {
+  Check,
+  Column,
+  CreateDateColumn,
+  Entity,
+  OneToMany,
+  PrimaryGeneratedColumn,
+  Unique,
+  UpdateDateColumn,
+} from 'typeorm'
 import { OrganizationUser } from './organization-user.entity'
 import { OrganizationRole } from './organization-role.entity'
 import { OrganizationInvitation } from './organization-invitation.entity'
 
 @Entity()
 @Unique('organization_referral_code_uq', ['referralCode'])
+@Check('organization_default_exec_timeout_nonnegative', '"defaultExecTimeoutSeconds" >= 0')
 export class Organization {
   @PrimaryGeneratedColumn('uuid')
   id: string
@@ -31,6 +41,9 @@ export class Organization {
 
   @Column({ nullable: true })
   defaultRegionId?: string
+
+  @Column({ type: 'int', nullable: true })
+  defaultExecTimeoutSeconds: number | null
 
   @Column({
     type: 'int',

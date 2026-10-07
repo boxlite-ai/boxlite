@@ -167,6 +167,7 @@ state inline.
 | `createdBy` | `character varying` | |
 | `telemetryEnabled` | `boolean` | default `true` |
 | `defaultRegionId` | `character varying` | nullable; references `region.id` |
+| `defaultExecTimeoutSeconds` | `integer` | nullable; nonnegative CHECK; null inherits the hosted 300-second default, zero disables the execution timer |
 | `max_cpu_per_box` | `integer` | default `4` |
 | `max_memory_per_box` | `integer` | default `8` |
 | `max_disk_per_box` | `integer` | default `10` |
