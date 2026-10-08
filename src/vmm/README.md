@@ -34,6 +34,10 @@ engine adapter, engine selection, and `native` feature wiring follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
 
+The [M1 boot artifacts](boot/README.md) provide a pinned x86_64 kernel build
+and a separate test initramfs. Build them with `make vmm:boot`; this does not
+yet boot a VM through this crate.
+
 ## Build
 
 From the repository root:
