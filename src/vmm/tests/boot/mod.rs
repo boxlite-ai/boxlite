@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Tests for the ELF loader: one synthetic image exercises every decoding
-//! and placement rule.
+//! and placement rule, and a probe loads the real kernel and reads it back
+//! through a KVM vCPU.
 
 use std::io;
 
@@ -289,5 +290,171 @@ fn leaves_ram_untouched_on_rejection() {
         put64(&mut image, field, value);
         load_elf(&ram, &image).expect_err("rejected image");
         assert_eq!(read(&ram, FIXTURE_LAYOUT.start, span), vec![0xff; span]);
+    }
+}
+
+/// Loads the kernel named by `VMM_KERNEL`, checks every segment against
+/// `readelf`, then lets a KVM vCPU sum the loaded span and report it on an
+/// I/O port.
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm, readelf, and VMM_KERNEL naming an x86_64 vmlinux"]
+fn native_vmlinux_bytes_are_visible_to_a_kvm_vcpu() {
+    use std::{process::Command, ptr::NonNull};
+
+    use boxlite_hypervisor::{KvmVm, MemoryRegion, VcpuExit, X86BootRegisters, X86Segment};
+    use vm_memory::GuestMemoryBackend;
+
+    const RAM_SIZE: usize = 128 << 20;
+    const PROBE_PORT: u16 = 0x500;
+
+    let path = std::env::var_os("VMM_KERNEL")
+        .expect("set VMM_KERNEL or run make test:integration:vmm:elf");
+    let image = std::fs::read(&path).expect("read VMM_KERNEL");
+    assert!(
+        image.len() <= RAM_SIZE,
+        "the probe maps {RAM_SIZE} bytes of RAM"
+    );
+
+    // readelf is an independent oracle for segment placement and the entry.
+    let output = Command::new("readelf")
+        .args(["--file-header", "--program-headers", "--wide"])
+        .arg(&path)
+        .env("LC_ALL", "C")
+        .output()
+        .expect("run readelf");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    let mut expected_entry = None;
+    let mut oracle = Vec::new();
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if line.trim_start().starts_with("Entry point address:") {
+            expected_entry = Some(parse_hex(fields[3]));
+        } else if fields.first() == Some(&"LOAD") {
+            oracle.push((
+                parse_hex(fields[1]) as usize,
+                parse_hex(fields[3]),
+                parse_hex(fields[4]) as usize,
+                parse_hex(fields[5]) as usize,
+            ));
+        }
+    }
+    assert!(!oracle.is_empty(), "readelf found no LOAD segments");
+    let expected = KernelLayout {
+        entry: expected_entry.expect("readelf entry point"),
+        start: oracle.iter().map(|segment| segment.1).min().unwrap(),
+        end: oracle
+            .iter()
+            .map(|segment| segment.1 + segment.3 as u64)
+            .max()
+            .unwrap(),
+    };
+
+    // RAM is declared before the VM and vCPU so it outlives them during unwinding.
+    let ram = ram(RAM_SIZE);
+    for &(_, paddr, _, memsz) in &oracle {
+        fill(&ram, paddr, memsz, 0xff);
+    }
+    assert_eq!(load_elf(&ram, &image).unwrap(), expected);
+    let mut checksum = 0u32;
+    for &(offset, paddr, filesz, memsz) in &oracle {
+        let loaded = read(&ram, paddr, memsz);
+        assert_eq!(&loaded[..filesz], &image[offset..offset + filesz]);
+        assert!(
+            loaded[filesz..].iter().all(|&byte| byte == 0),
+            "BSS at {paddr:#x} is not zero"
+        );
+        checksum = image[offset..offset + filesz]
+            .iter()
+            .fold(checksum, |sum, &byte| sum.wrapping_add(u32::from(byte)));
+    }
+
+    // A protected-mode program sums every byte of [start, end) and writes EAX
+    // to the probe port; gaps between segments are untouched zero RAM.
+    let mut program = vec![0x31, 0xc0, 0xbb];
+    program.extend_from_slice(&(expected.start as u32).to_le_bytes());
+    program.push(0xb9);
+    program.extend_from_slice(&((expected.end - expected.start) as u32).to_le_bytes());
+    program.extend_from_slice(&[
+        0x0f, 0xb6, 0x13, // movzx edx, byte [ebx]
+        0x01, 0xd0, // add eax, edx
+        0x43, // inc ebx
+        0xe2, 0xf8, // loop
+        0x66, 0xba, 0x00, 0x05, // mov dx, 0x500
+        0xef, 0xf4, // out dx, eax; hlt
+    ]);
+    ram.write_slice(&program, GuestAddress(0x1000)).unwrap();
+    for (index, descriptor) in [0u64, 0x00cf_9b00_0000_ffff, 0x00cf_9300_0000_ffff]
+        .into_iter()
+        .enumerate()
+    {
+        ram.write_slice(
+            &descriptor.to_le_bytes(),
+            GuestAddress(0x500 + index as u64 * 8),
+        )
+        .unwrap();
+    }
+
+    let vm = KvmVm::new().expect("create KVM VM");
+    let region = MemoryRegion {
+        guest_addr: 0,
+        host_addr: NonNull::new(ram.get_host_address(GuestAddress(0)).unwrap()).unwrap(),
+        size: RAM_SIZE,
+    };
+    // SAFETY: `ram` is declared before `vm` and `vcpu`, so it is dropped after
+    // them, and no other host thread touches it during the probe.
+    unsafe { vm.map_memory(&region) }.expect("map guest RAM");
+    let mut vcpu = vm.create_vcpu(0).expect("create vCPU");
+    vcpu.set_cpu_features(vm.supported_cpuid(), &[])
+        .expect("set CPUID");
+    vcpu.set_boot_registers(&X86BootRegisters {
+        rip: 0x1000,
+        rsp: 0x8000,
+        rflags: 2,
+        cr0: 1,
+        code: X86Segment {
+            base: 0,
+            limit: u32::MAX,
+            selector: 8,
+            attributes: 0xc09b,
+        },
+        data: X86Segment {
+            base: 0,
+            limit: u32::MAX,
+            selector: 16,
+            attributes: 0xc093,
+        },
+        gdt_base: 0x500,
+        gdt_limit: 23,
+        ..X86BootRegisters::default()
+    })
+    .expect("set boot registers");
+
+    let mut observed = None;
+    for _ in 0..16 {
+        match vcpu.run().expect("run vCPU") {
+            VcpuExit::Interrupted => continue,
+            VcpuExit::IoOut { port, bytes } => {
+                assert_eq!(port, PROBE_PORT);
+                observed = Some(u32::from_le_bytes(bytes.try_into().expect("32-bit OUT")));
+                break;
+            }
+            exit => panic!("unexpected probe exit: {exit:?}"),
+        }
+    }
+    assert_eq!(
+        observed,
+        Some(checksum),
+        "guest checksum of the loaded kernel"
+    );
+    // Finish the OUT without executing HLT, which would wait in the kernel.
+    vcpu.complete_pending_io().expect("complete pending I/O");
+
+    fn parse_hex(field: &str) -> u64 {
+        u64::from_str_radix(field.trim_start_matches("0x"), 16).expect("hex field")
     }
 }

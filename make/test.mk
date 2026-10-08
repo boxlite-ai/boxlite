@@ -1,5 +1,5 @@
 PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
-PHONY_TARGETS += test\:integration\:vmm\:kvm _ensure-kvm
+PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf _ensure-kvm
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -277,6 +277,16 @@ _ensure-kvm:
 test\:integration\:vmm\:kvm: _ensure-kvm
 	@cargo test -p boxlite-hypervisor --lib --no-run
 	@timeout 60s cargo test -p boxlite-hypervisor --lib kvm::vm::tests:: -- --ignored --test-threads=1
+
+# The ELF probe needs an x86_64 vmlinux; the kernel-build slice of #1698 will publish one here.
+VMM_KERNEL ?= $(CURDIR)/target/vmm/boot/x86_64/vmlinux
+export VMM_KERNEL
+
+# Load VMM_KERNEL into guest RAM and read it back through a KVM vCPU; this does not boot Linux.
+test\:integration\:vmm\:elf: _ensure-kvm
+	@test -r "$(VMM_KERNEL)" || { echo "VMM_KERNEL=$(VMM_KERNEL) is not readable; set it to an x86_64 ELF vmlinux" >&2; exit 1; }
+	@cargo test -p boxlite-vmm --lib --no-run
+	@timeout 60s cargo test -p boxlite-vmm --lib boot::elf::tests:: -- --ignored --test-threads=1
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
 # excluded from test:unit:rust because the zygote suite forks real processes.
