@@ -180,7 +180,7 @@ impl ImageManager {
                         (None, Some(_)) => "<none>",
                         (None, None) => "latest",
                     };
-                    (r.repository().to_string(), tag.to_string())
+                    (repository_of(&r), tag.to_string())
                 }
                 Err(_) => {
                     // Fallback if reference stored in DB is invalid
@@ -496,6 +496,24 @@ mod tests {
             seed_cached_build(images.store(), reference, build).await;
         }
         (dir, images)
+    }
+
+    /// A row's repository is the name `get` and `remove` take — registry
+    /// included, as a REST runtime lists it — so the same code reads both.
+    #[tokio::test]
+    async fn a_listed_repository_is_the_name_get_takes() {
+        let (_dir, images) = seeded(&[("quay.io/acme/app:v1", FIRST)]).await;
+
+        let listed = images.list().await.unwrap();
+        let [row] = listed.as_slice() else {
+            panic!("expected one row: {listed:?}");
+        };
+
+        assert_eq!(row.repository, "quay.io/acme/app");
+        assert_eq!(
+            images.get(&row.repository).await.unwrap().name,
+            row.repository
+        );
     }
 
     /// Everything a pull of `app` left behind is one image: both tags, the
