@@ -14,8 +14,9 @@ served, so the digest a client verifies still holds.
 - Place in the platform: [`apps/README.md`](../README.md)
 
 > **Private images.** An organization's login for ghcr.io, Docker Hub, quay.io
-> or gcr.io is read from the credential store when a pull needs it. The proxy
-> can read those passwords and write none; the API is the reverse.
+> or one of Container Registry's gcr.io hosts is read from the credential store
+> when a pull needs it. The proxy can read those passwords and write none; the
+> API is the reverse.
 
 ## Endpoints
 
@@ -142,7 +143,7 @@ steps.
 | `REGISTRY_PROXY_PORT` | `4100` | Listen port. Not 5000, the registry convention, because macOS binds it for AirPlay. |
 | `SHUTDOWN_TIMEOUT_SEC` | `3600` | How long a drain may take. A blob is one long response, so this has to outlast the longest pull in flight or a deploy truncates an image mid-layer. |
 | `BOXLITE_API_URL` | — | **Required.** The control plane. A runner API key is an opaque column rather than a signed token, so a caller can only be checked by asking. |
-| `REGISTRY_PROXY_UPSTREAM_HOSTS` | `ghcr.io,docker.io,quay.io,gcr.io` | Registries this proxy will pull from, written as the names an operator knows — never `registry-1.docker.io`. |
+| `REGISTRY_PROXY_UPSTREAM_HOSTS` | `ghcr.io,docker.io,quay.io,gcr.io,us.gcr.io,eu.gcr.io,asia.gcr.io` | Registries this proxy will pull from, written as the names an operator knows — never `registry-1.docker.io`. |
 | `REGISTRY_SECRET_STORE` | — | Where organizations' registry passwords are read from: `gcp` (Secret Manager) or `file`. Unset, every pull is anonymous. The API writes them under the same name. |
 | `REGISTRY_SECRET_DIR` | — | The directory the `file` store reads, on a local stack. |
 | `REGISTRY_PROXY_CREDENTIAL_TTL` | `60s` | How long a verified caller is taken on trust. Also the delay between revoking a runner and this proxy noticing. |

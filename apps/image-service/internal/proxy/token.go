@@ -31,7 +31,8 @@ var ErrRealmRefused = errors.New("token endpoint refused for a login")
 
 // tokenHostsBeyond names the hosts a registry's token endpoint may sit on
 // other than the registry itself. Docker Hub's is `auth.docker.io`; ghcr.io,
-// quay.io and gcr.io each issue tokens from their own host.
+// quay.io and gcr.io each issue tokens from their own host, as do gcr.io's
+// regional hosts (us.gcr.io answers with realm https://us.gcr.io/v2/token).
 //
 // A login goes nowhere else. The challenge that names a token endpoint is the
 // registry's own answer and arrives over verified TLS, but it is still text an

@@ -309,7 +309,8 @@ def _components(p: _Paths) -> dict[str, _Component]:
         # Presents the logins the API stored in the shared directory. It refuses
         # a private address as an upstream, so the local registry box is not a
         # registry it will reach: a private image here is a real one on one of
-        # its default upstreams, ghcr.io, Docker Hub, quay.io or gcr.io.
+        # its default upstreams, ghcr.io, Docker Hub, quay.io or one of
+        # Container Registry's gcr.io hosts.
         "registry-proxy": _Component(
             "registry-proxy", PORT_REGISTRY_PROXY, "http", f"http://127.0.0.1:{PORT_REGISTRY_PROXY}/health", 30,
             [str(p.registry_proxy_bin)], None,

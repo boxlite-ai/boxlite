@@ -65,7 +65,15 @@ export const REGISTRY_PROXY_HEALTH_PATH = '/health'
  * host the API accepted a login for and the proxy then refuses is a private
  * pull that fails with a 403 nobody expected.
  */
-export const REGISTRY_PROXY_UPSTREAM_HOSTS = ['ghcr.io', 'docker.io', 'quay.io', 'gcr.io']
+export const REGISTRY_PROXY_UPSTREAM_HOSTS = [
+  'ghcr.io',
+  'docker.io',
+  'quay.io',
+  'gcr.io',
+  'us.gcr.io',
+  'eu.gcr.io',
+  'asia.gcr.io',
+]
 export const REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE = 'REGISTRY_PROXY_UPSTREAM_HOSTS'
 
 /**
