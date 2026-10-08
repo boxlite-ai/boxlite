@@ -100,6 +100,14 @@ export BOXLITE_E2E_IMAGE=ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0
 # Skip local-only checks (journalctl, runner log):
 export BOXLITE_E2E_SKIP_PATH_VERIFY=1
 
+# Image the catalog case boots, which must be on a host the API's allowlist
+# admits. Defaults to a small public one on quay.io, so a run needs no override:
+export BOXLITE_E2E_CATALOG_IMAGE=quay.io/libpod/alpine:latest
+
+# Only for a stack that predates the image catalog: skip that case instead of
+# failing. Without it a 404 on /images is treated as the regression it is:
+export BOXLITE_E2E_ALLOW_MISSING_CATALOG=1
+
 # CLI tests need a profile pointing at the remote API:
 export BOXLITE_E2E_PROFILE=p1
 export BOXLITE_E2E_CLI=/path/to/boxlite   # CLI binary built with REST support
@@ -195,6 +203,7 @@ apps/e2e/
     ├── test_node_coverage.py        # Node SDK exec, copy, errors
     ├── test_go_entry.py             # Go SDK smoke
     ├── test_go_coverage.py          # Go SDK exec options, copy, errors
+    ├── test_images_catalog.py       # Image catalog: pull records it, delete removes it, admission refuses bad hosts
     ├── test_c_entry.py              # C SDK smoke
     └── test_c_coverage.py           # C SDK exec, errors
 ```
