@@ -222,6 +222,9 @@ fn test_free_functions_null_safe() {
         boxlite_runtime_free(ptr::null_mut());
         boxlite_image_free(ptr::null_mut());
         boxlite_free_image_detail(ptr::null_mut());
+        boxlite_registry_free(ptr::null_mut());
+        boxlite_free_registry_credential(ptr::null_mut());
+        boxlite_free_registry_credential_list(ptr::null_mut());
         boxlite_box_free(ptr::null_mut());
         boxlite_network_free(ptr::null_mut());
         boxlite_tunnel_free(ptr::null_mut());

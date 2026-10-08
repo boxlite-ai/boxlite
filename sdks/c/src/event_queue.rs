@@ -15,6 +15,7 @@ use boxlite::BoxliteError;
 use crate::images::{CImageDetail, CImageInfoList, CImagePullResult, CImageUsage};
 use crate::info::{CBoxInfo, CBoxInfoList};
 use crate::metrics::{CBoxMetrics, CRuntimeMetrics};
+use crate::registries::{CRegistryCredential, CRegistryCredentialList};
 use crate::volumes::{CVolumeInfo, CVolumeInfoList};
 
 /// Maximum number of buffered events before producer tasks yield.
@@ -177,6 +178,27 @@ pub(crate) type CBoxVolumeListFn =
 /// only and no result allocation is produced.
 pub type CBoxVolumeRemoveCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxVolumeRemoveFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
+/// Registry login list completion. A successful callback owns the list and
+/// must release it with `boxlite_free_registry_credential_list`; the error
+/// pointer is borrowed for callback dispatch only.
+pub type CBoxRegistryListCb =
+    Option<extern "C" fn(*mut CRegistryCredentialList, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxRegistryListFn =
+    extern "C" fn(*mut CRegistryCredentialList, *mut crate::CBoxliteError, *mut c_void);
+
+/// Registry login create completion. A successful callback owns the login and
+/// must release it with `boxlite_free_registry_credential`; on failure it is
+/// null. The error pointer is borrowed for callback dispatch only.
+pub type CBoxRegistryCreateCb =
+    Option<extern "C" fn(*mut CRegistryCredential, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxRegistryCreateFn =
+    extern "C" fn(*mut CRegistryCredential, *mut crate::CBoxliteError, *mut c_void);
+
+/// Registry login remove completion. The error pointer is borrowed for
+/// callback dispatch only and no result allocation is produced.
+pub type CBoxRegistryRemoveCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxRegistryRemoveFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
 /// Copy (into / out of) completion.
 pub type CBoxCopyCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
@@ -431,6 +453,21 @@ pub enum RuntimeEvent {
     },
     VolumeRemove {
         cb: CBoxVolumeRemoveFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    RegistryList {
+        cb: CBoxRegistryListFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CRegistryCredentialList>, BoxliteError>,
+    },
+    RegistryCreate {
+        cb: CBoxRegistryCreateFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CRegistryCredential>, BoxliteError>,
+    },
+    RegistryRemove {
+        cb: CBoxRegistryRemoveFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
     },

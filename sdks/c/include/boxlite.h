@@ -143,6 +143,10 @@ typedef struct ImageHandle ImageHandle;
 
 typedef struct OptionsHandle OptionsHandle;
 
+// Opaque handle to a REST runtime's registry logins, released with
+// `boxlite_registry_free`.
+typedef struct RegistryHandle RegistryHandle;
+
 // Opaque REST options handle. Owns a core [`BoxliteRestOptions`] that
 // the setters mutate in place before construction.
 typedef struct RestOptionsHandle RestOptionsHandle;
@@ -537,6 +541,47 @@ typedef struct BoxliteSocketAddress {
   uint16_t port;
   const char *path;
 } BoxliteSocketAddress;
+
+typedef struct RegistryHandle CBoxliteRegistryHandle;
+
+// A registry login the server pulls private images with. It has no
+// password field: the server never returns one.
+//
+// Every string is heap-owned and non-null except `created_by`, which is null
+// when the server does not know who added the login. `created_at` is in Unix
+// seconds (UTC). A standalone value is released with
+// `boxlite_free_registry_credential`; list entries belong to their list.
+typedef struct CRegistryCredential {
+  // UUID that `boxlite_registry_remove` takes.
+  char *id;
+  char *registry_host;
+  // Whole path segments ending in "/"; empty for the whole registry.
+  char *repository_prefix;
+  char *username;
+  char *created_by;
+  int64_t created_at;
+} CRegistryCredential;
+
+// `count` logins at `items`, which is null only when `count` is zero.
+// Released, entries included, with `boxlite_free_registry_credential_list`.
+typedef struct CRegistryCredentialList {
+  struct CRegistryCredential *items;
+  int count;
+} CRegistryCredentialList;
+
+// Registry login list completion. A successful callback owns the list and
+// must release it with `boxlite_free_registry_credential_list`; the error
+// pointer is borrowed for callback dispatch only.
+typedef void (*CBoxRegistryListCb)(struct CRegistryCredentialList*, CBoxliteError*, void*);
+
+// Registry login create completion. A successful callback owns the login and
+// must release it with `boxlite_free_registry_credential`; on failure it is
+// null. The error pointer is borrowed for callback dispatch only.
+typedef void (*CBoxRegistryCreateCb)(struct CRegistryCredential*, CBoxliteError*, void*);
+
+// Registry login remove completion. The error pointer is borrowed for
+// callback dispatch only and no result allocation is produced.
+typedef void (*CBoxRegistryRemoveCb)(CBoxliteError*, void*);
 
 typedef struct CredentialHandle CBoxliteCredential;
 
@@ -1194,6 +1239,88 @@ void boxlite_options_set_cmd(CBoxliteOptions *opts, const char *const *args, int
 
 void boxlite_options_free(CBoxliteOptions *opts);
 
+// Queue a read of every login the organization holds, oldest first.
+//
+// `Ok` means the request was queued; the callback runs later on the thread
+// calling `boxlite_runtime_drain`. `user_data` is passed through unchanged
+// and must stay usable until the callback runs.
+//
+// # Safety
+//
+// `handle` and `cb` must be non-null. `out_error` may be null and otherwise
+// receives synchronous queueing failures only. A successful callback owns the
+// list and must release it with `boxlite_free_registry_credential_list`; the
+// error pointer is borrowed for the callback only.
+enum BoxliteErrorCode boxlite_registry_list(CBoxliteRegistryHandle *handle,
+                                            CBoxRegistryListCb cb,
+                                            void *user_data,
+                                            CBoxliteError *out_error);
+
+// Queue adding a login, with the same dispatch contract as
+// [`boxlite_registry_list`].
+//
+// `repository_prefix` is whole path segments ending in "/", such as "acme/",
+// or null for the whole registry. The strings are copied before this returns;
+// the password is sent once and never returned. A login already held for the
+// same registry and prefix reaches the callback as `AlreadyExists`.
+//
+// # Safety
+//
+// `handle`, `registry_host`, `username`, `password` and `cb` must be
+// non-null and UTF-8; `repository_prefix` may be null. `out_error` may be
+// null. A successful callback owns the login and must release it with
+// `boxlite_free_registry_credential`.
+enum BoxliteErrorCode boxlite_registry_create(CBoxliteRegistryHandle *handle,
+                                              const char *registry_host,
+                                              const char *repository_prefix,
+                                              const char *username,
+                                              const char *password,
+                                              CBoxRegistryCreateCb cb,
+                                              void *user_data,
+                                              CBoxliteError *out_error);
+
+// Queue removing a login by id, with the same dispatch contract as
+// [`boxlite_registry_list`].
+//
+// An id that is not a UUID reaches the callback as `InvalidArgument` without
+// a request; a login a box still pulls through as `InvalidState`, naming the
+// boxes; an unknown id as `NotFound`.
+//
+// # Safety
+//
+// `handle`, `id` and `cb` must be non-null; `id` must be UTF-8 and only needs
+// to stay valid for this call. `out_error` may be null. The callback receives
+// only a borrowed error and has nothing to free.
+enum BoxliteErrorCode boxlite_registry_remove(CBoxliteRegistryHandle *handle,
+                                              const char *id,
+                                              CBoxRegistryRemoveCb cb,
+                                              void *user_data,
+                                              CBoxliteError *out_error);
+
+// Free a handle returned by `boxlite_runtime_registries`.
+//
+// # Safety
+//
+// `handle` must be null or a pointer from `boxlite_runtime_registries` that
+// has not been freed. It must not be used afterwards.
+void boxlite_registry_free(CBoxliteRegistryHandle *handle);
+
+// Free a login a create callback received.
+//
+// # Safety
+//
+// `credential` must be null or a pointer this library handed out that has
+// not been freed.
+void boxlite_free_registry_credential(struct CRegistryCredential *credential);
+
+// Free a list a list callback received, and every login in it.
+//
+// # Safety
+//
+// `list` must be null or a pointer this library handed out that has not been
+// freed.
+void boxlite_free_registry_credential_list(struct CRegistryCredentialList *list);
+
 // Create an API-key credential.
 //
 // # Arguments
@@ -1307,6 +1434,22 @@ enum BoxliteErrorCode boxlite_runtime_images(CBoxliteRuntime *runtime,
 enum BoxliteErrorCode boxlite_runtime_volumes(CBoxliteRuntime *runtime,
                                               CBoxliteVolumeHandle **out_handle,
                                               CBoxliteError *out_error);
+
+// Create a handle for the registry logins a REST server pulls private images
+// with.
+//
+// On success ownership of `*out_handle` transfers to the caller, which must
+// release it with `boxlite_registry_free`. A local runtime answers
+// `Unsupported`: it pulls with the logins in its `image_registries` option.
+// `out_error` may be null and otherwise receives synchronous failures.
+//
+// # Safety
+//
+// `runtime` must be a live runtime pointer and `out_handle` must be non-null
+// and writable. The returned handle must not be used after it is freed.
+enum BoxliteErrorCode boxlite_runtime_registries(CBoxliteRuntime *runtime,
+                                                 CBoxliteRegistryHandle **out_handle,
+                                                 CBoxliteError *out_error);
 
 // Async + callback variant of runtime shutdown.
 //
