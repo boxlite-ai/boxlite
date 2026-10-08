@@ -14,14 +14,14 @@ Pricing references were checked on 2026-09-24; use current regional SKUs when es
 
 | Component | What BoxLite uses | Cost drivers / condition |
 | --- | --- | --- |
-| [Cloud Run](https://cloud.google.com/run/pricing) | API/dashboard and OTel collector | CPU, memory, requests, configured minimum instances and transfer |
+| [Cloud Run](https://cloud.google.com/run/pricing) | API/dashboard, OTel collector and registry proxy | CPU, memory, requests, configured minimum instances and transfer |
 | [GKE Autopilot](https://cloud.google.com/kubernetes-engine/pricing) | Proxy cluster and two replicas | Cluster management, workload resources and applicable storage/transfer |
 | [Compute Engine](https://cloud.google.com/compute/vm-instance-pricing) | Runner fleet; optional ClickHouse VM | VM family, size, count and running hours |
 | [Hyperdisk Balanced](https://cloud.google.com/compute/disks-image-pricing) | Runner boot/local state; ClickHouse boot and retained data | Provisioned capacity and performance beyond included baseline |
 | [Cloud SQL](https://cloud.google.com/sql/pricing) | PostgreSQL control-plane state | Tier, availability, storage, configured backups/PITR and transfer |
 | [Memorystore](https://cloud.google.com/memorystore/docs/redis/pricing) | Redis | Capacity and configured Basic/HA service tier |
 | [Cloud Storage](https://cloud.google.com/storage/pricing) | App bucket, dynamic volume buckets, runner artifacts, state/config versions | Stored bytes, operations, retrieval where applicable and transfer |
-| [Artifact Registry](https://cloud.google.com/artifact-registry/pricing) | API, proxy and collector images | Retained image bytes and transfer |
+| [Artifact Registry](https://cloud.google.com/artifact-registry/pricing) | API, proxy, collector and registry proxy images | Retained image bytes and transfer |
 | [Secret Manager](https://cloud.google.com/secret-manager/pricing) | Bootstrap/state keys, passwords and CA material | Active versions, access operations and replication |
 | [Cloud Load Balancing](https://cloud.google.com/load-balancing/pricing) | Public API HTTPS, private API HTTPS, proxy TLS | Forwarding/proxy resources and processed traffic according to LB type |
 | Cloud Load Balancing — ClickHouse | Internal passthrough LB for PSC publication | Additional LB when ClickHouse is self-hosted |

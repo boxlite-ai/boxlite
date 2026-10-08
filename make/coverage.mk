@@ -62,6 +62,14 @@ coverage\:report:
 # Codecov enforces patch coverage against the PR base; total coverage is reported.
 codecov: coverage\:lcov
 
+# Add real KVM execution to the unit profiles before the CI upload. The CI
+# profile bounds each test; disabling retries preserves the first failure.
+coverage\:vmm\:kvm: _ensure-kvm
+	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 \
+		-p boxlite-hypervisor --lib --run-ignored only --test-threads=1 \
+		-E 'test(kvm::vm::tests::)'
+	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
+
 # Go's reports include every package, including packages with no tests.
 coverage\:go: dev\:go
 	@mkdir -p target/coverage
@@ -72,6 +80,8 @@ coverage\:go: dev\:go
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/gvproxy.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	(cd apps/runner && GOFLAGS=-tags=boxlite_dev go test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/runner.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
+	(cd apps/image-service && go test -covermode=atomic -coverpkg=./... \
+		-coverprofile="$(PROJECT_ROOT)/target/coverage/image-service.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	exit $$rc
 
 coverage\:python: _ensure-python-deps

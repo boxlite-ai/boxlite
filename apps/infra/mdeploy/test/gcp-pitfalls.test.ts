@@ -43,6 +43,12 @@ import { BOOT_DISK_TYPE, MACHINE as RUNNER_MACHINE } from '../stack/providers/gc
 import { apiPrefixRouteRules } from '../stack/providers/gcp/api.ts'
 import { isMissingNeg } from '../stack/providers/gcp/edge.ts'
 import { instanceFor } from 'naming'
+import {
+  REGISTRY_PROXY_CONTROL_PLANE_VARIABLE,
+  REGISTRY_PROXY_HEALTH_PATH,
+  REGISTRY_PROXY_PORT,
+  REGISTRY_PROXY_PORT_VARIABLE,
+} from '../stack/registry-proxy.ts'
 
 /*
  * The committed example, not this machine's stage file.
@@ -685,8 +691,10 @@ test('the telemetry database admits both of its callers, because both egress fro
    */
   assert.match(sourceOf('api'), /networkInterfaces: \[\{ subnetwork: placement\.egressSubnetwork \}\]/)
   assert.match(sourceOf('collector'), /networkInterfaces: \[\{ subnetwork: placement\.egressSubnetwork \}\]/)
-  // And nothing else reads it, so the address stays beside its clients.
-  for (const module of ['api', 'collector', 'runners', 'clickhouse', 'edge']) {
+  // And nothing else reads it, so the address stays beside its clients — and
+  // the registry proxy, a Cloud Run service that calls no VM, stays out of the
+  // range the runner and ClickHouse rules admit.
+  for (const module of ['api', 'collector', 'runners', 'clickhouse', 'edge', 'registry-proxy']) {
     const reads = (sourceOf(module).match(/placement\.egressSubnetwork/g) ?? []).length
     assert.equal(reads, module === 'api' || module === 'collector' ? 1 : 0, `${module} reads egressSubnetwork ${reads}x`)
   }
@@ -1613,4 +1621,92 @@ test('the runner is fenced off one address, not off the internet, and only once 
   assert.match(source, /targetServiceAccounts: \[runnerAccount\]/)
   assert.equal(/destinationRanges: \['0\.0\.0\.0\/0'\]/.test(source), false, 'the deny covers the internet')
   assert.match(source, /\{ dependsOn: \[internalForwarding, internalRecord\] \}/)
+})
+
+// ── the registry proxy ──────────────────────────────────────────────────────
+
+test('the registry proxy is invocable by everyone, because its callers cannot carry an identity', () => {
+  /*
+   * A caller here is the runtime pulling an image, and the registry protocol's
+   * own Authorization header already carries the runner's Basic credential.
+   * There is no second header for a Google identity token, so a named invoker
+   * authorises nothing that ever calls — every service account reaches it and
+   * the runtime that matters is refused 403.
+   */
+  assert.match(sourceOf('registry-proxy'), /member: 'allUsers'/)
+})
+
+test('and its ingress is internal, which is the other half of that pair', () => {
+  /*
+   * With everyone as invoker, the ingress is the whole restriction. Widening it
+   * is a one-word edit that puts an authenticated relay on the internet, and no
+   * type or apply would object.
+   */
+  const ingress = /ingress: '([A-Z_]+)'/.exec(sourceOf('registry-proxy'))?.[1]
+  assert.ok(ingress, 'the registry proxy declares no ingress at all')
+  assert.ok(
+    ['INGRESS_TRAFFIC_INTERNAL_ONLY', 'INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER'].includes(ingress),
+    `allUsers may invoke the registry proxy and its ingress is ${ingress}; that pair is a public relay`,
+  )
+})
+
+test('the registry proxy may stream a response for an hour', () => {
+  /*
+   * A blob is one response and a large layer takes minutes. Cloud Run's default
+   * request deadline is five, and a pull cut off there fails with a truncated
+   * body rather than a timeout the runtime could recognise and retry.
+   */
+  assert.match(sourceOf('registry-proxy'), /timeout: '3600s'/)
+})
+
+test('the registry proxy is spoken to over HTTP/2', () => {
+  /*
+   * Cloud Run caps an HTTP/1 response at 32 MiB unless it is chunked, and a
+   * blob relayed with the upstream's own Content-Length is not. Over HTTP/1
+   * every layer past that size fails here and nowhere else — locally, in every
+   * test, it streams fine.
+   */
+  assert.match(sourceOf('registry-proxy'), /ports: \[\{ name: 'h2c', containerPort: REGISTRY_PROXY_PORT \}\]/)
+})
+
+test('the registry proxy runs as its own account, not the control plane’s', () => {
+  /*
+   * What it holds differs from what the API holds, and will differ more: once
+   * registry credentials exist, this is the one process that reads them. An
+   * account shared with the API would hand the control plane those grants too.
+   */
+  const index = readFileSync(fileURLToPath(new URL('../stack/providers/gcp/index.ts', import.meta.url)), 'utf8')
+  const wiring = /registryProxy: \(\{ network, dependsOn \}\) =>[\s\S]*?\}\),/.exec(index)?.[0]
+  assert.ok(wiring, 'the GCP bundle wires no registry proxy')
+  assert.match(wiring, /placement: placement\(network, 'registry-proxy'\)/)
+  assert.doesNotMatch(wiring, /placement\(network, 'api'\)/)
+})
+
+test('the registry proxy’s contract matches the binary it deploys', () => {
+  /*
+   * The port, the control-plane variable and the health route are said twice:
+   * once in `stack/registry-proxy.ts`, once in the Go binary they describe.
+   * Each language checks its own half, and nothing checks that the halves
+   * agree — so a default changed on one side deploys a revision that never
+   * passes its first probe, or one that asks no control plane at all.
+   */
+  const service = fileURLToPath(new URL('../../../image-service/', import.meta.url))
+  const config = readFileSync(`${service}cmd/registry-proxy/config/config.go`, 'utf8')
+  const server = readFileSync(`${service}internal/proxy/server.go`, 'utf8')
+
+  assert.match(
+    config,
+    new RegExp(`envconfig:"${REGISTRY_PROXY_PORT_VARIABLE}" default:"${REGISTRY_PROXY_PORT}"`),
+    `the binary does not listen on ${REGISTRY_PROXY_PORT} by default under ${REGISTRY_PROXY_PORT_VARIABLE}`,
+  )
+  assert.match(
+    config,
+    new RegExp(`envconfig:"${REGISTRY_PROXY_CONTROL_PLANE_VARIABLE}"`),
+    `the binary does not read its control plane from ${REGISTRY_PROXY_CONTROL_PLANE_VARIABLE}`,
+  )
+  assert.match(
+    server,
+    new RegExp(`HealthPath = "${REGISTRY_PROXY_HEALTH_PATH}"`),
+    `the binary serves no health route at ${REGISTRY_PROXY_HEALTH_PATH}`,
+  )
 })

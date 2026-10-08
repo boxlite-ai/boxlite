@@ -14,9 +14,11 @@ import (
 // registry list it is built with must carry no credential at all: any one would
 // be spent on a tenant's reference to that host. The insecure registries are
 // kept as they were, HTTP and unverified, since reaching a local registry is
-// about transport, not about whose token opens it.
+// about transport, not about whose token opens it. The registry proxy, which
+// carries the runner's own key, is the one exception; its tests are in
+// client_registry_proxy_test.go.
 func TestBuildImageRegistries_HoldsNoCredential(t *testing.T) {
-	registries := buildImageRegistries([]string{"10.0.0.5:5000", "registry.local:5000"})
+	registries := buildImageRegistries([]string{"10.0.0.5:5000", "registry.local:5000"}, RegistryProxy{})
 
 	if len(registries) != 2 {
 		t.Fatalf("expected only the two insecure registries, got %d: %+v", len(registries), registries)
@@ -30,7 +32,7 @@ func TestBuildImageRegistries_HoldsNoCredential(t *testing.T) {
 		}
 	}
 
-	if got := buildImageRegistries(nil); len(got) != 0 {
+	if got := buildImageRegistries(nil, RegistryProxy{}); len(got) != 0 {
 		t.Errorf("no insecure registries means an empty list, got %+v", got)
 	}
 }

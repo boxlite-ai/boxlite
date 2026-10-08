@@ -65,7 +65,7 @@ pub struct NetworkBackendConfig {
     pub allow_net: Vec<String>,
     /// Secrets for MITM proxy injection.
     pub secrets: Vec<crate::runtime::options::Secret>,
-    /// Directory in which to mint the ephemeral MITM CA — used only when
+    /// Directory holding the persisted per-box MITM CA — used only when
     /// `secrets` is non-empty. The backend mints the CA in [`NetworkBackend::spec`].
     pub ca_dir: PathBuf,
     /// Per-direction rate limit for the guest link. Default is unlimited.

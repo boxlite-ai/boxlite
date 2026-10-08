@@ -58,6 +58,7 @@ type ClientConfig struct {
 	Logger                       *slog.Logger
 	HomeDir                      string
 	InsecureRegistries           []string
+	RegistryProxy                RegistryProxy
 	AWSRegion                    string
 	AWSEndpointUrl               string
 	AWSAccessKeyId               string
@@ -132,23 +133,114 @@ func secretSpecs(secrets []dto.SecretDTO) []boxlite.Secret {
 	return specs
 }
 
+// RegistryProxy is where the runner sends a pull for an image whose registry
+// credentials only the platform holds, and the runner's own credential for it.
+// The password is the runner's API key: the proxy authenticates a caller by
+// asking the control plane whose key it is.
+type RegistryProxy struct {
+	Host     string
+	Username string
+	Password string
+}
+
+// complete reports whether all three were given, which is the only state in
+// which the proxy is used at all.
+//
+// The host is judged after it is reduced to one, not as written: a value that
+// reduces to nothing — a bare scheme, whitespace — is as unusable as one left
+// out, and treating it as given would drop the proxy without a word.
+func (p RegistryProxy) complete() bool {
+	return registryHost(p.Host) != "" && p.Username != "" && p.Password != ""
+}
+
+// missing names the variables a partly configured proxy lacks or cannot use.
+// Empty for a proxy that is complete or not configured at all.
+func (p RegistryProxy) missing() []string {
+	given := map[string]bool{
+		"REGISTRY_PROXY_HOST":     registryHost(p.Host) != "",
+		"REGISTRY_PROXY_USERNAME": p.Username != "",
+		"REGISTRY_PROXY_PASSWORD": p.Password != "",
+	}
+	var absent []string
+	for _, name := range []string{"REGISTRY_PROXY_HOST", "REGISTRY_PROXY_USERNAME", "REGISTRY_PROXY_PASSWORD"} {
+		if !given[name] {
+			absent = append(absent, name)
+		}
+	}
+	if len(absent) == len(given) {
+		return nil
+	}
+	return absent
+}
+
+// warnOnPartialRegistryProxy says so when a stage configured some of the proxy
+// and not the rest. That is almost always an unfinished setting rather than an
+// intent, and without a word it would look like the proxy being ignored.
+func warnOnPartialRegistryProxy(logger *slog.Logger, proxy RegistryProxy) {
+	if absent := proxy.missing(); len(absent) > 0 {
+		logger.Warn("Registry proxy is partly configured and will not be used", "missing", strings.Join(absent, ", "))
+	}
+}
+
 // buildImageRegistries assembles the runtime-scoped OCI registry list handed
-// to boxlite-core: the insecure (HTTP) registries only, and never a credential.
+// to boxlite-core: the insecure (HTTP) registries, and — when the registry
+// proxy is fully configured — one entry for it. A registry's credential is
+// never here.
 //
 // Core matches credentials by host, and this runtime pulls the operator's
 // curated images and references tenants named from the same hosts. A
 // credential here would be spent on any tenant reference to its host, so the
 // runtime holds none and every image pulls anonymously — which is why the
-// curated images must be public. Kept as a pure function so that is testable
+// curated images must be public. The proxy's entry is the exception that
+// proves it: it carries the runner's own key, not a registry's, which is safe
+// only while no tenant reference names the proxy host — a reference the API's
+// image admission has to refuse.
+// With no proxy configured this is byte-for-byte the anonymous list, so the
+// proxy is safe to ship dark. Kept as a pure function so that is testable
 // without constructing a real runtime.
-func buildImageRegistries(insecureRegistries []string) []boxlite.ImageRegistry {
-	registries := make([]boxlite.ImageRegistry, 0, len(insecureRegistries))
+//
+// No host is named twice. The runtime matches a host to the first entry naming it and ignores
+// the rest, for transport and credential alike, so a registry proxy that is also listed as
+// insecure — the local stack's, served over plain HTTP — is one entry carrying both: HTTP from
+// the insecure list, the credential from the proxy. Two entries would let the credential-less
+// one win.
+//
+// The proxy is never searched. Search makes an unqualified reference like `alpine:3.20` try
+// this host, and nothing about an image a caller names without a registry should route it here.
+func buildImageRegistries(insecureRegistries []string, proxy RegistryProxy) []boxlite.ImageRegistry {
+	proxyHost := ""
+	if proxy.complete() {
+		proxyHost = registryHost(proxy.Host)
+	}
+
+	registries := make([]boxlite.ImageRegistry, 0, len(insecureRegistries)+1)
+	proxyIsInsecure := false
 	for _, host := range insecureRegistries {
+		if host == proxyHost {
+			proxyIsInsecure = true
+			continue
+		}
 		registries = append(registries, boxlite.ImageRegistry{
 			Host:       host,
 			Transport:  boxlite.RegistryTransportHTTP,
 			SkipVerify: true,
 		})
+	}
+	if proxyHost != "" {
+		entry := boxlite.ImageRegistry{
+			Host:      proxyHost,
+			Transport: boxlite.RegistryTransportHTTPS,
+			Search:    false,
+			Auth: boxlite.ImageRegistryAuth{
+				Username: proxy.Username,
+				Password: proxy.Password,
+			},
+		}
+		if proxyIsInsecure {
+			entry.Transport = boxlite.RegistryTransportHTTP
+			entry.SkipVerify = true
+		}
+		registries = append(registries, entry)
 	}
 	return registries
 }
@@ -159,8 +251,14 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	if config.HomeDir != "" {
 		opts = append(opts, boxlite.WithHomeDir(config.HomeDir))
 	}
+	logger := config.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	warnOnPartialRegistryProxy(logger, config.RegistryProxy)
+
 	insecureRegistries := normalizeRegistryHosts(config.InsecureRegistries)
-	registries := buildImageRegistries(insecureRegistries)
+	registries := buildImageRegistries(insecureRegistries, config.RegistryProxy)
 	if len(registries) > 0 {
 		opts = append(opts, boxlite.WithImageRegistries(registries...))
 	}
@@ -168,11 +266,6 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	rt, err := boxlite.NewRuntime(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create boxlite runtime: %w", err)
-	}
-
-	logger := config.Logger
-	if logger == nil {
-		logger = slog.Default()
 	}
 
 	return &Client{

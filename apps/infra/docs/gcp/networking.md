@@ -18,10 +18,12 @@ GCP uses private runner hosts, direct Cloud Run VPC egress, and separate public 
 | API → runner | Direct VPC egress → runner TCP 3003 |
 | API → SQL/Redis | Direct VPC egress → Private Service Access → managed service |
 | API/collector → ClickHouse | Direct VPC egress → private VM TCP 8123 |
+| Runner → registry proxy | Private Google Access → internal-ingress Cloud Run `run.app` address over HTTP/2 (not yet configured on hosts) |
+| Registry proxy → runner key check | Workload-subnet direct egress → private API path; upstream registries via Cloud Run's own egress |
 | Private VM/GKE → internet | Cloud NAT when internet egress is enabled |
 | Backoffice → ClickHouse | Consumer PSC endpoint → service attachment → internal passthrough LB |
 
-Cloud Run API ingress is restricted to internal/load-balancer traffic. The collector is internal-only.
+Cloud Run API ingress is restricted to internal/load-balancer traffic. The collector and registry proxy are internal-only.
 Their VPC egress mode is `PRIVATE_RANGES_ONLY`: public internet traffic does not automatically take
 Cloud NAT. There is no Serverless VPC Access connector in this resource graph.
 The API's built-in Cloud SQL connection uses its mounted Unix socket; Redis uses TLS and a mounted CA.
@@ -42,6 +44,7 @@ Cloud Run→VM ingress rules match the dedicated subnet CIDR. Do not substitute 
 accounts or network tags: [Direct VPC egress limitations](https://cloud.google.com/run/docs/configuring/vpc-direct-vpc)
 do not support those selectors for ingress firewall rules. The shared egress subnet admits both API
 and collector traffic where that range is allowed; it does not distinguish the two services.
+The registry proxy egresses from the primary workload subnet instead, so no range-keyed rule admits it to a VM.
 GKE proxy→runner access matches the pod range. Runner instances have no external IP.
 
 ## DNS and TLS
@@ -60,4 +63,4 @@ a broken runner. For proxy failures, inspect pod readiness and NEG/backend healt
 Use an actual box preview or exec request to verify the full path after changing a network rule.
 
 
-Sources: [network](../../mdeploy/stack/providers/gcp/network.ts), [API](../../mdeploy/stack/providers/gcp/api.ts), [proxy](../../mdeploy/stack/providers/gcp/edge.ts), [cluster](../../mdeploy/stack/providers/gcp/cluster.ts), [ClickStack publication](../../mdeploy/stack/providers/gcp/clickstack.ts).
+Sources: [network](../../mdeploy/stack/providers/gcp/network.ts), [API](../../mdeploy/stack/providers/gcp/api.ts), [proxy](../../mdeploy/stack/providers/gcp/edge.ts), [cluster](../../mdeploy/stack/providers/gcp/cluster.ts), [registry proxy](../../mdeploy/stack/providers/gcp/registry-proxy.ts), [ClickStack publication](../../mdeploy/stack/providers/gcp/clickstack.ts).
