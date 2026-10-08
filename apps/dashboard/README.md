@@ -100,3 +100,10 @@ An invitee reaches the invitations page from the email link or from the profile
 menu, which shows how many invitations are pending. Accepting switches to the
 organization just joined, because a membership that only shows up after a
 reload reads as a failed accept.
+
+## The organization you pick is the one you come back to
+
+A user in more than one organization switches between them from the profile
+menu, which marks the personal one. The pick is kept in `localStorage`, so the
+next login opens the same organization; if the user was removed from it in the
+meantime, the console falls back to their personal organization.
