@@ -421,6 +421,71 @@ func goBoxliteOnVolumeRemove(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	deliverUnitResult(userData, errPtr)
 }
 
+//export goBoxliteOnRegistryCreate
+func goBoxliteOnRegistryCreate(login *C.CRegistryCredential, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &login, func(l **C.CRegistryCredential) {
+		if l != nil && *l != nil {
+			C.boxlite_free_registry_credential(*l)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan registryResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- registryResult{err: err}
+		return
+	}
+	if login == nil {
+		ch <- registryResult{}
+		return
+	}
+	v := cRegistryCredentialToGo(login)
+	C.boxlite_free_registry_credential(login)
+	ch <- registryResult{value: &v}
+}
+
+//export goBoxliteOnRegistryList
+func goBoxliteOnRegistryList(list *C.CRegistryCredentialList, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &list, func(l **C.CRegistryCredentialList) {
+		if l != nil && *l != nil {
+			C.boxlite_free_registry_credential_list(*l)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan registryListResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- registryListResult{err: err}
+		return
+	}
+	logins := convertRegistryCredentialList(list)
+	if list != nil {
+		C.boxlite_free_registry_credential_list(list)
+	}
+	ch <- registryListResult{value: logins}
+}
+
+//export goBoxliteOnRegistryRemove
+func goBoxliteOnRegistryRemove(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
 // ─── Info callbacks ────────────────────────────────────────────────────────
 
 //export goBoxliteOnInfo
@@ -693,6 +758,16 @@ type volumeResult struct {
 
 type volumeListResult struct {
 	value []VolumeInfo
+	err   error
+}
+
+type registryResult struct {
+	value *RegistryCredential
+	err   error
+}
+
+type registryListResult struct {
+	value []RegistryCredential
 	err   error
 }
 

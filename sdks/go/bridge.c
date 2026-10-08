@@ -32,6 +32,10 @@ extern void goBoxliteOnVolume(CVolumeInfo *info, CBoxliteError *err, void *ud);
 extern void goBoxliteOnVolumeList(CVolumeInfoList *list, CBoxliteError *err, void *ud);
 extern void goBoxliteOnVolumeRemove(CBoxliteError *err, void *ud);
 
+extern void goBoxliteOnRegistryCreate(CRegistryCredential *login, CBoxliteError *err, void *ud);
+extern void goBoxliteOnRegistryList(CRegistryCredentialList *list, CBoxliteError *err, void *ud);
+extern void goBoxliteOnRegistryRemove(CBoxliteError *err, void *ud);
+
 extern void goBoxliteOnInfo(CBoxInfo *info, CBoxliteError *err, void *ud);
 extern void goBoxliteOnInfoList(CBoxInfoList *list, CBoxliteError *err, void *ud);
 
@@ -77,6 +81,10 @@ CBoxVolumeCreateCb cbVolumeCreate(void) { return (CBoxVolumeCreateCb)goBoxliteOn
 CBoxVolumeGetCb cbVolumeGet(void) { return (CBoxVolumeGetCb)goBoxliteOnVolume; }
 CBoxVolumeListCb cbVolumeList(void) { return (CBoxVolumeListCb)goBoxliteOnVolumeList; }
 CBoxVolumeRemoveCb cbVolumeRemove(void) { return (CBoxVolumeRemoveCb)goBoxliteOnVolumeRemove; }
+
+CBoxRegistryCreateCb cbRegistryCreate(void) { return (CBoxRegistryCreateCb)goBoxliteOnRegistryCreate; }
+CBoxRegistryListCb cbRegistryList(void) { return (CBoxRegistryListCb)goBoxliteOnRegistryList; }
+CBoxRegistryRemoveCb cbRegistryRemove(void) { return (CBoxRegistryRemoveCb)goBoxliteOnRegistryRemove; }
 
 CBoxInfoCb cbInfo(void) { return (CBoxInfoCb)goBoxliteOnInfo; }
 CBoxInfoListCb cbInfoList(void) { return (CBoxInfoListCb)goBoxliteOnInfoList; }

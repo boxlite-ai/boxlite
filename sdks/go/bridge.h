@@ -32,6 +32,10 @@ extern CBoxVolumeListCb cbVolumeList(void);
 extern CBoxVolumeGetCb cbVolumeGet(void);
 extern CBoxVolumeRemoveCb cbVolumeRemove(void);
 
+extern CBoxRegistryCreateCb cbRegistryCreate(void);
+extern CBoxRegistryListCb cbRegistryList(void);
+extern CBoxRegistryRemoveCb cbRegistryRemove(void);
+
 extern CBoxInfoCb cbInfo(void);
 extern CBoxInfoListCb cbInfoList(void);
 
