@@ -311,6 +311,24 @@ async def safe_execution():
         # RUST_LOG=debug python script.py
 ```
 
+### Node.js
+
+```typescript
+import { errorCode } from 'boxlite';
+
+try {
+  await runtime.remove('no-such-box');
+} catch (err) {
+  // The same codes as Python's `code`; see the Node.js reference's
+  // `errorCode(err)` section.
+  if (errorCode(err) === 'not_found') {
+    console.log('No such box');
+  } else {
+    throw err;
+  }
+}
+```
+
 ### Rust
 
 ```rust

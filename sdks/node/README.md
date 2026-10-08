@@ -440,6 +440,10 @@ try {
 }
 ```
 
+A failure the runtime itself reports carries a code that `errorCode(err)`
+returns, such as `not_found` or `invalid_state`; it is `undefined` for any
+other error. See [the Node.js reference](../../docs/reference/nodejs/README.md#errorcodeerr).
+
 ## Building from Source
 
 ```bash

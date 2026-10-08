@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { JsBoxlite, BoxliteRestOptions } from "../lib/index.js";
+import { JsBoxlite, BoxliteRestOptions, errorCode } from "../lib/index.js";
 
 // `lib/index.ts` exposes the cross-SDK `BoxliteRestOptions` bag while the
 // native binding takes its own `BoxliteRestOptions` class (the
@@ -51,6 +51,28 @@ describe("native-class subclassing", () => {
       }
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+// What `errorCode` reads is the message the binding throws, so check it on an
+// error that really crossed the binding: images are a local cache, which a
+// REST runtime refuses before sending anything.
+describe("errors thrown by the binding", () => {
+  test("carry the code errorCode reads", () => {
+    const runtime = JsBoxlite.rest(
+      new BoxliteRestOptions({ url: "http://127.0.0.1:1" }),
+    );
+    try {
+      let thrown: unknown;
+      try {
+        runtime.images();
+      } catch (err) {
+        thrown = err;
+      }
+      expect(errorCode(thrown)).toBe("unsupported");
+    } finally {
+      runtime.close();
     }
   });
 });

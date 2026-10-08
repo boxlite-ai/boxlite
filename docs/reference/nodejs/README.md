@@ -821,6 +821,26 @@ try {
 }
 ```
 
+### `errorCode(err)`
+
+A failure the native runtime reports is a plain `Error` whose message starts
+with the kind of failure. `errorCode` returns that kind's code, or `undefined`
+for any other error. The codes are the ones `BoxliteError::http()` gives
+(`src/shared/src/errors.rs`) and a REST server answers with, and the same as
+the `code` of Python's [runtime failure classes](../python/README.md#runtime-failures).
+
+```typescript
+import { errorCode } from 'boxlite';
+
+try {
+  await runtime.remove('no-such-box');
+} catch (err) {
+  if (errorCode(err) === 'not_found') {
+    // nothing to remove
+  }
+}
+```
+
 ---
 
 ## Metrics
