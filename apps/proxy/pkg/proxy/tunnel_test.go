@@ -113,8 +113,13 @@ func TestTunnelConnectRejectsPrivateBoxBeforeRunnerDial(t *testing.T) {
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
 	}
-	if want := "boxlite update AbCdEf123456 --inbound enabled"; !strings.Contains(response.Body.String(), want) {
-		t.Fatalf("body = %q, want it to name %q", response.Body.String(), want)
+	for _, want := range []string{
+		"inbound access disabled",
+		"boxlite update AbCdEf123456 --inbound enabled",
+	} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("body = %q, want it to name %q", response.Body.String(), want)
+		}
 	}
 }
 

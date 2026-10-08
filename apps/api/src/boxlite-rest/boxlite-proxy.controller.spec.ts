@@ -173,7 +173,9 @@ describe('BoxliteProxyController', () => {
       controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, tunnelRes as never),
     ).rejects.toMatchObject({
       status: 409,
-      message: expect.stringContaining('boxlite update public-box --inbound enabled'),
+      message: expect.stringMatching(
+        /inbound access disabled.*boxlite update public-box --inbound enabled/,
+      ),
     })
     expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
   })

@@ -247,7 +247,7 @@ export class BoxliteProxyController {
     // be rejected here anyway.
     if (!box.public) {
       throw new ConflictException(
-        `Box ${boxId} is not public; run \`boxlite update ${boxId} --inbound enabled\` or make it public in the dashboard`,
+        `Box ${boxId} has inbound access disabled. Enable it (for example: \`boxlite update ${boxId} --inbound enabled\`) and retry.`,
       )
     }
 
