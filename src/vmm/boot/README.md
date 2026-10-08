@@ -61,8 +61,28 @@ Run the offline wrapper checks without starting Docker:
 make test:vmm:boot
 ```
 
-QEMU boot qualification and independent-build comparison are separate follow-up
-checks; neither is covered by the wrapper tests.
+The qualification and reproducibility checks stop and reap the full build
+process group on timeout or interruption before removing temporary outputs.
+
+Boot the generated image under QEMU's software emulator and check both the
+guest marker and its reboot request:
+
+```sh
+make test:vmm:boot-artifacts
+```
+
+This check needs Docker Buildx and `qemu-system-x86_64` on the host. It boots
+one vCPU with TCG, so it does not require KVM or prove host-hardware behavior.
+
+Compare two builds with the build stage uncached:
+
+```sh
+make test:vmm:boot-reproducible
+```
+
+Each build validates `SHA256SUMS`; the check then compares every artifact and
+the checksum manifest byte-for-byte. Reproducibility is scoped to one builder
+architecture, as recorded in `build-info.txt`.
 
 ## Reference research
 

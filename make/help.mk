@@ -45,6 +45,8 @@ help:
 	@echo "    make test:unit:rust         - Run Rust unit tests (nextest when available)"
 	@echo "    make test:unit:vmm          - Run only the hypervisor and VMM crate unit tests"
 	@echo "    make test:vmm:boot          - Check boot-artifact build entry points"
+	@echo "    make test:vmm:boot-artifacts - Build and boot in QEMU (Docker + QEMU)"
+	@echo "    make test:vmm:boot-reproducible - Compare two uncached artifact builds (Docker)"
 	@echo "    make test:integration:vmm:kvm - Qualify KVM VM creation and memory (Linux x86_64)"
 	@echo "    make coverage:vmm:kvm      - Add KVM hardware coverage to existing unit profiles"
 	@echo "    make test:guest-perms       - Run guest ownership tests (privileged cases use sudo)"
