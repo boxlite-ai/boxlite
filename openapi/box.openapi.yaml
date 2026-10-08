@@ -134,6 +134,8 @@ tags:
     description: Container image management
   - name: Volumes
     description: Managed persistent volumes
+  - name: Registries
+    description: Logins the server pulls private images with
 
 # ===========================================================================
 # Paths
@@ -1185,6 +1187,93 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  # -------------------------------------------------------------------------
+  # Registries
+  # -------------------------------------------------------------------------
+  /{prefix}/registries:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+
+    get:
+      operationId: listRegistries
+      summary: List registry logins
+      description: |
+        The logins the server presents when it pulls a private image for a
+        box, oldest first. No login carries its password.
+      tags: [Registries]
+      responses:
+        "200":
+          description: The routing slot's registry logins
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListRegistriesResponse"
+
+    post:
+      operationId: createRegistry
+      summary: Add a registry login
+      description: |
+        The password is stored where the server cannot read it back, and is
+        never returned. A login is held per registry and prefix: a second one
+        for the same pair is refused with `AlreadyExistsError`. A server that
+        cannot pull private images answers `UnsupportedError`.
+      tags: [Registries]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRegistryRequest"
+      responses:
+        "201":
+          description: The login, without its password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistryCredential"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "409":
+          description: A login is already held for this registry and prefix
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  message: "A credential for ghcr.io/acme/ already exists; remove it before adding another"
+                  type: AlreadyExistsError
+                  code: already_exists
+        "501":
+          description: This server does not pull private images
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /{prefix}/registries/{registry_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/registryId"
+
+    delete:
+      operationId: removeRegistry
+      summary: Remove a registry login
+      description: |
+        Removes the login and destroys its password. A server refuses with
+        `InvalidStateError`, naming the boxes, while a box still pulls through
+        the login.
+      tags: [Registries]
+      responses:
+        "204":
+          description: The login is gone, and its password destroyed
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
 # ===========================================================================
 # Components
 # ===========================================================================
@@ -1295,6 +1384,15 @@ components:
       schema:
         type: string
       example: "quay.io%2Facme%2Fapp"
+
+    registryId:
+      name: registry_id
+      in: path
+      required: true
+      description: Server-assigned registry login identifier
+      schema:
+        type: string
+        format: uuid
 
     volumeId:
       name: volume_id
@@ -2629,3 +2727,68 @@ components:
           type: string
           nullable: true
           description: Opaque token for next page
+
+    # =======================================================================
+    # Registries
+    # =======================================================================
+    CreateRegistryRequest:
+      type: object
+      required: [registry_host, username, password]
+      properties:
+        registry_host:
+          type: string
+          description: The registry the login is for; the server says which it takes logins for
+          example: ghcr.io
+        repository_prefix:
+          type: string
+          description: |
+            The repositories it covers, as whole path segments ending in `/`.
+            Omitted or empty for the whole registry.
+          maxLength: 255
+          example: acme/
+        username:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: acme-bot
+        password:
+          type: string
+          description: Password or access token. Never returned.
+          writeOnly: true
+          minLength: 1
+          maxLength: 8192
+
+    RegistryCredential:
+      type: object
+      description: A registry login. There is no password field.
+      required: [id, registry_host, repository_prefix, username, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        registry_host:
+          type: string
+          example: ghcr.io
+        repository_prefix:
+          type: string
+          description: Empty for the whole registry
+          example: acme/
+        username:
+          type: string
+          example: acme-bot
+        created_by:
+          type: string
+          nullable: true
+          description: The user who added it
+        created_at:
+          type: string
+          format: date-time
+
+    ListRegistriesResponse:
+      type: object
+      required: [registries]
+      properties:
+        registries:
+          type: array
+          items:
+            $ref: "#/components/schemas/RegistryCredential"

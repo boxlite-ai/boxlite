@@ -83,9 +83,12 @@ export class RegistriesService {
       // the API holds no permission to delete one.
       await this.destroyQuietly(secretVersion)
       if ((error as { code?: string }).code === PG_UNIQUE_VIOLATION) {
-        throw new ConflictException(
-          `A credential for ${request.registryHost}/${repositoryPrefix} already exists; remove it before adding another`,
-        )
+        // The code names the conflict for an SDK, which would otherwise read a
+        // bare 409 as a resource in the wrong state, as a delete's refusal is.
+        throw new ConflictException({
+          message: `A credential for ${request.registryHost}/${repositoryPrefix} already exists; remove it before adding another`,
+          code: 'already_exists',
+        })
       }
       throw error
     }
@@ -150,11 +153,14 @@ export class RegistriesService {
   /**
    * The store, or a 501 when this deployment keeps none: without it there is
    * nowhere to put a password, and without the proxy nothing would present
-   * one.
+   * one. The code lets an SDK read it as unsupported rather than a fault.
    */
   private enabledStore(): SecretStore {
     if (!this.store || !registryProxyHost()) {
-      throw new NotImplementedException('Private registries are not enabled in this deployment')
+      throw new NotImplementedException({
+        message: 'Private registries are not enabled in this deployment',
+        code: 'unsupported',
+      })
     }
     return this.store
   }
