@@ -217,7 +217,7 @@ apps/e2e/
     ├── test_go_entry.py             # Go SDK smoke
     ├── test_go_coverage.py          # Go SDK exec options, copy, errors
     ├── test_images_catalog.py       # Image catalog via rt.images: booting records it, remove drops it, admission refuses bad hosts
-    ├── test_images_private.py       # Private image through a login registered over HTTP
+    ├── test_images_private.py       # Private image through a login added with rt.registries
     ├── test_c_entry.py              # C SDK smoke
     └── test_c_coverage.py           # C SDK exec, errors
 ```

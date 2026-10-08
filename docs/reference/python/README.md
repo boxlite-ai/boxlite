@@ -119,7 +119,7 @@ with the logins in `Options(image_registries=...)` instead.
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `list()` | `async () -> List[RegistryCredential]` | Every login the organization holds, oldest first |
-| `create()` | `async (*, registry_host: str, username: str, password: str, repository_prefix: str = None) -> RegistryCredential` | Add a login; `AlreadyExistsError` while one is held for the same registry and prefix |
+| `create()` | `async (*, registry_host: str, username: str, password: str, repository_prefix: str \| None = None) -> RegistryCredential` | Add a login; `AlreadyExistsError` while one is held for the same registry and prefix |
 | `remove()` | `async (id: str) -> None` | Remove a login; `InvalidStateError`, naming the boxes, while a box still pulls through it; `NotFoundError` for an unknown id |
 
 `create()` takes keyword arguments only. `repository_prefix` is whole path

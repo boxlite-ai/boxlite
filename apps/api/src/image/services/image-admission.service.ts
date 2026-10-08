@@ -110,11 +110,12 @@ export class ImageAdmissionService {
       !allowlist.includes(host) &&
       !(await this.registryCredentials.routesThroughProxy(organization.id, host, repository))
     ) {
-      // A host a login could open is told so, and where to add one; any other
-      // host gets the allowlist's own refusal.
+      // A host a login could open is told so, and both places to add one: the
+      // console and the SDK's runtime handle. Any other host gets the
+      // allowlist's own refusal.
       if (registryProxyHost() && credentialedRegistryHosts().includes(host)) {
         throw new BadRequestError(
-          `Image registry '${host}' is reachable only with a registered credential for this repository; add one under Registries`,
+          `Image registry '${host}' is reachable only with a registered credential for this repository; add one under Registries in the console, or with the SDK's runtime registries handle`,
         )
       }
       assertHostIsAllowed(host, allowlist)

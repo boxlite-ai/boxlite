@@ -173,9 +173,10 @@ Obtained with `runtime.registries()?`, which an embedded runtime refuses with
 
 The password goes up once, in the create. `RegistryCredential` has no
 password field, and `NewRegistryCredential`'s `Debug` prints it as
-`[redacted]`. `repository_prefix` is whole path segments ending in `/`, or
-`None` for the whole registry. `remove` refuses an id that is not a UUID with
-`InvalidArgument` before sending a request.
+`[redacted]`. A prefix is whole path segments ending in `/`: pass `None` in
+`NewRegistryCredential::repository_prefix` for the whole registry, which a
+returned `RegistryCredential` reports as an empty string. `remove` refuses an
+id that is not a UUID with `InvalidArgument` before sending a request.
 
 ```rust
 use boxlite::runtime::NewRegistryCredential;
