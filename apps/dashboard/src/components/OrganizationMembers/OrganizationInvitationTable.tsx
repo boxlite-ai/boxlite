@@ -15,53 +15,35 @@ import {
   SortingState,
   useReactTable,
 } from '@tanstack/react-table'
-import { OrganizationInvitation, OrganizationRole, UpdateOrganizationInvitationRoleEnum } from '@boxlite-ai/api-client'
+import { OrganizationInvitation } from '@boxlite-ai/api-client'
 import { Pagination } from '@/components/Pagination'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { TableHeader, TableRow, TableHead, TableBody, TableCell, Table } from '@/components/ui/table'
 import { CancelOrganizationInvitationDialog } from '@/components/OrganizationMembers/CancelOrganizationInvitationDialog'
-import { UpdateOrganizationInvitationDialog } from './UpdateOrganizationInvitationDialog'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { TableEmptyState } from '../TableEmptyState'
 
 interface DataTableProps {
   data: OrganizationInvitation[]
   loadingData: boolean
-  availableRoles: OrganizationRole[]
-  loadingAvailableRoles: boolean
   onCancelInvitation: (invitationId: string) => Promise<boolean>
-  onUpdateInvitation: (
-    invitationId: string,
-    role: UpdateOrganizationInvitationRoleEnum,
-    assignedRoleIds: string[],
-  ) => Promise<boolean>
   loadingInvitationAction: Record<string, boolean>
 }
 
 export function OrganizationInvitationTable({
   data,
   loadingData,
-  availableRoles,
-  loadingAvailableRoles,
   onCancelInvitation,
-  onUpdateInvitation,
   loadingInvitationAction,
 }: DataTableProps) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [invitationToCancel, setInvitationToCancel] = useState<string | null>(null)
   const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false)
-  const [invitationToUpdate, setInvitationToUpdate] = useState<OrganizationInvitation | null>(null)
-  const [isUpdateDialogOpen, setIsUpdateDialogOpen] = useState(false)
 
   const handleCancel = (invitationId: string) => {
     setInvitationToCancel(invitationId)
     setIsCancelDialogOpen(true)
-  }
-
-  const handleUpdate = (invitation: OrganizationInvitation) => {
-    setInvitationToUpdate(invitation)
-    setIsUpdateDialogOpen(true)
   }
 
   const handleConfirmCancel = async () => {
@@ -76,19 +58,7 @@ export function OrganizationInvitationTable({
     return false
   }
 
-  const handleConfirmUpdate = async (role: UpdateOrganizationInvitationRoleEnum, assignedRoleIds: string[]) => {
-    if (invitationToUpdate) {
-      const success = await onUpdateInvitation(invitationToUpdate.id, role, assignedRoleIds)
-      if (success) {
-        setInvitationToUpdate(null)
-        setIsUpdateDialogOpen(false)
-      }
-      return success
-    }
-    return false
-  }
-
-  const columns = getColumns({ onCancel: handleCancel, onUpdate: handleUpdate })
+  const columns = getColumns({ onCancel: handleCancel })
 
   const table = useReactTable({
     data,
@@ -153,22 +123,6 @@ export function OrganizationInvitationTable({
         <Pagination table={table} className="mt-4" entityName="Invitations" />
       </div>
 
-      {invitationToUpdate && (
-        <UpdateOrganizationInvitationDialog
-          open={isUpdateDialogOpen}
-          onOpenChange={(open) => {
-            setIsUpdateDialogOpen(open)
-            if (!open) {
-              setInvitationToUpdate(null)
-            }
-          }}
-          invitation={invitationToUpdate}
-          availableRoles={availableRoles}
-          loadingAvailableRoles={loadingAvailableRoles}
-          onUpdateInvitation={handleConfirmUpdate}
-        />
-      )}
-
       {invitationToCancel && (
         <CancelOrganizationInvitationDialog
           open={isCancelDialogOpen}
@@ -188,10 +142,8 @@ export function OrganizationInvitationTable({
 
 const getColumns = ({
   onCancel,
-  onUpdate,
 }: {
   onCancel: (invitationId: string) => void
-  onUpdate: (invitation: OrganizationInvitation) => void
 }): ColumnDef<OrganizationInvitation>[] => {
   const columns: ColumnDef<OrganizationInvitation>[] = [
     {
@@ -235,9 +187,6 @@ const getColumns = ({
               </DropdownMenuTrigger>
 
               <DropdownMenuContent align="end">
-                <DropdownMenuItem className="cursor-pointer" onClick={() => onUpdate(row.original)}>
-                  Edit
-                </DropdownMenuItem>
                 <DropdownMenuItem
                   className="cursor-pointer text-red-600 dark:text-red-400"
                   onClick={() => onCancel(row.original.id)}

@@ -85,4 +85,5 @@ mounting one twice has already caused duplicate API keys to be minted
 ## Every invitee joins as an owner
 
 An organization has no finer roles yet, so inviting asks only for an email
-address: a role picker would offer choices the product does not have.
+address: a role picker would offer choices the product does not have. For the
+same reason a pending invitation can be cancelled but not edited.
