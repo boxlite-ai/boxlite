@@ -232,8 +232,21 @@ fn test_free_functions_null_safe() {
     }
 }
 
+extern "C" fn record_pull_code(
+    result: *mut crate::images::CImagePullResult,
+    err: *mut FFIError,
+    ud: *mut c_void,
+) {
+    unsafe {
+        crate::images::free_image_pull_result(result);
+        *(ud as *mut Option<BoxliteErrorCode>) = Some((*err).code);
+    }
+}
+
+/// A REST runtime hands out the image handle; what it refuses is `pull`,
+/// since the server pulls an image when a box is created from it.
 #[test]
-fn test_runtime_images_unsupported_on_rest_runtime() {
+fn test_rest_runtime_images_refuses_pull() {
     let tokio_rt = crate::runtime::create_tokio_runtime().expect("create tokio runtime");
     let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new("http://localhost:1"))
         .expect("create rest runtime");
@@ -253,13 +266,36 @@ fn test_runtime_images_unsupported_on_rest_runtime() {
             &mut error as *mut _,
         )
     };
+    assert_eq!(code, BoxliteErrorCode::Ok);
+    assert!(!image_handle.is_null());
 
-    assert_eq!(code, BoxliteErrorCode::Unsupported);
-    assert!(image_handle.is_null());
-    assert!(!error.message.is_null());
+    let mut pull_code: Option<BoxliteErrorCode> = None;
+    let pull_code_slot: *mut Option<BoxliteErrorCode> = &mut pull_code;
+    let image_ref = CString::new("alpine:latest").expect("image ref cstring");
+    let queued = unsafe {
+        boxlite_image_pull(
+            image_handle,
+            image_ref.as_ptr(),
+            Some(record_pull_code),
+            pull_code_slot as *mut c_void,
+            &mut error as *mut _,
+        )
+    };
+    assert_eq!(queued, BoxliteErrorCode::Ok);
+    for _ in 0..20 {
+        if unsafe { *pull_code_slot }.is_some() {
+            break;
+        }
+        unsafe { boxlite_runtime_drain(&mut runtime_handle as *mut _, 500, &mut error as *mut _) };
+    }
 
+    assert_eq!(
+        unsafe { *pull_code_slot },
+        Some(BoxliteErrorCode::Unsupported)
+    );
     unsafe {
         boxlite_error_free(&mut error as *mut _);
+        boxlite_image_free(image_handle);
     }
 }
 
