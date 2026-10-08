@@ -58,7 +58,8 @@ extern "C" fn shutdown_on_exit() {
 #[derive(Clone)]
 pub struct BoxliteRuntime {
     backend: Arc<dyn RuntimeBackend>,
-    image_backend: Option<Arc<dyn ImageBackend>>,
+    /// Image capability — an `Arc` view of the same backend, local or REST.
+    image_backend: Arc<dyn ImageBackend>,
     /// Named-volume capability — an `Arc` view of the same backend (local or
     /// REST), mirroring `image_backend` / `images()`. Surfaced via `volumes()`.
     /// The concrete backend returns `Unsupported` until one is wired up.
@@ -116,7 +117,7 @@ impl BoxliteRuntime {
         let volume_backend = Arc::clone(&backend_arc) as Arc<dyn VolumeBackend>;
         Self {
             backend: backend_arc,
-            image_backend: Some(image_backend),
+            image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: None,
         }
@@ -143,10 +144,11 @@ impl BoxliteRuntime {
     pub fn rest(config: crate::rest::options::BoxliteRestOptions) -> BoxliteResult<Self> {
         let rest_runtime = Arc::new(RestRuntime::new(&config)?);
         let auth_backend = Arc::clone(&rest_runtime) as Arc<dyn crate::runtime::auth::AuthBackend>;
+        let image_backend = Arc::clone(&rest_runtime) as Arc<dyn ImageBackend>;
         let volume_backend = Arc::clone(&rest_runtime) as Arc<dyn VolumeBackend>;
         Ok(Self {
             backend: rest_runtime,
-            image_backend: None, // REST runtime doesn't support image operations
+            image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: Some(auth_backend),
         })
@@ -418,16 +420,17 @@ impl BoxliteRuntime {
     // IMAGE OPERATIONS (via ImageHandle)
     // ========================================================================
 
-    /// Get a handle for image operations (pull, list).
+    /// Get a handle for the images this runtime can boot from.
     ///
-    /// Returns an `ImageHandle` that provides methods for pulling and listing images.
-    /// This abstraction separates image management from runtime management,
-    /// following the same pattern as `LiteBox` for box operations.
+    /// On an embedded runtime that is the local cache; on a REST runtime, the
+    /// server's catalog. This abstraction separates image management from
+    /// runtime management, following the same pattern as `LiteBox` for box
+    /// operations.
     ///
     /// # Errors
     ///
-    /// Returns `BoxliteError::Unsupported` if called on a REST runtime,
-    /// as image operations are only supported for local runtimes.
+    /// None: both backends hold images. The `Result` is kept so callers
+    /// written when a REST runtime refused here still compile.
     ///
     /// # Example
     ///
@@ -449,12 +452,9 @@ impl BoxliteRuntime {
     /// # }
     /// ```
     pub fn images(&self) -> BoxliteResult<crate::runtime::ImageHandle> {
-        match &self.image_backend {
-            Some(manager) => Ok(crate::runtime::ImageHandle::new(Arc::clone(manager))),
-            None => Err(BoxliteError::Unsupported(
-                "Image operations not supported over REST API".to_string(),
-            )),
-        }
+        Ok(crate::runtime::ImageHandle::new(Arc::clone(
+            &self.image_backend,
+        )))
     }
 
     // ========================================================================

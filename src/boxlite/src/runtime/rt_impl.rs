@@ -1869,6 +1869,32 @@ impl super::images::ImageBackend for LocalRuntime {
         }
         self.0.image_manager.list().await
     }
+
+    async fn get_image(&self, name: &str) -> BoxliteResult<crate::runtime::types::ImageDetail> {
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot read images: runtime has been shut down".into(),
+            ));
+        }
+        self.0.image_manager.get(name).await
+    }
+
+    async fn remove_image(&self, name: &str) -> BoxliteResult<()> {
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot remove images: runtime has been shut down".into(),
+            ));
+        }
+        self.0.image_manager.remove(name).await
+    }
+
+    async fn image_usage(&self) -> BoxliteResult<crate::runtime::types::ImageUsage> {
+        Err(BoxliteError::Unsupported(
+            "image usage counts a server's catalog against its limit; \
+             an embedded runtime has a local cache with no limit"
+                .into(),
+        ))
+    }
 }
 
 // Named-volume operations (separate from RuntimeBackend). The concrete backend

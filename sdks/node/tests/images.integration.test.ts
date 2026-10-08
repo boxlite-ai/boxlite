@@ -16,12 +16,14 @@ function newIsolatedRuntime() {
 }
 
 describe("runtime image handle integration", { timeout: 120_000 }, () => {
-  test("REST runtime rejects image handle access", () => {
+  test("REST runtime refuses pull: it pulls when a box is created", async () => {
     const runtime = JsBoxlite.rest(
       new BoxliteRestOptions({ url: "http://localhost:1" }),
     );
 
-    expect(() => runtime.images).toThrow(/Image operations not supported/);
+    await expect(runtime.images.pull("alpine:latest")).rejects.toThrow(
+      /pulls an image when a box is created/,
+    );
   });
 
   test("pull returns image metadata", async () => {
