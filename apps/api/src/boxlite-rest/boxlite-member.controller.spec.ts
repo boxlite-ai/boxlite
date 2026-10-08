@@ -10,11 +10,15 @@ import { Test } from '@nestjs/testing'
 import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import type { AddressInfo } from 'net'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
+import { OrganizationInvitationStatus } from '../organization/enums/organization-invitation-status.enum'
 import { OrganizationActionGuard } from '../organization/guards/organization-action.guard'
+import { OrganizationInvitationService } from '../organization/services/organization-invitation.service'
 import { OrganizationService } from '../organization/services/organization.service'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { SystemRole } from '../user/enums/system-role.enum'
+import { BoxliteInvitationController } from './boxlite-invitation.controller'
 import { BoxliteMemberController } from './boxlite-member.controller'
 
 // org-1 has an owner (user-1) and a plain member (user-3); user-2 belongs to org-2 only.
@@ -29,7 +33,7 @@ function apiKeyPrincipal(userId: string, organizationId: string) {
   return { userId, email: `${userId}@example.com`, role: SystemRole.USER, organizationId, apiKey: { organizationId } }
 }
 
-describe('BoxLite REST members', () => {
+describe('BoxLite REST members and invitations', () => {
   let app: INestApplication
   let principal: ReturnType<typeof apiKeyPrincipal>
   const organizationUserService = {
@@ -45,13 +49,27 @@ describe('BoxLite REST members', () => {
     ]),
     delete: jest.fn(async () => undefined),
   }
+  const invitation = {
+    id: 'inv-1',
+    email: 'new@example.com',
+    status: OrganizationInvitationStatus.PENDING,
+    invitedBy: 'user-1@example.com',
+    createdAt: new Date('2026-09-02T00:00:00.000Z'),
+    expiresAt: new Date('2026-09-09T00:00:00.000Z'),
+  }
+  const organizationInvitationService = {
+    create: jest.fn(async () => invitation),
+    findPending: jest.fn(async () => [invitation]),
+    cancel: jest.fn(async () => undefined),
+  }
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
-      controllers: [BoxliteMemberController],
+      controllers: [BoxliteMemberController, BoxliteInvitationController],
       providers: [
         OrganizationActionGuard,
         { provide: OrganizationUserService, useValue: organizationUserService },
+        { provide: OrganizationInvitationService, useValue: organizationInvitationService },
         { provide: OrganizationService, useValue: { findOne: async (id: string) => ({ id }) } },
         { provide: getRedisConnectionToken(), useValue: { get: async () => null, set: async () => 'OK' } },
       ],
@@ -63,6 +81,8 @@ describe('BoxLite REST members', () => {
           return true
         },
       })
+      .overrideGuard(AuthenticatedRateLimitGuard)
+      .useValue({ canActivate: () => true })
       .compile()
 
     app = moduleRef.createNestApplication()
@@ -133,5 +153,52 @@ describe('BoxLite REST members', () => {
       ],
     })
     expect(organizationUserService.findAll).toHaveBeenCalledWith('org-1')
+  })
+
+  it('invites by email with the owner role and returns the pending invitation', async () => {
+    principal = apiKeyPrincipal('user-1', 'org-1')
+
+    const response = await call('POST', '/v1/org-1/invitations', { email: 'new@example.com' })
+
+    expect(response.status).toBe(201)
+    expect(await response.json()).toEqual({
+      id: 'inv-1',
+      email: 'new@example.com',
+      status: 'pending',
+      invited_by: 'user-1@example.com',
+      created_at: '2026-09-02T00:00:00.000Z',
+      expires_at: '2026-09-09T00:00:00.000Z',
+    })
+    expect(organizationInvitationService.create).toHaveBeenCalledWith(
+      'org-1',
+      { email: 'new@example.com', role: OrganizationMemberRole.OWNER, assignedRoleIds: [], expiresAt: undefined },
+      'user-1@example.com',
+    )
+  })
+
+  it('rejects an invitation without a valid email before reaching the service', async () => {
+    principal = apiKeyPrincipal('user-1', 'org-1')
+
+    const response = await call('POST', '/v1/org-1/invitations', { email: 'not-an-email' })
+
+    expect(response.status).toBe(400)
+    expect(organizationInvitationService.create).not.toHaveBeenCalled()
+  })
+
+  it('refuses an invitation from a caller without the owner role', async () => {
+    principal = apiKeyPrincipal('user-3', 'org-1')
+
+    expect((await call('POST', '/v1/org-1/invitations', { email: 'new@example.com' })).status).toBe(403)
+    expect(organizationInvitationService.create).not.toHaveBeenCalled()
+  })
+
+  it('lets an owner cancel a pending invitation, and refuses a plain member', async () => {
+    principal = apiKeyPrincipal('user-1', 'org-1')
+    expect((await call('DELETE', '/v1/org-1/invitations/inv-1')).status).toBe(204)
+    expect(organizationInvitationService.cancel).toHaveBeenCalledWith('org-1', 'inv-1')
+
+    principal = apiKeyPrincipal('user-3', 'org-1')
+    expect((await call('DELETE', '/v1/org-1/invitations/inv-1')).status).toBe(403)
+    expect(organizationInvitationService.cancel).toHaveBeenCalledTimes(1)
   })
 })

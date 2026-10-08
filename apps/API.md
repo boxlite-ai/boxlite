@@ -15,7 +15,7 @@ The inventory is implementation-grounded:
 - Hosted BoxLite-compatible routes come from the controllers in
   [`boxlite-rest`](./api/src/boxlite-rest/). They are excluded from the product
   OpenAPI document because their contracts live in [`openapi/box.openapi.yaml`](../openapi/box.openapi.yaml)
-  and, for cloud-only members, [`openapi/tenant.openapi.yaml`](../openapi/tenant.openapi.yaml).
+  and, for cloud-only members and invitations, [`openapi/tenant.openapi.yaml`](../openapi/tenant.openapi.yaml).
 - Runner, proxy, and collector routes come from their runtime registration in
   [`server.go`](./runner/pkg/api/server.go),
   [`proxy.go`](./proxy/pkg/proxy/proxy.go), and
@@ -406,15 +406,19 @@ the portable contract, which the runner's own route registration enforces.
 </details>
 
 <details>
-<summary><b>Members</b> · 2 routes</summary>
+<summary><b>Members and invitations</b> · 5 routes</summary>
 
 Contract: [`openapi/tenant.openapi.yaml`](../openapi/tenant.openapi.yaml), cloud-only and meant for the CLI
 and SDKs, which do not call it yet. Reads need membership; writes need the owner role.
+Invitees accept in the console, through `/api/organizations/invitations/{invitationId}/accept`.
 
 | Method   | Path                                                   | What it does                                                        |
 | -------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
 | `GET`    | `/api/v1[/{prefix}]/members`                           | Lists the organization's members.                                   |
 | `DELETE` | `/api/v1[/{prefix}]/members/{user_id}`                 | Removes a member and revokes their API keys in the organization.    |
+| `POST`   | `/api/v1[/{prefix}]/invitations`                       | Invites an email as an owner; `409` if already a member or invited. |
+| `GET`    | `/api/v1[/{prefix}]/invitations`                       | Lists pending, unexpired invitations.                               |
+| `DELETE` | `/api/v1[/{prefix}]/invitations/{invitation_id}`       | Cancels a pending invitation; `409` once it is no longer pending.   |
 
 </details>
 

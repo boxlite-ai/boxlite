@@ -6,6 +6,7 @@
 import { Controller, Delete, Get, HttpCode, Param, UseGuards } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { Audit } from '../audit/decorators/audit.decorator'
@@ -28,7 +29,7 @@ type RestMember = {
 // Spec-first surface: the contract is openapi/tenant.openapi.yaml (cloud-only, not the Box API).
 @Controller(['v1/members', 'v1/:prefix/members'])
 @ApiExcludeController()
-@UseGuards(CombinedAuthGuard, OrganizationActionGuard)
+@UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard, OrganizationActionGuard)
 export class BoxliteMemberController {
   constructor(private readonly organizationUserService: OrganizationUserService) {}
 

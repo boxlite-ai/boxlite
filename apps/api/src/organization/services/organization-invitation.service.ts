@@ -4,13 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { InjectRepository } from '@nestjs/typeorm'
@@ -121,11 +115,11 @@ export class OrganizationInvitationService {
     }
 
     if (invitation.expiresAt && invitation.expiresAt < new Date()) {
-      throw new ForbiddenException(`Invitation with ID ${invitationId} is expired`)
+      throw new ConflictException(`Invitation with ID ${invitationId} is expired`)
     }
 
     if (invitation.status !== OrganizationInvitationStatus.PENDING) {
-      throw new ForbiddenException(`Invitation with ID ${invitationId} is already ${invitation.status}`)
+      throw new ConflictException(`Invitation with ID ${invitationId} is already ${invitation.status}`)
     }
 
     if (updateOrganizationInvitationDto.expiresAt) {
@@ -253,11 +247,11 @@ export class OrganizationInvitationService {
     }
 
     if (invitation.expiresAt && invitation.expiresAt < new Date()) {
-      throw new ForbiddenException(`Invitation with ID ${invitationId} is expired`)
+      throw new ConflictException(`Invitation with ID ${invitationId} is expired`)
     }
 
     if (invitation.status !== OrganizationInvitationStatus.PENDING) {
-      throw new ForbiddenException(`Invitation with ID ${invitationId} is already ${invitation.status}`)
+      throw new ConflictException(`Invitation with ID ${invitationId} is already ${invitation.status}`)
     }
 
     invitation.status = newStatus
