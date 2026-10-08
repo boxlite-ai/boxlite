@@ -1,8 +1,9 @@
 # boxlite-vmm
 
-Workspace skeleton for BoxLite's native VMM. The crate-visible VM and vCPU `run`
-entry points sketch event dispatch, guest exits, and worker cleanup with inline
-`todo!()` operations that panic if called. VM event labels stay local to
+Workspace skeleton for BoxLite's native VMM. It validates its machine
+configuration and allocates guest RAM; the crate-visible VM and vCPU `run`
+entry points still sketch event dispatch, guest exits, and worker cleanup with
+inline `todo!()` operations that panic if called. VM event labels stay local to
 `Vm::run`; vCPU exits use `boxlite_hypervisor::VcpuExit`, and `Error` wraps
 `boxlite_hypervisor::Error` with its cause chain intact. This crate cannot
 create or boot a VM yet. The [VMM design](../../docs/contributing/architecture/vmm/README.md)
@@ -16,15 +17,16 @@ inspect the error's host cause.
 
 ```text
 boxlite-vmm
-└── boxlite-hypervisor
+├── boxlite-hypervisor
+└── vm-memory
 ```
 
 | Module | Planned responsibility |
 | --- | --- |
 | `vm` | VM facade and lifecycle coordination |
-| `config` | Machine configuration and boundary validation |
+| `config` | `VmConfig { vcpu_count, memory_mib }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB |
 | `error` | VMM errors that keep the hypervisor's cause chain |
-| `memory` | Backing-memory ownership and guest address layout |
+| `memory` | `GuestRam`: owned guest RAM and the RAM layout; registration with the host VM follows |
 | `vcpu` | Worker threads, stop coordination, and exit handling |
 | `irq` | Device interrupt assignment and routing; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `bus` | Address-range registration and device I/O dispatch |
@@ -33,6 +35,22 @@ Backend implementation and guest boot follow in M1. Virtio devices, the BoxLite
 engine adapter, engine selection, and `native` feature wiring follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
+
+## Guest RAM
+
+`memory::ram_ranges` places one region: at guest address 0 on x86_64, below
+the 32-bit MMIO hole at `0xC000_0000`, and at `0x8000_0000` on arm64. The
+3072 MiB bound keeps every layout inside that region; the region above 4 GiB
+and the arm64 address-space limit are later changes.
+
+`GuestRam` allocates the layout as zero-filled anonymous memory through
+vm-memory. Host-side users clone the shared `Arc<GuestMemoryMmap>` and access
+guest memory through vm-memory's volatile API, never through Rust references.
+Registering the RAM with the host VM, with the rules that keep the backing
+alive while a registration may exist, is the next slice.
+
+Unit tests live under `tests/` and are included as unit-test modules, which
+keeps them outside the counted sources and the coverage denominator.
 
 ## Build
 
@@ -45,8 +63,8 @@ make test:unit:vmm
 make fmt:check:rust
 ```
 
-With the corresponding Rust targets installed, the library skeleton can also
-be compiled for each host with a backend module without booting a VM:
+With the corresponding Rust targets installed, the crate can also be compiled
+for each host with a backend module without booting a VM:
 
 ```sh
 CARGO_BUILD_TARGET=aarch64-apple-darwin make vmm
