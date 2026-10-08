@@ -113,8 +113,13 @@ the in-process TTL caches under `pkg/cache/`.
 `cmd/runner/main.go` brings up the process in this order:
 
 1. **BoxLite runtime** is initialized via `boxlite.NewClient(...)`. This
-   loads the Rust core, opens `~/.boxlite/`, and is the single shared
-   handle to the VM hypervisor.
+   loads the Rust core, opens the BoxLite home, and is the single shared
+   handle to the VM hypervisor. The client resolves the home the way
+   boxlite-core would — `BOXLITE_HOME_DIR`, else `$BOXLITE_HOME`, else
+   `.boxlite` under `$HOME` (or the passwd home when `$HOME` is unset) —
+   passes it to core explicitly, and exposes it as `HomeDir()`, so the
+   rest of the runner (migration staging under `<home>/migrate`) reads the
+   same directory as the runtime.
 2. **Service singletons** are constructed and stashed on the
    `runner.GetInstance(...)` global: `BoxService`, `BackupInfoCache`,
    `ArtifactErrorCache`, `metrics.Collector`. Controllers later read them
