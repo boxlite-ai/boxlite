@@ -5,3 +5,7 @@ plugin\:boxlite\:check:
 
 plugin\:boxlite\:dist: plugin\:boxlite\:check
 	@python3 scripts/plugins/boxlite.py dist
+
+plugin\:boxlite\:check\:cc: plugin\:boxlite\:dist
+	@claude plugin validate --strict plugins/boxlite
+	@claude plugin validate --strict target/plugins/boxlite-marketplace

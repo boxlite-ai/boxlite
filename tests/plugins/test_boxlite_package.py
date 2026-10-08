@@ -31,12 +31,25 @@ class PackageTests(unittest.TestCase):
         with zipfile.ZipFile(archive) as zipped:
             self.assertIn('plugin.json', zipped.namelist())
             self.assertIn('skills/boxlite/SKILL.md', zipped.namelist())
+            self.assertIn('.claude-plugin/plugin.json', zipped.namelist())
             self.assertFalse(any('node_modules' in name for name in zipped.namelist()))
             self.assertFalse(any(name.startswith('templates/') for name in zipped.namelist()))
         catalog = json.loads((output / 'boxlite-marketplace/.agents/plugins/marketplace.json').read_text())
         target = output / 'boxlite-marketplace' / catalog['plugins'][0]['source']['path']
         self.assertTrue((target / 'plugin.json').exists())
+        claude_catalog = json.loads((output / 'boxlite-marketplace/.claude-plugin/marketplace.json').read_text())
+        claude_target = output / 'boxlite-marketplace' / claude_catalog['plugins'][0]['source']
+        self.assertEqual(target.resolve(), claude_target.resolve())
+        self.assertTrue((claude_target / '.claude-plugin/plugin.json').exists())
         self.assertEqual(archive.read_bytes(), package.build(output, self.root).read_bytes())
+
+    def test_rejects_claude_manifest_identity_drift(self):
+        manifest = self.root / '.claude-plugin/plugin.json'
+        value = json.loads(manifest.read_text())
+        value['name'] = 'another-plugin'
+        manifest.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError, 'Claude compatibility identity differs: name'):
+            package.validate(self.root)
 
     def test_rejects_private_deployment_state(self):
         (self.root / 'deployment.json').write_text('{}')

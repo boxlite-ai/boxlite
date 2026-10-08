@@ -35,6 +35,7 @@ help:
 	@echo "  Plugins:"
 	@echo "    make plugin:boxlite:check    - Validate BoxLite plugin and package tests"
 	@echo "    make plugin:boxlite:dist     - Build skills-only ZIP and local marketplace"
+	@echo "    make plugin:boxlite:check:cc - Validate Claude Code plugin and marketplace"
 	@echo ""
 	@echo "  Testing (strict full-matrix default):"
 	@echo "    make test                   - Run full test matrix (same as make test:all)"

@@ -32,6 +32,7 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-10-08 · [BoxLite skills in Claude Code](investigations/claude-code-plugin.md)
 - 2026-10-08 · [BoxLite skills-only Codex plugin](investigations/codex-plugin-v01.md)
 
 - 2026-07-19 · [Reaper: one wait, one place](investigations/reaper-exit-slot.md)

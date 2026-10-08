@@ -47,6 +47,10 @@ def validate(root=PLUGIN):
     for key in ('name', 'version', 'description'):
         if manifest[key] != legacy[key]:
             raise ValueError(f'Compatibility identity differs: {key}')
+    claude = json.loads((root / '.claude-plugin/plugin.json').read_text())
+    for key in ('name', 'version', 'description'):
+        if manifest[key] != claude[key]:
+            raise ValueError(f'Claude compatibility identity differs: {key}')
     settings = manifest['extensions']['com.openai']
     if settings['interface'] != legacy['interface']:
         raise ValueError('Compatibility presentation differs')
@@ -99,6 +103,15 @@ def build(output, root=PLUGIN):
         'name': 'boxlite', 'source': {'source': 'local', 'path': './plugins/boxlite'},
         'policy': {'installation': 'AVAILABLE', 'authentication': 'ON_USE'}, 'category': 'Developer Tools',
     }]}, indent=2) + '\n')
+    claude_catalog = marketplace / '.claude-plugin/marketplace.json'
+    claude_catalog.parent.mkdir(parents=True, exist_ok=True)
+    claude_catalog.write_text(json.dumps({
+        'name': 'boxlite', 'description': 'BoxLite cloud deployment skills.',
+        'owner': {'name': 'BoxLite'}, 'plugins': [{
+            'name': 'boxlite', 'source': './plugins/boxlite',
+            'description': 'Skills for building and deploying apps on BoxLite cloud.',
+        }],
+    }, indent=2) + '\n')
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     (output / 'SHA256SUMS').write_text(f'{digest}  {archive.name}\n')
     return archive
