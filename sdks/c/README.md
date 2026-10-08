@@ -323,6 +323,39 @@ first) and `boxlite_image_usage()` a `CImageUsage`. See
 [Images in the C reference](../../docs/reference/c/README.md#images) for each
 operation on each runtime.
 
+### Private Registry Logins
+
+On a REST runtime, `boxlite_runtime_registries()` returns the logins the
+server pulls private images with; a local runtime answers `Unsupported` and
+takes its logins from `image_registries` instead. The password is copied,
+sent once, and never returned.
+
+```c
+static void on_created(CRegistryCredential* login, CBoxliteError* error,
+                       void* user_data) {
+    if (error->code == Ok) {
+        printf("added %s for %s/%s\n", login->id, login->registry_host,
+               login->repository_prefix);
+        boxlite_free_registry_credential(login);
+    }
+    *(int*)user_data = 1;
+}
+
+CBoxliteRegistryHandle* registries = NULL;
+if (boxlite_runtime_registries(runtime, &registries, &error) == Ok) {
+    int done = 0;
+    if (boxlite_registry_create(registries, "ghcr.io", "acme/", "acme-bot",
+                                getenv("GHCR_TOKEN"), on_created, &done,
+                                &error) == Ok) {
+        while (!done && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
+        }
+    }
+    boxlite_registry_free(registries);
+}
+```
+
+See [Registries in the C reference](../../docs/reference/c/README.md#registries).
+
 ---
 
 ## API Overview

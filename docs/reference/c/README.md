@@ -45,6 +45,7 @@ The SDK provides two API styles:
   - [Command Execution](#command-execution)
   - [Discovery & Introspection](#discovery--introspection)
   - [Images](#images)
+  - [Registries](#registries)
   - [Metrics](#metrics)
 - [Memory Management](#memory-management)
 - [Thread Safety](#thread-safety)
@@ -1111,6 +1112,56 @@ if (error.code != Ok) {
 
 ---
 
+### Registries
+
+`boxlite_runtime_registries()` returns a `CBoxliteRegistryHandle*` for the
+logins a REST server presents when it pulls a private image for a box. A
+runtime from `boxlite_runtime_new()` answers `Unsupported`: it pulls with the
+logins in its `image_registries` option instead. Free the handle with
+`boxlite_registry_free()`.
+
+```c
+BoxliteErrorCode boxlite_registry_list(
+    CBoxliteRegistryHandle* handle,
+    CBoxRegistryListCb cb,      // void (*)(CRegistryCredentialList*, CBoxliteError*, void*)
+    void* user_data,
+    CBoxliteError* out_error
+);
+
+BoxliteErrorCode boxlite_registry_create(
+    CBoxliteRegistryHandle* handle,
+    const char* registry_host,      // e.g. "ghcr.io"
+    const char* repository_prefix,  // e.g. "acme/"; NULL for the whole registry
+    const char* username,
+    const char* password,
+    CBoxRegistryCreateCb cb,    // void (*)(CRegistryCredential*, CBoxliteError*, void*)
+    void* user_data,
+    CBoxliteError* out_error
+);
+
+BoxliteErrorCode boxlite_registry_remove(
+    CBoxliteRegistryHandle* handle,
+    const char* id,
+    CBoxRegistryRemoveCb cb,    // void (*)(CBoxliteError*, void*)
+    void* user_data,
+    CBoxliteError* out_error
+);
+```
+
+All three follow the post-and-drain contract of the image functions. The
+strings are copied before the call returns, and the password is sent once and
+never returned. The callback receives `AlreadyExists` for a second login for
+the same registry and prefix, `InvalidState` (naming the boxes) for removing a
+login a box still pulls through, and `NotFound` for an unknown id. An id that
+is not a UUID reaches it as `InvalidArgument` without a request.
+
+| Type | Fields | Ownership |
+|------|--------|-----------|
+| `CRegistryCredential` | `id`, `registry_host`, `repository_prefix` (empty for the whole registry), `username`, `created_by` (NULL when unknown), `created_at` (Unix seconds); no password | From a create callback, owned; free with `boxlite_free_registry_credential()` |
+| `CRegistryCredentialList` | `items`/`count` | The callback owns it; free with `boxlite_free_registry_credential_list()` |
+
+---
+
 ### Metrics
 
 #### boxlite_runtime_metrics
@@ -1342,6 +1393,13 @@ if (code != Ok) {
 | `boxlite_image_usage()` | Queue a read of the image allowance (REST runtimes) |
 | `boxlite_image_free()` | Free the image handle |
 | `boxlite_free_image_detail()` | Free an image detail |
+| `boxlite_runtime_registries()` | Get the registry login handle (REST runtimes) |
+| `boxlite_registry_list()` | Queue a list of registry logins |
+| `boxlite_registry_create()` | Queue adding a registry login |
+| `boxlite_registry_remove()` | Queue removing a registry login |
+| `boxlite_registry_free()` | Free the registry login handle |
+| `boxlite_free_registry_credential()` | Free a registry login |
+| `boxlite_free_registry_credential_list()` | Free a registry login list |
 | `boxlite_simple_new()` | Create simple box |
 | `boxlite_simple_run()` | Run command (simple) |
 | `boxlite_simple_free()` | Free simple box |
