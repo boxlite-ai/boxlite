@@ -52,7 +52,8 @@ export class EmailService {
         html: await renderFile(path.join(__dirname, 'assets/templates/organization-invitation.template.ejs'), {
           organizationName: payload.organizationName,
           invitedBy: payload.invitedBy,
-          invitationLink: `${this.options.dashboardUrl}/user/invitations?id=${payload.invitationId}`,
+          // DASHBOARD_URL is the console's origin; the page lives under the /dashboard router.
+          invitationLink: `${this.options.dashboardUrl}/dashboard/user/invitations?id=${payload.invitationId}`,
           expiresAt: new Date(payload.expiresAt).toLocaleDateString('en-US', {
             year: 'numeric',
             month: 'long',
