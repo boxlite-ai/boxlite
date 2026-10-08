@@ -9,6 +9,7 @@ use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
 use crate::runtime::images::ImageBackend;
 use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
+use crate::runtime::registries::RegistryBackend;
 use crate::runtime::rt_impl::{LocalRuntime, RuntimeImpl};
 use crate::runtime::signal_handler::install_signal_handler;
 use crate::runtime::types::BoxInfo;
@@ -69,6 +70,9 @@ pub struct BoxliteRuntime {
     /// not a second client). Surfaced via `auth()`, mirroring
     /// `image_backend` / `images()`.
     auth_backend: Option<Arc<dyn crate::runtime::auth::AuthBackend>>,
+    /// Registry-login capability — `Some` only for REST, like `auth_backend`.
+    /// Surfaced via `registries()`.
+    registry_backend: Option<Arc<dyn RegistryBackend>>,
 }
 
 // ============================================================================
@@ -120,6 +124,7 @@ impl BoxliteRuntime {
             image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: None,
+            registry_backend: None,
         }
     }
 
@@ -146,11 +151,13 @@ impl BoxliteRuntime {
         let auth_backend = Arc::clone(&rest_runtime) as Arc<dyn crate::runtime::auth::AuthBackend>;
         let image_backend = Arc::clone(&rest_runtime) as Arc<dyn ImageBackend>;
         let volume_backend = Arc::clone(&rest_runtime) as Arc<dyn VolumeBackend>;
+        let registry_backend = Arc::clone(&rest_runtime) as Arc<dyn RegistryBackend>;
         Ok(Self {
             backend: rest_runtime,
             image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: Some(auth_backend),
+            registry_backend: Some(registry_backend),
         })
     }
 
@@ -530,6 +537,46 @@ impl BoxliteRuntime {
             )),
         }
     }
+
+    /// Get a handle for the registry logins the server pulls private images
+    /// with (list, create, remove).
+    ///
+    /// # Errors
+    ///
+    /// Returns `BoxliteError::Unsupported` for non-REST runtimes: a local
+    /// runtime pulls with the logins in `BoxliteOptions::image_registries`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use boxlite::{BoxliteRuntime, BoxliteRestOptions};
+    /// use boxlite::runtime::NewRegistryCredential;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let runtime = BoxliteRuntime::rest(BoxliteRestOptions::from_env()?)?;
+    /// let login = runtime
+    ///     .registries()?
+    ///     .create(&NewRegistryCredential {
+    ///         registry_host: "ghcr.io".into(),
+    ///         repository_prefix: Some("acme/".into()),
+    ///         username: "acme-bot".into(),
+    ///         password: std::env::var("GHCR_TOKEN")?,
+    ///     })
+    ///     .await?;
+    /// println!("added {}", login.id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn registries(&self) -> BoxliteResult<crate::runtime::RegistryHandle> {
+        match &self.registry_backend {
+            Some(backend) => Ok(crate::runtime::RegistryHandle::new(Arc::clone(backend))),
+            None => Err(BoxliteError::Unsupported(
+                "registry logins are only available on REST runtimes; a local runtime \
+                 pulls with the logins in its options' image_registries"
+                    .to_string(),
+            )),
+        }
+    }
 }
 
 // ============================================================================
@@ -594,5 +641,20 @@ mod tests {
             err.to_string().contains("remove-on-stop is incompatible"),
             "unexpected message: {err}"
         );
+    }
+
+    /// A local runtime pulls with the logins in its options; it has no
+    /// server to keep any, so the handle is refused rather than handed out.
+    #[test]
+    fn registries_are_unsupported_on_a_local_runtime() {
+        let (runtime, _dir) = local_runtime();
+
+        let err = runtime
+            .registries()
+            .err()
+            .expect("a local runtime has no registry logins");
+
+        assert!(matches!(err, BoxliteError::Unsupported(_)), "{err:?}");
+        assert!(err.to_string().contains("image_registries"), "{err}");
     }
 }
