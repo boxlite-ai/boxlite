@@ -59,7 +59,8 @@ func (r *failAfterReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// A directory is copied under its own name, and "/." copies its contents.
+// Into an existing directory, a directory is copied under its own name, and
+// "/." copies its contents.
 // The C bindings this SDK sits on used to flatten every directory both ways,
 // so the directory itself was out of reach from Go.
 func TestCopyDirectoryNestsUnlessSourceEndsInDot(t *testing.T) {
