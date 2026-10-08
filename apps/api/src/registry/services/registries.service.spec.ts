@@ -79,6 +79,21 @@ describe('RegistriesService', () => {
       expect(store.destroy).toHaveBeenCalledWith('version-1')
     })
 
+    it('codes the refusal of a second login already_exists, so an SDK can tell it from a delete refusal', async () => {
+      const { service, credentials } = build()
+      credentials.insert.mockRejectedValue(Object.assign(new Error('duplicate'), { code: '23505' }))
+
+      const refusal = await service.create(ORG, 'user-1', REQUEST).then(
+        () => fail('a second login for the same prefix was stored'),
+        (error: ConflictException) => error,
+      )
+
+      expect(refusal.getResponse()).toMatchObject({
+        code: 'already_exists',
+        message: expect.stringContaining('ghcr.io/acme/ already exists'),
+      })
+    })
+
     it('destroys the password on any other failure to record it, and reports that failure', async () => {
       const { service, credentials, store } = build()
       credentials.insert.mockRejectedValue(new Error('connection reset'))
@@ -91,7 +106,11 @@ describe('RegistriesService', () => {
       delete process.env.REGISTRY_PROXY_HOST
       const { service, store } = build()
 
-      await expect(service.create(ORG, 'user-1', REQUEST)).rejects.toBeInstanceOf(NotImplementedException)
+      const refused = service.create(ORG, 'user-1', REQUEST)
+
+      await expect(refused).rejects.toBeInstanceOf(NotImplementedException)
+      // Coded, so an SDK reads it as unsupported rather than a server fault.
+      await expect(refused).rejects.toMatchObject({ response: { code: 'unsupported' } })
       expect(store.put).not.toHaveBeenCalled()
     })
   })

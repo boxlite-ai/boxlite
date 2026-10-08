@@ -13,7 +13,7 @@ import { credentialedRegistryHosts } from '../utils/registry-proxy.util'
  * Whole path segments ending in '/', or nothing for the whole host — the shape
  * the table's CHECK holds, refused here first with a message a caller can act on.
  */
-const REPOSITORY_PREFIX = /^([a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*\/)*$/
+export const REPOSITORY_PREFIX = /^([a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*\/)*$/
 
 /**
  * A new login. The password travels in this body and nowhere else, and no

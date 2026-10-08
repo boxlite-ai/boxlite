@@ -368,7 +368,8 @@ the network routes — requires `write:boxes`; deleting a box requires
 `delete:boxes`. Box reads (list, get, head, execution status, metrics) carry no
 permission and are reached by any member, because the model has no `read:boxes`.
 Volume routes require `read:volumes`, `write:volumes`, or `delete:volumes` to
-match. Attaching a managed volume while creating a box is authorized
+match, and registry login routes `read:registries`, `write:registries`, or
+`delete:registries`. Attaching a managed volume while creating a box is authorized
 independently of `write:boxes`: the caller must also hold `read:volumes` and
 `write:volumes`, so a box-only credential cannot reach another's volume data
 (GHSA-2qqv-7cwv-mj8h). A system admin and an interactive owner without an API key
@@ -437,6 +438,20 @@ the portable contract, which the runner's own route registration enforces.
 | `GET`    | `/api/v1[/{prefix}]/volumes`                            | Lists volumes in the organization.            |
 | `GET`    | `/api/v1[/{prefix}]/volumes/{volumeId}`                 | Gets a volume by ID.                          |
 | `DELETE` | `/api/v1[/{prefix}]/volumes/{volumeId}?force={boolean}` | Deletes a volume, optionally forcing removal. |
+
+</details>
+
+<details>
+<summary><b>Registries</b> · 3 routes</summary>
+
+| Method   | Path                                 | What it does                                                                     |
+| -------- | ------------------------------------ | -------------------------------------------------------------------------------- |
+| `GET`    | `/api/v1[/{prefix}]/registries`      | Lists the organization's private registry logins, without passwords.             |
+| `POST`   | `/api/v1[/{prefix}]/registries`      | Adds a login; a second one for the same registry and prefix is `already_exists`. |
+| `DELETE` | `/api/v1[/{prefix}]/registries/{id}` | Removes a login, unless a box still pulls through it (409 lists the boxes).      |
+
+The same logins as `/api/registries`, in the box API's snake_case shapes, for
+SDK clients.
 
 </details>
 
