@@ -781,6 +781,7 @@ name = "boxlite-vmm"
 version = "0.10.5"
 dependencies = [
  "boxlite-hypervisor",
+ "vm-memory 0.18.0",
 ]
 
 [[package]]
@@ -1990,7 +1991,7 @@ dependencies = [
  "mio 0.8.11",
  "nix 0.24.3",
  "radix_trie",
- "vm-memory",
+ "vm-memory 0.14.1",
  "vmm-sys-util 0.12.1",
 ]
 
@@ -6952,6 +6953,17 @@ checksum = "3c3aba5064cc5f6f7740cddc8dae34d2d9a311cac69b60d942af7f3ab8fc49f4"
 dependencies = [
  "libc",
  "thiserror 1.0.69",
+ "winapi",
+]
+
+[[package]]
+name = "vm-memory"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b55e753c7725603745cb32b2287ef7ef3da05c03c7702cda3fa8abe25ae0465"
+dependencies = [
+ "libc",
+ "thiserror 2.0.18",
  "winapi",
 ]
 
