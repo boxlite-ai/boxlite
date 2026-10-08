@@ -221,6 +221,7 @@ fn test_free_functions_null_safe() {
     unsafe {
         boxlite_runtime_free(ptr::null_mut());
         boxlite_image_free(ptr::null_mut());
+        boxlite_free_image_detail(ptr::null_mut());
         boxlite_box_free(ptr::null_mut());
         boxlite_network_free(ptr::null_mut());
         boxlite_tunnel_free(ptr::null_mut());

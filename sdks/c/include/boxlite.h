@@ -302,6 +302,68 @@ typedef struct CImageInfoList {
 // Image list completion.
 typedef void (*CBoxImageListCb)(struct CImageInfoList*, CBoxliteError*, void*);
 
+// One build of an image, owned by its enclosing [`CImageDetail`].
+//
+// Sizes and times follow [`CImageInfo`]: `size_bytes` is meaningful only when
+// `has_size` is non-zero, and `recorded_at` is in Unix seconds (UTC).
+typedef struct CImageVersion {
+  // Manifest digest, such as "sha256:…".
+  char *digest;
+  // Sum of the layer sizes the manifest declares, in bytes.
+  uint64_t size_bytes;
+  // Non-zero when `size_bytes` is known.
+  int has_size;
+  // The reference that was pulled to get this build.
+  char *source_ref;
+  // When this build was recorded, in Unix seconds.
+  int64_t recorded_at;
+} CImageVersion;
+
+// An image name and every build of it the runtime holds.
+//
+// `tags` points to `tags_count` strings and `versions` to `versions_count`
+// entries, newest first; each array is null only when its count is zero. The
+// callback that receives a detail owns it, nested strings and arrays
+// included, and releases it once with `boxlite_free_image_detail`.
+typedef struct CImageDetail {
+  // Registry and repository without a tag, such as "docker.io/library/alpine".
+  char *name;
+  char **tags;
+  int tags_count;
+  // Non-zero when the operator provides the image rather than a box having
+  // pulled it. Only a REST runtime's catalog has these.
+  int curated;
+  struct CImageVersion *versions;
+  int versions_count;
+} CImageDetail;
+
+// Image get completion. On success the callback owns the non-null detail and
+// must release it with `boxlite_free_image_detail`; on failure it is null. The
+// error pointer is borrowed for callback dispatch only.
+typedef void (*CBoxImageGetCb)(struct CImageDetail*, CBoxliteError*, void*);
+
+// Image remove completion. The error pointer is borrowed for callback
+// dispatch only and no result allocation is produced.
+typedef void (*CBoxImageRemoveCb)(CBoxliteError*, void*);
+
+// How much of its image allowance a REST runtime's caller holds.
+//
+// Passed to the callback by pointer, valid only during that callback; there
+// is nothing to free.
+typedef struct CImageUsage {
+  // Images held.
+  uint64_t count;
+  // Images the caller may hold.
+  uint64_t limit;
+  // Sum of the sizes the held builds' manifests declare. A layer two builds
+  // share is counted for each, so this is not the bytes stored.
+  uint64_t known_bytes;
+} CImageUsage;
+
+// Image usage completion. The usage (null on failure) and error pointers are
+// borrowed for callback dispatch only; there is nothing to free.
+typedef void (*CBoxImageUsageCb)(struct CImageUsage*, CBoxliteError*, void*);
+
 // A concrete host listener published to a guest port.
 //
 // `host_ip` is owned by the enclosing [`CBoxInfo`].
@@ -836,11 +898,71 @@ enum BoxliteErrorCode boxlite_image_list(CBoxliteImageHandle *handle,
                                          void *user_data,
                                          CBoxliteError *out_error);
 
+// Queue a read of every build held under an image name, such as
+// "docker.io/library/alpine".
+//
+// `Ok` means the request was queued; the callback runs later on the thread
+// calling `boxlite_runtime_drain`. A name the runtime does not hold reaches
+// the callback as `NotFound`, and a reference with a tag or digest
+// (`"quay.io/acme/app:v1"`) as `InvalidArgument`. `user_data` is passed
+// through unchanged and must stay usable until the callback runs.
+//
+// # Safety
+//
+// `handle`, `name`, and `cb` must be non-null; `name` must be UTF-8 and only
+// needs to stay valid for this call. `out_error` may be null and otherwise
+// receives synchronous queueing failures only. A successful callback owns
+// the detail and must release it with `boxlite_free_image_detail`; the error
+// pointer is borrowed for the callback only.
+enum BoxliteErrorCode boxlite_image_get(CBoxliteImageHandle *handle,
+                                        const char *name,
+                                        CBoxImageGetCb cb,
+                                        void *user_data,
+                                        CBoxliteError *out_error);
+
+// Queue removal of an image name, every tag of it, with the same dispatch
+// and argument contract as [`boxlite_image_get`].
+//
+// The layers stay. On a local runtime a box built from the image fetches the
+// image's configuration from the registry when it next starts. A REST server
+// refuses with `InvalidState` while a box can still boot from the image.
+//
+// # Safety
+//
+// As for [`boxlite_image_get`]. The callback receives only a borrowed error
+// and has nothing to free.
+enum BoxliteErrorCode boxlite_image_remove(CBoxliteImageHandle *handle,
+                                           const char *name,
+                                           CBoxImageRemoveCb cb,
+                                           void *user_data,
+                                           CBoxliteError *out_error);
+
+// Queue a read of how many images are held against the allowance, with the
+// same dispatch contract as [`boxlite_image_get`]. REST runtimes only: on a
+// local runtime the callback receives `Unsupported`.
+//
+// # Safety
+//
+// `handle` and `cb` must be non-null; `out_error` may be null. The usage and
+// error pointers the callback receives are valid only during the callback.
+enum BoxliteErrorCode boxlite_image_usage(CBoxliteImageHandle *handle,
+                                          CBoxImageUsageCb cb,
+                                          void *user_data,
+                                          CBoxliteError *out_error);
+
 void boxlite_image_free(CBoxliteImageHandle *handle);
 
 void boxlite_free_image_info_list(struct CImageInfoList *list);
 
 void boxlite_free_image_pull_result(struct CImagePullResult *result);
+
+// Free a `CImageDetail` with its tags, versions, and their strings.
+//
+// # Safety
+//
+// `detail` must be null or a pointer handed to a `boxlite_image_get` callback
+// that has not already been freed.
+void boxlite_free_image_detail(struct CImageDetail *detail);
 
 enum BoxliteErrorCode boxlite_box_info(CBoxHandle *handle,
                                        CBoxInfoCb cb,

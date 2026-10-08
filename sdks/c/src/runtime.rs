@@ -598,6 +598,21 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_handle_event::<crate::CImageInfoList>(result, user_data, cb),
+            RuntimeEvent::ImageGet {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CImageDetail>(result, user_data, cb),
+            RuntimeEvent::ImageRemove {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::ImageUsage {
+                cb,
+                user_data,
+                result,
+            } => dispatch_value_event::<crate::CImageUsage>(result, user_data, cb),
             RuntimeEvent::VolumeCreate {
                 cb,
                 user_data,
