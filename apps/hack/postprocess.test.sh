@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for the generated-API-client postprocessors
-# (hack/ts-client/postprocess.mjs, hack/go-client/postprocess.mjs).
+# (hack/ts-client/postprocess.mjs, hack/ts-client/type-request-function.mjs,
+# hack/go-client/postprocess.mjs).
 #
 # Contract under test:
 #   - TS: version import inserted after the generator's "do not edit" header
@@ -9,6 +10,8 @@
 #   - TS: generated API imports are pruned to the identifiers each file uses
 #   - TS: generated parameter docs keep required/default and enum cells valid
 #   - TS: missing header, or neither User-Agent nor spread -> non-zero exit
+#   - TS: createRequestFunction gets a Promise<R> return type
+#   - TS: an already typed createRequestFunction -> non-zero exit
 #   - Go: UserAgent literal replaced with the ClientVersion expression
 #   - Go: version.go written with the go:embed accessor for the package
 #   - Go: missing UserAgent -> non-zero exit
@@ -158,6 +161,28 @@ printf '/**\n * Do not edit the class manually.\n */\n\nexport class Configurati
 node "$HACK_DIR/ts-client/postprocess.mjs" "$ts_nospread_dir" my-client > /dev/null 2>&1
 [[ $? -ne 0 ]]
 check "TS: no User-Agent and no spread is a hard error" $?
+
+ts_rf_dir="$TMP_ROOT/ts-request-function"
+mkdir -p "$ts_rf_dir"
+cat > "$ts_rf_dir/common.ts" <<'EOF'
+export const createRequestFunction = function (axiosArgs: RequestArgs, globalAxios: AxiosInstance, BASE_PATH: string, configuration?: Configuration) {
+    return <T = unknown, R = AxiosResponse<T>>(axios: AxiosInstance = globalAxios, basePath: string = BASE_PATH) => {
+        const axiosRequestArgs = {...axiosArgs.options, url: (axios.defaults.baseURL ? '' : configuration?.basePath ?? basePath) + axiosArgs.url};
+        return axios.request<T, R>(axiosRequestArgs);
+    };
+}
+EOF
+
+node "$HACK_DIR/ts-client/type-request-function.mjs" "$ts_rf_dir" > /dev/null 2>&1
+check "TS: type step exits 0 on generator output" $?
+
+grep -qF 'basePath: string = BASE_PATH): Promise<R> => {' "$ts_rf_dir/common.ts" &&
+  grep -qF 'return axios.request<T, R>(axiosRequestArgs) as Promise<R>;' "$ts_rf_dir/common.ts"
+check "TS: createRequestFunction returns Promise<R>" $?
+
+node "$HACK_DIR/ts-client/type-request-function.mjs" "$ts_rf_dir" > /dev/null 2>&1
+[[ $? -ne 0 ]]
+check "TS: an already typed createRequestFunction is a hard error" $?
 
 # ── Go client ───────────────────────────────────────────────────────────────
 

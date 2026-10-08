@@ -43,7 +43,11 @@
       "{workspaceRoot}/hack/python-client/postprocess.sh"
     ],
     "goApiClient": ["apiClient", "{workspaceRoot}/hack/go-client/postprocess.mjs"],
-    "tsApiClient": ["apiClient", "{workspaceRoot}/hack/ts-client/postprocess.mjs"]
+    "tsApiClient": [
+      "apiClient",
+      "{workspaceRoot}/hack/ts-client/postprocess.mjs",
+      "{workspaceRoot}/hack/ts-client/type-request-function.mjs"
+    ]
   },
   "neverConnectToCloud": true,
   "useDaemonProcess": false,
