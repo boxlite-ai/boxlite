@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable } from '@nestjs/common'
+import { Injectable, Logger } from '@nestjs/common'
 import { OnEvent } from '@nestjs/event-emitter'
 import { NotificationEmitter } from '../gateways/notification-emitter.abstract'
 import { BoxEvents } from '../../box/constants/box-events.constants'
@@ -26,9 +26,14 @@ import { BoxService } from '../../box/services/box.service'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
+import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
+import { OrganizationEvents } from '../../organization/constants/organization-events.constant'
+import { OrganizationUserRemovedEvent } from '../../organization/events/organization-user-removed.event'
 
 @Injectable()
 export class NotificationService {
+  private readonly logger = new Logger(NotificationService.name)
+
   constructor(
     private readonly notificationEmitter: NotificationEmitter,
     private readonly regionService: RegionService,
@@ -90,6 +95,20 @@ export class NotificationService {
     if (organizationId !== undefined) {
       this.notificationEmitter.emitRunnerStateUpdated(dto, organizationId, event.oldState, event.newState)
     }
+  }
+
+  // After commit, so a socket reconnecting during the removal already fails the
+  // gateway's membership check instead of re-joining the room. Best-effort: the
+  // removal has committed, so an eviction failure is logged, not thrown.
+  @OnAsyncEvent({ event: OrganizationEvents.USER_REMOVED })
+  async handleOrganizationUserRemoved(event: OrganizationUserRemovedEvent) {
+    event.afterCommit(async () => {
+      try {
+        this.notificationEmitter.leaveOrganizationRoom(event.userId, event.organizationId)
+      } catch (error) {
+        this.logger.error(`Failed to evict user ${event.userId} from organization room ${event.organizationId}:`, error)
+      }
+    })
   }
 
   @OnEvent(RunnerEvents.UNSCHEDULABLE_UPDATED)
