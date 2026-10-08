@@ -106,9 +106,7 @@ describe('ImageAdmissionService', () => {
     })
 
     it('says a login would open a host that takes one, when none covers the repository', async () => {
-      await expect(service.assert(organization, 'ghcr.io/other/app:1')).rejects.toThrow(
-        /only with a registered credential/,
-      )
+      await expect(service.assert(organization, 'ghcr.io/other/app:1')).rejects.toThrow(/add one under Registries/)
     })
 
     it('refuses a ref written against the proxy itself, before anything is looked up', async () => {
