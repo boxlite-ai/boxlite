@@ -94,6 +94,10 @@ must explicitly remove it when it is no longer needed.
 
 ### Runtime Image Management
 
+`rt.Images()` holds the images a runtime can boot from: the local cache on a
+runtime from `NewRuntime`, the server's catalog on one from `NewRest`. The same
+code runs against either.
+
 ```go
 ctx := context.Background()
 images, err := rt.Images()
@@ -115,7 +119,34 @@ if err != nil {
 for _, image := range cached {
 	fmt.Println(image.Repository, image.Tag, image.ID)
 }
+
+detail, err := images.Get(ctx, "docker.io/library/alpine")
+if err != nil {
+	log.Fatal(err)
+}
+for _, version := range detail.Versions {
+	fmt.Println(detail.Name, version.Digest, version.RecordedAt)
+}
+if err := images.Remove(ctx, "docker.io/library/alpine"); err != nil {
+	log.Fatal(err)
+}
 ```
+
+| Method | Local runtime | REST runtime |
+|--------|---------------|--------------|
+| `Pull` | Pulls into the cache | `ErrUnsupported`: creating a box pulls |
+| `List` | One row per cached reference | One row per catalog tag |
+| `Get` | The cache entries under the name | The catalog entry with its versions |
+| `Remove` | Forgets the name; layers stay | Removes the catalog entry; `ErrInvalidState` while a box can boot from it |
+| `Usage` | `ErrUnsupported` | `ImageUsage{Count, Limit, KnownBytes}` |
+
+`Get` and `Remove` take an image name such as `"docker.io/library/alpine"`. A
+reference with a tag or digest fails with `ErrInvalidArgument`, since a remove
+takes every tag of the name; a name the runtime does not hold fails with
+`ErrNotFound`. `ImageDetail.Versions` is newest first, and
+`ImageVersion.SizeBytes` is nil when the size is unknown. Locally, a box built
+from a removed image reads the image's configuration from the registry when it
+next starts.
 
 ## Box Options
 

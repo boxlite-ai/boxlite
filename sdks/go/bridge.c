@@ -24,6 +24,9 @@ extern void goBoxliteOnCopy(CBoxliteError *err, void *ud);
 
 extern void goBoxliteOnImagePull(CImagePullResult *res, CBoxliteError *err, void *ud);
 extern void goBoxliteOnImageList(CImageInfoList *list, CBoxliteError *err, void *ud);
+extern void goBoxliteOnImageGet(CImageDetail *detail, CBoxliteError *err, void *ud);
+extern void goBoxliteOnImageRemove(CBoxliteError *err, void *ud);
+extern void goBoxliteOnImageUsage(CImageUsage *usage, CBoxliteError *err, void *ud);
 
 extern void goBoxliteOnVolume(CVolumeInfo *info, CBoxliteError *err, void *ud);
 extern void goBoxliteOnVolumeList(CVolumeInfoList *list, CBoxliteError *err, void *ud);
@@ -64,6 +67,9 @@ CBoxCopyCb cbCopy(void) { return (CBoxCopyCb)goBoxliteOnCopy; }
 
 CBoxImagePullCb cbImagePull(void) { return (CBoxImagePullCb)goBoxliteOnImagePull; }
 CBoxImageListCb cbImageList(void) { return (CBoxImageListCb)goBoxliteOnImageList; }
+CBoxImageGetCb cbImageGet(void) { return (CBoxImageGetCb)goBoxliteOnImageGet; }
+CBoxImageRemoveCb cbImageRemove(void) { return (CBoxImageRemoveCb)goBoxliteOnImageRemove; }
+CBoxImageUsageCb cbImageUsage(void) { return (CBoxImageUsageCb)goBoxliteOnImageUsage; }
 
 // Create and Get both deliver a single CVolumeInfo, so they share the
 // goBoxliteOnVolume trampoline (cast to their distinct typedef).
