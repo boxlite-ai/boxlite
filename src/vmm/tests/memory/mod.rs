@@ -1,16 +1,33 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Guest RAM layout and allocation.
+//! Guest RAM layout, allocation and the registration lifetime rules, driven
+//! through the fake backend.
 
-use std::error::Error as _;
+use std::{error::Error as _, sync::Arc};
 
+use boxlite_hypervisor::Error as HypervisorError;
 use vm_memory::{Bytes, GuestAddress, GuestMemoryBackend};
 
 use super::{GuestRam, MAX_MEMORY_MIB, RAM_START, ram_ranges};
-use crate::error::Error;
+use crate::{
+    error::Error,
+    fake_vm::{Call, FakeVm},
+};
 
 const MIB: usize = 1 << 20;
+
+/// Two regions far apart, so ascending and descending orders differ and the
+/// second registration can fail on its own; the addresses are never run.
+fn two_regions() -> GuestRam {
+    GuestRam::new(&[(GuestAddress(0), MIB), (GuestAddress(1 << 32), MIB)]).unwrap()
+}
+
+fn expected_calls(ram: &GuestRam) -> Vec<(Call, Call)> {
+    ram.regions()
+        .map(|region| (Call::map(&region), Call::unmap(&region)))
+        .collect()
+}
 
 #[test]
 fn ram_ranges_place_one_mib_aligned_region_at_the_architecture_start() {
@@ -47,9 +64,114 @@ fn allocated_ram_is_zeroed_and_mirrors_its_ranges() {
 
 #[test]
 fn two_regions_are_reported_in_ascending_order() {
-    let ram = GuestRam::new(&[(GuestAddress(0), MIB), (GuestAddress(1 << 32), MIB)]).unwrap();
-    let starts: Vec<u64> = ram.regions().map(|region| region.guest_addr).collect();
+    let starts: Vec<u64> = two_regions()
+        .regions()
+        .map(|region| region.guest_addr)
+        .collect();
     assert_eq!(starts, [0, 1 << 32]);
+}
+
+#[test]
+fn maps_ascending_and_unmaps_descending_with_the_backing_addresses() {
+    let mut ram = two_regions();
+    let vm = FakeVm::new();
+    let [(map0, unmap0), (map1, unmap1)] = expected_calls(&ram)[..] else {
+        panic!("two regions")
+    };
+
+    ram.map(&vm).unwrap();
+    assert_eq!(vm.calls(), [map0, map1]);
+    ram.unmap(&vm).unwrap();
+    assert_eq!(vm.calls(), [map0, map1, unmap1, unmap0]);
+}
+
+#[test]
+fn failed_second_map_unmaps_the_first_and_leaves_ram_remappable() {
+    let mut ram = two_regions();
+    let vm = FakeVm::failing_at(&[1]);
+    let [(map0, unmap0), (map1, _)] = expected_calls(&ram)[..] else {
+        panic!("two regions")
+    };
+
+    let error = ram.map(&vm).unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Hypervisor(HypervisorError::MapMemory { guest_addr, size, .. })
+            if guest_addr == 1 << 32 && size == MIB
+    ));
+    assert_eq!(vm.calls(), [map0, map1, unmap0]);
+
+    let retry = FakeVm::new();
+    ram.map(&retry).unwrap();
+    assert_eq!(retry.calls(), [map0, map1]);
+    ram.unmap(&retry).unwrap();
+}
+
+#[test]
+fn failed_rollback_keeps_the_backing_alive() {
+    let mut ram = two_regions();
+    let vm = FakeVm::failing_at(&[1, 2]);
+    let weak = Arc::downgrade(ram.memory());
+
+    let error = ram.map(&vm).unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Hypervisor(HypervisorError::MapMemory { .. })
+    ));
+    assert_eq!(vm.calls().len(), 3, "map, failed map, failed rollback");
+    assert_eq!(ram.mapped, 1);
+
+    drop(ram);
+    assert!(
+        weak.upgrade().is_some(),
+        "a registered region keeps its backing"
+    );
+}
+
+#[test]
+fn failed_unmap_keeps_state_and_retry_unmaps_only_the_remainder() {
+    let mut ram = two_regions();
+    let vm = FakeVm::failing_at(&[3]);
+    let [(map0, unmap0), (map1, unmap1)] = expected_calls(&ram)[..] else {
+        panic!("two regions")
+    };
+    let weak = Arc::downgrade(ram.memory());
+    ram.map(&vm).unwrap();
+
+    let error = ram.unmap(&vm).unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Hypervisor(HypervisorError::UnmapMemory { guest_addr: 0, size, .. }) if size == MIB
+    ));
+    assert_eq!(ram.mapped, 1);
+    assert_eq!(vm.calls(), [map0, map1, unmap1, unmap0]);
+
+    ram.unmap(&vm).unwrap();
+    assert_eq!(ram.mapped, 0);
+    assert_eq!(vm.calls(), [map0, map1, unmap1, unmap0, unmap0]);
+    drop(ram);
+    assert!(
+        weak.upgrade().is_none(),
+        "an unmapped RAM releases its backing"
+    );
+}
+
+#[test]
+fn drop_without_unmap_leaks_the_backing() {
+    let mut ram = two_regions();
+    let weak = Arc::downgrade(ram.memory());
+    ram.map(&FakeVm::new()).unwrap();
+
+    drop(ram);
+    assert!(weak.upgrade().is_some());
+}
+
+#[test]
+fn unmap_without_registrations_records_nothing() {
+    let mut ram = two_regions();
+    let vm = FakeVm::new();
+    ram.unmap(&vm).unwrap();
+    assert!(vm.calls().is_empty());
 }
 
 #[test]
