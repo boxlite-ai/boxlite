@@ -21,6 +21,10 @@ const MAX_NAME_CHARS: usize = 512;
 /// Internal trait for image management, implemented by both backends.
 ///
 /// `name` arguments have passed [`checked_name`].
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait ImageBackend: Send + Sync {
     /// Pull an image from a registry.

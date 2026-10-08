@@ -796,6 +796,171 @@ impl VolumeSpec {
     }
 }
 
+/// What a [`MountSpec`]'s `source` names.
+///
+/// Spelled `"volume"` and `"bind"` on every surface that carries a mount: the
+/// CLI(TODO), the SDK(TODO), the REST wire(TODO) and persisted box config(TODO). One
+/// spelling everywhere is what lets a mount written for one surface be read unchanged on
+/// another.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MountType {
+    /// A managed volume, by server-assigned id or by name. REST runtimes only:
+    /// the local runtime has no volume backend to resolve one against.
+    Volume,
+    /// A host directory or file. Local runtime only: over REST the path would
+    /// name the server's filesystem, not the caller's.
+    Bind,
+}
+
+impl MountType {
+    /// The spelling every surface uses for this type.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Volume => "volume",
+            Self::Bind => "bind",
+        }
+    }
+
+    /// What `source` has to name for this type, for error messages.
+    fn source_kind(self) -> &'static str {
+        match self {
+            Self::Volume => "a volume id or name",
+            Self::Bind => "a host path",
+        }
+    }
+}
+
+impl fmt::Display for MountType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for MountType {
+    type Err = boxlite_shared::errors::BoxliteError;
+
+    /// Exact spellings only. The type decides whose storage `source` names, so
+    /// reading a near miss such as `Volume` or `volumes` as some type would
+    /// mount something the caller did not ask for.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "volume" => Ok(Self::Volume),
+            "bind" => Ok(Self::Bind),
+            _ => Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                format!("unknown mount type {value:?}; expected \"volume\" or \"bind\""),
+            )),
+        }
+    }
+}
+
+/// A typed mount, for `BoxOptions::mounts`(TODO): what to mount (`mount_type`
+/// and `source`), where (`target`) and how (`read_only`, `sub_path`).
+///
+/// The typed sibling of [`VolumeSpec`]. A `VolumeSpec` infers its origin from
+/// which field is set; a `MountSpec` states it. Build one with
+/// [`MountSpec::volume_mount`] or [`MountSpec::bind_mount`].
+///
+/// `mount_type` is serialized under the key `type`, the spelling the CLI(TODO),
+/// the SDK(TODO) and the wire(TODO) use. `type` is a Rust keyword, hence the field name.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MountSpec {
+    #[serde(rename = "type")]
+    pub mount_type: MountType,
+
+    /// A volume id or name for `volume`, a host path for `bind`. Both types
+    /// require it; the design keeps it optional for mount types that have no
+    /// source, such as tmpfs(TODO). A volume with no source can become an
+    /// anonymous mount(TODO). For now, both `volume` and `bind` need a not
+    /// `None` source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+
+    /// Mount point inside the box; an absolute path.
+    pub target: String,
+
+    /// Mount without write access.
+    #[serde(default)]
+    pub read_only: bool,
+
+    /// Prefix inside a managed volume to mount instead of the whole volume;
+    /// `None` mounts all of it. Only a `volume` mount has one: a `bind` names
+    /// its sub-directory in `source` directly.
+    ///
+    /// [`MountSpec::validate`] checks only that the prefix fits the type.
+    /// Whether it is a legal key and whether it exists are the server's to
+    /// answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_path: Option<String>,
+}
+
+impl MountSpec {
+    /// Mount a managed volume, addressed by server-assigned id or by name.
+    pub fn volume_mount(volume: impl Into<String>, target: impl Into<String>) -> Self {
+        Self {
+            mount_type: MountType::Volume,
+            source: Some(volume.into()),
+            target: target.into(),
+            read_only: false,
+            sub_path: None,
+        }
+    }
+
+    /// Bind a host directory or file into the box.
+    pub fn bind_mount(host_path: impl Into<String>, target: impl Into<String>) -> Self {
+        Self {
+            mount_type: MountType::Bind,
+            source: Some(host_path.into()),
+            target: target.into(),
+            read_only: false,
+            sub_path: None,
+        }
+    }
+
+    /// Reject a mount whose fields contradict its type.
+    ///
+    /// The constructors cannot build one, but the fields are public and the
+    /// SDKs fill them from caller input(TODO), so create runs this(TODO) for every
+    /// mount on both runtimes, before the options reach a backend.
+    pub fn validate(&self) -> BoxliteResult<()> {
+        let mount_type = self.mount_type;
+        let target = &self.target;
+        let invalid = |message: String| {
+            Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                message,
+            ))
+        };
+
+        if !target.starts_with('/') {
+            return invalid(format!(
+                "{mount_type} mount target {target:?} must be an absolute path inside the box"
+            ));
+        }
+
+        match self.source.as_deref() {
+            Some(source) if !source.trim().is_empty() => {}
+            _ => {
+                return invalid(format!(
+                    "{mount_type} mount to {target:?} needs a source ({})",
+                    mount_type.source_kind()
+                ));
+            }
+        }
+
+        match (mount_type, self.sub_path.as_deref()) {
+            (MountType::Bind, Some(_)) => invalid(format!(
+                "bind mount to {target:?} sets sub_path; a bind names its sub-directory in \
+                 source directly"
+            )),
+            (MountType::Volume, Some("")) => invalid(format!(
+                "volume mount to {target:?} has an empty sub_path; omit it to mount the whole \
+                 volume"
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
 /// Network mode for public box configuration surfaces.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1156,6 +1321,117 @@ mod tests {
         ContainerCapabilities, NetworkRateLimit, SecurityOptions, SecurityOptionsBuilder,
     };
     use crate::runtime::types::Bytes;
+
+    /// The type decides whose storage `source` names, so only the two exact
+    /// spellings parse; a near miss is an error naming what is accepted.
+    #[test]
+    fn mount_type_parses_only_its_exact_spellings() {
+        for mount_type in [MountType::Volume, MountType::Bind] {
+            assert_eq!(
+                mount_type.to_string().parse::<MountType>().unwrap(),
+                mount_type
+            );
+        }
+
+        for near_miss in ["Volume", "volumes", "tmpfs", ""] {
+            let error = near_miss
+                .parse::<MountType>()
+                .expect_err("only volume and bind are mount types");
+            let message = error.to_string();
+            assert!(message.contains(&format!("{near_miss:?}")), "{message}");
+            assert!(message.contains("\"volume\" or \"bind\""), "{message}");
+        }
+    }
+
+    /// `MountSpec` is persisted as box config(TODO) and is the shape the
+    /// SDK(TODO) and the wire(TODO) share, so its JSON is a contract: `type`
+    /// rather than the Rust field name, lowercase type names, and no key for an
+    /// unset `sub_path`.
+    #[test]
+    fn mount_spec_json_uses_the_type_key_and_omits_an_unset_sub_path() {
+        let prefixed = MountSpec {
+            read_only: true,
+            sub_path: Some("foo/bar".to_string()),
+            ..MountSpec::volume_mount("run42", "/workspace")
+        };
+        let json = serde_json::to_value(&prefixed).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "volume",
+                "source": "run42",
+                "target": "/workspace",
+                "read_only": true,
+                "sub_path": "foo/bar",
+            })
+        );
+        assert_eq!(serde_json::from_value::<MountSpec>(json).unwrap(), prefixed);
+
+        let whole = serde_json::to_value(MountSpec::bind_mount("/srv/data", "/data")).unwrap();
+        assert_eq!(whole["type"], "bind");
+        assert!(whole.get("sub_path").is_none(), "{whole}");
+        assert!(whole.get("mount_type").is_none(), "{whole}");
+
+        let capitalized = r#"{"type":"Volume","source":"run42","target":"/workspace"}"#;
+        serde_json::from_str::<MountSpec>(capitalized)
+            .expect_err("the persisted spelling is lowercase only");
+    }
+
+    /// Every field that contradicts the type is refused at create(TODO), with
+    /// the target in the message so a caller with several mounts can find it.
+    #[test]
+    fn mount_spec_validate_refuses_fields_that_contradict_the_type() {
+        let refused = [
+            (
+                MountSpec::volume_mount("run42", "workspace"),
+                "must be an absolute path",
+            ),
+            (
+                MountSpec {
+                    source: None,
+                    ..MountSpec::volume_mount("run42", "/workspace")
+                },
+                "needs a source (a volume id or name)",
+            ),
+            (
+                MountSpec::bind_mount("  ", "/workspace"),
+                "needs a source (a host path)",
+            ),
+            (
+                MountSpec {
+                    sub_path: Some("foo".to_string()),
+                    ..MountSpec::bind_mount("/srv/data", "/workspace")
+                },
+                "bind mount to \"/workspace\" sets sub_path",
+            ),
+            (
+                MountSpec {
+                    sub_path: Some(String::new()),
+                    ..MountSpec::volume_mount("run42", "/workspace")
+                },
+                "empty sub_path",
+            ),
+        ];
+        for (mount, expected) in refused {
+            let message = mount
+                .validate()
+                .expect_err("the mount contradicts its type")
+                .to_string();
+            assert!(message.contains(expected), "{mount:?}: {message}");
+            assert!(message.contains("workspace"), "{mount:?}: {message}");
+        }
+
+        for accepted in [
+            MountSpec {
+                read_only: true,
+                sub_path: Some("foo/bar".to_string()),
+                ..MountSpec::volume_mount("run42", "/workspace")
+            },
+            MountSpec::bind_mount("/srv/data", "/workspace"),
+        ] {
+            accepted.validate().expect("the mount fits its type");
+        }
+    }
 
     #[test]
     fn legacy_ports_keep_old_same_port_and_last_write_wins_semantics() {

@@ -31,12 +31,15 @@ import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middl
 import { Request, Response, NextFunction } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
+import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
+import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import { AUTO_RESUME_TIMEOUT_SECONDS, BoxAutoResumeService } from './box-auto-resume.service'
 import { BoxState } from '../box/enums/box-state.enum'
+import { TunnelService } from '../box/services/tunnel.service'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -70,6 +73,7 @@ export class BoxliteProxyController {
     private readonly boxService: BoxService,
     private readonly runnerService: RunnerService,
     private readonly autoResume: BoxAutoResumeService,
+    private readonly tunnelService: TunnelService,
   ) {}
 
   @All(':boxId/exec')
@@ -218,6 +222,7 @@ export class BoxliteProxyController {
   }
 
   @Post(':boxId/network/tunnel')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.OK)
   async proxyNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
@@ -265,6 +270,7 @@ export class BoxliteProxyController {
     }
 
     const uri = await this.boxService.getNetworkTunnelUrl(boxId, authContext.organizationId, port)
+    await this.tunnelService.declarePublic(box.id, port)
     return { uri }
   }
 

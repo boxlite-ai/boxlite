@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// TestBoxCA_RenewsHostCertificateOnDayTwo verifies a real chain after the first leaf expires.
 func TestBoxCA_RenewsHostCertificateOnDayTwo(t *testing.T) {
 	ca := newTestCA(t)
 	now := time.Now()
@@ -29,6 +30,7 @@ func TestBoxCA_RenewsHostCertificateOnDayTwo(t *testing.T) {
 	}
 }
 
+// TestBoxCA_HostCertificateRespectsCAValidity prevents a leaf from outliving its issuer.
 func TestBoxCA_HostCertificateRespectsCAValidity(t *testing.T) {
 	ca := newTestCA(t)
 	now := time.Now()
@@ -45,6 +47,7 @@ func TestBoxCA_HostCertificateRespectsCAValidity(t *testing.T) {
 	}
 }
 
+// TestBoxCA_RejectsInvalidIssuerEvenWithCachedCertificate checks that caching cannot bypass issuer validity.
 func TestBoxCA_RejectsInvalidIssuerEvenWithCachedCertificate(t *testing.T) {
 	for _, cached := range []bool{false, true} {
 		ca := newTestCA(t)

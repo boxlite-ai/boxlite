@@ -41,15 +41,6 @@ pub unsafe extern "C" fn boxlite_copy_out(
     box_copy_out(handle, guest_src, host_dst, cb, user_data, out_error)
 }
 
-fn default_copy_options() -> CopyOptions {
-    CopyOptions {
-        recursive: true,
-        overwrite: true,
-        follow_symlinks: false,
-        include_parent: false,
-    }
-}
-
 unsafe fn box_copy_into(
     handle: *mut BoxHandle,
     host_src: *const c_char,
@@ -86,7 +77,7 @@ unsafe fn box_copy_into(
         let user_data_addr = user_data as usize;
 
         handle_ref.tokio_rt.spawn(async move {
-            let result = lite.copy_into(src, dst, default_copy_options()).await;
+            let result = lite.copy_into(src, dst, CopyOptions::default()).await;
             push_event(
                 &queue,
                 RuntimeEvent::Copy {
@@ -138,7 +129,7 @@ unsafe fn box_copy_out(
         let user_data_addr = user_data as usize;
 
         handle_ref.tokio_rt.spawn(async move {
-            let result = lite.copy_out(src, dst, default_copy_options()).await;
+            let result = lite.copy_out(src, dst, CopyOptions::default()).await;
             push_event(
                 &queue,
                 RuntimeEvent::Copy {
@@ -330,7 +321,7 @@ pub unsafe extern "C" fn boxlite_copy_out_start(
         let lite = handle_ref.handle.clone();
         match handle_ref
             .tokio_rt
-            .block_on(lite.copy_out_stream(src.as_str(), default_copy_options()))
+            .block_on(lite.copy_out_stream(src.as_str(), CopyOptions::default()))
         {
             Ok((bytes, source)) => {
                 if !out_source_kind.is_null() {
@@ -462,7 +453,7 @@ pub unsafe extern "C" fn boxlite_copy_in_start(
 
         handle_ref.tokio_rt.spawn(async move {
             let result = lite
-                .copy_in_stream(bytes, dst.as_str(), source, default_copy_options())
+                .copy_in_stream(bytes, dst.as_str(), source, CopyOptions::default())
                 .await;
             push_event(
                 &queue,

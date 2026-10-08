@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import io
 import json
+import os
 import sys
+import tarfile
 import types
 import unittest
 from pathlib import Path
@@ -355,6 +358,72 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 204)
         runtime.list_info.assert_awaited_once_with()
+
+
+def _tar_of(entries: dict[str, bytes | None]) -> bytes:
+    """An archive holding `entries`: bytes for a file, None for a directory."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for name, data in entries.items():
+            info = tarfile.TarInfo(name)
+            if data is None:
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+                tar.addfile(info)
+            else:
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+class UploadSourceTests(unittest.IsolatedAsyncioTestCase):
+    """What `upload_files` hands `copy_in` after extracting an upload.
+
+    The SDK copies a directory under its own name unless the source ends in
+    `/.`, so the server must not hand it the extraction directory itself.
+    """
+
+    async def asyncSetUp(self) -> None:
+        SERVER.state.active_boxes_by_id = {}
+        SERVER.state.active_boxes_lock = asyncio.Lock()
+
+    async def _copied_source(self, archive: bytes) -> tuple[str, bool]:
+        seen: dict[str, object] = {}
+
+        async def copy_in(source, path, options):
+            seen["source"] = source
+            seen["is_file"] = os.path.isfile(source)
+
+        handle = _make_box_handle("box-upload")
+        handle.copy_in = AsyncMock(side_effect=copy_in)
+        SERVER.state.active_boxes_by_id["box-upload"] = handle
+
+        response = await SERVER.upload_files(
+            "demo",
+            "box-upload",
+            path="/root/dst",
+            overwrite=True,
+            request=_DummyRequest(archive),
+            _auth={},
+        )
+
+        self.assertEqual(response.status_code, 204)
+        return seen["source"], seen["is_file"]
+
+    async def test_a_lone_file_is_copied_by_itself(self) -> None:
+        # It must land *as* `path`, as it did when the server copied the
+        # extraction directory's contents with include_parent=False.
+        source, is_file = await self._copied_source(_tar_of({"notes.txt": b"hi"}))
+
+        self.assertTrue(source.endswith(os.sep + "notes.txt"), source)
+        self.assertTrue(is_file)
+
+    async def test_anything_else_is_copied_as_the_extracted_contents(self) -> None:
+        source, _ = await self._copied_source(
+            _tar_of({"proj/": None, "proj/a.txt": b"a"})
+        )
+
+        self.assertTrue(source.endswith(os.sep + "extracted/."), source)
 
 
 if __name__ == "__main__":

@@ -198,6 +198,9 @@ fn validate_registry_auth(username: &Option<String>, password: &Option<String>) 
 // Copy Options
 // ============================================================================
 
+/// Copy options. To copy a directory's contents rather than the directory,
+/// spell the source `SRC/.` (as `docker cp` does) — build it as a string, since
+/// `pathlib.Path` drops a trailing `/.`.
 #[pyclass(name = "CopyOptions")]
 #[derive(Clone, Debug)]
 pub struct PyCopyOptions {
@@ -207,27 +210,17 @@ pub struct PyCopyOptions {
     pub overwrite: bool,
     #[pyo3(get, set)]
     pub follow_symlinks: bool,
-    #[pyo3(get, set)]
-    pub include_parent: bool,
 }
 
 #[pymethods]
 impl PyCopyOptions {
     #[new]
-    #[pyo3(
-        signature = (
-            recursive = true,
-            overwrite = true,
-            follow_symlinks = false,
-            include_parent = true
-        )
-    )]
-    fn new(recursive: bool, overwrite: bool, follow_symlinks: bool, include_parent: bool) -> Self {
+    #[pyo3(signature = (recursive = true, overwrite = true, follow_symlinks = false))]
+    fn new(recursive: bool, overwrite: bool, follow_symlinks: bool) -> Self {
         Self {
             recursive,
             overwrite,
             follow_symlinks,
-            include_parent,
         }
     }
 }
@@ -238,7 +231,6 @@ impl From<PyCopyOptions> for CopyOptions {
             recursive: opt.recursive,
             overwrite: opt.overwrite,
             follow_symlinks: opt.follow_symlinks,
-            include_parent: opt.include_parent,
         }
     }
 }

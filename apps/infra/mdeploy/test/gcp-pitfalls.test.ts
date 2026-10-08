@@ -36,6 +36,7 @@ import {
   GKE_SERVICE_CIDR,
   MANAGED_PROXY_CIDR,
   CLOUDRUN_EGRESS_CIDR,
+  PRIVATE_GOOGLE_ACCESS_ADDRESSES,
   PSC_NAT_CIDR,
   SUBNET_CIDR,
 } from '../stack/providers/gcp/network.ts'
@@ -1507,6 +1508,56 @@ test('the fixed GKE and proxy ranges neither overlap nor collide with Private Se
       slash16(cidr),
       slash16(SUBNET_CIDR),
       `${cidr} sits in a /16 the workload subnet does not block, so the allocator may take it`,
+    )
+  }
+})
+
+test('run.app answers privately, through Private Google Access', () => {
+  /*
+   * The silence this replaces: the collector's `run.app` name is a public
+   * address, `ingress: internal` is an ACL at Google's front end rather than a
+   * private endpoint, and the API reaches it with `PRIVATE_RANGES_ONLY` egress
+   * — which leaves a public destination on Cloud Run's own path. So every OTLP
+   * export from the API is refused with a 404 while the service looks healthy.
+   */
+  const source = sourceOf('network')
+
+  // Private, and bound to this network. A zone left public would divert
+  // `run.app` for readers far outside it.
+  assert.match(source, /dnsName: RUN_APP_ZONE,/)
+  assert.match(source, /visibility: 'private',/)
+  assert.match(source, /privateVisibilityConfig: \{ networks: \[\{ networkUrl: network\.id \}\] \}/)
+
+  // The apex carries the addresses and the wildcard points at the apex, which is
+  // the shape the Private Google Access guide prescribes for `run.app`.
+  assert.match(source, /name: RUN_APP_ZONE,\n\s+type: 'A',/)
+  assert.match(source, /rrdatas: PRIVATE_GOOGLE_ACCESS_ADDRESSES,/)
+  assert.match(source, /name: `\*\.\$\{RUN_APP_ZONE\}`,\n\s+type: 'CNAME',\n\s+ttl: 60,\n\s+rrdatas: \[RUN_APP_ZONE\],/)
+
+  // The addresses only answer through the network if the subnets the callers
+  // leave from have Private Google Access; both do, and both must keep it.
+  const withGoogleAccess = (source.match(/privateIpGoogleAccess: true,/g) ?? []).length
+  assert.equal(withGoogleAccess, 2, 'the workload subnet and the Cloud Run egress subnet both need Private Google Access')
+
+  // And workloads wait for the records, or one that starts early resolves the
+  // public address and keeps it for as long as its resolver caches it.
+  assert.match(source, /ready: \[\n\s+privateServiceAccess,\n(?:\s+\/\/.*\n)*\s+\.\.\.runAppRecords,/)
+})
+
+test('the run.app addresses are the private.googleapis.com range', () => {
+  /*
+   * `private.googleapis.com` is `199.36.153.8/30`, and the Private Google Access
+   * guide lists `*.run.app` on its row. An address outside that range is not a
+   * Private Google Access address at all, so `PRIVATE_RANGES_ONLY` would leave
+   * the API on its public path while the zone looked correct.
+   */
+  const privateRange = rangeOf('199.36.153.8/30')
+  const addresses = PRIVATE_GOOGLE_ACCESS_ADDRESSES.map((address) => rangeOf(`${address}/32`).first)
+  assert.equal(new Set(addresses).size, 4, 'all four private.googleapis.com addresses, once each')
+  for (const address of addresses) {
+    assert.ok(
+      address >= privateRange.first && address <= privateRange.last,
+      `${address} is outside private.googleapis.com (199.36.153.8/30)`,
     )
   }
 })

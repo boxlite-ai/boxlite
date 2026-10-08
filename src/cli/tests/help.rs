@@ -269,10 +269,12 @@ fn command_specific_help_has_no_noop_options() {
         }
     }
 
+    // `cp` spells "the contents, not the directory" as `SRC/.` now; the flag
+    // that used to say it must be gone rather than silently accepted.
     let cp_help = help_for(&["cp"], "--help");
     assert!(
-        declares_option(&cp_help, "--no-include-parent"),
-        "{cp_help}"
+        !declares_option(&cp_help, "--no-include-parent"),
+        "--no-include-parent was replaced by the SRC/. spelling:\n{cp_help}"
     );
 }
 

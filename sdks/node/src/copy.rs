@@ -6,7 +6,6 @@ pub struct JsCopyOptions {
     pub recursive: Option<bool>,
     pub overwrite: Option<bool>,
     pub follow_symlinks: Option<bool>,
-    pub include_parent: Option<bool>,
 }
 
 pub fn into_copy_options(opts: Option<JsCopyOptions>) -> boxlite::CopyOptions {
@@ -20,9 +19,6 @@ pub fn into_copy_options(opts: Option<JsCopyOptions>) -> boxlite::CopyOptions {
         }
         if let Some(v) = opt.follow_symlinks {
             o.follow_symlinks = v;
-        }
-        if let Some(v) = opt.include_parent {
-            o.include_parent = v;
         }
     }
     o

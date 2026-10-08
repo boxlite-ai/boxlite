@@ -42,14 +42,17 @@ import type { RunnerBinary, RunnerSlot } from './runners.ts'
 const BINARY_IDENTITY = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(\+[0-9a-f]{40})?$/
 const TARBALL_NAME = /^[A-Za-z0-9._-]+\.tar\.gz$/
 /**
- * The control plane's origin, as tight as the two places it is interpolated.
+ * An origin the unit environment is converged onto, as tight as the places it
+ * is interpolated.
  *
- * It lands inside a single-quoted assignment and inside a `sed` expression
- * delimited by `|`, both in a script that runs as root — so a quote or a pipe
- * in it is not a malformed URL but a command. An allowlist rather than an
- * escape, for the reason the other two here are.
+ * The control plane's and the collector's, which are checked by one rule
+ * because they run the same risk: each lands inside a single-quoted assignment
+ * and inside the `awk` invocation that rewrites the file, both in a script that
+ * runs as root — so a quote or a pipe in one is not a malformed URL but a
+ * command. An allowlist rather than an escape, for the reason the other two
+ * here are.
  */
-const CONTROL_PLANE_URL = /^https?:\/\/[A-Za-z0-9.-]+(:\d{1,5})?\/?$/
+const UNIT_ENV_URL = /^https?:\/\/[A-Za-z0-9.-]+(:\d{1,5})?\/?$/
 /** The object store a host mounts a volume from, as this module will spell it. */
 const VOLUME_BACKEND = /^[a-z0-9]+$/
 /** A registry proxy's host, a name and perhaps a port, as this module will spell it. */
@@ -136,6 +139,14 @@ export type UpgradeTarget = {
    * inventing one there would rewrite a host from a value nobody supplied.
    */
   apiUrl?: string | null
+  /**
+   * Where the collector accepts OTLP, so a host whose boot script wrote an
+   * empty one can be told.
+   *
+   * Absent for the same two callers `apiUrl` is absent for, and for the same
+   * reasons. Never empty: see `assertUnitEnvironment`.
+   */
+  otlpUrl?: string | null
   /**
    * Which object store a volume is mounted from, or null where the boot script
    * writes no such key. The cloud's answer: only the GCP hosts carry gcsfuse,
@@ -252,20 +263,37 @@ const assertUpgradeTarget = (target: UpgradeTarget): void => {
 }
 
 /**
- * The pair the unit environment is converged onto, checked wherever it is given.
+ * The values the unit environment is converged onto, checked wherever they are
+ * given.
  *
- * Both reach a single-quoted assignment and a `sed` expression that run as root,
- * which is the rule every other interpolated value in this module follows.
+ * All three reach a single-quoted assignment and an awk invocation that run as
+ * root, which is the rule every other interpolated value in this module follows.
+ *
+ * Absent and empty are deliberately not one answer. Absent means a caller with
+ * nothing to enforce — `runner:update`, which reads no stage environment — and
+ * the key is then left out of the expected set entirely, so the host keeps
+ * whatever it holds. Empty means the stage composed nothing, which is the very
+ * state this convergence exists to repair: a host converged onto
+ * `OTEL_EXPORTER_OTLP_ENDPOINT=` would be restarted onto the one value the
+ * runner reads as "do not export" — the policy enforcing the bug. So an empty
+ * value is refused here rather than shipped to a fleet.
  */
 const assertUnitEnvironment = ({
   apiUrl,
+  otlpUrl,
   volumeBackend,
   registryProxyHost,
-}: Pick<UpgradeTarget, 'apiUrl' | 'volumeBackend' | 'registryProxyHost'>): void => {
-  if (apiUrl != null && !CONTROL_PLANE_URL.test(apiUrl)) {
+}: Pick<UpgradeTarget, 'apiUrl' | 'otlpUrl' | 'volumeBackend' | 'registryProxyHost'>): void => {
+  if (apiUrl != null && !UNIT_ENV_URL.test(apiUrl)) {
     throw new RunnerUpgradeError(
-      `the control plane's URL reaches a single-quoted assignment and a sed expression that run as root, ` +
+      `the control plane's URL reaches a single-quoted assignment and an awk invocation that run as root, ` +
         `so it is checked here even though the stack composed it; got ${JSON.stringify(apiUrl)}`,
+    )
+  }
+  if (otlpUrl != null && !UNIT_ENV_URL.test(otlpUrl)) {
+    throw new RunnerUpgradeError(
+      `the collector's URL reaches the same two places, and an empty one would converge the fleet onto ` +
+        `the value that silences its exporter; got ${JSON.stringify(otlpUrl)}`,
     )
   }
   if (volumeBackend != null && !VOLUME_BACKEND.test(volumeBackend)) {
@@ -429,14 +457,15 @@ exit 101
 /**
  * The unit environment a host must converge on, for the keys a deploy moves.
  *
- * `BOXLITE_API_URL` is written once, at first boot, from `api.address`, and
- * nothing rewrites it afterwards: the script that wrote it is in
- * `ignoreChanges` on both clouds — `userDataBase64` on AWS,
- * `metadataStartupScript` on GCP — and a `protect: true` instance is never
- * replaced. So a stage that changes its domain leaves every existing host
- * calling a name that no longer resolves: the public record is renamed and the
- * private zone is rebuilt under the new one, and the host is then unreachable
- * from the control plane and cannot be told.
+ * `BOXLITE_API_URL` and `OTEL_EXPORTER_OTLP_ENDPOINT` are written once, at
+ * first boot, from `api.address` and the collector's own URL, and nothing
+ * rewrites them afterwards: the script that wrote them is in `ignoreChanges` on
+ * both clouds — `userDataBase64` on AWS, `metadataStartupScript` on GCP — and a
+ * `protect: true` instance is never replaced. So a stage that changes its
+ * domain leaves every existing host calling a name that no longer resolves, and
+ * a stage whose hosts were created before it had a collector leaves them with
+ * an empty endpoint, which the runner reads as "do not export" and which no
+ * redeploy can reach.
  *
  * `REGISTRY_PROXY_HOST` is here for the same reason: a host booted before the
  * stage ran a registry proxy has no key for it, and nothing else would give it
@@ -449,15 +478,20 @@ exit 101
  */
 export const unitEnvironmentBlock = ({
   apiUrl,
+  otlpUrl,
   volumeBackend,
   registryProxyHost,
-}: Pick<UpgradeTarget, 'volumeBackend' | 'registryProxyHost'> & { apiUrl: string }): string => {
-  assertUnitEnvironment({ apiUrl, volumeBackend, registryProxyHost })
-  // An array, so the optional key is absent rather than empty: an AWS host's
-  // boot script writes no backend, and enforcing one would leave every one of
-  // them disagreeing with itself forever.
+}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost'> & { apiUrl: string }): string => {
+  assertUnitEnvironment({ apiUrl, otlpUrl, volumeBackend, registryProxyHost })
+  // An array, so an optional key is absent rather than empty: an AWS host's
+  // boot script writes no backend, and a caller that supplied no collector or
+  // registry proxy has nothing to enforce for it. Pinning any of them as a
+  // blank line would leave every such host disagreeing with itself forever, or
+  // restart it onto nothing. Verbatim, unlike the address: the boot script
+  // writes the collector's as it stands.
   const expected = [
     `'BOXLITE_API_URL=${runnerApiUrl(apiUrl)}'`,
+    ...(otlpUrl ? [`'OTEL_EXPORTER_OTLP_ENDPOINT=${otlpUrl}'`] : []),
     ...(volumeBackend ? [`'VOLUME_STORAGE_BACKEND=${volumeBackend}'`] : []),
     ...(registryProxyHost ? [`'REGISTRY_PROXY_HOST=${registryProxyHost}'`] : []),
   ].join(' ')
@@ -560,11 +594,12 @@ converge_unit_environment() {
  */
 export const renderUnitEnvironmentPolicyScripts = ({
   apiUrl,
+  otlpUrl,
   volumeBackend,
   registryProxyHost,
-}: Pick<UpgradeTarget, 'volumeBackend' | 'registryProxyHost'> & { apiUrl: string }): UpgradePolicyScripts => {
+}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost'> & { apiUrl: string }): UpgradePolicyScripts => {
   const block = `set -euo pipefail
-${unitEnvironmentBlock({ apiUrl, volumeBackend, registryProxyHost })}`
+${unitEnvironmentBlock({ apiUrl, otlpUrl, volumeBackend, registryProxyHost })}`
   return {
     validate: `${SHEBANG}${block}
 if unit_environment_settled; then exit 100; fi
@@ -608,6 +643,7 @@ ${guards('return 0')}${swapSequence(target)}}
   const environment = target.apiUrl
     ? `${unitEnvironmentBlock({
         apiUrl: target.apiUrl,
+        otlpUrl: target.otlpUrl,
         volumeBackend: target.volumeBackend,
         registryProxyHost: target.registryProxyHost,
       })}

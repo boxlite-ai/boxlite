@@ -11,11 +11,13 @@ import { JobType } from '../enums/job-type.enum'
 import { Job } from '../entities/job.entity'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { sanitizeBoxError } from '../utils/sanitize-error.util'
+import { recordBusinessEvent } from '../../common/utils/business-event.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { Box } from '../entities/box.entity'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { ResourceType } from '../enums/resource-type.enum'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { BoxMigrationJobReceiver, isMigrationJobType } from './box-migration-job-receiver.service'
 
 /**
@@ -121,6 +123,11 @@ export class JobStateHandlerService {
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
+      // Warm-pool top-up creates stock no one requested; the claim records
+      // that box's box.create pair instead (BoxService.assignWarmPoolBox).
+      if (box.organizationId !== BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
+        this.recordJobOutcome('box.create', job, box)
+      }
     } catch (error) {
       this.logger.error(`Error handling CREATE_BOX job completion for box ${boxId}:`, error)
     }
@@ -201,6 +208,7 @@ export class JobStateHandlerService {
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
+      this.recordJobOutcome('box.stop', job, box)
     } catch (error) {
       this.logger.error(`Error handling STOP_BOX job completion for box ${boxId}:`, error)
     }
@@ -235,8 +243,23 @@ export class JobStateHandlerService {
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
+      this.recordJobOutcome('box.delete', job, box)
     } catch (error) {
       this.logger.error(`Error handling DESTROY_BOX job completion for box ${boxId}:`, error)
     }
+  }
+
+  /**
+   * Records the business outcome of a finished box job. Called only after the
+   * box row reflecting that outcome has been written, and only for COMPLETED
+   * or FAILED jobs (handleJobCompletion returns early on anything else).
+   */
+  private recordJobOutcome(name: 'box.create' | 'box.stop' | 'box.delete', job: Job, box: Box): void {
+    const event = { name, correlationId: box.id, orgId: box.organizationId } as const
+    if (job.status === JobStatus.COMPLETED) {
+      recordBusinessEvent({ ...event, outcome: 'success' })
+      return
+    }
+    recordBusinessEvent({ ...event, outcome: 'exception', exceptionType: 'runner_job_failed' })
   }
 }

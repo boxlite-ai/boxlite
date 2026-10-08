@@ -34,6 +34,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [AdvancedBoxOptions](#advancedboxoptions)
   - [RootfsSpec](#rootfsspec)
   - [VolumeSpec](#volumespec)
+  - [MountSpec](#mountspec)
   - [NetworkSpec](#networkspec)
   - [NetworkRateLimit](#networkratelimit)
   - [PortSpec](#portspec)
@@ -219,6 +220,56 @@ pub struct LiteBox {
 }
 ```
 
+#### SSH control
+
+`LiteBox::ssh()` returns an owned, cloneable `SshHandle` without starting the box.
+Only `configure()` uses the implicit-start guard of exec, metrics, and file
+copying. `Configured` and `Stopped` boxes using image defaults can start implicitly.
+With an explicit `BoxOptions.cmd` or `entrypoint`, configuration returns
+`InvalidState` in these states; call `start()` first. `status()` and `disable()`
+never start the VM or main command: valid `Configured` and `Stopped` handles return
+disabled status with generation zero and empty address and host identity fields.
+Running handles use the existing guest, including after attach before start or
+runtime recovery. Other lifecycle states return `InvalidState`. These observations
+do not prevent concurrent configuration. The REST backend returns `Unsupported`.
+
+| Method | Signature |
+|--------|-----------|
+| Configure | `async fn configure(&self, config: SshConfig) -> BoxliteResult<SshStatus>` |
+| Query | `async fn status(&self) -> BoxliteResult<SshStatus>` |
+| Disable | `async fn disable(&self) -> BoxliteResult<SshStatus>` |
+
+These types are exported directly from `boxlite`, independently of protobuf:
+
+| Type | Public fields |
+|------|---------------|
+| `SshConfig` | `listen_address: String`, `host_private_key: String`, `accounts: Vec<SshAccount>` |
+| `SshAccount` | `login: String`, `authorized_keys: Vec<String>`, `ca: Option<SshCaConfig>` |
+| `SshCaConfig` | `public_key: String`, `principal: String` |
+| `SshStatus` | `enabled: bool`, `generation: u64`, `listen_address: String`, `host_public_key: String`, `host_key_fingerprint: String` |
+
+Configuration fields are explicit; the runtime neither generates keys nor stores
+configuration nor publishes ports. All types are `Clone + Debug + Send + Sync`;
+configuration Debug output redacts credentials, and status supports `PartialEq + Eq`.
+
+After VM and container startup, each operation has a total 15-second budget:
+the guest's 10-second cleanup limit plus 5 seconds for communication and scheduling.
+Obtaining the SSH interface, connection setup, queueing, and the RPC consume this
+same budget, so delays can leave less than 10 seconds for guest cleanup.
+Runtime shutdown rejects new operations and cancels interface acquisition and RPCs.
+In-progress VM initialization finishes before cancellation is returned, preserving
+recovery of detached boxes; container startup retains its own cancellation.
+Operations are not retried. Cancellation/timeout cannot guarantee
+rollback. Invalidated handles return `Stopped`; drop all references to the old box
+and use `runtime.get()` to obtain a fresh handle for restart. Recovered stopped
+boxes with an explicit main command still require `start()` before `configure()`. Guest
+`InvalidArgument`, `FailedPrecondition`, and `Unimplemented` map to `InvalidArgument`, `InvalidState`, and `Unsupported`; other RPC failures,
+including guest `DeadlineExceeded`, map to `BoxliteError::Rpc` and retain operation
+and gRPC status context. Missing response status is `Internal`.
+
+See the [SSH guide](../../guides/ssh.md) for an implicit-start example,
+validation, reconfiguration, disable, and generation semantics.
+
 #### Methods
 
 | Method | Signature | Description |
@@ -226,6 +277,7 @@ pub struct LiteBox {
 | `id` | `fn id(&self) -> &BoxID` | Get box ID |
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
+| `ssh` | `fn ssh(&self) -> SshHandle` | Control local SSH; only configure may implicitly start the box |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
@@ -778,6 +830,46 @@ The two origins are not interchangeable across runtimes:
 | --- | --- | --- |
 | `VolumeSpec::managed_volume` | rejected — no volume backend | mounted |
 | `VolumeSpec::bind_mount` | mounted | rejected — the path is the server's, not yours |
+
+### MountSpec
+
+A typed mount. `BoxOptions` does not take one yet. Where a `VolumeSpec` infers
+its origin from which field is set, a `MountSpec` states it in `mount_type`.
+
+```rust
+pub struct MountSpec {
+    /// `MountType::Volume` or `MountType::Bind`; serialized as `"type"`.
+    pub mount_type: MountType,
+
+    /// A volume id or name for `Volume`, a host path for `Bind`; required by both.
+    pub source: Option<String>,
+
+    /// Mount point inside the box; an absolute path.
+    pub target: String,
+
+    /// Mount as read-only
+    pub read_only: bool,
+
+    /// `Volume` only: a prefix to mount instead of the whole volume.
+    pub sub_path: Option<String>,
+}
+```
+
+```rust
+use boxlite::runtime::options::MountSpec;
+
+let prefix = MountSpec {
+    read_only: true,
+    sub_path: Some("foo/bar".to_string()),
+    ..MountSpec::volume_mount("run42", "/workspace")
+};
+let bind = MountSpec::bind_mount("/tmp/data", "/data");
+```
+
+`MountType` parses from and displays as `"volume"` and `"bind"` exactly. No
+CLI, SDK or REST API carries a `MountSpec` yet.
+`MountSpec::validate` refuses a relative `target`, a missing `source`,
+`sub_path` on a `Bind`, and an empty `sub_path`.
 
 ### NetworkSpec
 

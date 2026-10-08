@@ -33,7 +33,7 @@ The manual GitHub workflow accepts `dev` and `prod`, so use one of those names f
 | `project`, `zone` | GCP project and optional VM zone; choose a zone supporting the configured machine family |
 | `login` | Required/optional provider sessions for this stage |
 | `registry` | `artifact-registry` on GCP or `ecr` on AWS, repository and tag policy |
-| `scan` | Blocking severities and timeout; `blockOn: "DISABLED"` explicitly disables the scan gate |
+| `scan` | Blocking severities and timeout for the registry's post-push image scan; `blockOn: "DISABLED"` explicitly disables that gate. mbuild's pre-build `yarn npm audit --severity high` of production dependencies still runs, so a high advisory blocks the build on every stage |
 | `protect` | Requires confirmation for protected operations; mdeploy refuses removal |
 | `promoteFrom` | Source stage whose artifacts bootstrap grants this stage access to |
 | `roleArn` | Optional AWS role to assume after resolving ambient credentials |

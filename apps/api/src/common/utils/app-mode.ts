@@ -33,8 +33,9 @@ export function isWorkerEnabled(): boolean {
 }
 
 /**
- * Returns the app mode
+ * Returns the component this process reports to telemetry as. `all` runs the
+ * API and the worker in one process, which reports as the API.
  */
-export function getAppMode(): AppMode {
-  return appMode
+export function getServiceType(): 'api' | 'worker' {
+  return appMode === 'worker' ? 'worker' : 'api'
 }

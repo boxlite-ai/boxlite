@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -54,6 +56,46 @@ func (r *failAfterReader) Read(p []byte) (int, error) {
 	n := copy(p, r.data[r.pos:])
 	r.pos += n
 	return n, nil
+}
+
+// A directory is copied under its own name, and "/." copies its contents.
+// The C bindings this SDK sits on used to flatten every directory both ways,
+// so the directory itself was out of reach from Go.
+func TestCopyDirectoryNestsUnlessSourceEndsInDot(t *testing.T) {
+	rt := newTestRuntime(t)
+	box := createStartedBox(t, rt, "alpine:latest")
+	ctx := context.Background()
+
+	src := filepath.Join(t.TempDir(), "tree")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := box.CopyInto(ctx, src, "/root"); err != nil {
+		t.Fatalf("CopyInto: %v", err)
+	}
+
+	nested := t.TempDir()
+	if err := box.CopyOut(ctx, "/root/tree", nested); err != nil {
+		t.Fatalf("CopyOut: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(nested, "tree", "a.txt")); err != nil || string(got) != "a" {
+		t.Fatalf("directory should land under its own name both ways: %q, %v", got, err)
+	}
+
+	contents := t.TempDir()
+	if err := box.CopyOut(ctx, "/root/tree/.", contents); err != nil {
+		t.Fatalf("CopyOut contents: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(contents, "a.txt")); err != nil || string(got) != "a" {
+		t.Fatalf("/. should copy the contents: %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(contents, "tree")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("/. must not copy the directory itself: %v", err)
+	}
 }
 
 // A source that fails mid-transfer must fail the copy: the Go layer takes

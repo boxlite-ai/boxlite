@@ -63,7 +63,7 @@ class ManagedBox:
         )
         sdk_file = files("boxlite.orchestration.guest").joinpath("boxlite_runtime.py")
         with as_file(sdk_file) as path:
-            await self._box.copy_in(str(path), site_packages, include_parent=False)
+            await self._box.copy_in(str(path), site_packages)
 
     def task(self, func: Callable) -> Callable:
         """Register one-shot task to run before event loop."""

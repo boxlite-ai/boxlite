@@ -14,6 +14,10 @@ import (
 
 // CopyInto copies a host file or directory into the box.
 //
+// A directory is copied under its own name; end hostSrc with "/." to copy
+// its contents instead, as docker cp does. Build that as a string:
+// filepath.Join drops the trailing ".".
+//
 // Copies land owned by the box's exec user, so a non-root workload can read
 // them. A destination at or under a mount inside the box (/tmp, /dev/shm,
 // volumes, the /etc/{hosts,hostname,resolv.conf} binds), or an archive entry
@@ -50,6 +54,9 @@ func (b *Box) CopyInto(ctx context.Context, hostSrc, guestDst string) error {
 }
 
 // CopyOut copies a file or directory from the box to the host.
+//
+// A directory is copied under its own name; end guestSrc with "/." to copy
+// its contents instead, as docker cp does.
 //
 // A source at or under a mount inside the box, or a directory containing one,
 // is refused: the archive would carry the underlying files rather than the ones

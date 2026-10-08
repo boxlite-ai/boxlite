@@ -13,6 +13,7 @@ import { OrganizationResourceActionGuard } from '../organization/guards/organiza
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
+import { BoxliteConfigController } from './boxlite-config.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
@@ -31,16 +32,21 @@ jest.mock('uuid', () => ({
 
 describe('BoxLite REST routing', () => {
   let app: INestApplication
+  let updatePublicStatus: jest.Mock
 
   async function startRoutingTestApp() {
+    updatePublicStatus = jest.fn((_boxId: string, isPublic: boolean) => Promise.resolve({ public: isPublic }))
     await startApp(
-      [BoxliteBoxController],
+      // The module's order, with the proxy controller's catch-all routes
+      // present, so one that shadowed PUT network/inbound would fail below.
+      [BoxliteConfigController, BoxliteBoxController, BoxliteProxyController],
       [
         {
           provide: BoxService,
           useValue: {
             findAllDeprecated: jest.fn().mockResolvedValue([]),
             toBoxDtos: jest.fn().mockResolvedValue([]),
+            updatePublicStatus,
           },
         },
         {
@@ -57,6 +63,10 @@ describe('BoxLite REST routing', () => {
 
   async function startApp(controllers: any[], providers: any[]) {
     const moduleRef = await Test.createTestingModule({ controllers, providers })
+      // The proxy controller is here only for its routes. Mock whatever it
+      // injects, so a constructor dependency added later (#1723 added
+      // TunnelService) cannot stop these routing tests from building.
+      .useMocker(() => ({}))
       .overrideGuard(CombinedAuthGuard)
       .useValue({
         canActivate: (context: any) => {
@@ -81,6 +91,15 @@ describe('BoxLite REST routing', () => {
     return fetch(`http://127.0.0.1:${address.port}${path}`)
   }
 
+  async function put(path: string, body: unknown): Promise<Response> {
+    const address = app.getHttpServer().address() as AddressInfo
+    return fetch(`http://127.0.0.1:${address.port}${path}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+
   afterEach(async () => {
     await app?.close()
   })
@@ -101,6 +120,43 @@ describe('BoxLite REST routing', () => {
     expect(await canonical.json()).toEqual({ boxes: [] })
     expect(legacy.status).toBe(200)
     expect(await legacy.json()).toEqual({ boxes: [] })
+  })
+
+  it.each([
+    ['/api/v1/boxes/box-1/network/inbound', 'enabled', true],
+    ['/api/v1/default/boxes/box-1/network/inbound', 'disabled', false],
+  ])('PUT %s sets inbound %s', async (path, mode, isPublic) => {
+    await startRoutingTestApp()
+
+    const response = await put(path, { mode })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ mode })
+    expect(updatePublicStatus).toHaveBeenCalledWith('box-1', isPublic, 'org-123')
+  })
+
+  it.each([
+    ['an unknown mode', { mode: 'public' }],
+    ['a missing mode', {}],
+    ['an unknown field', { mode: 'enabled', public: true }],
+    ['an inbound allowlist', { mode: 'enabled', allow_net: ['10.0.0.0/8'] }],
+  ])('rejects %s before changing inbound access', async (_label, body) => {
+    await startRoutingTestApp()
+
+    const response = await put('/api/v1/boxes/box-1/network/inbound', body)
+
+    expect(response.status).toBe(400)
+    expect(updatePublicStatus).not.toHaveBeenCalled()
+  })
+
+  // Clients call the inbound route only when the server advertises it, so a
+  // server without the route reports "unsupported" rather than a bare 404.
+  it('advertises inbound updates in /v1/config', async () => {
+    await startRoutingTestApp()
+
+    const response = await get('/api/v1/config')
+
+    expect((await response.json()).capabilities.inbound_update_enabled).toBe(true)
   })
 
   it('answers image usage on its own route, with or without a routing prefix', async () => {

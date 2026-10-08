@@ -55,6 +55,14 @@ pub mod mount_tags {
     pub const SHARED: &str = "BoxLiteShared";
 }
 
+/// SSH lifecycle limits shared between host and guest.
+pub mod ssh {
+    use std::time::Duration;
+
+    /// Maximum wait for guest SSH cleanup before returning `DeadlineExceeded`.
+    pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+}
+
 /// File-transfer constants shared between host, guest, and runner.
 pub mod files {
     /// Upper bound for the size-capped *fallback* path used when a peer is too

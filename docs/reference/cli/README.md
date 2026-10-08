@@ -553,6 +553,8 @@ boxlite inspect -l --format yaml
 **Synopsis:** `boxlite cp [OPTIONS] SRC DST`
 
 Copy files/folders between host and box. Exactly one of `SRC` or `DST` must be a `BOX:PATH` reference.
+End a directory `SRC` with `/.` to copy its contents rather than the directory itself, as
+`docker cp` does.
 
 **Options:**
 
@@ -560,7 +562,6 @@ Copy files/folders between host and box. Exactly one of `SRC` or `DST` must be a
 |------|---------|-------------|
 | `--follow-symlinks` | `false` | Resolve symlink targets (embedded local runtime only) |
 | `--no-overwrite` | `false` | Refuse to overwrite destination files (embedded local runtime only) |
-| `--no-include-parent` | `false` | Copy directory contents without their parent (embedded local runtime only) |
 
 If a stopped box is safe to resume, it is started temporarily and restored to
 stopped state after the copy succeeds or fails. A job box whose start would run
@@ -587,6 +588,7 @@ owned by the box's exec user.
 boxlite cp ./script.py mybox:/work/script.py        # host -> box
 boxlite cp mybox:/var/log/app.log ./app.log         # box -> host
 boxlite cp --no-overwrite ./data/ mybox:/data/      # local runtime only
+boxlite cp ./dist/. mybox:/srv/www                  # the contents of ./dist
 ```
 
 ---

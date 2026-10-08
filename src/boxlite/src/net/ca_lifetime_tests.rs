@@ -18,6 +18,7 @@ fn short_lived_ca(key: &KeyPair, expires: OffsetDateTime) -> String {
     params.self_signed(key).unwrap().pem()
 }
 
+/// Check the generated certificate's encoded expiry rather than a configured lifetime.
 fn assert_long_lived(pem: &str) {
     let cert = Certificate::from_pem(pem).unwrap();
     let expires = cert
@@ -32,11 +33,13 @@ fn assert_long_lived(pem: &str) {
     );
 }
 
+/// Guard the encoded CA lifetime that guest TLS clients actually validate.
 #[test]
 fn generated_ca_survives_day_two() {
     assert_long_lived(&generate().unwrap().cert_pem);
 }
 
+/// Expired, near-expiry, and future-dated CAs must retain their signing identity.
 #[test]
 fn restart_renews_legacy_ca_and_preserves_key() {
     for remaining in [Duration::hours(-1), Duration::hours(12), Duration::days(31)] {
@@ -57,6 +60,7 @@ fn restart_renews_legacy_ca_and_preserves_key() {
     }
 }
 
+/// Broken persisted credentials must not be silently replaced with a new identity.
 #[test]
 fn invalid_persisted_ca_material_is_rejected_without_overwriting_it() {
     let key = KeyPair::generate().unwrap();
@@ -76,6 +80,7 @@ fn invalid_persisted_ca_material_is_rejected_without_overwriting_it() {
     }
 }
 
+/// Remove stale matching issuers without normalizing unknown trust-bundle content.
 #[test]
 fn trust_renewal_removes_old_certificate_and_preserves_other_roots() {
     let dir = tempfile::tempdir().unwrap();
@@ -86,25 +91,90 @@ fn trust_renewal_removes_old_certificate_and_preserves_other_roots() {
     std::fs::write(dir.path().join("cert.pem"), &old).unwrap();
     write_private_key(&dir.path().join("key.pem"), &key.serialize_pem()).unwrap();
     let renewed = load_or_generate(dir.path()).unwrap().cert_pem;
-    let unrelated = format!(
-        "{}\n-----BEGIN CERTIFICATE-----\nbroken\n-----END CERTIFICATE-----",
-        generate().unwrap().cert_pem
+    let mut unrelated = generate().unwrap().cert_pem.into_bytes();
+    unrelated.extend_from_slice(
+        b"\n-----BEGIN CERTIFICATE-----\n\xffbroken\n-----END CERTIFICATE-----\n\xfe-----BEGIN CERTIFICATE-----\nincomplete\n",
     );
-    std::fs::write(&bundle, format!("# system roots\n{unrelated}\n{old}")).unwrap();
+    std::fs::write(
+        &bundle,
+        [b"# system roots\n".as_slice(), &unrelated, old.as_bytes()].concat(),
+    )
+    .unwrap();
 
     let installer = ca_trust::CaInstaller::with_bundle(bundle.clone());
     installer.install(renewed.as_bytes()).unwrap();
     installer.install(renewed.as_bytes()).unwrap();
-    let installed = std::fs::read_to_string(bundle).unwrap();
+    let installed = std::fs::read(bundle).unwrap();
     assert!(
-        !installed.contains(old.trim()),
+        !installed
+            .windows(old.len())
+            .any(|block| block == old.as_bytes()),
         "expired CA must leave the trust bundle"
     );
-    assert!(installed.contains(unrelated.trim()));
-    assert!(installed.starts_with("# system roots\n"));
-    assert_eq!(installed.matches(renewed.trim()).count(), 1);
+    assert!(
+        installed
+            .windows(unrelated.len())
+            .any(|block| block == unrelated)
+    );
+    assert!(installed.starts_with(b"# system roots\n"));
+    assert_eq!(
+        installed
+            .windows(renewed.len())
+            .filter(|block| *block == renewed.as_bytes())
+            .count(),
+        1
+    );
 }
 
+/// Parsed certificates must be usable issuers before they can replace existing trust.
+#[test]
+fn unusable_incoming_ca_does_not_change_trust_bundle() {
+    let original = generate().unwrap();
+    let key = KeyPair::from_pem(&original.key_pem).unwrap();
+    let now = OffsetDateTime::now_utc();
+    let mut failures = Vec::new();
+    for case in [
+        "not CA",
+        "missing usage",
+        "wrong usage",
+        "expired",
+        "future",
+    ] {
+        let mut params = CertificateParams::default();
+        params
+            .distinguished_name
+            .push(DnType::CommonName, "BoxLite MITM CA");
+        params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
+        params.key_usages = vec![KeyUsagePurpose::KeyCertSign];
+        params.not_before = now - Duration::days(1);
+        params.not_after = now + Duration::days(1);
+        match case {
+            "not CA" => params.is_ca = IsCa::NoCa,
+            "missing usage" => params.key_usages.clear(),
+            "wrong usage" => params.key_usages = vec![KeyUsagePurpose::DigitalSignature],
+            "expired" => params.not_after = now - Duration::hours(1),
+            "future" => params.not_before = now + Duration::hours(1),
+            _ => unreachable!(),
+        }
+        let incoming = params.self_signed(&key).unwrap().pem();
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("ca-certificates.crt");
+        std::fs::write(&bundle, &original.cert_pem).unwrap();
+        let rejected = ca_trust::CaInstaller::with_bundle(bundle.clone())
+            .install(incoming.as_bytes())
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::InvalidData);
+        let preserved = std::fs::read(&bundle).unwrap() == original.cert_pem.as_bytes();
+        if !rejected || !preserved {
+            failures.push((case, rejected, preserved));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "unusable incoming CAs must be rejected without replacing trust: {failures:?}"
+    );
+}
+
+/// Decode failures must leave the previously installed trust store intact.
 #[test]
 fn invalid_ca_does_not_change_trust_bundle() {
     let dir = tempfile::tempdir().unwrap();

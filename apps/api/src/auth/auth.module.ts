@@ -16,6 +16,7 @@ import { UserService } from '../user/user.service'
 import { TypedConfigModule } from '../config/typed-config.module'
 import { OidcMetadataService } from '../config/oidc-metadata.service'
 import { FailedAuthTrackerService } from './failed-auth-tracker.service'
+import { LoginEventRecorder } from './login-event.recorder'
 import { RegionModule } from '../region/region.module'
 import { LogoutController } from './logout.controller'
 @Module({
@@ -40,6 +41,7 @@ import { LogoutController } from './logout.controller'
         userService: UserService,
         oidcMetadataService: OidcMetadataService,
         configService: TypedConfigService,
+        loginEvents: LoginEventRecorder,
       ) => {
         if (configService.get('skipConnections')) {
           return
@@ -64,11 +66,13 @@ import { LogoutController } from './logout.controller'
           },
           userService,
           configService,
+          loginEvents,
         )
       },
-      inject: [UserService, OidcMetadataService, TypedConfigService],
+      inject: [UserService, OidcMetadataService, TypedConfigService, LoginEventRecorder],
     },
     FailedAuthTrackerService,
+    LoginEventRecorder,
   ],
   exports: [PassportModule, JwtStrategy, ApiKeyStrategy, FailedAuthTrackerService],
 })

@@ -430,9 +430,9 @@ export const gcpEdgeProvider =
               to: [{ ipBlock: { cidr: SUBNET_CIDR } }],
               ports: [{ protocol: 'TCP', port: RUNNER_PORT }],
             },
-            // The control plane, the collector and Secret Manager: all public
-            // addresses reached over TLS, so the destination cannot be narrowed
-            // to a range this module could name.
+            // The control plane, Secret Manager and the collector, over TLS.
+            // The collector now resolves to Private Google Access
+            // (`network.ts`); the other two are a public record and Google's.
             {
               to: [{ ipBlock: { cidr: '0.0.0.0/0' } }],
               ports: [{ protocol: 'TCP', port: 443 }],

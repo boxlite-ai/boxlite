@@ -36,6 +36,10 @@ pub struct VmmMetrics {
 ///
 /// Controllers handle the spawn/attach operation and return a VmmHandler
 /// for runtime operations. The caller creates the GuestSession separately.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait::async_trait]
 pub trait VmmController: Send {
     /// Spawn a new VM and return a handler for runtime operations.

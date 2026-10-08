@@ -16,6 +16,9 @@ import { UpdateUserDto } from './dto/update-user.dto'
 import { UserCreatedEvent } from './events/user-created.event'
 import { UserDeletedEvent } from './events/user-deleted.event'
 import { UserEmailVerifiedEvent } from './events/user-email-verified.event'
+import { recordBusinessEvent } from '../common/utils/business-event.util'
+
+const PG_UNIQUE_VIOLATION = '23505'
 
 @Injectable()
 export class UserService {
@@ -26,7 +29,11 @@ export class UserService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async create(createUserDto: CreateUserDto): Promise<User> {
+  /**
+   * @param registeredBy who registered the user, recorded on its user.registration
+   * business events. Omitted for the boot-time admin seed, which is not a registration.
+   */
+  async create(createUserDto: CreateUserDto, registeredBy?: 'user' | 'admin'): Promise<User> {
     const defaultOrganizationDefaultRegionId =
       createUserDto.defaultOrganizationDefaultRegionId ?? createUserDto.personalOrganizationDefaultRegionId
     let user = new User()
@@ -45,14 +52,39 @@ export class UserService {
       user.role = createUserDto.role
     }
 
-    await this.dataSource.transaction(async (em) => {
-      user = await em.save(user)
-      await this.eventEmitter.emitAsync(
-        UserEvents.CREATED,
-        new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId),
-      )
-    })
+    const registration = registeredBy
+      ? ({ name: 'user.registration', correlationId: createUserDto.id, actorKind: registeredBy } as const)
+      : undefined
+    if (registration) {
+      recordBusinessEvent({ ...registration, outcome: 'requested' })
+    }
 
+    let defaultOrganizationId: string | undefined
+    try {
+      await this.dataSource.transaction(async (em) => {
+        user = await em.save(user)
+        // The only listener, OrganizationService.handleUserCreatedEvent,
+        // returns the default organization it creates in this transaction.
+        const [defaultOrganization] = await this.eventEmitter.emitAsync(
+          UserEvents.CREATED,
+          new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId),
+        )
+        defaultOrganizationId = defaultOrganization?.id
+      })
+    } catch (error) {
+      if (registration) {
+        recordBusinessEvent({
+          ...registration,
+          outcome: 'exception',
+          exceptionType: error?.code === PG_UNIQUE_VIOLATION ? 'user_conflict' : 'internal',
+        })
+      }
+      throw error
+    }
+
+    if (registration) {
+      recordBusinessEvent({ ...registration, outcome: 'success', orgId: defaultOrganizationId })
+    }
     return user
   }
 

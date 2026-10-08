@@ -92,20 +92,17 @@ impl FilesInterface {
     }
 
     /// Download a path from guest into a local tar file.
+    ///
+    /// `container_src` is passed as the caller wrote it: a trailing `/.`
+    /// asks for the directory's contents (see `download_request`).
     pub async fn download_tar(
         &mut self,
         container_src: &str,
         container_id: Option<&str>,
-        include_parent: bool,
         follow_symlinks: bool,
         tar_dest: &std::path::Path,
     ) -> BoxliteResult<()> {
-        let request = DownloadRequest {
-            src_path: container_src.to_string(),
-            container_id: container_id.unwrap_or_default().to_string(),
-            include_parent,
-            follow_symlinks,
-        };
+        let request = download_request(container_src, container_id, follow_symlinks);
 
         let mut stream = self
             .client
@@ -227,15 +224,9 @@ impl FilesInterface {
         &mut self,
         container_src: &str,
         container_id: Option<&str>,
-        include_parent: bool,
         follow_symlinks: bool,
     ) -> BoxliteResult<(BoxByteStream, CopySourceKind)> {
-        let request = DownloadRequest {
-            src_path: container_src.to_string(),
-            container_id: container_id.unwrap_or_default().to_string(),
-            include_parent,
-            follow_symlinks,
-        };
+        let request = download_request(container_src, container_id, follow_symlinks);
 
         let mut stream = self
             .client
@@ -272,6 +263,28 @@ impl FilesInterface {
     }
 }
 
+/// Build the guest request for reading `container_src` out.
+///
+/// The API spells "the contents, not the directory" as `SRC/.`; the wire
+/// carries it as `include_parent: false`. Translating here — the one place
+/// every host-side download passes through, local or relayed for a REST
+/// caller — keeps guests that predate the spelling correct too: they read the
+/// flag, and normalize the trailing `.` away when they resolve the path.
+fn download_request(
+    container_src: &str,
+    container_id: Option<&str>,
+    follow_symlinks: bool,
+) -> DownloadRequest {
+    DownloadRequest {
+        src_path: container_src.to_string(),
+        container_id: container_id.unwrap_or_default().to_string(),
+        include_parent: !boxlite_shared::tar::specifies_current_dir(std::ffi::OsStr::new(
+            container_src,
+        )),
+        follow_symlinks,
+    }
+}
+
 /// Preserve the guest's error class instead of flattening it to `Internal`.
 ///
 /// The guest rejects bad requests with real gRPC codes — an unreachable
@@ -297,6 +310,24 @@ fn map_tonic_err(err: tonic::Status) -> BoxliteError {
 mod tests {
     use super::*;
     use tonic::Status;
+
+    /// The API spells "the contents" as `SRC/.`; the wire still carries
+    /// `include_parent`. Every host-side download — local, or relayed for a
+    /// REST caller — goes through this translation.
+    #[test]
+    fn a_trailing_dot_asks_the_guest_for_the_contents() {
+        assert!(download_request("/app", None, false).include_parent);
+        assert!(download_request("/app/", None, false).include_parent);
+
+        let contents = download_request("/app/.", Some("c1"), true);
+        assert!(!contents.include_parent);
+        assert_eq!(
+            contents.src_path, "/app/.",
+            "the path travels as the caller wrote it"
+        );
+        assert_eq!(contents.container_id, "c1");
+        assert!(contents.follow_symlinks);
+    }
 
     /// A destination the guest cannot reach is the caller's problem, not the
     /// server's — it must not arrive as a 500.

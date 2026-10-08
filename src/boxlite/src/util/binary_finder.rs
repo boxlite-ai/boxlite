@@ -4,9 +4,11 @@
 //! bundled with BoxLite. The search follows a priority order:
 //!
 //! 1. `BOXLITE_RUNTIME_DIR` - Explicit override (highest priority)
-//! 2. Embedded runtime cache (e.g., `~/.local/share/boxlite/runtimes/v{VERSION}-{COMMIT}-{HASH}/`) - Self-contained SDKs
-//! 3. `DYLD_LIBRARY_PATH` (macOS) / `LD_LIBRARY_PATH` (Linux) - User-specified runtime location
-//! 4. dladdr-based detection - For packaged/installed scenarios
+//! 2. Compile-time `BOXLITE_DEFAULT_RUNTIME_DIR` (in-tree: `target/<profile>/runtime`;
+//!    crates.io / dependency debug: `OUT_DIR/runtime`)
+//! 3. Embedded runtime cache (e.g., `~/.local/share/boxlite/runtimes/v{VERSION}-{COMMIT}-{HASH}/`) - Self-contained SDKs
+//! 4. `DYLD_LIBRARY_PATH` (macOS) / `LD_LIBRARY_PATH` (Linux) - User-specified runtime location
+//! 5. dladdr-based detection - For packaged/installed scenarios
 
 use std::path::PathBuf;
 
@@ -70,17 +72,16 @@ impl RuntimeBinaryFinder {
     ///
     /// Search priority:
     /// 1. `BOXLITE_RUNTIME_DIR` (explicit override)
-    /// 2. Embedded runtime cache
-    /// 3. `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH` (user-specified runtime location)
-    /// 4. dladdr-based detection (for packaged scenarios)
+    /// 2. Compile-time default (`target/<profile>/runtime` in-tree, `OUT_DIR/runtime`
+    ///    for crates.io / dependency debug builds that do not embed)
+    /// 3. Embedded runtime cache
+    /// 4. `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH` (user-specified runtime location)
+    /// 5. dladdr-based detection (for packaged scenarios)
     pub fn from_env() -> Self {
         let mut builder = Self::builder();
 
-        // 1. Explicit override (highest priority)
-        if let Ok(runtime_dir) = std::env::var("BOXLITE_RUNTIME_DIR") {
-            for path in runtime_dir.split(':').filter(|s| !s.is_empty()) {
-                builder = builder.with_path(path);
-            }
+        for path in configured_runtime_dirs() {
+            builder = builder.with_path(path);
         }
 
         // 2. Embedded runtime cache (self-contained SDK packaging)
@@ -164,6 +165,31 @@ pub fn find_binary(binary_name: &str) -> BoxliteResult<PathBuf> {
     RuntimeBinaryFinder::from_env().find(binary_name)
 }
 
+/// Directories from `BOXLITE_RUNTIME_DIR`, else the debug non-embed compile-time path.
+///
+/// Process env wins so a test or operator can point at another tree without
+/// rebuilding. The compile-time path is only baked when debug skips `include_bytes!`.
+pub(crate) fn configured_runtime_dirs() -> Vec<PathBuf> {
+    runtime_dirs_from(
+        std::env::var("BOXLITE_RUNTIME_DIR").ok().as_deref(),
+        option_env!("BOXLITE_DEFAULT_RUNTIME_DIR"),
+    )
+}
+
+fn runtime_dirs_from(explicit: Option<&str>, compile_time_default: Option<&str>) -> Vec<PathBuf> {
+    if let Some(runtime_dir) = explicit.filter(|value| !value.is_empty()) {
+        return runtime_dir
+            .split(':')
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .collect();
+    }
+    compile_time_default
+        .filter(|path| !path.is_empty())
+        .map(|path| vec![PathBuf::from(path)])
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +256,26 @@ mod tests {
 
         let result = finder.find("test-binary").unwrap();
         assert_eq!(result, temp_dir1.path().join("test-binary"));
+    }
+
+    #[test]
+    fn process_env_overrides_compile_time_default() {
+        let dirs = runtime_dirs_from(Some("/explicit/runtime"), Some("/compiled/default"));
+        assert_eq!(dirs, vec![PathBuf::from("/explicit/runtime")]);
+    }
+
+    #[test]
+    fn empty_process_env_falls_back_to_compile_time_default() {
+        let dirs = runtime_dirs_from(Some(""), Some("/compiled/default"));
+        assert_eq!(dirs, vec![PathBuf::from("/compiled/default")]);
+    }
+
+    #[test]
+    fn colon_separated_process_env_keeps_order() {
+        let dirs = runtime_dirs_from(Some("/first:/second"), Some("/compiled/default"));
+        assert_eq!(
+            dirs,
+            vec![PathBuf::from("/first"), PathBuf::from("/second")]
+        );
     }
 }
