@@ -158,6 +158,11 @@ for info in boxes:
 
 #### Runtime Image Management
 
+`runtime.images` holds the images a runtime can boot from: the local cache on
+an embedded runtime, the server's catalog on `Boxlite.rest(...)`. The same
+code runs against either; `pull` is local only (a REST runtime pulls when a
+box is created) and `usage` is REST only.
+
 ```python
 runtime = boxlite.Boxlite.default()
 
@@ -166,7 +171,14 @@ print(pull.reference, pull.config_digest, pull.layer_count)
 
 for image in await runtime.images.list():
     print(image.repository, image.tag, image.id)
+
+detail = await runtime.images.get("docker.io/library/alpine")
+print(detail.tags, [version.digest for version in detail.versions])
+await runtime.images.remove("docker.io/library/alpine")
 ```
+
+See [the Python reference](../../docs/reference/python/README.md#boxliteimagehandle)
+for each method on each runtime.
 
 ### Remote BoxLite server (REST)
 
