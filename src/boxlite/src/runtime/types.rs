@@ -669,7 +669,8 @@ pub struct ImageInfo {
     /// Full image reference (e.g., "docker.io/library/alpine:latest")
     pub reference: String,
 
-    /// Parsed repository name (e.g. "docker.io/library/alpine")
+    /// Registry and repository, without a tag (e.g. "docker.io/library/alpine"):
+    /// the name `ImageHandle::get` and `ImageHandle::remove` take.
     pub repository: String,
 
     /// Parsed image tag (e.g. "latest")
