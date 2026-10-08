@@ -7,18 +7,25 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-/// Minimal HTTP/1.1 stub. `handler(method, path) -> (status, json_body)`.
+struct RecordedRequest {
+    method: String,
+    path: String,
+    body: String,
+}
+
+/// HTTP/1.1 stub that records each request before invoking the handler.
 /// One request per connection (`Connection: close`); a daemon thread serves
 /// sequential connections for the test's lifetime.
 struct Stub {
     port: u16,
+    requests: Arc<Mutex<Vec<RecordedRequest>>>,
 }
 
 impl Stub {
@@ -37,6 +44,8 @@ impl Stub {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
         let port = listener.local_addr().unwrap().port();
         let handler = Arc::new(factory(format!("http://127.0.0.1:{port}")));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded_requests = Arc::clone(&requests);
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
@@ -75,6 +84,11 @@ impl Stub {
                 let mut request_body = vec![0; content_length];
                 reader.read_exact(&mut request_body).unwrap();
                 let request_body = String::from_utf8(request_body).unwrap();
+                recorded_requests.lock().unwrap().push(RecordedRequest {
+                    method: method.to_string(),
+                    path: path.to_string(),
+                    body: request_body.clone(),
+                });
                 let (status, body) = handler(method, path, &request_body);
                 let reason = match status {
                     200 => "OK",
@@ -91,7 +105,7 @@ impl Stub {
                 let _ = stream.flush();
             }
         });
-        Self { port }
+        Self { port, requests }
     }
 
     fn url(&self) -> String {
@@ -444,6 +458,39 @@ fn device_login_uses_discovered_endpoint_and_persists_session() {
 }
 
 #[test]
+fn device_login_request_encodes_public_client_once() {
+    // Legacy discovery lets this reach the request-body check on pre-fix code.
+    let stub = device_stub(false, None, None);
+    let home = TempDir::new().unwrap();
+    auth_cmd(&home)
+        .args(["auth", "login", "--url", &stub.url(), "--method", "device"])
+        .assert()
+        .success();
+    let requests = stub.requests.lock().unwrap();
+    let request = requests
+        .iter()
+        .find(|request| request.method == "POST" && request.path == "/device/code")
+        .expect("CLI must request device authorization");
+    let form: Vec<_> = url::form_urlencoded::parse(request.body.as_bytes()).collect();
+    let values = |key: &str| {
+        form.iter()
+            .filter(|(name, _)| name == key)
+            .map(|(_, value)| value.as_ref())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(values("client_id"), ["cli-test"]);
+    assert_eq!(values("audience"), ["test-api"]);
+    let scopes = values("scope");
+    assert_eq!(scopes.len(), 1);
+    assert!(
+        scopes[0]
+            .split_whitespace()
+            .any(|scope| scope == "offline_access")
+    );
+    assert!(values("client_secret").is_empty());
+}
+
+#[test]
 fn device_login_keeps_legacy_dex_endpoint_when_not_advertised() {
     let stub = device_stub(false, None, None);
     let home = TempDir::new().unwrap();
@@ -454,7 +501,7 @@ fn device_login_keeps_legacy_dex_endpoint_when_not_advertised() {
 }
 
 #[test]
-fn device_login_reports_disabled_grant_without_server_description() {
+fn device_login_reports_client_and_grant_checks_without_server_description() {
     let stub = device_stub(true, Some("unauthorized_client"), None);
     let home = TempDir::new().unwrap();
     auth_cmd(&home)
@@ -463,6 +510,7 @@ fn device_login_reports_disabled_grant_without_server_description() {
         .failure()
         .stderr(
             predicate::str::contains("unauthorized_client")
+                .and(predicate::str::contains("public CLI client ID"))
                 .and(predicate::str::contains("Device Code grant"))
                 .and(predicate::str::contains("SENSITIVE_SERVER_DESCRIPTION").not()),
         );

@@ -35,9 +35,7 @@ pub async fn run(cfg: &OidcConfig, http: &reqwest::Client) -> Result<OidcTokens>
     let client = CoreClient::from_provider_metadata(metadata, cfg.client_id.clone(), None)
         .set_device_authorization_url(device_url);
 
-    let mut request = client
-        .exchange_device_code()
-        .add_extra_param("client_id", cfg.client_id.as_str());
+    let mut request = client.exchange_device_code();
     for scope in &cfg.scopes {
         request = request.add_scope(Scope::new(scope.clone()));
     }
@@ -116,7 +114,7 @@ where
         RequestTokenError::ServerResponse(response) => {
             match response.error().to_string().as_str() {
                 "unauthorized_client" => {
-                    "unauthorized_client: ask the identity provider administrator to enable the Device Code grant for this CLI client"
+                    "unauthorized_client: check the public CLI client ID and issuer; confirm the Device Code grant is enabled for that CLI application (--client-id overrides server config)"
                 }
                 "invalid_client" => "invalid_client: check the public CLI client ID",
                 "access_denied" => {

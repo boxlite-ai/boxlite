@@ -256,9 +256,11 @@ older Dex deployments without this field retain the `/device/code` fallback.
 For Auth0, configure a public **Native** CLI application with the **Device Code**
 grant enabled. Enable **Refresh Token** for the client and **Allow Offline Access**
 for the target API to issue renewable sessions. Pass its public ID with
-`--client-id` if `/api/config` advertises a different application. Do not provide a
-client secret. An `unauthorized_client` error requires the Auth0 tenant
-administrator to enable the grant; GCP project access does not grant Auth0 access.
+`--client-id` if `/api/config` advertises the dashboard SPA application. Flags
+win over server values; `OIDC_CLIENT_ID` is a fallback, not an override for
+`/api/config`. Do not provide a client secret. An `unauthorized_client` error
+can mean an unknown/wrong client or a disabled grant: check the CLI client ID
+and issuer, then ask the IdP administrator to verify the Device Code grant.
 For Dex, enable `oauth2.deviceFlow: {}` in `apps/dex/config.yaml`.
 
 Device login prints the verification URL and one-time user code on stderr.
