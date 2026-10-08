@@ -16,7 +16,7 @@ export type Auth0CliExecute = (args: string[], signal?: AbortSignal) => Promise<
 
 function executeAuth0(args: string[], signal?: AbortSignal): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       'auth0',
       args,
       {
@@ -42,6 +42,9 @@ function executeAuth0(args: string[], signal?: AbortSignal): Promise<unknown> {
         }
       },
     )
+    // `auth0 api` reads a request body from a piped stdin, and execFile never
+    // closes that pipe; without EOF a write waits until the timeout kills it.
+    child.stdin?.end()
   })
 }
 
