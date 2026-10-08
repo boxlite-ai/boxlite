@@ -112,6 +112,15 @@ export BOXLITE_E2E_CATALOG_IMAGE=quay.io/libpod/alpine:latest
 # failing. Without it a 404 on /images is treated as the regression it is:
 export BOXLITE_E2E_ALLOW_MISSING_CATALOG=1
 
+# The private image case runs only with a real private image and its login,
+# written with its host and a tag or digest. The prefix defaults to the
+# image's namespace. It adds its own login and refuses to start while the
+# organization already has one for that registry and prefix:
+export BOXLITE_E2E_PRIVATE_IMAGE=ghcr.io/acme/private-app:1
+export BOXLITE_E2E_PRIVATE_USERNAME=acme-bot
+export BOXLITE_E2E_PRIVATE_PASSWORD=...        # a token with read access only
+export BOXLITE_E2E_PRIVATE_PREFIX=acme/
+
 # CLI tests need a profile pointing at the remote API:
 export BOXLITE_E2E_PROFILE=p1
 export BOXLITE_E2E_CLI=/path/to/boxlite   # CLI binary built with REST support
@@ -208,6 +217,7 @@ apps/e2e/
     ├── test_go_entry.py             # Go SDK smoke
     ├── test_go_coverage.py          # Go SDK exec options, copy, errors
     ├── test_images_catalog.py       # Image catalog via rt.images: booting records it, remove drops it, admission refuses bad hosts
+    ├── test_images_private.py       # Private image through a login registered over HTTP
     ├── test_c_entry.py              # C SDK smoke
     └── test_c_coverage.py           # C SDK exec, errors
 ```

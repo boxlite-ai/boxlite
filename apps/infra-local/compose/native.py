@@ -121,6 +121,13 @@ class _Paths:
         return self.bin / "boxlite-registry-proxy"
 
     @property
+    def registry_secrets(self) -> Path:
+        # Where the API's file store writes registry passwords and the registry
+        # proxy's reads them: one directory, the local stand-in for Secret
+        # Manager.
+        return self.state / "registry-secrets"
+
+    @property
     def runner_home(self) -> Path:
         # Anchored at the machine-global short root (NOT under .apps-local): the
         # runner's box sockets live at <home>/boxes/<id>/sockets/ready.sock and
@@ -241,6 +248,12 @@ def _components(p: _Paths) -> dict[str, _Component]:
         "RUNNER_AVAILABILITY_SCORE_THRESHOLD": "5",
         "RUNNER_MEMORY_PENALTY_THRESHOLD": "95",
         "RUNNER_DISK_PENALTY_THRESHOLD": "95",
+        # Private registries: the API writes a login's password to the file
+        # store the registry proxy reads, and hands a private image to the
+        # runner as a ref under the proxy's host.
+        "REGISTRY_PROXY_HOST": f"127.0.0.1:{PORT_REGISTRY_PROXY}",
+        "REGISTRY_SECRET_STORE": "file",
+        "REGISTRY_SECRET_DIR": str(p.registry_secrets),
         **_parse_dotenv(apps / ".env"),
     }
     return {
@@ -293,14 +306,18 @@ def _components(p: _Paths) -> dict[str, _Component]:
             },
             "boxlite-proxy$",
         ),
-        # Pulls public images only for now: it refuses a private upstream, so
-        # the local registry box is not a registry it will reach.
+        # Presents the logins the API stored in the shared directory. It refuses
+        # a private address as an upstream, so the local registry box is not a
+        # registry it will reach: a private image here is a real one on one of
+        # its default upstreams, ghcr.io, Docker Hub, quay.io or gcr.io.
         "registry-proxy": _Component(
             "registry-proxy", PORT_REGISTRY_PROXY, "http", f"http://127.0.0.1:{PORT_REGISTRY_PROXY}/health", 30,
             [str(p.registry_proxy_bin)], None,
             {
                 "REGISTRY_PROXY_PORT": str(PORT_REGISTRY_PROXY),
                 "BOXLITE_API_URL": f"http://localhost:{PORT_API}/api",
+                "REGISTRY_SECRET_STORE": "file",
+                "REGISTRY_SECRET_DIR": str(p.registry_secrets),
                 "SHUTDOWN_TIMEOUT_SEC": "10",
                 "ENVIRONMENT": "local",
                 "OTEL_LOGGING_ENABLED": "true",
@@ -765,6 +782,7 @@ def reset(cfg: InfraConfig, *, hard: bool = False) -> int:
         if r.returncode != 0:
             err(f"schema drop/recreate failed — aborting hard reset:\n{r.stderr.strip()}")
             return 1
+        _wipe_registry_secrets(p)
         if _migrate(cfg) != 0:
             err("migrations failed after schema reset — the schema may be incomplete")
             return 1
@@ -788,8 +806,15 @@ def nuke(cfg: InfraConfig) -> int:
     log("nuking everything (L1 boxes + data + logs)...")
     asyncio.run(orchestrator.down(cfg, SERVICES, wipe=True))
     shutil.rmtree(p.logs, ignore_errors=True)
+    _wipe_registry_secrets(p)
     ok("nuke complete — next `up` is a true cold start")
     return 0
+
+
+def _wipe_registry_secrets(p: _Paths) -> None:
+    # Registry passwords, in plain files. Once the rows naming them are gone
+    # nothing would ever delete them, so they go with the rows.
+    shutil.rmtree(p.registry_secrets, ignore_errors=True)
 
 
 def _migrate(cfg: InfraConfig) -> int:
