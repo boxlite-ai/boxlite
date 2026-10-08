@@ -39,10 +39,14 @@ class _FakeNetwork:
     def __init__(self, tunnel: _FakeTunnel) -> None:
         self.tunnel_value = tunnel
         self.ports: list[int] = []
+        self.modes: list[str] = []
 
     async def tunnel(self, port: int) -> _FakeTunnel:
         self.ports.append(port)
         return self.tunnel_value
+
+    async def set_inbound(self, mode: str) -> None:
+        self.modes.append(mode)
 
 
 class _FakeForwarder:
@@ -149,6 +153,41 @@ async def test_tunnel_requires_a_started_box():
 
     with pytest.raises(RuntimeError, match="Box not started"):
         await box.network.tunnel(3000)
+
+
+@pytest.mark.asyncio
+async def test_set_inbound_forwards_the_mode_to_the_native_handle():
+    box = SimpleBox.__new__(SimpleBox)
+    box._started = True
+    box._box = _FakeBox(_FakeTunnel([], None))
+
+    assert await box.network.set_inbound("disabled") is None
+    assert box._box.network.modes == ["disabled"]
+
+
+@pytest.mark.asyncio
+async def test_set_inbound_requires_a_started_box():
+    box = SimpleBox.__new__(SimpleBox)
+    box._started = False
+
+    with pytest.raises(RuntimeError, match="Box not started"):
+        await box.network.set_inbound("enabled")
+
+
+def test_sync_set_inbound_forwards_the_mode():
+    pytest.importorskip("greenlet")
+    from boxlite.sync_api._network import SyncNetworkHandle
+
+    class Owner:
+        def __init__(self) -> None:
+            self.modes: list[str] = []
+
+        def _set_inbound(self, mode):
+            self.modes.append(mode)
+
+    owner = Owner()
+    assert SyncNetworkHandle(owner).set_inbound("enabled") is None
+    assert owner.modes == ["enabled"]
 
 
 @pytest.mark.asyncio

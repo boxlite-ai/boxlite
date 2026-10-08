@@ -56,3 +56,7 @@ class SyncNetworkHandle:
             raise ValueError("port must be an integer between 1 and 65535")
         tunnel = self._owner._create_tunnel(port)
         return SyncBoxTunnel(self._owner, tunnel)
+
+    def set_inbound(self, mode: str) -> None:
+        """Make the box's services public (``"enabled"``) or private (``"disabled"``)."""
+        self._owner._set_inbound(mode)

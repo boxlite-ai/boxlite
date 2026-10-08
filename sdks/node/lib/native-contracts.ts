@@ -406,6 +406,11 @@ export interface JsSnapshotHandle {
 export interface JsNetworkHandle {
   /** Prepare a one-shot tunnel to a service port inside the box. */
   tunnel(port: number): Promise<NativeBoxTunnel>;
+  /**
+   * Make the box's services public (`"enabled"`) or private (`"disabled"`).
+   * @throws A native BoxLite error when the runtime does not support inbound updates.
+   */
+  setInbound(mode: "enabled" | "disabled"): Promise<void>;
 }
 
 export type SocketAddress =

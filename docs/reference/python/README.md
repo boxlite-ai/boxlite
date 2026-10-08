@@ -339,6 +339,7 @@ Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.network`.
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
 | Tunnel | `await box.network.tunnel(port) -> BoxTunnel` | Prepare a one-shot tunnel to a TCP service in the box |
+| Inbound access | `await box.network.set_inbound(mode) -> None` | Make a remote box public (`"enabled"`) or private (`"disabled"`); a local box or a server without `inbound_update_enabled` raises `RuntimeError` |
 | Forward | `await tunnel.forward(listen) -> TunnelForwarder` | Bind one local listener and forward every client |
 | Inspect | `tunnel.uri() -> str \| None` | Read the prepared public URL; `None` for a local box |
 | Connect | `await tunnel.connect() -> BoxConnection` | Consume the prepared tunnel into its byte stream |

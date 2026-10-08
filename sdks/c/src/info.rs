@@ -18,12 +18,22 @@ use crate::options::BoxlitePortProtocol;
 use crate::runtime::RuntimeHandle;
 use crate::{CBoxHandle, CBoxliteError, CBoxliteRuntime};
 
-/// Network mode exposed by [`CNetworkInfo`].
+/// Network mode exposed by [`CNetworkInfo`] and accepted by
+/// `boxlite_network_set_inbound`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoxliteNetworkMode {
     BoxliteNetworkModeEnabled = 0,
     BoxliteNetworkModeDisabled = 1,
+}
+
+impl From<BoxliteNetworkMode> for NetworkMode {
+    fn from(mode: BoxliteNetworkMode) -> Self {
+        match mode {
+            BoxliteNetworkMode::BoxliteNetworkModeEnabled => NetworkMode::Enabled,
+            BoxliteNetworkMode::BoxliteNetworkModeDisabled => NetworkMode::Disabled,
+        }
+    }
 }
 
 /// A concrete host listener published to a guest port.

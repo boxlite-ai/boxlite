@@ -29,6 +29,7 @@ export type { SocketAddress } from "./native-contracts.js";
 type BoxLike = Omit<JsBox, "network"> & {
   readonly network: {
     tunnel(port: number): Promise<NativeBoxTunnel>;
+    setInbound(mode: "enabled" | "disabled"): Promise<void>;
   };
 };
 
@@ -380,6 +381,15 @@ export class NetworkHandle {
     }
     const box = await this.ensureBox();
     return new BoxTunnel(await box.network.tunnel(port));
+  }
+
+  /**
+   * Make this box's services public (`"enabled"`) or private (`"disabled"`).
+   * Only a remote runtime whose server supports inbound updates accepts it.
+   */
+  async setInbound(mode: "enabled" | "disabled"): Promise<void> {
+    const box = await this.ensureBox();
+    await box.network.setInbound(mode);
   }
 }
 

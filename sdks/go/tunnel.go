@@ -259,6 +259,32 @@ func (n *Network) Tunnel(ctx context.Context, port uint16) (*BoxTunnel, error) {
 	return tunnel, nil
 }
 
+// SetInbound makes the box's services public (NetworkModeEnabled) or private
+// (NetworkModeDisabled). Only a REST runtime whose server advertises inbound
+// updates supports it; every other runtime returns an Error with ErrUnsupported.
+func (n *Network) SetInbound(ctx context.Context, mode NetworkMode) error {
+	if n == nil || n.handle == nil {
+		return ErrRuntimeClosed
+	}
+	var cMode uint32
+	switch mode {
+	case NetworkModeEnabled:
+		cMode = uint32(C.BoxliteNetworkModeEnabled)
+	case NetworkModeDisabled:
+		cMode = uint32(C.BoxliteNetworkModeDisabled)
+	default:
+		return fmt.Errorf("invalid inbound network mode %q", mode)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var cerr C.CBoxliteError
+	if code := C.boxlite_network_set_inbound(n.handle, cMode, &cerr); code != C.Ok {
+		return freeError(&cerr)
+	}
+	return nil
+}
+
 func (t *BoxTunnel) take() (*C.CBoxTunnelHandle, error) {
 	if t == nil {
 		return nil, ErrRuntimeClosed

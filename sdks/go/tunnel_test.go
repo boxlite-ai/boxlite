@@ -17,6 +17,17 @@ func TestNetworkTunnelRejectsClosedHandle(t *testing.T) {
 	}
 }
 
+func TestNetworkSetInboundRejectsClosedHandle(t *testing.T) {
+	var network *Network
+	if err := network.SetInbound(context.Background(), NetworkModeEnabled); !errors.Is(err, ErrRuntimeClosed) {
+		t.Fatalf("SetInbound() on nil error = %v, want ErrRuntimeClosed", err)
+	}
+	closed := &Network{}
+	if err := closed.SetInbound(context.Background(), NetworkModeEnabled); !errors.Is(err, ErrRuntimeClosed) {
+		t.Fatalf("SetInbound() on closed error = %v, want ErrRuntimeClosed", err)
+	}
+}
+
 func TestTunnelForwardRejectsClosedHandle(t *testing.T) {
 	var tunnel *BoxTunnel
 	listen, err := TCPListenAddress("", 0)

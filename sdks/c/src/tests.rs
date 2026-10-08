@@ -206,6 +206,21 @@ fn test_box_network_null_pointer_validation() {
 }
 
 #[test]
+fn test_network_set_inbound_null_pointer_validation() {
+    unsafe {
+        let mut error = FFIError::default();
+        let code = boxlite_network_set_inbound(
+            ptr::null_mut(),
+            BoxliteNetworkMode::BoxliteNetworkModeEnabled,
+            &mut error as *mut _,
+        );
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        boxlite_error_free(&mut error as *mut _);
+    }
+}
+
+#[test]
 fn test_c_string_conversion_logic() {
     let test_str = CString::new("hello").unwrap();
     unsafe {

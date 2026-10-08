@@ -149,6 +149,9 @@ The same route workflow works with local and remote runtimes:
 
 - `box.Network() (*Network, error)` returns box-scoped network operations.
 - `network.Tunnel(ctx, port) (*BoxTunnel, error)` prepares a one-shot tunnel.
+- `network.SetInbound(ctx, boxlite.NetworkModeEnabled) error` makes a remote box
+  public; `NetworkModeDisabled` makes it private. A local box, or a server
+  without the capability, returns an `Error` with `ErrUnsupported`.
 - `TCPListenAddress(host, port)` and `UnixListenAddress(path)` return validated
   standard `net.Addr` values for `tunnel.Forward(ctx, addr)`. The returned
   `TunnelForwarder` has `Addr() net.Addr`, `Wait(ctx) error`, and repeatable

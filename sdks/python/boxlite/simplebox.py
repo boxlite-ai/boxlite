@@ -59,6 +59,19 @@ class NetworkHandle:
             )
         return BoxTunnel(await self._owner._create_tunnel(port))
 
+    async def set_inbound(self, mode: str) -> None:
+        """Make the box's services public (``"enabled"``) or private (``"disabled"``).
+
+        Only a remote runtime whose server supports inbound updates accepts
+        this; a local box raises ``RuntimeError``.
+        """
+        if not self._owner._started:
+            raise RuntimeError(
+                "Box not started. Use 'async with SimpleBox(...) as box:' "
+                "or call 'await box.start()' first."
+            )
+        await self._owner._set_inbound(mode)
+
 
 class SimpleBox:
     """
@@ -146,6 +159,12 @@ class SimpleBox:
         if not isinstance(port, int) or not 1 <= port <= 65535:
             raise ValueError("port must be an integer between 1 and 65535")
         return await self._box.network.tunnel(port)
+
+    async def _set_inbound(self, mode: str) -> None:
+        """Forward an inbound-mode change to the native network handle."""
+        if self._box is None:
+            raise RuntimeError("Box not created")
+        await self._box.network.set_inbound(mode)
 
     async def __aenter__(self):
         """Async context manager entry - creates or reuses an existing box.
