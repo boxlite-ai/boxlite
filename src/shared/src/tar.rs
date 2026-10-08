@@ -268,22 +268,18 @@ fn unpack_blocking(tar_path: &Path, dest: &Path, opts: &UnpackContext) -> Boxlit
     } else {
         detect_extraction_mode(dest, tar_path)?
     };
-    let tar_file = std::fs::File::open(tar_path).map_err(|e| {
+    let mut tar_file = std::fs::File::open(tar_path).map_err(|e| {
         BoxliteError::Storage(format!("failed to open tar {}: {}", tar_path.display(), e))
     })?;
-    extract_from_reader(tar_file, dest, opts, mode, false, None)
+    land(&mut tar_file, dest, opts, mode, None)
 }
 
 /// Extract a tar archive read from `reader` to `dest` using the given `mode`.
-///
-/// `root_becomes_dest` lands a directory archive bound for a missing `dest`
-/// the way `docker cp` does (see [`Landing`]). Only the streamed path sets it.
 fn extract_from_reader<R: Read>(
     reader: R,
     dest: &Path,
     opts: &UnpackContext,
     mode: ExtractionMode,
-    root_becomes_dest: bool,
     mut report: Option<&mut UnpackReport>,
 ) -> BoxliteResult<()> {
     let mut seen = HashSet::new();
@@ -370,7 +366,7 @@ fn extract_from_reader<R: Read>(
             // consuming the one-shot stream twice. Directory entries are
             // delayed and sorted the way tar-rs does it (permissions).
             let mut landing = Landing {
-                creates_dest: root_becomes_dest && creates_dest,
+                creates_dest,
                 root: None,
             };
             let mut directories = Vec::new();
@@ -418,7 +414,7 @@ fn land<R: Read>(
     mode: ExtractionMode,
     report: Option<&mut UnpackReport>,
 ) -> BoxliteResult<()> {
-    extract_from_reader(&mut *reader, dest, opts, mode, true, report)?;
+    extract_from_reader(&mut *reader, dest, opts, mode, report)?;
     // Extraction can finish before the byte stream ends: FileToFile stops
     // after one entry, and tar-rs stops at the archive end marker. Drain the
     // raw stream so a terminal producer error cannot become success.
@@ -602,7 +598,7 @@ fn record_paths(
 
 // ── Entry names ───────────────────────────────────────────────────
 
-/// Paths extraction will create, relative to the extraction root.
+/// Paths extraction will create, relative to `dest`.
 ///
 /// Everything the archive names, plus every directory those names imply.
 /// A tar need not carry an entry for a directory it puts files in, and plenty
@@ -628,19 +624,23 @@ fn record_paths(
 /// A malformed archive yields the names read so far rather than an error:
 /// extraction reads the same bytes moments later and reports the real parse
 /// error, and until then the worst case is that no names are found.
-pub async fn entry_paths(tar_path: PathBuf) -> BoxliteResult<Vec<PathBuf>> {
-    tokio::task::spawn_blocking(move || entry_paths_blocking(&tar_path))
+///
+/// Call this before extracting: names follow [`Landing`] for whether `dest`
+/// exists yet, and an archive extraction would refuse partway is refused
+/// here, before anything lands.
+pub async fn entry_paths(tar_path: PathBuf, dest: PathBuf) -> BoxliteResult<Vec<PathBuf>> {
+    tokio::task::spawn_blocking(move || entry_paths_blocking(&tar_path, &dest))
         .await
-        .map_err(|e| BoxliteError::Storage(format!("entry_paths task join error: {}", e)))
+        .map_err(|e| BoxliteError::Storage(format!("entry_paths task join error: {}", e)))?
 }
 
-fn entry_paths_blocking(tar_path: &Path) -> Vec<PathBuf> {
+fn entry_paths_blocking(tar_path: &Path, dest: &Path) -> BoxliteResult<Vec<PathBuf>> {
     let Ok(file) = std::fs::File::open(tar_path) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let mut archive = tar::Archive::new(file);
     let Ok(entries) = archive.entries() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
 
     // Deduplicated because a directory is usually implied by many entries —
@@ -649,20 +649,20 @@ fn entry_paths_blocking(tar_path: &Path) -> Vec<PathBuf> {
     let mut created = Vec::new();
     let mut seen = HashSet::new();
     let mut landing = Landing {
-        creates_dest: false,
+        creates_dest: !dest.exists(),
         root: None,
     };
-    for landed in entries
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| landing.place(&entry).ok().flatten())
-    {
+    for entry in entries.filter_map(|entry| entry.ok()) {
+        let Some(landed) = landing.place(&entry)? else {
+            continue;
+        };
         for step in implied_dirs_then_self(&landed.name) {
             if seen.insert(step.clone()) {
                 created.push(step);
             }
         }
     }
-    created
+    Ok(created)
 }
 
 /// `path` preceded by every directory its own name implies, outermost first.
@@ -1347,8 +1347,10 @@ mod tests {
         );
     }
 
+    /// A lone directory entry is a single-root archive: it becomes the
+    /// missing destination, as `docker cp` lands an empty directory.
     #[tokio::test]
-    async fn unpack_single_dir_entry_uses_dir_mode() {
+    async fn unpack_single_dir_entry_becomes_a_missing_dest() {
         let tmp = TempDir::new().unwrap();
         let tar_path = tmp.path().join("dir_only.tar");
 
@@ -1368,7 +1370,8 @@ mod tests {
         unpack(tar_path, dest.clone(), default_unpack(true))
             .await
             .unwrap();
-        assert!(dest.join("somedir").is_dir());
+        assert!(dest.is_dir());
+        assert_eq!(landed(&dest), Vec::<PathBuf>::new());
     }
 
     #[tokio::test]
@@ -1490,7 +1493,7 @@ mod tests {
         unpack(tar_path, dest.clone(), uc(true, true, true))
             .await
             .unwrap();
-        assert!(dest.join("mydir").join("file.txt").is_file());
+        assert!(dest.join("file.txt").is_file());
     }
 
     /// A failed extraction must carry the errno, not just the operation.
@@ -1557,7 +1560,9 @@ mod tests {
         create_single_file_tar(&tar_path, "payload.bin", &vec![0u8; 4 << 20]);
 
         let ticker = tokio::spawn(async {});
-        let paths = entry_paths(tar_path).await.unwrap();
+        let paths = entry_paths(tar_path, tmp.path().join("dest"))
+            .await
+            .unwrap();
 
         assert_eq!(paths, vec![PathBuf::from("payload.bin")]);
         assert!(
@@ -1598,30 +1603,31 @@ mod tests {
 
     /// The names must be the ones extraction will actually create, or the
     /// guest's mount check and its ownership hand-off both reason about a
-    /// layout that never existed.
+    /// layout that never existed. POL-593: `SRC` bound for a missing
+    /// destination lands its contents there, as `SRC/.` does, and the names
+    /// are read before extraction creates anything.
     #[tokio::test]
     async fn entry_paths_match_what_extraction_creates() {
         let tmp = TempDir::new().unwrap();
-        let tar_path = tmp.path().join("dir.tar");
-        create_dir_tar(&tar_path);
+        let src = source_tree(tmp.path());
+        for include_parent in [true, false] {
+            let tar_path = tmp.path().join("dir.tar");
+            let opts = PackContext {
+                follow_symlinks: false,
+                include_parent,
+            };
+            pack(src.clone(), tar_path.clone(), opts).await.unwrap();
+            let dest = tmp.path().join(format!("dest-{include_parent}"));
 
-        let names = entry_paths(tar_path.clone()).await.unwrap();
+            let names = entry_paths(tar_path.clone(), dest.clone()).await.unwrap();
+            unpack(tar_path, dest.clone(), uc(true, true, false))
+                .await
+                .unwrap();
 
-        let dest = tmp.path().join("dest");
-        unpack(tar_path, dest.clone(), uc(true, true, true))
-            .await
-            .unwrap();
-        for name in &names {
-            assert!(
-                dest.join(name).exists(),
-                "{} was named but not extracted",
-                name.display()
-            );
+            let case = format!("include_parent={include_parent}");
+            assert_eq!(names, paths(&["sub", "sub/b.txt"]), "{case}");
+            assert_eq!(landed(&dest), names, "{case}");
         }
-        assert_eq!(
-            names,
-            vec![PathBuf::from("mydir"), PathBuf::from("mydir/file.txt")]
-        );
     }
 
     /// The other half of the same contract: nothing extraction creates may go
@@ -1641,9 +1647,9 @@ mod tests {
         let tar_path = tmp.path().join("leaves.tar");
         create_leaf_only_tar(&tar_path, &["app/main.py", "app/util.py"]);
 
-        let names = entry_paths(tar_path.clone()).await.unwrap();
-
         let dest = tmp.path().join("dest");
+        let names = entry_paths(tar_path.clone(), dest.clone()).await.unwrap();
+
         unpack(tar_path, dest.clone(), uc(true, true, false))
             .await
             .unwrap();
@@ -1668,7 +1674,11 @@ mod tests {
         let tar_path = tmp.path().join("junk.tar");
         std::fs::write(&tar_path, b"not a tar at all").unwrap();
 
-        assert_eq!(entry_paths(tar_path).await.unwrap(), Vec::<PathBuf>::new());
+        let dest = tmp.path().join("dest");
+        assert_eq!(
+            entry_paths(tar_path, dest).await.unwrap(),
+            Vec::<PathBuf>::new()
+        );
     }
 
     #[tokio::test]
@@ -2356,5 +2366,42 @@ mod tests {
         result.unwrap();
         assert_eq!(mode.unwrap(), 0o555);
         assert_eq!(landed(&dest), paths(&["sub", "sub/b.txt"]));
+    }
+
+    /// A local copy reads the whole archive before it lands anything, so an
+    /// archive the landing would refuse partway is refused up front. Unpacked
+    /// from a file anyway, it fails the same way and keeps what it wrote.
+    #[tokio::test]
+    async fn entry_paths_refuse_what_extraction_refuses() {
+        use tar::EntryType::{Directory, Regular};
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("outside.tar");
+        let entries = [
+            ("b/", Directory, ""),
+            ("b/c.txt", Regular, ""),
+            ("a.txt", Regular, ""),
+        ];
+        let bytes: Vec<u8> = archive_of(&entries).map(Result::unwrap).concat().await;
+        std::fs::write(&tar_path, bytes).unwrap();
+        let dest = tmp.path().join("out");
+
+        let refused = entry_paths(tar_path.clone(), dest.clone())
+            .await
+            .unwrap_err();
+        let into_existing = entry_paths(tar_path.clone(), tmp.path().to_path_buf()).await;
+        let unpacked = unpack(tar_path, dest.clone(), uc(true, true, true))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(refused, BoxliteError::InvalidArgument(_)),
+            "{refused}"
+        );
+        assert_eq!(into_existing.unwrap(), paths(&["b", "b/c.txt", "a.txt"]));
+        assert!(
+            matches!(unpacked, BoxliteError::InvalidArgument(_)),
+            "{unpacked}"
+        );
+        assert_eq!(landed(&dest), paths(&["c.txt"]));
     }
 }

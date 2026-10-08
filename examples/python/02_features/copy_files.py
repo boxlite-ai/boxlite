@@ -80,7 +80,8 @@ async def example_copy_in_out():
 
     print("Copying back to host ...")
     await box.copy_out("/app", str(out_dir), copy_options=CopyOptions())
-    roundtrip_path = out_dir / "app" / host_dir.name / "hello.txt"
+    # /app did not exist, so the copy-in made it hold host_dir's contents.
+    roundtrip_path = out_dir / "app" / "hello.txt"
     print("Round-trip file content:", roundtrip_path.read_text())
 
     await box.stop()

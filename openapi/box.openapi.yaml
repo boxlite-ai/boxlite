@@ -938,6 +938,11 @@ paths:
         would land on one, is rejected with `400` — such a write would not be
         visible to processes in the box. Extracted files are owned by the
         container's configured user.
+
+        A directory archive extracted to a `path` that does not exist lands
+        as `docker cp` lands a directory: the archive's leading directory
+        becomes `path`. An entry outside that directory is rejected with
+        `400`.
       tags: [Files]
       parameters:
         - name: path
