@@ -6,6 +6,11 @@
 
 import { BadRequestException } from '@nestjs/common'
 
+/** Most vCPUs the guest kernel (libkrunfw, `CONFIG_NR_CPUS=16`) brings online.
+ * A larger box still boots but silently runs on 16 CPUs, so no org limit may
+ * exceed it. Mirrors the runtime's `vm_defaults::MAX_CPUS`. */
+export const MAX_CPU_PER_BOX = 16
+
 /** Per-box resource ceilings carried on the organization (the "security
  * option" numbers). A value <= 0 means "unset" and is not enforced. */
 export interface PerBoxLimits {
@@ -23,7 +28,9 @@ export interface PerBoxLimits {
  */
 export function assertWithinPerBoxLimits(cpu: number, memoryGb: number, diskGb: number, limits: PerBoxLimits): void {
   const violations: string[] = []
-  if (limits.maxCpuPerBox > 0 && cpu > limits.maxCpuPerBox) {
+  if (cpu > MAX_CPU_PER_BOX) {
+    violations.push(`cpu ${cpu} exceeds the guest kernel limit of ${MAX_CPU_PER_BOX}`)
+  } else if (limits.maxCpuPerBox > 0 && cpu > limits.maxCpuPerBox) {
     violations.push(`cpu ${cpu} exceeds the per-box limit of ${limits.maxCpuPerBox}`)
   }
   if (limits.maxMemoryPerBox > 0 && memoryGb > limits.maxMemoryPerBox) {

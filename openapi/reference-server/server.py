@@ -569,7 +569,7 @@ async def get_config():
         "overrides": {},
         "capabilities": {
             "linux_capabilities_enabled": True,
-            "max_cpus": 32,
+            "max_cpus": 16,
             "max_memory_mib": 16384,
             "max_disk_size_gb": 100,
             "max_boxes_per_prefix": 50,

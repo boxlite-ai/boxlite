@@ -174,7 +174,7 @@ pub struct JsBoxOptions {
     /// Path to pre-prepared rootfs directory (alternative to image)
     pub rootfs_path: Option<String>,
 
-    /// Number of CPU cores (default: 1)
+    /// Number of CPU cores (default: 1, range: 1-16, the guest kernel's limit)
     pub cpus: Option<u8>,
 
     /// Memory limit in MiB (default: 512)

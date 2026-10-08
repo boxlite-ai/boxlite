@@ -458,6 +458,10 @@ impl RuntimeImpl {
             };
         }
 
+        // Only a new box is held to the vCPU ceiling: reuse above ignores
+        // general options, so a box persisted with more vCPUs stays reachable.
+        options.validate_cpus()?;
+
         // Initialize box variables with defaults
         let (config, mut state) = self.init_box_variables(&options, name.clone());
 
@@ -2005,6 +2009,100 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("my-data"), "{message}");
         assert!(message.contains("REST runtime"), "{message}");
+    }
+
+    /// The bundled guest kernel brings up at most `MAX_CPUS` vCPUs. Without
+    /// this guard a larger request boots anyway and the guest silently runs
+    /// on fewer CPUs than the box reports.
+    #[tokio::test]
+    async fn create_rejects_cpus_outside_guest_kernel_range() {
+        let (runtime, _dir) = create_test_runtime();
+        let local = LocalRuntime(Arc::clone(&runtime));
+        for cpus in [0, 17, 24] {
+            let name = format!("cpus-{cpus}");
+            let options = BoxOptions {
+                cpus: Some(cpus),
+                ..Default::default()
+            };
+            let error = RuntimeBackend::create(&local, options, Some(name.clone()))
+                .await
+                .err()
+                .expect("cpus outside 1..=16 must be rejected at create");
+
+            assert!(
+                matches!(error, BoxliteError::InvalidArgument(_)),
+                "{error:?}"
+            );
+            let message = error.to_string();
+            assert!(message.contains("cpus"), "{message}");
+            assert!(message.contains("16"), "{message}");
+            assert!(
+                runtime.box_manager.lookup_box(&name).unwrap().is_none(),
+                "a rejected create must not persist a box"
+            );
+        }
+
+        for cpus in [None, Some(1), Some(16)] {
+            let options = BoxOptions {
+                cpus,
+                ..Default::default()
+            };
+            RuntimeBackend::create(&local, options, None)
+                .await
+                .unwrap_or_else(|error| panic!("cpus {cpus:?} must be accepted: {error}"));
+        }
+    }
+
+    /// Reuse ignores general options, cpus included. A box persisted with more
+    /// vCPUs than the guest kernel supports (created before the ceiling) must
+    /// still be returned by `get_or_create`, while a new one is refused.
+    #[tokio::test]
+    async fn get_or_create_reuses_existing_box_beyond_guest_kernel_cpus() {
+        let (runtime, _dir) = create_test_runtime();
+        let mut config = test_box_config_in_layout(false, &runtime);
+        config.name = Some("legacy".to_string());
+        config.options.cpus = Some(24);
+        runtime
+            .box_manager
+            .add_box(&config, &BoxState::new())
+            .unwrap();
+        let local = LocalRuntime(Arc::clone(&runtime));
+        let request = || BoxOptions {
+            cpus: Some(24),
+            ..Default::default()
+        };
+
+        let (_, created) =
+            RuntimeBackend::get_or_create(&local, request(), Some("legacy".to_string()))
+                .await
+                .expect("an existing box is reused whatever cpus it was created with");
+        assert!(!created);
+
+        let error = RuntimeBackend::get_or_create(&local, request(), Some("fresh".to_string()))
+            .await
+            .err()
+            .expect("a new box beyond the guest kernel's vCPUs must be rejected");
+        assert!(
+            matches!(error, BoxliteError::InvalidArgument(_)),
+            "{error:?}"
+        );
+    }
+
+    /// A custom kernel may be built with a larger `CONFIG_NR_CPUS`, so the
+    /// bundled kernel's ceiling must not apply to it.
+    #[tokio::test]
+    async fn custom_kernel_is_not_bound_by_bundled_kernel_cpu_limit() {
+        let (runtime, _dir) = create_test_runtime();
+        let mut options = BoxOptions {
+            cpus: Some(24),
+            ..Default::default()
+        };
+        options.advanced.kernel = Some(KernelOptions::new("/custom/vmlinux"));
+
+        runtime
+            .create(options, None)
+            .await
+            .expect("a custom kernel sets its own vCPU ceiling");
     }
 
     #[test]
