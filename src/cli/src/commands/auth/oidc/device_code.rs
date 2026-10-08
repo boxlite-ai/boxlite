@@ -10,7 +10,10 @@
 use anyhow::{Context, Result, anyhow};
 use chrono::{TimeDelta, Utc};
 use openidconnect::core::{CoreClient, CoreDeviceAuthorizationResponse};
-use openidconnect::{DeviceAuthorizationUrl, OAuth2TokenResponse, Scope, TokenResponse};
+use openidconnect::{
+    DeviceAuthorizationUrl, ErrorResponseType, OAuth2TokenResponse, RequestTokenError, Scope,
+    StandardErrorResponse, TokenResponse,
+};
 use secrecy::SecretString;
 
 use super::{OidcConfig, OidcTokens};
@@ -25,12 +28,10 @@ use super::{OidcConfig, OidcTokens};
 pub async fn run(cfg: &OidcConfig, http: &reqwest::Client) -> Result<OidcTokens> {
     let metadata = super::discovery::load_provider_metadata(cfg, http).await?;
 
-    // The device-authorization endpoint isn't part of the OIDC core
-    // discovery doc, so `CoreProviderMetadata` doesn't expose it. Both Dex
-    // and Auth0 use the conventional `{issuer}/device/code` path; if a
-    // future IdP requires something different we can add `--device-endpoint`
-    // before adopting a custom `AdditionalProviderMetadata` struct.
-    let device_url = conventional_device_endpoint(cfg)?;
+    let device_url = match &metadata.additional_metadata().device_authorization_endpoint {
+        Some(url) => url.clone(),
+        None => conventional_device_endpoint(cfg)?,
+    };
     let client = CoreClient::from_provider_metadata(metadata, cfg.client_id.clone(), None)
         .set_device_authorization_url(device_url);
 
@@ -47,19 +48,24 @@ pub async fn run(cfg: &OidcConfig, http: &reqwest::Client) -> Result<OidcTokens>
     let details: CoreDeviceAuthorizationResponse = request
         .request_async(http)
         .await
-        .map_err(|e| anyhow!("requesting device code: {e}"))?;
+        .map_err(|e| device_error("requesting device code", e))?;
 
     print_user_instructions(&details);
 
     // `openidconnect` handles the entire poll loop (authorization_pending,
     // slow_down back-off, the `expires_in` deadline). We only supply the
     // sleep primitive — `tokio::time::sleep` — and an optional upper bound.
-    let token_response = client
+    let polling = client
         .exchange_device_access_token(&details)
         .context("building device-access-token request")?
-        .request_async(http, tokio::time::sleep, None)
-        .await
-        .map_err(|e| anyhow!("polling for device token: {e}"))?;
+        .request_async(http, tokio::time::sleep, None);
+    let token_response = tokio::select! {
+        response = polling => response.map_err(|e| device_error("polling for device token", e))?,
+        signal = tokio::signal::ctrl_c() => {
+            signal.context("listening for device login cancellation")?;
+            return Err(anyhow!("device login cancelled; no session was saved"));
+        }
+    };
 
     Ok(tokens_from_response(&token_response))
 }
@@ -89,14 +95,50 @@ fn print_user_instructions(details: &CoreDeviceAuthorizationResponse) {
     eprintln!();
 }
 
-/// Build the device-authorization endpoint by convention. Dex serves it at
-/// `{issuer}/device/code`; Auth0 at `{issuer}/oauth/device/code`. We send to
-/// the Dex form because that is the deployment this CLI targets; Auth0
-/// users can override via a future `--device-endpoint` flag.
+/// Backward compatibility for Dex deployments that omit the discovery field.
 fn conventional_device_endpoint(cfg: &OidcConfig) -> Result<DeviceAuthorizationUrl> {
     let url = format!("{}/device/code", cfg.issuer.as_str().trim_end_matches('/'));
     DeviceAuthorizationUrl::new(url.clone())
         .with_context(|| format!("invalid device authorization URL: {url}"))
+}
+
+/// Server descriptions and response bodies can contain credentials. Report only
+/// recognized OAuth categories and local guidance, never their arbitrary text.
+fn device_error<RE, TE>(
+    stage: &str,
+    error: RequestTokenError<RE, StandardErrorResponse<TE>>,
+) -> anyhow::Error
+where
+    RE: std::error::Error + 'static,
+    TE: ErrorResponseType + std::fmt::Display + 'static,
+{
+    let message = match error {
+        RequestTokenError::ServerResponse(response) => {
+            match response.error().to_string().as_str() {
+                "unauthorized_client" => {
+                    "unauthorized_client: ask the identity provider administrator to enable the Device Code grant for this CLI client"
+                }
+                "invalid_client" => "invalid_client: check the public CLI client ID",
+                "access_denied" => {
+                    "access_denied: device authorization was denied; start login again"
+                }
+                "expired_token" => "expired_token: the device code expired; start login again",
+                "invalid_grant" => {
+                    "invalid_grant: device authorization is no longer valid; start login again"
+                }
+                "invalid_scope" => "invalid_scope: check the CLI client's allowed scopes",
+                _ => "the identity provider rejected device authorization",
+            }
+        }
+        RequestTokenError::Request(_) => {
+            "unable to reach the identity provider; check connectivity and retry"
+        }
+        RequestTokenError::Parse(_, _) => {
+            "invalid OAuth response; check the provider's discovery document and device endpoint"
+        }
+        RequestTokenError::Other(_) => "device authorization could not complete; start login again",
+    };
+    anyhow!("{stage}: {message}")
 }
 
 fn tokens_from_response(resp: &openidconnect::core::CoreTokenResponse) -> OidcTokens {

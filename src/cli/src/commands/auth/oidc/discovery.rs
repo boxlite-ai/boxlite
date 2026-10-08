@@ -14,8 +14,39 @@
 //! re-implement `/api/config`.
 
 use anyhow::{Context, Result, anyhow};
-use openidconnect::{ClientId, IssuerUrl, core::CoreProviderMetadata};
-use serde::Deserialize;
+use openidconnect::core::{
+    CoreAuthDisplay, CoreClaimName, CoreClaimType, CoreClientAuthMethod, CoreGrantType,
+    CoreJsonWebKey, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm,
+    CoreResponseMode, CoreResponseType, CoreSubjectIdentifierType,
+};
+use openidconnect::{
+    AdditionalProviderMetadata, ClientId, DeviceAuthorizationUrl, IssuerUrl, ProviderMetadata,
+};
+use serde::{Deserialize, Serialize};
+
+/// RFC 8628's discovery extension, preserved alongside OIDC core metadata.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DeviceProviderMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_authorization_endpoint: Option<DeviceAuthorizationUrl>,
+}
+
+impl AdditionalProviderMetadata for DeviceProviderMetadata {}
+
+pub type OidcProviderMetadata = ProviderMetadata<
+    DeviceProviderMetadata,
+    CoreAuthDisplay,
+    CoreClientAuthMethod,
+    CoreClaimName,
+    CoreClaimType,
+    CoreGrantType,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJweKeyManagementAlgorithm,
+    CoreJsonWebKey,
+    CoreResponseMode,
+    CoreResponseType,
+    CoreSubjectIdentifierType,
+>;
 
 use super::{DiscoveryOverrides, OidcConfig};
 
@@ -124,14 +155,14 @@ pub async fn resolve_config(
 pub async fn load_provider_metadata(
     cfg: &OidcConfig,
     http: &reqwest::Client,
-) -> Result<CoreProviderMetadata> {
-    match CoreProviderMetadata::discover_async(cfg.issuer.clone(), http).await {
+) -> Result<OidcProviderMetadata> {
+    match OidcProviderMetadata::discover_async(cfg.issuer.clone(), http).await {
         Ok(metadata) => Ok(metadata),
         Err(err) if is_issuer_mismatch(&err) => {
             let toggled = toggle_trailing_slash(cfg.issuer.as_str());
             let retry_issuer = openidconnect::IssuerUrl::new(toggled.clone())
                 .with_context(|| format!("invalid retry issuer URL: {toggled}"))?;
-            CoreProviderMetadata::discover_async(retry_issuer, http)
+            OidcProviderMetadata::discover_async(retry_issuer, http)
                 .await
                 .with_context(|| {
                     format!(
