@@ -45,6 +45,8 @@ try:
         OutboundNetworkInfo,
         OutboundNetworkSpec,
         PublishedPort,
+        RegistryCredential,
+        RegistryHandle,
         RuntimeMetrics,
         Secret,
         SecurityOptions,
@@ -105,6 +107,8 @@ try:
         "ExportOptions",
         "VolumeHandle",
         "VolumeInfo",
+        "RegistryHandle",
+        "RegistryCredential",
     ]
     # Credential abstraction (ABC + virtual-registered native classes)
     from .credential import Credential  # noqa: F401
@@ -184,6 +188,7 @@ try:
         SyncExecution,
         SyncImageHandle,
         SyncNetworkHandle,
+        SyncRegistryHandle,
         SyncSimpleBox,
         SyncSkillBox,
         SyncTunnelForwarder,
@@ -199,6 +204,7 @@ try:
             "SyncExecution",
             "SyncImageHandle",
             "SyncNetworkHandle",
+            "SyncRegistryHandle",
             "SyncSimpleBox",
             "SyncSkillBox",
             "SyncTunnelForwarder",

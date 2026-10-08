@@ -46,6 +46,7 @@ from boxlite import Boxlite, Options, BoxOptions, ImageRegistry
 | `list_info()` | `async () -> List[BoxInfo]` | List all boxes |
 | `metrics()` | `async () -> RuntimeMetrics` | Get runtime-wide metrics |
 | `images` | property `-> ImageHandle` | The images this runtime can boot from; see [`boxlite.ImageHandle`](#boxliteimagehandle) |
+| `registries` | property `-> RegistryHandle` | The server's registry logins; raises `UnsupportedError` on a local runtime. See [`boxlite.RegistryHandle`](#boxliteregistryhandle) |
 
 #### Example
 
@@ -107,6 +108,38 @@ for image in await runtime.images.list():
 detail = await runtime.images.get("docker.io/library/alpine")
 print(detail.tags, [v.digest for v in detail.versions])
 await runtime.images.remove("docker.io/library/alpine")
+```
+
+### `boxlite.RegistryHandle`
+
+The logins a REST server presents when it pulls a private image for a box.
+`runtime.registries` raises `UnsupportedError` on a local runtime, which pulls
+with the logins in `Options(image_registries=...)` instead.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `list()` | `async () -> List[RegistryCredential]` | Every login the organization holds, oldest first |
+| `create()` | `async (*, registry_host: str, username: str, password: str, repository_prefix: str = None) -> RegistryCredential` | Add a login; `AlreadyExistsError` while one is held for the same registry and prefix |
+| `remove()` | `async (id: str) -> None` | Remove a login; `InvalidStateError`, naming the boxes, while a box still pulls through it; `NotFoundError` for an unknown id |
+
+`create()` takes keyword arguments only. `repository_prefix` is whole path
+segments ending in `/`, such as `"acme/"`; leave it out for the whole
+registry. The password goes up once: `RegistryCredential` has `id`,
+`registry_host`, `repository_prefix`, `username`, `created_by` and
+`created_at`, and no password. `remove()` raises `InvalidArgumentError` for an
+id that is not a UUID, before any request.
+
+```python
+runtime = Boxlite.rest(BoxliteRestOptions.from_env())
+login = await runtime.registries.create(
+    registry_host="ghcr.io",
+    repository_prefix="acme/",
+    username="acme-bot",
+    password=os.environ["GHCR_TOKEN"],
+)
+box = await runtime.create(BoxOptions(image="ghcr.io/acme/private-app:1"))
+for login in await runtime.registries.list():
+    print(login.registry_host, login.repository_prefix, login.username)
 ```
 
 ---
@@ -844,6 +877,7 @@ from boxlite import SyncBoxlite, SyncBox, SyncSimpleBox, SyncCodeBox
 | `ExecStderr` | `SyncExecStderr` | Regular iterator |
 | `SimpleBox` | `SyncSimpleBox` | `SimpleBox.info()` is async-only and is not exposed by `SyncSimpleBox` |
 | `CodeBox` | `SyncCodeBox` | Inherits the async-only metadata rule |
+| `RegistryHandle` | `SyncRegistryHandle` | |
 
 ### Classes
 
@@ -867,6 +901,7 @@ from boxlite import BoxliteRestOptions, SyncBoxlite
 
 with SyncBoxlite.rest(BoxliteRestOptions.from_env()) as runtime:
     print(runtime.images.usage())
+    print(runtime.registries.list())
 ```
 
 #### `SyncSimpleBox`

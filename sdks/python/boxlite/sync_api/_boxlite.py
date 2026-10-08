@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     )
     from ._box import SyncBox
     from ._images import SyncImageHandle
+    from ._registries import SyncRegistryHandle
 
 logger = logging.getLogger("boxlite.sync_boxlite")
 
@@ -363,6 +364,14 @@ class SyncBoxlite:
         from ._images import SyncImageHandle
 
         return SyncImageHandle(self, self._boxlite.images)
+
+    @property
+    def registries(self) -> "SyncRegistryHandle":
+        """Get the server's registry logins; raises UnsupportedError locally."""
+        self._require_started()
+        from ._registries import SyncRegistryHandle
+
+        return SyncRegistryHandle(self, self._boxlite.registries)
 
     def remove(self, id_or_name: str, force: bool = False) -> None:
         """
