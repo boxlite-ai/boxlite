@@ -8,6 +8,7 @@ use crate::images::PyImageHandle;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyRuntimeMetrics;
 use crate::options::{PyBoxOptions, PyBoxliteRestOptions, PyOptions};
+use crate::registries::PyRegistryHandle;
 use crate::util::map_err;
 use crate::volumes::PyVolumeHandle;
 
@@ -179,6 +180,18 @@ impl PyBoxlite {
     fn volumes(&self) -> PyResult<PyVolumeHandle> {
         let handle = self.runtime.volumes().map_err(map_err)?;
         Ok(PyVolumeHandle {
+            handle: Arc::new(handle),
+        })
+    }
+
+    /// The server's registry logins (list, create, remove).
+    ///
+    /// Raises UnsupportedError on a local runtime, which pulls with the
+    /// logins in `Options(image_registries=...)` instead.
+    #[getter]
+    fn registries(&self) -> PyResult<PyRegistryHandle> {
+        let handle = self.runtime.registries().map_err(map_err)?;
+        Ok(PyRegistryHandle {
             handle: Arc::new(handle),
         })
     }
