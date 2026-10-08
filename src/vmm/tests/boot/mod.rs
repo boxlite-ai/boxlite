@@ -1,0 +1,420 @@
+// Copyright 2026 BoxLite Contributors
+// SPDX-License-Identifier: Apache-2.0
+
+//! Tests for the ELF loader: synthetic images for every rule, and a probe that
+//! loads the real kernel and reads it back through a KVM vCPU.
+
+use std::io;
+
+use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap};
+
+use super::load_elf;
+use crate::boot::KernelLayout;
+
+/// RAM for the synthetic images: the fixture's segments end below 2 MiB.
+const RAM_SIZE: usize = 2 << 20;
+/// Physical start, file offset, file size, memory size and flags of each
+/// fixture segment: code, data, and a BSS-only segment.
+const SEGMENTS: [(u64, u64, u64, u64, u32); 3] = [
+    (0x10_0000, 0x100, 8, 0x20, 5),
+    (0x10_2000, 0x200, 4, 0x10, 6),
+    (0x10_3000, 0, 0, 0x80, 6),
+];
+const FIXTURE_LAYOUT: KernelLayout = KernelLayout {
+    entry: 0x10_0000,
+    start: 0x10_0000,
+    end: 0x10_3080,
+};
+
+fn ram(size: usize) -> GuestMemoryMmap<()> {
+    GuestMemoryMmap::from_ranges(&[(GuestAddress(0), size)]).expect("anonymous guest RAM")
+}
+
+fn put16(image: &mut [u8], offset: usize, value: u16) {
+    image[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put32(image: &mut [u8], offset: usize, value: u32) {
+    image[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put64(image: &mut [u8], offset: usize, value: u64) {
+    image[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+/// Offset of program header `index` in the fixture.
+fn header(index: usize) -> usize {
+    64 + index * 56
+}
+
+/// A minimal x86_64 executable: three `PT_LOAD` segments whose virtual
+/// addresses live in the kernel's negative half, as a real `vmlinux` has.
+fn fixture() -> Vec<u8> {
+    let mut image = vec![0u8; 0x204];
+    image[..7].copy_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1, 1]);
+    put16(&mut image, 16, 2);
+    put16(&mut image, 18, 62);
+    put32(&mut image, 20, 1);
+    put64(&mut image, 24, FIXTURE_LAYOUT.entry);
+    put64(&mut image, 32, 64);
+    put16(&mut image, 52, 64);
+    put16(&mut image, 54, 56);
+    put16(&mut image, 56, SEGMENTS.len() as u16);
+    image[0x100..0x108].copy_from_slice(b"CODE1234");
+    image[0x200..0x204].copy_from_slice(b"DATA");
+    for (index, (paddr, offset, filesz, memsz, flags)) in SEGMENTS.into_iter().enumerate() {
+        let base = header(index);
+        put32(&mut image, base, 1);
+        put32(&mut image, base + 4, flags);
+        put64(&mut image, base + 8, offset);
+        put64(&mut image, base + 16, paddr + 0xffff_8000_0000_0000);
+        put64(&mut image, base + 24, paddr);
+        put64(&mut image, base + 32, filesz);
+        put64(&mut image, base + 40, memsz);
+        put64(&mut image, base + 48, 1);
+    }
+    image
+}
+
+fn read(ram: &GuestMemoryMmap<()>, address: u64, len: usize) -> Vec<u8> {
+    let mut bytes = vec![0; len];
+    ram.read_slice(&mut bytes, GuestAddress(address))
+        .expect("read guest RAM");
+    bytes
+}
+
+fn fill(ram: &GuestMemoryMmap<()>, address: u64, len: usize, value: u8) {
+    ram.write_slice(&vec![value; len], GuestAddress(address))
+        .expect("write guest RAM");
+}
+
+fn reject(image: &[u8], reason: &str) {
+    let error = load_elf(&ram(RAM_SIZE), image).expect_err(reason);
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
+    assert!(error.to_string().contains(reason), "{error}");
+}
+
+#[test]
+fn loads_file_bytes_at_physical_addresses_and_zeroes_bss() {
+    let ram = ram(RAM_SIZE);
+    let span = (FIXTURE_LAYOUT.end - FIXTURE_LAYOUT.start) as usize;
+    fill(&ram, FIXTURE_LAYOUT.start, span, 0xff);
+
+    assert_eq!(load_elf(&ram, &fixture()).unwrap(), FIXTURE_LAYOUT);
+
+    let mut code = b"CODE1234".to_vec();
+    code.resize(0x20, 0);
+    assert_eq!(read(&ram, 0x10_0000, 0x20), code);
+    assert_eq!(
+        read(&ram, 0x10_0020, 0x1fe0),
+        vec![0xff; 0x1fe0],
+        "gap must stay untouched"
+    );
+    let mut data = b"DATA".to_vec();
+    data.resize(0x10, 0);
+    assert_eq!(read(&ram, 0x10_2000, 0x10), data);
+    assert_eq!(
+        read(&ram, 0x10_2010, 0xff0),
+        vec![0xff; 0xff0],
+        "gap must stay untouched"
+    );
+    assert_eq!(
+        read(&ram, 0x10_3000, 0x80),
+        vec![0; 0x80],
+        "BSS-only segment must be zero"
+    );
+    assert_eq!(
+        read(&ram, 0, 0x10_0000),
+        vec![0; 0x10_0000],
+        "first MiB must stay untouched"
+    );
+}
+
+#[test]
+fn accepts_a_segment_ending_exactly_at_the_end_of_ram() {
+    let mut image = fixture();
+    let last = header(2);
+    put64(&mut image, last + 40, RAM_SIZE as u64 - 0x10_3000);
+    let layout = load_elf(&ram(RAM_SIZE), &image).unwrap();
+    assert_eq!(layout.end, RAM_SIZE as u64);
+
+    put64(&mut image, last + 40, RAM_SIZE as u64 - 0x10_3000 + 1);
+    reject(&image, "is not backed by guest RAM");
+}
+
+#[test]
+fn rejects_segments_below_the_first_mib_outside_ram_or_overflowing() {
+    let last = header(2);
+    for (field, value, reason) in [
+        (last + 24, 0x0f_ffff, "is below the first MiB"),
+        (last + 24, u64::MAX - 1, "load segment address overflow"),
+        (last + 40, 0x20_0000, "is not backed by guest RAM"),
+    ] {
+        let mut image = fixture();
+        put64(&mut image, field, value);
+        reject(&image, reason);
+    }
+}
+
+#[test]
+fn rejects_wrong_class_endianness_type_machine_and_header_sizes() {
+    for offset in [0, 4, 5, 6, 16, 18, 20, 52] {
+        let mut image = fixture();
+        image[offset] ^= 0x40;
+        reject(&image, "expected a little-endian x86_64 ELF64 executable");
+    }
+    let mut image = fixture();
+    put16(&mut image, 54, 0);
+    reject(&image, "invalid ELF program header table");
+    let mut image = fixture();
+    put64(&mut image, 32, 63);
+    reject(&image, "invalid ELF program header table");
+    let mut image = fixture();
+    put64(&mut image, 32, u64::MAX);
+    reject(&image, "ELF file range overflow");
+}
+
+#[test]
+fn rejects_every_truncated_prefix() {
+    let image = fixture();
+    for len in 0..image.len() {
+        let error = load_elf(&ram(RAM_SIZE), &image[..len]).expect_err("truncated image");
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::InvalidData,
+            "prefix {len}: {error}"
+        );
+    }
+}
+
+#[test]
+fn rejects_file_size_above_memory_size_and_empty_segments() {
+    let mut image = fixture();
+    put64(&mut image, header(1) + 32, 0x11);
+    reject(&image, "nonzero memory size >= file size");
+    let mut image = fixture();
+    put64(&mut image, header(2) + 40, 0);
+    reject(&image, "nonzero memory size >= file size");
+}
+
+#[test]
+fn rejects_overlapping_segments_including_bss_only_overlap() {
+    let mut image = fixture();
+    put64(&mut image, header(1) + 24, 0x10_0008);
+    reject(&image, "overlapping ELF load segments");
+    let mut image = fixture();
+    put64(&mut image, header(2) + 24, 0x10_2008);
+    reject(&image, "overlapping ELF load segments");
+}
+
+#[test]
+fn rejects_entries_outside_file_backed_executable_bytes() {
+    for entry in [0, 0x0f_ffff, 0x10_0008, 0x10_2000, 0x10_3000, 0x20_0000] {
+        let mut image = fixture();
+        put64(&mut image, 24, entry);
+        reject(&image, "is outside file-backed executable segments");
+    }
+    let mut image = fixture();
+    put32(&mut image, header(0) + 4, 4);
+    reject(&image, "is outside file-backed executable segments");
+}
+
+#[test]
+fn rejects_dynamic_images_and_images_without_load_segments() {
+    for kind in [2, 3] {
+        let mut image = fixture();
+        put32(&mut image, header(2), kind);
+        reject(&image, "dynamic linking is not supported");
+    }
+    let mut image = fixture();
+    for index in 0..SEGMENTS.len() {
+        put32(&mut image, header(index), 4);
+    }
+    reject(&image, "is outside file-backed executable segments");
+}
+
+#[test]
+fn ignores_note_segments_and_leaves_ram_untouched_on_rejection() {
+    let mut image = fixture();
+    put32(&mut image, header(2), 4);
+    put64(&mut image, header(2) + 8, u64::MAX);
+    let layout = load_elf(&ram(RAM_SIZE), &image).unwrap();
+    assert_eq!(
+        layout.end, 0x10_2010,
+        "a note is not loaded and not measured"
+    );
+
+    let ram = ram(RAM_SIZE);
+    let span = (FIXTURE_LAYOUT.end - FIXTURE_LAYOUT.start) as usize;
+    fill(&ram, FIXTURE_LAYOUT.start, span, 0xff);
+    let mut image = fixture();
+    put64(&mut image, header(2) + 24, 0x10_2008);
+    load_elf(&ram, &image).expect_err("overlap");
+    assert_eq!(read(&ram, FIXTURE_LAYOUT.start, span), vec![0xff; span]);
+}
+
+/// Loads the kernel named by `VMM_KERNEL`, checks every segment against
+/// `readelf`, then lets a KVM vCPU sum the loaded span and report it on an
+/// I/O port.
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm, readelf, and VMM_KERNEL naming an x86_64 vmlinux"]
+fn native_vmlinux_bytes_are_visible_to_a_kvm_vcpu() {
+    use std::{process::Command, ptr::NonNull};
+
+    use boxlite_hypervisor::{KvmVm, MemoryRegion, VcpuExit, X86BootRegisters, X86Segment};
+    use vm_memory::GuestMemoryBackend;
+
+    const RAM_SIZE: usize = 128 << 20;
+    const PROBE_PORT: u16 = 0x500;
+
+    let path = std::env::var_os("VMM_KERNEL")
+        .expect("set VMM_KERNEL or run make test:integration:vmm:elf");
+    let image = std::fs::read(&path).expect("read VMM_KERNEL");
+    assert!(
+        image.len() <= RAM_SIZE,
+        "the probe maps {RAM_SIZE} bytes of RAM"
+    );
+
+    // readelf is an independent oracle for segment placement and the entry.
+    let output = Command::new("readelf")
+        .args(["--file-header", "--program-headers", "--wide"])
+        .arg(&path)
+        .env("LC_ALL", "C")
+        .output()
+        .expect("run readelf");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    let mut expected_entry = None;
+    let mut oracle = Vec::new();
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if line.trim_start().starts_with("Entry point address:") {
+            expected_entry = Some(parse_hex(fields[3]));
+        } else if fields.first() == Some(&"LOAD") {
+            oracle.push((
+                parse_hex(fields[1]) as usize,
+                parse_hex(fields[3]),
+                parse_hex(fields[4]) as usize,
+                parse_hex(fields[5]) as usize,
+            ));
+        }
+    }
+    assert!(!oracle.is_empty(), "readelf found no LOAD segments");
+    let expected = KernelLayout {
+        entry: expected_entry.expect("readelf entry point"),
+        start: oracle.iter().map(|segment| segment.1).min().unwrap(),
+        end: oracle
+            .iter()
+            .map(|segment| segment.1 + segment.3 as u64)
+            .max()
+            .unwrap(),
+    };
+
+    // RAM is declared before the VM and vCPU so it outlives them during unwinding.
+    let ram = ram(RAM_SIZE);
+    for &(_, paddr, _, memsz) in &oracle {
+        fill(&ram, paddr, memsz, 0xff);
+    }
+    assert_eq!(load_elf(&ram, &image).unwrap(), expected);
+    let mut checksum = 0u32;
+    for &(offset, paddr, filesz, memsz) in &oracle {
+        let loaded = read(&ram, paddr, memsz);
+        assert_eq!(&loaded[..filesz], &image[offset..offset + filesz]);
+        assert!(
+            loaded[filesz..].iter().all(|&byte| byte == 0),
+            "BSS at {paddr:#x} is not zero"
+        );
+        checksum = image[offset..offset + filesz]
+            .iter()
+            .fold(checksum, |sum, &byte| sum.wrapping_add(u32::from(byte)));
+    }
+
+    // A protected-mode program sums every byte of [start, end) and writes EAX
+    // to the probe port; gaps between segments are untouched zero RAM.
+    let mut program = vec![0x31, 0xc0, 0xbb];
+    program.extend_from_slice(&(expected.start as u32).to_le_bytes());
+    program.push(0xb9);
+    program.extend_from_slice(&((expected.end - expected.start) as u32).to_le_bytes());
+    program.extend_from_slice(&[
+        0x0f, 0xb6, 0x13, // movzx edx, byte [ebx]
+        0x01, 0xd0, // add eax, edx
+        0x43, // inc ebx
+        0xe2, 0xf8, // loop
+        0x66, 0xba, 0x00, 0x05, // mov dx, 0x500
+        0xef, 0xf4, // out dx, eax; hlt
+    ]);
+    ram.write_slice(&program, GuestAddress(0x1000)).unwrap();
+    for (index, descriptor) in [0u64, 0x00cf_9b00_0000_ffff, 0x00cf_9300_0000_ffff]
+        .into_iter()
+        .enumerate()
+    {
+        ram.write_slice(
+            &descriptor.to_le_bytes(),
+            GuestAddress(0x500 + index as u64 * 8),
+        )
+        .unwrap();
+    }
+
+    let vm = KvmVm::new().expect("create KVM VM");
+    let region = MemoryRegion {
+        guest_addr: 0,
+        host_addr: NonNull::new(ram.get_host_address(GuestAddress(0)).unwrap()).unwrap(),
+        size: RAM_SIZE,
+    };
+    // SAFETY: `ram` is declared before `vm` and `vcpu`, so it is dropped after
+    // them, and no other host thread touches it during the probe.
+    unsafe { vm.map_memory(&region) }.expect("map guest RAM");
+    let mut vcpu = vm.create_vcpu(0).expect("create vCPU");
+    vcpu.set_cpu_features(vm.supported_cpuid(), &[])
+        .expect("set CPUID");
+    vcpu.set_boot_registers(&X86BootRegisters {
+        rip: 0x1000,
+        rsp: 0x8000,
+        rflags: 2,
+        cr0: 1,
+        code: X86Segment {
+            base: 0,
+            limit: u32::MAX,
+            selector: 8,
+            attributes: 0xc09b,
+        },
+        data: X86Segment {
+            base: 0,
+            limit: u32::MAX,
+            selector: 16,
+            attributes: 0xc093,
+        },
+        gdt_base: 0x500,
+        gdt_limit: 23,
+        ..X86BootRegisters::default()
+    })
+    .expect("set boot registers");
+
+    let mut observed = None;
+    for _ in 0..16 {
+        match vcpu.run().expect("run vCPU") {
+            VcpuExit::Interrupted => continue,
+            VcpuExit::IoOut { port, bytes } => {
+                assert_eq!(port, PROBE_PORT);
+                observed = Some(u32::from_le_bytes(bytes.try_into().expect("32-bit OUT")));
+                break;
+            }
+            exit => panic!("unexpected probe exit: {exit:?}"),
+        }
+    }
+    assert_eq!(
+        observed,
+        Some(checksum),
+        "guest checksum of the loaded kernel"
+    );
+    // Finish the OUT without executing HLT, which would wait in the kernel.
+    vcpu.complete_pending_io().expect("complete pending I/O");
+
+    fn parse_hex(field: &str) -> u64 {
+        u64::from_str_radix(field.trim_start_matches("0x"), 16).expect("hex field")
+    }
+}

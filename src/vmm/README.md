@@ -4,8 +4,8 @@ Workspace skeleton for BoxLite's native VMM. The crate-visible VM and vCPU `run`
 entry points sketch event dispatch, guest exits, and worker cleanup with inline
 `todo!()` operations that panic if called. VM event labels stay local to
 `Vm::run`; vCPU exits use `boxlite_hypervisor::VcpuExit`, and `Error` wraps
-`boxlite_hypervisor::Error` with its cause chain intact. This crate cannot
-create or boot a VM yet. The [VMM design](../../docs/contributing/architecture/vmm/README.md)
+`boxlite_hypervisor::Error` with its cause chain intact. This crate places an
+x86_64 ELF `vmlinux` in guest RAM but cannot create or boot a VM yet. The [VMM design](../../docs/contributing/architecture/vmm/README.md)
 specifies the lifecycle API, memory layout, buses, interrupts, and threads it
 will implement.
 
@@ -16,12 +16,14 @@ inspect the error's host cause.
 
 ```text
 boxlite-vmm
-└── boxlite-hypervisor
+├── boxlite-hypervisor
+└── vm-memory (guest-memory access)
 ```
 
 | Module | Planned responsibility |
 | --- | --- |
 | `vm` | VM facade and lifecycle coordination |
+| `boot` | Implemented for x86_64: validated ELF `vmlinux` placement; `boot_params`, command line, MP table and entry registers follow |
 | `config` | Machine configuration and boundary validation |
 | `error` | VMM errors that keep the hypervisor's cause chain |
 | `memory` | Backing-memory ownership and guest address layout |
@@ -33,6 +35,37 @@ Backend implementation and guest boot follow in M1. Virtio devices, the BoxLite
 engine adapter, engine selection, and `native` feature wiring follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
+
+## Kernel loading
+
+On Linux x86_64, `boot::elf::load_elf(ram, image)` validates an ELF `vmlinux`
+and copies its `PT_LOAD` segments into borrowed guest memory (any vm-memory
+`GuestMemoryBackend`). It returns the entry, the lowest segment start and the
+highest segment end. It stays crate-visible until the lifecycle slice calls it
+from `Vm::new`.
+
+- Input: little-endian x86_64 ELF64 executable (`vmlinux`), not `bzImage`.
+- Placement: file bytes at `p_paddr`; BSS zero-filled; bytes between segments
+  untouched; nothing is written if any check fails.
+- Rejected: truncated headers or payloads, dynamic linking, address overflow,
+  segments below 1 MiB or outside registered RAM, overlapping segments (BSS
+  included), and an entry outside file-backed executable bytes.
+- Dependencies: vm-memory only. linux-loader's ELF loader cannot zero BSS on
+  borrowed RAM and adds no check the preflight lacks.
+
+The hardware probe needs Linux x86_64, read/write `/dev/kvm`, binutils
+`readelf`, and an x86_64 `vmlinux` whose segments end below 128 MiB:
+
+```sh
+make test:integration:vmm:elf VMM_KERNEL=/absolute/path/to/vmlinux
+```
+
+`VMM_KERNEL` defaults to `target/vmm/boot/x86_64/vmlinux`, where the kernel
+build slice publishes its artifact. The probe compares every segment with
+`readelf`, then a protected-mode guest sums the loaded span and reports it on
+an I/O port. A missing kernel or `/dev/kvm` fails rather than skips. It proves
+loading and guest visibility, not Linux execution: `boot_params`, initramfs,
+entry registers and the run loop are later slices.
 
 ## Build
 
