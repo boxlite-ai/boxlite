@@ -207,7 +207,7 @@ apps/e2e/
     ├── test_node_coverage.py        # Node SDK exec, copy, errors
     ├── test_go_entry.py             # Go SDK smoke
     ├── test_go_coverage.py          # Go SDK exec options, copy, errors
-    ├── test_images_catalog.py       # Image catalog: pull records it, delete removes it, admission refuses bad hosts
+    ├── test_images_catalog.py       # Image catalog via rt.images: booting records it, remove drops it, admission refuses bad hosts
     ├── test_c_entry.py              # C SDK smoke
     └── test_c_coverage.py           # C SDK exec, errors
 ```
