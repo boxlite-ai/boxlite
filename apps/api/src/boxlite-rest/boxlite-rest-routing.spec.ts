@@ -16,6 +16,8 @@ import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
+import { BoxliteImageController } from './boxlite-image.controller'
+import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 
 jest.mock('http-proxy-middleware', () => ({
@@ -31,9 +33,9 @@ describe('BoxLite REST routing', () => {
   let app: INestApplication
 
   async function startRoutingTestApp() {
-    const moduleRef = await Test.createTestingModule({
-      controllers: [BoxliteBoxController],
-      providers: [
+    await startApp(
+      [BoxliteBoxController],
+      [
         {
           provide: BoxService,
           useValue: {
@@ -50,7 +52,11 @@ describe('BoxLite REST routing', () => {
           useValue: {},
         },
       ],
-    })
+    )
+  }
+
+  async function startApp(controllers: any[], providers: any[]) {
+    const moduleRef = await Test.createTestingModule({ controllers, providers })
       .overrideGuard(CombinedAuthGuard)
       .useValue({
         canActivate: (context: any) => {
@@ -95,6 +101,34 @@ describe('BoxLite REST routing', () => {
     expect(await canonical.json()).toEqual({ boxes: [] })
     expect(legacy.status).toBe(200)
     expect(await legacy.json()).toEqual({ boxes: [] })
+  })
+
+  it('answers image usage on its own route, with or without a routing prefix', async () => {
+    const catalog = {
+      usage: jest.fn().mockResolvedValue({ count: 1, limit: 20, knownBytes: 0 }),
+      get: jest.fn(),
+    }
+    await startApp([BoxliteImageController], [{ provide: ImageCatalogService, useValue: catalog }])
+
+    for (const path of ['/api/v1/images/usage', '/api/v1/default/images/usage']) {
+      const response = await get(path)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ count: 1, limit: 20, known_bytes: 0 })
+    }
+    // Declared after `usage`, `:name` would have read "usage" as an image.
+    expect(catalog.get).not.toHaveBeenCalled()
+  })
+
+  it('takes an encoded image name as one path parameter', async () => {
+    const catalog = {
+      get: jest.fn().mockResolvedValue({ name: 'quay.io/acme/app', tags: [], curated: false, versions: [] }),
+    }
+    await startApp([BoxliteImageController], [{ provide: ImageCatalogService, useValue: catalog }])
+
+    const response = await get('/api/v1/images/quay.io%2Facme%2Fapp')
+
+    expect(response.status).toBe(200)
+    expect(catalog.get).toHaveBeenCalledWith({ id: 'org-123' }, 'quay.io/acme/app')
   })
 
   it('matches websocket attach upgrades with or without a routing prefix', () => {

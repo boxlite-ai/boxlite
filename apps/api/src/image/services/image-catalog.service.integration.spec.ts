@@ -122,6 +122,27 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
 
   const ownImages = async (organization = ORG) => (await catalog.list(organization)).filter((image) => !image.curated)
 
+  it('lists each tag at the version it points to, then an untagged version by digest', async () => {
+    await use('quay.io/acme/app:v1')
+    await use('quay.io/acme/app:v2', { digest: OTHER_DIGEST, sizeBytes: 1024 })
+    await use(`quay.io/acme/pinned@${DIGEST}`)
+    await use('quay.io/acme/mixed:v1')
+    await use(`quay.io/acme/mixed@${OTHER_DIGEST}`, { digest: OTHER_DIGEST, sizeBytes: 1024 })
+    await use('quay.io/acme/elsewhere:v1', { org: OTHER_ORG_ID })
+
+    const references = await catalog.listReferences(ORG)
+
+    expect(references.map(({ reference, tag, digest, sizeBytes }) => ({ reference, tag, digest, sizeBytes }))).toEqual([
+      { reference: 'quay.io/acme/app:v1', tag: 'v1', digest: DIGEST, sizeBytes: 4096 },
+      { reference: 'quay.io/acme/app:v2', tag: 'v2', digest: OTHER_DIGEST, sizeBytes: 1024 },
+      { reference: 'quay.io/acme/mixed:v1', tag: 'v1', digest: DIGEST, sizeBytes: 4096 },
+      { reference: `quay.io/acme/mixed@${OTHER_DIGEST}`, tag: '<none>', digest: OTHER_DIGEST, sizeBytes: 1024 },
+      { reference: `quay.io/acme/pinned@${DIGEST}`, tag: '<none>', digest: DIGEST, sizeBytes: 4096 },
+    ])
+    expect(references[0].name).toBe('quay.io/acme/app')
+    expect(references[0].recordedAt).toBeInstanceOf(Date)
+  })
+
   it('lists an image with the tags, version count and size recorded for it', async () => {
     await use('quay.io/acme/app:v1')
     await use('quay.io/acme/app:v2', { digest: OTHER_DIGEST, sizeBytes: 1024 })

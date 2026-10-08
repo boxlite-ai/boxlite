@@ -1103,83 +1103,87 @@ paths:
   # -------------------------------------------------------------------------
   # Images
   # -------------------------------------------------------------------------
-  /{prefix}/images/pull:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-    post:
-      operationId: pullImage
-      summary: Pull a container image
-      description: |
-        Pulls a container image from a registry and caches it locally.
-        Returns 200 with image info when the pull completes.
-      tags: [Images]
-      parameters:
-        - $ref: "#/components/parameters/idempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PullImageRequest"
-      responses:
-        "200":
-          description: Image pulled and cached
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ImageInfo"
-        "422":
-          $ref: "#/components/responses/UnprocessableEntityError"
-
   /{prefix}/images:
     parameters:
       - $ref: "#/components/parameters/prefix"
     get:
       operationId: listImages
-      summary: List cached images
-      description: Returns a paginated list of locally cached container images.
+      summary: List images
+      description: |
+        The images this deployment can boot from, one entry per reference:
+        each tag at the build it points to, and each build no tag points to
+        by its digest. A single-host server answers from its image cache; a
+        server shared between callers answers from the caller's catalog. A
+        server may answer every entry at once, leaving `next_page_token` out.
       tags: [Images]
       parameters:
         - $ref: "#/components/parameters/pageSize"
         - $ref: "#/components/parameters/pageToken"
       responses:
         "200":
-          description: List of cached images
+          description: Images the caller can boot from
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ListImagesResponse"
 
-  /{prefix}/images/{image_id}:
+  /{prefix}/images/usage:
     parameters:
       - $ref: "#/components/parameters/prefix"
-      - $ref: "#/components/parameters/imageId"
-
     get:
-      operationId: getImage
-      summary: Get image details
-      description: Returns metadata for a cached image by its manifest digest.
+      operationId: getImageUsage
+      summary: Get image usage
+      description: |
+        How many images the routing slot holds against the most it may hold.
+        A server with no such limit answers `UnsupportedError`.
       tags: [Images]
       responses:
         "200":
-          description: Image details
+          description: Images held and the limit
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ImageInfo"
+                $ref: "#/components/schemas/ImageUsage"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+
+  /{prefix}/images/{image_name}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/imageName"
+
+    get:
+      operationId: getImage
+      summary: Get an image
+      description: Every build held under an image name.
+      tags: [Images]
+      responses:
+        "200":
+          description: The image and its builds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageDetail"
         "404":
           $ref: "#/components/responses/NotFoundError"
 
-    head:
-      operationId: imageExists
-      summary: Check if an image is cached
-      description: Returns 204 if the image exists in the local cache, 404 if not.
+    delete:
+      operationId: removeImage
+      summary: Remove an image
+      description: |
+        Stop holding an image name, every tag of it. Layers are not deleted.
+        A server refuses with `InvalidStateError` while a box can still boot
+        from the image.
       tags: [Images]
       responses:
         "204":
-          description: Image exists
+          description: The image is no longer held
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
-          description: Image not found
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
 
 # ===========================================================================
 # Components
@@ -1281,14 +1285,16 @@ components:
         type: string
       example: exec-01HJK5ABCDEF
 
-    imageId:
-      name: image_id
+    imageName:
+      name: image_name
       in: path
       required: true
-      description: Image manifest digest (e.g., `sha256:abc123...`)
+      description: |
+        Registry and repository, without a tag or digest. It has slashes, so
+        it is sent URL-encoded as one segment.
       schema:
         type: string
-      example: "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
+      example: "quay.io%2Facme%2Fapp"
 
     volumeId:
       name: volume_id
@@ -2527,7 +2533,7 @@ components:
     # =======================================================================
     ImageInfo:
       type: object
-      description: Cached container image metadata (maps to ImageInfo)
+      description: One reference a server holds (maps to ImageInfo)
       required: [reference, repository, tag, id, cached_at]
       properties:
         reference:
@@ -2549,20 +2555,67 @@ components:
         cached_at:
           type: string
           format: date-time
-          description: When the image was pulled into the local cache
+          description: When the build this reference names was recorded
         size_bytes:
           type: integer
           nullable: true
           description: Image size in bytes
 
-    PullImageRequest:
+    ImageDetail:
       type: object
-      required: [reference]
+      description: An image name and every build held under it (maps to ImageDetail)
+      required: [name, tags, curated, versions]
       properties:
-        reference:
+        name:
           type: string
-          description: Image reference to pull from registry
-          example: python:3.11-slim
+          description: Registry and repository, without a tag
+          example: quay.io/acme/app
+        tags:
+          type: array
+          items:
+            type: string
+        curated:
+          type: boolean
+          description: Provided by the operator rather than recorded from a pull
+        versions:
+          type: array
+          description: Each build held, newest first
+          items:
+            $ref: "#/components/schemas/ImageVersion"
+
+    ImageVersion:
+      type: object
+      required: [digest, source_ref, recorded_at]
+      properties:
+        digest:
+          type: string
+          description: Manifest digest
+        size_bytes:
+          type: integer
+          nullable: true
+          description: Sum of the layer sizes the manifest declares, when known
+        source_ref:
+          type: string
+          description: The reference that was pulled to get this build
+        recorded_at:
+          type: string
+          format: date-time
+
+    ImageUsage:
+      type: object
+      required: [count, limit, known_bytes]
+      properties:
+        count:
+          type: integer
+          description: Images held
+        limit:
+          type: integer
+          description: Most images the routing slot may hold
+        known_bytes:
+          type: integer
+          description: |
+            Sum of the sizes the held builds' manifests declare. Not the bytes
+            stored: a layer two builds share is counted for each.
 
     ListImagesResponse:
       type: object
