@@ -16,6 +16,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
 - [Runtime Management](#runtime-management)
   - [BoxliteRuntime](#boxliteruntime)
   - [ImageHandle](#imagehandle)
+  - [RegistryHandle](#registryhandle)
   - [BoxliteOptions](#boxliteoptions)
 - [Box Handle](#box-handle)
   - [LiteBox](#litebox)
@@ -99,6 +100,7 @@ let runtime = BoxliteRuntime::default_runtime();
 | `metrics` | `async fn metrics(&self) -> RuntimeMetrics` | Get runtime-wide metrics |
 | `remove` | `async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()>` | Remove box completely |
 | `images` | `fn images(&self) -> BoxliteResult<ImageHandle>` | The images this runtime can boot from; never fails |
+| `registries` | `fn registries(&self) -> BoxliteResult<RegistryHandle>` | The server's registry logins; `Unsupported` on an embedded runtime |
 
 #### Example
 
@@ -155,6 +157,42 @@ for image in images.list().await? {
 let detail = images.get("docker.io/library/alpine").await?;
 println!("{:?}", detail.tags);
 images.remove("docker.io/library/alpine").await?;
+```
+
+### RegistryHandle
+
+The logins a REST server presents when it pulls a private image for a box.
+Obtained with `runtime.registries()?`, which an embedded runtime refuses with
+`Unsupported`: it pulls with the logins in `BoxliteOptions::image_registries`.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `list` | `async fn list(&self) -> BoxliteResult<Vec<RegistryCredential>>` | Every login the organization holds, oldest first |
+| `create` | `async fn create(&self, credential: &NewRegistryCredential) -> BoxliteResult<RegistryCredential>` | Add a login; `AlreadyExists` while one is held for the same registry and prefix |
+| `remove` | `async fn remove(&self, id: &str) -> BoxliteResult<()>` | Remove a login; `InvalidState`, naming the boxes, while a box still pulls through it; `NotFound` for an unknown id |
+
+The password goes up once, in the create. `RegistryCredential` has no
+password field, and `NewRegistryCredential`'s `Debug` prints it as
+`[redacted]`. `repository_prefix` is whole path segments ending in `/`, or
+`None` for the whole registry. `remove` refuses an id that is not a UUID with
+`InvalidArgument` before sending a request.
+
+```rust
+use boxlite::runtime::NewRegistryCredential;
+
+let registries = runtime.registries()?;
+let login = registries
+    .create(&NewRegistryCredential {
+        registry_host: "ghcr.io".into(),
+        repository_prefix: Some("acme/".into()),
+        username: "acme-bot".into(),
+        password: std::env::var("GHCR_TOKEN")?,
+    })
+    .await?;
+for login in registries.list().await? {
+    println!("{}/{} as {}", login.registry_host, login.repository_prefix, login.username);
+}
+registries.remove(&login.id).await?;
 ```
 
 ### BoxliteOptions

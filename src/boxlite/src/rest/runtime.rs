@@ -14,13 +14,15 @@ use super::client::ApiClient;
 use super::litebox::RestBox;
 use super::options::BoxliteRestOptions;
 use super::types::{
-    BoxResponse, CreateBoxRequest, CreateVolumeRequest, ImageDetailResponse, ImageInfoResponse,
-    ImageUsageResponse, ListBoxesResponse, ListImagesResponse, ListVolumesResponse,
+    BoxResponse, CreateBoxRequest, CreateRegistryRequest, CreateVolumeRequest, ImageDetailResponse,
+    ImageInfoResponse, ImageUsageResponse, ListBoxesResponse, ListImagesResponse,
+    ListRegistriesResponse, ListVolumesResponse, RegistryCredentialResponse,
     RuntimeMetricsResponse, VolumeResponse,
 };
 use crate::images::ImageObject;
 use crate::runtime::auth::{AuthBackend, Principal};
 use crate::runtime::images::ImageBackend;
+use crate::runtime::registries::{NewRegistryCredential, RegistryBackend, RegistryCredential};
 use crate::runtime::types::{ImageDetail, ImageInfo, ImageUsage};
 use crate::runtime::volumes::VolumeBackend;
 use crate::volumes::VolumeInfo;
@@ -110,6 +112,31 @@ impl ImageBackend for RestRuntime {
             limit: resp.limit,
             known_bytes: resp.known_bytes,
         })
+    }
+}
+
+#[async_trait::async_trait]
+impl RegistryBackend for RestRuntime {
+    async fn list_registries(&self) -> BoxliteResult<Vec<RegistryCredential>> {
+        let resp: ListRegistriesResponse = self.client.get("/registries").await?;
+        Ok(resp
+            .registries
+            .into_iter()
+            .map(RegistryCredentialResponse::into_registry_credential)
+            .collect())
+    }
+
+    async fn create_registry(
+        &self,
+        credential: &NewRegistryCredential,
+    ) -> BoxliteResult<RegistryCredential> {
+        let request = CreateRegistryRequest::from_credential(credential);
+        let resp: RegistryCredentialResponse = self.client.post("/registries", &request).await?;
+        Ok(resp.into_registry_credential())
+    }
+
+    async fn remove_registry(&self, id: &str) -> BoxliteResult<()> {
+        self.client.delete(&format!("/registries/{id}")).await
     }
 }
 
@@ -1070,6 +1097,176 @@ mod tests {
             .remove("quay.io/acme/app:v1")
             .await
             .unwrap_err();
+
+        assert!(matches!(error, BoxliteError::InvalidArgument(_)), "{error}");
+    }
+
+    const LOGIN_ID: &str = "0aaa0000-0000-4000-8000-000000000001";
+    const LOGINS: &str = r#"{"registries":[{"id":"0aaa0000-0000-4000-8000-000000000001","registry_host":"ghcr.io","repository_prefix":"acme/","username":"acme-bot","created_by":null,"created_at":"2026-01-02T03:04:05.000Z"}]}"#;
+    /// A login as a broken server might answer a create: with the password.
+    const LOGIN_WITH_PASSWORD: &str = r#"{"password":"echoed-by-a-broken-server","id":"0aaa0000-0000-4000-8000-000000000001","registry_host":"ghcr.io","repository_prefix":"acme/","username":"acme-bot","created_by":null,"created_at":"2026-01-02T03:04:05.000Z"}"#;
+
+    fn registries_on(port: u16) -> crate::runtime::RegistryHandle {
+        crate::BoxliteRuntime::rest(BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+            .unwrap()
+            .registries()
+            .unwrap()
+    }
+
+    fn new_login() -> crate::runtime::NewRegistryCredential {
+        crate::runtime::NewRegistryCredential {
+            registry_host: "ghcr.io".into(),
+            repository_prefix: Some("acme/".into()),
+            username: "acme-bot".into(),
+            password: "ghp_not-a-real-token".into(),
+        }
+    }
+
+    /// Answers one request with `(status, body)` and returns its request line
+    /// and body.
+    async fn recording_server(
+        status: u16,
+        body: &'static str,
+    ) -> (u16, tokio::task::JoinHandle<(String, String)>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                head.push(socket.read_u8().await.unwrap());
+            }
+            let head = String::from_utf8(head).unwrap();
+            let length = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            let mut request_body = vec![0; length];
+            socket.read_exact(&mut request_body).await.unwrap();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            (
+                head.lines().next().unwrap().to_string(),
+                String::from_utf8(request_body).unwrap(),
+            )
+        });
+        (port, server)
+    }
+
+    #[tokio::test]
+    async fn registries_list_reads_each_login() {
+        let (port, server) = json_server(vec![LOGINS]).await;
+
+        let logins = registries_on(port).list().await.unwrap();
+
+        assert_eq!(server.await.unwrap(), ["GET /v1/registries HTTP/1.1"]);
+        assert_eq!(logins.len(), 1);
+        assert_eq!(logins[0].id, LOGIN_ID);
+        assert_eq!(logins[0].registry_host, "ghcr.io");
+        assert_eq!(logins[0].repository_prefix, "acme/");
+        assert_eq!(logins[0].username, "acme-bot");
+        assert_eq!(logins[0].created_by, None);
+        assert_eq!(
+            logins[0].created_at.to_rfc3339(),
+            "2026-01-02T03:04:05+00:00"
+        );
+    }
+
+    /// The password goes up in the body, and a server that sent it back would
+    /// still not have it handed on: the login's type has no field for it.
+    #[tokio::test]
+    async fn registries_create_sends_the_login_and_reads_it_back_without_its_password() {
+        let (port, server) = recording_server(201, LOGIN_WITH_PASSWORD).await;
+
+        let created = registries_on(port).create(&new_login()).await.unwrap();
+
+        let (request_line, request_body) = server.await.unwrap();
+        assert_eq!(request_line, "POST /v1/registries HTTP/1.1");
+        let sent: serde_json::Value = serde_json::from_str(&request_body).unwrap();
+        assert_eq!(
+            sent,
+            serde_json::json!({"registry_host": "ghcr.io", "repository_prefix": "acme/",
+                               "username": "acme-bot", "password": "ghp_not-a-real-token"})
+        );
+        assert_eq!(created.id, LOGIN_ID);
+        let handed_on = serde_json::to_string(&created).unwrap();
+        assert!(!handed_on.contains("password"), "{handed_on}");
+        assert!(!format!("{created:?}").contains("echoed-by-a-broken-server"));
+    }
+
+    #[tokio::test]
+    async fn registries_create_for_a_held_prefix_is_already_exists() {
+        let (port, _server) = http_server(vec![(
+            409,
+            r#"{"statusCode":409,"message":"A credential for ghcr.io/acme/ already exists","code":"already_exists"}"#,
+        )])
+        .await;
+
+        let error = registries_on(port).create(&new_login()).await.unwrap_err();
+
+        assert!(matches!(error, BoxliteError::AlreadyExists(_)), "{error}");
+    }
+
+    /// A deployment without private registries answers 501 with a code, so the
+    /// caller reads a feature this server lacks, not a server fault.
+    #[tokio::test]
+    async fn registries_create_where_private_registries_are_off_is_unsupported() {
+        let (port, _server) = http_server(vec![(
+            501,
+            r#"{"statusCode":501,"message":"Private registries are not enabled in this deployment","code":"unsupported"}"#,
+        )])
+        .await;
+
+        let error = registries_on(port).create(&new_login()).await.unwrap_err();
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error}");
+    }
+
+    #[tokio::test]
+    async fn registries_remove_deletes_the_login_by_id() {
+        let (port, server) = http_server(vec![(204, "")]).await;
+
+        registries_on(port).remove(LOGIN_ID).await.unwrap();
+
+        assert_eq!(
+            server.await.unwrap(),
+            [format!("DELETE /v1/registries/{LOGIN_ID} HTTP/1.1")]
+        );
+    }
+
+    /// The server refuses while a box still pulls through the login, naming it.
+    #[tokio::test]
+    async fn registries_remove_of_a_login_in_use_is_invalid_state() {
+        let (port, _server) = http_server(vec![(
+            409,
+            r#"{"statusCode":409,"message":"Registry credential cannot be removed while 1 box(es) pull through it: box-1"}"#,
+        )])
+        .await;
+
+        let error = registries_on(port).remove(LOGIN_ID).await.unwrap_err();
+
+        assert!(matches!(error, BoxliteError::InvalidState(_)), "{error}");
+        assert!(error.to_string().contains("box-1"), "{error}");
+    }
+
+    /// An id becomes a URL segment, so one that is not a UUID is refused
+    /// before a request could reach another route.
+    #[tokio::test]
+    async fn registries_remove_refuses_an_id_that_is_not_a_uuid_without_a_request() {
+        let error = registries_on(1).remove("../images").await.unwrap_err();
 
         assert!(matches!(error, BoxliteError::InvalidArgument(_)), "{error}");
     }
