@@ -38,7 +38,7 @@ implementation currently serves all 26 paths:
 
 | Server | Serves | Does not serve |
 |--------|--------|----------------|
-| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | `network/tunnel`, the three `images/*` paths. Volume routes are registered but every operation answers `400 UnsupportedError` |
+| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | `network/tunnel`. Volume routes are registered but every operation answers `400 UnsupportedError`, as does `images/usage` |
 | reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, `network/tunnel`, attach, and `DELETE …/executions/{exec_id}` (kill) |
 
 Read each server's routes rather than either README — both under-report.
