@@ -5,9 +5,9 @@ use boxlite::litebox::copy::CopyOptions;
 use boxlite::runtime::advanced_options::{HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, InboundNetworkConfig,
-    NetworkMode, NetworkSpec, OutboundNetworkConfig, PortProtocol, PortSpec, RegistryTransport,
-    RootfsSpec, VolumeSpec,
+    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, InboundNetworkConfig, MountSpec,
+    MountType, NetworkMode, NetworkSpec, OutboundNetworkConfig, PortProtocol, PortSpec,
+    RegistryTransport, RootfsSpec, VolumeSpec,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -541,6 +541,7 @@ pub(crate) struct PyBoxOptions {
     #[pyo3(get, set)]
     pub(crate) env: Vec<(String, String)>,
     pub(crate) volumes: Vec<PyVolumeSpec>,
+    pub(crate) mounts: Vec<PyMountSpec>,
     #[pyo3(get, set)]
     pub(crate) network: Option<PyNetworkSpec>,
     pub(crate) ports: Vec<PyPortSpec>,
@@ -597,6 +598,7 @@ impl PyBoxOptions {
         working_dir=None,
         env=vec![],
         volumes=vec![],
+        mounts=vec![],
         network=None,
         ports=vec![],
         auto_remove=None,
@@ -621,6 +623,7 @@ impl PyBoxOptions {
         working_dir: Option<String>,
         env: Vec<(String, String)>,
         volumes: Vec<PyVolumeSpec>,
+        mounts: Vec<PyMountSpec>,
         network: Option<PyNetworkSpec>,
         ports: Vec<PyPortSpec>,
         auto_remove: Option<bool>,
@@ -644,6 +647,7 @@ impl PyBoxOptions {
             working_dir,
             env,
             volumes,
+            mounts,
             network,
             ports,
             auto_remove,
@@ -680,6 +684,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
         let auto_remove = py_opts.auto_remove;
         let auto_delete = py_opts.auto_delete;
         let volumes = py_opts.volumes.into_iter().map(VolumeSpec::from).collect();
+        let mounts = py_opts.mounts.into_iter().map(MountSpec::from).collect();
 
         let (network, inbound_network) = match py_opts.network {
             Some(spec) => <(NetworkSpec, NetworkSpec)>::try_from(spec)?,
@@ -708,6 +713,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
             env: py_opts.env,
             rootfs,
             volumes,
+            mounts,
             network,
             inbound_network,
             ports,
@@ -892,6 +898,91 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
         Err(PyRuntimeError::new_err(
             "volumes entries must be tuple or dict",
         ))
+    }
+}
+
+/// Parse a mount's `type` with the core's spelling rules and message.
+fn parse_mount_type(value: &str) -> PyResult<MountType> {
+    value.parse::<MountType>().map_err(crate::util::map_err)
+}
+
+/// One entry of the `mounts=` argument, before it becomes a [`MountSpec`]:
+/// a dict with the MountSpec keys; a `Mount` class is not there yet(TODO).
+#[derive(Clone, Debug)]
+pub(crate) struct PyMountSpec {
+    mount_type: MountType,
+    source: Option<String>,
+    target: String,
+    read_only: bool,
+    sub_path: Option<String>,
+}
+
+impl From<PyMountSpec> for MountSpec {
+    fn from(mount: PyMountSpec) -> Self {
+        // Carried over as given: whether the fields fit the type is
+        // `MountSpec::validate`'s to decide, at create.
+        MountSpec {
+            mount_type: mount.mount_type,
+            source: mount.source,
+            target: mount.target,
+            read_only: mount.read_only,
+            sub_path: mount.sub_path,
+        }
+    }
+}
+
+impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyMountSpec {
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let Ok(dict) = ob.cast::<PyDict>() else {
+            return Err(PyRuntimeError::new_err("mounts entries must be dicts"));
+        };
+
+        // Unknown keys are an error, not noise: Docker's `readonly` or a
+        // misspelt `read_only` would otherwise hand back a writable mount to a
+        // caller who asked for a read-only one.
+        const KEYS: [&str; 5] = ["type", "source", "target", "read_only", "sub_path"];
+        for key in dict.keys() {
+            let key: String = key.extract()?;
+            if !KEYS.contains(&key.as_str()) {
+                return Err(PyRuntimeError::new_err(format!(
+                    "unknown mount dict key {key:?}; expected one of {}",
+                    KEYS.join(", ")
+                )));
+            }
+        }
+
+        // Every key is a `str` by now, so a lookup cannot raise; `?` still
+        // surfaces one rather than reading it as an absent key.
+        let mount_type = match dict.get_item("type")? {
+            Some(value) => parse_mount_type(&value.extract::<String>()?)?,
+            None => return Err(PyRuntimeError::new_err("mount dict missing type")),
+        };
+        let target: String = match dict.get_item("target")? {
+            Some(value) => value.extract()?,
+            None => return Err(PyRuntimeError::new_err("mount dict missing target")),
+        };
+        let source: Option<String> = match dict.get_item("source")? {
+            Some(value) => value.extract()?,
+            None => None,
+        };
+        let read_only: bool = match dict.get_item("read_only")? {
+            Some(value) => value.extract()?,
+            None => false,
+        };
+        let sub_path: Option<String> = match dict.get_item("sub_path")? {
+            Some(value) => value.extract()?,
+            None => None,
+        };
+
+        Ok(PyMountSpec {
+            mount_type,
+            source,
+            target,
+            read_only,
+            sub_path,
+        })
     }
 }
 
@@ -1191,6 +1282,7 @@ mod tests {
             working_dir: None,
             env: vec![],
             volumes: vec![],
+            mounts: vec![],
             network: None,
             ports: vec![],
             auto_remove: None,
@@ -1219,6 +1311,7 @@ mod tests {
             working_dir: None,
             env: vec![],
             volumes: vec![],
+            mounts: vec![],
             network: None,
             ports: vec![],
             auto_remove: None,
@@ -1404,6 +1497,131 @@ mod tests {
             assert_eq!(spec.managed_volume, None);
             assert_eq!(spec.host_path, "/tmp/data");
             assert_eq!(spec.guest_path, "/data");
+        });
+    }
+
+    /// A dict with the MountSpec design's keys, as the SDK and the wire(TODO) spell
+    /// them, becomes the core spec field for field.
+    fn design_mount_dict(py: Python<'_>) -> Bound<'_, PyDict> {
+        let dict = PyDict::new(py);
+        dict.set_item("type", "volume").unwrap();
+        dict.set_item("source", "run42").unwrap();
+        dict.set_item("target", "/workspace").unwrap();
+        dict.set_item("read_only", true).unwrap();
+        dict.set_item("sub_path", "foo/bar").unwrap();
+        dict
+    }
+
+    fn design_mount_spec() -> MountSpec {
+        MountSpec {
+            read_only: true,
+            sub_path: Some("foo/bar".to_string()),
+            ..MountSpec::volume_mount("run42", "/workspace")
+        }
+    }
+
+    #[test]
+    fn py_mount_dict_uses_the_design_keys() {
+        Python::attach(|py| {
+            let spec = MountSpec::from(design_mount_dict(py).extract::<PyMountSpec>().unwrap());
+            assert_eq!(spec, design_mount_spec());
+        });
+    }
+
+    /// A misspelt `type` in a dict fails before the spec reaches the core.
+    #[test]
+    fn py_mount_dict_type_is_checked() {
+        Python::attach(|py| {
+            let dict = design_mount_dict(py);
+            dict.set_item("type", "volme").unwrap();
+            let error = dict.extract::<PyMountSpec>().unwrap_err();
+            assert!(error.to_string().contains("unknown mount type"), "{error}");
+        });
+    }
+
+    /// Unknown keys are refused, including the draft's `mount_type` and
+    /// Docker's spellings: dropping `readonly` would hand back a writable mount.
+    #[test]
+    fn py_mount_dict_rejects_unknown_keys() {
+        Python::attach(|py| {
+            for key in ["mount_type", "readonly", "ro", "destination", "subpath"] {
+                let dict = design_mount_dict(py);
+                dict.set_item(key, "x").unwrap();
+
+                let error = dict.extract::<PyMountSpec>().unwrap_err();
+                let message = error.to_string();
+                assert!(
+                    message.contains("unknown mount dict key"),
+                    "{key}: {message}"
+                );
+                assert!(message.contains(key), "{key}: {message}");
+            }
+        });
+    }
+
+    #[test]
+    fn py_mount_dict_requires_type_and_target() {
+        Python::attach(|py| {
+            for (missing, expected) in [
+                ("type", "mount dict missing type"),
+                ("target", "mount dict missing target"),
+            ] {
+                let dict = design_mount_dict(py);
+                dict.del_item(missing).unwrap();
+
+                let error = dict.extract::<PyMountSpec>().unwrap_err();
+                assert!(error.to_string().contains(expected), "{error}");
+            }
+        });
+    }
+
+    /// Omitted keys mean writable and the whole volume; a missing source is
+    /// carried as `None` for `MountSpec::validate` to refuse at create.
+    #[test]
+    fn py_mount_dict_omitted_keys_keep_their_defaults() {
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("type", "volume").unwrap();
+            dict.set_item("target", "/workspace").unwrap();
+
+            let spec = MountSpec::from(dict.extract::<PyMountSpec>().unwrap());
+            assert_eq!(spec.source, None);
+            assert!(!spec.read_only);
+            assert_eq!(spec.sub_path, None);
+        });
+    }
+
+    #[test]
+    fn py_mounts_entries_must_be_dicts() {
+        Python::attach(|py| {
+            let tuple = PyTuple::new(py, ["run42", "/workspace"]).unwrap();
+            let error = tuple.extract::<PyMountSpec>().unwrap_err();
+            assert!(error.to_string().contains("must be dicts"), "{error}");
+        });
+    }
+
+    /// `BoxOptions(mounts=...)` fills core `mounts` and leaves `volumes` to
+    /// `volumes=`, so the two lists never rewrite each other's entries.
+    #[test]
+    fn py_box_options_take_mounts_beside_volumes() {
+        Python::attach(|py| {
+            let kwargs = PyDict::new(py);
+            kwargs
+                .set_item("mounts", vec![design_mount_dict(py)])
+                .unwrap();
+            kwargs
+                .set_item("volumes", vec![("/tmp/in", "/in")])
+                .unwrap();
+
+            let options = py
+                .get_type::<PyBoxOptions>()
+                .call((), Some(&kwargs))
+                .expect("BoxOptions accepts mounts=");
+            let options = BoxOptions::try_from(options.extract::<PyBoxOptions>().unwrap()).unwrap();
+
+            assert_eq!(options.mounts, vec![design_mount_spec()]);
+            assert_eq!(options.volumes.len(), 1);
+            assert_eq!(options.volumes[0].host_path, "/tmp/in");
         });
     }
 
