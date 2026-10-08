@@ -25,7 +25,9 @@ pub use advanced_options::{JsAdvancedBoxOptions, JsContainerCapabilities, JsSecu
 pub use box_handle::JsBox;
 pub use copy::JsCopyOptions;
 pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution};
-pub use images::{JsImageHandle, JsImageInfo, JsImagePullResult};
+pub use images::{
+    JsImageDetail, JsImageHandle, JsImageInfo, JsImagePullResult, JsImageUsage, JsImageVersion,
+};
 pub use info::{
     JsBoxInfo, JsBoxStateInfo, JsHealthState, JsHealthStatus, JsNetworkInfo, JsPublishedPort,
 };

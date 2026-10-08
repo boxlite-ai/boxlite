@@ -12,7 +12,13 @@ from typing import TYPE_CHECKING, Optional
 from greenlet import greenlet
 
 if TYPE_CHECKING:
-    from ..boxlite import Boxlite, BoxOptions, Options, RuntimeMetrics
+    from ..boxlite import (
+        Boxlite,
+        BoxliteRestOptions,
+        BoxOptions,
+        Options,
+        RuntimeMetrics,
+    )
     from ._box import SyncBox
     from ._images import SyncImageHandle
 
@@ -66,8 +72,11 @@ class SyncBoxlite:
         """
         from ..boxlite import Boxlite
 
-        self._boxlite = Boxlite(options)
+        self._adopt(Boxlite(options))
 
+    def _adopt(self, boxlite: "Boxlite") -> None:
+        """Wrap an async runtime; the dispatcher starts on __enter__/start()."""
+        self._boxlite = boxlite
         self._loop: asyncio.AbstractEventLoop = None
         self._dispatcher_fiber: greenlet = None
         self._own_loop = False
@@ -224,18 +233,31 @@ class SyncBoxlite:
                 box = runtime.create(BoxOptions(image="alpine:latest"))
                 ...
         """
-        instance = object.__new__(SyncBoxlite)
-
         from ..boxlite import Boxlite
 
-        instance._boxlite = Boxlite.default()
+        return SyncBoxlite._around(Boxlite.default())
 
-        instance._loop = None
-        instance._dispatcher_fiber = None
-        instance._own_loop = False
-        instance._sync_helper = None
-        instance._started = False
+    @staticmethod
+    def rest(options: "BoxliteRestOptions") -> "SyncBoxlite":
+        """
+        Create a SyncBoxlite on a remote BoxLite server.
 
+        Mirrors async Boxlite.rest(): boxes and images are the server's.
+
+        Example:
+            with SyncBoxlite.rest(BoxliteRestOptions.from_env()) as runtime:
+                for image in runtime.images.list():
+                    ...
+        """
+        from ..boxlite import Boxlite
+
+        return SyncBoxlite._around(Boxlite.rest(options))
+
+    @staticmethod
+    def _around(boxlite: "Boxlite") -> "SyncBoxlite":
+        """A SyncBoxlite over an existing async runtime, not yet started."""
+        instance = object.__new__(SyncBoxlite)
+        instance._adopt(boxlite)
         return instance
 
     def _require_started(self) -> None:

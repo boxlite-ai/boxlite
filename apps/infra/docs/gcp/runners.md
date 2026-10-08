@@ -14,6 +14,8 @@ Development binaries live in the stage's GCS artifact bucket.
 
 mdeploy creates an OS Config policy assignment with a one-host disruption budget. Existing hosts
 retain their disks, image caches and local box state; boot-image/startup changes do not replace them.
+A second policy converges the few unit-environment keys a deploy can move — the API address, the volume
+backend and the registry proxy's host — onto hosts booted before them.
 Pulumi completion means the policy exists; agents converge asynchronously.
 
 `runner:update` rewrites the fleet policy and waits for reports. It refuses `--host`;

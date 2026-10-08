@@ -25,6 +25,13 @@ import { WarmPoolEvents } from '../constants/warmpool-events.constants'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import {
+  warmPoolBoxWhere,
+  warmPoolRowWhere,
+  warmPoolSpecOfBox,
+  warmPoolSpecOfRow,
+  WarmPoolSpec,
+} from '../utils/warm-pool-spec.util'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
@@ -67,18 +74,7 @@ export class BoxWarmPoolService {
   async fetchWarmPoolBox(params: FetchWarmPoolBoxParams): Promise<Box | null> {
     //  check if box is warm pool
     const warmPoolItem = await this.warmPoolRepository.findOne({
-      where: {
-        image: params.image,
-        target: params.target,
-        class: params.class,
-        cpu: params.cpu,
-        mem: params.mem,
-        disk: params.disk,
-        gpu: params.gpu,
-        osUser: params.osUser,
-        env: params.env,
-        pool: MoreThan(0),
-      },
+      where: { ...warmPoolRowWhere(params), pool: MoreThan(0) },
     })
     if (warmPoolItem) {
       const availabilityScoreThreshold = this.configService.getOrThrow<number>('runnerScore.thresholds.availability')
@@ -90,25 +86,26 @@ export class BoxWarmPoolService {
         .where('runner.region = :region')
         .andWhere('(runner.unschedulable = true OR runner.availabilityScore < :scoreThreshold)')
 
+      const spec = warmPoolSpecOfRow(warmPoolItem)
       const queryBuilder = this.boxRepository
         .createQueryBuilder('box')
-        .where('box.image = :image', { image: warmPoolItem.image })
-        .andWhere('box.class = :class', { class: warmPoolItem.class })
-        .andWhere('box.cpu = :cpu', { cpu: warmPoolItem.cpu })
-        .andWhere('box.mem = :mem', { mem: warmPoolItem.mem })
-        .andWhere('box.disk = :disk', { disk: warmPoolItem.disk })
-        .andWhere('box.osUser = :osUser', { osUser: warmPoolItem.osUser })
-        .andWhere('box.env = :env', { env: warmPoolItem.env })
-        .andWhere('box.organizationId = :organizationId', {
+        .where('box.organizationId = :organizationId', {
           organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
         })
-        .andWhere('box.region = :region', { region: warmPoolItem.target })
         .andWhere('box.state = :state', { state: BoxState.STARTED })
         .andWhere(`box.runnerId NOT IN (${excludedRunnersSubquery.getQuery()})`)
-        .setParameters({
-          region: warmPoolItem.target,
-          scoreThreshold: availabilityScoreThreshold,
-        })
+        // The subquery reads `:region` too, and it names that parameter rather
+        // than building it from the tuple. The loop below binds it as well —
+        // to the same value, since both come from `spec` — but binding it here
+        // is what keeps renaming a tuple field from breaking the exclusion at
+        // runtime and nowhere else. Neither binding is redundant on its own.
+        .setParameters({ region: spec.target, scoreThreshold: availabilityScoreThreshold })
+      // The tuple, one column per entry, from the same place the pool row was
+      // found with. A query builder is needed here for the runner-exclusion
+      // subquery, which a find-options where cannot express.
+      for (const [column, value] of Object.entries(warmPoolBoxWhere(spec))) {
+        queryBuilder.andWhere(`box.${column} = :${column}`, { [column]: value })
+      }
 
       const candidateLimit = this.configService.getOrThrow<number>('warmPool.candidateLimit')
       const warmPoolBoxes = await queryBuilder.orderBy('RANDOM()').take(candidateLimit).getMany()
@@ -134,6 +131,22 @@ export class BoxWarmPoolService {
     return null
   }
 
+  /**
+   * How many boxes a pool row currently has. Errored boxes do not count — the
+   * pool is short by one until they are cleaned up, which is what makes the
+   * top-up fire again.
+   */
+  private countPoolBoxes(spec: WarmPoolSpec): Promise<number> {
+    return this.boxRepository.count({
+      where: {
+        ...warmPoolBoxWhere(spec),
+        organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+        desiredState: BoxDesiredState.STARTED,
+        state: Not(In([BoxState.ERROR])),
+      },
+    })
+  }
+
   //  todo: make frequency configurable or more efficient
   @Cron(CronExpression.EVERY_10_SECONDS, { name: 'warm-pool-check' })
   @LogExecution('warm-pool-check')
@@ -148,22 +161,7 @@ export class BoxWarmPoolService {
           return
         }
 
-        const boxCount = await this.boxRepository.count({
-          where: {
-            organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
-            image: warmPoolItem.image,
-            class: warmPoolItem.class,
-            osUser: warmPoolItem.osUser,
-            env: warmPoolItem.env,
-            region: warmPoolItem.target,
-            cpu: warmPoolItem.cpu,
-            gpu: warmPoolItem.gpu,
-            mem: warmPoolItem.mem,
-            disk: warmPoolItem.disk,
-            desiredState: BoxDesiredState.STARTED,
-            state: Not(In([BoxState.ERROR])),
-          },
-        })
+        const boxCount = await this.countPoolBoxes(warmPoolSpecOfRow(warmPoolItem))
 
         const missingCount = warmPoolItem.pool - boxCount
         if (missingCount > 0) {
@@ -191,39 +189,14 @@ export class BoxWarmPoolService {
       return
     }
     const warmPoolItem = await this.warmPoolRepository.findOne({
-      where: {
-        image: event.box.image,
-        class: event.box.class,
-        cpu: event.box.cpu,
-        mem: event.box.mem,
-        disk: event.box.disk,
-        target: event.box.region,
-        env: event.box.env,
-        gpu: event.box.gpu,
-        osUser: event.box.osUser,
-      },
+      where: warmPoolRowWhere(warmPoolSpecOfBox(event.box)),
     })
 
     if (!warmPoolItem) {
       return
     }
 
-    const boxCount = await this.boxRepository.count({
-      where: {
-        organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
-        image: warmPoolItem.image,
-        class: warmPoolItem.class,
-        osUser: warmPoolItem.osUser,
-        env: warmPoolItem.env,
-        region: warmPoolItem.target,
-        cpu: warmPoolItem.cpu,
-        gpu: warmPoolItem.gpu,
-        mem: warmPoolItem.mem,
-        disk: warmPoolItem.disk,
-        desiredState: BoxDesiredState.STARTED,
-        state: Not(In([BoxState.ERROR])),
-      },
-    })
+    const boxCount = await this.countPoolBoxes(warmPoolSpecOfRow(warmPoolItem))
 
     if (warmPoolItem.pool <= boxCount) {
       return

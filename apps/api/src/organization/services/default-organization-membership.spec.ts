@@ -70,7 +70,6 @@ describe('default organization membership semantics', () => {
         maxCpuPerBox: 4,
         maxMemoryPerBox: 8,
         maxDiskPerBox: 10,
-        templateDeactivationTimeoutMinutes: 20160,
         boxLimitedNetworkEgress: false,
         authenticatedRateLimit: null,
         boxCreateRateLimit: null,

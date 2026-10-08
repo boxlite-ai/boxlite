@@ -11,6 +11,7 @@ import { AppService } from './app.service'
 import { UserModule } from './user/user.module'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { BoxModule } from './box/box.module'
+import { RegistryModule } from './registry/registry.module'
 import { AuthModule } from './auth/auth.module'
 import { ServeStaticModule } from '@nestjs/serve-static'
 import { join } from 'path'
@@ -174,6 +175,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     AuthModule,
     UserModule,
     BoxModule,
+    RegistryModule,
     ScheduleModule.forRoot(),
     UsageModule,
     AnalyticsModule,

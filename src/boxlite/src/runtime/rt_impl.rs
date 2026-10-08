@@ -1219,6 +1219,10 @@ impl RuntimeImpl {
     /// the canonical `boxes_dir/<box_id>` path. The box is persisted with the
     /// given `initial_status` (typically `Stopped` for clone/import operations).
     ///
+    /// `resolved_image` is what the staged disk was built from, when the caller
+    /// knows. It has to be passed in: the new box's first start reuses that
+    /// disk, and a start that reuses a disk records nothing of its own.
+    ///
     /// On failure, cleans up the allocated lock and box directory.
     pub(crate) async fn provision_box(
         self: &Arc<Self>,
@@ -1226,6 +1230,7 @@ impl RuntimeImpl {
         name: Option<String>,
         options: BoxOptions,
         initial_status: BoxStatus,
+        resolved_image: Option<crate::images::ResolvedImage>,
     ) -> BoxliteResult<LiteBox> {
         use crate::litebox::config::ContainerRuntimeConfig;
 
@@ -1257,6 +1262,7 @@ impl RuntimeImpl {
 
         let mut state = BoxState::new();
         state.set_status(initial_status);
+        state.resolved_image = resolved_image;
 
         let lock_id = self.lock_manager.allocate()?;
         state.set_lock_id(lock_id);
@@ -1862,6 +1868,32 @@ impl super::images::ImageBackend for LocalRuntime {
             ));
         }
         self.0.image_manager.list().await
+    }
+
+    async fn get_image(&self, name: &str) -> BoxliteResult<crate::runtime::types::ImageDetail> {
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot read images: runtime has been shut down".into(),
+            ));
+        }
+        self.0.image_manager.get(name).await
+    }
+
+    async fn remove_image(&self, name: &str) -> BoxliteResult<()> {
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot remove images: runtime has been shut down".into(),
+            ));
+        }
+        self.0.image_manager.remove(name).await
+    }
+
+    async fn image_usage(&self) -> BoxliteResult<crate::runtime::types::ImageUsage> {
+        Err(BoxliteError::Unsupported(
+            "image usage counts a server's catalog against its limit; \
+             an embedded runtime has a local cache with no limit"
+                .into(),
+        ))
     }
 }
 

@@ -158,6 +158,11 @@ for info in boxes:
 
 #### Runtime Image Management
 
+`runtime.images` holds the images a runtime can boot from: the local cache on
+an embedded runtime, the server's catalog on `Boxlite.rest(...)`. The same
+code runs against either; `pull` is local only (a REST runtime pulls when a
+box is created) and `usage` is REST only.
+
 ```python
 runtime = boxlite.Boxlite.default()
 
@@ -166,7 +171,14 @@ print(pull.reference, pull.config_digest, pull.layer_count)
 
 for image in await runtime.images.list():
     print(image.repository, image.tag, image.id)
+
+detail = await runtime.images.get("docker.io/library/alpine")
+print(detail.tags, [version.digest for version in detail.versions])
+await runtime.images.remove("docker.io/library/alpine")
 ```
+
+See [the Python reference](../../docs/reference/python/README.md#boxliteimagehandle)
+for each method on each runtime.
 
 ### Remote BoxLite server (REST)
 
@@ -819,6 +831,11 @@ from boxlite import BoxliteError, ExecError, TimeoutError, ParseError
 **TimeoutError** - Operation timed out
 
 **ParseError** - Failed to parse output
+
+**NotFoundError**, **InvalidStateError**, **UnsupportedError**, … - A failure
+the runtime reported, one class per kind, each with a `code` such as
+`not_found`. Every one is also a `RuntimeError`. The full list is in
+[the Python reference](../../docs/reference/python/README.md#runtime-failures).
 
 ### Common Error Patterns
 

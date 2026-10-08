@@ -288,8 +288,6 @@ export class RunnerService {
       ? params.excludedRunnerIds.filter((id) => !!id)
       : undefined
 
-    // TODO(image-rewrite): artifact-cache aware runner selection removed with
-    // runner_artifact_cache; runners are no longer filtered by which artifact they have cached.
     if (excludedRunnerIds?.length) {
       runnerFilter.id = Not(In(excludedRunnerIds))
     }
@@ -787,9 +785,6 @@ export class RunnerService {
 
     return availableRunners[randomIntFromInterval(0, availableRunners.length - 1)]
   }
-
-  // TODO(image-rewrite): the image based runner lookup helpers were
-  // removed with the image subsystem.
 
   async getRunnerApiVersion(runnerId: string): Promise<string> {
     const result = await this.runnerRepository.findOneOrFail({

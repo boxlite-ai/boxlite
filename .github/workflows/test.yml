@@ -7,7 +7,7 @@
 # - Rust: units and non-VM integration, with llvm-cov coverage
 # - Python: pytest with -m "not integration"
 # - Node.js: vitest unit project
-# - Go: SDK, networking bridge, and the runner; API: Jest with Postgres and Redis
+# - Go: SDK, networking bridge, the runner and the image service; API: Jest with Postgres and Redis
 # - Dashboard: vitest with jsdom, v8 coverage
 name: Test
 
@@ -38,6 +38,7 @@ on:
       - 'rust-toolchain.toml'
       - 'sdks/**'
       - 'apps/api/**'
+      - 'apps/image-service/**'
       - 'apps/dashboard/**'
       - 'apps/libs/api-client/**'
       - 'apps/runner/**'
@@ -182,6 +183,7 @@ jobs:
             go:
               - 'sdks/go/**/!(*.md)'
               - 'src/deps/libgvproxy-sys/**/!(*.md)'
+              - 'apps/image-service/**/!(*.md)'
               - 'apps/runner/**/!(*.md)'
               - 'apps/go.work'
               - 'apps/go.work.sum'
@@ -461,7 +463,7 @@ jobs:
 
       - uses: ./.github/actions/sccache
 
-      - name: Run Go SDK, networking, and runner tests with coverage
+      - name: Run Go SDK, networking, runner and image-service tests with coverage
         run: make coverage:go
 
       # coverage:go has already built the native library needed by both analyzers.
@@ -479,7 +481,7 @@ jobs:
       - name: Upload Go coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: target/coverage/go-sdk.out,target/coverage/gvproxy.out,target/coverage/runner.out
+          files: target/coverage/go-sdk.out,target/coverage/gvproxy.out,target/coverage/runner.out,target/coverage/image-service.out
           flags: go
           use_oidc: true
           disable_search: true

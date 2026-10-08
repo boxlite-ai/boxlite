@@ -102,6 +102,20 @@ type BoxInfo struct {
 	// int, because 0 is the exit code of every command that succeeded and so
 	// cannot double as "no exit code recorded".
 	ExitCode *int
+	// ResolvedImage is what Image resolved to when this box's disk was built —
+	// the build the box actually runs, where Image is the reference as given.
+	// Nil for a box booted from a local rootfs path, for one imported from an
+	// archive, for one whose disk predates the record, and from a backend that
+	// does not know it.
+	ResolvedImage *ResolvedImage
+}
+
+// ResolvedImage names an image build the way its registry does.
+type ResolvedImage struct {
+	// ManifestDigest is the registry's digest for the build.
+	ManifestDigest string
+	// TotalLayerSize is the declared on-registry size of its layers, in bytes.
+	TotalLayerSize int64
 }
 
 // Info returns information about the box.
@@ -224,6 +238,19 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 		StartedAt:      boxStartedAt,
 		LastActivityAt: boxLastActivityAt,
 		ExitCode:       boxExitCode,
+		ResolvedImage:  cResolvedImageToGo(info),
+	}
+}
+
+// cResolvedImageToGo reads the resolved image off a native BoxInfo; a null
+// digest means it is not known.
+func cResolvedImageToGo(info *C.CBoxInfo) *ResolvedImage {
+	if info.resolved_image_digest == nil {
+		return nil
+	}
+	return &ResolvedImage{
+		ManifestDigest: cString(info.resolved_image_digest),
+		TotalLayerSize: int64(info.resolved_image_size),
 	}
 }
 

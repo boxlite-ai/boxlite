@@ -14,10 +14,14 @@ use super::client::ApiClient;
 use super::litebox::RestBox;
 use super::options::BoxliteRestOptions;
 use super::types::{
-    BoxResponse, CreateBoxRequest, CreateVolumeRequest, ListBoxesResponse, ListVolumesResponse,
+    BoxResponse, CreateBoxRequest, CreateVolumeRequest, ImageDetailResponse, ImageInfoResponse,
+    ImageUsageResponse, ListBoxesResponse, ListImagesResponse, ListVolumesResponse,
     RuntimeMetricsResponse, VolumeResponse,
 };
+use crate::images::ImageObject;
 use crate::runtime::auth::{AuthBackend, Principal};
+use crate::runtime::images::ImageBackend;
+use crate::runtime::types::{ImageDetail, ImageInfo, ImageUsage};
 use crate::runtime::volumes::VolumeBackend;
 use crate::volumes::VolumeInfo;
 
@@ -70,6 +74,49 @@ impl VolumeBackend for RestRuntime {
             self.client.delete(&path).await
         }
     }
+}
+
+#[async_trait::async_trait]
+impl ImageBackend for RestRuntime {
+    async fn pull_image(&self, image_ref: &str) -> BoxliteResult<ImageObject> {
+        Err(BoxliteError::Unsupported(format!(
+            "a REST runtime pulls an image when a box is created from it; \
+             create the box with '{image_ref}' instead of pulling it first"
+        )))
+    }
+
+    async fn list_images(&self) -> BoxliteResult<Vec<ImageInfo>> {
+        let resp: ListImagesResponse = self.client.get("/images").await?;
+        Ok(resp
+            .images
+            .into_iter()
+            .map(ImageInfoResponse::into_image_info)
+            .collect())
+    }
+
+    async fn get_image(&self, name: &str) -> BoxliteResult<ImageDetail> {
+        let resp: ImageDetailResponse = self.client.get(&image_path(name)).await?;
+        Ok(resp.into_image_detail())
+    }
+
+    async fn remove_image(&self, name: &str) -> BoxliteResult<()> {
+        self.client.delete(&image_path(name)).await
+    }
+
+    async fn image_usage(&self) -> BoxliteResult<ImageUsage> {
+        let resp: ImageUsageResponse = self.client.get("/images/usage").await?;
+        Ok(ImageUsage {
+            count: resp.count,
+            limit: resp.limit,
+            known_bytes: resp.known_bytes,
+        })
+    }
+}
+
+/// The route for one image. A name has slashes in it, so it is encoded as a
+/// single segment: `quay.io/acme/app` is one path element, not three.
+fn image_path(name: &str) -> String {
+    format!("/images/{}", urlencoding::encode(name))
 }
 
 fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
@@ -406,11 +453,19 @@ mod tests {
     }
 
     async fn json_server(bodies: Vec<&'static str>) -> (u16, tokio::task::JoinHandle<Vec<String>>) {
+        http_server(bodies.into_iter().map(|body| (200, body)).collect()).await
+    }
+
+    /// Answers one connection per `(status, body)`, in order, and returns the
+    /// request line of each.
+    async fn http_server(
+        replies: Vec<(u16, &'static str)>,
+    ) -> (u16, tokio::task::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move {
             let mut requests = Vec::new();
-            for body in bodies {
+            for (status, body) in replies {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut headers = Vec::new();
                 while !headers.ends_with(b"\r\n\r\n") {
@@ -421,7 +476,7 @@ mod tests {
                 socket
                     .write_all(
                         format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                             body.len(),
                             body
                         )
@@ -907,5 +962,115 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
         assert!(error.to_string().contains("local runtime"));
+    }
+
+    fn images_on(port: u16) -> crate::runtime::ImageHandle {
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        crate::runtime::ImageHandle::new(Arc::new(runtime))
+    }
+
+    #[tokio::test]
+    async fn images_list_reads_one_row_per_reference() {
+        let (port, server) = json_server(vec![
+            r#"{"images":[{"reference":"quay.io/acme/app:v1","repository":"quay.io/acme/app","tag":"v1","id":"sha256:aa","cached_at":"2026-01-02T03:04:05Z","size_bytes":42}]}"#,
+        ])
+        .await;
+
+        let images = images_on(port).list().await.unwrap();
+
+        assert_eq!(server.await.unwrap(), ["GET /v1/images HTTP/1.1"]);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].reference, "quay.io/acme/app:v1");
+        assert_eq!(images[0].id, "sha256:aa");
+        assert_eq!(images[0].size.map(|size| size.0), Some(42));
+        assert_eq!(
+            images[0].cached_at.to_rfc3339(),
+            "2026-01-02T03:04:05+00:00"
+        );
+    }
+
+    /// A name has slashes; sent unencoded it would be three path segments
+    /// and reach no route.
+    #[tokio::test]
+    async fn images_get_sends_the_name_as_one_segment() {
+        let (port, server) = json_server(vec![
+            r#"{"name":"quay.io/acme/app","tags":["v1"],"curated":false,"versions":[{"digest":"sha256:aa","size_bytes":42,"source_ref":"quay.io/acme/app:v1","recorded_at":"2026-01-02T03:04:05Z"}]}"#,
+        ])
+        .await;
+
+        let detail = images_on(port).get("quay.io/acme/app").await.unwrap();
+
+        assert_eq!(
+            server.await.unwrap(),
+            ["GET /v1/images/quay.io%2Facme%2Fapp HTTP/1.1"]
+        );
+        assert_eq!(detail.name, "quay.io/acme/app");
+        assert_eq!(detail.tags, ["v1"]);
+        assert_eq!(detail.versions[0].digest, "sha256:aa");
+        assert_eq!(detail.versions[0].size_bytes, Some(42));
+        assert_eq!(detail.versions[0].source_ref, "quay.io/acme/app:v1");
+    }
+
+    #[tokio::test]
+    async fn images_remove_deletes_the_name() {
+        let (port, server) = http_server(vec![(204, "")]).await;
+
+        images_on(port).remove("quay.io/acme/app").await.unwrap();
+
+        assert_eq!(
+            server.await.unwrap(),
+            ["DELETE /v1/images/quay.io%2Facme%2Fapp HTTP/1.1"]
+        );
+    }
+
+    /// The server refuses while a box can still boot from the image, naming it.
+    #[tokio::test]
+    async fn images_remove_of_an_image_in_use_is_invalid_state() {
+        let (port, _server) = http_server(vec![(
+            409,
+            r#"{"error":{"message":"in use by box b1","type":"InvalidStateError","code":"invalid_state"}}"#,
+        )])
+        .await;
+
+        let error = images_on(port)
+            .remove("quay.io/acme/app")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, BoxliteError::InvalidState(_)), "{error}");
+        assert!(error.to_string().contains("b1"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn images_usage_reads_count_limit_and_bytes() {
+        let (port, server) =
+            json_server(vec![r#"{"count":3,"limit":20,"known_bytes":4096}"#]).await;
+
+        let usage = images_on(port).usage().await.unwrap();
+
+        assert_eq!(server.await.unwrap(), ["GET /v1/images/usage HTTP/1.1"]);
+        assert_eq!((usage.count, usage.limit, usage.known_bytes), (3, 20, 4096));
+    }
+
+    /// A REST runtime pulls when a box is created; pull answers without a
+    /// request, so an unreachable server cannot turn it into a connection error.
+    #[tokio::test]
+    async fn images_pull_is_unsupported_without_a_request() {
+        let error = images_on(1).pull("alpine:latest").await.unwrap_err();
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error}");
+    }
+
+    /// A tagged reference is refused before a request is sent, so the server
+    /// never deletes every tag of a name the caller meant one tag of.
+    #[tokio::test]
+    async fn images_remove_refuses_a_tagged_reference_without_a_request() {
+        let error = images_on(1)
+            .remove("quay.io/acme/app:v1")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, BoxliteError::InvalidArgument(_)), "{error}");
     }
 }

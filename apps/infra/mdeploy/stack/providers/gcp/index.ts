@@ -31,6 +31,8 @@ import { gcpDatabaseProvider } from './database.ts'
 import { gcpEdgeProvider } from './edge.ts'
 import { gcpMailProvider } from './mail.ts'
 import { CLOUDRUN_EGRESS_CIDR, gcpNetworkProvider } from './network.ts'
+import { gcpRegistryCredentialStoreProvider } from './registry-credentials.ts'
+import { gcpRegistryProxyProvider } from './registry-proxy.ts'
 import { gcpRunnerProvider } from './runners.ts'
 import { gcpStorageProvider } from './storage.ts'
 
@@ -118,7 +120,8 @@ export const gcpStackProviders = ({
     images: gcpImages({ stage, region, project }),
     network: gcpNetworkProvider({ project, region, appShort }),
     storage: gcpStorageProvider({ project, region, appShort }),
-    // Cloud Run hosts the API and collector; GKE exists only for the proxy.
+    // Cloud Run hosts the API, the collector and the registry proxy; GKE exists
+    // only for the preview proxy.
     cluster: ({ network }) => gcpClusterProvider({ project, region, appShort, network }),
     database: ({ network }) =>
       gcpDatabaseProvider({
@@ -200,6 +203,18 @@ export const gcpStackProviders = ({
         zoneId,
         dependsOn,
       }),
+    registryProxy: ({ network, dependsOn, registryCredentials }) =>
+      gcpRegistryProxyProvider({
+        project,
+        region,
+        registryCredentials,
+        // Its own role, so it runs as its own account: what the proxy is
+        // granted — reading registry credentials among it — is granted to it
+        // alone, not to the control plane beside it.
+        placement: placement(network, 'registry-proxy'),
+        dependsOn,
+      }),
+    registryCredentials: gcpRegistryCredentialStoreProvider({ project, appShort }),
     // 64 alphanumeric characters: the value travels through a systemd
     // EnvironmentFile and a JSON payload, and punctuation would drag quoting
     // rules into both.

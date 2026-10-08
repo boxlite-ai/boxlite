@@ -311,7 +311,15 @@ test('a payload leaves a bootstrapping host alone rather than failing on it', ()
  * holding no second copy of it, and a fleet already converged must not restart
  * on the next cycle.
  */
-const converge = ({ contents, work }: { contents: string; work: string }) => {
+const converge = ({
+  contents,
+  work,
+  registryProxyHost = null,
+}: {
+  contents: string
+  work: string
+  registryProxyHost?: string | null
+}) => {
   const envFile = join(work, 'runner.env')
   writeFileSync(envFile, contents)
   // What `renderRunnerBoot` leaves behind: the file carries
@@ -333,6 +341,7 @@ const converge = ({ contents, work }: { contents: string; work: string }) => {
     apiUrl: 'https://api.dev.boxlite.ai',
     otlpUrl: 'http://collector:4318',
     volumeBackend: 'gcs',
+    registryProxyHost,
   })
   const result = spawnSync('bash', ['-c', enforce], {
     encoding: 'utf8',
@@ -395,4 +404,26 @@ test('a host pointed at a name this stage no longer serves is rewritten once', (
   assert.equal(second.code, 100)
   assert.equal(second.restarts, 1, 'a converged host was restarted a second time')
   assert.match(second.out, /already pointed at the current control plane/)
+})
+
+test('a host booted before the stage ran a registry proxy is given its host once', () => {
+  /*
+   * Its boot script is never run again, so without this the host holds no key
+   * for the proxy and every private image it is handed is refused. Everything
+   * else in its file is already current, which is the case this converges.
+   */
+  const work = mkdtempSync(join(tmpdir(), 'runner-unit-env-proxy-'))
+  const current =
+    'BOXLITE_API_URL=https://api.dev.boxlite.ai/api\nVOLUME_STORAGE_BACKEND=gcs\nBOXLITE_RUNNER_TOKEN=secret-token\n'
+  const proxy = 'registry-proxy-abc-uc.a.run.app'
+
+  const first = converge({ contents: current, work, registryProxyHost: proxy })
+  assert.equal(first.code, 100, `enforce did not converge: ${first.out}`)
+  assert.match(first.file, new RegExp(`^REGISTRY_PROXY_HOST=${proxy.replaceAll('.', '\\.')}$`, 'm'))
+  assert.match(first.file, /^BOXLITE_RUNNER_TOKEN=secret-token$/m, 'the rewrite dropped the host’s own token')
+  assert.equal(first.restarts, 1, 'the unit must be restarted exactly once')
+
+  const second = converge({ contents: first.file, work, registryProxyHost: proxy })
+  assert.equal(second.code, 100)
+  assert.equal(second.restarts, 1, 'a converged host must not restart again')
 })

@@ -17,6 +17,8 @@ import { TypedConfigService } from '../../../config/typed-config.service'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
 import { WithSpan } from '../../../common/decorators/otel.decorator'
 import { BoxActivityService } from '../../services/box-activity.service'
+import { CuratedImagePinService } from '../../../image/services/curated-image-pin.service'
+import { boxImageIsOrgOwned } from '../../utils/image-ownership.util'
 
 @Injectable()
 export class BoxStartAction extends BoxAction {
@@ -29,6 +31,7 @@ export class BoxStartAction extends BoxAction {
     protected readonly configService: TypedConfigService,
     protected readonly redisLockProvider: RedisLockProvider,
     private readonly boxActivityService: BoxActivityService,
+    private readonly curatedImagePins: CuratedImagePinService,
   ) {
     super(runnerService, runnerAdapterFactory, boxRepository, redisLockProvider)
   }
@@ -76,8 +79,13 @@ export class BoxStartAction extends BoxAction {
       )
     }
 
+    // A tenant's image was pinned by the resolver when the box was created. A
+    // curated one keeps its tag on the box — the warm pool matches on it — and
+    // is pinned here instead, to the build this runner already booted.
+    const image = boxImageIsOrgOwned(box) ? box.image : await this.curatedImagePins.refFor(runner.id, box.image)
+
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-    await runnerAdapter.createBox(box, metadata)
+    await runnerAdapter.createBox(box, image, metadata)
 
     await this.updateBoxState(box, BoxState.CREATING, lockCode)
     return SYNC_AGAIN

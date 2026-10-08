@@ -182,6 +182,26 @@ const bindingsFor = ({
           member: principal,
         }),
       ]
+    case 'write-registry-credentials': {
+      // Both at the project, because the API creates these secrets at run
+      // time and a per-secret binding would need `setIamPolicy`, with which
+      // the API could grant itself the read it is denied. The create stands
+      // unconditioned for the reason `registry-credentials.ts` gives.
+      const { createRole, writeRole, condition } = capability.store.binding
+      return [
+        new gcp.projects.IAMMember(`ApiCapability${index}Create`, {
+          project,
+          role: createRole,
+          member: principal,
+        }),
+        new gcp.projects.IAMMember(`ApiCapability${index}Write`, {
+          project,
+          role: writeRole,
+          member: principal,
+          condition,
+        }),
+      ]
+    }
   }
 }
 

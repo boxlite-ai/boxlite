@@ -8,20 +8,23 @@ Because BoxLite has not launched yet, the historical migration chain has been sq
 the root baseline `1741087887225-migration.ts`. Fresh databases should run this single baseline first.
 Future schema changes should use the expand-and-contract workflow below.
 
-### Deprecated objects in pre-existing databases
+### Deprecated objects no entity maps
 
-The SSH gateway was removed by editing the baseline rather than by adding a contract migration,
-so databases created _before_ that edit still carry objects no entity maps any more:
+These objects are still in the database, but no entity maps them any more. They are inert —
+nothing reads or writes them — and a post-deploy `DROP` migration should retire them once every
+deployed environment runs code that no longer maps them.
 
-| Object                                             | Status                                                                     |
-| -------------------------------------------------- | -------------------------------------------------------------------------- |
-| table `ssh_access`                                 | **deprecated** — orphaned, to be dropped in a future post-deploy migration |
-| `region.sshGatewayUrl`                             | **deprecated** — same                                                      |
-| `region.sshGatewayApiKeyHash` (+ its unique index) | **deprecated** — same                                                      |
+| Object                                               | Present in                                       | Left behind by                                                                 |
+| ---------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------ |
+| table `ssh_access`                                   | databases created before the SSH gateway removal | that removal, which edited the baseline instead of adding a contract migration |
+| `region.sshGatewayUrl`                               | same                                             | same                                                                           |
+| `region.sshGatewayApiKeyHash` (+ its unique index)   | same                                             | same                                                                           |
+| `organization.template_deactivation_timeout_minutes` | every database                                   | the image catalog, which unmapped it and deferred the drop                     |
 
-Fresh databases never create them. They are inert — nothing reads or writes them — but a
-post-deploy `DROP` migration should retire them once every deployed environment is past the
-removal. Use `IF EXISTS`, since fresh databases will not have them.
+The SSH objects are absent from fresh databases, so their drop needs `IF EXISTS`. The
+organization column is still created by the baseline, so a plain `DROP COLUMN` retires it
+everywhere; it is `NOT NULL DEFAULT 20160`, which is why inserts that omit it keep working until
+then.
 
 ## Overview
 
