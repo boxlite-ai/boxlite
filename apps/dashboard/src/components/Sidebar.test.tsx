@@ -68,4 +68,28 @@ describe('Sidebar primary navigation', () => {
     expect(volumeLinks.length).toBeGreaterThan(0)
     expect(volumeLinks.every((link) => link.textContent === 'Volumes')).toBe(true)
   })
+
+  it('links the members page from the profile menu', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    act(() => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter initialEntries={['/dashboard/boxes']}>
+          <Sidebar isBannerVisible={false} version="test" />
+        </MemoryRouter>,
+      )
+    })
+
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="Open profile menu"]')
+    // Radix opens menus on pointerdown; jsdom has no PointerEvent, and React reads only `button`.
+    await act(async () =>
+      trigger?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 })),
+    )
+
+    const members = [...document.querySelectorAll<HTMLAnchorElement>('a[role="menuitem"]')].find(
+      (item) => item.textContent === 'Members',
+    )
+    expect(members?.getAttribute('href')).toBe('/dashboard/members')
+  })
 })
