@@ -31,9 +31,12 @@ import type {
   JsOptions,
 } from "./native-contracts.js";
 export type {
+  ImageDetail,
   ImageHandle,
   ImageInfo,
   ImagePullResult,
+  ImageUsage,
+  ImageVersion,
   VolumeHandle,
   VolumeInfo,
   JsImageRegistry,
