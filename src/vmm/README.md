@@ -55,8 +55,20 @@ crate-visible until the lifecycle slice calls it from `Vm::new`.
 - Dependencies: vm-memory only. The ELF loader of linux-loader cannot zero BSS
   on borrowed RAM and adds no check the decoder lacks.
 
-A probe that loads the real kernel and reads it back through a KVM vCPU is
-the next slice.
+The hardware probe needs Linux x86_64, read/write `/dev/kvm`, binutils
+`readelf`, and an x86_64 `vmlinux` whose segments end below 128 MiB:
+
+```sh
+make test:integration:vmm:elf VMM_KERNEL=/absolute/path/to/vmlinux
+```
+
+`VMM_KERNEL` defaults to `target/vmm/boot/x86_64/vmlinux`, where the
+kernel-build slice of #1698 will publish its artifact; until it lands, pass
+the path explicitly. The probe compares every segment with
+`readelf`, then a protected-mode guest sums the loaded span and reports it on
+an I/O port. A missing kernel or `/dev/kvm` fails rather than skips. It proves
+loading and guest visibility, not Linux execution: `boot_params`, initramfs,
+entry registers and the run loop are later slices.
 
 ## Build
 
