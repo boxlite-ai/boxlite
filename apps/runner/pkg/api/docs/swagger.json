@@ -519,6 +519,44 @@
         }
       }
     },
+    "/v1/boxes/{boxId}/attach": {
+      "get": {
+        "tags": ["boxlite"],
+        "summary": "Attach to a box's main command session via WebSocket",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Box ID",
+            "name": "boxId",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching Protocols"
+          },
+          "404": {
+            "description": "box not found",
+            "schema": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "409": {
+            "description": "already attached, or the box cannot be attached to",
+            "schema": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/boxes/{boxId}/executions/{execId}/attach": {
       "get": {
         "tags": ["boxlite"],

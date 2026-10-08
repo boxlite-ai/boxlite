@@ -740,6 +740,25 @@ enum BoxliteErrorCode boxlite_box_exec(CBoxHandle *handle,
                                        CExecutionHandle **out_execution,
                                        CBoxliteError *out_error);
 
+// Attach to the box's main command session — the container's init.
+//
+// `run IMAGE COMMAND` runs COMMAND *as* init (docker semantics), so following
+// it is an attach rather than an exec: there is no command to pass, only a
+// session to join. The handle that comes back is an ordinary
+// `CExecutionHandle` — the same stdout/stderr/exit callbacks, stdin, wait,
+// signal, kill and resize all apply.
+//
+// Attaching boots the box and creates its container but does NOT run init;
+// `boxlite_start_box` does. Callers therefore go create -> attach -> start, so
+// a command that finishes instantly cannot outrun the stream and take its
+// output and exit code with it.
+//
+// Only the main session is attachable; a running exec keeps the handle it was
+// created with.
+enum BoxliteErrorCode boxlite_box_attach_main(CBoxHandle *handle,
+                                              CExecutionHandle **out_execution,
+                                              CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_execution_on_stdout(CExecutionHandle *execution,
                                                   CBoxStdoutCb cb,
                                                   void *user_data,

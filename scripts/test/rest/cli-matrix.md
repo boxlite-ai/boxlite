@@ -41,7 +41,7 @@ when the profile is missing or expired.
 | Auth | `auth status`, `auth whoami` | same | `/v1/me`, credential source | OIDC requires an existing logged-in profile. |
 | Discovery | `ls --format json` | `list`, `ls`, `ps` | list boxes | `ps` is an alias filtered to active boxes. |
 | Create/lifecycle | `create`, `start`, `stop`, `rm` | plus `restart`, `inspect` | create/get/start/stop/remove | Cleanup is attempted in a trap. |
-| Execution | `exec BOX -- sh -lc ...` | same plus `run --rm` | HTTP exec plus WebSocket attach | This is the OIDC attach regression path. |
+| Execution | `exec BOX -- sh -lc ...`, `run --rm` | same | HTTP exec plus WebSocket attach, on both attach routes | This is the OIDC attach regression path. `exec` attaches to an execution, `run` to the box's main session — different routes, so both are in smoke. |
 | Files | no | `cp` host-to-box and box-to-host | REST file upload/download | Uses temporary files. |
 | Metrics | no | `stats --format json` | REST metrics proxy | Runs while the box is started. |
 | Images | skipped | skipped | none | REST runtime currently does not support `pull`/`images`. |
