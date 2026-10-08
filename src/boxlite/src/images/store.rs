@@ -282,6 +282,16 @@ impl ImageStore {
         inner.index.list_all()
     }
 
+    /// Drop `references` from the index. Their layers stay in storage, so
+    /// pulling one of these builds again reuses them.
+    pub async fn forget(&self, references: &[String]) -> BoxliteResult<()> {
+        let inner = self.inner.read().await;
+        for reference in references {
+            inner.index.remove(reference)?;
+        }
+        Ok(())
+    }
+
     /// Load an OCI image from a local directory.
     ///
     /// Reads OCI layout files (index.json, manifest blob) using oci-spec types

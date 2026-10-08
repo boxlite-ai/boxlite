@@ -55,18 +55,18 @@ describe("native-class subclassing", () => {
   });
 });
 
-// What `errorCode` reads is the message the binding throws, so check it on an
-// error that really crossed the binding: images are a local cache, which a
-// REST runtime refuses before sending anything.
+// What `errorCode` reads is the message the binding rejects with, so check it
+// on a rejection that really crossed the binding: a REST runtime refuses
+// `pull` before sending anything, since it pulls when a box is created.
 describe("errors thrown by the binding", () => {
-  test("carry the code errorCode reads", () => {
+  test("carry the code errorCode reads", async () => {
     const runtime = JsBoxlite.rest(
       new BoxliteRestOptions({ url: "http://127.0.0.1:1" }),
     );
     try {
       let thrown: unknown;
       try {
-        runtime.images();
+        await runtime.images.pull("alpine:latest");
       } catch (err) {
         thrown = err;
       }

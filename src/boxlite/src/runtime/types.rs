@@ -686,6 +686,56 @@ pub struct ImageInfo {
     pub size: Option<Bytes>,
 }
 
+/// One image name and every build of it the runtime holds.
+///
+/// Locally that is the cache's entries under the name; on a REST runtime it
+/// is the server's catalog entry, including images the operator provides.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageDetail {
+    /// Registry and repository, without a tag (e.g. "docker.io/library/alpine").
+    pub name: String,
+
+    /// Tags held for this name.
+    pub tags: Vec<String>,
+
+    /// Provided by the operator rather than pulled by a box. Only a catalog
+    /// has these; a local cache never does.
+    pub curated: bool,
+
+    /// Each build held under the name, newest first.
+    pub versions: Vec<ImageVersion>,
+}
+
+/// One build of an image.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageVersion {
+    /// Manifest digest (e.g. "sha256:…").
+    pub digest: String,
+
+    /// Sum of the layer sizes the manifest declares, when known.
+    pub size_bytes: Option<u64>,
+
+    /// The reference that was pulled to get this build.
+    pub source_ref: String,
+
+    /// When this build was recorded.
+    pub recorded_at: DateTime<Utc>,
+}
+
+/// How much of its image allowance a REST runtime's caller holds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageUsage {
+    /// Images held.
+    pub count: u64,
+
+    /// Images the caller may hold.
+    pub limit: u64,
+
+    /// Sum of the sizes the held builds' manifests declare. Not the bytes
+    /// stored: a layer two builds share is counted for each of them.
+    pub known_bytes: u64,
+}
+
 // ============================================================================
 // BOX CONFIG (Podman-style separation)
 // ============================================================================
