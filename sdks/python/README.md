@@ -820,6 +820,11 @@ from boxlite import BoxliteError, ExecError, TimeoutError, ParseError
 
 **ParseError** - Failed to parse output
 
+**NotFoundError**, **InvalidStateError**, **UnsupportedError**, … - A failure
+the runtime reported, one class per kind, each with a `code` such as
+`not_found`. Every one is also a `RuntimeError`. The full list is in
+[the Python reference](../../docs/reference/python/README.md#runtime-failures).
+
 ### Common Error Patterns
 
 ```python

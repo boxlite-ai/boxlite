@@ -175,8 +175,29 @@ class TestBoxliteManagementMethods:
         runtime = boxlite.Boxlite.rest(
             boxlite.BoxliteRestOptions(url="http://localhost:1")
         )
-        with pytest.raises(RuntimeError, match="Image operations not supported"):
+        # Caught as `RuntimeError` on purpose: handlers written before the
+        # classes existed must still catch it.
+        with pytest.raises(RuntimeError) as caught:
             _ = runtime.images
+
+        assert type(caught.value).__name__ == "UnsupportedError"
+        assert type(caught.value) is boxlite.UnsupportedError
+        assert caught.value.code == "unsupported"
+        assert "Image operations not supported" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_removing_a_missing_box_raises_not_found(self, tmp_path):
+        runtime = boxlite.Boxlite(boxlite.Options(home_dir=str(tmp_path)))
+        try:
+            with pytest.raises(RuntimeError) as caught:
+                await runtime.remove("no-such-box")
+
+            assert type(caught.value).__name__ == "NotFoundError"
+            assert type(caught.value) is boxlite.NotFoundError
+            assert caught.value.code == "not_found"
+            assert str(caught.value) == "not found: no-such-box"
+        finally:
+            await runtime.shutdown()
 
 
 class TestSyncBoxliteManagementMethods:
