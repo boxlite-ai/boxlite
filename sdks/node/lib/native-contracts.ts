@@ -22,9 +22,64 @@ export interface ImagePullResult {
   layerCount: number;
 }
 
+/** One build of an image. */
+export interface ImageVersion {
+  /** Manifest digest, such as `sha256:…`. */
+  digest: string;
+  /** Sum of the layer sizes the manifest declares; absent when unknown. */
+  sizeBytes?: number;
+  /** The reference that was pulled to get this build. */
+  sourceRef: string;
+  /** When this build was recorded, as an RFC 3339 string. */
+  recordedAt: string;
+}
+
+/** An image name and every build the runtime holds under it. */
+export interface ImageDetail {
+  /** Registry and repository without a tag, such as `docker.io/library/alpine`. */
+  name: string;
+  tags: string[];
+  /** Provided by the server's operator rather than pulled by a box. */
+  curated: boolean;
+  /** Newest first. */
+  versions: ImageVersion[];
+}
+
+/** Images held against the allowance, on a REST runtime. */
+export interface ImageUsage {
+  count: number;
+  limit: number;
+  /**
+   * Sum of the sizes the held builds' manifests declare; a layer two builds
+   * share counts for each.
+   */
+  knownBytes: number;
+}
+
+/**
+ * The images a runtime can boot from: the local cache on an embedded runtime,
+ * the server's catalog on a REST runtime.
+ */
 export interface ImageHandle {
+  /** Pull into the local cache. A REST runtime refuses: creating a box pulls. */
   pull(reference: string): Promise<ImagePullResult>;
   list(): Promise<ImageInfo[]>;
+  /**
+   * Every build held under an image name, such as `docker.io/library/alpine`.
+   *
+   * @throws `not_found` when nothing is held under the name, and
+   * `invalid_argument` for a reference with a tag or digest.
+   */
+  get(name: string): Promise<ImageDetail>;
+  /**
+   * Stop holding an image name, every tag of it. The layers stay.
+   *
+   * @throws `not_found` and `invalid_argument` as {@link ImageHandle.get};
+   * on a REST runtime `invalid_state` while a box can still boot from it.
+   */
+  remove(name: string): Promise<void>;
+  /** Images held against the allowance. @throws `unsupported` locally. */
+  usage(): Promise<ImageUsage>;
 }
 
 /** Metadata for a managed volume returned by the native runtime. */

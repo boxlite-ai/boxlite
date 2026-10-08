@@ -55,6 +55,7 @@ new JsBoxlite(options: JsOptions)
 | `metrics()` | `() => Promise<JsRuntimeMetrics>` | Get runtime metrics |
 | `remove()` | `(idOrName: string, force?: boolean) => Promise<void>` | Remove a box |
 | `close()` | `() => void` | Close runtime (no-op) |
+| `images` | getter `=> ImageHandle` | The images this runtime can boot from; see [`ImageHandle`](#imagehandle) |
 
 #### Example
 
@@ -75,6 +76,49 @@ const box = await runtime.create({
 // List all boxes
 const boxes = await runtime.listInfo();
 boxes.forEach(info => console.log(`${info.id}: ${info.state.status}`));
+```
+
+---
+
+### `ImageHandle`
+
+The images a runtime can boot from: the local cache on `new JsBoxlite(...)`
+or `JsBoxlite.withDefaultConfig()`, the server's catalog on
+`JsBoxlite.rest(...)`. The same code runs against either. Read it from the
+`runtime.images` getter.
+
+| Method | Signature | Local runtime | REST runtime |
+|--------|-----------|---------------|--------------|
+| `pull()` | `(reference: string) => Promise<ImagePullResult>` | Pulls into the cache | Rejects with `unsupported`: creating a box pulls |
+| `list()` | `() => Promise<ImageInfo[]>` | One row per cached reference | One row per catalog tag, then one per untagged version by digest |
+| `get()` | `(name: string) => Promise<ImageDetail>` | The cache entries under the name | The catalog entry with its versions |
+| `remove()` | `(name: string) => Promise<void>` | Forgets the name; layers stay | Removes the catalog entry; `invalid_state` while a box can boot from it |
+| `usage()` | `() => Promise<ImageUsage>` | Rejects with `unsupported` | `count`, `limit`, `knownBytes` |
+
+`get()` and `remove()` take an image name such as `"docker.io/library/alpine"`;
+a reference with a tag or digest rejects with `invalid_argument`, since a
+remove takes every tag of the name. A name nothing is held under rejects with
+`not_found`. The codes are what [`errorCode(err)`](#errorcodeerr) returns.
+Locally, a box built from a removed image reads the image's configuration from
+the registry when it next starts.
+
+| Type | Fields |
+|------|--------|
+| `ImageDetail` | `name`, `tags`, `curated`, `versions: ImageVersion[]` (newest first) |
+| `ImageVersion` | `digest`, `sizeBytes` (absent when unknown), `sourceRef`, `recordedAt` (RFC 3339) |
+| `ImageUsage` | `count`, `limit`, `knownBytes` |
+
+```typescript
+import { JsBoxlite, BoxliteRestOptions } from 'boxlite';
+
+const runtime = JsBoxlite.rest(new BoxliteRestOptions({ url: 'http://localhost:8100' }));
+// or JsBoxlite.withDefaultConfig()
+for (const image of await runtime.images.list()) {
+  console.log(image.reference, image.id);
+}
+const detail = await runtime.images.get('docker.io/library/alpine');
+console.log(detail.tags, detail.versions.map((version) => version.digest));
+await runtime.images.remove('docker.io/library/alpine');
 ```
 
 ---
