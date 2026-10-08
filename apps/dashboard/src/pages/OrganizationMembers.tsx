@@ -110,16 +110,17 @@ const OrganizationMembers: React.FC = () => {
     }
   }
 
-  const handleCreateInvitation = async (
-    email: string,
-    role: CreateOrganizationInvitationRoleEnum,
-    assignedRoleIds: string[],
-  ): Promise<boolean> => {
+  // Members carry no roles yet, so every invitee joins as an owner.
+  const handleCreateInvitation = async (email: string): Promise<boolean> => {
     if (!selectedOrganization) {
       return false
     }
     try {
-      await organizationsApi.createOrganizationInvitation(selectedOrganization.id, { email, role, assignedRoleIds })
+      await organizationsApi.createOrganizationInvitation(selectedOrganization.id, {
+        email,
+        role: CreateOrganizationInvitationRoleEnum.OWNER,
+        assignedRoleIds: [],
+      })
       toast.success('Invitation created successfully')
       await fetchInvitations(false)
       return true
@@ -181,12 +182,7 @@ const OrganizationMembers: React.FC = () => {
       <PageHeader size="full">
         <PageTitle>Members</PageTitle>
         {authenticatedUserIsOwner && (
-          <CreateOrganizationInvitationDialog
-            className="ml-auto"
-            availableRoles={roles}
-            loadingAvailableRoles={loadingRoles}
-            onCreateInvitation={handleCreateInvitation}
-          />
+          <CreateOrganizationInvitationDialog className="ml-auto" onCreateInvitation={handleCreateInvitation} />
         )}
       </PageHeader>
 

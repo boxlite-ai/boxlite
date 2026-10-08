@@ -4,9 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ViewerOrganizationRoleCheckbox } from '@/components/OrganizationMembers/ViewerOrganizationRoleCheckbox'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogClose,
@@ -19,72 +17,28 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { CreateOrganizationInvitationRoleEnum, OrganizationRole } from '@boxlite-ai/api-client'
 import { Plus } from '@/components/ui/icon'
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 
 interface CreateOrganizationInvitationDialogProps {
-  availableRoles: OrganizationRole[]
-  loadingAvailableRoles: boolean
-  onCreateInvitation: (
-    email: string,
-    role: CreateOrganizationInvitationRoleEnum,
-    assignedRoleIds: string[],
-  ) => Promise<boolean>
+  onCreateInvitation: (email: string) => Promise<boolean>
   className?: string
 }
 
 export const CreateOrganizationInvitationDialog: React.FC<CreateOrganizationInvitationDialogProps> = ({
-  availableRoles,
-  loadingAvailableRoles,
   onCreateInvitation,
   className,
 }) => {
   const [open, setOpen] = useState(false)
   const [email, setEmail] = useState('')
-  const [role, setRole] = useState<CreateOrganizationInvitationRoleEnum>(CreateOrganizationInvitationRoleEnum.MEMBER)
-  const [assignedRoleIds, setAssignedRoleIds] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
-
-  const [developerRole, setDeveloperRole] = useState<OrganizationRole | null>(null)
-
-  useEffect(() => {
-    if (!loadingAvailableRoles) {
-      const developerRole = availableRoles.find((r) => r.name === 'Developer')
-      if (developerRole) {
-        setDeveloperRole(developerRole)
-        setAssignedRoleIds([developerRole.id])
-      }
-    }
-  }, [loadingAvailableRoles, availableRoles])
-
-  const handleRoleAssignmentToggle = (roleId: string) => {
-    setAssignedRoleIds((current) => {
-      if (current.includes(roleId)) {
-        return current.filter((p) => p !== roleId)
-      } else {
-        return [...current, roleId]
-      }
-    })
-  }
 
   const handleCreateInvitation = async () => {
     setLoading(true)
-    const success = await onCreateInvitation(
-      email,
-      role,
-      role === CreateOrganizationInvitationRoleEnum.OWNER ? [] : assignedRoleIds,
-    )
+    const success = await onCreateInvitation(email)
     if (success) {
       setOpen(false)
       setEmail('')
-      setRole(CreateOrganizationInvitationRoleEnum.MEMBER)
-      if (developerRole) {
-        setAssignedRoleIds([developerRole.id])
-      } else {
-        setAssignedRoleIds([])
-      }
     }
     setLoading(false)
   }
@@ -96,12 +50,6 @@ export const CreateOrganizationInvitationDialog: React.FC<CreateOrganizationInvi
         setOpen(isOpen)
         if (!isOpen) {
           setEmail('')
-          setRole(CreateOrganizationInvitationRoleEnum.MEMBER)
-          if (developerRole) {
-            setAssignedRoleIds([developerRole.id])
-          } else {
-            setAssignedRoleIds([])
-          }
         }
       }}
     >
@@ -115,7 +63,7 @@ export const CreateOrganizationInvitationDialog: React.FC<CreateOrganizationInvi
         <DialogHeader>
           <DialogTitle>Invite Member</DialogTitle>
           <DialogDescription>
-            Give them access to the organization with an appropriate role and assignments.
+            Members have full access to the organization. The invitee accepts after signing in with this email.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -136,62 +84,6 @@ export const CreateOrganizationInvitationDialog: React.FC<CreateOrganizationInvi
               placeholder="mail@example.com"
             />
           </div>
-
-          <div className="space-y-3">
-            <Label htmlFor="role">Role</Label>
-            <RadioGroup
-              className="gap-6"
-              value={role}
-              onValueChange={(value: CreateOrganizationInvitationRoleEnum) => setRole(value)}
-            >
-              <div className="flex items-center space-x-4">
-                <RadioGroupItem value={CreateOrganizationInvitationRoleEnum.OWNER} id="role-owner" />
-                <div className="space-y-1">
-                  <Label htmlFor="role-owner" className="font-normal">
-                    Owner
-                  </Label>
-                  <p className="text-sm text-gray-500">
-                    Full administrative access to the organization and its resources
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center space-x-4">
-                <RadioGroupItem value={CreateOrganizationInvitationRoleEnum.MEMBER} id="role-member" />
-                <div className="space-y-1">
-                  <Label htmlFor="role-member" className="font-normal">
-                    Member
-                  </Label>
-                  <p className="text-sm text-gray-500">Access to organization resources is based on assignments</p>
-                </div>
-              </div>
-            </RadioGroup>
-          </div>
-
-          {role === CreateOrganizationInvitationRoleEnum.MEMBER && !loadingAvailableRoles && (
-            <div className="space-y-3">
-              <Label htmlFor="assignments">Assignments</Label>
-              <div className="space-y-6">
-                <ViewerOrganizationRoleCheckbox />
-                {availableRoles.map((availableRole) => (
-                  <div key={availableRole.id} className="flex items-center space-x-4">
-                    <Checkbox
-                      id={`role-${availableRole.id}`}
-                      checked={assignedRoleIds.includes(availableRole.id)}
-                      onCheckedChange={() => handleRoleAssignmentToggle(availableRole.id)}
-                    />
-                    <div className="space-y-1">
-                      <Label htmlFor={`role-${availableRole.id}`} className="font-normal">
-                        {availableRole.name}
-                      </Label>
-                      {availableRole.description && (
-                        <p className="text-sm text-gray-500">{availableRole.description}</p>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </form>
 
         <DialogFooter>
