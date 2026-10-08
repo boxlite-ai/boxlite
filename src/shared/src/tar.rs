@@ -371,13 +371,14 @@ fn extract_from_reader<R: Read>(
                 let mut file = entry.map_err(|e| {
                     BoxliteError::Storage(format!("failed to read tar entry: {}", e))
                 })?;
-                if let Ok(path) = file.path() {
-                    record(path.as_ref(), Some(dest));
-                }
+                let Some(landed) = landed(&file) else {
+                    continue;
+                };
+                record(&landed.name, Some(dest));
                 if file.header().entry_type() == tar::EntryType::Directory {
-                    directories.push(file);
+                    directories.push((file, landed));
                 } else {
-                    file.unpack_in(dest).map_err(|e| {
+                    unpack_at(&mut file, dest, &landed).map_err(|e| {
                         BoxliteError::Storage(format!(
                             "failed to extract archive: {}",
                             with_causes(&e)
@@ -385,15 +386,112 @@ fn extract_from_reader<R: Read>(
                     })?;
                 }
             }
-            directories.sort_by(|a, b| b.path_bytes().cmp(&a.path_bytes()));
-            for mut dir in directories {
-                dir.unpack_in(dest).map_err(|e| {
+            directories.sort_by(|(_, a), (_, b)| b.name.cmp(&a.name));
+            for (mut dir, landed) in directories {
+                unpack_at(&mut dir, dest, &landed).map_err(|e| {
                     BoxliteError::Storage(format!("failed to extract archive: {}", with_causes(&e)))
                 })?;
             }
             Ok(())
         }
     }
+}
+
+/// Where an archive entry lands, relative to the destination.
+struct Landed {
+    name: PathBuf,
+    /// A hard link's target, relative to the destination.
+    link: Option<PathBuf>,
+}
+
+/// Where `entry` lands, or `None` for what extraction skips: records about
+/// other entries, which `Entry::unpack` skips too, and names that are empty
+/// or climb out with `..`.
+fn landed<R: Read>(entry: &tar::Entry<'_, R>) -> Option<Landed> {
+    let kind = entry.header().entry_type();
+    if kind.is_pax_global_extensions()
+        || kind.is_pax_local_extensions()
+        || kind.is_gnu_longname()
+        || kind.is_gnu_longlink()
+    {
+        return None;
+    }
+    let name = sanitize_entry_path(&entry.path().ok()?)?;
+    // A hard link without a target is tar-rs's error to report.
+    let link = match entry.link_name() {
+        Ok(Some(target)) if kind.is_hard_link() && !target.as_os_str().is_empty() => {
+            Some(target.into_owned())
+        }
+        _ => None,
+    };
+    Some(Landed { name, link })
+}
+
+/// Unpack `entry` where `landed` says, after the checks
+/// `Entry::unpack_in` makes (`tar-0.4.45/src/entry.rs`). `unpack_in` takes
+/// the place from the entry's own name, so it cannot land an entry anywhere
+/// else; `Entry::unpack` writes the entry as `unpack_in` would.
+fn unpack_at<R: Read>(
+    entry: &mut tar::Entry<'_, R>,
+    dest: &Path,
+    landed: &Landed,
+) -> io::Result<()> {
+    let path = dest.join(&landed.name);
+    let parent = path.parent().unwrap_or(dest);
+    create_dirs_inside(dest, parent)?;
+    let base = inside(dest, parent)?;
+    match &landed.link {
+        // `Entry::unpack` would resolve the target from the working directory.
+        Some(target) => {
+            let target = base.join(target);
+            inside(&base, &target)?;
+            std::fs::hard_link(&target, &path).map_err(|e| {
+                let context = format!("hard linking {} to {}", target.display(), path.display());
+                io::Error::new(e.kind(), format!("{e} when {context}"))
+            })
+        }
+        None => entry.unpack(&path).map(drop),
+    }
+}
+
+/// Create the directories missing down to `dir`, each once its parent
+/// resolves inside `dest`, as tar-rs's `ensure_dir_created` does.
+fn create_dirs_inside(dest: &Path, dir: &Path) -> io::Result<()> {
+    let missing: Vec<&Path> = dir
+        .ancestors()
+        .take_while(|dir| dir.symlink_metadata().is_err())
+        .collect();
+    for dir in missing.into_iter().rev() {
+        if let Some(parent) = dir.parent() {
+            inside(dest, parent)?;
+        }
+        std::fs::create_dir_all(dir).map_err(|e| {
+            io::Error::new(e.kind(), format!("{e} when creating dir {}", dir.display()))
+        })?;
+    }
+    Ok(())
+}
+
+/// The canonical `dest`, once `path` resolves inside it, as tar-rs's
+/// `validate_inside_dst` checks: an earlier entry may be a symlink on the way.
+fn inside(dest: &Path, path: &Path) -> io::Result<PathBuf> {
+    let canonical = |path: &Path| {
+        path.canonicalize().map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!("{e} while canonicalizing {}", path.display()),
+            )
+        })
+    };
+    let dest = canonical(dest)?;
+    if canonical(path)?.starts_with(&dest) {
+        return Ok(dest);
+    }
+    Err(io::Error::other(format!(
+        "{} resolves outside {}",
+        path.display(),
+        dest.display()
+    )))
 }
 
 /// Record `path` — sanitized, plus every directory its name implies,
@@ -471,12 +569,11 @@ fn entry_paths_blocking(tar_path: &Path) -> Vec<PathBuf> {
     // through each file inside it.
     let mut created = Vec::new();
     let mut seen = HashSet::new();
-    for path in entries
+    for landed in entries
         .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.path().ok().map(|path| path.into_owned()))
-        .filter_map(|path| sanitize_entry_path(&path))
+        .filter_map(|entry| landed(&entry))
     {
-        for step in implied_dirs_then_self(&path) {
+        for step in implied_dirs_then_self(&landed.name) {
             if seen.insert(step.clone()) {
                 created.push(step);
             }
@@ -1838,5 +1935,152 @@ mod tests {
                 report.entry_paths
             );
         }
+    }
+
+    // ── landing each entry ───────────────────────────────────────
+
+    /// A one-chunk stream of `(name, kind, link target)` entries, as a caller
+    /// may build one; a regular file holds its own name.
+    fn archive_of(entries: &[(&str, tar::EntryType, &str)]) -> BoxByteStream {
+        let mut builder = tar::Builder::new(Vec::new());
+        for &(name, kind, target) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(kind);
+            header.set_mode(0o755);
+            let data = if kind.is_file() { name.as_bytes() } else { &[] };
+            header.set_size(data.len() as u64);
+            if kind.is_hard_link() || kind.is_symlink() {
+                builder.append_link(&mut header, name, target).unwrap();
+            } else {
+                builder.append_data(&mut header, name, data).unwrap();
+            }
+        }
+        Box::pin(futures::stream::iter([Ok(builder.into_inner().unwrap())]))
+    }
+
+    /// A PAX global header (`git archive` leads with one) describes the
+    /// archive; extraction creates nothing for it, so it is not reported.
+    #[tokio::test]
+    async fn a_pax_global_header_is_not_reported() {
+        use tar::EntryType::{Regular, XGlobalHeader};
+        let tmp = TempDir::new().unwrap();
+        let entries = [("pax_global_header", XGlobalHeader, ""), ("a", Regular, "")];
+
+        let report = unpack_stream(
+            archive_of(&entries),
+            tmp.path().join("out"),
+            uc(true, true, true),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.entry_paths, vec![PathBuf::from("a")]);
+    }
+
+    /// A hard link's target names another entry, found in the destination.
+    #[tokio::test]
+    async fn hard_links_resolve_in_the_destination() {
+        use std::os::unix::fs::MetadataExt;
+        use tar::EntryType::{Directory, Link, Regular};
+        let tmp = TempDir::new().unwrap();
+        let dest = tmp.path().to_path_buf();
+        let entries = [
+            ("X/", Directory, ""),
+            ("X/a", Regular, ""),
+            ("X/h", Link, "X/a"),
+        ];
+
+        unpack_stream(archive_of(&entries), dest.clone(), uc(true, true, true))
+            .await
+            .unwrap();
+
+        let inode = |name: &str| std::fs::metadata(dest.join(name)).unwrap().ino();
+        assert_eq!(inode("X/h"), inode("X/a"));
+    }
+
+    /// A failure names the paths involved, as tar-rs's own errors do.
+    #[tokio::test]
+    async fn landing_errors_name_their_paths() {
+        use tar::EntryType::Link;
+        let tmp = TempDir::new().unwrap();
+        let entries = [("h", Link, "missing-target")];
+
+        let err = unpack_stream(
+            archive_of(&entries),
+            tmp.path().to_path_buf(),
+            uc(true, true, true),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("missing-target"), "{err}");
+    }
+
+    /// Nothing lands outside the destination: not through a symlink an
+    /// earlier entry made, nor as a hard link to a file outside it. These are
+    /// the checks `unpack_in` makes, which landing makes itself.
+    #[tokio::test]
+    async fn entries_cannot_reach_out_of_the_destination() {
+        use std::os::unix::fs::MetadataExt;
+        use tar::EntryType::{Directory, Link, Regular, Symlink};
+        let tmp = TempDir::new().unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let secret = outside.join("secret");
+        std::fs::write(&secret, "s").unwrap();
+        let through_symlink = [
+            ("X/", Directory, ""),
+            ("X/s", Symlink, outside.to_str().unwrap()),
+            ("X/s/f", Regular, ""),
+        ];
+        let hard_link_out = [
+            ("X/", Directory, ""),
+            ("X/h", Link, secret.to_str().unwrap()),
+        ];
+        for (i, entries) in [&through_symlink[..], &hard_link_out[..]]
+            .iter()
+            .enumerate()
+        {
+            for exists in [false, true] {
+                let dest = tmp.path().join(format!("out-{i}-{exists}"));
+                if exists {
+                    std::fs::create_dir(&dest).unwrap();
+                }
+
+                let result = unpack_stream(archive_of(entries), dest, uc(true, true, true)).await;
+
+                assert!(result.is_err(), "case {i}, exists={exists}");
+                assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
+                assert_eq!(std::fs::metadata(&secret).unwrap().nlink(), 1);
+            }
+        }
+    }
+
+    /// A file with holes travels as a GNU sparse entry (BoxLite's packer
+    /// leaves tar-rs's sparse detection on) and lands with its holes.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn sparse_files_land_with_their_holes() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("s");
+        std::fs::create_dir(&src).unwrap();
+        let image = std::fs::File::create(src.join("disk.img")).unwrap();
+        image.set_len(1 << 20).unwrap();
+        let tar_path = tmp.path().join("s.tar");
+        pack(src, tar_path.clone(), contents_pack()).await.unwrap();
+        let kinds = archived_entries(&tar_path);
+        assert!(kinds
+            .iter()
+            .any(|(_, kind)| *kind == tar::EntryType::GNUSparse));
+
+        let dest = tmp.path().join("out");
+        unpack(tar_path, dest.clone(), uc(true, true, true))
+            .await
+            .unwrap();
+
+        let landed = std::fs::metadata(dest.join("disk.img")).unwrap();
+        assert_eq!(landed.len(), 1 << 20);
+        assert_eq!(landed.blocks(), 0, "the hole must not be written out");
     }
 }
