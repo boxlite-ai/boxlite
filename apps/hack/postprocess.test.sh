@@ -180,8 +180,9 @@ grep -qF 'basePath: string = BASE_PATH): Promise<R> => {' "$ts_rf_dir/common.ts"
   grep -qF 'return axios.request<T, R>(axiosRequestArgs) as Promise<R>;' "$ts_rf_dir/common.ts"
 check "TS: createRequestFunction returns Promise<R>" $?
 
-node "$HACK_DIR/ts-client/type-request-function.mjs" "$ts_rf_dir" > /dev/null 2>&1
-[[ $? -ne 0 ]]
+rf_err="$(node "$HACK_DIR/ts-client/type-request-function.mjs" "$ts_rf_dir" 2>&1 >/dev/null)"
+rf_rc=$?
+[[ "$rf_rc" -ne 0 && "$rf_err" == *'drop this step if the generator already types createRequestFunction'* ]]
 check "TS: an already typed createRequestFunction is a hard error" $?
 
 # ── Go client ───────────────────────────────────────────────────────────────
