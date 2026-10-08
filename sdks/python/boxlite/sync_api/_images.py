@@ -5,7 +5,13 @@ SyncImageHandle - Synchronous wrapper for runtime image operations.
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..boxlite import ImageHandle, ImageInfo, ImagePullResult
+    from ..boxlite import (
+        ImageDetail,
+        ImageHandle,
+        ImageInfo,
+        ImagePullResult,
+        ImageUsage,
+    )
     from ._boxlite import SyncBoxlite
 
 __all__ = ["SyncImageHandle"]
@@ -33,3 +39,12 @@ class SyncImageHandle:
 
     def list(self) -> list["ImageInfo"]:
         return self._sync(self._handle.list())
+
+    def get(self, name: str) -> "ImageDetail":
+        return self._sync(self._handle.get(name))
+
+    def remove(self, name: str) -> None:
+        return self._sync(self._handle.remove(name))
+
+    def usage(self) -> "ImageUsage":
+        return self._sync(self._handle.usage())
