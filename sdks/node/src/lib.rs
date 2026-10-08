@@ -14,6 +14,7 @@ mod info;
 mod metrics;
 mod network;
 mod options;
+mod registries;
 mod runtime;
 mod snapshot_options;
 mod snapshots;
@@ -39,6 +40,7 @@ pub use options::{
     ApiKeyCredential, JsAccessToken, JsBoxOptions, JsEnvVar, JsHealthCheckOptions, JsImageRegistry,
     JsImageRegistryAuth, JsNetworkSpec, JsOptions, JsPortSpec, JsSecret, JsVolumeSpec,
 };
+pub use registries::{JsNewRegistryCredential, JsRegistryCredential, JsRegistryHandle};
 pub use runtime::JsBoxlite; // re-export for dist bundling
 pub use snapshot_options::{JsCloneOptions, JsExportOptions, JsSnapshotOptions};
 pub use snapshots::{JsSnapshotHandle, JsSnapshotInfo};
