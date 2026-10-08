@@ -56,6 +56,7 @@ new JsBoxlite(options: JsOptions)
 | `remove()` | `(idOrName: string, force?: boolean) => Promise<void>` | Remove a box |
 | `close()` | `() => void` | Close runtime (no-op) |
 | `images` | getter `=> ImageHandle` | The images this runtime can boot from; see [`ImageHandle`](#imagehandle) |
+| `registries` | getter `=> RegistryHandle` | The server's registry logins; throws `unsupported` on a local runtime. See [`RegistryHandle`](#registryhandle) |
 
 #### Example
 
@@ -119,6 +120,41 @@ for (const image of await runtime.images.list()) {
 const detail = await runtime.images.get('docker.io/library/alpine');
 console.log(detail.tags, detail.versions.map((version) => version.digest));
 await runtime.images.remove('docker.io/library/alpine');
+```
+
+### `RegistryHandle`
+
+The logins a REST server presents when it pulls a private image for a box.
+Read it from the `runtime.registries` getter, which throws `unsupported` on a
+local runtime: that one pulls with the logins in `imageRegistries` instead.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `list()` | `() => Promise<RegistryCredential[]>` | Every login the organization holds, oldest first |
+| `create()` | `(credential: NewRegistryCredential) => Promise<RegistryCredential>` | Add a login; `already_exists` while one is held for the same registry and prefix |
+| `remove()` | `(id: string) => Promise<void>` | Remove a login; `invalid_state`, naming the boxes, while a box still pulls through it; `not_found` for an unknown id |
+
+| Type | Fields |
+|------|--------|
+| `NewRegistryCredential` | `registryHost`, `repositoryPrefix` (optional; whole path segments ending in `/`, omitted for the whole registry), `username`, `password` |
+| `RegistryCredential` | `id`, `registryHost`, `repositoryPrefix`, `username`, `createdBy` (absent when unknown), `createdAt` (RFC 3339) |
+
+The password goes up once and is never returned: `RegistryCredential` has no
+password field. `remove()` rejects an id that is not a UUID with
+`invalid_argument`, before any request.
+
+```typescript
+const runtime = JsBoxlite.rest(new BoxliteRestOptions({ url: 'http://localhost:8100' }));
+const login = await runtime.registries.create({
+  registryHost: 'ghcr.io',
+  repositoryPrefix: 'acme/',
+  username: 'acme-bot',
+  password: process.env.GHCR_TOKEN!,
+});
+const box = await runtime.create({ image: 'ghcr.io/acme/private-app:1' });
+for (const entry of await runtime.registries.list()) {
+  console.log(entry.registryHost, entry.repositoryPrefix, entry.username);
+}
 ```
 
 ---

@@ -131,6 +131,51 @@ export interface VolumeHandle {
   remove(id: string, force?: boolean | null): Promise<void>;
 }
 
+/** A registry login the server pulls private images with. Has no password. */
+export interface RegistryCredential {
+  /** UUID that {@link RegistryHandle.remove} takes. */
+  id: string;
+  registryHost: string;
+  /** Whole path segments ending in `/`; empty for the whole registry. */
+  repositoryPrefix: string;
+  username: string;
+  /** The user who added it; absent when the server does not know. */
+  createdBy?: string;
+  /** RFC 3339. */
+  createdAt: string;
+}
+
+/** A registry login to add. */
+export interface NewRegistryCredential {
+  /** The registry the login is for, such as `ghcr.io`. */
+  registryHost: string;
+  /** Whole path segments ending in `/`, such as `acme/`; omit for the whole registry. */
+  repositoryPrefix?: string;
+  username: string;
+  /** Password or access token. Sent once, never returned. */
+  password: string;
+}
+
+/** The server's registry logins. A local runtime has none: see {@link JsBoxlite.registries}. */
+export interface RegistryHandle {
+  /** Every login the organization holds, oldest first. */
+  list(): Promise<RegistryCredential[]>;
+  /**
+   * Add a login.
+   *
+   * @throws `already_exists` while one is held for the same registry and prefix.
+   */
+  create(credential: NewRegistryCredential): Promise<RegistryCredential>;
+  /**
+   * Remove a login by id.
+   *
+   * @throws `invalid_state`, naming the boxes, while a box still pulls through
+   * it; `not_found` for an unknown id; `invalid_argument` for an id that is
+   * not a UUID, before any request.
+   */
+  remove(id: string): Promise<void>;
+}
+
 export interface JsEnvVar {
   key: string;
   value: string;
@@ -545,6 +590,13 @@ export interface JsBoxlite {
   metrics(): Promise<JsRuntimeMetrics>;
   readonly images: ImageHandle;
   readonly volumes: VolumeHandle;
+  /**
+   * The server's registry logins.
+   *
+   * @throws `unsupported` on a local runtime, which pulls with the logins in
+   * `imageRegistries` instead.
+   */
+  readonly registries: RegistryHandle;
   remove(idOrName: string, force?: boolean | null): Promise<void>;
   close(): void;
   shutdown(timeout?: number | null): Promise<void>;
