@@ -1,0 +1,178 @@
+# Copyright 2024-2026 BoxLite Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+openapi: 3.1.1
+info:
+  title: BoxLite Tenant API
+  version: 0.1.0
+  description: |
+    HTTP API for the tenant model of the hosted BoxLite service: who belongs to
+    an organization. It is meant for the CLI and SDKs talking to the cloud;
+    no client calls it yet.
+
+    ## Relationship to the Box API
+
+    This contract is public but separate from `box.openapi.yaml`. The Box API
+    stays tenancy-free so one client dialect works against local, self-hosted,
+    and cloud servers. Organizations and their members exist only in the cloud
+    service, so local servers (`boxlite serve`, the reference server) do not
+    serve these routes. Both contracts share the host, the `/v1` prefix, the
+    bearer credentials, and the error envelope.
+
+    ## Organization prefix
+
+    Every route takes the organization id in the `{prefix}` segment: the value
+    `GET /v1/me` returns as `Principal.path_prefix`. An API key belongs to one
+    organization; using it under another organization's prefix returns 403.
+
+    ## Roles
+
+    Members are `owner` or `member`. Owners remove members.
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  contact:
+    name: BoxLite
+    url: https://github.com/boxlite-ai/boxlite
+
+servers:
+  - url: "https://{host}/v1"
+    description: BoxLite cloud API v1
+    variables:
+      host:
+        default: api.boxlite.ai
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Members
+    description: Users who belong to an organization
+
+paths:
+  /{prefix}/members:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+
+    get:
+      operationId: listMembers
+      summary: List the organization's members
+      tags: [Members]
+      responses:
+        "200":
+          description: Members of the organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListMembersResponse"
+        "401":
+          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+
+  /{prefix}/members/{user_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/userId"
+
+    delete:
+      operationId: removeMember
+      summary: Remove a member from the organization
+      description: |
+        Requires the `owner` role, and revokes the member's API keys in this
+        organization at once. Removing the last owner, or a user from their own
+        personal organization, is refused with 403.
+      tags: [Members]
+      responses:
+        "204":
+          description: Member removed and their API keys in this organization revoked
+        "401":
+          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "./box.openapi.yaml#/components/responses/NotFoundError"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        The same bearer credentials as the Box API: a BoxLite API key, which is
+        bound to one organization, or an OIDC access token for a signed-in user.
+
+  parameters:
+    prefix:
+      name: prefix
+      in: path
+      required: true
+      description: Organization id, as returned in `Principal.path_prefix` by `GET /v1/me`
+      schema:
+        type: string
+        minLength: 1
+
+    userId:
+      name: user_id
+      in: path
+      required: true
+      description: Member identifier, as returned in `Member.user_id`
+      schema:
+        type: string
+        minLength: 1
+
+  responses:
+    ForbiddenError:
+      description: |
+        The credential is valid but may not do this: the caller lacks the `owner`
+        role, the key belongs to another organization, or the removal is refused
+      content:
+        application/json:
+          schema:
+            $ref: "./box.openapi.yaml#/components/schemas/ErrorResponse"
+
+  schemas:
+    Member:
+      type: object
+      description: A user who belongs to the organization
+      additionalProperties: false
+      required: [user_id, email, role, joined_at]
+      properties:
+        user_id:
+          type: string
+          description: Stable user identifier; use it to remove the member
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+          description: Display name; may be empty
+        role:
+          type: string
+          enum: [owner, member]
+        joined_at:
+          type: string
+          format: date-time
+          description: When the user became a member (UTC)
+
+    ListMembersResponse:
+      type: object
+      additionalProperties: false
+      required: [members]
+      properties:
+        members:
+          type: array
+          items:
+            $ref: "#/components/schemas/Member"
