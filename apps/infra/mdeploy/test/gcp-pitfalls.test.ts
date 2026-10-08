@@ -1802,7 +1802,9 @@ test('the proxy, the API and the runner read the same registries and the same ho
   )
   const apiProxy = readFileSync(`${api}registry/utils/registry-proxy.util.ts`, 'utf8')
   assert.match(apiProxy, new RegExp(`'${REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE}'`))
-  assert.match(apiProxy, new RegExp(`\\[${REGISTRY_PROXY_UPSTREAM_HOSTS.map((host) => `'${host}'`).join(', ')}\\]`))
+  // However the formatter wraps the array: the same hosts, in the same order.
+  const quoted = REGISTRY_PROXY_UPSTREAM_HOSTS.map((host) => `'${host.replaceAll('.', '\\.')}'`).join(',\\s*')
+  assert.match(apiProxy, new RegExp(`\\[\\s*${quoted},?\\s*\\]`))
   assert.match(apiProxy, new RegExp(`'${REGISTRY_PROXY_HOST_VARIABLE}'`))
   assert.match(
     readFileSync(`${runner}cmd/runner/config/config.go`, 'utf8'),

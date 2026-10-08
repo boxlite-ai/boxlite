@@ -17,10 +17,18 @@ const messagesFor = async (body: Record<string, unknown>) =>
 describe('CreateRegistryCredentialDto', () => {
   const valid = { registryHost: 'ghcr.io', repositoryPrefix: 'acme/', username: 'acme-bot', password: 'ghp_x' }
 
-  it('accepts a login for one of the four registries', async () => {
+  it('accepts a login with or without a prefix', async () => {
     expect(await messagesFor(valid)).toEqual([])
     expect(await messagesFor({ ...valid, repositoryPrefix: undefined })).toEqual([])
   })
+
+  // Container Registry serves from a host per region, as well as gcr.io itself.
+  it.each(['ghcr.io', 'docker.io', 'quay.io', 'gcr.io', 'us.gcr.io', 'eu.gcr.io', 'asia.gcr.io'])(
+    'accepts a login for %s',
+    async (registryHost) => {
+      expect(await messagesFor({ ...valid, registryHost })).toEqual([])
+    },
+  )
 
   it.each(['public.ecr.aws', 'us-docker.pkg.dev', '169.254.169.254', 'registry-1.docker.io'])(
     'refuses a login for %s',

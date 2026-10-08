@@ -116,18 +116,24 @@ describe('the registries page', () => {
     expect(field('registry-password').value).toBe('')
   })
 
-  it('warns about service account keys once gcr.io is chosen', () => {
-    open()
-    const registry = document.getElementById('registry-host') as HTMLSelectElement
-    expect(document.body.textContent).not.toContain('service account keys')
+  // Container Registry serves the same images from a host per region, and each
+  // takes the same service account key.
+  it.each(['gcr.io', 'us.gcr.io', 'eu.gcr.io', 'asia.gcr.io'])(
+    'warns about service account keys once %s is chosen',
+    (host) => {
+      open()
+      const registry = document.getElementById('registry-host') as HTMLSelectElement
+      expect(document.body.textContent).not.toContain('service account keys')
 
-    act(() => {
-      registry.value = 'gcr.io'
-      registry.dispatchEvent(new Event('change', { bubbles: true }))
-    })
+      act(() => {
+        registry.value = host
+        registry.dispatchEvent(new Event('change', { bubbles: true }))
+      })
 
-    expect(document.body.textContent).toContain('service account keys')
-  })
+      expect(registry.value).toBe(host)
+      expect(document.body.textContent).toContain('service account keys')
+    },
+  )
 
   it('shows why a login could not be removed, which names the boxes still pulling', async () => {
     const refusal = new Error('cannot be removed while 1 box(es) pull through it: a1b2c3')

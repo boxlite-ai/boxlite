@@ -262,7 +262,7 @@ function isInternalAddress(host: string): boolean {
  * The allowlist is the gate for a pull a runner makes directly: a host on it is
  * reachable, a host off it is not, whatever the host looks like. The one other
  * way in is a registered login, and that pull goes through the registry proxy
- * instead, for the four hosts a login is accepted for — see
+ * instead, for the hosts a login is accepted for — see
  * `ImageAdmissionService`.
  *
  * Internal addresses are therefore not a second check — an earlier version

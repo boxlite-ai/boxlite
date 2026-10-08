@@ -563,7 +563,10 @@ test('the API, the proxy and the runners agree on the proxy and its registries',
   deployStack({ providers, config, inputs: inputs() })
 
   assert.equal(read(seen.runners.request.registryProxyHost), 'registry-proxy-123.run.app')
-  assert.equal(seen.api.request.environment.REGISTRY_PROXY_UPSTREAM_HOSTS, 'ghcr.io,docker.io,quay.io,gcr.io')
+  assert.equal(
+    seen.api.request.environment.REGISTRY_PROXY_UPSTREAM_HOSTS,
+    'ghcr.io,docker.io,quay.io,gcr.io,us.gcr.io,eu.gcr.io,asia.gcr.io',
+  )
   assert.equal(
     seen.registryProxy.request.environment.REGISTRY_PROXY_UPSTREAM_HOSTS,
     seen.api.request.environment.REGISTRY_PROXY_UPSTREAM_HOSTS,

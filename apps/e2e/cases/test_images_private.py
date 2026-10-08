@@ -9,7 +9,8 @@ is never seen again.
 
 It needs a real private image, because the registry proxy pulls only from the
 registries a login is accepted for, by default ghcr.io, docker.io, quay.io and
-gcr.io, and refuses a private address: the local registry box cannot stand in.
+Container Registry's gcr.io hosts, and refuses a private address: the local
+registry box cannot stand in.
 Without the first three variables below the file skips. A stack that keeps no
 registry credentials answers step 2 with a 501, which fails: setting them is
 asking for a stack that does.

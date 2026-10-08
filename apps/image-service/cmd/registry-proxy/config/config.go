@@ -28,7 +28,7 @@ type Config struct {
 	// UpstreamHosts are the registries this proxy will pull from. The upstream
 	// arrives in the request path, so without a list the caller chooses what
 	// this process connects to.
-	UpstreamHosts []string `envconfig:"REGISTRY_PROXY_UPSTREAM_HOSTS" default:"ghcr.io,docker.io,quay.io,gcr.io" validate:"required,min=1"`
+	UpstreamHosts []string `envconfig:"REGISTRY_PROXY_UPSTREAM_HOSTS" default:"ghcr.io,docker.io,quay.io,gcr.io,us.gcr.io,eu.gcr.io,asia.gcr.io" validate:"required,min=1"`
 	// SecretStore is where the passwords organizations registered are read
 	// from: gcp for Secret Manager, file for SecretDir on a local stack. The
 	// API writes them under the same two names. Unset leaves every pull

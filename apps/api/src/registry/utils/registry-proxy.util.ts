@@ -15,11 +15,21 @@ const REGISTRY_PROXY_HOST_ENV = 'REGISTRY_PROXY_HOST'
 const CREDENTIALED_HOSTS_ENV = 'REGISTRY_PROXY_UPSTREAM_HOSTS'
 
 /**
- * The four that take a username and a token or password. `public.ecr.aws` holds
- * only public images, and Artifact Registry is left to keyless access, so
- * neither is here. The proxy's own default is the same list.
+ * The registries that take a username and a token or password: ghcr.io, Docker
+ * Hub, quay.io, and Container Registry, which serves from gcr.io and from a host
+ * per region. `public.ecr.aws` holds only public images, and Artifact Registry
+ * is left to keyless access, so neither is here. The proxy's own default is the
+ * same list.
  */
-const FALLBACK_CREDENTIALED_HOSTS = ['ghcr.io', 'docker.io', 'quay.io', 'gcr.io']
+const FALLBACK_CREDENTIALED_HOSTS = [
+  'ghcr.io',
+  'docker.io',
+  'quay.io',
+  'gcr.io',
+  'us.gcr.io',
+  'eu.gcr.io',
+  'asia.gcr.io',
+]
 
 /** The registry proxy's host, or undefined when this deployment runs none. */
 export function registryProxyHost(): string | undefined {

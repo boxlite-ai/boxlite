@@ -36,20 +36,30 @@ import { OrganizationRolePermissionsEnum, RegistryCredential } from '@boxlite-ai
 import React, { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 
+/** Container Registry, which serves from gcr.io and from a host per region. */
+const CONTAINER_REGISTRY_HOSTS = ['gcr.io', 'us.gcr.io', 'eu.gcr.io', 'asia.gcr.io'] as const
+
 /**
  * The registries a login is accepted for by default, which is also what the
  * deploy gives the API and the registry proxy as REGISTRY_PROXY_UPSTREAM_HOSTS.
  * A stack configured with other hosts needs this list changed with it; either
  * way the API has the final say and refuses a host it was not given.
  */
-export const REGISTRY_HOSTS = ['ghcr.io', 'docker.io', 'quay.io', 'gcr.io'] as const
+export const REGISTRY_HOSTS = ['ghcr.io', 'docker.io', 'quay.io', ...CONTAINER_REGISTRY_HOSTS] as const
+
+const isContainerRegistry = (host: string) => (CONTAINER_REGISTRY_HOSTS as readonly string[]).includes(host)
+
+const CONTAINER_REGISTRY_HINT = '_json_key; the password is a service account key file'
 
 /** What each registry calls its username, so a caller knows what to type. */
 const USERNAME_HINT: Record<(typeof REGISTRY_HOSTS)[number], string> = {
   'ghcr.io': 'GitHub username; the password is a token with read:packages',
   'docker.io': 'Docker Hub username; the password is an access token',
   'quay.io': 'Robot account, e.g. acme+puller; the password is its token',
-  'gcr.io': '_json_key; the password is a service account key file',
+  'gcr.io': CONTAINER_REGISTRY_HINT,
+  'us.gcr.io': CONTAINER_REGISTRY_HINT,
+  'eu.gcr.io': CONTAINER_REGISTRY_HINT,
+  'asia.gcr.io': CONTAINER_REGISTRY_HINT,
 }
 
 const ROW_GRID = 'grid grid-cols-[1fr_1fr_1fr_0.8fr_60px] items-center gap-3 px-2'
@@ -233,7 +243,7 @@ const Registries: React.FC = () => {
                   required
                 />
               </div>
-              {host === 'gcr.io' && (
+              {isContainerRegistry(host) && (
                 <PanelNote>
                   Container Registry is now served by Artifact Registry, and many organizations forbid creating service
                   account keys. A short-lived oauth2accesstoken does not belong here: it expires within the hour.
