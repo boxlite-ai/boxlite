@@ -34,6 +34,9 @@ vi.mock('@/contexts/ThemeContext', () => ({
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({ selectedOrganization: { id: 'org-1' } }),
 }))
+vi.mock('@/hooks/useUserOrganizationInvitations', () => ({
+  useUserOrganizationInvitations: () => ({ count: 2 }),
+}))
 
 describe('Sidebar primary navigation', () => {
   let root: Root | null = null
@@ -91,5 +94,28 @@ describe('Sidebar primary navigation', () => {
       (item) => item.textContent === 'Members',
     )
     expect(members?.getAttribute('href')).toBe('/dashboard/members')
+  })
+
+  it('links the invitations page from the profile menu with the pending count', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    act(() => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter initialEntries={['/dashboard/boxes']}>
+          <Sidebar isBannerVisible={false} version="test" />
+        </MemoryRouter>,
+      )
+    })
+
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="Open profile menu"]')
+    // Radix opens menus on pointerdown; jsdom has no PointerEvent, and React reads only `button`.
+    await act(async () =>
+      trigger?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 })),
+    )
+
+    const invitations = document.querySelector('a[role="menuitem"][href="/dashboard/user/invitations"]')
+    // The label, then the badge with the pending count.
+    expect(invitations?.textContent).toBe('Invitations2')
   })
 })

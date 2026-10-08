@@ -93,3 +93,10 @@ removal.
 
 The members page sits in the profile menu, beside the organization settings,
 rather than in the sidebar: it manages the organization, not a resource in it.
+
+## Accepting an invitation opens the organization
+
+An invitee reaches the invitations page from the email link or from the profile
+menu, which shows how many invitations are pending. Accepting switches to the
+organization just joined, because a membership that only shows up after a
+reload reads as a failed accept.

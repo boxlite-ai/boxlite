@@ -9,6 +9,7 @@ import { OrganizationInvitationActionDialog } from '@/components/UserOrganizatio
 import { UserOrganizationInvitationTable } from '@/components/UserOrganizationInvitations/UserOrganizationInvitationTable'
 import { useApi } from '@/hooks/useApi'
 import { useOrganizations } from '@/hooks/useOrganizations'
+import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useUserOrganizationInvitations } from '@/hooks/useUserOrganizationInvitations'
 import { handleApiError } from '@/lib/error-handling'
 import { OrganizationInvitation } from '@boxlite-ai/api-client'
@@ -20,6 +21,7 @@ const UserOrganizationInvitations: React.FC = () => {
   const { organizationsApi } = useApi()
 
   const { refreshOrganizations } = useOrganizations()
+  const { onSelectOrganization } = useSelectedOrganization()
   const { setCount } = useUserOrganizationInvitations()
 
   const [invitations, setInvitations] = useState<OrganizationInvitation[]>([])
@@ -74,8 +76,11 @@ const UserOrganizationInvitations: React.FC = () => {
     setLoadingInvitationAction((prev) => ({ ...prev, [invitation.id]: true }))
     try {
       await organizationsApi.acceptOrganizationInvitation(invitation.id)
-      toast.success('Invitation accepted successfully')
+      toast.success(`You joined ${invitation.organizationName}`)
+      // Listing the new organization is not enough: the selection only follows
+      // localStorage on the next load, so switch to it now.
       await refreshOrganizations(invitation.organizationId)
+      await onSelectOrganization(invitation.organizationId)
       await fetchInvitations(false)
       return true
     } catch (error) {

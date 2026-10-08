@@ -18,6 +18,7 @@ import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
 import { Theme, useTheme } from '@/contexts/ThemeContext'
 import { RoutePath } from '@/enums/RoutePath'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { useUserOrganizationInvitations } from '@/hooks/useUserOrganizationInvitations'
 import { markJustLoggedOut } from '@/lib/auth-session'
 import { ONBOARDING_OPEN_EVENT } from '@/lib/onboarding-progress'
 import { cn } from '@/lib/utils'
@@ -27,6 +28,7 @@ import {
   ChevronDown,
   KeyRound,
   LogOut,
+  Mail,
   MessageCircle,
   Monitor,
   MoonIcon,
@@ -109,6 +111,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const { selectedOrganization } = useSelectedOrganization()
+  const { count: pendingInvitationCount } = useUserOrganizationInvitations()
 
   const primaryItems: NavItem[] = PRIMARY_NAV_ITEMS
 
@@ -243,6 +246,17 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
               </Link>
             </DropdownMenuItem>
           )}
+          <DropdownMenuItem asChild className="cursor-pointer">
+            <Link to={RoutePath.USER_INVITATIONS}>
+              <Mail className="size-4" />
+              Invitations
+              {pendingInvitationCount > 0 && (
+                <span className="ml-auto bg-brand px-1.5 text-[11px] font-semibold text-white">
+                  {pendingInvitationCount}
+                </span>
+              )}
+            </Link>
+          </DropdownMenuItem>
           <DropdownMenuItem asChild className="cursor-pointer">
             <a href={BOXLITE_DOCS_URL} target="_blank" rel="noopener noreferrer">
               <BookOpen className="size-4" />

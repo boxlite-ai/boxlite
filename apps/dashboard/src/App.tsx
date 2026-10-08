@@ -7,6 +7,7 @@
 import { NotificationSocketProvider } from '@/providers/NotificationSocketProvider'
 import { OrganizationsProvider } from '@/providers/OrganizationsProvider'
 import { SelectedOrganizationProvider } from '@/providers/SelectedOrganizationProvider'
+import { UserOrganizationInvitationsProvider } from '@/providers/UserOrganizationInvitationsProvider'
 import { initPylon } from '@/vendor/pylon'
 import { usePostHog } from 'posthog-js/react'
 import React, { Suspense, useEffect } from 'react'
@@ -44,6 +45,7 @@ const Volumes = React.lazy(() => import('./pages/Volumes'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
 const OrganizationMembers = React.lazy(() => import('@/pages/OrganizationMembers'))
+const UserOrganizationInvitations = React.lazy(() => import('@/pages/UserOrganizationInvitations'))
 const BoxDetails = React.lazy(() => import('./components/boxes').then((m) => ({ default: m.BoxDetails })))
 const BoxTerminalFullscreen = React.lazy(() =>
   import('./components/boxes').then((m) => ({ default: m.BoxTerminalFullscreen })),
@@ -155,23 +157,21 @@ function App() {
         element={<Navigate to={`${RoutePath.BOXES}${location.search}`} replace />}
       />
       <Route
-        path={RoutePath.USER_INVITATIONS}
-        element={<Navigate to={`${RoutePath.BOXES}${location.search}`} replace />}
-      />
-      <Route
         path={RoutePath.DASHBOARD}
         element={
           <Suspense fallback={<LoadingFallback />}>
             <ApiProvider>
               <OrganizationsProvider>
                 <SelectedOrganizationProvider>
-                  <RegionsProvider>
-                    <NotificationSocketProvider>
-                      <BannerProvider>
-                        <Dashboard />
-                      </BannerProvider>
-                    </NotificationSocketProvider>
-                  </RegionsProvider>
+                  <UserOrganizationInvitationsProvider>
+                    <RegionsProvider>
+                      <NotificationSocketProvider>
+                        <BannerProvider>
+                          <Dashboard />
+                        </BannerProvider>
+                      </NotificationSocketProvider>
+                    </RegionsProvider>
+                  </UserOrganizationInvitationsProvider>
                 </SelectedOrganizationProvider>
               </OrganizationsProvider>
             </ApiProvider>
@@ -221,6 +221,7 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.EMAIL_VERIFY)} element={<EmailVerify />} />
         <Route path={getRouteSubPath(RoutePath.SETTINGS)} element={<OrganizationSettings />} />
         <Route path={getRouteSubPath(RoutePath.MEMBERS)} element={<OrganizationMembers />} />
+        <Route path={getRouteSubPath(RoutePath.USER_INVITATIONS)} element={<UserOrganizationInvitations />} />
         <Route
           path={getRouteSubPath(RoutePath.ONBOARDING)}
           element={<Navigate to={`${RoutePath.BOXES}?onboarding=1`} replace />}
