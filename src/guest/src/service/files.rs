@@ -6,6 +6,7 @@
 
 use crate::service::server::GuestServer;
 use crate::storage::attach::Attacher;
+use boxlite_shared::errors::BoxliteError;
 use boxlite_shared::{
     files_server::Files, BoxByteStream, DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
 };
@@ -528,7 +529,8 @@ impl Files for GuestServer {
                     },
                 )
                 .await
-                .map_err(|e| Status::internal(e.to_string()))?;
+                // An archive the landing refuses is the caller's to fix.
+                .map_err(BoxliteError::into_validation_status)?;
                 let boxlite_shared::tar::UnpackReport {
                     entry_paths,
                     preexisting_dirs,
