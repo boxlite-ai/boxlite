@@ -66,6 +66,11 @@ impl FakeVm {
         }
     }
 
+    /// The call log, which outlives the backend so tests can read it after a drop.
+    pub(crate) fn log(&self) -> Arc<Mutex<Vec<Call>>> {
+        Arc::clone(&self.log)
+    }
+
     pub(crate) fn calls(&self) -> Vec<Call> {
         self.log.lock().unwrap().clone()
     }
