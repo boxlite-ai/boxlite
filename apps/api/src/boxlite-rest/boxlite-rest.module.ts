@@ -16,16 +16,19 @@ import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
+import { BoxliteImageController } from './boxlite-image.controller'
+import { ImageModule } from '../image/image.module'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 
 @Module({
-  imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule, UserModule],
+  imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule, UserModule, ImageModule],
   controllers: [
     BoxliteMeController,
     BoxliteConfigController,
     BoxliteBoxController,
     BoxliteProxyController,
     BoxliteVolumeController,
+    BoxliteImageController,
   ],
   providers: [BoxliteWsProxyService, CommerceBoxLimitService],
   exports: [BoxliteWsProxyService],

@@ -20,6 +20,16 @@ import { catalogNameOf, isCuratedSelector } from '../utils/image-ref.util'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/** One reference the catalog holds: a tag, or a version no tag points at. */
+export interface ImageReference {
+  reference: string
+  name: string
+  tag: string
+  digest: string
+  sizeBytes: number
+  recordedAt: Date
+}
+
 /** The operator's images, which every organization sees and none of them owns. */
 function curatedEntries(): ImageDto[] {
   return supportedImages().map(({ name, ref }) => ({
@@ -76,6 +86,56 @@ export class ImageCatalogService {
       ...curatedEntries(),
       ...images.map((image) => toDto(image, versions.get(image.id) ?? [], tags.get(image.id) ?? [])),
     ]
+  }
+
+  /**
+   * One row per reference the organization's catalog holds: each tag, at the
+   * version it points to, then each version no tag points to, by its digest.
+   *
+   * The shape a local image cache lists in, so an SDK lists both the same
+   * way. The curated set is not in it: it has no recorded build to name.
+   */
+  async listReferences(organization: Organization): Promise<ImageReference[]> {
+    const images = await this.imageRepository.find({
+      where: { organizationId: organization.id, deletedAt: IsNull() },
+      order: { name: 'ASC' },
+    })
+    if (images.length === 0) {
+      return []
+    }
+    const ids = images.map((image) => image.id)
+    const [versions, tags] = await Promise.all([
+      this.versionsByImage(ids),
+      this.tagRepository.find({ where: { imageId: In(ids) }, order: { name: 'ASC' } }),
+    ])
+
+    const references: ImageReference[] = []
+    for (const image of images) {
+      const held = versions.get(image.id) ?? []
+      const byId = new Map(held.map((version) => [version.id, version]))
+      const tagged = new Set<string>()
+      const row = (reference: string, tag: string, version: ImageVersion): ImageReference => ({
+        reference,
+        name: image.name,
+        tag,
+        digest: version.digest,
+        sizeBytes: version.sizeBytes,
+        recordedAt: version.createdAt,
+      })
+      for (const tag of tags.filter((candidate) => candidate.imageId === image.id)) {
+        // Only ready versions are read, so a tag can point at one not listed.
+        const version = byId.get(tag.versionId)
+        if (version) {
+          tagged.add(version.id)
+          references.push(row(`${image.name}:${tag.name}`, tag.name, version))
+        }
+      }
+      for (const version of held.filter((candidate) => !tagged.has(candidate.id))) {
+        // `<none>` is what a local image cache lists an untagged build as.
+        references.push(row(`${image.name}@${version.digest}`, '<none>', version))
+      }
+    }
+    return references
   }
 
   async get(organization: Organization, idOrRef: string): Promise<ImageDetailDto> {

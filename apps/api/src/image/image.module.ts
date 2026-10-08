@@ -44,6 +44,7 @@ import { ImageResolverService } from './services/image-resolver.service'
   ],
   exports: [
     ImageAdmissionService,
+    ImageCatalogService,
     ImagePreparationService,
     ImageRegistrarService,
     ImageResolverService,
