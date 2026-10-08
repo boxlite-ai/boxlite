@@ -64,6 +64,7 @@ interface NavItem {
 const PRIMARY_NAV_ITEMS: NavItem[] = [
   { label: 'Boxes', path: RoutePath.BOXES },
   { label: 'Images', path: RoutePath.IMAGES },
+  { label: 'Registries', path: RoutePath.REGISTRIES },
   { label: 'Volumes', path: RoutePath.VOLUMES },
   { label: 'Billing', path: RoutePath.BILLING },
 ]

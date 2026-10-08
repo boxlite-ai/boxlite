@@ -44,6 +44,7 @@ const BillingPlanChange = React.lazy(() => import('./pages/BillingPlanChange'))
 const Volumes = React.lazy(() => import('./pages/Volumes'))
 const Images = React.lazy(() => import('./pages/Images'))
 const ImageDetails = React.lazy(() => import('./pages/ImageDetails'))
+const Registries = React.lazy(() => import('./pages/Registries'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
 const BoxDetails = React.lazy(() => import('./components/boxes').then((m) => ({ default: m.BoxDetails })))
@@ -188,6 +189,7 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.VOLUMES)} element={<Volumes />} />
         <Route path={getRouteSubPath(RoutePath.IMAGES)} element={<Images />} />
         <Route path={getRouteSubPath(RoutePath.IMAGE_DETAILS)} element={<ImageDetails />} />
+        <Route path={getRouteSubPath(RoutePath.REGISTRIES)} element={<Registries />} />
         {/* Plan, wallet and usage are sections of the one Billing page. The old
             per-surface paths stay as redirects so existing links keep working.
             The route is open to any member: the wallet/plan data is owner-scoped by

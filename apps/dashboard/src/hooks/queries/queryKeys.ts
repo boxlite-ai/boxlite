@@ -82,6 +82,10 @@ export const queryKeys = {
     // which belongs to no organization and counts against no limit.
     usage: (organizationId: string) => [...queryKeys.images.all, organizationId, 'usage'] as const,
   },
+  registries: {
+    all: ['registries'] as const,
+    list: (organizationId: string) => [...queryKeys.registries.all, organizationId, 'list'] as const,
+  },
   volumes: {
     all: ['volumes'] as const,
     list: (organizationId: string) => [...queryKeys.volumes.all, organizationId, 'list'] as const,
