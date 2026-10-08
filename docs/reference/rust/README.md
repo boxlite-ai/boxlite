@@ -1202,7 +1202,7 @@ pub enum BoxliteError {
     /// Unsupported operation
     Unsupported(String),
 
-    /// Box not found
+    /// The named box, image, volume or snapshot does not exist
     NotFound(String),
 
     /// Resource already exists

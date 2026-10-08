@@ -43,8 +43,8 @@ pub enum BoxliteError {
     #[error("unsupported: {0}")]
     Unsupported(String),
 
-    /// Box not found in registry or database.
-    #[error("box not found: {0}")]
+    /// The named resource — a box, image, volume or snapshot — does not exist.
+    #[error("not found: {0}")]
     NotFound(String),
 
     /// Box or resource already exists.

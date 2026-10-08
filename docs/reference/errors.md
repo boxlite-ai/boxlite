@@ -229,7 +229,7 @@ Error: internal error: unexpected state transition
 
 ### `NotFound(String)`
 
-Box or resource not found.
+The named box, image, volume or snapshot does not exist.
 
 **Cause:**
 - Box ID doesn't exist
@@ -238,7 +238,7 @@ Box or resource not found.
 
 **Example:**
 ```text
-Error: box not found: 01JJNH8...
+Error: not found: 01JJNH8...
 ```
 
 **Solution:**
@@ -300,9 +300,12 @@ async def safe_execution():
                 print(f"Command failed: {result.stderr}")
                 return
 
-    except Exception as e:
-        # All BoxLite errors are raised as Python exceptions
-        print(f"Error: {e}")
+    except boxlite.NotFoundError:
+        # One class per error type above, each with a `code` (`not_found`
+        # here); see the Python reference's "Runtime failures" table.
+        print("No such box or image")
+    except boxlite.BoxliteError as e:
+        print(f"Error [{getattr(e, 'code', '-')}]: {e}")
 
         # Enable debug logging for details
         # RUST_LOG=debug python script.py

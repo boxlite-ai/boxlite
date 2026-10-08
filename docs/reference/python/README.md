@@ -868,7 +868,46 @@ from boxlite import BoxliteError, ExecError, TimeoutError, ParseError
 BoxliteError (base)
 ├── ExecError       # Command execution failed
 ├── TimeoutError    # Operation timed out
-└── ParseError      # Output parsing failed
+├── ParseError      # Output parsing failed
+└── NotFoundError, InvalidStateError, …   # Runtime failures, see below
+```
+
+### Runtime failures
+
+A failure the native runtime reports is raised as one class per kind of
+failure, each with a `code`. The names and codes are the ones
+`BoxliteError::http()` gives (`src/shared/src/errors.rs`), so a REST server
+answers the same failure with the same `code`. Every class is also a
+`RuntimeError`, which is what these failures were raised as before.
+
+| Class | `code` | Raised when |
+|-------|--------|-------------|
+| `NotFoundError` | `not_found` | The box, image, volume or snapshot does not exist |
+| `AlreadyExistsError` | `already_exists` | The name is taken |
+| `InvalidStateError` | `invalid_state` | The resource's state does not allow the operation |
+| `InvalidArgumentError` | `invalid_argument` | A value was refused |
+| `UnsupportedError` | `unsupported` | The operation is not available on this runtime |
+| `ResourceExhaustedError` | `resource_exhausted` | A limit was reached |
+| `StoppedError` | `stopped` | The box has stopped |
+| `SessionReapedError` | `session_reaped` | The session was reaped |
+| `ImageError` | `image_pull_failed` | An image could not be pulled or read |
+| `ExecutionError` | `execution_failed` | A process could not be run |
+| `NetworkError` | `network_unavailable` | The network was unavailable |
+| `UpstreamUnavailableError` | `upstream_unavailable` | A component did not answer |
+| `EngineError` | `engine_unavailable` | The virtualization engine failed |
+| `ConfigError` | `config_error` | Configuration is invalid, or authentication failed |
+| `StorageError` | `storage_error` | Storage could not be read or written |
+| `DatabaseError` | `database_error` | The runtime's database failed |
+| `MetadataError` | `metadata_error` | Stored metadata could not be read |
+| `InternalError` | `internal` | An unexpected failure |
+
+```python
+from boxlite import NotFoundError
+
+try:
+    await runtime.remove("no-such-box")
+except NotFoundError as e:
+    print(e.code)  # not_found
 ```
 
 ### `BoxliteError`
