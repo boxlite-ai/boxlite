@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Native VMM skeleton with VM and vCPU entry points, plus x86_64 ELF kernel
-//! decoding. The entry points are placeholders that panic if called.
+//! loading. The entry points are placeholders that panic if called.
 //!
 //! The VMM owns the guest machine and delegates host operations to
 //! `boxlite-hypervisor`. BoxLite runtime integration belongs in its engine adapter.

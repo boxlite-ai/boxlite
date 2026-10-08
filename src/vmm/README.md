@@ -16,13 +16,14 @@ inspect the error's host cause.
 
 ```text
 boxlite-vmm
-└── boxlite-hypervisor
+├── boxlite-hypervisor
+└── vm-memory (guest-memory access)
 ```
 
 | Module | Planned responsibility |
 | --- | --- |
 | `vm` | VM facade and lifecycle coordination |
-| `boot` | Implemented for x86_64: ELF `vmlinux` decoding; placement in guest RAM, `boot_params`, command line, MP table and entry registers follow |
+| `boot` | Implemented for x86_64: validated ELF `vmlinux` placement; `boot_params`, command line, MP table and entry registers follow |
 | `config` | Machine configuration and boundary validation |
 | `error` | VMM errors that keep the hypervisor's cause chain |
 | `memory` | Backing-memory ownership and guest address layout |
@@ -35,13 +36,27 @@ engine adapter, engine selection, and `native` feature wiring follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
 
-## Kernel decoding
+## Kernel loading
 
 On Linux x86_64, `boot::elf::parse(image)` decodes an ELF `vmlinux` into its
 `PT_LOAD` segments, sorted by physical address, plus the entry and span as a
 `KernelLayout`. It rejects anything but a little-endian x86-64 ELF64 executable
 with headers and file ranges inside the image, non-overlapping segments (BSS
-included) and an entry in file-backed executable bytes. Placement is next.
+included) and an entry in file-backed executable bytes.
+
+`boot::elf::load_elf(ram, image)` places those segments in borrowed guest
+memory (any vm-memory `GuestMemoryBackend`) and returns the layout. It stays
+crate-visible until the lifecycle slice calls it from `Vm::new`.
+
+- Placement: file bytes at `p_paddr`; BSS zero-filled; bytes between segments
+  untouched; nothing is written if any check fails.
+- Rejected before any write: segments below 1 MiB, where `boot_params`, the
+  command line and the MP table live, and segments outside registered RAM.
+- Dependencies: vm-memory only. The ELF loader of linux-loader cannot zero BSS
+  on borrowed RAM and adds no check the decoder lacks.
+
+A probe that loads the real kernel and reads it back through a KVM vCPU is
+the next slice.
 
 ## Build
 
