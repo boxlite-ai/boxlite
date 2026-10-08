@@ -3,6 +3,7 @@
 package boxlite
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -95,6 +96,39 @@ func TestCopyDirectoryNestsUnlessSourceEndsInDot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(contents, "tree")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("/. must not copy the directory itself: %v", err)
+	}
+}
+
+// The runner's copy-in path: a directory streamed to a missing destination
+// becomes it, the way docker cp lands it.
+func TestCopyInStreamLandsADirectoryTheWayDockerCpDoes(t *testing.T) {
+	rt := newTestRuntime(t)
+	box := createStartedBox(t, rt, "alpine:latest")
+	ctx := context.Background()
+	run := func(script string) string {
+		t.Helper()
+		result, err := box.Exec(ctx, "sh", "-c", script)
+		if err != nil {
+			t.Fatalf("%s: %v", script, err)
+		}
+		if result.ExitCode != 0 {
+			t.Fatalf("%s: exit code %d, stderr=%q", script, result.ExitCode, result.Stderr)
+		}
+		return result.Stdout
+	}
+	run("mkdir /root/tree && printf a > /root/tree/a.txt")
+
+	// The archive a client sends for directory "tree", as BoxLite packs it.
+	var archive bytes.Buffer
+	if err := box.CopyOutStream(ctx, "/root/tree", &archive, nil); err != nil {
+		t.Fatalf("CopyOutStream: %v", err)
+	}
+
+	if err := box.CopyInStream(ctx, "/root/landed", CopySourceDir, &archive); err != nil {
+		t.Fatalf("CopyInStream: %v", err)
+	}
+	if got := run("cat /root/landed/a.txt && test ! -e /root/landed/tree"); got != "a" {
+		t.Fatalf("got %q", got)
 	}
 }
 

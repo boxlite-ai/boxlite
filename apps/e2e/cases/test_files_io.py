@@ -5,6 +5,8 @@ Verifies that the SDK → API → Runner → VM `copy_in` / `copy_out` chain:
   - recurses into directories
   - honours the `SRC/.` "contents, not the directory" spelling and the
     `overwrite` option end-to-end
+  - lands a directory at a missing destination the way `docker cp` does,
+    in both directions
 
 `copy.rs` covers the full matrix at the local-FFI layer. Re-running all of
 those over the REST chain would burn ~10 boxes for low marginal
@@ -117,6 +119,33 @@ async def test_copy_in_directory_contents_with_dot_suffix(box):
     assert "/workspace/flatdest/sub/deep.txt" in files, (
         f"nested file missing — copy_in didn't recurse: {files}"
     )
+
+
+@pytest.mark.asyncio
+async def test_directory_becomes_a_missing_destination_both_ways(box):
+    """POL-593: a directory copied to a destination that does not exist
+    becomes it, the way `docker cp` lands it, rather than nesting under its
+    own name. Both directions, so neither can drift from the other."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tree = Path(tmpdir) / "tree"
+        tree.mkdir()
+        (tree / "a.txt").write_text("a\n")
+
+        await box.copy_in(str(tree), "/workspace/landed")
+        ex = await box.exec(
+            "sh", ["-c", "cat /workspace/landed/a.txt && test ! -e /workspace/landed/tree"],
+            None,
+        )
+        out, _ = await drain(ex)
+        rc = await asyncio.wait_for(ex.wait(), timeout=30)
+        assert rc.exit_code == 0 and out == "a\n", (
+            f"copy_in did not land the directory as the destination: rc={rc.exit_code}"
+        )
+
+        back = Path(tmpdir) / "back"
+        await box.copy_out("/workspace/landed", str(back))
+        assert (back / "a.txt").read_text() == "a\n"
+        assert not (back / "landed").exists(), "copy_out nested the directory"
 
 
 @pytest.mark.asyncio
