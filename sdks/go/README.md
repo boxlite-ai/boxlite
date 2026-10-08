@@ -148,6 +148,44 @@ takes every tag of the name; a name the runtime does not hold fails with
 from a removed image reads the image's configuration from the registry when it
 next starts.
 
+### Private Registry Logins
+
+On a runtime from `NewRest`, `rt.Registries()` manages the logins the server
+pulls private images with. A runtime from `NewRuntime` returns
+`ErrUnsupported`: pass `WithImageRegistries` instead.
+
+```go
+registries, err := rt.Registries()
+if err != nil {
+	log.Fatal(err)
+}
+defer registries.Close()
+
+login, err := registries.Create(ctx, boxlite.NewRegistryCredential{
+	RegistryHost:     "ghcr.io",
+	RepositoryPrefix: "acme/", // "" for the whole registry
+	Username:         "acme-bot",
+	Password:         os.Getenv("GHCR_TOKEN"),
+})
+if err != nil {
+	log.Fatal(err)
+}
+// ... boxes created from ghcr.io/acme/... now pull with this login ...
+if err := registries.Remove(ctx, login.ID); err != nil {
+	log.Fatal(err) // ErrInvalidState while a box still pulls through it
+}
+```
+
+| Method | Returns or fails with |
+|--------|-----------------------|
+| `List` | Every login, oldest first |
+| `Create` | The login; `ErrAlreadyExists` while one is held for the same registry and prefix |
+| `Remove` | `ErrInvalidState` naming the boxes while one pulls through it; `ErrNotFound` for an unknown id; `ErrInvalidArgument` for an id that is not a UUID |
+
+The password is sent once and never returned: `RegistryCredential` has no
+password field, and `NewRegistryCredential` prints `Password:[redacted]` with
+`%v`, `%+v` and `%#v`.
+
 ## Box Options
 
 - `WithNetwork(boxlite.NetworkSpec{Outbound: boxlite.OutboundNetworkSpec{Mode: boxlite.NetworkModeEnabled, AllowNet: []string{"api.openai.com"}}})` restricts outbound traffic while keeping networking enabled.
