@@ -66,8 +66,8 @@ codecov: coverage\:lcov
 # profile bounds each test; disabling retries preserves the first failure.
 coverage\:vmm\:kvm: _ensure-kvm
 	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 \
-		-p boxlite-hypervisor --lib --run-ignored only --test-threads=1 \
-		-E 'test(kvm::vm::tests::)'
+		-p boxlite-hypervisor -p boxlite-vmm --lib --run-ignored only --test-threads=1 \
+		-E 'test(vm::tests::)'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
 
 # Go's reports include every package, including packages with no tests.

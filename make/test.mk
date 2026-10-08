@@ -274,9 +274,13 @@ _ensure-kvm:
 	@test -r /dev/kvm -a -w /dev/kvm || { echo "Read/write access to /dev/kvm is required" >&2; exit 1; }
 
 # Run the ignored hardware tests explicitly and bound a stalled guest with a timeout.
+# Both crates run even when one fails, so one report shows every result.
 test\:integration\:vmm\:kvm: _ensure-kvm
-	@cargo test -p boxlite-hypervisor --lib --no-run
-	@timeout 60s cargo test -p boxlite-hypervisor --lib kvm::vm::tests:: -- --ignored --test-threads=1
+	@cargo test -p boxlite-hypervisor -p boxlite-vmm --lib --no-run
+	@status=0; \
+	timeout 60s cargo test -p boxlite-hypervisor --lib kvm::vm::tests:: -- --ignored --test-threads=1 || status=1; \
+	timeout 60s cargo test -p boxlite-vmm --lib vm::tests:: -- --ignored --test-threads=1 || status=1; \
+	exit $$status
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
 # excluded from test:unit:rust because the zygote suite forks real processes.
