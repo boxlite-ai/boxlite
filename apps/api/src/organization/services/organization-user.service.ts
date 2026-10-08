@@ -4,9 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { InjectRepository } from '@nestjs/typeorm'
+import { InjectRedis } from '@nestjs-modules/ioredis'
+import Redis from 'ioredis'
 import { DataSource, EntityManager, Repository } from 'typeorm'
 import { OrganizationRoleService } from './organization-role.service'
 import { OrganizationEvents } from '../constants/organization-events.constant'
@@ -17,6 +19,7 @@ import { OrganizationMemberRole } from '../enums/organization-member-role.enum'
 import { OrganizationResourcePermission } from '../enums/organization-resource-permission.enum'
 import { OrganizationInvitationAcceptedEvent } from '../events/organization-invitation-accepted.event'
 import { OrganizationResourcePermissionsUnassignedEvent } from '../events/organization-resource-permissions-unassigned.event'
+import { OrganizationUserRemovedEvent } from '../events/organization-user-removed.event'
 import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { UserService } from '../../user/user.service'
 import { UserEvents } from '../../user/constants/user-events.constant'
@@ -24,6 +27,8 @@ import { UserDeletedEvent } from '../../user/events/user-deleted.event'
 
 @Injectable()
 export class OrganizationUserService {
+  private readonly logger = new Logger(OrganizationUserService.name)
+
   constructor(
     @InjectRepository(OrganizationUser)
     private readonly organizationUserRepository: Repository<OrganizationUser>,
@@ -31,7 +36,13 @@ export class OrganizationUserService {
     private readonly userService: UserService,
     private readonly eventEmitter: EventEmitter2,
     private readonly dataSource: DataSource,
+    @InjectRedis() private readonly redis: Redis,
   ) {}
+
+  /** Redis key under which OrganizationAccessGuard caches a membership. */
+  static membershipCacheKey(organizationId: string, userId: string): string {
+    return `organization-user:${organizationId}:${userId}`
+  }
 
   async findAll(organizationId: string): Promise<OrganizationUserDto[]> {
     const organizationUsers = await this.organizationUserRepository.find({
@@ -149,7 +160,23 @@ export class OrganizationUserService {
       throw new NotFoundException(`User with ID ${userId} not found in organization with ID ${organizationId}`)
     }
 
-    await this.removeWithEntityManager(this.organizationUserRepository.manager, organizationUser)
+    // Listeners revoke what the membership granted, such as the member's API keys,
+    // in the same transaction, so the rows are deleted together or not at all.
+    const removal = await this.dataSource.transaction(async (em) => {
+      const event = new OrganizationUserRemovedEvent(em, organizationId, userId)
+      await this.removeWithEntityManager(em, organizationUser)
+      await this.eventEmitter.emitAsync(OrganizationEvents.USER_REMOVED, event)
+      return event
+    })
+
+    // Caches are cleared only after commit, so a request that refills one reads the removal.
+    await removal.runAfterCommitTasks()
+    const cacheKey = OrganizationUserService.membershipCacheKey(organizationId, userId)
+    try {
+      await this.redis.del(cacheKey)
+    } catch (error) {
+      this.logger.error(`Failed to invalidate membership cache ${cacheKey}:`, error)
+    }
   }
 
   private async removeWithEntityManager(

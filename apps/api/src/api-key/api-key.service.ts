@@ -13,6 +13,7 @@ import { RedisLockProvider } from '../box/common/redis-lock.provider'
 import { OnAsyncEvent } from '../common/decorators/on-async-event.decorator'
 import { OrganizationEvents } from '../organization/constants/organization-events.constant'
 import { OrganizationResourcePermissionsUnassignedEvent } from '../organization/events/organization-resource-permissions-unassigned.event'
+import { OrganizationUserRemovedEvent } from '../organization/events/organization-user-removed.event'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import { extractKeyDisplayPrefix, generateApiKeyHash, generateApiKeyValue } from '../common/utils/api-key'
@@ -204,5 +205,22 @@ export class ApiKeyService {
     })
 
     await Promise.all(apiKeysToRevoke.map((apiKey) => this.deleteWithEntityManager(payload.entityManager, apiKey)))
+  }
+
+  @OnAsyncEvent({
+    event: OrganizationEvents.USER_REMOVED,
+  })
+  async handleOrganizationUserRemovedEvent(payload: OrganizationUserRemovedEvent): Promise<void> {
+    const apiKeysToRevoke = await payload.entityManager.find(ApiKey, {
+      where: {
+        organizationId: payload.organizationId,
+        userId: payload.userId,
+      },
+    })
+
+    await payload.entityManager.remove(apiKeysToRevoke)
+    payload.afterCommit(async () => {
+      await Promise.all(apiKeysToRevoke.map((apiKey) => this.invalidateApiKeyCache(apiKey.keyHash)))
+    })
   }
 }
