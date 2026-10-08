@@ -26,7 +26,7 @@ boxlite-vmm
 | `vm` | VM facade and lifecycle coordination |
 | `config` | `VmConfig { vcpu_count, memory_mib }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB |
 | `error` | VMM errors that keep the hypervisor's cause chain |
-| `memory` | `GuestRam`: owned guest RAM and the RAM layout; registration with the host VM follows |
+| `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
 | `vcpu` | Worker threads, stop coordination, and exit handling |
 | `irq` | Device interrupt assignment and routing; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `bus` | Address-range registration and device I/O dispatch |
@@ -44,13 +44,22 @@ the 32-bit MMIO hole at `0xC000_0000`, and at `0x8000_0000` on arm64. The
 and the arm64 address-space limit are later changes.
 
 `GuestRam` allocates the layout as zero-filled anonymous memory through
-vm-memory. Host-side users clone the shared `Arc<GuestMemoryMmap>` and access
-guest memory through vm-memory's volatile API, never through Rust references.
-Registering the RAM with the host VM, with the rules that keep the backing
-alive while a registration may exist, is the next slice.
+vm-memory and registers it with the host VM. Three rules keep the backend's
+`map_memory` contract:
 
-Unit tests live under `tests/` and are included as unit-test modules, which
-keeps them outside the counted sources and the coverage denominator.
+- Host-side users clone the shared `Arc<GuestMemoryMmap>` and access guest
+  memory through vm-memory's volatile API, never through Rust references.
+- `map` registers regions lowest address first and removes the registered
+  prefix when one fails; `unmap` removes them highest first and stops at the
+  first failure, so the count of registered regions stays exact and a later
+  `unmap` retries.
+- The backing is released only after every registration is gone. Dropping a
+  `GuestRam` that may still be registered leaks the backing instead.
+
+Unit tests drive these paths with a recording fake backend. The test files
+live under `tests/` and are included as unit-test modules, which keeps them
+outside the counted sources and the coverage denominator. `Vm::new`, which
+composes validate, allocate, create the host VM and map, is the next slice.
 
 ## Build
 
