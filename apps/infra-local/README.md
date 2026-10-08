@@ -12,7 +12,8 @@ BoxLite. One Python orchestrator (`compose`) drives both layers:
 
 All generated state lives under one gitignored dir, `<repo>/.apps-local/`
 (`data/` volumes, `boxlite/` L1 SDK home, `boxlite-runner/` L3 home, `bin/`
-binaries, `logs/`).
+binaries, `logs/`, and `registry-secrets/`, where the API and the registry
+proxy keep registry passwords in plain files).
 
 ## Quick start
 
@@ -93,8 +94,9 @@ relies on — read-write host volumes + host port mapping — is pinned by
 > **Box boot is unverified on this stack** — the UI picker offers only the three
 > curated images hardcoded in `CreateBoxDialog.tsx`, so any other ref goes
 > through the API. Image resolution itself is in place: a curated name resolves
-> from the curated set, and any other ref is checked against the registry
-> allowlist. This stack sets no `BOXLITE_IMAGE_REGISTRY_ALLOWLIST`, so the API
+> from the curated set, a ref a registered login covers is routed through the
+> registry proxy, and any other is checked against the registry allowlist.
+> This stack sets no `BOXLITE_IMAGE_REGISTRY_ALLOWLIST`, so the API
 > falls back to the public registries and refuses the local registry at
 > `127.0.0.1:25000` — set the variable in `apps/api/.env` to boot a box from it.
 > (`INSECURE_REGISTRIES` in `compose/native.py` is the runner's own setting, not
