@@ -67,8 +67,8 @@ sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='boxlite_dev
     sudo -u postgres psql -c "CREATE DATABASE boxlite_dev OWNER boxlite"
 
 echo "=== 4. yarn install (stderr preserved — silent install hides real failures) ==="
-# tslib + node-forge are in apps/package.json upstream; bootstrap no
-# longer mutates the working tree to install them. The apps/apps self-
+# tslib is in apps/package.json upstream; bootstrap no longer mutates
+# the working tree to install it. The apps/apps self-
 # symlink papers over project.json files using `apps/api/...` paths that
 # assume workspace root is one level above apps/. The real fix is to
 # rewrite those paths; that's a separate refactor PR.
