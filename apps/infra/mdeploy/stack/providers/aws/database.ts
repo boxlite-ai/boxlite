@@ -31,9 +31,23 @@ import { instanceFor } from 'naming'
  * `standard` steps memory and not disk: `t4g.small` doubles `t4g.micro`'s
  * memory, 1 GiB to 2, and nothing asked for more room, so it keeps `small`'s
  * 20 GB. `medium` steps both.
+ *
+ * `large` steps neither disk nor, yet, the thing it is named for. It keeps
+ * `medium`'s 100 GB because nothing asked for more room, and it answers the
+ * size and not the reason for it. `DatabaseSize` says that
+ * at this size the server pools connections on the workloads' behalf; AWS does
+ * that with RDS Proxy, a resource beside the instance rather than a property of
+ * it, and nothing here builds one. So a stage moved to `large` on AWS gets the
+ * machine and keeps the client-side arithmetic — which is the gap to close
+ * before a stage lands here, not a difference to discover from a graph.
  */
-const INSTANCE = { small: 't4g.micro', standard: 't4g.small', medium: 'm7g.large' } as const
-const STORAGE = { small: '20 GB', standard: '20 GB', medium: '100 GB' } as const
+const INSTANCE = {
+  small: 't4g.micro',
+  standard: 't4g.small',
+  medium: 'm7g.large',
+  large: 'm7g.xlarge',
+} as const
+const STORAGE = { small: '20 GB', standard: '20 GB', medium: '100 GB', large: '100 GB' } as const
 
 export const awsDatabaseProvider =
   ({ network }: { network: Extract<NetworkBinding, { cloud: 'aws' }> }): DatabaseProvider =>
