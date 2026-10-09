@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -15,9 +16,9 @@ ROOT = Path(__file__).resolve().parents[4]
 ARTIFACTS = {"vmlinux", "kernel.config", "build-info.txt", "SHA256SUMS"}
 
 # Tool substitutes provide the external boundaries. The real script still owns
-# configuration, caching, verification, metadata and publication.
-TOOL = r'''#!/usr/bin/python3
-import json, os, pathlib, shutil, sys
+# configuration, caching, verification, metadata and publication. They run under
+# this suite's interpreter, which need not be /usr/bin/python3.
+TOOL = f"#!{sys.executable}\n" + r'''import json, os, pathlib, shutil, sys
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 mode = os.environ.get("BOOT_TEST_MODE", "")
