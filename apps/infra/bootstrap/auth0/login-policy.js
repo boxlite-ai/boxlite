@@ -9,14 +9,14 @@
  * Auth0 Form during an interactive browser login. Refresh-token, device-code,
  * and other non-browser exchanges cannot render Forms, so they fail closed.
  *
- * A social login is folded into the password account that already holds its
- * address before any token is issued (POL-555), without leaving Auth0: an
- * Auth0 Form asks for that account's password, the password-realm grant checks
- * it, the BoxLite API moves the folded user's data, and the Management API
- * links the identities so the token names the account that stays. An address
- * the provider has not verified is proven with the email Form first. With no
- * API origin or link Form configured the step is off, and social logins keep
- * their own identity.
+ * A login is folded into the account that already holds its address before
+ * any token is issued (POL-555), without leaving Auth0. The person proves that
+ * account is theirs: its password, checked with the password-realm grant, or,
+ * when only social accounts hold the address, the code the email Form mails.
+ * Google on a Gmail address and a fresh password sign-up have proven the
+ * mailbox already. The BoxLite API moves the folded user's data, and the
+ * Management API links the identities. With no API origin or link Form
+ * configured the step is off, and every login keeps its own identity.
  */
 
 const BROWSER_PROTOCOLS = new Set(['oidc-basic-profile', 'oidc-hybrid-profile', 'oidc-implicit-profile'])
@@ -31,9 +31,12 @@ const ACCOUNT_LINK_FORM_ID = __ACCOUNT_LINK_FORM_ID_JSON__
 // whichever domain the login itself runs on.
 const AUTH0_DOMAIN = __AUTH0_DOMAIN_JSON__
 
-// The API refuses an adopt request signed for any other audience.
+// The API refuses a request signed for any audience but the one it serves.
 const ADOPT_AUDIENCE = 'boxlite-account-link-adopt'
+const STATUS_AUDIENCE = 'boxlite-account-link-status'
 const PASSWORD_REALM_GRANT = 'http://auth0.com/oauth/grant-type/password-realm'
+// Gmail addresses, whose mail Google itself serves.
+const GMAIL_DOMAINS = new Set(['gmail.com', 'googlemail.com'])
 
 function isBoxLiteBrowserLogin(event) {
   return event.client?.client_id === BOXLITE_CLIENT_ID && BROWSER_PROTOCOLS.has(event.transaction?.protocol)
@@ -48,18 +51,19 @@ function isManagedDatabaseLogin(event) {
 }
 
 /**
- * An interactive BoxLite browser login through a social connection whose user
- * has a single sign-in. A user already linked reaches its account directly, so
- * this stops matching once the link is made. A token refresh or other exchange
- * keeps the identity it has until the next browser login: it cannot show a
- * Form, and the Management API lookup would otherwise run on every refresh.
+ * An interactive BoxLite browser login, through the database connection or a
+ * social one, whose user has a single sign-in. A user already linked reaches
+ * its account directly, so this stops matching once the link is made. A token
+ * refresh or other exchange keeps the identity it has until the next browser
+ * login: it cannot show a Form, and the Management API lookup would otherwise
+ * run on every refresh.
  */
 function needsAccountLink(event) {
   return (
     Boolean(ACCOUNT_LINK_API_ORIGIN && ACCOUNT_LINK_FORM_ID && AUTH0_DOMAIN) &&
     isBoxLiteBrowserLogin(event) &&
     event.user?.identities?.length === 1 &&
-    event.connection?.strategy !== 'auth0'
+    (event.connection?.strategy !== 'auth0' || event.connection?.name === BOXLITE_DB_CONNECTION)
   )
 }
 
@@ -126,12 +130,36 @@ function holdsPassword(user) {
   return (user.identities ?? []).some((identity) => identity.connection === BOXLITE_DB_CONNECTION)
 }
 
-/** The link page, asking for the password of the account holding the address. */
-function renderLinkForm(event, api, { error = '' } = {}) {
+// Password, then Google, then GitHub: an account ranks as its best sign-in.
+function rank(user) {
+  const ranks = (user.identities ?? []).map((identity) =>
+    identity.connection === BOXLITE_DB_CONNECTION ? 3 : ({ 'google-oauth2': 2, github: 1 }[identity.provider] ?? 0),
+  )
+  return Math.max(0, ...ranks)
+}
+
+/**
+ * Whether this login has proven its mailbox by itself: Google signing in a
+ * Gmail address, mail Google serves; or a password sign-up's first login,
+ * whose address Universal Login has just verified with a code.
+ */
+function provesMailbox(event) {
+  if (event.user.email_verified !== true) return false
+  if (event.connection?.strategy === 'google-oauth2') {
+    return GMAIL_DOMAINS.has(String(event.user.email).toLowerCase().split('@')[1])
+  }
+  return isManagedDatabaseLogin(event) && event.stats?.logins_count === 1
+}
+
+/** The link page, asking for the account's password, or to continue to a code. */
+function renderLinkForm(event, api, { mode, error = '' }) {
   api.prompt.render(ACCOUNT_LINK_FORM_ID, {
     vars: {
       email: event.user.email,
-      lead: 'An account already uses this email. Enter its password to link them.',
+      lead:
+        mode === 'password'
+          ? 'An account already uses this email. Enter its password to link them.'
+          : 'An account already uses this email. Continue to get a code at this address, then enter it to link them.',
       error,
     },
   })
@@ -186,6 +214,15 @@ function signLinkRequest(event, audience, claims) {
   return `${unsigned}.${signature}`
 }
 
+/** Whether BoxLite already has this user, that is, it has signed in before. */
+async function boxliteKnows(event, userId) {
+  const response = await fetch(`${ACCOUNT_LINK_API_ORIGIN}/api/auth/link/status`, {
+    headers: { authorization: `Bearer ${signLinkRequest(event, STATUS_AUDIENCE, { sub: userId })}` },
+  })
+  if (response.status !== 200) throw new Error(`the BoxLite API answered ${response.status} to status`)
+  return (await response.json()).known === true
+}
+
 async function adopt(event, primaryUserId, userId) {
   const token = signLinkRequest(event, ADOPT_AUDIENCE, { sub: userId, primary_user_id: primaryUserId })
   const response = await fetch(`${ACCOUNT_LINK_API_ORIGIN}/api/auth/link/adopt`, {
@@ -205,22 +242,38 @@ async function link(event, api, primaryUserId, userId) {
 }
 
 /**
- * Folds this login into `account`, which stays, so the login makes no
- * organization of its own. Local data moves before the tenant link: once
- * linked, later logins reach the account directly and never pass here again,
- * so anything not yet moved would stay stranded, while a failed link is simply
- * retried at the next login.
+ * The account that stays. One that already joins several sign-ins stays, so
+ * no linked sign-in moves twice. Otherwise the highest-ranked does, and this
+ * login counts only when BoxLite already knows its user: a new one joins what
+ * exists and makes no organization of its own.
  */
-async function fold(event, api, account) {
-  await adopt(event, account.user_id, event.user.user_id)
-  await link(event, api, account.user_id, event.user.user_id)
-  api.authentication.setPrimaryUser(account.user_id)
+async function accountThatStays(event, accounts) {
+  const joined = accounts.find((user) => (user.identities?.length ?? 0) > 1)
+  if (joined) return joined
+  const best = accounts.reduce((top, user) => (rank(user) > rank(top) ? user : top))
+  if (rank(event.user) > rank(best) && (await boxliteKnows(event, event.user.user_id))) return event.user
+  return best
+}
+
+/**
+ * Folds this login and `accounts` into one. Local data moves before the
+ * tenant link: once linked, later logins reach the account directly and never
+ * pass here again, so anything not yet moved would stay stranded, while a
+ * failed link is simply retried at the next login.
+ */
+async function fold(event, api, accounts) {
+  const stays = await accountThatStays(event, accounts)
+  const folded = [event.user, ...accounts].filter((user) => user.user_id !== stays.user_id)
+  for (const user of folded) await adopt(event, stays.user_id, user.user_id)
+  for (const user of folded) await link(event, api, stays.user_id, user.user_id)
+  if (stays.user_id !== event.user.user_id) api.authentication.setPrimaryUser(stays.user_id)
   setIdentityClaims(event, api, true)
 }
 
 /**
- * Shows the link page when a password account holds this login's address.
- * `mailboxProven` is set right after the email Form has checked a code.
+ * Folds this login into the accounts holding its address once the mailbox is
+ * proven, or shows the link page that asks for the proof. `mailboxProven` is
+ * set right after the email Form has checked a code.
  */
 async function planLink(event, api, { mailboxProven = false } = {}) {
   const emailVerified = mailboxProven || event.user.email_verified === true
@@ -234,13 +287,16 @@ async function planLink(event, api, { mailboxProven = false } = {}) {
     setIdentityClaims(event, api, emailVerified)
     return
   }
-  // With no password to ask for, only social accounts or none, this login
-  // goes on as it is.
-  if (!accounts.some(holdsPassword)) {
+  if (accounts.length === 0) {
     setIdentityClaims(event, api, emailVerified)
     return
   }
-  renderLinkForm(event, api)
+  const password = accounts.some(holdsPassword)
+  if (!password && (mailboxProven || provesMailbox(event))) {
+    await fold(event, api, accounts)
+    return
+  }
+  renderLinkForm(event, api, { mode: password ? 'password' : 'code' })
 }
 
 async function startAccountLink(event, api) {
@@ -262,20 +318,33 @@ async function startAccountLink(event, api) {
   await planLink(event, api)
 }
 
-/** The link page came back with the password, or without one. */
+/** The link page came back: with a password, or to get a code. */
 async function answerLinkForm(event, api) {
-  const passwordAccount = (await otherAccounts(event, api)).find(holdsPassword)
+  const fields = event.prompt?.fields ?? {}
+  const accounts = await otherAccounts(event, api)
+  const passwordAccount = accounts.find(holdsPassword)
   if (!passwordAccount) {
-    setIdentityClaims(event, api)
+    if (accounts.length === 0) {
+      setIdentityClaims(event, api)
+      return
+    }
+    // Only social accounts hold the address: the code the email Form mails
+    // there proves it.
+    if (!EMAIL_VERIFICATION_FORM_ID) {
+      api.access.deny('Email verification is unavailable')
+      return
+    }
+    api.prompt.render(EMAIL_VERIFICATION_FORM_ID)
     return
   }
-  const password = event.prompt?.fields?.password
+  const password = fields.password
   if (typeof password !== 'string' || password === '') {
-    renderLinkForm(event, api, { error: 'Enter the password.' })
+    renderLinkForm(event, api, { mode: 'password', error: 'Enter the password.' })
     return
   }
   if (!(await provePassword(event, api, passwordAccount, password))) return
-  await fold(event, api, passwordAccount)
+  // The password proves its own account; social ones need the mailbox too.
+  await fold(event, api, provesMailbox(event) ? accounts : [passwordAccount])
 }
 
 /** True once the account's password checks out; otherwise the page or a denial has answered. */
@@ -288,7 +357,7 @@ async function provePassword(event, api, account, password) {
   }
   if (!check.ok) {
     if (check.error === 'invalid_grant') {
-      renderLinkForm(event, api, { error: 'That password is not right. Try again.' })
+      renderLinkForm(event, api, { mode: 'password', error: 'That password is not right. Try again.' })
       return false
     }
     console.log(`Account link password check refused: ${check.error}`)
@@ -350,7 +419,7 @@ exports.onContinuePostLogin = async (event, api) => {
       await withAccountLink(api, () => answerLinkForm(event, api))
       return
     }
-    // Back from the email Form: its code proved the address.
+    // Back from the email Form: its code proved the mailbox.
     if (formId && event.prompt?.id === formId) {
       await withAccountLink(api, () => planLink(event, api, { mailboxProven: true }))
       return

@@ -146,32 +146,42 @@ fetches it from the stage's optional API group.
 
 ### The Action's part
 
-The Post-Login Action looks at every interactive BoxLite browser login through
-a social connection whose user has a single sign-in; a user already linked
-reaches its account directly. A login without an address keeps its own
-identity. A token refresh keeps the identity it has until the next browser
-login, which spares the Management API a lookup per refresh. The Action looks
-up the other users holding the address with a verified email; an unverified one
-is left alone, since a stranger may have signed the address up. If the lookup
-fails before a link page shows, the login goes through unlinked and the next
-one looks again: Auth0 allows a free or trial tenant's Management API 2
-requests a second
+The Post-Login Action looks at every interactive BoxLite browser login, through
+the database connection or a social one, whose user has a single sign-in; a
+user already linked reaches its account directly. A login without an address
+keeps its own identity. A token refresh keeps the identity it has until the
+next browser login, which spares the Management API a lookup per refresh. The
+Action looks up the other users holding the address with a verified email; an
+unverified one is left alone, since a stranger may have signed the address up.
+If the lookup fails before a link page shows, the login goes through unlinked
+and the next one looks again: Auth0 allows a free or trial tenant's Management
+API 2 requests a second
 ([Rate Limit Policy](https://auth0.com/docs/troubleshoot/customer-support/operational-policies/rate-limit-policy)).
 The flow:
 
 1. An address the provider has not verified goes through the email Form's code
    first, as an unverified password account's does.
-2. When one of the other accounts holds a password, the link page shows the
-   address and asks for that password, which the Action checks with the
-   password-realm grant through the link client, forwarding the browser's
-   address in `auth0-forwarded-for`.
-3. Once proven, the Action asks the API to move this login's data, then links
-   it through the Management API, and makes the account that stays the token's
-   subject.
+2. With no other account holding the address, the login goes on: it is the
+   account.
+3. When one of them holds a password, the link page shows the address and asks
+   for that password, which the Action checks with the password-realm grant
+   through the link client, forwarding the browser's address in
+   `auth0-forwarded-for`.
+4. When only social accounts hold it, the mailbox is the proof. Google on a
+   Gmail address, and a password sign-up's first login, whose address Universal
+   Login verified moments ago, have proven it already. Otherwise the link page
+   asks to continue to a code, and the email Form mails one there.
+5. Once proven, the Action asks the API to move the data of every user it
+   folds, then links them through the Management API, and makes the account
+   that stays the token's subject.
 
-With no other account, or only social ones, the login goes on as it is. The
-password account stays; this login joins it and makes no organization of its
-own. The design, POL-735, lists every case.
+A password proves its own account; social accounts apart from it join in the
+same login only when the mailbox is proven too, and otherwise at their own next
+login. The account that stays is one that already joins several sign-ins;
+otherwise the highest-ranked, password before Google before GitHub, where this
+login counts only when BoxLite already knows its user. A login BoxLite has
+never seen therefore joins an existing account and makes no organization of
+its own. The design, POL-735, lists every case.
 
 A wrong password shows the page again with the reason, as often as the person
 tries; Auth0's brute-force protection still counts each attempt.

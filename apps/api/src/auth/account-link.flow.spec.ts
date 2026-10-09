@@ -6,7 +6,7 @@
 /**
  * The login-time account link end to end: the real Post-Login Action, its
  * placeholders filled as the bootstrap configurator fills them, calling the
- * real adopt endpoint.
+ * real adopt and status endpoints.
  *
  * Auth0 is played by `tenant()`, answering the calls the Action makes the way
  * the Auth0 docs describe them: the token endpoint for the link client's
@@ -59,6 +59,8 @@ function tenant(
   options: {
     // The users `users-by-email` answers with; a password account by default.
     accounts?: Account[]
+    // The users BoxLite already has.
+    known?: string[]
     lookup?: number
     grantError?: string
     idTokenSub?: string
@@ -70,13 +72,15 @@ function tenant(
   const calls: Call[] = []
   const accounts = options.accounts ?? [account(PASSWORD_USER)]
   const adopt = options.adopt ?? jest.fn().mockResolvedValue(undefined)
+  const known = new Set(options.known ?? [])
   const config = {
     get: jest.fn(() => true),
     getOrThrow: jest.fn(() => SECRET),
   } as unknown as TypedConfigService
+  const users = { findOne: jest.fn(async (id: string) => (known.has(id) ? { id } : null)) }
   const controller = new AccountLinkController(
     config,
-    new AccountLinkService(config, { adopt } as unknown as LinkedIdentityService, {} as UserService),
+    new AccountLinkService(config, { adopt } as unknown as LinkedIdentityService, users as unknown as UserService),
   )
   const passwordAccount = accounts.find((user) => user.identities.some((each) => each.connection === 'boxlite-users'))
   const grant = {
@@ -100,6 +104,9 @@ function tenant(
   async function answer(call: Call): Promise<{ status: number; body?: unknown }> {
     if (call.url === `${API}/api/auth/link/adopt` && call.method === 'POST') {
       return endpoint(() => controller.adopt(call.headers.authorization), 204)
+    }
+    if (call.url === `${API}/api/auth/link/status` && call.method === 'GET') {
+      return endpoint(() => controller.status(call.headers.authorization), 200)
     }
     if (call.url === `https://${DOMAIN}/oauth/token` && call.body.grant_type === 'client_credentials') {
       return { status: 200, body: { access_token: 'management-token', expires_in: 86400 } }
@@ -204,6 +211,9 @@ function login(userId: string, { user, ...overrides }: Record<string, any> = {})
 }
 
 const google = (overrides: Record<string, any> = {}) => login(GOOGLE_USER, overrides)
+// Google signing in an address on Gmail, whose mail Google itself serves.
+const gmail = ({ user, ...overrides }: Record<string, any> = {}) =>
+  login(GOOGLE_USER, { ...overrides, user: { email: 'ada@gmail.com', ...user } })
 
 /** Every link the Action asked the Management API for: what went into which user. */
 function links(calls: Call[]) {
@@ -213,6 +223,16 @@ function links(calls: Call[]) {
       into: decodeURIComponent(call.url.split('/users/')[1].replace('/identities', '')),
       ...call.body,
     }))
+}
+
+/** Sends the code page back, then the email Form's code; returns the last step. */
+async function enterCode(action: Record<string, Handler>, event: Record<string, any>) {
+  const page = transaction()
+  await action.onContinuePostLogin({ ...event, prompt: { id: 'ap_link', fields: {} } }, page.api)
+  expect(page.seen.renders.map((render) => render.id)).toEqual(['ap_verify'])
+  const code = transaction()
+  await action.onContinuePostLogin({ ...event, prompt: { id: 'ap_verify', fields: {} } }, code.api)
+  return code
 }
 
 describe('login-time account link, Action and API together', () => {
@@ -259,7 +279,56 @@ describe('login-time account link, Action and API together', () => {
       )
     })
 
-    it("leaves a GitHub account apart from the password account to GitHub's own next login", async () => {
+    it('folds into a GitHub account with no page when Google serves the address', async () => {
+      const { action, calls, adopt } = tenant({ accounts: [account(GITHUB_USER)] })
+      const step = transaction()
+
+      await action.onExecutePostLogin(gmail(), step.api)
+
+      expect(step.seen.renders).toEqual([])
+      expect(adopt.mock.calls).toEqual([[GITHUB_USER, GOOGLE_USER]])
+      expect(links(calls)).toEqual([{ into: GITHUB_USER, provider: 'google-oauth2', user_id: '103' }])
+      expect(step.seen.primary).toEqual([GITHUB_USER])
+    })
+
+    it('keeps a Google user BoxLite knows and folds the GitHub account into it', async () => {
+      const { action, calls, adopt } = tenant({ accounts: [account(GITHUB_USER)], known: [GOOGLE_USER, GITHUB_USER] })
+      const step = transaction()
+
+      await action.onExecutePostLogin(gmail(), step.api)
+
+      expect(adopt.mock.calls).toEqual([[GOOGLE_USER, GITHUB_USER]])
+      expect(links(calls)).toEqual([{ into: GOOGLE_USER, provider: 'github', user_id: '55' }])
+      expect(step.seen.primary).toEqual([])
+    })
+
+    it('asks for a code first when Google does not serve the address', async () => {
+      const { action, adopt } = tenant({ accounts: [account(GITHUB_USER)] })
+      const step = transaction()
+
+      await action.onExecutePostLogin(google(), step.api)
+
+      expect(step.seen.renders).toEqual([
+        { id: 'ap_link', vars: expect.objectContaining({ lead: expect.stringMatching(/a code/) }) },
+      ])
+      expect(adopt).not.toHaveBeenCalled()
+    })
+
+    it('folds a GitHub account apart from the password account too when Google serves the address', async () => {
+      const { action, calls, adopt } = tenant({ accounts: [account(PASSWORD_USER), account(GITHUB_USER)] })
+      const step = transaction()
+
+      await action.onContinuePostLogin(gmail({ prompt: { id: 'ap_link', fields: { password: PASSWORD } } }), step.api)
+
+      expect(adopt.mock.calls).toEqual([
+        [PASSWORD_USER, GOOGLE_USER],
+        [PASSWORD_USER, GITHUB_USER],
+      ])
+      expect(links(calls).map((each) => each.into)).toEqual([PASSWORD_USER, PASSWORD_USER])
+      expect(step.seen.primary).toEqual([PASSWORD_USER])
+    })
+
+    it("leaves a GitHub account apart from the password account to GitHub's own next login otherwise", async () => {
       const { action, calls, adopt } = tenant({ accounts: [account(PASSWORD_USER), account(GITHUB_USER)] })
       const step = transaction()
 
@@ -271,15 +340,20 @@ describe('login-time account link, Action and API together', () => {
   })
 
   describe('a GitHub login', () => {
-    it('goes on as it is when only social accounts hold the address', async () => {
-      const { action, adopt, calls } = tenant({ accounts: [account(GOOGLE_USER)] })
-      const step = transaction()
+    it('reaches the Google account through the code the email Form mails', async () => {
+      const { action, calls, adopt } = tenant({ accounts: [account(GOOGLE_USER)] })
+      const event = login(GITHUB_USER)
+      const page = transaction()
+      await action.onExecutePostLogin(event, page.api)
+      expect(page.seen.renders).toEqual([
+        { id: 'ap_link', vars: expect.objectContaining({ lead: expect.stringMatching(/a code/) }) },
+      ])
 
-      await action.onExecutePostLogin(login(GITHUB_USER), step.api)
+      const code = await enterCode(action, event)
 
-      expect(step.seen).toEqual({ renders: [], denied: [], primary: [], redirects: [] })
-      expect(adopt).not.toHaveBeenCalled()
-      expect(links(calls)).toEqual([])
+      expect(adopt.mock.calls).toEqual([[GOOGLE_USER, GITHUB_USER]])
+      expect(links(calls)).toEqual([{ into: GOOGLE_USER, provider: 'github', user_id: '55' }])
+      expect(code.seen.primary).toEqual([GOOGLE_USER])
     })
 
     it('joins the account a password and Google already share, with its password', async () => {
@@ -294,6 +368,67 @@ describe('login-time account link, Action and API together', () => {
       expect(adopt.mock.calls).toEqual([[PASSWORD_USER, GITHUB_USER]])
       expect(links(calls)).toEqual([{ into: PASSWORD_USER, provider: 'github', user_id: '55' }])
       expect(step.seen.primary).toEqual([PASSWORD_USER])
+    })
+  })
+
+  describe('a password login', () => {
+    it("folds a password sign-up into the Google account on the strength of the sign-up's own code", async () => {
+      const { action, calls, adopt } = tenant({ accounts: [account(GOOGLE_USER)] })
+      const step = transaction()
+
+      await action.onExecutePostLogin(login(PASSWORD_USER, { stats: { logins_count: 1 } }), step.api)
+
+      expect(step.seen.renders).toEqual([])
+      expect(adopt.mock.calls).toEqual([[GOOGLE_USER, PASSWORD_USER]])
+      expect(links(calls)).toEqual([{ into: GOOGLE_USER, provider: 'auth0', user_id: 'primary' }])
+      expect(step.seen.primary).toEqual([GOOGLE_USER])
+    })
+
+    it('keeps a password account BoxLite knows once a code proves the address', async () => {
+      const { action, calls, adopt } = tenant({ accounts: [account(GOOGLE_USER)], known: [PASSWORD_USER, GOOGLE_USER] })
+      const event = login(PASSWORD_USER)
+      const page = transaction()
+      await action.onExecutePostLogin(event, page.api)
+      expect(page.seen.renders).toEqual([
+        { id: 'ap_link', vars: expect.objectContaining({ lead: expect.stringMatching(/a code/) }) },
+      ])
+
+      const code = await enterCode(action, event)
+
+      expect(adopt.mock.calls).toEqual([[PASSWORD_USER, GOOGLE_USER]])
+      expect(links(calls)).toEqual([{ into: PASSWORD_USER, provider: 'google-oauth2', user_id: '103' }])
+      expect(code.seen.primary).toEqual([])
+    })
+
+    it('folds a new password account and the Google and GitHub accounts apart into Google after the email Form', async () => {
+      const { action, calls, adopt } = tenant({ accounts: [account(GITHUB_USER), account(GOOGLE_USER)] })
+      const event = login(PASSWORD_USER, { user: { email_verified: false } })
+      const first = transaction()
+      await action.onExecutePostLogin(event, first.api)
+      expect(first.seen.renders).toEqual([{ id: 'ap_verify', vars: undefined }])
+
+      const second = transaction()
+      await action.onContinuePostLogin({ ...event, prompt: { id: 'ap_verify', fields: {} } }, second.api)
+
+      expect(adopt.mock.calls).toEqual([
+        [GOOGLE_USER, PASSWORD_USER],
+        [GOOGLE_USER, GITHUB_USER],
+      ])
+      expect(links(calls).map((each) => each.into)).toEqual([GOOGLE_USER, GOOGLE_USER])
+      expect(second.seen.primary).toEqual([GOOGLE_USER])
+    })
+
+    it('joins an account that already shares two sign-ins instead of moving them', async () => {
+      const shared = account(GOOGLE_USER, { linked: [GITHUB_USER] })
+      const { action, calls, adopt } = tenant({ accounts: [shared], known: [PASSWORD_USER, GOOGLE_USER] })
+      const event = login(PASSWORD_USER)
+      await action.onExecutePostLogin(event, transaction().api)
+
+      const code = await enterCode(action, event)
+
+      expect(adopt.mock.calls).toEqual([[GOOGLE_USER, PASSWORD_USER]])
+      expect(links(calls)).toEqual([{ into: GOOGLE_USER, provider: 'auth0', user_id: 'primary' }])
+      expect(code.seen.primary).toEqual([GOOGLE_USER])
     })
   })
 
@@ -323,6 +458,19 @@ describe('login-time account link, Action and API together', () => {
       expect(step.seen.renders).toEqual([
         { id: 'ap_link', vars: expect.objectContaining({ error: 'Enter the password.' }) },
       ])
+      expect(adopt).not.toHaveBeenCalled()
+    })
+
+    it('sends a code page that comes back to the email Form, not to the fold', async () => {
+      const { action, adopt } = tenant({ accounts: [account(GOOGLE_USER)] })
+      const step = transaction()
+
+      await action.onContinuePostLogin(
+        login(GITHUB_USER, { prompt: { id: 'ap_link', fields: { password: 'anything' } } }),
+        step.api,
+      )
+
+      expect(step.seen.renders.map((render) => render.id)).toEqual(['ap_verify'])
       expect(adopt).not.toHaveBeenCalled()
     })
 
