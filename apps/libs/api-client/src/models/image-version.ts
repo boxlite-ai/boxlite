@@ -32,6 +32,10 @@ export interface ImageVersion {
      */
     'sourceRef': string;
     /**
+     * Tags that point at this version now, so a reference with one of them boots it
+     */
+    'tags': Array<string>;
+    /**
      * When this version was first recorded
      */
     'createdAt': string;

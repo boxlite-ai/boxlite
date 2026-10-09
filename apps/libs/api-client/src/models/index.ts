@@ -52,6 +52,7 @@ export * from './health-controller-check200-response';
 export * from './health-controller-check200-response-info-value';
 export * from './image';
 export * from './image-detail';
+export * from './image-tag-event';
 export * from './image-usage';
 export * from './image-version';
 export * from './job';

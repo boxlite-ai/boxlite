@@ -9,6 +9,7 @@ Name | Type | Description | Notes
 **digest** | **string** | OCI manifest digest this version was pulled at | [default to undefined]
 **sizeBytes** | **number** | Sum of the layer sizes the manifest declared, in bytes | [default to undefined]
 **sourceRef** | **string** | The reference the caller asked for, kept verbatim as provenance | [default to undefined]
+**tags** | **Array&lt;string&gt;** | Tags that point at this version now, so a reference with one of them boots it | [default to undefined]
 **createdAt** | **string** | When this version was first recorded | [default to undefined]
 
 ## Example
@@ -21,6 +22,7 @@ const instance: ImageVersion = {
     digest,
     sizeBytes,
     sourceRef,
+    tags,
     createdAt,
 };
 ```

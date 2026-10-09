@@ -5,6 +5,9 @@
 
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
 
+/** How many tag events an image's detail carries: enough to read recent moves, bounded however long it lives. */
+export const IMAGE_HISTORY_LIMIT = 100
+
 @ApiSchema({ name: 'ImageVersion' })
 export class ImageVersionDto {
   @ApiProperty({ description: 'Version ID', example: '123e4567-e89b-12d3-a456-426614174000' })
@@ -28,7 +31,43 @@ export class ImageVersionDto {
   })
   sourceRef: string
 
+  @ApiProperty({
+    description: 'Tags that point at this version now, so a reference with one of them boots it',
+    example: ['stable'],
+    type: [String],
+  })
+  tags: string[]
+
   @ApiProperty({ description: 'When this version was first recorded', example: '2026-01-01T00:00:00.000Z' })
+  createdAt: string
+}
+
+@ApiSchema({ name: 'ImageTagEvent' })
+export class ImageTagEventDto {
+  @ApiProperty({ description: 'The tag that moved', example: 'stable' })
+  tagName: string
+
+  @ApiProperty({
+    description: 'Version the tag pointed at before. Null when the tag did not exist yet',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+    nullable: true,
+  })
+  fromVersionId: string | null
+
+  @ApiProperty({
+    description: 'Version the tag points at from then on',
+    example: '123e4567-e89b-12d3-a456-426614174001',
+  })
+  toVersionId: string
+
+  @ApiProperty({
+    description: 'Who moved the tag. Null when a box pulling the image is what recorded it',
+    example: 'auth0|6512bd43d9caa6e02c990b0a',
+    nullable: true,
+  })
+  actorId: string | null
+
+  @ApiProperty({ description: 'When the tag moved', example: '2026-01-01T00:00:00.000Z' })
   createdAt: string
 }
 
@@ -108,12 +147,10 @@ export class ImageDetailDto extends ImageDto {
   versions: ImageVersionDto[]
 
   @ApiProperty({
-    description:
-      'Tag movements over time. Always empty today: a tag keeps the digest it first resolved to, so there is nothing to record',
-    example: [],
-    type: [Object],
+    description: `Where each tag has pointed, newest first and at most ${IMAGE_HISTORY_LIMIT} events. Empty for curated images`,
+    type: [ImageTagEventDto],
   })
-  history: never[]
+  history: ImageTagEventDto[]
 }
 
 @ApiSchema({ name: 'ImageUsage' })

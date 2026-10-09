@@ -41,8 +41,8 @@ type ImageDetail struct {
 	CreatedAt NullableString `json:"createdAt"`
 	// Every pulled version, newest first
 	Versions []ImageVersion `json:"versions"`
-	// Tag movements over time. Always empty today: a tag keeps the digest it first resolved to, so there is nothing to record
-	History []map[string]interface{} `json:"history"`
+	// Where each tag has pointed, newest first and at most 100 events. Empty for curated images
+	History []ImageTagEvent `json:"history"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -52,7 +52,7 @@ type _ImageDetail ImageDetail
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewImageDetail(name string, id NullableString, curated bool, curatedRef NullableString, tags []string, versionCount float32, sizeBytes NullableFloat32, lastUsedAt NullableString, createdAt NullableString, versions []ImageVersion, history []map[string]interface{}) *ImageDetail {
+func NewImageDetail(name string, id NullableString, curated bool, curatedRef NullableString, tags []string, versionCount float32, sizeBytes NullableFloat32, lastUsedAt NullableString, createdAt NullableString, versions []ImageVersion, history []ImageTagEvent) *ImageDetail {
 	this := ImageDetail{}
 	this.Name = name
 	this.Id = id
@@ -327,9 +327,9 @@ func (o *ImageDetail) SetVersions(v []ImageVersion) {
 }
 
 // GetHistory returns the History field value
-func (o *ImageDetail) GetHistory() []map[string]interface{} {
+func (o *ImageDetail) GetHistory() []ImageTagEvent {
 	if o == nil {
-		var ret []map[string]interface{}
+		var ret []ImageTagEvent
 		return ret
 	}
 
@@ -338,7 +338,7 @@ func (o *ImageDetail) GetHistory() []map[string]interface{} {
 
 // GetHistoryOk returns a tuple with the History field value
 // and a boolean to check if the value has been set.
-func (o *ImageDetail) GetHistoryOk() ([]map[string]interface{}, bool) {
+func (o *ImageDetail) GetHistoryOk() ([]ImageTagEvent, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -346,7 +346,7 @@ func (o *ImageDetail) GetHistoryOk() ([]map[string]interface{}, bool) {
 }
 
 // SetHistory sets field value
-func (o *ImageDetail) SetHistory(v []map[string]interface{}) {
+func (o *ImageDetail) SetHistory(v []ImageTagEvent) {
 	o.History = v
 }
 

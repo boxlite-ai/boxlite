@@ -11,9 +11,17 @@ import { Box } from '../../box/entities/box.entity'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Organization } from '../../organization/entities/organization.entity'
-import { ImageDetailDto, ImageDto, ImageUsageDto, ImageVersionDto } from '../dto/image.dto'
+import {
+  IMAGE_HISTORY_LIMIT,
+  ImageDetailDto,
+  ImageDto,
+  ImageTagEventDto,
+  ImageUsageDto,
+  ImageVersionDto,
+} from '../dto/image.dto'
 import { Image } from '../entities/image.entity'
 import { ImageTag } from '../entities/image-tag.entity'
+import { ImageTagEvent } from '../entities/image-tag-event.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { ImageVersionState } from '../enums/image-version-state.enum'
 import { catalogNameOf, isCuratedSelector } from '../utils/image-ref.util'
@@ -67,6 +75,8 @@ export class ImageCatalogService {
     private readonly versionRepository: Repository<ImageVersion>,
     @InjectRepository(ImageTag)
     private readonly tagRepository: Repository<ImageTag>,
+    @InjectRepository(ImageTagEvent)
+    private readonly tagEventRepository: Repository<ImageTagEvent>,
     @InjectRepository(Box)
     private readonly boxRepository: Repository<Box>,
   ) {}
@@ -149,15 +159,22 @@ export class ImageCatalogService {
       throw new NotFoundException(`Image '${idOrRef}' not found`)
     }
 
-    const [versions, tags] = await Promise.all([this.versionsByImage([image.id]), this.tagsByImage([image.id])])
-    const rows = versions.get(image.id) ?? []
+    const [versions, tags, history] = await Promise.all([
+      this.versionsByImage([image.id]),
+      this.tagsByImage([image.id]),
+      this.historyOf(image.id),
+    ])
+    const versionRows = versions.get(image.id) ?? []
+    const tagRows = tags.get(image.id) ?? []
     return {
-      ...toDto(image, rows, tags.get(image.id) ?? []),
-      versions: rows.map(toVersionDto),
-      // S1 records no tag movement: a tag keeps the digest it first resolved
-      // to, so there is no history to report. The field is here because its
-      // absence and its emptiness mean different things to a caller.
-      history: [],
+      ...toDto(image, versionRows, tagRows),
+      versions: versionRows.map((version) =>
+        toVersionDto(
+          version,
+          tagRows.filter((tag) => tag.versionId === version.id),
+        ),
+      ),
+      history: history.map(toTagEventDto),
     }
   }
 
@@ -284,8 +301,8 @@ export class ImageCatalogService {
     return grouped
   }
 
-  private async tagsByImage(imageIds: string[]): Promise<Map<string, string[]>> {
-    const grouped = new Map<string, string[]>()
+  private async tagsByImage(imageIds: string[]): Promise<Map<string, ImageTag[]>> {
+    const grouped = new Map<string, ImageTag[]>()
     if (imageIds.length === 0) {
       return grouped
     }
@@ -296,22 +313,31 @@ export class ImageCatalogService {
     for (const tag of tags) {
       const bucket = grouped.get(tag.imageId)
       if (bucket) {
-        bucket.push(tag.name)
+        bucket.push(tag)
       } else {
-        grouped.set(tag.imageId, [tag.name])
+        grouped.set(tag.imageId, [tag])
       }
     }
     return grouped
   }
+
+  /** The most recent tag events, newest first — the index serves this read backwards. */
+  private historyOf(imageId: string): Promise<ImageTagEvent[]> {
+    return this.tagEventRepository.find({
+      where: { imageId },
+      order: { createdAt: 'DESC' },
+      take: IMAGE_HISTORY_LIMIT,
+    })
+  }
 }
 
-function toDto(image: Image, versions: ImageVersion[], tags: string[]): ImageDto {
+function toDto(image: Image, versions: ImageVersion[], tags: ImageTag[]): ImageDto {
   return {
     name: image.name,
     id: image.id,
     curated: false,
     curatedRef: null,
-    tags,
+    tags: tags.map((tag) => tag.name),
     versionCount: versions.length,
     // Per version, so layers two versions share are counted twice. Deliberate:
     // nothing here knows which layers overlap, and a number that pretended to
@@ -322,12 +348,23 @@ function toDto(image: Image, versions: ImageVersion[], tags: string[]): ImageDto
   }
 }
 
-function toVersionDto(version: ImageVersion): ImageVersionDto {
+function toVersionDto(version: ImageVersion, tags: ImageTag[]): ImageVersionDto {
   return {
     id: version.id,
     digest: version.digest,
     sizeBytes: version.sizeBytes,
     sourceRef: version.sourceSpec.sourceRef,
+    tags: tags.map((tag) => tag.name),
     createdAt: version.createdAt.toISOString(),
+  }
+}
+
+function toTagEventDto(event: ImageTagEvent): ImageTagEventDto {
+  return {
+    tagName: event.tagName,
+    fromVersionId: event.fromVersionId,
+    toVersionId: event.toVersionId,
+    actorId: event.actorId,
+    createdAt: event.createdAt.toISOString(),
   }
 }

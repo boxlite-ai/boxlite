@@ -85,6 +85,7 @@ docs/HealthControllerCheck200Response.md
 docs/HealthControllerCheck200ResponseInfoValue.md
 docs/Image.md
 docs/ImageDetail.md
+docs/ImageTagEvent.md
 docs/ImageUsage.md
 docs/ImageVersion.md
 docs/ImagesApi.md
@@ -216,6 +217,7 @@ models/create-volume.ts
 models/health-controller-check200-response-info-value.ts
 models/health-controller-check200-response.ts
 models/image-detail.ts
+models/image-tag-event.ts
 models/image-usage.ts
 models/image-version.ts
 models/image.ts

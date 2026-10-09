@@ -11,6 +11,7 @@ import { RegistryModule } from '../registry/registry.module'
 import { ImageController } from './controllers/image.controller'
 import { Image } from './entities/image.entity'
 import { ImageTag } from './entities/image-tag.entity'
+import { ImageTagEvent } from './entities/image-tag-event.entity'
 import { ImageVersion } from './entities/image-version.entity'
 import { CuratedImagePinService } from './services/curated-image-pin.service'
 import { ImageAdmissionService } from './services/image-admission.service'
@@ -35,7 +36,11 @@ import { ImageResolverService } from './services/image-resolver.service'
 // this module back, so the edge BoxModule → ImageModule → OrganizationModule
 // stays acyclic.
 @Module({
-  imports: [OrganizationModule, RegistryModule, TypeOrmModule.forFeature([Image, ImageVersion, ImageTag, Box])],
+  imports: [
+    OrganizationModule,
+    RegistryModule,
+    TypeOrmModule.forFeature([Image, ImageVersion, ImageTag, ImageTagEvent, Box]),
+  ],
   controllers: [ImageController],
   providers: [
     ImageAdmissionService,

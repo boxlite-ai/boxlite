@@ -15,6 +15,7 @@ import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { Organization } from '../../organization/entities/organization.entity'
 import { Image } from '../entities/image.entity'
 import { ImageTag } from '../entities/image-tag.entity'
+import { ImageTagEvent } from '../entities/image-tag-event.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { CuratedImagePinService } from './curated-image-pin.service'
 import { ImageCatalogService } from './image-catalog.service'
@@ -45,7 +46,7 @@ describeIfDatabase('ImagePreparationService (integration, real Postgres)', () =>
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema: schemaName,
-      entities: [Image, ImageVersion, ImageTag, Box, BoxLastActivity, BoxMigration],
+      entities: [Image, ImageVersion, ImageTag, ImageTagEvent, Box, BoxLastActivity, BoxMigration],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       synchronize: false,
@@ -70,6 +71,7 @@ describeIfDatabase('ImagePreparationService (integration, real Postgres)', () =>
       dataSource.getRepository(Image),
       dataSource.getRepository(ImageVersion),
       dataSource.getRepository(ImageTag),
+      dataSource.getRepository(ImageTagEvent),
       dataSource.getRepository(Box),
     )
   })
@@ -88,6 +90,7 @@ describeIfDatabase('ImagePreparationService (integration, real Postgres)', () =>
   })
 
   beforeEach(async () => {
+    await dataSource.query(`DELETE FROM "${schemaName}"."image_tag_event"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image_tag"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image_version"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image"`)

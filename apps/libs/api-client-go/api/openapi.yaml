@@ -7315,6 +7315,8 @@ components:
         digest: sha256:4a1c2f...
         sizeBytes: 26214400
         sourceRef: quay.io/acme/app:v1
+        tags:
+        - stable
         createdAt: 2026-01-01T00:00:00.000Z
       properties:
         id:
@@ -7333,6 +7335,14 @@ components:
           description: "The reference the caller asked for, kept verbatim as provenance"
           example: quay.io/acme/app:v1
           type: string
+        tags:
+          description: "Tags that point at this version now, so a reference with one\
+            \ of them boots it"
+          example:
+          - stable
+          items:
+            type: string
+          type: array
         createdAt:
           description: When this version was first recorded
           example: 2026-01-01T00:00:00.000Z
@@ -7343,6 +7353,46 @@ components:
       - id
       - sizeBytes
       - sourceRef
+      - tags
+      type: object
+    ImageTagEvent:
+      example:
+        tagName: stable
+        fromVersionId: 123e4567-e89b-12d3-a456-426614174000
+        toVersionId: 123e4567-e89b-12d3-a456-426614174001
+        actorId: auth0|6512bd43d9caa6e02c990b0a
+        createdAt: 2026-01-01T00:00:00.000Z
+      properties:
+        tagName:
+          description: The tag that moved
+          example: stable
+          type: string
+        fromVersionId:
+          description: Version the tag pointed at before. Null when the tag did not
+            exist yet
+          example: 123e4567-e89b-12d3-a456-426614174000
+          nullable: true
+          type: string
+        toVersionId:
+          description: Version the tag points at from then on
+          example: 123e4567-e89b-12d3-a456-426614174001
+          type: string
+        actorId:
+          description: Who moved the tag. Null when a box pulling the image is what
+            recorded it
+          example: auth0|6512bd43d9caa6e02c990b0a
+          nullable: true
+          type: string
+        createdAt:
+          description: When the tag moved
+          example: 2026-01-01T00:00:00.000Z
+          type: string
+      required:
+      - actorId
+      - createdAt
+      - fromVersionId
+      - tagName
+      - toVersionId
       type: object
     ImageDetail:
       example:
@@ -7362,13 +7412,27 @@ components:
           digest: sha256:4a1c2f...
           sizeBytes: 26214400
           sourceRef: quay.io/acme/app:v1
+          tags:
+          - stable
           createdAt: 2026-01-01T00:00:00.000Z
         - id: 123e4567-e89b-12d3-a456-426614174000
           digest: sha256:4a1c2f...
           sizeBytes: 26214400
           sourceRef: quay.io/acme/app:v1
+          tags:
+          - stable
           createdAt: 2026-01-01T00:00:00.000Z
-        history: []
+        history:
+        - tagName: stable
+          fromVersionId: 123e4567-e89b-12d3-a456-426614174000
+          toVersionId: 123e4567-e89b-12d3-a456-426614174001
+          actorId: auth0|6512bd43d9caa6e02c990b0a
+          createdAt: 2026-01-01T00:00:00.000Z
+        - tagName: stable
+          fromVersionId: 123e4567-e89b-12d3-a456-426614174000
+          toVersionId: 123e4567-e89b-12d3-a456-426614174001
+          actorId: auth0|6512bd43d9caa6e02c990b0a
+          createdAt: 2026-01-01T00:00:00.000Z
       properties:
         name:
           description: "What to pass as a box image to boot from this: the curated\
@@ -7430,11 +7494,10 @@ components:
             $ref: "#/components/schemas/ImageVersion"
           type: array
         history:
-          description: "Tag movements over time. Always empty today: a tag keeps the\
-            \ digest it first resolved to, so there is nothing to record"
-          example: []
+          description: "Where each tag has pointed, newest first and at most 100 events.\
+            \ Empty for curated images"
           items:
-            type: object
+            $ref: "#/components/schemas/ImageTagEvent"
           type: array
       required:
       - createdAt

@@ -59,6 +59,7 @@ flowchart LR
         t_image["image"]
         t_imgver["image_version"]
         t_imgtag["image_tag"]
+        t_imgevent["image_tag_event"]
         t_regcred["registry_credential"]
     end
 
@@ -81,6 +82,8 @@ flowchart LR
     t_imgver ==>|"imageId"| t_image
     t_imgtag ==>|"imageId"| t_image
     t_imgtag ==>|"versionId"| t_imgver
+    t_imgevent ==>|"imageId"| t_image
+    t_imgevent ==>|"fromVersionId, toVersionId"| t_imgver
 
     t_orguser -.->|"userId"| t_user
     t_apikey -.->|"organizationId, userId"| t_org
@@ -133,6 +136,9 @@ that no longer resolves.
 | `image_version`                          | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
 | `image_tag`                              | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
 | `image_tag`                              | `versionId`                  | `image_version.id`             | foreign key | `RESTRICT` |
+| `image_tag_event`                        | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
+| `image_tag_event`                        | `fromVersionId`              | `image_version.id`             | foreign key | `RESTRICT` |
+| `image_tag_event`                        | `toVersionId`                | `image_version.id`             | foreign key | `RESTRICT` |
 | `organization_user`                      | `userId`                     | `user.id`                      | application | — |
 | `api_key`                                | `organizationId`, `userId`   | `organization.id`, `user.id`   | application | — |
 | `webhook_initialization`                 | `organizationId`             | `organization.id`              | application | — |
@@ -549,6 +555,26 @@ the name back as a fresh entry.
 disappear underneath it. Postgres does not index a foreign key on its own, and
 this one is walked whenever a version is deleted, so `image_tag_version_index`
 covers it.
+
+### `image_tag_event`
+
+Where each tag has pointed. A row is written each time a tag comes to point at
+a version, starting with the pull that first records it, and never updated, so
+the history of an image is this table read newest first.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `imageId` | `uuid` | → `image.id`, cascade delete |
+| `tagName` | `character varying(128)` | |
+| `fromVersionId` | `uuid` | nullable; → `image_version.id`, **restrict** delete. Null when the tag did not exist before |
+| `toVersionId` | `uuid` | → `image_version.id`, **restrict** delete |
+| `actorId` | `character varying` | nullable; the identity provider subject of whoever moved it. Null when a pull recorded the tag |
+| `createdAt` | `timestamptz` | default `clock_timestamp()` |
+
+`createdAt` is the moment the row is written, not the start of its transaction,
+so events sort in the order they took effect. `image_tag_event_image_created_index` on
+`("imageId","createdAt")` serves the newest-first read backwards.
 
 ### `registry_credential`
 

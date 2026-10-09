@@ -29,6 +29,8 @@ type ImageVersion struct {
 	SizeBytes float32 `json:"sizeBytes"`
 	// The reference the caller asked for, kept verbatim as provenance
 	SourceRef string `json:"sourceRef"`
+	// Tags that point at this version now, so a reference with one of them boots it
+	Tags []string `json:"tags"`
 	// When this version was first recorded
 	CreatedAt string `json:"createdAt"`
 	AdditionalProperties map[string]interface{}
@@ -40,12 +42,13 @@ type _ImageVersion ImageVersion
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewImageVersion(id string, digest string, sizeBytes float32, sourceRef string, createdAt string) *ImageVersion {
+func NewImageVersion(id string, digest string, sizeBytes float32, sourceRef string, tags []string, createdAt string) *ImageVersion {
 	this := ImageVersion{}
 	this.Id = id
 	this.Digest = digest
 	this.SizeBytes = sizeBytes
 	this.SourceRef = sourceRef
+	this.Tags = tags
 	this.CreatedAt = createdAt
 	return &this
 }
@@ -154,6 +157,30 @@ func (o *ImageVersion) SetSourceRef(v string) {
 	o.SourceRef = v
 }
 
+// GetTags returns the Tags field value
+func (o *ImageVersion) GetTags() []string {
+	if o == nil {
+		var ret []string
+		return ret
+	}
+
+	return o.Tags
+}
+
+// GetTagsOk returns a tuple with the Tags field value
+// and a boolean to check if the value has been set.
+func (o *ImageVersion) GetTagsOk() ([]string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.Tags, true
+}
+
+// SetTags sets field value
+func (o *ImageVersion) SetTags(v []string) {
+	o.Tags = v
+}
+
 // GetCreatedAt returns the CreatedAt field value
 func (o *ImageVersion) GetCreatedAt() string {
 	if o == nil {
@@ -192,6 +219,7 @@ func (o ImageVersion) ToMap() (map[string]interface{}, error) {
 	toSerialize["digest"] = o.Digest
 	toSerialize["sizeBytes"] = o.SizeBytes
 	toSerialize["sourceRef"] = o.SourceRef
+	toSerialize["tags"] = o.Tags
 	toSerialize["createdAt"] = o.CreatedAt
 
 	for key, value := range o.AdditionalProperties {
@@ -210,6 +238,7 @@ func (o *ImageVersion) UnmarshalJSON(data []byte) (err error) {
 		"digest",
 		"sizeBytes",
 		"sourceRef",
+		"tags",
 		"createdAt",
 	}
 
@@ -244,6 +273,7 @@ func (o *ImageVersion) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "digest")
 		delete(additionalProperties, "sizeBytes")
 		delete(additionalProperties, "sourceRef")
+		delete(additionalProperties, "tags")
 		delete(additionalProperties, "createdAt")
 		o.AdditionalProperties = additionalProperties
 	}

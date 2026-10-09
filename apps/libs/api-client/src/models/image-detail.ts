@@ -15,6 +15,9 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
+import type { ImageTagEvent } from './image-tag-event';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { ImageVersion } from './image-version';
 
 export interface ImageDetail {
@@ -59,8 +62,8 @@ export interface ImageDetail {
      */
     'versions': Array<ImageVersion>;
     /**
-     * Tag movements over time. Always empty today: a tag keeps the digest it first resolved to, so there is nothing to record
+     * Where each tag has pointed, newest first and at most 100 events. Empty for curated images
      */
-    'history': Array<object>;
+    'history': Array<ImageTagEvent>;
 }
 

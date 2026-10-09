@@ -17,8 +17,10 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Organization } from '../../organization/entities/organization.entity'
 import { Image } from '../entities/image.entity'
 import { ImageTag } from '../entities/image-tag.entity'
+import { ImageTagEvent } from '../entities/image-tag-event.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { ImageVersionState } from '../enums/image-version-state.enum'
+import { IMAGE_HISTORY_LIMIT } from '../dto/image.dto'
 import { CuratedImagePinService } from './curated-image-pin.service'
 import { ImageCatalogService } from './image-catalog.service'
 import { ImageRegistrarService } from './image-registrar.service'
@@ -48,7 +50,7 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema: schemaName,
-      entities: [Image, ImageVersion, ImageTag, Box, BoxLastActivity, BoxMigration],
+      entities: [Image, ImageVersion, ImageTag, ImageTagEvent, Box, BoxLastActivity, BoxMigration],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       synchronize: false,
@@ -72,6 +74,7 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
       dataSource.getRepository(Image),
       dataSource.getRepository(ImageVersion),
       dataSource.getRepository(ImageTag),
+      dataSource.getRepository(ImageTagEvent),
       dataSource.getRepository(Box),
     )
   })
@@ -90,6 +93,7 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
   })
 
   beforeEach(async () => {
+    await dataSource.query(`DELETE FROM "${schemaName}"."image_tag_event"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image_tag"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image_version"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image"`)
@@ -295,12 +299,45 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
       const detail = await catalog.get(ORG, idOrRef)
       expect(detail.id).toBe(listed.id)
       expect(detail.versions).toHaveLength(1)
-      expect(detail.versions[0]).toMatchObject({ digest: DIGEST, sizeBytes: 4096, sourceRef: 'quay.io/acme/app:v1' })
-      // Nothing moves a tag today, so there is nothing to report — and an
-      // absent field would mean something different to a caller than an empty
-      // one.
-      expect(detail.history).toEqual([])
+      expect(detail.versions[0]).toMatchObject({
+        digest: DIGEST,
+        sizeBytes: 4096,
+        sourceRef: 'quay.io/acme/app:v1',
+        tags: ['v1'],
+      })
+      // The pull that recorded the tag is its first event.
+      expect(detail.history).toEqual([
+        expect.objectContaining({ tagName: 'v1', fromVersionId: null, toVersionId: detail.versions[0].id }),
+      ])
     }
+  })
+
+  it('answers a curated image with no history, since the operator pins its reference', async () => {
+    const [curated] = (await catalog.list(ORG)).filter((image) => image.curated)
+
+    const detail = await catalog.get(ORG, curated.name)
+
+    expect(detail.versions).toEqual([])
+    expect(detail.history).toEqual([])
+  })
+
+  it('keeps the most recent events when the history outgrows the detail', async () => {
+    await use('quay.io/acme/app:v1')
+    const { id: imageId, versions } = await catalog.get(ORG, 'quay.io/acme/app')
+    // As many events again as the detail carries, each a second after the one
+    // before and all after the pull's own, so the newest is the last of these.
+    await dataSource.query(
+      `INSERT INTO "${schemaName}"."image_tag_event" ("imageId", "tagName", "toVersionId", "createdAt")
+       SELECT $1, 't' || n, $2, clock_timestamp() + n * interval '1 second' FROM generate_series(1, $3) AS n`,
+      [imageId, versions[0].id, IMAGE_HISTORY_LIMIT],
+    )
+
+    const detail = await catalog.get(ORG, 'quay.io/acme/app')
+
+    expect(detail.history).toHaveLength(IMAGE_HISTORY_LIMIT)
+    expect(detail.history[0].tagName).toBe(`t${IMAGE_HISTORY_LIMIT}`)
+    // The pull that recorded v1 is the oldest event, and fell off.
+    expect(detail.history.map((event) => event.tagName)).not.toContain('v1')
   })
 
   it('counts held images against the limit and sums what the manifests declared', async () => {

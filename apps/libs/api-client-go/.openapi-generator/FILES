@@ -77,6 +77,7 @@ model_health_controller_check_200_response.go
 model_health_controller_check_200_response_info_value.go
 model_image.go
 model_image_detail.go
+model_image_tag_event.go
 model_image_usage.go
 model_image_version.go
 model_job.go

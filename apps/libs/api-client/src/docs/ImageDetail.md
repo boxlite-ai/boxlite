@@ -15,7 +15,7 @@ Name | Type | Description | Notes
 **lastUsedAt** | **string** | When a box last booted from this image | [default to undefined]
 **createdAt** | **string** | When this image first entered the catalog. Null for curated images | [default to undefined]
 **versions** | [**Array&lt;ImageVersion&gt;**](ImageVersion.md) | Every pulled version, newest first | [default to undefined]
-**history** | **Array&lt;object&gt;** | Tag movements over time. Always empty today: a tag keeps the digest it first resolved to, so there is nothing to record | [default to undefined]
+**history** | [**Array&lt;ImageTagEvent&gt;**](ImageTagEvent.md) | Where each tag has pointed, newest first and at most 100 events. Empty for curated images | [default to undefined]
 
 ## Example
 
