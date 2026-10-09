@@ -110,6 +110,26 @@ async fn copy_in_hands_files_to_the_box_user() {
         "box user must be able to read it"
     );
 
+    // A directory copied to a missing destination becomes it, so the
+    // archive's `tree/a.txt` lands as `landed/a.txt`. The paths read before
+    // extraction must name it there, or the hand-off misses it.
+    let tree = tmp.path().join("tree");
+    std::fs::create_dir(&tree).unwrap();
+    std::fs::write(tree.join("a.txt"), "a").unwrap();
+    bx.copy_into(&tree, "/srv/landed", CopyOptions::default())
+        .await
+        .expect("directory copy_into failed");
+    let owners = exec_stdout(
+        &bx,
+        BoxCommand::new("stat").args(["-c", "%n %u:%g", "/srv/landed", "/srv/landed/a.txt"]),
+    )
+    .await;
+    assert_eq!(
+        owners,
+        format!("/srv/landed {BOX_UID}:{BOX_GID}\n/srv/landed/a.txt {BOX_UID}:{BOX_GID}\n"),
+        "a copied directory must belong to the box user where it landed"
+    );
+
     // A destination directory the image already shipped is NOT ours to hand
     // over. `/usr/local/bin` exists in alpine and is root-owned; copying into
     // it must give away the file, never the directory.

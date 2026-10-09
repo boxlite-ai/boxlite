@@ -549,8 +549,9 @@ Copy files or directories between host and box.
 
 **Usage:** `boxlite cp [OPTIONS] SRC DST`
 
-- **SRC / DST:** host path or `BOX:PATH` (e.g. `mybox:/app/data`). End a directory
-  `SRC` with `/.` to copy its contents rather than the directory itself, as `docker cp` does.
+- **SRC / DST:** host path or `BOX:PATH` (e.g. `mybox:/app/data`). A directory `SRC` lands as
+  `docker cp` lands it: it becomes a `DST` that does not exist, and lands under its own name in
+  one that does. End `SRC` with `/.` to copy its contents either way.
 
 | Option | Description |
 |--------|-------------|
@@ -562,7 +563,7 @@ Copy files or directories between host and box.
 ```bash
 boxlite cp ./local.txt mybox:/workspace/
 boxlite cp mybox:/app/out ./output
-boxlite cp ./dist/. mybox:/srv/www        # the contents of ./dist, not dist/ itself
+boxlite cp ./dist/. mybox:/srv            # the contents of ./dist, not dist/ itself
 ```
 
 Paths at or under a mount inside the box are refused in both directions — `/tmp`,

@@ -419,13 +419,14 @@ class SimpleBox:
 
                 await box.copy_in("/local/config.json", "/app/config.json")
 
-            Copy a directory::
+            Copy a directory, landing it as ``docker cp`` does: it becomes
+            ``/app/data`` if that does not exist, else ``/app/data/data``::
 
-                await box.copy_in("/local/data/", "/app/data/")
+                await box.copy_in("/local/data", "/app/data")
 
-            Copy a directory's contents rather than the directory — end the
-            source with ``/.`` as ``docker cp`` does (build it as a string;
-            ``pathlib.Path`` drops the trailing ``.``)::
+            Copy a directory's contents either way — end the source with
+            ``/.`` (build it as a string; ``pathlib.Path`` drops the trailing
+            ``.``)::
 
                 await box.copy_in("/local/data/.", "/app/data")
         """
@@ -476,11 +477,13 @@ class SimpleBox:
 
                 await box.copy_out("/app/output.log", "/local/output.log")
 
-            Copy a directory::
+            Copy a directory, landing it as ``docker cp`` does: it becomes
+            ``/local/results`` if that does not exist, else
+            ``/local/results/results``::
 
-                await box.copy_out("/app/results/", "/local/results/")
+                await box.copy_out("/app/results", "/local/results")
 
-            Copy a directory's contents rather than the directory::
+            Copy a directory's contents either way::
 
                 await box.copy_out("/app/results/.", "/local/results")
         """

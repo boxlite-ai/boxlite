@@ -599,11 +599,13 @@ impl Files for GuestServer {
                 // and the ownership hand-off afterwards must agree on what
                 // this copy wrote. Shared rather than cloned — an archive may
                 // carry a great many names.
-                let entry_paths: Arc<[PathBuf]> =
-                    boxlite_shared::tar::entry_paths(staged.path().to_path_buf())
-                        .await
-                        .map_err(|e| Status::internal(e.to_string()))?
-                        .into();
+                let entry_paths: Arc<[PathBuf]> = boxlite_shared::tar::entry_paths(
+                    staged.path().to_path_buf(),
+                    dest_root.clone(),
+                )
+                .await
+                .map_err(BoxliteError::into_validation_status)?
+                .into();
 
                 // The root cleared the mount check, but individual entries may
                 // still land under one. Refuse before touching the rootfs — a
@@ -629,7 +631,7 @@ impl Files for GuestServer {
                     },
                 )
                 .await
-                .map_err(|e| Status::internal(e.to_string()))?;
+                .map_err(BoxliteError::into_validation_status)?;
 
                 // Hand the payload to the user the box actually runs as. tar
                 // preserves neither owner (it extracts as this process, root)

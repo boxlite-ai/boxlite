@@ -926,8 +926,10 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
 - `boxlite_copy_into`, `boxlite_copy_out` and `boxlite_copy_out_start` no
   longer flatten a directory source. The C bindings - and the Go SDK built on
   them - copied a directory's contents where the Rust, Python and Node SDKs
-  copied the directory itself; a directory is now copied under its own name.
-  End the source path with `/.` to copy only the contents, as before.
+  copied the directory itself. `boxlite_copy_into` and `boxlite_copy_out` now
+  land a directory as `docker cp` does: it becomes a destination that does not
+  exist, and lands under its own name in one that does. End the source path
+  with `/.` to copy only the contents either way, as before.
 - `boxlite_copy_in_start` takes a `BoxliteCopySourceKind source_kind` as its
   third argument instead of `bool source_is_dir`. Use
   `BoxliteCopySourceKindDir` for a directory tree,

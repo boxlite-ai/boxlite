@@ -30,10 +30,8 @@ async function main() {
 
   console.log('Copying back to host ...');
   await box.copyOut('/app', outDir, {});
-  const data = fs.readFileSync(
-    path.join(outDir, 'app', path.basename(hostDir), 'hello.txt'),
-    'utf8'
-  );
+  // /app did not exist, so the copy-in made it hold hostDir's contents.
+  const data = fs.readFileSync(path.join(outDir, 'app', 'hello.txt'), 'utf8');
   console.log('Round-trip content:', data.trim());
 
   await box.stop();
