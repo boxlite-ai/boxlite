@@ -31,4 +31,6 @@ Supply the public Native CLI Client ID through `--client-id` if server discovery
 
 ## Validation and limits
 
+Token conversion retains optional refresh and ID tokens without synthesizing them. If `expires_in` is absent or cannot be represented as a time delta, the session expires five minutes after conversion. Function documentation records this fallback and the discovery tests' configuration-precedence and path-preservation contracts.
+
 With production changes reverted, regression tests fail at the wrong endpoint, missing client/grant guidance, duplicated client ID, and cancellation; legacy endpoint behavior passes. Restoring the fix passes all 20 auth integration tests and 268 CLI unit tests with native dependency stubs. Tests cover discovery, device-request form encoding, client/grant rejection, denied/expired codes, cancellation, and persisted rotation. Stubs do not validate a VM or live tenant configuration. After administrator setup, complete real device authorization, confirm refresh-token issuance, refresh the session, and verify API identity before declaring live acceptance.

@@ -268,6 +268,7 @@ pub fn http_client() -> Result<reqwest::Client> {
 mod tests {
     use super::*;
 
+    /// Explicit flags must override both control-plane configuration and environment values.
     #[test]
     fn pick_prefers_flag_over_server_and_env() {
         assert_eq!(
@@ -276,6 +277,7 @@ mod tests {
         );
     }
 
+    /// Empty values must fall through to the next source, or resolve to no value.
     #[test]
     fn pick_falls_through_empty_strings() {
         // `Some("")` is treated as absent so a stray `--audience=` or
@@ -285,12 +287,14 @@ mod tests {
         assert_eq!(pick(None, None, Some("")), None);
     }
 
+    /// Appending `/config` must preserve the control plane's existing path prefix.
     #[test]
     fn join_config_url_appends_to_prefix() {
         let u = join_config_url("https://api.boxlite.ai/api").unwrap();
         assert_eq!(u.as_str(), "https://api.boxlite.ai/api/config");
     }
 
+    /// A trailing slash on the server URL must not introduce a doubled path separator.
     #[test]
     fn join_config_url_strips_trailing_slash() {
         let u = join_config_url("https://api.boxlite.ai/api/").unwrap();
@@ -320,6 +324,7 @@ mod tests {
     fn is_issuer_mismatch_recognizes_openidconnect_error_shape() {
         struct E(&'static str);
         impl std::fmt::Display for E {
+            /// Expose the fixture's exact provider error text to the mismatch detector.
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str(self.0)
             }

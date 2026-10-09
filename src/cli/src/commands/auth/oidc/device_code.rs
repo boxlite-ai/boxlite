@@ -139,6 +139,8 @@ where
     anyhow!("{stage}: {message}")
 }
 
+/// Convert provider tokens into a session, preserving absent refresh and ID tokens.
+/// Missing or unrepresentable lifetimes use a five-minute expiry from the current time.
 fn tokens_from_response(resp: &openidconnect::core::CoreTokenResponse) -> OidcTokens {
     let expires_in = resp
         .expires_in()
