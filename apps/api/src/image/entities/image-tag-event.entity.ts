@@ -7,9 +7,9 @@ import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, Primary
 import { Image } from './image.entity'
 import { ImageVersion } from './image-version.entity'
 
-// One row each time a tag comes to point at a version, starting with the pull
-// that first records it. Rows are only ever inserted, so the image's history is
-// this table read newest first.
+// One row each time a tag comes to point at a version: when a pull first
+// records it, and every time someone moves it. Rows are only ever inserted, so
+// the image's history is this table read newest first.
 @Entity()
 // Ascending, and read backwards for newest first: Postgres walks a btree either
 // way, and a DESC index would be a difference `migration:generate` cannot see.
@@ -54,9 +54,10 @@ export class ImageTagEvent {
   actorId: string | null
 
   // The moment the row is written, not `now()`, which is when its transaction
-  // began: of two transactions writing events for one tag, the one that waited
-  // on the other sorts after it, so the history reads in the order the events
-  // took effect.
+  // began. A move writes this after it holds the tag's row lock, so the order
+  // of these times is the order the moves took effect — with `now()`, a move
+  // that began first but waited for the lock would sort before the one it
+  // followed, and the history would name the wrong version as current.
   @CreateDateColumn({ type: 'timestamp with time zone', default: () => 'clock_timestamp()' })
   createdAt: Date
 }

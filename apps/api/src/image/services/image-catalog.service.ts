@@ -24,7 +24,7 @@ import { ImageTag } from '../entities/image-tag.entity'
 import { ImageTagEvent } from '../entities/image-tag-event.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { ImageVersionState } from '../enums/image-version-state.enum'
-import { catalogNameOf, isCuratedSelector } from '../utils/image-ref.util'
+import { assertTagName, catalogNameOf, isCuratedSelector } from '../utils/image-ref.util'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -56,7 +56,7 @@ function curatedEntries(): ImageDto[] {
 }
 
 /**
- * Reads and removes catalog entries.
+ * Reads catalog entries, moves their tags, and removes them.
  *
  * Two things share every query here. The first is that an image is soft
  * deleted: `deletedAt` is set and its versions and tags stay behind, because
@@ -179,12 +179,100 @@ export class ImageCatalogService {
   }
 
   /**
+   * Point a tag at one of the image's versions, creating the tag if it does not
+   * exist, and record where it pointed before.
+   *
+   * Only the catalog changes. A box already created holds the digest-pinned ref
+   * it was resolved to, so nothing running moves with the tag; and the version
+   * was pulled when it was recorded, so nothing is pulled either. What changes
+   * is what the next box created with this tag boots.
+   */
+  async moveTag(
+    organization: Organization,
+    idOrRef: string,
+    tagName: string,
+    versionId: string,
+    actorId: string | null,
+  ): Promise<ImageDetailDto> {
+    if (isCuratedSelector(idOrRef)) {
+      throw new BadRequestError(
+        `Image '${idOrRef}' is provided by the operator, who pins its reference, so it has no tags to move`,
+      )
+    }
+    assertTagName(tagName)
+
+    const image = await this.findRow(organization, idOrRef)
+    if (!image) {
+      throw new NotFoundException(`Image '${idOrRef}' not found`)
+    }
+
+    await this.tagRepository.manager.transaction(async (manager) => {
+      const version = await manager.findOne(ImageVersion, { where: { id: versionId, imageId: image.id } })
+      if (!version) {
+        throw new BadRequestError(`Version '${versionId}' is not a version of image '${image.name}'`)
+      }
+      if (version.state !== ImageVersionState.READY) {
+        throw new BadRequestError(
+          `Version '${versionId}' of image '${image.name}' is ${version.state}; only a ready version can be tagged`,
+        )
+      }
+
+      // A tag that does not exist yet is created here. Two moves racing to
+      // create it are settled by the unique constraint: the loser waits for the
+      // winner to commit and then moves the tag the winner created.
+      const created = await manager
+        .createQueryBuilder()
+        .insert()
+        .into(ImageTag)
+        .values({ imageId: image.id, name: tagName, versionId })
+        .orIgnore()
+        .returning(['id'])
+        .execute()
+      if (created.raw.length > 0) {
+        await manager.insert(ImageTagEvent, {
+          imageId: image.id,
+          tagName,
+          fromVersionId: null,
+          toVersionId: versionId,
+          actorId,
+        })
+        return
+      }
+
+      // Locked, so the version a move records leaving is the one the tag held
+      // when it moved: two concurrent moves record a chain rather than both
+      // claiming the same starting point.
+      const tag = await manager
+        .createQueryBuilder(ImageTag, 'tag')
+        .setLock('pessimistic_write')
+        .where('tag."imageId" = :imageId', { imageId: image.id })
+        .andWhere('tag.name = :name', { name: tagName })
+        .getOneOrFail()
+      if (tag.versionId === versionId) {
+        // Already there: nothing moved, so there is nothing to record.
+        return
+      }
+
+      await manager.update(ImageTag, { id: tag.id }, { versionId })
+      await manager.insert(ImageTagEvent, {
+        imageId: image.id,
+        tagName,
+        fromVersionId: tag.versionId,
+        toVersionId: versionId,
+        actorId,
+      })
+    })
+
+    return this.get(organization, image.id)
+  }
+
+  /**
    * Remove an image from the catalog.
    *
    * It removes the entry, not the bytes: whatever runners already cached stays
    * cached, and using the same reference again pulls it back as a new entry.
-   * That is also what makes this the way to pick up a tag that moved upstream,
-   * since a recorded tag keeps pointing at the digest it first resolved to.
+   * A pull never moves a recorded tag, so this is how to pick up where a tag
+   * points upstream now, rather than move it to a version already recorded.
    */
   async delete(organization: Organization, idOrRef: string): Promise<void> {
     if (isCuratedSelector(idOrRef)) {

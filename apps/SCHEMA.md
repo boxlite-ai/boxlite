@@ -538,9 +538,10 @@ reached through two upstream paths is normal usage.
 
 ### `image_tag`
 
-The digest a tag resolved to the first time it was pulled. Tags do not move:
-once recorded, a tag keeps pointing at that version, and the escape hatch is
-`DELETE /images/:idOrRef` followed by using the reference again, which brings
+The version a tag points at. A pull records a tag the first time it resolves it
+and never moves it after that; only someone moving it on purpose does, and
+every move is an `image_tag_event` row. Picking up where a tag points upstream
+is `DELETE /images/:idOrRef` followed by using the reference again, which brings
 the name back as a fresh entry.
 
 | Column | Type | Notes |
@@ -558,9 +559,9 @@ covers it.
 
 ### `image_tag_event`
 
-Where each tag has pointed. A row is written each time a tag comes to point at
-a version, starting with the pull that first records it, and never updated, so
-the history of an image is this table read newest first.
+Where each tag has pointed. A row is written when a pull first records a tag and
+each time the tag is moved, and never updated, so the history of an image is
+this table read newest first.
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
@@ -572,8 +573,9 @@ the history of an image is this table read newest first.
 | `actorId` | `character varying` | nullable; the identity provider subject of whoever moved it. Null when a pull recorded the tag |
 | `createdAt` | `timestamptz` | default `clock_timestamp()` |
 
-`createdAt` is the moment the row is written, not the start of its transaction,
-so events sort in the order they took effect. `image_tag_event_image_created_index` on
+`createdAt` is the moment the row is written, not the start of its transaction:
+a move writes it after taking the tag's row lock, so concurrent moves sort in the
+order they took effect. `image_tag_event_image_created_index` on
 `("imageId","createdAt")` serves the newest-first read backwards.
 
 ### `registry_credential`

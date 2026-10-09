@@ -7,11 +7,10 @@ import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn, U
 import { Image } from './image.entity'
 import { ImageVersion } from './image-version.entity'
 
-// The digest a tag resolved to the first time it was pulled. Nothing moves a
-// tag today: once `app:latest` is recorded it keeps pointing at that version.
-// The escape hatch is `DELETE /images/:idOrRef` and then using the reference
-// again, which brings the name back as a fresh entry. Moving a tag becomes a
-// first-class operation later, which is when this table starts changing.
+// The version a tag points at. A pull records a tag the first time it resolves
+// it and never moves it after that, so `app:latest` keeps booting the build it
+// first pulled. Only someone moving it on purpose does, and every move is an
+// `image_tag_event` row.
 @Entity()
 @Unique('image_tag_image_name_unique', ['imageId', 'name'])
 // Postgres does not index a foreign key for you, and `versionId` restricts:

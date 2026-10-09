@@ -165,8 +165,8 @@ export class ImageRegistrarService {
 
       // `DO NOTHING`, not an update: a tag that already points somewhere stays
       // there. Following a moved tag would change what a box boots from with
-      // nobody asking, and `DELETE /images/:idOrRef` is the intended way to
-      // pick up a move.
+      // nobody asking; a tag moves only when someone moves it, and picking up
+      // where it points upstream is `DELETE /images/:idOrRef`.
       const recorded = await manager
         .createQueryBuilder()
         .insert()

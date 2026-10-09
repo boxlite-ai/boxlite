@@ -171,11 +171,10 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
   })
 
   /**
-   * Nothing moves tags today. A tag that resolved once keeps naming that
-   * build, and deleting the image is what picks up a move — without this, an
-   * upstream tag move would silently change what a box boots from. The history
-   * agrees: the one event is the tag being recorded, and the second pull adds
-   * none.
+   * A pull never moves a tag. A tag that resolved once keeps naming that build
+   * until someone moves it on purpose — without this, an upstream tag move
+   * would silently change what a box boots from. The history agrees: the one
+   * event is the tag being recorded, and the second pull adds none.
    */
   it('leaves a tag pointing at the build it first resolved to', async () => {
     await report('quay.io/acme/app:v1', DIGEST)

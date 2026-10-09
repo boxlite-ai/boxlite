@@ -54,9 +54,10 @@ export type ResolvedImage = {
  *
  * A hit must come back digest-pinned. That is the assertion at the bottom, and
  * it is load-bearing rather than defensive: the catalog promises that a ref
- * boots the build it first resolved to, and a runner handed a tag asks the
- * registry again whenever it builds a new disk from it. A hit that came back
- * unpinned would let every new box follow `app:stable` upstream instead.
+ * boots the version its tag points at in the catalog, and a runner handed a
+ * tag asks the registry again whenever it builds a new disk from it. A hit that
+ * came back unpinned would let every new box follow `app:stable` upstream
+ * instead.
  */
 @Injectable()
 export class ImageResolverService {
@@ -120,9 +121,10 @@ export class ImageResolverService {
   }
 
   /**
-   * A tag, resolved to the digest it pointed at the first time it was pulled.
-   * It is deliberately not re-checked against the registry: the tag may have
-   * moved upstream, and following it would change what a box boots from without
+   * A tag, resolved to the version it points at in the catalog: the one the
+   * pull that recorded it found, until the organization moves it. It is
+   * deliberately not re-checked against the registry: the tag may have moved
+   * upstream, and following it would change what a box boots from without
    * anyone asking.
    */
   private async resolveByTag(

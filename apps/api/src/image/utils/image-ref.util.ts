@@ -73,6 +73,13 @@ export function isSha256Digest(value: string): boolean {
   return DIGEST_PATTERN.test(value)
 }
 
+/** Refuse a tag OCI would not accept: the rule a ref's tag and a tag being moved share. */
+export function assertTagName(tag: string): void {
+  if (!TAG_PATTERN.test(tag)) {
+    throw new BadRequestError(`Image tag '${tag}' is not a valid OCI tag`)
+  }
+}
+
 /** Whether a ref names an immutable build rather than a tag that can move. */
 export function isDigestPinned(ref: string): boolean {
   const at = ref.lastIndexOf('@')
@@ -111,9 +118,7 @@ export function parseImageRef(ref: string): ParsedImageRef {
   if (lastColon !== -1 && !rest.slice(lastColon + 1).includes('/')) {
     tag = rest.slice(lastColon + 1)
     rest = rest.slice(0, lastColon)
-    if (!TAG_PATTERN.test(tag)) {
-      throw new BadRequestError(`Image tag '${tag}' is not a valid OCI tag`)
-    }
+    assertTagName(tag)
   }
 
   const segments = rest.split('/')
