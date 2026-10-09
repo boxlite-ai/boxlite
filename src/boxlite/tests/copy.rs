@@ -343,6 +343,51 @@ async fn streaming_payload_under_mount_is_refused(bx: &LiteBox, tmp: &Path) {
     );
 }
 
+/// A caller-built archive led by `b/` that carries `a.txt` beside it.
+fn outside_root_archive() -> boxlite_shared::BoxByteStream {
+    let mut tar_bytes = Vec::new();
+    {
+        let mut builder = tar::Builder::new(&mut tar_bytes);
+        for (name, kind) in [
+            ("b/", tar::EntryType::Directory),
+            ("b/c.txt", tar::EntryType::Regular),
+            ("a.txt", tar::EntryType::Regular),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(kind);
+            header.set_mode(0o755);
+            header.set_size(0);
+            builder
+                .append_data(&mut header, name, std::io::empty())
+                .unwrap();
+        }
+        builder.finish().unwrap();
+    }
+    Box::pin(tokio_stream::iter(vec![Ok(tar_bytes)]))
+}
+
+/// That archive cannot land in a missing destination: the guest has written
+/// `b`'s contents there by the time it reads `a.txt`, so the copy fails as the
+/// caller's error and keeps what it wrote.
+async fn streaming_entry_outside_the_root_is_refused(bx: &LiteBox, _tmp: &Path) {
+    let err = bx
+        .copy_in_stream(
+            outside_root_archive(),
+            "/root/outside-root",
+            CopySourceKind::Dir,
+            CopyOptions::default(),
+        )
+        .await
+        .expect_err("an entry outside the archive root must fail the copy");
+
+    assert!(
+        matches!(err, boxlite::BoxliteError::InvalidArgument(_)),
+        "got: {err}"
+    );
+    let landed = BoxCommand::new("test").args(["-f", "/root/outside-root/c.txt"]);
+    assert_eq!(exec_exit_code(bx, landed).await, 0);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn copy_integration() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
@@ -394,6 +439,7 @@ async fn copy_integration() {
     streaming_hintless_corrupt_archive_fails(&bx, tmp.path()).await;
     streaming_stream_error_after_data_fails(&bx, tmp.path()).await;
     streaming_dir_rejects_non_recursive(&bx, tmp.path()).await;
+    streaming_entry_outside_the_root_is_refused(&bx, tmp.path()).await;
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
