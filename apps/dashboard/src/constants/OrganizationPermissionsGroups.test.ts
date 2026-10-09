@@ -62,8 +62,8 @@ describe('permission groups', () => {
   })
 
   /**
-   * There is no `write:images` scope: an image enters the catalog by being
-   * used, so creating a box is what writes it. Offering a write here would
+   * No route requires `write:images`: an image enters the catalog by being
+   * used, so creating a box is what writes it. Offering the scope here would
    * name a route that does not exist.
    */
   it('offer no write scope for images', () => {

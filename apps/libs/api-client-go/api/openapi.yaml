@@ -4838,6 +4838,7 @@ components:
             - read:images
             - delete:images
             - read:registries
+            - write:images
             type: string
           type: array
         expiresAt:
@@ -4896,6 +4897,7 @@ components:
             - read:images
             - delete:images
             - read:registries
+            - write:images
             type: string
           type: array
         expiresAt:
@@ -4959,6 +4961,7 @@ components:
             - read:images
             - delete:images
             - read:registries
+            - write:images
             type: string
           type: array
         lastUsedAt:
@@ -5029,6 +5032,7 @@ components:
             - read:images
             - delete:images
             - read:registries
+            - write:images
             type: string
           type: array
         isGlobal:
@@ -5434,6 +5438,7 @@ components:
             - read:images
             - delete:images
             - read:registries
+            - write:images
             type: string
           type: array
       required:
@@ -5479,6 +5484,7 @@ components:
             - read:images
             - delete:images
             - read:registries
+            - write:images
             type: string
           type: array
       required:

@@ -23,7 +23,7 @@ import { ImageCatalogService } from '../services/image-catalog.service'
  * The image catalog.
  *
  * There is no create: an image enters the catalog by being used. That is why
- * there is no `write:images` scope either — the write happens when a box
+ * no route here requires `write:images` — the write happens when a box
  * reaches STARTED, on the credentials that created the box.
  *
  * Every route is organization-scoped inside the service, by filtering on the
