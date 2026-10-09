@@ -4,15 +4,15 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { clickHouseRetentionPolicy, clickHouseStartupScript } from '../stack/providers/gcp/clickhouse.ts'
+import { clickHouseRetentionPolicy, clickHouseStartupScript, gcpClickHouseProvider } from '../stack/providers/gcp/clickhouse.ts'
 
-test('GCP initial schema and policy use the configured hours', () => {
+test('GCP bootstrap uses 30 days while the policy uses configured hours', () => {
   const script = clickHouseStartupScript({
     database: 'otel', writerUsername: 'otel_writer', readerUsername: 'otel_reader',
-    adminRef: 'admin', writerRef: 'writer', readerRef: 'reader', retentionHours: 168,
+    adminRef: 'admin', writerRef: 'writer', readerRef: 'reader',
   })
   const encoded = /printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d/.exec(script)![1]
-  assert.equal((Buffer.from(encoded, 'base64').toString().match(/INTERVAL 168 HOUR/g) ?? []).length, 7)
+  assert.equal((Buffer.from(encoded, 'base64').toString().match(/INTERVAL 720 HOUR/g) ?? []).length, 7)
   assert.notEqual(clickHouseRetentionPolicy(168, 'admin').validate, clickHouseRetentionPolicy(720, 'admin').validate)
 })
 
@@ -59,10 +59,66 @@ fi
   }
 })
 
-test('GCP deploy changes the retention policy without replacing the VM', () => {
-  const source = readFileSync(new URL('../stack/providers/gcp/clickhouse.ts', import.meta.url), 'utf8')
-  assert.match(source, /ignoreChanges: \['bootDisk', 'metadataStartupScript'\]/)
-  assert.match(source, /new gcp\.osconfig\.OsPolicyAssignment\('ClickHouseRetention'/)
-  assert.match(source, /clickHouseRetentionPolicy\(request\.retentionHours, ref\)/)
-  assert.match(source, /metadata: \{ 'enable-osconfig': 'TRUE' \}/)
+test('GCP retention changes preserve VM inputs while secret rotations reach the startup script', async (t) => {
+  // Capture the actual provider boundary without contacting GCP. Outputs resolve synchronously.
+  const output = (value: any): any => ({ value, apply: (fn: (value: any) => any) => output(fn(value)) })
+  const resources = new Map<string, { args: any; options: any }>()
+  let rotated = ''
+  class Resource {
+    [key: string]: any
+    constructor(name: string, args: any, options: any = {}) {
+      resources.set(name, { args, options })
+      Object.assign(this, args, {
+        id: output(name), selfLink: output(name), email: output('host@example.test'),
+        name: output(`${name}/versions/${name === rotated ? 2 : 1}`),
+        networkInterfaces: [{ networkIp: '10.0.0.2' }], result: output('test-password'),
+      })
+    }
+  }
+  const constructors = new Proxy({}, { get: () => Resource })
+  const globals = {
+    gcp: new Proxy({}, { get: () => constructors }), random: constructors,
+    $app: { name: 'boxlite', stage: 'dev' },
+    $util: { output, secret: output },
+    $resolve: (values: any[]) => output(values.map((value) => value.value)),
+    $interpolate: () => output('http://10.0.0.2:8123'),
+  }
+  for (const [key, value] of Object.entries(globals)) {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, key)
+    Object.defineProperty(globalThis, key, { configurable: true, value })
+    t.after(() => {
+      if (previous) Object.defineProperty(globalThis, key, previous)
+      else Reflect.deleteProperty(globalThis, key)
+    })
+  }
+  const provider = gcpClickHouseProvider({
+    network: { cloud: 'gcp', network: 'network', subnetwork: 'subnet' } as any,
+    project: 'project', region: 'us-central1', zone: 'us-central1-a', appShort: 'bl',
+    callerRanges: ['10.0.0.0/24'], clickStackConsumerProject: 'project',
+    clickStackConsumerAccount: null, managed: null, dependsOn: [],
+  })
+  const deploy = (retentionHours: number) => {
+    provider({ mode: 'self-hosted', database: 'otel', writerUsername: 'otel_writer',
+      readerUsername: 'otel_reader', instanceSize: 'small', dataGb: 100, retentionHours })
+    const vm = resources.get('ClickHouse')!
+    const policy = resources.get('ClickHouseRetention')!.args.osPolicies[0].resourceGroups[0].resources[0].exec
+    return { script: vm.args.metadataStartupScript.value, ignored: vm.options.ignoreChanges,
+      policy: policy.enforce.script.value }
+  }
+  const before = deploy(72)
+  const after = deploy(720)
+  await t.test('TTL updates change only the policy', () => {
+    assert.ok(after.script === before.script, 'TTL changes must not change the VM startup script')
+    assert.notEqual(after.policy, before.policy)
+    assert.match(after.policy, /INTERVAL 720 HOUR/)
+  })
+  for (const account of ['Admin', 'Writer', 'Reader']) {
+    rotated = `ClickHouse${account}SecretValue`
+    const rotation = deploy(720)
+    await t.test(`${account} rotation updates the VM`, () => {
+      assert.notEqual(rotation.script, after.script, `${account} rotation must reach the VM`)
+      assert.ok(!rotation.ignored.includes('metadataStartupScript'), 'credential updates must not be ignored')
+      assert.match(rotation.script, new RegExp(`${rotated}/versions/2`))
+    })
+  }
 })

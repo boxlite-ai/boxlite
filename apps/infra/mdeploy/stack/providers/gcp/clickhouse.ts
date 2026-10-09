@@ -113,7 +113,6 @@ export const clickHouseStartupScript = ({
   adminRef,
   writerRef,
   readerRef,
-  retentionHours,
 }: {
   database: string
   writerUsername: string
@@ -122,7 +121,6 @@ export const clickHouseStartupScript = ({
   adminRef: string
   writerRef: string
   readerRef: string
-  retentionHours?: number
 }): string => `#!/bin/bash
 set -euo pipefail
 # The console as well as the file. Nobody can SSH to this host — OS Login
@@ -213,7 +211,7 @@ until clickhouse-client --query 'SELECT 1' >/dev/null 2>&1; do sleep 2; done
 # there is no SSM here, so this is where the reconcile lives. The tables come
 # first because the grants below name them.
 mkdir -p /opt/boxlite-clickhouse
-printf '%s' '${Buffer.from(renderClickHouseSchema(retentionHours)).toString('base64')}' | base64 -d > /opt/boxlite-clickhouse/otel-schema.sql
+printf '%s' '${Buffer.from(renderClickHouseSchema()).toString('base64')}' | base64 -d > /opt/boxlite-clickhouse/otel-schema.sql
 clickhouse-client --multiquery < /opt/boxlite-clickhouse/otel-schema.sql
 
 clickhouse-client --query "CREATE DATABASE IF NOT EXISTS ${database}"
@@ -378,7 +376,6 @@ export const gcpClickHouseProvider =
           adminRef,
           writerRef,
           readerRef,
-          retentionHours: request.retentionHours,
         }),
     )
 
@@ -409,8 +406,9 @@ export const gcpClickHouseProvider =
         // newer image on an unrelated deploy would take the history with it.
         allowStoppingForUpdate: false,
       },
-      // This property forces VM replacement; existing hosts receive TTL changes through OS Config.
-      { ignoreChanges: ['bootDisk', 'metadataStartupScript'], dependsOn: [...access, ...dependsOn] },
+      // Keep credential changes visible. Only the OS policy depends on configured retention;
+      // the startup schema uses the fixed default so TTL updates do not replace the VM.
+      { ignoreChanges: ['bootDisk'], dependsOn: [...access, ...dependsOn] },
     )
 
     const firewall = new gcp.compute.Firewall('ClickHouseFirewall', {
