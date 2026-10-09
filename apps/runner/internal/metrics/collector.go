@@ -36,6 +36,9 @@ type Collector struct {
 	boxlite        *blclient.Client
 	log            *slog.Logger
 	boxliteHomeDir string
+	// diskUsage reads a filesystem's capacity and use; tests replace it so the
+	// path and field mapping are checked without a live, shared filesystem.
+	diskUsage func(ctx context.Context, path string) (*disk.UsageStat, error)
 
 	cpuRing  *ring.Ring
 	cpuMutex sync.RWMutex
@@ -73,6 +76,7 @@ func NewCollector(cfg CollectorConfig) *Collector {
 		log:                                cfg.Logger.With(slog.String("component", "metrics")),
 		boxlite:                            cfg.Boxlite,
 		boxliteHomeDir:                     cfg.BoxliteHomeDir,
+		diskUsage:                          disk.UsageWithContext,
 		cpuRing:                            ring.New(cfg.WindowSize),
 		cpuUsageSnapshotInterval:           cfg.CPUUsageSnapshotInterval,
 		allocatedResourcesSnapshotInterval: cfg.AllocatedResourcesSnapshotInterval,
@@ -137,7 +141,7 @@ func (c *Collector) collect(ctx context.Context) (*Metrics, error) {
 	metrics.MemoryUsagePercentage = float32(memStats.UsedPercent)
 	metrics.TotalRAMGiB = float32(memStats.Total) / (1024 * 1024 * 1024)
 
-	diskStats, err := disk.UsageWithContext(ctx, c.boxliteHomeDir)
+	diskStats, err := c.diskUsage(ctx, c.boxliteHomeDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to collect disk usage of %s: %v", c.boxliteHomeDir, err)
 	}
