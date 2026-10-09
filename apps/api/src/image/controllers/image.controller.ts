@@ -131,7 +131,7 @@ export class ImageController {
       authContext.organization,
       idOrRef,
       tag,
-      request.versionId,
+      { versionId: request.versionId },
       authContext.userId,
     )
   }

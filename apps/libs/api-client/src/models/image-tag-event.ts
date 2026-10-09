@@ -24,9 +24,17 @@ export interface ImageTagEvent {
      */
     'fromVersionId': string | null;
     /**
+     * Digest of the version the tag pointed at before. Null when the tag did not exist yet
+     */
+    'fromDigest': string | null;
+    /**
      * Version the tag points at from then on
      */
     'toVersionId': string;
+    /**
+     * Digest of the version the tag points at from then on
+     */
+    'toDigest': string;
     /**
      * Who moved the tag. Null when a box pulling the image is what recorded it
      */

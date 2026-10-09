@@ -28,6 +28,13 @@ import { assertTagName, catalogNameOf, isCuratedSelector } from '../utils/image-
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/**
+ * The version a tag moves to. The console names it by its catalog id; the box
+ * API, whose versions carry no id, by its digest, which is unique within an
+ * image.
+ */
+export type VersionSelector = { versionId: string } | { digest: string }
+
 /** One reference the catalog holds: a tag, or a version no tag points at. */
 export interface ImageReference {
   reference: string
@@ -191,7 +198,7 @@ export class ImageCatalogService {
     organization: Organization,
     idOrRef: string,
     tagName: string,
-    versionId: string,
+    target: VersionSelector,
     actorId: string | null,
   ): Promise<ImageDetailDto> {
     if (isCuratedSelector(idOrRef)) {
@@ -207,15 +214,18 @@ export class ImageCatalogService {
     }
 
     await this.tagRepository.manager.transaction(async (manager) => {
-      const version = await manager.findOne(ImageVersion, { where: { id: versionId, imageId: image.id } })
+      const where = 'versionId' in target ? { id: target.versionId } : { digest: target.digest }
+      const named = 'versionId' in target ? `Version '${target.versionId}'` : `Digest '${target.digest}'`
+      const version = await manager.findOne(ImageVersion, { where: { ...where, imageId: image.id } })
       if (!version) {
-        throw new BadRequestError(`Version '${versionId}' is not a version of image '${image.name}'`)
+        throw new BadRequestError(`${named} is not a version of image '${image.name}'`)
       }
       if (version.state !== ImageVersionState.READY) {
         throw new BadRequestError(
-          `Version '${versionId}' of image '${image.name}' is ${version.state}; only a ready version can be tagged`,
+          `${named} of image '${image.name}' is ${version.state}; only a ready version can be tagged`,
         )
       }
+      const versionId = version.id
 
       // A tag that does not exist yet is created here. Two moves racing to
       // create it are settled by the unique constraint: the loser waits for the
@@ -409,10 +419,15 @@ export class ImageCatalogService {
     return grouped
   }
 
-  /** The most recent tag events, newest first — the index serves this read backwards. */
+  /**
+   * The most recent tag events, newest first — the index serves this read
+   * backwards — with the versions they name, so each event carries their
+   * digests and reads without the image's version list.
+   */
   private historyOf(imageId: string): Promise<ImageTagEvent[]> {
     return this.tagEventRepository.find({
       where: { imageId },
+      relations: { fromVersion: true, toVersion: true },
       order: { createdAt: 'DESC' },
       take: IMAGE_HISTORY_LIMIT,
     })
@@ -453,7 +468,9 @@ function toTagEventDto(event: ImageTagEvent): ImageTagEventDto {
   return {
     tagName: event.tagName,
     fromVersionId: event.fromVersionId,
+    fromDigest: event.fromVersion?.digest ?? null,
     toVersionId: event.toVersionId,
+    toDigest: event.toVersion.digest,
     actorId: event.actorId,
     createdAt: event.createdAt.toISOString(),
   }

@@ -446,24 +446,50 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
 
     it('points the tag at the version, and records where it came from and who moved it', async () => {
       const { versionOf } = await imageWithVersions(DIGEST, OTHER_DIGEST)
-      await catalog.moveTag(ORG, 'quay.io/acme/app', 'stable', versionOf(DIGEST), ACTOR)
+      await catalog.moveTag(ORG, 'quay.io/acme/app', 'stable', { versionId: versionOf(DIGEST) }, ACTOR)
 
-      const detail = await catalog.moveTag(ORG, 'quay.io/acme/app', 'stable', versionOf(OTHER_DIGEST), ACTOR)
+      const detail = await catalog.moveTag(
+        ORG,
+        'quay.io/acme/app',
+        'stable',
+        { versionId: versionOf(OTHER_DIGEST) },
+        ACTOR,
+      )
 
       expect(detail.versions.find((version) => version.id === versionOf(OTHER_DIGEST))?.tags).toEqual(['stable', 'v2'])
       expect(detail.versions.find((version) => version.id === versionOf(DIGEST))?.tags).toEqual(['v1'])
       expect(detail.history[0]).toMatchObject({
         tagName: 'stable',
         fromVersionId: versionOf(DIGEST),
+        fromDigest: DIGEST,
         toVersionId: versionOf(OTHER_DIGEST),
+        toDigest: OTHER_DIGEST,
         actorId: ACTOR,
       })
+    })
+
+    /** The box API's versions carry no id, so it names the version by digest. */
+    it('moves a tag to the version a digest names', async () => {
+      const { versionOf } = await imageWithVersions(DIGEST, OTHER_DIGEST)
+
+      const detail = await catalog.moveTag(ORG, 'quay.io/acme/app', 'v1', { digest: OTHER_DIGEST }, ACTOR)
+
+      expect(detail.versions.find((version) => version.id === versionOf(OTHER_DIGEST))?.tags).toEqual(['v1', 'v2'])
+      expect(detail.history[0]).toMatchObject({ tagName: 'v1', fromDigest: DIGEST, toDigest: OTHER_DIGEST })
+    })
+
+    it('refuses a digest no version of the image has', async () => {
+      await imageWithVersions(DIGEST)
+
+      await expect(catalog.moveTag(ORG, 'quay.io/acme/app', 'v1', { digest: OTHER_DIGEST }, ACTOR)).rejects.toThrow(
+        BadRequestError,
+      )
     })
 
     it('creates a tag that does not exist yet, from no version', async () => {
       const { versionOf } = await imageWithVersions(DIGEST)
 
-      const detail = await catalog.moveTag(ORG, 'quay.io/acme/app', 'stable', versionOf(DIGEST), ACTOR)
+      const detail = await catalog.moveTag(ORG, 'quay.io/acme/app', 'stable', { versionId: versionOf(DIGEST) }, ACTOR)
 
       expect(detail.tags).toEqual(['stable', 'v1'])
       expect(detail.history[0]).toMatchObject({
@@ -476,7 +502,7 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
     it('records nothing when the tag already points there', async () => {
       const { detail: before, versionOf } = await imageWithVersions(DIGEST)
 
-      const after = await catalog.moveTag(ORG, 'quay.io/acme/app', 'v1', versionOf(DIGEST), ACTOR)
+      const after = await catalog.moveTag(ORG, 'quay.io/acme/app', 'v1', { versionId: versionOf(DIGEST) }, ACTOR)
 
       expect(after.history).toEqual(before.history)
     })
@@ -490,7 +516,7 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
       const pinned = `quay.io/acme/app@${DIGEST}`
       const boxId = await addBox(pinned)
 
-      await catalog.moveTag(ORG, 'quay.io/acme/app', 'v1', versionOf(OTHER_DIGEST), ACTOR)
+      await catalog.moveTag(ORG, 'quay.io/acme/app', 'v1', { versionId: versionOf(OTHER_DIGEST) }, ACTOR)
 
       const box = await dataSource.getRepository(Box).findOneByOrFail({ id: boxId })
       expect(box.image).toBe(pinned)
@@ -501,9 +527,9 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
       await use('quay.io/acme/other:v1', { digest: OTHER_DIGEST })
       const other = await catalog.get(ORG, 'quay.io/acme/other')
 
-      await expect(catalog.moveTag(ORG, 'quay.io/acme/app', 'stable', other.versions[0].id, ACTOR)).rejects.toThrow(
-        BadRequestError,
-      )
+      await expect(
+        catalog.moveTag(ORG, 'quay.io/acme/app', 'stable', { versionId: other.versions[0].id }, ACTOR),
+      ).rejects.toThrow(BadRequestError)
     })
 
     it('refuses a version that is not ready', async () => {
@@ -512,35 +538,35 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
         .getRepository(ImageVersion)
         .update({ id: versionOf(DIGEST) }, { state: ImageVersionState.DELETED })
 
-      await expect(catalog.moveTag(ORG, 'quay.io/acme/app', 'stable', versionOf(DIGEST), ACTOR)).rejects.toThrow(
-        BadRequestError,
-      )
+      await expect(
+        catalog.moveTag(ORG, 'quay.io/acme/app', 'stable', { versionId: versionOf(DIGEST) }, ACTOR),
+      ).rejects.toThrow(BadRequestError)
     })
 
     it('refuses a tag OCI would not accept', async () => {
       const { versionOf } = await imageWithVersions(DIGEST)
 
-      await expect(catalog.moveTag(ORG, 'quay.io/acme/app', '-stable', versionOf(DIGEST), ACTOR)).rejects.toThrow(
-        BadRequestError,
-      )
+      await expect(
+        catalog.moveTag(ORG, 'quay.io/acme/app', '-stable', { versionId: versionOf(DIGEST) }, ACTOR),
+      ).rejects.toThrow(BadRequestError)
     })
 
     it('refuses a curated image, and answers an image another organization holds as not found', async () => {
       const { versionOf } = await imageWithVersions(DIGEST)
       const [curated] = (await catalog.list(ORG)).filter((image) => image.curated)
 
-      await expect(catalog.moveTag(ORG, curated.name, 'stable', versionOf(DIGEST), ACTOR)).rejects.toThrow(
-        BadRequestError,
-      )
-      await expect(catalog.moveTag(OTHER_ORG, 'quay.io/acme/app', 'stable', versionOf(DIGEST), ACTOR)).rejects.toThrow(
-        NotFoundException,
-      )
+      await expect(
+        catalog.moveTag(ORG, curated.name, 'stable', { versionId: versionOf(DIGEST) }, ACTOR),
+      ).rejects.toThrow(BadRequestError)
+      await expect(
+        catalog.moveTag(OTHER_ORG, 'quay.io/acme/app', 'stable', { versionId: versionOf(DIGEST) }, ACTOR),
+      ).rejects.toThrow(NotFoundException)
     })
 
     /** A pull of a moved tag leaves it where it was put: only a move moves a tag. */
     it('keeps a moved tag where it was put when a box pulls it again', async () => {
       const { versionOf } = await imageWithVersions(DIGEST, OTHER_DIGEST)
-      await catalog.moveTag(ORG, 'quay.io/acme/app', 'v1', versionOf(OTHER_DIGEST), ACTOR)
+      await catalog.moveTag(ORG, 'quay.io/acme/app', 'v1', { versionId: versionOf(OTHER_DIGEST) }, ACTOR)
 
       await use('quay.io/acme/app:v1', { digest: THIRD_DIGEST })
 
@@ -560,8 +586,8 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
       const { versionOf } = await imageWithVersions(DIGEST, OTHER_DIGEST, THIRD_DIGEST)
 
       await Promise.all([
-        catalog.moveTag(ORG, 'quay.io/acme/app', 'v1', versionOf(OTHER_DIGEST), ACTOR),
-        catalog.moveTag(ORG, 'quay.io/acme/app', 'v1', versionOf(THIRD_DIGEST), ACTOR),
+        catalog.moveTag(ORG, 'quay.io/acme/app', 'v1', { versionId: versionOf(OTHER_DIGEST) }, ACTOR),
+        catalog.moveTag(ORG, 'quay.io/acme/app', 'v1', { versionId: versionOf(THIRD_DIGEST) }, ACTOR),
       ])
 
       const detail = await catalog.get(ORG, 'quay.io/acme/app')

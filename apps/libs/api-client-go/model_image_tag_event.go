@@ -25,8 +25,12 @@ type ImageTagEvent struct {
 	TagName string `json:"tagName"`
 	// Version the tag pointed at before. Null when the tag did not exist yet
 	FromVersionId NullableString `json:"fromVersionId"`
+	// Digest of the version the tag pointed at before. Null when the tag did not exist yet
+	FromDigest NullableString `json:"fromDigest"`
 	// Version the tag points at from then on
 	ToVersionId string `json:"toVersionId"`
+	// Digest of the version the tag points at from then on
+	ToDigest string `json:"toDigest"`
 	// Who moved the tag. Null when a box pulling the image is what recorded it
 	ActorId NullableString `json:"actorId"`
 	// When the tag moved
@@ -40,11 +44,13 @@ type _ImageTagEvent ImageTagEvent
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewImageTagEvent(tagName string, fromVersionId NullableString, toVersionId string, actorId NullableString, createdAt string) *ImageTagEvent {
+func NewImageTagEvent(tagName string, fromVersionId NullableString, fromDigest NullableString, toVersionId string, toDigest string, actorId NullableString, createdAt string) *ImageTagEvent {
 	this := ImageTagEvent{}
 	this.TagName = tagName
 	this.FromVersionId = fromVersionId
+	this.FromDigest = fromDigest
 	this.ToVersionId = toVersionId
+	this.ToDigest = toDigest
 	this.ActorId = actorId
 	this.CreatedAt = createdAt
 	return &this
@@ -108,6 +114,32 @@ func (o *ImageTagEvent) SetFromVersionId(v string) {
 	o.FromVersionId.Set(&v)
 }
 
+// GetFromDigest returns the FromDigest field value
+// If the value is explicit nil, the zero value for string will be returned
+func (o *ImageTagEvent) GetFromDigest() string {
+	if o == nil || o.FromDigest.Get() == nil {
+		var ret string
+		return ret
+	}
+
+	return *o.FromDigest.Get()
+}
+
+// GetFromDigestOk returns a tuple with the FromDigest field value
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *ImageTagEvent) GetFromDigestOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.FromDigest.Get(), o.FromDigest.IsSet()
+}
+
+// SetFromDigest sets field value
+func (o *ImageTagEvent) SetFromDigest(v string) {
+	o.FromDigest.Set(&v)
+}
+
 // GetToVersionId returns the ToVersionId field value
 func (o *ImageTagEvent) GetToVersionId() string {
 	if o == nil {
@@ -130,6 +162,30 @@ func (o *ImageTagEvent) GetToVersionIdOk() (*string, bool) {
 // SetToVersionId sets field value
 func (o *ImageTagEvent) SetToVersionId(v string) {
 	o.ToVersionId = v
+}
+
+// GetToDigest returns the ToDigest field value
+func (o *ImageTagEvent) GetToDigest() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.ToDigest
+}
+
+// GetToDigestOk returns a tuple with the ToDigest field value
+// and a boolean to check if the value has been set.
+func (o *ImageTagEvent) GetToDigestOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.ToDigest, true
+}
+
+// SetToDigest sets field value
+func (o *ImageTagEvent) SetToDigest(v string) {
+	o.ToDigest = v
 }
 
 // GetActorId returns the ActorId field value
@@ -194,7 +250,9 @@ func (o ImageTagEvent) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["tagName"] = o.TagName
 	toSerialize["fromVersionId"] = o.FromVersionId.Get()
+	toSerialize["fromDigest"] = o.FromDigest.Get()
 	toSerialize["toVersionId"] = o.ToVersionId
+	toSerialize["toDigest"] = o.ToDigest
 	toSerialize["actorId"] = o.ActorId.Get()
 	toSerialize["createdAt"] = o.CreatedAt
 
@@ -212,7 +270,9 @@ func (o *ImageTagEvent) UnmarshalJSON(data []byte) (err error) {
 	requiredProperties := []string{
 		"tagName",
 		"fromVersionId",
+		"fromDigest",
 		"toVersionId",
+		"toDigest",
 		"actorId",
 		"createdAt",
 	}
@@ -246,7 +306,9 @@ func (o *ImageTagEvent) UnmarshalJSON(data []byte) (err error) {
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "tagName")
 		delete(additionalProperties, "fromVersionId")
+		delete(additionalProperties, "fromDigest")
 		delete(additionalProperties, "toVersionId")
+		delete(additionalProperties, "toDigest")
 		delete(additionalProperties, "actorId")
 		delete(additionalProperties, "createdAt")
 		o.AdditionalProperties = additionalProperties

@@ -71,10 +71,23 @@ export class ImageTagEventDto {
   fromVersionId: string | null
 
   @ApiProperty({
+    description: 'Digest of the version the tag pointed at before. Null when the tag did not exist yet',
+    example: 'sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4',
+    nullable: true,
+  })
+  fromDigest: string | null
+
+  @ApiProperty({
     description: 'Version the tag points at from then on',
     example: '123e4567-e89b-12d3-a456-426614174001',
   })
   toVersionId: string
+
+  @ApiProperty({
+    description: 'Digest of the version the tag points at from then on',
+    example: 'sha256:b5ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4',
+  })
+  toDigest: string
 
   @ApiProperty({
     description: 'Who moved the tag. Null when a box pulling the image is what recorded it',

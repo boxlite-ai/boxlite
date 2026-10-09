@@ -177,7 +177,13 @@ describe('ImageController routing', () => {
     const response = await request('PUT', '/api/images/quay.io%2Facme%2Fapp/tags/stable', { versionId: VERSION_ID })
 
     expect(response.status).toBe(200)
-    expect(catalog.moveTag).toHaveBeenCalledWith(ORGANIZATION, 'quay.io/acme/app', 'stable', VERSION_ID, USER_ID)
+    expect(catalog.moveTag).toHaveBeenCalledWith(
+      ORGANIZATION,
+      'quay.io/acme/app',
+      'stable',
+      { versionId: VERSION_ID },
+      USER_ID,
+    )
   })
 
   it.each([{}, { versionId: 'v2' }])('refuses to move a tag to %j before reaching the catalog', async (body) => {

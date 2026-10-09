@@ -7446,7 +7446,9 @@ components:
       example:
         tagName: stable
         fromVersionId: 123e4567-e89b-12d3-a456-426614174000
+        fromDigest: sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
         toVersionId: 123e4567-e89b-12d3-a456-426614174001
+        toDigest: sha256:b5ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
         actorId: auth0|6512bd43d9caa6e02c990b0a
         createdAt: 2026-01-01T00:00:00.000Z
       properties:
@@ -7460,9 +7462,19 @@ components:
           example: 123e4567-e89b-12d3-a456-426614174000
           nullable: true
           type: string
+        fromDigest:
+          description: Digest of the version the tag pointed at before. Null when
+            the tag did not exist yet
+          example: sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
+          nullable: true
+          type: string
         toVersionId:
           description: Version the tag points at from then on
           example: 123e4567-e89b-12d3-a456-426614174001
+          type: string
+        toDigest:
+          description: Digest of the version the tag points at from then on
+          example: sha256:b5ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
           type: string
         actorId:
           description: Who moved the tag. Null when a box pulling the image is what
@@ -7477,8 +7489,10 @@ components:
       required:
       - actorId
       - createdAt
+      - fromDigest
       - fromVersionId
       - tagName
+      - toDigest
       - toVersionId
       type: object
     ImageDetail:
@@ -7516,12 +7530,16 @@ components:
         history:
         - tagName: stable
           fromVersionId: 123e4567-e89b-12d3-a456-426614174000
+          fromDigest: sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
           toVersionId: 123e4567-e89b-12d3-a456-426614174001
+          toDigest: sha256:b5ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
           actorId: auth0|6512bd43d9caa6e02c990b0a
           createdAt: 2026-01-01T00:00:00.000Z
         - tagName: stable
           fromVersionId: 123e4567-e89b-12d3-a456-426614174000
+          fromDigest: sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
           toVersionId: 123e4567-e89b-12d3-a456-426614174001
+          toDigest: sha256:b5ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
           actorId: auth0|6512bd43d9caa6e02c990b0a
           createdAt: 2026-01-01T00:00:00.000Z
       properties:
