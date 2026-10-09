@@ -213,6 +213,8 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
       // Nothing: nested virtualization is an instance attribute on this cloud,
       // and the guest's own /dev/kvm is present as soon as it is set.
       prepareKvm: '',
+      // Nothing: box state stays on the root volume, which `rootDiskGb` sizes.
+      prepareHome: '',
       startWrapper: startWrapper(secretNames, region),
       unitEnvironment: { AWS_REGION: region },
     }

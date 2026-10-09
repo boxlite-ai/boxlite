@@ -202,7 +202,7 @@
         },
         "runners": {
           "size": "small",
-          "rootDiskGb": 100
+          "rootDiskGb": 50
         },
         "alarms": {
           "apiServerErrors": {

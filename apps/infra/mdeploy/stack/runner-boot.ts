@@ -1,12 +1,13 @@
 /*
- * What a runner host does at first boot, written once for both clouds.
+ * What a runner host runs at boot, written once for both clouds.
  *
  * The script is the same shape everywhere, because what it does is the same
  * everywhere: install what a box needs, fetch the runner binary, refuse to
- * install it unless the checksum matches, and hand it to systemd. Four things
- * genuinely differ, and they are the four hooks below — where the host learns
+ * install it unless the checksum matches, and hand it to systemd. Five things
+ * genuinely differ, and they are the five hooks below — where the host learns
  * its own address, how a private registry credential is fetched, what mounts a
- * volume, and what has to be done in the guest to reach `/dev/kvm`.
+ * volume, which disk box state is kept on, and what has to be done in the guest
+ * to reach `/dev/kvm`.
  *
  * The last one is the reason this file is not simply AWS's script with a couple
  * of substitutions. On AWS nested virtualization is an instance attribute and
@@ -41,12 +42,15 @@ import { artifactFetchCommand, verifyAgainstManifest, type RunnerArtifact } from
 /**
  * Where the unit environment lives on a host.
  *
- * Named because two things write it: the boot script here, once, and the OS
- * policy in `runner-upgrade.ts` that converges it afterwards. A host created
- * before its stage changed domain has no other way to be told — the boot script
- * runs once and `metadataStartupScript` is in `ignoreChanges`.
+ * Named because two things write it: the boot script here, and the OS policy
+ * in `runner-upgrade.ts` that converges it afterwards. A host created before its
+ * stage changed domain has no other way to be told — it only ever has the boot
+ * script it was created with: `metadataStartupScript` is in `ignoreChanges`.
  */
 export const RUNNER_ENV_FILE = '/etc/boxlite/runner.env'
+
+/** Where a host keeps box state: the runner's home, and the mount its unit will not start without. */
+export const RUNNER_HOME = '/var/lib/boxlite'
 
 /**
  * The control-plane address as the unit spells it.
@@ -71,6 +75,12 @@ export type BootPlatform = {
    * See the note above: this is the hook that exists for GCP's sake.
    */
   prepareKvm: string
+  /**
+   * Shell that puts `RUNNER_HOME` on a disk of its own, or empty where box state
+   * stays on the root disk. Runs before the unit is enabled, and must be safe to
+   * run at every boot.
+   */
+  prepareHome: string
   /**
    * A start wrapper that re-fetches every secret the unit needs, or null where
    * the host has none to fetch.
@@ -136,7 +146,7 @@ export const renderRunnerBoot = (input: BootInput): string => {
     BOXLITE_API_URL: runnerApiUrl(input.apiUrl),
     API_VERSION: '2',
     API_PORT: String(input.port),
-    BOXLITE_HOME_DIR: '/var/lib/boxlite',
+    BOXLITE_HOME_DIR: RUNNER_HOME,
     OTEL_LOGGING_ENABLED: 'true',
     OTEL_TRACING_ENABLED: 'true',
     OTEL_EXPORTER_OTLP_ENDPOINT: input.otlpUrl,
@@ -196,6 +206,9 @@ cat > /etc/systemd/system/boxlite-runner.service << 'UNIT'
 [Unit]
 Description=BoxLite Runner
 After=network.target
+# Never on the disk beneath a mount that failed. Where the home is on the root
+# filesystem, this names only that mount, which is always there.
+RequiresMountsFor=${RUNNER_HOME}
 
 [Service]
 Type=simple
@@ -211,7 +224,8 @@ TimeoutStopSec=60
 WantedBy=multi-user.target
 UNIT
 
-mkdir -p /var/lib/boxlite
+${platform.prepareHome}
+mkdir -p ${RUNNER_HOME}
 systemctl daemon-reload
 systemctl enable boxlite-runner
 systemctl start boxlite-runner

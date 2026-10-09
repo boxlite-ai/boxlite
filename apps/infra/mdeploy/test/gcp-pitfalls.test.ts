@@ -40,7 +40,14 @@ import {
   PSC_NAT_CIDR,
   SUBNET_CIDR,
 } from '../stack/providers/gcp/network.ts'
-import { DATA_DISK, DISK_TYPE as RUNNER_DISK, MACHINE as RUNNER_MACHINE } from '../stack/providers/gcp/runners.ts'
+import {
+  DATA_DISK,
+  DATA_DISK_DEVICE,
+  DISK_TYPE as RUNNER_DISK,
+  MACHINE as RUNNER_MACHINE,
+  PREPARE_HOME,
+} from '../stack/providers/gcp/runners.ts'
+import { RUNNER_HOME } from '../stack/runner-boot.ts'
 import { apiPrefixRouteRules } from '../stack/providers/gcp/api.ts'
 import { isMissingNeg } from '../stack/providers/gcp/edge.ts'
 import { instanceFor } from 'naming'
@@ -893,7 +900,7 @@ test('the hosts may read the staged binary, and only while one is being installe
   assert.match(source, /role: 'roles\/storage\.objectViewer'/)
   assert.match(source, /resource\.name\.startsWith\("projects\/_\/buckets\/\$\{artifactsBucket\}\/objects\/runner\/"\)/)
   // And the host waits for it: a boot script that fetched before the binding
-  // existed would download nothing, and that boot never happens again.
+  // existed would download nothing, and nothing retries it until the host restarts.
   assert.match(source, /dependsOn: \[\.\.\.dependsOn, \.\.\.staged\]/)
 })
 
@@ -940,7 +947,7 @@ test('the upgrade policy selects hosts by the label those hosts actually carry',
 
 test('a host that cannot be told the new control-plane name is converged to it', () => {
   /*
-   * `BOXLITE_API_URL` is written once, at first boot. `metadataStartupScript`
+   * `BOXLITE_API_URL` is written by the boot script, which never changes. `metadataStartupScript`
    * is in `ignoreChanges` and the instance is protected, so a stage that
    * changes its domain strands every host it already has: the public record is
    * renamed, the private zone is rebuilt under the new name, and the old one
@@ -1182,6 +1189,15 @@ test('a runner keeps box state on a disk no deploy shrinks, replaces or detaches
   const instance = instances[0] as string
   assert.match(instance, /attachedDisks: \[\{ source: dataDisk\.id, deviceName: DATA_DISK_DEVICE \}\]/)
   assert.match(instance, /ignoreChanges: \[[^\]]*'attachedDisks'[^\]]*\]/)
+})
+
+test('a host mounts the disk it was given, at the home the runner reads', () => {
+  // One device name for the attachment and the mount, one home for the mount
+  // and the runner: a second spelling of either is a host that never finds its
+  // disk, or a runner that writes beside it.
+  assert.match(PREPARE_HOME, new RegExp(`^DATA_DEVICE='/dev/disk/by-id/google-${DATA_DISK_DEVICE}'$`, 'm'))
+  assert.match(PREPARE_HOME, new RegExp(`^DATA_HOME='${RUNNER_HOME}'$`, 'm'))
+  assert.match(withoutComments(sourceOf('runners')), /prepareHome: PREPARE_HOME,/)
 })
 
 test('no minCpuPlatform is asked of a family that has exactly one', () => {

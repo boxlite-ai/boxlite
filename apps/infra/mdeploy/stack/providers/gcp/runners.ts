@@ -34,7 +34,7 @@
 import type { Placement } from '../../network.ts'
 import type { RunnerProvider, RunnerRequest, Runners } from '../../runners.ts'
 import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE, runnerDataDiskNameFor, runnerPolicyName } from '../../runners.ts'
-import { renderRunnerBoot, type BootPlatform } from '../../runner-boot.ts'
+import { RUNNER_HOME, renderRunnerBoot, type BootPlatform } from '../../runner-boot.ts'
 import {
   REGISTER_RUNNERS_COMMAND,
   extraRunnersOf,
@@ -69,8 +69,8 @@ export const MACHINE = { small: 'n4-standard-4', medium: 'n4-standard-8', large:
 export const DISK_TYPE = 'hyperdisk-balanced'
 
 /**
- * The disk each host's box state is to live on, by size, so the boot disk can
- * hold only the OS and the runner.
+ * The disk each host keeps box state on, by size, so the boot disk holds only
+ * the OS and the runner.
  *
  * Twice the space of the 100 GB boot disk that held it before, at the
  * performance GCP's defaults gave that disk (6 IOPS per GiB over 3,000; 1.5 MiB/s
@@ -86,6 +86,50 @@ export const DATA_DISK = {
 
 /** What the data disk is attached as, so a host finds it at `/dev/disk/by-id/google-<this>`. */
 export const DATA_DISK_DEVICE = 'boxlite-data'
+
+/**
+ * Puts the runner's home on the data disk: formats it once, records it in fstab,
+ * mounts it.
+ *
+ * GCE reruns the boot script at every boot, so each step is one a second run
+ * leaves alone, and it stops rather than format a disk that is not blank or mount
+ * over a home that already holds state. `blkid` also answers 2 for a disk it
+ * cannot read, so a blank disk must read as zeros too. `nofail` keeps a host
+ * whose disk is missing bootable and reachable; the unit's `RequiresMountsFor`
+ * keeps the runner off it. A function of its paths so a test can run it on files.
+ */
+export const renderDataDiskMount = ({ device, mountPoint, fstab }: { device: string; mountPoint: string; fstab: string }): string => `# The disk box state lives on: formatted only when blank, never mounted over state.
+DATA_DEVICE='${device}'
+DATA_HOME='${mountPoint}'
+DATA_FSTAB='${fstab}'
+[ -e "$DATA_DEVICE" ] || udevadm settle --timeout=60 || true
+[ -e "$DATA_DEVICE" ] || { echo "FATAL: $DATA_DEVICE is not attached; box state will not go on the boot disk" >&2; exit 1; }
+if ! mountpoint -q "$DATA_HOME"; then
+  if [ -n "$(ls -A "$DATA_HOME" 2>/dev/null)" ]; then
+    echo "FATAL: $DATA_HOME holds state and is not a mount; refusing to hide it beneath the data disk" >&2
+    exit 1
+  fi
+  probe=0
+  blkid -p "$DATA_DEVICE" >/dev/null 2>&1 || probe=$?
+  if [ "$probe" -eq 2 ] && cmp -s -n 1048576 "$DATA_DEVICE" /dev/zero; then
+    mkfs.ext4 -m 0 -E lazy_itable_init=0,lazy_journal_init=0,discard "$DATA_DEVICE" </dev/null
+  elif [ "$probe" -ne 0 ]; then
+    echo "FATAL: $DATA_DEVICE is neither blank nor a filesystem (blkid answered $probe); refusing to format it" >&2
+    exit 1
+  fi
+fi
+awk -v home="$DATA_HOME" '$1 !~ /^#/ && $2 == home { found = 1 } END { exit !found }' "$DATA_FSTAB" ||
+  echo "$DATA_DEVICE $DATA_HOME ext4 discard,defaults,nofail 0 2" >> "$DATA_FSTAB"
+mkdir -p "$DATA_HOME"
+systemctl daemon-reload
+mountpoint -q "$DATA_HOME" || mount --fstab "$DATA_FSTAB" "$DATA_HOME"`
+
+/** The data disk mount as a host runs it. */
+export const PREPARE_HOME = renderDataDiskMount({
+  device: `/dev/disk/by-id/google-${DATA_DISK_DEVICE}`,
+  mountPoint: RUNNER_HOME,
+  fstab: '/etc/fstab',
+})
 
 const IMAGE = 'ubuntu-os-cloud/ubuntu-2404-lts-amd64'
 
@@ -143,8 +187,8 @@ chmod +x /usr/local/bin/boxlite-runner-start.sh
  * What a box volume is mounted from on these hosts.
  *
  * One constant because two things write it and they have to agree: the boot
- * script, once, and the OS policy that converges a host created before this
- * key existed. A second spelling is a fleet that reads as non-compliant
+ * script, and the OS policy that converges a host created before this key
+ * existed. A second spelling is a fleet that reads as non-compliant
  * forever, which is the shape `runnerApiUrl` was extracted to prevent.
  *
  * `gcs` and not a stage's setting: `installVolumeMount` puts gcsfuse on these
@@ -205,6 +249,8 @@ KERNEL=="kvm", GROUP="kvm", MODE="0660"
 KVMRULE
 udevadm control --reload-rules
 udevadm trigger --name-match=kvm || true`,
+      // Box state on a disk of its own: see `renderDataDiskMount`.
+      prepareHome: PREPARE_HOME,
       startWrapper: null,
       unitEnvironment: {
         /*
@@ -375,7 +421,7 @@ udevadm trigger --name-match=kvm || true`,
       })
 
       /*
-       * The data disk for this host's box state. Size and performance are set at
+       * The disk this host keeps box state on. Size and performance are set at
        * create and never again by a deploy: the disk is grown online, outside a
        * deploy, and the provider replaces a disk whose size went down, which is
        * how a grown disk reads against the size here. `protect` turns any such
@@ -478,7 +524,7 @@ udevadm trigger --name-match=kvm || true`,
           protect: true,
           // The read grant among them: a host whose boot script fetches the
           // staged object before the binding exists downloads nothing, and
-          // that boot never happens again.
+          // nothing retries that boot until the host restarts.
           dependsOn: [...dependsOn, ...staged],
         },
       )
@@ -487,7 +533,7 @@ udevadm trigger --name-match=kvm || true`,
     /*
      * How a new binary reaches the hosts above, which the boot script cannot.
      *
-     * `metadataStartupScript` is ignored after the first boot and the instance
+     * `metadataStartupScript` is fixed at create and the instance
      * is protected, so a deploy that changes the binary changes nothing on a
      * host that already exists — "at boot" means "never" here.
      *

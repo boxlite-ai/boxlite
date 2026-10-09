@@ -558,7 +558,7 @@ test('the unit-environment policy answers the same exit codes, and keeps no copy
 /*
  * The other thing a host cannot be told after first boot.
  *
- * `/etc/boxlite/runner.env` is written once, and the instance that holds it is
+ * `/etc/boxlite/runner.env` is written by the boot script, and the instance that holds it is
  * `protect: true` with its user data in `ignoreChanges` — so a stage that moves
  * its domain leaves every existing host calling a name that no longer resolves.
  * GCP converges it through a second resource in the one policy assignment; a

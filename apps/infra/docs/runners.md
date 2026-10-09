@@ -14,7 +14,8 @@ Build and select runner artifacts with shared commands, then follow the selected
 ## Identity and lifecycle
 
 Runners contain the Go service, Go SDK/FFI, Rust BoxLite runtime and nested-KVM box VMs.
-Their root disks contain image caches and local box state. Hosts are protected resources;
+Image caches and local box state live in `/var/lib/boxlite`: on the root disk on AWS, on a per-host
+[data disk](gcp/runners.md#data-disk) on GCP. Hosts are protected resources;
 changing the boot image or startup script does not replace an existing runner during ordinary deployment.
 
 | Artifact | Identity | Location |
@@ -67,7 +68,8 @@ npm run mstage env set -- RUNNERS=2 --stage dev --digest
 
 Review that the diff creates the additional host without replacing existing hosts. Then apply and
 check registration, target version, capacity and a test box on the new host. Extra runners have
-individual registration tokens. Machine size and disk size come from `deploy.runners` in the stage declaration.
+individual registration tokens. Machine size and root disk size come from `deploy.runners` in the stage declaration;
+a GCP host's data disk is sized by its machine size.
 
 Scale-in is a separate retirement operation: reducing a count attempts to delete a protected host,
 and on GCP its protected data disk.
