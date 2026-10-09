@@ -13,14 +13,17 @@ import (
 	"testing"
 )
 
-// With neither BOXLITE_HOME_DIR, $BOXLITE_HOME nor $HOME set, boxlite-core still
-// finds a home through the passwd entry. The client must report that same
-// directory, or code that reads the home (migration staging) disagrees with the
-// runtime. This opens a real runtime in the passwd home's .boxlite.
+// With neither BOXLITE_HOME_DIR, $BOXLITE_HOME nor $HOME set, the home comes
+// from the passwd entry. The client must report the directory it opened, or code
+// that reads the home (migration staging) disagrees with the runtime. The passwd
+// lookup is stubbed to a temporary directory so the runtime never opens, locks or
+// recovers the developer's real ~/.boxlite.
 func TestNewClientReportsThePasswdHomeWhenHomeIsUnset(t *testing.T) {
-	current, err := user.Current()
-	if err != nil {
-		t.Skipf("no passwd entry for the current user: %v", err)
+	passwdHome := t.TempDir()
+	lookup := currentUser
+	t.Cleanup(func() { currentUser = lookup })
+	currentUser = func() (*user.User, error) {
+		return &user.User{Username: "runner", HomeDir: passwdHome}, nil
 	}
 	unsetenv(t, "BOXLITE_HOME")
 	unsetenv(t, "HOME")
@@ -31,9 +34,9 @@ func TestNewClientReportsThePasswdHomeWhenHomeIsUnset(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	want := filepath.Join(current.HomeDir, ".boxlite")
-	if client.homeDir != want {
-		t.Fatalf("client home = %q, want %q", client.homeDir, want)
+	want := filepath.Join(passwdHome, ".boxlite")
+	if got := client.HomeDir(); got != want {
+		t.Fatalf("client home = %q, want %q", got, want)
 	}
 }
 
