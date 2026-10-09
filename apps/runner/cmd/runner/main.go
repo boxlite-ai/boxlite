@@ -143,6 +143,7 @@ func run() int {
 	metricsCollector := metrics.NewCollector(metrics.CollectorConfig{
 		Logger:                             logger,
 		Boxlite:                            boxliteClient,
+		BoxliteHomeDir:                     boxliteClient.HomeDir(),
 		WindowSize:                         cfg.CollectorWindowSize,
 		CPUUsageSnapshotInterval:           cfg.CPUUsageSnapshotInterval,
 		AllocatedResourcesSnapshotInterval: cfg.AllocatedResourcesSnapshotInterval,

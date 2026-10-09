@@ -22,16 +22,20 @@ import (
 )
 
 type CollectorConfig struct {
-	Logger                             *slog.Logger
-	Boxlite                            *blclient.Client
+	Logger  *slog.Logger
+	Boxlite *blclient.Client
+	// BoxliteHomeDir is the runtime's home. The disk metrics describe the
+	// filesystem that holds it, where boxes, images and bases live.
+	BoxliteHomeDir                     string
 	WindowSize                         int
 	CPUUsageSnapshotInterval           time.Duration
 	AllocatedResourcesSnapshotInterval time.Duration
 }
 
 type Collector struct {
-	boxlite *blclient.Client
-	log     *slog.Logger
+	boxlite        *blclient.Client
+	log            *slog.Logger
+	boxliteHomeDir string
 
 	cpuRing  *ring.Ring
 	cpuMutex sync.RWMutex
@@ -39,7 +43,6 @@ type Collector struct {
 	resourcesMutex     sync.RWMutex
 	allocatedCPU       float32
 	allocatedMemoryGiB float32
-	allocatedDiskGiB   float32
 	startedBoxCount    float32
 
 	cpuUsageSnapshotInterval           time.Duration
@@ -69,6 +72,7 @@ func NewCollector(cfg CollectorConfig) *Collector {
 	return &Collector{
 		log:                                cfg.Logger.With(slog.String("component", "metrics")),
 		boxlite:                            cfg.Boxlite,
+		boxliteHomeDir:                     cfg.BoxliteHomeDir,
 		cpuRing:                            ring.New(cfg.WindowSize),
 		cpuUsageSnapshotInterval:           cfg.CPUUsageSnapshotInterval,
 		allocatedResourcesSnapshotInterval: cfg.AllocatedResourcesSnapshotInterval,
@@ -133,17 +137,22 @@ func (c *Collector) collect(ctx context.Context) (*Metrics, error) {
 	metrics.MemoryUsagePercentage = float32(memStats.UsedPercent)
 	metrics.TotalRAMGiB = float32(memStats.Total) / (1024 * 1024 * 1024)
 
-	diskStats, err := disk.UsageWithContext(ctx, "/")
+	diskStats, err := disk.UsageWithContext(ctx, c.boxliteHomeDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to collect disk usage: %v", err)
+		return nil, fmt.Errorf("failed to collect disk usage of %s: %v", c.boxliteHomeDir, err)
+	}
+	// A zero capacity would reach the API as diskGiB 0, a divisor in its score.
+	if diskStats.Total == 0 {
+		return nil, fmt.Errorf("filesystem holding %s reports zero capacity", c.boxliteHomeDir)
 	}
 	metrics.DiskUsagePercentage = float32(diskStats.UsedPercent)
 	metrics.TotalDiskGiB = float32(diskStats.Total) / (1024 * 1024 * 1024)
+	// Used space on that filesystem (df's Used), not a sum of the boxes' sizes.
+	metrics.AllocatedDiskGiB = float32(diskStats.Used) / (1024 * 1024 * 1024)
 
 	c.resourcesMutex.RLock()
 	metrics.AllocatedCPU = c.allocatedCPU
 	metrics.AllocatedMemoryGiB = c.allocatedMemoryGiB
-	metrics.AllocatedDiskGiB = c.allocatedDiskGiB
 	metrics.StartedBoxCount = c.startedBoxCount
 	c.resourcesMutex.RUnlock()
 

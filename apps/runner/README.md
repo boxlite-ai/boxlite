@@ -446,8 +446,9 @@ durations, and network counters. All values come from
 `/info` combines:
 
 - A snapshot from `metrics.Collector.Collect(ctx)` — host CPU load
-  average, CPU/mem/disk %, summed allocated CPU/RAM/disk across running
-  boxes, artifact count, started box count.
+  average, CPU/mem %, summed allocated CPU/RAM across running boxes,
+  disk usage of the BoxLite home's filesystem, artifact count, started
+  box count.
 - `runner.InspectRunnerServices(ctx)` — pings the BoxLite runtime with
   a 2 s timeout and reports `boxlite: healthy|<err>`.
 
@@ -495,10 +496,16 @@ independent loops:
   smoothed CPU % without re-sampling on each request.
 - **Allocated resources snapshot** every
   `AllocatedResourcesSnapshotInterval` — queries `Boxlite.ListInfo()`
-  and sums the CPU/RAM/disk allocations across running boxes.
+  and sums the CPU/RAM allocations across running boxes.
 
 `Collect(ctx)` reads the current values with a short timeout and is
-called from both `/info` and the v2 healthcheck.
+called from both `/info` and the v2 healthcheck. Disk numbers come from
+one statfs of the filesystem holding the BoxLite home (`HomeDir()`),
+which is where boxes, images and bases live: `TotalDiskGiB` is its size,
+`DiskUsagePercentage` its use (`df`'s Use%), and `AllocatedDiskGiB` its
+used space (`df`'s Used) — not a sum of the boxes' requested sizes. A
+filesystem reporting zero capacity is an error, so the API never
+receives a `diskGiB` of 0.
 
 ### v2 job poller + executor
 
