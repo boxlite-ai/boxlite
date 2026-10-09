@@ -162,7 +162,6 @@ state inline.
 | Column | Type | Notes |
 | ------ | ---- | ----- |
 | `id` | `uuid` | primary key |
-| `referralCode` | `character varying(10)` | nullable; unique organization invitation code |
 | `name` | `character varying` | |
 | `createdBy` | `character varying` | |
 | `telemetryEnabled` | `boolean` | default `true` |
