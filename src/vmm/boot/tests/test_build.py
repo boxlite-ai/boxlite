@@ -13,6 +13,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -23,9 +24,9 @@ SCRIPT = ROOT / "scripts/build/build-vmm-boot.sh"
 ARTIFACTS = {"vmlinux", "kernel.config", "build-info.txt", "SHA256SUMS"}
 
 # Tool substitutes provide the external boundaries. The real script still owns
-# configuration, caching, verification, metadata and publication.
-TOOL = r'''#!/usr/bin/python3
-import json, os, pathlib, shutil, signal, subprocess, sys
+# configuration, caching, verification, metadata and publication. They run under
+# this suite's interpreter, which need not be /usr/bin/python3.
+TOOL = f"#!{sys.executable}\n" + r'''import json, os, pathlib, shutil, signal, subprocess, sys
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 mode = os.environ.get("BOOT_TEST_MODE", "")
