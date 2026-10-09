@@ -4,8 +4,10 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import type Redis from 'ioredis'
 import { DataSource } from 'typeorm'
 import { ApiKey } from '../api-key/api-key.entity'
+import { apiKeyValidationCacheKey } from '../common/utils/api-key'
 import { CustomNamingStrategy } from '../common/utils/naming-strategy.util'
 import { Organization } from '../organization/entities/organization.entity'
 import { OrganizationInvitation } from '../organization/entities/organization-invitation.entity'
@@ -24,6 +26,11 @@ const SOCIAL = 'google-oauth2|103'
 describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', () => {
   let dataSource: DataSource
   let service: LinkedIdentityService
+  // The API key cache, which ApiKeyStrategy fills and adopt prunes.
+  const cache = new Map<string, string>()
+  const redis = {
+    del: jest.fn(async (...keys: string[]) => keys.filter((key) => cache.delete(key)).length),
+  }
 
   beforeAll(async () => {
     dataSource = await new DataSource({
@@ -41,7 +48,7 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     }).initialize()
     await dataSource.query(`CREATE SCHEMA "${schemaName}"`)
     await dataSource.synchronize()
-    service = new LinkedIdentityService(dataSource)
+    service = new LinkedIdentityService(dataSource, redis as unknown as Redis)
   })
 
   afterAll(async () => {
@@ -54,6 +61,8 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
   })
 
   beforeEach(async () => {
+    cache.clear()
+    redis.del.mockClear()
     for (const table of ['api_key', 'organization_role_assignment', 'organization_user', 'organization_role']) {
       await dataSource.query(`DELETE FROM "${table}"`)
     }
@@ -102,15 +111,17 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     )
   }
 
-  async function apiKey(organizationId: string, userId: string, name: string) {
+  async function apiKey(organizationId: string, userId: string, name: string): Promise<string> {
+    const keyHash = randomUUID()
     await dataSource.getRepository(ApiKey).insert({
       organizationId,
       userId,
       name,
-      keyHash: randomUUID(),
+      keyHash,
       permissions: [],
       createdAt: new Date(),
     })
+    return keyHash
   }
 
   function membershipsOf(userId: string): Promise<OrganizationUser[]> {
@@ -241,6 +252,36 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
 
     const names = (await dataSource.getRepository(ApiKey).find({ where: { userId: PRIMARY } })).map((key) => key.name)
     expect(names.sort()).toEqual(['ci', 'ci (google-oauth2 2)', 'ci (google-oauth2)'])
+  })
+
+  it('drops the cached owner of every moved key, and only theirs', async () => {
+    await user(PRIMARY)
+    await user(SOCIAL)
+    const shared = await organization(PRIMARY, 'shared')
+    await member(shared, PRIMARY, OrganizationMemberRole.OWNER, true)
+    await member(shared, SOCIAL, OrganizationMemberRole.MEMBER, true)
+    const own = await apiKey(shared, PRIMARY, 'ci')
+    const moved = [await apiKey(shared, SOCIAL, 'ci'), await apiKey(shared, SOCIAL, 'deploy')]
+    for (const keyHash of [own, ...moved]) {
+      cache.set(apiKeyValidationCacheKey(keyHash), JSON.stringify({ userId: SOCIAL }))
+    }
+
+    await service.adopt(PRIMARY, SOCIAL)
+
+    expect([...cache.keys()]).toEqual([apiKeyValidationCacheKey(own)])
+  })
+
+  it('keeps the move when the cache cannot be reached', async () => {
+    await user(SOCIAL)
+    const org = await organization(SOCIAL, 'social org')
+    await member(org, SOCIAL, OrganizationMemberRole.OWNER, true)
+    await apiKey(org, SOCIAL, 'ci')
+    redis.del.mockRejectedValueOnce(new Error('connection lost'))
+
+    await service.adopt(PRIMARY, SOCIAL)
+
+    expect(redis.del).toHaveBeenCalledTimes(1)
+    expect(await dataSource.getRepository(ApiKey).findOneByOrFail({ name: 'ci' })).toMatchObject({ userId: PRIMARY })
   })
 
   it('moves nothing the second time', async () => {

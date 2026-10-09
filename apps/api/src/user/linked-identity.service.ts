@@ -4,7 +4,10 @@
  */
 
 import { Injectable, Logger } from '@nestjs/common'
+import { InjectRedis } from '@nestjs-modules/ioredis'
+import Redis from 'ioredis'
 import { DataSource, EntityManager } from 'typeorm'
+import { apiKeyValidationCacheKey } from '../common/utils/api-key'
 import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
 import { User } from './user.entity'
 
@@ -33,7 +36,10 @@ interface Membership {
 export class LinkedIdentityService {
   private readonly logger = new Logger(LinkedIdentityService.name)
 
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    @InjectRedis() private readonly redis: Redis,
+  ) {}
 
   /**
    * Hand everything `secondaryUserId` owns locally to `primaryUserId`.
@@ -46,7 +52,7 @@ export class LinkedIdentityService {
       throw new Error(`cannot link ${primaryUserId} to itself`)
     }
 
-    await this.dataSource.transaction(async (em) => {
+    const movedKeyHashes = await this.dataSource.transaction(async (em) => {
       // Serialise concurrent adoptions of one secondary, so two links
       // racing over the same identity cannot both copy its memberships.
       const secondary = await em
@@ -55,19 +61,42 @@ export class LinkedIdentityService {
         .where('user.id = :id', { id: secondaryUserId })
         .getOne()
       if (!secondary) {
-        return
+        return []
       }
 
       await this.ensurePrimaryUser(em, primaryUserId, secondary)
       const moved = await this.moveMemberships(em, primaryUserId, secondaryUserId)
-      const keys = await this.moveApiKeys(em, primaryUserId, secondaryUserId)
+      const keyHashes = await this.moveApiKeys(em, primaryUserId, secondaryUserId)
       await em.query(`UPDATE "organization" SET "createdBy" = $1 WHERE "createdBy" = $2`, [
         primaryUserId,
         secondaryUserId,
       ])
 
-      this.logger.log(`Moved ${moved} membership(s) and ${keys} API key(s) from ${secondaryUserId} to ${primaryUserId}`)
+      this.logger.log(
+        `Moved ${moved} membership(s) and ${keyHashes.length} API key(s) from ${secondaryUserId} to ${primaryUserId}`,
+      )
+      return keyHashes
     })
+    await this.forgetCachedOwners(movedKeyHashes)
+  }
+
+  /**
+   * ApiKeyStrategy caches a validated key with its owner for a few seconds.
+   * Until that entry goes, a moved key keeps authenticating as the secondary,
+   * which no longer belongs to any organization. Dropped after the move
+   * commits: any earlier, a request could read the old owner from the
+   * database and cache it again.
+   */
+  private async forgetCachedOwners(keyHashes: string[]): Promise<void> {
+    if (keyHashes.length === 0) {
+      return
+    }
+    try {
+      await this.redis.del(...keyHashes.map(apiKeyValidationCacheKey))
+    } catch (error) {
+      // The entries expire on their own; the move has committed and stands.
+      this.logger.error('Could not drop moved API keys from the validation cache:', error)
+    }
   }
 
   /**
@@ -156,11 +185,13 @@ export class LinkedIdentityService {
    * accounts named a key the same in one organization, the moved key keeps
    * working under the secondary's provider as a suffix, numbered when the
    * primary holds that name too, rather than one of them being dropped.
+   *
+   * Returns the moved keys' hashes.
    */
-  private async moveApiKeys(em: EntityManager, primaryUserId: string, secondaryUserId: string): Promise<number> {
+  private async moveApiKeys(em: EntityManager, primaryUserId: string, secondaryUserId: string): Promise<string[]> {
     const provider = secondaryUserId.slice(0, secondaryUserId.indexOf('|'))
-    const keys: { organizationId: string; userId: string; name: string }[] = await em.query(
-      `SELECT "organizationId", "userId", "name" FROM "api_key" WHERE "userId" IN ($1, $2)`,
+    const keys: { organizationId: string; userId: string; name: string; keyHash: string }[] = await em.query(
+      `SELECT "organizationId", "userId", "name", "keyHash" FROM "api_key" WHERE "userId" IN ($1, $2)`,
       [primaryUserId, secondaryUserId],
     )
     const slot = (organizationId: string, name: string) => `${organizationId}/${name}`
@@ -185,6 +216,6 @@ export class LinkedIdentityService {
         [primaryUserId, name, key.organizationId, secondaryUserId, key.name],
       )
     }
-    return incoming.length
+    return incoming.map((key) => key.keyHash)
   }
 }

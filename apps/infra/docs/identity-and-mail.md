@@ -141,6 +141,12 @@ they are. The password account keeps its own default organization; the moved
 one becomes its default only when the password account had none. Organizations
 are never merged.
 
+The API caches a validated key with its owner for
+`API_KEY_VALIDATION_CACHE_TTL_SECONDS` (10 by default). Once the move commits,
+it drops each moved key from that cache, so the key's next request already
+authenticates as the password account. If Redis cannot be reached, the move
+still stands and the entries expire on their own.
+
 ## Outbound mail
 
 Use the [GCP SMTP procedure](gcp/identity-and-mail.md#application-mail) or
