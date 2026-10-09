@@ -2,7 +2,8 @@
 //!
 //! These answer from `runtime.images()`, which on the embedded runtime `serve`
 //! runs is the local image cache. `usage` counts a catalog against a limit, and
-//! a cache has neither, so it responds `400 UnsupportedError`.
+//! a cache has neither, so it responds `400 UnsupportedError`; so does moving a
+//! tag, since a cache keeps no catalog of tags.
 
 use std::sync::Arc;
 
@@ -11,9 +12,11 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
+use boxlite::runtime::types::ImageDetail;
+
 use super::super::types::{
-    ImageDetailResponse, ImageInfoResponse, ImageUsageResponse, ImageVersionResponse,
-    ListImagesResponse,
+    ImageDetailResponse, ImageInfoResponse, ImageTagEventResponse, ImageUsageResponse,
+    ImageVersionResponse, ListImagesResponse, MoveTagRequest,
 };
 use super::super::{AppState, error_from_boxlite};
 
@@ -52,23 +55,56 @@ pub(in crate::commands::serve) async fn get_image(
         Err(e) => return error_from_boxlite(&e),
     };
     match handle.get(&name).await {
-        Ok(detail) => Json(ImageDetailResponse {
-            name: detail.name,
-            tags: detail.tags,
-            curated: detail.curated,
-            versions: detail
-                .versions
-                .into_iter()
-                .map(|version| ImageVersionResponse {
-                    recorded_at: version.recorded_at.to_rfc3339(),
-                    digest: version.digest,
-                    size_bytes: version.size_bytes,
-                    source_ref: version.source_ref,
-                })
-                .collect(),
-        })
-        .into_response(),
+        Ok(detail) => Json(detail_response(detail)).into_response(),
         Err(e) => error_from_boxlite(&e),
+    }
+}
+
+pub(in crate::commands::serve) async fn move_image_tag(
+    State(state): State<Arc<AppState>>,
+    Path((name, tag)): Path<(String, String)>,
+    Json(request): Json<MoveTagRequest>,
+) -> Response {
+    let handle = match state.runtime.images() {
+        Ok(h) => h,
+        Err(e) => return error_from_boxlite(&e),
+    };
+    match handle.move_tag(&name, &tag, &request.digest).await {
+        Ok(detail) => Json(detail_response(detail)).into_response(),
+        Err(e) => error_from_boxlite(&e),
+    }
+}
+
+/// An image in the box API's shape, for a read and for a tag move alike.
+fn detail_response(detail: ImageDetail) -> ImageDetailResponse {
+    ImageDetailResponse {
+        name: detail.name,
+        tags: detail.tags,
+        curated: detail.curated,
+        versions: detail
+            .versions
+            .into_iter()
+            .map(|version| ImageVersionResponse {
+                recorded_at: version.recorded_at.to_rfc3339(),
+                last_used_at: version.last_used_at.map(|time| time.to_rfc3339()),
+                upstream_missing_at: version.upstream_missing_at.map(|time| time.to_rfc3339()),
+                digest: version.digest,
+                size_bytes: version.size_bytes,
+                source_ref: version.source_ref,
+                tags: version.tags,
+            })
+            .collect(),
+        history: detail
+            .history
+            .into_iter()
+            .map(|event| ImageTagEventResponse {
+                moved_at: event.moved_at.to_rfc3339(),
+                tag: event.tag,
+                from_digest: event.from_digest,
+                to_digest: event.to_digest,
+                actor: event.actor,
+            })
+            .collect(),
     }
 }
 
@@ -120,11 +156,13 @@ mod tests {
     use axum::response::{IntoResponse, Response};
     use axum::routing::{delete, get};
     use boxlite::BoxliteRuntime;
+    use boxlite::runtime::types::{ImageTagEvent, ImageVersion};
+    use chrono::{TimeZone, Utc};
     use serde_json::{Value, json};
     use tokio::sync::RwLock;
 
     use super::super::super::AppState;
-    use super::{get_image, image_usage, list_images, remove_image};
+    use super::{ImageDetail, detail_response, get_image, image_usage, list_images, remove_image};
 
     /// Handler state whose runtime is a REST client of `upstream`.
     async fn state_over(upstream: Router) -> State<Arc<AppState>> {
@@ -280,5 +318,60 @@ mod tests {
         let (status, body) = read(image_usage(state).await).await;
 
         assert_eq!((status, body), (StatusCode::OK, usage));
+    }
+
+    /// serve's body names each field a catalog's does, so a REST runtime
+    /// reads a version's tags and times, and the history, from serve too.
+    #[test]
+    fn a_detail_carries_version_tags_times_and_the_history() {
+        let day = |day| Utc.with_ymd_and_hms(2026, 9, day, 0, 0, 0).unwrap();
+        let detail = ImageDetail {
+            name: "quay.io/acme/app".to_string(),
+            tags: vec!["stable".to_string()],
+            curated: false,
+            versions: vec![ImageVersion {
+                digest: "sha256:bb".to_string(),
+                size_bytes: None,
+                source_ref: "quay.io/acme/app:v2".to_string(),
+                recorded_at: day(1),
+                tags: vec!["stable".to_string()],
+                last_used_at: Some(day(2)),
+                upstream_missing_at: None,
+            }],
+            history: vec![ImageTagEvent {
+                tag: "stable".to_string(),
+                from_digest: Some("sha256:aa".to_string()),
+                to_digest: "sha256:bb".to_string(),
+                actor: None,
+                moved_at: day(3),
+            }],
+        };
+
+        let body = serde_json::to_value(detail_response(detail)).unwrap();
+
+        assert_eq!(
+            body,
+            json!({
+                "name": "quay.io/acme/app",
+                "tags": ["stable"],
+                "curated": false,
+                "versions": [{
+                    "digest": "sha256:bb",
+                    "size_bytes": null,
+                    "source_ref": "quay.io/acme/app:v2",
+                    "recorded_at": "2026-09-01T00:00:00+00:00",
+                    "tags": ["stable"],
+                    "last_used_at": "2026-09-02T00:00:00+00:00",
+                    "upstream_missing_at": null,
+                }],
+                "history": [{
+                    "tag": "stable",
+                    "from_digest": "sha256:aa",
+                    "to_digest": "sha256:bb",
+                    "actor": null,
+                    "moved_at": "2026-09-03T00:00:00+00:00",
+                }],
+            })
+        );
     }
 }

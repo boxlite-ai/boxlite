@@ -222,15 +222,34 @@ pub(super) struct ImageVersionResponse {
     pub size_bytes: Option<u64>,
     pub source_ref: String,
     pub recorded_at: String,
+    pub tags: Vec<String>,
+    pub last_used_at: Option<String>,
+    pub upstream_missing_at: Option<String>,
 }
 
-/// Body for `GET /v1/images/{name}`.
+#[derive(Serialize)]
+pub(super) struct ImageTagEventResponse {
+    pub tag: String,
+    pub from_digest: Option<String>,
+    pub to_digest: String,
+    pub actor: Option<String>,
+    pub moved_at: String,
+}
+
+/// Body for `GET /v1/images/{name}` and `PUT /v1/images/{name}/tags/{tag}`.
 #[derive(Serialize)]
 pub(super) struct ImageDetailResponse {
     pub name: String,
     pub tags: Vec<String>,
     pub curated: bool,
     pub versions: Vec<ImageVersionResponse>,
+    pub history: Vec<ImageTagEventResponse>,
+}
+
+/// Body for `PUT /v1/images/{name}/tags/{tag}`.
+#[derive(Deserialize)]
+pub(super) struct MoveTagRequest {
+    pub digest: String,
 }
 
 #[derive(Serialize)]

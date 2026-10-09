@@ -1269,12 +1269,6 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
-        "501":
-          description: This server keeps no catalog of tags
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
 
   # -------------------------------------------------------------------------
   # Registries

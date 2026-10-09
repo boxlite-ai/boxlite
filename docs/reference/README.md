@@ -30,16 +30,16 @@ Complete API documentation for each SDK:
 
 | Surface | Documentation | Description |
 |---------|---------------|-------------|
-| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 28 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images |
+| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 31 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images, registries |
 | **Reference server** | [`openapi/reference-server/`](../../openapi/reference-server/README.md) | A partial implementation used as a client test fixture, not a conformance target |
 
 The spec is the contract, not an inventory of any one server, and no
-implementation currently serves all 28 paths:
+implementation currently serves all 31 paths:
 
 | Server | Serves | Does not serve |
 |--------|--------|----------------|
-| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | `network/tunnel`, `network/inbound`. Volume routes are registered but every operation answers `400 UnsupportedError`, as does `images/usage` |
-| reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, `network/tunnel`, `network/inbound`, attach, and `DELETE …/executions/{exec_id}` (kill) |
+| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | registries, `network/tunnel`, `network/inbound`. Volume routes are registered but every operation answers `400 UnsupportedError`, as do `images/usage` and `images/{name}/tags/{tag}` |
+| reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, and `DELETE …/executions/{exec_id}` (kill) |
 
 Read each server's routes rather than either README — both under-report.
 `GET /config` does not close this gap: its feature flags (`tty_enabled`,
