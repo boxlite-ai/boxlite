@@ -88,7 +88,9 @@ describeIfDatabase('OrganizationService.getReferralCode (integration, real Postg
     expect(started).toBe(2)
     expect(first).toEqual(second)
     expect(first.referralCode).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$/)
-    expect(await organizations.findOneByOrFail({ id: organizationId })).toMatchObject({ referralCode: first.referralCode })
+    expect(await organizations.findOneByOrFail({ id: organizationId })).toMatchObject({
+      referralCode: first.referralCode,
+    })
   })
 
   it('retries a database uniqueness collision and persists the next code', async () => {
@@ -106,8 +108,12 @@ describeIfDatabase('OrganizationService.getReferralCode (integration, real Postg
 
     expect(result).toEqual({ organizationId, referralCode: '7KMNP4XZQ2' })
     expect(generateCode).toHaveBeenCalledTimes(2)
-    expect(await organizations.findOneByOrFail({ id: organizationId })).toMatchObject({ referralCode: result.referralCode })
-    expect(await organizations.findOneByOrFail({ id: existing.id })).toMatchObject({ referralCode: existing.referralCode })
+    expect(await organizations.findOneByOrFail({ id: organizationId })).toMatchObject({
+      referralCode: result.referralCode,
+    })
+    expect(await organizations.findOneByOrFail({ id: existing.id })).toMatchObject({
+      referralCode: existing.referralCode,
+    })
   })
 
   it('maps a PostgreSQL row-lock timeout to 503 without persisting a code', async () => {
