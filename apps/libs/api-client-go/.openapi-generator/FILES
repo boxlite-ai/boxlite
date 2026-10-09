@@ -87,6 +87,7 @@ model_log_entry.go
 model_metric_data_point.go
 model_metric_series.go
 model_metrics_response.go
+model_move_image_tag.go
 model_oidc_config.go
 model_organization.go
 model_organization_box_default_limited_network_egress.go

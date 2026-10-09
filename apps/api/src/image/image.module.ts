@@ -23,7 +23,7 @@ import { ImageResolverService } from './services/image-resolver.service'
 // The catalog's own module: the gate that decides whether an image may be
 // used at all, the resolver that turns it into the ref a runner is given, the
 // registrar that records what that ref turned out to be — in the catalog for a
-// tenant's image, as a per-runner pin for a curated one — the catalog the four
+// tenant's image, as a per-runner pin for a curated one — the catalog the five
 // HTTP routes read, which also moves tags, and the preparation service that
 // says whether a box is still waiting on a first pull. The entities are
 // registered here because the app uses `autoLoadEntities` — this `forFeature`

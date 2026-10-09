@@ -4,6 +4,7 @@
  */
 
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
+import { IsUUID } from 'class-validator'
 
 /** How many tag events an image's detail carries: enough to read recent moves, bounded however long it lives. */
 export const IMAGE_HISTORY_LIMIT = 100
@@ -69,6 +70,16 @@ export class ImageTagEventDto {
 
   @ApiProperty({ description: 'When the tag moved', example: '2026-01-01T00:00:00.000Z' })
   createdAt: string
+}
+
+@ApiSchema({ name: 'MoveImageTag' })
+export class MoveImageTagDto {
+  @ApiProperty({
+    description: 'Version to point the tag at. It must be a ready version of this image',
+    example: '123e4567-e89b-12d3-a456-426614174000',
+  })
+  @IsUUID()
+  versionId: string
 }
 
 @ApiSchema({ name: 'Image' })

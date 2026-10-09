@@ -81,8 +81,9 @@ const ImageDetails: React.FC = () => {
               </PanelNote>
             ) : (
               <PanelNote>
-                Tags: {image.tags.length > 0 ? image.tags.join(', ') : 'none recorded'}. A tag keeps the digest it first
-                resolved to — removing the image and using it again is what re-resolves it.
+                Tags: {image.tags.length > 0 ? image.tags.join(', ') : 'none recorded'}. A pull never moves a tag:
+                moving one to another version rolls boxes created afterwards onto it, and boxes already created keep
+                theirs.
               </PanelNote>
             )}
           </Panel>

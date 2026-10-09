@@ -3259,8 +3259,9 @@ paths:
     delete:
       description: "Removes the catalog entry, not the bytes: runners keep whatever\
         \ they cached, and using the same reference again pulls it back as a new entry.\
-        \ That is also how to pick up a tag that has moved upstream, since a recorded\
-        \ tag keeps the digest it first resolved to."
+        \ A pull never moves a recorded tag, so this is how to pick up where a tag\
+        \ points upstream now; to point it at a version already recorded, move the\
+        \ tag instead."
       operationId: deleteImage
       parameters:
       - description: Use with JWT to specify the organization ID
@@ -3337,6 +3338,68 @@ paths:
         - profile
         - email
       summary: Get image details
+      tags:
+      - images
+  /images/{idOrRef}/tags/{tag}:
+    put:
+      description: "Moves the tag to one of the image’s versions, or creates it there.\
+        \ Boxes created afterwards with the tag boot that version; boxes already created\
+        \ keep the version they were resolved to, and nothing is pulled. Every move\
+        \ is recorded in the image’s history."
+      operationId: moveImageTag
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: "Catalog ID, or any reference that names the image — URL-encode\
+          \ a reference"
+        explode: false
+        in: path
+        name: idOrRef
+        required: true
+        schema:
+          example: quay.io%2Facme%2Fapp
+          type: string
+        style: simple
+      - description: Tag to point at the version
+        explode: false
+        in: path
+        name: tag
+        required: true
+        schema:
+          example: stable
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MoveImageTag"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageDetail"
+          description: "The image, with the tag where it now points"
+        "400":
+          description: "The tag is not a valid OCI tag, the version is not a ready\
+            \ version of this image, or the image is curated"
+        "404":
+          description: No such image in this organization
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Point a tag at a version
       tags:
       - images
   /registries:
@@ -7517,6 +7580,18 @@ components:
       - tags
       - versionCount
       - versions
+      type: object
+    MoveImageTag:
+      example:
+        versionId: 123e4567-e89b-12d3-a456-426614174000
+      properties:
+        versionId:
+          description: Version to point the tag at. It must be a ready version of
+            this image
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+      required:
+      - versionId
       type: object
     RegistryCredentialKind:
       enum:

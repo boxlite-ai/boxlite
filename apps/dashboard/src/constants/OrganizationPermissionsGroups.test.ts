@@ -42,12 +42,14 @@ describe('permission groups', () => {
    * Both files, because they are the pair a reader assumes is in sync and were
    * not: the role file carried an Images group that granted `*:templates`, and
    * the API key file had no Images group at all. A key that can read the
-   * catalog but cannot be granted that scope is the failure this holds off.
+   * catalog but cannot be granted that scope is the failure this holds off —
+   * and `write:images` is the only scope that moves a tag, so a role or key
+   * without it could read the catalog but never roll an image out or back.
    */
   it.each(PERMISSION_GROUPS)('offer the catalog scopes in %s', (_source, groups) => {
     const images = groups.find((group) => group.name === 'Images')
 
-    expect(images?.permissions).toEqual(['read:images', 'delete:images'])
+    expect(images?.permissions).toEqual(['read:images', 'write:images', 'delete:images'])
   })
 
   /**
@@ -59,20 +61,5 @@ describe('permission groups', () => {
     const registries = groups.find((group) => group.name === 'Registries')
 
     expect(registries?.permissions).toEqual(['read:registries', 'write:registries', 'delete:registries'])
-  })
-
-  /**
-   * No route requires `write:images`: an image enters the catalog by being
-   * used, so creating a box is what writes it. Offering the scope here would
-   * name a route that does not exist.
-   */
-  it('offer no write scope for images', () => {
-    const offenders = PERMISSION_GROUPS.flatMap(([source, groups]) =>
-      groups.flatMap((group) =>
-        group.permissions.filter((permission) => permission === 'write:images').map(() => source),
-      ),
-    )
-
-    expect(offenders).toEqual([])
   })
 })

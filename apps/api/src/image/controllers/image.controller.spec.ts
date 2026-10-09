@@ -4,7 +4,7 @@
  */
 
 import type { INestApplication } from '@nestjs/common'
-import { ConflictException } from '@nestjs/common'
+import { ConflictException, ValidationPipe } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import { Test } from '@nestjs/testing'
 import type { AddressInfo } from 'net'
@@ -13,17 +13,22 @@ import { AuditTarget } from '../../audit/enums/audit-target.enum'
 import { AuditInterceptor } from '../../audit/interceptors/audit.interceptor'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
+import { RequiredOrganizationResourcePermissions } from '../../organization/decorators/required-organization-resource-permissions.decorator'
+import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
 import { ImageCatalogService } from '../services/image-catalog.service'
 import { ImageController } from './image.controller'
 
 const ORGANIZATION = { id: 'org-123', imageCountLimit: 20 }
+const USER_ID = 'auth0|6512bd43d9caa6e02c990b0a'
+const VERSION_ID = '123e4567-e89b-12d3-a456-426614174000'
 
 describe('ImageController routing', () => {
   let app: INestApplication
   let catalog: {
     list: jest.Mock
     get: jest.Mock
+    moveTag: jest.Mock
     delete: jest.Mock
     usage: jest.Mock
   }
@@ -37,6 +42,7 @@ describe('ImageController routing', () => {
     catalog = {
       list: jest.fn().mockResolvedValue([]),
       get: jest.fn().mockResolvedValue({ name: 'quay.io/acme/app' }),
+      moveTag: jest.fn().mockResolvedValue({ name: 'quay.io/acme/app' }),
       delete: jest.fn().mockResolvedValue(undefined),
       usage: jest.fn().mockResolvedValue({ count: 1, limit: 20, knownBytes: 42 }),
     }
@@ -49,7 +55,7 @@ describe('ImageController routing', () => {
       .useValue({
         canActivate: (context: any) => {
           context.switchToHttp().getRequest().user = {
-            userId: 'user-1',
+            userId: USER_ID,
             email: 'user@example.test',
             organizationId: ORGANIZATION.id,
             organization: ORGANIZATION,
@@ -68,6 +74,8 @@ describe('ImageController routing', () => {
     // Global in main.ts too, so each route's @Audit metadata is read the way
     // production reads it.
     app.useGlobalInterceptors(new AuditInterceptor(new Reflector(), audit as never, { get: jest.fn() } as never))
+    // As `main.ts` installs it, so a body the DTO refuses is refused here too.
+    app.useGlobalPipes(new ValidationPipe({ transform: true }))
     await app.listen(0)
   })
 
@@ -75,9 +83,12 @@ describe('ImageController routing', () => {
     await app?.close()
   })
 
-  const request = async (method: string, path: string): Promise<Response> => {
+  const request = async (method: string, path: string, body?: unknown): Promise<Response> => {
     const address = app.getHttpServer().address() as AddressInfo
-    return fetch(`http://127.0.0.1:${address.port}${path}`, { method })
+    return fetch(`http://127.0.0.1:${address.port}${path}`, {
+      method,
+      ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    })
   }
 
   /**
@@ -160,5 +171,36 @@ describe('ImageController routing', () => {
 
     expect(response.status).toBe(200)
     expect(catalog.list).toHaveBeenCalledWith(ORGANIZATION)
+  })
+
+  it('moves a tag on a URL-encoded reference, as the caller who asked', async () => {
+    const response = await request('PUT', '/api/images/quay.io%2Facme%2Fapp/tags/stable', { versionId: VERSION_ID })
+
+    expect(response.status).toBe(200)
+    expect(catalog.moveTag).toHaveBeenCalledWith(ORGANIZATION, 'quay.io/acme/app', 'stable', VERSION_ID, USER_ID)
+  })
+
+  it.each([{}, { versionId: 'v2' }])('refuses to move a tag to %j before reaching the catalog', async (body) => {
+    const response = await request('PUT', '/api/images/quay.io%2Facme%2Fapp/tags/stable', body)
+
+    expect(response.status).toBe(400)
+    expect(catalog.moveTag).not.toHaveBeenCalled()
+  })
+})
+
+describe('ImageController permissions', () => {
+  const reflector = new Reflector()
+  const route = (name: keyof ImageController) => ImageController.prototype[name]
+
+  it.each([
+    ['listImages', OrganizationResourcePermission.READ_IMAGES],
+    ['getImageUsage', OrganizationResourcePermission.READ_IMAGES],
+    ['getImage', OrganizationResourcePermission.READ_IMAGES],
+    ['moveImageTag', OrganizationResourcePermission.WRITE_IMAGES],
+    ['deleteImage', OrganizationResourcePermission.DELETE_IMAGES],
+  ] as const)('requires exactly its own scope on %s', (name, scope) => {
+    // The guard reads this and nothing else, so a route with the wrong scope
+    // here is a route anyone holding that other scope can call.
+    expect(reflector.get(RequiredOrganizationResourcePermissions, route(name))).toEqual([scope])
   })
 })

@@ -62,6 +62,7 @@ export * from './log-entry';
 export * from './metric-data-point';
 export * from './metric-series';
 export * from './metrics-response';
+export * from './move-image-tag';
 export * from './oidc-config';
 export * from './organization';
 export * from './organization-box-default-limited-network-egress';

@@ -48,7 +48,6 @@ export enum OrganizationResourcePermission {
   READ_REGISTRIES = 'read:registries',
 
   // Appended for the same reason, apart from the other image scopes. Using an
-  // image still records it without this; it is for writing the catalog over
-  // HTTP, which no route does yet.
+  // image still records it without this; what it guards is moving a tag.
   WRITE_IMAGES = 'write:images',
 }

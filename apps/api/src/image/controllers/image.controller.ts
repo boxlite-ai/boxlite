@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Controller, Delete, Get, HttpCode, Param, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, HttpCode, Param, Put, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiHeader, ApiOAuth2, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger'
-import { Audit } from '../../audit/decorators/audit.decorator'
+import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
@@ -16,15 +16,15 @@ import { OrganizationAuthContext } from '../../common/interfaces/auth-context.in
 import { RequiredOrganizationResourcePermissions } from '../../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
-import { ImageDetailDto, ImageDto, ImageUsageDto } from '../dto/image.dto'
+import { ImageDetailDto, ImageDto, ImageUsageDto, MoveImageTagDto } from '../dto/image.dto'
 import { ImageCatalogService } from '../services/image-catalog.service'
 
 /**
  * The image catalog.
  *
- * There is no create: an image enters the catalog by being used. That is why
- * no route here requires `write:images` — the write happens when a box
- * reaches STARTED, on the credentials that created the box.
+ * There is no create: an image enters the catalog by being used, when a box
+ * reaches STARTED, on the credentials that created the box. The one write over
+ * HTTP is moving a tag, which is what `write:images` guards.
  *
  * Every route is organization-scoped inside the service, by filtering on the
  * organization the credentials carry rather than by a guard on the way in: the
@@ -91,12 +91,57 @@ export class ImageController {
     return this.imageCatalogService.get(authContext.organization, idOrRef)
   }
 
+  @Put(':idOrRef/tags/:tag')
+  @ApiOperation({
+    summary: 'Point a tag at a version',
+    description:
+      'Moves the tag to one of the image’s versions, or creates it there. Boxes created afterwards with the tag boot that version; boxes already created keep the version they were resolved to, and nothing is pulled. Every move is recorded in the image’s history.',
+    operationId: 'moveImageTag',
+  })
+  @ApiParam({
+    name: 'idOrRef',
+    description: 'Catalog ID, or any reference that names the image — URL-encode a reference',
+    type: 'string',
+    example: 'quay.io%2Facme%2Fapp',
+  })
+  @ApiParam({ name: 'tag', description: 'Tag to point at the version', type: 'string', example: 'stable' })
+  @ApiResponse({ status: 200, description: 'The image, with the tag where it now points', type: ImageDetailDto })
+  @ApiResponse({
+    status: 400,
+    description:
+      'The tag is not a valid OCI tag, the version is not a ready version of this image, or the image is curated',
+  })
+  @ApiResponse({ status: 404, description: 'No such image in this organization' })
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_IMAGES])
+  @Audit({
+    action: AuditAction.UPDATE,
+    targetType: AuditTarget.IMAGE,
+    targetIdFromRequest: (req) => req.params.idOrRef,
+    requestMetadata: {
+      body: (req: TypedRequest<MoveImageTagDto>) => ({ tag: req.params.tag, versionId: req.body?.versionId }),
+    },
+  })
+  async moveImageTag(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('idOrRef') idOrRef: string,
+    @Param('tag') tag: string,
+    @Body() request: MoveImageTagDto,
+  ): Promise<ImageDetailDto> {
+    return this.imageCatalogService.moveTag(
+      authContext.organization,
+      idOrRef,
+      tag,
+      request.versionId,
+      authContext.userId,
+    )
+  }
+
   @Delete(':idOrRef')
   @HttpCode(204)
   @ApiOperation({
     summary: 'Remove an image from the catalog',
     description:
-      'Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. That is also how to pick up a tag that has moved upstream, since a recorded tag keeps the digest it first resolved to.',
+      'Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; to point it at a version already recorded, move the tag instead.',
     operationId: 'deleteImage',
   })
   @ApiParam({

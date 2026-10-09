@@ -18,7 +18,7 @@ import type { AxiosPromise, AxiosInstance, RawAxiosRequestConfig } from 'axios';
 import globalAxios from 'axios';
 // Some imports not used depending on template conditions
 // @ts-ignore
-import { DUMMY_BASE_URL, assertParamExists, setBearerAuthToObject, setSearchParams, toPathString, createRequestFunction } from '../common';
+import { DUMMY_BASE_URL, assertParamExists, setBearerAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction } from '../common';
 // @ts-ignore
 import { BASE_PATH, type RequestArgs, BaseAPI, operationServerMap } from '../base';
 // @ts-ignore
@@ -27,13 +27,15 @@ import type { Image } from '../models';
 import type { ImageDetail } from '../models';
 // @ts-ignore
 import type { ImageUsage } from '../models';
+// @ts-ignore
+import type { MoveImageTag } from '../models';
 /**
  * ImagesApi - axios parameter creator
  */
 export const ImagesApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. That is also how to pick up a tag that has moved upstream, since a recorded tag keeps the digest it first resolved to.
+         * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; to point it at a version already recorded, move the tag instead.
          * @summary Remove an image from the catalog
          * @param {string} idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -199,6 +201,59 @@ export const ImagesApiAxiosParamCreator = function (configuration?: Configuratio
                 options: localVarRequestOptions,
             };
         },
+        /**
+         * Moves the tag to one of the image’s versions, or creates it there. Boxes created afterwards with the tag boot that version; boxes already created keep the version they were resolved to, and nothing is pulled. Every move is recorded in the image’s history.
+         * @summary Point a tag at a version
+         * @param {string} idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
+         * @param {string} tag Tag to point at the version
+         * @param {MoveImageTag} moveImageTag 
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        moveImageTag: async (idOrRef: string, tag: string, moveImageTag: MoveImageTag, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'idOrRef' is not null or undefined
+            assertParamExists('moveImageTag', 'idOrRef', idOrRef)
+            // verify required parameter 'tag' is not null or undefined
+            assertParamExists('moveImageTag', 'tag', tag)
+            // verify required parameter 'moveImageTag' is not null or undefined
+            assertParamExists('moveImageTag', 'moveImageTag', moveImageTag)
+            const localVarPath = `/images/{idOrRef}/tags/{tag}`
+                .replace('{idOrRef}', encodeURIComponent(String(idOrRef)))
+                .replace('{tag}', encodeURIComponent(String(tag)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'PUT', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xBoxLiteOrganizationID != null) {
+                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(moveImageTag, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
     }
 };
 
@@ -209,7 +264,7 @@ export const ImagesApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = ImagesApiAxiosParamCreator(configuration)
     return {
         /**
-         * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. That is also how to pick up a tag that has moved upstream, since a recorded tag keeps the digest it first resolved to.
+         * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; to point it at a version already recorded, move the tag instead.
          * @summary Remove an image from the catalog
          * @param {string} idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -262,6 +317,22 @@ export const ImagesApiFp = function(configuration?: Configuration) {
             const localVarOperationServerBasePath = operationServerMap['ImagesApi.listImages']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
+        /**
+         * Moves the tag to one of the image’s versions, or creates it there. Boxes created afterwards with the tag boot that version; boxes already created keep the version they were resolved to, and nothing is pulled. Every move is recorded in the image’s history.
+         * @summary Point a tag at a version
+         * @param {string} idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
+         * @param {string} tag Tag to point at the version
+         * @param {MoveImageTag} moveImageTag 
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async moveImageTag(idOrRef: string, tag: string, moveImageTag: MoveImageTag, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ImageDetail>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.moveImageTag(idOrRef, tag, moveImageTag, xBoxLiteOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['ImagesApi.moveImageTag']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
     }
 };
 
@@ -272,7 +343,7 @@ export const ImagesApiFactory = function (configuration?: Configuration, basePat
     const localVarFp = ImagesApiFp(configuration)
     return {
         /**
-         * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. That is also how to pick up a tag that has moved upstream, since a recorded tag keeps the digest it first resolved to.
+         * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; to point it at a version already recorded, move the tag instead.
          * @summary Remove an image from the catalog
          * @param {string} idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -313,6 +384,19 @@ export const ImagesApiFactory = function (configuration?: Configuration, basePat
         listImages(xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<Image>> {
             return localVarFp.listImages(xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
+        /**
+         * Moves the tag to one of the image’s versions, or creates it there. Boxes created afterwards with the tag boot that version; boxes already created keep the version they were resolved to, and nothing is pulled. Every move is recorded in the image’s history.
+         * @summary Point a tag at a version
+         * @param {string} idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
+         * @param {string} tag Tag to point at the version
+         * @param {MoveImageTag} moveImageTag 
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        moveImageTag(idOrRef: string, tag: string, moveImageTag: MoveImageTag, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ImageDetail> {
+            return localVarFp.moveImageTag(idOrRef, tag, moveImageTag, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        },
     };
 };
 
@@ -321,7 +405,7 @@ export const ImagesApiFactory = function (configuration?: Configuration, basePat
  */
 export class ImagesApi extends BaseAPI {
     /**
-     * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. That is also how to pick up a tag that has moved upstream, since a recorded tag keeps the digest it first resolved to.
+     * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; to point it at a version already recorded, move the tag instead.
      * @summary Remove an image from the catalog
      * @param {string} idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -364,6 +448,20 @@ export class ImagesApi extends BaseAPI {
      */
     public listImages(xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return ImagesApiFp(this.configuration).listImages(xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * Moves the tag to one of the image’s versions, or creates it there. Boxes created afterwards with the tag boot that version; boxes already created keep the version they were resolved to, and nothing is pulled. Every move is recorded in the image’s history.
+     * @summary Point a tag at a version
+     * @param {string} idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
+     * @param {string} tag Tag to point at the version
+     * @param {MoveImageTag} moveImageTag 
+     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public moveImageTag(idOrRef: string, tag: string, moveImageTag: MoveImageTag, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ImagesApiFp(this.configuration).moveImageTag(idOrRef, tag, moveImageTag, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
 

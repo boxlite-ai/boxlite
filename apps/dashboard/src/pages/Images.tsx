@@ -212,8 +212,8 @@ const Images: React.FC = () => {
                   reference again brings it back as a new entry.
                 </p>
                 <p>
-                  That is also how to pick up a tag that has moved upstream: a recorded tag keeps the digest it first
-                  resolved to, so removing the image and using it again is what re-resolves it.
+                  A pull never moves a recorded tag, so this is also how to pick up where a tag points upstream now. To
+                  point a tag at a version already recorded, move it through the API instead.
                 </p>
                 <p>Boxes that have not been destroyed still hold this image, and the removal will be refused.</p>
               </div>

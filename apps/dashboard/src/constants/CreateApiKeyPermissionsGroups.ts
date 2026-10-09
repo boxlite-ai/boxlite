@@ -12,10 +12,14 @@ export const CREATE_API_KEY_PERMISSIONS_GROUPS: { name: string; permissions: Cre
     permissions: [CreateApiKeyPermissionsEnum.WRITE_BOXES, CreateApiKeyPermissionsEnum.DELETE_BOXES],
   },
   {
-    // No write, for the same reason as the role groups: nothing writes the
-    // catalog over HTTP.
+    // Write moves a tag, which is how an image is rolled out or back.
+    // Using an image records it without any of these.
     name: 'Images',
-    permissions: [CreateApiKeyPermissionsEnum.READ_IMAGES, CreateApiKeyPermissionsEnum.DELETE_IMAGES],
+    permissions: [
+      CreateApiKeyPermissionsEnum.READ_IMAGES,
+      CreateApiKeyPermissionsEnum.WRITE_IMAGES,
+      CreateApiKeyPermissionsEnum.DELETE_IMAGES,
+    ],
   },
   {
     // So a key can manage its organization's registry logins, which is how
