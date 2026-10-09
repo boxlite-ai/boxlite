@@ -318,8 +318,9 @@ if (boxlite_runtime_images(runtime, &images, &error) == Ok) {
 }
 ```
 
-`boxlite_image_get()` delivers a `CImageDetail` (tags and versions, newest
-first) and `boxlite_image_usage()` a `CImageUsage`. See
+`boxlite_image_get()` and `boxlite_image_move_tag()` deliver a `CImageDetail`
+(tags, versions newest first, and tag history) and `boxlite_image_usage()` a
+`CImageUsage`. See
 [Images in the C reference](../../docs/reference/c/README.md#images) for each
 operation on each runtime.
 

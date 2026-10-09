@@ -2,12 +2,13 @@
 //!
 //! The handle holds the images a runtime can boot from: the local cache on a
 //! runtime from `boxlite_runtime_new`, the server's catalog on a REST runtime.
-//! Pull is local only (a REST runtime pulls when a box is created) and usage is
-//! REST only.
+//! Pull is local only (a REST runtime pulls when a box is created); usage and
+//! tag moves are REST only.
 //!
 //! Async methods (`boxlite_image_pull`, `boxlite_image_list`,
-//! `boxlite_image_get`, `boxlite_image_remove`, `boxlite_image_usage`) follow
-//! the post-and-drain pattern; results are dispatched on the user's drain thread.
+//! `boxlite_image_get`, `boxlite_image_remove`, `boxlite_image_usage`,
+//! `boxlite_image_move_tag`) follow the post-and-drain pattern; results are
+//! dispatched on the user's drain thread.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
@@ -18,7 +19,7 @@ use tokio::runtime::Runtime as TokioRuntime;
 
 use boxlite::BoxliteError;
 use boxlite::ImageHandle as CoreImageHandle;
-use boxlite::runtime::types::{ImageDetail, ImageUsage, ImageVersion};
+use boxlite::runtime::types::{ImageDetail, ImageTagEvent, ImageUsage, ImageVersion};
 
 use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
 use crate::event_queue::{
@@ -64,7 +65,8 @@ pub struct CImagePullResult {
 /// One build of an image, owned by its enclosing [`CImageDetail`].
 ///
 /// Sizes and times follow [`CImageInfo`]: `size_bytes` is meaningful only when
-/// `has_size` is non-zero, and `recorded_at` is in Unix seconds (UTC).
+/// `has_size` is non-zero, times are in Unix seconds (UTC), and an optional
+/// time is meaningful only when its `has_` flag is non-zero.
 #[repr(C)]
 pub struct CImageVersion {
     /// Manifest digest, such as "sha256:…".
@@ -77,14 +79,40 @@ pub struct CImageVersion {
     pub source_ref: *mut c_char,
     /// When this build was recorded, in Unix seconds.
     pub recorded_at: i64,
+    /// The image's tags that point at this build: `tags_count` strings, null
+    /// only when the count is zero.
+    pub tags: *mut *mut c_char,
+    pub tags_count: c_int,
+    /// When a box last started from this build.
+    pub last_used_at: i64,
+    pub has_last_used_at: c_int,
+    /// When a pull found this build gone from its registry.
+    pub upstream_missing_at: i64,
+    pub has_upstream_missing_at: c_int,
+}
+
+/// One move of a tag, or the pull that first recorded it, owned by its
+/// enclosing [`CImageDetail`]. Versions are named by digest.
+#[repr(C)]
+pub struct CImageTagEvent {
+    pub tag: *mut c_char,
+    /// The build the tag pointed at before; null when the tag was new.
+    pub from_digest: *mut c_char,
+    pub to_digest: *mut c_char,
+    /// Who moved the tag; null when a pull recorded it.
+    pub actor: *mut c_char,
+    /// When the tag moved, in Unix seconds.
+    pub moved_at: i64,
 }
 
 /// An image name and every build of it the runtime holds.
 ///
-/// `tags` points to `tags_count` strings and `versions` to `versions_count`
-/// entries, newest first; each array is null only when its count is zero. The
-/// callback that receives a detail owns it, nested strings and arrays
-/// included, and releases it once with `boxlite_free_image_detail`.
+/// `tags` points to `tags_count` strings, `versions` to `versions_count`
+/// entries, newest first, and `history` to `history_count` tag moves, the
+/// latest first; each array is null only when its count is zero. A local cache
+/// leaves `history` empty. The callback that receives a detail owns it, nested
+/// strings and arrays included, and releases it once with
+/// `boxlite_free_image_detail`.
 #[repr(C)]
 pub struct CImageDetail {
     /// Registry and repository without a tag, such as "docker.io/library/alpine".
@@ -96,6 +124,8 @@ pub struct CImageDetail {
     pub curated: c_int,
     pub versions: *mut CImageVersion,
     pub versions_count: c_int,
+    pub history: *mut CImageTagEvent,
+    pub history_count: c_int,
 }
 
 /// How much of its image allowance a REST runtime's caller holds.
@@ -118,6 +148,19 @@ fn to_c_str(s: &str) -> *mut c_char {
     CString::new(s)
         .map(|c| c.into_raw())
         .unwrap_or(ptr::null_mut())
+}
+
+fn to_c_str_or_null(s: Option<&str>) -> *mut c_char {
+    s.map_or(ptr::null_mut(), to_c_str)
+}
+
+fn to_c_str_array(strings: &[String]) -> (*mut *mut c_char, c_int) {
+    into_raw_slice(strings.iter().map(|s| to_c_str(s)).collect())
+}
+
+/// Unix seconds and the non-zero flag that says they are known.
+fn to_c_time(seconds: Option<i64>) -> (i64, c_int) {
+    seconds.map_or((0, 0), |seconds| (seconds, 1))
 }
 
 impl CImageInfo {
@@ -156,24 +199,55 @@ impl CImageVersion {
             None => (0, 0),
         };
 
+        let (tags, tags_count) = to_c_str_array(&version.tags);
+        let (last_used_at, has_last_used_at) =
+            to_c_time(version.last_used_at.map(|time| time.timestamp()));
+        let (upstream_missing_at, has_upstream_missing_at) =
+            to_c_time(version.upstream_missing_at.map(|time| time.timestamp()));
+
         CImageVersion {
             digest: to_c_str(&version.digest),
             size_bytes,
             has_size,
             source_ref: to_c_str(&version.source_ref),
             recorded_at: version.recorded_at.timestamp(),
+            tags,
+            tags_count,
+            last_used_at,
+            has_last_used_at,
+            upstream_missing_at,
+            has_upstream_missing_at,
+        }
+    }
+}
+
+impl CImageTagEvent {
+    fn from_image_tag_event(event: &ImageTagEvent) -> Self {
+        CImageTagEvent {
+            tag: to_c_str(&event.tag),
+            from_digest: to_c_str_or_null(event.from_digest.as_deref()),
+            to_digest: to_c_str(&event.to_digest),
+            actor: to_c_str_or_null(event.actor.as_deref()),
+            moved_at: event.moved_at.timestamp(),
         }
     }
 }
 
 impl CImageDetail {
     pub fn from_image_detail(detail: &ImageDetail) -> Self {
-        let (tags, tags_count) = into_raw_slice(detail.tags.iter().map(|t| to_c_str(t)).collect());
+        let (tags, tags_count) = to_c_str_array(&detail.tags);
         let (versions, versions_count) = into_raw_slice(
             detail
                 .versions
                 .iter()
                 .map(CImageVersion::from_image_version)
+                .collect(),
+        );
+        let (history, history_count) = into_raw_slice(
+            detail
+                .history
+                .iter()
+                .map(CImageTagEvent::from_image_tag_event)
                 .collect(),
         );
 
@@ -184,6 +258,8 @@ impl CImageDetail {
             curated: c_int::from(detail.curated),
             versions,
             versions_count,
+            history,
+            history_count,
         }
     }
 }
@@ -205,20 +281,37 @@ pub unsafe fn free_image_detail(detail: *mut CImageDetail) {
         }
         let detail = Box::from_raw(detail);
         free_str(detail.name);
-        if !detail.tags.is_null() && detail.tags_count >= 0 {
-            for idx in 0..detail.tags_count as usize {
-                free_str(*detail.tags.add(idx));
-            }
-        }
-        free_raw_slice(detail.tags, detail.tags_count);
+        free_str_array(detail.tags, detail.tags_count);
         if !detail.versions.is_null() && detail.versions_count >= 0 {
             for idx in 0..detail.versions_count as usize {
                 let version = &*detail.versions.add(idx);
                 free_str(version.digest);
                 free_str(version.source_ref);
+                free_str_array(version.tags, version.tags_count);
             }
         }
         free_raw_slice(detail.versions, detail.versions_count);
+        if !detail.history.is_null() && detail.history_count >= 0 {
+            for idx in 0..detail.history_count as usize {
+                let event = &*detail.history.add(idx);
+                free_str(event.tag);
+                free_str(event.from_digest);
+                free_str(event.to_digest);
+                free_str(event.actor);
+            }
+        }
+        free_raw_slice(detail.history, detail.history_count);
+    }
+}
+
+unsafe fn free_str_array(strings: *mut *mut c_char, count: c_int) {
+    unsafe {
+        if !strings.is_null() && count >= 0 {
+            for idx in 0..count as usize {
+                free_str(*strings.add(idx));
+            }
+        }
+        free_raw_slice(strings, count);
     }
 }
 
@@ -356,6 +449,33 @@ pub unsafe extern "C" fn boxlite_image_usage(
     image_usage(handle, cb, user_data, out_error)
 }
 
+/// Queue a move of an image's tag onto the version with a digest, with the
+/// same dispatch contract as [`boxlite_image_get`]. The callback receives the
+/// image as it now is. Boxes already created keep the version they have.
+///
+/// `tag` must be one the OCI distribution spec accepts and `digest` a
+/// `sha256:` one; either malformed reaches the callback as `InvalidArgument`
+/// before anything is sent. REST runtimes only: on a local runtime, which
+/// resolves a tag afresh for each new box, the callback receives
+/// `Unsupported`.
+///
+/// # Safety
+///
+/// As for [`boxlite_image_get`], with `tag` and `digest` held to the same
+/// rules as `name`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_image_move_tag(
+    handle: *mut CBoxliteImageHandle,
+    name: *const c_char,
+    tag: *const c_char,
+    digest: *const c_char,
+    cb: CBoxImageGetCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    image_move_tag(handle, name, tag, digest, cb, user_data, out_error)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_image_free(handle: *mut CBoxliteImageHandle) {
     if !handle.is_null() {
@@ -377,23 +497,23 @@ pub unsafe extern "C" fn boxlite_free_image_pull_result(result: *mut CImagePullR
 ///
 /// # Safety
 ///
-/// `detail` must be null or a pointer handed to a `boxlite_image_get` callback
-/// that has not already been freed.
+/// `detail` must be null or a pointer handed to a `boxlite_image_get` or
+/// `boxlite_image_move_tag` callback that has not already been freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_free_image_detail(detail: *mut CImageDetail) {
     free_image_detail(detail)
 }
 
-/// `name` copied out of the caller's string, which it owns only until the
-/// call returns.
-unsafe fn copy_name(name: *const c_char) -> Result<String, BoxliteError> {
-    if name.is_null() {
-        return Err(null_pointer_error("name"));
+/// An argument copied out of the caller's string, which it owns only until
+/// the call returns; `what` names the argument in the error.
+unsafe fn copy_arg(value: *const c_char, what: &str) -> Result<String, BoxliteError> {
+    if value.is_null() {
+        return Err(null_pointer_error(what));
     }
-    unsafe { CStr::from_ptr(name) }
+    unsafe { CStr::from_ptr(value) }
         .to_str()
         .map(str::to_owned)
-        .map_err(|e| BoxliteError::InvalidArgument(format!("name is not UTF-8: {e}")))
+        .map_err(|e| BoxliteError::InvalidArgument(format!("{what} is not UTF-8: {e}")))
 }
 
 unsafe fn image_list(
@@ -519,7 +639,7 @@ unsafe fn image_get(
             return BoxliteErrorCode::InvalidArgument;
         }
 
-        let name = match copy_name(name) {
+        let name = match copy_arg(name, "name") {
             Ok(name) => name,
             Err(e) => {
                 write_error(out_error, e);
@@ -561,6 +681,70 @@ unsafe fn image_get(
     }
 }
 
+unsafe fn image_move_tag(
+    handle: *mut ImageHandle,
+    name: *const c_char,
+    tag: *const c_char,
+    digest: *const c_char,
+    cb: CBoxImageGetCb,
+    user_data: *mut c_void,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let copied = copy_arg(name, "name")
+            .and_then(|name| Ok((name, copy_arg(tag, "tag")?, copy_arg(digest, "digest")?)));
+        let (name, tag, digest) = match copied {
+            Ok(args) => args,
+            Err(e) => {
+                write_error(out_error, e);
+                return BoxliteErrorCode::InvalidArgument;
+            }
+        };
+
+        let handle_ref = &*handle;
+        if let Err(e) = crate::util::ensure_runtime_live(&handle_ref.liveness, "move image tag") {
+            let code = error_to_code(&e);
+            write_error(out_error, e);
+            return code;
+        }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
+
+        let core_handle = handle_ref.handle.clone();
+        let queue = handle_ref.queue.clone();
+        let user_data_addr = user_data as usize;
+
+        handle_ref.tokio_rt.spawn(async move {
+            let result = core_handle
+                .move_tag(&name, &tag, &digest)
+                .await
+                .map(|detail| {
+                    crate::event_queue::OwnedFfiPtr::new_with(
+                        Box::new(CImageDetail::from_image_detail(&detail)),
+                        free_image_detail,
+                    )
+                });
+            // A move answers the image as it now is, so it reaches the
+            // callback a get does.
+            push_event(
+                &queue,
+                RuntimeEvent::ImageGet {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
+    }
+}
+
 unsafe fn image_remove(
     handle: *mut ImageHandle,
     name: *const c_char,
@@ -574,7 +758,7 @@ unsafe fn image_remove(
             return BoxliteErrorCode::InvalidArgument;
         }
 
-        let name = match copy_name(name) {
+        let name = match copy_arg(name, "name") {
             Ok(name) => name,
             Err(e) => {
                 write_error(out_error, e);

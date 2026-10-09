@@ -1449,7 +1449,7 @@ mod owned_ffi_ptr_nested_leak_tests {
 
     #[test]
     fn owned_ffi_ptr_image_detail_reclaims_inner_cstrings() {
-        use boxlite::runtime::types::{ImageDetail, ImageVersion};
+        use boxlite::runtime::types::{ImageDetail, ImageTagEvent, ImageVersion};
 
         let _guard = crate::FREE_STR_LOCK.lock().unwrap();
         let before = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
@@ -1459,16 +1459,23 @@ mod owned_ffi_ptr_nested_leak_tests {
             size_bytes,
             source_ref: format!("quay.io/acme/app@{digest}"),
             recorded_at: Default::default(),
-            tags: Vec::new(),
+            tags: vec![format!("tag-{digest}")],
             last_used_at: None,
             upstream_missing_at: None,
+        };
+        let event = |from_digest: Option<&str>, actor: Option<&str>| ImageTagEvent {
+            tag: "v2".to_string(),
+            from_digest: from_digest.map(str::to_string),
+            to_digest: "sha256:bb".to_string(),
+            actor: actor.map(str::to_string),
+            moved_at: Default::default(),
         };
         let detail = ImageDetail {
             name: "quay.io/acme/app".to_string(),
             tags: vec!["v1".to_string(), "v2".to_string()],
             curated: false,
             versions: vec![version("sha256:bb", Some(42)), version("sha256:aa", None)],
-            history: Vec::new(),
+            history: vec![event(Some("sha256:aa"), Some("user-1")), event(None, None)],
         };
 
         let owned = OwnedFfiPtr::new_with(
@@ -1480,9 +1487,11 @@ mod owned_ffi_ptr_nested_leak_tests {
         let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
         assert_eq!(
             after - before,
-            7,
+            15,
             "OwnedFfiPtr<CImageDetail>::drop reclaimed {} inner CStrings; \
-             expected 7 (name + 2 tags + 2 versions × digest and source_ref).",
+             expected 15 (name + 2 tags + 2 versions × digest, source_ref and \
+             a tag + a move's tag, both digests and actor + a pull's tag and \
+             digest).",
             after - before
         );
     }

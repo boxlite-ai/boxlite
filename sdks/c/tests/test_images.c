@@ -1,5 +1,6 @@
 /**
- * BoxLite C SDK - image get, remove and usage through the image handle.
+ * BoxLite C SDK - image get, remove, usage and tag moves through the image
+ * handle.
  *
  * Unit-level (no VM): a local runtime on an empty home answers from its
  * empty cache, and a REST runtime is pointed at a loopback server forked
@@ -23,10 +24,18 @@
 #define NEWER_RECORDED_AT 1788220800LL
 #define OLDER_RECORDED_AT 1786797000LL
 
+/* "sha256:" and 64 hex digits, as a digest must be. */
+#define HEX16_A "aaaaaaaaaaaaaaaa"
+#define HEX16_B "bbbbbbbbbbbbbbbb"
+#define OLD_DIGEST "sha256:" HEX16_A HEX16_A HEX16_A HEX16_A
+#define NEW_DIGEST "sha256:" HEX16_B HEX16_B HEX16_B HEX16_B
+
 typedef struct Response {
   const char *request_line;
   const char *status;
   const char *body;
+  /* Text the request, head or body, must contain; NULL for none. */
+  const char *request_contains;
 } Response;
 
 /* The server answers only these exact request lines, so a name sent as
@@ -44,6 +53,22 @@ static const Response ROUTES[] = {
     {"GET /v1/images/usage HTTP/1.1", "200 OK",
      "{\"count\":3,\"limit\":20,\"known_bytes\":8192}"},
     {"DELETE /v1/images/quay.io%2Facme%2Fapp HTTP/1.1", "204 No Content", ""},
+    {"PUT /v1/images/quay.io%2Facme%2Fapp/tags/stable HTTP/1.1", "200 OK",
+     "{\"name\":\"quay.io/acme/app\",\"tags\":[\"stable\"],"
+     "\"curated\":false,\"versions\":["
+     "{\"digest\":\"" NEW_DIGEST "\",\"size_bytes\":null,"
+     "\"source_ref\":\"quay.io/acme/app:v2\","
+     "\"recorded_at\":\"2026-09-01T00:00:00Z\",\"tags\":[\"stable\"],"
+     "\"last_used_at\":\"2026-08-15T12:30:00Z\","
+     "\"upstream_missing_at\":null}],"
+     "\"history\":["
+     "{\"tag\":\"stable\",\"from_digest\":\"" OLD_DIGEST "\","
+     "\"to_digest\":\"" NEW_DIGEST "\",\"actor\":\"user-1\","
+     "\"moved_at\":\"2026-09-01T00:00:00Z\"},"
+     "{\"tag\":\"stable\",\"from_digest\":null,"
+     "\"to_digest\":\"" OLD_DIGEST "\",\"actor\":null,"
+     "\"moved_at\":\"2026-08-15T12:30:00Z\"}]}",
+     "{\"digest\":\"" NEW_DIGEST "\"}"},
 };
 static const size_t ROUTE_COUNT = sizeof(ROUTES) / sizeof(ROUTES[0]);
 
@@ -70,7 +95,7 @@ static void write_all(int fd, const char *data, size_t len) {
   }
 }
 
-/* Reads one request's head and answers it; returns 1 if it matched a route. */
+/* Answers one request; returns 1 if it matched a route, body included. */
 static int serve_one(int listener) {
   int client = accept(listener, NULL, NULL);
   if (client < 0) {
@@ -115,8 +140,19 @@ static int serve_one(int listener) {
   }
   write_all(client, header, (size_t)header_len);
   write_all(client, body, strlen(body));
+  /* Read the rest, such as a PUT's body, until the client closes: closing
+   * with unread data resets the connection and can drop the response. */
+  shutdown(client, SHUT_WR);
+  while (used < sizeof(request) - 1) {
+    ssize_t got = read(client, request + used, sizeof(request) - 1 - used);
+    if (got <= 0) {
+      break;
+    }
+    used += (size_t)got;
+  }
   close(client);
-  return route != NULL;
+  return route != NULL && (route->request_contains == NULL ||
+                           strstr(request, route->request_contains) != NULL);
 }
 
 /* Serves one request per route, then exits 0 only if each matched. */
@@ -198,6 +234,42 @@ static void on_detail(CImageDetail *detail, CBoxliteError *error,
   assert(older->has_size == 0 && older->size_bytes == 0);
   assert(older->recorded_at == OLDER_RECORDED_AT);
 
+  /* A server that names no version tags, times or history reads them empty. */
+  assert(newer->tags == NULL && newer->tags_count == 0);
+  assert(newer->has_last_used_at == 0 && newer->has_upstream_missing_at == 0);
+  assert(detail->history == NULL && detail->history_count == 0);
+
+  boxlite_free_image_detail(detail);
+}
+
+static void on_moved(CImageDetail *detail, CBoxliteError *error,
+                     void *user_data) {
+  Request *request = user_data;
+  record(request, error);
+  if (detail == NULL) {
+    return;
+  }
+
+  assert(detail->versions_count == 1);
+  const CImageVersion *version = &detail->versions[0];
+  assert(version->tags_count == 1);
+  assert(strcmp(version->tags[0], "stable") == 0);
+  assert(version->has_last_used_at == 1);
+  assert(version->last_used_at == OLDER_RECORDED_AT);
+  assert(version->has_upstream_missing_at == 0);
+
+  assert(detail->history_count == 2);
+  const CImageTagEvent *moved = &detail->history[0];
+  assert(strcmp(moved->tag, "stable") == 0);
+  assert(strcmp(moved->from_digest, OLD_DIGEST) == 0);
+  assert(strcmp(moved->to_digest, NEW_DIGEST) == 0);
+  assert(strcmp(moved->actor, "user-1") == 0);
+  assert(moved->moved_at == NEWER_RECORDED_AT);
+  const CImageTagEvent *recorded = &detail->history[1];
+  assert(recorded->from_digest == NULL && recorded->actor == NULL);
+  assert(strcmp(recorded->to_digest, OLD_DIGEST) == 0);
+  assert(recorded->moved_at == OLDER_RECORDED_AT);
+
   boxlite_free_image_detail(detail);
 }
 
@@ -246,6 +318,15 @@ static Request read_usage(CBoxliteRuntime *runtime,
   return request;
 }
 
+static Request move_tag(CBoxliteRuntime *runtime, CBoxliteImageHandle *images) {
+  Request request = {0};
+  CBoxliteError error = {0};
+  assert(boxlite_image_move_tag(images, "quay.io/acme/app", "stable",
+                                NEW_DIGEST, on_moved, &request, &error) == Ok);
+  drain_until_done(runtime, &request.done);
+  return request;
+}
+
 static CBoxliteImageHandle *images_of(CBoxliteRuntime *runtime) {
   CBoxliteImageHandle *images = NULL;
   CBoxliteError error = {0};
@@ -282,6 +363,8 @@ static void test_rest_catalog(void) {
   printf("  ok: usage reads count, limit, and known bytes\n");
   assert(remove_image(runtime, images, "quay.io/acme/app", NULL).code == Ok);
   printf("  ok: remove sends DELETE with the name as one segment\n");
+  assert(move_tag(runtime, images).code == Ok);
+  printf("  ok: move_tag puts the digest and reads the moved image\n");
 
   boxlite_image_free(images);
   boxlite_runtime_free(runtime);
@@ -333,13 +416,19 @@ static void test_local_cache(void) {
   assert(read_usage(runtime, images).code == Unsupported);
   printf("  ok: usage is Unsupported\n");
 
+  assert(move_tag(runtime, images).code == Unsupported);
+  printf("  ok: move_tag is Unsupported\n");
+
   assert(boxlite_image_get(images, NULL, on_detail, NULL, &error) ==
          InvalidArgument);
   boxlite_error_free(&error);
   assert(boxlite_image_remove(images, "quay.io/acme/app", NULL, NULL, &error) ==
          InvalidArgument);
   boxlite_error_free(&error);
-  printf("  ok: a NULL name or callback is refused before queueing\n");
+  assert(boxlite_image_move_tag(images, "quay.io/acme/app", NULL, NEW_DIGEST,
+                                on_moved, NULL, &error) == InvalidArgument);
+  boxlite_error_free(&error);
+  printf("  ok: a NULL name, tag or callback is refused before queueing\n");
 
   boxlite_image_free(images);
   boxlite_runtime_free(runtime);

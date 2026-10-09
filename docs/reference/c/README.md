@@ -1040,6 +1040,7 @@ against either; pull is local only and usage REST only. Free the handle with
 | `boxlite_image_get()` | The cache entries under the name | The catalog entry with its versions |
 | `boxlite_image_remove()` | Forgets the name; layers stay | Removes the catalog entry; `InvalidState` while a box can boot from it |
 | `boxlite_image_usage()` | `Unsupported` | `count`, `limit`, `known_bytes` |
+| `boxlite_image_move_tag()` | `Unsupported`: a cache resolves a tag afresh for each new box | Points the tag at the version with that digest; boxes already created keep theirs |
 
 ```c
 BoxliteErrorCode boxlite_image_get(
@@ -1064,21 +1065,37 @@ BoxliteErrorCode boxlite_image_usage(
     void* user_data,
     CBoxliteError* out_error
 );
+
+BoxliteErrorCode boxlite_image_move_tag(
+    CBoxliteImageHandle* handle,
+    const char* name,
+    const char* tag,
+    const char* digest,         // "sha256:" and 64 lowercase hex digits
+    CBoxImageGetCb cb,          // the image as it now is, as for a get
+    void* user_data,
+    CBoxliteError* out_error
+);
 ```
 
-All three follow the post-and-drain contract of the info functions: `Ok`
+All four follow the post-and-drain contract of the info functions: `Ok`
 means queued, and the callback runs in `boxlite_runtime_drain()`. `name` is
 an image name such as `"docker.io/library/alpine"`, copied before the call
 returns. A name the runtime does not hold reaches the callback as `NotFound`.
 A reference with a tag or digest (`"quay.io/acme/app:v1"`) reaches it as
 `InvalidArgument`, since a remove takes every tag of the name. Locally, a box
 built from a removed image reads the image's configuration from the registry
-when it next starts.
+when it next starts. `boxlite_image_move_tag()` copies `tag` and `digest` as it
+does `name`; a tag the OCI distribution spec refuses or a malformed digest
+reaches the callback as `InvalidArgument` before anything is sent.
+
+A catalog fills every field below; a local cache fills a version's `tags` and
+leaves its optional times unset and `history` empty.
 
 | Type | Fields | Ownership |
 |------|--------|-----------|
-| `CImageDetail` | `name`, `tags`/`tags_count`, `curated` (non-zero for operator-provided images), `versions`/`versions_count` (newest first) | The callback owns it; free with `boxlite_free_image_detail()` |
-| `CImageVersion` | `digest`, `size_bytes` (valid when `has_size` is non-zero), `source_ref`, `recorded_at` (Unix seconds) | Owned by its `CImageDetail` |
+| `CImageDetail` | `name`, `tags`/`tags_count`, `curated` (non-zero for operator-provided images), `versions`/`versions_count` (newest first), `history`/`history_count` (latest tag moves, newest first) | The callback owns it; free with `boxlite_free_image_detail()` |
+| `CImageVersion` | `digest`, `size_bytes` (valid when `has_size` is non-zero), `source_ref`, `recorded_at` (Unix seconds), `tags`/`tags_count`, `last_used_at` and `upstream_missing_at` (Unix seconds, valid when `has_last_used_at` / `has_upstream_missing_at` is non-zero) | Owned by its `CImageDetail` |
+| `CImageTagEvent` | `tag`, `from_digest` (NULL when the tag was new), `to_digest`, `actor` (NULL when a pull recorded the tag), `moved_at` (Unix seconds) | Owned by its `CImageDetail` |
 | `CImageUsage` | `count`, `limit`, `known_bytes` | Borrowed for the callback; nothing to free |
 
 ```c
@@ -1397,6 +1414,7 @@ if (code != Ok) {
 | `boxlite_image_get()` | Queue a read of an image name's builds |
 | `boxlite_image_remove()` | Queue removal of an image name |
 | `boxlite_image_usage()` | Queue a read of the image allowance (REST runtimes) |
+| `boxlite_image_move_tag()` | Queue a move of an image tag (REST runtimes) |
 | `boxlite_image_free()` | Free the image handle |
 | `boxlite_free_image_detail()` | Free an image detail |
 | `boxlite_runtime_registries()` | Get the registry login handle (REST runtimes) |

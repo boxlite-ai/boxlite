@@ -309,7 +309,8 @@ typedef void (*CBoxImageListCb)(struct CImageInfoList*, CBoxliteError*, void*);
 // One build of an image, owned by its enclosing [`CImageDetail`].
 //
 // Sizes and times follow [`CImageInfo`]: `size_bytes` is meaningful only when
-// `has_size` is non-zero, and `recorded_at` is in Unix seconds (UTC).
+// `has_size` is non-zero, times are in Unix seconds (UTC), and an optional
+// time is meaningful only when its `has_` flag is non-zero.
 typedef struct CImageVersion {
   // Manifest digest, such as "sha256:…".
   char *digest;
@@ -321,14 +322,39 @@ typedef struct CImageVersion {
   char *source_ref;
   // When this build was recorded, in Unix seconds.
   int64_t recorded_at;
+  // The image's tags that point at this build: `tags_count` strings, null
+  // only when the count is zero.
+  char **tags;
+  int tags_count;
+  // When a box last started from this build.
+  int64_t last_used_at;
+  int has_last_used_at;
+  // When a pull found this build gone from its registry.
+  int64_t upstream_missing_at;
+  int has_upstream_missing_at;
 } CImageVersion;
+
+// One move of a tag, or the pull that first recorded it, owned by its
+// enclosing [`CImageDetail`]. Versions are named by digest.
+typedef struct CImageTagEvent {
+  char *tag;
+  // The build the tag pointed at before; null when the tag was new.
+  char *from_digest;
+  char *to_digest;
+  // Who moved the tag; null when a pull recorded it.
+  char *actor;
+  // When the tag moved, in Unix seconds.
+  int64_t moved_at;
+} CImageTagEvent;
 
 // An image name and every build of it the runtime holds.
 //
-// `tags` points to `tags_count` strings and `versions` to `versions_count`
-// entries, newest first; each array is null only when its count is zero. The
-// callback that receives a detail owns it, nested strings and arrays
-// included, and releases it once with `boxlite_free_image_detail`.
+// `tags` points to `tags_count` strings, `versions` to `versions_count`
+// entries, newest first, and `history` to `history_count` tag moves, the
+// latest first; each array is null only when its count is zero. A local cache
+// leaves `history` empty. The callback that receives a detail owns it, nested
+// strings and arrays included, and releases it once with
+// `boxlite_free_image_detail`.
 typedef struct CImageDetail {
   // Registry and repository without a tag, such as "docker.io/library/alpine".
   char *name;
@@ -339,6 +365,8 @@ typedef struct CImageDetail {
   int curated;
   struct CImageVersion *versions;
   int versions_count;
+  struct CImageTagEvent *history;
+  int history_count;
 } CImageDetail;
 
 // Image get completion. On success the callback owns the non-null detail and
@@ -995,6 +1023,28 @@ enum BoxliteErrorCode boxlite_image_usage(CBoxliteImageHandle *handle,
                                           void *user_data,
                                           CBoxliteError *out_error);
 
+// Queue a move of an image's tag onto the version with a digest, with the
+// same dispatch contract as [`boxlite_image_get`]. The callback receives the
+// image as it now is. Boxes already created keep the version they have.
+//
+// `tag` must be one the OCI distribution spec accepts and `digest` a
+// `sha256:` one; either malformed reaches the callback as `InvalidArgument`
+// before anything is sent. REST runtimes only: on a local runtime, which
+// resolves a tag afresh for each new box, the callback receives
+// `Unsupported`.
+//
+// # Safety
+//
+// As for [`boxlite_image_get`], with `tag` and `digest` held to the same
+// rules as `name`.
+enum BoxliteErrorCode boxlite_image_move_tag(CBoxliteImageHandle *handle,
+                                             const char *name,
+                                             const char *tag,
+                                             const char *digest,
+                                             CBoxImageGetCb cb,
+                                             void *user_data,
+                                             CBoxliteError *out_error);
+
 void boxlite_image_free(CBoxliteImageHandle *handle);
 
 void boxlite_free_image_info_list(struct CImageInfoList *list);
@@ -1005,8 +1055,8 @@ void boxlite_free_image_pull_result(struct CImagePullResult *result);
 //
 // # Safety
 //
-// `detail` must be null or a pointer handed to a `boxlite_image_get` callback
-// that has not already been freed.
+// `detail` must be null or a pointer handed to a `boxlite_image_get` or
+// `boxlite_image_move_tag` callback that has not already been freed.
 void boxlite_free_image_detail(struct CImageDetail *detail);
 
 enum BoxliteErrorCode boxlite_box_info(CBoxHandle *handle,
