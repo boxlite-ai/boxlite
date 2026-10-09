@@ -216,7 +216,9 @@ already uses in that organization gets the folded user's provider as a suffix,
 such as `ci (google-oauth2)`, numbered when that name is taken too. Boxes,
 volumes, and usage belong to organizations and stay where they are. The staying
 user keeps its own default organization; the moved one becomes its default only
-when it had none. Organizations are never merged.
+when it had none. Organizations are never merged. The dashboard reopens the
+organization last chosen, else the default one; someone in more than one sees
+them all under Organization Settings, where Switch opens another.
 
 The API caches a validated key with its owner for
 `API_KEY_VALIDATION_CACHE_TTL_SECONDS` (10 by default). Once the move commits,
