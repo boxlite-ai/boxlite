@@ -22,6 +22,7 @@ boxlite-vmm
 | Module | Planned responsibility |
 | --- | --- |
 | `vm` | VM facade and lifecycle coordination |
+| `boot` | Implemented for x86_64: ELF `vmlinux` decoding; placement in guest RAM, `boot_params`, command line, MP table and entry registers follow |
 | `config` | Machine configuration and boundary validation |
 | `error` | VMM errors that keep the hypervisor's cause chain |
 | `memory` | Backing-memory ownership and guest address layout |
@@ -33,6 +34,14 @@ Backend implementation and guest boot follow in M1. Virtio devices, the BoxLite
 engine adapter, engine selection, and `native` feature wiring follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
+
+## Kernel decoding
+
+On Linux x86_64, `boot::elf::parse(image)` decodes an ELF `vmlinux` into its
+`PT_LOAD` segments, sorted by physical address, plus the entry and span as a
+`KernelLayout`. It rejects anything but a little-endian x86-64 ELF64 executable
+with headers and file ranges inside the image, non-overlapping segments (BSS
+included) and an entry in file-backed executable bytes. Placement is next.
 
 ## Build
 
