@@ -40,7 +40,7 @@ import {
   PSC_NAT_CIDR,
   SUBNET_CIDR,
 } from '../stack/providers/gcp/network.ts'
-import { BOOT_DISK_TYPE, MACHINE as RUNNER_MACHINE } from '../stack/providers/gcp/runners.ts'
+import { DATA_DISK, DISK_TYPE as RUNNER_DISK, MACHINE as RUNNER_MACHINE } from '../stack/providers/gcp/runners.ts'
 import { apiPrefixRouteRules } from '../stack/providers/gcp/api.ts'
 import { isMissingNeg } from '../stack/providers/gcp/edge.ts'
 import { instanceFor } from 'naming'
@@ -1105,7 +1105,7 @@ test('every runner size is a family that can nest, and none is one that cannot',
 test('the boot disk is the one N4 attaches, and no Persistent Disk is asked for', () => {
   // N4 does not take Persistent Disk at all, so `pd-balanced` is a create-time
   // refusal rather than a slower disk.
-  assert.equal(BOOT_DISK_TYPE, 'hyperdisk-balanced')
+  assert.equal(RUNNER_DISK, 'hyperdisk-balanced')
   assert.equal(sourceOf('runners').includes("'pd-"), false)
 })
 
@@ -1117,7 +1117,7 @@ test('every GCE host in the bundle names a machine family and a disk that pair',
    * disk rather than the family that cannot take it.
    */
   const hosts = [
-    { module: 'runners', machines: Object.values(RUNNER_MACHINE), disk: BOOT_DISK_TYPE },
+    { module: 'runners', machines: Object.values(RUNNER_MACHINE), disk: RUNNER_DISK },
     { module: 'clickhouse', machines: Object.values(CLICKHOUSE_MACHINE), disk: CLICKHOUSE_DISK },
   ]
   for (const { module, machines, disk } of hosts) {
@@ -1129,10 +1129,65 @@ test('every GCE host in the bundle names a machine family and a disk that pair',
   }
 })
 
+test('every runner size states a data disk GCP will create and its machine can use', () => {
+  /*
+   * Hyperdisk Balanced bounds a disk's IOPS by its size and its throughput by its
+   * IOPS, and refuses a create outside them; an N4 caps what all of its Hyperdisk
+   * can draw together, and anything stated above that is billed and never reached.
+   * docs.cloud.google.com/compute/docs/disks/hd-types/hyperdisk-balanced and
+   * .../disks/hyperdisk-perf-limits.
+   */
+  const CAP: Record<string, { iops: number; throughputMiBps: number }> = {
+    'n4-standard-4': { iops: 30_000, throughputMiBps: 240 },
+    'n4-standard-8': { iops: 30_000, throughputMiBps: 480 },
+    'n4-standard-16': { iops: 80_000, throughputMiBps: 1_200 },
+  }
+  for (const [size, machine] of Object.entries(RUNNER_MACHINE)) {
+    const disk = DATA_DISK[size as keyof typeof DATA_DISK]
+    assert.ok(disk, `${size} has no data disk`)
+    const cap = CAP[machine]
+    assert.ok(cap, `no Hyperdisk cap is recorded for ${machine}`)
+    assert.ok(
+      disk.iops >= 3_000 && disk.iops <= Math.min(500 * disk.sizeGb, 160_000),
+      `${size}: ${disk.iops} IOPS is out of bounds for ${disk.sizeGb} GiB`,
+    )
+    assert.ok(
+      disk.throughputMiBps >= Math.max(140, disk.iops / 256) && disk.throughputMiBps <= Math.min(2_400, disk.iops / 4),
+      `${size}: ${disk.throughputMiBps} MiB/s is out of bounds for ${disk.iops} IOPS`,
+    )
+    assert.ok(
+      disk.iops <= cap.iops && disk.throughputMiBps <= cap.throughputMiBps,
+      `${size} states more than ${machine} can draw`,
+    )
+  }
+})
+
+test('a runner keeps box state on a disk no deploy shrinks, replaces or detaches', () => {
+  /*
+   * A disk grown online reads back larger than the size the code states: the
+   * provider replaces a disk whose size went down, and `protect` turns that into
+   * an error. The attachment is fixed at create because the provider applies any
+   * edit to one by detaching the disk from the running host.
+   */
+  const source = sourceOf('runners')
+  const disks = blocksOpenedBy(source, /new gcp\.compute\.Disk\(/g).map(withoutComments)
+  assert.equal(disks.length, 1, `expected one data disk per host, found ${disks.length}`)
+  const disk = disks[0] as string
+  assert.match(disk, /ignoreChanges: \['size', 'provisionedIops', 'provisionedThroughput'\]/)
+  assert.match(disk, /protect: true/)
+  assert.match(disk, /type: DISK_TYPE/)
+  assert.match(disk, /name: runnerDataDiskNameFor\(/)
+  const instances = blocksOpenedBy(source, /new gcp\.compute\.Instance\(/g).map(withoutComments)
+  assert.equal(instances.length, 1, `expected one host constructor, found ${instances.length}`)
+  const instance = instances[0] as string
+  assert.match(instance, /attachedDisks: \[\{ source: dataDisk\.id, deviceName: DATA_DISK_DEVICE \}\]/)
+  assert.match(instance, /ignoreChanges: \[[^\]]*'attachedDisks'[^\]]*\]/)
+})
+
 test('no minCpuPlatform is asked of a family that has exactly one', () => {
   // The floor N2 needed. On N4 naming an older platform is rejected rather than
   // read as a minimum already met. The argument, not the prose: the comment
-  // above `BOOT_DISK_TYPE` says why it is gone, and should keep saying so.
+  // above `DISK_TYPE` says why it is gone, and should keep saying so.
   assert.equal(/^\s*minCpuPlatform:/m.test(sourceOf('runners')), false)
 })
 

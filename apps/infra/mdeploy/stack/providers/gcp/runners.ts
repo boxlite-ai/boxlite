@@ -13,7 +13,7 @@
  *   2. `advancedMachineFeatures.enableNestedVirtualization`, explicitly. The
  *      family being capable is not the same as the device being present.
  *   3. The boot disk N4 actually takes, which is Hyperdisk and not Persistent
- *      Disk. `BOOT_DISK_TYPE` says why.
+ *      Disk. `DISK_TYPE` says why.
  *
  * `scripts/deploy/gcp/create-instance.sh` has been doing this by hand for a
  * developer's own box host. This module is that script's content, made part of
@@ -33,7 +33,7 @@
 
 import type { Placement } from '../../network.ts'
 import type { RunnerProvider, RunnerRequest, Runners } from '../../runners.ts'
-import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE, runnerPolicyName } from '../../runners.ts'
+import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE, runnerDataDiskNameFor, runnerPolicyName } from '../../runners.ts'
 import { renderRunnerBoot, type BootPlatform } from '../../runner-boot.ts'
 import {
   REGISTER_RUNNERS_COMMAND,
@@ -66,7 +66,26 @@ export const MACHINE = { small: 'n4-standard-4', medium: 'n4-standard-8', large:
  * needed to be held above its floor) is rejected rather than treated as a
  * minimum that is already met.
  */
-export const BOOT_DISK_TYPE = 'hyperdisk-balanced'
+export const DISK_TYPE = 'hyperdisk-balanced'
+
+/**
+ * The disk each host's box state is to live on, by size, so the boot disk can
+ * hold only the OS and the runner.
+ *
+ * Twice the space of the 100 GB boot disk that held it before, at the
+ * performance GCP's defaults gave that disk (6 IOPS per GiB over 3,000; 1.5 MiB/s
+ * per GiB over 140). Throughput is held to what an n4-*-4 can draw from all its
+ * Hyperdisk: more is billed and never reached. Stated rather than defaulted,
+ * because a default is computed once at create and a disk grown later keeps it.
+ */
+export const DATA_DISK = {
+  small: { sizeGb: 200, iops: 3_600, throughputMiBps: 240 },
+  medium: { sizeGb: 200, iops: 3_600, throughputMiBps: 290 },
+  large: { sizeGb: 200, iops: 3_600, throughputMiBps: 290 },
+} as const
+
+/** What the data disk is attached as, so a host finds it at `/dev/disk/by-id/google-<this>`. */
+export const DATA_DISK_DEVICE = 'boxlite-data'
 
 const IMAGE = 'ubuntu-os-cloud/ubuntu-2404-lts-amd64'
 
@@ -355,6 +374,27 @@ udevadm trigger --name-match=kvm || true`,
         })
       })
 
+      /*
+       * The data disk for this host's box state. Size and performance are set at
+       * create and never again by a deploy: the disk is grown online, outside a
+       * deploy, and the provider replaces a disk whose size went down, which is
+       * how a grown disk reads against the size here. `protect` turns any such
+       * replacement into an error rather than an empty disk.
+       */
+      const dataDisk = new gcp.compute.Disk(
+        slot.resourceName.replace('Runner', 'RunnerData'),
+        {
+          name: runnerDataDiskNameFor({ app: $app.name, stage: $app.stage, host: slot.nameTag }),
+          project,
+          zone,
+          type: DISK_TYPE,
+          size: DATA_DISK[request.size].sizeGb,
+          provisionedIops: DATA_DISK[request.size].iops,
+          provisionedThroughput: DATA_DISK[request.size].throughputMiBps,
+        },
+        { ignoreChanges: ['size', 'provisionedIops', 'provisionedThroughput'], protect: true },
+      )
+
       return new gcp.compute.Instance(
         slot.resourceName,
         {
@@ -365,8 +405,10 @@ udevadm trigger --name-match=kvm || true`,
           // Explicitly, or the device is absent on a machine that can host it.
           advancedMachineFeatures: { enableNestedVirtualization: request.nestedVirtualization },
           bootDisk: {
-            initializeParams: { image: IMAGE, size: request.rootDiskGb, type: BOOT_DISK_TYPE },
+            initializeParams: { image: IMAGE, size: request.rootDiskGb, type: DISK_TYPE },
           },
+          // Attached at create only: see `ignoreChanges` below.
+          attachedDisks: [{ source: dataDisk.id, deviceName: DATA_DISK_DEVICE }],
           networkInterfaces: [
             {
               subnetwork: placement.subnetwork,
@@ -426,10 +468,13 @@ udevadm trigger --name-match=kvm || true`,
           deletionProtection: true,
         },
         {
-          // The boot script only ever runs once, and a newer image or a version
-          // bump must not replace a machine with running boxes on it. Both are
-          // landed on a live host out of band, one at a time.
-          ignoreChanges: ['bootDisk', 'metadataStartupScript'],
+          // The boot script is the one written at create, and a newer image or a
+          // version bump must not replace a machine with running boxes on it: both
+          // are landed on a live host out of band, one at a time. The data disk is
+          // fixed at create too, because the provider applies any edit to an
+          // attachment by detaching the disk from the running host. A host created
+          // before it existed never gets it until it is destroyed and recreated.
+          ignoreChanges: ['bootDisk', 'metadataStartupScript', 'attachedDisks'],
           protect: true,
           // The read grant among them: a host whose boot script fetches the
           // staged object before the binding exists downloads nothing, and

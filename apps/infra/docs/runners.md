@@ -69,7 +69,8 @@ Review that the diff creates the additional host without replacing existing host
 check registration, target version, capacity and a test box on the new host. Extra runners have
 individual registration tokens. Machine size and disk size come from `deploy.runners` in the stage declaration.
 
-Scale-in is a separate retirement operation: reducing a count attempts to delete a protected host.
+Scale-in is a separate retirement operation: reducing a count attempts to delete a protected host,
+and on GCP its protected data disk.
 Drain or migrate boxes and preserve required local data before designing a reviewed retirement.
 Do not disable protection merely to make an unexpected diff pass.
 
