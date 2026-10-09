@@ -13,7 +13,20 @@ import { cn } from '@/lib/utils'
 import React, { useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
-const VERSION_GRID = 'grid grid-cols-[1.4fr_0.6fr_1.4fr_0.7fr] items-center gap-3 px-2'
+const VERSION_GRID = 'grid grid-cols-[1.3fr_0.8fr_0.5fr_1.2fr_0.6fr_0.6fr] items-center gap-3 px-2'
+const HISTORY_GRID = 'grid grid-cols-[0.7fr_1.4fr_0.9fr_0.6fr] items-center gap-3 px-2'
+// The most tag events an image's detail carries, newest first: the API's
+// IMAGE_HISTORY_LIMIT. A full page means older events exist and are not shown.
+const HISTORY_LIMIT = 100
+
+/** A version as the history names it: its short digest, or its id when the detail no longer lists it. */
+function versionLabel(versionId: string | null, digests: Map<string, string>): string {
+  if (versionId === null) {
+    return 'new'
+  }
+  const digest = digests.get(versionId)
+  return digest ? `${digest.slice(0, 19)}…` : versionId
+}
 
 function Field({ label, value, title }: { label: string; value: React.ReactNode; title?: string }) {
   return (
@@ -27,17 +40,20 @@ function Field({ label, value, title }: { label: string; value: React.ReactNode;
 }
 
 /**
- * One image and the builds recorded for it.
+ * One image, the builds recorded for it, and where its tags have pointed.
  *
- * Each version answers the question the list cannot: which build a box booted
- * from, how big its manifest said it was, and which upstream reference the
- * caller actually typed to get it. The last one is provenance rather than an
- * address — the tag it names may have moved upstream since.
+ * Each version answers the question the list cannot: which build a box boots
+ * from, which tags point at it now, when a box last used it, and whether its
+ * registry was found not to have it any more. The reference the caller typed
+ * is provenance rather than an address — the tag it names may have moved
+ * upstream since. The history below is the latest moves of its tags, newest
+ * first.
  */
 const ImageDetails: React.FC = () => {
   const navigate = useNavigate()
   const { idOrRef } = useParams<{ idOrRef: string }>()
   const { data: image, isLoading, error } = useImageQuery(idOrRef)
+  const digests = new Map((image?.versions ?? []).map((version) => [version.id, version.digest]))
 
   useEffect(() => {
     if (error) handleApiError(error, 'Failed to fetch image')
@@ -96,8 +112,10 @@ const ImageDetails: React.FC = () => {
               )}
             >
               <span>Digest</span>
+              <span>Tags</span>
               <span>Size</span>
               <span>Pulled from</span>
+              <span>Last used</span>
               <span>Recorded</span>
             </div>
 
@@ -110,8 +128,23 @@ const ImageDetails: React.FC = () => {
             ) : (
               image.versions.map((version) => (
                 <div key={version.id} className={cn(VERSION_GRID, 'border-b border-border/60 py-[13px] text-body')}>
-                  <span title={version.digest} className="truncate font-mono text-meta text-foreground">
-                    {version.digest}
+                  <span className="flex min-w-0 flex-col">
+                    <span title={version.digest} className="truncate font-mono text-meta text-foreground">
+                      {version.digest}
+                    </span>
+                    {/* A pull found the registry no longer has it. Runners that
+                        cached it still start it; elsewhere it cannot be pulled. */}
+                    {version.upstreamMissingAt && (
+                      <span
+                        title={`A pull found it gone from its registry ${timeAgo(version.upstreamMissingAt)}`}
+                        className="font-mono text-label uppercase text-destructive"
+                      >
+                        Needs a new pull
+                      </span>
+                    )}
+                  </span>
+                  <span className="truncate font-mono text-meta text-muted-foreground">
+                    {version.tags.length > 0 ? version.tags.join(', ') : '—'}
                   </span>
                   <span className="font-mono text-meta tabular-nums text-muted-foreground">
                     {formatBytes(version.sizeBytes)}
@@ -121,9 +154,63 @@ const ImageDetails: React.FC = () => {
                   <span title={version.sourceRef} className="truncate font-mono text-meta text-muted-foreground">
                     {version.sourceRef}
                   </span>
+                  {/* Null is a version recorded before last use was tracked:
+                      unknown, which "never" would misstate. */}
+                  <span className="font-mono text-meta text-muted-foreground">
+                    {version.lastUsedAt ? timeAgo(version.lastUsedAt) : '—'}
+                  </span>
                   <span className="font-mono text-meta text-muted-foreground">{timeAgo(version.createdAt)}</span>
                 </div>
               ))
+            )}
+
+            <h2 className="mt-[26px] mb-2 px-2 font-mono text-label uppercase text-muted-foreground">History</h2>
+            <div
+              className={cn(
+                HISTORY_GRID,
+                'border-b border-border pb-2 font-mono text-label uppercase text-muted-foreground',
+              )}
+            >
+              <span>Tag</span>
+              <span>Moved</span>
+              <span>By</span>
+              <span>When</span>
+            </div>
+            {image.history.length === 0 ? (
+              <p className="px-2 py-[16px] font-mono text-meta text-muted-foreground">
+                {/* A pull writes a tag's first event, so tags with no history
+                    were recorded before history was kept; no event is backfilled. */}
+                {image.curated
+                  ? 'Curated images have no tags to move; the operator pins their reference.'
+                  : image.tags.length > 0
+                    ? 'No history yet: these tags were recorded before tag moves were kept.'
+                    : 'No tag has been recorded yet.'}
+              </p>
+            ) : (
+              image.history.map((event) => (
+                <div
+                  key={`${event.tagName}-${event.createdAt}-${event.toVersionId}`}
+                  className={cn(HISTORY_GRID, 'border-b border-border/60 py-[13px] text-body')}
+                >
+                  <span className="truncate font-mono text-meta text-foreground">{event.tagName}</span>
+                  <span className="truncate font-mono text-meta text-muted-foreground">
+                    {versionLabel(event.fromVersionId, digests)} → {versionLabel(event.toVersionId, digests)}
+                  </span>
+                  {/* No actor: a box pulling the image recorded the tag. */}
+                  <span
+                    title={event.actorId ?? undefined}
+                    className="truncate font-mono text-meta text-muted-foreground"
+                  >
+                    {event.actorId ?? 'a pull'}
+                  </span>
+                  <span className="font-mono text-meta text-muted-foreground">{timeAgo(event.createdAt)}</span>
+                </div>
+              ))
+            )}
+            {image.history.length >= HISTORY_LIMIT && (
+              <p className="px-2 py-[12px] font-mono text-meta text-muted-foreground">
+                Showing the latest {HISTORY_LIMIT} events; older ones are not listed.
+              </p>
             )}
           </div>
         </>
