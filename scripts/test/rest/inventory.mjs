@@ -74,6 +74,7 @@ const operationSignals = {
   getImage: [/getimage/, /images\(\)\.get/, /images\.get\(/, /\/images\/\{/],
   getImageUsage: [/getimageusage/, /images\.usage\(/, /\/images\/usage\b/],
   removeImage: [/removeimage/, /images\.remove\(/],
+  moveImageTag: [/moveimagetag/, /images\.move_tag\(/, /images\.movetag\(/, /movetag\(/, /\/tags\/\{/],
   listRegistries: [/listregistries/, /registries\.list\(/, /\/registries\b/],
   createRegistry: [/createregistry/, /registries\.create\(/],
   removeRegistry: [/removeregistry/, /registries\.remove\(/],

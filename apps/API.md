@@ -385,7 +385,8 @@ the network routes — requires `write:boxes`; deleting a box requires
 `delete:boxes`. Box reads (list, get, head, execution status, metrics) carry no
 permission and are reached by any member, because the model has no `read:boxes`.
 Volume routes require `read:volumes`, `write:volumes`, or `delete:volumes` to
-match, and registry login routes `read:registries`, `write:registries`, or
+match, image routes `read:images`, `write:images`, or `delete:images`, and
+registry login routes `read:registries`, `write:registries`, or
 `delete:registries`. Attaching a managed volume while creating a box is authorized
 independently of `write:boxes`: the caller must also hold `read:volumes` and
 `write:volumes`, so a box-only credential cannot reach another's volume data
@@ -455,6 +456,22 @@ the portable contract, which the runner's own route registration enforces.
 | `GET`    | `/api/v1[/{prefix}]/volumes`                            | Lists volumes in the organization.            |
 | `GET`    | `/api/v1[/{prefix}]/volumes/{volumeId}`                 | Gets a volume by ID.                          |
 | `DELETE` | `/api/v1[/{prefix}]/volumes/{volumeId}?force={boolean}` | Deletes a volume, optionally forcing removal. |
+
+</details>
+
+<details>
+<summary><b>Images</b> · 5 routes</summary>
+
+| Method   | Path                                          | What it does                                                                                           |
+| -------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `GET`    | `/api/v1[/{prefix}]/images`                   | Lists one row per reference the organization can boot from; curated images are left out.               |
+| `GET`    | `/api/v1[/{prefix}]/images/usage`             | Counts held images against the limit and sums the sizes their versions declared.                       |
+| `GET`    | `/api/v1[/{prefix}]/images/{name}`            | Gets an image: its versions with their tags, last use and upstream state, and the last 100 tag events. |
+| `PUT`    | `/api/v1[/{prefix}]/images/{name}/tags/{tag}` | Points a tag at the version with a digest and records the move; needs `write:images`.                  |
+| `DELETE` | `/api/v1[/{prefix}]/images/{name}`            | Removes the catalog entry, not the bytes, unless a box can still boot from it.                         |
+
+The same catalog as `/api/images`, in the box API's snake_case shapes and with
+versions named by digest, for SDK clients.
 
 </details>
 

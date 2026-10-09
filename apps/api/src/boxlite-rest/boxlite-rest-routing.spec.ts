@@ -6,7 +6,7 @@
 
 import { PATH_METADATA } from '@nestjs/common/constants'
 import { Test } from '@nestjs/testing'
-import type { INestApplication } from '@nestjs/common'
+import { ValidationPipe, type INestApplication } from '@nestjs/common'
 import type { AddressInfo } from 'net'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
@@ -85,6 +85,8 @@ describe('BoxLite REST routing', () => {
 
     app = moduleRef.createNestApplication()
     app.setGlobalPrefix('api')
+    // As main.ts validates every body, so a DTO's rules hold on its route here.
+    app.useGlobalPipes(new ValidationPipe({ transform: true }))
     await app.listen(0)
   }
 
@@ -179,7 +181,9 @@ describe('BoxLite REST routing', () => {
 
   it('takes an encoded image name as one path parameter', async () => {
     const catalog = {
-      get: jest.fn().mockResolvedValue({ name: 'quay.io/acme/app', tags: [], curated: false, versions: [] }),
+      get: jest
+        .fn()
+        .mockResolvedValue({ name: 'quay.io/acme/app', tags: [], curated: false, versions: [], history: [] }),
     }
     await startApp([BoxliteImageController], [{ provide: ImageCatalogService, useValue: catalog }])
 
@@ -187,6 +191,43 @@ describe('BoxLite REST routing', () => {
 
     expect(response.status).toBe(200)
     expect(catalog.get).toHaveBeenCalledWith({ id: 'org-123' }, 'quay.io/acme/app')
+  })
+
+  it('moves a tag on an encoded image name, with or without a routing prefix', async () => {
+    const digest = `sha256:${'a'.repeat(64)}`
+    const catalog = {
+      moveTag: jest
+        .fn()
+        .mockResolvedValue({ name: 'quay.io/acme/app', tags: [], curated: false, versions: [], history: [] }),
+    }
+    await startApp([BoxliteImageController], [{ provide: ImageCatalogService, useValue: catalog }])
+    const address = app.getHttpServer().address() as AddressInfo
+
+    for (const prefix of ['', '/default']) {
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}/api/v1${prefix}/images/quay.io%2Facme%2Fapp/tags/stable`,
+        { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ digest }) },
+      )
+      expect(response.status).toBe(200)
+    }
+    expect(catalog.moveTag).toHaveBeenCalledTimes(2)
+    expect(catalog.moveTag).toHaveBeenCalledWith({ id: 'org-123' }, 'quay.io/acme/app', 'stable', { digest }, undefined)
+  })
+
+  it('refuses a tag move whose body names no sha256 digest before the catalog is asked', async () => {
+    const catalog = { moveTag: jest.fn() }
+    await startApp([BoxliteImageController], [{ provide: ImageCatalogService, useValue: catalog }])
+    const address = app.getHttpServer().address() as AddressInfo
+
+    for (const body of [{}, { digest: 'latest' }, { digest: `sha256:${'A'.repeat(64)}` }]) {
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/images/quay.io%2Facme%2Fapp/tags/stable`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      expect(response.status).toBe(400)
+    }
+    expect(catalog.moveTag).not.toHaveBeenCalled()
   })
 
   it('answers registry logins with or without a routing prefix', async () => {

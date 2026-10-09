@@ -207,6 +207,11 @@ export class ImageCatalogService {
       )
     }
     assertTagName(tagName)
+    // TypeORM drops a where key whose value is undefined, so a selector that
+    // names nothing would match whichever version of the image comes first.
+    if (!('versionId' in target ? target.versionId : target.digest)) {
+      throw new BadRequestError('A tag moves to a version named by its id or its digest')
+    }
 
     const image = await this.findRow(organization, idOrRef)
     if (!image) {

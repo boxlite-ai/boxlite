@@ -27,7 +27,7 @@ const FALLBACK_ALLOWLIST = ['docker.io', 'quay.io', 'gcr.io', 'public.ecr.aws']
 /** A registry ref is at most this long; anything beyond is a probe, not a name. */
 const MAX_REF_LENGTH = 512
 
-const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/
+export const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/
 const TAG_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/
 // Lowercase alphanumerics, separated by a single `.`, `_`, `__` or `-`. This is
 // what rejects `..`, `../`, a leading separator, and an empty segment.

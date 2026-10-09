@@ -22,7 +22,7 @@ import { ImageVersion } from '../entities/image-version.entity'
 import { ImageVersionState } from '../enums/image-version-state.enum'
 import { IMAGE_HISTORY_LIMIT } from '../dto/image.dto'
 import { CuratedImagePinService } from './curated-image-pin.service'
-import { ImageCatalogService } from './image-catalog.service'
+import { ImageCatalogService, VersionSelector } from './image-catalog.service'
 import { ImageRegistrarService } from './image-registrar.service'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
@@ -476,6 +476,17 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
 
       expect(detail.versions.find((version) => version.id === versionOf(OTHER_DIGEST))?.tags).toEqual(['v1', 'v2'])
       expect(detail.history[0]).toMatchObject({ tagName: 'v1', fromDigest: DIGEST, toDigest: OTHER_DIGEST })
+    })
+
+    it('refuses a selector that names no version, rather than taking the first', async () => {
+      const { detail: before } = await imageWithVersions(DIGEST, OTHER_DIGEST)
+
+      for (const target of [{ digest: undefined }, { versionId: undefined }, { digest: '' }]) {
+        await expect(
+          catalog.moveTag(ORG, 'quay.io/acme/app', 'v2', target as unknown as VersionSelector, ACTOR),
+        ).rejects.toThrow(BadRequestError)
+      }
+      expect((await catalog.get(ORG, 'quay.io/acme/app')).history).toEqual(before.history)
     })
 
     it('refuses a digest no version of the image has', async () => {

@@ -1234,6 +1234,48 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  /{prefix}/images/{image_name}/tags/{tag}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/imageName"
+      - $ref: "#/components/parameters/imageTag"
+
+    put:
+      operationId: moveImageTag
+      summary: Point a tag at a build
+      description: |
+        Point a tag of the image at the build with this digest, creating the
+        tag if it does not exist. Boxes created afterwards with the tag boot
+        that build; boxes already created keep what they booted, and nothing
+        is pulled. Every move is kept in the image's history. A digest that is
+        not a ready build of this image, a tag OCI would refuse, or an image
+        the operator provides is refused with `InvalidArgumentError`. A server
+        that keeps no catalog of tags answers `UnsupportedError`.
+      tags: [Images]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MoveImageTagRequest"
+      responses:
+        "200":
+          description: The image as it now is
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageDetail"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "501":
+          description: This server keeps no catalog of tags
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   # -------------------------------------------------------------------------
   # Registries
   # -------------------------------------------------------------------------
@@ -1431,6 +1473,15 @@ components:
       schema:
         type: string
       example: "quay.io%2Facme%2Fapp"
+
+    imageTag:
+      name: tag
+      in: path
+      required: true
+      description: Tag to point at the build
+      schema:
+        type: string
+      example: stable
 
     registryId:
       name: registry_id
@@ -2731,6 +2782,13 @@ components:
           description: Each build held, newest first
           items:
             $ref: "#/components/schemas/ImageVersion"
+        history:
+          type: array
+          description: |
+            Where each tag has pointed, newest first. A server may keep only
+            the most recent moves; one that keeps no catalog answers it empty.
+          items:
+            $ref: "#/components/schemas/ImageTagEvent"
 
     ImageVersion:
       type: object
@@ -2749,6 +2807,56 @@ components:
         recorded_at:
           type: string
           format: date-time
+        tags:
+          type: array
+          description: Tags that point at this build now
+          items:
+            type: string
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When a box last started from this build. Null when that is not known
+        upstream_missing_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            When a pull first found the build gone from its registry. Runners
+            that cached it still start it. Null while it is not known to be gone.
+
+    ImageTagEvent:
+      type: object
+      description: One move of a tag, or the pull that first recorded it
+      required: [tag, to_digest, moved_at]
+      properties:
+        tag:
+          type: string
+          example: stable
+        from_digest:
+          type: string
+          nullable: true
+          description: Build the tag pointed at before. Null when the tag did not exist yet
+        to_digest:
+          type: string
+          description: Build the tag points at from then on
+        actor:
+          type: string
+          nullable: true
+          description: Who moved the tag. Null when a pull recorded it
+        moved_at:
+          type: string
+          format: date-time
+
+    MoveImageTagRequest:
+      type: object
+      required: [digest]
+      properties:
+        digest:
+          type: string
+          description: Manifest digest of a build the image holds
+          pattern: "^sha256:[a-f0-9]{64}$"
+          example: "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
 
     ImageUsage:
       type: object
