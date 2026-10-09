@@ -9,12 +9,9 @@
  * script, and neither is a resource the engine can re-run when a password
  * rotates.
  *
- * So the self-hosted path here does the reconcile from the *startup script*
- * instead, and accepts what that costs: the schema is applied at boot rather
- * than on every deploy, and a rotated password needs a restart rather than an
- * apply. That is a real difference in behaviour and it is written down rather
- * than smoothed over — the alternative was a local command that shells out to
- * `gcloud compute ssh`, which is a person's tool wearing a resource's clothes.
+ * Initial schema and accounts are reconciled at boot. Retention also has an
+ * OS Config policy, so changed TTLs reach existing hosts without SSH or restart.
+ * Other schema and account operations remain in the boot script.
  *
  * `managed` and `disabled` behave exactly as they do on AWS, because neither
  * touches a machine.
@@ -69,15 +66,37 @@ const clickHouseSecret = (resourceName: string, project: string, secretId: strin
 }
 
 /**
- * The OTLP schema, base64 so that one quoting problem cannot become two.
- *
- * The same vendored file the AWS side applies over SSM: seven tables and their
- * retention, defined once and applied from both clouds. The collector creates
- * none of it — `create_schema` is false in `apps/otel-collector/config.yaml` —
- * so a host that skipped this answers every insert with `UNKNOWN_TABLE` while
- * the instance, the firewall and the deploy all look healthy.
+ * Derive table names and timestamp expressions from the initial schema so
+ * retention enforcement cannot drift from the bundled table definitions.
  */
-const SCHEMA_BASE64 = Buffer.from(renderClickHouseSchema()).toString('base64')
+export const clickHouseRetentionPolicy = (retentionHours: number | undefined, adminRef: string) => {
+  const tables = [...renderClickHouseSchema(retentionHours).matchAll(
+    /CREATE TABLE IF NOT EXISTS [`"]otel[`"]\.[`"](\w+)[`"].*?\bTTL ([^\n]+)/gs,
+  )]
+  if (tables.length !== 7) throw new Error('ClickHouse retention requires all seven telemetry tables')
+  const predicates = tables.map(([, table, ttl]) =>
+    `(name = '${table}' AND position(create_table_query, 'TTL ${ttl.trim().replace(/INTERVAL (\d+) HOUR/, 'toIntervalHour($1)')}') > 0)`,
+  ).join(' OR ')
+  const auth = `#!/bin/bash
+set -euo pipefail
+CLICKHOUSE_PASSWORD=$(gcloud secrets versions access '${adminRef}' --format='get(payload.data)' | base64 -d)
+export CLICKHOUSE_PASSWORD
+check_ttl() {
+  clickhouse-client --receive_timeout=60 --query "SELECT count() FROM system.tables WHERE database = 'otel' AND (${predicates})"
+}
+`
+  return {
+    validate: `${auth}count=$(check_ttl)
+if [ "$count" = 7 ]; then exit 100; else exit 101; fi
+`,
+    enforce: `${auth}clickhouse-client --receive_timeout=60 --multiquery <<'SQL'
+${tables.map(([, table, ttl]) => `ALTER TABLE otel.${table} MODIFY TTL ${ttl.trim()};`).join('\n')}
+SQL
+test "$(check_ttl)" = 7
+exit 100
+`,
+  }
+}
 
 /**
  * What the host does at every boot: mount its disk, install the server, then
@@ -94,6 +113,7 @@ export const clickHouseStartupScript = ({
   adminRef,
   writerRef,
   readerRef,
+  retentionHours,
 }: {
   database: string
   writerUsername: string
@@ -102,6 +122,7 @@ export const clickHouseStartupScript = ({
   adminRef: string
   writerRef: string
   readerRef: string
+  retentionHours?: number
 }): string => `#!/bin/bash
 set -euo pipefail
 # The console as well as the file. Nobody can SSH to this host — OS Login
@@ -192,7 +213,7 @@ until clickhouse-client --query 'SELECT 1' >/dev/null 2>&1; do sleep 2; done
 # there is no SSM here, so this is where the reconcile lives. The tables come
 # first because the grants below name them.
 mkdir -p /opt/boxlite-clickhouse
-printf '%s' '${SCHEMA_BASE64}' | base64 -d > /opt/boxlite-clickhouse/otel-schema.sql
+printf '%s' '${Buffer.from(renderClickHouseSchema(retentionHours)).toString('base64')}' | base64 -d > /opt/boxlite-clickhouse/otel-schema.sql
 clickhouse-client --multiquery < /opt/boxlite-clickhouse/otel-schema.sql
 
 clickhouse-client --query "CREATE DATABASE IF NOT EXISTS ${database}"
@@ -357,6 +378,7 @@ export const gcpClickHouseProvider =
           adminRef,
           writerRef,
           readerRef,
+          retentionHours: request.retentionHours,
         }),
     )
 
@@ -381,11 +403,14 @@ export const gcpClickHouseProvider =
         ],
         serviceAccount: { email: host.email, scopes: ['cloud-platform'] },
         metadataStartupScript: startupScript,
+        metadata: { 'enable-osconfig': 'TRUE' },
+        labels: { 'boxlite-clickhouse': hostName },
         // Telemetry storage is not a machine to be replaced casually, and a
         // newer image on an unrelated deploy would take the history with it.
         allowStoppingForUpdate: false,
       },
-      { ignoreChanges: ['bootDisk'], dependsOn: [...access, ...dependsOn] },
+      // This property forces VM replacement; existing hosts receive TTL changes through OS Config.
+      { ignoreChanges: ['bootDisk', 'metadataStartupScript'], dependsOn: [...access, ...dependsOn] },
     )
 
     const firewall = new gcp.compute.Firewall('ClickHouseFirewall', {
@@ -408,6 +433,34 @@ export const gcpClickHouseProvider =
       sourceRanges: callerRanges,
       targetServiceAccounts: [host.email],
     })
+
+    const retention = admin.version.name.apply((ref: string) => clickHouseRetentionPolicy(request.retentionHours, ref))
+    const retentionPolicy = new gcp.osconfig.OsPolicyAssignment('ClickHouseRetention', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'clickhouse-retention' }),
+      project,
+      location: zone,
+      instanceFilter: { inclusionLabels: [{ labels: { 'boxlite-clickhouse': hostName } }] },
+      osPolicies: [
+        {
+          id: 'telemetry-retention',
+          mode: 'ENFORCEMENT',
+          resourceGroups: [
+            {
+              resources: [
+                {
+                  id: 'table-ttl',
+                  exec: {
+                    validate: { interpreter: 'NONE', script: retention.apply((scripts: { validate: string }) => scripts.validate) },
+                    enforce: { interpreter: 'NONE', script: retention.apply((scripts: { enforce: string }) => scripts.enforce) },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      rollout: { disruptionBudget: { fixed: 1 }, minWaitDuration: '0s' },
+    }, { dependsOn: [instance, ...access] })
 
     /*
      * Published to the consumer in another network, always.
@@ -448,6 +501,6 @@ export const gcpClickHouseProvider =
         credentialVersion: reader.version.name,
       },
       id: instance.id,
-      ready: [instance, firewall],
+      ready: [instance, firewall, retentionPolicy],
     }
   }

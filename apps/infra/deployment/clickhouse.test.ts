@@ -8,16 +8,30 @@ import * as clickHouseConfig from './clickhouse.js'
 
 const { CLICKHOUSE_STAGE_CONFIG_KEYS, resolveClickHouseConfig } = clickHouseConfig
 
+test('self-hosted retention defaults to 30 days and accepts an hour override', () => {
+  const hours = (environment: NodeJS.ProcessEnv) => {
+    const config = resolveClickHouseConfig(environment)
+    return config.mode === 'self-hosted' ? config.retentionHours : undefined
+  }
+  assert.equal(hours({}), 720)
+  assert.equal(hours({ CLICKHOUSE_RETENTION_HOURS: '168' }), 168)
+  for (const value of ['0', '-1', '1.5', 'NaN', '1; SELECT 1', '9007199254740992']) {
+    assert.throws(() => resolveClickHouseConfig({ CLICKHOUSE_RETENTION_HOURS: value }), /positive.*integer/)
+  }
+})
+
 test('defaults to one active self-hosted backend', () => {
   assert.deepEqual(resolveClickHouseConfig({}), {
     mode: 'self-hosted',
     active: true,
+    retentionHours: 720,
   })
 })
 
-test('exposes only the backend selector and managed connection', () => {
+test('exposes the backend selector, retention and managed connection', () => {
   assert.deepEqual(CLICKHOUSE_STAGE_CONFIG_KEYS, [
     'CLICKHOUSE_MODE',
+    'CLICKHOUSE_RETENTION_HOURS',
     'CLICKHOUSE_URL',
     'CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN',
     'CLICKHOUSE_READER_PASSWORD_SECRET_ARN',
@@ -161,7 +175,6 @@ test('rejects removed tuning, multi-phase, and plaintext-secret inputs', () => {
   for (const key of [
     'CLICKHOUSE_SELF_HOSTED_INSTANCE_TYPE',
     'CLICKHOUSE_SELF_HOSTED_DATA_GB',
-    'CLICKHOUSE_RETENTION_HOURS',
     'CLICKHOUSE_WRITER_USERNAME',
     'CLICKHOUSE_READER_USERNAME',
     'CLICKHOUSE_DATABASE',

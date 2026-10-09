@@ -89,7 +89,8 @@ test('leaves schema reconciliation to the post-boot readiness barrier', () => {
 
 test('vendors every v0.144 telemetry table', () => {
   const schema = renderClickHouseSchema()
-  assert.match(schema, /INTERVAL 72 HOUR/)
+  assert.match(schema, /INTERVAL 720 HOUR/)
+  assert.equal((renderClickHouseSchema(168).match(/INTERVAL 168 HOUR/g) || []).length, 7)
   for (const table of [
     'otel_logs',
     'otel_traces',
@@ -130,8 +131,10 @@ test('loads the schema after SST relocates the module under .sst/platform', asyn
   const bundledModule = join(platformDirectory, 'clickhouse-host.ts')
   mkdirSync(platformDirectory, { recursive: true })
   copyFileSync(new URL('../mdeploy/stack/clickhouse-host.ts', import.meta.url), bundledModule)
+  mkdirSync(join(directory, 'shared'))
+  copyFileSync(new URL('../shared/clickhouse-retention.ts', import.meta.url), join(directory, 'shared/clickhouse-retention.ts'))
 
   const relocated = await import(pathToFileURL(bundledModule).href)
 
-  assert.match(relocated.renderClickHouseSchema(), /INTERVAL 72 HOUR/)
+  assert.match(relocated.renderClickHouseSchema(), /INTERVAL 720 HOUR/)
 })

@@ -514,13 +514,13 @@ const REFUSED_STORES: RefusedStore[] = [
     // value. The manifest proves the stage was configured under the older contract, so deploying
     // it without a fresh bootstrap would apply a topology the operator never reviewed.
     description: 'a manifest naming removed ClickHouse configuration',
-    manifest: ['STACK_DOMAIN', 'CLICKHOUSE_RETENTION_HOURS'],
+    manifest: ['STACK_DOMAIN', 'CLICKHOUSE_SELF_HOSTED_DATA_GB'],
     values: {
       STACK_DOMAIN: 'configured.example.test',
-      CLICKHOUSE_RETENTION_HOURS: '168',
+      CLICKHOUSE_SELF_HOSTED_DATA_GB: '100',
     },
     digest: 'correct',
-    refusal: /CLICKHOUSE_RETENTION_HOURS is no longer supported/,
+    refusal: /CLICKHOUSE_SELF_HOSTED_DATA_GB is no longer supported/,
   },
 ]
 

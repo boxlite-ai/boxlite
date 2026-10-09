@@ -79,6 +79,12 @@ const inputs = (overrides: Partial<StackInputs> = {}): StackInputs => ({
   ...overrides,
 })
 
+test('the configured retention reaches the ClickHouse provider', () => {
+  const providers = bundle()
+  deployStack({ providers: providers.providers, config, inputs: inputs({ clickHouseRetentionHours: 168 }) })
+  assert.equal(providers.seen.clickhouse.request.retentionHours, 168)
+})
+
 /**
  * A fleet of the given control-plane names, shaped as `fleetFrom` shapes one.
  *

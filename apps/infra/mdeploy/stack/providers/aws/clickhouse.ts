@@ -24,13 +24,13 @@
 
 import {
   CLICKHOUSE_IMAGE,
-  CLICKHOUSE_RETENTION_HOURS,
   encodeClickHouseUserData,
   renderClickHouseSchema,
 } from '../../clickhouse-host.ts'
 import type { ClickHouse, ClickHouseProvider, ClickHouseRequest } from '../../clickhouse.ts'
 import type { NetworkBinding } from '../../network.ts'
 import { instanceFor } from 'naming'
+import { DEFAULT_CLICKHOUSE_RETENTION_HOURS } from '../../../../shared/clickhouse-retention.ts'
 
 /** What each requested size answers to. */
 const INSTANCE = { small: 'm6a.large', medium: 'm6a.xlarge' } as const
@@ -235,12 +235,13 @@ export const awsClickHouseProvider =
           CLICKHOUSE_WRITER_SECRET_ARN: writer.resource.arn,
           CLICKHOUSE_READER_SECRET_ARN: reader.resource.arn,
           CLICKHOUSE_EXPECTED_IMAGE: CLICKHOUSE_IMAGE,
-          CLICKHOUSE_SCHEMA_BASE64: Buffer.from(renderClickHouseSchema()).toString('base64'),
-          CLICKHOUSE_RETENTION_HOURS: String(CLICKHOUSE_RETENTION_HOURS),
+          CLICKHOUSE_SCHEMA_BASE64: Buffer.from(renderClickHouseSchema(request.retentionHours)).toString('base64'),
+          CLICKHOUSE_RETENTION_HOURS: String(request.retentionHours ?? DEFAULT_CLICKHOUSE_RETENTION_HOURS),
         },
         // Every input that changes the answer. A rotated password re-grants
         // rather than locking the collector out until someone notices.
         triggers: [
+          request.retentionHours ?? DEFAULT_CLICKHOUSE_RETENTION_HOURS,
           instance.id,
           volume.id,
           userData,

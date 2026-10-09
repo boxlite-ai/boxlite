@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
+import { clickHouseRetentionHours } from '../shared/clickhouse-retention.ts'
+
 type ClickHouseMode = 'self-hosted' | 'managed' | 'disabled'
 
 export type ClickHouseConfig =
-  | { mode: 'self-hosted'; active: true }
+  | { mode: 'self-hosted'; active: true; retentionHours: number }
   | { mode: 'managed'; active: true; url: string; writerSecretArn: string; readerSecretArn: string }
   | { mode: 'disabled'; active: false }
 
@@ -18,12 +20,12 @@ const MANAGED_KEYS = [
 ]
 export const CLICKHOUSE_STAGE_CONFIG_KEYS = Object.freeze([
   'CLICKHOUSE_MODE',
+  'CLICKHOUSE_RETENTION_HOURS',
   ...MANAGED_KEYS,
 ])
 export const CLICKHOUSE_REMOVED_STAGE_CONFIG_KEYS = Object.freeze([
   'CLICKHOUSE_SELF_HOSTED_INSTANCE_TYPE',
   'CLICKHOUSE_SELF_HOSTED_DATA_GB',
-  'CLICKHOUSE_RETENTION_HOURS',
   'CLICKHOUSE_WRITER_USERNAME',
   'CLICKHOUSE_READER_USERNAME',
   'CLICKHOUSE_DATABASE',
@@ -99,6 +101,7 @@ export function requireClickHouseSecretArn(
 /** Resolve the complete ClickHouse topology before SST declares resources. */
 export function resolveClickHouseConfig(environment: NodeJS.ProcessEnv = process.env): ClickHouseConfig {
   rejectSet(environment, CLICKHOUSE_REMOVED_STAGE_CONFIG_KEYS, 'is not supported')
+  const retentionHours = clickHouseRetentionHours(environment)
 
   const mode = modeValue(environment)
 
@@ -109,7 +112,7 @@ export function resolveClickHouseConfig(environment: NodeJS.ProcessEnv = process
 
   if (mode === 'self-hosted') {
     rejectSet(environment, MANAGED_KEYS, 'cannot be set when CLICKHOUSE_MODE=self-hosted')
-    return { mode, active: true }
+    return { mode, active: true, retentionHours }
   }
 
   const url = environment.CLICKHOUSE_URL?.trim()

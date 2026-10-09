@@ -21,6 +21,7 @@
  */
 
 import { apiEnvironmentFrom } from './api-environment.ts'
+import { clickHouseRetentionHours } from '../../shared/clickhouse-retention.ts'
 import { OTEL_GROUP, PROXY_GROUP, RUNNER_GROUP, serviceSecretsFrom, splitServiceChannels, type GroupDeclaration } from './env.ts'
 import type { RunnerSlot } from '../stack/runners.ts'
 import { runnerNameFor } from '../stack/runners.ts'
@@ -169,6 +170,7 @@ export type StackEnvironment = {
   runnerFleet: RunnerSlot[]
   /** A ClickHouse someone else operates, for a stage that runs none of its own. */
   managedClickHouse: { url: string; writerSecretArn: string; readerSecretArn: string } | null
+  clickHouseRetentionHours: number
   /**
    * The consumer of this stage's ClickStack publication, by service account, or
    * null for a stage that publishes to nobody.
@@ -304,6 +306,7 @@ export const readStackEnvironment = ({
     senderDomain: optional(environment, 'MAIL_DOMAIN'),
     runnerFleet: fleetFrom({ environment, app, stage }),
     managedClickHouse: managedClickHouseFrom(environment),
+    clickHouseRetentionHours: clickHouseRetentionHours(environment),
     clickStackConsumer: clickStackConsumerFrom(environment),
     dnsZoneId: required(environment, 'CLOUDFLARE_ZONE_ID', 'every public record this stage writes goes into it'),
     mailRelayHost: optional(environment, 'MAIL_RELAY_HOST'),

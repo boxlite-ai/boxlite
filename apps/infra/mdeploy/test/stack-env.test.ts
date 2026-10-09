@@ -6,6 +6,12 @@ import { StackEnvError, readStackEnvironment } from '../src/stack-env.ts'
 import type { GroupDeclaration } from '../src/env.ts'
 
 const SHA = 'a'.repeat(40)
+
+test('retention is read from the stage environment with a 30-day default', () => {
+  assert.equal(read(complete).clickHouseRetentionHours, 720)
+  assert.equal(read({ ...complete, CLICKHOUSE_RETENTION_HOURS: '168' }).clickHouseRetentionHours, 168)
+  assert.throws(() => read({ ...complete, CLICKHOUSE_RETENTION_HOURS: '0' }), /positive.*integer/)
+})
 const DIGEST = 'b'.repeat(64)
 
 const declaration: GroupDeclaration = {

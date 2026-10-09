@@ -29,7 +29,16 @@ Set `stages.<stage>.deploy.clickhouse.mode` in `.mstage.config.json` for mdeploy
 | `disabled` | No ClickHouse backend/exporter | Use other telemetry destinations as needed |
 
 Self-hosted size and disk capacity come from `deploy.clickhouse.instanceSize` and `dataGb`.
-The vendored schema currently renders 72-hour retention.
+Set `CLICKHOUSE_RETENTION_HOURS` in the encrypted stage environment (or with the explicit
+`--local-env` override). It accepts positive integer hours and defaults to `720` (30 days).
+For example, `CLICKHOUSE_RETENTION_HOURS=168` keeps seven days of telemetry.
+Self-hosted deploys update all seven existing table TTLs as well as the initial schema:
+AWS runs its SSM readiness command when the value changes; GCP updates an OS Config policy
+that checks actual TTLs and applies `ALTER TABLE ... MODIFY TTL` without restarting the server.
+GCP enforcement is asynchronous: a successful apply publishes the policy; confirm the
+`clickhouse-retention` assignment's compliance report before considering the TTL update complete.
+Managed services retain operator-owned schema/TTL lifecycle. Expiration remains a background
+operation, and increasing retention cannot recover data already deleted.
 Keep database/user settings aligned with the bundled schema and boot scripts;
 `otel`, `otel_writer` and `otel_reader` are the example's supported baseline.
 

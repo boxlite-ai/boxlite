@@ -60,6 +60,7 @@ const imageFor = (images: Images, component: 'api' | 'proxy' | 'otel-collector')
 
 /** What one deploy decides, as opposed to what `mdeploy.config.json` declares. */
 export type StackInputs = {
+  clickHouseRetentionHours?: number
   stage: string
   /** The commit being deployed. Every container runs the same one. */
   tag: string
@@ -215,7 +216,10 @@ export const deployStack = ({
   const cluster: Cluster = providers.cluster({ network })({ roles: CONTAINER_ROLES })
   const database: Database = providers.database({ network })(config.database)
   const cache: Cache = providers.cache({ network })(config.cache)
-  const clickhouse: ClickHouse = providers.clickhouse({ network })(config.clickhouse)
+  const clickhouse: ClickHouse = providers.clickhouse({ network })({
+    ...config.clickhouse,
+    retentionHours: inputs.clickHouseRetentionHours,
+  })
 
   /*
    * The network's own rules, which reach every workload through the cluster.
