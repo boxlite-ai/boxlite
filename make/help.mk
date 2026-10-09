@@ -30,6 +30,7 @@ help:
 	@echo "    make runtime:debug  - Build runtime artifacts (debug)"
 	@echo "    make vmm            - Build only the hypervisor and VMM crates"
 	@echo "    make vmm:boot       - Build the pinned x86_64 ELF kernel with Linux host tools (BOOT_OUTPUT, BOOT_JOBS)"
+	@echo "    make vmm:boot:box   - Build the same kernel inside a pinned BoxLite box, e.g. on macOS"
 	@echo "    make skillbox-image - Build SkillBox Docker image (APT_SOURCE=mirrors.aliyun.com for China)"
 	@echo "    make build:apps     - Build the apps workspace (api, dashboard, runner, libs…)"
 	@echo ""

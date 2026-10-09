@@ -1,4 +1,4 @@
-PHONY_TARGETS += guest shim runtime vmm vmm\:boot cli cli\:release skillbox-image build\:apps
+PHONY_TARGETS += guest shim runtime vmm vmm\:boot vmm\:boot\:box cli cli\:release skillbox-image build\:apps
 
 vmm:
 	@cargo build -p boxlite-hypervisor -p boxlite-vmm
@@ -7,6 +7,11 @@ vmm\:boot: export _BOXLITE_BOOT_OUTPUT_ARG := $(value BOOT_OUTPUT)
 vmm\:boot: export _BOXLITE_BOOT_JOBS_ARG := $(value BOOT_JOBS)
 vmm\:boot:
 	@bash "$(SCRIPT_DIR)/build/build-vmm-boot.sh"
+
+vmm\:boot\:box: export _BOXLITE_BOOT_OUTPUT_ARG := $(value BOOT_OUTPUT)
+vmm\:boot\:box: export _BOXLITE_BOOT_JOBS_ARG := $(value BOOT_JOBS)
+vmm\:boot\:box:
+	@bash "$(SCRIPT_DIR)/build/build-vmm-boot-in-box.sh"
 
 guest: export _BOXLITE_GUEST_TARGET_ARG := $(value GUEST_TARGET)
 guest: export _BOXLITE_PROFILE_ARG := $(value PROFILE)

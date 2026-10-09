@@ -42,3 +42,24 @@ give identical bytes. `make test:vmm:boot` runs the real script against stubbed
 tools and never compiles Linux. `BOOT_REAL_BUILD=1` adds two native builds and
 checks byte equality, the ELF header, segment placement and configuration.
 Booting the kernel is a later slice.
+
+## Building inside a BoxLite box
+
+`make vmm:boot:box` runs the same build inside a Linux box, for macOS (Apple
+Silicon) or for Linux hosts without the packages above. It takes `BOOT_OUTPUT`
+and `BOOT_JOBS`; the output must be inside the repository, the box's only mount.
+Design: [#1890](https://github.com/boxlite-ai/boxlite/issues/1890).
+
+`boxlite.lock` pins a BoxLite CLI release, its SHA-256 for each host and a
+digest-pinned `ubuntu:24.04` builder image. The release is downloaded into
+`target/vmm/boot/.cache`, verified and run from there; nothing is installed.
+`BOXLITE_HOME` and, on Linux, `XDG_DATA_HOME` point at `target/vmm/boot/.boxlite`,
+so an installed or locally built BoxLite keeps its own images, boxes and
+database. macOS extracts the runtime into its versioned directory under
+`~/Library/Application Support/boxlite/runtimes`.
+
+The box installs the Debian packages listed above on every run, so it needs
+network access. Sources are extracted to the box's ext4 root disk (`/tmp` there
+is tmpfs, and a macOS mount may be case-insensitive). Apple Silicon hosts get an
+arm64 box that cross-compiles. `build-info.txt`, and so `SHA256SUMS`, record the
+box's architecture and compiler. macOS is not yet qualified.
