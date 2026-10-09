@@ -19,6 +19,8 @@ import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
 import { BoxliteImageController } from './boxlite-image.controller'
 import { ImageCatalogService } from '../image/services/image-catalog.service'
+import { BoxliteRegistryController } from './boxlite-registry.controller'
+import { RegistriesService } from '../registry/services/registries.service'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 
 jest.mock('http-proxy-middleware', () => ({
@@ -185,6 +187,31 @@ describe('BoxLite REST routing', () => {
 
     expect(response.status).toBe(200)
     expect(catalog.get).toHaveBeenCalledWith({ id: 'org-123' }, 'quay.io/acme/app')
+  })
+
+  it('answers registry logins with or without a routing prefix', async () => {
+    const registries = { list: jest.fn().mockResolvedValue([]) }
+    await startApp([BoxliteRegistryController], [{ provide: RegistriesService, useValue: registries }])
+
+    for (const path of ['/api/v1/registries', '/api/v1/default/registries']) {
+      const response = await get(path)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ registries: [] })
+    }
+    expect(registries.list).toHaveBeenCalledWith('org-123')
+  })
+
+  it('refuses a registry login id that is not a UUID before the service sees it', async () => {
+    const registries = { delete: jest.fn() }
+    await startApp([BoxliteRegistryController], [{ provide: RegistriesService, useValue: registries }])
+    const address = app.getHttpServer().address() as AddressInfo
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/registries/not-a-uuid`, {
+      method: 'DELETE',
+    })
+
+    expect(response.status).toBe(400)
+    expect(registries.delete).not.toHaveBeenCalled()
   })
 
   it('matches websocket attach upgrades with or without a routing prefix', () => {

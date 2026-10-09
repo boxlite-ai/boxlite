@@ -269,6 +269,27 @@ await runtime.images.remove("docker.io/library/alpine");
 See [the Node.js reference](../../docs/reference/nodejs/README.md#imagehandle)
 for each method on each runtime.
 
+### Private Registry Logins
+
+On `JsBoxlite.rest(...)`, `runtime.registries` manages the logins the server
+pulls private images with. The password goes up once and is never returned.
+A local runtime throws `unsupported`: pass `imageRegistries` to its options
+instead.
+
+```typescript
+const login = await runtime.registries.create({
+  registryHost: "ghcr.io",
+  repositoryPrefix: "acme/", // omit for the whole registry
+  username: "acme-bot",
+  password: process.env.GHCR_TOKEN!,
+});
+const box = await runtime.create({ image: "ghcr.io/acme/private-app:1" });
+// ...
+await runtime.registries.remove(login.id); // refused while a box pulls through it
+```
+
+See [the Node.js reference](../../docs/reference/nodejs/README.md#registryhandle).
+
 ### CodeBox
 
 Python code execution sandbox.

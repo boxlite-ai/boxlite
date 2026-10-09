@@ -21,7 +21,8 @@ import { createSecretStore } from './stores/secret.store'
 // module, to ask whether a runner hosts an organization's box. The secret
 // store is built once, at boot, which is where a misconfigured one — the file
 // store in production among them — stops the API. `OrganizationModule` is
-// imported for the permission guard the tenant routes run.
+// imported for the permission guard the tenant routes run. `RegistriesService`
+// is exported for the box API's routes to the same logins.
 @Module({
   imports: [OrganizationModule, TypeOrmModule.forFeature([RegistryCredential, Box])],
   controllers: [RegistriesController, RunnerRegistryCredentialController],
@@ -30,6 +31,6 @@ import { createSecretStore } from './stores/secret.store'
     RegistriesService,
     { provide: SECRET_STORE, useFactory: createSecretStore, inject: [TypedConfigService] },
   ],
-  exports: [RegistryCredentialService],
+  exports: [RegistryCredentialService, RegistriesService],
 })
 export class RegistryModule {}

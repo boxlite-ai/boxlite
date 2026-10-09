@@ -105,8 +105,11 @@ describe('ImageAdmissionService', () => {
       expect(credentials.routesThroughProxy).toHaveBeenCalledWith('org-1', 'ghcr.io', 'acme/app')
     })
 
-    it('says a login would open a host that takes one, when none covers the repository', async () => {
-      await expect(service.assert(organization, 'ghcr.io/other/app:1')).rejects.toThrow(/add one under Registries/)
+    it('says a login would open a host that takes one, and where to add it, when none covers the repository', async () => {
+      const refused = service.assert(organization, 'ghcr.io/other/app:1')
+
+      await expect(refused).rejects.toThrow(/add one under Registries in the console/)
+      await expect(refused).rejects.toThrow(/the SDK's runtime registries handle/)
     })
 
     it('refuses a ref written against the proxy itself, before anything is looked up', async () => {

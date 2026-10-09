@@ -630,6 +630,64 @@ pub(crate) struct ImageUsageResponse {
 }
 
 // ============================================================================
+// Registries
+// ============================================================================
+
+/// Body for `POST /v1/{prefix}/registries`. No `Debug`: it holds the password.
+#[derive(Serialize)]
+pub(crate) struct CreateRegistryRequest<'a> {
+    pub registry_host: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_prefix: Option<&'a str>,
+    pub username: &'a str,
+    pub password: &'a str,
+}
+
+impl<'a> CreateRegistryRequest<'a> {
+    pub fn from_credential(credential: &'a crate::runtime::NewRegistryCredential) -> Self {
+        Self {
+            registry_host: &credential.registry_host,
+            repository_prefix: credential.repository_prefix.as_deref(),
+            username: &credential.username,
+            password: &credential.password,
+        }
+    }
+}
+
+/// One login, as `/v1/{prefix}/registries` answers it. There is no password
+/// field, so one a server sent back is dropped here.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RegistryCredentialResponse {
+    pub id: String,
+    pub registry_host: String,
+    #[serde(default)]
+    pub repository_prefix: String,
+    pub username: String,
+    #[serde(default)]
+    pub created_by: Option<String>,
+    pub created_at: String,
+}
+
+impl RegistryCredentialResponse {
+    pub fn into_registry_credential(self) -> crate::runtime::RegistryCredential {
+        crate::runtime::RegistryCredential {
+            created_at: recorded_time(&self.created_at),
+            id: self.id,
+            registry_host: self.registry_host,
+            repository_prefix: self.repository_prefix,
+            username: self.username,
+            created_by: self.created_by,
+        }
+    }
+}
+
+/// Response for `GET /v1/{prefix}/registries`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ListRegistriesResponse {
+    pub registries: Vec<RegistryCredentialResponse>,
+}
+
+// ============================================================================
 // Snapshot / Clone / Export
 // ============================================================================
 

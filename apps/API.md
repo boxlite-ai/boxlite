@@ -354,9 +354,10 @@ deployments (shared with the control-plane API)
 Most resource paths accept both an unprefixed form and an organization-prefixed
 form. The tables write that as `[/{prefix}]`; clients can discover their prefix
 through `GET /api/v1/me`. Except for configuration discovery, these routes use
-combined bearer authentication. The box and volume resource routes also apply
-organization authorization; identity discovery at `GET /api/v1/me` can return
-`path_prefix: null` for an authenticated user with no organization membership.
+combined bearer authentication. The box, volume and registry resource routes
+also apply organization authorization; identity discovery at `GET /api/v1/me`
+can return `path_prefix: null` for an authenticated user with no organization
+membership.
 
 <details>
 <summary><b>Discovery</b> · 2 routes</summary>
@@ -415,6 +416,20 @@ the portable contract, which the runner's own route registration enforces.
 | `GET`    | `/api/v1[/{prefix}]/volumes`                            | Lists volumes in the organization.            |
 | `GET`    | `/api/v1[/{prefix}]/volumes/{volumeId}`                 | Gets a volume by ID.                          |
 | `DELETE` | `/api/v1[/{prefix}]/volumes/{volumeId}?force={boolean}` | Deletes a volume, optionally forcing removal. |
+
+</details>
+
+<details>
+<summary><b>Registries</b> · 3 routes</summary>
+
+| Method   | Path                                 | What it does                                                                     |
+| -------- | ------------------------------------ | -------------------------------------------------------------------------------- |
+| `GET`    | `/api/v1[/{prefix}]/registries`      | Lists the organization's private registry logins, without passwords.             |
+| `POST`   | `/api/v1[/{prefix}]/registries`      | Adds a login; a second one for the same registry and prefix is `already_exists`. |
+| `DELETE` | `/api/v1[/{prefix}]/registries/{id}` | Removes a login, unless a box still pulls through it (409 lists the boxes).      |
+
+The same logins as `/api/registries`, in the box API's snake_case shapes, for
+SDK clients.
 
 </details>
 

@@ -2,22 +2,22 @@
 Private images, end to end.
 
 The whole claim, against a real stack: with no login a private image does not
-pull; with one registered through `POST /registries`, a box boots from the
-image reference exactly as it is written, reads it back that way, and the
-login cannot be removed while that box stands. The password goes up once and
-is never seen again.
+pull; with one registered through `rt.registries`, a box boots from the image
+reference exactly as it is written, reads it back that way, and the login
+cannot be removed while that box stands. The password goes up once and is
+never seen again.
 
 It needs a real private image, because the registry proxy pulls only from the
 registries a login is accepted for, by default ghcr.io, docker.io, quay.io and
 Container Registry's gcr.io hosts, and refuses a private address: the local
 registry box cannot stand in.
 Without the first three variables below the file skips. A stack that keeps no
-registry credentials answers step 2 with a 501, which fails: setting them is
-asking for a stack that does.
+registry credentials refuses step 2 as unsupported, which fails: setting them
+is asking for a stack that does.
 
-The logins are driven over their HTTP API, since the runtime gains them only
-with the SDK change; the catalog and the boxes go through the runtime, as the
-catalog's own case does.
+The logins, the catalog and the boxes all go through the runtime, as an SDK
+caller would drive them; only listing boxes and reading one back use the HTTP
+API.
 
 The tests run in file order and share the login and the box they build up,
 because a private pull is tens of seconds and is paid for once.
@@ -30,9 +30,8 @@ was none before it ran. An entry that was there already pins the tag to its
 digest, and the box then reads back pinned.
 
 Nothing here lets pytest print the password. A check on it is reduced to a
-bool first, since pytest prints an assertion's operands, and a register that
-cannot be sent is raised again without the request helper's frames, since
-pytest prints their arguments and the request body holds the password.
+bool first, since pytest prints an assertion's operands, and the one call that
+takes it is made in a helper whose only argument is the runtime.
 
 Environment:
   BOXLITE_E2E_PRIVATE_IMAGE     A private image on a registry the stack takes
@@ -83,39 +82,15 @@ _NAME = re.sub(r"(@sha256:[0-9a-f]{64}|:[^/:@]+)$", "", PRIVATE_IMAGE)
 state: dict = {"boxes": []}
 
 
-class Registries:
-    """The registry logins' HTTP API, answering with what the server sent."""
-
-    def list(self) -> list[dict]:
-        status, rows = request_json("GET", "/registries")
-        assert status == 200, f"listing the logins answered {status}: {rows}"
-        return rows
-
-    def create(self) -> tuple[int, dict | None]:
-        """
-        Register this case's login; a refusal comes back rather than raises.
-
-        A request that cannot be sent is raised again from here: pytest prints
-        the arguments of every frame in a traceback, and the request helper's
-        hold the password.
-        """
-        try:
-            return request_json(
-                "POST",
-                "/registries",
-                {
-                    "registryHost": _HOST,
-                    "repositoryPrefix": PREFIX,
-                    "username": USERNAME,
-                    "password": PASSWORD,
-                },
-            )
-        except Exception as failure:
-            refusal = AssertionError(f"registering the login failed: {type(failure).__name__}")
-        raise refusal from None
-
-    def delete(self, login_id: str) -> tuple[int, dict | None]:
-        return request_json("DELETE", f"/registries/{login_id}")
+async def _register(rt):
+    """Register this case's login. pytest prints each frame's arguments, so the
+    password is read here rather than passed in."""
+    return await rt.registries.create(
+        registry_host=_HOST,
+        repository_prefix=PREFIX,
+        username=USERNAME,
+        password=PASSWORD,
+    )
 
 
 def _is_this_image(ref: str | None) -> bool:
@@ -142,16 +117,11 @@ async def _create_recorded(rt, **options):
         state["boxes"].extend(sorted(_box_ids_of_this_image() - before))
 
 
-@pytest.fixture(scope="module")
-def registries() -> Registries:
-    return Registries()
-
-
 @pytest_asyncio.fixture(scope="module", autouse=True)
-async def only_what_this_case_made(rt, registries: Registries):
+async def only_what_this_case_made(rt):
     """Refuse to start over someone's login; afterwards remove what this case made."""
-    for row in registries.list():
-        if row["registryHost"] == _HOST and row["repositoryPrefix"] == PREFIX:
+    for login in await rt.registries.list():
+        if login.registry_host == _HOST and login.repository_prefix == PREFIX:
             pytest.fail(
                 f"this organization already has a login for {_HOST}/{PREFIX}; this case adds "
                 f"its own and will not remove one it did not add"
@@ -175,9 +145,12 @@ async def only_what_this_case_made(rt, registries: Registries):
         except Exception as failure:
             leftovers.append(f"box {box_id}: {failure}")
     if "login" in state:
-        status, body = registries.delete(state["login"]["id"])
-        if status not in (204, 404):
-            leftovers.append(f"login {state['login']['id']}: {status} {body}")
+        try:
+            await rt.registries.remove(state["login"].id)
+        except boxlite.NotFoundError:
+            pass
+        except Exception as failure:
+            leftovers.append(f"login {state['login'].id}: {failure}")
     if not state["catalog_existed"]:
         try:
             await rt.images.remove(_NAME)
@@ -218,32 +191,32 @@ async def test_without_a_login_the_private_image_does_not_boot(rt):
     )
 
 
-def test_a_login_is_stored_and_its_password_is_never_returned(registries):
+@pytest.mark.asyncio
+async def test_a_login_is_stored_and_its_password_is_never_returned(rt):
     """Step 2. Neither the answer nor the list carries the password."""
-    status, login = registries.create()
-    if status == 201:
-        # Kept before any check, so the cleanup removes it whatever they find.
-        state["login"] = login
+    login = await _register(rt)
+    # Kept before any check, so the cleanup removes it whatever they find.
+    state["login"] = login
     shows_password = PASSWORD in repr(login)
     assert not shows_password, "the answer carries the password"
-    assert status == 201, f"registering the login answered {status}: {login}"
 
-    assert login["registryHost"] == _HOST
-    assert login["repositoryPrefix"] == PREFIX
-    listed = next(row for row in registries.list() if row["id"] == login["id"])
+    assert login.registry_host == _HOST
+    assert login.repository_prefix == PREFIX
+    listed = next(row for row in await rt.registries.list() if row.id == login.id)
     for where, row in (("the created login", login), ("the list", listed)):
-        has_password_field = "password" in row
+        has_password_field = hasattr(row, "password")
         assert not has_password_field, f"{where} has a password field"
         shows_password = PASSWORD in repr(row)
         assert not shows_password, f"{where} carries the password"
 
 
-def test_a_second_login_for_the_same_prefix_is_refused(registries):
+@pytest.mark.asyncio
+async def test_a_second_login_for_the_same_prefix_is_refused(rt):
     """Step 3. One login per registry and prefix, so the proxy never chooses between two."""
-    status, body = registries.create()
-    shows_password = PASSWORD in repr(body)
+    with pytest.raises(boxlite.AlreadyExistsError) as refused:
+        await _register(rt)
+    shows_password = PASSWORD in str(refused.value)
     assert not shows_password, "the refusal carries the password"
-    assert status == 409, f"a second login for {_HOST}/{PREFIX} answered {status}: {body}"
 
 
 @pytest.mark.asyncio
@@ -266,24 +239,24 @@ async def test_the_private_image_boots_by_the_reference_as_written(rt):
     )
 
 
-def test_a_login_in_use_cannot_be_removed(registries):
+@pytest.mark.asyncio
+async def test_a_login_in_use_cannot_be_removed(rt):
     """Step 5. The box standing on it is named."""
-    status, body = registries.delete(state["login"]["id"])
+    with pytest.raises(boxlite.InvalidStateError) as refused:
+        await rt.registries.remove(state["login"].id)
 
-    assert status == 409, f"removing a login in use answered {status}: {body}"
-    assert state["box"].id in (body or {}).get("message", ""), body
+    assert state["box"].id in str(refused.value), refused.value
 
 
 @pytest.mark.asyncio
-async def test_once_the_box_is_gone_the_login_can_be(rt, registries):
-    """Step 6. And a second delete is a not-found, not a missing image."""
+async def test_once_the_box_is_gone_the_login_can_be(rt):
+    """Step 6. And a second remove is a not-found, not a missing image."""
     box_id = state.pop("box").id
     await rt.remove(box_id, force=True)
     state["boxes"].remove(box_id)
 
-    login_id = state.pop("login")["id"]
-    status, body = registries.delete(login_id)
-    assert status == 204, f"removing the login answered {status}: {body}"
-    status, body = registries.delete(login_id)
-    assert status == 404, f"removing it again answered {status}: {body}"
-    assert "image" not in (body or {}).get("message", "").lower(), body
+    login_id = state.pop("login").id
+    await rt.registries.remove(login_id)
+    with pytest.raises(boxlite.NotFoundError) as again:
+        await rt.registries.remove(login_id)
+    assert "image" not in str(again.value).lower(), again.value
