@@ -173,14 +173,22 @@ func resolveHomeDir(configured string) (string, error) {
 	}
 	userHome := os.Getenv("HOME")
 	if userHome == "" {
-		current, err := user.Current()
+		current, err := currentUser()
 		if err != nil {
 			return "", fmt.Errorf("cannot locate the BoxLite home directory; set BOXLITE_HOME_DIR: %w", err)
+		}
+		// A passwd entry without a home would turn into the relative path
+		// ".boxlite", which core rejects with a less helpful error.
+		if current.HomeDir == "" {
+			return "", fmt.Errorf("cannot locate the BoxLite home directory; set BOXLITE_HOME_DIR: user %q has no home directory", current.Username)
 		}
 		userHome = current.HomeDir
 	}
 	return filepath.Join(userHome, ".boxlite"), nil
 }
+
+// currentUser is the passwd lookup behind the last fallback; tests replace it.
+var currentUser = user.Current
 
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {

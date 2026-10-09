@@ -60,3 +60,16 @@ func TestResolveHomeDirFollowsCoreOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveHomeDirRejectsAPasswdEntryWithoutAHome(t *testing.T) {
+	t.Setenv("BOXLITE_HOME", "")
+	t.Setenv("HOME", "")
+	lookup := currentUser
+	t.Cleanup(func() { currentUser = lookup })
+	currentUser = func() (*user.User, error) { return &user.User{Username: "runner"}, nil }
+
+	got, err := resolveHomeDir("")
+	if err == nil {
+		t.Fatalf("resolveHomeDir(\"\") = %q, want an error for a home-less passwd entry", got)
+	}
+}
