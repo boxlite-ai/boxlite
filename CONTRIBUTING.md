@@ -183,7 +183,7 @@ section order are optional.
   rejects, and why. Every PR needs one, drafts included; keep it aligned with the
   final scope. Use `Fixes #<n>` only when the PR closes that GitHub issue.
 - Keep each PR within 400 added code lines (target 100–200), including drafts,
-  following the [shared PR size policy](https://github.com/boxlite-ai/agent-tooling/blob/main/plugins/boxlite-agent-tooling/guidance/workflow.md#pr-size-and-decomposition).
+  following boxlite-agent-tooling, which takes precedence in case of conflicts.
   Count source, scripts, configuration, and generated code. Exclude `*.spec.ts`,
   `*_test.go`, files under `tests` directories, recognized documentation,
   data/assets, and lockfiles; unclassified files count. Exclusions are file-based:
