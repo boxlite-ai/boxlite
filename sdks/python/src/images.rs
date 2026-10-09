@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use boxlite::ImageHandle;
-use boxlite::runtime::types::{ImageDetail, ImageInfo, ImageUsage, ImageVersion};
+use boxlite::runtime::types::{ImageDetail, ImageInfo, ImageTagEvent, ImageUsage, ImageVersion};
 use pyo3::prelude::*;
 
 use crate::util::map_err;
@@ -79,6 +79,12 @@ pub(crate) struct PyImageVersion {
     pub(crate) source_ref: String,
     #[pyo3(get)]
     pub(crate) recorded_at: String,
+    #[pyo3(get)]
+    pub(crate) tags: Vec<String>,
+    #[pyo3(get)]
+    pub(crate) last_used_at: Option<String>,
+    #[pyo3(get)]
+    pub(crate) upstream_missing_at: Option<String>,
 }
 
 #[pymethods]
@@ -98,6 +104,47 @@ impl From<ImageVersion> for PyImageVersion {
             size_bytes: version.size_bytes,
             source_ref: version.source_ref,
             recorded_at: version.recorded_at.to_rfc3339(),
+            tags: version.tags,
+            last_used_at: version.last_used_at.map(|time| time.to_rfc3339()),
+            upstream_missing_at: version.upstream_missing_at.map(|time| time.to_rfc3339()),
+        }
+    }
+}
+
+/// One move of a tag, or the pull that first recorded it; versions named by digest.
+#[pyclass(name = "ImageTagEvent")]
+#[derive(Clone)]
+pub(crate) struct PyImageTagEvent {
+    #[pyo3(get)]
+    pub(crate) tag: String,
+    #[pyo3(get)]
+    pub(crate) from_digest: Option<String>,
+    #[pyo3(get)]
+    pub(crate) to_digest: String,
+    #[pyo3(get)]
+    pub(crate) actor: Option<String>,
+    #[pyo3(get)]
+    pub(crate) moved_at: String,
+}
+
+#[pymethods]
+impl PyImageTagEvent {
+    fn __repr__(&self) -> String {
+        format!(
+            "ImageTagEvent(tag={:?}, from_digest={:?}, to_digest={:?})",
+            self.tag, self.from_digest, self.to_digest
+        )
+    }
+}
+
+impl From<ImageTagEvent> for PyImageTagEvent {
+    fn from(event: ImageTagEvent) -> Self {
+        Self {
+            tag: event.tag,
+            from_digest: event.from_digest,
+            to_digest: event.to_digest,
+            actor: event.actor,
+            moved_at: event.moved_at.to_rfc3339(),
         }
     }
 }
@@ -114,6 +161,8 @@ pub(crate) struct PyImageDetail {
     pub(crate) curated: bool,
     #[pyo3(get)]
     pub(crate) versions: Vec<PyImageVersion>,
+    #[pyo3(get)]
+    pub(crate) history: Vec<PyImageTagEvent>,
 }
 
 #[pymethods]
@@ -138,6 +187,11 @@ impl From<ImageDetail> for PyImageDetail {
                 .versions
                 .into_iter()
                 .map(PyImageVersion::from)
+                .collect(),
+            history: detail
+                .history
+                .into_iter()
+                .map(PyImageTagEvent::from)
                 .collect(),
         }
     }
@@ -226,6 +280,25 @@ impl PyImageHandle {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let usage = handle.usage().await.map_err(map_err)?;
             Ok(PyImageUsage::from(usage))
+        })
+    }
+
+    /// Point a tag of an image name at the version with that digest; REST
+    /// runtimes only.
+    fn move_tag<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        tag: String,
+        digest: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let detail = handle
+                .move_tag(&name, &tag, &digest)
+                .await
+                .map_err(map_err)?;
+            Ok(PyImageDetail::from(detail))
         })
     }
 

@@ -48,3 +48,6 @@ class SyncImageHandle:
 
     def usage(self) -> "ImageUsage":
         return self._sync(self._handle.usage())
+
+    def move_tag(self, name: str, tag: str, digest: str) -> "ImageDetail":
+        return self._sync(self._handle.move_tag(name, tag, digest))

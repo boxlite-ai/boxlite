@@ -90,16 +90,23 @@ and `usage()` REST only.
 | `get()` | `async (name: str) -> ImageDetail` | The cache entries under the name | The catalog entry with its versions |
 | `remove()` | `async (name: str) -> None` | Forgets the name; layers stay | Removes the catalog entry; `InvalidStateError` while a box can boot from it |
 | `usage()` | `async () -> ImageUsage` | Raises `UnsupportedError` | `count`, `limit`, `known_bytes` |
+| `move_tag()` | `async (name: str, tag: str, digest: str) -> ImageDetail` | Raises `UnsupportedError`: a cache resolves a tag afresh for each new box | Points the tag at the version with that digest; boxes already created keep theirs |
 
 `get()` and `remove()` take an image name such as `"docker.io/library/alpine"`;
 a reference with a tag or digest raises `InvalidArgumentError`, since a remove
 takes every tag of the name. Locally, a box built from a removed image reads
 the image's configuration from the registry when it next starts.
 
+`move_tag()` takes a tag the OCI distribution spec accepts and a `sha256:`
+digest; either malformed raises `InvalidArgumentError` before anything is
+sent. A catalog fills every field below; a local cache fills a version's
+`tags` and leaves `last_used_at`, `upstream_missing_at` and `history` empty.
+
 | Type | Fields |
 |------|--------|
-| `ImageDetail` | `name`, `tags`, `curated`, `versions: List[ImageVersion]` |
-| `ImageVersion` | `digest`, `size_bytes` (`None` when unknown), `source_ref`, `recorded_at` |
+| `ImageDetail` | `name`, `tags`, `curated`, `versions: List[ImageVersion]`, `history: List[ImageTagEvent]` (latest moves, newest first) |
+| `ImageVersion` | `digest`, `size_bytes` (`None` when unknown), `source_ref`, `recorded_at`, `tags`, `last_used_at` and `upstream_missing_at` (`None` when unset) |
+| `ImageTagEvent` | `tag`, `from_digest` (`None` when the tag was new), `to_digest`, `actor` (`None` when a pull recorded the tag), `moved_at` |
 | `ImageUsage` | `count`, `limit`, `known_bytes` |
 
 ```python
@@ -108,6 +115,10 @@ for image in await runtime.images.list():
     print(image.reference, image.id)
 detail = await runtime.images.get("docker.io/library/alpine")
 print(detail.tags, [v.digest for v in detail.versions])
+# REST runtimes: roll `stable` onto the newest version.
+detail = await runtime.images.move_tag(
+    "docker.io/library/alpine", "stable", detail.versions[0].digest
+)
 await runtime.images.remove("docker.io/library/alpine")
 ```
 
