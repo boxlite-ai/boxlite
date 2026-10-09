@@ -16,7 +16,7 @@ use super::options::BoxliteRestOptions;
 use super::types::{
     BoxResponse, CreateBoxRequest, CreateRegistryRequest, CreateVolumeRequest, ImageDetailResponse,
     ImageInfoResponse, ImageUsageResponse, ListBoxesResponse, ListImagesResponse,
-    ListRegistriesResponse, ListVolumesResponse, RegistryCredentialResponse,
+    ListRegistriesResponse, ListVolumesResponse, MoveTagRequest, RegistryCredentialResponse,
     RuntimeMetricsResponse, VolumeResponse,
 };
 use crate::images::ImageObject;
@@ -112,6 +112,12 @@ impl ImageBackend for RestRuntime {
             limit: resp.limit,
             known_bytes: resp.known_bytes,
         })
+    }
+
+    async fn move_tag(&self, name: &str, tag: &str, digest: &str) -> BoxliteResult<ImageDetail> {
+        let path = format!("{}/tags/{}", image_path(name), urlencoding::encode(tag));
+        let resp: ImageDetailResponse = self.client.put(&path, &MoveTagRequest { digest }).await?;
+        Ok(resp.into_image_detail())
     }
 }
 
@@ -1108,6 +1114,104 @@ mod tests {
 
         assert_eq!(server.await.unwrap(), ["GET /v1/images/usage HTTP/1.1"]);
         assert_eq!((usage.count, usage.limit, usage.known_bytes), (3, 20, 4096));
+    }
+
+    const MOVED_DETAIL: &str = r#"{"name":"quay.io/acme/app","tags":["stable"],"curated":false,"versions":[{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size_bytes":42,"source_ref":"quay.io/acme/app:v2","recorded_at":"2026-01-02T03:04:05Z","tags":["stable"],"last_used_at":"2026-01-03T00:00:00Z","upstream_missing_at":null}],"history":[{"tag":"stable","from_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","to_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","actor":"auth0|alice","moved_at":"2026-01-04T00:00:00Z"}]}"#;
+
+    /// The name and the tag are one segment each, and the digest goes in the
+    /// body; the answer is the image as it now is, history included.
+    #[tokio::test]
+    async fn images_move_tag_puts_the_digest_and_reads_the_moved_image() {
+        let digest = format!("sha256:{}", "b".repeat(64));
+        let (port, server) = recording_server(200, MOVED_DETAIL).await;
+
+        let detail = images_on(port)
+            .move_tag("quay.io/acme/app", "stable", &digest)
+            .await
+            .unwrap();
+
+        let (request_line, request_body) = server.await.unwrap();
+        assert_eq!(
+            request_line,
+            "PUT /v1/images/quay.io%2Facme%2Fapp/tags/stable HTTP/1.1"
+        );
+        let sent: serde_json::Value = serde_json::from_str(&request_body).unwrap();
+        assert_eq!(sent, serde_json::json!({ "digest": digest }));
+        assert_eq!(detail.versions[0].tags, ["stable"]);
+        assert_eq!(
+            detail.versions[0]
+                .last_used_at
+                .map(|time| time.to_rfc3339()),
+            Some("2026-01-03T00:00:00+00:00".to_string())
+        );
+        assert!(detail.versions[0].upstream_missing_at.is_none());
+        let moved = &detail.history[0];
+        assert_eq!(moved.tag, "stable");
+        assert_eq!(
+            moved.from_digest.as_deref(),
+            Some(&*format!("sha256:{}", "a".repeat(64)))
+        );
+        assert_eq!(moved.to_digest, digest);
+        assert_eq!(moved.actor.as_deref(), Some("auth0|alice"));
+        assert_eq!(moved.moved_at.to_rfc3339(), "2026-01-04T00:00:00+00:00");
+    }
+
+    /// A digest the image has no version for, or a curated image, is the
+    /// server's 400.
+    #[tokio::test]
+    async fn images_move_tag_the_server_refuses_is_invalid_argument() {
+        let (port, _server) = http_server(vec![(
+            400,
+            r#"{"error":{"message":"Digest 'sha256:...' is not a version of image 'quay.io/acme/app'","type":"InvalidArgumentError","code":"invalid_argument"}}"#,
+        )])
+        .await;
+
+        let error = images_on(port)
+            .move_tag(
+                "quay.io/acme/app",
+                "stable",
+                &format!("sha256:{}", "c".repeat(64)),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, BoxliteError::InvalidArgument(_)), "{error}");
+        assert!(error.to_string().contains("not a version"), "{error}");
+    }
+
+    /// Checked before anything is sent: the runtime points at a port nothing
+    /// listens on, so a request would surface as a connection error instead.
+    #[tokio::test]
+    async fn images_move_tag_refuses_a_bad_name_tag_or_digest_without_a_request() {
+        let digest = format!("sha256:{}", "b".repeat(64));
+        for (name, tag, digest) in [
+            ("quay.io/acme/app:v1", "stable", digest.as_str()),
+            ("quay.io/acme/app", "-stable", digest.as_str()),
+            ("quay.io/acme/app", "stable", "latest"),
+        ] {
+            let error = images_on(1).move_tag(name, tag, digest).await.unwrap_err();
+            assert!(
+                matches!(error, BoxliteError::InvalidArgument(_)),
+                "{name} {tag} {digest}: {error}"
+            );
+        }
+    }
+
+    /// A server from before tag moves answers a detail without history or the
+    /// newer version fields; it still reads, with them empty.
+    #[tokio::test]
+    async fn images_get_from_a_server_without_history_reads_it_empty() {
+        let (port, _server) = json_server(vec![
+            r#"{"name":"quay.io/acme/app","tags":["v1"],"curated":false,"versions":[{"digest":"sha256:aa","size_bytes":42,"source_ref":"quay.io/acme/app:v1","recorded_at":"2026-01-02T03:04:05Z"}]}"#,
+        ])
+        .await;
+
+        let detail = images_on(port).get("quay.io/acme/app").await.unwrap();
+
+        assert!(detail.history.is_empty());
+        assert!(detail.versions[0].tags.is_empty());
+        assert!(detail.versions[0].last_used_at.is_none());
+        assert!(detail.versions[0].upstream_missing_at.is_none());
     }
 
     /// A REST runtime pulls when a box is created; pull answers without a

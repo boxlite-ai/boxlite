@@ -1903,6 +1903,19 @@ impl super::images::ImageBackend for LocalRuntime {
                 .into(),
         ))
     }
+
+    async fn move_tag(
+        &self,
+        _name: &str,
+        _tag: &str,
+        _digest: &str,
+    ) -> BoxliteResult<crate::runtime::types::ImageDetail> {
+        Err(BoxliteError::Unsupported(
+            "moving a tag changes a server's catalog; an embedded runtime has a \
+             local cache, which resolves a tag afresh for each new box"
+                .into(),
+        ))
+    }
 }
 
 // Named-volume operations (separate from RuntimeBackend). The concrete backend

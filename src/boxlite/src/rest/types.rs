@@ -579,7 +579,16 @@ pub(crate) struct ListImagesResponse {
     pub images: Vec<ImageInfoResponse>,
 }
 
-/// One build, as `GET /v1/{prefix}/images/{name}` lists it.
+/// A time the server may leave out; `None` when it does, or when it does not
+/// parse, rather than a time nobody observed.
+fn optional_time(raw: Option<&str>) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(raw?)
+        .ok()
+        .map(|time| time.with_timezone(&chrono::Utc))
+}
+
+/// One build, as `GET /v1/{prefix}/images/{name}` lists it. The fields after
+/// `recorded_at` default, so a server that predates them still reads.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ImageVersionResponse {
     pub digest: String,
@@ -587,9 +596,27 @@ pub(crate) struct ImageVersionResponse {
     pub size_bytes: Option<u64>,
     pub source_ref: String,
     pub recorded_at: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub last_used_at: Option<String>,
+    #[serde(default)]
+    pub upstream_missing_at: Option<String>,
 }
 
-/// Response for `GET /v1/{prefix}/images/{name}`.
+/// One move of a tag, as an image's `history` lists it.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ImageTagEventResponse {
+    pub tag: String,
+    #[serde(default)]
+    pub from_digest: Option<String>,
+    pub to_digest: String,
+    #[serde(default)]
+    pub actor: Option<String>,
+    pub moved_at: String,
+}
+
+/// Response for `GET /v1/{prefix}/images/{name}` and for a tag move.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ImageDetailResponse {
     pub name: String,
@@ -599,6 +626,14 @@ pub(crate) struct ImageDetailResponse {
     pub curated: bool,
     #[serde(default)]
     pub versions: Vec<ImageVersionResponse>,
+    #[serde(default)]
+    pub history: Vec<ImageTagEventResponse>,
+}
+
+/// Body for `PUT /v1/{prefix}/images/{name}/tags/{tag}`.
+#[derive(Debug, Serialize)]
+pub(crate) struct MoveTagRequest<'a> {
+    pub digest: &'a str,
 }
 
 impl ImageDetailResponse {
@@ -612,9 +647,23 @@ impl ImageDetailResponse {
                 .into_iter()
                 .map(|version| crate::runtime::types::ImageVersion {
                     recorded_at: recorded_time(&version.recorded_at),
+                    last_used_at: optional_time(version.last_used_at.as_deref()),
+                    upstream_missing_at: optional_time(version.upstream_missing_at.as_deref()),
                     digest: version.digest,
                     size_bytes: version.size_bytes,
                     source_ref: version.source_ref,
+                    tags: version.tags,
+                })
+                .collect(),
+            history: self
+                .history
+                .into_iter()
+                .map(|event| crate::runtime::types::ImageTagEvent {
+                    moved_at: recorded_time(&event.moved_at),
+                    tag: event.tag,
+                    from_digest: event.from_digest,
+                    to_digest: event.to_digest,
+                    actor: event.actor,
                 })
                 .collect(),
         }

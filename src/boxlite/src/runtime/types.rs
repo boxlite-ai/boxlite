@@ -705,6 +705,11 @@ pub struct ImageDetail {
 
     /// Each build held under the name, newest first.
     pub versions: Vec<ImageVersion>,
+
+    /// Where each tag has pointed, newest first. Only a catalog keeps it, and
+    /// only its most recent moves; a local cache answers it empty.
+    #[serde(default)]
+    pub history: Vec<ImageTagEvent>,
 }
 
 /// One build of an image.
@@ -721,6 +726,39 @@ pub struct ImageVersion {
 
     /// When this build was recorded.
     pub recorded_at: DateTime<Utc>,
+
+    /// Tags that point at this build now.
+    #[serde(default)]
+    pub tags: Vec<String>,
+
+    /// When a box last started from this build, when that is known. Only a
+    /// catalog tracks it.
+    #[serde(default)]
+    pub last_used_at: Option<DateTime<Utc>>,
+
+    /// When a pull first found this build gone from its registry. Runners
+    /// that cached it still start it. Only a catalog records it.
+    #[serde(default)]
+    pub upstream_missing_at: Option<DateTime<Utc>>,
+}
+
+/// One move of a tag in a catalog, or the pull that first recorded the tag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageTagEvent {
+    /// The tag that moved.
+    pub tag: String,
+
+    /// The build it pointed at before; `None` when the tag did not exist yet.
+    pub from_digest: Option<String>,
+
+    /// The build it points at from then on.
+    pub to_digest: String,
+
+    /// Who moved it; `None` when a pull recorded it.
+    pub actor: Option<String>,
+
+    /// When it moved.
+    pub moved_at: DateTime<Utc>,
 }
 
 /// How much of its image allowance a REST runtime's caller holds.

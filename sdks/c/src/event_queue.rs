@@ -1459,12 +1459,16 @@ mod owned_ffi_ptr_nested_leak_tests {
             size_bytes,
             source_ref: format!("quay.io/acme/app@{digest}"),
             recorded_at: Default::default(),
+            tags: Vec::new(),
+            last_used_at: None,
+            upstream_missing_at: None,
         };
         let detail = ImageDetail {
             name: "quay.io/acme/app".to_string(),
             tags: vec!["v1".to_string(), "v2".to_string()],
             curated: false,
             versions: vec![version("sha256:bb", Some(42)), version("sha256:aa", None)],
+            history: Vec::new(),
         };
 
         let owned = OwnedFfiPtr::new_with(

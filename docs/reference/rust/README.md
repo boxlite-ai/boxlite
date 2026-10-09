@@ -142,6 +142,7 @@ the server's catalog on a REST one. Obtained with `runtime.images()?`.
 | `get` | `async fn get(&self, name: &str) -> BoxliteResult<ImageDetail>` | The cache entries under the name | The catalog entry, with its versions |
 | `remove` | `async fn remove(&self, name: &str) -> BoxliteResult<()>` | Forgets the name; layers stay | Removes the catalog entry; refused while a box can boot from it |
 | `usage` | `async fn usage(&self) -> BoxliteResult<ImageUsage>` | `Unsupported`: a cache has no limit | Images held, the limit, and their declared bytes |
+| `move_tag` | `async fn move_tag(&self, name: &str, tag: &str, digest: &str) -> BoxliteResult<ImageDetail>` | `Unsupported`: a cache resolves a tag afresh for each new box | Points the tag at the version with that digest; boxes already created keep theirs |
 
 `get` and `remove` take an image name such as `docker.io/library/alpine`; a
 reference with a tag or digest is refused with `InvalidArgument`, since a
@@ -150,6 +151,15 @@ refuses nothing, but a box built from the image reads its configuration from
 the cache whenever it starts: after the remove that start fetches it from the
 registry again, and fails while the registry is unreachable.
 
+`move_tag` takes a tag the OCI distribution spec accepts and a `sha256:`
+digest that one of the image's versions lists; either is refused with
+`InvalidArgument` before anything is sent. In a catalog, each version of an
+`ImageDetail` carries the `tags` on it, its `last_used_at`, and the
+`upstream_missing_at` a failed pull set when its registry no longer had it;
+the detail's `history` holds the latest tag moves, newest first, as
+`ImageTagEvent`s naming versions by digest. A local cache fills a version's
+`tags` and leaves the rest empty.
+
 ```rust
 let images = runtime.images()?;
 for image in images.list().await? {
@@ -157,6 +167,11 @@ for image in images.list().await? {
 }
 let detail = images.get("docker.io/library/alpine").await?;
 println!("{:?}", detail.tags);
+// REST runtimes: roll `stable` onto the newest version.
+let detail = images
+    .move_tag("docker.io/library/alpine", "stable", &detail.versions[0].digest)
+    .await?;
+println!("{:?}", detail.history.first());
 images.remove("docker.io/library/alpine").await?;
 ```
 

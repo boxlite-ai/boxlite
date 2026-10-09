@@ -18,6 +18,9 @@ use crate::runtime::types::{ImageDetail, ImageInfo, ImageUsage};
 /// repository path, both bounded well below this.
 const MAX_NAME_CHARS: usize = 512;
 
+/// Longest tag the OCI distribution spec allows.
+const MAX_TAG_CHARS: usize = 128;
+
 /// Internal trait for image management, implemented by both backends.
 ///
 /// `name` arguments have passed [`checked_name`].
@@ -41,6 +44,10 @@ pub(crate) trait ImageBackend: Send + Sync {
 
     /// How many images are held against the caller's allowance.
     async fn image_usage(&self) -> BoxliteResult<ImageUsage>;
+
+    /// Point `tag` of `name` at the build with `digest`; the image as it now is.
+    /// `tag` and `digest` have passed [`checked_tag`] and [`checked_digest`].
+    async fn move_tag(&self, name: &str, tag: &str, digest: &str) -> BoxliteResult<ImageDetail>;
 }
 
 /// `name` if it names an image without a tag or digest, refused otherwise.
@@ -79,6 +86,39 @@ pub(crate) fn checked_name(name: &str) -> BoxliteResult<&str> {
         ));
     }
     Ok(name)
+}
+
+/// `tag` if the OCI distribution spec accepts it: a letter, digit or
+/// underscore, then up to 127 of those, `.` or `-`. A server refuses the same
+/// tags; refusing them here keeps a typo from becoming a round trip.
+pub(crate) fn checked_tag(tag: &str) -> BoxliteResult<&str> {
+    let mut chars = tag.chars();
+    let starts_well = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+    let continues_well = chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
+    if starts_well && continues_well && tag.len() <= MAX_TAG_CHARS {
+        Ok(tag)
+    } else {
+        Err(BoxliteError::InvalidArgument(format!(
+            "'{tag}' is not a tag the OCI distribution spec accepts"
+        )))
+    }
+}
+
+/// `digest` if it is a sha256 manifest digest, the only kind a catalog records
+/// and the form `ImageVersion::digest` takes.
+pub(crate) fn checked_digest(digest: &str) -> BoxliteResult<&str> {
+    match digest.strip_prefix("sha256:") {
+        Some(hex)
+            if hex.len() == 64 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) =>
+        {
+            Ok(digest)
+        }
+        _ => Err(BoxliteError::InvalidArgument(format!(
+            "'{digest}' is not a sha256 digest; pass the digest of one of the image's versions"
+        ))),
+    }
 }
 
 /// `reference` without a trailing `:tag` or `@digest`.
@@ -201,11 +241,72 @@ impl ImageHandle {
     pub async fn usage(&self) -> BoxliteResult<ImageUsage> {
         self.manager.image_usage().await
     }
+
+    /// Point `tag` of the image `name` at the build with `digest`, creating
+    /// the tag if it does not exist, and answer the image as it now is.
+    ///
+    /// Boxes created afterwards with the tag boot that build; boxes already
+    /// created keep what they booted, and nothing is pulled. The move is kept
+    /// in the image's `history`. REST runtimes only: a local cache keeps no
+    /// catalog of tags, and resolves a tag afresh for each new box. The name,
+    /// tag and digest are checked before anything is sent.
+    pub async fn move_tag(
+        &self,
+        name: &str,
+        tag: &str,
+        digest: &str,
+    ) -> BoxliteResult<ImageDetail> {
+        self.manager
+            .move_tag(
+                checked_name(name)?,
+                checked_tag(tag)?,
+                checked_digest(digest)?,
+            )
+            .await
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::checked_name;
+    use super::{checked_digest, checked_name, checked_tag};
+
+    #[test]
+    fn accepts_a_tag_oci_accepts() {
+        for tag in ["v1", "stable", "_private", "3.20-alpine", &"a".repeat(128)] {
+            assert_eq!(checked_tag(tag).unwrap(), tag);
+        }
+    }
+
+    #[test]
+    fn refuses_a_tag_oci_refuses() {
+        for tag in [
+            "",
+            "-v1",
+            ".hidden",
+            "v1/x",
+            "v 1",
+            "v1:x",
+            &"a".repeat(129),
+        ] {
+            assert!(checked_tag(tag).is_err(), "{tag:?} was accepted");
+        }
+    }
+
+    #[test]
+    fn accepts_only_a_sha256_digest() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        assert_eq!(checked_digest(&digest).unwrap(), digest);
+        for digest in [
+            String::new(),
+            "latest".into(),
+            "sha256:aa".into(),
+            format!("sha256:{}", "A".repeat(64)),
+            format!("sha512:{}", "a".repeat(64)),
+            format!("sha256:{}", "a".repeat(65)),
+        ] {
+            assert!(checked_digest(&digest).is_err(), "{digest:?} was accepted");
+        }
+    }
 
     #[test]
     fn accepts_an_image_name() {

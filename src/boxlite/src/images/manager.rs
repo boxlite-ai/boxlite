@@ -223,6 +223,8 @@ impl ImageManager {
             tags,
             curated: false,
             versions: versions_of(&held),
+            // A cache keeps no record of where a tag pointed before.
+            history: Vec::new(),
         })
     }
 
@@ -326,32 +328,45 @@ impl HeldReference {
     }
 }
 
-/// One version per build, newest first. A build's tag names it ahead of the
-/// digest alias a pull also keeps for it.
+/// One version per build, newest first, each with the tags that name it. A
+/// build's tag names it ahead of the digest alias a pull also keeps for it.
 fn versions_of(held: &[HeldReference]) -> Vec<ImageVersion> {
     let mut by_build: HashMap<&str, ImageVersion> = HashMap::new();
     for entry in held {
         let recorded_at = cached_time(&entry.cached.cached_at);
-        match by_build.entry(entry.cached.manifest_digest.as_str()) {
-            Entry::Vacant(slot) => {
-                slot.insert(ImageVersion {
-                    digest: entry.cached.manifest_digest.clone(),
-                    // The cache keeps layer digests, not their sizes.
-                    size_bytes: None,
-                    source_ref: entry.reference.clone(),
-                    recorded_at,
-                });
-            }
+        let version = match by_build.entry(entry.cached.manifest_digest.as_str()) {
+            Entry::Vacant(slot) => slot.insert(ImageVersion {
+                digest: entry.cached.manifest_digest.clone(),
+                // The cache keeps layer digests, not their sizes.
+                size_bytes: None,
+                source_ref: entry.reference.clone(),
+                recorded_at,
+                tags: Vec::new(),
+                // A cache records neither a build's last use nor its registry
+                // losing it; only a catalog does.
+                last_used_at: None,
+                upstream_missing_at: None,
+            }),
             Entry::Occupied(slot) => {
                 let version = slot.into_mut();
                 if !entry.is_alias() {
                     version.source_ref = entry.reference.clone();
                 }
                 version.recorded_at = version.recorded_at.min(recorded_at);
+                version
             }
+        };
+        if !entry.is_alias()
+            && let Some(tag) = entry.parsed.tag()
+        {
+            version.tags.push(tag.to_string());
         }
     }
     let mut versions: Vec<ImageVersion> = by_build.into_values().collect();
+    for version in &mut versions {
+        version.tags.sort();
+        version.tags.dedup();
+    }
     versions.sort_by_key(|version| std::cmp::Reverse(version.recorded_at));
     versions
 }
@@ -552,6 +567,38 @@ mod tests {
                 (NEWER, "quay.io/acme/app:v2")
             ]
         );
+    }
+
+    /// Each build names the tags the cache holds for it, and none of its
+    /// digest alias.
+    #[tokio::test]
+    async fn get_names_the_tags_on_each_build() {
+        let alias = format!("quay.io/acme/app@{FIRST}");
+        let (_dir, images) = seeded(&[
+            ("quay.io/acme/app:v1", FIRST),
+            ("quay.io/acme/app:stable", FIRST),
+            (alias.as_str(), FIRST),
+            ("quay.io/acme/app:v2", NEWER),
+        ])
+        .await;
+
+        let detail = images.get("quay.io/acme/app").await.unwrap();
+
+        let mut tags: Vec<(&str, Vec<String>)> = detail
+            .versions
+            .iter()
+            .map(|v| (v.digest.as_str(), v.tags.clone()))
+            .collect();
+        tags.sort();
+        assert_eq!(
+            tags,
+            [
+                (FIRST, vec!["stable".to_string(), "v1".to_string()]),
+                (NEWER, vec!["v2".to_string()]),
+            ]
+        );
+        assert!(detail.versions.iter().all(|v| v.last_used_at.is_none()));
+        assert!(detail.history.is_empty());
     }
 
     /// The cache keys `alpine` as it was pulled; asking by its full name finds it.
