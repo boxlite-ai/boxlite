@@ -144,6 +144,58 @@ API at boot. The key reaches the API on both deploy paths: SST declares
 `OIDC_ACCOUNT_LINK_SECRET` as a secret that defaults to empty, and mdeploy
 fetches it from the stage's optional API group.
 
+### The Action's part
+
+The Post-Login Action looks at every interactive BoxLite browser login through
+a social connection whose user has a single sign-in; a user already linked
+reaches its account directly. A login without an address keeps its own
+identity. A token refresh keeps the identity it has until the next browser
+login, which spares the Management API a lookup per refresh. The Action looks
+up the other users holding the address with a verified email; an unverified one
+is left alone, since a stranger may have signed the address up. If the lookup
+fails before a link page shows, the login goes through unlinked and the next
+one looks again: Auth0 allows a free or trial tenant's Management API 2
+requests a second
+([Rate Limit Policy](https://auth0.com/docs/troubleshoot/customer-support/operational-policies/rate-limit-policy)).
+The flow:
+
+1. An address the provider has not verified goes through the email Form's code
+   first, as an unverified password account's does.
+2. When one of the other accounts holds a password, the link page shows the
+   address and asks for that password, which the Action checks with the
+   password-realm grant through the link client, forwarding the browser's
+   address in `auth0-forwarded-for`.
+3. Once proven, the Action asks the API to move this login's data, then links
+   it through the Management API, and makes the account that stays the token's
+   subject.
+
+With no other account, or only social ones, the login goes on as it is. The
+password account stays; this login joins it and makes no organization of its
+own. The design, POL-735, lists every case.
+
+A wrong password shows the page again with the reason, as often as the person
+tries; Auth0's brute-force protection still counts each attempt.
+`mfa_required`, a blocked account, or an API or tenant error ends the login
+with a message, and the next login starts over; moving the data again is
+harmless.
+
+The Action depends on three things outside its code:
+
+- **The link Form**: a Password field with the id `password`, which the Action
+  rather than the Form requires. The Action renders it with the vars `email`,
+  `lead` and `error`.
+- **The link client**: a confidential client allowed the password-realm grant,
+  with Trust Token Endpoint IP Header on so Auth0 honours
+  `auth0-forwarded-for`, and granted `read:users` (the lookup) and
+  `update:users` (linking) on the Management API.
+- **Three secrets**: `ACCOUNT_LINK_SECRET`, the same key as the API's
+  `OIDC_ACCOUNT_LINK_SECRET`, and the link client's `ACCOUNT_LINK_CLIENT_ID`
+  and `ACCOUNT_LINK_CLIENT_SECRET`.
+
+The configurator provisions none of them yet. It hydrates the tenant domain
+into the Action's code and leaves the API origin and the link Form's id empty,
+so the link is off.
+
 ### What the link moves
 
 When a folded user already had a BoxLite user — it signed in before — the API

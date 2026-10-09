@@ -286,6 +286,23 @@ test('hydrateLoginPolicyAction embeds exact non-secret resource identifiers safe
   assert.equal(hydrated.includes('__EMAIL_VERIFICATION_'), false)
 })
 
+test('hydrateLoginPolicyAction leaves the account link off unless given an origin and a Form', () => {
+  const source =
+    'const origin = __ACCOUNT_LINK_API_ORIGIN_JSON__; const form = __ACCOUNT_LINK_FORM_ID_JSON__; const domain = __AUTH0_DOMAIN_JSON__;'
+  const values = { clientId: 'spa_123', connectionName: 'boxlite-users', formId: 'ap_verify' }
+
+  assert.equal(hydrateLoginPolicyAction(source, values), 'const origin = ""; const form = ""; const domain = "";')
+  assert.equal(
+    hydrateLoginPolicyAction(source, {
+      ...values,
+      accountLinkApiOrigin: 'https://api.example.com',
+      accountLinkFormId: 'ap_link',
+      tenant: 'tenant.us.auth0.com',
+    }),
+    'const origin = "https://api.example.com"; const form = "ap_link"; const domain = "tenant.us.auth0.com";',
+  )
+})
+
 test('parseAuth0LoginPolicyOptions defaults to preview and requires exact tenant, client, and connection', () => {
   assert.deepEqual(
     parseAuth0LoginPolicyOptions([
@@ -832,7 +849,7 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
       },
       client,
       {
-        actionCode: 'exports.onExecutePostLogin = async () => {}',
+        actionCode: 'const AUTH0_DOMAIN = __AUTH0_DOMAIN_JSON__\nexports.onExecutePostLogin = async () => {}',
         emailVerificationTemplate: template,
         journalDirectory,
       },
@@ -875,6 +892,8 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
     assert.equal(journal.includes('"kind": "flow"'), false)
     assert.equal(journal.includes('"kind": "verification form"'), false)
     assert.match(journal, /passwordPolicy/)
+    // The Action reaches the token endpoint and Management API on the --tenant host.
+    assert.match(state.action.code, /const AUTH0_DOMAIN = "tenant\.us\.auth0\.com"/)
 
     const reapplyStart = calls.length
     const reapplied = configurator.apply()
@@ -901,14 +920,17 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
 
 type ActionHandler = (event: any, api: any) => Promise<void>
 
-function loadAction(): { onExecutePostLogin: ActionHandler; onContinuePostLogin: ActionHandler } {
+function loadAction(context: Record<string, unknown> = {}): {
+  onExecutePostLogin: ActionHandler
+  onContinuePostLogin: ActionHandler
+} {
   const source = hydrateLoginPolicyAction(readFileSync(new URL('./auth0/login-policy.js', import.meta.url), 'utf8'), {
     clientId: 'spa_123',
     connectionName: 'boxlite-users',
     formId: 'ap_verify',
   })
   const exports: Record<string, ActionHandler> = {}
-  runInNewContext(source, { exports })
+  runInNewContext(source, { exports, ...context })
   return exports as { onExecutePostLogin: ActionHandler; onContinuePostLogin: ActionHandler }
 }
 
@@ -943,6 +965,36 @@ function actionApi() {
     },
   }
 }
+
+test('login policy as deployed today leaves a social login its own identity', async () => {
+  // A request or a log line would mean the link step ran.
+  const reached: unknown[] = []
+  const { onExecutePostLogin } = loadAction({
+    fetch: async (url: unknown) => reached.push(url),
+    console: { log: (line: unknown) => reached.push(line) },
+  })
+  const capture = actionApi()
+
+  await onExecutePostLogin(
+    {
+      ...managedEvent(),
+      connection: { name: 'google-oauth2', strategy: 'google-oauth2' },
+      user: {
+        user_id: 'google-oauth2|103',
+        email: 'person@example.com',
+        email_verified: true,
+        name: 'Person',
+        identities: [{ provider: 'google-oauth2', user_id: '103', connection: 'google-oauth2' }],
+      },
+    },
+    capture.api,
+  )
+
+  assert.deepEqual(reached, [])
+  assert.deepEqual(capture.rendered, [])
+  assert.deepEqual(capture.denied, [])
+  assert.equal(capture.claims.email_verified, true)
+})
 
 test('login policy copies claims for verified managed database users', async () => {
   const { onExecutePostLogin } = loadAction()
