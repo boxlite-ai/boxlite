@@ -1,0 +1,4 @@
+interface:
+  display_name: "Set up BoxLite"
+  short_description: "Connect the BoxLite CLI to your cloud account"
+  default_prompt: "Use $boxlite-setup to check the CLI and sign in to BoxLite."

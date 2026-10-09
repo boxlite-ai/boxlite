@@ -1,0 +1,4 @@
+interface:
+  display_name: "BoxLite"
+  short_description: "Build and deploy apps in BoxLite cloud boxes"
+  default_prompt: "Use $boxlite to deploy a full-stack app with persistent storage."
