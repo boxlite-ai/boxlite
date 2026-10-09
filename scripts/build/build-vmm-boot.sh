@@ -7,7 +7,7 @@ inputs="$root/src/vmm/boot"
 cache="$root/target/vmm/boot/.cache"
 output="${_BOXLITE_BOOT_OUTPUT_ARG:-$root/target/vmm/boot/x86_64}"
 jobs="${_BOXLITE_BOOT_JOBS_ARG:-}"
-work= partial=
+work= stage= backup= partial= child_pid=
 artifacts=(vmlinux kernel.config build-info.txt)
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -31,26 +31,66 @@ check_host() {
     [[ $(uname -s) == Linux ]] || fail "Linux host required; on macOS use a Linux VM"
     local tool
     for tool in gcc x86_64-linux-gnu-gcc x86_64-linux-gnu-ld x86_64-linux-gnu-as \
-        make bc bison flex curl xz tar perl readelf sha256sum; do
+        make bc bison flex curl xz tar perl readelf sha256sum flock setsid realpath; do
         command -v "$tool" >/dev/null || fail "missing $tool; see src/vmm/boot/README.md for prerequisites"
     done
     [[ $(x86_64-linux-gnu-gcc -dumpmachine) == x86_64*-linux-gnu* ]] ||
         fail "x86_64-linux-gnu-gcc must target x86_64 Linux"
-    [[ ! -e $output || -d $output ]] || fail "output is not a directory: $output"
     jobs=${jobs:-$(getconf _NPROCESSORS_ONLN)}
+}
+
+check_output() {
+    [[ ! -L $output ]] || fail "output must not be a symlink: $output"
+    [[ ! -e $output || -d $output ]] || fail "output is not a directory: $output"
+    local path name
+    shopt -s nullglob dotglob
+    for path in "$output"/*; do
+        name=${path##*/}
+        case "$name" in
+            vmlinux|kernel.config|build-info.txt|SHA256SUMS) ;;
+            *) fail "output directory contains an unrelated entry: $path" ;;
+        esac
+        [[ -f $path && ! -L $path ]] || fail "unsafe output entry: $path"
+    done
+    output=$(realpath -m -- "$output")
 }
 
 cleanup() {
     local status=$? path
     trap - EXIT
-    for path in "$work" "$partial"; do
+    set +e
+    if [[ -n $child_pid ]]; then
+        kill -KILL -- "-$child_pid" 2>/dev/null
+        wait "$child_pid" 2>/dev/null
+    fi
+    if [[ -n $backup && -d $backup/artifacts && ! -e $output ]]; then
+        mv -- "$backup/artifacts" "$output" || {
+            printf 'ERROR: previous artifacts retained in %s\n' "$backup/artifacts" >&2
+            backup=
+            status=1
+        }
+    fi
+    for path in "$work" "$stage" "$backup" "$partial"; do
         [[ -z $path ]] || rm -rf -- "$path" || { printf 'ERROR: cleanup failed: %s\n' "$path" >&2; status=1; }
     done
     exit "$status"
 }
 
+run() {
+    # Each child gets its own session so cleanup can kill the whole tree; the lock
+    # descriptor stays with this process only.
+    setsid -- "$@" 9>&- &
+    child_pid=$!
+    local status=0
+    wait "$child_pid" || status=$?
+    child_pid=
+    return "$status"
+}
+
 prepare() {
     mkdir -p "$cache"
+    exec 9>"$cache/build.lock"
+    flock -n 9 || fail "another VMM boot build is running in this checkout"
     work=$(mktemp -d "${TMPDIR:-/tmp}/boxlite-vmm-boot.XXXXXXXX")
     trap cleanup EXIT
     trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
@@ -81,7 +121,7 @@ extract_kernel() {
     if [[ ! -f $tarball ]]; then
         # Download beside the cache entry so the final move is an atomic rename.
         partial="$cache/.linux-$KERNEL_VERSION.tar.xz.part.$$"
-        curl --fail --location --no-progress-meter --show-error --retry 3 \
+        run curl --fail --location --no-progress-meter --show-error --retry 3 \
             --connect-timeout 30 --max-time 600 --retry-max-time 900 \
             "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$KERNEL_VERSION.tar.xz" \
             --output "$partial"
@@ -90,7 +130,7 @@ extract_kernel() {
         partial=
     fi
     verify_tarball "$tarball"
-    tar -xJf "$tarball" -C "$work"
+    run tar -xJf "$tarball" -C "$work"
 }
 
 check_config() {
@@ -123,9 +163,9 @@ build_kernel() {
     local -a kernel_make=(make -C "$work/linux-$KERNEL_VERSION" "O=$work/build"
         ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- HOSTCC=gcc CC=x86_64-linux-gnu-gcc
         "KCFLAGS=-ffile-prefix-map=$work=.")
-    "${kernel_make[@]}" "KCONFIG_ALLCONFIG=$work/inputs/kernel.config" allnoconfig
+    run "${kernel_make[@]}" "KCONFIG_ALLCONFIG=$work/inputs/kernel.config" allnoconfig
     check_config
-    "${kernel_make[@]}" -j"$jobs" vmlinux
+    run "${kernel_make[@]}" -j"$jobs" vmlinux
     verify_elf "$work/build/vmlinux"
 }
 
@@ -144,21 +184,29 @@ write_metadata() {
 }
 
 publish() {
-    local stage="$work/stage" artifact
-    mkdir "$stage"
+    local artifact
+    mkdir -p -- "$(dirname "$output")"
+    stage=$(mktemp -d "$(dirname "$output")/.boxlite-boot.XXXXXXXX")
+    chmod 0755 "$stage"
     install -m 0644 "$work/build/vmlinux" "$stage/vmlinux"
     install -m 0644 "$work/build/.config" "$stage/kernel.config"
     write_metadata > "$stage/build-info.txt"
     for artifact in "${artifacts[@]}"; do [[ -s $stage/$artifact ]] || fail "empty artifact: $artifact"; done
     (cd "$stage" && sha256sum "${artifacts[@]}" > SHA256SUMS)
-    # Only the artifact names are written; other entries in the output directory are left alone.
-    mkdir -p -- "$output"
-    install -m 0644 "$stage"/* "$output/"
+    check_output
+    # Swap the staged directory in by rename; the previous output survives any failure.
+    if [[ -d $output ]]; then
+        backup=$(mktemp -d "$(dirname "$output")/.boxlite-boot-old.XXXXXXXX")
+        mv -- "$output" "$backup/artifacts"
+    fi
+    mv -- "$stage" "$output"
+    stage=
     printf 'Built VMM kernel: %s/vmlinux\n' "$output"
 }
 
 parse_args "$@"
 check_host
+check_output
 prepare
 extract_kernel
 build_kernel
