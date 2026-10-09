@@ -321,6 +321,27 @@ const S3_URI_SCHEME = 's3://'
 const ARCHIVE_PREFIX_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
 /**
+ * The login-time account link (POL-555).
+ *
+ * The Post-Login Action proves the person holds both accounts and links them
+ * inside Auth0. Moving BoxLite's own rows is the one step it cannot take, so
+ * it asks this API to, and asks whether BoxLite knows a user, signing both
+ * requests with the HS256 key it holds as `ACCOUNT_LINK_SECRET` and this API
+ * reads as `OIDC_ACCOUNT_LINK_SECRET`. Present means on; absent means off.
+ */
+export function oidcAccountLinkConfig(env: NodeJS.ProcessEnv = process.env) {
+  const secret = env.OIDC_ACCOUNT_LINK_SECRET?.trim()
+  if (!secret) {
+    return { enabled: false, secret: undefined as string | undefined }
+  }
+  // RFC 7518 §3.2: an HS256 key must be at least as long as the hash, 256 bits.
+  if (secret.length < 32) {
+    throw new Error('OIDC_ACCOUNT_LINK_SECRET must hold at least 32 characters')
+  }
+  return { enabled: true, secret }
+}
+
+/**
  * Where a box migration's archive lives in the object store: the prefix the
  * exporting runner writes under and the importing one reads back.
  *
@@ -404,6 +425,7 @@ const configuration = {
     endSessionEndpoint: process.env.OIDC_END_SESSION_ENDPOINT,
     postLogoutRedirectAllowlist: process.env.OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST,
     managementApi: oidcManagementApiConfig(),
+    accountLink: oidcAccountLinkConfig(),
   },
   smtp: {
     host: process.env.SMTP_HOST,

@@ -23,8 +23,8 @@ interface Membership {
  * then fails leaves a state the next login can simply repeat.
  *
  * BoxLite provisions a user, and a default organization, from the token
- * subject the first time it sees one. Once Auth0 links a social identity into
- * the password account, tokens stop carrying the social subject, and every
+ * subject the first time it sees one. Once Auth0 links one account into
+ * another, tokens stop carrying the folded account's subject, and every
  * organization that subject belonged to would stop appearing: the membership
  * rows still name the old id. This moves them to the primary account.
  *
@@ -138,7 +138,7 @@ export class LinkedIdentityService {
     const existingByOrganization = new Map(existing.map((row) => [row.organizationId, row]))
     // One default per user is enforced by a partial unique index. The
     // primary's own default wins; the secondary's only survives when the
-    // primary had none, which is the account the social login created.
+    // primary had none, which is a primary BoxLite had not seen before.
     let hasDefault = existing.some((row) => row.isDefaultForUser)
 
     for (const membership of incoming) {

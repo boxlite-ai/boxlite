@@ -30,6 +30,7 @@ export interface ApiInputs {
   oidcClientId: sst.Secret
   oidcMgmtClientId: sst.Secret
   oidcMgmtClientSecret: sst.Secret
+  accountLinkSecret: sst.Secret
   posthogApiKey: sst.Secret
   svixAuthToken: sst.Secret
   usageExportToken: sst.Secret
@@ -65,6 +66,7 @@ export function buildApi(input: ApiInputs) {
     oidcClientId,
     oidcMgmtClientId,
     oidcMgmtClientSecret,
+    accountLinkSecret,
     posthogApiKey,
     svixAuthToken,
     usageExportToken,
@@ -233,6 +235,9 @@ export function buildApi(input: ApiInputs) {
             'when OIDC_MANAGEMENT_API_ENABLED=true',
           ),
         }),
+        // The key the Post-Login Action signs the account link's adopt and
+        // status requests with (POL-555); empty leaves both endpoints off.
+        OIDC_ACCOUNT_LINK_SECRET: accountLinkSecret.value,
         // RP-initiated logout fallback. Safe to set unconditionally: the API
         // probes the IdP's discovery doc at startup and only exposes this URL
         // to the dashboard when the IdP itself lacks end_session_endpoint
