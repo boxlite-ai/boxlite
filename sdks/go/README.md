@@ -144,6 +144,7 @@ fmt.Println(pull.Reference, pull.ConfigDigest, pull.LayerCount)
 | `Get` | The cache entries under the name | The catalog entry with its versions |
 | `Remove` | Forgets the name; layers stay | Removes the catalog entry; `ErrInvalidState` while a box can boot from it |
 | `Usage` | `ErrUnsupported` | `ImageUsage{Count, Limit, KnownBytes}` |
+| `MoveTag` | `ErrUnsupported`: a cache resolves a tag afresh for each new box | Points the tag at the version with that digest; boxes already created keep theirs |
 
 `Get` and `Remove` take an image name such as `"docker.io/library/alpine"`. A
 reference with a tag or digest fails with `ErrInvalidArgument`, since a remove
@@ -152,6 +153,13 @@ takes every tag of the name; a name the runtime does not hold fails with
 `ImageVersion.SizeBytes` is nil when the size is unknown. Locally, a box built
 from a removed image reads the image's configuration from the registry when it
 next starts.
+
+`MoveTag(ctx, name, tag, digest)` takes a tag the OCI distribution spec accepts
+and a `sha256:` digest; either malformed fails with `ErrInvalidArgument` before
+anything is sent. A catalog fills each version's `Tags`, `LastUsedAt` and
+`UpstreamMissingAt` (nil when unset) and the detail's `History` of tag moves,
+newest first, where `FromDigest` is empty for a new tag and `Actor` for a move
+a pull recorded. A local cache fills only `Tags`.
 
 ### Private Registry Logins
 
