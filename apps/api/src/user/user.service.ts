@@ -17,8 +17,18 @@ import { UserCreatedEvent } from './events/user-created.event'
 import { UserDeletedEvent } from './events/user-deleted.event'
 import { UserEmailVerifiedEvent } from './events/user-email-verified.event'
 import { recordBusinessEvent } from '../common/utils/business-event.util'
+import { CommerceInternalClient } from '../commerce/commerce-internal.client'
+import { CommerceUnavailableError } from '../commerce/commerce.errors'
+import { ReferralRegistrationException } from '../exceptions/referral-registration.exception'
 
 const PG_UNIQUE_VIOLATION = '23505'
+
+function registrationExceptionType(error: unknown): string {
+  if (error instanceof ReferralRegistrationException) {
+    return error.code
+  }
+  return (error as { code?: unknown })?.code === PG_UNIQUE_VIOLATION ? 'user_conflict' : 'internal'
+}
 
 @Injectable()
 export class UserService {
@@ -27,20 +37,23 @@ export class UserService {
     private readonly userRepository: Repository<User>,
     private readonly eventEmitter: EventEmitter2,
     private readonly dataSource: DataSource,
+    private readonly commerce: CommerceInternalClient,
   ) {}
 
   /**
    * @param registeredBy who registered the user, recorded on its user.registration
    * business events. Omitted for the boot-time admin seed, which is not a registration.
+   * @param referralCode the raw referral code sent with the request creating the account.
+   * It is ignored when blank or when Commerce is not configured; otherwise it must
+   * resolve to the inviting organization, or no user is created.
+   * @throws ReferralRegistrationException when a referral code cannot be resolved.
    */
-  async create(createUserDto: CreateUserDto, registeredBy?: 'user' | 'admin'): Promise<User> {
+  async create(createUserDto: CreateUserDto, registeredBy?: 'user' | 'admin', referralCode?: string): Promise<User> {
     const defaultOrganizationDefaultRegionId =
       createUserDto.defaultOrganizationDefaultRegionId ?? createUserDto.personalOrganizationDefaultRegionId
     let user = new User()
     user.id = createUserDto.id
     user.name = createUserDto.name
-    const keyPair = await this.generatePrivateKey()
-    user.keyPair = keyPair
     user.publicKeys = []
     user.emailVerified = createUserDto.emailVerified
 
@@ -61,6 +74,10 @@ export class UserService {
 
     let defaultOrganizationId: string | undefined
     try {
+      // Resolve before the costly key generation: a refused referral leaves the
+      // identity new, and its next request tries again.
+      user.referredByOrganizationId = await this.resolveReferral(referralCode)
+      user.keyPair = await this.generatePrivateKey()
       await this.dataSource.transaction(async (em) => {
         user = await em.save(user)
         // The only listener, OrganizationService.handleUserCreatedEvent,
@@ -73,11 +90,7 @@ export class UserService {
       })
     } catch (error) {
       if (registration) {
-        recordBusinessEvent({
-          ...registration,
-          outcome: 'exception',
-          exceptionType: error?.code === PG_UNIQUE_VIOLATION ? 'user_conflict' : 'internal',
-        })
+        recordBusinessEvent({ ...registration, outcome: 'exception', exceptionType: registrationExceptionType(error) })
       }
       throw error
     }
@@ -86,6 +99,26 @@ export class UserService {
       recordBusinessEvent({ ...registration, outcome: 'success', orgId: defaultOrganizationId })
     }
     return user
+  }
+
+  private async resolveReferral(referralCode: string | undefined): Promise<string | null> {
+    if (!referralCode?.trim() || !this.commerce.isConfigured()) {
+      return null
+    }
+
+    let organizationId: string | null
+    try {
+      organizationId = await this.commerce.resolveReferralCode(referralCode)
+    } catch (error) {
+      if (error instanceof CommerceUnavailableError) {
+        throw new ReferralRegistrationException('referral_unavailable')
+      }
+      throw error
+    }
+    if (!organizationId) {
+      throw new ReferralRegistrationException('invalid_referral_code')
+    }
+    return organizationId
   }
 
   async findAll(): Promise<User[]> {

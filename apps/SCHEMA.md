@@ -200,7 +200,7 @@ Identity, keyed by the subject the IdP issues rather than a generated uuid.
 | `role` | `enum` | `admin` \| `user`, default `user` |
 | `publicKeys` | `simple-json` | |
 | `keyPair` | `simple-json` | nullable; deprecated — written on user creation, read by nothing since the SSH gateway was removed |
-| `referredByOrganizationId` | `uuid` | nullable; organization whose invitation created the account; no FK |
+| `referredByOrganizationId` | `uuid` | nullable; organization whose invitation created the account, resolved from `X-BoxLite-Referral-Code` and written only at creation; no FK |
 | `createdAt` | `timestamptz` | |
 
 **Partial index:** `user_referred_by_organization_idx (referredByOrganizationId)` where `referredByOrganizationId IS NOT NULL`.
