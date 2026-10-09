@@ -213,7 +213,7 @@ const Images: React.FC = () => {
                 </p>
                 <p>
                   A pull never moves a recorded tag, so this is also how to pick up where a tag points upstream now. To
-                  point a tag at a version already recorded, move it through the API instead.
+                  point a tag at a version already recorded, move it through the API or an SDK instead.
                 </p>
                 <p>Boxes that have not been destroyed still hold this image, and the removal will be refused.</p>
               </div>
