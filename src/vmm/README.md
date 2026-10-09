@@ -36,6 +36,9 @@ their interfaces are being established.
 
 ## Build
 
+`make vmm:boot` builds the pinned x86_64 ELF kernel (`vmlinux`) with Linux host
+tools; see [boot](boot/README.md) for prerequisites, outputs and limits.
+
 From the repository root:
 
 ```sh
