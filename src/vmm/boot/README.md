@@ -63,3 +63,9 @@ network access. Sources are extracted to the box's ext4 root disk (`/tmp` there
 is tmpfs, and a macOS mount may be case-insensitive). Apple Silicon hosts get an
 arm64 box that cross-compiles. `build-info.txt`, and so `SHA256SUMS`, record the
 box's architecture and compiler. macOS is not yet qualified.
+
+The build lock only serializes builds inside one box. BoxLite's virtiofs mount
+does not implement file locks, so the guest kernel keeps them local: a box
+build does not exclude a host build or another box build of the same checkout.
+Run one build per checkout at a time; overlapping runs can overwrite each
+other's output.
