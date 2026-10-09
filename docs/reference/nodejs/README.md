@@ -96,6 +96,7 @@ either; `pull()` is local only and `usage()` REST only. Read it from the
 | `get()` | `(name: string) => Promise<ImageDetail>` | The cache entries under the name | The catalog entry with its versions |
 | `remove()` | `(name: string) => Promise<void>` | Forgets the name; layers stay | Removes the catalog entry; `invalid_state` while a box can boot from it |
 | `usage()` | `() => Promise<ImageUsage>` | Rejects with `unsupported` | `count`, `limit`, `knownBytes` |
+| `moveTag()` | `(name: string, tag: string, digest: string) => Promise<ImageDetail>` | Rejects with `unsupported`: a cache resolves a tag afresh for each new box | Points the tag at the version with that digest; boxes already created keep theirs |
 
 `get()` and `remove()` take an image name such as `"docker.io/library/alpine"`;
 a reference with a tag or digest rejects with `invalid_argument`, since a
@@ -104,10 +105,16 @@ remove takes every tag of the name. A name nothing is held under rejects with
 Locally, a box built from a removed image reads the image's configuration from
 the registry when it next starts.
 
+`moveTag()` takes a tag the OCI distribution spec accepts and a `sha256:`
+digest; either malformed rejects with `invalid_argument` before anything is
+sent. A catalog fills every field below; a local cache fills a version's
+`tags` and leaves `lastUsedAt`, `upstreamMissingAt` and `history` empty.
+
 | Type | Fields |
 |------|--------|
-| `ImageDetail` | `name`, `tags`, `curated`, `versions: ImageVersion[]` (newest first) |
-| `ImageVersion` | `digest`, `sizeBytes` (absent when unknown), `sourceRef`, `recordedAt` (RFC 3339) |
+| `ImageDetail` | `name`, `tags`, `curated`, `versions: ImageVersion[]` (newest first), `history: ImageTagEvent[]` (latest moves, newest first) |
+| `ImageVersion` | `digest`, `sizeBytes` (absent when unknown), `sourceRef`, `recordedAt` (RFC 3339), `tags`, `lastUsedAt` and `upstreamMissingAt` (absent when unset) |
+| `ImageTagEvent` | `tag`, `fromDigest` (absent when the tag was new), `toDigest`, `actor` (absent when a pull recorded the tag), `movedAt` |
 | `ImageUsage` | `count`, `limit`, `knownBytes` |
 
 ```typescript
@@ -120,6 +127,8 @@ for (const image of await runtime.images.list()) {
 }
 const detail = await runtime.images.get('docker.io/library/alpine');
 console.log(detail.tags, detail.versions.map((version) => version.digest));
+// REST runtimes: roll `stable` onto the newest version.
+await runtime.images.moveTag('docker.io/library/alpine', 'stable', detail.versions[0].digest);
 await runtime.images.remove('docker.io/library/alpine');
 ```
 

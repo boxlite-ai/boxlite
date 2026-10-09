@@ -35,6 +35,7 @@ export type {
   ImageHandle,
   ImageInfo,
   ImagePullResult,
+  ImageTagEvent,
   ImageUsage,
   ImageVersion,
   NewRegistryCredential,

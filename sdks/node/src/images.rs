@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use boxlite::ImageHandle;
-use boxlite::runtime::types::{ImageDetail, ImageInfo, ImageUsage, ImageVersion};
+use boxlite::runtime::types::{ImageDetail, ImageInfo, ImageTagEvent, ImageUsage, ImageVersion};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -68,6 +68,15 @@ pub struct JsImageVersion {
     /// When this build was recorded, as an RFC 3339 string.
     #[napi(js_name = "recordedAt")]
     pub recorded_at: String,
+    /// The image's tags that point at this build.
+    pub tags: Vec<String>,
+    /// When a box last started from this build; absent when unknown.
+    #[napi(js_name = "lastUsedAt")]
+    pub last_used_at: Option<String>,
+    /// When a pull found this build gone from its registry; absent while it is
+    /// not known to be gone.
+    #[napi(js_name = "upstreamMissingAt")]
+    pub upstream_missing_at: Option<String>,
 }
 
 impl From<ImageVersion> for JsImageVersion {
@@ -77,6 +86,39 @@ impl From<ImageVersion> for JsImageVersion {
             size_bytes: version.size_bytes.map(js_number),
             source_ref: version.source_ref,
             recorded_at: version.recorded_at.to_rfc3339(),
+            tags: version.tags,
+            last_used_at: version.last_used_at.map(|time| time.to_rfc3339()),
+            upstream_missing_at: version.upstream_missing_at.map(|time| time.to_rfc3339()),
+        }
+    }
+}
+
+/// One move of a tag, or the pull that first recorded it; versions named by
+/// digest.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsImageTagEvent {
+    pub tag: String,
+    /// The build the tag pointed at before; absent when the tag was new.
+    #[napi(js_name = "fromDigest")]
+    pub from_digest: Option<String>,
+    #[napi(js_name = "toDigest")]
+    pub to_digest: String,
+    /// Who moved the tag; absent when a pull recorded it.
+    pub actor: Option<String>,
+    /// As an RFC 3339 string.
+    #[napi(js_name = "movedAt")]
+    pub moved_at: String,
+}
+
+impl From<ImageTagEvent> for JsImageTagEvent {
+    fn from(event: ImageTagEvent) -> Self {
+        Self {
+            tag: event.tag,
+            from_digest: event.from_digest,
+            to_digest: event.to_digest,
+            actor: event.actor,
+            moved_at: event.moved_at.to_rfc3339(),
         }
     }
 }
@@ -92,6 +134,8 @@ pub struct JsImageDetail {
     pub curated: bool,
     /// Newest first.
     pub versions: Vec<JsImageVersion>,
+    /// The latest tag moves, newest first; empty on a local cache.
+    pub history: Vec<JsImageTagEvent>,
 }
 
 impl From<ImageDetail> for JsImageDetail {
@@ -104,6 +148,11 @@ impl From<ImageDetail> for JsImageDetail {
                 .versions
                 .into_iter()
                 .map(JsImageVersion::from)
+                .collect(),
+            history: detail
+                .history
+                .into_iter()
+                .map(JsImageTagEvent::from)
                 .collect(),
         }
     }
@@ -182,6 +231,23 @@ impl JsImageHandle {
         let handle = Arc::clone(&self.handle);
         let usage = handle.usage().await.map_err(map_err)?;
         Ok(JsImageUsage::from(usage))
+    }
+
+    /// Point a tag of an image name at the version with that digest; REST
+    /// runtimes only.
+    #[napi(js_name = "moveTag")]
+    pub async fn move_tag(
+        &self,
+        name: String,
+        tag: String,
+        digest: String,
+    ) -> Result<JsImageDetail> {
+        let handle = Arc::clone(&self.handle);
+        let detail = handle
+            .move_tag(&name, &tag, &digest)
+            .await
+            .map_err(map_err)?;
+        Ok(JsImageDetail::from(detail))
     }
 }
 

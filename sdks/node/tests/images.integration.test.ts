@@ -121,7 +121,43 @@ describe("image catalog on a local cache", () => {
 
     expect(errorCode(err)).toBe("unsupported");
   });
+
+  test("moveTag is unsupported", async () => {
+    const err = await failureOf(
+      runtime.images.moveTag("quay.io/acme/app", "stable", NEW),
+    );
+
+    expect(errorCode(err)).toBe("unsupported");
+  });
 });
+
+const OLD = `sha256:${"a".repeat(64)}`;
+const NEW = `sha256:${"b".repeat(64)}`;
+const MOVED = {
+  name: "quay.io/acme/app",
+  tags: ["stable"],
+  curated: false,
+  versions: [
+    {
+      digest: NEW,
+      size_bytes: null,
+      source_ref: "quay.io/acme/app:v2",
+      recorded_at: "2026-09-02T00:00:00Z",
+      tags: ["stable"],
+      last_used_at: "2026-09-03T00:00:00Z",
+      upstream_missing_at: null,
+    },
+  ],
+  history: [
+    {
+      tag: "stable",
+      from_digest: OLD,
+      to_digest: NEW,
+      actor: "user-1",
+      moved_at: "2026-09-04T00:00:00Z",
+    },
+  ],
+};
 
 const CATALOG_ROUTES: Record<string, unknown> = {
   "/v1/images/quay.io%2Facme%2Fapp": {
@@ -161,6 +197,16 @@ describe("image catalog on a REST runtime", () => {
         res.writeHead(204).end();
         return;
       }
+      if (req.method === "PUT") {
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", () => {
+          requests.push(body);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(MOVED));
+        });
+        return;
+      }
       const body = CATALOG_ROUTES[req.url ?? ""];
       res.writeHead(body ? 200 : 404, { "Content-Type": "application/json" });
       res.end(JSON.stringify(body ?? { error: { message: req.url } }));
@@ -192,14 +238,17 @@ describe("image catalog on a REST runtime", () => {
           digest: "sha256:bb",
           sourceRef: "quay.io/acme/app:v2",
           recordedAt: "2026-09-02T00:00:00+00:00",
+          tags: [],
         },
         {
           digest: "sha256:aa",
           sizeBytes: 4096,
           sourceRef: "quay.io/acme/app:v1",
           recordedAt: "2026-09-01T00:00:00+00:00",
+          tags: [],
         },
       ],
+      history: [],
     });
     expect(detail.versions[0]).not.toHaveProperty("sizeBytes");
   });
@@ -214,5 +263,36 @@ describe("image catalog on a REST runtime", () => {
     await runtime.images.remove("quay.io/acme/app");
 
     expect(requests).toEqual(["DELETE /v1/images/quay.io%2Facme%2Fapp"]);
+  });
+
+  test("moveTag puts the digest and reads the moved image", async () => {
+    const detail = await runtime.images.moveTag(
+      "quay.io/acme/app",
+      "stable",
+      NEW,
+    );
+
+    expect(requests).toEqual([
+      "PUT /v1/images/quay.io%2Facme%2Fapp/tags/stable",
+      JSON.stringify({ digest: NEW }),
+    ]);
+    expect(detail.versions).toEqual([
+      {
+        digest: NEW,
+        sourceRef: "quay.io/acme/app:v2",
+        recordedAt: "2026-09-02T00:00:00+00:00",
+        tags: ["stable"],
+        lastUsedAt: "2026-09-03T00:00:00+00:00",
+      },
+    ]);
+    expect(detail.history).toEqual([
+      {
+        tag: "stable",
+        fromDigest: OLD,
+        toDigest: NEW,
+        actor: "user-1",
+        movedAt: "2026-09-04T00:00:00+00:00",
+      },
+    ]);
   });
 });

@@ -32,6 +32,27 @@ export interface ImageVersion {
   sourceRef: string;
   /** When this build was recorded, as an RFC 3339 string. */
   recordedAt: string;
+  /** The image's tags that point at this build. */
+  tags: string[];
+  /** When a box last started from this build; absent when unknown. */
+  lastUsedAt?: string;
+  /**
+   * When a pull found this build gone from its registry; absent while it is
+   * not known to be gone.
+   */
+  upstreamMissingAt?: string;
+}
+
+/** One move of a tag, or the pull that first recorded it; versions named by digest. */
+export interface ImageTagEvent {
+  tag: string;
+  /** The build the tag pointed at before; absent when the tag was new. */
+  fromDigest?: string;
+  toDigest: string;
+  /** Who moved the tag; absent when a pull recorded it. */
+  actor?: string;
+  /** As an RFC 3339 string. */
+  movedAt: string;
 }
 
 /** An image name and every build the runtime holds under it. */
@@ -43,6 +64,8 @@ export interface ImageDetail {
   curated: boolean;
   /** Newest first. */
   versions: ImageVersion[];
+  /** The latest tag moves, newest first; empty on a local cache. */
+  history: ImageTagEvent[];
 }
 
 /** Images held against the allowance, on a REST runtime. */
@@ -80,6 +103,14 @@ export interface ImageHandle {
   remove(name: string): Promise<void>;
   /** Images held against the allowance. @throws `unsupported` locally. */
   usage(): Promise<ImageUsage>;
+  /**
+   * Point a tag of an image name at the version with that digest; boxes
+   * already created keep theirs.
+   *
+   * @throws `unsupported` locally, and `invalid_argument` for a malformed
+   * name, tag or `sha256:` digest.
+   */
+  moveTag(name: string, tag: string, digest: string): Promise<ImageDetail>;
 }
 
 /** Metadata for a managed volume returned by the native runtime. */
