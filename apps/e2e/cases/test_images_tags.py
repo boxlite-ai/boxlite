@@ -15,9 +15,11 @@ the image pinned to its digest, and `GET /box/{id}` answers that ref. Reading
 the digest, rather than anything inside the guest, keeps the case free of any
 knowledge about the images it is given.
 
-The catalog is read and moved over HTTP, `/api/images`: the SDK's image handle
-does not carry version ids or move tags yet. Boxes are created and removed
-with the SDK runtime, as in the catalog case.
+The catalog is read and moved through the SDK's image handle, `rt.images`,
+which names versions by digest. Boxes are created and removed with the SDK
+runtime, as in the catalog case. Finding a curated image is the one read over
+HTTP, `/api/images`: the box API lists only recorded builds, and a curated
+image has none.
 
 The tests run in file order and share the two versions they pull, because a
 cold pull is tens of seconds and is paid for once.
@@ -37,7 +39,6 @@ POL-547.
 from __future__ import annotations
 
 import os
-from urllib.parse import quote
 
 import pytest
 import pytest_asyncio
@@ -64,10 +65,6 @@ MOVED_IMAGE = f"{NAME}:{MOVED_TAG}"
 state: dict = {}
 
 
-def _image_path(name: str) -> str:
-    return f"/images/{quote(name, safe='')}"
-
-
 @pytest_asyncio.fixture(scope="module", autouse=True)
 async def fresh_image(rt):
     """
@@ -91,36 +88,30 @@ async def fresh_image(rt):
         pass
 
 
-async def _detail() -> dict | None:
-    status, body = request_json("GET", _image_path(NAME))
-    if status == 404:
+async def _detail(rt) -> boxlite.ImageDetail | None:
+    try:
+        return await rt.images.get(NAME)
+    except boxlite.NotFoundError:
         return None
-    assert status == 200, f"reading {NAME} answered {status}: {body}"
-    return body
 
 
-async def _version_tagged(tag: str) -> dict | None:
-    detail = await _detail()
+async def _version_tagged(rt, tag: str) -> boxlite.ImageVersion | None:
+    detail = await _detail(rt)
     if detail is None:
         return None
-    return next((version for version in detail["versions"] if tag in version["tags"]), None)
+    return next((version for version in detail.versions if tag in version.tags), None)
 
 
-def _tags_by_version(detail: dict) -> dict[str, set[str]]:
-    return {version["id"]: set(version["tags"]) for version in detail["versions"]}
+def _tags_by_version(detail: boxlite.ImageDetail) -> dict[str, set[str]]:
+    return {version.digest: set(version.tags) for version in detail.versions}
 
 
-def _move(name: str, tag: str, version_id: str) -> tuple[int, dict | None]:
-    return request_json("PUT", f"{_image_path(name)}/tags/{quote(tag, safe='')}", {"versionId": version_id})
-
-
-def _moved(tag: str, version_id: str) -> dict:
-    """The image after moving `tag` to `version_id`, failing on any refusal."""
-    status, body = _move(NAME, tag, version_id)
-    if status == 403:
-        pytest.fail(f"this key cannot move tags; it needs the write:images scope: {body}")
-    assert status == 200, f"moving {tag} answered {status}: {body}"
-    return body
+async def _moved(rt, tag: str, digest: str) -> boxlite.ImageDetail:
+    """The image after moving `tag` to the version with `digest`."""
+    try:
+        return await rt.images.move_tag(NAME, tag, digest)
+    except boxlite.ConfigError as refused:
+        pytest.fail(f"this key cannot move tags; it needs the write:images scope: {refused}")
 
 
 def _booted(box) -> str:
@@ -130,9 +121,9 @@ def _booted(box) -> str:
     return body["image"]
 
 
-def _pinned(version: dict) -> str:
+def _pinned(version: boxlite.ImageVersion) -> str:
     """The ref a catalog hit on `version` hands the runner."""
-    return f"{state['name']}@{version['digest']}"
+    return f"{state['name']}@{version.digest}"
 
 
 @pytest.mark.asyncio
@@ -144,27 +135,24 @@ async def test_each_tag_pulled_records_a_version(rt):
         box = await create_box(rt, image)
         try:
             # Kept up until the report lands; removing it first would drop the report.
-            recorded = await until_reported(lambda tag=tag: _version_tagged(tag))
+            recorded = await until_reported(lambda tag=tag: _version_tagged(rt, tag))
             assert recorded is not None, f"{image} booted a box but never entered the catalog"
         finally:
             await rt.remove(box.id, force=True)
 
-    old, new = await _version_tagged(OLD_TAG), await _version_tagged(NEW_TAG)
-    assert old["id"] != new["id"], (
+    old, new = await _version_tagged(rt, OLD_TAG), await _version_tagged(rt, NEW_TAG)
+    assert old.digest != new.digest, (
         f"{OLD_IMAGE} and {NEW_IMAGE} are one digest, so moving a tag between them "
         f"would show nothing; pick two that differ"
     )
-    detail = await _detail()
-    history = detail["history"]
+    detail = await _detail(rt)
     for tag, version in ((OLD_TAG, old), (NEW_TAG, new)):
         recorded_by_pull = any(
-            event["tagName"] == tag
-            and event["toVersionId"] == version["id"]
-            and event["actorId"] is None
-            for event in history
+            event.tag == tag and event.to_digest == version.digest and event.actor is None
+            for event in detail.history
         )
-        assert recorded_by_pull, f"the pull that recorded {tag!r} left no history: {history}"
-    state.update(name=detail["name"], old=old, new=new)
+        assert recorded_by_pull, f"the pull that recorded {tag!r} left no history: {detail.history}"
+    state.update(name=detail.name, old=old, new=new)
 
 
 @pytest.mark.asyncio
@@ -172,16 +160,16 @@ async def test_a_moved_tag_is_what_the_next_box_boots(rt):
     """Step 2. The tag, created on the newer version, boots it."""
     new = state["new"]
 
-    detail = _moved(MOVED_TAG, new["id"])
+    detail = await _moved(rt, MOVED_TAG, new.digest)
 
-    assert MOVED_TAG in _tags_by_version(detail)[new["id"]]
-    moved = detail["history"][0]
-    assert (moved["tagName"], moved["fromVersionId"], moved["toVersionId"]) == (
+    assert MOVED_TAG in _tags_by_version(detail)[new.digest]
+    moved = detail.history[0]
+    assert (moved.tag, moved.from_digest, moved.to_digest) == (
         MOVED_TAG,
         None,
-        new["id"],
+        new.digest,
     ), f"the newest history entry is not this move: {moved}"
-    assert moved["actorId"] is not None, "a move through the API was recorded as a pull"
+    assert moved.actor is not None, "a move through the SDK was recorded as a pull"
 
     box = await create_box(rt, MOVED_IMAGE)
     # Kept up through the next steps: step 3 needs its report to land, and
@@ -191,16 +179,16 @@ async def test_a_moved_tag_is_what_the_next_box_boots(rt):
 
 
 @pytest.mark.asyncio
-async def test_booting_the_moved_tag_records_nothing_new():
+async def test_booting_the_moved_tag_records_nothing_new(rt):
     """
     Step 3. The box above booted a version the catalog had, so its report
     adds no version and moves no tag: pulling is not how a tag changes.
     """
     old, new = state["old"], state["new"]
-    expected = {old["id"]: {OLD_TAG}, new["id"]: {NEW_TAG, MOVED_TAG}}
+    expected = {old.digest: {OLD_TAG}, new.digest: {NEW_TAG, MOVED_TAG}}
 
     async def unchanged() -> None:
-        assert _tags_by_version(await _detail()) == expected
+        assert _tags_by_version(await _detail(rt)) == expected
 
     await hold_through_report_window(unchanged)
 
@@ -214,13 +202,13 @@ async def test_moving_it_back_changes_only_the_next_box(rt):
     old, new = state["old"], state["new"]
     box_on_new = state["box_on_new"]
     try:
-        detail = _moved(MOVED_TAG, old["id"])
+        detail = await _moved(rt, MOVED_TAG, old.digest)
 
-        back = detail["history"][0]
-        assert (back["tagName"], back["fromVersionId"], back["toVersionId"]) == (
+        back = detail.history[0]
+        assert (back.tag, back.from_digest, back.to_digest) == (
             MOVED_TAG,
-            new["id"],
-            old["id"],
+            new.digest,
+            old.digest,
         ), f"the newest history entry is not the roll-back: {back}"
         assert _booted(box_on_new) == _pinned(new), (
             "moving the tag rewrote a box that already existed"
@@ -235,7 +223,8 @@ async def test_moving_it_back_changes_only_the_next_box(rt):
         await rt.remove(box_on_new.id, force=True)
 
 
-def test_a_curated_image_has_no_tags_to_move():
+@pytest.mark.asyncio
+async def test_a_curated_image_has_no_tags_to_move(rt):
     """
     Step 5. A curated image is the operator's, pinned by its reference, so
     moving a tag of it is refused.
@@ -246,8 +235,7 @@ def test_a_curated_image_has_no_tags_to_move():
     if curated is None:
         pytest.skip("this stack offers no curated image")
 
-    status, body = _move(curated["name"], MOVED_TAG, state["old"]["id"])
-    # The version is another image's, which is a 400 of its own; the reason
+    # The digest is another image's, which is a refusal of its own; the reason
     # is what shows the refusal came from the image being curated.
-    assert status == 400, f"moving a curated image's tag answered {status}: {body}"
-    assert "no tags to move" in body["message"], body
+    with pytest.raises(boxlite.InvalidArgumentError, match="no tags to move"):
+        await rt.images.move_tag(curated["name"], MOVED_TAG, state["old"].digest)
