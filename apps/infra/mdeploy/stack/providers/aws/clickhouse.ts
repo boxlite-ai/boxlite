@@ -30,7 +30,6 @@ import {
 import type { ClickHouse, ClickHouseProvider, ClickHouseRequest } from '../../clickhouse.ts'
 import type { NetworkBinding } from '../../network.ts'
 import { instanceFor } from 'naming'
-import { DEFAULT_CLICKHOUSE_RETENTION_HOURS } from '../../../../shared/clickhouse-retention.ts'
 
 /** What each requested size answers to. */
 const INSTANCE = { small: 'm6a.large', medium: 'm6a.xlarge' } as const
@@ -115,6 +114,10 @@ export const awsClickHouseProvider =
       }
     }
 
+    // The schema, the readiness environment and its trigger all read the one
+    // resolved value, so the readiness check never compares a schema rendered
+    // at one number against a TTL asserted at another.
+    const { retentionHours } = request
     const admin = clickHouseSecret('ClickHouseAdminSecret', 'clickhouse-admin')
     const writer = clickHouseSecret('ClickHouseWriterSecret', 'clickhouse-writer')
     const reader = clickHouseSecret('ClickHouseReaderSecret', 'clickhouse-reader')
@@ -235,13 +238,13 @@ export const awsClickHouseProvider =
           CLICKHOUSE_WRITER_SECRET_ARN: writer.resource.arn,
           CLICKHOUSE_READER_SECRET_ARN: reader.resource.arn,
           CLICKHOUSE_EXPECTED_IMAGE: CLICKHOUSE_IMAGE,
-          CLICKHOUSE_SCHEMA_BASE64: Buffer.from(renderClickHouseSchema(request.retentionHours)).toString('base64'),
-          CLICKHOUSE_RETENTION_HOURS: String(request.retentionHours ?? DEFAULT_CLICKHOUSE_RETENTION_HOURS),
+          CLICKHOUSE_SCHEMA_BASE64: Buffer.from(renderClickHouseSchema(retentionHours)).toString('base64'),
+          CLICKHOUSE_RETENTION_HOURS: String(retentionHours),
         },
         // Every input that changes the answer. A rotated password re-grants
         // rather than locking the collector out until someone notices.
         triggers: [
-          request.retentionHours ?? DEFAULT_CLICKHOUSE_RETENTION_HOURS,
+          retentionHours,
           instance.id,
           volume.id,
           userData,

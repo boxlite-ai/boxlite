@@ -20,6 +20,23 @@ test('self-hosted retention defaults to 30 days and accepts an hour override', (
   }
 })
 
+test('retention cannot be set when no self-hosted backend owns it', () => {
+  const managed = {
+    CLICKHOUSE_MODE: 'managed',
+    CLICKHOUSE_URL: 'https://example.clickhouse.cloud:8443',
+    CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN: 'arn:aws:secretsmanager:region:account:secret:writer',
+    CLICKHOUSE_READER_PASSWORD_SECRET_ARN: 'arn:aws:secretsmanager:region:account:secret:reader',
+  }
+  assert.throws(
+    () => resolveClickHouseConfig({ ...managed, CLICKHOUSE_RETENTION_HOURS: '168' }),
+    /CLICKHOUSE_RETENTION_HOURS cannot be set when CLICKHOUSE_MODE=managed/,
+  )
+  assert.throws(
+    () => resolveClickHouseConfig({ CLICKHOUSE_MODE: 'disabled', CLICKHOUSE_RETENTION_HOURS: '168' }),
+    /CLICKHOUSE_RETENTION_HOURS cannot be set when CLICKHOUSE_MODE=disabled/,
+  )
+})
+
 test('defaults to one active self-hosted backend', () => {
   assert.deepEqual(resolveClickHouseConfig({}), {
     mode: 'self-hosted',

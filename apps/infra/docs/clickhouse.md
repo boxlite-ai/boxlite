@@ -29,21 +29,18 @@ Set `stages.<stage>.deploy.clickhouse.mode` in `.mstage.config.json` for mdeploy
 | `disabled` | No ClickHouse backend/exporter | Use other telemetry destinations as needed |
 
 Self-hosted size and disk capacity come from `deploy.clickhouse.instanceSize` and `dataGb`.
-Set `CLICKHOUSE_RETENTION_HOURS` in the encrypted stage environment (or with the explicit
-`--local-env` override). It accepts positive integer hours and defaults to `720` (30 days).
-For example, `CLICKHOUSE_RETENTION_HOURS=168` keeps seven days of telemetry.
-Self-hosted deploys update all seven existing table TTLs:
-AWS runs its SSM readiness command when the value changes; GCP updates an OS Config policy
-that checks actual TTLs and applies `ALTER TABLE ... MODIFY TTL` without restarting the server.
-GCP enforcement is asynchronous: a successful apply publishes the policy; confirm the
-`clickhouse-retention` assignment's compliance report before considering the TTL update complete.
-New GCP tables start with the fixed 720-hour bootstrap TTL until the agent applies the configured
-value. Existing tables retain their TTL until enforcement. TTL-only changes leave the startup
-script unchanged; credential changes still update it and can replace the instance, reusing its
-separate data disk. Upgrading a host with an older startup script (including the former 72-hour
-bootstrap schema) can cause a one-time replacement; inspect the deployment preview for that change.
-Managed services retain operator-owned schema/TTL lifecycle. Expiration remains a background
-operation, and increasing retention cannot recover data already deleted.
+`CLICKHOUSE_RETENTION_HOURS` (stage environment, positive integer hours, default `720`) sets
+the TTL of the seven telemetry tables. It is rejected unless the ClickHouse mode is `self-hosted`.
+
+| Cloud | How a changed value reaches existing tables |
+| --- | --- |
+| AWS | The SSM readiness command re-runs and alters every table TTL during the deploy. |
+| GCP | An OS Config policy alters the TTLs on the host's next agent cycle, without a restart or VM replacement. Check the `clickhouse-retention` compliance report before treating the change as applied. |
+
+Both clouds judge compliance by the `toIntervalHour(N)` marker in each table's `create_table_query`.
+New GCP tables are bootstrapped at the default TTL and converge to the configured value afterwards.
+Expiry runs in the background; raising retention cannot recover rows already deleted.
+Moving a GCP host off the former 72-hour bootstrap schema replaces its VM once; the data disk is kept.
 Keep database/user settings aligned with the bundled schema and boot scripts;
 `otel`, `otel_writer` and `otel_reader` are the example's supported baseline.
 

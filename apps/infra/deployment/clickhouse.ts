@@ -18,9 +18,11 @@ const MANAGED_KEYS = [
   'CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN',
   'CLICKHOUSE_READER_PASSWORD_SECRET_ARN',
 ]
+/** Only a self-hosted backend owns its TTLs; anywhere else the value would be silently dropped. */
+const SELF_HOSTED_KEYS = ['CLICKHOUSE_RETENTION_HOURS']
 export const CLICKHOUSE_STAGE_CONFIG_KEYS = Object.freeze([
   'CLICKHOUSE_MODE',
-  'CLICKHOUSE_RETENTION_HOURS',
+  ...SELF_HOSTED_KEYS,
   ...MANAGED_KEYS,
 ])
 export const CLICKHOUSE_REMOVED_STAGE_CONFIG_KEYS = Object.freeze([
@@ -101,20 +103,20 @@ export function requireClickHouseSecretArn(
 /** Resolve the complete ClickHouse topology before SST declares resources. */
 export function resolveClickHouseConfig(environment: NodeJS.ProcessEnv = process.env): ClickHouseConfig {
   rejectSet(environment, CLICKHOUSE_REMOVED_STAGE_CONFIG_KEYS, 'is not supported')
-  const retentionHours = clickHouseRetentionHours(environment)
 
   const mode = modeValue(environment)
 
   if (mode === 'disabled') {
-    rejectSet(environment, MANAGED_KEYS, 'cannot be set when CLICKHOUSE_MODE=disabled')
+    rejectSet(environment, [...SELF_HOSTED_KEYS, ...MANAGED_KEYS], 'cannot be set when CLICKHOUSE_MODE=disabled')
     return { mode, active: false }
   }
 
   if (mode === 'self-hosted') {
     rejectSet(environment, MANAGED_KEYS, 'cannot be set when CLICKHOUSE_MODE=self-hosted')
-    return { mode, active: true, retentionHours }
+    return { mode, active: true, retentionHours: clickHouseRetentionHours(environment) }
   }
 
+  rejectSet(environment, SELF_HOSTED_KEYS, 'cannot be set when CLICKHOUSE_MODE=managed')
   const url = environment.CLICKHOUSE_URL?.trim()
   const writerSecretArn = environment.CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN?.trim()
   const readerSecretArn = environment.CLICKHOUSE_READER_PASSWORD_SECRET_ARN?.trim()

@@ -6,12 +6,6 @@ import { StackEnvError, readStackEnvironment } from '../src/stack-env.ts'
 import type { GroupDeclaration } from '../src/env.ts'
 
 const SHA = 'a'.repeat(40)
-
-test('retention is read from the stage environment with a 30-day default', () => {
-  assert.equal(read(complete).clickHouseRetentionHours, 720)
-  assert.equal(read({ ...complete, CLICKHOUSE_RETENTION_HOURS: '168' }).clickHouseRetentionHours, 168)
-  assert.throws(() => read({ ...complete, CLICKHOUSE_RETENTION_HOURS: '0' }), /positive.*integer/)
-})
 const DIGEST = 'b'.repeat(64)
 
 const declaration: GroupDeclaration = {
@@ -122,6 +116,12 @@ test('a managed ClickHouse arrives whole or not at all', () => {
     CLICKHOUSE_READER_PASSWORD_SECRET_ARN: 'arn:reader',
   }).managedClickHouse
   assert.equal(managed?.url, 'https://clickhouse.invalid')
+})
+
+test('retention is read from the stage environment, or null when it set none', () => {
+  assert.equal(read(complete).clickHouseRetentionHours, null)
+  assert.equal(read({ ...complete, CLICKHOUSE_RETENTION_HOURS: '168' }).clickHouseRetentionHours, 168)
+  assert.throws(() => read({ ...complete, CLICKHOUSE_RETENTION_HOURS: '0' }), /positive.*integer/)
 })
 
 test('the ClickStack consumer is a service account or nobody', () => {

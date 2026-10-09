@@ -9,9 +9,10 @@
  * script, and neither is a resource the engine can re-run when a password
  * rotates.
  *
- * Initial schema and accounts are reconciled at boot. Retention also has an
- * OS Config policy, so changed TTLs reach existing hosts without SSH or restart.
- * Other schema and account operations remain in the boot script.
+ * So schema and accounts are reconciled from the *startup script*, at boot.
+ * Retention alone has a second path: an OS Config policy that alters the
+ * table TTLs in place, so a changed value reaches a running host without SSH,
+ * a restart, or a replaced instance.
  *
  * `managed` and `disabled` behave exactly as they do on AWS, because neither
  * touches a machine.
@@ -66,23 +67,35 @@ const clickHouseSecret = (resourceName: string, project: string, secretId: strin
 }
 
 /**
- * Derive table names and timestamp expressions from the initial schema so
- * retention enforcement cannot drift from the bundled table definitions.
+ * The OTLP schema the host applies at boot, base64 so that one quoting problem
+ * cannot become two. Always rendered at the default retention: the startup
+ * script replaces the VM when it changes, so the configured value must never
+ * appear in it. The policy below carries that value instead.
  */
-export const clickHouseRetentionPolicy = (retentionHours: number | undefined, adminRef: string) => {
+const BOOTSTRAP_SCHEMA_BASE64 = Buffer.from(renderClickHouseSchema()).toString('base64')
+
+/**
+ * The OS Config policy that keeps the seven table TTLs at the configured
+ * retention. Tables and their TTL expressions come from the schema itself, so
+ * the policy cannot drift from the bundled definitions.
+ *
+ * Compliance is judged by the `toIntervalHour(N)` marker ClickHouse prints
+ * into `create_table_query` — the same check the AWS readiness command makes.
+ * Matching the whole clause would tie the policy to the server's formatting,
+ * and a permanent mismatch would re-run all seven ALTERs every agent cycle.
+ */
+export const clickHouseRetentionPolicy = (retentionHours: number, adminRef: string) => {
   const tables = [...renderClickHouseSchema(retentionHours).matchAll(
     /CREATE TABLE IF NOT EXISTS [`"]otel[`"]\.[`"](\w+)[`"].*?\bTTL ([^\n]+)/gs,
   )]
   if (tables.length !== 7) throw new Error('ClickHouse retention requires all seven telemetry tables')
-  const predicates = tables.map(([, table, ttl]) =>
-    `(name = '${table}' AND position(create_table_query, 'TTL ${ttl.trim().replace(/INTERVAL (\d+) HOUR/, 'toIntervalHour($1)')}') > 0)`,
-  ).join(' OR ')
+  const names = tables.map(([, table]) => `'${table}'`).join(', ')
   const auth = `#!/bin/bash
 set -euo pipefail
 CLICKHOUSE_PASSWORD=$(gcloud secrets versions access '${adminRef}' --format='get(payload.data)' | base64 -d)
 export CLICKHOUSE_PASSWORD
 check_ttl() {
-  clickhouse-client --receive_timeout=60 --query "SELECT count() FROM system.tables WHERE database = 'otel' AND (${predicates})"
+  clickhouse-client --receive_timeout=60 --query "SELECT count() FROM system.tables WHERE database = 'otel' AND name IN (${names}) AND position(create_table_query, 'toIntervalHour(${retentionHours})') > 0"
 }
 `
   return {
@@ -211,7 +224,7 @@ until clickhouse-client --query 'SELECT 1' >/dev/null 2>&1; do sleep 2; done
 # there is no SSM here, so this is where the reconcile lives. The tables come
 # first because the grants below name them.
 mkdir -p /opt/boxlite-clickhouse
-printf '%s' '${Buffer.from(renderClickHouseSchema()).toString('base64')}' | base64 -d > /opt/boxlite-clickhouse/otel-schema.sql
+printf '%s' '${BOOTSTRAP_SCHEMA_BASE64}' | base64 -d > /opt/boxlite-clickhouse/otel-schema.sql
 clickhouse-client --multiquery < /opt/boxlite-clickhouse/otel-schema.sql
 
 clickhouse-client --query "CREATE DATABASE IF NOT EXISTS ${database}"
@@ -406,8 +419,7 @@ export const gcpClickHouseProvider =
         // newer image on an unrelated deploy would take the history with it.
         allowStoppingForUpdate: false,
       },
-      // Keep credential changes visible. Only the OS policy depends on configured retention;
-      // the startup schema uses the fixed default so TTL updates do not replace the VM.
+      // The startup script is not ignored: a rotated password must reach the host.
       { ignoreChanges: ['bootDisk'], dependsOn: [...access, ...dependsOn] },
     )
 

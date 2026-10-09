@@ -42,7 +42,12 @@ fi
     assert.equal(run(scripts.validate).status, 100)
     writeFileSync(environment.STATE_FILE, '6')
     assert.equal(run(scripts.validate).status, 101)
-    assert.match(readFileSync(environment.QUERY_FILE, 'utf8'), /TTL toDateTime\(TimestampTime\) \+ toIntervalHour\(168\)/)
+    const query = readFileSync(environment.QUERY_FILE, 'utf8')
+    // The same marker the AWS readiness check matches: ClickHouse's own
+    // spelling of the interval, not of the whole TTL expression.
+    assert.match(query, /position\(create_table_query, 'toIntervalHour\(168\)'\) > 0/)
+    assert.doesNotMatch(query, /toDateTime\(/)
+    for (const table of ['otel_logs', 'otel_traces', 'otel_metrics_gauge']) assert.match(query, new RegExp(`'${table}'`))
     assert.equal(run(scripts.enforce).status, 100)
     const sql = readFileSync(environment.SQL_FILE, 'utf8')
     assert.equal((sql.match(/ALTER TABLE otel\./g) ?? []).length, 7)
