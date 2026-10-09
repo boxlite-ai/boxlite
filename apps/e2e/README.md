@@ -203,6 +203,7 @@ apps/e2e/
 ├── lib/
 │   ├── e2e_auth.py          # Auth context: API-key / OIDC, env vars / profile
 │   ├── images.py            # Curated ref derived from apps/box-images/VERSION
+│   ├── catalog_boxes.py     # Boxes against the catalog: pull budget, report window
 │   └── path_verification.py # Helpers that prove SDK→API→Runner was the route
 ├── sdks/
 │   ├── node/                # TypeScript drivers (fallback: scripts/test/image.js)

@@ -37,15 +37,19 @@ upstream, which needs a repository under our control.
 
 from __future__ import annotations
 
-import asyncio
 import os
-import re
 import warnings
 
 import pytest
 import pytest_asyncio
 
 import boxlite
+from catalog_boxes import (
+    WINDOW_REMAINING,
+    create_box,
+    hold_through_report_window,
+    until_reported,
+)
 from e2e_auth import auth_context, request_json
 
 # Small, public, and on a host the built-in allowlist admits
@@ -93,6 +97,11 @@ async def _listed(images, name: str) -> list:
     return [info for info in await images.list() if info.repository == name]
 
 
+async def _listed_or_none(images, name: str) -> list | None:
+    """What `_listed` answers, or None while the catalog lists nothing under `name`."""
+    return await _listed(images, name) or None
+
+
 @pytest_asyncio.fixture(scope="module", autouse=True)
 async def clean_catalog(images):
     """Clear our test entries before and after, so a re-run starts where the first did."""
@@ -114,59 +123,6 @@ async def clean_catalog(images):
     await drop()
 
 
-# The admission gate caps how many cold pulls — creates the catalog cannot
-# answer yet — an organization may start per window, and each stack sets its
-# own budget. This file makes several, and any other suite on the same
-# organization spends from the same budget. Waiting the window out is not a
-# workaround for a flaky server: the refusal is the documented contract, it
-# carries how long is left, and a suite that treated it as a failure would be
-# reporting the gate working as a bug.
-_WINDOW_REMAINING = re.compile(r"(\d+)s left in the current one")
-
-
-async def _create_box(rt, image: str, *, attempts: int = 3):
-    """Create a box, waiting out the cold-pull budget if the gate asks us to."""
-    for attempt in range(attempts):
-        try:
-            return await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
-        except Exception as failure:
-            remaining = _WINDOW_REMAINING.search(str(failure))
-            if remaining is None or attempt == attempts - 1:
-                raise
-            await asyncio.sleep(int(remaining.group(1)) + 1)
-    raise AssertionError("unreachable")
-
-
-# The runner delivers what an image resolved to on its next state push, which
-# its box sync makes every 10 seconds, and it drops a report still owed for a
-# box that is destroyed first. So the catalog changes only while the box is
-# still up, some seconds after it started — and an unchanged catalog proves
-# nothing until that window has passed. Two and a half sync periods.
-_REPORT_WINDOW_SECONDS = 25
-
-
-async def _await_listed(images, name: str) -> bool:
-    """Whether `name` is listed, polled until the runner's report has had time to land."""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + _REPORT_WINDOW_SECONDS
-    while True:
-        if await _listed(images, name):
-            return True
-        if loop.time() >= deadline:
-            return False
-        await asyncio.sleep(1)
-
-
-async def _hold_through_report_window(check) -> None:
-    """Assert `check` for as long as a report could still land, failing on the first change."""
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + _REPORT_WINDOW_SECONDS
-    while loop.time() < deadline:
-        await check()
-        await asyncio.sleep(1)
-    await check()
-
-
 @pytest.mark.asyncio
 async def test_an_arbitrary_public_image_boots_a_box(rt, images):
     """Step 1. No registration call and no catalog entry beforehand — just a reference."""
@@ -174,11 +130,11 @@ async def test_an_arbitrary_public_image_boots_a_box(rt, images):
         f"{CATALOG_NAME} was in the catalog before the first box booted"
     )
 
-    box = await _create_box(rt, CATALOG_IMAGE)
+    box = await create_box(rt, CATALOG_IMAGE)
     try:
         assert box.id
         # Kept up until the report lands; removing it first would drop the report.
-        assert await _await_listed(images, CATALOG_NAME), (
+        assert await until_reported(lambda: _listed_or_none(images, CATALOG_NAME)), (
             f"{CATALOG_NAME} never entered the catalog while a box booted from it was up"
         )
     finally:
@@ -224,7 +180,7 @@ async def test_a_second_box_adds_no_second_version(rt, images):
     """
     before = await images.get(CATALOG_NAME)
 
-    box = await _create_box(rt, CATALOG_IMAGE)
+    box = await create_box(rt, CATALOG_IMAGE)
     try:
 
         async def unchanged() -> None:
@@ -235,7 +191,7 @@ async def test_a_second_box_adds_no_second_version(rt, images):
             )
             assert after.tags == before.tags
 
-        await _hold_through_report_window(unchanged)
+        await hold_through_report_window(unchanged)
     finally:
         await rt.remove(box.id, force=True)
 
@@ -247,7 +203,7 @@ async def test_a_box_still_holding_it_blocks_removal(rt, images):
     the entry cannot go. The refusal names the box, which is the only way the
     caller can act on it.
     """
-    box = await _create_box(rt, CATALOG_IMAGE)
+    box = await create_box(rt, CATALOG_IMAGE)
     try:
         with pytest.raises(boxlite.InvalidStateError) as refusal:
             await images.remove(CATALOG_NAME)
@@ -273,9 +229,9 @@ async def test_removal_frees_the_name_and_the_quota(rt, images):
 
     # The name is free again, and using the reference brings it back as a new
     # entry — which is what makes deletion the escape hatch for a pinned tag.
-    box = await _create_box(rt, CATALOG_IMAGE)
+    box = await create_box(rt, CATALOG_IMAGE)
     try:
-        assert await _await_listed(images, CATALOG_NAME)
+        assert await until_reported(lambda: _listed_or_none(images, CATALOG_NAME))
     finally:
         await rt.remove(box.id, force=True)
 
@@ -291,7 +247,7 @@ async def test_a_pull_that_fails_records_nothing(rt, images):
 
     box = None
     try:
-        box = await _create_box(rt, UNPULLABLE_IMAGE)
+        box = await create_box(rt, UNPULLABLE_IMAGE)
         # The premise is that this reference cannot resolve. If it booted, the
         # pull succeeded and this test is no longer testing what it says.
         pytest.fail(
@@ -309,7 +265,7 @@ async def test_a_pull_that_fails_records_nothing(rt, images):
         # so the word "pull" cannot tell it apart from a registry failure.
         # Match the window it reports instead — a structural marker the prose
         # around it can change without breaking.
-        if _WINDOW_REMAINING.search(message):
+        if WINDOW_REMAINING.search(message):
             pytest.fail(
                 f"the cold-pull budget ran out before the registry was reached, so an "
                 f"empty catalog proves nothing here: {message}"
@@ -337,7 +293,7 @@ async def test_a_pull_that_fails_records_nothing(rt, images):
             f"{UNPULLABLE_NAME} entered the catalog even though it never pulled"
         )
 
-    await _hold_through_report_window(never_recorded)
+    await hold_through_report_window(never_recorded)
 
 
 @pytest.mark.asyncio
@@ -355,13 +311,13 @@ async def test_curated_boxes_never_touch_the_catalog(rt, images, image):
 
     before = await snapshot()
 
-    box = await _create_box(rt, image)
+    box = await create_box(rt, image)
     try:
 
         async def untouched() -> None:
             assert await snapshot() == before
 
-        await _hold_through_report_window(untouched)
+        await hold_through_report_window(untouched)
     finally:
         await rt.remove(box.id, force=True)
 
