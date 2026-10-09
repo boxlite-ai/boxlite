@@ -22,6 +22,7 @@ import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { ImageAdmissionService } from '../../image/services/image-admission.service'
 import { ImagePreparationService } from '../../image/services/image-preparation.service'
+import { ImagePullFailureService } from '../../image/services/image-pull-failure.service'
 import { ImageResolverService } from '../../image/services/image-resolver.service'
 import { ImageRegistrarService, ReportedImage } from '../../image/services/image-registrar.service'
 import { BoxWarmPoolService } from './box-warm-pool.service'
@@ -135,6 +136,7 @@ export class BoxService {
     private readonly imageResolverService: ImageResolverService,
     private readonly imageRegistrarService: ImageRegistrarService,
     private readonly imagePreparationService: ImagePreparationService,
+    private readonly imagePullFailureService: ImagePullFailureService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -1528,6 +1530,7 @@ export class BoxService {
       // The runner's words, which can name the registry proxy ref it pulled.
       updateData.errorReason = withoutRegistryProxy(errorReason)
       if (newState === BoxState.ERROR) {
+        updateData.errorReason = await this.imagePullFailureService.reasonFor(box, updateData.errorReason)
         updateData.recoverable = recoverable
       }
     }

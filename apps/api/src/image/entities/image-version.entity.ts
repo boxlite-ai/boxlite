@@ -67,6 +67,18 @@ export class ImageVersion {
   @Column({ type: 'text' })
   storageRef: string
 
+  // When a box last started from this build, as its runner reported. Null
+  // for a version recorded before this was tracked.
+  @Column({ type: 'timestamp with time zone', nullable: true })
+  lastUsedAt: Date | null
+
+  // When a pull of this build first failed because its registry no longer
+  // had it. A mark, not a state: a runner that cached the build still starts
+  // it, so nothing here stops using it or removes it, and nothing clears it —
+  // a later start from a cache proves nothing about the registry.
+  @Column({ type: 'timestamp with time zone', nullable: true })
+  upstreamMissingAt: Date | null
+
   @CreateDateColumn({ type: 'timestamp with time zone' })
   createdAt: Date
 }

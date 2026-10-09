@@ -443,6 +443,8 @@ function toVersionDto(version: ImageVersion, tags: ImageTag[]): ImageVersionDto 
     sizeBytes: version.sizeBytes,
     sourceRef: version.sourceSpec.sourceRef,
     tags: tags.map((tag) => tag.name),
+    lastUsedAt: version.lastUsedAt?.toISOString() ?? null,
+    upstreamMissingAt: version.upstreamMissingAt?.toISOString() ?? null,
     createdAt: version.createdAt.toISOString(),
   }
 }

@@ -82,6 +82,9 @@ Filesystem or disk operation error.
 - Permission denied writing to `~/.boxlite`
 - Disk image creation failed
 - QCOW2 operation failed
+- A registry refused an image pull. The message names the registry's OCI
+  error code when it sent one, as in
+  `failed to pull manifest [MANIFEST_UNKNOWN]: ...`
 
 **Example:**
 ```text

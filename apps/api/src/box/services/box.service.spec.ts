@@ -22,6 +22,9 @@ import { CreateBoxDto as RestCreateBoxDto } from '../../boxlite-rest/dto/create-
 import { createBoxToCreateBox } from '../../boxlite-rest/mappers/box-to-box.mapper'
 import { Context } from '../../common/context/context'
 
+/** Records every reason as it came, which is what a failure it cannot explain gets. */
+const passThroughPullFailures = () => ({ reasonFor: jest.fn(async (_box: unknown, reason: string) => reason) }) as any
+
 // ensureStartedForProxy only touches boxRepository + eventEmitter +
 // organizationService; every other injected dependency is irrelevant.
 function makeService() {
@@ -61,6 +64,7 @@ function makeService() {
     noop, // imageResolverService
     noop, // imageRegistrarService
     noop, // imagePreparationService
+    passThroughPullFailures(), // imagePullFailureService
   )
   return { service, boxRepository, eventEmitter, organizationService }
 }
@@ -107,6 +111,7 @@ function makePreviewUrlService() {
     noop, // imageResolverService
     noop, // imageRegistrarService
     noop, // imagePreparationService
+    passThroughPullFailures(), // imagePullFailureService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -316,6 +321,7 @@ function makeNetworkTunnelService() {
     noop, // imageResolverService
     noop, // imageRegistrarService
     noop, // imagePreparationService
+    passThroughPullFailures(), // imagePullFailureService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -351,8 +357,13 @@ describe('BoxService image reporting', () => {
       boxRepository: { findOne: jest.fn().mockResolvedValue(box), updateWhere: jest.fn() },
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
       imageRegistrarService: { onBoxStarted: jest.fn().mockResolvedValue(undefined) },
+      imagePullFailureService: passThroughPullFailures(),
     })
-    return { service, registrar: (service as any).imageRegistrarService }
+    return {
+      service,
+      registrar: (service as any).imageRegistrarService,
+      pullFailures: (service as any).imagePullFailureService,
+    }
   }
 
   const reported = { digest: `sha256:${'a'.repeat(64)}`, sizeBytes: 4096 }
@@ -429,6 +440,31 @@ describe('BoxService image reporting', () => {
     } finally {
       delete process.env.REGISTRY_PROXY_HOST
     }
+  })
+
+  /**
+   * A runner that reports a failed pull as a state, rather than through a job,
+   * gets its reason explained the same way, after the proxy's address is out
+   * of it. A state that is not an error carries no failure to explain.
+   */
+  it('explains the reason of an error report, and only of an error report', async () => {
+    const { service, pullFailures } = makeService(BoxState.STARTED)
+    pullFailures.reasonFor.mockResolvedValue('explained')
+
+    await service.updateState('box-1', BoxState.ERROR, false, 'failed to pull manifest [MANIFEST_UNKNOWN]: x')
+
+    expect(pullFailures.reasonFor).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'box-1' }),
+      'failed to pull manifest [MANIFEST_UNKNOWN]: x',
+    )
+    expect((service as any).boxRepository.updateWhere).toHaveBeenCalledWith(
+      'box-1',
+      expect.objectContaining({ updateData: expect.objectContaining({ errorReason: 'explained' }) }),
+    )
+
+    pullFailures.reasonFor.mockClear()
+    await service.updateState('box-1', BoxState.STOPPED, false, 'stopped by the user')
+    expect(pullFailures.reasonFor).not.toHaveBeenCalled()
   })
 
   /**

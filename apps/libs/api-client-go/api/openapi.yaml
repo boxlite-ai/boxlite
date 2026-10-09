@@ -7386,6 +7386,8 @@ components:
         sourceRef: quay.io/acme/app:v1
         tags:
         - stable
+        lastUsedAt: 2026-01-01T00:00:00.000Z
+        upstreamMissingAt: 2026-01-02T00:00:00.000Z
         createdAt: 2026-01-01T00:00:00.000Z
       properties:
         id:
@@ -7412,6 +7414,20 @@ components:
           items:
             type: string
           type: array
+        lastUsedAt:
+          description: When a box last started from this version. Null when none has
+            since this was recorded
+          example: 2026-01-01T00:00:00.000Z
+          nullable: true
+          type: string
+        upstreamMissingAt:
+          description: "When a pull of this version first failed because its registry\
+            \ no longer has it. Runners that cached it still start it; elsewhere,\
+            \ move its tags to a version the registry still has. Null while no pull\
+            \ has found it gone"
+          example: 2026-01-02T00:00:00.000Z
+          nullable: true
+          type: string
         createdAt:
           description: When this version was first recorded
           example: 2026-01-01T00:00:00.000Z
@@ -7420,9 +7436,11 @@ components:
       - createdAt
       - digest
       - id
+      - lastUsedAt
       - sizeBytes
       - sourceRef
       - tags
+      - upstreamMissingAt
       type: object
     ImageTagEvent:
       example:
@@ -7483,6 +7501,8 @@ components:
           sourceRef: quay.io/acme/app:v1
           tags:
           - stable
+          lastUsedAt: 2026-01-01T00:00:00.000Z
+          upstreamMissingAt: 2026-01-02T00:00:00.000Z
           createdAt: 2026-01-01T00:00:00.000Z
         - id: 123e4567-e89b-12d3-a456-426614174000
           digest: sha256:4a1c2f...
@@ -7490,6 +7510,8 @@ components:
           sourceRef: quay.io/acme/app:v1
           tags:
           - stable
+          lastUsedAt: 2026-01-01T00:00:00.000Z
+          upstreamMissingAt: 2026-01-02T00:00:00.000Z
           createdAt: 2026-01-01T00:00:00.000Z
         history:
         - tagName: stable

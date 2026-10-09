@@ -128,6 +128,8 @@ export class ImageRegistrarService {
         throw new Error(`Image upsert for '${name}' returned no row`)
       }
 
+      // The same upsert shape as the image's: a build already recorded keeps
+      // everything it was recorded with, and only when it was last used moves.
       await manager
         .createQueryBuilder()
         .insert()
@@ -139,8 +141,9 @@ export class ImageRegistrarService {
           sourceKind: ImageSourceKind.PULL,
           sourceSpec: { sourceRef: imageRef },
           storageRef: `${name}@${reported.digest}`,
+          lastUsedAt: new Date(),
         })
-        .orIgnore()
+        .orUpdate(['lastUsedAt'], ['imageId', 'digest'])
         .execute()
 
       // A ref the caller already pinned names no tag to record — it is the

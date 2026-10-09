@@ -519,7 +519,8 @@ every catalog read joins back to `image` and filters `deletedAt IS NULL`.
 
 One row per distinct manifest digest of an image. Rows appear only after a pull
 succeeds, so there is no pending state to go stale — a failed pull is recorded
-on the box that attempted it.
+on the box that attempted it. The one thing a failed pull writes here is
+`upstreamMissingAt`, on a build the registry no longer has.
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
@@ -531,6 +532,8 @@ on the box that attempted it.
 | `sourceKind` | `enum` | `pull` |
 | `sourceSpec` | `jsonb` | `{ sourceRef }` — what the user typed |
 | `storageRef` | `text` | where to fetch the bytes from |
+| `lastUsedAt` | `timestamptz` | nullable; when a box last started from this build |
+| `upstreamMissingAt` | `timestamptz` | nullable; when a pull first failed with the registry's `MANIFEST_UNKNOWN` or `NAME_UNKNOWN`. A mark, not a state: never cleared, and the version stays usable on runners that cached it |
 | `createdAt` | `timestamptz` | |
 
 The digest is unique per image, not per organization: the same public image

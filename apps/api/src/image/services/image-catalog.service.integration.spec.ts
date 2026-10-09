@@ -312,6 +312,19 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
     }
   })
 
+  it('reports when each version was last used, and when its registry no longer had it', async () => {
+    await use('quay.io/acme/app:v1')
+    const before = await catalog.get(ORG, 'quay.io/acme/app')
+    expect(before.versions[0].lastUsedAt).not.toBeNull()
+    expect(before.versions[0].upstreamMissingAt).toBeNull()
+    const foundGone = new Date('2026-09-29T00:00:00.000Z')
+    await dataSource.getRepository(ImageVersion).update({ id: before.versions[0].id }, { upstreamMissingAt: foundGone })
+
+    const after = await catalog.get(ORG, 'quay.io/acme/app')
+
+    expect(after.versions[0].upstreamMissingAt).toBe(foundGone.toISOString())
+  })
+
   it('answers a curated image with no history, since the operator pins its reference', async () => {
     const [curated] = (await catalog.list(ORG)).filter((image) => image.curated)
 

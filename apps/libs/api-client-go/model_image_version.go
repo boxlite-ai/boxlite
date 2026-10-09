@@ -31,6 +31,10 @@ type ImageVersion struct {
 	SourceRef string `json:"sourceRef"`
 	// Tags that point at this version now, so a reference with one of them boots it
 	Tags []string `json:"tags"`
+	// When a box last started from this version. Null when none has since this was recorded
+	LastUsedAt NullableString `json:"lastUsedAt"`
+	// When a pull of this version first failed because its registry no longer has it. Runners that cached it still start it; elsewhere, move its tags to a version the registry still has. Null while no pull has found it gone
+	UpstreamMissingAt NullableString `json:"upstreamMissingAt"`
 	// When this version was first recorded
 	CreatedAt string `json:"createdAt"`
 	AdditionalProperties map[string]interface{}
@@ -42,13 +46,15 @@ type _ImageVersion ImageVersion
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewImageVersion(id string, digest string, sizeBytes float32, sourceRef string, tags []string, createdAt string) *ImageVersion {
+func NewImageVersion(id string, digest string, sizeBytes float32, sourceRef string, tags []string, lastUsedAt NullableString, upstreamMissingAt NullableString, createdAt string) *ImageVersion {
 	this := ImageVersion{}
 	this.Id = id
 	this.Digest = digest
 	this.SizeBytes = sizeBytes
 	this.SourceRef = sourceRef
 	this.Tags = tags
+	this.LastUsedAt = lastUsedAt
+	this.UpstreamMissingAt = upstreamMissingAt
 	this.CreatedAt = createdAt
 	return &this
 }
@@ -181,6 +187,58 @@ func (o *ImageVersion) SetTags(v []string) {
 	o.Tags = v
 }
 
+// GetLastUsedAt returns the LastUsedAt field value
+// If the value is explicit nil, the zero value for string will be returned
+func (o *ImageVersion) GetLastUsedAt() string {
+	if o == nil || o.LastUsedAt.Get() == nil {
+		var ret string
+		return ret
+	}
+
+	return *o.LastUsedAt.Get()
+}
+
+// GetLastUsedAtOk returns a tuple with the LastUsedAt field value
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *ImageVersion) GetLastUsedAtOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.LastUsedAt.Get(), o.LastUsedAt.IsSet()
+}
+
+// SetLastUsedAt sets field value
+func (o *ImageVersion) SetLastUsedAt(v string) {
+	o.LastUsedAt.Set(&v)
+}
+
+// GetUpstreamMissingAt returns the UpstreamMissingAt field value
+// If the value is explicit nil, the zero value for string will be returned
+func (o *ImageVersion) GetUpstreamMissingAt() string {
+	if o == nil || o.UpstreamMissingAt.Get() == nil {
+		var ret string
+		return ret
+	}
+
+	return *o.UpstreamMissingAt.Get()
+}
+
+// GetUpstreamMissingAtOk returns a tuple with the UpstreamMissingAt field value
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *ImageVersion) GetUpstreamMissingAtOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.UpstreamMissingAt.Get(), o.UpstreamMissingAt.IsSet()
+}
+
+// SetUpstreamMissingAt sets field value
+func (o *ImageVersion) SetUpstreamMissingAt(v string) {
+	o.UpstreamMissingAt.Set(&v)
+}
+
 // GetCreatedAt returns the CreatedAt field value
 func (o *ImageVersion) GetCreatedAt() string {
 	if o == nil {
@@ -220,6 +278,8 @@ func (o ImageVersion) ToMap() (map[string]interface{}, error) {
 	toSerialize["sizeBytes"] = o.SizeBytes
 	toSerialize["sourceRef"] = o.SourceRef
 	toSerialize["tags"] = o.Tags
+	toSerialize["lastUsedAt"] = o.LastUsedAt.Get()
+	toSerialize["upstreamMissingAt"] = o.UpstreamMissingAt.Get()
 	toSerialize["createdAt"] = o.CreatedAt
 
 	for key, value := range o.AdditionalProperties {
@@ -239,6 +299,8 @@ func (o *ImageVersion) UnmarshalJSON(data []byte) (err error) {
 		"sizeBytes",
 		"sourceRef",
 		"tags",
+		"lastUsedAt",
+		"upstreamMissingAt",
 		"createdAt",
 	}
 
@@ -274,6 +336,8 @@ func (o *ImageVersion) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "sizeBytes")
 		delete(additionalProperties, "sourceRef")
 		delete(additionalProperties, "tags")
+		delete(additionalProperties, "lastUsedAt")
+		delete(additionalProperties, "upstreamMissingAt")
 		delete(additionalProperties, "createdAt")
 		o.AdditionalProperties = additionalProperties
 	}

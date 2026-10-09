@@ -212,6 +212,23 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
     })
   })
 
+  /**
+   * Each start moves it, including the digest-pinned start every box after
+   * the first gets from the catalog — the one path that records no tag.
+   */
+  it('moves when a version was last used each time a box starts from it', async () => {
+    await report('quay.io/acme/app:v1')
+    const [first] = await dataSource.getRepository(ImageVersion).find()
+    const longAgo = new Date('2026-01-01T00:00:00.000Z')
+    await dataSource.getRepository(ImageVersion).update({ id: first.id }, { lastUsedAt: longAgo })
+
+    await report(`quay.io/acme/app@${DIGEST}`)
+
+    const versions = await dataSource.getRepository(ImageVersion).find()
+    expect(versions).toHaveLength(1)
+    expect(versions[0].lastUsedAt?.getTime()).toBeGreaterThan(longAgo.getTime())
+  })
+
   it('records no tag for a reference the caller already pinned', async () => {
     await report(`quay.io/acme/app@${DIGEST}`)
 
