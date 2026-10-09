@@ -108,6 +108,14 @@ export BOXLITE_E2E_RUNNER_LOG=/path/to/runner.log
 # admits. Defaults to a small public one on quay.io, so a run needs no override:
 export BOXLITE_E2E_CATALOG_IMAGE=quay.io/libpod/alpine:latest
 
+# Two tags of one repository with different digests, the repository spelled
+# the same in both, which the tag case pulls and moves a tag between. Defaults
+# to two alpine releases on Docker Hub, so a run needs no override. Moving a
+# tag takes the write:images scope, which an API key made before that scope
+# existed does not have:
+export BOXLITE_E2E_TAG_IMAGE_OLD=docker.io/library/alpine:3.19
+export BOXLITE_E2E_TAG_IMAGE_NEW=docker.io/library/alpine:3.20
+
 # Only for a stack that predates the image catalog: skip that case instead of
 # failing. Without it a 404 on /images is treated as the regression it is:
 export BOXLITE_E2E_ALLOW_MISSING_CATALOG=1
@@ -201,9 +209,9 @@ apps/e2e/
 ├── two_sided.sh             # Validates that test catches bug + PR fixes it
 ├── pytest.ini
 ├── lib/
+│   ├── catalog_boxes.py     # Boxes against the catalog: pull budget, report window
 │   ├── e2e_auth.py          # Auth context: API-key / OIDC, env vars / profile
 │   ├── images.py            # Curated ref derived from apps/box-images/VERSION
-│   ├── catalog_boxes.py     # Boxes against the catalog: pull budget, report window
 │   └── path_verification.py # Helpers that prove SDK→API→Runner was the route
 ├── sdks/
 │   ├── node/                # TypeScript drivers (fallback: scripts/test/image.js)
@@ -223,6 +231,7 @@ apps/e2e/
     ├── test_go_coverage.py          # Go SDK exec options, copy, errors
     ├── test_images_catalog.py       # Image catalog via rt.images: booting records it, remove drops it, admission refuses bad hosts
     ├── test_images_private.py       # Private image through a login added with rt.registries
+    ├── test_images_tags.py          # Moving a tag over /api/images: the next box follows, others keep theirs
     ├── test_c_entry.py              # C SDK smoke
     └── test_c_coverage.py           # C SDK exec, errors
 ```
