@@ -8,9 +8,17 @@ import { HttpException, HttpStatus } from '@nestjs/common'
 // Clients branch on the code, not the message, so each code is part of the API.
 const REFERRAL_REGISTRATION_ERRORS = {
   invalid_referral_code: { status: HttpStatus.UNPROCESSABLE_ENTITY, message: 'Invalid referral code' },
+  referral_email_required: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'A referral needs an email address on the account; continue without the referral code',
+  },
+  referral_conflict: {
+    status: HttpStatus.CONFLICT,
+    message: 'This account was already referred by another organization; continue without the referral code',
+  },
   referral_unavailable: {
     status: HttpStatus.SERVICE_UNAVAILABLE,
-    message: 'Referral codes cannot be checked right now; try again later',
+    message: 'Referrals cannot be processed right now; try again later',
   },
 } as const
 
