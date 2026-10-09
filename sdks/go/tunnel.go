@@ -266,12 +266,12 @@ func (n *Network) SetInbound(ctx context.Context, mode NetworkMode) error {
 	if n == nil || n.handle == nil {
 		return ErrRuntimeClosed
 	}
-	var cMode uint32
+	var cMode C.int32_t
 	switch mode {
 	case NetworkModeEnabled:
-		cMode = uint32(C.BoxliteNetworkModeEnabled)
+		cMode = C.int32_t(C.BoxliteNetworkModeEnabled)
 	case NetworkModeDisabled:
-		cMode = uint32(C.BoxliteNetworkModeDisabled)
+		cMode = C.int32_t(C.BoxliteNetworkModeDisabled)
 	default:
 		return fmt.Errorf("invalid inbound network mode %q", mode)
 	}

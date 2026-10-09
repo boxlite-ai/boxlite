@@ -711,7 +711,7 @@ BoxliteErrorCode boxlite_network_tunnel(
 );
 BoxliteErrorCode boxlite_network_set_inbound(
     CBoxNetworkHandle* network,
-    BoxliteNetworkMode mode,
+    int32_t mode,  /* a BoxliteNetworkMode value */
     CBoxliteError* out_error
 );
 BoxliteErrorCode boxlite_tunnel_uri(
@@ -761,7 +761,7 @@ for a local tunnel.
 `boxlite_network_set_inbound()` makes a remote box public
 (`BoxliteNetworkModeEnabled`) or private (`BoxliteNetworkModeDisabled`). A local
 box, or a server that does not advertise `inbound_update_enabled`, returns
-`Unsupported`.
+`Unsupported`. Any other `mode` value returns `InvalidArgument`.
 
 `boxlite_tunnel_forward()` creates a TCP or Unix listener from the tunnel. Its
 wait and close callbacks are posted exactly once through the parent runtime's

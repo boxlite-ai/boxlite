@@ -64,8 +64,8 @@ typedef enum BoxliteErrorCode {
   SessionReaped = 21,
 } BoxliteErrorCode;
 
-// Network mode exposed by [`CNetworkInfo`] and accepted by
-// `boxlite_network_set_inbound`.
+// Network mode exposed by [`CNetworkInfo`]. `boxlite_network_set_inbound`
+// takes these values as an integer.
 typedef enum BoxliteNetworkMode {
   BoxliteNetworkModeEnabled = 0,
   BoxliteNetworkModeDisabled = 1,
@@ -906,11 +906,14 @@ enum BoxliteErrorCode boxlite_network_tunnel(CBoxNetworkHandle *network,
 
 // Make the box's services public (`Enabled`) or private (`Disabled`).
 //
-// Only a REST runtime whose server advertises inbound updates supports this;
-// every other runtime returns `Unsupported`. Returns `InvalidArgument` for a
-// null network pointer, with details written to `out_error` when provided.
+// `mode` is a `BoxliteNetworkMode` value taken as an integer, so an
+// out-of-range value from C is rejected rather than read as an invalid Rust
+// enum. Only a REST runtime whose server advertises inbound updates supports
+// this; every other runtime returns `Unsupported`. Returns `InvalidArgument`
+// for an unknown mode or a null network pointer, with details written to
+// `out_error` when provided.
 enum BoxliteErrorCode boxlite_network_set_inbound(CBoxNetworkHandle *network,
-                                                  enum BoxliteNetworkMode mode,
+                                                  int32_t mode,
                                                   CBoxliteError *out_error);
 
 // Release an unconsumed tunnel. Existing connections and forwarders remain alive.
