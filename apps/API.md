@@ -205,13 +205,13 @@ serves and the events it emits are catalogued below alongside its routes.
 <details>
 <summary><b>Image catalog</b> · 5 routes</summary>
 
-| Method   | Path                               | What it does                                                                                         |
-| -------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `GET`    | `/api/images`                      | Lists the organization's images together with the operator's curated set.                            |
-| `GET`    | `/api/images/usage`                | Counts held images against the limit and sums the sizes their versions declared.                     |
-| `GET`    | `/api/images/{idOrRef}`            | Gets an image, its versions with their tags, last use and whether the registry still has them, and the last 100 tag events.                      |
-| `PUT`    | `/api/images/{idOrRef}/tags/{tag}` | Points a tag at a ready version and records the move; boxes already created keep their version.      |
-| `DELETE` | `/api/images/{idOrRef}`            | Removes the catalog entry, not the bytes, unless a box can still boot from it (409 lists the boxes). |
+| Method   | Path                               | What it does                                                                                                                |
+| -------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/images`                      | Lists the organization's images together with the operator's curated set.                                                   |
+| `GET`    | `/api/images/usage`                | Counts held images against the limit and sums the sizes their versions declared.                                            |
+| `GET`    | `/api/images/{idOrRef}`            | Gets an image, its versions with their tags, last use and whether the registry still has them, and the last 100 tag events. |
+| `PUT`    | `/api/images/{idOrRef}/tags/{tag}` | Points a tag at a ready version and records the move; boxes already created keep their version.                             |
+| `DELETE` | `/api/images/{idOrRef}`            | Removes the catalog entry, not the bytes, unless a box can still boot from it (409 lists the boxes).                        |
 
 </details>
 
