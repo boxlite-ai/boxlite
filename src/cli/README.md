@@ -85,8 +85,10 @@ cargo build --release -p boxlite-cli
 ### Run a one-off command
 
 ```bash
-boxlite run python:slim python -c "print('Hello from BoxLite!')"
+boxlite run python:slim python -c 'print("Hello from BoxLite!")'
 ```
+
+Interactive bash treats `!` inside double quotes as a history event.
 
 ### Run interactively with a TTY
 
