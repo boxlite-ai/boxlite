@@ -115,6 +115,13 @@ workflow never forces a pass. Failed file detection cannot select this path,
 and upload errors fail `Test (conclusion)`. Source changes still need reports
 and 90% patch coverage; missing reports fail the patch status.
 
+Plugin resources, `scripts/plugins`, `tests/plugins`, and their Make/CI inputs select
+the lightweight `Plugin package coverage` job, including on drafts. It measures
+package tests and real check/dist commands through `make plugin:boxlite:coverage`,
+saves the Cobertura XML as the `plugin-coverage` artifact, and uploads it with OIDC
+under the `plugins` carryforward flag. Selected plugin source cannot take the
+empty-upload path; package or upload failures block `Test (conclusion)`.
+
 After verifying normal uploads and the skipped-coverage path on PRs and merge
 groups, require `codecov/patch` from the Codecov app in the main ruleset alongside
 `Test (conclusion)`. Deploy the workflow before enabling that requirement so
