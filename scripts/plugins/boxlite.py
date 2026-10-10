@@ -68,6 +68,10 @@ def validate(root=PLUGIN):
     for key in ('name', 'version', 'description'):
         if required_field(manifest, key, 'portable manifest') != required_field(legacy, key, 'Codex manifest'):
             raise ValueError(f'Compatibility identity differs: {key}')
+    claude = load_manifest(root, '.claude-plugin/plugin.json')
+    for key in ('name', 'version', 'description'):
+        if required_field(manifest, key, 'portable manifest') != required_field(claude, key, 'Claude manifest'):
+            raise ValueError(f'Claude compatibility identity differs: {key}')
     extensions = required_field(manifest, 'extensions', 'portable manifest')
     settings = required_field(extensions, 'com.openai', 'extensions')
     interface = required_field(settings, 'interface', 'OpenAI extension')
@@ -99,7 +103,7 @@ def validate(root=PLUGIN):
 
 
 def build(output, root=PLUGIN):
-    """Validate and stage a deterministic ZIP, local marketplace, and SHA-256 digest."""
+    """Validate and stage a deterministic ZIP, host marketplaces, and SHA-256 digest."""
     files = validate(root)
     output.mkdir(parents=True, exist_ok=True)
     archive = output / 'boxlite-0.1.0.zip'
@@ -123,6 +127,15 @@ def build(output, root=PLUGIN):
         'name': 'boxlite', 'source': {'source': 'local', 'path': './plugins/boxlite'},
         'policy': {'installation': 'AVAILABLE', 'authentication': 'ON_USE'}, 'category': 'Developer Tools',
     }]}, indent=2) + '\n')
+    claude_catalog = marketplace / '.claude-plugin/marketplace.json'
+    claude_catalog.parent.mkdir(parents=True, exist_ok=True)
+    claude_catalog.write_text(json.dumps({
+        'name': 'boxlite', 'description': 'BoxLite cloud deployment skills.',
+        'owner': {'name': 'BoxLite'}, 'plugins': [{
+            'name': 'boxlite', 'source': './plugins/boxlite',
+            'description': 'Skills for building and deploying apps on BoxLite cloud.',
+        }],
+    }, indent=2) + '\n')
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     (output / 'SHA256SUMS').write_text(f'{digest}  {archive.name}\n')
     return archive
