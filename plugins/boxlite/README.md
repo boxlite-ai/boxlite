@@ -17,6 +17,10 @@ The generated marketplace contains both host catalogs pointing at the same plugi
 
 Use a temporary `CLAUDE_CONFIG_DIR` for installation tests. Inspect `plugin list` and `plugin details` to confirm both skills load; this does not prove live device login or deployment. Tested CLI versions and outstanding acceptance checks belong in the release evidence. Claude web chat is outside this adapter's scope.
 
-This is a development package. Public release requires a tested CLI release containing discovered device endpoints and `network tunnel`, real Auth0 device login and refresh verification, independent deployment acceptance, desktop installation evidence, final publisher policy URLs, and review evidence. Application Google login needs its own client configuration when testing that use case. The CLI fix does not enable grants in the Auth0 tenant. Public submission/review is separate from local installation.
+This is a development package. Public release requires a tested CLI release meeting the [setup skill's #1836 build prerequisite](skills/boxlite-setup/SKILL.md) and supporting `network tunnel`, real Auth0 device login and refresh verification, independent deployment acceptance, desktop installation evidence, final publisher policy URLs, and review evidence. Application Google login needs its own client configuration when testing that use case. The CLI fix does not enable grants in the Auth0 tenant. Public submission/review is separate from local installation.
 
 Use the references from each skill for the requested workflow. Keep application source, credentials, build caches, and deployment state outside this package.
+
+Packaging reports absent manifests, non-object JSON, and missing required fields as contextual `ValueError`s. Validation, distribution, and Claude strict checks always run, even when files share their Make target names; the non-colon force prerequisite preserves the macOS Make workaround.
+
+The [setup skill](skills/boxlite-setup/SKILL.md) bundles the verified public Native CLI client ID for `https://dev.boxlite.ai/api` with its matching issuer and an explicit device-login command. Production and other environments require their own public Native CLI client ID from the environment administrator; the development ID must not be reused. User/admin overrides remain supported. The package contains no client secret or user tokens.
