@@ -4,7 +4,7 @@ A skills-only plugin for Codex desktop and CLI. It contains BoxLite setup/deploy
 
 The portable entry point is `plugin.json`; `.codex-plugin/plugin.json` supplies the Codex compatibility overlay. Setup and deployment guidance lives under `skills/`. Install this folder through a compatible local marketplace and invoke the skill for the requested workflow. Installation itself does not authenticate to BoxLite.
 
-The plugin supports either a verified official CLI **v0.10.6 or newer** containing [#1836](skills/boxlite-setup/SKILL.md), or the verified native build from the [pinned source procedure](skills/boxlite-setup/references/source-build.md). The published v0.10.5 binary is incompatible; the pinned build may report that version and is accepted through source provenance.
+The plugin supports either a verified official CLI **v0.10.6 or newer** containing [#1836](https://github.com/boxlite-ai/boxlite/pull/1836), or the verified native build from the [pinned source procedure](skills/boxlite-setup/references/source-build.md). The published v0.10.5 binary is incompatible; the pinned build may report that version and is accepted through source provenance.
 
 The source path allows submission before a compatible CLI release exists. Public publication still requires independent deployment acceptance, installation evidence, publisher metadata/policy requirements and platform review. Application Google login needs its own client configuration when testing that use case. The CLI fix does not enable grants in the Auth0 tenant.
 
