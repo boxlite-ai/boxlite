@@ -541,7 +541,7 @@ impl ExecutionState {
         if inner.released {
             return Ok(false);
         }
-        let Some(process) = self.process else {
+        let Some(process) = self.process.as_ref() else {
             return Ok(false);
         };
         let result = process.signal(signal, process_group);
@@ -552,7 +552,10 @@ impl ExecutionState {
     pub(crate) async fn owned_process_is_current(&self) -> bool {
         self.shutdown_managed
             && !self.inner.lock().await.released
-            && self.process.is_some_and(|process| process.is_current())
+            && self
+                .process
+                .as_ref()
+                .is_some_and(|process| process.is_current())
     }
 
     /// Kill process with signal.
@@ -651,6 +654,12 @@ mod release_tests {
 
     #[tokio::test]
     async fn release_closes_handle_fds_and_aborts_forwarders_idempotently() {
+        // Serializes against child-spawning tests: this test asserts that raw
+        // fd numbers are closed (`fd_is_open(raw_fd)` checks the *number*,
+        // which a parallel test can recycle into a fresh descriptor between
+        // `release_resources` and the assertion). Without the guard the
+        // assertion is flaky under parallel fd churn.
+        let _test_guard = crate::reaper::reap_test_guard().await;
         let (state, tracked_fds, _peers) = state_with_tracked_handle();
         let retained_clone = state.clone();
         let (task_fd, task_peer) = pipe().unwrap();
@@ -716,12 +725,16 @@ mod release_tests {
             .expect("spawn sleep");
         let pid = Pid::from_raw(child.id() as i32);
         let identity = ProcessInstance::capture(pid).expect("read child identity");
-        let stale = identity.with_start_time_for_test(
-            identity
-                .start_time()
-                .checked_sub(1)
-                .expect("process start time must be nonzero"),
-        );
+        // Read the start time before moving `identity` into the test helper
+        // (`with_start_time_for_test` takes `self` by value now that
+        // `ProcessInstance` is `Clone`, not `Copy`).
+        let stale_start = identity
+            .start_time()
+            .checked_sub(1)
+            .expect("process start time must be nonzero");
+        let stale = identity
+            .with_start_time_for_test(stale_start)
+            .with_no_pidfd_for_test();
 
         assert!(!stale
             .signal(nix::sys::signal::Signal::SIGTERM, false)
@@ -865,12 +878,16 @@ mod release_tests {
         let mut child = command.spawn().expect("spawn process-group leader");
         let pid = Pid::from_raw(child.id() as i32);
         let identity = ProcessInstance::capture(pid).expect("read child identity");
-        let stale = identity.with_start_time_for_test(
-            identity
-                .start_time()
-                .checked_sub(1)
-                .expect("process start time must be nonzero"),
-        );
+        // Read the start time before moving `identity` into the test helper
+        // (`with_start_time_for_test` takes `self` by value now that
+        // `ProcessInstance` is `Clone`, not `Copy`).
+        let stale_start = identity
+            .start_time()
+            .checked_sub(1)
+            .expect("process start time must be nonzero");
+        let stale = identity
+            .with_start_time_for_test(stale_start)
+            .with_no_pidfd_for_test();
 
         assert!(!stale
             .signal(nix::sys::signal::Signal::SIGTERM, true)
