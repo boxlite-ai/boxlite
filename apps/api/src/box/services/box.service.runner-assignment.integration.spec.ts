@@ -45,6 +45,9 @@ describeIfDatabase('BoxService runner assignment under concurrency (integration,
   let boxRepository: BoxRepository
   let redis: Redis
   let service: BoxService
+  let runnerService: RunnerService
+  let runnerLogger: { log: jest.Mock; warn: jest.Mock; error: jest.Mock; debug: jest.Mock }
+  let eventEmitter: { emit: jest.Mock }
   let ownsDatabase = false
   let config: Record<string, number | undefined>
 
@@ -53,6 +56,8 @@ describeIfDatabase('BoxService runner assignment under concurrency (integration,
     'runnerDisk.overcommitRatio': 1,
     'runnerDisk.minFreePercentage': 10,
     'runnerDisk.expandLimitGiB': undefined,
+    'runnerDisk.warningPercentage': 75,
+    'runnerDisk.criticalPercentage': 85,
   }
 
   function readyRunner(): Runner {
@@ -138,11 +143,18 @@ describeIfDatabase('BoxService runner assignment under concurrency (integration,
     // Real candidate selection: findAvailableRunners / getRandomAvailableRunner /
     // findOneUncachedOrFail all read through this repository, so the score gate
     // and the `excludedRunnerIds` filter are the production ones.
-    const runnerService = Object.create(RunnerService.prototype) as RunnerService
+    runnerService = Object.create(RunnerService.prototype) as RunnerService
+    runnerLogger = { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }
+    eventEmitter = { emit: jest.fn() }
     Object.assign(runnerService as any, {
       runnerRepository: runners,
       configService: { get: (key: string) => config[key], getOrThrow: (key: string) => config[key] },
       dataSource,
+      logger: runnerLogger,
+      eventEmitter,
+      // The TOPSIS score is not under test here; a fixed value keeps the
+      // health path from depending on the whole runnerScore config.
+      calculateAvailabilityScore: () => 100,
     })
 
     service = Object.create(BoxService.prototype) as BoxService
@@ -193,6 +205,7 @@ describeIfDatabase('BoxService runner assignment under concurrency (integration,
 
   beforeEach(async () => {
     config = { ...defaultConfig }
+    jest.clearAllMocks()
     await dataSource.query(`DELETE FROM "${schemaName}"."box_last_activity"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."box"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."runner"`)
@@ -341,6 +354,108 @@ describeIfDatabase('BoxService runner assignment under concurrency (integration,
 
       expect((await assignDisk(100)).runnerId).toBe(runner.id)
       await expect(assignDisk(1)).rejects.toMatchObject({ status: 400 })
+    })
+  })
+
+  describe('disk pressure', () => {
+    function heartbeat(runner: Runner, diskUsage: number): Promise<void> {
+      return runnerService.updateRunnerHealth(runner.id, undefined, undefined, undefined, undefined, {
+        currentDiskUsagePercentage: diskUsage,
+        diskGiB: 1000,
+      })
+    }
+
+    async function freshRunner(): Promise<Runner> {
+      const runner = readyRunner()
+      await runners.insert(runner)
+      return runner
+    }
+
+    function stored(runner: Runner): Promise<Runner> {
+      return runners.findOneByOrFail({ id: runner.id })
+    }
+
+    it('marks a runner unschedulable at the critical threshold and stops placing boxes on it', async () => {
+      const runner = await freshRunner()
+
+      await heartbeat(runner, 85)
+
+      expect(await stored(runner)).toMatchObject({ unschedulable: true, unschedulableReason: 'disk_pressure' })
+      // Notifications forward `event.runner` as the dashboard row, so it must
+      // carry the new flag, not the one loaded before the update.
+      expect(eventEmitter.emit).toHaveBeenCalledWith(
+        'runner.unschedulable.updated',
+        expect.objectContaining({
+          oldUnschedulable: false,
+          newUnschedulable: true,
+          runner: expect.objectContaining({ unschedulable: true, unschedulableReason: 'disk_pressure' }),
+        }),
+      )
+      await expect(assignBox('pressured')).rejects.toMatchObject({ status: 400 })
+    })
+
+    it('keeps the mark between the warning and critical thresholds', async () => {
+      const runner = await freshRunner()
+      await heartbeat(runner, 90)
+
+      await heartbeat(runner, 80)
+
+      expect(await stored(runner)).toMatchObject({ unschedulable: true, unschedulableReason: 'disk_pressure' })
+    })
+
+    it('clears its own mark once usage falls below the warning threshold', async () => {
+      const runner = await freshRunner()
+      await heartbeat(runner, 90)
+
+      await heartbeat(runner, 74)
+
+      expect(await stored(runner)).toMatchObject({ unschedulable: false, unschedulableReason: null })
+      expect(eventEmitter.emit).toHaveBeenLastCalledWith(
+        'runner.unschedulable.updated',
+        expect.objectContaining({
+          runner: expect.objectContaining({ unschedulable: false, unschedulableReason: null }),
+        }),
+      )
+      expect((await assignBox('recovered')).runnerId).toBe(runner.id)
+    })
+
+    it('keeps the mark when a heartbeat omits disk usage', async () => {
+      const runner = await freshRunner()
+      await heartbeat(runner, 90)
+
+      await runnerService.updateRunnerHealth(runner.id, undefined, undefined, undefined, undefined, { cpu: 64 })
+
+      expect(await stored(runner)).toMatchObject({ unschedulable: true, unschedulableReason: 'disk_pressure' })
+    })
+
+    it('never clears or relabels an operator mark', async () => {
+      const runner = await freshRunner()
+      await runnerService.updateSchedulingStatus(runner.id, true)
+
+      await heartbeat(runner, 90)
+      await heartbeat(runner, 10)
+
+      expect(await stored(runner)).toMatchObject({ unschedulable: true, unschedulableReason: 'operator' })
+    })
+
+    it('logs disk pressure at warning and error levels', async () => {
+      const runner = await freshRunner()
+
+      await heartbeat(runner, 80)
+      await heartbeat(runner, 86)
+      await heartbeat(runner, 50)
+
+      const pressure = { 'event.name': 'runner.disk_pressure', 'runner.id': runner.id }
+      expect(runnerLogger.warn).toHaveBeenCalledTimes(1)
+      expect(runnerLogger.warn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ ...pressure, 'disk.pressure_level': 'warning', 'disk.usage_percentage': 80 }),
+      )
+      expect(runnerLogger.error).toHaveBeenCalledTimes(1)
+      expect(runnerLogger.error).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ ...pressure, 'disk.pressure_level': 'critical', 'disk.usage_percentage': 86 }),
+      )
     })
   })
 })

@@ -591,6 +591,10 @@ const configuration = {
       ? parseInt(process.env.RUNNER_DISK_EXPAND_LIMIT_GIB, 10)
       : undefined,
     minFreePercentage: parseFloat(process.env.RUNNER_DISK_MIN_FREE_PERCENTAGE || '10'),
+    // Disk pressure on heartbeat: log from warning; mark unschedulable from
+    // critical, and lift that mark below warning.
+    warningPercentage: parseFloat(process.env.RUNNER_DISK_WARNING_PERCENTAGE || '75'),
+    criticalPercentage: parseFloat(process.env.RUNNER_DISK_CRITICAL_PERCENTAGE || '85'),
   },
   rateLimit: {
     anonymous: {

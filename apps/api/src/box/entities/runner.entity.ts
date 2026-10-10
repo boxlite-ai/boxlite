@@ -7,6 +7,7 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from 'typeorm'
 import { BoxClass } from '../enums/box-class.enum'
 import { RunnerState } from '../enums/runner-state.enum'
+import { RunnerUnschedulableReason } from '../enums/runner-unschedulable-reason.enum'
 import { RunnerServiceInfo } from '../common/runner-service-info'
 
 @Entity()
@@ -155,6 +156,13 @@ export class Runner {
     default: false,
   })
   unschedulable: boolean
+
+  @Column({
+    type: 'enum',
+    enum: RunnerUnschedulableReason,
+    nullable: true,
+  })
+  unschedulableReason: RunnerUnschedulableReason | null
 
   @Column({
     default: false,

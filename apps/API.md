@@ -313,7 +313,7 @@ release fetched over HTTPS.
 | Socket.IO event          | `volume.lastUsedAt.updated`    | Notifies an organization that a volume's last-used time changed.                                                                       |
 | Socket.IO event          | `runner.created`               | Notifies an organization that a runner was registered.                                                                                 |
 | Socket.IO event          | `runner.state.updated`         | Notifies an organization that a runner's state changed.                                                                                |
-| Socket.IO event          | `runner.unschedulable.updated` | Notifies an organization that runner scheduling availability changed.                                                                  |
+| Socket.IO event          | `runner.unschedulable.updated` | Notifies an organization that runner scheduling availability changed, including the API's own disk-pressure mark.                      |
 | Webhook event (Svix)     | `box.created`                  | Delivers a signed box-created event to the organization's subscribed endpoints.                                                        |
 | Webhook event (Svix)     | `box.state.updated`            | Delivers a box observed-state change to the organization's subscribed endpoints.                                                       |
 | Webhook event (Svix)     | `volume.created`               | Delivers a volume-created event to the organization's subscribed endpoints.                                                            |

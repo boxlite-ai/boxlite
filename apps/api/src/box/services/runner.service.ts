@@ -32,6 +32,8 @@ import { Runner } from '../entities/runner.entity'
 import { CreateRunnerInternalDto } from '../dto/create-runner-internal.dto'
 import { BoxClass } from '../enums/box-class.enum'
 import { RunnerState } from '../enums/runner-state.enum'
+import { RunnerUnschedulableReason } from '../enums/runner-unschedulable-reason.enum'
+import { RunnerUnschedulableUpdatedEvent } from '../events/runner-unschedulable-updated.event'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { BoxState } from '../enums/box-state.enum'
@@ -480,6 +482,70 @@ export class RunnerService {
       RunnerEvents.STATE_UPDATED,
       new RunnerStateUpdatedEvent(runner, runner.state, updateData.state),
     )
+
+    // Only a reported value counts: the `|| 0` above would read a missing
+    // metric as an empty disk and lift the mark.
+    if (metrics?.currentDiskUsagePercentage !== undefined) {
+      await this.applyDiskPressure(runner, metrics.currentDiskUsagePercentage)
+    }
+  }
+
+  /**
+   * Logs data-disk pressure and marks the runner unschedulable at the critical
+   * threshold. The mark is lifted only below the warning threshold, so usage
+   * hovering at critical does not flap, and only when the API set it: an
+   * operator's mark is never touched. Conditional updates, not read-then-save,
+   * keep this from racing the scheduling endpoints.
+   */
+  private async applyDiskPressure(runner: Runner, diskUsage: number): Promise<void> {
+    const warning = this.configService.getOrThrow('runnerDisk.warningPercentage')
+    const critical = this.configService.getOrThrow('runnerDisk.criticalPercentage')
+
+    if (diskUsage >= warning) {
+      const level = diskUsage >= critical ? 'critical' : 'warning'
+      const attributes = {
+        'event.name': 'runner.disk_pressure',
+        'disk.pressure_level': level,
+        'runner.id': runner.id,
+        'runner.region': runner.region,
+        'disk.usage_percentage': diskUsage,
+        'disk.capacity_gib': runner.diskGiB,
+      }
+      const message = `Runner ${runner.id} data disk at ${diskUsage}% (${level})`
+      if (level === 'critical') {
+        this.logger.error(message, attributes)
+      } else {
+        this.logger.warn(message, attributes)
+      }
+    }
+
+    let result: UpdateResult | undefined
+    if (diskUsage >= critical) {
+      result = await this.runnerRepository.update(
+        { id: runner.id, unschedulable: false, state: Not(RunnerState.DECOMMISSIONED) },
+        { unschedulable: true, unschedulableReason: RunnerUnschedulableReason.DISK_PRESSURE },
+      )
+    } else if (diskUsage < warning) {
+      result = await this.runnerRepository.update(
+        { id: runner.id, unschedulableReason: RunnerUnschedulableReason.DISK_PRESSURE },
+        { unschedulable: false, unschedulableReason: null },
+      )
+    }
+    if (!result?.affected) {
+      return
+    }
+    this.invalidateRunnerCache(runner.id)
+    // update() bypasses the entity subscriber that normally emits this, and
+    // notifications forward the runner as-is, so it must carry the new flag.
+    const marked = diskUsage >= critical
+    const updated = Object.assign(Object.create(Runner.prototype) as Runner, runner, {
+      unschedulable: marked,
+      unschedulableReason: marked ? RunnerUnschedulableReason.DISK_PRESSURE : null,
+    })
+    this.eventEmitter.emit(
+      RunnerEvents.UNSCHEDULABLE_UPDATED,
+      new RunnerUnschedulableUpdatedEvent(updated, !marked, marked),
+    )
   }
 
   private async updateRunnerState(runnerId: string, newState: RunnerState): Promise<void> {
@@ -775,6 +841,7 @@ export class RunnerService {
   async updateSchedulingStatus(id: string, unschedulable: boolean): Promise<Runner> {
     const runner = await this.findOneOrFail(id)
     runner.unschedulable = unschedulable
+    runner.unschedulableReason = unschedulable ? RunnerUnschedulableReason.OPERATOR : null
     await this.runnerRepository.save(runner)
     return runner
   }
