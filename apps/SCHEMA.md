@@ -367,12 +367,18 @@ or `archived`.
 | `env` | `jsonb` | default `{}` |
 | `labels` | `jsonb` | nullable |
 | `volumes` | `jsonb` | array of `{ volumeId, mountPath }` |
-| `public` | `boolean` | default `false` |
-| `networkBlockAll` | `boolean` | default `false` |
-| `networkAllowList` | `character varying` | nullable |
+| `inboundMode` | `character varying` | `enabled` \| `disabled`, default `disabled`; `enabled` lets the proxy serve exposed services without sign-in |
+| `outboundMode` | `character varying` | `enabled` \| `disabled`, default `enabled`; `disabled` blocks all egress |
+| `outboundAllowNet` | `text[]` | nullable egress allowlist (hosts, wildcards, IPv4, CIDRs); null = full egress |
 | `authToken` | `character varying` | `nanoid(32)`, lowercased |
 | `daemonVersion` | `character varying` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |
+
+The network policy columns use the `/v1` NetworkSpec vocabulary. The control-plane
+`Box` DTO and the runner create body still present them as `public`,
+`networkBlockAll` and a comma-joined `networkAllowList`; the API translates at
+those boundaries (`box/utils/network-policy.util.ts`) until the clients move
+(POL-827).
 
 **Unique:** `(organizationId, name)`.
 

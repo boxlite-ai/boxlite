@@ -47,7 +47,7 @@ describe('TunnelService', () => {
     expect(repository.query).toHaveBeenCalledTimes(1)
   })
 
-  it('requires an active public tunnel and a currently public box', async () => {
+  it('requires an active public tunnel and a box with inbound enabled', async () => {
     const { service, builder } = makeService()
 
     await expect(service.isPublicAccessAllowed('AbCdEf123456', 3000)).resolves.toBe(true)
@@ -56,7 +56,7 @@ describe('TunnelService', () => {
     expect(builder.andWhere).toHaveBeenCalledWith('tunnel.port = :port', { port: 3000 })
     expect(builder.andWhere).toHaveBeenCalledWith('tunnel.access_mode = :mode', { mode: 'public' })
     expect(builder.andWhere).toHaveBeenCalledWith('tunnel.revoked_at IS NULL')
-    expect(builder.andWhere).toHaveBeenCalledWith('box.public = true')
+    expect(builder.andWhere).toHaveBeenCalledWith('box.inboundMode = :inboundMode', { inboundMode: 'enabled' })
   })
 
   it('caches both access verdicts briefly', async () => {

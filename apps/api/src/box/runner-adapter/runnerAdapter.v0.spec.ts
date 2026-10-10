@@ -6,6 +6,27 @@
 import { RunnerAdapterV0 } from './runnerAdapter.v0'
 
 describe('RunnerAdapterV0 createBox', () => {
+  // The runner wire still speaks the flag shape; the row stores modes. The
+  // polarity flip (outbound disabled -> blockAll true) and the comma join both
+  // happen here, so pin them at the boundary.
+  it('translates the outbound policy into the runner flag shape', async () => {
+    const adapter = new RunnerAdapterV0()
+    const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
+    ;(adapter as any).boxApiClient = { create }
+
+    await adapter.createBox({
+      id: 'box-1',
+      image: 'base',
+      env: {},
+      outboundMode: 'disabled',
+      outboundAllowNet: ['api.openai.com', '10.0.0.0/8'],
+    } as any)
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ networkBlockAll: true, networkAllowList: 'api.openai.com,10.0.0.0/8' }),
+    )
+  })
+
   it('passes secrets through to the runner create body', async () => {
     const adapter = new RunnerAdapterV0()
     const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
@@ -23,8 +44,8 @@ describe('RunnerAdapterV0 createBox', () => {
       secrets: [
         { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
       ],
-      networkBlockAll: false,
-      networkAllowList: undefined,
+      outboundMode: 'enabled',
+      outboundAllowNet: undefined,
       authToken: undefined,
       organizationId: undefined,
       region: undefined,
@@ -56,8 +77,8 @@ describe('RunnerAdapterV0 createBox', () => {
       env: {},
       volumes: [],
       secrets: [{ name: 'openai', value: 'sk-test' }],
-      networkBlockAll: false,
-      networkAllowList: undefined,
+      outboundMode: 'enabled',
+      outboundAllowNet: undefined,
       errorReason: 'crashed',
     } as any
 

@@ -10,6 +10,7 @@ import Redis from 'ioredis'
 import { Repository } from 'typeorm'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Tunnel } from '../entities/tunnel.entity'
+import { NetworkMode } from '../enums/network-mode.enum'
 
 const TERMINAL_PORT = 22222
 // Same window as the other preview checks (preview:public, preview:token): the proxy
@@ -51,7 +52,7 @@ export class TunnelService {
       .andWhere('tunnel.port = :port', { port })
       .andWhere('tunnel.access_mode = :mode', { mode: 'public' })
       .andWhere('tunnel.revoked_at IS NULL')
-      .andWhere('box.public = true')
+      .andWhere('box.inboundMode = :inboundMode', { inboundMode: NetworkMode.ENABLED })
       .andWhere('box.state NOT IN (:...excluded)', { excluded: ['destroyed', 'destroying', 'archived', 'archiving'] })
       .getExists()
     await this.redis.setex(cacheKey, ACCESS_CACHE_TTL_SECONDS, allowed ? '1' : '0')

@@ -8,6 +8,7 @@ import { Injectable, Logger } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository, IsNull } from 'typeorm'
 import { RunnerAdapter, RunnerInfo, RunnerBoxInfo, StartBoxResponse } from './runnerAdapter'
+import { allowListFromAllowNet, isOutboundBlocked } from '../utils/network-policy.util'
 import { Runner } from '../entities/runner.entity'
 import { Box } from '../entities/box.entity'
 import { Job } from '../entities/job.entity'
@@ -142,8 +143,8 @@ export class RunnerAdapterV2 implements RunnerAdapter {
         hosts: secret.hosts,
         placeholder: secret.placeholder,
       })),
-      networkBlockAll: box.networkBlockAll,
-      networkAllowList: box.networkAllowList,
+      networkBlockAll: isOutboundBlocked(box.outboundMode),
+      networkAllowList: allowListFromAllowNet(box.outboundAllowNet),
       metadata,
       authToken: box.authToken,
       organizationId: box.organizationId,

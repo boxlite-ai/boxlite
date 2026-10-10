@@ -10,6 +10,7 @@ import { IsEnum, IsOptional } from 'class-validator'
 import { Box } from '../entities/box.entity'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
+import { allowListFromAllowNet, isInboundEnabled, isOutboundBlocked } from '../utils/network-policy.util'
 
 @ApiSchema({ name: 'BoxVolume' })
 export class BoxVolume {
@@ -313,12 +314,7 @@ export class BoxDto {
   // `exitCode` arrives as an argument for the same reason `lastActivityAt`
   // does: the control plane does not store it. It is read from the runner that
   // owns the box, and an unreadable one degrades to absent.
-  static fromBox(
-    box: Box,
-    toolboxProxyUrl: string,
-    lastActivityAt?: Date | null,
-    exitCode?: number,
-  ): BoxDto {
+  static fromBox(box: Box, toolboxProxyUrl: string, lastActivityAt?: Date | null, exitCode?: number): BoxDto {
     return {
       id: box.id,
       organizationId: box.organizationId,
@@ -331,9 +327,11 @@ export class BoxDto {
       gpu: box.gpu,
       memory: box.mem,
       disk: box.disk,
-      public: box.public,
-      networkBlockAll: box.networkBlockAll,
-      networkAllowList: box.networkAllowList,
+      // The flag shape is kept on the wire for the dashboard and Go clients;
+      // the row stores the policy as inbound/outbound modes.
+      public: isInboundEnabled(box.inboundMode),
+      networkBlockAll: isOutboundBlocked(box.outboundMode),
+      networkAllowList: allowListFromAllowNet(box.outboundAllowNet),
       labels: box.labels,
       volumes: box.volumes,
       state: this.getBoxState(box),
