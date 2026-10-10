@@ -31,6 +31,7 @@ Complete API documentation for each SDK:
 | Surface | Documentation | Description |
 |---------|---------------|-------------|
 | **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 28 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images |
+| **Tenant API** | [`openapi/tenant.openapi.yaml`](../../openapi/tenant.openapi.yaml) | Cloud-only contract for organization members, 2 paths, meant for the CLI and SDKs, which do not call it yet. Shares the Box API's host, credentials, and error envelope; local servers do not serve it |
 | **Reference server** | [`openapi/reference-server/`](../../openapi/reference-server/README.md) | A partial implementation used as a client test fixture, not a conformance target |
 
 The spec is the contract, not an inventory of any one server, and no
