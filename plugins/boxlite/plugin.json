@@ -12,10 +12,10 @@
   "license": "Apache-2.0",
   "keywords": [
     "boxlite",
+    "cloud",
     "deployment",
-    "postgresql",
-    "storage",
-    "codex"
+    "cli",
+    "skills"
   ],
   "extensions": {
     "com.openai": {

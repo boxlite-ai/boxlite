@@ -6,6 +6,8 @@ The portable entry point is `plugin.json`; `.codex-plugin/plugin.json` supplies 
 
 This is a development package. Public release requires a tested CLI release of **v0.10.6 or newer** meeting the [setup skill's #1836 build prerequisite](skills/boxlite-setup/SKILL.md) and supporting `network tunnel`, real Auth0 device login and refresh verification, independent deployment acceptance, desktop installation evidence, publisher metadata/policy requirements, and review evidence. Application Google login needs its own client configuration when testing that use case. The CLI fix does not enable grants in the Auth0 tenant. Public submission/review is separate from local installation.
 
+Discovery tags describe BoxLite cloud deployment through CLI skills. They apply across application stacks; PostgreSQL is an application choice rather than a plugin prerequisite.
+
 Use the references from each skill for the requested workflow. Keep application source, credentials, build caches, and deployment state outside this package.
 
 Before the required CLI release is available, the setup skill executes a [pinned source-build fallback](skills/boxlite-setup/references/source-build.md) when no verified compatible CLI is installed. The agent fetches the merged #1836 source, runs the repository's dependency/runtime/CLI Make targets and selects that development executable before login. Keep the checkout for its runtime resources. The plugin ZIP contains the procedure; source and build outputs remain outside the plugin.
