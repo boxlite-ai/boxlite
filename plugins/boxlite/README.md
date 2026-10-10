@@ -8,6 +8,8 @@ This is a development package. Public release requires a tested CLI release of *
 
 Use the references from each skill for the requested workflow. Keep application source, credentials, build caches, and deployment state outside this package.
 
+Before the required CLI release is available, the setup skill executes a [pinned source-build fallback](skills/boxlite-setup/references/source-build.md) when no verified compatible CLI is installed. The agent fetches the merged #1836 source, runs the repository's dependency/runtime/CLI Make targets and selects that development executable before login. Keep the checkout for its runtime resources. The plugin ZIP contains the procedure; source and build outputs remain outside the plugin.
+
 Packaging reports absent manifests, non-object JSON, and missing required fields as contextual `ValueError`s. Validation and distribution always run, even when files share their Make target names; the non-colon force prerequisite preserves the macOS Make workaround.
 
 For measured packaging coverage, install `coverage==7.13.5` into a Python environment and run `make plugin:boxlite:coverage`, optionally setting `PLUGIN_COVERAGE_PYTHON` to its interpreter. This runs package tests plus the actual check/dist commands and writes `target/coverage/plugins/coverage.xml`; credentials and application runtime are outside its scope.
