@@ -191,3 +191,71 @@ async fn test_working_dir_with_user() {
 
     tb.teardown().await;
 }
+
+/// Executing a command that does not exist must surface as a structured
+/// `Execution` error (HTTP 422), NOT a 5-layer nested `Internal`/500 — so it
+/// stops false-alarming SRE and the SDK gets a typed error. This is the
+/// end-to-end proof of the typed user-command-error path: youki's workload
+/// validator → ValidatingExecutor fd signal → BuildFailureKind → reason token
+/// → BoxliteError::Execution.
+#[tokio::test]
+async fn test_command_not_found_returns_execution_error() {
+    let tb = TestBox::new().await;
+
+    // Execution (the Ok type) is not Debug, so match instead of expect_err.
+    let err = match tb
+        .handle
+        .exec(BoxCommand::new("this-binary-does-not-exist-2026"))
+        .await
+    {
+        Err(e) => e,
+        Ok(_) => panic!("command-not-found must be an Execution error (422), not Ok/500"),
+    };
+
+    assert!(
+        matches!(err, boxlite::BoxliteError::Execution(_)),
+        "command not found must map to Execution (422), got {err:?}"
+    );
+    assert!(
+        err.to_string().contains("not found"),
+        "error should explain the missing command, got: {err}"
+    );
+
+    tb.teardown().await;
+}
+
+/// A file that exists but is not executable maps to the same structured
+/// `Execution` error (422), not a 500. Pins youki's
+/// "does not have correct permissions" path end-to-end.
+#[tokio::test]
+async fn test_not_executable_returns_execution_error() {
+    let tb = TestBox::new().await;
+
+    // Create a present-but-non-executable file (mode 0644).
+    let prep = tb
+        .handle
+        .exec(BoxCommand::new("sh").args([
+            "-c",
+            "printf '#!/bin/sh\\necho hi\\n' > /tmp/noexec && chmod 0644 /tmp/noexec",
+        ]))
+        .await
+        .expect("prep exec failed");
+    assert_eq!(
+        prep.wait().await.expect("prep wait").exit_code,
+        0,
+        "creating the non-executable file should succeed"
+    );
+
+    // Exec the file directly so youki's validator rejects it with
+    // "does not have correct permissions" -> Execution (422).
+    let err = match tb.handle.exec(BoxCommand::new("/tmp/noexec")).await {
+        Err(e) => e,
+        Ok(_) => panic!("not-executable must be an Execution error (422), not Ok"),
+    };
+    assert!(
+        matches!(err, boxlite::BoxliteError::Execution(_)),
+        "not-executable must map to Execution (422), got {err:?}"
+    );
+
+    tb.teardown().await;
+}
