@@ -114,7 +114,7 @@ serves and the events it emits are catalogued below alongside its routes.
 | `DELETE` | `/api/organizations/{organizationId}`                                    | Deletes an organization.                                 |
 | `PATCH`  | `/api/organizations/{organizationId}/name`                               | Changes an organization's name.                          |
 | `PATCH`  | `/api/organizations/{organizationId}/default-region`                     | Sets the organization's default region.                  |
-| `POST`   | `/api/organizations/{organizationId}/leave`                              | Removes the caller from the organization.                |
+| `POST`   | `/api/organizations/{organizationId}/leave`                              | Removes the caller and revokes their API keys here.      |
 | `POST`   | `/api/organizations/{organizationId}/suspend`                            | Suspends the organization.                               |
 | `POST`   | `/api/organizations/{organizationId}/unsuspend`                          | Restores a suspended organization.                       |
 | `GET`    | `/api/organizations/by-box-id/{boxId}`                                   | Resolves the organization that owns a box.               |
@@ -122,7 +122,7 @@ serves and the events it emits are catalogued below alongside its routes.
 | `PUT`    | `/api/organizations/{organizationId}/experimental-config`                | Replaces the organization's experimental configuration.  |
 | `GET`    | `/api/organizations/{organizationId}/users`                              | Lists organization members.                              |
 | `POST`   | `/api/organizations/{organizationId}/users/{userId}/access`              | Changes a member's organization access.                  |
-| `DELETE` | `/api/organizations/{organizationId}/users/{userId}`                     | Removes a member from the organization.                  |
+| `DELETE` | `/api/organizations/{organizationId}/users/{userId}`                     | Removes a member and revokes their API keys here.        |
 | `GET`    | `/api/organizations/invitations`                                         | Lists invitations addressed to the caller.               |
 | `GET`    | `/api/organizations/invitations/count`                                   | Counts invitations addressed to the caller.              |
 | `POST`   | `/api/organizations/invitations/{invitationId}/accept`                   | Accepts an organization invitation.                      |

@@ -1253,7 +1253,8 @@ components:
 
           1. **BoxLite-issued** (always enabled). Dashboard-issued API keys
              (`blk_live_…` / `blk_test_…`) — long-lived, org-scoped,
-             survives teammate offboarding. Issued at
+             revoked when the member who created it leaves or is removed
+             from the organization. Issued at
              `https://app.boxlite.ai/settings/api-keys`.
           2. **Federated SSO / enterprise JWTs** (optional, per-deployment).
              JWTs issued by a configured enterprise IdP (Okta, Auth0,

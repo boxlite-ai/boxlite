@@ -12,4 +12,5 @@ export const OrganizationEvents = {
   CREATED: 'organization.created',
   SUSPENDED_BOX_STOPPED: 'organization.suspended-box-stopped',
   PERMISSIONS_UNASSIGNED: 'permissions.unassigned',
+  USER_REMOVED: 'organization.user.removed',
 } as const

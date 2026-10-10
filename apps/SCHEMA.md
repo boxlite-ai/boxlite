@@ -274,6 +274,11 @@ Same cascade asymmetry as `organization_role_assignment`.
 Machine credential. The name is part of the identity, so a key is addressed by
 `(organization, user, name)`; only the hash is stored.
 
+No foreign key ties a key to its `organization_user` row, so the application
+revokes it: removing a member, or a member leaving, deletes that member's keys
+in the organization within the same transaction as the membership
+(`OrganizationUserService.delete`).
+
 | Column | Type | Notes |
 | ------ | ---- | ----- |
 | `organizationId` | `uuid` | primary key |
