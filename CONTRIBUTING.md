@@ -182,9 +182,15 @@ section order are optional.
   lessons: sources, relevant constraints, and what the design adopts, adapts, or
   rejects, and why. Every PR needs one, drafts included; keep it aligned with the
   final scope. Use `Fixes #<n>` only when the PR closes that GitHub issue.
-- Keep each PR within 400 changed lines (target 100–200), counting tests, docs, and
-  generated text. Track larger work in one issue with a checklist of slices, one
-  coherent PR per slice; open separate issues only for independently tracked work.
+- Keep each PR within 400 added code lines (target 100–200), including drafts,
+  following boxlite-agent-tooling, which takes precedence in case of conflicts.
+  Count source, scripts, configuration, and generated code. Exclude `*.spec.ts`,
+  `*_test.go`, files under `tests` directories, recognized documentation,
+  data/assets, and lockfiles; unclassified files count. Exclusions are file-based:
+  tests embedded in other source files still count. Estimate before coding and
+  measure against the intended base before each PR creation or update.
+  Track larger work in one issue with a checklist of slices, one coherent PR per
+  slice; open separate issues only for independently tracked work.
 - Explain the problem, how the change produces the result, and the resulting
   behavior once. Keep the whole description within
   **120 words**, fenced blocks included, with no paragraph over 80 words and no list

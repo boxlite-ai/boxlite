@@ -405,16 +405,16 @@ a derived availability score.
 | `class` | `enum` | default `small` |
 | `cpu` | `double precision` | declared capacity |
 | `memoryGiB` | `double precision` | declared capacity |
-| `diskGiB` | `double precision` | declared capacity |
+| `diskGiB` | `double precision` | declared capacity; each heartbeat overwrites it with the size of the filesystem holding the runner's BoxLite home |
 | `gpu` | `integer` | nullable |
 | `gpuType` | `character varying` | nullable |
 | `currentCpuLoadAverage` | `double precision` | |
 | `currentCpuUsagePercentage` | `double precision` | |
 | `currentMemoryUsagePercentage` | `double precision` | |
-| `currentDiskUsagePercentage` | `double precision` | |
+| `currentDiskUsagePercentage` | `double precision` | use of that filesystem (`df` Use%) |
 | `currentAllocatedCpu` | `double precision` | |
 | `currentAllocatedMemoryGiB` | `double precision` | |
-| `currentAllocatedDiskGiB` | `double precision` | |
+| `currentAllocatedDiskGiB` | `double precision` | used GiB on that filesystem (`df` Used), not a sum of box sizes |
 | `currentStartedBoxes` | `integer` | |
 | `availabilityScore` | `integer` | |
 | `unschedulable` | `boolean` | default `false` |
