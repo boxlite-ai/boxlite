@@ -143,6 +143,7 @@ func run() int {
 	metricsCollector := metrics.NewCollector(metrics.CollectorConfig{
 		Logger:                             logger,
 		Boxlite:                            boxliteClient,
+		BoxliteHomeDir:                     boxliteClient.HomeDir(),
 		WindowSize:                         cfg.CollectorWindowSize,
 		CPUUsageSnapshotInterval:           cfg.CPUUsageSnapshotInterval,
 		AllocatedResourcesSnapshotInterval: cfg.AllocatedResourcesSnapshotInterval,
@@ -189,7 +190,7 @@ func run() int {
 			Backend:        boxBackend,
 			Collector:      metricsCollector,
 			ArchiveStore:   migrationArchiveStore(cfg, logger),
-			MigrateWorkDir: migrationWorkDir(cfg, logger),
+			MigrateWorkDir: migrationWorkDir(cfg, boxliteClient.HomeDir()),
 		})
 		if err != nil {
 			logger.Error("Failed to create executor service", "error", err)
@@ -286,26 +287,11 @@ func migrationArchiveStore(cfg *config.Config, logger *slog.Logger) storage.Arch
 	return store
 }
 
-// migrationWorkDir resolves where a migration archive is staged, mirroring how
-// boxlite-core resolves its own home directory: an explicit setting wins, then
-// BOXLITE_HOME, then $HOME/.boxlite.
-func migrationWorkDir(cfg *config.Config, logger *slog.Logger) string {
+// migrationWorkDir resolves where a migration archive is staged: an explicit
+// setting wins, otherwise the migrate directory under the BoxLite home.
+func migrationWorkDir(cfg *config.Config, boxliteHome string) string {
 	if cfg.MigrateWorkDir != "" {
 		return cfg.MigrateWorkDir
 	}
-
-	home := cfg.BoxliteHomeDir
-	if home == "" {
-		home = os.Getenv("BOXLITE_HOME")
-	}
-	if home == "" {
-		userHome, err := os.UserHomeDir()
-		if err != nil {
-			logger.Warn("Box migration disabled: no home directory to stage archives in", "error", err)
-			return ""
-		}
-		home = filepath.Join(userHome, ".boxlite")
-	}
-
-	return filepath.Join(home, "migrate")
+	return filepath.Join(boxliteHome, "migrate")
 }

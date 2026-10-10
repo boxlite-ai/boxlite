@@ -19,7 +19,7 @@
   "skills": "./skills",
   "interface": {
     "displayName": "BoxLite",
-    "shortDescription": "Build and deploy full-stack apps on BoxLite.",
+    "shortDescription": "Build and deploy BoxLite apps",
     "longDescription": "Guidance for building and deploying BoxLite cloud apps with persistent storage, application-owned identity, and CLI-based operations.",
     "developerName": "BoxLite",
     "category": "Developer Tools",

@@ -11,6 +11,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"os/user"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -154,12 +157,46 @@ func buildImageRegistries(insecureRegistries []string, ghcrUsername, ghcrToken s
 	return registries
 }
 
+// resolveHomeDir picks the BoxLite home the way boxlite-core does when it is
+// given none: the configured directory, then $BOXLITE_HOME, then .boxlite under
+// the user's home — $HOME, or the passwd entry when $HOME is unset. The runner
+// hands the result to core, so the runtime and everything here that reads the
+// home (migration staging) agree on one directory. Two cases differ from core:
+// an empty $BOXLITE_HOME counts as unset, and with neither $HOME nor a passwd
+// entry this returns an error instead of falling back to ./.boxlite.
+func resolveHomeDir(configured string) (string, error) {
+	if configured != "" {
+		return configured, nil
+	}
+	if home := os.Getenv("BOXLITE_HOME"); home != "" {
+		return home, nil
+	}
+	userHome := os.Getenv("HOME")
+	if userHome == "" {
+		current, err := currentUser()
+		if err != nil {
+			return "", fmt.Errorf("cannot locate the BoxLite home directory; set BOXLITE_HOME_DIR: %w", err)
+		}
+		// A passwd entry without a home would turn into the relative path
+		// ".boxlite", which core rejects with a less helpful error.
+		if current.HomeDir == "" {
+			return "", fmt.Errorf("cannot locate the BoxLite home directory; set BOXLITE_HOME_DIR: user %q has no home directory", current.Username)
+		}
+		userHome = current.HomeDir
+	}
+	return filepath.Join(userHome, ".boxlite"), nil
+}
+
+// currentUser is the passwd lookup behind the last fallback; tests replace it.
+var currentUser = user.Current
+
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
-	var opts []boxlite.RuntimeOption
-	if config.HomeDir != "" {
-		opts = append(opts, boxlite.WithHomeDir(config.HomeDir))
+	homeDir, err := resolveHomeDir(config.HomeDir)
+	if err != nil {
+		return nil, err
 	}
+	opts := []boxlite.RuntimeOption{boxlite.WithHomeDir(homeDir)}
 	insecureRegistries := normalizeRegistryHosts(config.InsecureRegistries)
 	registries := buildImageRegistries(insecureRegistries, config.GhcrUsername, config.GhcrToken)
 	// docker.io auth (local dev): boxlite-core pulls box base images (e.g. the
@@ -192,7 +229,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	return &Client{
 		runtime:            rt,
 		logger:             logger,
-		homeDir:            config.HomeDir,
+		homeDir:            homeDir,
 		boxes:              make(map[string]*boxlite.Box),
 		awsRegion:          config.AWSRegion,
 		awsEndpointUrl:     config.AWSEndpointUrl,
@@ -206,6 +243,11 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 			exclusionPeriod: config.VolumeCleanupExclusionPeriod,
 		},
 	}, nil
+}
+
+// HomeDir is the directory the runtime keeps boxes, images and its database in.
+func (c *Client) HomeDir() string {
+	return c.homeDir
 }
 
 // Shutdown gracefully stops all running boxes in the underlying BoxLite
