@@ -120,6 +120,7 @@ impl<'a> ShimSpawner<'a> {
             .with_layout(self.layout.clone())
             .with_security(self.options.advanced.security.clone())
             .with_volumes(self.options.volumes.clone())
+            .with_mounts(self.options.mounts.clone())
             .with_additional_path_access(self.additional_path_access())
             .with_network_backend_enabled(matches!(
                 &self.options.network,

@@ -97,11 +97,11 @@ fn options_from_manifest(
     options.sanitize().map_err(|error| {
         BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
     })?;
-    // The local runtime shares no typed mounts yet(TODO), so an archive that
-    // carries one is refused rather than stored and dropped at boot.
+    // Import does not keep typed mounts yet(TODO), so an archive that carries
+    // one is refused rather than stored.
     if !options.mounts.is_empty() {
         return Err(BoxliteError::Unsupported(
-            "typed mounts are not supported by the local runtime yet".to_string(),
+            "importing an archive with typed mounts is not supported yet".to_string(),
         ));
     }
 
@@ -420,10 +420,10 @@ mod tests {
         assert!(error.to_string().contains("volume mounts"));
     }
 
-    /// The local runtime shares no typed mounts yet, so an archive that carries
-    /// one is refused whoever imports it, rather than stored and later dropped.
+    /// Import does not keep typed mounts yet, so an archive that carries one is
+    /// refused whoever imports it, rather than stored.
     #[test]
-    fn import_refuses_typed_mounts_until_the_local_runtime_shares_them() {
+    fn import_refuses_typed_mounts_until_import_keeps_them() {
         use crate::runtime::options::MountSpec;
 
         for policy in [
@@ -436,7 +436,7 @@ mod tests {
             };
 
             let error = options_from_manifest(&v3_manifest(options), policy)
-                .expect_err("the local runtime shares no typed mounts yet");
+                .expect_err("import does not keep typed mounts yet");
 
             assert!(
                 error.to_string().contains("typed mounts"),
