@@ -1,0 +1,44 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "boxlite",
+  "version": "0.1.0",
+  "description": "Skills for building and deploying apps on BoxLite cloud.",
+  "author": {
+    "name": "BoxLite",
+    "url": "https://boxlite.ai"
+  },
+  "homepage": "https://docs.boxlite.ai",
+  "repository": "https://github.com/boxlite-ai/boxlite",
+  "license": "Apache-2.0",
+  "keywords": [
+    "boxlite",
+    "cloud",
+    "deployment",
+    "cli",
+    "skills"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "BoxLite",
+        "shortDescription": "Build and deploy BoxLite apps",
+        "longDescription": "Guidance for building and deploying BoxLite cloud apps with persistent storage, application-owned identity, and CLI-based operations.",
+        "developerName": "BoxLite",
+        "category": "Developer Tools",
+        "capabilities": [
+          "Interactive",
+          "Write"
+        ],
+        "websiteURL": "https://boxlite.ai",
+        "brandColor": "#111111",
+        "composerIcon": "./assets/boxlite-icon.png",
+        "logo": "./assets/boxlite-icon.png",
+        "defaultPrompt": [
+          "Use BoxLite to build and deploy a full-stack app with persistent storage.",
+          "Use BoxLite to diagnose my deployment and verify persistent storage."
+        ]
+      },
+      "onboardingSkill": "./skills/boxlite-setup/SKILL.md"
+    }
+  }
+}
