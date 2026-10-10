@@ -122,7 +122,7 @@ class BoxBuildContract(unittest.TestCase):
 
     def test_make_forwards_literal_output_and_jobs(self):
         (self.repo / "Makefile").write_text(f"SCRIPT_DIR := {self.repo}/scripts\ninclude {ROOT}/make/build.mk\n")
-        result = subprocess.run([shutil.which("make"), "--no-print-directory", "vmm:boot:box",
+        result = subprocess.run([shutil.which("make"), "--no-print-directory", "vmm:boot",
                                  "BOOT_OUTPUT=out dir $(touch BAD)", "BOOT_JOBS=3"], cwd=self.repo,
                                 env=self.env, text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
