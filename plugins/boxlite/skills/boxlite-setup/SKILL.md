@@ -3,15 +3,19 @@ name: boxlite-setup
 description: Set up the BoxLite CLI and authenticate to a BoxLite cloud account for deployment. Use for BoxLite onboarding or expired developer credentials, not application end-user Google sign-in.
 ---
 
-If a CLI is installed, first check `boxlite --version`, `boxlite auth login --help`, and `boxlite network tunnel --help`. The v0.1 development package also requires network tunnels.
+If a CLI is installed, first check `boxlite --version`, `boxlite auth login --help`, and `boxlite network tunnel --help`. The plugin also requires network tunnels.
 
 Start with local CLI help and this skill's bundled setup/build guidance. Consult https://github.com/boxlite-ai/boxlite/tree/main/src/cli and https://docs.boxlite.ai/ only when required installation information is missing or current release details need verification.
 
 If an online documentation fetch fails, report it briefly and continue using verified CLI capabilities and the bundled instructions. That fetch failure alone must not block login or the pinned source-build fallback below.
 
-Require BoxLite CLI **v0.10.6 or newer**, with `network tunnel` support. Hosted Auth0 device login requires the discovered-endpoint fix in [#1836](https://github.com/boxlite-ai/boxlite/pull/1836), merged into `main` on 2026-10-09 as [`e6cc3d1`](https://github.com/boxlite-ai/boxlite/commit/e6cc3d1a1e991f8732f7b5c8f9eb4baa3c1bbbbf). The published `v0.10.5` release predates that fix. `v0.10.6` is the minimum planned release; public plugin release remains pending until that CLI release is available and verified to contain the fix. Version output and `--method device` alone do not establish build provenance. Source builds containing #1836 may be used for development verification before the release.
+Use either a verified official BoxLite CLI release **v0.10.6 or newer**, or the verified native source build pinned in the [source-build fallback](references/source-build.md), with `network tunnel` support.
 
-For this development package, when no verified compatible CLI is available, execute the [source-build fallback](references/source-build.md) as part of the requested setup. Fetch the pinned merged source, prepare its native runtime, build and select the CLI, then continue authorization below. Do not stop solely because v0.10.6 has not been published. Keep a verified existing release/source build when available; report a concrete platform, permission or build failure if the fallback cannot finish.
+Hosted Auth0 device login requires the discovered-endpoint fix in [#1836](https://github.com/boxlite-ai/boxlite/pull/1836), merged as [`e6cc3d1`](https://github.com/boxlite-ai/boxlite/commit/e6cc3d1a1e991f8732f7b5c8f9eb4baa3c1bbbbf). The published `v0.10.5` release predates that fix.
+
+A build from the pinned source may report v0.10.5; accept it only after verifying its official origin, full commit and normal native build. Version output and `--method device` alone do not establish build provenance.
+
+When no verified compatible CLI is available, execute the source-build fallback as part of the requested setup. It is a supported installation path, including before v0.10.6 is published. Fetch the pinned source, prepare its native runtime, build and select the CLI, then continue authorization below. Keep a verified existing release/pinned source build when available; report a concrete platform, permission or build failure if the fallback cannot finish.
 
 Keep developer credentials in the CLI's private store, outside app source and deploy archives. Respect an existing home/profile selected by the user. A new deployment may use its own named profile. Start with `boxlite --profile NAME auth status` and `boxlite --profile NAME auth whoami`; never print credentials files or request tokens in chat.
 

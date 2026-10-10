@@ -1,12 +1,14 @@
-# Development CLI source fallback
+# Pinned CLI source build
 
-Execute this procedure when the user requests setup with this development plugin and no verified compatible CLI is available. Prefer a verified official v0.10.6+ release when available. An already-built source CLI may be reused when its origin, full commit and normal native build are verified. This exception supports internal testing; it does not satisfy the public-release gate.
+Execute this supported installation procedure when the user requests setup and no verified compatible CLI is available. Prefer a verified official v0.10.6+ release when available. An already-built source CLI may be reused when its official origin, exact pinned commit and normal native build are verified. Plugin installation does not itself fetch, build or authenticate; run this procedure during requested setup.
 
 The pinned revision below is the merged #1836 commit, not its old PR branch. Its CLI may still report v0.10.5: record source provenance instead of changing the version or accepting the older published binary.
 
 ## Fetch and build
 
 Check the host with `uname -s` and `uname -m`. The supported source-build hosts are macOS Apple Silicon and Linux x86_64/ARM64. Read the pinned repository's `AGENTS.md`, `docs/contributing/development/building.md`, `docs/contributing/development/cli.md` and Make targets. Linux local VM execution additionally requires KVM; hosted API login is a separate check.
+
+Allow network access to fetch the repository, submodules and build dependencies. Start with Git and Make; the pinned build requires Rust 1.88+, Go 1.24+ and native compiler/cross-compilation tools. `setup:build` prepares platform dependencies through Homebrew on macOS or the supported Linux package manager, which may require administrator permissions. Follow its actual failures rather than bypassing missing tools. The first native build can be lengthy; downloads, hardware and existing caches determine its duration. Report the current build step and keep the process running while it progresses. Windows and Intel macOS are outside this pinned source procedure.
 
 Use a fresh source directory outside the plugin cache and application/deployment archives. Respect a user-selected location. The example uses a user cache; if it already exists, reuse it only after verifying the official origin, exact revision and clean tracked source. Otherwise choose a fresh directory. Never reset or delete a user's checkout to make this example fit.
 
