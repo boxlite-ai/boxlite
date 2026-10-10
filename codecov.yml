@@ -36,6 +36,8 @@ flags:
     carryforward: true
   dashboard:
     carryforward: true
+  plugins:
+    carryforward: true
 
 ignore:
   - "src/deps/**/vendor/**" # Third-party sources, not BoxLite's networking bridge
