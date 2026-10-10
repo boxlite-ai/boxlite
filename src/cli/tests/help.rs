@@ -125,17 +125,6 @@ fn command_help_only_advertises_meaningful_global_options() {
                 "--path-prefix",
             ],
         ),
-        (
-            &["update"],
-            &[
-                "--debug",
-                "--home",
-                "--config",
-                "--url",
-                "--profile",
-                "--path-prefix",
-            ],
-        ),
         (&["pull"], &["--debug", "--home", "--registry", "--config"]),
         (&["images"], &["--debug", "--home", "--config"]),
         (
@@ -186,6 +175,17 @@ fn command_help_only_advertises_meaningful_global_options() {
         ),
         (
             &["network", "tunnel"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--profile",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["network", "inbound"],
             &[
                 "--debug",
                 "--home",

@@ -126,7 +126,7 @@ func TestTunnelConnectRejectsPrivateBoxBeforeRunnerDial(t *testing.T) {
 	}
 	for _, want := range []string{
 		"inbound access disabled",
-		"boxlite update AbCdEf123456 --inbound enabled",
+		"boxlite network inbound AbCdEf123456 enabled",
 	} {
 		if !strings.Contains(response.Body.String(), want) {
 			t.Fatalf("body = %q, want it to name %q", response.Body.String(), want)

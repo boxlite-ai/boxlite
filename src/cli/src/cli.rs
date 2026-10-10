@@ -203,11 +203,18 @@ const AUTH_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
-const NETWORK_SCOPES: &[CommandScope] = &[CommandScope {
-    name: "tunnel",
-    globals: BOX_GLOBALS,
-    children: &[],
-}];
+const NETWORK_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "tunnel",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "inbound",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+];
 const VOLUME_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "create",
@@ -268,11 +275,6 @@ const COMMAND_SCOPES: &[CommandScope] = &[
     },
     CommandScope {
         name: "restart",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-    CommandScope {
-        name: "update",
         globals: BOX_GLOBALS,
         children: &[],
     },
@@ -592,9 +594,6 @@ pub enum Commands {
 
     /// Restart one or more boxes
     Restart(crate::commands::restart::RestartArgs),
-
-    /// Update settings of an existing box
-    Update(crate::commands::update::UpdateArgs),
 
     /// Pull an image from a registry
     Pull(crate::commands::pull::PullArgs),
@@ -1696,16 +1695,16 @@ mod tests {
         (&["boxlite", "start", "box"], 1, REGISTRY),
         (&["boxlite", "stop", "box"], 1, REGISTRY),
         (&["boxlite", "restart", "box"], 1, REGISTRY),
-        (
-            &["boxlite", "update", "box", "--inbound", "enabled"],
-            1,
-            REGISTRY,
-        ),
         (&["boxlite", "inspect", "box"], 1, REGISTRY),
         (&["boxlite", "cp", "box:/src", "/tmp/dst"], 1, REGISTRY),
         (&["boxlite", "stats", "box"], 1, REGISTRY),
         (
             &["boxlite", "network", "tunnel", "box", "3000"],
+            2,
+            REGISTRY,
+        ),
+        (
+            &["boxlite", "network", "inbound", "box", "enabled"],
             2,
             REGISTRY,
         ),
@@ -2653,7 +2652,9 @@ mod tests {
         let Commands::Network(network) = cli.command else {
             panic!("expected Commands::Network");
         };
-        let NetworkCommand::Tunnel(args) = network.command;
+        let NetworkCommand::Tunnel(args) = network.command else {
+            panic!("expected NetworkCommand::Tunnel");
+        };
         assert_eq!(args.target, "mybox");
         assert_eq!(args.port, 3000);
         assert!(args.listen.is_none());
@@ -2703,32 +2704,46 @@ mod tests {
         assert!(result.is_err(), "port 0 must be rejected by the parser");
     }
 
-    // ─── update parse tests ────────────────────────────────────────────────
+    // ─── network inbound parse tests ───────────────────────────────────────
 
     #[test]
-    fn update_parses_inbound_mode_like_run() {
+    fn network_inbound_parses_mode_like_run() {
         for (value, expected) in [
             ("enabled", NetworkMode::Enabled),
             ("disabled", NetworkMode::Disabled),
             ("Enabled", NetworkMode::Enabled),
         ] {
-            let cli = parse_projected(&["boxlite", "update", "mybox", "--inbound", value]);
-            let Commands::Update(args) = cli.command else {
-                panic!("expected Commands::Update");
+            let cli = parse_projected(&["boxlite", "network", "inbound", "mybox", value]);
+            let Commands::Network(network) = cli.command else {
+                panic!("expected Commands::Network");
+            };
+            let NetworkCommand::Inbound(args) = network.command else {
+                panic!("expected NetworkCommand::Inbound");
             };
             assert_eq!(args.target, "mybox");
-            assert_eq!(args.inbound, expected);
+            assert_eq!(args.mode, expected);
         }
     }
 
     #[test]
-    fn update_rejects_a_missing_or_unknown_inbound_mode() {
+    fn network_inbound_rejects_a_missing_or_unknown_mode() {
         for args in [
-            &["boxlite", "update", "mybox"][..],
-            &["boxlite", "update", "mybox", "--inbound", "public"][..],
+            &["boxlite", "network", "inbound", "mybox"][..],
+            &["boxlite", "network", "inbound", "mybox", "public"][..],
         ] {
             assert!(try_parse_from(args).is_err(), "{args:?} must be rejected");
         }
+    }
+
+    /// `boxlite update BOX --inbound MODE` shipped in no release and moved to
+    /// `boxlite network inbound BOX MODE`.
+    #[test]
+    fn withdrawn_update_subcommand_is_rejected() {
+        let result = try_parse_from(["boxlite", "update", "mybox", "--inbound", "enabled"]);
+        assert!(
+            result.is_err(),
+            "the withdrawn update command must not come back"
+        );
     }
 
     /// `boxlite port BOX` existed earlier on this branch and was withdrawn:
