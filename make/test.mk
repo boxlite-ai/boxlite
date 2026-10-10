@@ -268,9 +268,10 @@ test\:unit\:cli:
 test\:unit\:vmm:
 	@cargo test $(RUST_UNIT_VMM_ARGS) -- $(CARGOTEST_FILTER)
 
-# Stubbed-tool contract tests for the kernel build script; they never compile Linux.
+# Stubbed-tool contract tests for the kernel build scripts; they never compile Linux or start a box.
 test\:vmm\:boot:
 	@python3 "$(PROJECT_ROOT)/src/vmm/boot/tests/test_build.py"
+	@python3 "$(PROJECT_ROOT)/src/vmm/boot/tests/test_box_build.py"
 
 # Missing /dev/kvm must fail hardware qualification, not report skipped tests as a pass.
 _ensure-kvm:

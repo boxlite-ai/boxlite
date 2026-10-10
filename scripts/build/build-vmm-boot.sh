@@ -28,7 +28,7 @@ parse_args() {
 }
 
 check_host() {
-    [[ $(uname -s) == Linux ]] || fail "Linux host required; on macOS use a Linux VM"
+    [[ $(uname -s) == Linux ]] || fail "Linux host required; use make vmm:boot to build inside a BoxLite box"
     local tool
     for tool in gcc x86_64-linux-gnu-gcc x86_64-linux-gnu-ld x86_64-linux-gnu-as \
         make bc bison flex curl xz tar perl readelf sha256sum flock setsid realpath; do
