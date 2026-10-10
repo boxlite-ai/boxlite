@@ -41,6 +41,24 @@ class PackageTests(unittest.TestCase):
         self.assertTrue((target / 'plugin.json').exists())
         self.assertEqual(archive.read_bytes(), package.build(output, self.root).read_bytes())
 
+    def test_rebuild_removes_stale_marketplace_files(self):
+        """Rebuild the real marketplace without retaining obsolete resources."""
+        output = Path(self.temp.name) / 'output'
+        archive = package.build(output, self.root)
+        original = archive.read_bytes()
+        marketplace = output / 'boxlite-marketplace'
+        stale = [marketplace / 'obsolete-plugin/plugin.json',
+                 marketplace / '.agents/plugins/obsolete.json']
+        for path in stale:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('obsolete')
+        rebuilt = package.build(output, self.root)
+        for path in stale:
+            self.assertFalse(path.exists(), str(path))
+        self.assertTrue((marketplace / '.agents/plugins/marketplace.json').exists())
+        self.assertTrue((marketplace / 'plugins/boxlite/plugin.json').exists())
+        self.assertEqual(original, rebuilt.read_bytes())
+
     def test_rejects_private_deployment_state(self):
         """Reject deployment state instead of publishing it in the package."""
         (self.root / 'deployment.json').write_text('{}')
@@ -111,6 +129,7 @@ class PackageTests(unittest.TestCase):
                     finally:
                         path.write_text(original)
 
+    @unittest.skipUnless(shutil.which('make'), 'Make is not installed')
     def test_make_targets_validate_with_same_named_files(self):
         """Run real Make recipes despite target-name collisions in the filesystem."""
         root = Path(self.temp.name) / 'make-work'

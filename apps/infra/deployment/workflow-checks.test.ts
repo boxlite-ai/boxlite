@@ -135,12 +135,16 @@ const coverageSuites = ['rust', 'python', 'node', 'go', 'api', 'dashboard', 'plu
 
 for (const path of ['scripts/plugins/boxlite.py', 'scripts/plugins/.coveragerc',
   'tests/plugins/test_boxlite_package.py', 'plugins/boxlite/skills/boxlite-setup/SKILL.md',
-  'plugins/boxlite/.codex-plugin/plugin.json', 'make/plugins.mk']) {
+  'plugins/boxlite/.codex-plugin/plugin.json', 'make/plugins.mk', '.agents/plugins/marketplace.json']) {
   test(`plugin inputs select real coverage on PRs and main pushes: ${path}`, () => {
     assert.deepEqual(testSuites([path]), ['plugins'])
     assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
   })
 }
+
+test('repository marketplace-only pushes reach plugin coverage workflow', () => {
+  assert.equal(acceptsFiles('test.yml', 'push', ['.agents/plugins/marketplace.json']), true)
+})
 
 test('plugin coverage runs on drafts and propagates report/upload failures', () => {
   const jobs = coverageWorkflow.jobs
