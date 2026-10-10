@@ -1444,12 +1444,25 @@ fn is_loopback_host(host: &str) -> bool {
 /// every caller gets full box control (exec, files, secrets).
 fn check_bind_auth(host: &str, api_key: Option<&str>) -> anyhow::Result<()> {
     if api_key.is_none() && !is_loopback_host(host) {
-        anyhow::bail!(
-            "refusing to bind `boxlite serve` to non-loopback address {host} without an API key; \
-             set --api-key (or BOXLITE_SERVE_API_KEY), or bind to 127.0.0.1"
-        );
+        return Err(unauthenticated_bind_error(host));
     }
     Ok(())
+}
+
+/// Same rule against the address the listener actually bound. `localhost`
+/// passes [`check_bind_auth`] by name, but the resolver may map it elsewhere.
+fn check_bound_addr(addr: std::net::SocketAddr, api_key: Option<&str>) -> anyhow::Result<()> {
+    if api_key.is_none() && !addr.ip().is_loopback() {
+        return Err(unauthenticated_bind_error(addr));
+    }
+    Ok(())
+}
+
+fn unauthenticated_bind_error(target: impl std::fmt::Display) -> anyhow::Error {
+    anyhow::anyhow!(
+        "refusing to bind `boxlite serve` to non-loopback address {target} without an API key; \
+         set --api-key (or BOXLITE_SERVE_API_KEY), or bind to 127.0.0.1"
+    )
 }
 
 /// Auth middleware: thin axum adapter over [`auth_allows`]. 401 in the
@@ -1932,6 +1945,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
     let app = build_router(state.clone());
     let listener = tokio::net::TcpListener::bind((args.host.as_str(), args.port)).await?;
     let addr = listener.local_addr()?;
+    check_bound_addr(addr, args.api_key.as_deref())?;
 
     tracing::info!("boxlite serve listening on {}", addr);
     eprintln!("BoxLite REST API server listening on http://{addr}");
@@ -2001,6 +2015,26 @@ mod tests {
     fn check_bind_auth_rejects_network_bind_without_key() {
         for host in ["0.0.0.0", "::", "[::]", "192.168.1.10", "example.com", ""] {
             assert!(check_bind_auth(host, None).is_err(), "{host}");
+        }
+    }
+
+    #[test]
+    fn check_bound_addr_rejects_resolved_network_addr_without_key() {
+        for addr in ["127.0.0.1:8100", "[::1]:8100"] {
+            assert!(
+                check_bound_addr(addr.parse().unwrap(), None).is_ok(),
+                "{addr}"
+            );
+        }
+        for addr in ["192.168.1.10:8100", "0.0.0.0:8100", "[::]:8100"] {
+            assert!(
+                check_bound_addr(addr.parse().unwrap(), None).is_err(),
+                "{addr}"
+            );
+            assert!(
+                check_bound_addr(addr.parse().unwrap(), Some("k")).is_ok(),
+                "{addr}"
+            );
         }
     }
 
