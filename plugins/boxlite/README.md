@@ -4,6 +4,8 @@ A skills-only plugin for Codex desktop and CLI. It contains BoxLite setup/deploy
 
 Run `make test:unit:plugins` for package unit tests. Each distribution build replaces the entire generated marketplace directory, removing files from older builds. Keep personal files outside that directory.
 
+Packaging requires Python 3.9 or newer. Unit tests, validation and distribution use `PLUGIN_PYTHON`, defaulting to `python3`; for example, `make plugin:boxlite:dist PLUGIN_PYTHON=python3.11`. Recursive package checks use the same interpreter. Coverage defaults to it too; `PLUGIN_COVERAGE_PYTHON` can select a separate environment containing coverage.py.
+
 From the repository root run `make plugin:boxlite:check` and `make plugin:boxlite:dist`. The latter produces a plugin ZIP and a standalone local marketplace in `target/plugins/boxlite-marketplace`. Add that directory with `codex plugin marketplace add ABSOLUTE_PATH`, then install `codex plugin add boxlite@boxlite`. For desktop development, the repository marketplace also exposes BoxLite as available; restart the app and select that source. Verify both installation paths separately.
 
 This is a development package. Public release requires a tested CLI release of **v0.10.6 or newer** meeting the [setup skill's #1836 build prerequisite](skills/boxlite-setup/SKILL.md) and supporting `network tunnel`, real Auth0 device login and refresh verification, independent deployment acceptance, desktop installation evidence, publisher metadata/policy requirements, and review evidence. Application Google login needs its own client configuration when testing that use case. The CLI fix does not enable grants in the Auth0 tenant. Public submission/review is separate from local installation.
