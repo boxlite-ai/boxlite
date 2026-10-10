@@ -88,6 +88,11 @@ const grantsFor = (capability: ApiCapability): $util.Input<string>[] => {
           }),
         ),
       ]
+    case 'write-registry-credentials':
+      // This cloud runs no registry proxy and so keeps no credential store,
+      // and the stack only asks for this where one is active. Reaching here
+      // means that changed without anyone deciding what the grant is.
+      throw new Error(`AWS keeps no registry credential store, but was handed one on ${capability.store.binding.cloud}`)
   }
 }
 

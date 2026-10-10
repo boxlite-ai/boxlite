@@ -7,7 +7,7 @@ mbuild publishes, verifies, and promotes the container artifacts declared by mst
 [Infrastructure index](../README.md) · [Deployment](../docs/deployment.md) · [Configuration](../docs/configuration.md)
 
 Run from `apps/infra`. Bootstrap the registry and sign in before commands that contact it.
-The three declared artifacts are `api` (including dashboard), `proxy`, and `otel-collector`.
+The four declared artifacts are `api` (including dashboard), `proxy`, `otel-collector`, and `registry-proxy`.
 Runner binaries use the separate [runner commands](../docs/runners.md).
 
 ## Commands

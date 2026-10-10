@@ -59,10 +59,9 @@ type Config struct {
 	BuildEngine                        string        `envconfig:"BUILD_ENGINE" default:"buildkit" validate:"oneof=buildkit legacy"`
 	BoxliteHomeDir                     string        `envconfig:"BOXLITE_HOME_DIR"`
 	InsecureRegistries                 string        `envconfig:"INSECURE_REGISTRIES"`
-	GhcrUsername                       string        `envconfig:"GHCR_USERNAME"`
-	GhcrToken                          string        `envconfig:"GHCR_TOKEN"`
-	DockerHubUsername                  string        `envconfig:"DOCKERHUB_USERNAME"`
-	DockerHubToken                     string        `envconfig:"DOCKERHUB_TOKEN"`
+	RegistryProxyHost                  string        `envconfig:"REGISTRY_PROXY_HOST"`
+	RegistryProxyUsername              string        `envconfig:"REGISTRY_PROXY_USERNAME"`
+	RegistryProxyPassword              string        `envconfig:"REGISTRY_PROXY_PASSWORD"`
 	MigrateWorkDir                     string        `envconfig:"MIGRATE_WORK_DIR"`
 }
 
@@ -106,6 +105,8 @@ func GetConfig() (*Config, error) {
 		config.ApiToken = apiToken
 	}
 
+	defaultRegistryProxyLogin(config)
+
 	if config.ApiPort == 0 {
 		config.ApiPort = DEFAULT_API_PORT
 	}
@@ -119,6 +120,25 @@ func GetConfig() (*Config, error) {
 	}
 
 	return config, nil
+}
+
+// defaultRegistryProxyLogin fills in the runner's login to the registry proxy.
+//
+// The proxy checks the password against the control plane as a runner key, so
+// the one that works is this runner's own. Taking it from ApiToken rather than
+// asking a deployment to write it twice means a rotated runner token cannot
+// leave the proxy login behind. The username is not checked; "runner" is what
+// the local stack has always sent.
+func defaultRegistryProxyLogin(config *Config) {
+	if config.RegistryProxyHost == "" {
+		return
+	}
+	if config.RegistryProxyPassword == "" {
+		config.RegistryProxyPassword = config.ApiToken
+	}
+	if config.RegistryProxyUsername == "" {
+		config.RegistryProxyUsername = "runner"
+	}
 }
 
 func (c *Config) GetOtelHeaders() map[string]string {

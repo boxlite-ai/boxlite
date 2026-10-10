@@ -9,6 +9,7 @@ use crate::images::JsImageHandle;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsRuntimeMetrics;
 use crate::options::{JsBoxOptions, JsBoxliteRestOptions, JsOptions, js_options_into_core};
+use crate::registries::JsRegistryHandle;
 use crate::util::map_err;
 use crate::volumes::JsVolumeHandle;
 
@@ -297,6 +298,16 @@ impl JsBoxlite {
     pub fn volumes(&self) -> Result<JsVolumeHandle> {
         let handle = self.runtime.volumes().map_err(map_err)?;
         Ok(JsVolumeHandle {
+            handle: Arc::new(handle),
+        })
+    }
+
+    /// Get the server's registry logins. Throws `unsupported` on a local
+    /// runtime, which pulls with the logins in `imageRegistries` instead.
+    #[napi(getter)]
+    pub fn registries(&self) -> Result<JsRegistryHandle> {
+        let handle = self.runtime.registries().map_err(map_err)?;
+        Ok(JsRegistryHandle {
             handle: Arc::new(handle),
         })
     }

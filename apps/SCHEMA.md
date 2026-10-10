@@ -56,6 +56,10 @@ flowchart LR
         t_volume["volume"]
         t_job["job"]
         t_warm["warm_pool"]
+        t_image["image"]
+        t_imgver["image_version"]
+        t_imgtag["image_tag"]
+        t_regcred["registry_credential"]
     end
 
     subgraph metering["Metering"]
@@ -73,6 +77,9 @@ flowchart LR
     t_assigninv ==>|"roleId"| t_role
     t_activity ==>|"boxId"| t_box
     t_migration ==>|"boxId"| t_box
+    t_imgver ==>|"imageId"| t_image
+    t_imgtag ==>|"imageId"| t_image
+    t_imgtag ==>|"versionId"| t_imgver
     t_tunnel ==>|"box_id"| t_box
 
     t_orguser -.->|"userId"| t_user
@@ -84,6 +91,7 @@ flowchart LR
     t_box -.->|"runnerId"| t_runner
     t_box -.->|"volumes[].volumeId"| t_volume
     t_volume -.->|"organizationId"| t_org
+    t_regcred -.->|"organizationId"| t_org
     t_job -.->|"resourceId"| t_box
     t_job -.->|"runnerId"| t_runner
     t_period -.->|"boxId"| t_box
@@ -99,7 +107,8 @@ box request is matched against the pool by shape, not by id.
 ## Referential integrity
 
 The schema declares foreign keys within the control plane. They live
-inside the tenancy cluster or on tables owned outright by a box.
+inside the tenancy cluster, on tables owned outright by a box, or inside
+the image catalog.
 Every edge that crosses a plane boundary — including `box.organizationId`,
 the most widely joined column in the system — is a bare `uuid` or
 `character varying` column with no constraint behind it.
@@ -120,6 +129,9 @@ that no longer resolves.
 | `organization_role_assignment_invitation`| `roleId`                     | `organization_role.id`         | foreign key | `NO ACTION` |
 | `box_last_activity`                      | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
 | `box_migration`                          | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
+| `image_version`                          | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
+| `image_tag`                              | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
+| `image_tag`                              | `versionId`                  | `image_version.id`             | foreign key | `RESTRICT` |
 | `tunnel`                                 | `box_id`                     | `box.id`                       | foreign key | `CASCADE` |
 | `organization_user`                      | `userId`                     | `user.id`                      | application | — |
 | `api_key`                                | `organizationId`, `userId`   | `organization.id`, `user.id`   | application | — |
@@ -127,6 +139,7 @@ that no longer resolves.
 | `audit_log`                              | `organizationId`             | `organization.id`              | application | — |
 | `audit_log`                              | `targetType`, `targetId`     | any table                      | application | polymorphic, untyped |
 | `region`                                 | `organizationId`             | `organization.id`              | application | null for shared regions |
+| `image`                                  | `organizationId`             | `organization.id`              | application | never null |
 | `organization`                           | `defaultRegionId`            | `region.id`                    | application | — |
 | `volume`                                 | `organizationId`             | `organization.id`              | application | — |
 | `box`                                    | `organizationId`             | `organization.id`              | application | — |
@@ -142,15 +155,16 @@ that no longer resolves.
 
 ### Invariants held by partial unique indexes
 
-Three correctness properties are enforced by the database rather than by
+Four correctness properties are enforced by the database rather than by
 application locking. The per-box Redis locks are advisory and expire, so an
-interleaved pair of handlers could otherwise violate all three.
+interleaved pair of handlers could otherwise violate all four.
 
 | Index                                          | Table               | Definition                                              |
 | ---------------------------------------------- | ------------------- | ------------------------------------------------------- |
 | `box_usage_periods_one_open_period_per_box_idx` | `box_usage_periods` | unique `("boxId")` where `"endAt" IS NULL`              |
 | `IDX_UNIQUE_INCOMPLETE_JOB`                    | `job`               | unique `("resourceType","resourceId","runnerId")` where `"completedAt" IS NULL` |
 | `organization_user_default_user_unique`        | `organization_user` | unique `("userId")` where `"isDefaultForUser" = true`   |
+| `image_org_name_active_unique`                 | `image`             | unique `("organizationId","name")` where `"deletedAt" IS NULL` |
 
 ## Tenancy, access and audit
 
@@ -181,7 +195,7 @@ state inline.
 | `suspendedUntil` | `timestamptz` | nullable |
 | `suspensionReason` | `character varying` | nullable |
 | `suspensionCleanupGracePeriodHours` | `integer` | default `24` |
-| `template_deactivation_timeout_minutes` | `integer` | default `20160` |
+| `image_count_limit` | `integer` | default `20`; catalog entries an organization may keep |
 | `boxLimitedNetworkEgress` | `boolean` | default `false` |
 | `experimentalConfig` | `jsonb` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |
@@ -348,6 +362,7 @@ or `archived`.
 | `name` | `character varying` | unique per organization |
 | `region` | `character varying` | holds `region.id` |
 | `image` | `character varying` | nullable |
+| `imageIsOrgOwned` | `boolean` | nullable; false for the operator's curated set. Null means the row predates the column, and the reader falls back to matching `image` against the curated set as it stands now — which is what every row used to do, and why the column exists |
 | `runnerId` | `uuid` | nullable |
 | `prevRunnerId` | `uuid` | nullable; the runner to revert to if reassignment fails |
 | `class` | `enum` | `small` \| `medium` \| `large`, default `small` |
@@ -469,6 +484,95 @@ derived from the row id (`boxlite-volume-<id>`).
 
 Attachment lives in `box.volumes`, so attaching or detaching a volume never
 writes to this table.
+
+### `image`
+
+One row per upstream repository an organization has pulled, written after a box
+built from it reaches STARTED. Curated images are never rows here: they stay
+env-driven, and the catalog endpoints union them in at read time. `GET /images`,
+`GET /images/usage`, `GET /images/:idOrRef` and `DELETE /images/:idOrRef` read
+these tables; nothing but a box reaching STARTED writes them.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `organizationId` | `uuid` | not null — there is no shared row |
+| `name` | `character varying(255)` | upstream repository path, e.g. `docker.io/library/python` |
+| `lastUsedAt` | `timestamptz` | nullable |
+| `deletedAt` | `timestamptz` | nullable — soft delete |
+| `createdAt` / `updatedAt` | `timestamptz` | |
+
+Uniqueness is a partial index rather than a table constraint, so a soft-deleted
+name can be used again; `image_org_lastused_index` serves the count the
+admission gate takes when a create names an image the organization does not
+hold yet, and the per-org listing the catalog API serves. A soft delete leaves
+the versions and tags behind — the cascade only fires on a real delete — so
+every catalog read joins back to `image` and filters `deletedAt IS NULL`.
+
+### `image_version`
+
+One row per distinct manifest digest of an image. Rows appear only after a pull
+succeeds, so there is no pending state to go stale — a failed pull is recorded
+on the box that attempted it.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `imageId` | `uuid` | → `image.id`, cascade delete |
+| `digest` | `character varying(71)` | OCI manifest digest, unique per image |
+| `sizeBytes` | `bigint` | sum of the declared layer sizes |
+| `state` | `enum` | `ready` \| `deleted`, default `ready` |
+| `sourceKind` | `enum` | `pull` |
+| `sourceSpec` | `jsonb` | `{ sourceRef }` — what the user typed |
+| `storageRef` | `text` | where to fetch the bytes from |
+| `createdAt` | `timestamptz` | |
+
+The digest is unique per image, not per organization: the same public image
+reached through two upstream paths is normal usage.
+
+### `image_tag`
+
+The digest a tag resolved to the first time it was pulled. Tags do not move:
+once recorded, a tag keeps pointing at that version, and the escape hatch is
+`DELETE /images/:idOrRef` followed by using the reference again, which brings
+the name back as a fresh entry.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `imageId` | `uuid` | → `image.id`, cascade delete |
+| `name` | `character varying(128)` | unique per image |
+| `versionId` | `uuid` | → `image_version.id`, **restrict** delete |
+| `updatedAt` | `timestamptz` | |
+
+`versionId` restricts rather than cascades: a version a tag still names must not
+disappear underneath it. Postgres does not index a foreign key on its own, and
+this one is walked whenever a version is deleted, so `image_tag_version_index`
+covers it.
+
+### `registry_credential`
+
+A login an organization registered for a private registry. The password is in
+no column: it is written to Secret Manager, which the API can write but not
+read, and the row keeps only the name of the version that holds it.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `organizationId` | `uuid` | not null |
+| `kind` | `enum` | `basic` |
+| `registryHost` | `character varying(255)` | e.g. `ghcr.io` |
+| `repositoryPrefix` | `character varying(255)` | default `''`, the whole host |
+| `username` | `character varying(255)` | |
+| `secretVersion` | `text` | the Secret Manager version holding the password |
+| `createdBy` | `character varying` | nullable — the identity provider's subject, not a uuid |
+| `createdAt` / `updatedAt` | `timestamptz` | |
+
+`registry_credential_org_host_prefix_unique` allows one credential per host and
+prefix in an organization; its leading columns also serve the lookup by
+organization and host. `registry_credential_prefix_shape` holds a prefix to
+whole path segments, `''` or ending in `/`, so `acme/` cannot match
+`acme-other/app`.
 
 ### `job`
 

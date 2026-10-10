@@ -113,14 +113,18 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     }
   }
 
-  async createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined> {
-    if (!box.image) {
+  async createBox(
+    box: Box,
+    image: string,
+    metadata?: { [key: string]: string },
+  ): Promise<StartBoxResponse | undefined> {
+    if (!image) {
       throw new Error(`Box ${box.id} has no image; cannot create on runner`)
     }
 
     const payload = {
       id: box.id,
-      image: box.image,
+      image,
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,

@@ -38,6 +38,19 @@ mod types;
 
 pub(crate) use crate::litebox::box_impl::LiveState;
 
+/// What a completed build hands back.
+///
+/// A struct rather than a tuple because the third element is unlike the other
+/// two: `live` and `guard` are the box, `resolved_image` is a fact about it the
+/// caller records.
+pub(crate) struct BuiltBox {
+    pub(crate) live: LiveState,
+    pub(crate) guard: types::CleanupGuard,
+    /// Present when this build made a new disk from a registry image; see
+    /// [`crate::litebox::state::BoxState::resolved_image`].
+    pub(crate) resolved_image: Option<crate::images::ResolvedImage>,
+}
+
 use crate::litebox::BoxStatus;
 use crate::litebox::config::BoxConfig;
 use crate::metrics::BoxMetricsStorage;
@@ -206,7 +219,7 @@ impl BoxBuilder {
     /// Executes all initialization stages with automatic cleanup on failure.
     /// Returns (LiveState, CleanupGuard) - caller must disarm guard after all
     /// operations succeed (including DB persist).
-    pub(crate) async fn build(self) -> BoxliteResult<(LiveState, types::CleanupGuard)> {
+    pub(crate) async fn build(self) -> BoxliteResult<BuiltBox> {
         use std::time::Instant;
 
         let total_start = Instant::now();
@@ -221,7 +234,13 @@ impl BoxBuilder {
         let reuse_rootfs = status == BoxStatus::Stopped;
         let skip_guest_wait = status == BoxStatus::Running;
 
-        let ctx = InitPipelineContext::new(config, runtime.clone(), reuse_rootfs, skip_guest_wait);
+        let ctx = InitPipelineContext::new(
+            config,
+            runtime.clone(),
+            reuse_rootfs,
+            skip_guest_wait,
+            state.resolved_image.clone(),
+        );
         let ctx = Arc::new(Mutex::new(ctx));
         let ctx_for_cleanup = Arc::clone(&ctx);
 
@@ -305,7 +324,11 @@ impl BoxBuilder {
                 bind_mount,
             );
 
-            Ok::<(LiveState, types::CleanupGuard), BoxliteError>((live_state, guard))
+            Ok::<BuiltBox, BoxliteError>(BuiltBox {
+                live: live_state,
+                guard,
+                resolved_image: ctx.resolved_image.take(),
+            })
         };
 
         match inner.await {

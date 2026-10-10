@@ -94,6 +94,10 @@ must explicitly remove it when it is no longer needed.
 
 ### Runtime Image Management
 
+`rt.Images()` holds the images a runtime can boot from: the local cache on a
+runtime from `NewRuntime`, the server's catalog on one from `NewRest`. The same
+code runs against either.
+
 ```go
 ctx := context.Background()
 images, err := rt.Images()
@@ -115,7 +119,72 @@ if err != nil {
 for _, image := range cached {
 	fmt.Println(image.Repository, image.Tag, image.ID)
 }
+
+detail, err := images.Get(ctx, "docker.io/library/alpine")
+if err != nil {
+	log.Fatal(err)
+}
+for _, version := range detail.Versions {
+	fmt.Println(detail.Name, version.Digest, version.RecordedAt)
+}
+if err := images.Remove(ctx, "docker.io/library/alpine"); err != nil {
+	log.Fatal(err)
+}
 ```
+
+| Method | Local runtime | REST runtime |
+|--------|---------------|--------------|
+| `Pull` | Pulls into the cache | `ErrUnsupported`: creating a box pulls |
+| `List` | One row per cached reference | One row per catalog tag |
+| `Get` | The cache entries under the name | The catalog entry with its versions |
+| `Remove` | Forgets the name; layers stay | Removes the catalog entry; `ErrInvalidState` while a box can boot from it |
+| `Usage` | `ErrUnsupported` | `ImageUsage{Count, Limit, KnownBytes}` |
+
+`Get` and `Remove` take an image name such as `"docker.io/library/alpine"`. A
+reference with a tag or digest fails with `ErrInvalidArgument`, since a remove
+takes every tag of the name; a name the runtime does not hold fails with
+`ErrNotFound`. `ImageDetail.Versions` is newest first, and
+`ImageVersion.SizeBytes` is nil when the size is unknown. Locally, a box built
+from a removed image reads the image's configuration from the registry when it
+next starts.
+
+### Private Registry Logins
+
+On a runtime from `NewRest`, `rt.Registries()` manages the logins the server
+pulls private images with. A runtime from `NewRuntime` returns
+`ErrUnsupported`: pass `WithImageRegistries` instead.
+
+```go
+registries, err := rt.Registries()
+if err != nil {
+	log.Fatal(err)
+}
+defer registries.Close()
+
+login, err := registries.Create(ctx, boxlite.NewRegistryCredential{
+	RegistryHost:     "ghcr.io",
+	RepositoryPrefix: "acme/", // "" for the whole registry
+	Username:         "acme-bot",
+	Password:         os.Getenv("GHCR_TOKEN"),
+})
+if err != nil {
+	log.Fatal(err)
+}
+// ... boxes created from ghcr.io/acme/... now pull with this login ...
+if err := registries.Remove(ctx, login.ID); err != nil {
+	log.Fatal(err) // ErrInvalidState while a box still pulls through it
+}
+```
+
+| Method | Returns or fails with |
+|--------|-----------------------|
+| `List` | Every login, oldest first |
+| `Create` | The login; `ErrAlreadyExists` while one is held for the same registry and prefix |
+| `Remove` | `ErrInvalidState` naming the boxes while one pulls through it; `ErrNotFound` for an unknown id; `ErrInvalidArgument` for an id that is not a UUID |
+
+The password is sent once and never returned: `RegistryCredential` has no
+password field, and `NewRegistryCredential` prints `Password:[redacted]` with
+`%v`, `%+v` and `%#v`.
 
 ## Box Options
 

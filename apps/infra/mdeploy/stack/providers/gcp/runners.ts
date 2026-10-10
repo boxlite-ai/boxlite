@@ -42,6 +42,7 @@ import {
   registrationPayload,
 } from '../../runner-registration.ts'
 import { renderPolicyScripts, renderUnitEnvironmentPolicyScripts } from '../../runner-upgrade.ts'
+import { REGISTRY_PROXY_HOST_VARIABLE } from '../../registry-proxy.ts'
 import { splitSecretRef } from './secret-env.ts'
 import { volumeConditionFor } from './storage.ts'
 
@@ -395,7 +396,8 @@ udevadm trigger --name-match=kvm || true`,
         // the host ships telemetry to that instead of to the collector.
         $resolve(Object.values(request.environment)),
         token,
-      ]).apply(([apiUrl, otlpUrl, references, resolved, hostToken]) => {
+        request.registryProxyHost ?? '',
+      ]).apply(([apiUrl, otlpUrl, references, resolved, hostToken, proxyHost]) => {
         const secrets = Object.keys(request.secrets).map((name, index) => ({
           name,
           ...splitSecretRef((references as string[])[index] as string),
@@ -412,6 +414,9 @@ udevadm trigger --name-match=kvm || true`,
               Object.keys(request.environment).map((name, index) => [name, String((resolved as string[])[index])]),
             ),
             BOXLITE_RUNNER_NAME: slot.controlPlaneRunnerName,
+            // Where this host presents its own key to pull a private image.
+            // Converged below as well, for the hosts booted before it existed.
+            ...(proxyHost ? { [REGISTRY_PROXY_HOST_VARIABLE]: proxyHost as string } : {}),
             // Last, so this host's own token wins over the fleet-wide one the
             // store delivered. Every host but the first has its own.
             [RUNNER_TOKEN_VARIABLE]: hostToken as string,
@@ -554,17 +559,19 @@ udevadm trigger --name-match=kvm || true`,
      * new binary" are two moments now. The report API is what closes that gap —
      * see `apps/infra/mdeploy/README.md`.
      */
-    // Both addresses are Outputs, so the rendered pair is one too — and each
+    // The addresses are Outputs, so the rendered pair is one too — and each
     // field has to be unwrapped on its own before it can be handed to a script
     // slot. Resolved together and not cast, for the reason the boot script above
     // records: an unresolved Output renders as Pulumi's `[toString]` refusal
     // text, and this one would converge the whole fleet onto it.
-    const unitEnvPolicy = $resolve([request.apiUrl, request.otlpUrl]).apply(([apiUrl, otlpUrl]) =>
-      renderUnitEnvironmentPolicyScripts({
-        apiUrl: apiUrl as string,
-        otlpUrl: otlpUrl as string,
-        volumeBackend: VOLUME_BACKEND,
-      }),
+    const unitEnvPolicy = $resolve([request.apiUrl, request.otlpUrl, request.registryProxyHost ?? '']).apply(
+      ([apiUrl, otlpUrl, proxyHost]) =>
+        renderUnitEnvironmentPolicyScripts({
+          apiUrl: apiUrl as string,
+          otlpUrl: otlpUrl as string,
+          volumeBackend: VOLUME_BACKEND,
+          registryProxyHost: (proxyHost as string) || null,
+        }),
     )
     const unitEnvScripts = {
       validate: unitEnvPolicy.apply((rendered: { validate: string }) => rendered.validate),

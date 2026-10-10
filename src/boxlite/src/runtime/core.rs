@@ -9,6 +9,7 @@ use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
 use crate::runtime::images::ImageBackend;
 use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
+use crate::runtime::registries::RegistryBackend;
 use crate::runtime::rt_impl::{LocalRuntime, RuntimeImpl};
 use crate::runtime::signal_handler::install_signal_handler;
 use crate::runtime::types::BoxInfo;
@@ -58,7 +59,8 @@ extern "C" fn shutdown_on_exit() {
 #[derive(Clone)]
 pub struct BoxliteRuntime {
     backend: Arc<dyn RuntimeBackend>,
-    image_backend: Option<Arc<dyn ImageBackend>>,
+    /// Image capability — an `Arc` view of the same backend, local or REST.
+    image_backend: Arc<dyn ImageBackend>,
     /// Named-volume capability — an `Arc` view of the same backend (local or
     /// REST), mirroring `image_backend` / `images()`. Surfaced via `volumes()`.
     /// The concrete backend returns `Unsupported` until one is wired up.
@@ -68,6 +70,9 @@ pub struct BoxliteRuntime {
     /// not a second client). Surfaced via `auth()`, mirroring
     /// `image_backend` / `images()`.
     auth_backend: Option<Arc<dyn crate::runtime::auth::AuthBackend>>,
+    /// Registry-login capability — `Some` only for REST, like `auth_backend`.
+    /// Surfaced via `registries()`.
+    registry_backend: Option<Arc<dyn RegistryBackend>>,
 }
 
 // ============================================================================
@@ -116,9 +121,10 @@ impl BoxliteRuntime {
         let volume_backend = Arc::clone(&backend_arc) as Arc<dyn VolumeBackend>;
         Self {
             backend: backend_arc,
-            image_backend: Some(image_backend),
+            image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: None,
+            registry_backend: None,
         }
     }
 
@@ -143,12 +149,15 @@ impl BoxliteRuntime {
     pub fn rest(config: crate::rest::options::BoxliteRestOptions) -> BoxliteResult<Self> {
         let rest_runtime = Arc::new(RestRuntime::new(&config)?);
         let auth_backend = Arc::clone(&rest_runtime) as Arc<dyn crate::runtime::auth::AuthBackend>;
+        let image_backend = Arc::clone(&rest_runtime) as Arc<dyn ImageBackend>;
         let volume_backend = Arc::clone(&rest_runtime) as Arc<dyn VolumeBackend>;
+        let registry_backend = Arc::clone(&rest_runtime) as Arc<dyn RegistryBackend>;
         Ok(Self {
             backend: rest_runtime,
-            image_backend: None, // REST runtime doesn't support image operations
+            image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: Some(auth_backend),
+            registry_backend: Some(registry_backend),
         })
     }
 
@@ -418,16 +427,17 @@ impl BoxliteRuntime {
     // IMAGE OPERATIONS (via ImageHandle)
     // ========================================================================
 
-    /// Get a handle for image operations (pull, list).
+    /// Get a handle for the images this runtime can boot from.
     ///
-    /// Returns an `ImageHandle` that provides methods for pulling and listing images.
-    /// This abstraction separates image management from runtime management,
-    /// following the same pattern as `LiteBox` for box operations.
+    /// On an embedded runtime that is the local cache; on a REST runtime, the
+    /// server's catalog. This abstraction separates image management from
+    /// runtime management, following the same pattern as `LiteBox` for box
+    /// operations.
     ///
     /// # Errors
     ///
-    /// Returns `BoxliteError::Unsupported` if called on a REST runtime,
-    /// as image operations are only supported for local runtimes.
+    /// None: both backends hold images. The `Result` is kept so callers
+    /// written when a REST runtime refused here still compile.
     ///
     /// # Example
     ///
@@ -449,12 +459,9 @@ impl BoxliteRuntime {
     /// # }
     /// ```
     pub fn images(&self) -> BoxliteResult<crate::runtime::ImageHandle> {
-        match &self.image_backend {
-            Some(manager) => Ok(crate::runtime::ImageHandle::new(Arc::clone(manager))),
-            None => Err(BoxliteError::Unsupported(
-                "Image operations not supported over REST API".to_string(),
-            )),
-        }
+        Ok(crate::runtime::ImageHandle::new(Arc::clone(
+            &self.image_backend,
+        )))
     }
 
     // ========================================================================
@@ -530,6 +537,46 @@ impl BoxliteRuntime {
             )),
         }
     }
+
+    /// Get a handle for the registry logins the server pulls private images
+    /// with (list, create, remove).
+    ///
+    /// # Errors
+    ///
+    /// Returns `BoxliteError::Unsupported` for non-REST runtimes: a local
+    /// runtime pulls with the logins in `BoxliteOptions::image_registries`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use boxlite::{BoxliteRuntime, BoxliteRestOptions};
+    /// use boxlite::runtime::NewRegistryCredential;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let runtime = BoxliteRuntime::rest(BoxliteRestOptions::from_env()?)?;
+    /// let login = runtime
+    ///     .registries()?
+    ///     .create(&NewRegistryCredential {
+    ///         registry_host: "ghcr.io".into(),
+    ///         repository_prefix: Some("acme/".into()),
+    ///         username: "acme-bot".into(),
+    ///         password: std::env::var("GHCR_TOKEN")?,
+    ///     })
+    ///     .await?;
+    /// println!("added {}", login.id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn registries(&self) -> BoxliteResult<crate::runtime::RegistryHandle> {
+        match &self.registry_backend {
+            Some(backend) => Ok(crate::runtime::RegistryHandle::new(Arc::clone(backend))),
+            None => Err(BoxliteError::Unsupported(
+                "registry logins are only available on REST runtimes; a local runtime \
+                 pulls with the logins in its options' image_registries"
+                    .to_string(),
+            )),
+        }
+    }
 }
 
 // ============================================================================
@@ -594,5 +641,20 @@ mod tests {
             err.to_string().contains("remove-on-stop is incompatible"),
             "unexpected message: {err}"
         );
+    }
+
+    /// A local runtime pulls with the logins in its options; it has no
+    /// server to keep any, so the handle is refused rather than handed out.
+    #[test]
+    fn registries_are_unsupported_on_a_local_runtime() {
+        let (runtime, _dir) = local_runtime();
+
+        let err = runtime
+            .registries()
+            .err()
+            .expect("a local runtime has no registry logins");
+
+        assert!(matches!(err, BoxliteError::Unsupported(_)), "{err:?}");
+        assert!(err.to_string().contains("image_registries"), "{err}");
     }
 }

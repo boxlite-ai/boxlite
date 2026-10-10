@@ -86,6 +86,7 @@ func NewCollector(cfg CollectorConfig) *Collector {
 func (c *Collector) Start(ctx context.Context) {
 	go c.snapshotCPUUsage(ctx)
 	go c.snapshotAllocatedResources(ctx)
+	go c.snapshotRuntimeMetrics(ctx)
 }
 
 func (c *Collector) Collect(ctx context.Context) (*Metrics, error) {

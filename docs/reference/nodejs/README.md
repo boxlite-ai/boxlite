@@ -55,6 +55,8 @@ new JsBoxlite(options: JsOptions)
 | `metrics()` | `() => Promise<JsRuntimeMetrics>` | Get runtime metrics |
 | `remove()` | `(idOrName: string, force?: boolean) => Promise<void>` | Remove a box |
 | `close()` | `() => void` | Close runtime (no-op) |
+| `images` | getter `=> ImageHandle` | The images this runtime can boot from; see [`ImageHandle`](#imagehandle) |
+| `registries` | getter `=> RegistryHandle` | The server's registry logins; throws `unsupported` on a local runtime. See [`RegistryHandle`](#registryhandle) |
 
 #### Example
 
@@ -75,6 +77,84 @@ const box = await runtime.create({
 // List all boxes
 const boxes = await runtime.listInfo();
 boxes.forEach(info => console.log(`${info.id}: ${info.state.status}`));
+```
+
+---
+
+### `ImageHandle`
+
+The images a runtime can boot from: the local cache on `new JsBoxlite(...)`
+or `JsBoxlite.withDefaultConfig()`, the server's catalog on
+`JsBoxlite.rest(...)`. The same code runs against either. Read it from the
+`runtime.images` getter.
+
+| Method | Signature | Local runtime | REST runtime |
+|--------|-----------|---------------|--------------|
+| `pull()` | `(reference: string) => Promise<ImagePullResult>` | Pulls into the cache | Rejects with `unsupported`: creating a box pulls |
+| `list()` | `() => Promise<ImageInfo[]>` | One row per cached reference | One row per catalog tag, then one per untagged version by digest |
+| `get()` | `(name: string) => Promise<ImageDetail>` | The cache entries under the name | The catalog entry with its versions |
+| `remove()` | `(name: string) => Promise<void>` | Forgets the name; layers stay | Removes the catalog entry; `invalid_state` while a box can boot from it |
+| `usage()` | `() => Promise<ImageUsage>` | Rejects with `unsupported` | `count`, `limit`, `knownBytes` |
+
+`get()` and `remove()` take an image name such as `"docker.io/library/alpine"`;
+a reference with a tag or digest rejects with `invalid_argument`, since a
+remove takes every tag of the name. A name nothing is held under rejects with
+`not_found`. The codes are what [`errorCode(err)`](#errorcodeerr) returns.
+Locally, a box built from a removed image reads the image's configuration from
+the registry when it next starts.
+
+| Type | Fields |
+|------|--------|
+| `ImageDetail` | `name`, `tags`, `curated`, `versions: ImageVersion[]` (newest first) |
+| `ImageVersion` | `digest`, `sizeBytes` (absent when unknown), `sourceRef`, `recordedAt` (RFC 3339) |
+| `ImageUsage` | `count`, `limit`, `knownBytes` |
+
+```typescript
+import { JsBoxlite, BoxliteRestOptions } from 'boxlite';
+
+const runtime = JsBoxlite.rest(new BoxliteRestOptions({ url: 'http://localhost:8100' }));
+// or JsBoxlite.withDefaultConfig()
+for (const image of await runtime.images.list()) {
+  console.log(image.reference, image.id);
+}
+const detail = await runtime.images.get('docker.io/library/alpine');
+console.log(detail.tags, detail.versions.map((version) => version.digest));
+await runtime.images.remove('docker.io/library/alpine');
+```
+
+### `RegistryHandle`
+
+The logins a REST server presents when it pulls a private image for a box.
+Read it from the `runtime.registries` getter, which throws `unsupported` on a
+local runtime: that one pulls with the logins in `imageRegistries` instead.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `list()` | `() => Promise<RegistryCredential[]>` | Every login the organization holds, oldest first |
+| `create()` | `(credential: NewRegistryCredential) => Promise<RegistryCredential>` | Add a login; `already_exists` while one is held for the same registry and prefix |
+| `remove()` | `(id: string) => Promise<void>` | Remove a login; `invalid_state`, naming the boxes, while a box still pulls through it; `not_found` for an unknown id |
+
+| Type | Fields |
+|------|--------|
+| `NewRegistryCredential` | `registryHost`, `repositoryPrefix` (optional; whole path segments ending in `/`, omitted for the whole registry), `username`, `password` |
+| `RegistryCredential` | `id`, `registryHost`, `repositoryPrefix`, `username`, `createdBy` (absent when unknown), `createdAt` (RFC 3339) |
+
+The password goes up once and is never returned: `RegistryCredential` has no
+password field. `remove()` rejects an id that is not a UUID with
+`invalid_argument`, before any request.
+
+```typescript
+const runtime = JsBoxlite.rest(new BoxliteRestOptions({ url: 'http://localhost:8100' }));
+const login = await runtime.registries.create({
+  registryHost: 'ghcr.io',
+  repositoryPrefix: 'acme/',
+  username: 'acme-bot',
+  password: process.env.GHCR_TOKEN!,
+});
+const box = await runtime.create({ image: 'ghcr.io/acme/private-app:1' });
+for (const entry of await runtime.registries.list()) {
+  console.log(entry.registryHost, entry.repositoryPrefix, entry.username);
+}
 ```
 
 ---
@@ -817,6 +897,26 @@ try {
 } catch (err) {
   if (err instanceof ParseError) {
     console.error('Failed to parse cursor position');
+  }
+}
+```
+
+### `errorCode(err)`
+
+A failure the native runtime reports is a plain `Error` whose message starts
+with the kind of failure. `errorCode` returns that kind's code, or `undefined`
+for any other error. The codes are the ones `BoxliteError::http()` gives
+(`src/shared/src/errors.rs`) and a REST server answers with, and the same as
+the `code` of Python's [runtime failure classes](../python/README.md#runtime-failures).
+
+```typescript
+import { errorCode } from 'boxlite';
+
+try {
+  await runtime.remove('no-such-box');
+} catch (err) {
+  if (errorCode(err) === 'not_found') {
+    // nothing to remove
   }
 }
 ```

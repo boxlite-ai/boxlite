@@ -243,6 +243,11 @@ await box.stop();
 
 ### Runtime Image Management
 
+`runtime.images` holds the images a runtime can boot from: the local cache on
+an embedded runtime, the server's catalog on `JsBoxlite.rest(...)`. The same
+code runs against either; `pull` is local only (a REST runtime pulls when a
+box is created) and `usage` is REST only.
+
 ```typescript
 import { JsBoxlite } from "boxlite";
 
@@ -255,7 +260,35 @@ const images = await runtime.images.list();
 for (const image of images) {
   console.log(image.repository, image.tag, image.id);
 }
+
+const detail = await runtime.images.get("docker.io/library/alpine");
+console.log(detail.tags, detail.versions.map((version) => version.digest));
+await runtime.images.remove("docker.io/library/alpine");
 ```
+
+See [the Node.js reference](../../docs/reference/nodejs/README.md#imagehandle)
+for each method on each runtime.
+
+### Private Registry Logins
+
+On `JsBoxlite.rest(...)`, `runtime.registries` manages the logins the server
+pulls private images with. The password goes up once and is never returned.
+A local runtime throws `unsupported`: pass `imageRegistries` to its options
+instead.
+
+```typescript
+const login = await runtime.registries.create({
+  registryHost: "ghcr.io",
+  repositoryPrefix: "acme/", // omit for the whole registry
+  username: "acme-bot",
+  password: process.env.GHCR_TOKEN!,
+});
+const box = await runtime.create({ image: "ghcr.io/acme/private-app:1" });
+// ...
+await runtime.registries.remove(login.id); // refused while a box pulls through it
+```
+
+See [the Node.js reference](../../docs/reference/nodejs/README.md#registryhandle).
 
 ### CodeBox
 
@@ -439,6 +472,10 @@ try {
   }
 }
 ```
+
+A failure the runtime itself reports carries a code that `errorCode(err)`
+returns, such as `not_found` or `invalid_state`; it is `undefined` for any
+other error. See [the Node.js reference](../../docs/reference/nodejs/README.md#errorcodeerr).
 
 ## Building from Source
 

@@ -134,6 +134,8 @@ tags:
     description: Container image management
   - name: Volumes
     description: Managed persistent volumes
+  - name: Registries
+    description: Logins the server pulls private images with
 
 # ===========================================================================
 # Paths
@@ -1150,83 +1152,174 @@ paths:
   # -------------------------------------------------------------------------
   # Images
   # -------------------------------------------------------------------------
-  /{prefix}/images/pull:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-    post:
-      operationId: pullImage
-      summary: Pull a container image
-      description: |
-        Pulls a container image from a registry and caches it locally.
-        Returns 200 with image info when the pull completes.
-      tags: [Images]
-      parameters:
-        - $ref: "#/components/parameters/idempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PullImageRequest"
-      responses:
-        "200":
-          description: Image pulled and cached
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ImageInfo"
-        "422":
-          $ref: "#/components/responses/UnprocessableEntityError"
-
   /{prefix}/images:
     parameters:
       - $ref: "#/components/parameters/prefix"
     get:
       operationId: listImages
-      summary: List cached images
-      description: Returns a paginated list of locally cached container images.
+      summary: List images
+      description: |
+        The images this deployment can boot from, one entry per reference:
+        each tag at the build it points to, and each build no tag points to
+        by its digest. A single-host server answers from its image cache; a
+        server shared between callers answers from the caller's catalog. A
+        server may answer every entry at once, leaving `next_page_token` out.
       tags: [Images]
       parameters:
         - $ref: "#/components/parameters/pageSize"
         - $ref: "#/components/parameters/pageToken"
       responses:
         "200":
-          description: List of cached images
+          description: Images the caller can boot from
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ListImagesResponse"
 
-  /{prefix}/images/{image_id}:
+  /{prefix}/images/usage:
     parameters:
       - $ref: "#/components/parameters/prefix"
-      - $ref: "#/components/parameters/imageId"
-
     get:
-      operationId: getImage
-      summary: Get image details
-      description: Returns metadata for a cached image by its manifest digest.
+      operationId: getImageUsage
+      summary: Get image usage
+      description: |
+        How many images the routing slot holds against the most it may hold.
+        A server with no such limit answers `UnsupportedError`.
       tags: [Images]
       responses:
         "200":
-          description: Image details
+          description: Images held and the limit
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ImageInfo"
+                $ref: "#/components/schemas/ImageUsage"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+
+  /{prefix}/images/{image_name}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/imageName"
+
+    get:
+      operationId: getImage
+      summary: Get an image
+      description: Every build held under an image name.
+      tags: [Images]
+      responses:
+        "200":
+          description: The image and its builds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageDetail"
         "404":
           $ref: "#/components/responses/NotFoundError"
 
-    head:
-      operationId: imageExists
-      summary: Check if an image is cached
-      description: Returns 204 if the image exists in the local cache, 404 if not.
+    delete:
+      operationId: removeImage
+      summary: Remove an image
+      description: |
+        Stop holding an image name, every tag of it. Layers are not deleted.
+        A server refuses with `InvalidStateError` while a box can still boot
+        from the image.
       tags: [Images]
       responses:
         "204":
-          description: Image exists
+          description: The image is no longer held
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
-          description: Image not found
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  # -------------------------------------------------------------------------
+  # Registries
+  # -------------------------------------------------------------------------
+  /{prefix}/registries:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+
+    get:
+      operationId: listRegistries
+      summary: List registry logins
+      description: |
+        The logins the server presents when it pulls a private image for a
+        box, oldest first. No login carries its password.
+      tags: [Registries]
+      responses:
+        "200":
+          description: The routing slot's registry logins
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListRegistriesResponse"
+
+    post:
+      operationId: createRegistry
+      summary: Add a registry login
+      description: |
+        The password is stored where the server cannot read it back, and is
+        never returned. A login is held per registry and prefix: a second one
+        for the same pair is refused with `AlreadyExistsError`. A server that
+        cannot pull private images answers `UnsupportedError`.
+      tags: [Registries]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRegistryRequest"
+      responses:
+        "201":
+          description: The login, without its password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistryCredential"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "409":
+          description: A login is already held for this registry and prefix
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  message: "A credential for ghcr.io/acme/ already exists; remove it before adding another"
+                  type: AlreadyExistsError
+                  code: already_exists
+        "501":
+          description: This server does not pull private images
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /{prefix}/registries/{registry_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/registryId"
+
+    delete:
+      operationId: removeRegistry
+      summary: Remove a registry login
+      description: |
+        Removes the login and destroys its password. A server refuses with
+        `InvalidStateError`, naming the boxes, while a box still pulls through
+        the login.
+      tags: [Registries]
+      responses:
+        "204":
+          description: The login is gone, and its password destroyed
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
 
 # ===========================================================================
 # Components
@@ -1328,14 +1421,25 @@ components:
         type: string
       example: exec-01HJK5ABCDEF
 
-    imageId:
-      name: image_id
+    imageName:
+      name: image_name
       in: path
       required: true
-      description: Image manifest digest (e.g., `sha256:abc123...`)
+      description: |
+        Registry and repository, without a tag or digest. It has slashes, so
+        it is sent URL-encoded as one segment.
       schema:
         type: string
-      example: "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
+      example: "quay.io%2Facme%2Fapp"
+
+    registryId:
+      name: registry_id
+      in: path
+      required: true
+      description: Server-assigned registry login identifier
+      schema:
+        type: string
+        format: uuid
 
     volumeId:
       name: volume_id
@@ -2578,7 +2682,7 @@ components:
     # =======================================================================
     ImageInfo:
       type: object
-      description: Cached container image metadata (maps to ImageInfo)
+      description: One reference a server holds (maps to ImageInfo)
       required: [reference, repository, tag, id, cached_at]
       properties:
         reference:
@@ -2600,20 +2704,67 @@ components:
         cached_at:
           type: string
           format: date-time
-          description: When the image was pulled into the local cache
+          description: When the build this reference names was recorded
         size_bytes:
           type: integer
           nullable: true
           description: Image size in bytes
 
-    PullImageRequest:
+    ImageDetail:
       type: object
-      required: [reference]
+      description: An image name and every build held under it (maps to ImageDetail)
+      required: [name, tags, curated, versions]
       properties:
-        reference:
+        name:
           type: string
-          description: Image reference to pull from registry
-          example: python:3.11-slim
+          description: Registry and repository, without a tag
+          example: quay.io/acme/app
+        tags:
+          type: array
+          items:
+            type: string
+        curated:
+          type: boolean
+          description: Provided by the operator rather than recorded from a pull
+        versions:
+          type: array
+          description: Each build held, newest first
+          items:
+            $ref: "#/components/schemas/ImageVersion"
+
+    ImageVersion:
+      type: object
+      required: [digest, source_ref, recorded_at]
+      properties:
+        digest:
+          type: string
+          description: Manifest digest
+        size_bytes:
+          type: integer
+          nullable: true
+          description: Sum of the layer sizes the manifest declares, when known
+        source_ref:
+          type: string
+          description: The reference that was pulled to get this build
+        recorded_at:
+          type: string
+          format: date-time
+
+    ImageUsage:
+      type: object
+      required: [count, limit, known_bytes]
+      properties:
+        count:
+          type: integer
+          description: Images held
+        limit:
+          type: integer
+          description: Most images the routing slot may hold
+        known_bytes:
+          type: integer
+          description: |
+            Sum of the sizes the held builds' manifests declare. Not the bytes
+            stored: a layer two builds share is counted for each.
 
     ListImagesResponse:
       type: object
@@ -2627,3 +2778,68 @@ components:
           type: string
           nullable: true
           description: Opaque token for next page
+
+    # =======================================================================
+    # Registries
+    # =======================================================================
+    CreateRegistryRequest:
+      type: object
+      required: [registry_host, username, password]
+      properties:
+        registry_host:
+          type: string
+          description: The registry the login is for; the server says which it takes logins for
+          example: ghcr.io
+        repository_prefix:
+          type: string
+          description: |
+            The repositories it covers, as whole path segments ending in `/`.
+            Omitted or empty for the whole registry.
+          maxLength: 255
+          example: acme/
+        username:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: acme-bot
+        password:
+          type: string
+          description: Password or access token. Never returned.
+          writeOnly: true
+          minLength: 1
+          maxLength: 8192
+
+    RegistryCredential:
+      type: object
+      description: A registry login. There is no password field.
+      required: [id, registry_host, repository_prefix, username, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        registry_host:
+          type: string
+          example: ghcr.io
+        repository_prefix:
+          type: string
+          description: Empty for the whole registry
+          example: acme/
+        username:
+          type: string
+          example: acme-bot
+        created_by:
+          type: string
+          nullable: true
+          description: The user who added it
+        created_at:
+          type: string
+          format: date-time
+
+    ListRegistriesResponse:
+      type: object
+      required: [registries]
+      properties:
+        registries:
+          type: array
+          items:
+            $ref: "#/components/schemas/RegistryCredential"

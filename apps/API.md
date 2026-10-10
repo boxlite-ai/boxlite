@@ -45,6 +45,7 @@ import, images, and runtime-wide metrics. They are intentionally absent below;
 | [Hosted BoxLite-compatible API](#hosted-boxlite-compatible-api)           | `apps/api`                   | `/api/v1`                                                                            | `3000`                   |
 | [Runner API](#runner-api)                                                 | `apps/runner`                | `/`                                                                                  | `3003`                   |
 | [Preview proxy API](#preview-proxy-api)                                   | `apps/proxy`                 | `proxy.<domain>`, `<port>-<box>.proxy.<domain>`                                      | `4000`                   |
+| [Registry proxy API](#registry-proxy-api)                                 | `apps/image-service`         | `/v2`                                                                                | `4100`                   |
 | [Telemetry collector API](#telemetry-collector-api)                       | `apps/otel-collector`        | OTLP/HTTP and health listeners                                                       | `4318`, `13133`, `13132` |
 | [Local development stack](#local-development-stack)                       | `apps/infra-local`           | `http://localhost:28080`                                                             | local host ports only    |
 | [Container-based local environment](#container-based-local-environment)   | `apps/scripts`               | containers on `5556`, `5432`, `6379`, `5001`; apps on `3000`, `3001`, `4000`, `8080` | local host ports only    |
@@ -198,24 +199,36 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Runners and jobs</b> · 14 routes</summary>
+<summary><b>Registry credentials</b> · 3 routes</summary>
 
-| Method   | Path                           | What it does                                                   |
-| -------- | ------------------------------ | -------------------------------------------------------------- |
-| `GET`    | `/api/runners`                 | Lists runners.                                                 |
-| `POST`   | `/api/runners`                 | Registers a runner.                                            |
-| `GET`    | `/api/runners/me`              | Returns the authenticated runner's identity and configuration. |
-| `GET`    | `/api/runners/by-box/{boxId}`  | Resolves the runner assigned to a box.                         |
-| `GET`    | `/api/runners/{id}`            | Gets a runner by ID.                                           |
-| `GET`    | `/api/runners/{id}/full`       | Gets a runner with its full related data.                      |
-| `DELETE` | `/api/runners/{id}`            | Deletes a runner.                                              |
-| `PATCH`  | `/api/runners/{id}/scheduling` | Enables or disables scheduling onto a runner.                  |
-| `PATCH`  | `/api/runners/{id}/draining`   | Enables or disables runner draining.                           |
-| `POST`   | `/api/runners/healthcheck`     | Records or checks runner health.                               |
-| `GET`    | `/api/jobs`                    | Lists jobs assigned to the authenticated runner.               |
-| `GET`    | `/api/jobs/poll`               | Long-polls for work assigned to the runner.                    |
-| `GET`    | `/api/jobs/{jobId}`            | Gets a job by ID.                                              |
-| `POST`   | `/api/jobs/{jobId}/status`     | Reports job progress, success, or failure.                     |
+| Method   | Path                   | What it does                                                                          |
+| -------- | ---------------------- | ------------------------------------------------------------------------------------- |
+| `GET`    | `/api/registries`      | Lists the organization's private registry logins, without passwords.                  |
+| `POST`   | `/api/registries`      | Adds a login; the password is stored where the API cannot read it and never returned. |
+| `DELETE` | `/api/registries/{id}` | Removes a login, unless a box still pulls through it (409 lists the boxes).           |
+
+</details>
+
+<details>
+<summary><b>Runners and jobs</b> · 15 routes</summary>
+
+| Method   | Path                                   | What it does                                                   |
+| -------- | -------------------------------------- | -------------------------------------------------------------- |
+| `GET`    | `/api/runners`                         | Lists runners.                                                 |
+| `POST`   | `/api/runners`                         | Registers a runner.                                            |
+| `GET`    | `/api/runners/me`                      | Returns the authenticated runner's identity and configuration. |
+| `GET`    | `/api/runners/me/registry-credentials` | Finds the registry login a pull uses, without its password.    |
+| `GET`    | `/api/runners/by-box/{boxId}`          | Resolves the runner assigned to a box.                         |
+| `GET`    | `/api/runners/{id}`                    | Gets a runner by ID.                                           |
+| `GET`    | `/api/runners/{id}/full`               | Gets a runner with its full related data.                      |
+| `DELETE` | `/api/runners/{id}`                    | Deletes a runner.                                              |
+| `PATCH`  | `/api/runners/{id}/scheduling`         | Enables or disables scheduling onto a runner.                  |
+| `PATCH`  | `/api/runners/{id}/draining`           | Enables or disables runner draining.                           |
+| `POST`   | `/api/runners/healthcheck`             | Records or checks runner health.                               |
+| `GET`    | `/api/jobs`                            | Lists jobs assigned to the authenticated runner.               |
+| `GET`    | `/api/jobs/poll`                       | Long-polls for work assigned to the runner.                    |
+| `GET`    | `/api/jobs/{jobId}`                    | Gets a job by ID.                                              |
+| `POST`   | `/api/jobs/{jobId}/status`             | Reports job progress, success, or failure.                     |
 
 </details>
 
@@ -343,9 +356,10 @@ deployments (shared with the control-plane API)
 Most resource paths accept both an unprefixed form and an organization-prefixed
 form. The tables write that as `[/{prefix}]`; clients can discover their prefix
 through `GET /api/v1/me`. Except for configuration discovery, these routes use
-combined bearer authentication. The box and volume resource routes also apply
-organization authorization; identity discovery at `GET /api/v1/me` can return
-`path_prefix: null` for an authenticated user with no organization membership.
+combined bearer authentication. The box, volume and registry resource routes
+also apply organization authorization; identity discovery at `GET /api/v1/me`
+can return `path_prefix: null` for an authenticated user with no organization
+membership.
 
 <details>
 <summary><b>Discovery</b> · 2 routes</summary>
@@ -404,6 +418,20 @@ the portable contract, which the runner's own route registration enforces.
 | `GET`    | `/api/v1[/{prefix}]/volumes`                            | Lists volumes in the organization.            |
 | `GET`    | `/api/v1[/{prefix}]/volumes/{volumeId}`                 | Gets a volume by ID.                          |
 | `DELETE` | `/api/v1[/{prefix}]/volumes/{volumeId}?force={boolean}` | Deletes a volume, optionally forcing removal. |
+
+</details>
+
+<details>
+<summary><b>Registries</b> · 3 routes</summary>
+
+| Method   | Path                                 | What it does                                                                     |
+| -------- | ------------------------------------ | -------------------------------------------------------------------------------- |
+| `GET`    | `/api/v1[/{prefix}]/registries`      | Lists the organization's private registry logins, without passwords.             |
+| `POST`   | `/api/v1[/{prefix}]/registries`      | Adds a login; a second one for the same registry and prefix is `already_exists`. |
+| `DELETE` | `/api/v1[/{prefix}]/registries/{id}` | Removes a login, unless a box still pulls through it (409 lists the boxes).      |
+
+The same logins as `/api/registries`, in the box API's snake_case shapes, for
+SDK clients.
 
 </details>
 
@@ -489,6 +517,34 @@ and tunnels them to guest ports is in [`proxy/README.md`](./proxy/README.md).
 | `POST`    | `<any host>/accept-boxlite-preview-warning?redirect={url}` | Records preview-warning acceptance and redirects the browser.                                    |
 | `ANY`     | `<port>-<box>.proxy.<domain>/{path...}`                    | Reverse-proxies HTTP and WebSocket traffic to the selected box port after preview access checks. |
 | `CONNECT` | `<port>-<box>.proxy.<domain>`                              | Opens a bidirectional TCP tunnel through the runner; allowed for public boxes only.              |
+
+</details>
+
+## Registry proxy API
+
+**Service:** `apps/image-service` (binary `cmd/registry-proxy`) · **Base path:**
+`/v2` · **Port:** `4100` in deployments (`REGISTRY_PROXY_PORT` environment
+variable) · **Reached:** from inside the stage's network only, at its own Cloud
+Run address over HTTP/2
+
+The pull half of the OCI distribution protocol, served so a runner can fetch an
+image whose registry credentials only the platform holds. The organization and
+the upstream registry ride in the repository name — `<org>/<host>/<repo…>` —
+because one proxy serves every registry and the path is what says which. A
+manifest is relayed byte for byte and a blob is streamed, so the digest a client
+verifies still covers what the upstream served. How callers are authenticated,
+which upstreams are reachable, and how redirects are judged is in
+[`image-service/README.md`](./image-service/README.md).
+
+<details>
+<summary><b>Registry proxy routes</b> · 4 routes</summary>
+
+| Method       | Path                                                  | What it does                                                                             |
+| ------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `GET`        | `/health`                                             | Reports registry proxy health and version.                                               |
+| `GET` `HEAD` | `/v2/`                                                | The distribution version check; answers an unauthenticated caller with a Basic challenge. |
+| `GET` `HEAD` | `/v2/{org}/{host}/{repository...}/manifests/{ref}`    | Relays the upstream manifest unmodified, with its digest and media type.                 |
+| `GET` `HEAD` | `/v2/{org}/{host}/{repository...}/blobs/{digest}`     | Streams the upstream blob, following a registry's redirect to a permitted address.        |
 
 </details>
 
@@ -588,14 +644,15 @@ a separate environment — see
 </details>
 
 <details>
-<summary><b>Application processes</b> · 4 processes</summary>
+<summary><b>Application processes</b> · 5 processes</summary>
 
-| Process     | Host port | Interface                                                                  |
-| ----------- | --------- | -------------------------------------------------------------------------- |
-| `api`       | `3001`    | Control-plane and hosted BoxLite-compatible APIs; probed at `/api/health`. |
-| `dashboard` | `3000`    | Vite dev server for the dashboard app.                                     |
-| `proxy`     | `4000`    | Preview proxy API (`PROXY_PORT`).                                          |
-| `runner`    | `3003`    | Runner API (`API_PORT`).                                                   |
+| Process          | Host port | Interface                                                                  |
+| ---------------- | --------- | -------------------------------------------------------------------------- |
+| `api`            | `3001`    | Control-plane and hosted BoxLite-compatible APIs; probed at `/api/health`. |
+| `dashboard`      | `3000`    | Vite dev server for the dashboard app.                                     |
+| `proxy`          | `4000`    | Preview proxy API (`PROXY_PORT`).                                          |
+| `registry-proxy` | `4100`    | Registry proxy API (`REGISTRY_PROXY_PORT`); probed at `/health`.           |
+| `runner`         | `3003`    | Runner API (`API_PORT`).                                                   |
 
 The local API listens on `3001` rather than the deployed `3000`, which the
 dashboard dev server uses; `BOXLITE_LOCAL_API_PORT` overrides it. This stack
@@ -637,9 +694,9 @@ container.
 | `proxy`     | `4000`    | Preview proxy API.                                          |
 | `runner`    | `8080`    | Runner API, left on the in-code default rather than `3003`. |
 
-These are the same four projects the boxed stack serves, on the same `3000`,
-`3001`, and `4000` host ports, so the two local environments cannot run at the
-same time.
+These are four of the five projects the boxed stack serves — all but the
+registry proxy — on the same `3000`, `3001`, and `4000` host ports, so the two
+local environments cannot run at the same time.
 
 </details>
 

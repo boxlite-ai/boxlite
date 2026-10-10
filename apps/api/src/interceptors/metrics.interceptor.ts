@@ -43,7 +43,6 @@ type CommonCaptureProps = {
   userAgent: string
   error?: string
   source: string
-  isDeprecated?: boolean
   sdkVersion?: string
   environment?: string
 }
@@ -117,7 +116,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
       userAgent,
       error,
       source: Array.isArray(source) ? source[0] : source,
-      isDeprecated: request.route.path.includes('/images'),
       sdkVersion,
       environment: this.configService.get('posthog.environment'),
     }
@@ -128,7 +126,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
           case '/api/api-keys':
             this.captureCreateApiKey(props)
             break
-          // TODO(image-rewrite): /api/templates metrics removed with box_template.
           case '/api/v1/boxes':
           case '/api/v1/:prefix/boxes':
             this.captureCreateBox(props, request.body, response)
@@ -194,7 +191,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
           case '/api/v1/:prefix/boxes/:boxId':
             this.captureDeleteBox(props, request.params.boxIdOrName || request.params.boxId)
             break
-          // TODO(image-rewrite): /api/templates delete metrics removed with box_template.
           case '/api/organizations/:organizationId':
             this.captureDeleteOrganization(props, request.params.organizationId)
             break
@@ -206,6 +202,9 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
             break
           case '/api/volumes/:volumeId':
             this.captureDeleteVolume(props, request.params.volumeId)
+            break
+          case '/api/images/:idOrRef':
+            this.captureDeleteImage(props, request.params.idOrRef)
             break
         }
         break
@@ -409,8 +408,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
   private captureCreateApiKey(props: CommonCaptureProps) {
     this.capture('api_api_key_created', props, 'api_api_key_creation_failed')
   }
-
-  // TODO(image-rewrite): template create/activate/deactivate/delete metrics removed with box_template.
 
   private captureCreateBox(props: CommonCaptureProps, request: RestCreateBoxDto, response: BoxResponseDto) {
     const envVarsLength = request.env ? Object.keys(request.env).length : 0
@@ -645,6 +642,14 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     })
   }
 
+  // Delete is the catalog's only mutation — an image enters it by being used,
+  // not by being created — so it is the only event there is to capture.
+  private captureDeleteImage(props: CommonCaptureProps, idOrRef: string) {
+    this.capture('api_image_deleted', props, 'api_image_deletion_failed', {
+      image_id_or_ref: idOrRef,
+    })
+  }
+
   private captureUpdateOrganizationExperimentalConfig(
     props: CommonCaptureProps,
     experimentalConfig: Record<string, any> | null,
@@ -693,7 +698,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
       user_agent: props.userAgent,
       error: props.error,
       source: props.source,
-      is_deprecated: props.isDeprecated,
       sdk_version: props.sdkVersion,
       environment: props.environment,
       boxlite_version: this.version,

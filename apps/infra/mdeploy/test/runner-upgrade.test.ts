@@ -640,8 +640,13 @@ test('the GCP policy resolves the endpoint rather than casting it', () => {
   // that — the trap `renderRunnerBoot` already records for the boot script.
   const gcp = readFileSync(fileURLToPath(new URL('../stack/providers/gcp/runners.ts', import.meta.url)), 'utf8')
   const policy = gcp.slice(gcp.indexOf('const unitEnvPolicy'), gcp.indexOf('const scripts'))
-  assert.match(policy, /\$resolve\(\[request\.apiUrl, request\.otlpUrl\]\)/, 'both addresses must be resolved together')
+  assert.match(
+    policy,
+    /\$resolve\(\[request\.apiUrl, request\.otlpUrl, request\.registryProxyHost \?\? ''\]\)/,
+    'every address must be resolved together',
+  )
   assert.match(policy, /otlpUrl: otlpUrl as string/, 'and the resolved one is what reaches the renderer')
+  assert.match(policy, /registryProxyHost: \(proxyHost as string\) \|\| null/)
 })
 
 test('a caller with no control-plane address converges only the binary', () => {
@@ -668,4 +673,22 @@ test('an AWS host is sent both halves, and the address is what re-sends them', (
   // No backend here: these hosts mount with mount-s3 and their boot script
   // writes no such key, so enforcing one would leave every host disagreeing.
   assert.doesNotMatch(upgrades, /volumeBackend/)
+})
+
+test('a registry proxy host that is not a host is refused before it reaches a root shell', () => {
+  for (const registryProxyHost of ["x'; rm -rf / #", 'https://registry-proxy.example', 'Registry-Proxy.example']) {
+    assert.throws(
+      () => renderUnitEnvironmentPolicyScripts({ apiUrl: 'https://api.boxlite.ai', volumeBackend: 'gcs', registryProxyHost }),
+      /the registry proxy's host reaches/,
+      `accepted ${registryProxyHost}`,
+    )
+  }
+  assert.match(
+    renderUnitEnvironmentPolicyScripts({
+      apiUrl: 'https://api.boxlite.ai',
+      volumeBackend: 'gcs',
+      registryProxyHost: '127.0.0.1:4100',
+    }).validate,
+    /'REGISTRY_PROXY_HOST=127\.0\.0\.1:4100'/,
+  )
 })

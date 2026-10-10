@@ -12,7 +12,21 @@ pub use archive::{LayerExtractor, OverrideFileType, OverrideStat, SafeRoot};
 pub use config::ContainerImageConfig;
 pub use image_disk::ImageDiskManager;
 pub use manager::ImageManager;
-pub use object::ImageObject;
+pub use object::{ImageObject, ResolvedImage};
+
+/// Cache and registry fixtures for tests of code that pulls through an
+/// [`ImageManager`], so they exercise the real store rather than a stand-in.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::ImageManager;
+
+    pub(crate) use super::store::tests::registry_answering;
+
+    /// Put a build in `images`' cache under `image_ref`, as a pull leaves it.
+    pub(crate) async fn seed_cached_build(images: &ImageManager, image_ref: &str, digest: &str) {
+        super::store::tests::seed_cached_build(images.store(), image_ref, digest).await;
+    }
+}
 
 use oci_client::Reference;
 
@@ -114,15 +128,19 @@ impl Iterator for ReferenceIter<'_> {
             return None;
         }
 
-        let registry = &self.registries[self.index];
+        let registry = self.registries[self.index].clone();
         self.index += 1;
 
-        let tag = self.base_ref.tag().unwrap_or("latest").to_string();
-        Some(Reference::with_tag(
-            registry.clone(),
-            self.base_ref.repository().to_string(),
-            tag,
-        ))
+        // A digest names one build on every registry, so it is kept as is; a
+        // tag, written or implied, is looked up on each.
+        let repository = self.base_ref.repository().to_string();
+        Some(match self.base_ref.digest() {
+            Some(digest) => Reference::with_digest(registry, repository, digest.to_string()),
+            None => {
+                let tag = self.base_ref.tag().unwrap_or("latest").to_string();
+                Reference::with_tag(registry, repository, tag)
+            }
+        })
     }
 }
 
@@ -200,6 +218,25 @@ mod tests {
         for r in &refs {
             assert_eq!(r.2, Some("3.18".to_string()));
         }
+    }
+
+    /// A digest names one build wherever it is resolved, so trying it on each
+    /// search registry must keep it; rebuilt with a tag, it would ask each one
+    /// for whatever `latest` is there.
+    #[test]
+    fn test_digest_survives_registry_substitution() {
+        let registries = vec!["ghcr.io".to_string(), "quay.io".to_string()];
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let iter = ReferenceIter::new(&format!("alpine@{digest}"), &registries).unwrap();
+        let refs: Vec<String> = iter.map(|r| r.whole()).collect();
+
+        assert_eq!(
+            refs,
+            vec![
+                format!("ghcr.io/library/alpine@{digest}"),
+                format!("quay.io/library/alpine@{digest}"),
+            ]
+        );
     }
 
     #[test]

@@ -282,6 +282,75 @@ func goBoxliteOnImageList(list *C.CImageInfoList, errPtr *C.CBoxliteError, userD
 	ch <- imageListResult{value: images}
 }
 
+//export goBoxliteOnImageGet
+func goBoxliteOnImageGet(detail *C.CImageDetail, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &detail, func(d **C.CImageDetail) {
+		if d != nil && *d != nil {
+			C.boxlite_free_image_detail(*d)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan imageDetailResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- imageDetailResult{err: err}
+		return
+	}
+	if detail == nil {
+		ch <- imageDetailResult{}
+		return
+	}
+	v := cImageDetailToGo(detail)
+	C.boxlite_free_image_detail(detail)
+	ch <- imageDetailResult{value: &v}
+}
+
+//export goBoxliteOnImageRemove
+func goBoxliteOnImageRemove(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
+// goBoxliteOnImageUsage copies the usage out during the callback: the C side
+// lends the pointer for the callback only.
+//
+//export goBoxliteOnImageUsage
+func goBoxliteOnImageUsage(usage *C.CImageUsage, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	// Claim before Value/Delete; see claimHandleForDispatch.
+	if !claimHandleForDispatch(h) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan imageUsageResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- imageUsageResult{err: err}
+		return
+	}
+	if usage == nil {
+		ch <- imageUsageResult{}
+		return
+	}
+	ch <- imageUsageResult{value: &ImageUsage{
+		Count:      uint64(usage.count),
+		Limit:      uint64(usage.limit),
+		KnownBytes: uint64(usage.known_bytes),
+	}}
+}
+
 // ─── Volume callbacks ──────────────────────────────────────────────────────
 
 // goBoxliteOnVolume delivers a single CVolumeInfo. Shared by Create and Get
@@ -349,6 +418,71 @@ func goBoxliteOnVolumeList(list *C.CVolumeInfoList, errPtr *C.CBoxliteError, use
 
 //export goBoxliteOnVolumeRemove
 func goBoxliteOnVolumeRemove(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
+//export goBoxliteOnRegistryCreate
+func goBoxliteOnRegistryCreate(login *C.CRegistryCredential, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &login, func(l **C.CRegistryCredential) {
+		if l != nil && *l != nil {
+			C.boxlite_free_registry_credential(*l)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan registryResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- registryResult{err: err}
+		return
+	}
+	if login == nil {
+		ch <- registryResult{}
+		return
+	}
+	v := cRegistryCredentialToGo(login)
+	C.boxlite_free_registry_credential(login)
+	ch <- registryResult{value: &v}
+}
+
+//export goBoxliteOnRegistryList
+func goBoxliteOnRegistryList(list *C.CRegistryCredentialList, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &list, func(l **C.CRegistryCredentialList) {
+		if l != nil && *l != nil {
+			C.boxlite_free_registry_credential_list(*l)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan registryListResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- registryListResult{err: err}
+		return
+	}
+	logins := convertRegistryCredentialList(list)
+	if list != nil {
+		C.boxlite_free_registry_credential_list(list)
+	}
+	ch <- registryListResult{value: logins}
+}
+
+//export goBoxliteOnRegistryRemove
+func goBoxliteOnRegistryRemove(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	deliverUnitResult(userData, errPtr)
 }
 
@@ -607,6 +741,16 @@ type imageListResult struct {
 	err   error
 }
 
+type imageDetailResult struct {
+	value *ImageDetail
+	err   error
+}
+
+type imageUsageResult struct {
+	value *ImageUsage
+	err   error
+}
+
 type volumeResult struct {
 	value *VolumeInfo
 	err   error
@@ -614,6 +758,16 @@ type volumeResult struct {
 
 type volumeListResult struct {
 	value []VolumeInfo
+	err   error
+}
+
+type registryResult struct {
+	value *RegistryCredential
+	err   error
+}
+
+type registryListResult struct {
+	value []RegistryCredential
 	err   error
 }
 

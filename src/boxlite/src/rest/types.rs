@@ -456,6 +456,9 @@ impl BoxResponse {
             // "the box never entered Running".
             started_at: None,
             last_activity_at,
+            // Not published by the REST surface either: the control plane keeps
+            // the digest in its image catalog, not on the box it returns.
+            resolved_image: None,
         })
     }
 }
@@ -530,6 +533,159 @@ impl VolumeResponse {
 #[derive(Debug, Deserialize)]
 pub(crate) struct ListVolumesResponse {
     pub volumes: Vec<VolumeResponse>,
+}
+
+// ============================================================================
+// Images
+// ============================================================================
+
+/// When the server recorded something; now when the time does not parse,
+/// matching how a volume's creation time is read.
+fn recorded_time(raw: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .map(|time| time.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|_| chrono::Utc::now())
+}
+
+/// One reference, as `GET /v1/{prefix}/images` lists it.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ImageInfoResponse {
+    pub reference: String,
+    pub repository: String,
+    pub tag: String,
+    pub id: String,
+    pub cached_at: String,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+}
+
+impl ImageInfoResponse {
+    pub fn into_image_info(self) -> crate::runtime::types::ImageInfo {
+        crate::runtime::types::ImageInfo {
+            cached_at: recorded_time(&self.cached_at),
+            reference: self.reference,
+            repository: self.repository,
+            tag: self.tag,
+            id: self.id,
+            size: self
+                .size_bytes
+                .map(crate::runtime::types::Bytes::from_bytes),
+        }
+    }
+}
+
+/// Response for `GET /v1/{prefix}/images`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ListImagesResponse {
+    pub images: Vec<ImageInfoResponse>,
+}
+
+/// One build, as `GET /v1/{prefix}/images/{name}` lists it.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ImageVersionResponse {
+    pub digest: String,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+    pub source_ref: String,
+    pub recorded_at: String,
+}
+
+/// Response for `GET /v1/{prefix}/images/{name}`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ImageDetailResponse {
+    pub name: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub curated: bool,
+    #[serde(default)]
+    pub versions: Vec<ImageVersionResponse>,
+}
+
+impl ImageDetailResponse {
+    pub fn into_image_detail(self) -> crate::runtime::types::ImageDetail {
+        crate::runtime::types::ImageDetail {
+            name: self.name,
+            tags: self.tags,
+            curated: self.curated,
+            versions: self
+                .versions
+                .into_iter()
+                .map(|version| crate::runtime::types::ImageVersion {
+                    recorded_at: recorded_time(&version.recorded_at),
+                    digest: version.digest,
+                    size_bytes: version.size_bytes,
+                    source_ref: version.source_ref,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Response for `GET /v1/{prefix}/images/usage`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ImageUsageResponse {
+    pub count: u64,
+    pub limit: u64,
+    pub known_bytes: u64,
+}
+
+// ============================================================================
+// Registries
+// ============================================================================
+
+/// Body for `POST /v1/{prefix}/registries`. No `Debug`: it holds the password.
+#[derive(Serialize)]
+pub(crate) struct CreateRegistryRequest<'a> {
+    pub registry_host: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_prefix: Option<&'a str>,
+    pub username: &'a str,
+    pub password: &'a str,
+}
+
+impl<'a> CreateRegistryRequest<'a> {
+    pub fn from_credential(credential: &'a crate::runtime::NewRegistryCredential) -> Self {
+        Self {
+            registry_host: &credential.registry_host,
+            repository_prefix: credential.repository_prefix.as_deref(),
+            username: &credential.username,
+            password: &credential.password,
+        }
+    }
+}
+
+/// One login, as `/v1/{prefix}/registries` answers it. There is no password
+/// field, so one a server sent back is dropped here.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RegistryCredentialResponse {
+    pub id: String,
+    pub registry_host: String,
+    #[serde(default)]
+    pub repository_prefix: String,
+    pub username: String,
+    #[serde(default)]
+    pub created_by: Option<String>,
+    pub created_at: String,
+}
+
+impl RegistryCredentialResponse {
+    pub fn into_registry_credential(self) -> crate::runtime::RegistryCredential {
+        crate::runtime::RegistryCredential {
+            created_at: recorded_time(&self.created_at),
+            id: self.id,
+            registry_host: self.registry_host,
+            repository_prefix: self.repository_prefix,
+            username: self.username,
+            created_by: self.created_by,
+        }
+    }
+}
+
+/// Response for `GET /v1/{prefix}/registries`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ListRegistriesResponse {
+    pub registries: Vec<RegistryCredentialResponse>,
 }
 
 // ============================================================================

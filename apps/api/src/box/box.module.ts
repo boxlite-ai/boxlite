@@ -34,6 +34,7 @@ import { BoxStopAction } from './managers/box-actions/box-stop.action'
 import { BoxDestroyAction } from './managers/box-actions/box-destroy.action'
 import { BoxRepository } from './repositories/box.repository'
 import { RegionModule } from '../region/region.module'
+import { ImageModule } from '../image/image.module'
 import { Region } from '../region/entities/region.entity'
 import { JobController } from './controllers/job.controller'
 import { JobService } from './services/job.service'
@@ -60,6 +61,7 @@ import { TunnelService } from './services/tunnel.service'
     UserModule,
     OrganizationModule,
     RegionModule,
+    ImageModule,
     TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, Region, Job, BoxLastActivity, BoxMigration, Tunnel]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],

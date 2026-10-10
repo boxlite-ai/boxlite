@@ -97,10 +97,8 @@ curl -s -X DELETE http://localhost:8080/v1/demo/boxes/$BOX_ID \
 | `/{prefix}/boxes/{id}/files` | GET | Download files |
 | `/{prefix}/boxes/{id}/metrics` | GET | Box metrics |
 | `/{prefix}/metrics` | GET | Runtime metrics |
-| `/{prefix}/images/pull` | POST | Pull image |
-| `/{prefix}/images` | GET | List images |
 
-**Not implemented:** `GET/HEAD /{prefix}/images/{id}` (SDK has no get-by-digest), WebSocket TTY.
+**Not implemented:** the `/{prefix}/images…` and `/{prefix}/registries…` routes, WebSocket TTY.
 
 ## CLI Options
 

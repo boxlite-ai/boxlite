@@ -26,6 +26,7 @@ import type { Cache } from './cache.ts'
 import type { ClickHouse } from './clickhouse.ts'
 import type { Database } from './database.ts'
 import type { Placement } from './network.ts'
+import type { RegistryCredentialStore } from './registry-credentials.ts'
 import type { Storage } from './storage.ts'
 import type { WorkloadHost } from './cluster.ts'
 
@@ -42,6 +43,7 @@ export type ApiCapability =
   | { kind: 'vend-volume-credentials'; storage: Storage }
   | { kind: 'read-telemetry'; clickhouse: ClickHouse }
   | { kind: 'read-secret'; ref: $util.Output<string> }
+  | { kind: 'write-registry-credentials'; store: Extract<RegistryCredentialStore, { active: true }> }
 
 /*
  * The two public names, from the one module that composes them.

@@ -12,9 +12,10 @@ use std::sync::{Condvar, Mutex};
 
 use boxlite::BoxliteError;
 
-use crate::images::{CImageInfoList, CImagePullResult};
+use crate::images::{CImageDetail, CImageInfoList, CImagePullResult, CImageUsage};
 use crate::info::{CBoxInfo, CBoxInfoList};
 use crate::metrics::{CBoxMetrics, CRuntimeMetrics};
+use crate::registries::{CRegistryCredential, CRegistryCredentialList};
 use crate::volumes::{CVolumeInfo, CVolumeInfoList};
 
 /// Maximum number of buffered events before producer tasks yield.
@@ -130,6 +131,26 @@ pub type CBoxImageListCb =
 pub(crate) type CBoxImageListFn =
     extern "C" fn(*mut CImageInfoList, *mut crate::CBoxliteError, *mut c_void);
 
+/// Image get completion. On success the callback owns the non-null detail and
+/// must release it with `boxlite_free_image_detail`; on failure it is null. The
+/// error pointer is borrowed for callback dispatch only.
+pub type CBoxImageGetCb =
+    Option<extern "C" fn(*mut CImageDetail, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxImageGetFn =
+    extern "C" fn(*mut CImageDetail, *mut crate::CBoxliteError, *mut c_void);
+
+/// Image remove completion. The error pointer is borrowed for callback
+/// dispatch only and no result allocation is produced.
+pub type CBoxImageRemoveCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxImageRemoveFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
+/// Image usage completion. The usage (null on failure) and error pointers are
+/// borrowed for callback dispatch only; there is nothing to free.
+pub type CBoxImageUsageCb =
+    Option<extern "C" fn(*mut CImageUsage, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxImageUsageFn =
+    extern "C" fn(*mut CImageUsage, *mut crate::CBoxliteError, *mut c_void);
+
 /// Volume create completion.
 ///
 /// On success the callback takes ownership of the non-null metadata pointer and
@@ -157,6 +178,27 @@ pub(crate) type CBoxVolumeListFn =
 /// only and no result allocation is produced.
 pub type CBoxVolumeRemoveCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxVolumeRemoveFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
+/// Registry login list completion. A successful callback owns the list and
+/// must release it with `boxlite_free_registry_credential_list`; the error
+/// pointer is borrowed for callback dispatch only.
+pub type CBoxRegistryListCb =
+    Option<extern "C" fn(*mut CRegistryCredentialList, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxRegistryListFn =
+    extern "C" fn(*mut CRegistryCredentialList, *mut crate::CBoxliteError, *mut c_void);
+
+/// Registry login create completion. A successful callback owns the login and
+/// must release it with `boxlite_free_registry_credential`; on failure it is
+/// null. The error pointer is borrowed for callback dispatch only.
+pub type CBoxRegistryCreateCb =
+    Option<extern "C" fn(*mut CRegistryCredential, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxRegistryCreateFn =
+    extern "C" fn(*mut CRegistryCredential, *mut crate::CBoxliteError, *mut c_void);
+
+/// Registry login remove completion. The error pointer is borrowed for
+/// callback dispatch only and no result allocation is produced.
+pub type CBoxRegistryRemoveCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxRegistryRemoveFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
 /// Copy (into / out of) completion.
 pub type CBoxCopyCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
@@ -379,6 +421,21 @@ pub enum RuntimeEvent {
         user_data: usize,
         result: Result<OwnedFfiPtr<CImageInfoList>, BoxliteError>,
     },
+    ImageGet {
+        cb: CBoxImageGetFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CImageDetail>, BoxliteError>,
+    },
+    ImageRemove {
+        cb: CBoxImageRemoveFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    ImageUsage {
+        cb: CBoxImageUsageFn,
+        user_data: usize,
+        result: Result<CImageUsage, BoxliteError>,
+    },
     VolumeCreate {
         cb: CBoxVolumeCreateFn,
         user_data: usize,
@@ -396,6 +453,21 @@ pub enum RuntimeEvent {
     },
     VolumeRemove {
         cb: CBoxVolumeRemoveFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    RegistryList {
+        cb: CBoxRegistryListFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CRegistryCredentialList>, BoxliteError>,
+    },
+    RegistryCreate {
+        cb: CBoxRegistryCreateFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CRegistryCredential>, BoxliteError>,
+    },
+    RegistryRemove {
+        cb: CBoxRegistryRemoveFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
     },
@@ -1274,6 +1346,8 @@ mod owned_ffi_ptr_nested_leak_tests {
             started_at: 0,
             last_activity_at: 0,
             exit_code: std::ptr::null_mut(),
+            resolved_image_digest: test_cstr("sha256:abc"),
+            resolved_image_size: 4096,
         });
 
         let owned = OwnedFfiPtr::new_with(payload, crate::info::free_box_info_ptr);
@@ -1282,9 +1356,9 @@ mod owned_ffi_ptr_nested_leak_tests {
         let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
         assert_eq!(
             after - before,
-            6,
+            7,
             "OwnedFfiPtr<CBoxInfo>::drop reclaimed {} inner CStrings; \
-             expected 6 (four BoxInfo strings + allow_net + host_ip). Inner allocations leak.",
+             expected 7 (five BoxInfo strings + allow_net + host_ip). Inner allocations leak.",
             after - before
         );
     }
@@ -1348,6 +1422,8 @@ mod owned_ffi_ptr_nested_leak_tests {
             started_at: 0,
             last_activity_at: 0,
             exit_code: std::ptr::null_mut(),
+            resolved_image_digest: std::ptr::null_mut(),
+            resolved_image_size: 0,
         }];
         let items_ptr = items_vec.as_mut_ptr();
         let items_len = items_vec.len();
@@ -1367,6 +1443,42 @@ mod owned_ffi_ptr_nested_leak_tests {
             4,
             "OwnedFfiPtr<CBoxInfoList>::drop reclaimed {} inner CStrings; \
              expected 4 (1 item × 4 fields). Inner allocations leak.",
+            after - before
+        );
+    }
+
+    #[test]
+    fn owned_ffi_ptr_image_detail_reclaims_inner_cstrings() {
+        use boxlite::runtime::types::{ImageDetail, ImageVersion};
+
+        let _guard = crate::FREE_STR_LOCK.lock().unwrap();
+        let before = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+
+        let version = |digest: &str, size_bytes| ImageVersion {
+            digest: digest.to_string(),
+            size_bytes,
+            source_ref: format!("quay.io/acme/app@{digest}"),
+            recorded_at: Default::default(),
+        };
+        let detail = ImageDetail {
+            name: "quay.io/acme/app".to_string(),
+            tags: vec!["v1".to_string(), "v2".to_string()],
+            curated: false,
+            versions: vec![version("sha256:bb", Some(42)), version("sha256:aa", None)],
+        };
+
+        let owned = OwnedFfiPtr::new_with(
+            Box::new(crate::images::CImageDetail::from_image_detail(&detail)),
+            crate::images::free_image_detail,
+        );
+        drop(owned);
+
+        let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+        assert_eq!(
+            after - before,
+            7,
+            "OwnedFfiPtr<CImageDetail>::drop reclaimed {} inner CStrings; \
+             expected 7 (name + 2 tags + 2 versions × digest and source_ref).",
             after - before
         );
     }

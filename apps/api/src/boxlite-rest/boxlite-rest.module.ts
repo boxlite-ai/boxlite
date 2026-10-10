@@ -16,16 +16,22 @@ import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { BoxAutoResumeService } from './box-auto-resume.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
+import { BoxliteImageController } from './boxlite-image.controller'
+import { ImageModule } from '../image/image.module'
+import { BoxliteRegistryController } from './boxlite-registry.controller'
+import { RegistryModule } from '../registry/registry.module'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 
 @Module({
-  imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule],
+  imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule, ImageModule, RegistryModule],
   controllers: [
     BoxliteMeController,
     BoxliteConfigController,
     BoxliteBoxController,
     BoxliteProxyController,
     BoxliteVolumeController,
+    BoxliteImageController,
+    BoxliteRegistryController,
   ],
   providers: [BoxliteWsProxyService, BoxAutoResumeService, CommerceBoxLimitService],
   exports: [BoxliteWsProxyService],

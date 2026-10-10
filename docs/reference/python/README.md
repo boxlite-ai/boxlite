@@ -45,6 +45,8 @@ from boxlite import Boxlite, Options, BoxOptions, ImageRegistry
 | `get_info()` | `async (box_id: str) -> Optional[BoxInfo]` | Get current box metadata by ID or name |
 | `list_info()` | `async () -> List[BoxInfo]` | List all boxes |
 | `metrics()` | `async () -> RuntimeMetrics` | Get runtime-wide metrics |
+| `images` | property `-> ImageHandle` | The images this runtime can boot from; see [`boxlite.ImageHandle`](#boxliteimagehandle) |
+| `registries` | property `-> RegistryHandle` | The server's registry logins; raises `UnsupportedError` on a local runtime. See [`boxlite.RegistryHandle`](#boxliteregistryhandle) |
 
 #### Example
 
@@ -72,6 +74,72 @@ box = await runtime.create(BoxOptions(image="alpine:latest"))
 # List all boxes
 for info in await runtime.list_info():
     print(f"{info.id}: {info.state.status}")
+```
+
+### `boxlite.ImageHandle`
+
+The images a runtime can boot from: the local cache on `Boxlite.default()`
+or `Boxlite(options)`, the server's catalog on `Boxlite.rest(...)`. The same
+code runs against either.
+
+| Method | Signature | Local runtime | REST runtime |
+|--------|-----------|---------------|--------------|
+| `pull()` | `async (reference: str) -> ImagePullResult` | Pulls into the cache | Raises `UnsupportedError`: creating a box pulls |
+| `list()` | `async () -> List[ImageInfo]` | One row per cached reference | One row per catalog tag |
+| `get()` | `async (name: str) -> ImageDetail` | The cache entries under the name | The catalog entry with its versions |
+| `remove()` | `async (name: str) -> None` | Forgets the name; layers stay | Removes the catalog entry; `InvalidStateError` while a box can boot from it |
+| `usage()` | `async () -> ImageUsage` | Raises `UnsupportedError` | `count`, `limit`, `known_bytes` |
+
+`get()` and `remove()` take an image name such as `"docker.io/library/alpine"`;
+a reference with a tag or digest raises `InvalidArgumentError`, since a remove
+takes every tag of the name. Locally, a box built from a removed image reads
+the image's configuration from the registry when it next starts.
+
+| Type | Fields |
+|------|--------|
+| `ImageDetail` | `name`, `tags`, `curated`, `versions: List[ImageVersion]` |
+| `ImageVersion` | `digest`, `size_bytes` (`None` when unknown), `source_ref`, `recorded_at` |
+| `ImageUsage` | `count`, `limit`, `known_bytes` |
+
+```python
+runtime = Boxlite.rest(BoxliteRestOptions.from_env())  # or Boxlite.default()
+for image in await runtime.images.list():
+    print(image.reference, image.id)
+detail = await runtime.images.get("docker.io/library/alpine")
+print(detail.tags, [v.digest for v in detail.versions])
+await runtime.images.remove("docker.io/library/alpine")
+```
+
+### `boxlite.RegistryHandle`
+
+The logins a REST server presents when it pulls a private image for a box.
+`runtime.registries` raises `UnsupportedError` on a local runtime, which pulls
+with the logins in `Options(image_registries=...)` instead.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `list()` | `async () -> List[RegistryCredential]` | Every login the organization holds, oldest first |
+| `create()` | `async (*, registry_host: str, username: str, password: str, repository_prefix: str \| None = None) -> RegistryCredential` | Add a login; `AlreadyExistsError` while one is held for the same registry and prefix |
+| `remove()` | `async (id: str) -> None` | Remove a login; `InvalidStateError`, naming the boxes, while a box still pulls through it; `NotFoundError` for an unknown id |
+
+`create()` takes keyword arguments only. `repository_prefix` is whole path
+segments ending in `/`, such as `"acme/"`; leave it out for the whole
+registry. The password goes up once: `RegistryCredential` has `id`,
+`registry_host`, `repository_prefix`, `username`, `created_by` and
+`created_at`, and no password. `remove()` raises `InvalidArgumentError` for an
+id that is not a UUID, before any request.
+
+```python
+runtime = Boxlite.rest(BoxliteRestOptions.from_env())
+login = await runtime.registries.create(
+    registry_host="ghcr.io",
+    repository_prefix="acme/",
+    username="acme-bot",
+    password=os.environ["GHCR_TOKEN"],
+)
+box = await runtime.create(BoxOptions(image="ghcr.io/acme/private-app:1"))
+for login in await runtime.registries.list():
+    print(login.registry_host, login.repository_prefix, login.username)
 ```
 
 ---
@@ -809,6 +877,7 @@ from boxlite import SyncBoxlite, SyncBox, SyncSimpleBox, SyncCodeBox
 | `ExecStderr` | `SyncExecStderr` | Regular iterator |
 | `SimpleBox` | `SyncSimpleBox` | `SimpleBox.info()` is async-only and is not exposed by `SyncSimpleBox` |
 | `CodeBox` | `SyncCodeBox` | Inherits the async-only metadata rule |
+| `RegistryHandle` | `SyncRegistryHandle` | |
 
 ### Classes
 
@@ -823,6 +892,16 @@ with SyncBoxlite.default() as runtime:
     for line in execution.stdout():
         print(line)
     box.stop()
+```
+
+`SyncBoxlite.rest(options)` mirrors `Boxlite.rest(...)`:
+
+```python
+from boxlite import BoxliteRestOptions, SyncBoxlite
+
+with SyncBoxlite.rest(BoxliteRestOptions.from_env()) as runtime:
+    print(runtime.images.usage())
+    print(runtime.registries.list())
 ```
 
 #### `SyncSimpleBox`
@@ -868,7 +947,46 @@ from boxlite import BoxliteError, ExecError, TimeoutError, ParseError
 BoxliteError (base)
 ├── ExecError       # Command execution failed
 ├── TimeoutError    # Operation timed out
-└── ParseError      # Output parsing failed
+├── ParseError      # Output parsing failed
+└── NotFoundError, InvalidStateError, …   # Runtime failures, see below
+```
+
+### Runtime failures
+
+A failure the native runtime reports is raised as one class per kind of
+failure, each with a `code`. The names and codes are the ones
+`BoxliteError::http()` gives (`src/shared/src/errors.rs`), so a REST server
+answers the same failure with the same `code`. Every class is also a
+`RuntimeError`, which is what these failures were raised as before.
+
+| Class | `code` | Raised when |
+|-------|--------|-------------|
+| `NotFoundError` | `not_found` | The box, image, volume or snapshot does not exist |
+| `AlreadyExistsError` | `already_exists` | The name is taken |
+| `InvalidStateError` | `invalid_state` | The resource's state does not allow the operation |
+| `InvalidArgumentError` | `invalid_argument` | A value was refused |
+| `UnsupportedError` | `unsupported` | The operation is not available on this runtime |
+| `ResourceExhaustedError` | `resource_exhausted` | A limit was reached |
+| `StoppedError` | `stopped` | The box has stopped |
+| `SessionReapedError` | `session_reaped` | The session was reaped |
+| `ImageError` | `image_pull_failed` | An image could not be pulled or read |
+| `ExecutionError` | `execution_failed` | A process could not be run |
+| `NetworkError` | `network_unavailable` | The network was unavailable |
+| `UpstreamUnavailableError` | `upstream_unavailable` | A component did not answer |
+| `EngineError` | `engine_unavailable` | The virtualization engine failed |
+| `ConfigError` | `config_error` | Configuration is invalid, or authentication failed |
+| `StorageError` | `storage_error` | Storage could not be read or written |
+| `DatabaseError` | `database_error` | The runtime's database failed |
+| `MetadataError` | `metadata_error` | Stored metadata could not be read |
+| `InternalError` | `internal` | An unexpected failure |
+
+```python
+from boxlite import NotFoundError
+
+try:
+    await runtime.remove("no-such-box")
+except NotFoundError as e:
+    print(e.code)  # not_found
 ```
 
 ### `BoxliteError`

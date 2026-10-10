@@ -77,10 +77,6 @@ export interface Organization {
      */
     'maxDiskPerBox': number;
     /**
-     * Time in minutes before an unused template is deactivated
-     */
-    'templateDeactivationTimeoutMinutes': number;
-    /**
      * Box default network block all
      */
     'boxLimitedNetworkEgress': boolean;

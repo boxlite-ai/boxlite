@@ -141,17 +141,16 @@ const runnerSecurityGroup = new aws.ec2.SecurityGroup('RunnerSecurityGroup', {
   ],
 })
 
-// ── Runner ghcr pull credential (private image access) ────────────────────
-// Runners pull box images straight from ghcr.io (the self-hosted registry
-// was removed). The curated defaults (BOXLITE_SYSTEM_*_IMAGE, above) are
-// public, so this credential is needed only for a private ref — whether set
-// there or appended through BOXLITE_SYSTEM_IMAGES. When
-// set, the pull TOKEN is stored in Secrets Manager and fetched by each
-// runner at boot via its instance-role — NOT baked into user-data/IMDS — so
-// scaled-out runners pick it up automatically and a rotated token only needs
-// a secret update + a runner restart. The username (a non-secret bot
-// account) is baked directly. Env-gated: set GHCR_TOKEN (+ GHCR_USERNAME)
-// in apps/infra/.env to enable; unset = no ghcr auth wired.
+// ── Legacy runner ghcr pull credential ───────────────────────────────────
+// Runners no longer read it: a runner holds no registry credential and pulls
+// every image anonymously, so every curated image must be public. What stays
+// is the provisioning, because a host built from this stack fetches the token
+// at boot and its start wrapper refuses to start without it — and hosts keep
+// the user-data they were created with. Deleting the secret while such a host
+// runs breaks its next restart, so this is removed only once none is left.
+// When GHCR_TOKEN (+ GHCR_USERNAME) is set, the token is stored in Secrets
+// Manager and fetched at boot via the instance role, never baked into
+// user-data; unset = nothing is provisioned.
 const ghcrUsername = process.env.GHCR_USERNAME?.trim() || ''
 const ghcrToken = process.env.GHCR_TOKEN?.trim() || ''
 const ghcrSecret =
@@ -425,13 +424,16 @@ async function buildRunnerUserData(input: {
     input.awsRegion,
   )
 
-  // ghcr pull credential delivery (option B, rotation-capable): write a start-wrapper
-  // that re-fetches the TOKEN from Secrets Manager on EVERY service start — so
-  // `systemctl restart` picks up a rotated token — and is fail-CLOSED (refuses to run
-  // with anonymous pulls) with a bounded retry for instance-profile IAM propagation at
-  // first boot. The wrapper is exec'd as ExecStart; username + secret ARN + region come
-  // from the unit's Environment=. Only emitted when a ghcr secret is wired; the TOKEN is
-  // never baked into user-data. The AWS CLI it needs is installed unconditionally above.
+  // Legacy ghcr pull credential delivery: a start-wrapper that re-fetches the TOKEN from
+  // Secrets Manager on every service start and refuses to start the runner when that
+  // fetch fails, with a bounded retry for instance-profile IAM propagation at first boot.
+  // The runner itself no longer reads GHCR_TOKEN and pulls every image anonymously, so
+  // the script's own "no anonymous pulls" wording below is stale. It is left verbatim
+  // because this text is user-data: editing it changes every runner host's launch
+  // configuration, and the block goes as a whole once the secret is retired (see
+  // "Legacy runner ghcr pull credential" above). Only emitted when a ghcr secret is wired;
+  // the TOKEN is never baked into user-data. The AWS CLI it needs is installed
+  // unconditionally above.
   const ghcrBlock = input.ghcrSecretArn
     ? `
 # ── ghcr pull credential setup: fail-closed start-wrapper ────────────────────

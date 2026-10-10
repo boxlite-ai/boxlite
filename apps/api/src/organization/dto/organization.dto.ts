@@ -87,12 +87,6 @@ export class OrganizationDto {
   maxDiskPerBox: number
 
   @ApiProperty({
-    description: 'Time in minutes before an unused template is deactivated',
-    default: 20160,
-  })
-  templateDeactivationTimeoutMinutes: number
-
-  @ApiProperty({
     description: 'Box default network block all',
   })
   boxLimitedNetworkEgress: boolean
@@ -172,7 +166,6 @@ export class OrganizationDto {
       maxCpuPerBox: organization.maxCpuPerBox,
       maxMemoryPerBox: organization.maxMemoryPerBox,
       maxDiskPerBox: organization.maxDiskPerBox,
-      templateDeactivationTimeoutMinutes: organization.templateDeactivationTimeoutMinutes,
       boxLimitedNetworkEgress: organization.boxLimitedNetworkEgress,
       defaultRegionId: organization.defaultRegionId,
       authenticatedRateLimit: organization.authenticatedRateLimit,

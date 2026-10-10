@@ -15,6 +15,10 @@ const state = vi.hoisted(() => ({
   org: null as unknown,
   config: { billingApiUrl: 'http://billing.test' } as { billingApiUrl?: string },
   pricesQuery: { data: undefined, isLoading: false } as { data: unknown; isLoading: boolean },
+  // The catalog behind the image suggestions. Empty by default: the dialog has
+  // to work before an organization has pulled anything, which is the state
+  // every new organization is in.
+  catalogImages: [] as { name: string; curated: boolean; tags: string[] }[],
 }))
 
 const LIVE_PRICES = {
@@ -37,6 +41,9 @@ vi.mock('@/hooks/useSelectedOrganization', () => ({
 }))
 vi.mock('@/hooks/queries/useVolumesQuery', () => ({
   useVolumesQuery: () => ({ data: [{ id: 'vol-1', name: 'subtitle-models', state: 'ready' }] }),
+}))
+vi.mock('@/hooks/queries/useImagesQuery', () => ({
+  useImagesQuery: () => ({ data: state.catalogImages }),
 }))
 vi.mock('@/hooks/useConfig', () => ({ useConfig: () => state.config }))
 vi.mock('@/hooks/queries/useUsagePricesQuery', () => ({
@@ -94,6 +101,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     state.org = makeOrg({ maxCpuPerBox: 4, maxMemoryPerBox: 8, maxDiskPerBox: 10 })
     state.config = { billingApiUrl: 'http://billing.test' }
     state.pricesQuery = { data: LIVE_PRICES, isLoading: false }
+    state.catalogImages = []
   })
 
   afterEach(() => {
@@ -338,6 +346,88 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await act(async () => createButton?.click())
     await flush()
   }
+
+  describe('the image field', () => {
+    function imageInput() {
+      return document.querySelector<HTMLInputElement>('input[aria-label="Image reference"]')
+    }
+
+    function menuItems() {
+      return [...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)
+    }
+
+    // The whole reason the field is free text: the catalog only ever contains
+    // images something already booted from, so the first box on a new image
+    // has nothing to pick.
+    it('sends no image at all when the field is left blank', async () => {
+      await renderOpen()
+
+      await submit()
+
+      expect(mutationMocks.createBox).toHaveBeenCalledWith(expect.objectContaining({ image: undefined }))
+    })
+
+    it('submits a reference the catalog has never heard of', async () => {
+      await renderOpen()
+
+      const input = imageInput()
+      if (!input) throw new Error('image reference field missing')
+      await act(async () => typeInto(input, 'quay.io/acme/app:v1'))
+      await submit()
+
+      expect(mutationMocks.createBox).toHaveBeenCalledWith(expect.objectContaining({ image: 'quay.io/acme/app:v1' }))
+    })
+
+    it('offers a curated image under its short name and never a tag', async () => {
+      state.catalogImages = [{ name: 'python', curated: true, tags: [] }]
+      await renderOpen()
+
+      await openDropdown('Choose a known image')
+
+      expect(menuItems()).toEqual(['python'])
+    })
+
+    it('offers an organization image with its tag when exactly one is recorded', async () => {
+      state.catalogImages = [{ name: 'quay.io/acme/app', curated: false, tags: ['v1'] }]
+      await renderOpen()
+
+      await openDropdown('Choose a known image')
+
+      expect(menuItems()).toEqual(['quay.io/acme/app:v1'])
+    })
+
+    // Picking one of several tags for the user would silently decide something
+    // they never said; the bare name leaves the choice with them.
+    it('offers the bare name when several tags are recorded', async () => {
+      state.catalogImages = [{ name: 'quay.io/acme/app', curated: false, tags: ['v1', 'latest'] }]
+      await renderOpen()
+
+      await openDropdown('Choose a known image')
+
+      expect(menuItems()).toEqual(['quay.io/acme/app'])
+    })
+
+    it('fills the field from a suggestion and submits it', async () => {
+      state.catalogImages = [{ name: 'quay.io/acme/app', curated: false, tags: ['v1'] }]
+      await renderOpen()
+
+      await openDropdown('Choose a known image')
+      await selectMenuItem('quay.io/acme/app:v1')
+
+      expect(imageInput()?.value).toBe('quay.io/acme/app:v1')
+
+      await submit()
+      expect(mutationMocks.createBox).toHaveBeenCalledWith(expect.objectContaining({ image: 'quay.io/acme/app:v1' }))
+    })
+
+    it('says so rather than offering nothing when the catalog is empty', async () => {
+      await renderOpen()
+
+      await openDropdown('Choose a known image')
+
+      expect(menuItems()).toEqual(['No images yet'])
+    })
+  })
 
   it('defaults auto-resume to enabled and submits the toggle state with create params', async () => {
     await renderOpen()

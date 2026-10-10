@@ -101,3 +101,20 @@ func TestCBoxInfoToGoCarriesTheMainCommandExitCode(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
+
+// TestCBoxInfoToGoCarriesTheResolvedImage checks the resolved image survives
+// the hop into Go. Nothing else would notice it missing: a caller reading nil
+// just never learns which build its box got.
+func TestCBoxInfoToGoCarriesTheResolvedImage(t *testing.T) {
+	known, unknown := cBoxInfoResolvedImageTestFixtures()
+	want := &ResolvedImage{
+		ManifestDigest: "sha256:0a7ed0d449b9318548e66674610d757de19b7645759f74b587b610b59d6b43fd",
+		TotalLayerSize: 3974501,
+	}
+	if !reflect.DeepEqual(known.ResolvedImage, want) {
+		t.Errorf("ResolvedImage = %+v, want %+v", known.ResolvedImage, want)
+	}
+	if unknown.ResolvedImage != nil {
+		t.Errorf("a null native digest must read as nil, got %+v", unknown.ResolvedImage)
+	}
+}

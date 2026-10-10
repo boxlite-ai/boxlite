@@ -15,6 +15,8 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
 
 - [Runtime Management](#runtime-management)
   - [BoxliteRuntime](#boxliteruntime)
+  - [ImageHandle](#imagehandle)
+  - [RegistryHandle](#registryhandle)
   - [BoxliteOptions](#boxliteoptions)
 - [Box Handle](#box-handle)
   - [LiteBox](#litebox)
@@ -98,6 +100,8 @@ let runtime = BoxliteRuntime::default_runtime();
 | `exists` | `async fn exists(&self, id_or_name: &str) -> BoxliteResult<bool>` | Check if box exists |
 | `metrics` | `async fn metrics(&self) -> RuntimeMetrics` | Get runtime-wide metrics |
 | `remove` | `async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()>` | Remove box completely |
+| `images` | `fn images(&self) -> BoxliteResult<ImageHandle>` | The images this runtime can boot from; never fails |
+| `registries` | `fn registries(&self) -> BoxliteResult<RegistryHandle>` | The server's registry logins; `Unsupported` on an embedded runtime |
 
 #### Example
 
@@ -124,6 +128,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+```
+
+### ImageHandle
+
+The images a runtime can boot from: the local cache on an embedded runtime,
+the server's catalog on a REST one. Obtained with `runtime.images()?`.
+
+| Method | Signature | Embedded runtime | REST runtime |
+|--------|-----------|------------------|--------------|
+| `pull` | `async fn pull(&self, image_ref: &str) -> BoxliteResult<ImageObject>` | Pulls into the cache | `Unsupported`: a box's create pulls |
+| `list` | `async fn list(&self) -> BoxliteResult<Vec<ImageInfo>>` | One row per cached reference | One row per catalog tag |
+| `get` | `async fn get(&self, name: &str) -> BoxliteResult<ImageDetail>` | The cache entries under the name | The catalog entry, with its versions |
+| `remove` | `async fn remove(&self, name: &str) -> BoxliteResult<()>` | Forgets the name; layers stay | Removes the catalog entry; refused while a box can boot from it |
+| `usage` | `async fn usage(&self) -> BoxliteResult<ImageUsage>` | `Unsupported`: a cache has no limit | Images held, the limit, and their declared bytes |
+
+`get` and `remove` take an image name such as `docker.io/library/alpine`; a
+reference with a tag or digest is refused with `InvalidArgument`, since a
+remove takes every tag of the name. Locally, `remove` deletes no layers and
+refuses nothing, but a box built from the image reads its configuration from
+the cache whenever it starts: after the remove that start fetches it from the
+registry again, and fails while the registry is unreachable.
+
+```rust
+let images = runtime.images()?;
+for image in images.list().await? {
+    println!("{} {}", image.reference, image.id);
+}
+let detail = images.get("docker.io/library/alpine").await?;
+println!("{:?}", detail.tags);
+images.remove("docker.io/library/alpine").await?;
+```
+
+### RegistryHandle
+
+The logins a REST server presents when it pulls a private image for a box.
+Obtained with `runtime.registries()?`, which an embedded runtime refuses with
+`Unsupported`: it pulls with the logins in `BoxliteOptions::image_registries`.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `list` | `async fn list(&self) -> BoxliteResult<Vec<RegistryCredential>>` | Every login the organization holds, oldest first |
+| `create` | `async fn create(&self, credential: &NewRegistryCredential) -> BoxliteResult<RegistryCredential>` | Add a login; `AlreadyExists` while one is held for the same registry and prefix |
+| `remove` | `async fn remove(&self, id: &str) -> BoxliteResult<()>` | Remove a login; `InvalidState`, naming the boxes, while a box still pulls through it; `NotFound` for an unknown id |
+
+The password goes up once, in the create. `RegistryCredential` has no
+password field, and `NewRegistryCredential`'s `Debug` prints it as
+`[redacted]`. A prefix is whole path segments ending in `/`: pass `None` in
+`NewRegistryCredential::repository_prefix` for the whole registry, which a
+returned `RegistryCredential` reports as an empty string. `remove` refuses an
+id that is not a UUID with `InvalidArgument` before sending a request.
+
+```rust
+use boxlite::runtime::NewRegistryCredential;
+
+let registries = runtime.registries()?;
+let login = registries
+    .create(&NewRegistryCredential {
+        registry_host: "ghcr.io".into(),
+        repository_prefix: Some("acme/".into()),
+        username: "acme-bot".into(),
+        password: std::env::var("GHCR_TOKEN")?,
+    })
+    .await?;
+for login in registries.list().await? {
+    println!("{}/{} as {}", login.registry_host, login.repository_prefix, login.username);
+}
+registries.remove(&login.id).await?;
 ```
 
 ### BoxliteOptions
@@ -1307,7 +1378,7 @@ pub enum BoxliteError {
     /// Unsupported operation
     Unsupported(String),
 
-    /// Box not found
+    /// The named box, image, volume or snapshot does not exist
     NotFound(String),
 
     /// Resource already exists

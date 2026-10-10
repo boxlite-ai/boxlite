@@ -45,8 +45,12 @@ export const OTEL_GROUP = 'otel-collector'
  * symmetry because BoxLite's runner is a binary on a host with nested KVM, not
  * a container — there is no image for mbuild to build, and its key still has to
  * reach the machine. So the invariant this repository can hold is the one that
- * matters: every artifact has a group. The reverse is not true, and saying so
- * here is cheaper than a test that quietly excluded a name.
+ * matters: every artifact with a secret has a group. The reverse is not true,
+ * and saying so here is cheaper than a test that quietly excluded a name.
+ *
+ * `registry-proxy` is the artifact with no group, because it holds no secret
+ * yet: it checks a caller by presenting that caller's own runner key. See
+ * `stack/registry-proxy.ts`.
  */
 export const RUNNER_GROUP = 'runner'
 export const SERVICE_GROUPS = [API_GROUP, PROXY_GROUP, OTEL_GROUP, RUNNER_GROUP]
