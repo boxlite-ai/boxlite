@@ -62,3 +62,9 @@ When an asset changes, compute its full SHA-256, put the first eight characters
 in the filename, update this table and whichever of `branding/theme.json` or
 `branding/tenant.json` points at it, deploy the dashboard, then run
 `npm run auth0:universal-login -- preview --stage <name>`.
+
+The account link Form copies the theme's font and logo URLs when it is
+applied, so after changing either, also run `npm run auth0:configure-login`
+with `--replace-link-form` for each tenant, as the
+[operator doc](../../docs/identity-and-mail.md) shows; otherwise the link page
+keeps loading the old file.
