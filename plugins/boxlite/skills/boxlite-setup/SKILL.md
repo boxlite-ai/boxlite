@@ -3,7 +3,9 @@ name: boxlite-setup
 description: Set up the BoxLite CLI and authenticate to a BoxLite cloud account for deployment. Use for BoxLite onboarding or expired developer credentials, not application end-user Google sign-in.
 ---
 
-Check `boxlite --version`, `boxlite auth login --help`, and `boxlite network tunnel --help`. Read the current official CLI installation guidance at https://docs.boxlite.ai/ and https://github.com/boxlite-ai/boxlite/tree/main/src/cli before installing or choosing a version. The v0.1 development build needs discovered device endpoints (POL-818) and network tunnels; do not assume a released binary contains them.
+Check `boxlite --version`, `boxlite auth login --help`, and `boxlite network tunnel --help`. Read the current official CLI installation guidance at https://docs.boxlite.ai/ and https://github.com/boxlite-ai/boxlite/tree/main/src/cli before installing or choosing a build. The v0.1 development package also requires network tunnels.
+
+Hosted Auth0 device login requires the discovered-endpoint fix in [#1836](https://github.com/boxlite-ai/boxlite/pull/1836), merged into `main` on 2026-10-09 as [`e6cc3d1`](https://github.com/boxlite-ai/boxlite/commit/e6cc3d1a1e991f8732f7b5c8f9eb4baa3c1bbbbf). Use a build from that commit or a descendant, or another verified build containing the fix. The published `v0.10.5` release predates this fix; version output and the presence of `--method device` alone cannot establish compatibility. Confirm the installed binary's source revision or release provenance before login. Until a verified release includes the fix, use the official source-build guidance above.
 
 Keep developer credentials in the CLI's private store, outside app source and deploy archives. Respect an existing home/profile selected by the user. A new deployment may use its own named profile. Start with `boxlite --profile NAME auth status` and `boxlite --profile NAME auth whoami`; never print credentials files or request tokens in chat.
 
