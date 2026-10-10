@@ -15,6 +15,7 @@ PRIVATE = {'deployment.json', 'credentials.toml', 'secrets.json', 'supervisor.co
 
 
 def package_files(root):
+    """Yield distributable files, excluding caches and rejecting private state/links."""
     for path in sorted(root.rglob('*')):
         relative = path.relative_to(root)
         if CACHE.intersection(relative.parts) or path.suffix == '.tsbuildinfo':
@@ -28,6 +29,7 @@ def package_files(root):
 
 
 def checked_path(root, value):
+    """Resolve a ./-prefixed manifest file within the plugin root or raise ValueError."""
     if not isinstance(value, str) or not value.startswith('./'):
         raise ValueError('Manifest paths must be ./-prefixed')
     path = root / value
@@ -36,25 +38,46 @@ def checked_path(root, value):
     return path
 
 
+def load_manifest(root, relative):
+    """Load a required JSON object; absent files and non-objects are invalid packages."""
+    try:
+        value = json.loads((root / relative).read_text())
+    except FileNotFoundError as error:
+        raise ValueError(f'Missing manifest file: {relative}') from error
+    if not isinstance(value, dict):
+        raise ValueError(f'Manifest must be an object: {relative}')
+    return value
+
+
+def required_field(mapping, key, label):
+    """Read a required object field with a contextual package validation error."""
+    if not isinstance(mapping, dict) or key not in mapping:
+        raise ValueError(f'Missing {label} field: {key}')
+    return mapping[key]
+
+
 def validate(root=PLUGIN):
+    """Return package files after validating manifests, skills, and package boundaries."""
     files = list(package_files(root))
-    manifest = json.loads((root / 'plugin.json').read_text())
+    manifest = load_manifest(root, 'plugin.json')
     if manifest.get('$schema') != 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json':
         raise ValueError('Expected portable Agent Plugins schema')
     if manifest.get('name') != 'boxlite' or manifest.get('version') != '0.1.0':
         raise ValueError('Unexpected plugin identity/version')
-    legacy = json.loads((root / '.codex-plugin/plugin.json').read_text())
+    legacy = load_manifest(root, '.codex-plugin/plugin.json')
     for key in ('name', 'version', 'description'):
-        if manifest[key] != legacy[key]:
+        if required_field(manifest, key, 'portable manifest') != required_field(legacy, key, 'Codex manifest'):
             raise ValueError(f'Compatibility identity differs: {key}')
-    settings = manifest['extensions']['com.openai']
-    if settings['interface'] != legacy['interface']:
+    extensions = required_field(manifest, 'extensions', 'portable manifest')
+    settings = required_field(extensions, 'com.openai', 'extensions')
+    interface = required_field(settings, 'interface', 'OpenAI extension')
+    if interface != required_field(legacy, 'interface', 'Codex manifest'):
         raise ValueError('Compatibility presentation differs')
     if legacy.get('skills') != './skills':
         raise ValueError('Compatibility skill root differs')
-    checked_path(root, settings['onboardingSkill'])
+    checked_path(root, required_field(settings, 'onboardingSkill', 'OpenAI extension'))
     for field in ('composerIcon', 'logo'):
-        checked_path(root, settings['interface'][field])
+        checked_path(root, required_field(interface, field, 'OpenAI interface'))
     if (root / 'mcp.json').exists() or (root / 'hooks').exists() or (root / '.mcp.json').exists():
         raise ValueError('v0.1 is skills-only')
     skills = list((root / 'skills').glob('*/SKILL.md'))
@@ -76,6 +99,7 @@ def validate(root=PLUGIN):
 
 
 def build(output, root=PLUGIN):
+    """Validate and stage a deterministic ZIP, local marketplace, and SHA-256 digest."""
     files = validate(root)
     output.mkdir(parents=True, exist_ok=True)
     archive = output / 'boxlite-0.1.0.zip'

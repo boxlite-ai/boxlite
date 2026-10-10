@@ -4,7 +4,7 @@ Use the private project manifest to select the exact Box, volume, guest director
 
 Inspect bounded log tails and redact incidental secrets before presenting them. A login error can be application OAuth setup, an expired developer session, or an Auth0 grant problem; identify which layer failed before changing settings.
 
-For a preview proxy's HTML 403 response, check Box inbound access and caller authorization before changing app settings. For a 502, check the guest listener, its `0.0.0.0` binding, and local health response. Distinguish proxy errors from the app's own responses; do not enable public access merely to bypass a failed probe.
+Use the recorded registered tunnel URL for public app probes. For a proxy HTML 403 or 404, confirm the exact Box/port's tunnel registration with the [deployment](deployment.md) command, inbound setting, and access policy before changing app settings. For a 502, check the guest listener, its `0.0.0.0` binding, and local health response. Distinguish proxy errors from the app's own responses; do not enable public access merely to bypass a failed probe or substitute a preview URL.
 
 To stop, shut down guest services cleanly before stopping the Box. To restart, start the same Box and invoke its recorded service startup commands. Do not create a replacement to recover an idle proxy URL. Starting a Box does not prove the app starts automatically: verify its startup mechanism and health endpoint. For a missing media mount, inspect attachment and identity while preserving files and database.
 
