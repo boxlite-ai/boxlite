@@ -114,9 +114,9 @@ def build(output, root=PLUGIN):
             info.external_attr = 0o100644 << 16
             zipped.writestr(info, path.read_bytes())
     marketplace = output / 'boxlite-marketplace'
+    if marketplace.exists():
+        shutil.rmtree(marketplace)
     staged = marketplace / 'plugins/boxlite'
-    if staged.exists():
-        shutil.rmtree(staged)
     for path in files:
         target = staged / path.relative_to(root)
         target.parent.mkdir(parents=True, exist_ok=True)

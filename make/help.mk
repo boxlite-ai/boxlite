@@ -42,6 +42,7 @@ help:
 	@echo "    make test                   - Run full test matrix (same as make test:all)"
 	@echo "    make test:all               - Run full test matrix (unit + integration)"
 	@echo "    make test:unit              - Run all unit suites"
+	@echo "    make test:unit:plugins      - Run plugin package unit tests"
 	@echo "    make test:integration       - Run all integration suites"
 	@echo "    make test:unit:core         - Run Rust/FFI/gvproxy unit suites"
 	@echo "    make test:integration:core  - Run core integration suites (Rust + CLI)"

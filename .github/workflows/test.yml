@@ -60,6 +60,7 @@ on:
       - 'codecov.yml'
       - '!**/*.md'
       - 'plugins/boxlite/**'
+      - '.agents/plugins/marketplace.json'
       - 'scripts/plugins/**'
       - 'tests/plugins/**'
   # No path filter on pull_request: the `Test (conclusion)` job is a required
@@ -225,6 +226,7 @@ jobs:
               - 'codecov.yml'
               - '.github/workflows/test.yml'
             plugins:
+              - '.agents/plugins/marketplace.json'
               - 'plugins/boxlite/**'
               - 'scripts/plugins/**'
               - 'tests/plugins/**'
