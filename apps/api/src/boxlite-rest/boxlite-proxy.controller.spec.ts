@@ -174,7 +174,7 @@ describe('BoxliteProxyController', () => {
     ).rejects.toMatchObject({
       status: 409,
       message: expect.stringMatching(
-        /inbound access disabled.*boxlite update public-box --inbound enabled/,
+        /inbound access disabled.*boxlite network inbound public-box enabled/,
       ),
     })
     expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()

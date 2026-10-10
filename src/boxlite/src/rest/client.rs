@@ -925,7 +925,7 @@ mod tests {
             }),
             (
                 "403 Forbidden",
-                "Box AbCdEf123456 has inbound access disabled. Enable it (for example: `boxlite update AbCdEf123456 --inbound enabled`) and retry.",
+                "Box AbCdEf123456 has inbound access disabled. Enable it (for example: `boxlite network inbound AbCdEf123456 enabled`) and retry.",
                 |e| matches!(e, BoxliteError::Config(msg) if msg.starts_with("auth:")),
             ),
             ("502 Bad Gateway", "runner unavailable", |e| {

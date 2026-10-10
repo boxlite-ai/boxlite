@@ -484,13 +484,6 @@ Restart one or more boxes.
 
 **Usage:** `boxlite restart BOX [BOX ...]`
 
-### `boxlite update`
-
-Make an existing remote box public or private, so `boxlite network tunnel` can
-reach it. `enabled` exposes the box's services without authentication.
-
-**Usage:** `boxlite update BOX --inbound <enabled|disabled>`
-
 ### `boxlite rm`
 
 Remove one or more boxes.
@@ -596,6 +589,13 @@ Display system-wide runtime information (version, paths, host/virtualization, bo
 boxlite info
 boxlite info --format json
 ```
+
+### `boxlite network inbound`
+
+Make an existing remote box public or private, so `boxlite network tunnel` can
+reach it. `enabled` exposes the box's services without authentication.
+
+**Usage:** `boxlite network inbound BOX <enabled|disabled>`
 
 ## Shell completion
 

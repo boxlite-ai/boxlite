@@ -26,7 +26,6 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite start`](#boxlite-start)
   - [`boxlite stop`](#boxlite-stop)
   - [`boxlite restart`](#boxlite-restart)
-  - [`boxlite update`](#boxlite-update)
   - [`boxlite pull`](#boxlite-pull)
   - [`boxlite images`](#boxlite-images)
   - [`boxlite inspect`](#boxlite-inspect)
@@ -35,6 +34,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite logs`](#boxlite-logs)
   - [`boxlite stats`](#boxlite-stats)
   - [`boxlite network tunnel`](#boxlite-network-tunnel)
+  - [`boxlite network inbound`](#boxlite-network-inbound)
   - [`boxlite serve`](#boxlite-serve)
   - [`boxlite volume`](#boxlite-volume)
   - [`boxlite completion`](#boxlite-completion)
@@ -481,36 +481,6 @@ Stop then start one or more boxes. If `stop` fails for a box, that box is skippe
 
 ---
 
-### `boxlite update`
-
-**Synopsis:** `boxlite update BOX --inbound <enabled|disabled>`
-
-Change the inbound mode of an existing remote box, the setting `--inbound`
-picks at create. Prints `BOX` on success.
-
-| Flag | Description |
-|------|-------------|
-| `--inbound <enabled\|disabled>` | Required. `enabled` lets `boxlite network tunnel` reach the box; `disabled` makes it private again. |
-
-```bash
-boxlite --profile app update mybox --inbound enabled
-boxlite --profile app network tunnel mybox 9000 --listen 8080
-```
-
-- `enabled` makes every service the box exposes reachable through the remote
-  proxy without authentication, not only the tunnel you open.
-- `disabled` refuses new tunnel requests at once. The proxy may apply the
-  previous setting to new connections for a while longer, and connections
-  already open stay open.
-- Needs the `write:boxes` permission; without it the CLI prints
-  `auth: forbidden (HTTP 403)`.
-- Local boxes, and servers that do not advertise `inbound_update_enabled` in
-  `GET /v1/config` (such as `boxlite serve`), fail with `unsupported`.
-- `Box was modified by another operation` means the box changed state at the
-  same moment; run the command again.
-
----
-
 ### `boxlite pull`
 
 **Synopsis:** `boxlite pull [OPTIONS] IMAGE`
@@ -694,7 +664,34 @@ numeric addresses, and Unix socket paths must be absolute.
 
 A remote box must be public before it can be tunneled: create it with
 `--inbound enabled`, or make an existing box public with
-[`boxlite update BOX --inbound enabled`](#boxlite-update).
+[`boxlite network inbound BOX enabled`](#boxlite-network-inbound).
+
+---
+
+### `boxlite network inbound`
+
+**Synopsis:** `boxlite network inbound BOX <enabled|disabled>`
+
+Change the inbound mode of an existing remote box, the setting `--inbound`
+picks at create. `enabled` lets `boxlite network tunnel` reach the box;
+`disabled` makes it private again. Prints `BOX` on success.
+
+```bash
+boxlite --profile app network inbound mybox enabled
+boxlite --profile app network tunnel mybox 9000 --listen 8080
+```
+
+- `enabled` makes every service the box exposes reachable through the remote
+  proxy without authentication, not only the tunnel you open.
+- `disabled` refuses new tunnel requests at once. The proxy may apply the
+  previous setting to new connections for a while longer, and connections
+  already open stay open.
+- Needs the `write:boxes` permission; without it the CLI prints
+  `auth: forbidden (HTTP 403)`.
+- Local boxes, and servers that do not advertise `inbound_update_enabled` in
+  `GET /v1/config` (such as `boxlite serve`), fail with `unsupported`.
+- `Box was modified by another operation` means the box changed state at the
+  same moment; run the command again.
 
 ---
 
@@ -852,7 +849,7 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 |------|-------------|
 | `--network <enabled\|disabled>` | Outbound mode; default `enabled`. Disabled mode creates no network interface. |
 | `--allow-net HOST` | Restrict TCP/UDP egress to exact hosts, `*.example.com`, IPs, or CIDRs; repeatable, implies enabled networking, and is incompatible with `--network disabled`. Hostname-only rules deny UDP unless an IP/CIDR is also allowed. |
-| `--inbound <enabled\|disabled>` | Inbound mode; default `disabled` (services exposed by the box are private). Change it later with [`boxlite update`](#boxlite-update). |
+| `--inbound <enabled\|disabled>` | Inbound mode; default `disabled` (services exposed by the box are private). Change it later with [`boxlite network inbound`](#boxlite-network-inbound). |
 | `--net-tx-kbps KBPS` | Cap what the box sends (guest to internet), in kilobits/sec. `0` or unset leaves it uncapped. |
 | `--net-rx-kbps KBPS` | Cap what reaches the box (internet to guest), in kilobits/sec. `0` or unset leaves it uncapped. |
 

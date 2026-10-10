@@ -61,7 +61,7 @@ can be consumed by `connect()` or by `forward()` to bind a local listener.
 Remote CLI users can run `boxlite network tunnel BOX PORT` to obtain the public
 service URL. A remote box is private unless it was created with
 `--inbound enabled`; make an existing one public with
-`boxlite update BOX --inbound enabled`.
+`boxlite network inbound BOX enabled`.
 
 Image `EXPOSE` declarations are metadata only and never create host listeners.
 
