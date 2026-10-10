@@ -212,6 +212,53 @@ class PackageTests(unittest.TestCase):
                     self.assertIn(f'{override or interpreter} -m coverage ', line)
 
     @unittest.skipUnless(shutil.which('make'), 'Make is not installed')
+    def test_make_claude_strict_validation_and_failure_propagation(self):
+        """Reach both CLI boundaries with real packaging, stopping on source failure."""
+        root = Path(self.temp.name) / 'make-claude'
+        shutil.copytree(self.root, root / 'plugins/boxlite')
+        (root / 'scripts/plugins').mkdir(parents=True)
+        shutil.copyfile(REPO / 'scripts/plugins/boxlite.py', root / 'scripts/plugins/boxlite.py')
+        (root / 'tests/plugins').mkdir(parents=True)
+        (root / 'tests/plugins/test_package.py').write_text(
+            'import unittest\nfrom scripts.plugins.boxlite import validate\n'
+            'class PackageBoundary(unittest.TestCase):\n'
+            '    def test_validate(self):\n        self.assertTrue(validate())\n')
+        workaround = (REPO / 'Makefile').read_text().split('# Workaround for macOS', 1)[1]
+        (root / 'Makefile').write_text(
+            f'include {REPO / "make/plugins.mk"}\n.PHONY: $(PHONY_TARGETS)\n# Workaround for macOS'
+            + workaround)
+        log = root / 'claude-invocations'
+        executable = root / 'claude'
+        executable.write_text(
+            '#!/bin/sh\n'
+            f'printf \'%s\\n\' "$*" >> {shlex.quote(str(log))}\n'
+            'if [ "$4" = "plugins/boxlite" ]; then\n'
+            '    exit "$CLAUDE_TEST_SOURCE_STATUS"\n'
+            'fi\nexit 0\n')
+        executable.chmod(0o755)
+        environment = os.environ.copy()
+        for key in ('MAKEFLAGS', 'MFLAGS', 'MAKEOVERRIDES', 'PLUGIN_PYTHON',
+                    'PLUGIN_COVERAGE_PYTHON'):
+            environment.pop(key, None)
+        environment['PATH'] = str(root) + os.pathsep + environment.get('PATH', '')
+        expected = ['plugin validate --strict plugins/boxlite',
+                    'plugin validate --strict target/plugins/boxlite-marketplace']
+        for source_status in (0, 7):
+            with self.subTest(source_status=source_status):
+                log.write_text('')
+                environment['CLAUDE_TEST_SOURCE_STATUS'] = str(source_status)
+                result = subprocess.run(
+                    ['make', '--no-print-directory', 'plugin:boxlite:check:cc',
+                     f'PLUGIN_PYTHON={sys.executable}'], cwd=root, env=environment,
+                    capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0 if source_status == 0 else 2,
+                                 result.stdout + result.stderr)
+                self.assertEqual(log.read_text().splitlines(),
+                                 expected if source_status == 0 else expected[:1])
+                self.assertTrue((root / 'target/plugins/boxlite-marketplace'
+                                 '/.claude-plugin/marketplace.json').exists())
+
+    @unittest.skipUnless(shutil.which('make'), 'Make is not installed')
     def test_make_targets_validate_with_same_named_files(self):
         """Run real Make recipes despite target-name collisions in the filesystem."""
         root = Path(self.temp.name) / 'make-work'
