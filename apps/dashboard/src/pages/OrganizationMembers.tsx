@@ -17,7 +17,6 @@ import {
   CreateOrganizationInvitationRoleEnum,
   OrganizationInvitation,
   OrganizationUserRoleEnum,
-  UpdateOrganizationInvitationRoleEnum,
 } from '@boxlite-ai/api-client'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
@@ -130,31 +129,6 @@ const OrganizationMembers: React.FC = () => {
     }
   }
 
-  const handleUpdateInvitation = async (
-    invitationId: string,
-    role: UpdateOrganizationInvitationRoleEnum,
-    assignedRoleIds: string[],
-  ): Promise<boolean> => {
-    if (!selectedOrganization) {
-      return false
-    }
-    setLoadingInvitationAction((prev) => ({ ...prev, [invitationId]: true }))
-    try {
-      await organizationsApi.updateOrganizationInvitation(selectedOrganization.id, invitationId, {
-        role,
-        assignedRoleIds,
-      })
-      toast.success('Invitation updated successfully')
-      await fetchInvitations(false)
-      return true
-    } catch (error) {
-      handleApiError(error, 'Failed to update invitation')
-      return false
-    } finally {
-      setLoadingInvitationAction((prev) => ({ ...prev, [invitationId]: false }))
-    }
-  }
-
   const handleCancelInvitation = async (invitationId: string): Promise<boolean> => {
     if (!selectedOrganization) {
       return false
@@ -207,10 +181,7 @@ const OrganizationMembers: React.FC = () => {
             <OrganizationInvitationTable
               data={invitations}
               loadingData={loadingInvitations}
-              availableRoles={roles}
-              loadingAvailableRoles={loadingRoles}
               onCancelInvitation={handleCancelInvitation}
-              onUpdateInvitation={handleUpdateInvitation}
               loadingInvitationAction={loadingInvitationAction}
             />
           </>
