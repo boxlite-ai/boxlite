@@ -1,7 +1,3 @@
-## TL;DR
-
-BoxLite runs isolated applications in lightweight virtual machines, locally or through a cloud control plane.
-
 <h1 align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/boxlite-banner-dark.png">
