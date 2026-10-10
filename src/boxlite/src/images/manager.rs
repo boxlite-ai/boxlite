@@ -12,8 +12,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
-
 use super::blob_source::{BlobSource, LocalBundleBlobSource, StoreBlobSource};
 use super::object::ImageObject;
 use crate::db::Database;
@@ -21,8 +19,6 @@ use crate::images::store::{ImageStore, SharedImageStore};
 use crate::runtime::options::ImageRegistry;
 use crate::runtime::types::ImageInfo;
 use boxlite_shared::errors::BoxliteResult;
-use oci_client::Reference;
-use std::str::FromStr;
 
 // ============================================================================
 // INTERNAL TYPES
@@ -130,38 +126,10 @@ impl ImageManager {
     pub async fn list(&self) -> BoxliteResult<Vec<ImageInfo>> {
         let raw_images = self.store.list().await?;
 
-        let mut images = Vec::with_capacity(raw_images.len());
-        for (reference, cached) in raw_images {
-            // If parsing fails, default to UNIX_EPOCH to signal error
-            let cached_at = DateTime::parse_from_rfc3339(&cached.cached_at)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|e| {
-                    tracing::warn!("Invalid cached_at timestamp: {}, using epoch", e);
-                    DateTime::<Utc>::from(std::time::SystemTime::UNIX_EPOCH)
-                });
-
-            let (repository, tag) = match Reference::from_str(&reference) {
-                Ok(r) => (
-                    r.repository().to_string(),
-                    r.tag().unwrap_or("latest").to_string(),
-                ),
-                Err(_) => {
-                    // Fallback if reference stored in DB is invalid
-                    (reference.clone(), "<none>".to_string())
-                }
-            };
-
-            images.push(ImageInfo {
-                reference,
-                repository,
-                tag,
-                id: cached.manifest_digest,
-                cached_at,
-                size: None, // Size calculation is expensive now? omitted for list temporarily
-            });
-        }
-
-        Ok(images)
+        Ok(raw_images
+            .into_iter()
+            .map(|(reference, cached)| ImageInfo::from_cached(reference, cached))
+            .collect())
     }
 
     /// Load an OCI/Docker image from a local directory.

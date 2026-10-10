@@ -1,5 +1,6 @@
 use crate::cli::GlobalFlags;
 use crate::formatter::{self, OutputFormat};
+use crate::query::QueryRuntime;
 use boxlite::BoxInfo;
 use clap::Args;
 use serde::Serialize;
@@ -57,7 +58,7 @@ impl From<BoxInfo> for BoxPresenter {
 }
 
 pub async fn execute(args: ListArgs, global: &GlobalFlags) -> anyhow::Result<()> {
-    let rt = global.create_runtime()?;
+    let rt = QueryRuntime::from_runtime(global.create_runtime())?;
     let boxes = rt.list_info().await?;
 
     let boxes: Vec<BoxInfo> = boxes
