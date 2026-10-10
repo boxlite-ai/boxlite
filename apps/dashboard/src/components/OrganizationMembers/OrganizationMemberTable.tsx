@@ -15,13 +15,12 @@ import {
   SortingState,
   useReactTable,
 } from '@tanstack/react-table'
-import { OrganizationRole, OrganizationUser, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
+import { OrganizationUser } from '@boxlite-ai/api-client'
 import { Pagination } from '@/components/Pagination'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { TableHeader, TableRow, TableHead, TableBody, TableCell, Table } from '@/components/ui/table'
 import { RemoveOrganizationMemberDialog } from '@/components/OrganizationMembers/RemoveOrganizationMemberDialog'
-import { UpdateOrganizationMemberAccess } from '@/components/OrganizationMembers/UpdateOrganizationMemberAccessDialog'
 import { capitalize } from '@/lib/utils'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { TableEmptyState } from '../TableEmptyState'
@@ -29,9 +28,6 @@ import { TableEmptyState } from '../TableEmptyState'
 interface DataTableProps {
   data: OrganizationUser[]
   loadingData: boolean
-  availableAssignments: OrganizationRole[]
-  loadingAvailableAssignments: boolean
-  onUpdateMemberAccess: (userId: string, role: OrganizationUserRoleEnum, assignedRoleIds: string[]) => Promise<boolean>
   onRemoveMember: (userId: string) => Promise<boolean>
   loadingMemberAction: Record<string, boolean>
   ownerMode: boolean
@@ -40,28 +36,15 @@ interface DataTableProps {
 export function OrganizationMemberTable({
   data,
   loadingData,
-  availableAssignments,
-  loadingAvailableAssignments,
-  onUpdateMemberAccess,
   onRemoveMember,
   loadingMemberAction,
   ownerMode,
 }: DataTableProps) {
   const [sorting, setSorting] = useState<SortingState>([])
-  const [memberToUpdate, setMemberToUpdate] = useState<OrganizationUser | null>(null)
-  const [isUpdateMemberAccessDialogOpen, setIsUpdateMemberAccessDialogOpen] = useState(false)
   const [memberToRemove, setMemberToRemove] = useState<string | null>(null)
   const [isRemoveDialogOpen, setIsRemoveDialogOpen] = useState(false)
 
   const columns = getColumns({
-    onUpdateMemberRole: (member) => {
-      setMemberToUpdate(member)
-      setIsUpdateMemberAccessDialogOpen(true)
-    },
-    onUpdateAssignedRoles: (member) => {
-      setMemberToUpdate(member)
-      setIsUpdateMemberAccessDialogOpen(true)
-    },
     onRemove: (userId: string) => {
       setMemberToRemove(userId)
       setIsRemoveDialogOpen(true)
@@ -85,18 +68,6 @@ export function OrganizationMemberTable({
       },
     },
   })
-
-  const handleUpdateMemberAccess = async (role: OrganizationUserRoleEnum, assignedRoleIds: string[]) => {
-    if (memberToUpdate) {
-      const success = await onUpdateMemberAccess(memberToUpdate.userId, role, assignedRoleIds)
-      if (success) {
-        setMemberToUpdate(null)
-        setIsUpdateMemberAccessDialogOpen(false)
-      }
-      return success
-    }
-    return false
-  }
 
   const handleConfirmRemove = async () => {
     if (memberToRemove) {
@@ -156,24 +127,6 @@ export function OrganizationMemberTable({
         <Pagination table={table} className="mt-4" entityName="Members" />
       </div>
 
-      {memberToUpdate && (
-        <UpdateOrganizationMemberAccess
-          open={isUpdateMemberAccessDialogOpen}
-          onOpenChange={(open) => {
-            setIsUpdateMemberAccessDialogOpen(open)
-            if (!open) {
-              setMemberToUpdate(null)
-            }
-          }}
-          initialRole={memberToUpdate.role}
-          initialAssignments={memberToUpdate.assignedRoles}
-          availableAssignments={availableAssignments}
-          loadingAvailableAssignments={loadingAvailableAssignments}
-          onUpdateAccess={handleUpdateMemberAccess}
-          processingUpdateAccess={loadingMemberAction[memberToUpdate.userId]}
-        />
-      )}
-
       {memberToRemove && (
         <RemoveOrganizationMemberDialog
           open={isRemoveDialogOpen}
@@ -192,13 +145,9 @@ export function OrganizationMemberTable({
 }
 
 const getColumns = ({
-  onUpdateMemberRole,
-  onUpdateAssignedRoles,
   onRemove,
   ownerMode,
 }: {
-  onUpdateMemberRole: (member: OrganizationUser) => void
-  onUpdateAssignedRoles: (member: OrganizationUser) => void
   onRemove: (userId: string) => void
   ownerMode: boolean
 }): ColumnDef<OrganizationUser>[] => {
@@ -212,80 +161,42 @@ const getColumns = ({
       header: () => {
         return <div className="px-3 w-24">Role</div>
       },
-      cell: ({ row }) => {
-        const role = capitalize(row.original.role)
-
-        if (!ownerMode) {
-          return <div className="px-3 text-sm">{role}</div>
-        }
-
-        return (
-          <Button variant="ghost" className="w-auto px-3" onClick={() => onUpdateMemberRole(row.original)}>
-            {role}
-          </Button>
-        )
-      },
+      cell: ({ row }) => <div className="px-3 text-sm">{capitalize(row.original.role)}</div>,
     },
   ]
 
   if (ownerMode) {
-    const extraColumns: ColumnDef<OrganizationUser>[] = [
-      {
-        accessorKey: 'assignedRoles',
-        header: () => {
-          return <div className="px-3 w-32">Assignments</div>
-        },
-        cell: ({ row }) => {
-          if (row.original.role === OrganizationUserRoleEnum.OWNER) {
-            return <div className="px-3 text-sm text-muted-foreground">Full Access</div>
-          }
+    columns.push({
+      id: 'actions',
+      cell: ({ row }) => {
+        // The API refuses to remove a user from their own personal organization.
+        if (row.original.isDefaultForUser) {
+          return null
+        }
 
-          const roleCount = row.original.assignedRoles?.length || 0
-          const roleText = roleCount === 1 ? '1 role' : `${roleCount} roles`
+        return (
+          <div className="text-right">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" className="h-8 w-8 p-0">
+                  <span className="sr-only">Open menu</span>
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
 
-          return (
-            <Button variant="ghost" className="w-auto px-3" onClick={() => onUpdateAssignedRoles(row.original)}>
-              {roleText}
-            </Button>
-          )
-        },
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  className="cursor-pointer text-red-600 dark:text-red-400"
+                  onClick={() => onRemove(row.original.userId)}
+                >
+                  Remove
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )
       },
-      {
-        id: 'actions',
-        cell: ({ row }) => {
-          return (
-            <div className="text-right">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" className="h-8 w-8 p-0">
-                    <span className="sr-only">Open menu</span>
-                    <MoreHorizontal className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem className="cursor-pointer" onClick={() => onUpdateMemberRole(row.original)}>
-                    Change Role
-                  </DropdownMenuItem>
-                  {row.original.role !== OrganizationUserRoleEnum.OWNER && (
-                    <DropdownMenuItem className="cursor-pointer" onClick={() => onUpdateAssignedRoles(row.original)}>
-                      Manage Assignments
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem
-                    className="cursor-pointer text-red-600 dark:text-red-400"
-                    onClick={() => onRemove(row.original.userId)}
-                  >
-                    Remove
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          )
-        },
-      },
-    ]
-    columns.push(...extraColumns)
+    })
   }
 
   return columns

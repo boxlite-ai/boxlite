@@ -9,7 +9,6 @@ import { OrganizationInvitationTable } from '@/components/OrganizationMembers/Or
 import { OrganizationMemberTable } from '@/components/OrganizationMembers/OrganizationMemberTable'
 import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
 import { useApi } from '@/hooks/useApi'
-import { useOrganizationRoles } from '@/hooks/useOrganizationRoles'
 import { useOrganizations } from '@/hooks/useOrganizations'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
@@ -29,8 +28,8 @@ const OrganizationMembers: React.FC = () => {
   const { refreshOrganizations } = useOrganizations()
   const { selectedOrganization, organizationMembers, refreshOrganizationMembers, authenticatedUserOrganizationMember } =
     useSelectedOrganization()
-  const { roles, loadingRoles } = useOrganizationRoles()
 
+  const [loadingMembers, setLoadingMembers] = useState(true)
   const [invitations, setInvitations] = useState<OrganizationInvitation[]>([])
   const [loadingInvitations, setLoadingInvitations] = useState(true)
 
@@ -58,34 +57,12 @@ const OrganizationMembers: React.FC = () => {
   )
 
   useEffect(() => {
+    // refreshOrganizationMembers already reports its own failure.
     refreshOrganizationMembers()
+      .catch(() => undefined)
+      .finally(() => setLoadingMembers(false))
     fetchInvitations()
   }, [fetchInvitations, refreshOrganizationMembers])
-
-  const handleUpdateMemberAccess = async (
-    userId: string,
-    role: OrganizationUserRoleEnum,
-    assignedRoleIds: string[],
-  ): Promise<boolean> => {
-    if (!selectedOrganization) {
-      return false
-    }
-    setLoadingMemberAction((prev) => ({ ...prev, [userId]: true }))
-    try {
-      await organizationsApi.updateAccessForOrganizationMember(selectedOrganization.id, userId, {
-        role,
-        assignedRoleIds,
-      })
-      toast.success('Access updated successfully')
-      await refreshOrganizationMembers()
-      return true
-    } catch (error) {
-      handleApiError(error, 'Failed to update access')
-      return false
-    } finally {
-      setLoadingMemberAction((prev) => ({ ...prev, [userId]: false }))
-    }
-  }
 
   const handleRemoveMember = async (userId: string): Promise<boolean> => {
     if (!selectedOrganization) {
@@ -163,10 +140,7 @@ const OrganizationMembers: React.FC = () => {
       <PageContent size="full">
         <OrganizationMemberTable
           data={organizationMembers}
-          loadingData={loadingRoles}
-          availableAssignments={roles}
-          loadingAvailableAssignments={loadingRoles}
-          onUpdateMemberAccess={handleUpdateMemberAccess}
+          loadingData={loadingMembers}
           onRemoveMember={handleRemoveMember}
           loadingMemberAction={loadingMemberAction}
           ownerMode={authenticatedUserIsOwner}
