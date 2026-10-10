@@ -49,7 +49,8 @@ import {
   DEFAULT_BOX_SORT_DIRECTION,
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
-import { BusinessEventActorKind, recordBusinessEvent } from '../../common/utils/business-event.util'
+import { recordBusinessEvent } from '../../common/utils/business-event.util'
+import { currentLogContext, runWithLogContext } from '../../common/utils/business-event-context'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { customAlphabet as customNanoid, nanoid, urlAlphabet } from 'nanoid'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
@@ -96,8 +97,6 @@ const TERMINAL_PREVIEW_PORT = 22222
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
-  // Who asked for the box, recorded on its box.create business events.
-  actorKind?: BusinessEventActorKind
 }
 
 @Injectable()
@@ -255,7 +254,7 @@ export class BoxService {
           })
 
           if (warmPoolBox) {
-            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, options)
+            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, options.maxCreatedBoxes)
           }
         }
       }
@@ -331,7 +330,7 @@ export class BoxService {
         outcome: 'requested',
         correlationId: insertedBox.id,
         orgId: insertedBox.organizationId,
-        actorKind: options.actorKind,
+        actorKind: currentLogContext()?.actorKind,
       })
 
       this.eventEmitter
@@ -356,9 +355,8 @@ export class BoxService {
     warmPoolBox: Box,
     createBoxDto: CreateBoxDto,
     organization: Organization,
-    options: BoxCreationOptions,
+    maxCreatedBoxes?: number,
   ): Promise<BoxDto> {
-    const { maxCreatedBoxes } = options
     const now = new Date()
     const updateData: Partial<Box> = {
       // POL-205: same default as the fresh-box path — see the comment there.
@@ -421,7 +419,7 @@ export class BoxService {
       name: 'box.create',
       correlationId: updatedBox.id,
       orgId: organization.id,
-      actorKind: options.actorKind,
+      actorKind: currentLogContext()?.actorKind,
     } as const
     recordBusinessEvent({ ...createEvent, outcome: 'requested' })
     recordBusinessEvent({ ...createEvent, outcome: 'success' })
@@ -916,11 +914,7 @@ export class BoxService {
     await this.redis.del(lockKey)
   }
 
-  async destroy(
-    boxIdOrName: string,
-    organizationId: string | undefined,
-    actorKind: BusinessEventActorKind,
-  ): Promise<Box> {
+  async destroy(boxIdOrName: string, organizationId?: string): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
     if (box.pending) {
@@ -939,7 +933,7 @@ export class BoxService {
       outcome: 'requested',
       correlationId: updatedBox.id,
       orgId: updatedBox.organizationId,
-      actorKind,
+      actorKind: currentLogContext()?.actorKind,
     })
 
     this.eventEmitter.emit(BoxEvents.DESTROYED, new BoxDestroyedEvent(updatedBox))
@@ -1018,12 +1012,7 @@ export class BoxService {
     return updated
   }
 
-  async stop(
-    boxIdOrName: string,
-    organizationId: string | undefined,
-    actorKind: BusinessEventActorKind,
-    force?: boolean,
-  ): Promise<Box> {
+  async stop(boxIdOrName: string, organizationId?: string, force?: boolean): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
     this.assertBoxNotErrored(box)
@@ -1055,7 +1044,7 @@ export class BoxService {
       outcome: 'requested',
       correlationId: updatedBox.id,
       orgId: updatedBox.organizationId,
-      actorKind,
+      actorKind: currentLogContext()?.actorKind,
     })
 
     this.eventEmitter.emit(BoxEvents.STOPPED, new BoxStoppedEvent(updatedBox, force))
@@ -1512,7 +1501,9 @@ export class BoxService {
       return
     }
 
-    const destroyPromises = boxes.map((box) => this.destroy(box.id, undefined, 'warm_pool'))
+    const destroyPromises = boxes.map((box) =>
+      runWithLogContext({ actorKind: 'warm_pool' }, () => this.destroy(box.id)),
+    )
     const results = await Promise.allSettled(destroyPromises)
 
     // Log any failed box destructions
@@ -1537,7 +1528,7 @@ export class BoxService {
 
   @OnEvent(OrganizationEvents.SUSPENDED_BOX_STOPPED)
   async handleSuspendedBoxStopped(event: OrganizationSuspendedBoxStoppedEvent) {
-    await this.stop(event.boxId, undefined, 'org_suspension').catch((error) => {
+    await runWithLogContext({ actorKind: 'org_suspension' }, () => this.stop(event.boxId)).catch((error) => {
       //  log the error for now, but don't throw it as it will be retried
       this.logger.error(`Error stopping box from suspended organization. BoxId: ${event.boxId}: `, error)
     })

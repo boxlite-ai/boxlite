@@ -17,6 +17,7 @@ import { UserCreatedEvent } from './events/user-created.event'
 import { UserDeletedEvent } from './events/user-deleted.event'
 import { UserEmailVerifiedEvent } from './events/user-email-verified.event'
 import { recordBusinessEvent } from '../common/utils/business-event.util'
+import { currentLogContext } from '../common/utils/business-event-context'
 
 const PG_UNIQUE_VIOLATION = '23505'
 
@@ -30,10 +31,10 @@ export class UserService {
   ) {}
 
   /**
-   * @param registeredBy who registered the user, recorded on its user.registration
-   * business events. Omitted for the boot-time admin seed, which is not a registration.
+   * Records user.registration business events, with the actor, when called inside
+   * runWithLogContext. The boot-time admin seed calls it outside one: it is not a registration.
    */
-  async create(createUserDto: CreateUserDto, registeredBy?: 'user' | 'admin'): Promise<User> {
+  async create(createUserDto: CreateUserDto): Promise<User> {
     const defaultOrganizationDefaultRegionId =
       createUserDto.defaultOrganizationDefaultRegionId ?? createUserDto.personalOrganizationDefaultRegionId
     let user = new User()
@@ -52,6 +53,7 @@ export class UserService {
       user.role = createUserDto.role
     }
 
+    const registeredBy = currentLogContext()?.actorKind
     const registration = registeredBy
       ? ({ name: 'user.registration', correlationId: createUserDto.id, actorKind: registeredBy } as const)
       : undefined

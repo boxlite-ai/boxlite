@@ -5,6 +5,7 @@
 
 import { UserService } from './user.service'
 import { recordBusinessEvent } from '../common/utils/business-event.util'
+import { runWithLogContext } from '../common/utils/business-event-context'
 
 jest.mock('../common/utils/business-event.util', () => ({ recordBusinessEvent: jest.fn() }))
 
@@ -26,7 +27,7 @@ describe('UserService registration events', () => {
   it('records requested then success with the default organization it created', async () => {
     const service = makeService(committingTransaction())
 
-    await service.create({ id: 'user-1', name: 'User One' } as never, 'user')
+    await runWithLogContext({ actorKind: 'user' }, () => service.create({ id: 'user-1', name: 'User One' } as never))
 
     expect(jest.mocked(recordBusinessEvent).mock.calls).toEqual([
       [{ name: 'user.registration', outcome: 'requested', correlationId: 'user-1', actorKind: 'user' }],
@@ -38,7 +39,9 @@ describe('UserService registration events', () => {
     const conflict = Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' })
     const service = makeService(jest.fn().mockRejectedValue(conflict))
 
-    await expect(service.create({ id: 'user-1', name: 'User One' } as never, 'user')).rejects.toBe(conflict)
+    await expect(
+      runWithLogContext({ actorKind: 'user' }, () => service.create({ id: 'user-1', name: 'User One' } as never)),
+    ).rejects.toBe(conflict)
 
     expect(recordBusinessEvent).toHaveBeenLastCalledWith({
       name: 'user.registration',
@@ -50,7 +53,8 @@ describe('UserService registration events', () => {
     expect(recordBusinessEvent).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: 'success' }))
   })
 
-  it('records nothing for a create that is not a registration', async () => {
+  // The boot-time admin seed calls create outside any log context.
+  it('records nothing for a create outside a log context', async () => {
     const service = makeService(committingTransaction())
 
     await service.create({ id: 'admin', name: 'Admin' } as never)
