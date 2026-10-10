@@ -97,6 +97,15 @@ export function generateApiKeyHash(value: string): string {
 }
 
 /**
+ * The Redis key under which ApiKeyStrategy caches a validated key, owner
+ * included. Whatever deletes a key or changes its owner drops this entry, or
+ * the old answer keeps authenticating until it expires.
+ */
+export function apiKeyValidationCacheKey(keyHash: string): string {
+  return `api-key:validation:${keyHash}`
+}
+
+/**
  * Non-secret prefix used for masked display (`blk_live_••••abc`). Returns the
  * `{prefix}_{class}_` head for current keys; for legacy single-segment values
  * (`dtn_…`) falls back to the first 3 characters, matching the

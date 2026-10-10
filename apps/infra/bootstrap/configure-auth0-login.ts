@@ -11,15 +11,17 @@ import {
   missingLoginPolicyScopes,
   parseAuth0LoginPolicyOptions,
 } from './auth0-login-policy.js'
+import { loadAccountLinkForm } from './account-link-form.js'
 
 const bootstrapRoot = dirname(fileURLToPath(import.meta.url))
 
-function sources() {
+function sources(tenant: string) {
   return {
     actionCode: readFileSync(join(bootstrapRoot, 'auth0', 'login-policy.js'), 'utf8'),
     emailVerificationTemplate: JSON.parse(
       readFileSync(join(bootstrapRoot, 'auth0', 'email-verification-form.json'), 'utf8'),
     ),
+    accountLinkForm: loadAccountLinkForm(tenant),
     journalDirectory: join(bootstrapRoot, '..', '.sst', 'auth0-backups'),
   }
 }
@@ -54,7 +56,7 @@ try {
     const configurator = new Auth0LoginPolicyConfigurator(
       options,
       new Auth0CliManagementClient(options.tenant),
-      sources(),
+      sources(options.tenant),
     )
     console.log(JSON.stringify(options.apply ? configurator.apply() : configurator.preview(), null, 2))
   }

@@ -224,7 +224,7 @@ function requireTenantDomain(value: unknown) {
   return url.hostname
 }
 
-function parseTarget(catalog: JsonObject, stage: string): BrandingTarget {
+export function parseTarget(catalog: JsonObject, stage: string): BrandingTarget {
   if (!STAGE_PATTERN.test(stage)) throw new Error(`stage '${stage}' must match ${STAGE_PATTERN}`)
   const raw = catalog[stage]
   if (!isObject(raw)) throw new Error(`stage '${stage}' is not configured in auth0/targets.json`)
@@ -248,7 +248,7 @@ function requireRelativeAsset(name: string, value: JsonValue | undefined, stackO
   return url.href
 }
 
-function prepareTheme(raw: JsonObject, target: BrandingTarget) {
+export function prepareTheme(raw: JsonObject, target: BrandingTarget) {
   const theme = withoutComments(raw) as JsonObject
   if (!isObject(theme.colors) || !isObject(theme.fonts) || !isObject(theme.widget)) {
     throw new Error('branding/theme.json needs colors, fonts, and widget objects')

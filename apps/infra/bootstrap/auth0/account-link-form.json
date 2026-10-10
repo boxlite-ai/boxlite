@@ -1,0 +1,103 @@
+{
+  "name": "BoxLite account link",
+  "languages": {
+    "primary": "en"
+  },
+  "start": {
+    "next_node": "step_link",
+    "coordinates": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  "nodes": [
+    {
+      "id": "step_link",
+      "type": "STEP",
+      "coordinates": {
+        "x": 300,
+        "y": 0
+      },
+      "alias": "Link your sign-in",
+      "config": {
+        "components": [
+          {
+            "id": "intro",
+            "category": "BLOCK",
+            "type": "RICH_TEXT",
+            "config": {
+              "content": "<h2>{{vars.title}}</h2><p>{{vars.lead}}</p>"
+            }
+          },
+          {
+            "id": "account",
+            "category": "FIELD",
+            "type": "CUSTOM",
+            "label": "Email address",
+            "required": false,
+            "sensitive": false,
+            "config": {
+              "schema": {
+                "type": "string"
+              },
+              "code": "account-field.js",
+              "params": {
+                "address": "{{vars.address}}",
+                "mode": "{{vars.mode}}"
+              }
+            }
+          },
+          {
+            "id": "password",
+            "category": "FIELD",
+            "type": "PASSWORD",
+            "label": "Password",
+            "required": false,
+            "sensitive": true,
+            "config": {}
+          },
+          {
+            "id": "error",
+            "category": "BLOCK",
+            "type": "RICH_TEXT",
+            "config": {
+              "content": "<p><strong>{{vars.error}}</strong></p>"
+            }
+          },
+          {
+            "id": "continue_button",
+            "category": "BLOCK",
+            "type": "NEXT_BUTTON",
+            "config": {
+              "text": "Continue"
+            }
+          },
+          {
+            "id": "cancel",
+            "category": "FIELD",
+            "type": "CUSTOM",
+            "required": false,
+            "sensitive": false,
+            "config": {
+              "schema": {
+                "type": "string"
+              },
+              "code": "cancel-field.js",
+              "params": {
+                "render": "{{vars.render}}"
+              }
+            }
+          }
+        ],
+        "next_node": "$ending"
+      }
+    }
+  ],
+  "ending": {
+    "resume_flow": true,
+    "coordinates": {
+      "x": 600,
+      "y": 0
+    }
+  }
+}
