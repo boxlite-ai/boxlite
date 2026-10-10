@@ -201,9 +201,10 @@ export class StatusSyncService implements TrackableJobExecutions, OnApplicationS
     if (sharedRegionIds.length === 0) {
       return []
     }
-    // INITIALIZING is the birth state (fleet expansion must not page) and
-    // DISABLED/DECOMMISSIONED/unschedulable/draining are operator intent —
-    // only runners meant to carry traffic count.
+    // INITIALIZING is the birth state (fleet expansion must not page),
+    // DISABLED/DECOMMISSIONED/draining are operator intent, and unschedulable
+    // is either operator intent or the API's disk-pressure mark — only runners
+    // meant to carry traffic count.
     const runners = await this.withDeadline(
       this.runnerRepository.find({
         select: ['region', 'state'],

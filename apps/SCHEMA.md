@@ -418,6 +418,7 @@ a derived availability score.
 | `currentStartedBoxes` | `integer` | |
 | `availabilityScore` | `integer` | |
 | `unschedulable` | `boolean` | default `false` |
+| `unschedulableReason` | `enum` | nullable; `operator` \| `disk_pressure` |
 | `draining` | `boolean` | default `false` |
 | `appVersion` | `character varying` | default `v0.0.0-dev` |
 | `apiVersion` | `character varying` | default `0` |
@@ -440,6 +441,22 @@ Allocation comes from `box` rows, not `currentAllocatedDiskGiB`. Selection and
 insert are not locked against each other, so concurrent creates can overshoot
 slightly; the free-space floor bounds that. A box that fits nowhere fails with
 `No available runners`.
+
+**Disk pressure.** Each heartbeat compares `currentDiskUsagePercentage` with
+`RUNNER_DISK_WARNING_PERCENTAGE` (default `75`) and
+`RUNNER_DISK_CRITICAL_PERCENTAGE` (default `85`):
+
+| Usage | Effect |
+| ----- | ------ |
+| ≥ warning | Logs `runner.disk_pressure` (`disk.pressure_level` `warning`, or `critical` at error level) |
+| ≥ critical | Sets `unschedulable`, reason `disk_pressure`, unless already unschedulable |
+| < warning | Clears `unschedulable` only when the reason is `disk_pressure` |
+
+The scheduling endpoints write reason `operator` or clear it, so an operator's
+mark is never lifted automatically. A disk-pressure mark behaves like an
+operator mark elsewhere: the `handle-unschedulable-runners` cron destroys
+unclaimed warm-pool boxes on the runner, freeing space, and status sync stops
+counting it as capacity.
 
 ### `region`
 
