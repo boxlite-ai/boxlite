@@ -2,7 +2,7 @@
 
 Inspect the app's build, start, health check, runtime dependencies, and data paths. Use its existing project commands for local verification. Keep generated application source in the app workspace. Inspect `boxlite create --help`, `volume create --help`, and `network tunnel --help` for the installed CLI version before selecting options.
 
-Confirm that the selected CLI profile or explicit URL targets the intended cloud API before allocating resources; an unconfigured CLI can use the local runtime. Run `auth whoami` and resource queries with the same connection settings. When using an SDK, select its REST runtime explicitly.
+Confirm that the selected CLI profile or explicit URL targets the intended cloud API before allocating resources; an unconfigured CLI can use the local runtime. Run `boxlite --profile PROFILE auth whoami` and resource queries with the same connection settings, retaining any explicit URL override. When using an SDK, select its REST runtime explicitly.
 
 Select unique Box and volume names and record their IDs, public URL, guest app directory, service port, and persistent paths in a private project manifest. Respect the user's existing profile and cloud environment. For an independent test, allocate separate resources within the authorized scope/budget.
 
@@ -14,7 +14,9 @@ Copy only app source or built artifacts required by the deployment. Exclude host
 
 Check each foreground exec's exit status before using its output; SDK completion alone does not imply success. A detached launch only confirms submission: probe the service port and health endpoint before reporting it ready.
 
-For an app that needs a public HTTPS URL, create its Box with `--inbound enabled`; the default inbound mode is private and `network tunnel` will refuse it. Explain the public exposure and honor the user's existing authorization; obtain authorization when that exposure is outside the agreed scope. Inspect the actual inbound setting rather than assuming platform defaults. Expose only the intended service. Do not recreate an existing private Box merely to change visibility: inspect `boxlite update --help` if that command is available, or use the documented server-side inbound update for that exact Box.
+For a public HTTPS app, `--inbound enabled` makes every service the Box exposes reachable through the remote proxy without proxy authentication; opening a tunnel to one port does not limit that exposure. Before public creation or enabling inbound access, identify all listening services and disable or isolate unintended database, admin, and debug endpoints. Confirm that only intended services can be reached through the proxy. Provision unfamiliar images or services with inbound disabled, inspect them after startup, and keep the Box private until isolation is verified. Recheck listeners after adding or updating services on a public Box. Explain the public exposure and honor the user's existing authorization; obtain authorization when that exposure is outside the agreed scope.
+
+The default inbound mode is private and `network tunnel` will refuse it. Create with `--inbound enabled` only when startup services and isolation have already been verified. Inspect the actual inbound setting rather than assuming platform defaults. Do not recreate an existing private Box merely to change visibility: inspect `boxlite update --help` if that command is available, or use the documented server-side inbound update for that exact Box after the same service checks.
 
 Obtain the public URL with `boxlite --profile PROFILE network tunnel BOX_NAME PORT`. Use the returned HTTPS URL, not a handcrafted proxy hostname. For remote Boxes, `-p` host-port publication is not the public URL mechanism. Verify the app's health endpoint and required features through that URL. Configure application OAuth callbacks only after it is known.
 
