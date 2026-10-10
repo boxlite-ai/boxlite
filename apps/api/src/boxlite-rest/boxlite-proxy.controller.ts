@@ -77,6 +77,7 @@ export class BoxliteProxyController {
   ) {}
 
   @All(':boxId/exec')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   async proxyExec(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -96,6 +97,7 @@ export class BoxliteProxyController {
   }
 
   @All(':boxId/executions/:execId/signal')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   async proxyExecSignal(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -116,6 +118,7 @@ export class BoxliteProxyController {
   }
 
   @All(':boxId/executions/:execId/resize')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   async proxyExecResize(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -156,6 +159,7 @@ export class BoxliteProxyController {
   }
 
   @Delete(':boxId/executions/:execId')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   async proxyExecKill(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -182,6 +186,7 @@ export class BoxliteProxyController {
   // a NestJS 404, which is the correct answer.
 
   @All(':boxId/files')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   async proxyFiles(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,

@@ -109,7 +109,7 @@ serves and the events it emits are catalogued below alongside its routes.
 | `GET`    | `/api/organizations`                                                     | Lists organizations available to the caller.             |
 | `POST`   | `/api/organizations`                                                     | Creates an organization.                                 |
 | `GET`    | `/api/organizations/{organizationId}`                                    | Gets an organization by ID.                              |
-| `GET`    | `/api/organizations/{organizationId}/referral-code`                      | Gets or initializes the organization's invitation code. |
+| `GET`    | `/api/organizations/{organizationId}/referral-code`                      | Gets or initializes the organization's invitation code.  |
 | `GET`    | `/api/organizations/{organizationId}/concurrency`                        | Gets a bounded concurrency timeline from usage periods.  |
 | `DELETE` | `/api/organizations/{organizationId}`                                    | Deletes an organization.                                 |
 | `PATCH`  | `/api/organizations/{organizationId}/name`                               | Changes an organization's name.                          |
@@ -174,7 +174,7 @@ serves and the events it emits are catalogued below alongside its routes.
 | `POST` | `/api/box/{boxIdOrName}/ports/{port}/signed-preview-url/{token}/expire` | Expires a signed preview URL token.                   |
 | `GET`  | `/api/box/{boxId}/toolbox-proxy-url`                                    | Returns the box toolbox proxy URL.                    |
 | `GET`  | `/api/preview/{boxId}/public`                                           | Reports whether a box is publicly reachable.          |
-| `GET`  | `/api/preview/{boxId}/tunnels/{port}`                                   | Checks an active public tunnel for the proxy.          |
+| `GET`  | `/api/preview/{boxId}/tunnels/{port}`                                   | Checks an active public tunnel for the proxy.         |
 | `GET`  | `/api/preview/{boxId}/validate/{authToken}`                             | Validates a box preview authentication token.         |
 | `GET`  | `/api/preview/{boxId}/access`                                           | Checks whether the caller may preview a box.          |
 | `GET`  | `/api/preview/{signedPreviewToken}/{port}/box-id`                       | Resolves a signed preview token and port to a box ID. |
@@ -341,9 +341,21 @@ deployments (shared with the control-plane API)
 Most resource paths accept both an unprefixed form and an organization-prefixed
 form. The tables write that as `[/{prefix}]`; clients can discover their prefix
 through `GET /api/v1/me`. Except for configuration discovery, these routes use
-combined bearer authentication. The box and volume resource routes also apply
-organization authorization; identity discovery at `GET /api/v1/me` can return
-`path_prefix: null` for an authenticated user with no organization membership.
+combined bearer authentication, then organization authorization.
+
+Resource permissions are enforced per route. A box mutation — create, start,
+stop, exec, signal, resize, execution kill, file transfer, and the network
+routes — requires `write:boxes`; deleting a box requires `delete:boxes`. Box
+reads (list, get, head, execution status, metrics) carry no permission and are
+reached by any member, because the model has no `read:boxes`. Volume routes
+require `read:volumes`, `write:volumes`, or `delete:volumes` to match. Attaching
+a managed volume while creating a box is authorized independently of
+`write:boxes`: the caller must also hold `read:volumes` and `write:volumes`, so a
+box-only credential cannot reach another's volume data (GHSA-2qqv-7cwv-mj8h).
+A system admin and an interactive owner without an API key are not
+permission-bounded; every API key is bounded by the permissions it carries.
+`GET /api/v1/me` can return `path_prefix: null` for an authenticated user with no
+organization membership.
 
 <details>
 <summary><b>Discovery</b> · 2 routes</summary>
@@ -385,7 +397,7 @@ organization authorization; identity discovery at `GET /api/v1/me` can return
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/files?path={path}`          | Downloads a box path as a tar stream.                   |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/metrics`                    | Returns metrics for one box without marking it active.  |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Returns the runner tunnel URI for a guest TCP port.     |
-| `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Makes a box public or private (needs `write:boxes`).    |
+| `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Makes a box public or private.                          |
 
 The exec, signal, resize, files, and metrics handlers are registered as
 catch-all reverse proxies to the box's assigned runner; the methods shown are
@@ -651,14 +663,14 @@ is unset; the same document carries PostHog's key and host to the browser.
 <details>
 <summary><b>External interfaces</b> · 4 APIs, 2 SaaS integrations</summary>
 
-| Interface     | Client                                                                                 | Base URL source                  | What it covers                                                                                                                                                                                             |
-| ------------- | -------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Analytics API | [`libs/analytics-api-client`](./libs/analytics-api-client/), generated                 | `analyticsApiUrl`                | 8 routes: per-box and organization usage, aggregates, and charts, plus box logs, metrics, and traces.                                                                                                      |
-| Billing API   | [`billingApiClient.ts`](./dashboard/src/billing-api/billingApiClient.ts), hand-written | `billingApiUrl`                  | 20 routes: wallet and top-ups, plans, payment methods, invoices, usage series and prices, coupons, billing emails, portal and checkout URLs.                                                               |
+| Interface     | Client                                                                                  | Base URL source                  | What it covers                                                                                                                                                                                             |
+| ------------- | --------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Analytics API | [`libs/analytics-api-client`](./libs/analytics-api-client/), generated                  | `analyticsApiUrl`                | 8 routes: per-box and organization usage, aggregates, and charts, plus box logs, metrics, and traces.                                                                                                      |
+| Billing API   | [`billingApiClient.ts`](./dashboard/src/billing-api/billingApiClient.ts), hand-written  | `billingApiUrl`                  | 20 routes: wallet and top-ups, plans, payment methods, invoices, usage series and prices, coupons, billing emails, portal and checkout URLs.                                                               |
 | Box admission | [`commerce-box-limit.service.ts`](./api/src/boxlite-rest/commerce-box-limit.service.ts) | `billingApiUrl`                  | 2 server-side reads on Commerce: `GET /plan` and `GET /organization/{organizationId}/plan`, bearer `USAGE_EXPORT_TOKEN`, used by hosted CREATE BOX.                                                        |
-| Usage export  | [`api/src/usage/services`](./api/src/usage/services/), hand-written                    | `usageExport.url`                | 2 routes on the same Commerce service, server-side: `POST /internal/usage-events` and `POST /internal/allocation-snapshot`, bearer `USAGE_EXPORT_TOKEN`, which must equal Commerce's `USAGE_INGEST_TOKEN`. |
-| PostHog       | `posthog-js` in the dashboard; `posthog-node` in the API                               | `posthog.apiKey`, `posthog.host` | Browser product analytics; server-side `api_*` operation events from the global metrics interceptor, two `groupIdentify` calls, and feature-flag evaluation.                                               |
-| Pylon         | [`App.tsx`](./dashboard/src/App.tsx) widget, production builds only                    | `pylonAppId`                     | Outbound support-chat widget; it registers no route here.                                                                                                                                                  |
+| Usage export  | [`api/src/usage/services`](./api/src/usage/services/), hand-written                     | `usageExport.url`                | 2 routes on the same Commerce service, server-side: `POST /internal/usage-events` and `POST /internal/allocation-snapshot`, bearer `USAGE_EXPORT_TOKEN`, which must equal Commerce's `USAGE_INGEST_TOKEN`. |
+| PostHog       | `posthog-js` in the dashboard; `posthog-node` in the API                                | `posthog.apiKey`, `posthog.host` | Browser product analytics; server-side `api_*` operation events from the global metrics interceptor, two `groupIdentify` calls, and feature-flag evaluation.                                               |
+| Pylon         | [`App.tsx`](./dashboard/src/App.tsx) widget, production builds only                     | `pylonAppId`                     | Outbound support-chat widget; it registers no route here.                                                                                                                                                  |
 
 The analytics client is generated from
 [`swagger.json`](./libs/analytics-api-client/swagger.json). Its four telemetry

@@ -156,6 +156,126 @@ describe('BoxliteBoxController permissions', () => {
   })
 })
 
+// GHSA-2qqv-7cwv-mj8h / POL-845: attaching a managed volume is authorized on
+// the caller's volume permissions, independently of WRITE_BOXES. A box-capable
+// key must not reach a volume through box creation.
+describe('BoxliteBoxController volume attachment authorization', () => {
+  const { READ_VOLUMES, WRITE_VOLUMES, WRITE_BOXES } = OrganizationResourcePermission
+
+  function makeController() {
+    const boxService = {
+      create: jest.fn().mockResolvedValue({ id: 'box-1', state: 'started' }),
+      toBoxDto: jest.fn(),
+    }
+    const boxStateWaiter = { waitForStarted: jest.fn() }
+    const commerceBoxLimitService = { resolveMaxCreatedBoxes: jest.fn().mockResolvedValue(10) }
+    const controller = new BoxliteBoxController(
+      boxService as any,
+      boxStateWaiter as any,
+      commerceBoxLimitService as any,
+    )
+    return { controller, boxService }
+  }
+
+  function keyContext(permissions: OrganizationResourcePermission[]) {
+    return {
+      role: 'user',
+      organization: { id: 'org-1' },
+      organizationId: 'org-1',
+      // Owner on purpose: a key is bounded by its own permissions, not widened
+      // by whoever owns it.
+      organizationUser: { role: 'owner', assignedRoles: [] },
+      apiKey: { permissions },
+    } as any
+  }
+
+  // A non-owner member with no API key is caught by neither bypass, so it is
+  // bounded by the permissions its assigned roles carry, resolved exactly as the
+  // guard resolves them (assignedRoles.flatMap, a missing list treated as none).
+  function memberContext(assignedRoles: Array<{ permissions: OrganizationResourcePermission[] }> | undefined) {
+    return {
+      role: 'user',
+      organization: { id: 'org-1' },
+      organizationId: 'org-1',
+      organizationUser: { role: 'member', assignedRoles },
+    } as any
+  }
+
+  const dtoWithVolume = { image: 'alpine:latest', volumes: [{ managed_volume: 'vol_1', guest_path: '/data' }] } as any
+
+  it('refuses a WRITE_BOXES-only key that attaches a volume', async () => {
+    const { controller, boxService } = makeController()
+
+    await expect(controller.createBox(keyContext([WRITE_BOXES]), dtoWithVolume)).rejects.toThrow(/managed volume/)
+    expect(boxService.create).not.toHaveBeenCalled()
+  })
+
+  it('refuses a key holding only one of the two volume permissions', async () => {
+    const { controller, boxService } = makeController()
+
+    await expect(controller.createBox(keyContext([WRITE_BOXES, READ_VOLUMES]), dtoWithVolume)).rejects.toThrow(
+      /write:volumes/,
+    )
+    expect(boxService.create).not.toHaveBeenCalled()
+  })
+
+  it('allows a key holding both volume permissions', async () => {
+    const { controller, boxService } = makeController()
+
+    await controller.createBox(keyContext([WRITE_BOXES, READ_VOLUMES, WRITE_VOLUMES]), dtoWithVolume)
+
+    expect(boxService.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not gate a volume-free create on volume permissions', async () => {
+    const { controller, boxService } = makeController()
+
+    await controller.createBox(keyContext([WRITE_BOXES]), { image: 'alpine:latest' } as any)
+
+    expect(boxService.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('exempts a system admin and an interactive owner without a key', async () => {
+    const { controller, boxService } = makeController()
+    const admin = { role: 'admin', organization: { id: 'org-1' }, organizationId: 'org-1' } as any
+    const owner = {
+      role: 'user',
+      organization: { id: 'org-1' },
+      organizationId: 'org-1',
+      organizationUser: { role: 'owner', assignedRoles: [] },
+    } as any
+
+    await controller.createBox(admin, dtoWithVolume)
+    await controller.createBox(owner, dtoWithVolume)
+
+    expect(boxService.create).toHaveBeenCalledTimes(2)
+  })
+
+  it('allows a member whose assigned roles grant both volume permissions', async () => {
+    const { controller, boxService } = makeController()
+
+    await controller.createBox(memberContext([{ permissions: [READ_VOLUMES, WRITE_VOLUMES] }]), dtoWithVolume)
+
+    expect(boxService.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a member whose assigned roles lack the volume permissions', async () => {
+    const { controller, boxService } = makeController()
+
+    await expect(
+      controller.createBox(memberContext([{ permissions: [WRITE_BOXES] }]), dtoWithVolume),
+    ).rejects.toThrow(/managed volume/)
+    expect(boxService.create).not.toHaveBeenCalled()
+  })
+
+  it('refuses a member that carries no assigned roles', async () => {
+    const { controller, boxService } = makeController()
+
+    await expect(controller.createBox(memberContext(undefined), dtoWithVolume)).rejects.toThrow(/managed volume/)
+    expect(boxService.create).not.toHaveBeenCalled()
+  })
+})
+
 // The audit log for a visibility change must name the box and the mode asked
 // for, and nothing else from the body. Driven through the real interceptor
 // with the handler's own @Audit metadata, so a wrong extractor fails here.
