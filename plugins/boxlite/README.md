@@ -25,6 +25,8 @@ Discovery tags describe BoxLite cloud deployment through CLI skills. They apply 
 
 Use the references from each skill for the requested workflow. Keep application source, credentials, build caches, and deployment state outside this package.
 
+Setup uses local CLI help and bundled instructions first. Online installation documentation is a conditional reference for missing information or current release verification; a documentation fetch failure alone does not block login or the pinned source-build fallback.
+
 Before the required CLI release is available, the setup skill executes a [pinned source-build fallback](skills/boxlite-setup/references/source-build.md) when no verified compatible CLI is installed. The agent fetches the merged #1836 source, runs the repository's dependency/runtime/CLI Make targets and selects that development executable before login. Keep the checkout for its runtime resources. The plugin ZIP contains the procedure; source and build outputs remain outside the plugin.
 
 Packaging reports absent manifests, non-object JSON, and missing required fields as contextual `ValueError`s. Validation, distribution, and Claude strict checks always run, even when files share their Make target names; the non-colon force prerequisite preserves the macOS Make workaround.
