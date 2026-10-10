@@ -90,3 +90,6 @@ same reason a pending invitation can be cancelled but not edited, and a member
 can be removed but not given another role. The member whose personal
 organization this is has no remove action, because the API refuses that
 removal.
+
+The members page sits in the profile menu, beside the organization settings,
+rather than in the sidebar: it manages the organization, not a resource in it.
