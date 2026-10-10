@@ -8,6 +8,7 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, OneToOne, Uniqu
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
+import { NetworkMode } from '../enums/network-mode.enum'
 import { BoxSecret, BoxVolume } from '../dto/box.dto'
 import { nanoid } from 'nanoid'
 import { BoxLastActivity } from './box-last-activity.entity'
@@ -129,14 +130,19 @@ export class Box {
   })
   env: { [key: string]: string } = {}
 
-  @Column({ default: false, type: 'boolean' })
-  public = false
+  // Network policy, one column per direction, in the `/v1` NetworkSpec
+  // vocabulary. Inbound `enabled` lets the proxy serve the box's exposed
+  // services without sign-in; it never affects the terminal or the API.
+  @Column({ type: 'varchar', default: NetworkMode.DISABLED })
+  inboundMode: NetworkMode = NetworkMode.DISABLED
 
-  @Column({ default: false, type: 'boolean' })
-  networkBlockAll = false
+  @Column({ type: 'varchar', default: NetworkMode.ENABLED })
+  outboundMode: NetworkMode = NetworkMode.ENABLED
 
-  @Column({ nullable: true })
-  networkAllowList?: string
+  // Egress allowlist entries (hosts, wildcards, IPs, CIDRs). Null means full
+  // egress under outbound `enabled`; it is irrelevant under `disabled`.
+  @Column({ type: 'text', array: true, nullable: true })
+  outboundAllowNet?: string[] | null
 
   @Column('jsonb', { nullable: true })
   labels: { [key: string]: string }

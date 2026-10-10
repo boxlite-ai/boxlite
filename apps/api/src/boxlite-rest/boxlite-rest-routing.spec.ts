@@ -30,10 +30,10 @@ jest.mock('uuid', () => ({
 
 describe('BoxLite REST routing', () => {
   let app: INestApplication
-  let updatePublicStatus: jest.Mock
+  let updateInboundMode: jest.Mock
 
   async function startRoutingTestApp() {
-    updatePublicStatus = jest.fn((_boxId: string, isPublic: boolean) => Promise.resolve({ public: isPublic }))
+    updateInboundMode = jest.fn((_boxId: string, inboundMode: string) => Promise.resolve({ inboundMode }))
     const moduleRef = await Test.createTestingModule({
       // The module's order, with the proxy controller's catch-all routes
       // present, so one that shadowed PUT network/inbound would fail below.
@@ -44,7 +44,7 @@ describe('BoxLite REST routing', () => {
           useValue: {
             findAllDeprecated: jest.fn().mockResolvedValue([]),
             toBoxDtos: jest.fn().mockResolvedValue([]),
-            updatePublicStatus,
+            updateInboundMode,
           },
         },
         {
@@ -117,16 +117,16 @@ describe('BoxLite REST routing', () => {
   })
 
   it.each([
-    ['/api/v1/boxes/box-1/network/inbound', 'enabled', true],
-    ['/api/v1/default/boxes/box-1/network/inbound', 'disabled', false],
-  ])('PUT %s sets inbound %s', async (path, mode, isPublic) => {
+    ['/api/v1/boxes/box-1/network/inbound', 'enabled'],
+    ['/api/v1/default/boxes/box-1/network/inbound', 'disabled'],
+  ])('PUT %s sets inbound %s', async (path, mode) => {
     await startRoutingTestApp()
 
     const response = await put(path, { mode })
 
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ mode })
-    expect(updatePublicStatus).toHaveBeenCalledWith('box-1', isPublic, 'org-123')
+    expect(updateInboundMode).toHaveBeenCalledWith('box-1', mode, 'org-123')
   })
 
   it.each([
@@ -140,7 +140,7 @@ describe('BoxLite REST routing', () => {
     const response = await put('/api/v1/boxes/box-1/network/inbound', body)
 
     expect(response.status).toBe(400)
-    expect(updatePublicStatus).not.toHaveBeenCalled()
+    expect(updateInboundMode).not.toHaveBeenCalled()
   })
 
   // Clients call the inbound route only when the server advertises it, so a

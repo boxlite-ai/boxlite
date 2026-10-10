@@ -27,7 +27,13 @@ function makeHarness() {
   const boxService = {
     findOneByIdOrName: jest
       .fn()
-      .mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true, state: 'started', public: true }),
+      .mockResolvedValue({
+        id: 'box-uuid',
+        runnerId: 'runner-1',
+        autoResume: true,
+        state: 'started',
+        inboundMode: 'enabled',
+      }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
     getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://3000-box.proxy.test'),
   }
@@ -166,16 +172,14 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: true,
       state: 'started',
-      public: false,
+      inboundMode: 'disabled',
     })
 
     await expect(
       controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, tunnelRes as never),
     ).rejects.toMatchObject({
       status: 409,
-      message: expect.stringMatching(
-        /inbound access disabled.*boxlite update public-box --inbound enabled/,
-      ),
+      message: expect.stringMatching(/inbound access disabled.*boxlite update public-box --inbound enabled/),
     })
     expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
   })
@@ -191,7 +195,7 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: true,
       state: 'stopped',
-      public: false,
+      inboundMode: 'disabled',
     })
 
     await expect(
@@ -210,14 +214,14 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: false,
       state: 'stopped',
-      public: true,
+      inboundMode: 'enabled',
     })
 
     await expect(
       controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, tunnelRes as never),
     ).rejects.toMatchObject({
       status: 409,
-      // Pin the reason: without public: true this 409s at the visibility
+      // Pin the reason: without inboundMode: 'enabled' this 409s at the visibility
       // gate instead, and the state policy under test never runs.
       message: expect.stringContaining('is not running'),
     })
@@ -232,7 +236,7 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: true,
       state: 'stopped',
-      public: true,
+      inboundMode: 'enabled',
     })
 
     const result = await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, tunnelRes as never)
@@ -256,7 +260,7 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: true,
       state: 'stopped',
-      public: true,
+      inboundMode: 'enabled',
     })
     autoResume.ensureReady.mockRejectedValue(new RequestTimeoutException('Timed out waiting to resume box box-uuid'))
 
@@ -274,7 +278,7 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: true,
       state: 'stopped',
-      public: true,
+      inboundMode: 'enabled',
     })
     const failure = new Error('start failed')
     autoResume.ensureReady.mockRejectedValue(failure)
@@ -303,7 +307,7 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: true,
       state: 'started',
-      public: false,
+      inboundMode: 'disabled',
     })
 
     await expect(
@@ -323,7 +327,7 @@ describe('BoxliteProxyController', () => {
         runnerId: 'runner-1',
         autoResume: true,
         state,
-        public: true,
+        inboundMode: 'enabled',
       })
 
       await expect(
@@ -343,7 +347,7 @@ describe('BoxliteProxyController', () => {
         runnerId: 'runner-1',
         autoResume: true,
         state,
-        public: true,
+        inboundMode: 'enabled',
       })
 
       await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, tunnelRes as never)
@@ -362,7 +366,7 @@ describe('BoxliteProxyController', () => {
         runnerId: 'runner-1',
         autoResume: false,
         state,
-        public: true,
+        inboundMode: 'enabled',
       })
 
       await expect(

@@ -40,6 +40,7 @@ import { RunnerService } from '../box/services/runner.service'
 import { AUTO_RESUME_TIMEOUT_SECONDS, BoxAutoResumeService } from './box-auto-resume.service'
 import { BoxState } from '../box/enums/box-state.enum'
 import { TunnelService } from '../box/services/tunnel.service'
+import { isInboundEnabled } from '../box/utils/network-policy.util'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -245,7 +246,7 @@ export class BoxliteProxyController {
     // tunnel. Checked before the state gate below so a private box is never
     // woken (ensureReady is a real resume, not a free status read) only to
     // be rejected here anyway.
-    if (!box.public) {
+    if (!isInboundEnabled(box.inboundMode)) {
       throw new ConflictException(
         `Box ${boxId} has inbound access disabled. Enable it (for example: \`boxlite update ${boxId} --inbound enabled\`) and retry.`,
       )
