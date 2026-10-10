@@ -217,6 +217,7 @@ describe('BoxMigrationManager submitter loop', () => {
     const migration = makeMigration(BoxMigrationState.PENDING_IMPORT, {
       arcPath: 'box-migrations/box-1.boxlite',
     })
+    migration.box.disk = 120
     const h = makeHarness([migration])
 
     await h.manager.submitMigrationJobs()
@@ -225,6 +226,7 @@ describe('BoxMigrationManager submitter loop', () => {
       regions: [migration.box.region],
       boxClass: migration.box.class,
       excludedRunnerIds: [SOURCE_RUNNER],
+      requiredDiskGiB: 120,
     })
     expect(h.jobService.createJob).toHaveBeenCalledWith(
       h.entityManager,

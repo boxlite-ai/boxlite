@@ -583,6 +583,15 @@ const configuration = {
       },
     },
   },
+  // Hard disk admission for runner selection; see findAvailableRunners.
+  runnerDisk: {
+    overcommitRatio: parseFloat(process.env.RUNNER_DISK_OVERCOMMIT_RATIO || '1'),
+    // What a runner's data disk can grow to. Unset means its reported diskGiB.
+    expandLimitGiB: process.env.RUNNER_DISK_EXPAND_LIMIT_GIB
+      ? parseInt(process.env.RUNNER_DISK_EXPAND_LIMIT_GIB, 10)
+      : undefined,
+    minFreePercentage: parseFloat(process.env.RUNNER_DISK_MIN_FREE_PERCENTAGE || '10'),
+  },
   rateLimit: {
     anonymous: {
       ttl: process.env.RATE_LIMIT_ANONYMOUS_TTL ? parseInt(process.env.RATE_LIMIT_ANONYMOUS_TTL, 10) : undefined,

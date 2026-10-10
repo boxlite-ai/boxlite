@@ -13,6 +13,7 @@ import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
 import { Runner } from '../entities/runner.entity'
 import { BoxClass } from '../enums/box-class.enum'
+import { BoxState } from '../enums/box-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
 import { BoxRepository } from '../repositories/box.repository'
 import { BoxService } from './box.service'
@@ -45,6 +46,14 @@ describeIfDatabase('BoxService runner assignment under concurrency (integration,
   let redis: Redis
   let service: BoxService
   let ownsDatabase = false
+  let config: Record<string, number | undefined>
+
+  const defaultConfig = {
+    'runnerScore.thresholds.availability': 10,
+    'runnerDisk.overcommitRatio': 1,
+    'runnerDisk.minFreePercentage': 10,
+    'runnerDisk.expandLimitGiB': undefined,
+  }
 
   function readyRunner(): Runner {
     const runner = new Runner({
@@ -132,7 +141,7 @@ describeIfDatabase('BoxService runner assignment under concurrency (integration,
     const runnerService = Object.create(RunnerService.prototype) as RunnerService
     Object.assign(runnerService as any, {
       runnerRepository: runners,
-      configService: { getOrThrow: jest.fn().mockReturnValue(10) },
+      configService: { get: (key: string) => config[key], getOrThrow: (key: string) => config[key] },
       dataSource,
     })
 
@@ -183,6 +192,7 @@ describeIfDatabase('BoxService runner assignment under concurrency (integration,
   })
 
   beforeEach(async () => {
+    config = { ...defaultConfig }
     await dataSource.query(`DELETE FROM "${schemaName}"."box_last_activity"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."box"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."runner"`)
@@ -249,5 +259,88 @@ describeIfDatabase('BoxService runner assignment under concurrency (integration,
     // says "nowhere to put this" is the honest answer.
     await expect(assignBox('draining-target')).rejects.toMatchObject({ status: 400 })
     expect(await boxes.countBy({ runnerId: runner.id })).toBe(0)
+  })
+
+  describe('disk admission', () => {
+    async function diskRunner(diskGiB: number, usagePercentage = 0): Promise<Runner> {
+      const runner = readyRunner()
+      runner.diskGiB = diskGiB
+      runner.currentDiskUsagePercentage = usagePercentage
+      await runners.insert(runner)
+      return runner
+    }
+
+    async function placeBox(runner: Runner, disk: number, state = BoxState.STARTED): Promise<void> {
+      const box = pendingBox(`placed-${randomUUID().slice(0, 8)}`)
+      box.runnerId = runner.id
+      box.disk = disk
+      box.state = state
+      await boxes.insert(box)
+    }
+
+    function assignDisk(disk: number): Promise<Box> {
+      const box = pendingBox(`disk-${randomUUID().slice(0, 8)}`)
+      box.disk = disk
+      return (service as any).persistOnAvailableRunner(box, { regions: [region], boxClass: BoxClass.SMALL }, () =>
+        boxRepository.insert(box),
+      )
+    }
+
+    it('skips a runner whose allocated disk plus the request exceeds its capacity', async () => {
+      const full = await diskRunner(500)
+      await placeBox(full, 200)
+      await placeBox(full, 250)
+      const roomy = await diskRunner(500)
+
+      // Placement picks randomly among candidates, so several boxes make a
+      // runner that should have been skipped show up rather than hide by luck.
+      for (let i = 0; i < 5; i++) {
+        expect((await assignDisk(60)).runnerId).toBe(roomy.id)
+      }
+    })
+
+    it('admits a request that exactly fills the remaining capacity', async () => {
+      const runner = await diskRunner(500)
+      await placeBox(runner, 200)
+      await placeBox(runner, 250)
+
+      expect((await assignDisk(50)).runnerId).toBe(runner.id)
+    })
+
+    it('reports no available runners when no runner has room', async () => {
+      const runner = await diskRunner(100)
+      await placeBox(runner, 60)
+
+      await expect(assignDisk(50)).rejects.toMatchObject({ status: 400, message: 'No available runners' })
+    })
+
+    it('does not count archived or destroyed boxes as allocated', async () => {
+      const runner = await diskRunner(100)
+      await placeBox(runner, 80, BoxState.ARCHIVED)
+      await placeBox(runner, 80, BoxState.DESTROYED)
+
+      expect((await assignDisk(90)).runnerId).toBe(runner.id)
+    })
+
+    it('skips a runner with less than the minimum free space', async () => {
+      await diskRunner(1000, 91)
+
+      await expect(assignDisk(10)).rejects.toMatchObject({ status: 400 })
+    })
+
+    it('admits a runner at exactly the minimum free space', async () => {
+      const runner = await diskRunner(1000, 90)
+
+      expect((await assignDisk(10)).runnerId).toBe(runner.id)
+    })
+
+    it('admits up to the expand limit when it exceeds the current capacity', async () => {
+      config['runnerDisk.expandLimitGiB'] = 400
+      const runner = await diskRunner(100)
+      await placeBox(runner, 300)
+
+      expect((await assignDisk(100)).runnerId).toBe(runner.id)
+      await expect(assignDisk(1)).rejects.toMatchObject({ status: 400 })
+    })
   })
 })
