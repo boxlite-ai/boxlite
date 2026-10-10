@@ -48,7 +48,7 @@ We assume an attacker has:
 
 | Threat Actor | Description | Mitigation |
 |--------------|-------------|------------|
-| Malicious volumes | Attacker-controlled host paths mounted into guest | Sandbox restricts file access to explicit paths |
+| Malicious volumes and bind mounts | Attacker-controlled host paths mounted into guest | Sandbox restricts file access to explicit paths |
 | Resource exhaustion | Guest attempting to consume host resources | cgroups (Linux) and rlimits limit resources |
 | Information leakage | Guest attempting to read host secrets | Environment sanitization, FD cleanup |
 | Privilege escalation | Guest/shim attempting to gain root | Privilege dropping, seccomp filtering |
@@ -218,7 +218,7 @@ requiring maximum security should use Linux.
 1. Environment sanitized (secrets removed)
 2. Inherited FDs closed (no leaked handles)
 3. Sandbox restricts file read paths
-4. Only explicit volume mounts accessible
+4. Only explicit volume and bind mounts accessible
 
 ### Privilege Escalation
 
@@ -237,7 +237,7 @@ requiring maximum security should use Linux.
 **Mitigations**:
 1. pivot_root changes filesystem root (Linux)
 2. Sandbox enforces path whitelist (macOS)
-3. Only explicit volume paths accessible
+3. Only explicit volume and bind-mount paths accessible
 4. Symlink attacks prevented by canonicalization
 
 ## Security Properties
@@ -271,7 +271,7 @@ requiring maximum security should use Linux.
 
 1. **Guest code**: Assumed malicious from start
 2. **Guest filesystem**: Assumed to contain malicious data
-3. **Volume contents**: Assumed potentially malicious
+3. **Volume and bind-mount contents**: Assumed potentially malicious
 
 ## Non-Goals
 

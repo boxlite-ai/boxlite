@@ -9,7 +9,7 @@ use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
 use crate::runtime::id::{BoxID, BoxIDMint};
 use crate::runtime::layout::{BoxFilesystemLayout, FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
-use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
+use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions, MountType};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
 use crate::vmm::VmmKind;
@@ -1764,12 +1764,21 @@ fn reject_local_unsupported_options(options: &BoxOptions) -> BoxliteResult<()> {
         )));
     }
 
-    // The local runtime shares no typed mounts yet(TODO): refused here, before
-    // the image pull and the box record, rather than dropped at boot.
-    if !options.mounts.is_empty() {
-        return Err(BoxliteError::Unsupported(
-            "typed mounts are not supported by the local runtime yet".into(),
-        ));
+    // The `BoxOptions::mounts` sibling of the managed-volume check above.
+    //
+    // `resolve_user_mounts` refuses a volume mount too, but only once boot is
+    // under way; failing here keeps the refusal ahead of the image pull and the
+    // box record.
+    if let Some(mount) = options
+        .mounts
+        .iter()
+        .find(|mount| mount.mount_type == MountType::Volume)
+    {
+        let source = mount.source.as_deref().unwrap_or_default();
+        return Err(BoxliteError::Unsupported(format!(
+            "volume mount of {source:?} is only supported by REST runtimes; the local runtime \
+             has no volume backend to resolve it against"
+        )));
     }
 
     Ok(())
@@ -2015,22 +2024,31 @@ mod tests {
         assert!(message.contains("REST runtime"), "{message}");
     }
 
-    /// Until the local runtime shares typed mounts, create refuses them rather
-    /// than booting a box without them.
+    /// The same guard for typed mounts: a bind mount passes, a volume mount is
+    /// refused before boot rather than by `resolve_user_mounts` during it.
     #[tokio::test]
-    async fn local_runtime_refuses_typed_mounts_until_it_shares_them() {
+    async fn local_runtime_rejects_volume_mounts_before_boot() {
         use crate::runtime::options::MountSpec;
 
-        let options = BoxOptions {
+        let features = ExperimentalFeatures::default();
+        let bind = BoxOptions {
             mounts: vec![MountSpec::bind_mount("/tmp/data", "/data")],
             ..Default::default()
         };
-        let error = sanitize_local_options(&ExperimentalFeatures::default(), options)
+        assert!(sanitize_local_options(&features, bind).await.is_ok());
+
+        let volume = BoxOptions {
+            mounts: vec![MountSpec::volume_mount("my-data", "/data")],
+            ..Default::default()
+        };
+        let error = sanitize_local_options(&features, volume)
             .await
-            .expect_err("the local runtime shares no typed mounts yet");
+            .expect_err("a volume mount has no local backend to resolve against");
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
-        assert!(error.to_string().contains("typed mounts"), "{error}");
+        let message = error.to_string();
+        assert!(message.contains("my-data"), "{message}");
+        assert!(message.contains("REST runtime"), "{message}");
     }
 
     #[test]

@@ -848,9 +848,13 @@ A runtime refuses the mounts it does not take rather than dropping them; use
 
 - REST runtimes take no typed mounts yet.
 
-- The local runtime takes no typed mounts yet.
+- The local runtime shares a `Bind` mount's directory, or a single file staged
+  on its own. It has no volume backend, so it refuses a `Volume` mount: create
+  refuses one before the box is recorded, and a box imported with one fails
+  at boot.
 
-- Importing an archive that carries mounts is not supported yet.
+- Importing your own archive keeps its mounts; an untrusted upload refuses
+  them, as it refuses volumes.
 
 ### NetworkSpec
 
