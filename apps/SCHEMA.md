@@ -428,6 +428,19 @@ a derived availability score.
 **Unique:** `(region, name)`. **Index:**
 `(state, unschedulable, region)` — the placement query.
 
+**Disk admission.** The placement query also requires room for the box's
+requested `disk`:
+
+- `Σ box.disk + requested ≤ max(diskGiB, RUNNER_DISK_EXPAND_LIMIT_GIB) × RUNNER_DISK_OVERCOMMIT_RATIO`,
+  where the sum covers this runner's boxes that are not `archived` or
+  `destroyed`. The expand limit is unset by default and the ratio is `1`.
+- `currentDiskUsagePercentage ≤ 100 − RUNNER_DISK_MIN_FREE_PERCENTAGE` (default `10`).
+
+Allocation comes from `box` rows, not `currentAllocatedDiskGiB`. Selection and
+insert are not locked against each other, so concurrent creates can overshoot
+slightly; the free-space floor bounds that. A box that fits nowhere fails with
+`No available runners`.
+
 ### `region`
 
 A placement domain. Two check constraints keep type and ownership consistent,

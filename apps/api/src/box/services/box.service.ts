@@ -133,7 +133,7 @@ export class BoxService {
    * Assigns `box` to a schedulable runner, then persists it.
    *
    * Nothing locks the runner row across the gap between the candidate query —
-   * which already filters out draining, unschedulable and non-READY runners —
+   * which already filters out draining, unschedulable, non-READY and full runners —
    * and the insert. A drain landing inside that gap therefore wins the row but
    * not the box: the runner ends up marked draining with this box assigned to
    * it. That is the deliberate trade, and it is how schedulers usually settle
@@ -153,10 +153,10 @@ export class BoxService {
    */
   private async persistOnAvailableRunner(
     box: Box,
-    runnerParams: GetRunnerParams,
+    runnerParams: Omit<GetRunnerParams, 'requiredDiskGiB'>,
     persist: () => Promise<Box>,
   ): Promise<Box> {
-    const runner = await this.runnerService.getRandomAvailableRunner(runnerParams)
+    const runner = await this.runnerService.getRandomAvailableRunner({ ...runnerParams, requiredDiskGiB: box.disk })
     box.runnerId = runner.id
     return persist()
   }

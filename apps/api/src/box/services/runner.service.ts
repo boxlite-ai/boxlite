@@ -16,7 +16,17 @@ import {
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { DataSource, FindOptionsWhere, In, MoreThanOrEqual, Not, Repository, UpdateResult } from 'typeorm'
+import {
+  DataSource,
+  FindOptionsWhere,
+  In,
+  LessThanOrEqual,
+  MoreThanOrEqual,
+  Not,
+  Raw,
+  Repository,
+  UpdateResult,
+} from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { Runner } from '../entities/runner.entity'
 import { CreateRunnerInternalDto } from '../dto/create-runner-internal.dto'
@@ -302,6 +312,26 @@ export class RunnerService {
       runnerFilter.class = params.boxClass
     }
 
+    // Disk admission. Allocated disk is summed from box rows because the
+    // runner reports used space, not requested sizes. Selection and insert are
+    // not locked against each other (see BoxService.persistOnAvailableRunner),
+    // so concurrent creates can overshoot; the free-space floor bounds that.
+    runnerFilter.currentDiskUsagePercentage = LessThanOrEqual(
+      100 - this.configService.getOrThrow('runnerDisk.minFreePercentage'),
+    )
+    runnerFilter.diskGiB = Raw(
+      (diskGiB) =>
+        `(SELECT COALESCE(SUM(b."disk"), 0) FROM "box" b` +
+        ` WHERE b."runnerId" = ${diskGiB.replace(/diskGiB$/, 'id')} AND b."state" NOT IN (:...releasedStates))` +
+        ` + :requiredDiskGiB <= GREATEST(${diskGiB}, :expandLimitGiB) * :overcommitRatio`,
+      {
+        releasedStates: RELEASED_BOX_STATES,
+        requiredDiskGiB: params.requiredDiskGiB,
+        expandLimitGiB: this.configService.get('runnerDisk.expandLimitGiB') ?? 0,
+        overcommitRatio: this.configService.getOrThrow('runnerDisk.overcommitRatio'),
+      },
+    )
+
     const runners = await this.runnerRepository.find({
       where: runnerFilter,
     })
@@ -328,7 +358,7 @@ export class RunnerService {
     }
 
     const boxCount = await this.boxRepository.count({
-      where: { runnerId: id, state: Not(In([BoxState.ARCHIVED, BoxState.DESTROYED])) },
+      where: { runnerId: id, state: Not(In(RELEASED_BOX_STATES)) },
     })
     if (boxCount > 0) {
       throw new HttpException(
@@ -981,11 +1011,15 @@ export class RunnerService {
  */
 export const NO_AVAILABLE_RUNNERS = 'No available runners'
 
+/** Boxes in these states no longer hold disk on their runner. */
+const RELEASED_BOX_STATES = [BoxState.ARCHIVED, BoxState.DESTROYED]
+
 export class GetRunnerParams {
   regions?: string[]
   boxClass?: BoxClass
   excludedRunnerIds?: string[]
   availabilityScoreThreshold?: number
+  requiredDiskGiB: number
 }
 
 interface AvailabilityScoreParams {
