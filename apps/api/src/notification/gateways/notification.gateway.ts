@@ -13,8 +13,9 @@ import { BoxState } from '../../box/enums/box-state.enum'
 import { BoxDto } from '../../box/dto/box.dto'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
-import { JwtStrategy } from '../../auth/jwt.strategy'
+import { JwtStrategy, jwtUserId } from '../../auth/jwt.strategy'
 import { ApiKeyStrategy } from '../../auth/api-key.strategy'
+import { OrganizationUserService } from '../../organization/services/organization-user.service'
 import { isAuthContext } from '../../common/interfaces/auth-context.interface'
 import { VolumeEvents } from '../../box/constants/volume-events'
 import { VolumeDto } from '../../box/dto/volume.dto'
@@ -38,6 +39,7 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
   constructor(
     private readonly jwtStrategy: JwtStrategy,
     private readonly apiKeyStrategy: ApiKeyStrategy,
+    private readonly organizationUserService: OrganizationUserService,
     @InjectRedis() private readonly redis: Redis,
   ) {
     super()
@@ -61,16 +63,18 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
 
       // Try JWT authentication first
       try {
-        const payload = await this.jwtStrategy.verifyToken(token)
+        const userId = jwtUserId(await this.jwtStrategy.verifyToken(token))
+        if (!userId) {
+          return next(new UnauthorizedException())
+        }
 
         // Join the user room for user scoped notifications
-        await socket.join(payload.sub)
-
-        // Join the organization room for organization scoped notifications
-        const organizationId = socket.handshake.query.organizationId as string | undefined
-        if (organizationId) {
-          await socket.join(organizationId)
-        }
+        await socket.join(userId)
+        await this.joinOrganizationRoomAsMember(
+          socket,
+          userId,
+          socket.handshake.query.organizationId as string | undefined,
+        )
 
         return next()
       } catch {
@@ -84,11 +88,7 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
         if (isAuthContext(authContext)) {
           // Join the user room for user scoped notifications
           await socket.join(authContext.userId)
-
-          // Join the organization room for organization scoped notifications
-          if (authContext.organizationId) {
-            await socket.join(authContext.organizationId)
-          }
+          await this.joinOrganizationRoomAsMember(socket, authContext.userId, authContext.organizationId)
 
           return next()
         }
@@ -98,6 +98,19 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
         return next(new UnauthorizedException())
       }
     })
+  }
+
+  // An organization room broadcasts that organization's box, volume and runner
+  // events, so a token alone is not enough: the user must be a member.
+  private async joinOrganizationRoomAsMember(socket: Socket, userId: string, organizationId: string | undefined) {
+    if (!organizationId) {
+      return
+    }
+    if (!(await this.organizationUserService.exists(organizationId, userId))) {
+      this.logger.warn(`Socket for user ${userId} not joined to organization ${organizationId}: not a member`)
+      return
+    }
+    await socket.join(organizationId)
   }
 
   emitBoxCreated(box: BoxDto) {
@@ -148,5 +161,9 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
       return
     }
     this.server.to(organizationId).emit(RunnerEvents.UNSCHEDULABLE_UPDATED, runner)
+  }
+
+  leaveOrganizationRoom(userId: string, organizationId: string) {
+    this.server.in(userId).socketsLeave(organizationId)
   }
 }

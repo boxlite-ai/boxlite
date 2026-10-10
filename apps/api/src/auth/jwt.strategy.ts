@@ -42,6 +42,15 @@ export function requireVerifiedAuth0DatabaseEmail(
   }
 }
 
+/**
+ * The user id of a verified token, for consumers that bypass Passport's validate
+ * callback. Same rule as JwtStrategy.validate, so every transport resolves one user:
+ * OKTA tokens carry it in `uid` (with the email in `sub`); others in `sub`.
+ */
+export function jwtUserId(payload: { sub?: string; cid?: unknown; uid?: unknown }): string | undefined {
+  return payload.cid && payload.uid ? (payload.uid as string) : payload.sub
+}
+
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   private readonly logger = new Logger(JwtStrategy.name)

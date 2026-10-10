@@ -8,7 +8,7 @@ import type { IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { createProxyMiddleware, type RequestHandler } from 'http-proxy-middleware'
 import { ApiKeyService } from '../api-key/api-key.service'
-import { JwtStrategy } from '../auth/jwt.strategy'
+import { JwtStrategy, jwtUserId } from '../auth/jwt.strategy'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { OrganizationService } from '../organization/services/organization.service'
 import { Organization } from '../organization/entities/organization.entity'
@@ -193,11 +193,7 @@ export class BoxliteWsProxyService {
       // 2. JWT (OIDC) — org comes from the URL tenant; membership required.
       if (!this.jwtStrategy) return null
       if (!urlTenant || urlTenant === 'default') return null
-      const payload = await this.jwtStrategy.verifyToken(token)
-      // Mirror JwtStrategy.validate's sub/uid handling (OKTA carries userId in `uid`).
-      const claims = payload as { sub?: string; cid?: unknown; uid?: string }
-      let userId = claims.sub
-      if (claims.cid && claims.uid) userId = claims.uid
+      const userId = jwtUserId(await this.jwtStrategy.verifyToken(token))
       if (!userId) return null
 
       const membership = await this.organizationUserService.findOne(urlTenant, userId)

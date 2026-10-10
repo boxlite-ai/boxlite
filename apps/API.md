@@ -304,7 +304,7 @@ release fetched over HTTPS.
 
 | Protocol                 | Path, topic, or event          | What it does                                                                                                                           |
 | ------------------------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Socket.IO over WebSocket | `/api/socket.io/`              | Authenticates a JWT or API key, joins user and organization rooms, and streams resource notifications.                                 |
+| Socket.IO over WebSocket | `/api/socket.io/`              | Authenticates a JWT or API key and joins the user room, plus the organization room for members only; removal ejects the member. |
 | Socket.IO event          | `box.created`                  | Notifies an organization that a box was created.                                                                                       |
 | Socket.IO event          | `box.state.updated`            | Notifies an organization that a box's observed state changed.                                                                          |
 | Socket.IO event          | `box.desired-state.updated`    | Notifies an organization that a box's desired state changed.                                                                           |
