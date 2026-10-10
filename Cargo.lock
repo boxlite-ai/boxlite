@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-c"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "boxlite",
  "cbindgen",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-cli"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-guest"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -695,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-hypervisor"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "kvm-bindings",
  "kvm-ioctls",
@@ -704,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-node"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "boxlite",
  "boxlite-shared",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-python"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "boxlite",
  "futures",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-shared"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "futures",
  "proptest",
@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-shim"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "boxlite",
  "boxlite-shared",
@@ -778,7 +778,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-vmm"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "boxlite-hypervisor",
 ]
@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "bubblewrap-sys"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "num_cpus",
 ]
@@ -1628,7 +1628,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "e2fsprogs-sys"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "num_cpus",
 ]
@@ -3061,14 +3061,14 @@ dependencies = [
 
 [[package]]
 name = "libgvproxy-sys"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "libkrun-sys"
-version = "0.10.5"
+version = "0.10.6"
 dependencies = [
  "libc",
  "num_cpus",
