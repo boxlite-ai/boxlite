@@ -2,7 +2,7 @@
 
 The BoxLite developer account uses Auth0 for CLI/cloud authorization. An application's users authenticate with that application's own identity provider and sessions. End users do not need BoxLite accounts. Do not share the developer access token with a generated application.
 
-For application Google login, register its actual HTTPS origin and exact callback in a separate Google OAuth Web client. Configure consent and test users while in testing. Supply the client secret only to the application backend through a private file transfer or the selected secret store. Do not change the BoxLite platform's Auth0 Google connection to configure app login.
+For application Google login, use the verified registered tunnel URL from [deployment](deployment.md) for its HTTPS origin and exact callback in a separate Google OAuth Web client. Preview or signed-preview links must not become OAuth origins or callbacks. Configure consent and test users while in testing. Supply the client secret only to the application backend through a private file transfer or the selected secret store. Do not change the BoxLite platform's Auth0 Google connection to configure app login.
 
 Use a maintained OAuth/OIDC library to validate state, nonce, signature, issuer, and audience. Verify email when the application's identity rules require it. Do not accept an unsigned browser profile as proof of identity. Use secure HttpOnly session cookies and appropriate CSRF protection for cookie-authenticated mutations. Keep user authorization in the backend and database.
 
