@@ -129,6 +129,8 @@ Use the [GCP SMTP procedure](gcp/identity-and-mail.md#application-mail) or
 [AWS SES procedure](aws/identity-and-mail.md#application-mail) for the application sender.
 When mail is disabled, invitations may be created without delivery. Verify application invitations
 and identity-provider verification/reset messages independently.
+An invitation email links to `<DASHBOARD_URL>/dashboard/user/invitations?id=<invitation>`, so set
+`DASHBOARD_URL` to the console's origin, not to a path under it.
 
 ## Universal Login branding
 
