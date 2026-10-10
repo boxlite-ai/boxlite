@@ -1003,7 +1003,7 @@ mod tests {
         std::fs::create_dir_all(layout.sockets_dir()).unwrap();
         std::fs::create_dir_all(layout.logs_dir()).unwrap();
 
-        let paths = crate::jailer::build_path_access(&layout, &[]);
+        let paths = crate::jailer::build_path_access(&layout, &[], &[]);
         let binary = PathBuf::from("/usr/local/bin/boxlite-shim");
         let policy = build_sandbox_policy(&paths, &UnixSocketAccess::default(), &binary, false);
 
