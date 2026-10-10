@@ -81,3 +81,8 @@ what to do next, and any dialog it opens must be the same one the rest of the UI
 opens. A second entry point to the same guide is a bug, not a convenience —
 mounting one twice has already caused duplicate API keys to be minted
 (issue #1491).
+
+## Every invitee joins as an owner
+
+An organization has no finer roles yet, so inviting asks only for an email
+address: a role picker would offer choices the product does not have.
