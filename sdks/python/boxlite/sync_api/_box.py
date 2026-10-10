@@ -65,6 +65,10 @@ class SyncBox:
         """Establish a native tunnel handle for a service port."""
         return self._sync(self._box.network.tunnel(port))
 
+    def _set_inbound(self, mode: str) -> None:
+        """Forward an inbound-mode change to the native network handle."""
+        self._sync(self._box.network.set_inbound(mode))
+
     @property
     def id(self) -> str:
         """Get the box ID."""

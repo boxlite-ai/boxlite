@@ -205,6 +205,51 @@ fn test_box_network_null_pointer_validation() {
     }
 }
 
+// Declared as `boxlite.h` declares it, so these tests pass `mode` the way a C
+// caller does: as a plain integer that no Rust enum has checked.
+unsafe extern "C" {
+    #[link_name = "boxlite_network_set_inbound"]
+    fn c_network_set_inbound(
+        network: *mut c_void,
+        mode: i32,
+        out_error: *mut CBoxliteError,
+    ) -> BoxliteErrorCode;
+}
+
+#[test]
+fn test_network_set_inbound_null_pointer_validation() {
+    unsafe {
+        let mut error = FFIError::default();
+        let code = c_network_set_inbound(
+            ptr::null_mut(),
+            BoxliteNetworkMode::BoxliteNetworkModeEnabled as i32,
+            &mut error as *mut _,
+        );
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        boxlite_error_free(&mut error as *mut _);
+    }
+}
+
+// C callers can pass any integer as the mode. An unknown one must be rejected
+// before the handle is touched, with an error that names the value.
+#[test]
+fn test_network_set_inbound_rejects_unknown_mode() {
+    for mode in [2, -1] {
+        unsafe {
+            let mut error = FFIError::default();
+            let code = c_network_set_inbound(ptr::null_mut(), mode, &mut error as *mut _);
+            assert_eq!(code, BoxliteErrorCode::InvalidArgument, "mode {mode}");
+            let message = CStr::from_ptr(error.message).to_string_lossy().into_owned();
+            assert!(
+                message.contains(&format!("mode {mode}")),
+                "mode {mode}: {message}"
+            );
+            boxlite_error_free(&mut error as *mut _);
+        }
+    }
+}
+
 #[test]
 fn test_c_string_conversion_logic() {
     let test_str = CString::new("hello").unwrap();

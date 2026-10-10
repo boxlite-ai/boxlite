@@ -2,9 +2,11 @@ package boxlite
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -189,5 +191,90 @@ func TestRestBoxInfoFetchesCurrentMetadata(t *testing.T) {
 			info.AutoDelete,
 			info.AutoResume,
 		)
+	}
+}
+
+func TestRestNetworkSetInboundPutsMode(t *testing.T) {
+	const boxJSON = `{
+		"box_id":"box1","name":"service","status":"running",
+		"created_at":"2026-07-14T00:00:00Z","updated_at":"2026-07-14T00:00:00Z",
+		"pid":null,"image":"alpine:3.20","cpus":1,"memory_mib":256
+	}`
+	cases := []struct {
+		name         string
+		capabilities string
+		mode         NetworkMode
+		wantPut      bool
+		wantErr      string
+	}{
+		{name: "advertising server accepts the update", capabilities: `{"capabilities":{"inbound_update_enabled":true}}`, mode: NetworkModeDisabled, wantPut: true},
+		{name: "server without the capability is refused before any PUT", capabilities: `{"capabilities":{}}`, mode: NetworkModeDisabled, wantErr: "unsupported"},
+		{name: "unknown mode is rejected before any request", capabilities: `{"capabilities":{"inbound_update_enabled":true}}`, mode: NetworkMode("public"), wantErr: `invalid inbound network mode "public"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var putBody atomic.Pointer[string]
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/v1/boxes/box1":
+					_, _ = io.WriteString(w, boxJSON)
+				case r.Method == http.MethodGet && r.URL.Path == "/v1/config":
+					_, _ = io.WriteString(w, tc.capabilities)
+				case r.Method == http.MethodPut && r.URL.Path == "/v1/boxes/box1/network/inbound":
+					body, _ := io.ReadAll(r.Body)
+					text := string(body)
+					putBody.Store(&text)
+					_, _ = io.WriteString(w, `{"mode":"disabled"}`)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			rt, err := NewRest(BoxliteRestOptions{URL: server.URL})
+			if err != nil {
+				t.Fatalf("NewRest: %v", err)
+			}
+			defer func() { _ = rt.Close() }()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			box, err := rt.Get(ctx, "box1")
+			if err != nil {
+				t.Fatalf("Get box: %v", err)
+			}
+			defer func() { _ = box.Close() }()
+			network, err := box.Network()
+			if err != nil {
+				t.Fatalf("Network: %v", err)
+			}
+			defer func() { _ = network.Close() }()
+
+			err = network.SetInbound(ctx, tc.mode)
+			if tc.wantPut {
+				if err != nil {
+					t.Fatalf("SetInbound: %v", err)
+				}
+				got := putBody.Load()
+				if got == nil || !strings.Contains(*got, `"disabled"`) {
+					t.Fatalf("PUT body = %v, want mode disabled", got)
+				}
+				return
+			}
+			if putBody.Load() != nil {
+				t.Fatalf("PUT was sent although SetInbound had to refuse: %v", tc.name)
+			}
+			if tc.wantErr == "unsupported" {
+				var berr *Error
+				if !errors.As(err, &berr) || berr.Code != ErrUnsupported {
+					t.Fatalf("SetInbound error = %v, want ErrUnsupported", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("SetInbound error = %v, want %q", err, tc.wantErr)
+			}
+		})
 	}
 }

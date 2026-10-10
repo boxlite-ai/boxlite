@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use boxlite::LiteBox;
 use boxlite::litebox::{BoxTunnel, SocketAddress, TunnelForwarder};
+use boxlite::runtime::options::NetworkMode;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -142,6 +143,20 @@ impl JsNetworkHandle {
         Ok(JsBoxTunnel {
             handle: Mutex::new(Some(tunnel)),
         })
+    }
+
+    /// Make the box's services public (`"enabled"`) or private (`"disabled"`).
+    ///
+    /// Only a REST runtime whose server advertises inbound updates supports
+    /// this; every other runtime rejects with the BoxLite `Unsupported` error.
+    #[napi]
+    pub async fn set_inbound(&self, mode: String) -> Result<()> {
+        let mode = mode.parse::<NetworkMode>().map_err(map_err)?;
+        self.handle
+            .network()
+            .set_inbound(mode)
+            .await
+            .map_err(map_err)
     }
 }
 

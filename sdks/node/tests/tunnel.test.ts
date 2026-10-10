@@ -34,6 +34,25 @@ describe("SimpleBox", () => {
     await expect(tunnel.connect()).resolves.toBe(connection);
   });
 
+  test("setInbound forwards the mode to the native network handle", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const setInbound = vi.fn(
+      async (_mode: "enabled" | "disabled") => undefined,
+    );
+    const box = new SimpleBox({ image: "alpine:latest" }) as SimpleBox & {
+      _box: {
+        network: {
+          tunnel: ReturnType<typeof vi.fn>;
+          setInbound: typeof setInbound;
+        };
+      };
+    };
+    box._box = { network: { tunnel: vi.fn(), setInbound } };
+
+    await expect(box.network.setInbound("disabled")).resolves.toBeUndefined();
+    expect(setInbound).toHaveBeenCalledWith("disabled");
+  });
+
   test("uri is null for a local tunnel, which is reached by connecting", async () => {
     const { SimpleBox } = await import("../lib/simplebox.js");
     const nativeTunnel = { uri: vi.fn(() => null), connect: vi.fn() };

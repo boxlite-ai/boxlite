@@ -294,6 +294,7 @@ live binding data yet, so box, get, or list info may report
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
 | Tunnel | `await box.network.tunnel(port)` | Prepare a one-shot `JsBoxTunnel` or `BoxTunnel` |
+| Inbound access | `await box.network.setInbound(mode)` | Make a remote box public (`"enabled"`) or private (`"disabled"`); a local box or a server without `inbound_update_enabled` rejects as unsupported |
 | Forward | `await tunnel.forward(listen)` | Return a listener-backed `TunnelForwarder` |
 | Inspect | `tunnel.uri(): string \| null` | Read the prepared public URL; `null` for a local box |
 | Connect | `await tunnel.connect()` | Consume the prepared tunnel into its connection |

@@ -18,12 +18,26 @@ use crate::options::BoxlitePortProtocol;
 use crate::runtime::RuntimeHandle;
 use crate::{CBoxHandle, CBoxliteError, CBoxliteRuntime};
 
-/// Network mode exposed by [`CNetworkInfo`].
+/// Network mode exposed by [`CNetworkInfo`]. `boxlite_network_set_inbound`
+/// takes these values as an integer.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoxliteNetworkMode {
     BoxliteNetworkModeEnabled = 0,
     BoxliteNetworkModeDisabled = 1,
+}
+
+/// Maps a C [`BoxliteNetworkMode`] value. Takes the raw integer because C
+/// callers can pass any value, and an unknown one must be rejected rather than
+/// become an invalid Rust enum.
+pub(crate) fn network_mode_from_c(mode: i32) -> Option<NetworkMode> {
+    const ENABLED: i32 = BoxliteNetworkMode::BoxliteNetworkModeEnabled as i32;
+    const DISABLED: i32 = BoxliteNetworkMode::BoxliteNetworkModeDisabled as i32;
+    match mode {
+        ENABLED => Some(NetworkMode::Enabled),
+        DISABLED => Some(NetworkMode::Disabled),
+        _ => None,
+    }
 }
 
 /// A concrete host listener published to a guest port.

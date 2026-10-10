@@ -20,6 +20,7 @@ use crate::error::{BoxliteErrorCode, error_to_code, null_pointer_error, write_er
 use crate::event_queue::{
     CTunnelForwarderCloseCb, CTunnelForwarderWaitCb, EventQueue, RuntimeEvent, push_event,
 };
+use crate::info::network_mode_from_c;
 use crate::{
     CBoxHandle, CBoxNetworkHandle, CBoxTunnelHandle, CBoxliteError, CTunnelForwarderHandle,
 };
@@ -343,6 +344,47 @@ pub unsafe extern "C" fn boxlite_network_tunnel(
                 }));
                 BoxliteErrorCode::Ok
             }
+            Err(error) => {
+                let code = error_to_code(&error);
+                write_error(out_error, error);
+                code
+            }
+        }
+    }
+}
+
+/// Make the box's services public (`Enabled`) or private (`Disabled`).
+///
+/// `mode` is a `BoxliteNetworkMode` value taken as an integer, so an
+/// out-of-range value from C is rejected rather than read as an invalid Rust
+/// enum. Only a REST runtime whose server advertises inbound updates supports
+/// this; every other runtime returns `Unsupported`. Returns `InvalidArgument`
+/// for an unknown mode or a null network pointer, with details written to
+/// `out_error` when provided.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_network_set_inbound(
+    network: *mut CBoxNetworkHandle,
+    mode: i32,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        let Some(network_mode) = network_mode_from_c(mode) else {
+            write_error(
+                out_error,
+                BoxliteError::InvalidArgument(format!("unknown inbound network mode {mode}")),
+            );
+            return BoxliteErrorCode::InvalidArgument;
+        };
+        if network.is_null() {
+            write_error(out_error, null_pointer_error("network"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let network_ref = &*network;
+        match network_ref
+            .tokio_rt
+            .block_on(network_ref.handle.set_inbound(network_mode))
+        {
+            Ok(()) => BoxliteErrorCode::Ok,
             Err(error) => {
                 let code = error_to_code(&error);
                 write_error(out_error, error);

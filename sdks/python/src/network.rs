@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use boxlite::LiteBox;
 use boxlite::litebox::{BoxTunnel, SocketAddress, TunnelForwarder};
+use boxlite::runtime::options::NetworkMode;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use pyo3::types::PyType;
@@ -127,6 +128,18 @@ impl PyNetworkHandle {
             Ok(PyBoxTunnel {
                 handle: Mutex::new(Some(tunnel)),
             })
+        })
+    }
+
+    /// Make the box's services public (`"enabled"`) or private (`"disabled"`).
+    ///
+    /// Only a REST runtime whose server advertises inbound updates supports
+    /// this; every other runtime raises the BoxLite `Unsupported` error.
+    fn set_inbound<'py>(&self, py: Python<'py>, mode: &str) -> PyResult<Bound<'py, PyAny>> {
+        let mode = mode.parse::<NetworkMode>().map_err(map_err)?;
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle.network().set_inbound(mode).await.map_err(map_err)
         })
     }
 }
