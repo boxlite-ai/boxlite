@@ -33,6 +33,22 @@ make dev:python
 | `make dist:python` | Build portable Python wheels             |
 | `make clean`       | Clean build artifacts                    |
 
+## Release version alignment
+
+The runtime, CLI, C bindings, and Python/Node SDKs share the Rust workspace version.
+Update these together when preparing a release:
+
+- `Cargo.toml`: `workspace.package.version` and internal `workspace.dependencies` versions.
+- `Cargo.lock`: the matching workspace package versions.
+- `sdks/python/pyproject.toml`: `project.version`.
+- `sdks/node/package.json` and `package-lock.json`: package version and lockfile root versions.
+- Root `package.json`: the `@boxlite-ai/boxlite` dependency range.
+
+Select Cargo lock entries by package name: third-party dependencies can share the
+old version number. `boxlite-test-utils` keeps its independent version. The Go release
+workflow derives its `sdks/go/v...` tag from `Cargo.toml`. Version edits prepare source
+metadata; publishing follows the [release workflows](../../../.github/workflows/README.md).
+
 ## Platform support
 
 | Platform | Architecture          | Hypervisor           |
