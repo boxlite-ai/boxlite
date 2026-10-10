@@ -1966,6 +1966,13 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/VolumeSpec"
+        mounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/MountSpec"
+          description: |
+            Typed mounts, the named-field sibling of `volumes`. A box may use
+            both lists.
         network:
           $ref: "#/components/schemas/NetworkSpec"
           description: |
@@ -2071,8 +2078,48 @@ components:
           default: false
           enum: [false]
           description: |
-            Read-only managed mounts are not implemented yet; `true` is
-            rejected rather than silently downgraded to read-write.
+            The `volumes` list takes no read-only flag; mount a volume
+            read-only with `mounts[].read_only`. `true` is rejected here
+            rather than silently downgraded to read-write.
+
+    MountSpec:
+      type: object
+      description: |
+        A mount with a stated type. Only `volume` is accepted here: a `bind`
+        would name a path on the server's filesystem, not the caller's, so
+        host binds are local-runtime only.
+      additionalProperties: false
+      required: [type, source, target]
+      properties:
+        type:
+          type: string
+          enum: [volume]
+          description: What `source` names. `volume` is a managed volume.
+        source:
+          type: string
+          minLength: 1
+          description: |
+            The volume's server-assigned `id` or its `name` — both resolve to
+            the same volume, and a name is unique within the owning scope.
+          example: run42
+        target:
+          type: string
+          description: Mount point inside the container; an absolute path.
+          example: /workspace
+        read_only:
+          type: boolean
+          default: false
+          description: |
+            Mount the volume read-only: the box can read but not modify the
+            files under the mount. Omitted means read-write.
+        sub_path:
+          type: string
+          minLength: 1
+          description: |
+            Mount only this prefix of the volume at `target`, instead of the
+            whole volume. Relative to the volume root; must not start with
+            `/`, contain `..`, or contain `//`. Omitted mounts everything.
+          example: foo/bar
 
     VolumeState:
       type: string

@@ -27,5 +27,9 @@ export interface BoxVolume {
      * Optional subpath within the volume to mount. When specified, only this S3 prefix will be accessible. When omitted, the entire volume is mounted.
      */
     'subpath'?: string;
+    /**
+     * Mount the volume read-only. When true the box can read but not modify the files under the mount (or its subpath). Omitted means read-write.
+     */
+    'readOnly'?: boolean;
 }
 

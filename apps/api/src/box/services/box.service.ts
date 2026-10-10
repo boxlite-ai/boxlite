@@ -53,7 +53,9 @@ import { BusinessEventActorKind, recordBusinessEvent } from '../../common/utils/
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { customAlphabet as customNanoid, nanoid, urlAlphabet } from 'nanoid'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
-import { validateMountPaths, validateSubpaths } from '../utils/volume-mount-path-validation.util'
+import { validateMountPaths, validateReadOnlyFlags, validateSubpaths } from '../utils/volume-mount-path-validation.util'
+import { validateMountSubPaths, validateMountTargets } from '../utils/mount-path-validation.util'
+import { BoxMount } from '../dto/box-mount.dto'
 import { BoxRepository } from '../repositories/box.repository'
 import { Job } from '../entities/job.entity'
 import { JobService } from './job.service'
@@ -217,6 +219,11 @@ export class BoxService {
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
+      const hasMounts = (createBoxDto.mounts?.length ?? 0) > 0
+      if (createBoxDto.mounts && hasMounts) {
+        createBoxDto.mounts = await this.resolveMountSources(organization.id, createBoxDto.mounts)
+      }
+
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
         const canonical = await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
@@ -235,9 +242,9 @@ export class BoxService {
           }
           return { ...volume, volumeId: canonicalId }
         })
-      } else if (image && !needsFreshBox) {
-        //  No volumes requested — try to claim a pre-warmed box matching this image/spec
-        //  before creating a fresh one.
+      } else if (image && !needsFreshBox && !hasMounts) {
+        //  No volumes or mounts requested — try to claim a pre-warmed box matching this
+        //  image/spec before creating a fresh one. A warm-pool box has nothing mounted.
         const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${image}`)) === 1
         if (!skipWarmPool) {
           const warmPoolBox = await this.warmPoolService.fetchWarmPoolBox({
@@ -309,6 +316,13 @@ export class BoxService {
 
       if (createBoxDto.volumes !== undefined) {
         box.volumes = this.resolveVolumes(createBoxDto.volumes)
+      }
+
+      // Typed mounts are stored as the volumes they mount, after the volume
+      // list, so the runner, restarts and the volume in-use check need no
+      // second list to read.
+      if (createBoxDto.mounts !== undefined) {
+        box.volumes = [...box.volumes, ...this.resolveMounts(createBoxDto.mounts)]
       }
 
       box.pending = true
@@ -1598,7 +1612,59 @@ export class BoxService {
       throw new BadRequestError(error instanceof Error ? error.message : 'Invalid volume subpath configuration')
     }
 
+    try {
+      validateReadOnlyFlags(volumes)
+    } catch (error) {
+      throw new BadRequestError(error instanceof Error ? error.message : 'Invalid volume readOnly configuration')
+    }
+
     return volumes
+  }
+
+  /**
+   * Replace each mount's source, a volume id or name, with the id it resolves
+   * to inside this organization, as `create` does for a volume's `volumeId`.
+   * The lookup is VolumeService's: it owns tenant scoping and the readiness
+   * check, and a second copy of either would be a second place to get them
+   * wrong.
+   */
+  private async resolveMountSources(organizationId: string, mounts: BoxMount[]): Promise<BoxMount[]> {
+    const canonical = await this.volumeService.validateVolumes(
+      organizationId,
+      mounts.map((mount) => mount.source),
+    )
+    return mounts.map((mount) => {
+      const canonicalId = canonical.get(mount.source)
+      if (!canonicalId) {
+        // validateVolumes keys every selector or throws, so this is
+        // unreachable today. Fail closed anyway rather than persist the
+        // caller's own string as an id.
+        throw new BadRequestError(`Volume '${mount.source}' could not be resolved`)
+      }
+      return { ...mount, source: canonicalId }
+    })
+  }
+
+  /** Validate typed mounts and turn each into the `BoxVolume` it mounts. */
+  private resolveMounts(mounts: BoxMount[]): BoxVolume[] {
+    try {
+      validateMountTargets(mounts)
+    } catch (error) {
+      throw new BadRequestError(error instanceof Error ? error.message : 'Invalid mount target configuration')
+    }
+
+    try {
+      validateMountSubPaths(mounts)
+    } catch (error) {
+      throw new BadRequestError(error instanceof Error ? error.message : 'Invalid mount sub_path configuration')
+    }
+
+    return mounts.map((mount) => ({
+      volumeId: mount.source,
+      mountPath: mount.target,
+      subpath: mount.subPath,
+      readOnly: mount.readOnly,
+    }))
   }
 }
 

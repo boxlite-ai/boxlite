@@ -51,6 +51,28 @@ describe('BoxLite lifecycle policy mapper', () => {
     expect(mapped.volumes).toEqual([{ volumeId: 'customer-data', mountPath: '/data' }])
   })
 
+  it('maps REST mount specs to typed mounts, leaving volumes alone', () => {
+    const mapped = createBoxToCreateBox({
+      mounts: [{ type: 'volume', source: 'run42', target: '/workspace', read_only: true, sub_path: 'foo/bar' }],
+    })
+
+    expect(mapped.mounts).toEqual([
+      { type: 'volume', source: 'run42', target: '/workspace', subPath: 'foo/bar', readOnly: true },
+    ])
+    expect(mapped.volumes).toBeUndefined()
+  })
+
+  // Omitted means the whole volume and read-write, and both have to stay
+  // omitted rather than become '' or false on the way to the runner.
+  it('leaves subPath and readOnly undefined when a mount omits them', () => {
+    const mapped = createBoxToCreateBox({
+      mounts: [{ type: 'volume', source: 'run42', target: '/workspace' }],
+    })
+
+    expect(mapped.mounts?.[0].subPath).toBeUndefined()
+    expect(mapped.mounts?.[0].readOnly).toBeUndefined()
+  })
+
   it('maps REST secret specs to secret placeholder rules', () => {
     const mapped = createBoxToCreateBox({
       secrets: [

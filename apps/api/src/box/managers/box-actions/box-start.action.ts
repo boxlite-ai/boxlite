@@ -72,7 +72,12 @@ export class BoxStartAction extends BoxAction {
     const metadata: { [key: string]: string } = { ...organization?.boxMetadata }
     if (box.volumes?.length) {
       metadata['volumes'] = JSON.stringify(
-        box.volumes.map((v) => ({ volumeId: v.volumeId, mountPath: v.mountPath, subpath: v.subpath })),
+        box.volumes.map((v) => ({
+          volumeId: v.volumeId,
+          mountPath: v.mountPath,
+          subpath: v.subpath,
+          readOnly: v.readOnly,
+        })),
       )
     }
 
@@ -103,7 +108,12 @@ export class BoxStartAction extends BoxAction {
     const metadata: { [key: string]: string } = { ...organization?.boxMetadata }
     if (box.volumes?.length) {
       metadata['volumes'] = JSON.stringify(
-        box.volumes.map((v) => ({ volumeId: v.volumeId, mountPath: v.mountPath, subpath: v.subpath })),
+        box.volumes.map((v) => ({
+          volumeId: v.volumeId,
+          mountPath: v.mountPath,
+          subpath: v.subpath,
+          readOnly: v.readOnly,
+        })),
       )
     }
 

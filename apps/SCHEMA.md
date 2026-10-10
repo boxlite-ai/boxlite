@@ -366,7 +366,7 @@ or `archived`.
 | `osUser` | `character varying` | |
 | `env` | `jsonb` | default `{}` |
 | `labels` | `jsonb` | nullable |
-| `volumes` | `jsonb` | array of `{ volumeId, mountPath }` |
+| `volumes` | `jsonb` | array of `{ volumeId, mountPath, subpath?, readOnly? }`; `readOnly: true` binds the mount read-only in the box, omitted or `null` binds it read-write |
 | `public` | `boolean` | default `false` |
 | `networkBlockAll` | `boolean` | default `false` |
 | `networkAllowList` | `character varying` | nullable |

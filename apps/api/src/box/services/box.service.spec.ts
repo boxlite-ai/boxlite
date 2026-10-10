@@ -410,6 +410,116 @@ describe('BoxService public defaults', () => {
     expect(boxRepository.insert).toHaveBeenCalled()
   })
 
+  it('rejects a non-boolean volume readOnly before storing the box', async () => {
+    const { service, boxRepository } = makeCreateService()
+    ;(service as any).volumeService = {
+      validateVolumes: jest.fn().mockResolvedValue(new Map([['vol-1', 'vol-1']])),
+    }
+
+    const create = service.create(
+      { name: 'ro-box', image: 'base', volumes: [{ volumeId: 'vol-1', mountPath: '/data', readOnly: 'true' }] } as any,
+      { id: 'org-1' } as any,
+    )
+
+    await expect(create).rejects.toThrow(BadRequestError)
+    await expect(create).rejects.toThrow(/Invalid readOnly "true" for volume vol-1 \(must be a boolean\)/)
+    expect(boxRepository.insert).not.toHaveBeenCalled()
+  })
+
+  // Some JSON clients serialize an unset optional field as null. The runner's
+  // Go decode leaves ReadOnly false for it, so the API must not refuse it.
+  it('accepts a null volume readOnly as omitted', async () => {
+    const { service, boxRepository } = makeCreateService()
+    ;(service as any).volumeService = {
+      validateVolumes: jest.fn().mockResolvedValue(new Map([['vol-1', 'vol-1']])),
+    }
+
+    await service.create(
+      {
+        name: 'null-ro-box',
+        image: 'base',
+        volumes: [{ volumeId: 'vol-1', mountPath: '/data', readOnly: null }],
+      } as any,
+      { id: 'org-1' } as any,
+    )
+
+    expect(boxRepository.insert).toHaveBeenCalled()
+  })
+
+  // Resolves every selector to an id derived from it, so a test can tell a
+  // resolved id from the selector the caller sent.
+  function resolvingVolumeService() {
+    return {
+      validateVolumes: jest.fn(
+        async (_organizationId: string, selectors: string[]) =>
+          new Map(selectors.map((selector) => [selector, `id-of-${selector}`])),
+      ),
+    }
+  }
+
+  // Everything downstream of create (runner payloads, restarts, the volume
+  // in-use check) reads `box.volumes`, so that is where a mount has to land,
+  // under the id its source resolved to, after the volumes the caller listed.
+  it('stores mounts as volumes under the ids their sources resolve to', async () => {
+    const { service, boxRepository } = makeCreateService()
+    const volumeService = resolvingVolumeService()
+    Object.assign(service as any, { volumeService })
+
+    await service.create(
+      {
+        name: 'mounted-box',
+        image: 'base',
+        volumes: [{ volumeId: 'data', mountPath: '/data' }],
+        mounts: [{ type: 'volume', source: 'run42', target: '/workspace', readOnly: true, subPath: 'foo/bar' }],
+      } as any,
+      { id: 'org-1' } as any,
+    )
+
+    expect(volumeService.validateVolumes).toHaveBeenCalledWith('org-1', ['run42'])
+    expect(boxRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        volumes: [
+          { volumeId: 'id-of-data', mountPath: '/data' },
+          { volumeId: 'id-of-run42', mountPath: '/workspace', subpath: 'foo/bar', readOnly: true },
+        ],
+      }),
+      undefined,
+    )
+  })
+
+  it('creates a fresh box instead of claiming a warm box when mounts are present', async () => {
+    const { service, boxRepository, warmPoolService } = makeCreateService()
+    Object.assign(service as any, { volumeService: resolvingVolumeService() })
+    // Default exists=1 would skip the warm-pool branch outright; clear it so
+    // the assertion below actually guards the mounts path.
+    ;(service as any).redis.exists.mockResolvedValue(0)
+
+    await service.create(
+      {
+        name: 'mounted-box',
+        image: 'base',
+        mounts: [{ type: 'volume', source: 'run42', target: '/workspace' }],
+      } as any,
+      { id: 'org-1' } as any,
+    )
+
+    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+    expect(boxRepository.insert).toHaveBeenCalled()
+  })
+
+  it('refuses a mount whose target fails validation', async () => {
+    const { service, boxRepository } = makeCreateService()
+    Object.assign(service as any, { volumeService: resolvingVolumeService() })
+
+    await expect(
+      service.create(
+        { name: 'mounted-box', image: 'base', mounts: [{ type: 'volume', source: 'run42', target: '/' }] } as any,
+        { id: 'org-1' } as any,
+      ),
+    ).rejects.toThrow('Invalid mount target / (cannot mount to the root directory)')
+    expect(boxRepository.insert).not.toHaveBeenCalled()
+  })
+
   it.each([
     [undefined, false],
     [true, true],

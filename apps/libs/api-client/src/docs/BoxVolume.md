@@ -8,6 +8,7 @@ Name | Type | Description | Notes
 **volumeId** | **string** | The ID of the volume | [default to undefined]
 **mountPath** | **string** | The mount path for the volume | [default to undefined]
 **subpath** | **string** | Optional subpath within the volume to mount. When specified, only this S3 prefix will be accessible. When omitted, the entire volume is mounted. | [optional] [default to undefined]
+**readOnly** | **boolean** | Mount the volume read-only. When true the box can read but not modify the files under the mount (or its subpath). Omitted means read-write. | [optional] [default to undefined]
 
 ## Example
 
@@ -18,6 +19,7 @@ const instance: BoxVolume = {
     volumeId,
     mountPath,
     subpath,
+    readOnly,
 };
 ```
 

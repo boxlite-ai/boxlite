@@ -300,7 +300,7 @@ describe('CreateBoxDto managed volumes', () => {
     }
   })
 
-  it('rejects read-only cloud volume mounts until the backend supports them', async () => {
+  it('rejects read_only: true on volumes, which take no read-only flag', async () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
         volumes: [{ managed_volume: 'volume-123', guest_path: '/data', read_only: true }],
@@ -318,6 +318,108 @@ describe('CreateBoxDto managed volumes', () => {
     )
 
     expect(getReadOnlyConstraints(errors)).toHaveProperty('isIn')
+  })
+})
+
+describe('CreateBoxDto mounts', () => {
+  // The constraints class-validator recorded on one field of the first mount.
+  function getMountConstraints(errors: Awaited<ReturnType<typeof validate>>, field: string) {
+    return errors
+      .find((error) => error.property === 'mounts')
+      ?.children?.[0]?.children?.find((error) => error.property === field)?.constraints
+  }
+
+  it('accepts the MountSpec design shape, by id and by name', async () => {
+    for (const source of ['volume-123', 'run42']) {
+      const errors = await validate(
+        plainToInstance(CreateBoxDto, {
+          mounts: [{ type: 'volume', source, target: '/workspace', read_only: true, sub_path: 'foo/bar' }],
+        }),
+      )
+
+      expect(errors).toHaveLength(0)
+    }
+  })
+
+  it('accepts a mount that omits read_only and sub_path', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        mounts: [{ type: 'volume', source: 'run42', target: '/workspace' }],
+      }),
+    )
+
+    expect(errors).toHaveLength(0)
+  })
+
+  // A bind would name a path on the runner's filesystem, so the type is
+  // refused with a message that says where binds work instead.
+  it.each(['bind', 'tmpfs', 'Volume', undefined])('rejects the mount type %s', async (type) => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        mounts: [{ type, source: 'run42', target: '/workspace' }],
+      }),
+    )
+
+    expect(getMountConstraints(errors, 'type')?.isIn).toContain('bind mounts are only supported by the local runtime')
+  })
+
+  it.each(['/host/data', './data', '~/data', 'C:\\data', '\\\\server\\share'])(
+    'rejects the path %s as a source with a bind-mount message',
+    async (source) => {
+      const errors = await validate(
+        plainToInstance(CreateBoxDto, {
+          mounts: [{ type: 'volume', source, target: '/workspace' }],
+        }),
+      )
+
+      expect(JSON.stringify(errors)).toContain('bind mounts are not supported by this API')
+    },
+  )
+
+  it('rejects a missing or empty source', async () => {
+    const missing = await validate(
+      plainToInstance(CreateBoxDto, {
+        mounts: [{ type: 'volume', target: '/workspace' }],
+      }),
+    )
+    expect(getMountConstraints(missing, 'source')).toHaveProperty('isString')
+
+    const empty = await validate(
+      plainToInstance(CreateBoxDto, {
+        mounts: [{ type: 'volume', source: '', target: '/workspace' }],
+      }),
+    )
+    expect(getMountConstraints(empty, 'source')).toHaveProperty('isNotEmpty')
+  })
+
+  // A null that quietly became read-write would hand the caller a writable
+  // mount they believe is protected.
+  it.each([null, 'yes'])('rejects the read_only value %s', async (read_only) => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        mounts: [{ type: 'volume', source: 'run42', target: '/workspace', read_only }],
+      }),
+    )
+
+    expect(getMountConstraints(errors, 'read_only')).toHaveProperty('isBoolean')
+  })
+
+  // Omitting sub_path already means the whole volume, so an empty one is a
+  // mistake rather than a second spelling of it.
+  it('rejects an empty or non-string sub_path', async () => {
+    const empty = await validate(
+      plainToInstance(CreateBoxDto, {
+        mounts: [{ type: 'volume', source: 'run42', target: '/workspace', sub_path: '' }],
+      }),
+    )
+    expect(getMountConstraints(empty, 'sub_path')).toHaveProperty('isNotEmpty')
+
+    const numeric = await validate(
+      plainToInstance(CreateBoxDto, {
+        mounts: [{ type: 'volume', source: 'run42', target: '/workspace', sub_path: 7 }],
+      }),
+    )
+    expect(getMountConstraints(numeric, 'sub_path')).toHaveProperty('isString')
   })
 })
 
