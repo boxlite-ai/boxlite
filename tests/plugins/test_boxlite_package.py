@@ -1,7 +1,10 @@
 import importlib.util
 import json
+import os
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -47,13 +50,20 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(archive.read_bytes(), package.build(output, self.root).read_bytes())
 
     def test_rejects_claude_manifest_identity_drift(self):
-        """Reject Claude identity drift before staging a cross-host package."""
+        """Reject drift in each Claude identity field before staging a package."""
         manifest = self.root / '.claude-plugin/plugin.json'
-        value = json.loads(manifest.read_text())
-        value['name'] = 'another-plugin'
-        manifest.write_text(json.dumps(value))
-        with self.assertRaisesRegex(ValueError, 'Claude compatibility identity differs: name'):
-            package.validate(self.root)
+        original = manifest.read_text()
+        for key, replacement in (('name', 'another-plugin'), ('version', '0.2.0'),
+                                 ('description', 'Another plugin description.')):
+            with self.subTest(field=key):
+                value = json.loads(original)
+                value[key] = replacement
+                manifest.write_text(json.dumps(value))
+                try:
+                    with self.assertRaisesRegex(ValueError, f'Claude compatibility identity differs: {key}'):
+                        package.validate(self.root)
+                finally:
+                    manifest.write_text(original)
 
     def test_rebuild_removes_stale_marketplace_files(self):
         """Rebuild the real marketplace without retaining obsolete resources."""
@@ -145,6 +155,63 @@ class PackageTests(unittest.TestCase):
                         path.write_text(original)
 
     @unittest.skipUnless(shutil.which('make'), 'Make is not installed')
+    def test_make_targets_use_configured_python(self):
+        """Select the same interpreter across real and recursive plugin recipes."""
+        root = Path(self.temp.name) / 'make-python'
+        shutil.copytree(self.root, root / 'plugins/boxlite')
+        (root / 'scripts/plugins').mkdir(parents=True)
+        shutil.copyfile(REPO / 'scripts/plugins/boxlite.py', root / 'scripts/plugins/boxlite.py')
+        (root / 'tests/plugins').mkdir(parents=True)
+        (root / 'tests/plugins/test_package.py').write_text(
+            'import unittest\nfrom scripts.plugins.boxlite import validate\n'
+            'class PackageBoundary(unittest.TestCase):\n'
+            '    def test_validate(self):\n        self.assertTrue(validate())\n')
+        workaround = (REPO / 'Makefile').read_text().split('# Workaround for macOS', 1)[1]
+        (root / 'Makefile').write_text(
+            f'include {REPO / "make/plugins.mk"}\n.PHONY: $(PHONY_TARGETS)\n# Workaround for macOS'
+            + workaround)
+        log = root / 'python-invocations'
+        interpreter = root / 'selected-python'
+        interpreter.write_text(
+            '#!/bin/sh\n'
+            f'printf \'%s\\n\' "$*" >> {shlex.quote(str(log))}\n'
+            f'exec {shlex.quote(sys.executable)} "$@"\n')
+        interpreter.chmod(0o755)
+        # Each isolated Make fixture supplies its own interpreter contract.
+        environment = os.environ.copy()
+        for key in ('MAKEFLAGS', 'MFLAGS', 'MAKEOVERRIDES', 'PLUGIN_PYTHON',
+                    'PLUGIN_COVERAGE_PYTHON'):
+            environment.pop(key, None)
+        unit = "-m unittest discover -s tests/plugins -p test_*.py"
+        cases = {
+            'test:unit:plugins': [unit],
+            'plugin:boxlite:check': ['scripts/plugins/boxlite.py check', unit],
+            'plugin:boxlite:dist': ['scripts/plugins/boxlite.py check', unit,
+                                   'scripts/plugins/boxlite.py dist'],
+        }
+        for target, expected in cases.items():
+            with self.subTest(target=target):
+                log.write_text('')
+                result = subprocess.run(['make', '--no-print-directory', target,
+                                         f'PLUGIN_PYTHON={interpreter}'], cwd=root,
+                                        env=environment, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(log.read_text().splitlines(), expected)
+        for override in (None, root / 'coverage-python'):
+            with self.subTest(coverage_override=override):
+                command = ['make', '--no-print-directory', '-n', 'plugin:boxlite:coverage',
+                           f'PLUGIN_PYTHON={interpreter}']
+                if override is not None:
+                    command.append(f'PLUGIN_COVERAGE_PYTHON={override}')
+                result = subprocess.run(command, cwd=root, env=environment,
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                coverage = [line for line in result.stdout.splitlines() if ' -m coverage ' in line]
+                self.assertEqual(len(coverage), 5, result.stdout)
+                for line in coverage:
+                    self.assertIn(f'{override or interpreter} -m coverage ', line)
+
+    @unittest.skipUnless(shutil.which('make'), 'Make is not installed')
     def test_make_targets_validate_with_same_named_files(self):
         """Run real Make recipes despite target-name collisions in the filesystem."""
         root = Path(self.temp.name) / 'make-work'
@@ -161,7 +228,8 @@ class PackageTests(unittest.TestCase):
             (root / target).touch()
         for target in ('plugin:boxlite:check', 'plugin:boxlite:dist', 'plugin:boxlite:check:cc'):
             with self.subTest(target=target):
-                result = subprocess.run(['make', '--no-print-directory', target], cwd=root,
+                result = subprocess.run(['make', '--no-print-directory', target,
+                                         f'PLUGIN_PYTHON={sys.executable}'], cwd=root,
                                         capture_output=True, text=True, timeout=30)
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn('Expected portable Agent Plugins schema', result.stderr)

@@ -4,6 +4,8 @@ A skills-only plugin for Codex desktop/CLI and Claude Code. It contains BoxLite 
 
 Run `make test:unit:plugins` for package unit tests. Each distribution build replaces the entire generated marketplace directory, removing files from older builds. Keep personal files outside that directory.
 
+Packaging requires Python 3.9 or newer. Unit tests, validation and distribution use `PLUGIN_PYTHON`, defaulting to `python3`; for example, `make plugin:boxlite:dist PLUGIN_PYTHON=python3.11`. Recursive package checks use the same interpreter. Coverage defaults to it too; `PLUGIN_COVERAGE_PYTHON` can select a separate environment containing coverage.py.
+
 From the repository root run `make plugin:boxlite:check` and `make plugin:boxlite:dist`. The latter produces a plugin ZIP and a standalone local marketplace in `target/plugins/boxlite-marketplace`. Add that directory with `codex plugin marketplace add ABSOLUTE_PATH`, then install `codex plugin add boxlite@boxlite`. For desktop development, the repository marketplace also exposes BoxLite as available; restart the app and select that source. Verify both installation paths separately.
 
 For Claude Code, run `make plugin:boxlite:check:cc`, then:
@@ -29,7 +31,7 @@ Setup uses local CLI help and bundled instructions first. Online installation do
 
 Before the required CLI release is available, the setup skill executes a [pinned source-build fallback](skills/boxlite-setup/references/source-build.md) when no verified compatible CLI is installed. The agent fetches the merged #1836 source, runs the repository's dependency/runtime/CLI Make targets and selects that development executable before login. Keep the checkout for its runtime resources. The plugin ZIP contains the procedure; source and build outputs remain outside the plugin.
 
-Packaging reports absent manifests, non-object JSON, and missing required fields as contextual `ValueError`s. Validation, distribution, and Claude strict checks always run, even when files share their Make target names; the non-colon force prerequisite preserves the macOS Make workaround.
+Packaging reports absent manifests, non-object JSON, and missing required fields as contextual `ValueError`s. Claude compatibility requires matching names, versions and descriptions; package tests check drift in each field before output is staged. Validation, distribution, and Claude strict checks always run, even when files share their Make target names; the non-colon force prerequisite preserves the macOS Make workaround.
 
 For measured packaging coverage, install `coverage==7.13.5` into a Python environment and run `make plugin:boxlite:coverage`, optionally setting `PLUGIN_COVERAGE_PYTHON` to its interpreter. This runs package tests plus the actual check/dist commands and writes `target/coverage/plugins/coverage.xml`; credentials and application runtime are outside its scope.
 
