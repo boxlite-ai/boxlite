@@ -41,6 +41,7 @@ import {
 } from '../box/services/box-auto-resume.service'
 import { BoxState } from '../box/enums/box-state.enum'
 import { TunnelService } from '../box/services/tunnel.service'
+import { isInboundEnabled } from '../box/utils/network-policy.util'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -228,7 +229,7 @@ export class BoxliteProxyController {
     // as public can use a tunnel.
     // A private box should be accessed via the authenticated API, not a
     // tunnel.
-    if (!box.public) {
+    if (!isInboundEnabled(box.inboundMode)) {
       throw new ConflictException(`Box ${boxId} is not public; set public: true before opening a tunnel`)
     }
 

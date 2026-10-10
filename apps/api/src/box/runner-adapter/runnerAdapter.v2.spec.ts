@@ -25,8 +25,8 @@ describe('RunnerAdapterV2 createBox', () => {
       secrets: [
         { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
       ],
-      networkBlockAll: false,
-      networkAllowList: undefined,
+      outboundMode: 'enabled',
+      outboundAllowNet: undefined,
       authToken: undefined,
       organizationId: undefined,
       region: undefined,

@@ -27,7 +27,13 @@ function makeHarness() {
   const boxService = {
     findOneByIdOrName: jest
       .fn()
-      .mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true, state: 'started', public: true }),
+      .mockResolvedValue({
+        id: 'box-uuid',
+        runnerId: 'runner-1',
+        autoResume: true,
+        state: 'started',
+        inboundMode: 'enabled',
+      }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
     getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://3000-box.proxy.test'),
   }
@@ -165,7 +171,7 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: true,
       state: 'started',
-      public: false,
+      inboundMode: 'disabled',
     })
 
     await expect(
@@ -183,14 +189,14 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: false,
       state: 'stopped',
-      public: true,
+      inboundMode: 'enabled',
     })
 
     await expect(
       controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000),
     ).rejects.toMatchObject({
       status: 409,
-      // Pin the reason: without public: true this 409s at the visibility
+      // Pin the reason: without inboundMode: 'enabled' this 409s at the visibility
       // gate instead, and the state policy under test never runs.
       message: expect.stringContaining('is not running'),
     })
@@ -207,7 +213,7 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: true,
       state: 'stopped',
-      public: true,
+      inboundMode: 'enabled',
     })
 
     const result = await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)
@@ -234,7 +240,7 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: true,
       state: 'started',
-      public: false,
+      inboundMode: 'disabled',
     })
 
     await expect(
@@ -254,7 +260,7 @@ describe('BoxliteProxyController', () => {
         runnerId: 'runner-1',
         autoResume: true,
         state,
-        public: true,
+        inboundMode: 'enabled',
       })
 
       await expect(
@@ -274,7 +280,7 @@ describe('BoxliteProxyController', () => {
         runnerId: 'runner-1',
         autoResume: true,
         state,
-        public: true,
+        inboundMode: 'enabled',
       })
 
       await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)
@@ -293,7 +299,7 @@ describe('BoxliteProxyController', () => {
         runnerId: 'runner-1',
         autoResume: false,
         state,
-        public: true,
+        inboundMode: 'enabled',
       })
 
       await expect(

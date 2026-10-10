@@ -45,6 +45,13 @@ import { WarmPool } from '../entities/warm-pool.entity'
 import { BoxDto, BoxDtoReads, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
+import { NetworkMode } from '../enums/network-mode.enum'
+import {
+  allowNetFromList,
+  inboundModeFromPublic,
+  isInboundEnabled,
+  outboundModeFromBlockAll,
+} from '../utils/network-policy.util'
 import { VolumeService } from './volume.service'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import {
@@ -328,16 +335,16 @@ export class BoxService {
       box.disk = disk
 
       // POL-205: an unset public value on the internal create DTO defaults private.
-      box.public = createBoxDto.public ?? false
+      box.inboundMode = inboundModeFromPublic(createBoxDto.public)
 
-      if (createBoxDto.networkBlockAll !== undefined) {
-        box.networkBlockAll = createBoxDto.networkBlockAll
-      } else if (organization.boxLimitedNetworkEgress) {
-        box.networkBlockAll = true
-      }
+      // An explicit request wins; otherwise the organization's limited-egress
+      // default decides.
+      box.outboundMode = outboundModeFromBlockAll(
+        createBoxDto.networkBlockAll ?? Boolean(organization.boxLimitedNetworkEgress),
+      )
 
       if (createBoxDto.networkAllowList !== undefined) {
-        box.networkAllowList = this.resolveNetworkAllowList(createBoxDto.networkAllowList)
+        box.outboundAllowNet = this.resolveNetworkAllowList(createBoxDto.networkAllowList)
       }
 
       const lifecyclePolicy = this.resolveLifecyclePolicy({
@@ -404,7 +411,7 @@ export class BoxService {
     const now = new Date()
     const updateData: Partial<Box> = {
       // POL-205: same default as the fresh-box path — see the comment there.
-      public: createBoxDto.public ?? false,
+      inboundMode: inboundModeFromPublic(createBoxDto.public),
       labels: createBoxDto.labels || {},
       organizationId: organization.id,
       createdAt: now,
@@ -420,11 +427,11 @@ export class BoxService {
     updateData.autoResume = lifecyclePolicy.autoResume
 
     if (createBoxDto.networkBlockAll !== undefined) {
-      updateData.networkBlockAll = createBoxDto.networkBlockAll
+      updateData.outboundMode = outboundModeFromBlockAll(createBoxDto.networkBlockAll)
     }
 
     if (createBoxDto.networkAllowList !== undefined) {
-      updateData.networkAllowList = this.resolveNetworkAllowList(createBoxDto.networkAllowList)
+      updateData.outboundAllowNet = this.resolveNetworkAllowList(createBoxDto.networkAllowList)
     }
 
     if (!warmPoolBox.runnerId) {
@@ -1127,11 +1134,11 @@ export class BoxService {
     return await this.start(box.id, organization)
   }
 
-  async updatePublicStatus(boxIdOrName: string, isPublic: boolean, organizationId?: string): Promise<Box> {
+  async updateInboundMode(boxIdOrName: string, inboundMode: NetworkMode, organizationId?: string): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
     const updateData: Partial<Box> = {
-      public: isPublic,
+      inboundMode,
     }
 
     return await this.boxRepository.update(box.id, {
@@ -1414,11 +1421,11 @@ export class BoxService {
     const updateData: Partial<Box> = {}
 
     if (networkBlockAll !== undefined) {
-      updateData.networkBlockAll = networkBlockAll
+      updateData.outboundMode = outboundModeFromBlockAll(networkBlockAll)
     }
 
     if (networkAllowList !== undefined) {
-      updateData.networkAllowList = this.resolveNetworkAllowList(networkAllowList)
+      updateData.outboundAllowNet = this.resolveNetworkAllowList(networkAllowList)
     }
 
     const updatedBox = await this.boxRepository.update(box.id, { updateData, entity: box })
@@ -1598,7 +1605,7 @@ export class BoxService {
       throw new NotFoundException(`Box with ID ${boxId} not found`)
     }
 
-    return box.public
+    return isInboundEnabled(box.inboundMode)
   }
 
   @OnEvent(OrganizationEvents.SUSPENDED_BOX_STOPPED)
@@ -1641,14 +1648,14 @@ export class BoxService {
     return { autoStop, autoDelete, autoResume }
   }
 
-  private resolveNetworkAllowList(networkAllowList: string): string {
+  private resolveNetworkAllowList(networkAllowList: string): string[] | undefined {
     try {
       validateNetworkAllowList(networkAllowList)
     } catch (error) {
       throw new BadRequestError(error instanceof Error ? error.message : 'Invalid network allow list')
     }
 
-    return networkAllowList
+    return allowNetFromList(networkAllowList)
   }
 
   private resolveVolumes(volumes: BoxVolume[]): BoxVolume[] {
