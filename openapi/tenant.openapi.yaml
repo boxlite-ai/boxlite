@@ -19,8 +19,8 @@ info:
   version: 0.1.0
   description: |
     HTTP API for the tenant model of the hosted BoxLite service: who belongs to
-    an organization. It is meant for the CLI and SDKs talking to the cloud;
-    no client calls it yet.
+    an organization, and invitations to join one. It is meant for the CLI and
+    SDKs talking to the cloud; no client calls it yet.
 
     ## Relationship to the Box API
 
@@ -39,7 +39,8 @@ info:
 
     ## Roles
 
-    Members are `owner` or `member`. Owners remove members.
+    Members are `owner` or `member`. Owners invite and remove members. Every
+    invitation created through this API makes the invitee an `owner`.
   license:
     name: Apache-2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -60,6 +61,8 @@ security:
 tags:
   - name: Members
     description: Users who belong to an organization
+  - name: Invitations
+    description: Email invitations to join an organization
 
 paths:
   /{prefix}/members:
@@ -105,6 +108,85 @@ paths:
         "404":
           $ref: "./box.openapi.yaml#/components/responses/NotFoundError"
 
+  /{prefix}/invitations:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+
+    post:
+      operationId: createInvitation
+      summary: Invite a user to the organization by email
+      description: |
+        Requires the `owner` role. The invitee accepts in the BoxLite console
+        after signing in with the invited address, and joins as an `owner`.
+      tags: [Invitations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInvitationRequest"
+      responses:
+        "201":
+          description: Pending invitation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invitation"
+        "400":
+          $ref: "./box.openapi.yaml#/components/responses/BadRequestError"
+        "401":
+          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "409":
+          description: The email already belongs to a member or has a pending invitation
+          content:
+            application/json:
+              schema:
+                $ref: "./box.openapi.yaml#/components/schemas/ErrorResponse"
+
+    get:
+      operationId: listInvitations
+      summary: List pending invitations
+      tags: [Invitations]
+      responses:
+        "200":
+          description: Pending, unexpired invitations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListInvitationsResponse"
+        "401":
+          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+
+  /{prefix}/invitations/{invitation_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/invitationId"
+
+    delete:
+      operationId: cancelInvitation
+      summary: Cancel a pending invitation
+      description: Requires the `owner` role.
+      tags: [Invitations]
+      responses:
+        "204":
+          description: Invitation cancelled
+        "401":
+          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "./box.openapi.yaml#/components/responses/NotFoundError"
+        "409":
+          description: The invitation is no longer pending (accepted, declined, cancelled or expired)
+          content:
+            application/json:
+              schema:
+                $ref: "./box.openapi.yaml#/components/schemas/ErrorResponse"
+
 components:
   securitySchemes:
     BearerAuth:
@@ -133,11 +215,20 @@ components:
         type: string
         minLength: 1
 
+    invitationId:
+      name: invitation_id
+      in: path
+      required: true
+      description: Server-assigned invitation identifier
+      schema:
+        type: string
+        minLength: 1
+
   responses:
     ForbiddenError:
       description: |
         The credential is valid but may not do this: the caller lacks the `owner`
-        role, the key belongs to another organization, or the removal is refused
+        role, the key belongs to another organization, or the change is refused
       content:
         application/json:
           schema:
@@ -176,3 +267,51 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Member"
+
+    CreateInvitationRequest:
+      type: object
+      additionalProperties: false
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+          description: Address the invitation is sent to; the invitee must sign in with it to accept
+        expires_at:
+          type: string
+          format: date-time
+          description: When the invitation lapses (UTC). Defaults to seven days after creation.
+
+    Invitation:
+      type: object
+      additionalProperties: false
+      required: [id, email, status, invited_by, created_at, expires_at]
+      properties:
+        id:
+          type: string
+          description: Server-assigned invitation identifier
+        email:
+          type: string
+          format: email
+        status:
+          type: string
+          enum: [pending, accepted, declined, cancelled]
+        invited_by:
+          type: string
+          description: Email of the member who sent the invitation
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+
+    ListInvitationsResponse:
+      type: object
+      additionalProperties: false
+      required: [invitations]
+      properties:
+        invitations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Invitation"
