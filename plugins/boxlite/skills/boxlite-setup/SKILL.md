@@ -3,9 +3,11 @@ name: boxlite-setup
 description: Set up the BoxLite CLI and authenticate to a BoxLite cloud account for deployment. Use for BoxLite onboarding or expired developer credentials, not application end-user Google sign-in.
 ---
 
-Check `boxlite --version`, `boxlite auth login --help`, and `boxlite network tunnel --help`. Read the current official CLI installation guidance at https://docs.boxlite.ai/ and https://github.com/boxlite-ai/boxlite/tree/main/src/cli before installing or choosing a build. The v0.1 development package also requires network tunnels.
+If a CLI is installed, check `boxlite --version`, `boxlite auth login --help`, and `boxlite network tunnel --help`. Read the current official CLI installation guidance at https://docs.boxlite.ai/ and https://github.com/boxlite-ai/boxlite/tree/main/src/cli before installing or choosing a build. The v0.1 development package also requires network tunnels.
 
 Require BoxLite CLI **v0.10.6 or newer**, with `network tunnel` support. Hosted Auth0 device login requires the discovered-endpoint fix in [#1836](https://github.com/boxlite-ai/boxlite/pull/1836), merged into `main` on 2026-10-09 as [`e6cc3d1`](https://github.com/boxlite-ai/boxlite/commit/e6cc3d1a1e991f8732f7b5c8f9eb4baa3c1bbbbf). The published `v0.10.5` release predates that fix. `v0.10.6` is the minimum planned release; public plugin release remains pending until that CLI release is available and verified to contain the fix. Version output and `--method device` alone do not establish build provenance. Source builds containing #1836 may be used for development verification before the release.
+
+For this development package, when no verified compatible CLI is available, execute the [source-build fallback](references/source-build.md) as part of the requested setup. Fetch the pinned merged source, prepare its native runtime, build and select the CLI, then continue authorization below. Do not stop solely because v0.10.6 has not been published. Keep a verified existing release/source build when available; report a concrete platform, permission or build failure if the fallback cannot finish.
 
 Keep developer credentials in the CLI's private store, outside app source and deploy archives. Respect an existing home/profile selected by the user. A new deployment may use its own named profile. Start with `boxlite --profile NAME auth status` and `boxlite --profile NAME auth whoami`; never print credentials files or request tokens in chat.
 
