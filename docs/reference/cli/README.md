@@ -711,7 +711,7 @@ Run a long-running REST API server. The server holds a single `BoxliteRuntime` a
 | `--debug` | `false` | Enable debug output |
 | `--port N` | `8100` | TCP port to listen on |
 | `--home PATH` | `~/.boxlite` | Absolute runtime data directory; env `BOXLITE_HOME` |
-| `--host ADDR` | `0.0.0.0` | Bind address |
+| `--host ADDR` | `127.0.0.1` | Bind address. Any non-loopback address (e.g. `0.0.0.0`) requires `--api-key`; `serve` refuses to start otherwise. |
 | `--api-key KEY` | unset | Require this exact `Authorization: Bearer` value (constant-time match) on every route except `GET /v1/config`; env `BOXLITE_SERVE_API_KEY`. Unset is permissive. |
 | `--registry REGISTRY` | none | Image registry; repeatable and prepended to config |
 | `--config PATH` | none | JSON runtime configuration file |
@@ -720,8 +720,8 @@ Run a long-running REST API server. The server holds a single `BoxliteRuntime` a
 
 ```bash
 boxlite serve
-boxlite serve --host 127.0.0.1 --port 9000
-BOXLITE_SERVE_API_KEY="$KEY" boxlite serve --host 127.0.0.1
+boxlite serve --port 9000
+BOXLITE_SERVE_API_KEY="$KEY" boxlite serve --host 0.0.0.0
 ```
 
 ---

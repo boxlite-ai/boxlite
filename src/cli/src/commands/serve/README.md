@@ -8,10 +8,10 @@ sessions.
 ## Quick Start
 
 ```bash
-boxlite serve                      # listen on 0.0.0.0:8100 (permissive)
+boxlite serve                      # listen on 127.0.0.1:8100 (permissive)
 boxlite serve --port 9090          # custom port
-boxlite serve --host 127.0.0.1    # bind localhost only
 boxlite serve --api-key dev-key    # require Bearer dev-key (else 401)
+boxlite serve --host 0.0.0.0 --api-key "$KEY"  # expose on the network (key required)
 ```
 
 Ctrl-C triggers graceful shutdown (`runtime.shutdown` with a 10 s timeout).
@@ -119,7 +119,9 @@ All paths are relative to the server root (e.g. `http://localhost:8100`).
 **Auth.** With `--api-key <KEY>` (or `$BOXLITE_SERVE_API_KEY`) set, every
 route except `GET /v1/config` requires `Authorization: Bearer <KEY>`
 (constant-time match) and returns `401` otherwise. Without it the server is
-permissive (accepts any/no bearer) — the zero-config local-dev default.
+permissive (accepts any/no bearer) — the zero-config local-dev default. A
+permissive server only binds to loopback: `serve` refuses to start on any
+other `--host` (e.g. `0.0.0.0`) unless an API key is set.
 
 ### Box CRUD & Lifecycle
 
@@ -407,7 +409,7 @@ sets `reaping_kill` under one lock acquisition.
 | Flag     | Default   | Description              |
 |----------|-----------|--------------------------|
 | `--port` | `8100`    | TCP port to listen on    |
-| `--host` | `0.0.0.0` | Address to bind          |
+| `--host` | `127.0.0.1` | Address to bind; non-loopback requires `--api-key` |
 
 ### Internal Constants
 
