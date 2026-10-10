@@ -10,4 +10,6 @@ Use the references from each skill for the requested workflow. Keep application 
 
 Packaging reports absent manifests, non-object JSON, and missing required fields as contextual `ValueError`s. Validation and distribution always run, even when files share their Make target names; the non-colon force prerequisite preserves the macOS Make workaround.
 
+For measured packaging coverage, install `coverage==7.13.5` into a Python environment and run `make plugin:boxlite:coverage`, optionally setting `PLUGIN_COVERAGE_PYTHON` to its interpreter. This runs package tests plus the actual check/dist commands and writes `target/coverage/plugins/coverage.xml`; credentials and application runtime are outside its scope.
+
 The [setup skill](skills/boxlite-setup/SKILL.md) bundles the production public Native CLI client ID for `https://app.boxlite.ai/api` with issuer `https://auth.boxlite.ai/`, an explicit device-login command, and a browser PKCE alternative. Other environments require their own public Native CLI client ID from the environment administrator; the production ID must match the selected API and issuer. User/admin overrides remain supported. The package contains no client secret or user tokens.

@@ -131,7 +131,50 @@ for (const result of ['skipped', 'success', 'failure', 'cancelled']) {
 }
 
 const coverageWorkflow: any = loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows/test.yml'), 'utf8'))
-const coverageSuites = ['rust', 'python', 'node', 'go', 'api', 'dashboard']
+const coverageSuites = ['rust', 'python', 'node', 'go', 'api', 'dashboard', 'plugins']
+
+for (const path of ['scripts/plugins/boxlite.py', 'scripts/plugins/.coveragerc',
+  'tests/plugins/test_boxlite_package.py', 'plugins/boxlite/skills/boxlite-setup/SKILL.md',
+  'plugins/boxlite/.codex-plugin/plugin.json', 'make/plugins.mk']) {
+  test(`plugin inputs select real coverage on PRs and main pushes: ${path}`, () => {
+    assert.deepEqual(testSuites([path]), ['plugins'])
+    assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
+  })
+}
+
+test('plugin coverage runs on drafts and propagates report/upload failures', () => {
+  const jobs = coverageWorkflow.jobs
+  const job = jobs.plugins
+  assert.ok(job, 'plugin source changes need a real coverage job')
+  const evaluate = (expression: string, context: any) => runInNewContext(
+    expression.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), context, { timeout: 1000 })
+  for (const event of ['pull_request', 'push', 'merge_group', 'schedule', 'workflow_dispatch']) {
+    for (const selected of ['true', 'false']) {
+      const github = { event_name: event, event: { pull_request: { draft: true } } }
+      const output = String(evaluate(jobs.changes.outputs.plugins, { github, steps: { filter: { outputs: { plugins: selected } } } }))
+      assert.equal(evaluate(job.if, { github, needs: { changes: { outputs: { plugins: output } } } }),
+        selected === 'true' || event === 'schedule' || event === 'workflow_dispatch')
+    }
+  }
+  assert.ok(job.steps.some((step: any) => step.run === 'make plugin:boxlite:coverage'))
+  const upload = job.steps.find((step: any) => step.uses?.startsWith('codecov/codecov-action@'))
+  assert.equal(upload?.with?.files, 'target/coverage/plugins/coverage.xml')
+  assert.equal(upload.with.flags, 'plugins')
+  assert.equal(upload.with.use_oidc, true)
+  assert.equal(upload.with.disable_search, true)
+  assert.equal(upload.with.fail_ci_if_error, true)
+  assert.equal(upload.with.force, undefined)
+  assert.equal(job.permissions['id-token'], 'write')
+  const conclusion = jobs['test-conclusion']
+  assert.ok(conclusion.needs.includes('plugins'))
+  for (const result of ['success', 'skipped', 'failure', 'cancelled']) {
+    const needs = Object.fromEntries(conclusion.needs.map((name: string) => [name, { result: name === 'plugins' ? result : 'success' }]))
+    const script = conclusion.steps[0].run.replaceAll('${{ toJSON(needs) }}', JSON.stringify(needs))
+    const run = spawnSync('bash', ['-eo', 'pipefail', '-c', script], { encoding: 'utf8', timeout: 10_000 })
+    assert.equal(run.error, undefined)
+    assert.equal(run.status === 0, result === 'success' || result === 'skipped', run.stderr)
+  }
+})
 
 function selectsEmptyCoverage(outputs: Record<string, string>, result = 'success', event = 'pull_request') {
   const job = coverageWorkflow.jobs['coverage-empty']

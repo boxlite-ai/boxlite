@@ -9,6 +9,7 @@
 # - Node.js: vitest unit project
 # - Go: SDK, networking bridge, and the runner; API: Jest with Postgres and Redis
 # - Dashboard: vitest with jsdom, v8 coverage
+# - Plugins: Python package tests and real CLI check/dist commands
 name: Test
 
 on:
@@ -58,6 +59,9 @@ on:
       - 'openapi/**'
       - 'codecov.yml'
       - '!**/*.md'
+      - 'plugins/boxlite/**'
+      - 'scripts/plugins/**'
+      - 'tests/plugins/**'
   # No path filter on pull_request: the `Test (conclusion)` job is a required
   # status check, so this workflow must run on EVERY PR and report it. A
   # path-skipped workflow leaves the required check stuck "Pending" → PR blocked.
@@ -95,6 +99,7 @@ jobs:
       go: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.go == 'true' }}
       api: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.api == 'true' }}
       dashboard: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.dashboard == 'true' }}
+      plugins: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.plugins == 'true' }}
       setup: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.setup == 'true' }}
       infra: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.infra == 'true' }}
     steps:
@@ -218,6 +223,15 @@ jobs:
               - 'apps/yarn.lock'
               - 'apps/nx.json'
               - 'codecov.yml'
+              - '.github/workflows/test.yml'
+            plugins:
+              - 'plugins/boxlite/**'
+              - 'scripts/plugins/**'
+              - 'tests/plugins/**'
+              - 'Makefile'
+              - 'make/plugins.mk'
+              - 'codecov.yml'
+              - '.github/actions/setup-python/**/!(*.md)'
               - '.github/workflows/test.yml'
             setup:
               - '.gitmodules'
@@ -648,6 +662,38 @@ jobs:
           disable_search: true
           fail_ci_if_error: true
 
+  plugins:
+    name: Plugin package coverage
+    needs: changes
+    if: ${{ needs.changes.outputs.plugins == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-python
+      - name: Install coverage collector
+        run: python3 -m pip install coverage==7.13.5
+      - name: Measure plugin package tests and CLI commands
+        run: make plugin:boxlite:coverage
+      - name: Save plugin coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-coverage
+          path: target/coverage/plugins/coverage.xml
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload plugin coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/plugins/coverage.xml
+          flags: plugins
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
+
   # A skipped test job cannot publish Codecov's separately required status.
   # Validate the PR's changed files with Codecov instead of forcing a pass.
   coverage-empty:
@@ -661,7 +707,8 @@ jobs:
           needs.changes.outputs.node == 'false' &&
           needs.changes.outputs.go == 'false' &&
           needs.changes.outputs.api == 'false' &&
-          needs.changes.outputs.dashboard == 'false' }}
+          needs.changes.outputs.dashboard == 'false' &&
+          needs.changes.outputs.plugins == 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -683,7 +730,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [changes, infra, rust, python, node, go, setup, api, dashboard, guest_artifacts, coverage-empty]
+    needs: [changes, infra, rust, python, node, go, setup, api, dashboard, plugins, guest_artifacts, coverage-empty]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}
