@@ -83,11 +83,11 @@ The HTTP path in code:
   StartProxy (— · apps/proxy/pkg/proxy/proxy.go:80) — registers the catch-all route for preview hosts
     └─ NewProxyRequestHandler (— · apps/libs/common-go/pkg/proxy/proxy.go:116) — reverse proxy for one request
       ├─ GetProxyTarget (Proxy · apps/proxy/pkg/proxy/get_box_target.go:49) — choose the upstream
-        ├─ parseHost (Proxy · apps/proxy/pkg/proxy/get_box_target.go:353) — canonical port plus box ID or signed token
-        ├─ getBoxPublic (Proxy · apps/proxy/pkg/proxy/get_box_target.go:244) — ask the API, cached 3 s
+        ├─ parseHost (Proxy · apps/proxy/pkg/proxy/get_box_target.go:358) — canonical port plus box ID or signed token
+        ├─ getBoxInboundEnabled (Proxy · apps/proxy/pkg/proxy/get_box_target.go:247) — ask the API for the inbound mode, cached 3 s
         ├─ Authenticate (Proxy · apps/proxy/pkg/proxy/auth.go:18) — resolve signed hosts or authorize private/terminal access
         ├─ hasPublicTunnelAccess (Proxy · apps/proxy/pkg/proxy/tunnel_access.go:15) — check every guest service port
-        └─ updateLastActivity (Proxy · apps/proxy/pkg/proxy/get_box_target.go:424) — renew activity every 50 s
+        └─ updateLastActivity (Proxy · apps/proxy/pkg/proxy/get_box_target.go:429) — renew activity every 50 s
       └─ dialGuestPort (Proxy · apps/proxy/pkg/proxy/get_box_target.go:163) — dial each new upstream connection
         └─ dialGuestPortWithWake (Proxy · apps/proxy/pkg/proxy/guest_wake.go:51) — dial, waking a stopped box
           ├─ getBoxRunnerInfo (Proxy · apps/proxy/pkg/proxy/get_box_target.go:205) — runner URL and key, cached 2 min
@@ -219,7 +219,7 @@ is internal and changes together with the API and the runner.
 | Service | Call                                                                                                     | Credential                                              |
 | ------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | API     | `GET /api/config` at startup, for unset OIDC settings                                                    | `PROXY_API_KEY`                                         |
-| API     | `GET /api/preview/{boxId}/public`, `/validate/{token}`, `/tunnels/{port}`; `GET /api/preview/{token}/{port}/box-id` | `PROXY_API_KEY` |
+| API     | `GET /api/preview/{boxId}/inbound`, `/validate/{token}`, `/tunnels/{port}`; `GET /api/preview/{token}/{port}/box-id` | `PROXY_API_KEY` |
 | API     | `GET /api/preview/{boxId}/access`                                                                        | The caller's bearer token                               |
 | API     | `GET /api/runners/by-box/{boxId}`, `POST /api/box/{boxId}/last-activity`                                 | `PROXY_API_KEY`                                         |
 | API     | `POST /api/preview/{boxId}/ensure-ready`, when the runner reports the box is not running                 | `PROXY_API_KEY`                                         |

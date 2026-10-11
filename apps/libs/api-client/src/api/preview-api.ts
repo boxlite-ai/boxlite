@@ -66,6 +66,40 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
         },
         /**
          * 
+         * @summary Read the inbound mode of a box
+         * @param {string} boxId ID of the box
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        getBoxInboundMode: async (boxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getBoxInboundMode', 'boxId', boxId)
+            const localVarPath = `/preview/{boxId}/inbound`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Check if user has access to the box
          * @param {string} boxId 
          * @param {*} [options] Override http request option.
@@ -109,6 +143,7 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
          * @summary Check if box is public
          * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
+         * @deprecated
          * @throws {RequiredError}
          */
         isBoxPublic: async (boxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
@@ -201,6 +236,19 @@ export const PreviewApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Read the inbound mode of a box
+         * @param {string} boxId ID of the box
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async getBoxInboundMode(boxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<string>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getBoxInboundMode(boxId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['PreviewApi.getBoxInboundMode']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Check if user has access to the box
          * @param {string} boxId 
          * @param {*} [options] Override http request option.
@@ -217,6 +265,7 @@ export const PreviewApiFp = function(configuration?: Configuration) {
          * @summary Check if box is public
          * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
+         * @deprecated
          * @throws {RequiredError}
          */
         async isBoxPublic(boxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<boolean>> {
@@ -261,6 +310,16 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          * 
+         * @summary Read the inbound mode of a box
+         * @param {string} boxId ID of the box
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        getBoxInboundMode(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<string> {
+            return localVarFp.getBoxInboundMode(boxId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Check if user has access to the box
          * @param {string} boxId 
          * @param {*} [options] Override http request option.
@@ -274,6 +333,7 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
          * @summary Check if box is public
          * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
+         * @deprecated
          * @throws {RequiredError}
          */
         isBoxPublic(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<boolean> {
@@ -311,6 +371,17 @@ export class PreviewApi extends BaseAPI {
 
     /**
      * 
+     * @summary Read the inbound mode of a box
+     * @param {string} boxId ID of the box
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public getBoxInboundMode(boxId: string, options?: RawAxiosRequestConfig) {
+        return PreviewApiFp(this.configuration).getBoxInboundMode(boxId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Check if user has access to the box
      * @param {string} boxId 
      * @param {*} [options] Override http request option.
@@ -325,6 +396,7 @@ export class PreviewApi extends BaseAPI {
      * @summary Check if box is public
      * @param {string} boxId ID of the box
      * @param {*} [options] Override http request option.
+     * @deprecated
      * @throws {RequiredError}
      */
     public isBoxPublic(boxId: string, options?: RawAxiosRequestConfig) {

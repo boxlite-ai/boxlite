@@ -48,7 +48,7 @@ func newTunnelProxy(t *testing.T, accessStatus int) *Proxy {
 	}
 	proxy := &Proxy{
 		apiclient:                  apiclient.NewAPIClient(clientConfig),
-		boxPublicCache:             publicCache,
+		boxInboundCache:            publicCache,
 		boxAuthKeyValidCache:       common_cache.NewMapCache[bool](ctx),
 		boxRunnerCache:             runnerCache,
 		boxLastActivityUpdateCache: activityCache,
@@ -114,7 +114,7 @@ func TestDeclaredTunnelAllowsHTTP(t *testing.T) {
 func TestAuthenticatedPrivateServicePreviewIsDenied(t *testing.T) {
 	proxy := newTunnelProxy(t, http.StatusNotFound)
 	ctx := context.Background()
-	if err := proxy.boxPublicCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
+	if err := proxy.boxInboundCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if err := proxy.boxAuthKeyValidCache.Set(ctx, "AbCdEf123456:owner-key", true, time.Minute); err != nil {
@@ -146,7 +146,7 @@ func TestSignedServicePreviewRequiresTunnel(t *testing.T) {
 			proxy.config = &config.Config{}
 			proxy.secureCookie = securecookie.New([]byte("test-cookie-signing-key-with-32-bytes"), nil)
 			token := "signedtoken12345"
-			if err := proxy.boxPublicCache.Set(context.Background(), token, false, time.Minute); err != nil {
+			if err := proxy.boxInboundCache.Set(context.Background(), token, false, time.Minute); err != nil {
 				t.Fatal(err)
 			}
 			cookieValue, err := proxy.secureCookie.Encode(BOX_AUTH_COOKIE_NAME+token, "AbCdEf123456")
@@ -170,7 +170,7 @@ func TestSignedServicePreviewRequiresTunnel(t *testing.T) {
 func TestPrivateTerminalPreviewRemainsAvailable(t *testing.T) {
 	proxy := newTunnelProxy(t, http.StatusNotFound)
 	ctx := context.Background()
-	if err := proxy.boxPublicCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
+	if err := proxy.boxInboundCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if err := proxy.boxAuthKeyValidCache.Set(ctx, "AbCdEf123456:owner-key", true, time.Minute); err != nil {

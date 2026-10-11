@@ -3,6 +3,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { NetworkMode } from '../enums/network-mode.enum'
+
+/** A stored enabled flag → the `/v1` NetworkSpec `mode` the wire speaks. */
+export function networkMode(enabled: boolean): NetworkMode {
+  return enabled ? NetworkMode.ENABLED : NetworkMode.DISABLED
+}
+
 /**
  * The box row stores the outbound allowlist as entries (`outboundAllowNet`),
  * while the control-plane DTO still speaks the Daytona-era comma-joined
