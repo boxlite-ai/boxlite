@@ -2749,8 +2749,35 @@ paths:
       summary: Runner healthcheck
       tags:
       - runners
+  /preview/{boxId}/inbound:
+    get:
+      operationId: getBoxInboundMode
+      parameters:
+      - description: ID of the box
+        explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                enum:
+                - enabled
+                - disabled
+                type: string
+          description: "Inbound mode of the box: `enabled` means the proxy may serve\
+            \ its services without sign-in"
+      summary: Read the inbound mode of a box
+      tags:
+      - preview
   /preview/{boxId}/public:
     get:
+      deprecated: true
       operationId: isBoxPublic
       parameters:
       - description: ID of the box

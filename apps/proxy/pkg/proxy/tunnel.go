@@ -36,12 +36,12 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
 	}
-	isPublic, err := p.getBoxPublic(request.Context(), boxID)
+	inboundEnabled, err := p.getBoxInboundEnabled(request.Context(), boxID)
 	if err != nil {
-		http.Error(writer, "box visibility unavailable", http.StatusBadGateway)
+		http.Error(writer, "box inbound mode unavailable", http.StatusBadGateway)
 		return
 	}
-	if !*isPublic {
+	if !*inboundEnabled {
 		http.Error(writer, "box is not public", http.StatusForbidden)
 		return
 	}

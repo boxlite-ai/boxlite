@@ -139,8 +139,8 @@ func newWakeTestProxy(t *testing.T, runner *fakeRunner, api *fakeAPI) *Proxy {
 	if err := runnerCache.Set(ctx, wakeTestBoxID, RunnerInfo{ApiUrl: "http://" + runner.listener.Addr().String(), ApiKey: "runner-key"}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	publicCache := common_cache.NewMapCache[bool](ctx)
-	if err := publicCache.Set(ctx, wakeTestBoxID, true, time.Minute); err != nil {
+	inboundCache := common_cache.NewMapCache[bool](ctx)
+	if err := inboundCache.Set(ctx, wakeTestBoxID, true, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	clientConfig := apiclient.NewConfiguration()
@@ -148,7 +148,7 @@ func newWakeTestProxy(t *testing.T, runner *fakeRunner, api *fakeAPI) *Proxy {
 	proxy := &Proxy{
 		apiclient:                  apiclient.NewAPIClient(clientConfig),
 		boxRunnerCache:             runnerCache,
-		boxPublicCache:             publicCache,
+		boxInboundCache:            inboundCache,
 		boxLastActivityUpdateCache: common_cache.NewMapCache[bool](ctx),
 	}
 	proxy.guestPortTransport = proxy.newGuestPortTransport()
