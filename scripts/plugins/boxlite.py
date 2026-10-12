@@ -79,7 +79,12 @@ def validate(root=PLUGIN):
         raise ValueError('Compatibility presentation differs')
     if legacy.get('skills') != './skills':
         raise ValueError('Compatibility skill root differs')
-    checked_path(root, required_field(settings, 'onboardingSkill', 'OpenAI extension'))
+    onboarding = required_field(settings, 'onboardingSkill', 'OpenAI extension')
+    legacy_extensions = required_field(legacy, 'extensions', 'Codex manifest')
+    legacy_settings = required_field(legacy_extensions, 'com.openai', 'Codex extensions')
+    if required_field(legacy_settings, 'onboardingSkill', 'Codex OpenAI extension') != onboarding:
+        raise ValueError('Compatibility onboarding differs')
+    checked_path(root, onboarding)
     for field in ('composerIcon', 'logo'):
         checked_path(root, required_field(interface, field, 'OpenAI interface'))
     if (root / 'mcp.json').exists() or (root / 'hooks').exists() or (root / '.mcp.json').exists():

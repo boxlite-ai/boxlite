@@ -65,6 +65,26 @@ class PackageTests(unittest.TestCase):
                 finally:
                     manifest.write_text(original)
 
+    def test_rejects_missing_or_drifted_codex_onboarding(self):
+        """The compatibility host must resolve the same packaged setup skill."""
+        manifest = self.root / '.codex-plugin/plugin.json'
+        original = manifest.read_text()
+        variants = [None, {}, {'com.openai': {}},
+                    {'com.openai': {'onboardingSkill': './skills/boxlite/SKILL.md'}}]
+        for extensions in variants:
+            with self.subTest(extensions=extensions):
+                value = json.loads(original)
+                if extensions is None:
+                    value.pop('extensions', None)
+                else:
+                    value['extensions'] = extensions
+                manifest.write_text(json.dumps(value))
+                try:
+                    with self.assertRaisesRegex(ValueError, 'extensions|com.openai|onboarding'):
+                        package.validate(self.root)
+                finally:
+                    manifest.write_text(original)
+
     def test_rebuild_removes_stale_marketplace_files(self):
         """Rebuild the real marketplace without retaining obsolete resources."""
         output = Path(self.temp.name) / 'output'
@@ -168,7 +188,7 @@ class PackageTests(unittest.TestCase):
             '    def test_validate(self):\n        self.assertTrue(validate())\n')
         workaround = (REPO / 'Makefile').read_text().split('# Workaround for macOS', 1)[1]
         (root / 'Makefile').write_text(
-            f'include {REPO / "make/plugins.mk"}\n.PHONY: $(PHONY_TARGETS)\n# Workaround for macOS'
+            f'include {REPO / "make/test.mk"}\ninclude {REPO / "make/plugins.mk"}\n.PHONY: $(PHONY_TARGETS)\n# Workaround for macOS'
             + workaround)
         log = root / 'python-invocations'
         interpreter = root / 'selected-python'
@@ -225,7 +245,7 @@ class PackageTests(unittest.TestCase):
             '    def test_validate(self):\n        self.assertTrue(validate())\n')
         workaround = (REPO / 'Makefile').read_text().split('# Workaround for macOS', 1)[1]
         (root / 'Makefile').write_text(
-            f'include {REPO / "make/plugins.mk"}\n.PHONY: $(PHONY_TARGETS)\n# Workaround for macOS'
+            f'include {REPO / "make/test.mk"}\ninclude {REPO / "make/plugins.mk"}\n.PHONY: $(PHONY_TARGETS)\n# Workaround for macOS'
             + workaround)
         log = root / 'claude-invocations'
         executable = root / 'claude'
@@ -269,7 +289,7 @@ class PackageTests(unittest.TestCase):
         (root / 'plugins/boxlite/plugin.json').write_text('{}')
         workaround = (REPO / 'Makefile').read_text().split('# Workaround for macOS', 1)[1]
         (root / 'Makefile').write_text(
-            f'include {REPO / "make/plugins.mk"}\n.PHONY: $(PHONY_TARGETS)\n# Workaround for macOS'
+            f'include {REPO / "make/test.mk"}\ninclude {REPO / "make/plugins.mk"}\n.PHONY: $(PHONY_TARGETS)\n# Workaround for macOS'
             + workaround)
         for target in ('plugin:boxlite:check', 'plugin:boxlite:dist', 'plugin:boxlite:check:cc'):
             (root / target).touch()

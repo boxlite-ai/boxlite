@@ -12,16 +12,24 @@ Allow network access to fetch the repository, submodules and build dependencies.
 
 Use a fresh source directory outside the plugin cache and application/deployment archives. Respect a user-selected location. The example uses a user cache; if it already exists, reuse it only after verifying the official origin, exact revision and clean tracked source. Otherwise choose a fresh directory. Never reset or delete a user's checkout to make this example fit.
 
-Run these commands in one shell for a fresh directory, stopping on failure:
+Set BOXLITE_SOURCE_DIR when the user selects another source location. These commands can reuse a clean checkout at the exact pinned revision without resetting user files. A partial clone, a different revision or modified tracked files fails verification: inspect it or choose a fresh path; do not delete/reset it. Run in one shell, stopping on failure:
 
 ```sh
 set -eu
 BOXLITE_SOURCE_REV=e6cc3d1a1e991f8732f7b5c8f9eb4baa3c1bbbbf
-BOXLITE_SOURCE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/boxlite/cli-source-$BOXLITE_SOURCE_REV"
-git init "$BOXLITE_SOURCE_DIR"
-git -C "$BOXLITE_SOURCE_DIR" remote add origin https://github.com/boxlite-ai/boxlite.git
-git -C "$BOXLITE_SOURCE_DIR" fetch --depth 1 origin "$BOXLITE_SOURCE_REV"
-git -C "$BOXLITE_SOURCE_DIR" checkout --detach FETCH_HEAD
+BOXLITE_SOURCE_DIR="${BOXLITE_SOURCE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/boxlite/cli-source-$BOXLITE_SOURCE_REV}"
+if [ -d "$BOXLITE_SOURCE_DIR/.git" ]; then
+    test "$(git -C "$BOXLITE_SOURCE_DIR" remote get-url origin)" = "https://github.com/boxlite-ai/boxlite.git"
+    test "$(git -C "$BOXLITE_SOURCE_DIR" rev-parse HEAD)" = "$BOXLITE_SOURCE_REV"
+    git -C "$BOXLITE_SOURCE_DIR" diff --quiet
+    git -C "$BOXLITE_SOURCE_DIR" diff --cached --quiet
+else
+    test ! -e "$BOXLITE_SOURCE_DIR"
+    git init "$BOXLITE_SOURCE_DIR"
+    git -C "$BOXLITE_SOURCE_DIR" remote add origin https://github.com/boxlite-ai/boxlite.git
+    git -C "$BOXLITE_SOURCE_DIR" fetch --depth 1 origin "$BOXLITE_SOURCE_REV"
+    git -C "$BOXLITE_SOURCE_DIR" checkout --detach FETCH_HEAD
+fi
 test "$(git -C "$BOXLITE_SOURCE_DIR" rev-parse HEAD)" = "$BOXLITE_SOURCE_REV"
 cd "$BOXLITE_SOURCE_DIR"
 env -u BOXLITE_DEPS_STUB -u SKIP_GUEST_BUILD -u CARGO_TARGET_DIR make setup:submodules

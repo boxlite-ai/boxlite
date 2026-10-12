@@ -42,3 +42,5 @@ Dated root-cause analyses and design studies, newest first.
 - 2026-07-14 · [`boxlite run` command: Docker semantics fix](investigations/run-command-semantics-fix.md)
 - 2026-03-10 · [Concurrent exec deadlock](investigations/concurrent-exec-deadlock.md)
 - 2026-02-22 · [Boot latency analysis](investigations/boot-latency-analysis.md)
+
+The [BoxLite plugin contributor guide](development/boxlite-plugins.md) covers distribution, host validation and executable deployment-helper acceptance.

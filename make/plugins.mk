@@ -1,12 +1,7 @@
 # Skills-only BoxLite distribution; no runtime build is required.
-PHONY_TARGETS += plugin-boxlite-force
-PLUGIN_PYTHON ?= python3
 PLUGIN_COVERAGE_PYTHON ?= $(PLUGIN_PYTHON)
 PLUGIN_COVERAGE = PYTHONDONTWRITEBYTECODE=1 COVERAGE_FILE=target/coverage/plugins/.coverage COVERAGE_RCFILE=scripts/plugins/.coveragerc $(PLUGIN_COVERAGE_PYTHON) -m coverage
-plugin-boxlite-force:
 
-test\:unit\:plugins: plugin-boxlite-force
-	@PYTHONDONTWRITEBYTECODE=1 $(PLUGIN_PYTHON) -m unittest discover -s tests/plugins -p 'test_*.py'
 
 plugin\:boxlite\:check: plugin-boxlite-force
 	@$(PLUGIN_PYTHON) scripts/plugins/boxlite.py check
