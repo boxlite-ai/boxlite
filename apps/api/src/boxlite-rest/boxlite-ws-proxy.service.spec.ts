@@ -8,6 +8,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware'
 import type { IncomingMessage } from 'http'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
+import { AttachTicketService } from './attach-ticket.service'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(() => ({
@@ -18,6 +19,19 @@ jest.mock('uuid', () => ({
   v4: jest.fn(() => 'mock-uuid'),
   validate: jest.fn(() => true),
 }))
+
+/** The two Redis calls `AttachTicketService` makes, over a map. */
+function fakeRedis() {
+  const store = new Map<string, string>()
+  return {
+    set: async (key: string, value: string) => (store.set(key, value), 'OK'),
+    getdel: async (key: string) => {
+      const value = store.get(key) ?? null
+      store.delete(key)
+      return value
+    },
+  }
+}
 
 describe('BoxliteWsProxyService', () => {
   beforeEach(() => {
@@ -57,6 +71,7 @@ describe('BoxliteWsProxyService', () => {
     const jwtStrategy = {
       verifyToken: jest.fn(),
     }
+    const attachTickets = new AttachTicketService(fakeRedis() as never)
     const service = new BoxliteWsProxyService(
       apiKeyService as never,
       organizationUserService as never,
@@ -66,6 +81,7 @@ describe('BoxliteWsProxyService', () => {
       autoResume as never,
       userService as never,
       jwtStrategy as never,
+      attachTickets,
     ) as unknown as {
       authenticate: (req: IncomingMessage, urlTenant?: string) => Promise<{ organization: { id: string } } | null>
     }
@@ -80,11 +96,13 @@ describe('BoxliteWsProxyService', () => {
       autoResume,
       userService,
       jwtStrategy,
+      attachTickets,
     }
   }
 
   it('rewrites public box ids to internal box ids before proxying attach upgrades to the runner', () => {
     new BoxliteWsProxyService(
+      {} as never,
       {} as never,
       {} as never,
       {} as never,
@@ -281,5 +299,99 @@ describe('BoxliteWsProxyService', () => {
       service.authenticate(authRequest('eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzEifQ.signature'), 'org-1'),
     ).resolves.toBeNull()
     expect(organizationUserService.findOne).not.toHaveBeenCalled()
+  })
+
+  describe('one-time attach tickets', () => {
+    const attachUrl = (ticket: string, execId = 'exec-1') =>
+      `/api/v1/org-1/boxes/public-box/executions/${execId}/attach?ticket=${ticket}&stdin=1`
+
+    async function upgradeWithTicket(harness: ReturnType<typeof buildAuthHarness>, url: string) {
+      const socket = { write: jest.fn(), destroy: jest.fn() }
+      const req = { url, headers: {} } as IncomingMessage
+      await (harness.service as unknown as BoxliteWsProxyService).upgrade(req, socket as never, Buffer.alloc(0))
+      return { req, socket }
+    }
+
+    function ticketHarness() {
+      const harness = buildAuthHarness()
+      harness.organizationUserService.findOne.mockResolvedValue({
+        organizationId: 'org-1',
+        userId: 'user-1',
+        role: 'owner',
+        assignedRoles: [],
+      })
+      return harness
+    }
+
+    const grant = { userId: 'user-1', organizationId: 'org-1', boxId: 'box-uuid', execId: 'exec-1' }
+
+    it('accepts a ticket in place of a bearer and keeps it out of the runner request', async () => {
+      const harness = ticketHarness()
+      const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
+      const ticket = await harness.attachTickets.issue(grant)
+
+      const { req, socket } = await upgradeWithTicket(harness, attachUrl(ticket))
+
+      expect(socket.write).not.toHaveBeenCalled()
+      expect(proxyHandler.upgrade).toHaveBeenCalledTimes(1)
+      expect(req.url).toBe('/api/v1/org-1/boxes/public-box/executions/exec-1/attach?stdin=1')
+      expect(harness.organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
+    })
+
+    it('refuses a ticket the second time', async () => {
+      const harness = ticketHarness()
+      const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
+      const ticket = await harness.attachTickets.issue(grant)
+
+      await upgradeWithTicket(harness, attachUrl(ticket))
+      const { socket } = await upgradeWithTicket(harness, attachUrl(ticket))
+
+      expect(proxyHandler.upgrade).toHaveBeenCalledTimes(1)
+      expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('401'))
+    })
+
+    it.each([
+      ['another execution', { ...grant, execId: 'exec-2' }],
+      ['another box', { ...grant, boxId: 'other-box' }],
+      ['another organization', { ...grant, organizationId: 'org-2' }],
+    ])('refuses a ticket issued for %s', async (_case, issuedFor) => {
+      const harness = ticketHarness()
+      const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
+      const ticket = await harness.attachTickets.issue(issuedFor)
+
+      const { socket } = await upgradeWithTicket(harness, attachUrl(ticket))
+
+      expect(proxyHandler.upgrade).not.toHaveBeenCalled()
+      expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('401'))
+    })
+
+    it('refuses a ticket whose user no longer has write:boxes', async () => {
+      const harness = buildAuthHarness()
+      harness.organizationUserService.findOne.mockResolvedValue({
+        organizationId: 'org-1',
+        userId: 'user-1',
+        role: 'member',
+        assignedRoles: [],
+      })
+      const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
+      const ticket = await harness.attachTickets.issue(grant)
+
+      const { socket } = await upgradeWithTicket(harness, attachUrl(ticket))
+
+      expect(proxyHandler.upgrade).not.toHaveBeenCalled()
+      expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('401'))
+    })
+
+    it('refuses a ticket whose user has left the organization', async () => {
+      const harness = buildAuthHarness()
+      harness.organizationUserService.findOne.mockResolvedValue(null)
+      const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
+      const ticket = await harness.attachTickets.issue(grant)
+
+      const { socket } = await upgradeWithTicket(harness, attachUrl(ticket))
+
+      expect(proxyHandler.upgrade).not.toHaveBeenCalled()
+      expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('401'))
+    })
   })
 })

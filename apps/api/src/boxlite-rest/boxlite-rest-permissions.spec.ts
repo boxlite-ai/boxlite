@@ -43,6 +43,7 @@ const EXPECTED: Record<string, OrganizationResourcePermission[] | null> = {
   proxyExecSignal: [WRITE_BOXES],
   proxyExecResize: [WRITE_BOXES],
   proxyExecKill: [WRITE_BOXES],
+  issueAttachTicket: [WRITE_BOXES],
   proxyFiles: [WRITE_BOXES],
   proxyNetworkTunnel: [WRITE_BOXES],
   proxyExecStatus: null,
