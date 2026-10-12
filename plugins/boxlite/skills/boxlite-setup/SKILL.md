@@ -1,43 +1,50 @@
 ---
 name: boxlite-setup
-description: Set up the BoxLite CLI and authenticate to a BoxLite cloud account for deployment. Use for BoxLite onboarding or expired developer credentials, not application end-user Google sign-in.
+description: Install a compatible BoxLite CLI and authenticate its developer cloud profile before deployment. Use for first-use BoxLite onboarding, missing CLI installation or expired BoxLite credentials, not an application's end-user login.
 ---
 
-If a CLI is installed, first check `boxlite --version`, `boxlite auth login --help`, and `boxlite network tunnel --help`. The plugin also requires network tunnels.
+Run this workflow when the user starts BoxLite setup or first asks the bundled **boxlite** skill to build/deploy an app. Continue from the original app request after setup; do not require the user to find a Setup button or invoke another skill manually. Reuse a verified CLI and valid selected profile; installation alone does not start authentication.
 
-Start with local CLI help and this skill's bundled setup/build guidance. Consult https://github.com/boxlite-ai/boxlite/tree/main/src/cli and https://docs.boxlite.ai/ only when required installation information is missing or current release details need verification.
+## 1. Select a compatible CLI
 
-If an online documentation fetch fails, report it briefly and continue using verified CLI capabilities and the bundled instructions. That fetch failure alone must not block login or the pinned source-build fallback below.
+~~~sh
+command -v boxlite
+boxlite --version
+boxlite auth login --help
+boxlite network tunnel --help
+~~~
 
-Use either a verified official BoxLite CLI release **v0.10.6 or newer**, or the verified native source build pinned in the [source-build fallback](references/source-build.md), with `network tunnel` support.
+Expect: a verified official **v0.10.6+** CLI, or the provenance-verified pinned native build in [source-build](references/source-build.md), with device login and tunnels. Published v0.10.5 lacks the hosted device-endpoint fix; the pinned build may report v0.10.5 and is identified by source provenance.
 
-Hosted Auth0 device login requires the discovered-endpoint fix in [#1836](https://github.com/boxlite-ai/boxlite/pull/1836), merged as [`e6cc3d1`](https://github.com/boxlite-ai/boxlite/commit/e6cc3d1a1e991f8732f7b5c8f9eb4baa3c1bbbbf). The published `v0.10.5` release predates that fix.
+If no CLI is installed, check the official release version. When a compatible release exists use the official installer:
 
-A build from the pinned source may report v0.10.5; accept it only after verifying its official origin, full commit and normal native build. Version output and `--method device` alone do not establish build provenance.
+~~~sh
+curl -fsSL https://sh.boxlite.ai | sh
+"$HOME/.local/bin/boxlite" --version
+~~~
 
-When no verified compatible CLI is available, execute the source-build fallback as part of the requested setup. It is a supported installation path, including before v0.10.6 is published. Fetch the pinned source, prepare its native runtime, build and select the CLI, then continue authorization below. Keep a verified existing release/pinned source build when available; report a concrete platform, permission or build failure if the fallback cannot finish.
+Expect: a compatible binary under ~/.local/bin. Retain its absolute path when PATH does not persist across tool calls. If no compatible release exists or an installed CLI is incompatible, execute the supported pinned source procedure and continue login. Give the user any administrator/interactive dependency step that requires their participation.
 
-Keep developer credentials in the CLI's private store, outside app source and deploy archives. Respect an existing home/profile selected by the user. A new deployment may use its own named profile. Start with `boxlite --profile NAME auth status` and `boxlite --profile NAME auth whoami`; never print credentials files or request tokens in chat.
+Use local CLI help and bundled instructions first. Online docs are only for missing information or current release verification; fetch failure does not block a verified executable or the source procedure.
 
-Hosted production uses API `https://app.boxlite.ai/api`, issuer `https://auth.boxlite.ai/`, and public Native CLI Client ID `PniqOPOrdcQ1gx2aIBljtZuvhtigCM6C`. Confirm the issuer from the selected API's `/config` before applying this mapping (a trailing slash is optional). Use `--client-id` to select the CLI application when `/config` advertises the dashboard application. Flags override server config; `OIDC_CLIENT_ID` is only a fallback and cannot override a server value. A client ID is public application metadata, not a client secret or a user credential.
+## 2. Authenticate the selected profile
 
-Once the user has selected hosted production, preserve any explicit user/admin `CLI_CLIENT_ID`; apply the bundled value only when that selected value is absent or empty:
+Respect the selected home, API and profile. If no profile was specified, inspect `boxlite auth status` and reuse the active profile; choose a named cloud profile only when no existing context applies. Use the CLI global `--home CLI_HOME` selector for a custom BoxLite home; this is not the operating system HOME. Check the reported credential source without displaying its value. In the examples, substitute the selected API/home, or omit a selector only when intentionally using its verified default.
 
-```sh
-boxlite --profile NAME auth login --url https://app.boxlite.ai/api --client-id "${CLI_CLIENT_ID:-PniqOPOrdcQ1gx2aIBljtZuvhtigCM6C}" --method device
-```
+~~~sh
+boxlite --home CLI_HOME --profile PROFILE --url API auth status
+boxlite --home CLI_HOME --profile PROFILE --url API auth whoami
+~~~
 
-Replace `NAME` with the selected profile. For self-hosted or additional environments, obtain that environment's public Native CLI Client ID from its administrator and run `boxlite --profile NAME auth login --url SERVER_API_URL --client-id PUBLIC_CLI_CLIENT_ID --method device`. The bundled production ID applies only to its matching API and issuer. Add another environment mapping after verifying its API, issuer, and device login. A future `oidc.cliClientId` config field requires CLI support before it can replace the explicit flag.
+Expect: online identity for the intended API. A successful check skips login. Missing credentials or an expired session that cannot refresh: read [login](references/login.md) and start the appropriate device command automatically, using its production mapping only for the matching API/issuer. Present the verification URL/user code and keep polling alive while the user authorizes in the browser.
 
-Present only the printed verification URL and one-time user code from the device response. Keep the process alive while the user completes browser authorization. For `unauthorized_client`, check the CLI Client ID and issuer, then ask the Auth0 tenant administrator to verify Device Code for that application. Refresh Token and API offline access must be enabled to obtain renewable sessions. Stop polling on denial, expiry, or user cancellation.
+DNS, TLS, transport, rate-limit or server failures are not proof that credentials expired: report the failing connection and preserve the profile instead of opening another login. Stop on denial/cancellation/expiry; do not retry authorization or change accounts to bypass the result. Browser PKCE and user-controlled API-key alternatives are in the login reference.
 
-Browser PKCE is an alternative when the user's local callback is reachable and the client's allowed callback is `http://127.0.0.1:5555/callback`. Use the same selected profile, API and CLI client as device login; for hosted production run:
-```sh
-boxlite --profile NAME auth login --url https://app.boxlite.ai/api --client-id "${CLI_CLIENT_ID:-PniqOPOrdcQ1gx2aIBljtZuvhtigCM6C}" --method browser
-```
+## 3. Verify routing and continue
 
-Switch methods only after the device attempt has ended, preserving denial/cancellation decisions. Never claim a dashboard browser session automatically authenticates the CLI. API-key login, when the user chooses it, uses `--api-key-stdin`; do not put the key in argv or app code.
+~~~sh
+boxlite --home CLI_HOME --profile PROFILE --url API auth whoami
+boxlite --home CLI_HOME --profile PROFILE --url API list --format json
+~~~
 
-After successful authorization run `boxlite --profile NAME auth whoami`, then `boxlite --profile NAME list --format json`. Check account/project routing before creating resources. To verify refresh issuance inspect only the boolean presence of a refresh token locally, never its value. A successful login without one is usable until the access token expires; label refresh verification pending until a real refresh succeeds.
-
-Continue with the bundled boxlite skill for application deployment. App Google sign-in uses separate application OAuth credentials, not this developer login.
+Expect: online identity and cloud resources using the same connection settings. Keep credentials private; never print the store or request tokens in chat. Return the verified executable/home/profile/API to the original **boxlite** workflow and continue the requested app task. A login-only request ends after these checks. Installation/discovery does not prove login or deployment.

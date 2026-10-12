@@ -1,27 +1,28 @@
 # BoxLite plugin v0.1
 
-A skills-only plugin for Codex desktop and CLI. It contains BoxLite setup/deployment skills and references for identity, durable storage, and operations. Applications are generated or adapted in the user's project; the package has no website template, app runtime, MCP server, or lifecycle hook.
+Build or adapt an app, deploy it through the BoxLite CLI, return its registered HTTPS URL, and update it while retaining its Box and data. Shared skills support Codex desktop/CLI.
 
-Run `make test:unit:plugins` for package unit tests. Each distribution build replaces the entire generated marketplace directory, removing files from older builds. Keep personal files outside that directory.
+## Install and use
 
-Packaging requires Python 3.9 or newer. Unit tests, validation and distribution use `PLUGIN_PYTHON`, defaulting to `python3`; for example, `make plugin:boxlite:dist PLUGIN_PYTHON=python3.11`. Recursive package checks use the same interpreter. Coverage defaults to it too, but the pinned coverage.py requires Python 3.10 or newer; Python 3.9 users must select a separate Python 3.10+ environment with `PLUGIN_COVERAGE_PYTHON`.
+For a standalone marketplace supplied as a test package, extract it and use its absolute directory:
 
-From the repository root run `make plugin:boxlite:check` and `make plugin:boxlite:dist`. The latter produces a plugin ZIP and a standalone local marketplace in `target/plugins/boxlite-marketplace`. Add that directory with `codex plugin marketplace add ABSOLUTE_PATH`, then install `codex plugin add boxlite@boxlite`. For desktop development, the repository marketplace also exposes BoxLite as available; restart the app and select that source. Verify both installation paths separately.
+~~~sh
+codex plugin marketplace add ABSOLUTE_MARKETPLACE_DIRECTORY
+codex plugin add boxlite@boxlite
+~~~
 
-The plugin supports either a verified official CLI **v0.10.6 or newer** containing [#1836](https://github.com/boxlite-ai/boxlite/pull/1836), or the verified native build from the [pinned source procedure](skills/boxlite-setup/references/source-build.md). The published v0.10.5 binary is incompatible; the pinned build may report that version and is accepted through source provenance.
+Start a new session. Ask: **Help me build and deploy an application on BoxLite.** For an existing project: **Deploy this project to BoxLite and give me its public URL.**
 
-The source path allows submission before a compatible CLI release exists. Public publication still requires independent deployment acceptance, installation evidence, publisher metadata/policy requirements and platform review. Application Google login needs its own client configuration when testing that use case. The CLI fix does not enable grants in the Auth0 tenant.
+Installation alone does not authenticate the BoxLite CLI. Codex declares a bundled onboarding skill; Setup entry visibility depends on the host interface. You can also directly ask to build/deploy an app: its skill enters setup automatically when needed, reuses valid credentials, or starts device login and waits for browser authorization. It resumes the original task after verification.
 
-Discovery tags describe BoxLite cloud deployment through CLI skills. They apply across application stacks; PostgreSQL is an application choice rather than a plugin prerequisite.
+## Supported workflow
 
-Use the references from each skill for the requested workflow. Keep application source, credentials, build caches, and deployment state outside this package.
+[Setup](skills/boxlite-setup/SKILL.md) selects an official CLI v0.10.6+ or the provenance-verified [pinned native source build](skills/boxlite-setup/references/source-build.md), then authenticates the chosen profile. Production device login is the default; browser PKCE and user-controlled API keys remain alternatives. Other environments need their own public CLI client ID.
 
-Setup uses local CLI help and bundled instructions first. Online installation documentation is a conditional reference for missing information or current release verification; a documentation fetch failure alone does not block login or the pinned source-build fallback.
+[Deployment](skills/boxlite/SKILL.md) checks the actual project, obtains a registered tunnel URL, stages compressed source, builds in the Box and verifies health/features. Its helpers use a private project configuration for repeat deployment, preserving shared configuration/data and the same Box/port URL. Database, app login and managed media references are read only when needed.
 
-When no verified compatible CLI is installed, the setup skill executes the pinned source-build procedure. The agent fetches the exact merged #1836 commit, runs the repository's dependency/runtime/CLI Make targets and selects that executable before login. Keep the checkout for its runtime resources. The plugin ZIP contains the procedure; source and build outputs remain outside the plugin.
+The optional deploy helper requires host Python 3.9+ and the guest's provided Python 3. It uses the standard library and installs no helper dependencies.
 
-Packaging reports absent manifests, non-object JSON, and missing required fields as contextual `ValueError`s. Validation and distribution always run, even when files share their Make target names; the non-colon force prerequisite preserves the macOS Make workaround.
+Keep app source, deployment state, credentials and CLI build caches outside this plugin. Online documentation is a conditional reference. This package has no application template, MCP server or lifecycle hook. Its optional helpers manage an app through the existing CLI.
 
-For measured packaging coverage, install `coverage==7.13.5` into a Python 3.10+ environment and run `make plugin:boxlite:coverage`. When packaging uses Python 3.9, pass `PLUGIN_COVERAGE_PYTHON=ABSOLUTE_PATH_TO_PYTHON_3_10_PLUS_ENVIRONMENT/bin/python`. This runs package tests plus the actual check/dist commands and writes `target/coverage/plugins/coverage.xml`; credentials and application runtime are outside its scope.
-
-The [setup skill](skills/boxlite-setup/SKILL.md) bundles the production public Native CLI client ID for `https://app.boxlite.ai/api` with issuer `https://auth.boxlite.ai/`, an explicit device-login command, and a browser PKCE alternative. Other environments require their own public Native CLI client ID from the environment administrator; the production ID must match the selected API and issuer. User/admin overrides remain supported. The package contains no client secret or user tokens.
+For package builds, validation, coverage and host compatibility checks, see docs/contributing/development/boxlite-plugins.md in the source checkout.
