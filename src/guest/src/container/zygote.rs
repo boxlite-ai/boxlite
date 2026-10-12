@@ -88,32 +88,26 @@ pub(crate) enum BuildResult {
         error: String,
     },
     /// The container's command cannot run in the image: the caller's input,
-    /// already worded for them (see `command_rejection`).
+    /// in youki's own words (see `command_rejection`).
     Rejected {
         message: String,
     },
 }
 
 /// Recognize the command check youki runs in init (`DefaultExecutor::validate`)
-/// and word its verdict for the caller, who wrote the command.
+/// and return its verdict, which already names the command, unchanged.
 ///
 /// The check runs in the init child, so its verdict reaches the builder only as
 /// text, after the marker youki puts on a failure init reports
 /// (`wait_for_init_ready`). `build()` then wraps it in a `CreateContainerError`
 /// whose fields are private, so text is all there is to match; the marker keeps
-/// the wording match to what init reported. youki's sentence already names the
-/// command, so it is kept and only the fix is added.
+/// the wording match to what init reported.
 fn command_rejection(error: &libcontainer::error::LibcontainerError) -> Option<String> {
     let text = error.to_string();
     let (_, reported_by_init) = text.split_once("error in executing process : ")?;
-    let fix = if reported_by_init.contains("not found in $PATH") {
-        "check the name or use an absolute path that exists in the image"
-    } else if reported_by_init.contains("does not have correct permissions") {
-        "check its file permissions in the image"
-    } else {
-        return None;
-    };
-    Some(format!("{reported_by_init}; {fix}"))
+    (reported_by_init.contains("not found in $PATH")
+        || reported_by_init.contains("does not have correct permissions"))
+    .then(|| reported_by_init.to_string())
 }
 
 /// Tagged IPC request from parent to zygote.
@@ -1621,13 +1615,7 @@ mod tests {
         let error = relayed_command_check("httpd", empty.path().to_str().unwrap());
 
         let message = command_rejection(&error).expect("a missing command is rejected");
-        assert!(
-            message.starts_with("executable 'httpd' not found"),
-            "{message}"
-        );
-        assert!(
-            message.ends_with("check the name or use an absolute path that exists in the image")
-        );
+        assert_eq!(message, "executable 'httpd' not found in $PATH");
     }
 
     #[test]
@@ -1638,7 +1626,7 @@ mod tests {
 
         let message = command_rejection(&error).expect("a non-executable command is rejected");
         assert!(message.starts_with("executable 'httpd'"), "{message}");
-        assert!(message.ends_with("check its file permissions in the image"));
+        assert!(message.ends_with("does not have correct permissions"));
     }
 
     #[test]

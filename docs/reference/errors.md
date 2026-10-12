@@ -294,7 +294,7 @@ The request itself is wrong; retrying it unchanged fails the same way. Over REST
 
 **Example:**
 ```text
-Error: invalid argument: executable 'httpd' not found in $PATH; check the name or use an absolute path that exists in the image
+Error: invalid argument: executable 'httpd' not found in $PATH
 ```
 
 **Solution:**
