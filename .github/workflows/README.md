@@ -122,6 +122,10 @@ saves the Cobertura XML as the `plugin-coverage` artifact, and uploads it with O
 under the `plugins` carryforward flag. Selected plugin source cannot take the
 empty-upload path; package or upload failures block `Test (conclusion)`.
 
+The package validator requires onboarding to name a distributed, frontmatter-validated
+`skills/<name>/SKILL.md` inventory. Excluded caches and shipped reference files cannot
+serve as onboarding skills, even when both manifests name the same existing file or alias.
+
 After verifying normal uploads and the skipped-coverage path on PRs and merge
 groups, require `codecov/patch` from the Codecov app in the main ruleset alongside
 `Test (conclusion)`. Deploy the workflow before enabling that requirement so

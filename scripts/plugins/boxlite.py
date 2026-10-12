@@ -84,14 +84,15 @@ def validate(root=PLUGIN):
     legacy_settings = required_field(legacy_extensions, 'com.openai', 'Codex extensions')
     if required_field(legacy_settings, 'onboardingSkill', 'Codex OpenAI extension') != onboarding:
         raise ValueError('Compatibility onboarding differs')
-    checked_path(root, onboarding)
     for field in ('composerIcon', 'logo'):
         checked_path(root, required_field(interface, field, 'OpenAI interface'))
     if (root / 'mcp.json').exists() or (root / 'hooks').exists() or (root / '.mcp.json').exists():
         raise ValueError('v0.1 is skills-only')
-    skills = list((root / 'skills').glob('*/SKILL.md'))
+    skills = [path for path in files if path.name == 'SKILL.md' and path.parent.parent == root / 'skills']
     if not skills:
         raise ValueError('No skills packaged')
+    if checked_path(root, onboarding) not in skills:
+        raise ValueError('Onboarding must name a packaged skill')
     for skill in skills:
         text = skill.read_text()
         if not text.startswith('---\n') or '\n---\n' not in text[4:]:
