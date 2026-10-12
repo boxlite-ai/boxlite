@@ -115,7 +115,7 @@ export async function buildClickHouseStorage(input: {
   const adminSecret: ManagedSecret = createClickHouseSecret('ClickHouseAdminSecret', 'clickhouse-admin')
   const writerSecret: ManagedSecret = createClickHouseSecret('ClickHouseWriterSecret', 'clickhouse-writer')
   const readerSecret: ManagedSecret = createClickHouseSecret('ClickHouseReaderSecret', 'clickhouse-reader')
-  const { encodeClickHouseUserData, CLICKHOUSE_IMAGE, CLICKHOUSE_RETENTION_HOURS, renderClickHouseSchema } = await import(
+  const { encodeClickHouseUserData, CLICKHOUSE_IMAGE, renderClickHouseSchema } = await import(
     'mdeploy/clickhouse-host'
   )
 
@@ -228,10 +228,10 @@ export async function buildClickHouseStorage(input: {
       CLICKHOUSE_WRITER_SECRET_ARN: writerSecret.resource.arn,
       CLICKHOUSE_READER_SECRET_ARN: readerSecret.resource.arn,
       CLICKHOUSE_EXPECTED_IMAGE: CLICKHOUSE_IMAGE,
-      CLICKHOUSE_SCHEMA_BASE64: Buffer.from(renderClickHouseSchema()).toString('base64'),
-      CLICKHOUSE_RETENTION_HOURS: String(CLICKHOUSE_RETENTION_HOURS),
+      CLICKHOUSE_SCHEMA_BASE64: Buffer.from(renderClickHouseSchema(config.retentionHours)).toString('base64'),
+      CLICKHOUSE_RETENTION_HOURS: String(config.retentionHours),
     },
-    triggers: [instance.id, volume.id, userData, adminSecret.version.id, writerSecret.version.id, readerSecret.version.id],
+    triggers: [config.retentionHours, instance.id, volume.id, userData, adminSecret.version.id, writerSecret.version.id, readerSecret.version.id],
   }, { dependsOn: [attachment] })
   return {
     mode: config.mode,

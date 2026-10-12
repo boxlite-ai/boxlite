@@ -17,7 +17,7 @@ Pricing references were checked on 2026-09-24; use current regional SKUs when es
 | [Cloud Run](https://cloud.google.com/run/pricing) | API/dashboard and OTel collector | CPU, memory, requests, configured minimum instances and transfer |
 | [GKE Autopilot](https://cloud.google.com/kubernetes-engine/pricing) | Proxy cluster and two replicas | Cluster management, workload resources and applicable storage/transfer |
 | [Compute Engine](https://cloud.google.com/compute/vm-instance-pricing) | Runner fleet; optional ClickHouse VM | VM family, size, count and running hours |
-| [Hyperdisk Balanced](https://cloud.google.com/compute/disks-image-pricing) | Runner boot/local state; ClickHouse boot and retained data | Provisioned capacity and performance beyond included baseline |
+| [Hyperdisk Balanced](https://cloud.google.com/compute/disks-image-pricing) | Runner boot disks and per-host data disks (billed while unattached); ClickHouse boot and retained data | Provisioned capacity and performance beyond included baseline |
 | [Cloud SQL](https://cloud.google.com/sql/pricing) | PostgreSQL control-plane state | Tier, availability, storage, configured backups/PITR and transfer |
 | [Memorystore](https://cloud.google.com/memorystore/docs/redis/pricing) | Redis | Capacity and configured Basic/HA service tier |
 | [Cloud Storage](https://cloud.google.com/storage/pricing) | App bucket, dynamic volume buckets, runner artifacts, state/config versions | Stored bytes, operations, retrieval where applicable and transfer |

@@ -16,7 +16,7 @@ import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import { SystemRole } from '../user/enums/system-role.enum'
 import { RunnerService } from '../box/services/runner.service'
-import { generateApiKeyHash } from '../common/utils/api-key'
+import { apiKeyValidationCacheKey, generateApiKeyHash } from '../common/utils/api-key'
 import { RegionService } from '../region/services/region.service'
 import { JWT_REGEX } from './constants/jwt-regex.constant'
 
@@ -207,7 +207,7 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
   }
 
   private generateValidationCacheKey(token: string): string {
-    return `api-key:validation:${generateApiKeyHash(token)}`
+    return apiKeyValidationCacheKey(generateApiKeyHash(token))
   }
 
   private generateUserCacheKey(userId: string): string {

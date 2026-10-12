@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
+import { clickHouseRetentionHours } from '../shared/clickhouse-retention.ts'
+
 type ClickHouseMode = 'self-hosted' | 'managed' | 'disabled'
 
 export type ClickHouseConfig =
-  | { mode: 'self-hosted'; active: true }
+  | { mode: 'self-hosted'; active: true; retentionHours: number }
   | { mode: 'managed'; active: true; url: string; writerSecretArn: string; readerSecretArn: string }
   | { mode: 'disabled'; active: false }
 
@@ -16,14 +18,16 @@ const MANAGED_KEYS = [
   'CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN',
   'CLICKHOUSE_READER_PASSWORD_SECRET_ARN',
 ]
+/** Only a self-hosted backend owns its TTLs; anywhere else the value would be silently dropped. */
+const SELF_HOSTED_KEYS = ['CLICKHOUSE_RETENTION_HOURS']
 export const CLICKHOUSE_STAGE_CONFIG_KEYS = Object.freeze([
   'CLICKHOUSE_MODE',
+  ...SELF_HOSTED_KEYS,
   ...MANAGED_KEYS,
 ])
 export const CLICKHOUSE_REMOVED_STAGE_CONFIG_KEYS = Object.freeze([
   'CLICKHOUSE_SELF_HOSTED_INSTANCE_TYPE',
   'CLICKHOUSE_SELF_HOSTED_DATA_GB',
-  'CLICKHOUSE_RETENTION_HOURS',
   'CLICKHOUSE_WRITER_USERNAME',
   'CLICKHOUSE_READER_USERNAME',
   'CLICKHOUSE_DATABASE',
@@ -103,15 +107,16 @@ export function resolveClickHouseConfig(environment: NodeJS.ProcessEnv = process
   const mode = modeValue(environment)
 
   if (mode === 'disabled') {
-    rejectSet(environment, MANAGED_KEYS, 'cannot be set when CLICKHOUSE_MODE=disabled')
+    rejectSet(environment, [...SELF_HOSTED_KEYS, ...MANAGED_KEYS], 'cannot be set when CLICKHOUSE_MODE=disabled')
     return { mode, active: false }
   }
 
   if (mode === 'self-hosted') {
     rejectSet(environment, MANAGED_KEYS, 'cannot be set when CLICKHOUSE_MODE=self-hosted')
-    return { mode, active: true }
+    return { mode, active: true, retentionHours: clickHouseRetentionHours(environment) }
   }
 
+  rejectSet(environment, SELF_HOSTED_KEYS, 'cannot be set when CLICKHOUSE_MODE=managed')
   const url = environment.CLICKHOUSE_URL?.trim()
   const writerSecretArn = environment.CLICKHOUSE_WRITER_PASSWORD_SECRET_ARN?.trim()
   const readerSecretArn = environment.CLICKHOUSE_READER_PASSWORD_SECRET_ARN?.trim()

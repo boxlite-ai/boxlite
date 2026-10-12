@@ -19,6 +19,8 @@ import { FailedAuthTrackerService } from './failed-auth-tracker.service'
 import { LoginEventRecorder } from './login-event.recorder'
 import { RegionModule } from '../region/region.module'
 import { LogoutController } from './logout.controller'
+import { AccountLinkController } from './account-link.controller'
+import { AccountLinkService } from './account-link.service'
 @Module({
   imports: [
     PassportModule.register({
@@ -32,8 +34,9 @@ import { LogoutController } from './logout.controller'
     BoxModule,
     RegionModule,
   ],
-  controllers: [LogoutController],
+  controllers: [LogoutController, AccountLinkController],
   providers: [
+    AccountLinkService,
     ApiKeyStrategy,
     {
       provide: JwtStrategy,

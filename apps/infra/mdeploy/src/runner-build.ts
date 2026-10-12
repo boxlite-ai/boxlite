@@ -486,7 +486,7 @@ export const buildRunner = async ({
    * from the session mstage resolved, Google's project from the stage's own
    * declaration — the same values `sst.config.ts` and `pulumi/program.ts` name
    * the bucket from. A build that staged into one and a deploy that read
-   * another would 404 on the host, at a boot that never happens again.
+   * another would 404 on the host, from a boot script that is never rewritten.
    */
   const prefix = `runner/${ref}`
   const destination =
