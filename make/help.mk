@@ -37,6 +37,7 @@ help:
 	@echo "    make test:all               - Run full test matrix (unit + integration)"
 	@echo "    make test:unit              - Run all unit suites"
 	@echo "    make test:integration       - Run all integration suites"
+	@echo "    make test:unit:plugins      - Run plugin packaging and deployment helper unit tests"
 	@echo "    make test:unit:core         - Run Rust/FFI/gvproxy unit suites"
 	@echo "    make test:integration:core  - Run core integration suites (Rust + CLI)"
 	@echo "    make test:unit:sdk          - Run SDK unit suites (Python + Node + C + Go)"
