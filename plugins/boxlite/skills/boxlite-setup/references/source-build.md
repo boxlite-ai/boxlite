@@ -2,7 +2,7 @@
 
 Execute this supported installation procedure when the user requests setup and no verified compatible CLI is available. Prefer a verified official v0.10.6+ release when available. An already-built source CLI may be reused when its official origin, exact pinned commit and normal native build are verified. Plugin installation does not itself fetch, build or authenticate; run this procedure during requested setup.
 
-The pinned revision below is the merged #1836 commit, not its old PR branch. Its CLI may still report v0.10.5: record source provenance instead of changing the version or accepting the older published binary.
+The pinned source CLI may still report v0.10.5: record source provenance instead of changing the version or accepting the older published binary.
 
 ## Fetch and build
 
