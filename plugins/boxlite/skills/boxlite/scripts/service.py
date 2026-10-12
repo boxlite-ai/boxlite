@@ -60,7 +60,7 @@ def owned_group(state):
                 if os.getpgid(int(entry.name)) == pid and identity(int(entry.name)) is not None:
                     members.append(entry)
             except ProcessLookupError:
-                pass
+                pass  # A process can exit between the /proc scan and group lookup.
         if not members:
             return False
         if not any(marker in (entry / 'environ').read_bytes().split(b'\0') for entry in members):
@@ -82,7 +82,7 @@ def stop(state):
         try:
             os.killpg(pid, signal.SIGKILL)
         except ProcessLookupError:
-            pass
+            pass  # The group may finish exiting before SIGKILL reaches it.
         deadline = time.monotonic() + 2
         while owned_group(state):
             if time.monotonic() >= deadline:
@@ -99,7 +99,7 @@ def launch(config):
     try:
         connection = socket.create_connection(('127.0.0.1', port), timeout=1)
     except OSError:
-        pass
+        pass  # Readiness still verifies that the new service can bind and respond.
     else:
         connection.close()
         raise RuntimeError('Service port is already occupied; no new process was started')
@@ -118,14 +118,14 @@ def launch(config):
                     if response.status == 200 and process.poll() is None:
                         return state
             except (OSError, urllib.error.URLError):
-                pass
+                pass  # Refusal or HTTP failure is retryable only until the health deadline.
             time.sleep(0.2)
         raise RuntimeError('Application health deadline expired; inspect app.log')
     except BaseException:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
-            pass
+            pass  # A failed startup may already have terminated its process group.
         process.wait()
         raise
 
@@ -163,8 +163,12 @@ def execute(action, config):
             state = launch(config)
         except BaseException:
             if old:
-                restored = launch(old['config'])
-                state_path.write_text(json.dumps(restored))
+                try:
+                    restored = launch(old['config'])
+                except BaseException:
+                    state_path.unlink(missing_ok=True)
+                else:
+                    state_path.write_text(json.dumps(restored))
             raise
         state_path.write_text(json.dumps(state))
         os.chmod(state_path, 0o600)

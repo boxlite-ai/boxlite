@@ -16,12 +16,26 @@ boxlite network tunnel --help
 
 Expect: a verified official **v0.10.6+** CLI, or the provenance-verified pinned native build in [source-build](references/source-build.md), with device login and tunnels. Published v0.10.5 lacks the hosted device-endpoint fix; the pinned build may report v0.10.5 and is identified by source provenance.
 
-If no CLI is installed, check the official release version. When a compatible release exists use the official installer:
+If no CLI is installed, check the official release version. When a compatible release exists, set CLI_TAG to that published v0.10.6+ tag. Download its official installer into a temporary directory, verify checksum and provenance, then execute it:
 
 ~~~sh
-curl -fsSL https://sh.boxlite.ai | sh
+INSTALLER_DIR="$(mktemp -d)"
+(
+  set -eu
+  cd "$INSTALLER_DIR"
+  gh release download "$CLI_TAG" --repo boxlite-ai/boxlite --pattern install.sh --pattern install.sh.sha256
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -c install.sh.sha256
+  else
+    shasum -a 256 -c install.sh.sha256
+  fi
+  XDG_CACHE_HOME="$INSTALLER_DIR/cache" gh attestation verify install.sh --repo boxlite-ai/boxlite
+  BOXLITE_VERSION="$CLI_TAG" sh ./install.sh
+)
 "$HOME/.local/bin/boxlite" --version
 ~~~
+
+Checksum and attestation must both pass before execution. If gh, verification or a compatible release is unavailable, use the pinned source procedure; never bypass verification.
 
 Expect: a compatible binary under ~/.local/bin. Retain its absolute path when PATH does not persist across tool calls. If no compatible release exists or an installed CLI is incompatible, execute the supported pinned source procedure and continue login. Give the user any administrator/interactive dependency step that requires their participation.
 
