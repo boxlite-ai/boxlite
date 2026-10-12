@@ -37,6 +37,9 @@ pub(super) struct ImageManifest {
     /// DiffIDs from image config's `rootfs.diff_ids` (SHA256 of uncompressed layers).
     /// Empty if not available (e.g., config not yet downloaded, or empty in config).
     pub(super) diff_ids: Vec<String>,
+    /// Multi-arch index digest, when the registry returned an index before the
+    /// platform manifest. Removed with the other scratch files once the ext4 is ready.
+    pub(super) index_digest: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +129,21 @@ impl ImageManager {
         ))
     }
 
+    /// Download the manifest and config without layer tarballs.
+    ///
+    /// A shared-ext4 build inserts its `building` row after this returns and
+    /// before [`Self::pull`] fetches layers.
+    pub async fn pull_metadata(&self, image_ref: &str) -> BoxliteResult<ImageObject> {
+        let manifest = self.store.pull_metadata(image_ref).await?;
+        let storage = self.store.storage().await;
+        let blob_source = BlobSource::Store(StoreBlobSource::new(storage));
+        Ok(ImageObject::new(
+            image_ref.to_string(),
+            manifest,
+            blob_source,
+        ))
+    }
+
     /// List all cached images.
     pub async fn list(&self) -> BoxliteResult<Vec<ImageInfo>> {
         let raw_images = self.store.list().await?;
@@ -198,5 +216,12 @@ impl ImageManager {
         let blob_source = BlobSource::LocalBundle(LocalBundleBlobSource::new(path, cache_dir));
 
         Ok(ImageObject::new(reference, manifest, blob_source))
+    }
+
+    pub(crate) async fn scratch_files(
+        &self,
+        image: &ImageObject,
+    ) -> super::shared_ext4::ScratchFiles {
+        super::shared_ext4::scratch_files(&*self.store.storage().await, image)
     }
 }

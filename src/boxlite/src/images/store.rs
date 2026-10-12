@@ -319,6 +319,7 @@ impl ImageStore {
             layers,
             config_digest: config_digest_str,
             diff_ids: Vec::new(), // Populated later if config is available
+            index_digest: None,
         })
     }
 
@@ -503,6 +504,7 @@ impl ImageStore {
             layers,
             config_digest,
             diff_ids,
+            index_digest: None,
         })
     }
 
@@ -571,49 +573,102 @@ impl ImageStore {
     /// This method handles the actual network I/O - manifest pull, layer download, etc.
     /// Lock is released during network I/O to allow other operations.
     async fn pull_from_registry(&self, reference: &Reference) -> BoxliteResult<ImageManifest> {
+        let image_manifest = self.fetch_manifest_and_config(reference).await?;
+        let client = self.client_for(reference);
+        self.download_layers(&client, reference, &image_manifest.layers)
+            .await?;
+        self.update_index(&reference.whole(), &image_manifest)
+            .await?;
+        Ok(image_manifest)
+    }
+
+    /// Manifest and config only. Layer tarballs stay unfetched so a shared-ext4
+    /// build can insert its `building` row before the layer download.
+    pub async fn pull_metadata(&self, image_ref: &str) -> BoxliteResult<ImageManifest> {
+        use super::ReferenceIter;
+
+        let candidates = ReferenceIter::new(image_ref, &self.registries)
+            .map_err(|e| BoxliteError::Storage(format!("invalid image reference: {e}")))?;
+        let mut errors: Vec<(String, BoxliteError)> = Vec::new();
+        for reference in candidates {
+            let ref_str = reference.whole();
+            {
+                let inner = self.inner.read().await;
+                if let Some(manifest) = self.try_load_metadata(&inner, &ref_str)? {
+                    return Ok(manifest);
+                }
+            }
+            match self.fetch_manifest_and_config(&reference).await {
+                Ok(manifest) => return Ok(manifest),
+                Err(err) => errors.push((ref_str, err)),
+            }
+        }
+        if errors.is_empty() {
+            Err(BoxliteError::Storage(format!(
+                "No registries configured for image: {}",
+                image_ref
+            )))
+        } else {
+            let details: Vec<String> = errors
+                .iter()
+                .map(|(registry, err)| format!("  - {}: {}", registry, err))
+                .collect();
+            Err(BoxliteError::Storage(format!(
+                "Failed to read image metadata '{}' after trying {} {}:\n{}",
+                image_ref,
+                errors.len(),
+                if errors.len() == 1 {
+                    "registry"
+                } else {
+                    "registries"
+                },
+                details.join("\n")
+            )))
+        }
+    }
+
+    fn try_load_metadata(
+        &self,
+        inner: &ImageStoreInner,
+        image_ref: &str,
+    ) -> BoxliteResult<Option<ImageManifest>> {
+        let Some(cached) = inner.index.get(image_ref)? else {
+            return Ok(None);
+        };
+        if !inner.storage.has_manifest(&cached.manifest_digest)
+            || !inner.storage.has_config(&cached.config_digest)
+        {
+            return Ok(None);
+        }
+        Ok(Some(self.load_manifest_from_disk(inner, &cached)?))
+    }
+
+    async fn fetch_manifest_and_config(
+        &self,
+        reference: &Reference,
+    ) -> BoxliteResult<ImageManifest> {
         let client = self.client_for(reference);
         let auth = registry_auth_for(reference.registry(), &self.image_registries);
-
-        // Step 1: Pull manifest (no lock needed)
         let (manifest, manifest_digest_str) = client
             .pull_manifest(reference, &auth)
             .await
             .map_err(|e| BoxliteError::Storage(format!("failed to pull manifest: {e}")))?;
-
-        // Step 2: Save manifest (quick write lock)
         {
             let inner = self.inner.read().await;
             inner
                 .storage
                 .save_manifest(&manifest, &manifest_digest_str)?;
         }
-
-        // Step 3: Extract image manifest (may pull platform-specific manifest for multi-platform images)
         let mut image_manifest = self
             .extract_image_manifest(&client, reference, &manifest, manifest_digest_str)
             .await?;
-
-        // Step 4: Download layers (no lock during download, atomic file writes)
-        self.download_layers(&client, reference, &image_manifest.layers)
-            .await?;
-
-        // Step 5: Download config (no lock during download)
         self.download_config(&client, reference, &image_manifest.config_digest)
             .await?;
-
-        // Step 5b: Parse diff_ids from config for DiffID verification.
-        // load_diff_ids_from_config re-verifies the config digest, so a
-        // read/digest/parse failure here is a genuine fault and fails the pull.
         {
             let inner = self.inner.read().await;
             image_manifest.diff_ids =
                 self.load_diff_ids_from_config(&inner, &image_manifest.config_digest)?;
         }
-
-        // Step 6: Update index using reference.whole() as the cache key
-        self.update_index(&reference.whole(), &image_manifest)
-            .await?;
-
         Ok(image_manifest)
     }
 
@@ -655,11 +710,15 @@ impl ImageStore {
                     layers,
                     config_digest,
                     diff_ids: Vec::new(), // Populated after config download
+                    index_digest: None,
                 })
             }
             oci_client::manifest::OciManifest::ImageIndex(index) => {
-                self.extract_platform_manifest(client, reference, index)
-                    .await
+                let mut image = self
+                    .extract_platform_manifest(client, reference, index)
+                    .await?;
+                image.index_digest = Some(manifest_digest);
+                Ok(image)
             }
         }
     }
@@ -746,6 +805,7 @@ impl ImageStore {
                     layers,
                     config_digest,
                     diff_ids: Vec::new(), // Populated after config download
+                    index_digest: None,
                 })
             }
             _ => Err(BoxliteError::Storage(

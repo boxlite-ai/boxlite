@@ -87,6 +87,10 @@ impl BaseDiskStore {
         Self { db }
     }
 
+    pub(crate) fn database(&self) -> &Database {
+        &self.db
+    }
+
     /// Insert a new base disk record.
     ///
     /// Serializes `BaseDisk` to JSON and extracts queryable columns.

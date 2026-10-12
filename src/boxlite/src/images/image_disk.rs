@@ -124,11 +124,21 @@ impl ImageDiskManager {
         self.install(digest, temp_disk)
     }
 
+    /// Ext4 filename stem (layer-digest chain plus reserve) and its cache path.
+    pub(crate) fn shared_disk(&self, image: &ImageObject) -> (String, PathBuf) {
+        let path = self.disk_path(&image.compute_image_digest());
+        let key = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("image-disk");
+        (key.to_string(), path)
+    }
+
     /// Atomically install a staged disk to the cache directory.
     ///
     /// Takes ownership of the temp `Disk`, renames it to the final cache path,
     /// and returns a new persistent `Disk` pointing to the installed location.
-    fn install(&self, digest: &str, staged_disk: Disk) -> BoxliteResult<Disk> {
+    pub(crate) fn install(&self, digest: &str, staged_disk: Disk) -> BoxliteResult<Disk> {
         let target = self.disk_path(digest);
 
         // Defensive: target may already exist from a previous run

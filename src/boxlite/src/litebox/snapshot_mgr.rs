@@ -169,14 +169,36 @@ impl SnapshotManager {
             ))
         })?;
 
-        // 2-4. Fork: move container → snapshot dir, create COW child at original path
+        // 2-4. Record the snapshot disk row, then fork the qcow2.
         let snap_disk = snapshot_dir.join(disk_filenames::CONTAINER_DISK);
-        let forked = crate::disk::fork_qcow2(&container_disk, &snap_disk)?;
+        let snapshot_id = nanoid::nanoid!(8);
+        let fork_commit =
+            crate::db::shared_disk::commit_fork(self.store.database(), box_id, &snapshot_id)?;
+        if matches!(fork_commit, crate::db::shared_disk::ForkCommit::NotReady) {
+            return Err(BoxliteError::InvalidState(format!(
+                "refusing to snapshot box {box_id}: its ext4 is not ready"
+            )));
+        }
+        let forked = match crate::disk::fork_qcow2(&container_disk, &snap_disk) {
+            Ok(forked) => forked,
+            Err(err) => {
+                if let crate::db::shared_disk::ForkCommit::Committed { previous_parent } =
+                    fork_commit
+                {
+                    crate::db::shared_disk::abort_fork(
+                        self.store.database(),
+                        box_id,
+                        &snapshot_id,
+                        &previous_parent,
+                    )?;
+                }
+                return Err(err);
+            }
+        };
         let disk_info = crate::disk::DiskInfo::from(&forked);
         // forked is persistent (won't be deleted on drop)
 
         // 5. Insert DB record
-        let snapshot_id = nanoid::nanoid!(8);
         let now = chrono::Utc::now().timestamp();
         let info = SnapshotInfo {
             id: snapshot_id,
@@ -210,9 +232,20 @@ impl SnapshotManager {
             ))
         })?;
 
+        if crate::db::shared_disk::child_blocks(self.store.database(), &info.id)? {
+            return Err(crate::db::shared_disk::blocked_disk(&info.id));
+        }
+
         let snap_disk = info.disk_info.to_path_buf();
         if !snap_disk.exists() {
-            // Snapshot disk already gone — just clean up DB record.
+            // Snapshot disk already gone — drop the disk row, then the metadata.
+            match crate::db::shared_disk::delete_disk_if_free(self.store.database(), &info.id)? {
+                crate::db::shared_disk::DiskDelete::Blocked => {
+                    return Err(crate::db::shared_disk::blocked_disk(&info.id));
+                }
+                crate::db::shared_disk::DiskDelete::Removed
+                | crate::db::shared_disk::DiskDelete::Absent => {}
+            }
             self.store.delete(&info.id)?;
             return Ok(());
         }
@@ -276,6 +309,16 @@ impl SnapshotManager {
                 error = %e,
                 "Failed to remove snapshot directory (DB record already deleted)"
             );
+        }
+
+        if !snap_disk.exists() {
+            match crate::db::shared_disk::delete_disk_if_free(self.store.database(), &info.id)? {
+                crate::db::shared_disk::DiskDelete::Blocked => {
+                    return Err(crate::db::shared_disk::blocked_disk(&info.id));
+                }
+                crate::db::shared_disk::DiskDelete::Removed
+                | crate::db::shared_disk::DiskDelete::Absent => {}
+            }
         }
 
         Ok(())

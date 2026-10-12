@@ -14,6 +14,8 @@ pub struct PullArgs {
 }
 
 pub async fn execute(args: PullArgs, global: &GlobalFlags) -> Result<()> {
+    // TODO: rename `pull` to `build` once this command installs the shared ext4.
+    // CLI, SDK, and REST keep the name `pull` until then.
     let options = global.resolve_runtime_options()?;
     let runtime = global.create_runtime_with_options(options)?;
     let images = runtime.images()?;

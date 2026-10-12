@@ -8,6 +8,7 @@
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper};
+use crate::images::shared_ext4::{self, ReadyExt4};
 use crate::images::{ContainerImageConfig, ImageDiskManager};
 use crate::litebox::init::types::{ContainerRootfsPrepResult, USE_DISK_ROOTFS, USE_OVERLAYFS};
 use crate::pipeline::PipelineTask;
@@ -62,6 +63,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
         };
 
         let (container_image_config, disk) = run_container_rootfs(
+            box_id.as_str(),
             &rootfs_spec,
             &env,
             &runtime,
@@ -91,6 +93,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
 /// Pull image and prepare rootfs, then create or reuse COW disk.
 #[allow(clippy::too_many_arguments)]
 async fn run_container_rootfs(
+    box_id: &str,
     rootfs_spec: &RootfsSpec,
     env: &[(String, String)],
     runtime: &SharedRuntimeImpl,
@@ -120,7 +123,21 @@ async fn run_container_rootfs(
 
         let disk = Disk::new(disk_path.clone(), DiskFormat::Qcow2, true);
 
-        // Load container config
+        if let RootfsSpec::Image(_) = rootfs_spec
+            && USE_DISK_ROOTFS
+        {
+            let ready = shared_ext4::open_restart(&runtime.box_manager.db(), box_id)?;
+            let config = apply_config(
+                ready.config,
+                env,
+                entrypoint_override,
+                cmd_override,
+                user_override,
+                working_dir_override,
+            );
+            return Ok((config, disk));
+        }
+
         let image = match rootfs_spec {
             RootfsSpec::Image(r) => pull_image(runtime, r).await?,
             RootfsSpec::RootfsPath(path) => {
@@ -153,6 +170,22 @@ async fn run_container_rootfs(
         );
 
         return Ok((container_image_config, disk));
+    }
+
+    if let RootfsSpec::Image(image_ref) = rootfs_spec
+        && USE_DISK_ROOTFS
+    {
+        let ready = prepare_shared_ext4(runtime, image_ref).await?;
+        let disk = commit_and_create_cow(runtime, box_id, &ready, layout, disk_size_gb)?;
+        let config = apply_config(
+            ready.config,
+            env,
+            entrypoint_override,
+            cmd_override,
+            user_override,
+            working_dir_override,
+        );
+        return Ok((config, disk));
     }
 
     // Fresh start: pull or load image
@@ -262,6 +295,111 @@ fn create_cow_disk(
     }
 }
 
+fn apply_config(
+    mut config: ContainerImageConfig,
+    env: &[(String, String)],
+    entrypoint_override: Option<&[String]>,
+    cmd_override: Option<&[String]>,
+    user_override: Option<&str>,
+    working_dir_override: Option<&str>,
+) -> ContainerImageConfig {
+    if !env.is_empty() {
+        config.merge_env(env.to_vec());
+    }
+    apply_user_overrides(
+        &mut config,
+        entrypoint_override,
+        cmd_override,
+        user_override,
+        working_dir_override,
+    );
+    config
+}
+
+async fn prepare_shared_ext4(
+    runtime: &SharedRuntimeImpl,
+    image_ref: &str,
+) -> BoxliteResult<ReadyExt4> {
+    let db = runtime.box_manager.db();
+    if let Some(ready) = shared_ext4::choose_start(&db, image_ref)? {
+        return Ok(ready);
+    }
+    let image = runtime.image_manager.pull_metadata(image_ref).await?;
+    let (disk_key, path) = runtime.image_disk_mgr.shared_disk(&image);
+    let scratch = runtime.image_manager.scratch_files(&image).await;
+    let oci = image.load_config().await?;
+    let config = ContainerImageConfig::from_oci_config(&oci)?;
+    let config_json = serde_json::to_string(&config)
+        .map_err(|e| BoxliteError::Image(format!("failed to store guest image config: {e}")))?;
+    let image_for_build = image.clone();
+    let runtime_for_build = runtime.clone();
+    shared_ext4::resolve_for_create(
+        &db,
+        &runtime.builds,
+        image_ref,
+        &disk_key,
+        &path,
+        &config_json,
+        &scratch,
+        move || {
+            let image_for_build = image_for_build.clone();
+            let runtime_for_build = runtime_for_build.clone();
+            async move {
+                let image = runtime_for_build
+                    .image_manager
+                    .pull(image_for_build.reference())
+                    .await?;
+                let disk = runtime_for_build
+                    .image_disk_mgr
+                    .get_or_create(&image)
+                    .await?;
+                let _ = disk.leak();
+                Ok(())
+            }
+        },
+    )
+    .await
+}
+
+fn commit_and_create_cow(
+    runtime: &SharedRuntimeImpl,
+    box_id: &str,
+    ready: &ReadyExt4,
+    layout: &BoxFilesystemLayout,
+    disk_size_gb: Option<u64>,
+) -> BoxliteResult<Disk> {
+    if !ready.path.is_file() {
+        return Err(BoxliteError::Storage(format!(
+            "refusing to create a qcow2 for {}: ext4 is missing",
+            ready.disk_key
+        )));
+    }
+    let db = runtime.box_manager.db();
+    if !crate::db::shared_disk::commit_disk(&db, box_id, &ready.disk_key, &ready.disk_key)? {
+        return Err(BoxliteError::InvalidState(format!(
+            "image disk {} is not ready",
+            ready.disk_key
+        )));
+    }
+    let disk_size = std::fs::metadata(&ready.path)
+        .map(|meta| meta.len())
+        .unwrap_or(64 * 1024 * 1024);
+    let prepared = ContainerRootfsPrepResult::DiskImage {
+        base_disk_path: ready.path.clone(),
+        disk_size,
+    };
+    match create_cow_disk(&prepared, layout, disk_size_gb) {
+        Ok(disk) => Ok(disk),
+        Err(err) => match crate::db::shared_disk::delete_disk_if_free(&db, box_id)? {
+            crate::db::shared_disk::DiskDelete::Blocked => {
+                Err(crate::db::shared_disk::blocked_disk(box_id))
+            }
+            crate::db::shared_disk::DiskDelete::Removed
+            | crate::db::shared_disk::DiskDelete::Absent => Err(err),
+        },
+    }
+}
+
 /// Apply user overrides to container image config (entrypoint, CMD, user,
 /// and working dir) — the docker `run` override set, applied to the init
 /// process configuration.
@@ -353,4 +491,63 @@ async fn prepare_disk_rootfs(
         base_disk_path: disk_path,
         disk_size,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepare_shared_ext4;
+    use crate::runtime::options::{BoxliteOptions, ImageRegistry};
+    use crate::runtime::rt_impl::RuntimeImpl;
+
+    /// A dead `building` row that still has its ext4 and a `disk.root` must fail
+    /// inside `prepare_shared_ext4` before `pull_metadata`.
+    #[tokio::test]
+    async fn dead_building_with_a_file_and_disk_root_fails_before_pull() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_path_buf();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.clone(),
+            image_registries: vec![ImageRegistry::http("127.0.0.1:9").with_search(true)],
+        })
+        .unwrap();
+        let image_ref = "127.0.0.1:9/library/alpine:latest";
+        let ext4 = home
+            .join("images")
+            .join("disk-images")
+            .join("alpine-a.ext4");
+        std::fs::create_dir_all(ext4.parent().unwrap()).unwrap();
+        std::fs::write(&ext4, b"partial").unwrap();
+        let db = runtime.box_manager.db();
+        db.conn()
+            .execute(
+                "INSERT INTO image_disk (disk_key, path, state, config) VALUES ('alpine-a', ?1, 'building', '{}')",
+                [ext4.to_str().unwrap()],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO image (ref, disk_key) VALUES (?1, 'alpine-a')",
+                [image_ref],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO disk (id, root, parent) VALUES ('boxA', 'alpine-a', 'alpine-a')",
+                [],
+            )
+            .unwrap();
+
+        let err = prepare_shared_ext4(&runtime, image_ref).await.unwrap_err();
+        assert!(err.to_string().contains("refusing to rebuild"), "{err}");
+        assert_eq!(std::fs::read(&ext4).unwrap(), b"partial");
+        let state: String = db
+            .conn()
+            .query_row(
+                "SELECT state FROM image_disk WHERE disk_key = 'alpine-a'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "building");
+    }
 }

@@ -29,6 +29,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite update`](#boxlite-update)
   - [`boxlite pull`](#boxlite-pull)
   - [`boxlite images`](#boxlite-images)
+  - [`boxlite rmi`](#boxlite-rmi)
   - [`boxlite inspect`](#boxlite-inspect)
   - [`boxlite cp`](#boxlite-cp)
   - [`boxlite info`](#boxlite-info)
@@ -142,7 +143,7 @@ and `--version` display actions remain terminal.
 1. On dual-backend commands, `--url` selects REST; local runtime config is then unused.
 2. Otherwise, `--config` is the base, `--home` overrides `home_dir`, and
    `--registry` values are prepended to `image_registries`.
-3. `serve`, `pull`, `images`, `info`, and `logs` always use the embedded local runtime.
+3. `serve`, `pull`, `images`, `rmi`, `info`, and `logs` always use the embedded local runtime.
 
 ---
 
@@ -544,6 +545,24 @@ List cached images.
 |------|-------|---------|-------------|
 | `--quiet` | `-q` | `false` | Print only image IDs; conflicts with `--format` |
 | `--format FMT` | — | `table` | Output format; conflicts with `--quiet` (see [Output Formats](#output-formats)) |
+
+---
+
+### `boxlite rmi`
+
+**Synopsis:** `boxlite rmi [OPTIONS] [IMAGE]`
+
+Remove a shared ext4, or one name that points at it.
+
+`IMAGE` is required unless `--unused` or `--disk-key` is set. A qcow2 whose `disk.root` is that ext4 refuses the removal, and `--force` does not override that. The last name is removed only when one conditional update matches a row; zero rows leaves the file in place and `rmi` exits with an error. `--force` only stops a live build when this is the last name. `--unused` removes ext4 files that no image name and no disk root still use, and finishes a `deleting` row in that same state.
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--force` | Stop a live build when removing its last name |
+| `--unused` | Remove unreferenced ext4 files |
+| `--disk-key KEY` | Remove one ext4 by disk key instead of by image name |
 
 ---
 

@@ -26,6 +26,15 @@ pub(crate) trait ImageBackend: Send + Sync {
 
     /// List all locally cached images.
     async fn list_images(&self) -> BoxliteResult<Vec<ImageInfo>>;
+
+    /// Remove one image name, or the ext4 behind it when it is the last name.
+    async fn remove_image(&self, image_ref: &str, force: bool) -> BoxliteResult<()>;
+
+    /// Remove one ext4 by `disk_key` when no image name and no disk root use it.
+    async fn remove_image_disk(&self, disk_key: &str) -> BoxliteResult<()>;
+
+    /// Remove ext4 files that no image name and no disk root use.
+    async fn remove_unused_images(&self) -> BoxliteResult<()>;
 }
 
 /// Handle for performing image operations.
@@ -110,5 +119,21 @@ impl ImageHandle {
     /// ```
     pub async fn list(&self) -> BoxliteResult<Vec<ImageInfo>> {
         self.manager.list_images().await
+    }
+
+    /// Remove an image name. `--force` does not override a `disk.root` reference.
+    /// A live build is left running unless this is the last name and `force` is set.
+    pub async fn remove(&self, image_ref: &str, force: bool) -> BoxliteResult<()> {
+        self.manager.remove_image(image_ref, force).await
+    }
+
+    /// Remove one shared ext4 by its `disk_key`.
+    pub async fn remove_disk(&self, disk_key: &str) -> BoxliteResult<()> {
+        self.manager.remove_image_disk(disk_key).await
+    }
+
+    /// Remove shared ext4 files with no image name and no disk root.
+    pub async fn remove_unused(&self) -> BoxliteResult<()> {
+        self.manager.remove_unused_images().await
     }
 }

@@ -4,6 +4,7 @@ mod config;
 mod image_disk;
 mod manager;
 mod object;
+pub(crate) mod shared_ext4;
 mod storage;
 mod store;
 

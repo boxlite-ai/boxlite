@@ -287,6 +287,11 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         children: &[],
     },
     CommandScope {
+        name: "rmi",
+        globals: LOCAL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
         name: "inspect",
         globals: BOX_GLOBALS,
         children: &[],
@@ -601,6 +606,9 @@ pub enum Commands {
 
     /// List images
     Images(crate::commands::images::ImagesArgs),
+
+    /// Remove a shared ext4 image
+    Rmi(crate::commands::rmi::RmiArgs),
 
     /// Display detailed information on a box
     Inspect(crate::commands::inspect::InspectArgs),
@@ -1710,6 +1718,7 @@ mod tests {
             REGISTRY,
         ),
         (&["boxlite", "images"], 1, LOCAL_WITHOUT_REGISTRY),
+        (&["boxlite", "rmi", "alpine"], 1, LOCAL_WITHOUT_REGISTRY),
         (&["boxlite", "info"], 1, LOCAL_WITHOUT_REGISTRY),
         (&["boxlite", "logs", "box"], 1, LOCAL_WITHOUT_REGISTRY),
         (&["boxlite", "pull", "alpine"], 1, LOCAL_WITH_REGISTRY),

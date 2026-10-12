@@ -7,7 +7,7 @@
 //! Each table has queryable columns for efficient filtering + JSON blob for full data.
 
 /// Current schema version.
-pub const SCHEMA_VERSION: i32 = 10;
+pub const SCHEMA_VERSION: i32 = 11;
 
 /// Schema version tracking table.
 pub const SCHEMA_VERSION_TABLE: &str = r#"
@@ -78,6 +78,37 @@ CREATE TABLE IF NOT EXISTS image_index (
 );
 
 CREATE INDEX IF NOT EXISTS idx_image_index_manifest_digest ON image_index(manifest_digest);
+"#;
+
+/// Image name → current shared ext4 (v11). `ref` is the name used to start a box.
+pub const IMAGE_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS image (
+    ref TEXT PRIMARY KEY NOT NULL,
+    disk_key TEXT NOT NULL
+);
+"#;
+
+/// Shared raw ext4 (v11). `config` is guest image config JSON, not layer diff IDs.
+/// `state` is `building`, `ready`, or `deleting`.
+pub const IMAGE_DISK_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS image_disk (
+    disk_key TEXT PRIMARY KEY NOT NULL,
+    path TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('building', 'ready', 'deleting')),
+    config TEXT NOT NULL
+);
+"#;
+
+/// qcow2 overlay (v11). `root` is the shared ext4 `disk_key`. `parent` is that
+/// ext4 key when there is no snapshot, otherwise the parent qcow2 id.
+pub const DISK_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS disk (
+    id TEXT PRIMARY KEY NOT NULL,
+    root TEXT NOT NULL,
+    parent TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_disk_root ON disk(root);
+CREATE INDEX IF NOT EXISTS idx_disk_parent ON disk(parent);
 "#;
 
 /// Box snapshot table schema (added in v6, replaces v5 `snapshots`).
@@ -158,6 +189,9 @@ pub fn all_schemas() -> Vec<&'static str> {
         BOX_STATE_TABLE,
         ALIVE_TABLE,
         IMAGE_INDEX_TABLE,
+        IMAGE_TABLE,
+        IMAGE_DISK_TABLE,
+        DISK_TABLE,
         BASE_DISK_TABLE,
         BASE_DISK_REF_TABLE,
         SNAPSHOT_TABLE,

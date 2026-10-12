@@ -11,6 +11,7 @@ mod boxes;
 mod images;
 pub(crate) mod migration;
 mod schema;
+pub(crate) mod shared_disk;
 pub(crate) mod snapshot;
 
 use std::path::Path;
@@ -195,6 +196,9 @@ mod tests {
         assert!(tables.contains(&"box_state".to_string()));
         assert!(tables.contains(&"alive".to_string()));
         assert!(tables.contains(&"image_index".to_string()));
+        assert!(tables.contains(&"image".to_string()));
+        assert!(tables.contains(&"image_disk".to_string()));
+        assert!(tables.contains(&"disk".to_string()));
         assert!(tables.contains(&"base_disk".to_string()));
         assert!(tables.contains(&"base_disk_ref".to_string()));
         assert!(tables.contains(&"snapshot".to_string()));
@@ -237,7 +241,14 @@ mod tests {
         assert_eq!(version, schema::SCHEMA_VERSION);
 
         // Verify v7 tables exist
-        for table in ["base_disk", "base_disk_ref", "snapshot"] {
+        for table in [
+            "base_disk",
+            "base_disk_ref",
+            "snapshot",
+            "image",
+            "image_disk",
+            "disk",
+        ] {
             let exists: bool = conn
                 .query_row(
                     "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name=?1",
@@ -311,7 +322,14 @@ mod tests {
         assert_eq!(version, schema::SCHEMA_VERSION);
 
         // v7 tables should exist
-        for table in ["base_disk", "base_disk_ref", "snapshot"] {
+        for table in [
+            "base_disk",
+            "base_disk_ref",
+            "snapshot",
+            "image",
+            "image_disk",
+            "disk",
+        ] {
             let exists: bool = conn
                 .query_row(
                     "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name=?1",

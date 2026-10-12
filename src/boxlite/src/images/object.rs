@@ -73,6 +73,14 @@ impl ImageObject {
         &self.manifest.config_digest
     }
 
+    pub(crate) fn manifest_digest(&self) -> &str {
+        &self.manifest.manifest_digest
+    }
+
+    pub(crate) fn index_digest(&self) -> Option<&str> {
+        self.manifest.index_digest.as_deref()
+    }
+
     /// Get number of layers
     #[allow(dead_code)]
     pub fn layer_count(&self) -> usize {
@@ -382,6 +390,7 @@ mod tests {
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                     .to_string(),
             diff_ids,
+            index_digest: None,
         };
         ImageObject::new("test:image".to_string(), manifest, blob_source)
     }

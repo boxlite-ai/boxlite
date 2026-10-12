@@ -94,8 +94,13 @@ impl BoxImpl {
 
         // Phase B: Create N container overlay headers (VM is resumed, fast).
         // Guest rootfs is NOT cloned — each clone creates its own on first start.
+        let db = rt.box_manager.db();
+        let shared_root =
+            crate::db::shared_disk::disk_row(&db, &source_box_id)?.map(|(root, _)| root);
         let mut staging_dirs = Vec::with_capacity(count);
+        let mut clone_ids = Vec::with_capacity(count);
         for _ in 0..count {
+            let clone_id = crate::runtime::id::BoxIDMint::mint();
             let temp = tempfile::tempdir_in(rt.layout.boxes_dir()).map_err(|e| {
                 BoxliteError::Storage(format!("Failed to create temp box directory: {}", e))
             })?;
@@ -107,37 +112,70 @@ impl BoxImpl {
                 BoxliteError::Storage(format!("Failed to create staging disks dir: {}", e))
             })?;
 
+            // Commit the clone's disk row while the ext4 is still ready, then
+            // write its qcow2. parent is the new base; root stays the ext4.
+            if let Some(root) = &shared_root
+                && !crate::db::shared_disk::commit_disk(
+                    &db,
+                    clone_id.as_str(),
+                    root,
+                    layer.id.as_str(),
+                )?
+            {
+                return Err(BoxliteError::InvalidState(format!(
+                    "refusing to clone: ext4 {root} is not ready"
+                )));
+            }
             // Container overlay → shared base (qcow2 backing qcow2)
             // leak() prevents the Disk RAII guard from deleting the file on drop —
             // the child is the clone's persistent disk and must outlive this function.
-            Qcow2Helper::create_cow_child_disk(
+            if let Err(err) = Qcow2Helper::create_cow_child_disk(
                 &shared_container,
                 BackingFormat::Qcow2,
                 &staging_disks.join(disk_filenames::CONTAINER_DISK),
                 container_vsize,
-            )?
-            .leak();
+            )
+            .map(|disk| {
+                disk.leak();
+            }) {
+                if shared_root.is_some() {
+                    match crate::db::shared_disk::delete_disk_if_free(&db, clone_id.as_str())? {
+                        crate::db::shared_disk::DiskDelete::Blocked => {
+                            return Err(crate::db::shared_disk::blocked_disk(clone_id.as_str()));
+                        }
+                        crate::db::shared_disk::DiskDelete::Removed
+                        | crate::db::shared_disk::DiskDelete::Absent => {}
+                    }
+                }
+                return Err(err);
+            }
 
             staging_dirs.push(staging);
+            clone_ids.push(clone_id);
         }
 
         // Phase C: Provision each clone and record base disk refs.
         let mut clones = Vec::with_capacity(count);
-        for (i, staging) in staging_dirs.into_iter().enumerate() {
+        for i in 0..staging_dirs.len() {
+            let staging = staging_dirs[i].clone();
             let litebox = match rt
                 .provision_box(
-                    staging.clone(),
+                    staging,
                     names.get(i).cloned(),
                     self.config.options.clone(),
                     BoxStatus::Stopped,
+                    Some(clone_ids[i].clone()),
                 )
                 .await
             {
                 Ok(lb) => lb,
                 Err(e) => {
-                    // Cleanup remaining staging dirs on failure.
-                    let _ = std::fs::remove_dir_all(&staging);
-                    // Don't clean up already-provisioned clones; they're valid boxes.
+                    // Drop this clone and any later one that never provisioned.
+                    // Already-provisioned clones stay. A disk row is deleted only
+                    // when its qcow2 is gone and nothing parents it.
+                    for j in i..staging_dirs.len() {
+                        abandon_unprovisioned_clone(&db, clone_ids[j].as_str(), &staging_dirs[j])?;
+                    }
                     return Err(e);
                 }
             };
@@ -326,4 +364,150 @@ fn do_export_finalize(
     );
 
     Ok(crate::runtime::options::BoxArchive::new(output_path))
+}
+
+/// Drop a clone that never became a box. Leave the qcow2 in place when some
+/// `disk.parent` still points at `id`. Otherwise remove the staging directory
+/// and delete the disk row only after that file is gone.
+fn abandon_unprovisioned_clone(
+    db: &crate::db::Database,
+    id: &str,
+    staging: &std::path::Path,
+) -> BoxliteResult<()> {
+    if crate::db::shared_disk::child_blocks(db, id)? {
+        return Ok(());
+    }
+    let qcow = staging.join("disks").join(disk_filenames::CONTAINER_DISK);
+    let _ = std::fs::remove_dir_all(staging);
+    if qcow.exists() {
+        return Ok(());
+    }
+    match crate::db::shared_disk::delete_disk_if_free(db, id)? {
+        crate::db::shared_disk::DiskDelete::Blocked => {
+            Err(crate::db::shared_disk::blocked_disk(id))
+        }
+        crate::db::shared_disk::DiskDelete::Removed
+        | crate::db::shared_disk::DiskDelete::Absent => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::ContainerID;
+    use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
+    use crate::litebox::state::BoxState;
+    use crate::runtime::id::BoxIDMint;
+    use crate::runtime::options::{BoxOptions, BoxliteOptions};
+    use crate::runtime::rt_impl::RuntimeImpl;
+
+    fn write_qcow2(path: &std::path::Path) {
+        let mut buf = vec![0u8; 1024];
+        buf[0..4].copy_from_slice(&0x514649fbu32.to_be_bytes());
+        buf[4..8].copy_from_slice(&3u32.to_be_bytes());
+        buf[24..32].copy_from_slice(&(1024u64 * 1024 * 1024).to_be_bytes());
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, buf).unwrap();
+    }
+
+    #[tokio::test]
+    async fn provision_failure_drops_clone_disk_rows_whose_files_are_gone() {
+        let home = tempfile::TempDir::new().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .unwrap();
+        let source_id = BoxIDMint::mint();
+        let box_home = runtime.layout.boxes_dir().join(source_id.as_str());
+        write_qcow2(&box_home.join("disks").join(disk_filenames::CONTAINER_DISK));
+        let db = runtime.box_manager.db();
+        db.conn()
+            .execute(
+                "INSERT INTO image_disk (disk_key, path, state, config) VALUES ('ext4key1', '/tmp/ext4', 'ready', '{}')",
+                [],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO disk (id, root, parent) VALUES (?1, 'ext4key1', 'ext4key1')",
+                [source_id.as_str()],
+            )
+            .unwrap();
+
+        let taken_id = BoxIDMint::mint();
+        let taken = BoxConfig {
+            id: taken_id,
+            name: Some("taken".into()),
+            created_at: chrono::Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions::default(),
+            engine_kind: crate::vmm::VmmKind::Libkrun,
+            box_home: runtime.layout.boxes_dir().join("taken-home"),
+        };
+        runtime
+            .box_manager
+            .add_box(&taken, &BoxState::new())
+            .unwrap();
+
+        let source = BoxImpl::new(
+            BoxConfig {
+                id: source_id.clone(),
+                name: Some("source".into()),
+                created_at: chrono::Utc::now(),
+                container: ContainerRuntimeConfig {
+                    id: ContainerID::new(),
+                },
+                options: BoxOptions::default(),
+                engine_kind: crate::vmm::VmmKind::Libkrun,
+                box_home,
+            },
+            BoxState::new(),
+            Arc::clone(&runtime),
+            runtime.shutdown_token.child_token(),
+        );
+
+        let err = match source
+            .clone_boxes(
+                crate::runtime::options::CloneOptions {},
+                2,
+                vec!["taken".into(), "later".into()],
+            )
+            .await
+        {
+            Ok(_) => panic!("provision should fail on the duplicate name"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("taken"),
+            "expected the duplicate-name provision failure, got {err}"
+        );
+
+        let base_id: String = db
+            .conn()
+            .query_row(
+                "SELECT parent FROM disk WHERE id = ?1",
+                [source_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let leftover: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM disk WHERE parent = ?1 AND id != ?2",
+                rusqlite::params![base_id, source_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            leftover, 0,
+            "provision failure left {leftover} clone disk rows after the qcow2 was abandoned"
+        );
+    }
 }

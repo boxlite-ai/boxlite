@@ -21,7 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use serde::{Deserialize, Serialize};
 
 use crate::db::base_disk::BaseDiskStore;
@@ -264,6 +264,15 @@ impl BaseDiskManager {
                 continue;
             }
 
+            let Some(disk_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            // A qcow2 another disk still parents is not free. Leave the file
+            // so this sweep does not strand `disk.root` on a path it removed.
+            if crate::db::shared_disk::child_blocks(self.store.database(), disk_id)? {
+                continue;
+            }
+
             tracing::info!(
                 path = %path.display(),
                 size_mb = metadata.len() / (1024 * 1024),
@@ -271,8 +280,19 @@ impl BaseDiskManager {
             );
             match fs::remove_file(&path) {
                 Ok(()) => {
-                    removed += 1;
-                    reclaimed_bytes += metadata.len();
+                    match crate::db::shared_disk::delete_disk_if_free(
+                        self.store.database(),
+                        disk_id,
+                    )? {
+                        crate::db::shared_disk::DiskDelete::Blocked => {
+                            return Err(crate::db::shared_disk::blocked_disk(disk_id));
+                        }
+                        crate::db::shared_disk::DiskDelete::Removed
+                        | crate::db::shared_disk::DiskDelete::Absent => {
+                            removed += 1;
+                            reclaimed_bytes += metadata.len();
+                        }
+                    }
                 }
                 Err(e) => tracing::warn!("GC: failed to remove {}: {}", path.display(), e),
             }
@@ -306,9 +326,37 @@ impl BaseDiskManager {
 
         let container = source_disks_dir.join(disk_filenames::CONTAINER_DISK);
 
+        // Record the clone-base disk row before the qcow2 fork. The source
+        // container's parent becomes this base; both roots stay the ext4.
+        let fork_commit = crate::db::shared_disk::commit_fork(
+            self.store.database(),
+            source_box_id,
+            base_disk_id.as_str(),
+        )?;
+        if matches!(fork_commit, crate::db::shared_disk::ForkCommit::NotReady) {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidState(format!(
+                "refusing to clone box {source_box_id}: its ext4 is not ready"
+            )));
+        }
+
         // Fork: move container → bases/{id}.qcow2, create COW child at original path
         let base_file = self.bases_dir.join(format!("{}.qcow2", base_disk_id));
-        let forked = super::fork_qcow2(&container, &base_file)?;
+        let forked = match super::fork_qcow2(&container, &base_file) {
+            Ok(forked) => forked,
+            Err(err) => {
+                if let crate::db::shared_disk::ForkCommit::Committed { previous_parent } =
+                    fork_commit
+                {
+                    crate::db::shared_disk::abort_fork(
+                        self.store.database(),
+                        source_box_id,
+                        base_disk_id.as_str(),
+                        &previous_parent,
+                    )?;
+                }
+                return Err(err);
+            }
+        };
         let disk_info = super::DiskInfo::from(&forked);
         // forked is persistent (won't be deleted on drop)
 
@@ -332,31 +380,59 @@ impl BaseDiskManager {
 
     /// Attempt to garbage-collect a clone base by ID and cascade to parent.
     ///
-    /// Queries the `base_disk_ref` table for dependents. If none exist,
-    /// deletes the base (DB record + file) and cascades to the parent base.
-    pub(crate) fn try_gc_base(&self, base_disk_id: &BaseDiskID) {
-        let record = match self.store.find_by_id(base_disk_id) {
-            Ok(Some(r)) => r,
-            _ => return,
+    /// Queries the `base_disk_ref` table for dependents. If none exist, unlinks
+    /// the qcow2 first. A failed unlink leaves the file, the base-disk record,
+    /// and the disk row. After the file is gone, the disk row is deleted when
+    /// no `disk.parent` points at it, then the base-disk record. A database
+    /// error from that disk-row delete is returned.
+    pub(crate) fn try_gc_base(&self, base_disk_id: &BaseDiskID) -> BoxliteResult<()> {
+        let record = match self.store.find_by_id(base_disk_id)? {
+            Some(r) => r,
+            None => return Ok(()),
         };
 
         // Only auto-cleanup clone bases (snapshots/rootfs require explicit removal)
         if record.kind() != BaseDiskKind::CloneBase {
-            return;
+            return Ok(());
         }
 
         // DB query for dependents — if any exist, keep the base
-        if self.store.has_dependents(base_disk_id).unwrap_or(true) {
-            return;
+        if self.store.has_dependents(base_disk_id)? {
+            return Ok(());
         }
 
         // Read parent BEFORE deleting file (we need the qcow2 header)
         let base_file = record.disk_info().to_path_buf();
         let parent = self.find_parent_base(&base_file);
 
-        // Delete DB record and file
-        let _ = self.store.delete(record.id());
-        let _ = std::fs::remove_file(record.disk_info().as_path());
+        // A qcow2 another disk still parents is not free, even when no
+        // base_disk_ref row remains. Leave the file and both rows.
+        if crate::db::shared_disk::child_blocks(self.store.database(), base_disk_id.as_str())? {
+            return Ok(());
+        }
+
+        match std::fs::remove_file(&base_file) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(BoxliteError::Storage(format!(
+                    "failed to remove {}: {err}",
+                    base_file.display()
+                )));
+            }
+        }
+
+        match crate::db::shared_disk::delete_disk_if_free(
+            self.store.database(),
+            base_disk_id.as_str(),
+        )? {
+            crate::db::shared_disk::DiskDelete::Blocked => {
+                return Err(crate::db::shared_disk::blocked_disk(base_disk_id.as_str()));
+            }
+            crate::db::shared_disk::DiskDelete::Removed
+            | crate::db::shared_disk::DiskDelete::Absent => {}
+        }
+        self.store.delete(record.id())?;
 
         tracing::info!(
             base_disk_id = %record.id(),
@@ -368,8 +444,9 @@ impl BaseDiskManager {
             && let Ok(Some(parent_record)) =
                 self.store.find_by_base_path(&parent_path.to_string_lossy())
         {
-            self.try_gc_base(parent_record.id());
+            self.try_gc_base(parent_record.id())?;
         }
+        Ok(())
     }
 
     /// Walk the qcow2 backing chain to find the first parent that lives in bases_dir.
@@ -637,7 +714,7 @@ mod tests {
         mgr.store().remove_all_refs_for_box("clone-1").unwrap();
 
         // GC should delete the base (no dependents)
-        mgr.try_gc_base(&base_id("base0001"));
+        mgr.try_gc_base(&base_id("base0001")).unwrap();
 
         assert!(
             mgr.store()
@@ -687,7 +764,7 @@ mod tests {
         mgr.store().insert(&bd2).unwrap();
 
         // No refs → GC base-2 → cascades to base-1
-        mgr.try_gc_base(&base_id("base0002"));
+        mgr.try_gc_base(&base_id("base0002")).unwrap();
 
         assert!(
             mgr.store()
@@ -730,7 +807,7 @@ mod tests {
         mgr.store().insert(&disk).unwrap();
 
         // GC should NOT delete the snapshot (kind=Snapshot is excluded from GC)
-        mgr.try_gc_base(&base_id("snap0001"));
+        mgr.try_gc_base(&base_id("snap0001")).unwrap();
 
         assert!(
             mgr.store()
@@ -773,7 +850,7 @@ mod tests {
 
         // Remove clone-1's ref: base should survive (clone-2 still depends)
         mgr.store().remove_all_refs_for_box("clone-1").unwrap();
-        mgr.try_gc_base(&base_id("shared01"));
+        mgr.try_gc_base(&base_id("shared01")).unwrap();
 
         assert!(
             mgr.store()
@@ -786,7 +863,7 @@ mod tests {
 
         // Remove clone-2's ref: now base should be GC'd
         mgr.store().remove_all_refs_for_box("clone-2").unwrap();
-        mgr.try_gc_base(&base_id("shared01"));
+        mgr.try_gc_base(&base_id("shared01")).unwrap();
 
         assert!(
             mgr.store()
@@ -999,5 +1076,196 @@ mod tests {
 
         assert_eq!(removed, 0);
         assert!(stray.exists());
+    }
+
+    fn clone_base_with_disk_row(dir: &std::path::Path, mgr: &BaseDiskManager) -> BaseDisk {
+        mgr.store()
+            .database()
+            .conn()
+            .execute(
+                "INSERT INTO image_disk (disk_key, path, state, config) VALUES ('ext4key1', '/tmp/ext4', 'ready', '{}')",
+                [],
+            )
+            .unwrap();
+        mgr.store()
+            .database()
+            .conn()
+            .execute(
+                "INSERT INTO disk (id, root, parent) VALUES ('boxsrc01', 'ext4key1', 'ext4key1')",
+                [],
+            )
+            .unwrap();
+        let box_disks = dir.join("boxes").join("boxsrc01").join("disks");
+        std::fs::create_dir_all(&box_disks).unwrap();
+        write_qcow2_with_backing(&box_disks.join(disk_filenames::CONTAINER_DISK), None);
+        mgr.create_base_disk(&box_disks, BaseDiskKind::CloneBase, None, "boxsrc01")
+            .unwrap()
+    }
+
+    #[test]
+    fn try_gc_base_drops_disk_row_when_the_qcow2_is_gone() {
+        let (dir, mgr) = setup();
+        let disk = clone_base_with_disk_row(dir.path(), &mgr);
+        let base_file = disk.disk_info.to_path_buf();
+        mgr.store()
+            .database()
+            .conn()
+            .execute("DELETE FROM disk WHERE id = 'boxsrc01'", [])
+            .unwrap();
+        mgr.store().remove_all_refs_for_box("boxsrc01").unwrap();
+
+        mgr.try_gc_base(&disk.id).unwrap();
+
+        assert!(
+            !base_file.exists(),
+            "the unreferenced qcow2 must be removed"
+        );
+        let row =
+            crate::db::shared_disk::disk_row(mgr.store().database(), disk.id.as_str()).unwrap();
+        assert!(
+            row.is_none(),
+            "gc left a disk.root pointing at a deleted qcow2: {row:?}"
+        );
+    }
+
+    #[test]
+    fn try_gc_base_keeps_the_file_when_a_disk_parent_remains() {
+        let (dir, mgr) = setup();
+        let disk = clone_base_with_disk_row(dir.path(), &mgr);
+        let base_file = disk.disk_info.to_path_buf();
+        let before = std::fs::read(&base_file).unwrap();
+        mgr.store()
+            .database()
+            .conn()
+            .execute("DELETE FROM disk WHERE id = 'boxsrc01'", [])
+            .unwrap();
+        mgr.store()
+            .database()
+            .conn()
+            .execute(
+                "INSERT INTO disk (id, root, parent) VALUES ('clone001', 'ext4key1', ?1)",
+                [disk.id.as_str()],
+            )
+            .unwrap();
+        mgr.store().remove_all_refs_for_box("boxsrc01").unwrap();
+
+        mgr.try_gc_base(&disk.id).unwrap();
+
+        assert_eq!(
+            std::fs::read(&base_file).ok().as_deref(),
+            Some(before.as_slice()),
+            "qcow2 was unlinked while a disk.parent still points at it"
+        );
+        assert!(
+            crate::db::shared_disk::disk_row(mgr.store().database(), disk.id.as_str())
+                .unwrap()
+                .is_some(),
+            "the disk row must stay while a child points at it"
+        );
+    }
+
+    /// Unlink fails after the clone base is otherwise free. The base-disk record
+    /// and the disk row must still be there, because the qcow2 is still there.
+    #[test]
+    fn try_gc_base_keeps_the_base_record_when_unlink_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        struct RestoreMode(PathBuf);
+        impl Drop for RestoreMode {
+            fn drop(&mut self) {
+                if let Ok(meta) = std::fs::metadata(&self.0) {
+                    let mut perms = meta.permissions();
+                    perms.set_mode(0o755);
+                    let _ = std::fs::set_permissions(&self.0, perms);
+                }
+            }
+        }
+
+        let (dir, mgr) = setup();
+        let disk = clone_base_with_disk_row(dir.path(), &mgr);
+        let base_file = disk.disk_info.to_path_buf();
+        mgr.store()
+            .database()
+            .conn()
+            .execute("DELETE FROM disk WHERE id = 'boxsrc01'", [])
+            .unwrap();
+        mgr.store().remove_all_refs_for_box("boxsrc01").unwrap();
+
+        let _restore = RestoreMode(mgr.bases_dir.clone());
+        let mut perms = std::fs::metadata(&mgr.bases_dir).unwrap().permissions();
+        perms.set_mode(0o555);
+        std::fs::set_permissions(&mgr.bases_dir, perms).unwrap();
+
+        let gc = mgr.try_gc_base(&disk.id);
+
+        assert!(
+            base_file.exists(),
+            "unlink failed, so the qcow2 must still be on disk"
+        );
+        assert!(
+            mgr.store().find_by_id(&disk.id).unwrap().is_some(),
+            "base-disk record was deleted before the qcow2 unlink succeeded"
+        );
+        assert!(
+            crate::db::shared_disk::disk_row(mgr.store().database(), disk.id.as_str())
+                .unwrap()
+                .is_some(),
+            "disk row was deleted while the qcow2 is still present"
+        );
+        let err = gc.expect_err("unlink failure must surface");
+        assert!(err.to_string().contains("failed to remove"), "{err}");
+    }
+
+    /// A settled bases/ qcow2 with no base-disk record still has a disk row.
+    /// Removing the file must remove that row. A parent pointer keeps the file.
+    #[test]
+    fn gc_orphans_does_not_leave_disk_root_after_removing_the_file() {
+        let (dir, mgr) = setup();
+        let db = mgr.store().database();
+        db.conn()
+            .execute(
+                "INSERT INTO image_disk (disk_key, path, state, config) VALUES ('ext4key1', '/tmp/ext4', 'ready', '{}')",
+                [],
+            )
+            .unwrap();
+
+        let gone = mgr.bases_dir.join("freed001.qcow2");
+        std::fs::write(&gone, b"unclaimed qcow2").unwrap();
+        age(&gone);
+        db.conn()
+            .execute(
+                "INSERT INTO disk (id, root, parent) VALUES ('freed001', 'ext4key1', 'ext4key1')",
+                [],
+            )
+            .unwrap();
+
+        let kept = mgr.bases_dir.join("kept0001.qcow2");
+        std::fs::write(&kept, b"still parented").unwrap();
+        age(&kept);
+        db.conn()
+            .execute(
+                "INSERT INTO disk (id, root, parent) VALUES ('kept0001', 'ext4key1', 'ext4key1'), ('child001', 'ext4key1', 'kept0001')",
+                [],
+            )
+            .unwrap();
+
+        let _removed = mgr.gc_orphans(&dir.path().join("boxes")).unwrap();
+
+        assert!(!gone.exists(), "the unclaimed qcow2 should be removed");
+        let left = crate::db::shared_disk::disk_row(db, "freed001").unwrap();
+        assert!(
+            left.is_none(),
+            "gc left disk.root after deleting the qcow2: {left:?}"
+        );
+        assert!(
+            kept.exists(),
+            "unlinked a qcow2 whose disk.parent still points at it"
+        );
+        assert!(
+            crate::db::shared_disk::disk_row(db, "kept0001")
+                .unwrap()
+                .is_some(),
+            "the parented disk row must stay with its file"
+        );
     }
 }

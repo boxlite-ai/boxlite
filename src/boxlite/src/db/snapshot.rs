@@ -24,6 +24,10 @@ impl SnapshotStore {
         Self { db }
     }
 
+    pub(crate) fn database(&self) -> &Database {
+        &self.db
+    }
+
     /// Insert a new snapshot record.
     pub(crate) fn save(&self, info: &SnapshotInfo) -> BoxliteResult<()> {
         let json = serde_json::to_string(info).map_err(|e| {
