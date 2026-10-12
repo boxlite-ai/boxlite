@@ -209,6 +209,7 @@ impl Container {
                 container_id,
                 &state_root,
                 &bundle.path,
+                &entrypoint[0],
                 start::InitIoSetup::Console(socket.path().to_string()),
             )?;
             ContainerStdio::pty(socket.receive_pty_master()?)
@@ -220,6 +221,7 @@ impl Container {
                 container_id,
                 &state_root,
                 &bundle.path,
+                &entrypoint[0],
                 start::InitIoSetup::Pipes(init_fds),
             )?;
             stdio

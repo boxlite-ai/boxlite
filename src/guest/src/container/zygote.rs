@@ -81,8 +81,56 @@ pub(crate) struct InitBuildSpec {
 /// Build outcome. Invalid states are unrepresentable.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub(crate) enum BuildResult {
-    Spawned { pid: i32 },
-    Failed { error: String },
+    Spawned {
+        pid: i32,
+    },
+    Failed {
+        error: String,
+    },
+    /// The container's command cannot run in the image. `error` keeps
+    /// libcontainer's text for the console log.
+    Rejected {
+        reason: CommandRejection,
+        error: String,
+    },
+}
+
+/// Why libcontainer refused the container's command.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub(crate) enum CommandRejection {
+    NotFound,
+    NotExecutable,
+}
+
+impl CommandRejection {
+    /// Recognize the command check youki runs in init (`DefaultExecutor::validate`).
+    ///
+    /// The check runs in the init child, so its verdict reaches the builder only
+    /// as text, after the marker youki puts on a failure init reports
+    /// (`wait_for_init_ready`). `build()` then wraps it in a
+    /// `CreateContainerError` whose fields are private, so text is all there is
+    /// to match; the marker keeps the wording match to what init reported.
+    fn classify(error: &libcontainer::error::LibcontainerError) -> Option<Self> {
+        let text = error.to_string();
+        let (_, reported_by_init) = text.split_once("error in executing process : ")?;
+        if reported_by_init.contains("not found in $PATH") {
+            Some(Self::NotFound)
+        } else if reported_by_init.contains("does not have correct permissions") {
+            Some(Self::NotExecutable)
+        } else {
+            None
+        }
+    }
+
+    /// The fix the caller needs to make, minus the command's name.
+    fn advice(self) -> &'static str {
+        match self {
+            Self::NotFound => {
+                "was not found in the image; check the name or use an absolute path that exists in the image"
+            }
+            Self::NotExecutable => "is not executable in the image; check its file permissions",
+        }
+    }
 }
 
 /// Tagged IPC request from parent to zygote.
@@ -173,6 +221,10 @@ impl Zygote {
     /// stdio pipe fds (if any) ride via SCM_RIGHTS. Blocks until the build
     /// completes — callers on an async runtime decide whether that needs
     /// `spawn_blocking`.
+    ///
+    /// A command the image cannot run is `InvalidArgument` carrying only the
+    /// advice ("was not found in the image; …"): this layer never sees the
+    /// command, so the caller that does puts its name in front.
     pub fn build_init(&self, spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BoxliteResult<Pid> {
         let sock = self.sock.lock().unwrap();
         let fd = sock.as_raw_fd();
@@ -181,6 +233,9 @@ impl Zygote {
             ZygoteResponse::BuildInit(BuildResult::Spawned { pid }) => Ok(Pid::from_raw(pid)),
             ZygoteResponse::BuildInit(BuildResult::Failed { error }) => {
                 Err(BoxliteError::Internal(error))
+            }
+            ZygoteResponse::BuildInit(BuildResult::Rejected { reason, .. }) => {
+                Err(BoxliteError::InvalidArgument(reason.advice().to_string()))
             }
             other => Err(BoxliteError::Internal(format!(
                 "zygote protocol violation: BuildInit answered with {other:?}"
@@ -386,6 +441,7 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
 /// libcontainer's own `waitpid(intermediate)` sees ECHILD, which it tolerates
 /// by design (readiness travels over its pipes, not the exit code).
 fn do_build_init(spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
+    let mut rejection = None;
     let build_fn = || -> Result<Pid, String> {
         // Own the received fds before any fallible step — see `do_build`.
         // SAFETY: fds were received via SCM_RIGHTS, we own them exclusively.
@@ -427,14 +483,20 @@ fn do_build_init(spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
             .with_systemd(false)
             .with_detach(true)
             .build()
-            .map_err(|e| format!("build failed: {e}"))?;
+            .map_err(|e| {
+                rejection = CommandRejection::classify(&e);
+                format!("build failed: {e}")
+            })?;
 
         container
             .pid()
             .ok_or_else(|| "built container state has no init pid".to_string())
     };
 
-    let result = build_with_default_sigpipe(build_fn);
+    let result = match (build_with_default_sigpipe(build_fn), rejection) {
+        (BuildResult::Failed { error }, Some(reason)) => BuildResult::Rejected { reason, error },
+        (result, _) => result,
+    };
 
     // Greppable from the guest console: proves init creation actually routed
     // through the zygote rather than silently reverting to an in-guest build.
@@ -443,7 +505,7 @@ fn do_build_init(spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
             "[zygote] init build: container_id={} pid={}",
             spec.container_id, pid
         ),
-        BuildResult::Failed { error } => eprintln!(
+        BuildResult::Failed { error } | BuildResult::Rejected { error, .. } => eprintln!(
             "[zygote] init build failed: container_id={} error={}",
             spec.container_id, error
         ),
@@ -1533,5 +1595,79 @@ mod tests {
             panic!("an init build without any stdio must fail, got: {result:?}");
         };
         assert!(error.contains("stdio"), "unexpected error: {error}");
+    }
+
+    // ========================================================================
+    // Command rejection: youki's command check, as the builder receives it
+    // ========================================================================
+
+    /// Run youki's own command check, then relay its verdict the way an init
+    /// build does: as text, from init through the main channel.
+    fn relayed_command_check(command: &str, path: &str) -> libcontainer::error::LibcontainerError {
+        use libcontainer::oci_spec::runtime::{ProcessBuilder, SpecBuilder};
+        use libcontainer::process::init::error::InitProcessError;
+        use libcontainer::workload::default::DefaultExecutor;
+        use libcontainer::workload::Executor;
+
+        let process = ProcessBuilder::default()
+            .args(vec![command.to_string()])
+            .env(vec![format!("PATH={path}")])
+            .build()
+            .unwrap();
+        let spec = SpecBuilder::default().process(process).build().unwrap();
+        let verdict = DefaultExecutor {}
+            .validate(&spec)
+            .expect_err("the command check was meant to fail");
+        relayed_init_failure(&InitProcessError::from(verdict).to_string())
+    }
+
+    fn relayed_init_failure(text: &str) -> libcontainer::error::LibcontainerError {
+        use libcontainer::process::channel::ChannelError;
+        use libcontainer::process::container_main_process::ProcessError;
+
+        // channel.rs `wait_for_init_ready` wraps what the intermediate relays.
+        // `build()` adds a `CreateContainerError` around this, but that type
+        // cannot be built outside youki; its text only prepends a prefix.
+        ProcessError::Channel(ChannelError::ExecError(format!(
+            "error in executing process : {text}"
+        )))
+        .into()
+    }
+
+    #[test]
+    fn a_command_missing_from_path_is_rejected_as_not_found() {
+        let empty = tempfile::tempdir().unwrap();
+        let error = relayed_command_check("httpd", empty.path().to_str().unwrap());
+
+        assert_eq!(
+            CommandRejection::classify(&error),
+            Some(CommandRejection::NotFound),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_command_without_exec_permission_is_rejected_as_not_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("httpd"), "#!/bin/sh\n").unwrap();
+        let error = relayed_command_check("httpd", dir.path().to_str().unwrap());
+
+        assert_eq!(
+            CommandRejection::classify(&error),
+            Some(CommandRejection::NotExecutable),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn other_init_failures_are_not_command_rejections() {
+        let pivot = relayed_init_failure("failed to pivot root");
+        // youki's wording, but not reported by init.
+        let unrelated = libcontainer::error::LibcontainerError::InvalidInput(
+            "executable 'httpd' not found in $PATH".to_string(),
+        );
+
+        assert_eq!(CommandRejection::classify(&pivot), None);
+        assert_eq!(CommandRejection::classify(&unrelated), None);
     }
 }
