@@ -24,5 +24,3 @@ Installation alone does not authenticate the BoxLite CLI. Codex declares a bundl
 The optional deploy helper requires host Python 3.9+ and the guest's provided Python 3. It uses the standard library and installs no helper dependencies.
 
 Keep app source, deployment state, credentials and CLI build caches outside this plugin. Online documentation is a conditional reference. This package has no application template, MCP server or lifecycle hook. Its optional helpers manage an app through the existing CLI.
-
-For package builds, validation, coverage and host compatibility checks, see docs/contributing/development/boxlite-plugins.md in the source checkout.

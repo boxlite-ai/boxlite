@@ -32,7 +32,6 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
-- 2026-10-08 · [BoxLite skills-only Codex plugin](investigations/codex-plugin-v01.md): defines the shared skills, package boundaries, and Codex installation/acceptance plan.
 - 2026-10-08 · [CLI device authorization discovery](investigations/cli-device-authorization.md)
 - 2026-07-19 · [Reaper: one wait, one place](investigations/reaper-exit-slot.md)
 - 2026-07-15 · [Collapse `start_attached` into `attach` and `start`](investigations/collapse-start-attached.md)
@@ -41,5 +40,3 @@ Dated root-cause analyses and design studies, newest first.
 - 2026-07-14 · [`boxlite run` command: Docker semantics fix](investigations/run-command-semantics-fix.md)
 - 2026-03-10 · [Concurrent exec deadlock](investigations/concurrent-exec-deadlock.md)
 - 2026-02-22 · [Boot latency analysis](investigations/boot-latency-analysis.md)
-
-The [BoxLite plugin contributor guide](development/boxlite-plugins.md) covers distribution, host validation and executable deployment-helper acceptance.
