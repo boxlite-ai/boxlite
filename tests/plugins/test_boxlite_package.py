@@ -90,21 +90,27 @@ class PackageTests(unittest.TestCase):
         portable = self.root / 'plugin.json'
         codex = self.root / '.codex-plugin/plugin.json'
         skill_text = (self.root / 'skills/boxlite-setup/SKILL.md').read_text()
+        originals = {path: path.read_text() for path in (portable, codex)}
         for relative in ('node_modules/setup/SKILL.md', 'skills/dist/SKILL.md',
                          'references/setup/SKILL.md', 'node_modules/linked/SKILL.md'):
             with self.subTest(path=relative):
                 skill = self.root / relative
-                skill.parent.mkdir(parents=True, exist_ok=True)
-                if relative == 'node_modules/linked/SKILL.md':
-                    skill.symlink_to(self.root / 'skills/boxlite-setup/SKILL.md')
-                else:
-                    skill.write_text(skill_text)
-                for manifest in (portable, codex):
-                    value = json.loads(manifest.read_text())
-                    value['extensions']['com.openai']['onboardingSkill'] = './' + relative
-                    manifest.write_text(json.dumps(value))
-                with self.assertRaisesRegex(ValueError, 'packaged skill'):
-                    package.build(Path(self.temp.name) / 'output', self.root)
+                try:
+                    skill.parent.mkdir(parents=True, exist_ok=True)
+                    if relative == 'node_modules/linked/SKILL.md':
+                        skill.symlink_to(self.root / 'skills/boxlite-setup/SKILL.md')
+                    else:
+                        skill.write_text(skill_text)
+                    for manifest in (portable, codex):
+                        value = json.loads(manifest.read_text())
+                        value['extensions']['com.openai']['onboardingSkill'] = './' + relative
+                        manifest.write_text(json.dumps(value))
+                    with self.assertRaisesRegex(ValueError, 'packaged skill'):
+                        package.build(Path(self.temp.name) / 'output', self.root)
+                finally:
+                    skill.unlink(missing_ok=True)
+                    for manifest, original in originals.items():
+                        manifest.write_text(original)
 
     def test_rebuild_removes_stale_marketplace_files(self):
         """Rebuild the real marketplace without retaining obsolete resources."""
