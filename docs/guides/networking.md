@@ -59,9 +59,7 @@ For SDK code that must work with local and remote runtimes, use
 `box.network.tunnel(port)` and open byte streams with `connect()`. A tunnel
 can be consumed by `connect()` or by `forward()` to bind a local listener.
 Remote CLI users can run `boxlite network tunnel BOX PORT` to obtain the public
-service URL. A remote box is private unless it was created with
-`--inbound enabled`; make an existing one public with
-`boxlite update BOX --inbound enabled`.
+service URL.
 
 Image `EXPOSE` declarations are metadata only and never create host listeners.
 

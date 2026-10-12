@@ -40,8 +40,7 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	if !*isPublic {
-		message := fmt.Sprintf("Box %s has inbound access disabled. Enable it (for example: `boxlite update %s --inbound enabled`) and retry.", boxID, boxID)
-		http.Error(writer, message, http.StatusForbidden)
+		http.Error(writer, "box is not public", http.StatusForbidden)
 		return
 	}
 	allowed, err := p.hasPublicTunnelAccess(request.Context(), boxID, port)

@@ -12,7 +12,7 @@ use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{AttachOptions, BoxCommand, BoxTunnel, Execution, LiteBox};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
-    BoxArchive, BoxOptions, CloneOptions, ExportOptions, NetworkMode, SnapshotOptions,
+    BoxArchive, BoxOptions, CloneOptions, ExportOptions, SnapshotOptions,
 };
 use crate::runtime::types::BoxInfo;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -160,8 +160,7 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 /// Backend abstraction for box network operations.
 ///
 /// Kept separate from `BoxBackend` so lifecycle/exec/file operations do not own
-/// network capabilities directly: the tunnel data plane and the inbound access
-/// policy.
+/// network data-plane capabilities directly.
 #[allow(
     clippy::double_must_use,
     reason = "async_trait generates a must-use boxed future"
@@ -170,17 +169,6 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 pub(crate) trait BoxNetworkBackend: Send + Sync {
     /// Establish a one-shot tunnel to a service port inside the box.
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
-
-    /// Make the box's services public (`Enabled`) or private (`Disabled`).
-    ///
-    /// For now only REST runtimes implement this. The local runtime keeps
-    /// the `Unsupported` default: it never enforces inbound access, and a
-    /// local box cannot change its options after create.
-    async fn set_inbound(&self, _mode: NetworkMode) -> BoxliteResult<()> {
-        Err(BoxliteError::Unsupported(
-            "changing inbound access is only supported by REST runtimes".into(),
-        ))
-    }
 }
 
 /// Backend abstraction for snapshot lifecycle operations on a box.
