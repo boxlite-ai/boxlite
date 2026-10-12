@@ -8,6 +8,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Delete,
   Head,
   Body,
@@ -24,6 +25,8 @@ import { ApiTags, ApiBearerAuth, ApiResponse, ApiExcludeController } from '@nest
 import { Response } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
+import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
+import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
@@ -32,7 +35,7 @@ import { Box } from '../box/entities/box.entity'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
-import { CreateBoxDto } from './dto/create-box.dto'
+import { CreateBoxDto, InboundNetworkSpecDto } from './dto/create-box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.mapper'
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
@@ -117,7 +120,7 @@ export class BoxliteBoxController {
     const createBoxDto = createBoxToCreateBox(dto)
     const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
 
-    let box = await this.boxService.create(createBoxDto, organization, { maxCreatedBoxes })
+    let box = await this.boxService.create(createBoxDto, organization, { maxCreatedBoxes, actorKind: 'user' })
     if (box.state !== BoxState.STARTED) {
       box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
     }
@@ -178,7 +181,7 @@ export class BoxliteBoxController {
     targetIdFromRequest: (req) => req.params.boxId,
   })
   async removeBox(@AuthContext() authContext: OrganizationAuthContext, @Param('boxId') boxId: string) {
-    await this.boxService.destroy(boxId, authContext.organizationId)
+    await this.boxService.destroy(boxId, authContext.organizationId, 'user')
   }
 
   @Post(':boxId/start')
@@ -228,9 +231,36 @@ export class BoxliteBoxController {
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
   ): Promise<BoxResponseDto> {
-    const box = await this.boxService.stop(boxId, authContext.organizationId)
+    const box = await this.boxService.stop(boxId, authContext.organizationId, 'user')
     const dto = await this.boxService.toBoxDto(box)
     return boxToBoxResponse(dto)
+  }
+
+  // The dashboard flips the same `public` flag through
+  // `POST /api/box/:id/public/:isPublic`, which requires WRITE_BOXES. Requiring
+  // it here too keeps this from being a weaker route to that operation.
+  @Put(':boxId/network/inbound')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @ApiResponse({
+    status: 200,
+    description: 'Inbound access after the change',
+    type: InboundNetworkSpecDto,
+  })
+  @Audit({
+    action: AuditAction.UPDATE_PUBLIC_STATUS,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    requestMetadata: {
+      body: (req: TypedRequest<InboundNetworkSpecDto>) => ({ mode: req.body?.mode }),
+    },
+  })
+  async updateInboundNetwork(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Body() dto: InboundNetworkSpecDto,
+  ): Promise<InboundNetworkSpecDto> {
+    const box = await this.boxService.updatePublicStatus(boxId, dto.mode === 'enabled', authContext.organizationId)
+    return { mode: box.public ? 'enabled' : 'disabled' }
   }
 
   private isStartAlreadyInProgress(box: Box): boolean {

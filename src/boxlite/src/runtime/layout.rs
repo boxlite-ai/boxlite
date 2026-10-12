@@ -492,7 +492,7 @@ impl BoxFilesystemLayout {
 
     /// CA directory: ~/.boxlite/boxes/{box_id}/ca
     ///
-    /// Stores ephemeral MITM CA cert+key for secret substitution.
+    /// Stores the per-box MITM CA cert+key for secret substitution.
     /// NOT under shared/ — the guest must not read the private key.
     /// Files: cert.pem (0644), key.pem (0600).
     pub fn ca_dir(&self) -> PathBuf {

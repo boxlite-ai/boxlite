@@ -1,6 +1,6 @@
 # Run VM-based E2E integration tests on a persistent AWS EC2 runner.
 #
-# GitHub-hosted runners do not support nested virtualization / KVM.
+# Full-runtime tests use persistent KVM capacity and cached native builds.
 # This workflow starts a pre-configured EC2 instance, runs integration tests,
 # then stops it. The instance is never terminated — build caches persist.
 #

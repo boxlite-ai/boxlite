@@ -97,6 +97,17 @@ func TestTunnelTargetUsesPreviewAuthority(t *testing.T) {
 	}
 }
 
+func TestTunnelTargetRejectsTerminalPort(t *testing.T) {
+	for _, port := range []string{"22222", "022222"} {
+		request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
+		request.Host = port + "-d-416243644566313233343536.proxy.test:443"
+
+		if _, _, err := (&Proxy{}).tunnelTarget(request); err == nil {
+			t.Fatalf("terminal port %s accepted as a public CONNECT tunnel", port)
+		}
+	}
+}
+
 func TestTunnelConnectRejectsPrivateBoxBeforeRunnerDial(t *testing.T) {
 	ctx := context.Background()
 	publicCache := common_cache.NewMapCache[bool](ctx)
@@ -113,6 +124,14 @@ func TestTunnelConnectRejectsPrivateBoxBeforeRunnerDial(t *testing.T) {
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
 	}
+	for _, want := range []string{
+		"inbound access disabled",
+		"boxlite update AbCdEf123456 --inbound enabled",
+	} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("body = %q, want it to name %q", response.Body.String(), want)
+		}
+	}
 }
 
 func TestTunnelConnectRenewsBoxActivityBeforeStreaming(t *testing.T) {
@@ -120,6 +139,10 @@ func TestTunnelConnectRenewsBoxActivityBeforeStreaming(t *testing.T) {
 
 	renewed := make(chan string, 1)
 	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/preview/"+boxID+"/tunnels/3000" {
+			writer.WriteHeader(http.StatusOK)
+			return
+		}
 		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/last-activity") {
 			select {
 			case renewed <- request.URL.Path:

@@ -14,8 +14,39 @@
 //! re-implement `/api/config`.
 
 use anyhow::{Context, Result, anyhow};
-use openidconnect::{ClientId, IssuerUrl, core::CoreProviderMetadata};
-use serde::Deserialize;
+use openidconnect::core::{
+    CoreAuthDisplay, CoreClaimName, CoreClaimType, CoreClientAuthMethod, CoreGrantType,
+    CoreJsonWebKey, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm,
+    CoreResponseMode, CoreResponseType, CoreSubjectIdentifierType,
+};
+use openidconnect::{
+    AdditionalProviderMetadata, ClientId, DeviceAuthorizationUrl, IssuerUrl, ProviderMetadata,
+};
+use serde::{Deserialize, Serialize};
+
+/// RFC 8628's discovery extension, preserved alongside OIDC core metadata.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DeviceProviderMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_authorization_endpoint: Option<DeviceAuthorizationUrl>,
+}
+
+impl AdditionalProviderMetadata for DeviceProviderMetadata {}
+
+pub type OidcProviderMetadata = ProviderMetadata<
+    DeviceProviderMetadata,
+    CoreAuthDisplay,
+    CoreClientAuthMethod,
+    CoreClaimName,
+    CoreClaimType,
+    CoreGrantType,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJweKeyManagementAlgorithm,
+    CoreJsonWebKey,
+    CoreResponseMode,
+    CoreResponseType,
+    CoreSubjectIdentifierType,
+>;
 
 use super::{DiscoveryOverrides, OidcConfig};
 
@@ -124,14 +155,14 @@ pub async fn resolve_config(
 pub async fn load_provider_metadata(
     cfg: &OidcConfig,
     http: &reqwest::Client,
-) -> Result<CoreProviderMetadata> {
-    match CoreProviderMetadata::discover_async(cfg.issuer.clone(), http).await {
+) -> Result<OidcProviderMetadata> {
+    match OidcProviderMetadata::discover_async(cfg.issuer.clone(), http).await {
         Ok(metadata) => Ok(metadata),
         Err(err) if is_issuer_mismatch(&err) => {
             let toggled = toggle_trailing_slash(cfg.issuer.as_str());
             let retry_issuer = openidconnect::IssuerUrl::new(toggled.clone())
                 .with_context(|| format!("invalid retry issuer URL: {toggled}"))?;
-            CoreProviderMetadata::discover_async(retry_issuer, http)
+            OidcProviderMetadata::discover_async(retry_issuer, http)
                 .await
                 .with_context(|| {
                     format!(
@@ -237,6 +268,7 @@ pub fn http_client() -> Result<reqwest::Client> {
 mod tests {
     use super::*;
 
+    /// Explicit flags must override both control-plane configuration and environment values.
     #[test]
     fn pick_prefers_flag_over_server_and_env() {
         assert_eq!(
@@ -245,6 +277,7 @@ mod tests {
         );
     }
 
+    /// Empty values must fall through to the next source, or resolve to no value.
     #[test]
     fn pick_falls_through_empty_strings() {
         // `Some("")` is treated as absent so a stray `--audience=` or
@@ -254,12 +287,14 @@ mod tests {
         assert_eq!(pick(None, None, Some("")), None);
     }
 
+    /// Appending `/config` must preserve the control plane's existing path prefix.
     #[test]
     fn join_config_url_appends_to_prefix() {
         let u = join_config_url("https://api.boxlite.ai/api").unwrap();
         assert_eq!(u.as_str(), "https://api.boxlite.ai/api/config");
     }
 
+    /// A trailing slash on the server URL must not introduce a doubled path separator.
     #[test]
     fn join_config_url_strips_trailing_slash() {
         let u = join_config_url("https://api.boxlite.ai/api/").unwrap();
@@ -289,6 +324,7 @@ mod tests {
     fn is_issuer_mismatch_recognizes_openidconnect_error_shape() {
         struct E(&'static str);
         impl std::fmt::Display for E {
+            /// Expose the fixture's exact provider error text to the mismatch detector.
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str(self.0)
             }

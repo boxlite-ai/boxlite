@@ -240,7 +240,7 @@ const DEPLOYER_ROLES = [
    * what lets gcloud mint a key for this identity and use sudo once it is in.
    *
    * A deploy-time channel, not an operator's back door: a runner's boot script
-   * is ignored after first boot and the instance is never replaced, so a new
+   * is fixed at create and the instance is never replaced, so a new
    * binary has no other way onto a host that already exists.
    * `mdeploy/stack/runner-upgrade.ts` records the rest of the reasoning.
    */

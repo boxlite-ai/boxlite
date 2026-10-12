@@ -167,6 +167,7 @@ export default $config({
       }),
       config,
       inputs: {
+        clickHouseRetentionHours: stackEnvironment.clickHouseRetentionHours,
         stage: $app.stage,
         tag: stackEnvironment.tag,
         domain: stackEnvironment.domain,

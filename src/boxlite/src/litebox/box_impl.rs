@@ -884,7 +884,7 @@ impl BoxImpl {
             temp_tar.to_path_buf(),
             boxlite_shared::tar::PackContext {
                 follow_symlinks: opts.follow_symlinks,
-                include_parent: opts.include_parent,
+                include_parent: !boxlite_shared::tar::specifies_current_dir(host_src.as_os_str()),
             },
         )
         .await?;
@@ -956,7 +956,6 @@ impl BoxImpl {
             .download_tar(
                 container_src,
                 Some(self.container_id()),
-                opts.include_parent,
                 opts.follow_symlinks,
                 &temp_tar,
             )
@@ -1060,18 +1059,43 @@ impl BoxImpl {
         let live = self.live_state().await?;
         let mut files_iface = live.guest_session.files().await?;
         files_iface
-            .download_stream(
-                &container_src,
-                Some(&cid),
-                opts.include_parent,
-                opts.follow_symlinks,
-            )
+            .download_stream(&container_src, Some(&cid), opts.follow_symlinks)
             .await
     }
 
     // ========================================================================
     // LIVE STATE INITIALIZATION (internal)
     // ========================================================================
+
+    /// Acquire the SSH session without implicitly rerunning an explicit main command.
+    pub(crate) async fn ssh_session(&self) -> BoxliteResult<GuestSession> {
+        self.ensure_usable_without_rerunning_main("control SSH on")?;
+        Ok(self.live_state().await?.guest_session.clone())
+    }
+
+    /// Observe the current VM without booting it or starting its main command.
+    pub(crate) fn existing_ssh_session(&self) -> BoxliteResult<Option<GuestSession>> {
+        match self.state.read().status {
+            BoxStatus::Running => Ok(Some(
+                self.live
+                    .get()
+                    .map(|live| live.guest_session.clone())
+                    // Recovered handles have a transport but no cached LiveState.
+                    .unwrap_or_else(|| GuestSession::new(self.config.transport())),
+            )),
+            BoxStatus::Configured | BoxStatus::Stopped if self.live.initialized() => {
+                Err(BoxliteError::Stopped(format!(
+                    "Box {} SSH handle still holds a stopped VM; drop it and call runtime.get()",
+                    self.config.id
+                )))
+            }
+            BoxStatus::Configured | BoxStatus::Stopped => Ok(None),
+            status => Err(BoxliteError::InvalidState(format!(
+                "Cannot control SSH on box {}: it is {}",
+                self.config.id, status
+            ))),
+        }
+    }
 
     /// The implicit-boot funnel: boot the box and make sure its container's init
     /// is running. `exec`, `metrics`, `copy_into` and `copy_out` pass through
@@ -2435,3 +2459,7 @@ mod tests {
         drop((litebox, child));
     }
 }
+
+#[cfg(test)]
+#[path = "ssh_tests.rs"]
+mod ssh_tests;

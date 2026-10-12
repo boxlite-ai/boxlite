@@ -1,13 +1,14 @@
 # Run hosted-runner tests and collect coverage across the runtime and SDKs.
 #
-# Non-VM integration suites use test-only runtime construction because GitHub
-# runners cannot provide the virtualization needed by production startup.
+# Non-VM integration suites use test-only runtime construction. Native x86_64
+# hypervisor tests separately exercise KVM without booting the BoxLite runtime.
 #
 # Test coverage:
 # - Rust: units and non-VM integration, with llvm-cov coverage
 # - Python: pytest with -m "not integration"
 # - Node.js: vitest unit project
 # - Go: SDK, networking bridge, and the runner; API: Jest with Postgres and Redis
+# - Dashboard: vitest with jsdom, v8 coverage
 name: Test
 
 on:
@@ -37,6 +38,8 @@ on:
       - 'rust-toolchain.toml'
       - 'sdks/**'
       - 'apps/api/**'
+      - 'apps/dashboard/**'
+      - 'apps/libs/api-client/**'
       - 'apps/runner/**'
       - 'apps/go.work'
       - 'apps/go.work.sum'
@@ -91,6 +94,7 @@ jobs:
       node: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.node == 'true' }}
       go: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.go == 'true' }}
       api: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.api == 'true' }}
+      dashboard: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.dashboard == 'true' }}
       setup: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.setup == 'true' }}
       infra: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.infra == 'true' }}
     steps:
@@ -207,6 +211,14 @@ jobs:
               - 'apps/jest.preset.js'
               - 'codecov.yml'
               - '.github/workflows/test.yml'
+            dashboard:
+              - 'apps/dashboard/**/!(*.md)'
+              - 'apps/libs/api-client/**/!(*.md)'
+              - 'apps/package.json'
+              - 'apps/yarn.lock'
+              - 'apps/nx.json'
+              - 'codecov.yml'
+              - '.github/workflows/test.yml'
             setup:
               - '.gitmodules'
               - 'scripts/setup/setup-submodules.sh'
@@ -291,6 +303,15 @@ jobs:
         env:
           BOXLITE_DEPS_STUB: "1"
         run: make coverage:lcov NEXTEST_PROFILE=ci
+
+      - name: Enable KVM access for native hypervisor tests
+        if: matrix.platform.target == 'linux-x64-gnu'
+        run: sudo chmod a+rw /dev/kvm
+
+      - name: Run KVM hardware tests with coverage
+        if: matrix.platform.target == 'linux-x64-gnu'
+        timeout-minutes: 5
+        run: make coverage:vmm:kvm
 
       - name: Run OpenAPI reference-server unit tests
         # Keyed on BoxliteError's Display text (src/shared/src/errors.rs, in this
@@ -591,6 +612,42 @@ jobs:
           disable_search: true
           fail_ci_if_error: true
 
+  dashboard:
+    name: Dashboard Tests
+    needs: changes
+    if: ${{ needs.changes.outputs.dashboard == 'true' }}
+    runs-on: "ubuntu-latest"
+    permissions: # Read source; OIDC authenticates the coverage upload.
+      contents: "read"
+      id-token: write
+    defaults: # Keep package-manager commands inside the apps workspace.
+      run:
+        working-directory: "apps"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: ${{ false }}
+      - name: Enable Corepack
+        run: "corepack enable"
+      - uses: actions/setup-node@v4
+        with: # Match the apps workspace toolchain and cache key.
+          node-version: "22"
+          cache: "yarn"
+          cache-dependency-path: "apps/yarn.lock"
+      - name: Install app dependencies
+        run: "yarn install --immutable"
+      - name: Run dashboard unit tests
+        run: "yarn nx run dashboard:test --coverage --skip-nx-cache"
+
+      - name: Upload dashboard coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/dashboard/lcov.info
+          flags: dashboard
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
+
   # A skipped test job cannot publish Codecov's separately required status.
   # Validate the PR's changed files with Codecov instead of forcing a pass.
   coverage-empty:
@@ -603,7 +660,8 @@ jobs:
           needs.changes.outputs.python == 'false' &&
           needs.changes.outputs.node == 'false' &&
           needs.changes.outputs.go == 'false' &&
-          needs.changes.outputs.api == 'false' }}
+          needs.changes.outputs.api == 'false' &&
+          needs.changes.outputs.dashboard == 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -625,7 +683,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [changes, infra, rust, python, node, go, setup, api, guest_artifacts, coverage-empty]
+    needs: [changes, infra, rust, python, node, go, setup, api, dashboard, guest_artifacts, coverage-empty]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

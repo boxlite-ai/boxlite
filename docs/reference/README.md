@@ -30,23 +30,24 @@ Complete API documentation for each SDK:
 
 | Surface | Documentation | Description |
 |---------|---------------|-------------|
-| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 26 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images |
+| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 28 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images |
 | **Reference server** | [`openapi/reference-server/`](../../openapi/reference-server/README.md) | A partial implementation used as a client test fixture, not a conformance target |
 
 The spec is the contract, not an inventory of any one server, and no
-implementation currently serves all 26 paths:
+implementation currently serves all 28 paths:
 
 | Server | Serves | Does not serve |
 |--------|--------|----------------|
-| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | `network/tunnel`, the three `images/*` paths. Volume routes are registered but every operation answers `400 UnsupportedError` |
-| reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, `network/tunnel`, attach, and `DELETE …/executions/{exec_id}` (kill) |
+| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | `network/tunnel`, `network/inbound`, the three `images/*` paths. Volume routes are registered but every operation answers `400 UnsupportedError` |
+| reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, `network/tunnel`, `network/inbound`, attach, and `DELETE …/executions/{exec_id}` (kill) |
 
 Read each server's routes rather than either README — both under-report.
-`GET /config` does not close this gap: it carries feature flags
-(`tty_enabled`, `streaming_enabled`, `snapshots_enabled`, `clone_enabled`,
-`export_enabled`, `import_enabled`), not route availability, has no flag at all
-for volumes, images or tunnel, and can disagree with the routes — the reference
-server advertises `streaming_enabled: true` while serving no attach route.
+`GET /config` does not close this gap: its feature flags (`tty_enabled`,
+`streaming_enabled`, `snapshots_enabled`, `clone_enabled`, `export_enabled`,
+`import_enabled`, `inbound_update_enabled`) cover only some routes, there is no
+flag at all for volumes, images or tunnel, and a flag can disagree with the
+routes — the reference server advertises `streaming_enabled: true` while
+serving no attach route.
 
 `{prefix}` is a deployment-defined routing slot, opaque to the client, published
 by a server as `Principal.path_prefix`. A single-tenant server may omit the

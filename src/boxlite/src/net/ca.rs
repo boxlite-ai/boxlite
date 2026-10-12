@@ -8,6 +8,10 @@ use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, KeyUsag
 use std::io::{Read, Write};
 use std::path::Path;
 use time::{Duration, OffsetDateTime};
+use x509_cert::{Certificate, der::DecodePem};
+
+const CA_VALIDITY: Duration = Duration::days(3650);
+const CA_RENEW_BEFORE: Duration = Duration::days(30);
 
 /// CA certificate and private key in PEM format.
 pub struct MitmCa {
@@ -19,7 +23,11 @@ pub struct MitmCa {
 pub fn generate() -> BoxliteResult<MitmCa> {
     let key_pair = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
         .map_err(|e| BoxliteError::Network(format!("MITM CA key generation failed: {e}")))?;
+    generate_with_key(key_pair)
+}
 
+/// Issue a long-lived CA certificate using the supplied signing identity.
+fn generate_with_key(key_pair: KeyPair) -> BoxliteResult<MitmCa> {
     let mut params = CertificateParams::default();
     params.distinguished_name = {
         let mut dn = DistinguishedName::new();
@@ -29,7 +37,7 @@ pub fn generate() -> BoxliteResult<MitmCa> {
 
     let now = OffsetDateTime::now_utc();
     params.not_before = now - Duration::minutes(1);
-    params.not_after = now + Duration::hours(24);
+    params.not_after = now + CA_VALIDITY;
     params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
     params.key_usages = vec![KeyUsagePurpose::CrlSign, KeyUsagePurpose::KeyCertSign];
 
@@ -43,7 +51,7 @@ pub fn generate() -> BoxliteResult<MitmCa> {
     })
 }
 
-/// Load CA from files if they exist, otherwise generate and persist.
+/// Load or renew the CA before container initialization installs guest trust.
 ///
 /// Files: `{ca_dir}/cert.pem` (0644), `{ca_dir}/key.pem` (0600).
 /// The CA directory must NOT be shared with the guest VM (it contains the private key).
@@ -53,10 +61,26 @@ pub fn load_or_generate(ca_dir: &Path) -> BoxliteResult<MitmCa> {
     let cert_path = ca_dir.join("cert.pem");
     let key_path = ca_dir.join("key.pem");
 
-    // Restart path: load existing CA (matches cert already in container rootfs)
+    // Renew only at cold start; reattaching to a live proxy must preserve its CA.
     if cert_path.exists() && key_path.exists() {
-        let cert_pem = read_ca_cert(&cert_path)?;
+        let mut cert_pem = read_ca_cert(&cert_path)?;
         let key_pem = read_private_key(&key_path)?;
+        let cert = Certificate::from_pem(&cert_pem).map_err(|e| {
+            BoxliteError::Network(format!("Failed to parse persisted MITM CA: {e}"))
+        })?;
+        let validity = cert.tbs_certificate.validity;
+        let now = OffsetDateTime::now_utc();
+        if validity.not_after.to_unix_duration().as_secs()
+            <= (now + CA_RENEW_BEFORE).unix_timestamp() as u64
+            || validity.not_before.to_unix_duration().as_secs() > now.unix_timestamp() as u64
+        {
+            let key = KeyPair::from_pem(&key_pem)
+                .map_err(|e| BoxliteError::Network(format!("Failed to parse MITM CA key: {e}")))?;
+            cert_pem = generate_with_key(key)?.cert_pem;
+            // Keeping the key makes renewal a single atomic certificate replacement.
+            write_ca_cert(&cert_path, &cert_pem)?;
+            tracing::info!("MITM: renewed CA in {}", ca_dir.display());
+        }
         tracing::info!("MITM: loaded persisted CA from {}", ca_dir.display());
         return Ok(MitmCa { cert_pem, key_pem });
     }
@@ -320,6 +344,10 @@ fn write_private_key(path: &Path, contents: &str) -> BoxliteResult<()> {
 }
 
 #[cfg(test)]
+#[path = "ca_lifetime_tests.rs"]
+mod lifetime_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -394,14 +422,15 @@ mod tests {
         let ca_dir = dir.path().join("ca");
         std::fs::create_dir_all(&ca_dir).unwrap();
         std::fs::set_permissions(&ca_dir, std::fs::Permissions::from_mode(0o777)).unwrap();
-        std::fs::write(ca_dir.join("cert.pem"), "cert").unwrap();
+        let original = generate().unwrap();
+        std::fs::write(ca_dir.join("cert.pem"), &original.cert_pem).unwrap();
         let key_path = ca_dir.join("key.pem");
-        std::fs::write(&key_path, "private-key").unwrap();
+        std::fs::write(&key_path, &original.key_pem).unwrap();
         std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
         let ca = load_or_generate(&ca_dir).unwrap();
 
-        assert_eq!(ca.key_pem, "private-key");
+        assert_eq!(ca.key_pem, original.key_pem);
         let mode = std::fs::metadata(&ca_dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
     }
@@ -611,14 +640,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ca_dir = dir.path().join("ca");
         std::fs::create_dir_all(&ca_dir).unwrap();
-        std::fs::write(ca_dir.join("cert.pem"), "cert").unwrap();
+        let original = generate().unwrap();
+        std::fs::write(ca_dir.join("cert.pem"), &original.cert_pem).unwrap();
         let key_path = ca_dir.join("key.pem");
-        std::fs::write(&key_path, "private-key").unwrap();
+        std::fs::write(&key_path, &original.key_pem).unwrap();
         std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
         let ca = load_or_generate(&ca_dir).unwrap();
 
-        assert_eq!(ca.key_pem, "private-key");
+        assert_eq!(ca.key_pem, original.key_pem);
         let mode = std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
     }
@@ -631,14 +661,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ca_dir = dir.path().join("ca");
         std::fs::create_dir_all(&ca_dir).unwrap();
-        std::fs::write(ca_dir.join("cert.pem"), "cert").unwrap();
+        let original = generate().unwrap();
+        std::fs::write(ca_dir.join("cert.pem"), &original.cert_pem).unwrap();
         let key_path = ca_dir.join("key.pem");
-        std::fs::write(&key_path, "private-key").unwrap();
+        std::fs::write(&key_path, &original.key_pem).unwrap();
         std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o400)).unwrap();
 
         let ca = load_or_generate(&ca_dir).unwrap();
 
-        assert_eq!(ca.key_pem, "private-key");
+        assert_eq!(ca.key_pem, original.key_pem);
         let mode = std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o400);
     }

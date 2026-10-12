@@ -84,7 +84,7 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Users and authentication</b> · 10 routes</summary>
+<summary><b>Users and authentication</b> · 12 routes</summary>
 
 | Method   | Path                                                     | What it does                                   |
 | -------- | -------------------------------------------------------- | ---------------------------------------------- |
@@ -98,6 +98,8 @@ serves and the events it emits are catalogued below alongside its routes.
 | `DELETE` | `/api/users/linked-accounts/{provider}/{providerUserId}` | Unlinks an external account.                   |
 | `POST`   | `/api/users/mfa/sms/enroll`                              | Enrolls the user in SMS MFA.                   |
 | `GET`    | `/api/auth/end-session`                                  | Starts OIDC RP-initiated logout.               |
+| `POST`   | `/api/auth/link/adopt`                                   | Moves a linked account's data for the Action.  |
+| `GET`    | `/api/auth/link/status`                                  | Tells the Action whether BoxLite knows a user. |
 
 </details>
 
@@ -174,6 +176,7 @@ serves and the events it emits are catalogued below alongside its routes.
 | `POST` | `/api/box/{boxIdOrName}/ports/{port}/signed-preview-url/{token}/expire` | Expires a signed preview URL token.                   |
 | `GET`  | `/api/box/{boxId}/toolbox-proxy-url`                                    | Returns the box toolbox proxy URL.                    |
 | `GET`  | `/api/preview/{boxId}/public`                                           | Reports whether a box is publicly reachable.          |
+| `GET`  | `/api/preview/{boxId}/tunnels/{port}`                                   | Checks an active public tunnel for the proxy.          |
 | `GET`  | `/api/preview/{boxId}/validate/{authToken}`                             | Validates a box preview authentication token.         |
 | `GET`  | `/api/preview/{boxId}/access`                                           | Checks whether the caller may preview a box.          |
 | `GET`  | `/api/preview/{signedPreviewToken}/{port}/box-id`                       | Resolves a signed preview token and port to a box ID. |
@@ -370,7 +373,7 @@ organization authorization; identity discovery at `GET /api/v1/me` can return
 </details>
 
 <details>
-<summary><b>Execution, files, metrics, and networking</b> · 10 routes</summary>
+<summary><b>Execution, files, metrics, and networking</b> · 11 routes</summary>
 
 | Method   | Path                                                          | What it does                                            |
 | -------- | ------------------------------------------------------------- | ------------------------------------------------------- |
@@ -384,6 +387,7 @@ organization authorization; identity discovery at `GET /api/v1/me` can return
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/files?path={path}`          | Downloads a box path as a tar stream.                   |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/metrics`                    | Returns metrics for one box without marking it active.  |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Returns the runner tunnel URI for a guest TCP port.     |
+| `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Makes a box public or private (needs `write:boxes`).    |
 
 The exec, signal, resize, files, and metrics handlers are registered as
 catch-all reverse proxies to the box's assigned runner; the methods shown are

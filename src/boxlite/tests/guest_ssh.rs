@@ -9,6 +9,317 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
+use tokio_stream::StreamExt;
+
+#[derive(Clone, Copy, Debug)]
+enum SshOperation {
+    Configure,
+    Status,
+    Disable,
+}
+
+impl SshOperation {
+    async fn call(
+        self,
+        sandbox: &boxlite::LiteBox,
+        config: &boxlite::SshConfig,
+    ) -> boxlite::BoxliteResult<boxlite::SshStatus> {
+        let ssh = sandbox.ssh();
+        match self {
+            Self::Configure => ssh.configure(config.clone()).await,
+            Self::Status => ssh.status().await,
+            Self::Disable => ssh.disable().await,
+        }
+    }
+}
+
+fn assert_initial_ssh_disabled(status: boxlite::SshStatus) {
+    assert_eq!(
+        status,
+        boxlite::SshStatus {
+            enabled: false,
+            generation: 0,
+            listen_address: String::new(),
+            host_public_key: String::new(),
+            host_key_fingerprint: String::new(),
+        }
+    );
+}
+
+/// Shutdown must let VM initialization publish a recoverable detached box.
+#[tokio::test]
+async fn runtime_ssh_shutdown_during_vm_startup() {
+    let home = common::home::PerTestBoxHome::new();
+    let options = BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    };
+    let runtime = BoxliteRuntime::new(options.clone()).unwrap();
+    let mut box_options = common::alpine_opts();
+    box_options.detach = true;
+    let sandbox = runtime.create(box_options, None).await.unwrap();
+    let id = sandbox.id().to_string();
+    let pid_file = home.path.join("boxes").join(&id).join("shim.pid");
+    // Configure must be cancelled before the guest can validate credentials.
+    let config = boxlite::SshConfig {
+        listen_address: "0.0.0.0:2222".into(),
+        host_private_key: String::new(),
+        accounts: vec![],
+    };
+    let result = {
+        let ssh = sandbox.ssh();
+        let call = ssh.configure(config);
+        tokio::pin!(call);
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !pid_file.exists() {
+                tokio::select! {
+                    biased;
+                    result = &mut call => panic!("SSH completed before VM spawn: {result:?}"),
+                    _ = tokio::task::yield_now() => {}
+                }
+            }
+        })
+        .await
+        .expect("VM must spawn while SSH startup is pending");
+        assert_eq!(
+            sandbox.info().await.unwrap().status,
+            boxlite::BoxStatus::Configured,
+            "shutdown must happen before initialization publishes Running"
+        );
+        // Observers must finish while configure is parked in VM initialization.
+        assert_initial_ssh_disabled(sandbox.ssh().status().await.unwrap());
+        assert_initial_ssh_disabled(sandbox.ssh().disable().await.unwrap());
+        assert_eq!(
+            sandbox.info().await.unwrap().status,
+            boxlite::BoxStatus::Configured
+        );
+        runtime
+            .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(30), call)
+            .await
+            .expect("SSH must return after VM initialization")
+    };
+    let initialized = sandbox.info().await.unwrap();
+    drop(sandbox);
+    drop(runtime);
+
+    let runtime = BoxliteRuntime::new(options).unwrap();
+    let recovered = runtime.get(&id).await.unwrap().unwrap();
+    let recovered_state = recovered.info().await.unwrap();
+    let status = recovered.ssh().status().await;
+    let reattached = recovered.info().await.unwrap();
+    recovered.stop().await.unwrap();
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(result, Err(boxlite::BoxliteError::Stopped(_))),
+        "{result:?}"
+    );
+    assert_eq!(initialized.status, boxlite::BoxStatus::Running);
+    assert_eq!(recovered_state.status, boxlite::BoxStatus::Running);
+    assert!(initialized.pid.is_some());
+    assert_eq!(reattached.pid, initialized.pid);
+    assert!(!status.unwrap().enabled);
+    assert!(common::home::live_shim_pids(&home.path.join("boxes")).is_empty());
+}
+
+/// Wait for the main command's write before inspecting its host-mounted record.
+async fn start_recorded_main(sandbox: &boxlite::LiteBox, attached: Option<boxlite::Execution>) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        sandbox.start().await.unwrap();
+        // Guest output permits one subscriber; keep an existing pre-start attach.
+        let mut execution = match attached {
+            Some(execution) => execution,
+            None => sandbox
+                .attach(boxlite::AttachOptions::main().read_only())
+                .await
+                .unwrap(),
+        };
+        let mut stdout = execution.stdout().unwrap();
+        let mut output = String::new();
+        while let Some(chunk) = stdout.next().await {
+            output.push_str(&chunk);
+            if output.contains("main-recorded\n") {
+                return;
+            }
+        }
+        panic!("main command exited before recording its execution: {output}");
+    })
+    .await
+    .expect("main command must record its execution within 30 seconds");
+}
+
+/// Only configure requires explicit startup; observations preserve workload records.
+async fn check_ssh_start_policy(
+    mut options: boxlite::BoxOptions,
+    initial_state: boxlite::BoxStatus,
+    operation: SshOperation,
+) {
+    let home = common::home::PerTestBoxHome::new();
+    let files = tempfile::TempDir::new_in("/tmp").unwrap();
+    let host_key = files.path().join("host");
+    let user_key = files.path().join("user");
+    generate_key(&host_key, "host").await;
+    generate_key(&user_key, "user").await;
+    let config = boxlite::SshConfig {
+        listen_address: "0.0.0.0:2222".into(),
+        host_private_key: std::fs::read_to_string(&host_key).unwrap(),
+        accounts: vec![boxlite::SshAccount {
+            login: "alice".into(),
+            authorized_keys: vec![std::fs::read_to_string(user_key.with_extension("pub")).unwrap()],
+            ca: None,
+        }],
+    };
+    let record = files.path().join("runs");
+    std::fs::write(&record, "").unwrap();
+    options.volumes = vec![boxlite::runtime::options::VolumeSpec {
+        managed_volume: None,
+        host_path: files.path().to_str().unwrap().into(),
+        guest_path: "/proof".into(),
+        read_only: false,
+    }];
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+    let mut sandbox = runtime.create(options, None).await.unwrap();
+    let expected_record = if initial_state == boxlite::BoxStatus::Stopped {
+        start_recorded_main(&sandbox, None).await;
+        sandbox.stop().await.unwrap();
+        let id = sandbox.id().to_string();
+        // A retained backend's cancelled token would hide the missing guard.
+        drop(sandbox);
+        sandbox = runtime.get(&id).await.unwrap().unwrap();
+        "run\n"
+    } else {
+        ""
+    };
+    assert_eq!(std::fs::read_to_string(&record).unwrap(), expected_record);
+    let before = sandbox.info().await.unwrap();
+    assert_eq!(before.status, initial_state);
+    assert_eq!(before.pid, None);
+
+    let result = operation.call(&sandbox, &config).await;
+    let after = sandbox.info().await.unwrap();
+    let recorded = std::fs::read_to_string(&record).unwrap();
+    if matches!(operation, SshOperation::Configure) {
+        let error = result.unwrap_err();
+        assert!(matches!(error, boxlite::BoxliteError::InvalidState(_)));
+        assert!(error.to_string().contains("start the box explicitly"));
+    } else {
+        assert_initial_ssh_disabled(result.unwrap());
+    }
+    assert_eq!(after.status, before.status);
+    assert_eq!(after.pid, before.pid);
+    assert_eq!(recorded, expected_record);
+
+    let attached = if initial_state == boxlite::BoxStatus::Configured {
+        let execution = sandbox
+            .attach(boxlite::AttachOptions::main().read_only())
+            .await
+            .unwrap();
+        for observer in [SshOperation::Status, SshOperation::Disable] {
+            assert_initial_ssh_disabled(observer.call(&sandbox, &config).await.unwrap());
+            assert_eq!(std::fs::read_to_string(&record).unwrap(), expected_record);
+        }
+        Some(execution)
+    } else {
+        None
+    };
+    start_recorded_main(&sandbox, attached).await;
+    let running = sandbox.info().await.unwrap();
+    let status = operation.call(&sandbox, &config).await.unwrap();
+    assert_eq!(status.enabled, matches!(operation, SshOperation::Configure));
+    assert_eq!(sandbox.info().await.unwrap().pid, running.pid);
+    assert_eq!(
+        std::fs::read_to_string(&record).unwrap(),
+        format!("{expected_record}run\n")
+    );
+    assert!(sandbox.ssh().configure(config).await.unwrap().enabled);
+    sandbox.stop().await.unwrap();
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}
+
+macro_rules! ssh_main_guard_test {
+    ($name:ident, $state:ident, $command:ident, $operation:ident) => {
+        #[tokio::test]
+        async fn $name() {
+            let mut options = common::alpine_opts();
+            options.$command = Some(
+                [
+                    "sh",
+                    "-c",
+                    "printf 'run\\n' >> /proof/runs; printf 'main-recorded\\n'; exec sleep 300",
+                ]
+                .map(String::from)
+                .to_vec(),
+            );
+            check_ssh_start_policy(
+                options,
+                boxlite::BoxStatus::$state,
+                SshOperation::$operation,
+            )
+            .await;
+        }
+    };
+}
+
+ssh_main_guard_test!(
+    runtime_ssh_configured_cmd_configure,
+    Configured,
+    cmd,
+    Configure
+);
+ssh_main_guard_test!(runtime_ssh_configured_cmd_status, Configured, cmd, Status);
+ssh_main_guard_test!(runtime_ssh_configured_cmd_disable, Configured, cmd, Disable);
+ssh_main_guard_test!(runtime_ssh_stopped_cmd_configure, Stopped, cmd, Configure);
+ssh_main_guard_test!(runtime_ssh_stopped_cmd_status, Stopped, cmd, Status);
+ssh_main_guard_test!(runtime_ssh_stopped_cmd_disable, Stopped, cmd, Disable);
+ssh_main_guard_test!(
+    runtime_ssh_configured_entrypoint_configure,
+    Configured,
+    entrypoint,
+    Configure
+);
+ssh_main_guard_test!(
+    runtime_ssh_configured_entrypoint_status,
+    Configured,
+    entrypoint,
+    Status
+);
+ssh_main_guard_test!(
+    runtime_ssh_configured_entrypoint_disable,
+    Configured,
+    entrypoint,
+    Disable
+);
+ssh_main_guard_test!(
+    runtime_ssh_stopped_entrypoint_configure,
+    Stopped,
+    entrypoint,
+    Configure
+);
+ssh_main_guard_test!(
+    runtime_ssh_stopped_entrypoint_status,
+    Stopped,
+    entrypoint,
+    Status
+);
+ssh_main_guard_test!(
+    runtime_ssh_stopped_entrypoint_disable,
+    Stopped,
+    entrypoint,
+    Disable
+);
 
 async fn connect_rpc(
     socket: std::path::PathBuf,
@@ -782,6 +1093,103 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
         sandbox.stop().await.unwrap();
 
         sandbox = runtime.get("guest-ssh").await.unwrap().unwrap();
+    }
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}
+
+/// Exercise the public API against a real SSH client: runtime reconnection preserves
+/// a live listener, invalid configuration leaves it intact, and a VM restart resets it.
+#[tokio::test]
+async fn runtime_ssh_control_and_recovered_handle() {
+    let home = common::home::PerTestBoxHome::new();
+    let keys = tempfile::TempDir::new_in("/tmp").unwrap();
+    let host_key = keys.path().join("host");
+    let user_key = keys.path().join("user");
+    generate_key(&host_key, "host").await;
+    generate_key(&user_key, "user").await;
+    let options = BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    };
+    let mut runtime = BoxliteRuntime::new(options.clone()).unwrap();
+    let mut box_options = common::alpine_opts();
+    box_options.detach = true;
+    box_options.ports = vec![PortSpec {
+        host_port: None,
+        guest_port: 2222,
+        protocol: PortProtocol::Tcp,
+        host_ip: Some("127.0.0.1".into()),
+    }];
+    let mut sandbox = runtime
+        .create(box_options, Some("runtime-ssh".into()))
+        .await
+        .unwrap();
+    let handle = sandbox.ssh();
+    assert_eq!(
+        sandbox.info().await.unwrap().status,
+        boxlite::BoxStatus::Configured
+    );
+    drop(handle);
+    let config = boxlite::SshConfig {
+        listen_address: "0.0.0.0:2222".into(),
+        host_private_key: std::fs::read_to_string(&host_key).unwrap(),
+        accounts: vec![boxlite::SshAccount {
+            login: "alice".into(),
+            authorized_keys: vec![std::fs::read_to_string(user_key.with_extension("pub")).unwrap()],
+            ca: None,
+        }],
+    };
+    for _ in 0..2 {
+        let before = sandbox.info().await.unwrap();
+        let initial = sandbox.ssh().status().await.unwrap();
+        assert_initial_ssh_disabled(initial);
+        assert_initial_ssh_disabled(sandbox.ssh().disable().await.unwrap());
+        let after = sandbox.info().await.unwrap();
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.pid, before.pid);
+        let status = sandbox.ssh().configure(config.clone()).await.unwrap();
+        let info = sandbox.info().await.unwrap();
+        let port = info.network.unwrap().published_ports.unwrap()[0].host_port;
+        drop(sandbox);
+        drop(runtime);
+        runtime = BoxliteRuntime::new(options.clone()).unwrap();
+        sandbox = runtime.get("runtime-ssh").await.unwrap().unwrap();
+        let ssh = sandbox.ssh();
+        assert_eq!(ssh.status().await.unwrap(), status);
+        assert_eq!(sandbox.info().await.unwrap().pid, info.pid);
+        assert!(!ssh.disable().await.unwrap().enabled);
+        assert_eq!(sandbox.info().await.unwrap().pid, info.pid);
+        let status = ssh.configure(config.clone()).await.unwrap();
+        let mut invalid = config.clone();
+        invalid.accounts.clear();
+        assert!(matches!(
+            ssh.configure(invalid).await,
+            Err(boxlite::BoxliteError::InvalidArgument(_))
+        ));
+        assert_eq!(ssh.status().await.unwrap(), status);
+        let known_hosts = keys.path().join("known_hosts");
+        std::fs::write(
+            &known_hosts,
+            format!("[127.0.0.1]:{port} {}\n", status.host_public_key),
+        )
+        .unwrap();
+        let mut exec = client_command("ssh", &user_key, &known_hosts, port);
+        exec.args(["alice@127.0.0.1", "printf runtime-ssh-ok"]);
+        assert_eq!(checked_output(exec).await, b"runtime-ssh-ok");
+        let disabled = ssh.disable().await.unwrap();
+        assert!(!disabled.enabled);
+        assert_eq!(ssh.disable().await.unwrap(), disabled);
+        sandbox.stop().await.unwrap();
+        assert!(matches!(
+            ssh.status().await,
+            Err(boxlite::BoxliteError::Stopped(_))
+        ));
+        drop(ssh);
+        drop(sandbox);
+        sandbox = runtime.get("runtime-ssh").await.unwrap().unwrap();
     }
     runtime
         .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))

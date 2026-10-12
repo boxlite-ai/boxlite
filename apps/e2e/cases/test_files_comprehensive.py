@@ -93,8 +93,7 @@ async def test_deeply_nested_directory(box):
         (Path(tmpdir) / "a" / "b" / "mid.txt").write_text("mid\n")
 
         opts = boxlite.CopyOptions(
-            recursive=True, overwrite=True,
-            follow_symlinks=False, include_parent=True,
+            recursive=True, overwrite=True, follow_symlinks=False,
         )
         await box.copy_in(str(Path(tmpdir) / "a"), "/workspace/nested/", copy_options=opts)
 
@@ -126,8 +125,7 @@ async def test_copy_in_overwrites_when_true(box):
         f2 = Path(tmpdir) / "data.txt"
         f2.write_text("replaced\n")
         opts = boxlite.CopyOptions(
-            recursive=False, overwrite=True,
-            follow_symlinks=False, include_parent=False,
+            recursive=False, overwrite=True, follow_symlinks=False,
         )
         await box.copy_in(str(f2), "/workspace/data.txt", copy_options=opts)
 

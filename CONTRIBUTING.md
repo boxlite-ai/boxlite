@@ -123,6 +123,16 @@ Threshold behavior follows [Codecov's status configuration](https://docs.codecov
 7. CI converts unacknowledged PRs to draft. Read the current diff, check that the description accurately explains it, then post the exact `/reviewed <full-head-SHA>` command from the bot comment. Only a new, unedited comment from the PR author counts. Once `Author reviewed the PR` passes, click **Ready for review**. A new commit, or editing/deleting the only acknowledgment, returns the PR to draft and requires a fresh comment. Forks use the same flow. Maintainer approval remains separate
 8. Sign the [BoxLite Contributor License Agreement](./docs/legal/CLA.md) when CLA Assistant asks you to do so
 
+### Updating agent tooling
+
+Run `./.agent-tooling/install.sh` in each worktree after a tooling upgrade to
+refresh hooks and managed guidance. Keep committed bootstrap scripts synchronized
+with the adopted release templates.
+
+The 0.1.26 Claude bootstrap checks the adopted manifest version and reinstalls a
+stale project plugin when an update leaves it unchanged, preserving project
+settings. Run `/reload-plugins` afterward to activate the refreshed plugin.
+
 ### Watching CI and PR feedback
 
 Once the pinned agent tooling is installed (`make setup`, once per clone),
@@ -172,9 +182,15 @@ section order are optional.
   lessons: sources, relevant constraints, and what the design adopts, adapts, or
   rejects, and why. Every PR needs one, drafts included; keep it aligned with the
   final scope. Use `Fixes #<n>` only when the PR closes that GitHub issue.
-- Keep each PR within 400 changed lines (target 100–200), counting tests, docs, and
-  generated text. Track larger work in one issue with a checklist of slices, one
-  coherent PR per slice; open separate issues only for independently tracked work.
+- Keep each PR within 400 added code lines (target 100–200), including drafts,
+  following boxlite-agent-tooling, which takes precedence in case of conflicts.
+  Count source, scripts, configuration, and generated code. Exclude `*.spec.ts`,
+  `*_test.go`, files under `tests` directories, recognized documentation,
+  data/assets, and lockfiles; unclassified files count. Exclusions are file-based:
+  tests embedded in other source files still count. Estimate before coding and
+  measure against the intended base before each PR creation or update.
+  Track larger work in one issue with a checklist of slices, one coherent PR per
+  slice; open separate issues only for independently tracked work.
 - Explain the problem, how the change produces the result, and the resulting
   behavior once. Keep the whole description within
   **120 words**, fenced blocks included, with no paragraph over 80 words and no list

@@ -272,6 +272,11 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         children: &[],
     },
     CommandScope {
+        name: "update",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
         name: "pull",
         globals: LOCAL_IMAGE_GLOBALS,
         children: &[],
@@ -587,6 +592,9 @@ pub enum Commands {
 
     /// Restart one or more boxes
     Restart(crate::commands::restart::RestartArgs),
+
+    /// Update settings of an existing box
+    Update(crate::commands::update::UpdateArgs),
 
     /// Pull an image from a registry
     Pull(crate::commands::pull::PullArgs),
@@ -1688,6 +1696,11 @@ mod tests {
         (&["boxlite", "start", "box"], 1, REGISTRY),
         (&["boxlite", "stop", "box"], 1, REGISTRY),
         (&["boxlite", "restart", "box"], 1, REGISTRY),
+        (
+            &["boxlite", "update", "box", "--inbound", "enabled"],
+            1,
+            REGISTRY,
+        ),
         (&["boxlite", "inspect", "box"], 1, REGISTRY),
         (&["boxlite", "cp", "box:/src", "/tmp/dst"], 1, REGISTRY),
         (&["boxlite", "stats", "box"], 1, REGISTRY),
@@ -1890,13 +1903,6 @@ mod tests {
             panic!("expected run");
         };
         assert_eq!(run.entrypoint.as_deref(), Some("/bin/sh"));
-
-        let cli = Cli::try_parse_from(["boxlite", "cp", "--no-include-parent", "box:/src", "/dst"])
-            .expect("inverse parent option parses");
-        let Commands::Cp(cp) = cli.command else {
-            panic!("expected cp");
-        };
-        assert!(cp.no_include_parent);
     }
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -2695,6 +2701,34 @@ mod tests {
     fn tunnel_rejects_port_zero_at_parse() {
         let result = Cli::try_parse_from(["boxlite", "network", "tunnel", "mybox", "0"]);
         assert!(result.is_err(), "port 0 must be rejected by the parser");
+    }
+
+    // ─── update parse tests ────────────────────────────────────────────────
+
+    #[test]
+    fn update_parses_inbound_mode_like_run() {
+        for (value, expected) in [
+            ("enabled", NetworkMode::Enabled),
+            ("disabled", NetworkMode::Disabled),
+            ("Enabled", NetworkMode::Enabled),
+        ] {
+            let cli = parse_projected(&["boxlite", "update", "mybox", "--inbound", value]);
+            let Commands::Update(args) = cli.command else {
+                panic!("expected Commands::Update");
+            };
+            assert_eq!(args.target, "mybox");
+            assert_eq!(args.inbound, expected);
+        }
+    }
+
+    #[test]
+    fn update_rejects_a_missing_or_unknown_inbound_mode() {
+        for args in [
+            &["boxlite", "update", "mybox"][..],
+            &["boxlite", "update", "mybox", "--inbound", "public"][..],
+        ] {
+            assert!(try_parse_from(args).is_err(), "{args:?} must be rejected");
+        }
     }
 
     /// `boxlite port BOX` existed earlier on this branch and was withdrawn:

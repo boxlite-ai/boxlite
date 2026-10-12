@@ -5,8 +5,15 @@
  */
 
 import 'reflect-metadata'
-import { BadRequestException, ValidationPipe } from '@nestjs/common'
+import { BadRequestException, CallHandler, ExecutionContext, ValidationPipe } from '@nestjs/common'
 import { PIPES_METADATA } from '@nestjs/common/constants'
+import { Reflector } from '@nestjs/core'
+import { firstValueFrom, of } from 'rxjs'
+import { AuditAction } from '../audit/enums/audit-action.enum'
+import { AuditTarget } from '../audit/enums/audit-target.enum'
+import { AuditInterceptor } from '../audit/interceptors/audit.interceptor'
+import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
+import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { CreateBoxDto } from './dto/create-box.dto'
 
@@ -132,5 +139,56 @@ describe('BoxliteBoxController request validation', () => {
     )
 
     expect(dto.volumes?.[0]?.managed_volume).toBe(selector)
+  })
+})
+
+// Making a box public exposes its services to anyone, so this route must ask
+// for the same permission as the dashboard's toggle. Read off the real
+// handler, as the pipe above is, so deleting the decorator fails here.
+describe('BoxliteBoxController permissions', () => {
+  it('requires WRITE_BOXES to change inbound access', () => {
+    const required = new Reflector().get(
+      RequiredOrganizationResourcePermissions,
+      BoxliteBoxController.prototype.updateInboundNetwork,
+    )
+
+    expect(required).toEqual([OrganizationResourcePermission.WRITE_BOXES])
+  })
+})
+
+// The audit log for a visibility change must name the box and the mode asked
+// for, and nothing else from the body. Driven through the real interceptor
+// with the handler's own @Audit metadata, so a wrong extractor fails here.
+describe('BoxliteBoxController inbound audit', () => {
+  it('records the box and the requested mode', async () => {
+    const auditService = {
+      createLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
+      updateLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
+    }
+    const interceptor = new AuditInterceptor(new Reflector(), auditService as any, { get: jest.fn() } as any)
+    const request = {
+      url: '/api/v1/boxes/box-1/network/inbound',
+      ip: '127.0.0.1',
+      params: { boxId: 'box-1' },
+      body: { mode: 'enabled', allow_net: [] },
+      user: { userId: 'user-1', email: 'dev@example.com', organizationId: 'org-1' },
+      get: jest.fn(),
+    }
+    const context = {
+      getHandler: () => BoxliteBoxController.prototype.updateInboundNetwork,
+      switchToHttp: () => ({ getRequest: () => request, getResponse: () => ({ statusCode: 200 }) }),
+    } as unknown as ExecutionContext
+    const next: CallHandler = { handle: () => of({ mode: 'enabled' }) }
+
+    await firstValueFrom(interceptor.intercept(context, next))
+
+    expect(auditService.createLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AuditAction.UPDATE_PUBLIC_STATUS,
+        targetType: AuditTarget.BOX,
+        targetId: 'box-1',
+        metadata: { body: { mode: 'enabled' } },
+      }),
+    )
   })
 })

@@ -1428,6 +1428,43 @@ async fn record_activity(State(state): State<Arc<AppState>>, req: Request, next:
     next.run(req).await
 }
 
+/// Whether `host` can only be reached from this machine. Anything that is not
+/// a loopback IP or `localhost` (including `0.0.0.0`, `::` and other
+/// hostnames) counts as network-reachable.
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Refuse to expose the unauthenticated API beyond loopback: without a key,
+/// every caller gets full box control (exec, files, secrets).
+fn check_bind_auth(host: &str, api_key: Option<&str>) -> anyhow::Result<()> {
+    if api_key.is_none() && !is_loopback_host(host) {
+        return Err(unauthenticated_bind_error(host));
+    }
+    Ok(())
+}
+
+/// Same rule against the address the listener actually bound. `localhost`
+/// passes [`check_bind_auth`] by name, but the resolver may map it elsewhere.
+fn check_bound_addr(addr: std::net::SocketAddr, api_key: Option<&str>) -> anyhow::Result<()> {
+    if api_key.is_none() && !addr.ip().is_loopback() {
+        return Err(unauthenticated_bind_error(addr));
+    }
+    Ok(())
+}
+
+fn unauthenticated_bind_error(target: impl std::fmt::Display) -> anyhow::Error {
+    anyhow::anyhow!(
+        "refusing to bind `boxlite serve` to non-loopback address {target} without an API key; \
+         set --api-key (or BOXLITE_SERVE_API_KEY), or bind to 127.0.0.1"
+    )
+}
+
 /// Auth middleware: thin axum adapter over [`auth_allows`]. 401 in the
 /// standard error shape when denied.
 async fn require_api_key(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
@@ -1884,6 +1921,8 @@ fn build_router(state: Arc<AppState>) -> Router {
 // ============================================================================
 
 pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()> {
+    check_bind_auth(&args.host, args.api_key.as_deref())?;
+
     // A server owns an embedded runtime. Client connection settings must not
     // turn it into a proxy merely because a credential profile or REST URL is
     // present in the environment.
@@ -1906,6 +1945,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
     let app = build_router(state.clone());
     let listener = tokio::net::TcpListener::bind((args.host.as_str(), args.port)).await?;
     let addr = listener.local_addr()?;
+    check_bound_addr(addr, args.api_key.as_deref())?;
 
     tracing::info!("boxlite serve listening on {}", addr);
     eprintln!("BoxLite REST API server listening on http://{addr}");
@@ -1949,6 +1989,59 @@ mod tests {
         assert!(!auth_allows(Some("k"), "/v1/me", Some("wrong")));
         assert!(!auth_allows(Some("k"), "/v1/me", None));
         assert!(!auth_allows(Some("k"), "/v1/boxes", Some("")));
+    }
+
+    #[test]
+    fn default_host_is_loopback() {
+        assert!(is_loopback_host(LOCAL_SERVE_HOST));
+        assert!(check_bind_auth(LOCAL_SERVE_HOST, None).is_ok());
+    }
+
+    #[test]
+    fn check_bind_auth_allows_loopback_without_key() {
+        for host in [
+            "127.0.0.1",
+            "127.1.2.3",
+            "::1",
+            "[::1]",
+            "localhost",
+            "LOCALHOST",
+        ] {
+            assert!(check_bind_auth(host, None).is_ok(), "{host}");
+        }
+    }
+
+    #[test]
+    fn check_bind_auth_rejects_network_bind_without_key() {
+        for host in ["0.0.0.0", "::", "[::]", "192.168.1.10", "example.com", ""] {
+            assert!(check_bind_auth(host, None).is_err(), "{host}");
+        }
+    }
+
+    #[test]
+    fn check_bound_addr_rejects_resolved_network_addr_without_key() {
+        for addr in ["127.0.0.1:8100", "[::1]:8100"] {
+            assert!(
+                check_bound_addr(addr.parse().unwrap(), None).is_ok(),
+                "{addr}"
+            );
+        }
+        for addr in ["192.168.1.10:8100", "0.0.0.0:8100", "[::]:8100"] {
+            assert!(
+                check_bound_addr(addr.parse().unwrap(), None).is_err(),
+                "{addr}"
+            );
+            assert!(
+                check_bound_addr(addr.parse().unwrap(), Some("k")).is_ok(),
+                "{addr}"
+            );
+        }
+    }
+
+    #[test]
+    fn check_bind_auth_allows_network_bind_with_key() {
+        assert!(check_bind_auth("0.0.0.0", Some("k")).is_ok());
+        assert!(check_bind_auth("::", Some("k")).is_ok());
     }
 
     #[test]

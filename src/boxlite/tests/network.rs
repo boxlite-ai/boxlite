@@ -95,7 +95,7 @@ fn factory_backend_carries_allowlist_and_secret_metadata_in_spec() {
 #[test]
 fn factory_backend_with_secrets_mints_ca_in_spec() {
     // Public-API path: with secrets configured, the created backend's spec()
-    // mints an ephemeral MITM CA into ca_dir — the create → spec-with-CA flow
+    // persists a per-box MITM CA into ca_dir — the create → spec-with-CA flow
     // the core relies on to hand the shim a usable CA.
     use boxlite::net::{NetworkBackendFactory, default_factory};
     use boxlite::runtime::options::Secret;

@@ -30,8 +30,14 @@ const shippedVersion = (
   }
 ).version
 
+// Hooks export repository selectors that override cwd. Fixture Git commands
+// and resolver shells must discover their temporary repository instead.
+const fixtureEnvironment = Object.fromEntries(
+  Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')),
+)
+
 const git = (cwd: string, ...args: string[]): string => {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8' })
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: fixtureEnvironment })
   assert.equal(result.status, 0, result.stderr)
   return result.stdout.trim()
 }
@@ -97,7 +103,7 @@ const resolveReleasedTree = ({ directory, sha }: { directory: string; sha: strin
       cwd: directory,
       encoding: 'utf8',
       env: {
-        ...process.env,
+        ...fixtureEnvironment,
         ...stepEnvironment,
         GITHUB_OUTPUT: output,
         SHA: sha,

@@ -13,7 +13,6 @@ import { DataTableFacetedFilter, FacetedFilterOption } from '@/components/ui/dat
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { useCommandPaletteActions } from '@/components/CommandPalette'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { getRelativeTimeString } from '@/lib/utils'
@@ -21,6 +20,7 @@ import { OrganizationRolePermissionsEnum, VolumeDto, VolumeState } from '@boxlit
 import {
   ColumnDef,
   ColumnFiltersState,
+  RowSelectionState,
   flexRender,
   getCoreRowModel,
   getFacetedRowModel,
@@ -33,10 +33,10 @@ import {
 } from '@tanstack/react-table'
 import { AlertTriangle, CheckCircle, HardDrive, Loader2, MoreHorizontal, Timer } from '@/components/ui/icon'
 import { AnimatePresence } from 'motion/react'
-import { useCallback, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { TableEmptyState } from './TableEmptyState'
 import { VolumeBulkAction, VolumeBulkActionAlertDialog } from './VolumeTable/BulkActionAlertDialog'
-import { getVolumeBulkActionCounts, isVolumeDeletable, useVolumeCommands } from './VolumeTable/useVolumeCommands'
+import { getVolumeBulkActionCounts, isVolumeDeletable } from './VolumeTable/volumeBulkActions'
 
 interface VolumeTableProps {
   data: VolumeDto[]
@@ -44,24 +44,11 @@ interface VolumeTableProps {
   processingVolumeAction: Record<string, boolean>
   onDelete: (volume: VolumeDto) => void
   onBulkDelete: (volumes: VolumeDto[]) => void
-  onCreateVolume?: () => void
 }
 
-export function VolumeTable({
-  data,
-  loading,
-  processingVolumeAction,
-  onDelete,
-  onBulkDelete,
-  onCreateVolume,
-}: VolumeTableProps) {
+export function VolumeTable({ data, loading, processingVolumeAction, onDelete, onBulkDelete }: VolumeTableProps) {
   const { authenticatedUserHasPermission } = useSelectedOrganization()
-  const { setIsOpen } = useCommandPaletteActions()
 
-  const writePermitted = useMemo(
-    () => authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_VOLUMES),
-    [authenticatedUserHasPermission],
-  )
   const deletePermitted = useMemo(
     () => authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_VOLUMES),
     [authenticatedUserHasPermission],
@@ -69,6 +56,8 @@ export function VolumeTable({
 
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
+  // Controlled so the effect below can prune it when the data moves on.
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
 
   const columns = getColumns({
     onDelete,
@@ -89,8 +78,13 @@ export function VolumeTable({
     state: {
       sorting,
       columnFilters,
+      rowSelection,
     },
-    enableRowSelection: deletePermitted,
+    onRowSelectionChange: setRowSelection,
+    // Delete is the only bulk action, so a volume that cannot be deleted has
+    // nothing to be selected for. Leaving it selectable lets the toast offer
+    // "Delete 0" and hand an empty list to onBulkDelete.
+    enableRowSelection: deletePermitted ? (row) => isVolumeDeletable(row.original) : false,
     getRowId: (row) => row.id,
     initialState: {
       pagination: {
@@ -98,50 +92,24 @@ export function VolumeTable({
       },
     },
   })
+  // A refresh can move a selected volume into a state it cannot be deleted
+  // from. `enableRowSelection` stops it being picked again but does not drop a
+  // selection already made, which would leave "Delete 0" armed on the toast.
+  useEffect(() => {
+    const deletableIds = new Set(data.filter(isVolumeDeletable).map((volume) => volume.id))
+    setRowSelection((selection) => {
+      const kept = Object.entries(selection).filter(([id]) => deletableIds.has(id))
+      // Same reference when nothing went stale, so an idle poll does not
+      // re-render the table.
+      return kept.length === Object.keys(selection).length ? selection : Object.fromEntries(kept)
+    })
+  }, [data])
+
   const selectedRows = table.getSelectedRowModel().rows
   const hasSelection = selectedRows.length > 0
   const selectedVolumes = selectedRows.map((row) => row.original)
-  const selectableCount = table.getRowModel().rows.filter((row) => {
-    const volume = row.original
-    return (
-      isVolumeDeletable(volume) &&
-      !processingVolumeAction[volume.id] &&
-      volume.state !== VolumeState.PENDING_DELETE &&
-      volume.state !== VolumeState.DELETING
-    )
-  }).length
   const bulkActionCounts = useMemo(() => getVolumeBulkActionCounts(selectedVolumes), [selectedVolumes])
   const [pendingBulkAction, setPendingBulkAction] = useState<VolumeBulkAction | null>(null)
-
-  const toggleAllRowsSelected = useCallback(
-    (selected: boolean) => {
-      if (selected) {
-        for (const row of table.getRowModel().rows) {
-          const isProcessing = processingVolumeAction[row.original.id]
-          const isDeleting =
-            row.original.state === VolumeState.PENDING_DELETE || row.original.state === VolumeState.DELETING
-
-          if (!isProcessing && !isDeleting && isVolumeDeletable(row.original)) {
-            row.toggleSelected(true)
-          }
-        }
-      } else {
-        table.toggleAllRowsSelected(false)
-      }
-    },
-    [table, processingVolumeAction],
-  )
-
-  useVolumeCommands({
-    writePermitted,
-    deletePermitted,
-    selectedCount: selectedRows.length,
-    selectableCount,
-    toggleAllRowsSelected,
-    bulkActionCounts,
-    onDelete: () => setPendingBulkAction(VolumeBulkAction.Delete),
-    onCreateVolume,
-  })
 
   const handleBulkActionConfirm = () => {
     if (pendingBulkAction === VolumeBulkAction.Delete) {
@@ -238,7 +206,8 @@ export function VolumeTable({
             className="absolute bottom-5 left-1/2 -translate-x-1/2 z-50"
             selectedCount={selectedRows.length}
             onClearSelection={() => table.resetRowSelection()}
-            onActionClick={() => setIsOpen(true)}
+            actionLabel={`Delete ${bulkActionCounts.deletable}`}
+            onActionClick={() => setPendingBulkAction(VolumeBulkAction.Delete)}
           />
         )}
       </AnimatePresence>
@@ -333,6 +302,7 @@ const getColumns = ({
         return (
           <Checkbox
             checked={row.getIsSelected()}
+            disabled={!row.getCanSelect()}
             onCheckedChange={(value) => row.toggleSelected(!!value)}
             aria-label="Select row"
             className="translate-y-[2px]"

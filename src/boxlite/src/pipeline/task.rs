@@ -7,6 +7,10 @@ use boxlite_shared::errors::BoxliteResult;
 ///
 /// Implement this trait to define custom task types for your pipeline.
 /// Tasks run with a shared context, which is cloned per task.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub trait PipelineTask<Ctx>: Send + Sync {
     /// Execute the task with the shared pipeline context.

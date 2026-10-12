@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// newTestCA generates a fresh ephemeral CA for tests.
+// newTestCA generates a fresh per-box CA for tests.
 // Uses the same ECDSA P-256 algorithm as the Rust CA generator.
 func newTestCA(t *testing.T) *BoxCA {
 	t.Helper()
@@ -28,7 +28,7 @@ func newTestCA(t *testing.T) *BoxCA {
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "BoxLite Test CA"},
 		NotBefore:             now.Add(-1 * time.Minute),
-		NotAfter:              now.Add(24 * time.Hour),
+		NotAfter:              now.Add(3650 * 24 * time.Hour),
 		IsCA:                  true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,

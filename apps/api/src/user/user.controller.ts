@@ -95,7 +95,7 @@ export class UserController {
     },
   })
   async create(@Body() createUserDto: CreateUserDto): Promise<User> {
-    return this.userService.create(createUserDto)
+    return this.userService.create(createUserDto, 'admin')
   }
 
   @Get()

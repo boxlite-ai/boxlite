@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -41,7 +40,17 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	if !*isPublic {
-		http.Error(writer, "box is not public", http.StatusForbidden)
+		message := fmt.Sprintf("Box %s has inbound access disabled. Enable it (for example: `boxlite update %s --inbound enabled`) and retry.", boxID, boxID)
+		http.Error(writer, message, http.StatusForbidden)
+		return
+	}
+	allowed, err := p.hasPublicTunnelAccess(request.Context(), boxID, port)
+	if err != nil {
+		http.Error(writer, "tunnel access unavailable", http.StatusBadGateway)
+		return
+	}
+	if !allowed {
+		http.Error(writer, "tunnel not found", http.StatusNotFound)
 		return
 	}
 
@@ -88,11 +97,10 @@ func (p *Proxy) tunnelTarget(request *http.Request) (string, uint16, error) {
 	} else if ok {
 		boxID = decoded
 	}
-	value, err := strconv.ParseUint(port, 10, 16)
-	if err != nil || value == 0 {
-		return "", 0, fmt.Errorf("invalid tunnel port")
+	if port == TERMINAL_PORT {
+		return "", 0, fmt.Errorf("terminal port is reserved")
 	}
-	return boxID, uint16(value), nil
+	return boxID, port, nil
 }
 
 func decodeTunnelBoxID(value string) (string, bool, error) {

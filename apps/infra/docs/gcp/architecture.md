@@ -92,7 +92,7 @@ flowchart TB
     runtime["Go SDK / FFI → Rust BoxLite runtime<br/>Images · storage · networking"]
     shim["Jailer + boxlite-shim<br/>VMM / nested KVM"]
     guest["Box microVMs<br/>boxlite-guest → user containers/apps"]
-    disk["$ Hyperdisk Balanced<br/>OS · image cache · local box state"]
+    disk["$ Hyperdisk Balanced data disk<br/>/var/lib/boxlite · image cache · local box state"]
     runner -->runtime -->shim -->guest
     runtime ---disk
    end

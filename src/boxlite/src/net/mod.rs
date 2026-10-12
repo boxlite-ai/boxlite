@@ -65,7 +65,7 @@ pub struct NetworkBackendConfig {
     pub allow_net: Vec<String>,
     /// Secrets for MITM proxy injection.
     pub secrets: Vec<crate::runtime::options::Secret>,
-    /// Directory in which to mint the ephemeral MITM CA — used only when
+    /// Directory holding the persisted per-box MITM CA — used only when
     /// `secrets` is non-empty. The backend mints the CA in [`NetworkBackend::spec`].
     pub ca_dir: PathBuf,
     /// Per-direction rate limit for the guest link. Default is unlimited.
@@ -377,6 +377,10 @@ fn control_unsupported(op: &str) -> BoxliteError {
 /// runtime control inherit the default `Unsupported` implementations. Owned
 /// per-box by the core (see `BoxImpl::network`); provisioning the VM's NIC is a
 /// separate, non-trait concern.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub trait NetworkBackend: Send + Sync + std::fmt::Debug {
     /// A human-readable name for this backend (e.g. `"gvisor-tap-vsock"`).

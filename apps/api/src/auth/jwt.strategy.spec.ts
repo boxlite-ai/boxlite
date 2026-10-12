@@ -10,6 +10,7 @@ import * as jose from 'jose'
 import { JwtStrategy, requireVerifiedAuth0DatabaseEmail } from './jwt.strategy'
 import { UserService } from '../user/user.service'
 import { TypedConfigService } from '../config/typed-config.service'
+import { LoginEventRecorder } from './login-event.recorder'
 import {
   EMAIL_VERIFICATION_REQUIRED_CODE,
   EmailVerificationRequiredException,
@@ -33,13 +34,16 @@ function buildStrategy() {
     }),
   } as unknown as TypedConfigService
 
+  const loginEvents = { recordFirstUse: jest.fn().mockResolvedValue(undefined) } as unknown as LoginEventRecorder
+
   const strategy = new JwtStrategy(
     { jwksUri: 'https://example.com/.well-known/jwks.json', audience: 'aud', issuer: 'iss' },
     userService,
     configService,
+    loginEvents,
   )
 
-  return { strategy, userService }
+  return { strategy, userService, loginEvents }
 }
 
 describe('JwtStrategy.validate — auto-created user', () => {
@@ -56,6 +60,7 @@ describe('JwtStrategy.validate — auto-created user', () => {
     expect(userService.create).toHaveBeenCalledTimes(1)
     expect(userService.create).toHaveBeenCalledWith(
       expect.objectContaining({ defaultOrganizationDefaultRegionId: DEFAULT_REGION_ID }),
+      'user',
     )
   })
 
@@ -77,6 +82,27 @@ describe('JwtStrategy.validate — auto-created user', () => {
     await strategy.validate(request, { sub: 'google-oauth2|user-1', email: 'new@boxlite.dev', email_verified: false })
 
     expect(userService.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('hands the resolved user and the token claims to the login recorder', async () => {
+    const { strategy, loginEvents } = buildStrategy()
+    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
+    const payload = { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true, iat: 1000, exp: 4600 }
+
+    await strategy.validate(request, payload)
+
+    expect(loginEvents.recordFirstUse).toHaveBeenCalledWith('user-1', payload)
+  })
+
+  // A rejected token is not a login, so nothing may be recorded for it.
+  it('does not record a login for a rejected unverified identity', async () => {
+    const { strategy, loginEvents } = buildStrategy()
+    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
+
+    await expect(
+      strategy.validate(request, { sub: 'auth0|user-1', email: 'new@boxlite.dev', email_verified: false }),
+    ).rejects.toThrow(EmailVerificationRequiredException)
+    expect(loginEvents.recordFirstUse).not.toHaveBeenCalled()
   })
 })
 

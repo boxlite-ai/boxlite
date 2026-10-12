@@ -269,6 +269,7 @@ export const gcpProgram =
       }),
       config,
       inputs: {
+        clickHouseRetentionHours: stackEnvironment.clickHouseRetentionHours,
         stage,
         tag: stackEnvironment.tag,
         domain: stackEnvironment.domain,

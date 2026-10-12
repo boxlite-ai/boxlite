@@ -154,6 +154,7 @@ export function BoxTable({
   totalItems,
   onPaginationChange,
   handleRecover,
+  onOpenQuickstart,
 }: BoxTableProps) {
   const { authenticatedUserHasPermission } = useSelectedOrganization()
   const writePermitted = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
@@ -275,8 +276,17 @@ export function BoxTable({
             <BoxCube state="empty" size={56} className="mb-4 text-muted-foreground" />
             <div className="font-display text-em font-semibold">No boxes yet.</div>
             <div className="mt-2 max-w-sm text-body text-muted-foreground">
-              Your agent creates them through the SDK. Hand it the prompt above, or make one by hand.
+              Your agent creates them through the SDK, or you can make one by hand.
             </div>
+            {onOpenQuickstart && (
+              <button
+                type="button"
+                onClick={onOpenQuickstart}
+                className="mt-5 border border-border px-4 py-2 font-mono text-[12px] text-muted-foreground transition-colors hover:border-foreground/45 hover:text-foreground"
+              >
+                Open Quickstart →
+              </button>
+            )}
           </div>
         ) : (
           data.map((box) => {
@@ -347,6 +357,15 @@ export function BoxTable({
             <div className="mt-2 max-w-sm text-[13px] text-muted-foreground">
               Spin up a Box with the BoxLite SDK or CLI, or hit “New Box”.
             </div>
+            {onOpenQuickstart && (
+              <button
+                type="button"
+                onClick={onOpenQuickstart}
+                className="mt-4 border border-border px-4 py-2 font-mono text-[12px] text-muted-foreground transition-colors hover:border-foreground/45 hover:text-foreground"
+              >
+                Open Quickstart →
+              </button>
+            )}
           </div>
         ) : (
           data.map((box) => {

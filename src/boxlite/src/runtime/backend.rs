@@ -12,7 +12,7 @@ use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{AttachOptions, BoxCommand, BoxTunnel, Execution, LiteBox};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
-    BoxArchive, BoxOptions, CloneOptions, ExportOptions, SnapshotOptions,
+    BoxArchive, BoxOptions, CloneOptions, ExportOptions, NetworkMode, SnapshotOptions,
 };
 use crate::runtime::types::BoxInfo;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -26,6 +26,10 @@ use super::id::BoxID;
 ///
 /// This trait is `pub(crate)` — internal implementation detail.
 /// The public API (`BoxliteRuntime`) is unchanged.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait RuntimeBackend: Send + Sync {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox>;
@@ -69,6 +73,10 @@ pub(crate) trait RuntimeBackend: Send + Sync {
 ///
 /// Local backend is implemented directly by `BoxImpl`.
 /// REST backend delegates to HTTP API calls.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait BoxBackend: Send + Sync + Any {
     /// Owned downcast helper (`Arc` upcast), so callers can move the local
@@ -152,11 +160,27 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 /// Backend abstraction for box network operations.
 ///
 /// Kept separate from `BoxBackend` so lifecycle/exec/file operations do not own
-/// network data-plane capabilities directly.
+/// network capabilities directly: the tunnel data plane and the inbound access
+/// policy.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait BoxNetworkBackend: Send + Sync {
     /// Establish a one-shot tunnel to a service port inside the box.
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
+
+    /// Make the box's services public (`Enabled`) or private (`Disabled`).
+    ///
+    /// For now only REST runtimes implement this. The local runtime keeps
+    /// the `Unsupported` default: it never enforces inbound access, and a
+    /// local box cannot change its options after create.
+    async fn set_inbound(&self, _mode: NetworkMode) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "changing inbound access is only supported by REST runtimes".into(),
+        ))
+    }
 }
 
 /// Backend abstraction for snapshot lifecycle operations on a box.
@@ -164,6 +188,10 @@ pub(crate) trait BoxNetworkBackend: Send + Sync {
 /// Kept separate from `BoxBackend` so lifecycle/exec/file operations can evolve
 /// independently from snapshot/clone/export behavior.
 #[allow(dead_code)] // Snapshots temporarily disabled; will be re-enabled
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait SnapshotBackend: Send + Sync {
     async fn create(&self, options: SnapshotOptions, name: &str) -> BoxliteResult<SnapshotInfo>;
@@ -189,6 +217,10 @@ pub(crate) trait SnapshotBackend: Send + Sync {
 /// defaults to `signal(id, SIGKILL)`. Splitting them lets callers ask for
 /// SIGINT/SIGTERM/SIGHUP without the request body being silently coerced
 /// to SIGKILL on the server side (the historical bug).
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait ExecBackend: Send + Sync {
     async fn signal(&mut self, execution_id: &str, signal: i32) -> BoxliteResult<()>;

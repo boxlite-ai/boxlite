@@ -130,6 +130,30 @@ test('a service reads its optional keys when present and boots without them when
   assert.equal(withOne.POSTHOG_API_KEY, 'ph')
 })
 
+test('the API receives the account-link secret a stage holds, and deploys without one', () => {
+  // The Post-Login Action signs its adopt and status requests with this key
+  // when it merges a person's logins into one account. A store holding it
+  // under a declaration that does not name it would deploy an API answering
+  // the Action 404, with nothing in the deploy saying why.
+  const required = {
+    ADMIN_API_KEY: 'a',
+    ENCRYPTION_KEY: 'b',
+    ENCRYPTION_SALT: 'c',
+    OIDC_CLIENT_ID: 'd',
+    OTEL_COLLECTOR_API_KEY: 'e',
+    PROXY_API_KEY: 'f',
+  }
+  const key = 'k'.repeat(32)
+  const held = narrow('api', { ...required, OIDC_ACCOUNT_LINK_SECRET: key })
+  assert.equal(serviceSecretsFrom({ group: 'api', declaration, environment: held }).OIDC_ACCOUNT_LINK_SECRET, key)
+
+  const unheld = narrow('api', required)
+  assert.equal(
+    serviceSecretsFrom({ group: 'api', declaration, environment: unheld }).OIDC_ACCOUNT_LINK_SECRET,
+    undefined,
+  )
+})
+
 test('a required service key that never arrived still stops the deploy', () => {
   assert.throws(
     () => serviceSecretsFrom({ group: 'api', declaration, environment: { ADMIN_API_KEY: 'a' } }),

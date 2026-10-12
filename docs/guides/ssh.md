@@ -1,51 +1,69 @@
 # Guest SSH control
 
+SSH starts disabled. The local Rust runtime exposes `LiteBox::ssh()` to configure,
+query, or disable it. Only `configure()` follows the implicit-start policy of
+exec, metrics, and file copying. A `Configured` or `Stopped` box using the image's
+default command can start implicitly. If `BoxOptions.cmd` or `entrypoint`
+explicitly sets the main command, configuration returns `InvalidState` in these
+states; call `start()` first.
+
+`status()` and `disable()` never start the VM or container main command. Valid
+`Configured` or `Stopped` handles return disabled status with generation zero and
+empty address and host identity fields, regardless of the configured command.
+Running boxes send requests to the existing guest, including after `attach()`
+before `start()` and after runtime recovery. Other lifecycle states return
+`InvalidState`. Results describe the state observed by the call; a concurrent
+`configure()` can subsequently enable SSH.
+
+Creating the handle alone does not start anything. The REST backend returns
+`Unsupported`; CLI and other language SDKs have no SSH control API.
+SSH does not publish a host port; configure network forwarding separately when needed.
 For component diagrams and implementation details, see
 [Guest SSH architecture](../../src/guest/src/service/ssh/README.md).
 
-SSH starts disabled. Control it through the existing host-only guest gRPC connection
-at the box's `sockets/box.sock`, after `Guest.Init` succeeds. There is no LiteBox,
-CLI, or language SDK SSH control API. SSH does not publish a host port; configure
-network forwarding separately when needed.
-
-`boxlite.v1.Ssh` exposes `Configure`, `Status`, and `Disable`. The complete schema
-is in `src/shared/proto/boxlite/v1/service.proto`.
-
-Callers must regenerate their protocol bindings and send `SshConfigureRequest.config`
-using field number 4. The legacy string fields `listen_address`, `ca_public_key`,
-and `principal` (field numbers 1–3) are reserved and ignored when decoding. After
-Guest.Init succeeds, a legacy-only request returns `InvalidArgument` because
-`config` is missing, without changing the current SSH service. There is no legacy
-request conversion or protocol version negotiation.
-
 ```rust,ignore
-use boxlite_shared::{SshAccount, SshClient, SshConfig, SshConfigureRequest, SshStatusRequest,
-    SshDisableRequest};
+use boxlite::{SshAccount, SshConfig};
 
-// channel is a tonic Channel connected to the running box's box.sock.
-let mut ssh = SshClient::new(channel);
-let status = ssh.configure(SshConfigureRequest {
-    config: Some(SshConfig {
-        listen_address: "0.0.0.0:2222".into(),
-        host_private_key: std::fs::read_to_string("host_key")?,
-        accounts: vec![
-            SshAccount {
-                login: "alice".into(),
-                authorized_keys: vec![std::fs::read_to_string("alice.pub")?],
-                ca: None,
-            },
-            SshAccount {
-                login: "bob".into(),
-                authorized_keys: vec![std::fs::read_to_string("bob.pub")?],
-                ca: None,
-            },
-        ],
-    }),
-}).await?.into_inner().status.unwrap();
+let ssh = sandbox.ssh();
+let status = ssh.configure(SshConfig {
+    listen_address: "0.0.0.0:2222".into(),
+    host_private_key: std::fs::read_to_string("host_key")?,
+    accounts: vec![SshAccount {
+        login: "alice".into(),
+        authorized_keys: vec![std::fs::read_to_string("alice.pub")?],
+        ca: None,
+    }],
+}).await?;
 println!("{} {}", status.host_public_key, status.host_key_fingerprint);
-let current = ssh.status(SshStatusRequest {}).await?.into_inner().status;
-ssh.disable(SshDisableRequest {}).await?;
+let current = ssh.status().await?;
+ssh.disable().await?;
 ```
+
+`SshHandle` owns its backend reference and can outlive the `LiteBox` borrow.
+A fresh handle to a running VM can query SSH without calling `start()` again.
+After startup, each operation has a total 15-second budget: the guest's 10-second
+cleanup limit plus 5 seconds for communication and scheduling. Obtaining the SSH
+interface, connection setup, queueing, and the RPC all consume this budget; VM and
+container startup time is excluded. Connection or queueing delays can leave less
+than 10 seconds for guest cleanup. Runtime shutdown rejects new SSH operations
+and cancels interface acquisition and RPCs. In-progress VM initialization finishes
+before cancellation is returned, so detached boxes remain recoverable; container
+startup retains its own cancellation. Operations are not automatically retried.
+Timeout or cancellation does not undo changes the guest may already have applied.
+Invalidated handles return `Stopped`; drop all references to the old box and
+obtain a fresh handle with `runtime.get()`. That handle can query or disable SSH
+without restarting the box. A stopped box with an explicit main command still
+requires `start()` before `configure()`.
+
+The internal host-only `boxlite.v1.Ssh` gRPC service remains available on
+`sockets/box.sock` after `Guest.Init` succeeds. It exposes `Configure`, `Status`,
+and `Disable`; its schema is in `src/shared/proto/boxlite/v1/service.proto`.
+Raw protocol callers must regenerate their bindings and send
+`SshConfigureRequest.config` using field 4. Legacy string fields `listen_address`,
+`ca_public_key`, and `principal` (fields 1–3) are reserved and ignored. A
+legacy-only request returns `InvalidArgument` because `config` is missing,
+without changing the current service. There is no legacy request conversion or
+protocol version negotiation.
 
 Configure accepts an unencrypted OpenSSH host private key and a non-empty
 `accounts` list. Each account has a unique `login` and at least one public key or
@@ -83,7 +101,8 @@ Every valid Configure fully restarts SSH, even if the configuration is identical
 validate → stop listener → disconnect all clients → wait for SSH execution and
 forwarding cleanup → bind new listener. Invalid configuration returns a sanitized
 `InvalidArgument` error and leaves the old service running. If stopping takes
-longer than ten seconds, the request returns `DeadlineExceeded`; cleanup remains
+longer than ten seconds, the request returns `DeadlineExceeded`, which the Rust
+runtime preserves as `BoxliteError::Rpc` with the original gRPC status; cleanup remains
 tracked and a later Configure must finish draining it before starting another
 listener. A bind failure returns `Unavailable` and leaves SSH disabled, without
 restoring the old configuration. Disable performs the same drain and is idempotent.
