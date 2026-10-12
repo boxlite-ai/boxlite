@@ -154,7 +154,7 @@ OpenSSH already performs these steps; a Rust client uses the following APIs.
 | --- | --- |
 | `auth_publickey()` / `auth_openssh_certificate()` | `SshAuthorizer` checks the named account and records session permissions. |
 | `channel_open_session()` | Reserve a channel and its pending environment/PTY state. |
-| `env_request()` / `pty_request()` | Validate and store settings for the upcoming process. |
+| `env_request()` / `pty_request()` | Validate and store settings for the upcoming process. A PTY terminal type sets `TERM` and overrides any env-request `TERM`. An empty terminal type (sent by OpenSSH when the client has no `TERM`) still allocates the PTY and leaves `TERM` unset, as OpenSSH `sshd` does. |
 | `shell_request()` / `exec_request()` | `ChannelBridge` starts a typed shell/exec workload through the execution core. |
 | `subsystem_request("sftp")` | Start `SftpSession` inside the container using the separate `russh-sftp` library. |
 | `data()` / `channel_eof()` | Forward stdin bytes or end-of-input to the execution. |

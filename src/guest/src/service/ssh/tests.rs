@@ -360,6 +360,16 @@ async fn grpc_ssh_accepts_ca_keys_and_both_with_injected_host_identity() {
                     channel.wait().await,
                     Some(russh::ChannelMsg::Success)
                 ));
+                // OpenSSH sends an empty terminal type when the client has no TERM.
+                let mut no_term = client.channel_open_session().await.unwrap();
+                no_term
+                    .request_pty(true, "", 80, 24, 0, 0, &[])
+                    .await
+                    .unwrap();
+                assert!(matches!(
+                    no_term.wait().await,
+                    Some(russh::ChannelMsg::Success)
+                ));
                 let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let port = target.local_addr().unwrap().port();
                 let forward = client

@@ -945,6 +945,8 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
         assert_eq!(checked_output(exec).await, b"ssh-exec-ok");
 
         let mut pty = client_command("ssh", &user_key, &known_hosts, port);
+        // Without TERM, OpenSSH sends an empty terminal type (as on CI runners).
+        pty.env_remove("TERM");
         pty.args(["-tt", "root@127.0.0.1", "test -t 0 && printf ssh-pty-ok"]);
         assert_eq!(checked_output(pty).await, b"ssh-pty-ok");
 

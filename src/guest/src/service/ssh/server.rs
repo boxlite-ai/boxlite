@@ -671,12 +671,16 @@ fn apply_pty_request(
     dimensions: (u32, u32, u32, u32),
     modes: &[(Pty, u32)],
 ) -> bool {
-    if term.is_empty()
-        || term.len() > MAX_TERM_BYTES
-        || !term.bytes().all(|byte| byte.is_ascii_graphic())
-        || (state.env.len() >= MAX_ENV_VARS && !state.env.contains_key("TERM"))
-    {
-        return false;
+    // An empty terminal type means the client has no TERM. Like OpenSSH
+    // sshd, still allocate the PTY but leave TERM unset.
+    let term = (!term.is_empty()).then_some(term);
+    if let Some(term) = term {
+        if term.len() > MAX_TERM_BYTES
+            || !term.bytes().all(|byte| byte.is_ascii_graphic())
+            || (state.env.len() >= MAX_ENV_VARS && !state.env.contains_key("TERM"))
+        {
+            return false;
+        }
     }
 
     let (rows, cols, x_pixels, y_pixels) = dimensions;
@@ -698,9 +702,11 @@ fn apply_pty_request(
     }
 
     // OpenSSH carries the terminal type in the PTY request, not necessarily
-    // in a separate environment request. The PTY value is authoritative.
-    state.env.insert("TERM".to_string(), term.to_string());
-    state.pty_term = Some(term.to_string());
+    // in a separate environment request. A non-empty PTY value is authoritative.
+    if let Some(term) = term {
+        state.env.insert("TERM".to_string(), term.to_string());
+        state.pty_term = Some(term.to_string());
+    }
     state.tty = Some(tty);
     true
 }
@@ -1014,9 +1020,7 @@ mod tests {
         );
 
         let mut state = PendingChannelState::default();
-        for invalid in ["", "xterm\nunsafe"] {
-            assert!(!apply_pty_request(&mut state, invalid, tty, &modes));
-        }
+        assert!(!apply_pty_request(&mut state, "xterm\nunsafe", tty, &modes));
         assert!(!apply_pty_request(
             &mut state,
             &"x".repeat(MAX_TERM_BYTES + 1),
@@ -1029,5 +1033,30 @@ mod tests {
             (u16::MAX as u32 + 1, 80, 0, 0),
             &modes
         ));
+    }
+
+    #[test]
+    fn empty_pty_term_allocates_a_pty_without_setting_term() {
+        let tty = (24, 80, 0, 0);
+
+        let mut state = PendingChannelState::default();
+        assert!(apply_pty_request(&mut state, "", tty, &[]));
+        assert!(state.tty.is_some());
+        assert!(!state.into_execution_env().contains_key("TERM"));
+
+        let mut state = PendingChannelState::default();
+        state.env.insert("TERM".into(), "caller-value".into());
+        assert!(apply_pty_request(&mut state, "", tty, &[]));
+        assert_eq!(
+            state.into_execution_env().get("TERM").map(String::as_str),
+            Some("caller-value")
+        );
+
+        let mut state = PendingChannelState::default();
+        for index in 0..MAX_ENV_VARS {
+            state.env.insert(format!("VAR_{index}"), String::new());
+        }
+        assert!(apply_pty_request(&mut state, "", tty, &[]));
+        assert!(!apply_pty_request(&mut state, "xterm", tty, &[]));
     }
 }
