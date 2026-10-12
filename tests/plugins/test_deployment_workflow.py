@@ -76,7 +76,7 @@ class DeploymentBoundaryTests(unittest.TestCase):
         result, calls, copied = self.run_deployment('success')
         self.assertEqual(result['url'], 'https://application.example')
         self.assertEqual(result['pid'], 123)
-        self.assertTrue(result['public_health'] == 'passed')
+        self.assertEqual(result['public_health'], 'passed')
         self.assertTrue(all(call[1:3] == ['--profile', 'selected'] for call in calls))
         tunnels = [call for call in calls if call[3] == 'network']
         self.assertEqual(len(tunnels), 1)
@@ -94,6 +94,17 @@ class DeploymentBoundaryTests(unittest.TestCase):
             self.assertEqual(argv[argv.index('--url') + 1], 'https://app.boxlite.ai/api')
             self.assertEqual(argv[argv.index('--profile') + 1], 'selected')
 
+    def test_archive_operations_have_longer_deadlines_without_shortening_restart(self):
+        self.run_deployment('success')
+        for argv, timeout in zip(self.calls, self.timeouts):
+            archive_copy = 'cp' in argv and Path(argv[-2]).name == 'source.tgz'
+            extraction = 'tar' in argv
+            self.assertEqual(timeout, 300 if archive_copy or extraction else 60)
+
+    def test_cli_timeout_has_safe_operation_error(self):
+        with self.assertRaisesRegex(RuntimeError, 'CLI cp timed out'):
+            self.run_deployment('timed-out-copy')
+
     def test_failed_or_unknown_build_never_restarts_running_app(self):
         for mode in ['failed-build', 'unknown-build']:
             with self.subTest(mode=mode):
@@ -109,6 +120,7 @@ class DeploymentBoundaryTests(unittest.TestCase):
 
     def run_deployment(self, mode, **context):
         self.calls = []
+        self.timeouts = []
         copied = {}
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -122,6 +134,7 @@ class DeploymentBoundaryTests(unittest.TestCase):
 
             def cli(argv, **kwargs):
                 self.calls.append(argv)
+                self.timeouts.append(kwargs['timeout'])
                 if 'cp' in argv:
                     source = Path(argv[-2])
                     if source.name == 'source.tgz':
@@ -129,6 +142,8 @@ class DeploymentBoundaryTests(unittest.TestCase):
                             copied['source_files'] = {entry.name for entry in archive if entry.isfile()}
                     elif source.name == 'config.json':
                         copied['config'] = json.loads(source.read_text())
+                    if mode == 'timed-out-copy':
+                        raise subprocess.TimeoutExpired(argv, kwargs['timeout'])
                     if mode == 'failed-copy':
                         return subprocess.CompletedProcess(argv, 7, '', 'fixture failure')
                 output = ''
@@ -150,6 +165,27 @@ class DeploymentBoundaryTests(unittest.TestCase):
                  redirect_stdout(io.StringIO()) as output:
                 deploy.deploy(config)
             return json.loads(output.getvalue()), self.calls, copied
+
+
+class ServiceRollbackBoundaryTests(unittest.TestCase):
+    def test_failed_rollback_removes_stale_state_and_preserves_original_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shared = root / 'shared'
+            shared.mkdir()
+            config = {'cwd': str(root), 'state_dir': str(shared),
+                      'start': ['python3', 'app.py'],
+                      'health_url': 'http://127.0.0.1:8000/health'}
+            state_path = shared / 'service.json'
+            state_path.write_text(json.dumps({'pid': 17, 'config': config}))
+            original = RuntimeError('replacement startup failed')
+            rollback = RuntimeError('previous startup failed')
+            with patch.object(service, 'stop'), \
+                 patch.object(service, 'launch', side_effect=[original, rollback]):
+                with self.assertRaises(RuntimeError) as raised:
+                    service.execute('restart', config)
+            self.assertIs(raised.exception, original)
+            self.assertFalse(state_path.exists())
 
 
 @unittest.skipUnless(sys.platform == 'linux', 'Process ownership uses the Linux guest /proc')
@@ -194,7 +230,7 @@ class ServiceTests(unittest.TestCase):
             try:
                 service.stop(self.state())
             except ValueError:
-                pass
+                pass  # Ownership-refusal tests deliberately leave unrelated PID state.
 
     def probe(self):
         with urllib.request.urlopen(self.config['health_url'], timeout=2) as response:

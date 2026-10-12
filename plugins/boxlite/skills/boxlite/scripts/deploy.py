@@ -55,8 +55,11 @@ def deploy(config_path):
     if any(not isinstance(c, list) or not c or any(not isinstance(a, str) or '\0' in a for a in c) for c in commands):
         raise ValueError('Commands must be nonempty argv arrays')
 
-    def run(*args):
-        result = subprocess.run([*cli, *args], capture_output=True, text=True, timeout=60)
+    def run(*args, timeout=60):
+        try:
+            result = subprocess.run([*cli, *args], capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f'CLI {args[0]} timed out; inspect that operation before retrying') from None
         if result.returncode:
             raise RuntimeError(f'CLI {args[0]} failed; inspect that operation with the selected profile')
         return result.stdout
@@ -76,10 +79,10 @@ def deploy(config_path):
         os.chmod(controller_config, 0o600)
         run('exec', box, '--', 'mkdir', '-p', app, shared, root + '/data')
         run('exec', box, '--', 'chmod', '700', shared)
-        run('cp', str(archive), box + ':' + release + '/source.tgz')
+        run('cp', str(archive), box + ':' + release + '/source.tgz', timeout=300)
         run('cp', str(Path(__file__).with_name('service.py')), box + ':' + shared + '/service.py')
         run('cp', str(controller_config), box + ':' + release + '/config.json')
-        run('exec', box, '--', 'tar', '-xzf', release + '/source.tgz', '-C', app)
+        run('exec', box, '--', 'tar', '-xzf', release + '/source.tgz', '-C', app, timeout=300)
         run('exec', '-d', box, '--', 'python3', shared + '/service.py', 'build', release + '/config.json')
         deadline = time.monotonic() + remote['build_timeout'] + 60
         while True:

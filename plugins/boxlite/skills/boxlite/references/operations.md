@@ -24,3 +24,5 @@ Build failures leave the current service running. Replacement-start failure atte
 Back up database/media outside the Box using their supported methods. Restore to separate resources and check data/features before claiming recovery. Preserve schema compatibility and do not overwrite live data without authorization.
 
 Report retained resource identities, lifetime and billing. Stop/delete only within the agreed cleanup scope; Box deletion removes guest data while volumes have separate lifetimes.
+
+Source archive transfer and extraction each allow 300 seconds; other CLI operations retain a 60-second deadline, including restart. A CLI timeout reports the operation without argv/output and requires inspecting its state before retrying. If replacement and rollback startup both fail, stale service state is removed and the original replacement error is preserved.
