@@ -7,7 +7,7 @@ import { getMetadataArgsStorage } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { WarmPool } from '../entities/warm-pool.entity'
 import { BoxClass } from '../enums/box-class.enum'
-import { warmPoolBoxWhere, warmPoolRowWhere, warmPoolSpecOfBox, warmPoolSpecOfRow } from './warm-pool-spec.util'
+import { warmPoolBoxWhere, warmPoolRowWhere, warmPoolSpecOfBox, warmPoolSpecOfRow } from './warm-pool-match.util'
 
 const SPEC = {
   image: 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0',

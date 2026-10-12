@@ -31,7 +31,7 @@ import {
   warmPoolSpecOfBox,
   warmPoolSpecOfRow,
   WarmPoolSpec,
-} from '../utils/warm-pool-spec.util'
+} from '../utils/warm-pool-match.util'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
