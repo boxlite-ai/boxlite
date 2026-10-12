@@ -215,13 +215,11 @@ pub(crate) enum InitIoSetup {
 /// * `container_id` - Unique container identifier
 /// * `state_root` - Directory for libcontainer state
 /// * `bundle_path` - OCI bundle directory with config.json
-/// * `command` - Init's `args[0]`, named in the error if the image cannot run it
 /// * `io` - How init's stdio is wired (pipes, or a PTY via console socket)
 pub(crate) fn create_container_with_stdio(
     container_id: &str,
     state_root: &Path,
     bundle_path: &Path,
-    command: &str,
     io: InitIoSetup,
 ) -> BoxliteResult<()> {
     let (console_socket, init_fds) = match io {
@@ -253,9 +251,7 @@ pub(crate) fn create_container_with_stdio(
         .map_err(|e| match e {
             // The image cannot run the command: the caller's own mistake, which
             // our ids and paths would only bury.
-            BoxliteError::InvalidArgument(advice) => {
-                BoxliteError::InvalidArgument(format!("command {command:?} {advice}"))
-            }
+            BoxliteError::InvalidArgument(_) => e,
             e => BoxliteError::Internal(format!(
                 "Failed to create container {} at bundle {}: {}",
                 container_id,

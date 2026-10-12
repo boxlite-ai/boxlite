@@ -754,10 +754,7 @@ async fn a_main_command_missing_from_the_image_is_an_invalid_argument() {
         Err(boxlite::BoxliteError::InvalidArgument(message)) => message,
         other => panic!("a missing main command is the caller's mistake, got {other:?}"),
     };
-    assert!(
-        message.contains("\"httpd\""),
-        "names the command: {message}"
-    );
+    assert!(message.contains("'httpd'"), "names the command: {message}");
     for leaked in ["internal error", "/run/boxlite", "bundle", box_id.as_str()] {
         assert!(!message.contains(leaked), "leaks {leaked:?}: {message}");
     }

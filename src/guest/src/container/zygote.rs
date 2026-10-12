@@ -87,50 +87,33 @@ pub(crate) enum BuildResult {
     Failed {
         error: String,
     },
-    /// The container's command cannot run in the image. `error` keeps
-    /// libcontainer's text for the console log.
+    /// The container's command cannot run in the image: the caller's input,
+    /// already worded for them (see `command_rejection`).
     Rejected {
-        reason: CommandRejection,
-        error: String,
+        message: String,
     },
 }
 
-/// Why libcontainer refused the container's command.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
-pub(crate) enum CommandRejection {
-    NotFound,
-    NotExecutable,
-}
-
-impl CommandRejection {
-    /// Recognize the command check youki runs in init (`DefaultExecutor::validate`).
-    ///
-    /// The check runs in the init child, so its verdict reaches the builder only
-    /// as text, after the marker youki puts on a failure init reports
-    /// (`wait_for_init_ready`). `build()` then wraps it in a
-    /// `CreateContainerError` whose fields are private, so text is all there is
-    /// to match; the marker keeps the wording match to what init reported.
-    fn classify(error: &libcontainer::error::LibcontainerError) -> Option<Self> {
-        let text = error.to_string();
-        let (_, reported_by_init) = text.split_once("error in executing process : ")?;
-        if reported_by_init.contains("not found in $PATH") {
-            Some(Self::NotFound)
-        } else if reported_by_init.contains("does not have correct permissions") {
-            Some(Self::NotExecutable)
-        } else {
-            None
-        }
-    }
-
-    /// The fix the caller needs to make, minus the command's name.
-    fn advice(self) -> &'static str {
-        match self {
-            Self::NotFound => {
-                "was not found in the image; check the name or use an absolute path that exists in the image"
-            }
-            Self::NotExecutable => "is not executable in the image; check its file permissions",
-        }
-    }
+/// Recognize the command check youki runs in init (`DefaultExecutor::validate`)
+/// and word its verdict for the caller, who wrote the command.
+///
+/// The check runs in the init child, so its verdict reaches the builder only as
+/// text, after the marker youki puts on a failure init reports
+/// (`wait_for_init_ready`). `build()` then wraps it in a `CreateContainerError`
+/// whose fields are private, so text is all there is to match; the marker keeps
+/// the wording match to what init reported. youki's sentence already names the
+/// command, so it is kept and only the fix is added.
+fn command_rejection(error: &libcontainer::error::LibcontainerError) -> Option<String> {
+    let text = error.to_string();
+    let (_, reported_by_init) = text.split_once("error in executing process : ")?;
+    let fix = if reported_by_init.contains("not found in $PATH") {
+        "check the name or use an absolute path that exists in the image"
+    } else if reported_by_init.contains("does not have correct permissions") {
+        "check its file permissions in the image"
+    } else {
+        return None;
+    };
+    Some(format!("{reported_by_init}; {fix}"))
 }
 
 /// Tagged IPC request from parent to zygote.
@@ -222,9 +205,7 @@ impl Zygote {
     /// completes — callers on an async runtime decide whether that needs
     /// `spawn_blocking`.
     ///
-    /// A command the image cannot run is `InvalidArgument` carrying only the
-    /// advice ("was not found in the image; …"): this layer never sees the
-    /// command, so the caller that does puts its name in front.
+    /// A command the image cannot run is `InvalidArgument`.
     pub fn build_init(&self, spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BoxliteResult<Pid> {
         let sock = self.sock.lock().unwrap();
         let fd = sock.as_raw_fd();
@@ -234,8 +215,8 @@ impl Zygote {
             ZygoteResponse::BuildInit(BuildResult::Failed { error }) => {
                 Err(BoxliteError::Internal(error))
             }
-            ZygoteResponse::BuildInit(BuildResult::Rejected { reason, .. }) => {
-                Err(BoxliteError::InvalidArgument(reason.advice().to_string()))
+            ZygoteResponse::BuildInit(BuildResult::Rejected { message }) => {
+                Err(BoxliteError::InvalidArgument(message))
             }
             other => Err(BoxliteError::Internal(format!(
                 "zygote protocol violation: BuildInit answered with {other:?}"
@@ -484,7 +465,7 @@ fn do_build_init(spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
             .with_detach(true)
             .build()
             .map_err(|e| {
-                rejection = CommandRejection::classify(&e);
+                rejection = command_rejection(&e);
                 format!("build failed: {e}")
             })?;
 
@@ -494,7 +475,7 @@ fn do_build_init(spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
     };
 
     let result = match (build_with_default_sigpipe(build_fn), rejection) {
-        (BuildResult::Failed { error }, Some(reason)) => BuildResult::Rejected { reason, error },
+        (BuildResult::Failed { .. }, Some(message)) => BuildResult::Rejected { message },
         (result, _) => result,
     };
 
@@ -505,7 +486,7 @@ fn do_build_init(spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
             "[zygote] init build: container_id={} pid={}",
             spec.container_id, pid
         ),
-        BuildResult::Failed { error } | BuildResult::Rejected { error, .. } => eprintln!(
+        BuildResult::Failed { error } | BuildResult::Rejected { message: error } => eprintln!(
             "[zygote] init build failed: container_id={} error={}",
             spec.container_id, error
         ),
@@ -1635,28 +1616,29 @@ mod tests {
     }
 
     #[test]
-    fn a_command_missing_from_path_is_rejected_as_not_found() {
+    fn a_command_missing_from_path_is_rejected_with_its_name() {
         let empty = tempfile::tempdir().unwrap();
         let error = relayed_command_check("httpd", empty.path().to_str().unwrap());
 
-        assert_eq!(
-            CommandRejection::classify(&error),
-            Some(CommandRejection::NotFound),
-            "{error}"
+        let message = command_rejection(&error).expect("a missing command is rejected");
+        assert!(
+            message.starts_with("executable 'httpd' not found"),
+            "{message}"
+        );
+        assert!(
+            message.ends_with("check the name or use an absolute path that exists in the image")
         );
     }
 
     #[test]
-    fn a_command_without_exec_permission_is_rejected_as_not_executable() {
+    fn a_command_without_exec_permission_is_rejected_with_its_name() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("httpd"), "#!/bin/sh\n").unwrap();
         let error = relayed_command_check("httpd", dir.path().to_str().unwrap());
 
-        assert_eq!(
-            CommandRejection::classify(&error),
-            Some(CommandRejection::NotExecutable),
-            "{error}"
-        );
+        let message = command_rejection(&error).expect("a non-executable command is rejected");
+        assert!(message.starts_with("executable 'httpd'"), "{message}");
+        assert!(message.ends_with("check its file permissions in the image"));
     }
 
     #[test]
@@ -1667,7 +1649,7 @@ mod tests {
             "executable 'httpd' not found in $PATH".to_string(),
         );
 
-        assert_eq!(CommandRejection::classify(&pivot), None);
-        assert_eq!(CommandRejection::classify(&unrelated), None);
+        assert_eq!(command_rejection(&pivot), None);
+        assert_eq!(command_rejection(&unrelated), None);
     }
 }
