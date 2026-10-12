@@ -428,6 +428,7 @@ describe('BoxService public defaults', () => {
       warmPoolBox,
       { name: 'assigned-box', public: requestedPublic },
       { id: 'org-1' },
+      {},
     )
 
     expect(update).toHaveBeenCalledWith(

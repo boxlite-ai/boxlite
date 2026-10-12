@@ -375,8 +375,8 @@ async fn copy_integration() {
     non_recursive_rejects_directory(&bx, tmp.path()).await;
     follow_symlinks_false_preserves_link(&bx, tmp.path()).await;
     follow_symlinks_true_dereferences(&bx, tmp.path()).await;
-    include_parent_true_nests_dir(&bx, tmp.path()).await;
-    include_parent_false_flattens(&bx, tmp.path()).await;
+    dir_source_nests_inside_an_existing_dir(&bx, tmp.path()).await;
+    dot_suffix_copies_the_contents(&bx, tmp.path()).await;
     copy_in_creates_intermediate_dirs(&bx, tmp.path()).await;
     copy_out_nonexistent_errors(&bx, tmp.path()).await;
     concurrent_copy_roundtrip(&bx, tmp.path()).await;
@@ -429,7 +429,8 @@ async fn directory_roundtrip(bx: &LiteBox, tmp: &Path) {
     std::fs::write(dir_src.join("a.txt"), "aaa\n").unwrap();
     std::fs::write(dir_src.join("b.txt"), "bbb\n").unwrap();
 
-    // Default include_parent=true → creates /root/mydir/{a,b}.txt
+    // A directory lands under its own name inside an existing destination →
+    // creates /root/mydir/{a,b}.txt
     bx.copy_into(&dir_src, "/root", CopyOptions::default())
         .await
         .expect("copy_into dir failed");
@@ -728,43 +729,54 @@ async fn follow_symlinks_true_dereferences(bx: &LiteBox, tmp: &Path) {
 }
 
 // ============================================================================
-// COPY OPTIONS: include_parent
+// SOURCE SPELLING: `SRC` names the directory, `SRC/.` its contents
 // ============================================================================
 
-async fn include_parent_true_nests_dir(bx: &LiteBox, tmp: &Path) {
-    eprintln!("  [copy] include_parent_true_nests_dir");
+async fn dir_source_nests_inside_an_existing_dir(bx: &LiteBox, tmp: &Path) {
+    eprintln!("  [copy] dir_source_nests_inside_an_existing_dir");
     let dir_src = tmp.join("parentdir");
     std::fs::create_dir(&dir_src).unwrap();
     std::fs::write(dir_src.join("p.txt"), "parent\n").unwrap();
 
-    bx.copy_into(
-        &dir_src,
-        "/root",
-        CopyOptions::default().include_parent(true),
-    )
-    .await
-    .expect("copy_into include_parent=true");
+    bx.copy_into(&dir_src, "/root", CopyOptions::default())
+        .await
+        .expect("copy_into a directory");
 
     let out = exec_stdout(bx, BoxCommand::new("cat").args(["/root/parentdir/p.txt"])).await;
     assert_eq!(out, "parent\n");
 }
 
-async fn include_parent_false_flattens(bx: &LiteBox, tmp: &Path) {
-    eprintln!("  [copy] include_parent_false_flattens");
-    let dir_src = tmp.join("flatdir");
+/// `SRC/.` copies what is in the directory, both ways. The spelling is built
+/// as a string: anything that walks a path's components drops the trailing
+/// `.`, and the copy would then nest the directory instead.
+async fn dot_suffix_copies_the_contents(bx: &LiteBox, tmp: &Path) {
+    eprintln!("  [copy] dot_suffix_copies_the_contents");
+    let dir_src = tmp.join("dotdir");
     std::fs::create_dir(&dir_src).unwrap();
     std::fs::write(dir_src.join("f.txt"), "flat\n").unwrap();
 
-    bx.copy_into(
-        &dir_src,
-        "/root/flatdest/",
-        CopyOptions::default().include_parent(false),
-    )
-    .await
-    .expect("copy_into include_parent=false");
+    let dotted = format!("{}/.", dir_src.display());
+    bx.copy_into(Path::new(&dotted), "/root/dotdest/", CopyOptions::default())
+        .await
+        .expect("copy_into SRC/.");
 
-    let out = exec_stdout(bx, BoxCommand::new("cat").args(["/root/flatdest/f.txt"])).await;
+    let out = exec_stdout(bx, BoxCommand::new("cat").args(["/root/dotdest/f.txt"])).await;
     assert_eq!(out, "flat\n");
+
+    let host_out = tmp.join("dot-out");
+    std::fs::create_dir(&host_out).unwrap();
+    bx.copy_out("/root/dotdest/.", &host_out, CopyOptions::default())
+        .await
+        .expect("copy_out SRC/.");
+
+    assert_eq!(
+        std::fs::read_to_string(host_out.join("f.txt")).unwrap(),
+        "flat\n"
+    );
+    assert!(
+        !host_out.join("dotdest").exists(),
+        "the contents, not the directory, must land"
+    );
 }
 
 // ============================================================================
@@ -943,10 +955,11 @@ async fn copy_in_landing_on_a_file_mount_is_refused(bx: &LiteBox, tmp: &Path) {
     std::fs::write(dir.join("hosts"), "127.0.0.1 evil\n").unwrap();
     std::fs::write(dir.join("harmless.txt"), "ok\n").unwrap();
 
-    // include_parent=false flattens the contents into /etc, so `hosts` lands
-    // squarely on the bind — the whole point of the case.
+    // `etcclash/.` copies the contents into /etc, so `hosts` lands squarely
+    // on the bind — the whole point of the case.
+    let dotted = format!("{}/.", dir.display());
     let err = bx
-        .copy_into(&dir, "/etc/", CopyOptions::default().include_parent(false))
+        .copy_into(Path::new(&dotted), "/etc/", CopyOptions::default())
         .await
         .expect_err("an entry landing on a bind mount must be refused");
 

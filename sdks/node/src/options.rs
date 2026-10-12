@@ -567,6 +567,8 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             env,
             rootfs,
             volumes,
+            // Typed mounts(TODO): this SDK has no field for them.
+            mounts: Vec::new(),
             network,
             inbound_network,
             ports,

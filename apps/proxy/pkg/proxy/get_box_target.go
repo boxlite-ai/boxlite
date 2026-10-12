@@ -47,22 +47,14 @@ const (
 )
 
 func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, error) {
-	var targetPort, targetPath, boxIdOrSignedToken string
-
 	// Extract port and box ID from the host header.
 	// Expected format: 1234-<boxId | token>.proxy.domain
-	var err error
-	targetPort, boxIdOrSignedToken, _, err = p.parseHost(ctx.Request.Host)
+	targetPort, boxIdOrSignedToken, _, err := p.parseHost(ctx.Request.Host)
 	if err != nil {
 		ctx.Error(common_errors.NewBadRequestError(err))
 		return nil, err
 	}
-	targetPath = requestEscapedPath(ctx.Request.URL, ctx.Param("path"))
-
-	if targetPort == "" {
-		ctx.Error(common_errors.NewBadRequestError(errors.New("target port is required")))
-		return nil, errors.New("target port is required")
-	}
+	targetPath := requestEscapedPath(ctx.Request.URL, ctx.Param("path"))
 
 	if boxIdOrSignedToken == "" {
 		ctx.Error(common_errors.NewBadRequestError(errors.New("box ID or signed token is required")))
@@ -85,18 +77,26 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 	}
 
 	if !*isPublic || targetPort == TERMINAL_PORT {
-		portFloat, err := strconv.ParseFloat(targetPort, 64)
-		if err != nil {
-			ctx.Error(common_errors.NewBadRequestError(fmt.Errorf("failed to parse target port: %w", err)))
-			return nil, fmt.Errorf("failed to parse target port: %w", err)
-		}
 		var didRedirect bool
-		boxId, didRedirect, err = p.Authenticate(ctx, boxIdOrSignedToken, float32(portFloat))
+		boxId, didRedirect, err = p.Authenticate(ctx, boxIdOrSignedToken, float32(targetPort))
 		if err != nil {
 			if !didRedirect {
 				ctx.Error(err)
 			}
 			return nil, err
+		}
+	}
+	if targetPort != TERMINAL_PORT {
+		allowed, err := p.hasPublicTunnelAccess(ctx.Request.Context(), boxId, targetPort)
+		if err != nil {
+			wrappedErr := fmt.Errorf("check tunnel access: %w", err)
+			ctx.Error(common_errors.NewCustomError(http.StatusBadGateway, wrappedErr.Error(), "BAD_GATEWAY"))
+			return nil, wrappedErr
+		}
+		if !allowed {
+			wrappedErr := errors.New("tunnel not found")
+			ctx.Error(common_errors.NewNotFoundError(wrappedErr))
+			return nil, wrappedErr
 		}
 	}
 
@@ -132,12 +132,7 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 	}
 
 	if targetPort != TERMINAL_PORT {
-		if _, err := strconv.ParseUint(targetPort, 10, 16); err != nil {
-			wrappedErr := fmt.Errorf("invalid target port: %w", err)
-			ctx.Error(common_errors.NewBadRequestError(wrappedErr))
-			return nil, wrappedErr
-		}
-		target, err := url.Parse("http://" + net.JoinHostPort(boxId, targetPort) + targetPath)
+		target, err := url.Parse("http://" + net.JoinHostPort(boxId, strconv.Itoa(int(targetPort))) + targetPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse guest target URL: %w", err)
 		}
@@ -154,7 +149,7 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 		ctx.Error(common_errors.NewBadRequestError(fmt.Errorf("failed to get runner info: %w", err)))
 		return nil, fmt.Errorf("failed to get runner info: %w", err)
 	}
-	target, err := url.Parse(fmt.Sprintf("%s/boxes/%s/toolbox/proxy/%s%s", strings.TrimRight(runnerInfo.ApiUrl, "/"), boxId, targetPort, targetPath))
+	target, err := url.Parse(fmt.Sprintf("%s/boxes/%s/toolbox/proxy/%d%s", strings.TrimRight(runnerInfo.ApiUrl, "/"), boxId, targetPort, targetPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse terminal target URL: %w", err)
 	}
@@ -354,42 +349,42 @@ func (p *Proxy) validateAndCache(
 	return &isValid, nil
 }
 
-func (p *Proxy) parseHost(host string) (targetPort string, boxIdOrSignedToken string, baseHost string, err error) {
+// parseHost returns the target port as a number, so every caller compares one
+// canonical form: a label like "022222" is TERMINAL_PORT, not a guest port.
+func (p *Proxy) parseHost(host string) (targetPort uint16, boxIdOrSignedToken string, baseHost string, err error) {
 	// Extract port and box ID from the host header
 	// Expected format: 1234-some-id-uuid.proxy.domain
 	if host == "" {
-		return "", "", "", errors.New("host is required")
+		return 0, "", "", errors.New("host is required")
 	}
 
 	// Split the host to extract the port and box ID
 	parts := strings.Split(host, ".")
 	if len(parts) == 0 {
-		return "", "", "", errors.New("invalid host format")
+		return 0, "", "", errors.New("invalid host format")
 	}
 
 	if len(parts) < 2 {
-		return "", "", "", errors.New("invalid host format: must have subdomain")
+		return 0, "", "", errors.New("invalid host format: must have subdomain")
 	}
 
 	// Extract port from the first part (e.g., "1234-some-id-uuid")
 	hostPrefix := parts[0]
 	before, after, ok := strings.Cut(hostPrefix, "-")
 	if !ok {
-		return "", "", "", errors.New("invalid host format: port and box ID not found")
+		return 0, "", "", errors.New("invalid host format: port and box ID not found")
 	}
 
-	targetPort = before
-
-	// Check that port is numeric
-	if _, err := strconv.Atoi(targetPort); err != nil {
-		return "", "", "", fmt.Errorf("invalid port '%s': must be numeric", targetPort)
+	port, err := strconv.ParseUint(before, 10, 16)
+	if err != nil || port == 0 {
+		return 0, "", "", fmt.Errorf("invalid port '%s': must be 1-65535", before)
 	}
 
 	boxIdOrSignedToken = after
 	// Join remaining parts to form the base domain (e.g., "proxy.domain")
 	baseHost = strings.Join(parts[1:], ".")
 
-	return targetPort, boxIdOrSignedToken, baseHost, nil
+	return uint16(port), boxIdOrSignedToken, baseHost, nil
 }
 
 func decodeDirectPreviewBoxID(value string) (string, bool, error) {

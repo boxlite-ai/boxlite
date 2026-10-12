@@ -28,16 +28,11 @@ vi.mock('usehooks-ts', () => ({
 vi.mock('sonner', () => ({ toast: { success: vi.fn() } }))
 
 vi.mock('@/assets/Logo', () => ({ LogoText: () => <span>BoxLite</span> }))
-vi.mock('@/components/BoxSearchCommands', () => ({ BoxSearchCommands: () => null }))
 vi.mock('@/contexts/ThemeContext', () => ({
   useTheme: () => ({ theme: 'dark', setTheme: vi.fn() }),
 }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({ selectedOrganization: { id: 'org-1' } }),
-}))
-vi.mock('./CommandPalette', () => ({
-  useCommandPaletteActions: () => ({ setIsOpen: vi.fn() }),
-  useRegisterCommands: () => undefined,
 }))
 
 describe('Sidebar primary navigation', () => {

@@ -15,6 +15,10 @@ use crate::runtime::types::ImageInfo;
 ///
 /// Implemented by runtime backends that support image operations.
 /// Currently only `LocalRuntime` implements this trait; REST runtime does not.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait ImageBackend: Send + Sync {
     /// Pull an image from a registry.

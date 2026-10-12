@@ -18,9 +18,32 @@ use tokio_stream::wrappers::ReceiverStream;
 pub struct PackContext {
     /// Follow symlinks (copy target content) vs preserve them as links.
     pub follow_symlinks: bool,
-    /// When packing a directory, include the directory itself as a top-level
-    /// entry (true) or flatten its contents into the archive root (false).
+    /// When packing a directory, root the archive at the directory itself
+    /// (`name/`, true) or at its contents (`./`, false — docker's `SRC/.`).
+    ///
+    /// Either way the archive leads with one entry standing for the source.
+    /// Callers holding the caller's raw path derive this with
+    /// [`specifies_current_dir`].
     pub include_parent: bool,
+}
+
+/// Whether `path` names a directory's contents rather than the directory —
+/// docker's `SRC/.` spelling (`go-archive/copy.go`'s `specifiesCurrentDir`).
+///
+/// Reads the raw bytes on purpose. `Path::components` drops a trailing
+/// `CurDir`, so anything that rebuilds a path through it silently turns
+/// `src/.` into `src` — including `Path::strip_prefix`, which the guest runs
+/// on every container path it resolves. Call this on the caller's path at the
+/// boundary it arrives on, before anything normalizes it.
+pub fn specifies_current_dir(path: &std::ffi::OsStr) -> bool {
+    let bytes = path.as_encoded_bytes();
+    // Trailing separators first, the way `filepath.Base` does: `./` and
+    // `src/./` name the contents just as `.` and `src/.` do.
+    let trimmed = match bytes.iter().rposition(|byte| *byte != b'/') {
+        Some(last) => &bytes[..=last],
+        None => return false,
+    };
+    trimmed == b"." || trimmed.ends_with(b"/.")
 }
 
 /// Pack `src` (file or directory) into a tar archive at `tar_path`.
@@ -47,36 +70,21 @@ fn pack_blocking<W: Write>(src: &Path, writer: W, opts: &PackContext) -> Boxlite
     builder.follow_symlinks(opts.follow_symlinks);
 
     if src.is_dir() {
-        if opts.include_parent {
-            let base = src
-                .file_name()
+        // The directory's own entry comes first — `append_dir_all` writes it
+        // before any child. The contents form is rooted at `"."`, never `""`:
+        // an empty name makes `append_dir_all` skip the root entry, and an
+        // archive without one cannot be told apart from the archive of
+        // whatever the directory holds. Extraction skips `./` itself.
+        let root = if opts.include_parent {
+            src.file_name()
                 .map(|s| s.to_owned())
-                .unwrap_or_else(|| std::ffi::OsStr::new("root").to_owned());
-            builder
-                .append_dir_all(base, src)
-                .map_err(|e| BoxliteError::Storage(format!("failed to archive dir: {}", e)))?;
+                .unwrap_or_else(|| std::ffi::OsStr::new("root").to_owned())
         } else {
-            // Add each top-level entry individually so we don't create a
-            // "." entry that produces an empty tar path on extraction.
-            for entry in std::fs::read_dir(src).map_err(|e| {
-                BoxliteError::Storage(format!("failed to read dir {}: {}", src.display(), e))
-            })? {
-                let entry = entry.map_err(|e| {
-                    BoxliteError::Storage(format!("failed to read dir entry: {}", e))
-                })?;
-                let name = entry.file_name();
-                let path = entry.path();
-                if path.is_dir() {
-                    builder.append_dir_all(&name, &path).map_err(|e| {
-                        BoxliteError::Storage(format!("failed to archive dir: {}", e))
-                    })?;
-                } else {
-                    builder.append_path_with_name(&path, &name).map_err(|e| {
-                        BoxliteError::Storage(format!("failed to archive file: {}", e))
-                    })?;
-                }
-            }
-        }
+            std::ffi::OsStr::new(".").to_owned()
+        };
+        builder
+            .append_dir_all(root, src)
+            .map_err(|e| BoxliteError::Storage(format!("failed to archive dir: {}", e)))?;
     } else {
         let name = src
             .file_name()
@@ -816,7 +824,7 @@ mod tests {
         assert_eq!(std::fs::read(&dest).unwrap(), data);
     }
 
-    // ── pack: directory with include_parent ───────────────────────
+    // ── pack: a directory or its contents ─────────────────────────
 
     #[tokio::test]
     async fn pack_dir_include_parent_true() {
@@ -848,24 +856,49 @@ mod tests {
         );
     }
 
+    /// Each entry's archived name and type, in archive order.
+    fn archived_entries(tar_path: &Path) -> Vec<(String, tar::EntryType)> {
+        let mut archive = tar::Archive::new(std::fs::File::open(tar_path).unwrap());
+        archive
+            .entries()
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                let name = String::from_utf8_lossy(&entry.path_bytes()).into_owned();
+                (name, entry.header().entry_type())
+            })
+            .collect()
+    }
+
+    fn contents_pack() -> PackContext {
+        PackContext {
+            follow_symlinks: false,
+            include_parent: false,
+        }
+    }
+
+    /// The contents form still leads with an entry standing for the source:
+    /// `./`, a directory. Without it the archive of a one-file directory is
+    /// byte-identical to that file's own archive.
     #[tokio::test]
-    async fn pack_dir_include_parent_false_flattens() {
+    async fn pack_dir_contents_is_rooted_at_dot() {
         let tmp = TempDir::new().unwrap();
         let src_dir = tmp.path().join("flatdir");
         std::fs::create_dir(&src_dir).unwrap();
         std::fs::write(src_dir.join("f.txt"), "flat").unwrap();
 
         let tar_path = tmp.path().join("out.tar");
-        pack(
-            src_dir,
-            tar_path.clone(),
-            PackContext {
-                follow_symlinks: true,
-                include_parent: false,
-            },
-        )
-        .await
-        .unwrap();
+        pack(src_dir, tar_path.clone(), contents_pack())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            archived_entries(&tar_path),
+            vec![
+                ("./".to_string(), tar::EntryType::Directory),
+                ("f.txt".to_string(), tar::EntryType::Regular),
+            ]
+        );
 
         let dest = tmp.path().join("dest");
         std::fs::create_dir(&dest).unwrap();
@@ -875,6 +908,55 @@ mod tests {
 
         // File directly in dest, not under flatdir/
         assert_eq!(std::fs::read_to_string(dest.join("f.txt")).unwrap(), "flat");
+    }
+
+    #[tokio::test]
+    async fn pack_contents_of_an_empty_dir_is_just_its_root() {
+        let tmp = TempDir::new().unwrap();
+        let src_dir = tmp.path().join("empty");
+        std::fs::create_dir(&src_dir).unwrap();
+
+        let tar_path = tmp.path().join("out.tar");
+        pack(src_dir, tar_path.clone(), contents_pack())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            archived_entries(&tar_path),
+            vec![("./".to_string(), tar::EntryType::Directory)]
+        );
+    }
+
+    /// The `SRC/.` spelling is read off the caller's raw bytes, because a
+    /// `Path` round-trip eats the dot: `Path::new("/app/.").strip_prefix("/")`
+    /// yields `app`.
+    #[test]
+    fn a_trailing_dot_names_the_contents_and_survives_only_as_raw_bytes() {
+        use std::ffi::OsStr;
+        assert!(specifies_current_dir(OsStr::new("src/.")));
+        assert!(specifies_current_dir(OsStr::new("/a/b/.")));
+        assert!(specifies_current_dir(OsStr::new(".")));
+
+        // Trailing separators do not change what the path names.
+        assert!(specifies_current_dir(OsStr::new("./")));
+        assert!(specifies_current_dir(OsStr::new("src/./")));
+        assert!(specifies_current_dir(OsStr::new("/a/b/.///")));
+
+        assert!(!specifies_current_dir(OsStr::new("src")));
+        assert!(!specifies_current_dir(OsStr::new("src/")));
+        assert!(!specifies_current_dir(OsStr::new("src/.hidden")));
+        assert!(!specifies_current_dir(OsStr::new("src/..")));
+        assert!(!specifies_current_dir(OsStr::new("/")));
+        assert!(!specifies_current_dir(OsStr::new("")));
+
+        let dotted = Path::new("/app/.");
+        assert!(specifies_current_dir(dotted.as_os_str()));
+        let normalized = dotted.strip_prefix("/").unwrap();
+        assert!(
+            !specifies_current_dir(normalized.as_os_str()),
+            "a Path round-trip drops the dot, so deriving this late would read \
+             every `SRC/.` as `SRC`"
+        );
     }
 
     #[tokio::test]

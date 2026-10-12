@@ -16,6 +16,7 @@ use super::error::{map_http_body, map_plain_reply};
 use super::options::BoxliteRestOptions;
 use super::types::ServerConfig;
 use crate::runtime::auth::Principal;
+use crate::runtime::options::NetworkMode;
 
 /// Re-request a token once it is within this leeway of `expires_at`.
 const REFRESH_LEEWAY: Duration = Duration::from_secs(60);
@@ -463,6 +464,25 @@ impl ApiClient {
         Ok(descriptor.uri)
     }
 
+    /// Make a box's services public (`Enabled`) or private (`Disabled`).
+    pub(crate) async fn set_box_inbound(
+        &self,
+        box_id: impl AsRef<str>,
+        mode: NetworkMode,
+    ) -> BoxliteResult<()> {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct InboundNetworkSpec {
+            mode: NetworkMode,
+        }
+        let path = format!("/boxes/{}/network/inbound", box_id.as_ref());
+        let builder = self
+            .http
+            .put(self.url(&path))
+            .json(&InboundNetworkSpec { mode });
+        let _: InboundNetworkSpec = self.send_json(builder).await?;
+        Ok(())
+    }
+
     /// Build an authorized file request bounded by the box lifetime.
     pub async fn authorized_request(
         &self,
@@ -556,6 +576,16 @@ impl ApiClient {
             )
         })?;
         ensure_capability("import", capabilities.import_enabled)
+    }
+
+    pub async fn require_inbound_update_enabled(&self) -> BoxliteResult<()> {
+        let config = self.get_config().await?;
+        let capabilities = config.capabilities.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "Remote server did not advertise inbound update capability".to_string(),
+            )
+        })?;
+        ensure_capability("inbound update", capabilities.inbound_update_enabled)
     }
 
     /// POST binary data with query params, parse JSON response.
@@ -895,7 +925,7 @@ mod tests {
             }),
             (
                 "403 Forbidden",
-                "box is not public",
+                "Box AbCdEf123456 has inbound access disabled. Enable it (for example: `boxlite update AbCdEf123456 --inbound enabled`) and retry.",
                 |e| matches!(e, BoxliteError::Config(msg) if msg.starts_with("auth:")),
             ),
             ("502 Bad Gateway", "runner unavailable", |e| {

@@ -10,7 +10,8 @@ import { UserCreatedEvent } from './events/user-created.event'
 describe('UserService default organization compatibility', () => {
   it('accepts deprecated personal organization create-user fields as aliases for default organization fields', async () => {
     const eventEmitter = {
-      emitAsync: jest.fn().mockResolvedValue(undefined),
+      // EventEmitter2.emitAsync resolves to one result per listener.
+      emitAsync: jest.fn().mockResolvedValue([]),
     }
     const entityManager = {
       save: jest.fn(async (entity) => entity),

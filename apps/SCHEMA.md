@@ -13,8 +13,8 @@ The model is implementation-grounded:
   entity files are the complete list of mapped tables.
 - Column types, constraints, and index definitions come from the migrations in
   [`api/src/migrations`](./api/src/migrations/): the baseline
-  `1741087887225-migration.ts` creates 17 tables, and the
-  [`pre-deploy`](./api/src/migrations/pre-deploy/) set adds 5 more.
+  `1741087887225-migration.ts` and the
+  [`pre-deploy`](./api/src/migrations/pre-deploy/) set create the tables.
 - Satellite stores come from [`dex/config.yaml`](./dex/config.yaml),
   [`otel-collector/config.yaml`](./otel-collector/config.yaml), and the
   ClickHouse queries in
@@ -27,7 +27,7 @@ control plane only through `runner` telemetry columns and `job` results.
 
 ## Overview
 
-The 21 tables sort into three planes. **Tenancy** is who a caller is and what
+The tables sort into three planes. **Tenancy** is who a caller is and what
 they may do; **fleet** is the microVMs and the machines that run them;
 **metering** is what gets billed.
 
@@ -50,6 +50,7 @@ flowchart LR
         t_box["box"]
         t_activity["box_last_activity"]
         t_migration["box_migration"]
+        t_tunnel["tunnel"]
         t_runner["runner"]
         t_region["region"]
         t_volume["volume"]
@@ -72,6 +73,7 @@ flowchart LR
     t_assigninv ==>|"roleId"| t_role
     t_activity ==>|"boxId"| t_box
     t_migration ==>|"boxId"| t_box
+    t_tunnel ==>|"box_id"| t_box
 
     t_orguser -.->|"userId"| t_user
     t_apikey -.->|"organizationId, userId"| t_org
@@ -96,8 +98,8 @@ box request is matched against the pool by shape, not by id.
 
 ## Referential integrity
 
-The schema declares **9 foreign keys across 21 tables**. All of them live
-inside the tenancy cluster or on the two tables owned outright by a box.
+The schema declares foreign keys within the control plane. They live
+inside the tenancy cluster or on tables owned outright by a box.
 Every edge that crosses a plane boundary — including `box.organizationId`,
 the most widely joined column in the system — is a bare `uuid` or
 `character varying` column with no constraint behind it.
@@ -118,6 +120,7 @@ that no longer resolves.
 | `organization_role_assignment_invitation`| `roleId`                     | `organization_role.id`         | foreign key | `NO ACTION` |
 | `box_last_activity`                      | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
 | `box_migration`                          | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
+| `tunnel`                                 | `box_id`                     | `box.id`                       | foreign key | `CASCADE` |
 | `organization_user`                      | `userId`                     | `user.id`                      | application | — |
 | `api_key`                                | `organizationId`, `userId`   | `organization.id`, `user.id`   | application | — |
 | `webhook_initialization`                 | `organizationId`             | `organization.id`              | application | — |
@@ -402,16 +405,16 @@ a derived availability score.
 | `class` | `enum` | default `small` |
 | `cpu` | `double precision` | declared capacity |
 | `memoryGiB` | `double precision` | declared capacity |
-| `diskGiB` | `double precision` | declared capacity |
+| `diskGiB` | `double precision` | declared capacity; each heartbeat overwrites it with the size of the filesystem holding the runner's BoxLite home |
 | `gpu` | `integer` | nullable |
 | `gpuType` | `character varying` | nullable |
 | `currentCpuLoadAverage` | `double precision` | |
 | `currentCpuUsagePercentage` | `double precision` | |
 | `currentMemoryUsagePercentage` | `double precision` | |
-| `currentDiskUsagePercentage` | `double precision` | |
+| `currentDiskUsagePercentage` | `double precision` | use of that filesystem (`df` Use%) |
 | `currentAllocatedCpu` | `double precision` | |
 | `currentAllocatedMemoryGiB` | `double precision` | |
-| `currentAllocatedDiskGiB` | `double precision` | |
+| `currentAllocatedDiskGiB` | `double precision` | used GiB on that filesystem (`df` Used), not a sum of box sizes |
 | `currentStartedBoxes` | `integer` | |
 | `availabilityScore` | `integer` | |
 | `unschedulable` | `boolean` | default `false` |
@@ -525,6 +528,29 @@ copy and fail the comparison it exists for.
 
 **Index:** `(state)`.
 
+### `tunnel`
+
+One access declaration per box port. Only public access is enabled; private
+mode and `token_hash` are reserved for later.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `box_id` | `character varying(12)` | FK → `box.id`, cascades on hard deletion |
+| `port` | `integer` | 1–65535 |
+| `access_mode` | `character varying` | `public` or reserved `private` |
+| `token_hash` | `character varying` | null for public; non-null for private |
+| `created_at` | `timestamptz` | creation time |
+| `revoked_at` | `timestamptz` | null while active |
+
+**Unique:** `(box_id, port)`. Repeating an authorized tunnel request keeps the
+declaration active.
+
+The migration creates no declarations for existing boxes. Existing preview and
+tunnel hostnames become reachable only after the owner prepares that port with
+`POST /api/v1/boxes/{boxId}/network/tunnel?port={port}`. Rows survive box
+stop/start and proxy restart; hard deletion of a box removes its rows.
+
 ### `box_last_activity`
 
 Heartbeat timestamp, one row per box, in its own table. Writing it therefore
@@ -633,7 +659,7 @@ boundary.
 
 | Store | Owner | Contents |
 | ----- | ----- | -------- |
-| ClickHouse database `otel` | written by [`otel-collector`](./otel-collector/config.yaml), read by `apps/api` | `otel_logs`, `otel_traces`, `otel_metrics_gauge` — the upstream ClickHouse exporter's own schema, queried by [`box-telemetry`](./api/src/box-telemetry/services/box-telemetry.service.ts) to serve per-box logs, traces, and metrics. The collector runs with `create_schema: false` and a 72-hour TTL, so it writes the tables but does not own them. |
+| ClickHouse database `otel` | written by [`otel-collector`](./otel-collector/config.yaml), read by `apps/api` | `otel_logs`, `otel_traces`, `otel_metrics_gauge` — the upstream ClickHouse exporter's own schema, queried by [`box-telemetry`](./api/src/box-telemetry/services/box-telemetry.service.ts) to serve per-box logs, traces, and metrics. The collector uses `create_schema: false`; self-hosted infrastructure owns table TTLs through `CLICKHOUSE_RETENTION_HOURS`, defaulting to 720 hours (30 days). |
 | SQLite `/var/dex/dex.db` | [`dex`](./dex/config.yaml) | Dex's own OIDC state — clients, auth codes, refresh tokens, signing keys. The control plane knows a person only by the subject dex issues, stored as `user.id`. |
 | Redis | `apps/api` | Advisory locks, rate-limit counters, and caches. Not a table store, and not a source of truth: because the locks expire, the invariants that matter live in the partial unique indexes listed above. |
 

@@ -413,8 +413,9 @@ The two directions differ on a directory that merely *contains* a mount. `copy_o
 it outright — the archive would carry the image's file rather than the mounted one. `copy_in`
 allows it and checks per entry instead, refusing only if some entry would land *on* a mount:
 copying a directory into `/etc` is fine, and becomes a refusal only when an entry resolves
-to `/etc/hosts`, `/etc/hostname`, or `/etc/resolv.conf` — which needs `include_parent=False`,
-since the default nests everything under the source directory's own name.
+to `/etc/hosts`, `/etc/hostname`, or `/etc/resolv.conf` — which needs the `SRC/.` spelling
+(`copy_in("./etc-files/.", "/etc")`), since a plain `SRC` lands under the source directory's
+own name.
 
 Use a path outside the mount (`/workspace` is a good default), or pipe a tar through
 `exec`, which runs inside the namespace:

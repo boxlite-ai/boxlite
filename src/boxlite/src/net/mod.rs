@@ -377,6 +377,10 @@ fn control_unsupported(op: &str) -> BoxliteError {
 /// runtime control inherit the default `Unsupported` implementations. Owned
 /// per-box by the core (see `BoxImpl::network`); provisioning the VM's NIC is a
 /// separate, non-trait concern.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub trait NetworkBackend: Send + Sync + std::fmt::Debug {
     /// A human-readable name for this backend (e.g. `"gvisor-tap-vsock"`).

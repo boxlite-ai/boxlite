@@ -17,6 +17,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { SERVICE_ACCOUNT_LIMIT, identityFor, instanceFor } from 'naming'
+import { runnerDataDiskNameFor, runnerDataDiskPrefix, runnerNameFor } from '../stack/runners.ts'
 
 const providers = (cloud: 'aws' | 'gcp'): { file: string; text: string }[] => {
   const directory = fileURLToPath(new URL(`../stack/providers/${cloud}/`, import.meta.url))
@@ -156,4 +157,32 @@ test('every artifact this repository builds can be named, and the identity still
     const identity = identityFor({ appShort: declared.appShort, stage: 'prod', artifact, action: 'run' })
     assert.ok(identity.length <= SERVICE_ACCOUNT_LIMIT, `${identity} is ${identity.length}`)
   }
+})
+
+test('a data disk is named after its host, under a prefix no host of the stage shares', () => {
+  /*
+   * The prefix is what a grant to grow these disks would match, and a boot disk is
+   * named after its host — so a host whose name started with it would put its
+   * boot disk inside that grant. Every host a stage can have: `stack-env.ts`
+   * accepts up to a hundred.
+   */
+  const stage = 'dev'
+  const prefix = runnerDataDiskPrefix({ app: declared.app, stage })
+  const disks = new Set<string>()
+  for (let index = 1; index <= 100; index += 1) {
+    const host = runnerNameFor({ app: declared.app, stage, index })
+    const disk = runnerDataDiskNameFor({ app: declared.app, stage, host })
+    assert.ok(disk.startsWith(prefix), `${disk} is outside ${prefix}`)
+    assert.ok(!host.startsWith(prefix), `host ${host} falls inside ${prefix}`)
+    disks.add(disk)
+  }
+  assert.equal(disks.size, 100, 'two hosts share a data disk name')
+  assert.equal(
+    runnerDataDiskNameFor({ app: declared.app, stage, host: runnerNameFor({ app: declared.app, stage, index: 2 }) }),
+    `${declared.app}-dev-runner-data-2`,
+  )
+  assert.throws(
+    () => runnerDataDiskNameFor({ app: declared.app, stage, host: `${declared.app}-prod-runner` }),
+    /is not a runner host/,
+  )
 })

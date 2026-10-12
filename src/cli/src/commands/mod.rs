@@ -16,4 +16,5 @@ pub mod serve;
 pub mod start;
 pub mod stats;
 pub mod stop;
+pub mod update;
 pub mod volume;

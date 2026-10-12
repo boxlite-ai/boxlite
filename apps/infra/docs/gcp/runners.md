@@ -21,6 +21,20 @@ the next mdeploy reasserts the checkout's policy target. Both paths verify binar
 Already-converged hosts need no restart. Release downgrades require the explicit `--allow-downgrade` update command.
 IAP/OS Login remains available for authorized administration, but normal updates do not require per-user SSH.
 
+## Data disk
+
+Each host gets its own Hyperdisk Balanced disk, `<app>-<stage>-runner-data[-N]`, attached as `boxlite-data`:
+200 GiB at 3,600 IOPS and 290 MiB/s (240 MiB/s on `small`, the n4-standard-4 limit). Box state lives on it:
+the boot script formats a blank disk once and mounts it at `/var/lib/boxlite` with `nofail`, so `rootDiskGb`
+sizes only the boot disk. The runner unit requires that mount: a host whose disk does not mount still boots
+and stays reachable, with the runner stopped: `systemctl status var-lib-boxlite.mount` says why, or
+`/var/log/runner-setup.log` when the boot script refused a disk that was missing, not blank, or would hide data.
+A deploy sets size and performance only at creation and never
+changes them back, so grow the disk online; the disk is protected, so a deploy that would replace it fails.
+The attachment is fixed at creation too: a host that existed before its disk does not get it attached,
+and that disk stays unattached, and billed, until the host is destroyed and recreated; a `--replace`
+would carry the ignored attachment over.
+
 ## Verify and recover
 
 Inspect every host and every declared policy, including binary/unit-environment policies after mdeploy:

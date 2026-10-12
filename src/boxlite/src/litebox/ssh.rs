@@ -1,0 +1,222 @@
+//! SSH control with implicit startup restricted to configuration.
+
+use std::{fmt, future::Future, sync::Arc, time::Duration};
+
+use boxlite_shared::{BoxliteError, BoxliteResult, constants::ssh::DRAIN_TIMEOUT};
+
+use super::box_impl::BoxImpl;
+use crate::portal::interfaces::SshInterface;
+use crate::runtime::backend::BoxBackend;
+
+// Allow guest cleanup plus communication and scheduling overhead after startup.
+const SSH_TIMEOUT: Duration = Duration::from_secs(DRAIN_TIMEOUT.as_secs() + 5);
+
+enum StartupPolicy {
+    AllowStart,
+    ExistingVmOnly,
+}
+
+/// Complete guest SSH configuration. Keys are never persisted by the runtime.
+#[derive(Clone)]
+pub struct SshConfig {
+    pub listen_address: String,
+    pub host_private_key: String,
+    pub accounts: Vec<SshAccount>,
+}
+
+/// Credentials accepted for one SSH login (not a container OS identity).
+#[derive(Clone)]
+pub struct SshAccount {
+    pub login: String,
+    pub authorized_keys: Vec<String>,
+    pub ca: Option<SshCaConfig>,
+}
+
+/// Certificate authority and required certificate principal.
+#[derive(Clone)]
+pub struct SshCaConfig {
+    pub public_key: String,
+    pub principal: String,
+}
+
+impl fmt::Debug for SshConfig {
+    /// Retain the listener address for diagnostics without exposing the host key.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SshConfig")
+            .field("listen_address", &self.listen_address)
+            .field("host_private_key", &"[REDACTED]")
+            .field("accounts", &self.accounts)
+            .finish()
+    }
+}
+
+impl fmt::Debug for SshAccount {
+    /// Identify the login while redacting its authorized keys and CA credentials.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SshAccount")
+            .field("login", &self.login)
+            .field("authorized_keys", &"[REDACTED]")
+            .field("ca", &self.ca)
+            .finish()
+    }
+}
+
+impl fmt::Debug for SshCaConfig {
+    /// Redact both the CA key and principal from credential diagnostics.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SshCaConfig")
+            .field("public_key", &"[REDACTED]")
+            .field("principal", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Guest listener state and public host identity; contains no credentials.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SshStatus {
+    pub enabled: bool,
+    pub generation: u64,
+    pub listen_address: String,
+    pub host_public_key: String,
+    pub host_key_fingerprint: String,
+}
+
+/// Owned SSH control handle; only configuration may implicitly start the box.
+///
+/// `configure()` may start boxes using the image's default command. With an explicit
+/// `BoxOptions.cmd` or `entrypoint`, a Configured or Stopped box returns
+/// `InvalidState`: call `LiteBox::start()` first. This also applies to fresh
+/// handles obtained through `runtime.get()` after stopping the box.
+///
+/// `status()` and `disable()` never start the VM or its main command. Valid
+/// Configured or Stopped handles return disabled status with generation zero and
+/// empty address and host identity fields. Running handles use the existing guest,
+/// including after runtime recovery or attach before start. Spent handles return
+/// `Stopped`; other lifecycle states return `InvalidState`. Status is an observation
+/// at call time and does not prevent a concurrent `configure()` from enabling SSH.
+///
+/// After startup, each operation has a total 15-second budget: the guest's
+/// 10-second cleanup limit plus 5 seconds for communication and scheduling.
+/// Interface acquisition, connection setup, queueing, and the RPC consume this
+/// same budget; VM and container startup do not. Guest `DeadlineExceeded` remains
+/// [`BoxliteError::Rpc`] with the original status context. Runtime shutdown rejects
+/// new operations and cancels interface acquisition and RPCs. In-progress VM
+/// initialization finishes before cancellation is returned; container startup
+/// retains its own cancellation. Operations are not retried. Timeout or cancellation
+/// does not undo a configuration already applied by the guest.
+#[derive(Clone)]
+pub struct SshHandle {
+    backend: Arc<dyn BoxBackend>,
+}
+
+impl fmt::Debug for SshHandle {
+    /// Identify the box without traversing backend state or guest credentials.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SshHandle")
+            .field("box_id", self.backend.id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl SshHandle {
+    /// Retain the backend without starting it; operations check local support.
+    pub(super) fn new(backend: Arc<dyn BoxBackend>) -> Self {
+        Self { backend }
+    }
+
+    /// Validate and replace SSH configuration, disconnecting existing clients.
+    /// Startup follows the policy described on [`SshHandle`].
+    pub async fn configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
+        self.run(
+            "configure",
+            StartupPolicy::AllowStart,
+            |mut ssh| async move { ssh.configure(config).await },
+        )
+        .await
+    }
+
+    /// Query SSH state without starting the VM or container main command.
+    pub async fn status(&self) -> BoxliteResult<SshStatus> {
+        self.run(
+            "status",
+            StartupPolicy::ExistingVmOnly,
+            |mut ssh| async move { ssh.status().await },
+        )
+        .await
+    }
+
+    /// Stop SSH and disconnect clients. Repeated calls are supported.
+    /// Never starts the VM or container main command.
+    pub async fn disable(&self) -> BoxliteResult<SshStatus> {
+        self.run(
+            "disable",
+            StartupPolicy::ExistingVmOnly,
+            |mut ssh| async move { ssh.disable().await },
+        )
+        .await
+    }
+
+    /// Share control policy without cancelling VM initialization midway through
+    /// its transfer of resources into LiveState, matching exec's startup boundary.
+    async fn run<F, Fut>(
+        &self,
+        name: &str,
+        startup: StartupPolicy,
+        op: F,
+    ) -> BoxliteResult<SshStatus>
+    where
+        F: FnOnce(SshInterface) -> Fut,
+        Fut: Future<Output = BoxliteResult<SshStatus>>,
+    {
+        let backend = self
+            .backend
+            .clone()
+            .as_any_arc()
+            .downcast::<BoxImpl>()
+            .map_err(|_| {
+                BoxliteError::Unsupported("SSH control requires the local backend".into())
+            })?;
+        let stopped =
+            || BoxliteError::Stopped(format!("SSH {name}: box {} stopped", backend.config.id));
+        if backend.shutdown_token.is_cancelled() {
+            return Err(stopped());
+        }
+        let session = match startup {
+            StartupPolicy::AllowStart => backend.ssh_session().await.map(Some),
+            StartupPolicy::ExistingVmOnly => backend.existing_ssh_session(),
+        }
+        .map_err(|error| match error {
+            BoxliteError::Stopped(_) => stopped(),
+            error => error,
+        })?;
+        tokio::select! {
+            biased;
+            _ = backend.shutdown_token.cancelled() => Err(stopped()),
+            result = tokio::time::timeout(SSH_TIMEOUT, async {
+                let Some(session) = session else {
+                    return Ok(SshStatus {
+                        enabled: false,
+                        generation: 0,
+                        listen_address: String::new(),
+                        host_public_key: String::new(),
+                        host_key_fingerprint: String::new(),
+                    });
+                };
+                op(session.ssh().await?).await
+            }) => result.unwrap_or_else(|_| Err(BoxliteError::Rpc(format!(
+                "SSH {name}: timed out after {} seconds for box {}",
+                SSH_TIMEOUT.as_secs(), backend.config.id
+            )))),
+        }
+    }
+}
+
+const _: () = {
+    /// Reject public SSH types that cannot be shared across async tasks.
+    const fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<SshHandle>;
+    let _ = assert_send_sync::<SshConfig>;
+    let _ = assert_send_sync::<SshAccount>;
+    let _ = assert_send_sync::<SshCaConfig>;
+    let _ = assert_send_sync::<SshStatus>;
+};

@@ -27,6 +27,7 @@ import {
   type UpgradeTarget,
 } from '../stack/runner-upgrade.ts'
 import { renderRunnerBoot } from '../stack/runner-boot.ts'
+import { renderDataDiskMount } from '../stack/providers/gcp/runners.ts'
 import { verifyAgainstManifest } from '../stack/runner-binary.ts'
 
 const TARBALL = 'boxlite-runner-v0.10.0-linux-amd64.tar.gz'
@@ -234,7 +235,14 @@ test('the same rendered lines guard both install paths', () => {
       binary: { tarballUrl: 'https://x/t.tar.gz', checksumUrl: 'https://x/t.tar.gz.sha256', tarballName: TARBALL, transport: 'https' },
       port: 3003,
       environment: {},
-      platform: { hostAddress: 'HOST_IP=1', installVolumeMount: '', prepareKvm: '', startWrapper: null, unitEnvironment: {} },
+      platform: {
+        hostAddress: 'HOST_IP=1',
+        installVolumeMount: '',
+        prepareKvm: '',
+        prepareHome: '',
+        startWrapper: null,
+        unitEnvironment: {},
+      },
     }),
     'base64',
   ).toString('utf8')
@@ -329,7 +337,11 @@ const converge = ({ contents, work }: { contents: string; work: string }) => {
     chmodSync(systemctl, 0o755)
   }
   const restarts = join(work, 'restarts')
-  const { enforce } = renderUnitEnvironmentPolicyScripts({ apiUrl: 'https://api.dev.boxlite.ai', volumeBackend: 'gcs' })
+  const { enforce } = renderUnitEnvironmentPolicyScripts({
+    apiUrl: 'https://api.dev.boxlite.ai',
+    otlpUrl: 'http://collector:4318',
+    volumeBackend: 'gcs',
+  })
   const result = spawnSync('bash', ['-c', enforce], {
     encoding: 'utf8',
     env: {
@@ -351,12 +363,22 @@ const converge = ({ contents, work }: { contents: string; work: string }) => {
 
 test('a host pointed at a name this stage no longer serves is rewritten once', () => {
   const work = mkdtempSync(join(tmpdir(), 'runner-unit-env-'))
-  const stale = 'BOXLITE_API_URL=https://dev.boxlite.ai/api\nBOXLITE_RUNNER_TOKEN=secret-token\n'
+  // What the prod hosts actually hold: an address from before the domain moved,
+  // and the collector endpoint frozen empty by a first boot that had no collector.
+  const stale =
+    'BOXLITE_API_URL=https://dev.boxlite.ai/api\nOTEL_EXPORTER_OTLP_ENDPOINT=\nBOXLITE_RUNNER_TOKEN=secret-token\n'
 
   const first = converge({ contents: stale, work })
   assert.equal(first.code, 100, `enforce did not converge: ${first.out}`)
   assert.match(first.file, /^BOXLITE_API_URL=https:\/\/api\.dev\.boxlite\.ai\/api$/m, 'the address was not rewritten')
   assert.match(first.file, /^VOLUME_STORAGE_BACKEND=gcs$/m, 'the key the file lacked was not appended')
+  // The key that was present but empty: `^key=` has to match it too, or the
+  // host keeps the value that silences its exporter.
+  assert.match(
+    first.file,
+    /^OTEL_EXPORTER_OTLP_ENDPOINT=http:\/\/collector:4318$/m,
+    'the endpoint that froze empty was not filled in',
+  )
   assert.match(first.file, /^BOXLITE_RUNNER_TOKEN=secret-token$/m, 'the rewrite dropped the host’s own token')
   /*
    * Nothing beside it, and nothing loosened.
@@ -381,4 +403,109 @@ test('a host pointed at a name this stage no longer serves is rewritten once', (
   assert.equal(second.code, 100)
   assert.equal(second.restarts, 1, 'a converged host was restarted a second time')
   assert.match(second.out, /already pointed at the current control plane/)
+})
+
+/**
+ * The GCP data-disk mount, run as the boot script runs it, against files and
+ * stub commands: `blkid` answers `probe`, and `mkfs.ext4` and `mount` only
+ * record that they were called. `cmp`, `awk` and `ls` are the real ones.
+ */
+const mountDataDisk = ({ work, probe, device = join(work, 'disk') }: { work: string; probe: number; device?: string }) => {
+  const bin = join(work, 'bin')
+  mkdirSync(bin, { recursive: true })
+  const stub = (name: string, body: string) => {
+    writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`)
+    chmodSync(join(bin, name), 0o755)
+  }
+  stub('blkid', 'exit "$PROBE"')
+  stub('mkfs.ext4', 'echo "mkfs.ext4 $*" >> "$CALLS"')
+  stub('mount', 'echo "mount $*" >> "$CALLS"; touch "$MOUNTED"')
+  stub('mountpoint', 'test -e "$MOUNTED"')
+  stub('systemctl', 'exit 0')
+  stub('udevadm', 'exit 0')
+  const fstab = join(work, 'fstab')
+  const home = join(work, 'home')
+  const calls = join(work, 'calls')
+  const result = spawnSync('bash', ['-c', `set -euo pipefail\n${renderDataDiskMount({ device, mountPoint: home, fstab })}`], {
+    encoding: 'utf8',
+    env: { PATH: `${bin}:/usr/bin:/bin`, PROBE: String(probe), CALLS: calls, MOUNTED: join(work, 'mounted') },
+  })
+  return {
+    code: result.status,
+    out: `${result.stdout}${result.stderr}`,
+    calls: existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n') : [],
+    fstab: readFileSync(fstab, 'utf8'),
+    device,
+    home,
+    fstabPath: fstab,
+  }
+}
+
+/** A fresh host: a blank 1 MiB disk and an fstab that names only the root. */
+const freshHost = (): string => {
+  const work = mkdtempSync(join(tmpdir(), 'runner-data-disk-'))
+  writeFileSync(join(work, 'disk'), Buffer.alloc(1 << 20))
+  writeFileSync(join(work, 'fstab'), 'LABEL=cloudimg-rootfs / ext4 discard,errors=remount-ro 0 1\n')
+  return work
+}
+
+test('a blank data disk is formatted once and mounted, and a later boot changes nothing', () => {
+  const work = freshHost()
+  const first = mountDataDisk({ work, probe: 2 })
+  assert.equal(first.code, 0, first.out)
+  assert.deepEqual(first.calls, [
+    `mkfs.ext4 -m 0 -E lazy_itable_init=0,lazy_journal_init=0,discard ${first.device}`,
+    `mount --fstab ${first.fstabPath} ${first.home}`,
+  ])
+  const entries = first.fstab.split('\n').filter((line) => line.split(/\s+/)[1] === first.home)
+  assert.deepEqual(entries, [`${first.device} ${first.home} ext4 discard,defaults,nofail 0 2`])
+  // GCE reruns the boot script at every boot, by which time the disk is
+  // mounted and has a filesystem.
+  const second = mountDataDisk({ work, probe: 0 })
+  assert.equal(second.code, 0, second.out)
+  assert.deepEqual(second.calls, first.calls, 'a later boot formatted or mounted again')
+  assert.equal(second.fstab, first.fstab, 'a later boot touched fstab')
+})
+
+test('a data disk that already holds a filesystem is mounted, never formatted', () => {
+  const run = mountDataDisk({ work: freshHost(), probe: 0 })
+  assert.equal(run.code, 0, run.out)
+  assert.deepEqual(run.calls, [`mount --fstab ${run.fstabPath} ${run.home}`])
+})
+
+test('a disk not provably blank, a missing disk and a populated home are refused untouched', () => {
+  const cases: { name: string; probe: number; reason: RegExp; setup?: (work: string) => void; device?: string }[] = [
+    { name: 'blkid could not probe', probe: 4, reason: /refusing to format/ },
+    { name: 'blkid found two signatures', probe: 8, reason: /refusing to format/ },
+    {
+      name: 'blkid found nothing but the disk is not zeroed',
+      probe: 2,
+      reason: /refusing to format/,
+      setup: (work) => {
+        const disk = Buffer.alloc(1 << 20)
+        disk[1080] = 0x53
+        writeFileSync(join(work, 'disk'), disk)
+      },
+    },
+    { name: 'the disk is not attached', probe: 2, reason: /is not attached/, device: '/nonexistent/boxlite-data' },
+    {
+      name: 'the home already holds state',
+      probe: 2,
+      reason: /refusing to hide/,
+      setup: (work) => {
+        mkdirSync(join(work, 'home'))
+        writeFileSync(join(work, 'home', 'boxlite.db'), '')
+      },
+    },
+  ]
+  for (const each of cases) {
+    const work = freshHost()
+    each.setup?.(work)
+    const before = readFileSync(join(work, 'fstab'), 'utf8')
+    const run = mountDataDisk({ work, probe: each.probe, device: each.device })
+    assert.notEqual(run.code, 0, `${each.name}: the mount went ahead`)
+    assert.match(run.out, each.reason, each.name)
+    assert.deepEqual(run.calls, [], `${each.name}: formatted or mounted anyway`)
+    assert.equal(run.fstab, before, `${each.name}: fstab changed`)
+  }
 })

@@ -41,6 +41,7 @@ import { BoxRepository } from '../repositories/box.repository'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { sanitizeBoxError } from '../utils/sanitize-error.util'
+import { recordBusinessEvent } from '../../common/utils/business-event.util'
 
 @Injectable()
 export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown {
@@ -136,6 +137,14 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
                   },
                 })
 
+                recordBusinessEvent({
+                  name: 'box.stop',
+                  outcome: 'requested',
+                  correlationId: box.id,
+                  orgId: box.organizationId,
+                  actorKind: 'auto_stop',
+                })
+
                 this.syncInstanceState(box.id).catch(this.logger.error)
               } catch (error) {
                 this.logger.error(`Error processing auto-stop state for box ${box.id}:`, error)
@@ -207,6 +216,14 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
                     desiredState: BoxDesiredState.STOPPED,
                     autoDelete: box.autoDelete,
                   },
+                })
+
+                recordBusinessEvent({
+                  name: 'box.delete',
+                  outcome: 'requested',
+                  correlationId: box.id,
+                  orgId: box.organizationId,
+                  actorKind: 'auto_delete',
                 })
 
                 this.syncInstanceState(box.id).catch(this.logger.error)

@@ -118,6 +118,12 @@ test('a managed ClickHouse arrives whole or not at all', () => {
   assert.equal(managed?.url, 'https://clickhouse.invalid')
 })
 
+test('retention is read from the stage environment, or null when it set none', () => {
+  assert.equal(read(complete).clickHouseRetentionHours, null)
+  assert.equal(read({ ...complete, CLICKHOUSE_RETENTION_HOURS: '168' }).clickHouseRetentionHours, 168)
+  assert.throws(() => read({ ...complete, CLICKHOUSE_RETENTION_HOURS: '0' }), /positive.*integer/)
+})
+
 test('the ClickStack consumer is a service account or nobody', () => {
   // Nobody is a supported state: a stage publishes to whoever is configured,
   // and a stage with no console configures none. What is not supported is a

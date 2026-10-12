@@ -47,7 +47,7 @@ own.
 | `lint.yml` | push, PR, merge_group | — | Format and lint per language, plus the installer smoke test. `Lint (conclusion)` is the required check |
 | `test.yml` | push, PR, merge_group, weekly, dispatch | — | Lightweight draft checks; SDK tests and combined Rust/CLI coverage on ready PRs. Compact routine matrices and full weekly/manual matrices. Codecov requires 90% patch coverage |
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
-| `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs |
+| `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs. It regenerates through the `generate:api-client` targets, `apps/hack` post-steps included, so regenerate with those targets rather than the bare generator |
 | `author-review.yml` | PR (target), issue_comment, merge_group | — | Converts unacknowledged PRs to draft, posts author instructions, and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
 | `build-runtime.yml` | weekly, release, dispatch | — | Builds runtime/CLI artifacts and populates sccache together; publishes crates on release |
 | `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
@@ -99,6 +99,14 @@ and reports total coverage.
 
 Linux x64 also runs the native KVM hardware tests and adds their profiles before
 the Rust coverage upload. Missing `/dev/kvm` access fails this qualification.
+
+`Dashboard Tests` runs the dashboard's vitest suite on one Linux runner and
+uploads v8 coverage under the `dashboard` flag. `@nx/vite` infers the project's
+`test` target from the `test` block in `apps/dashboard/vite.config.mts`; without
+that block the target does not exist, nothing runs the suite, and a
+dashboard-only change reaches Codecov with no report — which the patch status
+rejects as a missing report rather than as low coverage. Specs choose their own
+environment with a `// @vitest-environment jsdom` pragma.
 
 When none of the coverage suites is selected on a PR or merge group, the
 `Codecov (no coverage changes)` job runs a validated `empty-upload`. Codecov

@@ -1,11 +1,12 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{io, sync::Mutex};
+use std::{io, os::fd::AsRawFd, sync::Mutex};
 
 use kvm_bindings::{KVM_API_VERSION, KVM_PIT_SPEAKER_DUMMY, kvm_pit_config};
 use kvm_ioctls::{Cap, Kvm, VmFd};
 
+use super::KvmVcpu;
 use super::memory::MemorySlots;
 use crate::{Error, MemoryRegion, Result};
 
@@ -17,15 +18,25 @@ use crate::{Error, MemoryRegion, Result};
 pub struct KvmVm {
     fd: VmFd,
     slots: Mutex<MemorySlots>,
+    run_size: usize,
+    kick_signal: i32,
+    cpuid: Vec<crate::X86CpuidEntry>,
 }
 
 impl KvmVm {
     /// Opens `/dev/kvm`, verifies the required API, and creates the empty VM.
     pub fn new() -> Result<Self> {
-        Self::create().map_err(Error::CreateVm)
+        Self::with_kick_signal(libc::SIGRTMIN() + 1)
     }
 
-    fn create() -> io::Result<Self> {
+    /// Selects an application-reserved realtime signal for vCPU workers.
+    /// It must retain its default disposition and be unblocked before creation.
+    pub fn with_kick_signal(signal: i32) -> Result<Self> {
+        super::kick::validate_signal(signal).map_err(Error::CreateVm)?;
+        Self::create(signal).map_err(Error::CreateVm)
+    }
+
+    fn create(kick_signal: i32) -> io::Result<Self> {
         let kvm = Kvm::new().map_err(|error| {
             let source = io::Error::from_raw_os_error(error.errno());
             if matches!(source.raw_os_error(), Some(libc::ENOENT | libc::ENODEV)) {
@@ -76,7 +87,29 @@ impl KvmVm {
         Ok(Self {
             fd,
             slots: Mutex::new(MemorySlots::new(kvm.get_nr_memslots(), page_size as usize)),
+            run_size: kvm.get_vcpu_mmap_size().map_err(io::Error::from)?,
+            kick_signal,
+            cpuid: super::features::supported_cpuid(&kvm)?,
         })
+    }
+
+    /// Host-supported CPUID values before the VMM applies guest topology/policy.
+    pub fn supported_cpuid(&self) -> &[crate::X86CpuidEntry] {
+        &self.cpuid
+    }
+
+    /// Creates a vCPU on the thread that will run it, in KVM's reset state.
+    pub fn create_vcpu(&self, id: u32) -> Result<KvmVcpu> {
+        let create = || {
+            let kick = super::kick::WorkerSignal::reserve(id, self.kick_signal)?;
+            let fd = self
+                .fd
+                .create_vcpu(u64::from(id))
+                .map_err(io::Error::from)?;
+            kick.configure(fd.as_raw_fd())?;
+            Ok(KvmVcpu::new(fd, id, self.run_size, kick))
+        };
+        create().map_err(|source| Error::CreateVcpu { id, source })
     }
 
     /// Registers caller-owned RAM at a guest physical address.
@@ -128,15 +161,55 @@ impl KvmVm {
             source,
         })
     }
+
+    /// Sets a GSI on the in-kernel interrupt controller, from any thread.
+    pub fn set_irq_line(&self, line: u32, level: bool) -> Result<()> {
+        self.fd
+            .set_irq_line(line, level)
+            .map_err(|source| Error::SetIrqLine {
+                line,
+                source: source.into(),
+            })
+    }
+}
+
+impl crate::Vm for KvmVm {
+    type Vcpu = KvmVcpu;
+
+    unsafe fn map_memory(&self, region: &MemoryRegion) -> Result<()> {
+        // SAFETY: the trait caller guarantees the same backing-memory contract.
+        unsafe { Self::map_memory(self, region) }
+    }
+
+    fn unmap_memory(&self, region: &MemoryRegion) -> Result<()> {
+        Self::unmap_memory(self, region)
+    }
+
+    fn create_vcpu(&self, id: u32) -> Result<Self::Vcpu> {
+        Self::create_vcpu(self, id)
+    }
+
+    fn set_irq_line(&self, line: u32, level: bool) -> Result<()> {
+        Self::set_irq_line(self, line, level)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::ptr::NonNull;
+    use std::sync::{
+        atomic::{AtomicU8, Ordering},
+        mpsc,
+    };
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
 
     use kvm_bindings::{KVM_IRQCHIP_IOAPIC, kvm_irqchip, kvm_regs};
 
     use super::*;
+    use crate::{VcpuExit, VcpuHandle};
 
     struct Ram(NonNull<u8>);
 
@@ -185,6 +258,232 @@ mod tests {
         vm.fd
             .get_pit2()
             .expect("KvmVm::new must create the in-kernel PIT");
+        crate::Vm::set_irq_line(&vm, 4, true).unwrap();
+        crate::Vm::set_irq_line(&vm, 4, false).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn failed_signal_reservation_does_not_consume_vcpu_id() {
+        let vm = KvmVm::new().unwrap();
+        let mut blocked = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+        let mut original = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+        // SAFETY: both signal sets are initialized before libc writes to them.
+        unsafe {
+            libc::sigemptyset(&mut blocked);
+            libc::sigaddset(&mut blocked, vm.kick_signal);
+        }
+        // SAFETY: pointers refer to live signal sets; this only changes the test worker.
+        assert_eq!(
+            unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &blocked, &mut original) },
+            0
+        );
+
+        let first = vm.create_vcpu(0);
+
+        // SAFETY: restore the exact mask before asserting or retrying creation.
+        assert_eq!(
+            unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &original, std::ptr::null_mut()) },
+            0
+        );
+        assert!(matches!(
+            first,
+            Err(Error::CreateVcpu { source, .. })
+                if source.kind() == io::ErrorKind::AlreadyExists
+        ));
+        let vcpu = vm
+            .create_vcpu(0)
+            .expect("a failed signal reservation must not consume the KVM vCPU id");
+        drop(vcpu);
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn kick_before_entry_preserves_registers_and_dropped_handles_are_inert() {
+        let vm = KvmVm::new().unwrap();
+        let mut vcpu = crate::Vm::create_vcpu(&vm, 0).unwrap();
+        let before = vcpu.fd.get_regs().unwrap();
+        let handle = crate::Vcpu::handle(&vcpu);
+        handle.kick().unwrap();
+        assert!(matches!(
+            crate::Vcpu::run(&mut vcpu).unwrap(),
+            VcpuExit::Interrupted
+        ));
+        assert_eq!(vcpu.fd.get_regs().unwrap().rip, before.rip);
+        crate::Vcpu::complete_pending_io(&mut vcpu).unwrap();
+        drop(vcpu);
+        handle.kick().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn boot_registers_round_trip_through_kvm() {
+        use crate::{X86BootRegisters, X86Segment};
+
+        let vm = KvmVm::new().unwrap();
+        let mut vcpu = vm.create_vcpu(0).unwrap();
+        let code = X86Segment {
+            limit: u32::MAX,
+            selector: 8,
+            attributes: 0xa09b,
+            ..Default::default()
+        };
+        vcpu.set_boot_registers(&X86BootRegisters {
+            rip: 0x10_0200,
+            rsp: 0x8ff0,
+            rsi: 0x7000,
+            rflags: 2,
+            cr0: 0x8000_0001,
+            cr3: 0x9000,
+            cr4: 0x20,
+            efer: 0x500,
+            code,
+            data: X86Segment {
+                selector: 16,
+                attributes: 0xc093,
+                ..code
+            },
+            gdt_base: 0x500,
+            gdt_limit: 23,
+            ..Default::default()
+        })
+        .unwrap();
+        let regs = vcpu.fd.get_regs().unwrap();
+        assert_eq!(
+            (regs.rip, regs.rsp, regs.rsi, regs.rflags),
+            (0x10_0200, 0x8ff0, 0x7000, 2)
+        );
+        let special = vcpu.fd.get_sregs().unwrap();
+        assert_eq!(
+            (special.cr0, special.cr3, special.cr4, special.efer),
+            (0x8000_0001, 0x9000, 0x20, 0x500)
+        );
+        assert_eq!(
+            (special.cs.selector, special.cs.l, special.ds.selector),
+            (8, 1, 16)
+        );
+        assert_eq!((special.gdt.base, special.gdt.limit), (0x500, 23));
+        let fpu = vcpu.fd.get_fpu().unwrap();
+        assert_eq!(fpu.fcw, 0x37f);
+        // MXCSR is the seventh dword in the legacy SSE area of XSAVE.
+        assert_eq!(vcpu.fd.get_xsave().unwrap().region[6], 0x1f80);
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn cpu_features_round_trip_through_kvm() {
+        use crate::X86Msr;
+        use kvm_bindings::{KVM_MAX_CPUID_ENTRIES, Msrs, kvm_msr_entry};
+
+        let vm = KvmVm::new().unwrap();
+        let mut vcpu = vm.create_vcpu(0).unwrap();
+        let mut cpuid = vm.supported_cpuid().to_vec();
+        cpuid.iter_mut().find(|entry| entry.leaf == 1).unwrap().ecx |= 1 << 31;
+        vcpu.set_cpu_features(
+            &cpuid,
+            &[X86Msr {
+                index: 0x174,
+                value: 0x10,
+            }],
+        )
+        .unwrap();
+        let actual = vcpu.fd.get_cpuid2(KVM_MAX_CPUID_ENTRIES).unwrap();
+        let leaf = actual
+            .as_slice()
+            .iter()
+            .find(|entry| entry.function == 1)
+            .unwrap();
+        assert_ne!(leaf.ecx & (1 << 31), 0);
+        let mut msrs = Msrs::from_entries(&[kvm_msr_entry {
+            index: 0x174,
+            ..Default::default()
+        }])
+        .unwrap();
+        assert_eq!(vcpu.fd.get_msrs(&mut msrs).unwrap(), 1);
+        assert_eq!(msrs.as_slice()[0].data, 0x10);
+        assert!(matches!(
+            vcpu.set_cpu_features(&[], &[]),
+            Err(Error::ConfigureVcpu {
+                id: 0,
+                operation: "prepare CPUID",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn kick_interrupts_a_guest_that_has_entered_kvm() {
+        let (ready, receive_ready) = mpsc::sync_channel(1);
+        let (release, receive_release) = mpsc::sync_channel(1);
+        let (completed, receive_completed) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let ram = Ram::new();
+            // Real mode: mark entry, wait for the host's stop byte, then HLT.
+            let program = [
+                0xc6, 0x06, 0x00, 0x18, 0x01, 0x80, 0x3e, 0x01, 0x18, 0x01, 0x75, 0xf9, 0xf4,
+            ];
+            // SAFETY: the guest cannot access the mapping before registration.
+            unsafe {
+                std::ptr::copy_nonoverlapping(program.as_ptr(), ram.0.as_ptr(), program.len())
+            };
+            let vm = KvmVm::new().unwrap();
+            // SAFETY: ram outlives vm/vcpu, including during unwinding.
+            unsafe { crate::Vm::map_memory(&vm, &ram.region()) }.unwrap();
+            let mut vcpu = crate::Vm::create_vcpu(&vm, 0).unwrap();
+            let mut segments = vcpu.fd.get_sregs().unwrap();
+            segments.cs.base = 0;
+            segments.cs.selector = 0;
+            vcpu.fd.set_sregs(&segments).unwrap();
+            vcpu.fd
+                .set_regs(&kvm_regs {
+                    rip: 0x1000,
+                    rflags: 2,
+                    ..Default::default()
+                })
+                .unwrap();
+            let marker_address = ram.0.as_ptr() as usize + 0x800;
+            ready
+                .send((crate::Vcpu::handle(&vcpu), marker_address))
+                .unwrap();
+            let outcome =
+                crate::Vcpu::run(&mut vcpu).map(|exit| matches!(exit, VcpuExit::Interrupted));
+            // Keep RAM alive even if KVM returns an unexpected error before the
+            // marker. The parent releases it after its last atomic load.
+            let _ = receive_release.recv();
+            completed.send(outcome).unwrap();
+        });
+        let (handle, marker_address) = receive_ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        // SAFETY: the worker holds RAM until release. x86 byte stores are atomic;
+        // there are no overlapping non-atomic host accesses to this marker.
+        let marker = unsafe { AtomicU8::from_ptr(marker_address as *mut u8) };
+        // SAFETY: the worker holds RAM until release; this byte is separate from
+        // the marker and host/guest access it with byte-wide operations.
+        let stop = unsafe { AtomicU8::from_ptr((marker_address + 1) as *mut u8) };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let entered = loop {
+            if marker.load(Ordering::Relaxed) == 1 {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            thread::yield_now();
+        };
+        let kicked = handle.kick();
+        stop.store(1, Ordering::Relaxed);
+        release.send(()).unwrap();
+        let outcome = receive_completed
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the guest did not stop after the kick attempt");
+        worker.join().unwrap();
+        assert!(entered, "the guest never reached its spin loop");
+        kicked.unwrap();
+        assert!(
+            outcome.unwrap(),
+            "the running guest did not return Interrupted"
+        );
+        handle.kick().unwrap();
     }
 
     #[test]
@@ -198,19 +497,25 @@ mod tests {
         let vm = KvmVm::new().unwrap();
         // SAFETY: ram is uniquely owned and outlives vm and vcpu.
         unsafe { vm.map_memory(&ram.region()) }.unwrap();
-        let mut vcpu = vm.fd.create_vcpu(0).unwrap();
-        let mut segments = vcpu.get_sregs().unwrap();
+        let mut vcpu = vm.create_vcpu(0).unwrap();
+        assert!(matches!(
+            vm.create_vcpu(0),
+            Err(Error::CreateVcpu { id: 0, .. })
+        ));
+        vcpu.complete_pending_io().unwrap();
+        let mut segments = vcpu.fd.get_sregs().unwrap();
         segments.cs.base = 0;
         segments.cs.selector = 0;
-        vcpu.set_sregs(&segments).unwrap();
-        vcpu.set_regs(&kvm_regs {
-            rip: 0x1000,
-            rflags: 2,
-            ..Default::default()
-        })
-        .unwrap();
+        vcpu.fd.set_sregs(&segments).unwrap();
+        vcpu.fd
+            .set_regs(&kvm_regs {
+                rip: 0x1000,
+                rflags: 2,
+                ..Default::default()
+            })
+            .unwrap();
         match vcpu.run().unwrap() {
-            kvm_ioctls::VcpuExit::IoOut(port, bytes) => {
+            crate::VcpuExit::IoOut { port, bytes } => {
                 assert_eq!(port, 0x3f8);
                 assert_eq!(bytes, b"K");
             }
@@ -218,8 +523,14 @@ mod tests {
         }
         // The I/O exit leaves instruction completion pending until KVM_RUN.
         // Complete it without reaching HLT, which can wait in the kernel.
-        vcpu.set_kvm_immediate_exit(1);
-        assert_eq!(vcpu.run().unwrap_err().errno(), libc::EINTR);
+        vcpu.complete_pending_io().unwrap();
+        assert_eq!(vcpu.fd.get_regs().unwrap().rip, 0x1006);
+        vcpu.complete_pending_io().unwrap();
+        assert_eq!(vcpu.fd.get_regs().unwrap().rip, 0x1006);
+        assert_eq!(vcpu.fd.get_kvm_run().immediate_exit, 0);
+        crate::VcpuHandle::kick(&vcpu.handle()).unwrap();
+        assert!(matches!(vcpu.run().unwrap(), crate::VcpuExit::Interrupted));
+        assert_eq!(vcpu.fd.get_regs().unwrap().rip, 0x1006);
         // Stop this user of the backing page before removing its guest mapping.
         drop(vcpu);
         vm.unmap_memory(&ram.region()).unwrap();

@@ -20,6 +20,7 @@ export class BoxliteConfigController {
         clone_enabled: false,
         export_enabled: false,
         import_enabled: false,
+        inbound_update_enabled: true,
       },
     }
   }

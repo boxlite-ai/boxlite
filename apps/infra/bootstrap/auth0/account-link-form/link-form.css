@@ -1,0 +1,162 @@
+/*
+ * The account link Form, dressed like the login page
+ * (apps/infra/auth0/branding/theme.json): its logo and centred heading,
+ * 52px inputs with the label floating on the top border, the greyed
+ * read-only address, a full-width Continue and a quiet cancel line.
+ */
+.af-component {
+  margin-bottom: 24px;
+}
+
+#bl-link-logo {
+  display: block;
+  height: 36px;
+  margin: 0 auto 24px;
+}
+
+.af-componentId-intro {
+  text-align: center;
+}
+
+.af-componentId-intro h2 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  font-weight: 400;
+}
+
+.af-componentId-intro p {
+  margin: 0;
+  font-size: 12px;
+}
+
+/* Labels float on the input's top border, as on the login page. */
+.af-component.af-field {
+  position: relative;
+}
+
+.af-field-label {
+  position: absolute;
+  top: 0;
+  left: 8px;
+  z-index: 1;
+  padding: 1px 6px;
+  background: #13161b;
+  transform: translateY(-50%);
+  line-height: 13px;
+}
+
+.af-fieldLabel-text {
+  margin: 0;
+  color: #8c919c;
+  font-size: 11.44px;
+}
+
+.af-componentId-account .af-field-label {
+  background: #232833;
+}
+
+.af-field:focus-within .af-fieldLabel-text {
+  color: #00b0f0;
+}
+
+.bl-link-account,
+.af-passwordField-input,
+.af-field-invalid .af-passwordField-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 52px;
+  padding: 0 16px;
+  border: 1px solid #2a2f3a;
+  border-radius: 1px;
+  background: #13161b;
+  color: #fff;
+  font: inherit;
+  font-size: 16px;
+}
+
+/* Browsers paint autofilled inputs light; the inset shadow covers it, as the
+ * login page does. Focus thickens the border to 2px without moving the text. */
+.af-passwordField-input:-webkit-autofill {
+  box-shadow: inset 0 0 0 30px #13161b;
+  -webkit-text-fill-color: #fff;
+}
+
+.af-passwordField-input:focus {
+  border-color: #00b0f0;
+  outline: none;
+  box-shadow:
+    inset 0 0 0 1px #00b0f0,
+    inset 0 0 0 30px #13161b;
+}
+
+.af-field-invalid .af-passwordField-input {
+  border-color: #e05548;
+}
+
+.af-passwordField-icon {
+  height: 52px;
+}
+
+/* The address is fixed: greyed, like the login page's read-only identifier. */
+.bl-link-account {
+  background: #232833;
+  color: #8c919c;
+  cursor: not-allowed;
+}
+
+.af-nextButton {
+  width: 100%;
+  height: 52px;
+  border-radius: 0;
+}
+
+.af-componentId-continue_button {
+  margin-bottom: 16px;
+}
+
+/* The error line: the Action's message for a wrong or refused password. */
+.af-componentId-error p {
+  margin: 0;
+}
+
+.af-componentId-error strong {
+  color: #e05548;
+  font-weight: 400;
+}
+
+.af-componentId-error:has(strong:empty) {
+  display: none;
+}
+
+/* Forms' own banner for an empty password, recoloured for the dark page. */
+.af-scenarioMessage-error {
+  border: 1px solid #e05548;
+  border-radius: 1px;
+  background: transparent;
+  color: #e05548;
+}
+
+.bl-link-cancel {
+  margin: 0;
+  color: #fff;
+  font-size: 13px;
+}
+
+.bl-link-cancel button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #00b0f0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.bl-link-cancel button:hover,
+.bl-link-cancel button:focus-visible {
+  text-decoration: underline;
+}
+
+/* Code mode asks for no password; the address field marks the page. */
+.bl-link-code .af-componentId-password {
+  display: none !important;
+}

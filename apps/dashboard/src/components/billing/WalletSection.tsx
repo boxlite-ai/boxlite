@@ -11,6 +11,7 @@ import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { InvoicesTable } from '@/components/Invoices'
 import { WalletTransactionsTable } from '@/components/WalletTransactions'
 import { Input } from '@/components/ui/input'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { useRedeemCouponMutation } from '@/hooks/mutations/useRedeemCouponMutation'
@@ -116,78 +117,76 @@ function Pager({
 }
 
 /**
- * Displays the billing history section showing all charged invoices.
- * The money history: what was actually charged, for usage, plan changes and
- * credit purchases alike. This is the primary billing surface — a credit grant
- * is quota rather than a payment, and reading both off one table is what let a
- * prorated upgrade's granted quota be mistaken for the amount billed for it.
+ * The two money histories, as peers under one tab strip.
  *
- * @returns The billing history section component with invoice table and pagination
+ * They were stacked: billing history, then a folded credit ledger under it.
+ * Each holds 25 rows a page, so whichever came first pushed the other off the
+ * screen, and the fold — added so a grant would not be read as a charge —
+ * buried the ledger where nothing suggested it existed.
+ *
+ * Tabs answer both. Only one table is ever on screen, so neither crowds the
+ * other, and a grant can never sit beside a charge at equal weight — a
+ * stronger separation than the fold gave, since a fold could be opened. Each
+ * label carries its own size, so the ledger announces itself without being
+ * opened.
  */
-function BillingHistorySection() {
-  const [page, setPage] = useState(1)
-  const invoicesQuery = useOwnerInvoicesQuery(page, DEFAULT_PAGE_SIZE)
-  const totalPages = invoicesQuery.data?.totalPages ?? 0
-  useClampPage(page, totalPages, setPage)
+function MoneyHistorySection() {
+  const [tab, setTab] = useState('invoices')
+
+  const [invoicePage, setInvoicePage] = useState(1)
+  const invoicesQuery = useOwnerInvoicesQuery(invoicePage, DEFAULT_PAGE_SIZE)
+  const invoiceTotalPages = invoicesQuery.data?.totalPages ?? 0
+  useClampPage(invoicePage, invoiceTotalPages, setInvoicePage)
+
+  const [creditPage, setCreditPage] = useState(1)
+  const transactionsQuery = useOwnerWalletTransactionsQuery(creditPage, DEFAULT_PAGE_SIZE)
+  const creditTotalPages = transactionsQuery.data?.totalPages ?? 0
+  useClampPage(creditPage, creditTotalPages, setCreditPage)
 
   return (
     <section>
-      <SectionTitle
-        title="Billing history"
-        count={invoicesQuery.data ? `${invoicesQuery.data.totalItems} documents` : undefined}
-      />
-      <InvoicesTable
-        data={invoicesQuery.data?.items ?? []}
-        loading={Boolean(invoicesQuery.isLoading || invoicesQuery.isFetching)}
-      />
-      <Pager page={page} totalPages={totalPages} onPage={setPage} />
-      <PanelNote>Amounts charged to your payment method. Credit grants are listed under Credit activity.</PanelNote>
-    </section>
-  )
-}
+      <Tabs value={tab} onValueChange={setTab} className="w-full gap-0">
+        <TabsList variant="segmented">
+          <TabsTrigger value="invoices">
+            Billing history
+            <Count value={invoicesQuery.data?.totalItems} />
+          </TabsTrigger>
+          <TabsTrigger value="credits">
+            Credit activity
+            <Count value={transactionsQuery.data?.totalItems} />
+          </TabsTrigger>
+        </TabsList>
 
-/**
- * Displays the collapsible credit activity section showing wallet ledger transactions.
- * Grants, expiries and void-restores are free quota with no invoice behind
- * them, so they appear in no other feed and still need a home — but folded,
- * because a top-up already shows in the billing history above as the money it
- * cost, and showing it twice at equal weight is what caused the confusion.
- *
- * @returns The wallet transactions section component with collapsible content
- */
-function WalletTransactionsSection() {
-  const [open, setOpen] = useState(false)
-  const [page, setPage] = useState(1)
-  const transactionsQuery = useOwnerWalletTransactionsQuery(page, DEFAULT_PAGE_SIZE, open)
-  const totalPages = transactionsQuery.data?.totalPages ?? 0
-  useClampPage(page, totalPages, setPage)
+        <TabsContent value="invoices" className="mt-5">
+          <InvoicesTable
+            data={invoicesQuery.data?.items ?? []}
+            loading={Boolean(invoicesQuery.isLoading || invoicesQuery.isFetching)}
+          />
+          <Pager page={invoicePage} totalPages={invoiceTotalPages} onPage={setInvoicePage} />
+          <PanelNote>Amounts charged to your payment method.</PanelNote>
+        </TabsContent>
 
-  return (
-    <section>
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls="credit-activity"
-        onClick={() => setOpen((wasOpen) => !wasOpen)}
-        className="flex w-full items-center gap-2 border-b border-border pb-2 font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <span style={{ color: BRAND }}>{open ? '▾' : '▸'}</span>
-        Credit activity
-        <span className="ml-auto normal-case tracking-normal">
-          {transactionsQuery.data ? `${transactionsQuery.data.totalItems} records` : ''}
-        </span>
-      </button>
-      {open && (
-        <div id="credit-activity" className="mt-3">
+        <TabsContent value="credits" className="mt-5">
           <WalletTransactionsTable
             data={transactionsQuery.data?.items ?? []}
             loading={Boolean(transactionsQuery.isLoading || transactionsQuery.isFetching)}
           />
-          <Pager page={page} totalPages={totalPages} onPage={setPage} />
-        </div>
-      )}
+          <Pager page={creditPage} totalPages={creditTotalPages} onPage={setCreditPage} />
+          {/* Says what these are, which is the job the fold used to do badly:
+              quota granted, not money taken. */}
+          <PanelNote>Credit grants and expiries. These are quota, not charges against your card.</PanelNote>
+        </TabsContent>
+      </Tabs>
     </section>
   )
+}
+
+/** A tab's own size, so neither history has to be opened to be sized up. */
+function Count({ value }: { value?: number }) {
+  if (value === undefined) {
+    return null
+  }
+  return <span className="ml-2 font-normal tabular-nums text-muted-foreground">{value}</span>
 }
 
 /**
@@ -653,9 +652,7 @@ export function WalletSection() {
             </Panel>
           </section>
 
-          <BillingHistorySection key={`invoices-${selectedOrganization?.id ?? 'no-organization'}`} />
-
-          <WalletTransactionsSection key={`credits-${selectedOrganization?.id ?? 'no-organization'}`} />
+          <MoneyHistorySection key={`history-${selectedOrganization?.id ?? 'no-organization'}`} />
         </div>
       )}
     </div>

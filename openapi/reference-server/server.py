@@ -1001,9 +1001,17 @@ async def upload_files(
         with tarfile.open(tar_path, "r:*") as tar:
             tar.extractall(extract_dir)
 
+        # Land what the archive held, not the extraction directory: its
+        # contents ("/." is docker cp's spelling for them), or a lone file by
+        # itself so that it still lands *as* `path`.
+        entries = os.listdir(extract_dir)
+        if len(entries) == 1 and os.path.isfile(os.path.join(extract_dir, entries[0])):
+            source = os.path.join(extract_dir, entries[0])
+        else:
+            source = extract_dir + "/."
         await box_handle.copy_in(
-            extract_dir, path,
-            boxlite.CopyOptions(overwrite=overwrite, include_parent=False),
+            source, path,
+            boxlite.CopyOptions(overwrite=overwrite),
         )
 
     return Response(status_code=204)
