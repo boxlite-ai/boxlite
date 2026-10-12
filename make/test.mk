@@ -643,3 +643,10 @@ test\:stress\:api-vm-lifecycle-local:
 	BOXLITE_STRESS_P95_MS=$${BOXLITE_STRESS_P95_MS:-60000} \
 	BOXLITE_STRESS_P99_MS=$${BOXLITE_STRESS_P99_MS:-90000} \
 	k6 run --summary-trend-stats 'avg,min,med,p(90),p(95),p(99),max' scripts/test/stress/api-vm-lifecycle.k6.js
+
+PHONY_TARGETS += plugin-boxlite-force
+PLUGIN_PYTHON ?= python3
+plugin-boxlite-force:
+
+test\:unit\:plugins: plugin-boxlite-force
+	@PYTHONDONTWRITEBYTECODE=1 $(PLUGIN_PYTHON) -m unittest discover -s tests/plugins -p 'test_*.py'

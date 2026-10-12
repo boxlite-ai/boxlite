@@ -722,3 +722,40 @@ async fn attach_by_exec_id_is_unsupported_on_the_local_backend() {
     let _ = runtime.remove(handle.id().as_str(), true).await;
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
+
+#[tokio::test]
+async fn a_main_command_missing_from_the_image_is_an_invalid_argument() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime
+        .create(
+            BoxOptions {
+                entrypoint: Some(vec!["httpd".into()]),
+                ..main_command_opts(&["-f"], false)
+            },
+            None,
+        )
+        .await
+        .expect("create box");
+
+    let result = handle.start().await;
+
+    let box_id = handle.id().to_string();
+    let _ = handle.stop().await;
+    let _ = runtime.remove(&box_id, true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
+
+    let message = match result {
+        Err(boxlite::BoxliteError::InvalidArgument(message)) => message,
+        other => panic!("a missing main command is the caller's mistake, got {other:?}"),
+    };
+    assert!(message.contains("'httpd'"), "names the command: {message}");
+    for leaked in ["internal error", "/run/boxlite", "bundle", box_id.as_str()] {
+        assert!(!message.contains(leaked), "leaks {leaked:?}: {message}");
+    }
+}

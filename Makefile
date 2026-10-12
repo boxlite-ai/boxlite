@@ -4,6 +4,7 @@ include make/clean.mk
 include make/setup.mk
 include make/build.mk
 include make/dist.mk
+include make/plugins.mk
 include make/dev.mk
 include make/changes.mk
 include make/test.mk

@@ -28,6 +28,7 @@ flowchart TB
    subgraph control["Control plane"]
     api["$ Cloud Run<br/>BoxLite API + Dashboard"]
     proxy["$ GKE Autopilot<br/>BoxLite Proxy"]
+    regproxy["$ Cloud Run · internal ingress<br/>Registry proxy"]
    end
    subgraph execution["$ Compute Engine runner fleet · nested KVM"]
     runner["BoxLite Runner"]
@@ -60,6 +61,9 @@ flowchart TB
  runner <-->|"Mount persistent volumes"|storage
  api -. "Validate identity" .->idp
  runner -->|"Pull images"|registry
+ runner -. "Private pulls · HTTP/2<br/>not wired on hosts yet" .->regproxy
+ regproxy -->|"Verify runner key<br/>via internal API load balancer"|api
+ regproxy -->|"Relay pulls byte for byte"|registry
  api -. "Telemetry" .->otel
  proxy -. "Telemetry" .->otel
  runner -. "Host + box telemetry" .->otel
@@ -83,6 +87,7 @@ flowchart TB
   proxyLB["$ External proxy Network Load Balancer<br/>Wildcard box access · TLS"]
   api["$ Cloud Run<br/>apps/api — control plane<br/>apps/dashboard — bundled SPA"]
   collector["$ Cloud Run<br/>apps/otel-collector<br/>BoxLite + ClickHouse exporters"]
+  regproxy["$ Cloud Run · internal ingress<br/>apps/image-service — registry proxy"]
   subgraph vpc["Private VPC — subnets, routes and firewalls"]
    privateDNS["$ Cloud DNS private zone"]
    internalLB["$ Internal Application Load Balancer<br/>Private API access"]
@@ -119,6 +124,8 @@ flowchart TB
  users -->proxyLB -->proxy
  proxy -->|"Lookup / authorization"|internalLB
  runner -->|"Registration / callbacks"|internalLB
+ runner -. "Private pulls · not wired on hosts yet" .->regproxy
+ regproxy -->|"Workload-subnet egress · verify runner key"|internalLB
  privateDNS -. "Internal API address" .->internalLB
  internalLB -->api
  api -->|"Direct VPC egress · runner API"|runner
@@ -147,8 +154,8 @@ SQL/Redis services; Private Service Connect publishes the self-hosted ClickHouse
 ```mermaid
 flowchart LR
  deploy["BoxLite apps/infra<br/>mbuild · mstage · mdeploy / Pulumi<br/>Developer machine / CI"]
- workloads["BoxLite workloads<br/>API · proxy · collector<br/>runners · ClickHouse"]
- containers["API · proxy · collector"]
+ workloads["BoxLite workloads<br/>API · proxy · collector · registry proxy<br/>runners · ClickHouse"]
+ containers["API · proxy · collector<br/>registry proxy"]
  hosts["Runner hosts"]
  privateHosts["Private VMs + GKE workloads"]
  lbs["Internal API + proxy TLS load balancers"]

@@ -565,6 +565,13 @@ impl ContainerService for GuestServer {
                     )),
                 }))
             }
+            // The caller's input, such as a command the image cannot run, not a
+            // guest failure: answer it like the validation above, which the
+            // host maps to a bare InvalidArgument.
+            Err(e @ BoxliteError::InvalidArgument(_)) => {
+                error!("Failed to create container: {}", e);
+                Err(e.into_validation_status())
+            }
             Err(e) => {
                 error!("Failed to create container: {}", e);
                 Ok(Response::new(ContainerInitResponse {

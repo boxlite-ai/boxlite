@@ -283,6 +283,24 @@ Error: invalid state: cannot execute on stopped box
 - Restart box if stopped: `await runtime.get(box_id)` (may auto-restart)
 - Create new box if needed
 
+### `InvalidArgument(String)`
+
+The request itself is wrong; retrying it unchanged fails the same way. Over REST it is HTTP 400.
+
+**Cause:**
+- The box's main command (its `entrypoint`, else its `cmd`) is missing from the image or is not executable. `start()` reports this.
+- An unknown Linux capability in the box's advanced options
+- Box options that conflict, such as `detach=true` with remove-on-stop, or `ports` with networking disabled
+
+**Example:**
+```text
+Error: invalid argument: executable 'httpd' not found in $PATH
+```
+
+**Solution:**
+- Read the message: it names the input to fix.
+- For a missing command, check which binaries the image ships, for example from a box with a shell: `await box.exec("which", "httpd")`. The name is looked up in the image's `PATH`, so use an absolute path for anything outside it.
+
 ## Error handling patterns
 
 ### Python

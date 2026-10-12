@@ -27,7 +27,7 @@ Follow the shared [secret-handling and resource-protection rules](../security.md
 
 - Public traffic enters through the load balancers; GCP runners and GKE nodes have private addresses.
 - Direct Cloud Run egress uses CIDR-based VM ingress rules, with the shared-subnet limitation described in [networking](networking.md).
-- The collector's internal ingress restriction remains meaningful even where its invoker IAM binding permits `allUsers`.
+- The collector's and registry proxy's internal ingress restrictions remain meaningful even where their invoker IAM bindings permit `allUsers`. The registry proxy checks each runner key against the control plane itself.
 - Database/cache use private connectivity. API and collector have different ClickHouse reader/writer credentials.
 - Volume access uses scoped temporary credentials and bucket-prefix permissions; stage naming alone does not isolate every volume bucket.
 

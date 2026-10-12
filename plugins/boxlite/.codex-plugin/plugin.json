@@ -1,0 +1,39 @@
+{
+  "name": "boxlite",
+  "version": "0.1.0",
+  "description": "Skills for building, deploying and updating apps on BoxLite cloud.",
+  "author": {
+    "name": "BoxLite",
+    "url": "https://boxlite.ai"
+  },
+  "homepage": "https://docs.boxlite.ai",
+  "repository": "https://github.com/boxlite-ai/boxlite",
+  "license": "Apache-2.0",
+  "keywords": ["boxlite", "cloud", "deployment", "cli", "skills"],
+  "skills": "./skills",
+  "interface": {
+    "displayName": "BoxLite",
+    "shortDescription": "Build and deploy BoxLite apps",
+    "longDescription": "Build or adapt applications, deploy them on BoxLite cloud boxes, register public HTTPS tunnels, and update or operate their services and storage through the BoxLite CLI.",
+    "developerName": "BoxLite",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://boxlite.ai",
+    "brandColor": "#111111",
+    "composerIcon": "./assets/boxlite-icon.png",
+    "logo": "./assets/boxlite-icon.png",
+    "defaultPrompt": [
+      "Use BoxLite to build and deploy an application.",
+      "Deploy this project to BoxLite and give me its public URL.",
+      "Update my BoxLite app and verify the same public URL."
+    ]
+  },
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/boxlite-setup/SKILL.md"
+    }
+  }
+}

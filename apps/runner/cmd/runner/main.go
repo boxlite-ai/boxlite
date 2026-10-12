@@ -106,10 +106,16 @@ func run() int {
 		}
 	}
 
+	registryProxy := blclient.RegistryProxy{
+		Host:     cfg.RegistryProxyHost,
+		Username: cfg.RegistryProxyUsername,
+		Password: cfg.RegistryProxyPassword,
+	}
 	boxliteClient, err := blclient.NewClient(ctx, blclient.ClientConfig{
 		Logger:                       logger,
 		HomeDir:                      cfg.BoxliteHomeDir,
 		InsecureRegistries:           insecureRegs,
+		RegistryProxy:                registryProxy,
 		AWSRegion:                    cfg.AWSRegion,
 		AWSEndpointUrl:               cfg.AWSEndpointUrl,
 		AWSAccessKeyId:               cfg.AWSAccessKeyId,

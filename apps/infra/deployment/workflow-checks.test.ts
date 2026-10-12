@@ -131,7 +131,54 @@ for (const result of ['skipped', 'success', 'failure', 'cancelled']) {
 }
 
 const coverageWorkflow: any = loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows/test.yml'), 'utf8'))
-const coverageSuites = ['rust', 'python', 'node', 'go', 'api', 'dashboard']
+const coverageSuites = ['rust', 'python', 'node', 'go', 'api', 'dashboard', 'plugins']
+
+for (const path of ['scripts/plugins/boxlite.py', 'scripts/plugins/.coveragerc',
+  'tests/plugins/test_boxlite_package.py', 'plugins/boxlite/skills/boxlite-setup/SKILL.md',
+  'plugins/boxlite/.codex-plugin/plugin.json', 'make/plugins.mk', '.agents/plugins/marketplace.json']) {
+  test(`plugin inputs select real coverage on PRs and main pushes: ${path}`, () => {
+    assert.deepEqual(testSuites([path]), ['plugins'])
+    assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
+  })
+}
+
+test('repository marketplace-only pushes reach plugin coverage workflow', () => {
+  assert.equal(acceptsFiles('test.yml', 'push', ['.agents/plugins/marketplace.json']), true)
+})
+
+test('plugin coverage runs on drafts and propagates report/upload failures', () => {
+  const jobs = coverageWorkflow.jobs
+  const job = jobs.plugins
+  assert.ok(job, 'plugin source changes need a real coverage job')
+  const evaluate = (expression: string, context: any) => runInNewContext(
+    expression.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), context, { timeout: 1000 })
+  for (const event of ['pull_request', 'push', 'merge_group', 'schedule', 'workflow_dispatch']) {
+    for (const selected of ['true', 'false']) {
+      const github = { event_name: event, event: { pull_request: { draft: true } } }
+      const output = String(evaluate(jobs.changes.outputs.plugins, { github, steps: { filter: { outputs: { plugins: selected } } } }))
+      assert.equal(evaluate(job.if, { github, needs: { changes: { outputs: { plugins: output } } } }),
+        selected === 'true' || event === 'schedule' || event === 'workflow_dispatch')
+    }
+  }
+  assert.ok(job.steps.some((step: any) => step.run === 'make plugin:boxlite:coverage'))
+  const upload = job.steps.find((step: any) => step.uses?.startsWith('codecov/codecov-action@'))
+  assert.equal(upload?.with?.files, 'target/coverage/plugins/coverage.xml')
+  assert.equal(upload.with.flags, 'plugins')
+  assert.equal(upload.with.use_oidc, true)
+  assert.equal(upload.with.disable_search, true)
+  assert.equal(upload.with.fail_ci_if_error, true)
+  assert.equal(upload.with.force, undefined)
+  assert.equal(job.permissions['id-token'], 'write')
+  const conclusion = jobs['test-conclusion']
+  assert.ok(conclusion.needs.includes('plugins'))
+  for (const result of ['success', 'skipped', 'failure', 'cancelled']) {
+    const needs = Object.fromEntries(conclusion.needs.map((name: string) => [name, { result: name === 'plugins' ? result : 'success' }]))
+    const script = conclusion.steps[0].run.replaceAll('${{ toJSON(needs) }}', JSON.stringify(needs))
+    const run = spawnSync('bash', ['-eo', 'pipefail', '-c', script], { encoding: 'utf8', timeout: 10_000 })
+    assert.equal(run.error, undefined)
+    assert.equal(run.status === 0, result === 'success' || result === 'skipped', run.stderr)
+  }
+})
 
 function selectsEmptyCoverage(outputs: Record<string, string>, result = 'success', event = 'pull_request') {
   const job = coverageWorkflow.jobs['coverage-empty']
@@ -212,6 +259,37 @@ test('Linux x64 KVM hardware coverage joins unit profiles before upload', () => 
   }
   assert.equal(steps[hardwareAt]['continue-on-error'], undefined,
     'missing hardware or failed tests must fail CI')
+})
+
+// The check below only guards the ignore list if editing that list runs it.
+test('a change to codecov.yml selects the suite that checks codecov.yml', () => {
+  assert.ok(testSuites(['codecov.yml']).includes('infra'))
+})
+
+// Codecov rejects the empty upload with "Testable files changed" when a changed
+// file is not ignored, so every test source has to match an ignore glob. Select by
+// any path carrying "test" or "spec" as a word: deliberately wider than the globs,
+// so a suite named by a convention nobody has added yet fails here rather than on
+// Codecov. That width is paid for by naming the production files that carry those
+// words. picomatch approximates Codecov's matcher, which ships no library to
+// test against.
+test('every test source is ignored, so a test-only change still qualifies for the empty upload', () => {
+  const production = [
+    '.github/workflows/test.yml',                    // runs the suites, is not one
+    'make/test.mk',                                  // the recipes it calls
+    'scripts/setup/setup-test.sh',                   // installs test tooling
+    'sdks/go/info_cgo_test_support_dev.go',          // dev-tag cgo bridge, shipped
+    'src/boxlite/examples/disk_attachment_test.rs',  // an example, built as one
+    'src/guest/src/container/spec.rs',               // the OCI runtime spec
+  ]
+  const ignore: string[] = (loadYaml(readFileSync(join(REPO_ROOT, 'codecov.yml'), 'utf8')) as any).ignore
+  const tracked = spawnSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 << 20 })
+  assert.equal(tracked.status, 0, tracked.stderr)
+  const testSources = tracked.stdout.trim().split('\n')
+    .filter((path) => /(^|[^a-z0-9])(test|spec)s?([^a-z0-9]|$)/i.test(path) && !production.includes(path))
+  assert.ok(testSources.length > 100, `expected the repo's test sources, found ${testSources.length}`)
+  const testable = testSources.filter((path) => !ignore.some((pattern) => matches(pattern, path)))
+  assert.deepEqual(testable, [], 'these test sources would count as a testable change')
 })
 
 function cliUnitTests(runner: 'cargo' | 'nextest', exitCode = 0) {

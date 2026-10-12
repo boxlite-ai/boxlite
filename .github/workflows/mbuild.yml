@@ -12,8 +12,8 @@
 # the API image on its own trigger and is the path in use; this is the
 # replacement being built beside it, dispatched by hand until it takes over —
 # and unlike it, this one publishes every artifact mbuild.config.json declares
-# (the API, the proxy and the collector) from one commit, so a deploy names one
-# SHA rather than three selectors.
+# (the API, the proxy, the collector and the registry proxy) from one commit, so
+# a deploy names one SHA rather than a selector per image.
 #
 # Every step retries, because everything here that fails transiently is a
 # registry or a token endpoint. The retries are safe rather than hopeful: mbuild
