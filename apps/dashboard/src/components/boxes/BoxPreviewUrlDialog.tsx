@@ -19,8 +19,8 @@ import { useState } from 'react'
 export type BoxPreviewUrlDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** True while anyone with the URL can open it, i.e. the box is public. */
-  isPublic: boolean
+  /** True while anyone with the URL can open it, i.e. inbound access is enabled. */
+  inboundEnabled: boolean
   /** Resolved URL for the port last submitted, if any. */
   url?: string
   isFetching?: boolean
@@ -42,7 +42,7 @@ export type BoxPreviewUrlDialogProps = {
 export function BoxPreviewUrlDialog({
   open,
   onOpenChange,
-  isPublic,
+  inboundEnabled,
   url,
   isFetching = false,
   error,
@@ -99,7 +99,7 @@ export function BoxPreviewUrlDialog({
             {/* Who can use it matters at the moment of copying, which is here
                 rather than back on the sheet. */}
             <p className="text-[11px] uppercase tracking-[1px] text-muted-foreground">
-              {isPublic ? 'anyone with this url can open it' : 'only your organization can open it'}
+              {inboundEnabled ? 'anyone with this url can open it' : 'only your organization can open it'}
             </p>
 
             {/* Stated here because it cannot be diagnosed afterwards: the URL

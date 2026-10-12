@@ -20,6 +20,7 @@ import { Plan } from '@/billing-api/types/Plan'
 import {
   BoxProgressPhase,
   BoxState,
+  NetworkMode,
   RegistryCredentialKind,
   type UsageConcurrencySeriesDto,
 } from '@boxlite-ai/api-client'
@@ -47,7 +48,7 @@ const BILLING_API_URL = 'http://localhost:3000/api/billing'
 const API_URL = import.meta.env.VITE_API_URL
 
 // Quickstart's agent handoff waits for a box created after it handed the key
-// over, then for that box turning public. Static fixtures can reach neither
+// over, then for that box enabling inbound access. Static fixtures can reach neither
 // stage, so both are exposed behind a switch that is off by default:
 //   localStorage['qs-publish-demo'] = 'created' | 'published'
 function quickstartHandoffDemoBox() {
@@ -58,7 +59,10 @@ function quickstartHandoffDemoBox() {
     id: 'mock-box-agent',
     name: 'agile-otter',
     createdAt: new Date().toISOString(),
-    public: stage === 'published',
+    network: {
+      outbound: { mode: NetworkMode.ENABLED, allow_net: [] },
+      inbound: { mode: stage === 'published' ? NetworkMode.ENABLED : NetworkMode.DISABLED, allow_net: [] },
+    },
   }
 }
 
@@ -182,14 +186,15 @@ export const handlers = [
     return box ? HttpResponse.json(box) : new HttpResponse(null, { status: 404 })
   }),
 
-  // Network / preview surface. `public` is mutated in place so the detail page
-  // reflects the toggle after its query is invalidated, the way it does against
-  // a real API.
-  http.post(`${API_URL}/box/:boxIdOrName/public/:isPublic`, ({ params }) => {
-    const box = MOCK_BOXES.find((b) => b.id === params.boxIdOrName)
-    if (!box) return new HttpResponse(null, { status: 404 })
-    box.public = params.isPublic === 'true'
-    return HttpResponse.json(box)
+  // Network / preview surface. `network.inbound` is mutated in place so the
+  // detail page reflects the toggle after its query is invalidated, the way it
+  // does against a real API.
+  http.put(`${API_URL}/v1/:prefix/boxes/:boxId/network/inbound`, async ({ params, request }) => {
+    const box = MOCK_BOXES.find((b) => b.id === params.boxId)
+    if (!box?.network) return new HttpResponse(null, { status: 404 })
+    const { mode } = (await request.json()) as { mode: NetworkMode }
+    box.network.inbound = { mode, allow_net: [] }
+    return HttpResponse.json(box.network.inbound)
   }),
   http.get(`${API_URL}/box/:boxIdOrName/ports/:port/preview-url`, ({ params }) => {
     const boxId = String(params.boxIdOrName)

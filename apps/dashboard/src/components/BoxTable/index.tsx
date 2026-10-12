@@ -7,7 +7,7 @@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { getBoxDisplayName, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { BoxCube } from '@/components/BoxCube'
-import { boxCubeState } from '@/lib/box-shape'
+import { boxCubeState, isInboundEnabled } from '@/lib/box-shape'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn, getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
@@ -317,7 +317,7 @@ export function BoxTable({
                   <BoxCube
                     state={boxCubeState(box)}
                     size={28}
-                    className={cn(box.public ? 'text-foreground' : 'text-muted-foreground')}
+                    className={cn(isInboundEnabled(box) ? 'text-foreground' : 'text-muted-foreground')}
                   />
                   <span className="truncate text-em">{name}</span>
                   <CopyNameButton name={name} className="opacity-0 group-hover:opacity-100" />

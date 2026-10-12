@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
 import { Switch } from '@/components/ui/switch'
+import { NetworkMode, type NetworkInfo } from '@boxlite-ai/api-client'
 import { useState, type ReactNode } from 'react'
 
 /**
@@ -78,17 +79,27 @@ function InlineAction({
 }
 
 export type BoxNetworkPanelProps = {
-  isPublic: boolean
-  isPublicPending?: boolean
+  /** The box's policy in both directions; absent when the API did not report it. */
+  network?: NetworkInfo
+  inboundPending?: boolean
   /** False for viewers, who see the state but cannot change exposure. */
   canManage: boolean
-  onTogglePublic: (next: boolean) => void
+  onToggleInbound: (next: NetworkMode) => void
   /** Opens the port prompt that resolves a preview URL. */
   onGetUrl: () => void
 }
 
+/** `enabled · 2 hosts allowed`: an allowlist narrows egress, so it is part of the value. */
+function outboundLabel(outbound: NetworkInfo['outbound']): string {
+  if (outbound.mode !== NetworkMode.ENABLED) return 'disabled'
+  const allowed = outbound.allow_net.length
+  if (allowed === 0) return 'enabled'
+  return `enabled · ${allowed} ${allowed === 1 ? 'host' : 'hosts'} allowed`
+}
+
 /**
- * Who can reach this box, and a way to get a preview URL for one of its ports.
+ * Both directions of the box's network policy, and a way to get a preview URL
+ * for one of its ports.
  *
  * The section does not list ports, because the console cannot enumerate what is
  * listening inside a guest — see `BoxPreviewUrlDialog` for why. Rather than
@@ -96,55 +107,59 @@ export type BoxNetworkPanelProps = {
  * names, which is something the REST surface answers reliably.
  */
 export function BoxNetworkPanel({
-  isPublic,
-  isPublicPending = false,
+  network,
+  inboundPending = false,
   canManage,
-  onTogglePublic,
+  onToggleInbound,
   onGetUrl,
 }: BoxNetworkPanelProps) {
-  const [confirmingPublic, setConfirmingPublic] = useState(false)
+  const [confirmingInbound, setConfirmingInbound] = useState(false)
+  const inboundEnabled = network?.inbound.mode === NetworkMode.ENABLED
 
   return (
     <>
       <SectionHeader title="network" right={<InlineAction onClick={onGetUrl}>get url</InlineAction>} />
 
-      {/* `access` answers the only question this row is asked — can a stranger
-          open this box? — rather than naming the mechanism.
-
-          The URLs it governs carry no credential (`getPortPreviewUrl` returns
-          `url` and `token` separately), so a non-member is bounced through
-          OIDC and then refused by the org-membership check in
-          preview.controller.ts:142. Access is credential-based, not
-          network-based: there is no inbound IP allowlist (openapi/box.openapi
-          .yaml — "no layer enforces an inbound allowlist today").
-
-          Sheet convention: grey key, foreground value; hue carries the risk
-          signal (amber when exposed). */}
+      {/* Sheet convention: grey key, foreground value; hue carries the risk
+          signal (amber when inbound is enabled). Outbound is read-only: no
+          route changes it after create. */}
       <div className="mb-[6px] flex items-baseline gap-2">
-        <span className="whitespace-nowrap text-muted-foreground">access</span>
+        <span className="whitespace-nowrap text-muted-foreground">outbound</span>
         <span className="-translate-y-1 min-w-[8px] flex-1 border-b border-dotted border-border" />
-        <span className="whitespace-nowrap" style={isPublic ? { color: STATUS.idle } : undefined}>
-          {isPublic ? 'anyone' : 'your organization'}
+        <span className="whitespace-nowrap">{network ? outboundLabel(network.outbound) : 'unknown'}</span>
+      </div>
+
+      {/* Inbound access only lets the proxy skip sign-in for the services the
+          box exposes. The URLs carry no credential (`getPortPreviewUrl` returns
+          `url` and `token` separately), so with it disabled a non-member is
+          bounced through OIDC and refused by the org-membership check in
+          preview.controller.ts. Access is credential-based, not network-based:
+          no layer enforces an inbound allowlist yet. */}
+      <div className="mb-[6px] flex items-baseline gap-2">
+        <span className="whitespace-nowrap text-muted-foreground">inbound</span>
+        <span className="-translate-y-1 min-w-[8px] flex-1 border-b border-dotted border-border" />
+        <span className="whitespace-nowrap" style={inboundEnabled ? { color: STATUS.idle } : undefined}>
+          {network ? (inboundEnabled ? 'enabled · anyone' : 'disabled · your organization') : 'unknown'}
         </span>
-        {canManage ? (
+        {canManage && network ? (
           <Switch
-            aria-label="Public"
-            checked={isPublic}
-            disabled={isPublicPending}
-            onCheckedChange={(next) => (next ? setConfirmingPublic(true) : onTogglePublic(false))}
+            aria-label="Inbound access"
+            checked={inboundEnabled}
+            disabled={inboundPending}
+            onCheckedChange={(next) => (next ? setConfirmingInbound(true) : onToggleInbound(NetworkMode.DISABLED))}
             className="ml-1 scale-90"
           />
         ) : null}
       </div>
 
-      <AlertDialog open={confirmingPublic} onOpenChange={setConfirmingPublic}>
+      <AlertDialog open={confirmingInbound} onOpenChange={setConfirmingInbound}>
         <AlertDialogContent className="font-mono">
           <AlertDialogHeader>
             <AlertDialogTitle>Open this box&apos;s preview URLs to anyone?</AlertDialogTitle>
-            {/* Scoped deliberately. The flag only makes the proxy skip
+            {/* Scoped deliberately. Inbound access only makes the proxy skip
                 authentication for preview traffic (get_box_target.go:87) and
                 raw tunnel CONNECTs (tunnel.go:43). The web terminal stays
-                authenticated even when public — the same line exempts
+                authenticated even with it enabled — the same line exempts
                 TERMINAL_PORT — and the management API is untouched. An earlier
                 "Make this box public?" read as handing over the whole box. */}
             <AlertDialogDescription>
@@ -163,11 +178,11 @@ export function BoxNetworkPanel({
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                onTogglePublic(true)
-                setConfirmingPublic(false)
+                onToggleInbound(NetworkMode.ENABLED)
+                setConfirmingInbound(false)
               }}
             >
-              Open to anyone
+              Enable inbound access
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

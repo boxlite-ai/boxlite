@@ -22,24 +22,24 @@ const noop = () => {}
 /** Opened, nothing asked for yet. */
 export const Empty: Story = {
   name: '1 · Asking for a port',
-  args: { open: true, onOpenChange: noop, isPublic: false, onFetchUrl: noop },
+  args: { open: true, onOpenChange: noop, inboundEnabled: false, onFetchUrl: noop },
 }
 
 export const Fetching: Story = {
   name: '2 · Fetching',
-  args: { open: true, onOpenChange: noop, isPublic: false, isFetching: true, onFetchUrl: noop },
+  args: { open: true, onOpenChange: noop, inboundEnabled: false, isFetching: true, onFetchUrl: noop },
 }
 
 /** Restricted box: the URL only opens for organization members. */
 export const RestrictedResult: Story = {
   name: '3 · URL on a restricted box',
-  args: { open: true, onOpenChange: noop, isPublic: false, url: RESTRICTED_URL, onFetchUrl: noop },
+  args: { open: true, onOpenChange: noop, inboundEnabled: false, url: RESTRICTED_URL, onFetchUrl: noop },
 }
 
-/** Public box: the wording has to make the anonymous reach unmissable. */
-export const PublicResult: Story = {
-  name: '4 · URL on a public box',
-  args: { open: true, onOpenChange: noop, isPublic: true, url: RESTRICTED_URL, onFetchUrl: noop },
+/** Inbound access enabled: the wording has to make the anonymous reach unmissable. */
+export const InboundEnabledResult: Story = {
+  name: '4 · URL with inbound access enabled',
+  args: { open: true, onOpenChange: noop, inboundEnabled: true, url: RESTRICTED_URL, onFetchUrl: noop },
 }
 
 export const Failed: Story = {
@@ -47,7 +47,7 @@ export const Failed: Story = {
   args: {
     open: true,
     onOpenChange: noop,
-    isPublic: false,
+    inboundEnabled: false,
     error: 'Could not get a URL for that port.',
     onFetchUrl: noop,
   },
@@ -64,7 +64,7 @@ export const Interactive: Story = {
       <BoxPreviewUrlDialog
         open
         onOpenChange={noop}
-        isPublic={false}
+        inboundEnabled={false}
         url={url}
         isFetching={isFetching}
         onFetchUrl={(port) => {

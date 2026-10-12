@@ -25,8 +25,9 @@ import {
   VolumesApi,
   WebhooksApi,
   UsageApi as CoreUsageApi,
+  NetworkMode,
 } from '@boxlite-ai/api-client'
-import axios, { AxiosError } from 'axios'
+import axios, { AxiosError, AxiosInstance } from 'axios'
 import { BoxliteError } from './errors'
 
 // A burst of in-flight requests can all 401 at once when the access token goes
@@ -70,6 +71,7 @@ function clearReauthAttempted(): void {
 
 export class ApiClient {
   private config: Configuration
+  private http: AxiosInstance
   private onUnauthorized?: () => Promise<void> | void
   private _boxApi: BoxApi
   private _userApi: UsersApi
@@ -139,6 +141,8 @@ export class ApiClient {
         })
       },
     )
+
+    this.http = axiosInstance
 
     // Initialize APIs
     this._boxApi = new BoxApi(this.config, undefined, axiosInstance)
@@ -214,6 +218,19 @@ export class ApiClient {
     // state, not an error, while the redirect navigates the page away. Reached
     // only on a successfully-started re-auth.
     return new Promise<never>(() => {})
+  }
+
+  /**
+   * Sets a box's inbound mode through the `/v1` route the CLI and SDKs use.
+   * `/v1` is spec-first and outside the generated client, so this goes through
+   * the same axios instance to keep the 401 and error handling above.
+   */
+  public async setBoxInboundMode(organizationId: string, boxId: string, mode: NetworkMode): Promise<void> {
+    await this.http.put(
+      `/v1/${encodeURIComponent(organizationId)}/boxes/${encodeURIComponent(boxId)}/network/inbound`,
+      { mode },
+      { baseURL: this.config.basePath, headers: { Authorization: `Bearer ${this.config.accessToken}` } },
+    )
   }
 
   public setAccessToken(accessToken: string) {
