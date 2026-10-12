@@ -63,7 +63,7 @@ Example for a project with requirements.txt, server.py and /health on port 8000:
   "cli": "boxlite",
   "profile": "PROFILE",
   "home": "CLI_HOME",
-  "api_url": "https://app.boxlite.ai/api",
+  "api_url": "https://api.boxlite.ai",
   "box": "APP",
   "source": "..",
   "port": 8000,
