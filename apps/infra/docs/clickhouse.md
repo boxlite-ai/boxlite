@@ -29,7 +29,18 @@ Set `stages.<stage>.deploy.clickhouse.mode` in `.mstage.config.json` for mdeploy
 | `disabled` | No ClickHouse backend/exporter | Use other telemetry destinations as needed |
 
 Self-hosted size and disk capacity come from `deploy.clickhouse.instanceSize` and `dataGb`.
-The vendored schema currently renders 72-hour retention.
+`CLICKHOUSE_RETENTION_HOURS` (stage environment, positive integer hours, default `720`) sets
+the TTL of the seven telemetry tables. It is rejected unless the ClickHouse mode is `self-hosted`.
+
+| Cloud | How a changed value reaches existing tables |
+| --- | --- |
+| AWS | The SSM readiness command re-runs and alters every table TTL during the deploy. |
+| GCP | An OS Config policy alters the TTLs on the host's next agent cycle, without a restart or VM replacement. Check the `clickhouse-retention` compliance report before treating the change as applied. |
+
+Both clouds judge compliance by the `toIntervalHour(N)` marker in each table's `create_table_query`.
+New GCP tables are bootstrapped at the default TTL and converge to the configured value afterwards.
+Expiry runs in the background; raising retention cannot recover rows already deleted.
+Moving a GCP host off the former 72-hour bootstrap schema replaces its VM once; the data disk is kept.
 Keep database/user settings aligned with the bundled schema and boot scripts;
 `otel`, `otel_writer` and `otel_reader` are the example's supported baseline.
 

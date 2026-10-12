@@ -76,7 +76,26 @@ const inputs = (overrides: Partial<StackInputs> = {}): StackInputs => ({
   collectorSecrets: {},
   runnerEnvironment: {},
   runnerSecrets: {},
+  clickHouseRetentionHours: null,
   ...overrides,
+})
+
+test('retention is resolved once, and only a self-hosted ClickHouse accepts one', () => {
+  const retentionSeen = (clickHouseRetentionHours: number | null, mode = config.clickhouse.mode) => {
+    const providers = bundle()
+    deployStack({
+      providers: providers.providers,
+      config: { ...config, clickhouse: { ...config.clickhouse, mode } },
+      inputs: inputs({ clickHouseRetentionHours }),
+    })
+    return providers.seen.clickhouse.request.retentionHours
+  }
+  assert.equal(retentionSeen(168), 168)
+  assert.equal(retentionSeen(null), 720)
+  for (const mode of ['managed', 'disabled'] as const) {
+    assert.equal(retentionSeen(null, mode), 720)
+    assert.throws(() => retentionSeen(168, mode), /CLICKHOUSE_RETENTION_HOURS cannot be set when deploy.clickhouse.mode is/)
+  }
 })
 
 /**

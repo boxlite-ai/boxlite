@@ -1,5 +1,5 @@
 PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
-PHONY_TARGETS += test\:integration\:vmm\:kvm _ensure-kvm
+PHONY_TARGETS += test\:integration\:vmm\:kvm _ensure-kvm test\:vmm\:boot
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -267,6 +267,10 @@ test\:unit\:cli:
 # submodules.
 test\:unit\:vmm:
 	@cargo test $(RUST_UNIT_VMM_ARGS) -- $(CARGOTEST_FILTER)
+
+# Stubbed-tool contract tests for the kernel build script; they never compile Linux.
+test\:vmm\:boot:
+	@python3 "$(PROJECT_ROOT)/src/vmm/boot/tests/test_build.py"
 
 # Missing /dev/kvm must fail hardware qualification, not report skipped tests as a pass.
 _ensure-kvm:

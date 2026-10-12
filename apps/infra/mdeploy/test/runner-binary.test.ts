@@ -4,7 +4,7 @@
  * The version is the checkout's, so most of what is worth pinning here is the
  * refusals: a resolver that answered *something* for a malformed selector would
  * compose an address nothing published, and the failure would land on a host's
- * first boot — where the boot script never runs again.
+ * first boot — and a host never gets a boot script other than the one it was created with.
  */
 
 import assert from 'node:assert/strict'
@@ -140,7 +140,7 @@ test('the same commit is staged under one key on either cloud, read by that clou
    * One key, two schemes. `runner:build` composes the destination from the same
    * rule, so a stage that moved clouds would otherwise stage under one name and
    * read under another — and the host would 404 at first boot, permanently,
-   * because the boot script never runs again.
+   * because a host never gets a boot script other than the one it was created with.
    */
   const google = runnerArtifactFor({
     selector: { kind: 'build', version: '0.10.0', ref: REF },
@@ -162,8 +162,8 @@ test('the same commit is staged under one key on either cloud, read by that clou
 })
 
 test('a build with nowhere staged is refused before a host is created', () => {
-  // Composing an address anyway would fail on the host at first boot, and that
-  // boot never happens again.
+  // Composing an address anyway would fail on the host at first boot, from a
+  // boot script that is never rewritten.
   assert.throws(
     () => resolve({ RUNNER_ARTIFACT_SOURCE: 'build', RUNNER_ARTIFACT_REF: REF }, null),
     /staged in this stage’s artifacts bucket, and this deploy was handed none/,

@@ -5,9 +5,9 @@
  * `ignoreChanges`, because a host holds state nothing else in the stack does —
  * `/var/lib/boxlite` and the libkrun VMs in its memory. That is the right call
  * and it has one consequence: a deploy that changes which binary the fleet
- * should run changes nothing at all. The boot script runs once, at first boot,
- * and a `protect: true` instance is never replaced, so "installed at boot" means
- * "never" for every host that already exists.
+ * should run changes nothing at all. A host only ever has the boot script it was
+ * created with, and a `protect: true` instance is never replaced, so "installed
+ * at boot" means "never" for every host that already exists.
  *
  * So the version is landed in place instead: the binary under
  * `/usr/local/bin/boxlite-runner` is replaced and the unit restarted, and the
@@ -444,9 +444,9 @@ exit 101
 /**
  * The unit environment a host must converge on, for the keys a deploy moves.
  *
- * `BOXLITE_API_URL` and `OTEL_EXPORTER_OTLP_ENDPOINT` are written once, at
- * first boot, from `api.address` and the collector's own URL, and nothing
- * rewrites them afterwards: the script that wrote them is in `ignoreChanges` on
+ * `BOXLITE_API_URL` and `OTEL_EXPORTER_OTLP_ENDPOINT` are written by the boot
+ * script from `api.address` and the collector's own URL, and nothing changes
+ * them afterwards: the script that wrote them is in `ignoreChanges` on
  * both clouds — `userDataBase64` on AWS, `metadataStartupScript` on GCP — and a
  * `protect: true` instance is never replaced. So a stage that changes its
  * domain leaves every existing host calling a name that no longer resolves, and

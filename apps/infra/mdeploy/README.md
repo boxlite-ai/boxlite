@@ -39,8 +39,8 @@ Use [mbuild](../mbuild/README.md) and the [runner runbook](../docs/runners.md) t
 
 ## Runner convergence
 
-Runner hosts retain local box state and are protected against replacement. Boot-image/startup
-changes are ignored for existing hosts; binary and unit-environment updates have a separate path.
+Runner hosts retain local box state and are protected against replacement. Boot-image, startup and
+attached-disk changes are ignored for existing hosts; binary and unit-environment updates have a separate path.
 
 Updates verify artifact checksums and readiness. Already-converged hosts need no restart;
 release downgrade requires the explicit operator command. Follow [GCP runner convergence](../docs/gcp/runners.md)

@@ -26,8 +26,9 @@ import { API_PORT } from './api.ts'
 import type { AlarmProvider, AlarmSubjects } from './alarms.ts'
 import type { Cache, CacheProvider } from './cache.ts'
 import { CACHE_PASSWORD_VARIABLE, cacheEnvironment } from './cache.ts'
-import type { ClickHouse, ClickHouseProvider } from './clickhouse.ts'
+import type { ClickHouse, ClickHouseMode, ClickHouseProvider } from './clickhouse.ts'
 import { CLICKHOUSE_PASSWORD_VARIABLE, clickHouseEnvironment } from './clickhouse.ts'
+import { DEFAULT_CLICKHOUSE_RETENTION_HOURS } from '../../shared/clickhouse-retention.ts'
 import type { Cluster, ClusterProvider, WorkloadHost } from './cluster.ts'
 import type { Collector, CollectorProvider } from './collector.ts'
 import { COLLECTOR_API_KEY_STORE_KEY, COLLECTOR_API_KEY_VARIABLE } from './collector.ts'
@@ -60,6 +61,8 @@ const imageFor = (images: Images, component: 'api' | 'proxy' | 'otel-collector')
 
 /** What one deploy decides, as opposed to what `mdeploy.config.json` declares. */
 export type StackInputs = {
+  /** `CLICKHOUSE_RETENTION_HOURS` from the stage, or null when it set none. */
+  clickHouseRetentionHours: number | null
   stage: string
   /** The commit being deployed. Every container runs the same one. */
   tag: string
@@ -187,6 +190,18 @@ const assertOneChannelPerName = ({
   }
 }
 
+/**
+ * Retention is resolved here, where the mode is known. Only a self-hosted
+ * ClickHouse applies it; a value set for a managed or disabled one would be
+ * silently dropped, so it is refused instead.
+ */
+const clickHouseRetentionFor = (mode: ClickHouseMode, configured: number | null): number => {
+  if (configured !== null && mode !== 'self-hosted') {
+    throw new Error(`CLICKHOUSE_RETENTION_HOURS cannot be set when deploy.clickhouse.mode is ${mode}`)
+  }
+  return configured ?? DEFAULT_CLICKHOUSE_RETENTION_HOURS
+}
+
 /** What the deploy reports, and what a post-deploy check reads. */
 export type StackOutputs = {
   apiUrl: $util.Output<string>
@@ -215,7 +230,10 @@ export const deployStack = ({
   const cluster: Cluster = providers.cluster({ network })({ roles: CONTAINER_ROLES })
   const database: Database = providers.database({ network })(config.database)
   const cache: Cache = providers.cache({ network })(config.cache)
-  const clickhouse: ClickHouse = providers.clickhouse({ network })(config.clickhouse)
+  const clickhouse: ClickHouse = providers.clickhouse({ network })({
+    ...config.clickhouse,
+    retentionHours: clickHouseRetentionFor(config.clickhouse.mode, inputs.clickHouseRetentionHours),
+  })
 
   /*
    * The network's own rules, which reach every workload through the cluster.

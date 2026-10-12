@@ -84,7 +84,7 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Users and authentication</b> · 10 routes</summary>
+<summary><b>Users and authentication</b> · 12 routes</summary>
 
 | Method   | Path                                                     | What it does                                   |
 | -------- | -------------------------------------------------------- | ---------------------------------------------- |
@@ -98,6 +98,8 @@ serves and the events it emits are catalogued below alongside its routes.
 | `DELETE` | `/api/users/linked-accounts/{provider}/{providerUserId}` | Unlinks an external account.                   |
 | `POST`   | `/api/users/mfa/sms/enroll`                              | Enrolls the user in SMS MFA.                   |
 | `GET`    | `/api/auth/end-session`                                  | Starts OIDC RP-initiated logout.               |
+| `POST`   | `/api/auth/link/adopt`                                   | Moves a linked account's data for the Action.  |
+| `GET`    | `/api/auth/link/status`                                  | Tells the Action whether BoxLite knows a user. |
 
 </details>
 
