@@ -38,6 +38,15 @@ pub mod executor {
 
     /// Key for container executor (format: "container")
     pub const CONTAINER_KEY: &str = "container";
+
+    /// Stable `ExecError.reason` token meaning "the user-supplied command can't be
+    /// run" (not found in PATH / not executable / no PATH set). This is OUR own
+    /// vocabulary on the guest→host boundary: the guest classifies the failure at
+    /// the source (via the youki workload validator, surfaced through a typed
+    /// fd side-channel) and the host maps this reason to `BoxliteError::Execution`
+    /// (HTTP 422) instead of `Internal` (500). Both sides MUST agree on this
+    /// literal, hence the shared constant — no magic strings.
+    pub const REASON_USER_COMMAND_ERROR: &str = "user_command_error";
 }
 
 /// Virtiofs mount tags
