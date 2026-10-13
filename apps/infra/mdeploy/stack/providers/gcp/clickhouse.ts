@@ -506,7 +506,7 @@ export const gcpClickHouseProvider =
       zone,
       network: network.network,
       subnetwork: network.subnetwork,
-      instanceLink: instance.selfLink,
+      instance,
       hostAccount: host.email,
       port: HTTP_PORT,
       consumerProject: clickStackConsumerProject,

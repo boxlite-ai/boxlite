@@ -111,8 +111,9 @@ and inputs, preserving its state-managed value unless separately replaced. Coord
 the new ARN and consumer IAM/reference updates; the existing readiness step restarts
 ClickHouse. This naming migration does not alter GCP resources.
 
-Review rollout impact first: GCP startup changes replace the VM; AWS readiness
-restarts ClickHouse. The data disk is retained, but rollout can interrupt queries.
+Review rollout impact first: GCP startup changes replace the VM, which
+[rejoins its ClickStack backend](gcp/clickhouse.md#clickstack-publication) in the same
+deploy; AWS readiness restarts ClickHouse. The data disk is retained, but rollout can interrupt queries.
 Check authentication, denied writes/tables/settings and persistence after restart.
 Run `BOXLITE_CLICKHOUSE_INTEGRATION=1 make test:apps:infra` with Docker for a
 disposable local check. Full stack typechecking uses `make test:apps:infra-config`.

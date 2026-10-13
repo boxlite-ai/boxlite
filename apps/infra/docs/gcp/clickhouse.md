@@ -34,11 +34,17 @@ reader-secret access are distinct: `CLICKSTACK_CONSUMER_ACCOUNT` grants
 the named service account reader-secret access; it does not itself create a consumer endpoint.
 See [publication source](../../mdeploy/stack/providers/gcp/clickstack.ts) and the full [data-path graph](architecture.md#gcp-runtime-and-data-paths).
 
+A changed startup script recreates the VM under the same name, and Compute Engine removes
+the deleted VM from the balancer's unmanaged instance group. The `ClickStackMembership`
+command, keyed on the VM's id, adds the new VM back in the same deploy; a VM already listed
+is left alone. It runs `gcloud`, so the deploy needs `gcloud` authenticated as the deployer.
 
 ## Verify the result
 
 Check tables, collector insertion and the API's distinct reader path. A healthy VM is insufficient.
-Verify ingestion and queries after each deployment.
+Verify ingestion and queries after each deployment. After a VM replacement, also confirm that
+`gcloud compute backend-services get-health <app>-<stage>-clickstack --region <region>`
+lists the VM as `HEALTHY`; a result listing no instance means the group lost it.
 See [retained data precautions](../clickhouse.md#retained-data) before changing backend mode or removing disks.
 
 Sources: [ClickHouse provider](../../mdeploy/stack/providers/gcp/clickhouse.ts),

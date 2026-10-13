@@ -38,6 +38,12 @@ const CONNECTION_LIMIT = 10
  */
 const HEALTH_PROBE_RANGES = ['35.191.0.0/16', '130.211.0.0/22']
 
+/** Adds the VM unless listed; `addInstances` refuses an existing member (`memberAlreadyExists`). */
+const JOIN_GROUP_SCRIPT = `set -eu
+members=$(gcloud compute instance-groups unmanaged list-instances "$GROUP" --project="$PROJECT" --zone="$ZONE" --format='value(instance.basename())')
+if printf '%s\\n' "$members" | grep -Fqx -- "$INSTANCE"; then exit 0; fi
+gcloud compute instance-groups unmanaged add-instances "$GROUP" --project="$PROJECT" --zone="$ZONE" --instances="$INSTANCE"`
+
 /**
  * The ClickStack publication: everything between the ClickHouse VM and a
  * consumer's endpoint.
@@ -53,7 +59,7 @@ export const publishClickStack = ({
   zone,
   network,
   subnetwork,
-  instanceLink,
+  instance,
   hostAccount,
   port,
   consumerProject,
@@ -66,8 +72,8 @@ export const publishClickStack = ({
   zone: string
   network: $util.Input<string>
   subnetwork: $util.Input<string>
-  /** The ClickHouse VM, by self link: what the instance group holds. */
-  instanceLink: $util.Input<string>
+  /** The ClickHouse VM: the group holds its self link, and a recreation changes only its id. */
+  instance: { selfLink: $util.Input<string>; instanceId: $util.Input<string>; name: $util.Input<string> }
   /** The identity the VM runs as, which the firewall rule below targets. */
   hostAccount: $util.Input<string>
   /**
@@ -137,7 +143,18 @@ export const publishClickStack = ({
     project,
     zone,
     network,
-    instances: [instanceLink],
+    instances: [instance.selfLink],
+  })
+
+  /*
+   * Membership again whenever the VM is recreated: Compute Engine drops a deleted
+   * VM from this group, and the unchanged self link gives Pulumi nothing to update.
+   * Not `InstanceGroupMembership`, whose create fails where the VM is still listed.
+   */
+  new command.local.Command('ClickStackMembership', {
+    create: JOIN_GROUP_SCRIPT,
+    environment: { PROJECT: project, ZONE: zone, GROUP: group.name, INSTANCE: instance.name },
+    triggers: [instance.instanceId],
   })
 
   /*

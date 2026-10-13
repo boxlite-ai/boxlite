@@ -71,12 +71,14 @@ test('ClickHouse providers preserve host inputs and reconcile optional reader cr
   const resources = new Map<string, { args: any; options: any }>()
   let rotated = ''
   let arnSuffix = ''
+  let recreated = 1
   class Resource {
     [key: string]: any
     constructor(name: string, args: any, options: any = {}) {
       resources.set(name, { args, options })
       Object.assign(this, args, {
         id: output(name), arn: output(`${name}-arn${arnSuffix}`), selfLink: output(name), email: output('host@example.test'),
+        instanceId: output(`${name}#${recreated}`), // A recreated VM keeps its name and self link, not its id.
         name: output(`${name}/versions/${name === rotated ? 2 : 1}`),
         networkInterfaces: [{ networkIp: '10.0.0.2' }], result: output('test-password'),
       })
@@ -150,6 +152,31 @@ test('ClickHouse providers preserve host inputs and reconcile optional reader cr
       assert.match(rotation.script, new RegExp(`${rotated}/versions/2`))
     })
   }
+  await t.test('a VM recreated under its own name rejoins the published group', (subtest) => {
+    const declared = (id: number) => { recreated = id; deploy(720); recreated = 1; return new Map([...resources].map(([name, { args }]) => [name, JSON.stringify(args)])) }
+    const before = declared(1)
+    const changed = [...declared(2)].filter(([name, args]) => before.get(name) !== args).map(([name]) => name)
+    assert.deepEqual(changed, ['ClickStackMembership'], 'nothing re-adds the recreated VM, so its group stays empty')
+    const { create, environment } = resources.get('ClickStackMembership')!.args
+    const env = Object.fromEntries(Object.entries(environment).map(([key, value]: [string, any]) => [key, value.value ?? value]))
+    const directory = mkdtempSync(join(tmpdir(), 'boxlite-membership-')), members = join(directory, 'members')
+    subtest.after(() => rmSync(directory, { recursive: true, force: true }))
+    // Compute Engine as the script meets it: names listed, an existing member refused, anything else unexpected.
+    writeFileSync(join(directory, 'gcloud'), `#!/bin/sh
+[ "$5 $6 $7" = "$GROUP --project=$PROJECT --zone=$ZONE" ] || exit 2
+case "$4 $8" in
+  "list-instances --format=value(instance.basename())") cat "$MEMBERS" ;;
+  "add-instances --instances=$INSTANCE") ! grep -qx "$INSTANCE" "$MEMBERS" || exit 1; echo "$INSTANCE" >> "$MEMBERS" ;;
+  *) exit 2 ;; esac
+`, { mode: 0o700 })
+    const run = (current?: string) => {
+      if (current === undefined) rmSync(members, { force: true }); else writeFileSync(members, current)
+      return spawnSync('sh', ['-c', create], { env: { ...process.env, ...env, MEMBERS: members, PATH: `${directory}:${process.env.PATH}` } }).status
+    }
+    assert.deepEqual([run(''), readFileSync(members, 'utf8')], [0, `${env.INSTANCE}\n`], 'the recreated VM joins its emptied group')
+    assert.equal(run(`${env.INSTANCE}\n`), 0, 'a VM still in its group is left alone')
+    assert.notEqual(run(), 0, 'a group that cannot be read fails the deploy')
+  })
   await t.test('AWS uses unique secret names and propagates the returned ARN through IAM and readiness', () => {
     const invoke = (otelOpenapiEnabled: boolean) => {
       resources.clear()
