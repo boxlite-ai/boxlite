@@ -78,8 +78,9 @@ for info in await runtime.list_info():
 ### `boxlite.ImageHandle`
 
 The images a runtime can boot from: the local cache on `Boxlite.default()`
-or `Boxlite(options)`, the server's catalog on `Boxlite.rest(...)`. The same
-code runs against either.
+or `Boxlite(options)`, the server's catalog on `Boxlite.rest(...)`. `list()`,
+`get()` and `remove()` run unchanged against either; `pull()` is local only
+and `usage()` REST only.
 
 | Method | Signature | Local runtime | REST runtime |
 |--------|-----------|---------------|--------------|

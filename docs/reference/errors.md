@@ -232,9 +232,9 @@ Error: internal error: unexpected state transition
 The named box, image, volume or snapshot does not exist.
 
 **Cause:**
-- Box ID doesn't exist
-- Box was removed
-- Image not in cache
+- Box ID doesn't exist, or the box was removed
+- Image name not held: not in the local cache, or not in the server's catalog
+- Volume or snapshot name doesn't exist
 
 **Example:**
 ```text
@@ -242,9 +242,9 @@ Error: not found: 01JJNH8...
 ```
 
 **Solution:**
-- List all boxes: `await runtime.list_info()`
-- Verify box ID is correct
-- Create new box if needed
+- List what the runtime holds: `await runtime.list_info()` for boxes, `await runtime.images.list()` for images
+- Verify the ID or name is correct
+- Create the box, volume or snapshot, or use the image again, if needed
 
 ### `AlreadyExists(String)`
 

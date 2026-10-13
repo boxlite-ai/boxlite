@@ -95,8 +95,8 @@ must explicitly remove it when it is no longer needed.
 ### Runtime Image Management
 
 `rt.Images()` holds the images a runtime can boot from: the local cache on a
-runtime from `NewRuntime`, the server's catalog on one from `NewRest`. The same
-code runs against either.
+runtime from `NewRuntime`, the server's catalog on one from `NewRest`. `List`,
+`Get` and `Remove` run unchanged against either.
 
 ```go
 ctx := context.Background()
@@ -105,12 +105,6 @@ if err != nil {
 	log.Fatal(err)
 }
 defer images.Close()
-
-pull, err := images.Pull(ctx, "alpine:latest")
-if err != nil {
-	log.Fatal(err)
-}
-fmt.Println(pull.Reference, pull.ConfigDigest, pull.LayerCount)
 
 cached, err := images.List(ctx)
 if err != nil {
@@ -130,6 +124,17 @@ for _, version := range detail.Versions {
 if err := images.Remove(ctx, "docker.io/library/alpine"); err != nil {
 	log.Fatal(err)
 }
+```
+
+`Pull` fills a local cache ahead of time. A REST runtime refuses it with
+`ErrUnsupported`, because creating a box there pulls the image:
+
+```go
+pull, err := images.Pull(ctx, "alpine:latest")
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(pull.Reference, pull.ConfigDigest, pull.LayerCount)
 ```
 
 | Method | Local runtime | REST runtime |

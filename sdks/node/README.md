@@ -244,17 +244,13 @@ await box.stop();
 ### Runtime Image Management
 
 `runtime.images` holds the images a runtime can boot from: the local cache on
-an embedded runtime, the server's catalog on `JsBoxlite.rest(...)`. The same
-code runs against either; `pull` is local only (a REST runtime pulls when a
-box is created) and `usage` is REST only.
+an embedded runtime, the server's catalog on `JsBoxlite.rest(...)`. `list`,
+`get` and `remove` run unchanged against either; `usage` is REST only.
 
 ```typescript
 import { JsBoxlite } from "boxlite";
 
 const runtime = JsBoxlite.withDefaultConfig();
-
-const pulled = await runtime.images.pull("alpine:latest");
-console.log(pulled.reference, pulled.configDigest, pulled.layerCount);
 
 const images = await runtime.images.list();
 for (const image of images) {
@@ -264,6 +260,14 @@ for (const image of images) {
 const detail = await runtime.images.get("docker.io/library/alpine");
 console.log(detail.tags, detail.versions.map((version) => version.digest));
 await runtime.images.remove("docker.io/library/alpine");
+```
+
+`pull` fills a local cache ahead of time. A REST runtime refuses it as
+unsupported, because creating a box there pulls the image:
+
+```typescript
+const pulled = await runtime.images.pull("alpine:latest");
+console.log(pulled.reference, pulled.configDigest, pulled.layerCount);
 ```
 
 See [the Node.js reference](../../docs/reference/nodejs/README.md#imagehandle)

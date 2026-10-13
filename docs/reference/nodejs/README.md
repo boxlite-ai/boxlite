@@ -84,7 +84,8 @@ boxes.forEach(info => console.log(`${info.id}: ${info.state.status}`));
 
 The images a runtime can boot from: the local cache on `new JsBoxlite(...)`
 or `JsBoxlite.withDefaultConfig()`, the server's catalog on
-`JsBoxlite.rest(...)`. The same code runs against either. Read it from the
+`JsBoxlite.rest(...)`. `list()`, `get()` and `remove()` run unchanged against
+either; `pull()` is local only and `usage()` REST only. Read it from the
 `runtime.images` getter.
 
 | Method | Signature | Local runtime | REST runtime |

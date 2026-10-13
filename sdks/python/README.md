@@ -159,15 +159,11 @@ for info in boxes:
 #### Runtime Image Management
 
 `runtime.images` holds the images a runtime can boot from: the local cache on
-an embedded runtime, the server's catalog on `Boxlite.rest(...)`. The same
-code runs against either; `pull` is local only (a REST runtime pulls when a
-box is created) and `usage` is REST only.
+an embedded runtime, the server's catalog on `Boxlite.rest(...)`. `list`, `get`
+and `remove` run unchanged against either; `usage` is REST only.
 
 ```python
 runtime = boxlite.Boxlite.default()
-
-pull = await runtime.images.pull("alpine:latest")
-print(pull.reference, pull.config_digest, pull.layer_count)
 
 for image in await runtime.images.list():
     print(image.repository, image.tag, image.id)
@@ -175,6 +171,14 @@ for image in await runtime.images.list():
 detail = await runtime.images.get("docker.io/library/alpine")
 print(detail.tags, [version.digest for version in detail.versions])
 await runtime.images.remove("docker.io/library/alpine")
+```
+
+`pull` fills a local cache ahead of time. A REST runtime refuses it with
+`UnsupportedError`, because creating a box there pulls the image:
+
+```python
+pull = await runtime.images.pull("alpine:latest")
+print(pull.reference, pull.config_digest, pull.layer_count)
 ```
 
 See [the Python reference](../../docs/reference/python/README.md#boxliteimagehandle)

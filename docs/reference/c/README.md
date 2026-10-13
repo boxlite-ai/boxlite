@@ -1028,8 +1028,9 @@ alive until the completion has been drained.
 `boxlite_runtime_images()` returns a `CBoxliteImageHandle*` for the images a
 runtime can boot from: the local cache on a runtime from
 `boxlite_runtime_new()`, the server's catalog on one from
-`boxlite_rest_runtime_new_with_options()`. The same code runs against either.
-Free the handle with `boxlite_image_free()`.
+`boxlite_rest_runtime_new_with_options()`. List, get and remove run unchanged
+against either; pull is local only and usage REST only. Free the handle with
+`boxlite_image_free()`.
 
 | Function | Local runtime | REST runtime |
 |----------|---------------|--------------|
