@@ -88,12 +88,6 @@ async fn wait_for_file(handle: &LiteBox, path: &str) {
 
 #[tokio::test]
 async fn entrypoint_only_argv_survives_restart_without_image_cmd() {
-    let home = boxlite_test_utils::home::PerTestBoxHome::new();
-    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
-        home_dir: home.path.clone(),
-        image_registries: common::test_registries(),
-    })
-    .expect("create runtime");
     // Keep the shell alive so /proc exposes any unwanted image CMD arguments.
     let entrypoint = [
         "sh",
@@ -101,49 +95,77 @@ async fn entrypoint_only_argv_survives_restart_without_image_cmd() {
         "while :; do sleep 30; done",
         "entrypoint-marker",
     ];
-    let handle = runtime
-        .create(
-            BoxOptions {
-                entrypoint: Some(entrypoint.iter().map(|arg| (*arg).into()).collect()),
-                ..common::alpine_opts()
-            },
-            None,
-        )
-        .await
-        .expect("create box");
-    let box_id = handle.id().to_string();
-    let mut observed = Vec::new();
+    assert_main_argv_on_start_and_restart(
+        BoxOptions {
+            entrypoint: Some(entrypoint.iter().map(|arg| (*arg).into()).collect()),
+            ..common::alpine_opts()
+        },
+        &entrypoint,
+    )
+    .await;
+}
 
-    for _ in 0..2 {
-        let handle = runtime.get(&box_id).await.unwrap().expect("get box");
-        handle.start().await.expect("start entrypoint-only box");
-        let mut execution = handle
-            .exec(
-                BoxCommand::new("cat")
-                    .arg("/proc/1/cmdline")
-                    .timeout(std::time::Duration::from_secs(10)),
-            )
-            .await
-            .expect("read container init argv");
-        let mut stdout = execution.stdout().expect("stdout stream");
-        let mut argv = String::new();
-        while let Some(chunk) = stdout.next().await {
-            argv.push_str(&chunk);
+#[tokio::test]
+async fn empty_entrypoint_preserves_image_cmd_on_start_and_restart() {
+    assert_main_argv_on_start_and_restart(
+        BoxOptions {
+            entrypoint: Some(vec![]),
+            // Alpine's default CMD is /bin/sh; keep it interactive across reads.
+            tty: true,
+            ..common::alpine_opts()
+        },
+        &["/bin/sh"],
+    )
+    .await;
+}
+
+async fn assert_main_argv_on_start_and_restart(options: BoxOptions, expected: &[&str]) {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(options, None).await.expect("create box");
+    let box_id = handle.id().to_string();
+    let observed = async {
+        let mut observed = Vec::new();
+        for _ in 0..2 {
+            let handle = runtime.get(&box_id).await?.expect("get box");
+            handle.start().await?;
+            let mut execution = handle
+                .exec(
+                    BoxCommand::new("cat")
+                        .arg("/proc/1/cmdline")
+                        .timeout(std::time::Duration::from_secs(10)),
+                )
+                .await?;
+            let mut stdout = execution.stdout().expect("stdout stream");
+            let mut argv = String::new();
+            while let Some(chunk) = stdout.next().await {
+                argv.push_str(&chunk);
+            }
+            let result = execution.wait().await?;
+            observed.push((result.exit_code, argv));
+            handle.stop().await?;
         }
-        let result = execution.wait().await.expect("wait for argv read");
-        observed.push((result.exit_code, argv));
-        handle.stop().await.expect("stop box before restarting");
+        Ok::<_, boxlite::BoxliteError>(observed)
     }
+    .await;
 
     runtime.remove(&box_id, true).await.expect("remove box");
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 
-    for (boot, (exit_code, argv)) in observed.iter().enumerate() {
+    for (boot, (exit_code, argv)) in observed
+        .expect("start box and read init argv")
+        .iter()
+        .enumerate()
+    {
         assert_eq!(*exit_code, 0, "read argv on boot {boot}");
         assert_eq!(
             argv.split_terminator('\0').collect::<Vec<_>>(),
-            entrypoint,
-            "boot {boot} must not append the image CMD"
+            expected,
+            "boot {boot} must use the resolved main command"
         );
     }
 }

@@ -277,9 +277,8 @@ fn create_cow_disk(
     }
 }
 
-/// Apply user overrides to container image config (entrypoint, CMD, user,
-/// and working dir) — the docker `run` override set, applied to the init
-/// process configuration.
+/// Apply entrypoint, CMD, user, and working directory overrides to the
+/// container's init process configuration.
 fn apply_user_overrides(
     config: &mut ContainerImageConfig,
     entrypoint_override: Option<&[String]>,
@@ -289,7 +288,7 @@ fn apply_user_overrides(
 ) {
     if let Some(ep) = entrypoint_override {
         config.entrypoint = ep.to_vec();
-        if cmd_override.is_none() {
+        if !ep.is_empty() && cmd_override.is_none() {
             config.cmd.clear();
         }
     }
@@ -503,7 +502,7 @@ mod tests {
             ),
             (Some(vec!["python3"]), Some(vec![]), vec!["python3"]),
             (None, Some(vec![]), vec!["image-init"]),
-            (Some(vec![]), None, vec![]),
+            (Some(vec![]), None, vec!["sleep", "infinity"]),
             (
                 Some(vec![]),
                 Some(vec!["echo", "hello"]),
