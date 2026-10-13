@@ -58,6 +58,14 @@ and a macOS mount may be case-insensitive). Apple Silicon hosts get an arm64 box
 that cross-compiles. `build-info.txt`, and so `SHA256SUMS`, record the box's
 architecture and compiler. macOS is not yet qualified.
 
+The box gets 4096 MiB of memory, a 4 GiB root disk (a build peaks at about
+2.15 GiB) and one vCPU per job. Jobs are capped at 16, the most vCPUs the guest
+kernel bundled with the pinned BoxLite brings up (`CONFIG_NR_CPUS`); the wrapper
+prints a note when it lowers them. Before downloading anything it fails unless
+the host has 4096 MiB of available memory (`free` on Linux, `vm_stat` on macOS)
+and 4 GiB free on the file system holding `target/vmm/boot/.boxlite` (`df`).
+Neither check needs root.
+
 ## Host build
 
 `make vmm:boot:host` requires a Linux host; the guest is always x86_64. Host GCC

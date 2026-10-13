@@ -17,8 +17,8 @@ ROOT = Path(__file__).resolve().parents[4]
 IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
 TARGETS = ("aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu")
 
-# Stands in for uname, curl and the released boxlite binary. Every call is logged
-# with the environment the wrapper is responsible for setting.
+# Stands in for uname, curl, the resource probes and the released boxlite binary. Every
+# call is logged with the environment the wrapper is responsible for setting.
 TOOL = f"#!{sys.executable}\n" + r'''import json, os, pathlib, shutil, sys
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
@@ -35,6 +35,18 @@ elif name == "curl":
         destination.write_bytes(b"tampered release")
     else:
         shutil.copyfile(fixture / "release.tar.gz", destination)
+elif name == "free":
+    print("       total  used  free  shared  buff/cache  available")
+    print("Mem:   1 1 1 1 1 " + os.environ.get("BOX_TEST_MEM_MIB", "8192"))
+elif name == "vm_stat":
+    # 16 KiB pages: 64 pages per MiB, split over the three page kinds the wrapper adds up.
+    pages = int(os.environ.get("BOX_TEST_MEM_MIB", "8192")) * 64
+    print("Mach Virtual Memory Statistics: (page size of 16384 bytes)")
+    print(f"Pages free:  {pages - 2 * (pages // 4)}.\nPages active:  999.\n"
+          f"Pages inactive:  {pages // 4}.\nPages speculative:  {pages // 4}.")
+elif name == "df":
+    print("Filesystem 1024-blocks Used Available Capacity Mounted on")
+    print("/dev/test 1 1 " + os.environ.get("BOX_TEST_DISK_KIB", str(100 << 20)) + " 1% /")
 elif name == "boxlite":
     sys.exit(int(os.environ.get("BOX_TEST_EXIT", "0")))
 '''
@@ -64,9 +76,9 @@ class BoxBuildContract(unittest.TestCase):
         self.cache = self.repo / "target/vmm/boot/.cache"
         self.bin = self.fixture / "bin"
         self.bin.mkdir()
-        for name in ("bash", "dirname", "getconf", "mkdir", "mv", "rm", "tar", "gzip", "sha256sum"):
+        for name in ("awk", "bash", "dirname", "getconf", "mkdir", "mv", "rm", "tar", "gzip", "sha256sum"):
             (self.bin / name).symlink_to(shutil.which(name))
-        for name in ("uname", "curl"):
+        for name in ("uname", "curl", "free", "vm_stat", "df"):
             (self.bin / name).write_text(TOOL)
             (self.bin / name).chmod(0o755)
         self.env = {"PATH": str(self.bin), "BOX_TEST_FIXTURE": str(self.fixture),
@@ -92,7 +104,7 @@ class BoxBuildContract(unittest.TestCase):
         args, env = self.calls("boxlite")[0]
         state = self.repo / "target/vmm/boot/.boxlite"
         self.assertEqual(env, {"BOXLITE_HOME": str(state), "XDG_DATA_HOME": str(state / "xdg")})
-        self.assertEqual(args[:12], ["run", "--rm", "--cpus", "2", "--memory", "4096", "--disk-size", "16",
+        self.assertEqual(args[:12], ["run", "--rm", "--cpus", "2", "--memory", "4096", "--disk-size", "4",
                                      "-v", f"{self.repo}:/src", "-w", "/src"])
         self.assertEqual(args[12:15], [IMAGE, "bash", "-c"])
         self.assertIn("TMPDIR=/var/tmp/boxlite-vmm-boot", args[15])
@@ -119,6 +131,29 @@ class BoxBuildContract(unittest.TestCase):
             with self.subTest(output=output):
                 self.assertIn("inside the repository", self.run_box("--output", output, expected=1).stderr)
         self.assertEqual(self.calls("boxlite"), [])
+
+    def test_caps_cpus_at_guest_kernel_limit(self):
+        result = self.run_box("--jobs", "24")
+        args = self.calls("boxlite")[-1][0]
+        self.assertEqual(args[2:4], ["--cpus", "16"])
+        self.assertEqual(args[-1], "16")
+        self.assertIn("using 16", result.stderr)
+        self.run_box()
+        self.assertEqual(self.calls("boxlite")[-1][0][2:4], ["--cpus", "2"])
+        self.assertEqual(self.calls("boxlite")[-1][0][-1], "2")
+
+    def test_rejects_hosts_that_cannot_hold_the_box(self):
+        for host in ("Linux-x86_64", "Darwin-arm64"):
+            with self.subTest(host=host):
+                low_memory = self.run_box(expected=1, BOX_TEST_HOST=host, BOX_TEST_MEM_MIB="4095")
+                self.assertIn("4095 MiB of memory available; the build box needs 4096 MiB", low_memory.stderr)
+                low_disk = self.run_box(expected=1, BOX_TEST_HOST=host, BOX_TEST_DISK_KIB=str((4 << 20) - 1))
+                self.assertIn("free on", low_disk.stderr)
+                self.assertIn("the build box needs 4 GiB", low_disk.stderr)
+                self.assertEqual(self.calls("curl") + self.calls("boxlite"), [])
+                self.run_box(BOX_TEST_HOST=host, BOX_TEST_MEM_MIB="4096", BOX_TEST_DISK_KIB=str(4 << 20))
+                self.assertEqual(len(self.calls("boxlite")), 1)
+                (self.fixture / "calls").unlink()
 
     def test_make_forwards_literal_output_and_jobs(self):
         (self.repo / "Makefile").write_text(f"SCRIPT_DIR := {self.repo}/scripts\ninclude {ROOT}/make/build.mk\n")

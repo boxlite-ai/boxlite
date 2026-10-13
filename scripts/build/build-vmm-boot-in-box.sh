@@ -9,6 +9,11 @@ state="$root/target/vmm/boot/.boxlite"
 output="${_BOXLITE_BOOT_OUTPUT_ARG:-$root/target/vmm/boot/x86_64}"
 jobs="${_BOXLITE_BOOT_JOBS_ARG:-}"
 partial=
+# The guest kernel bundled with the pinned BoxLite brings up at most 16 vCPUs (CONFIG_NR_CPUS).
+box_max_cpus=16
+box_memory_mib=4096
+# A build peaks at about 2.15 GiB on the box root disk (packages, sources, objects).
+box_disk_gib=4
 trap '[[ -z $partial ]] || rm -f -- "$partial"' EXIT
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -27,6 +32,10 @@ parse_args() {
     done
     [[ -z $jobs || $jobs =~ ^[1-9][0-9]*$ ]] || fail "--jobs must be a positive integer"
     jobs=${jobs:-$(getconf _NPROCESSORS_ONLN)}
+    if (( jobs > box_max_cpus )); then
+        echo "note: the box kernel supports $box_max_cpus CPUs; using $box_max_cpus jobs instead of $jobs" >&2
+        jobs=$box_max_cpus
+    fi
 }
 
 release_target() {
@@ -36,6 +45,32 @@ release_target() {
         Linux-aarch64|Linux-arm64) echo aarch64-unknown-linux-gnu ;;
         *) fail "unsupported host $(uname -s) $(uname -m); BoxLite supports macOS arm64 and Linux x86_64/arm64" ;;
     esac
+}
+
+# Available host memory in MiB; neither probe needs root.
+available_memory_mib() {
+    if [[ $(uname -s) == Darwin ]]; then
+        vm_stat | awk '/page size of/ { size = $8 }
+            /^Pages (free|inactive|speculative):/ { gsub(/\./, "", $NF); pages += $NF }
+            END { print int(pages * size / 1048576) }'
+    else
+        free -m | awk '/^Mem:/ { print $7 }'
+    fi
+}
+
+# Fail before any download when the host cannot hold the box's memory or its full root disk.
+check_resources() {
+    local memory dir=$state free_kib
+    memory=$(available_memory_mib) || true
+    [[ $memory =~ ^[0-9]+$ ]] || fail "cannot read available host memory"
+    (( memory >= box_memory_mib )) ||
+        fail "$memory MiB of memory available; the build box needs $box_memory_mib MiB"
+    [[ -d $dir ]] || dir="$root/target"
+    [[ -d $dir ]] || dir=$root
+    free_kib=$(df -Pk "$dir" | awk 'NR == 2 { print $4 }') || true
+    [[ $free_kib =~ ^[0-9]+$ ]] || fail "cannot read free disk space on $dir"
+    (( free_kib >= box_disk_gib * 1024 * 1024 )) ||
+        fail "$(( free_kib / 1024 )) MiB free on $dir; the build box needs $box_disk_gib GiB"
 }
 
 # The repository is the box's only mount, so the output must live inside it.
@@ -89,10 +124,11 @@ BOX
 
 parse_args "$@"
 target=$(release_target)
+check_resources
 in_box_output=$(box_output)
 source "$root/src/vmm/boot/boxlite.lock"
 fetch_boxlite "$target"
 # Keep this BoxLite's images, boxes, database and extracted runtime away from any other install.
 export BOXLITE_HOME="$state" XDG_DATA_HOME="$state/xdg"
-"$boxlite_dir/boxlite" run --rm --cpus "$jobs" --memory 4096 --disk-size 16 -v "$root:/src" -w /src \
-    "$BUILDER_IMAGE" bash -c "$inner" bash "$in_box_output" "$jobs"
+"$boxlite_dir/boxlite" run --rm --cpus "$jobs" --memory "$box_memory_mib" --disk-size "$box_disk_gib" \
+    -v "$root:/src" -w /src "$BUILDER_IMAGE" bash -c "$inner" bash "$in_box_output" "$jobs"
