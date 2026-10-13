@@ -2,6 +2,31 @@
 
 BoxLite uses OCI-compatible container images with intelligent caching.
 
+## Startup command overrides
+
+An image's `ENTRYPOINT` and `CMD` form the container's main command.
+`BoxOptions.entrypoint` replaces the image's entrypoint; setting it also discards
+the image's default CMD. Use `BoxOptions.cmd` to supply new arguments explicitly,
+as with [Docker's entrypoint override](https://docs.docker.com/engine/containers/run/#default-entrypoint).
+
+| User entrypoint | User cmd | Main command |
+| --- | --- | --- |
+| Omitted | Omitted | Image ENTRYPOINT + image CMD |
+| Omitted | Provided | Image ENTRYPOINT + user cmd |
+| Provided | Omitted | User entrypoint only |
+| Provided | Provided | User entrypoint + user cmd |
+
+For an image with `CMD ["sleep", "infinity"]`, setting
+`entrypoint=["python3", "-m", "http.server", "8080"]` runs that HTTP server
+without appending `sleep infinity`. The CLI's `--entrypoint EXEC` and trailing
+`COMMAND` use the same override rules.
+
+These rules apply on first start and every stop/start. Earlier releases retained
+the image CMD with an entrypoint-only override. Pass those arguments explicitly in
+`cmd` when creating boxes that need the previous behavior. Previously created
+boxes with entrypoint-only options also adopt the new rules on their next start
+under the updated runtime.
+
 ## Image pull flow
 
 ```text

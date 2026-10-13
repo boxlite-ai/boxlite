@@ -301,7 +301,11 @@ Scopes:          box:read, box:write, box:exec
 Create a box from an image (or a prepared rootfs via `--rootfs`) and run a
 command, with docker's semantics: `COMMAND` replaces the image's `CMD`, the
 image's `ENTRYPOINT` is prepended, and the result **is** the container's init
-(PID 1). Omit it and the image's own default runs.
+(PID 1).
+
+`--entrypoint EXEC` replaces the image entrypoint and clears its default
+CMD; only an explicit `COMMAND` is appended. Omit both to run the image's defaults.
+See [startup command overrides](../../concepts/images.md#startup-command-overrides).
 
 The box's lifetime is that command's lifetime. When it exits, the box stops and
 takes the command's exit code; `boxlite ps` shows it stopped and
@@ -373,12 +377,13 @@ boxlite exec -e DEBUG=1 -w /app mybox -- pytest tests/
 Create a box without starting it. Prints the new box's ID to stdout.
 
 `COMMAND` is stored, not run — it becomes the box's main command (the container's
-init) when the box is next started, exactly as it would under `run`. Omit it and
-the image's own default is used.
+init) when the box is next started, exactly as it would under `run`.
+`--entrypoint EXEC` uses the same override rules as [`run`](#boxlite-run), including
+clearing the image CMD. Omit both `COMMAND` and `--entrypoint` to use image defaults.
 
-A box created **with** a command is a job: `exec` and `cp` will not start it
-implicitly, because starting it runs that command. Start it deliberately with
-`boxlite start`. A box created **without** one boots the image's default, and
+A box created **with** `COMMAND` or `--entrypoint` is a job: `exec` and `cp` will not
+start it implicitly, because starting it runs that command. Start it deliberately with
+`boxlite start`. A box created **without** either boots the image's default, and
 `exec` still starts it on demand.
 
 **Options:**
