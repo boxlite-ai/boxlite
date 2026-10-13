@@ -232,16 +232,14 @@ impl ImageManager {
     /// image's configuration from the registry when it next starts.
     pub async fn remove(&self, name: &str) -> BoxliteResult<()> {
         let name = canonical_name(name)?;
-        let references: Vec<String> = self
-            .held_under(&name)
-            .await?
-            .into_iter()
-            .map(|entry| entry.reference)
-            .collect();
-        if references.is_empty() {
+        let forgotten = self
+            .store
+            .forget_matching(|reference| parsed_under(reference, &name).is_some())
+            .await?;
+        if forgotten == 0 {
             return Err(BoxliteError::NotFound(format!("image {name}")));
         }
-        self.store.forget(&references).await
+        Ok(())
     }
 
     /// The cache entries whose reference resolves to `name`.
@@ -252,8 +250,8 @@ impl ImageManager {
             .await?
             .into_iter()
             .filter_map(|(reference, cached)| {
-                let parsed = Reference::from_str(&reference).ok()?;
-                (repository_of(&parsed) == name).then_some(HeldReference {
+                let parsed = parsed_under(&reference, name)?;
+                Some(HeldReference {
                     reference,
                     parsed,
                     cached,
@@ -307,6 +305,12 @@ fn is_build_alias(reference: &Reference, build: &str) -> bool {
 
 fn repository_of(reference: &Reference) -> String {
     format!("{}/{}", reference.registry(), reference.repository())
+}
+
+/// `reference` parsed, when it resolves to the image `name`.
+fn parsed_under(reference: &str, name: &str) -> Option<Reference> {
+    let parsed = Reference::from_str(reference).ok()?;
+    (repository_of(&parsed) == name).then_some(parsed)
 }
 
 /// One cache entry, with its reference parsed.
@@ -373,8 +377,9 @@ fn cached_time(raw: &str) -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::ImageManager;
-    use crate::db::Database;
+    use crate::db::{CachedImage, Database, ImageIndexStore};
     use crate::images::store::tests::seed_cached_build;
+    use chrono::{DateTime, Utc};
 
     const FIRST: &str = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0";
     const NEWER: &str = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee1";
@@ -595,5 +600,58 @@ mod tests {
             images.remove("quay.io/acme/app").await.unwrap_err(),
             crate::BoxliteError::NotFound(_)
         ));
+    }
+
+    /// Capitals are not allowed in a repository, so no pull could have cached
+    /// this name: it is the caller's mistake, refused before anything is removed.
+    #[tokio::test]
+    async fn a_name_no_reference_can_spell_is_an_invalid_argument() {
+        let (_dir, images) = seeded(&[("quay.io/acme/app:v1", FIRST)]).await;
+
+        let read = images.get("quay.io/acme/App").await.unwrap_err();
+        let removed = images.remove("quay.io/acme/App").await.unwrap_err();
+
+        for error in [read, removed] {
+            assert!(
+                matches!(error, crate::BoxliteError::InvalidArgument(_)),
+                "{error}"
+            );
+            assert!(error.to_string().contains("quay.io/acme/App"), "{error}");
+        }
+        assert_eq!(images.list().await.unwrap().len(), 1);
+    }
+
+    /// A stored time that does not parse dates its build to the epoch: the
+    /// image still reads, with that build as its oldest.
+    #[tokio::test]
+    async fn a_build_whose_stored_time_does_not_parse_reads_as_the_oldest() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("test.db")).unwrap();
+        let images = ImageManager::new(dir.path().join("images"), db.clone(), vec![]).unwrap();
+        seed_cached_build(images.store(), "quay.io/acme/app:v2", NEWER).await;
+        let unreadable_time = CachedImage {
+            manifest_digest: FIRST.to_string(),
+            config_digest: FIRST.to_string(),
+            layers: vec![],
+            cached_at: "not a time".to_string(),
+            complete: true,
+        };
+        ImageIndexStore::new(db)
+            .upsert("quay.io/acme/app:v1", &unreadable_time)
+            .unwrap();
+
+        let detail = images.get("quay.io/acme/app").await.unwrap();
+
+        let versions: Vec<(&str, bool)> = detail
+            .versions
+            .iter()
+            .map(|v| {
+                (
+                    v.digest.as_str(),
+                    v.recorded_at == DateTime::<Utc>::UNIX_EPOCH,
+                )
+            })
+            .collect();
+        assert_eq!(versions, [(NEWER, false), (FIRST, true)]);
     }
 }

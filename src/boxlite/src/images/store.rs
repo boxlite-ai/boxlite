@@ -282,14 +282,22 @@ impl ImageStore {
         inner.index.list_all()
     }
 
-    /// Drop `references` from the index. Their layers stay in storage, so
-    /// pulling one of these builds again reuses them.
-    pub async fn forget(&self, references: &[String]) -> BoxliteResult<()> {
-        let inner = self.inner.read().await;
-        for reference in references {
-            inner.index.remove(reference)?;
-        }
-        Ok(())
+    /// Drop every reference `is_match` accepts from the index, all of them or,
+    /// on error, none, and return how many went. They are chosen under the
+    /// same write lock that drops them, so a reference a pull indexes
+    /// meanwhile is either among them or indexed after. Their layers stay in
+    /// storage, so pulling one of these builds again reuses them.
+    pub async fn forget_matching(&self, is_match: impl Fn(&str) -> bool) -> BoxliteResult<usize> {
+        let inner = self.inner.write().await;
+        let references: Vec<String> = inner
+            .index
+            .list_all()?
+            .into_iter()
+            .map(|(reference, _)| reference)
+            .filter(|reference| is_match(reference))
+            .collect();
+        inner.index.remove_all(&references)?;
+        Ok(references.len())
     }
 
     /// Load an OCI image from a local directory.
@@ -2006,6 +2014,97 @@ pub(super) mod tests {
         assert_eq!(manifest.layers[0].digest, layer_digest);
         assert!(!manifest.config_digest.is_empty());
         assert!(!manifest.manifest_digest.is_empty());
+    }
+
+    /// Removing an image forgets its tag and its digest alias together. If the
+    /// database refuses partway, both must stay: losing only the tag leaves the
+    /// image listed with no name a caller would pull it by.
+    #[tokio::test]
+    async fn forget_matching_keeps_every_reference_when_one_cannot_be_removed() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
+        let store = ImageStore::new(temp_dir.path().join("images"), db.clone(), vec![]).unwrap();
+        let tag = "quay.io/acme/app:v1".to_string();
+        let manifest = seed_cached_image(&store, &tag).await;
+        let alias = format!("quay.io/acme/app@{}", manifest.manifest_digest);
+        seed_cached_build(&store, &alias, &manifest.manifest_digest).await;
+        // Stands in for a delete the database fails, such as on a full disk.
+        // The tag is the older entry, so it is dropped second, after the alias.
+        db.conn()
+            .execute_batch(&format!(
+                "CREATE TRIGGER refuse_tag BEFORE DELETE ON image_index \
+                 WHEN OLD.reference = '{tag}' BEGIN SELECT RAISE(ABORT, 'refused'); END;"
+            ))
+            .unwrap();
+
+        let error = store
+            .forget_matching(|reference| reference == tag || reference == alias)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("refused"), "{error}");
+        let mut held: Vec<String> = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(reference, _)| reference)
+            .collect();
+        held.sort();
+        assert_eq!(held, [tag, alias]);
+    }
+
+    /// A tag a pull indexes while a remove of its image waits for the index
+    /// goes with the remove: what to drop is chosen once the remove holds the
+    /// index, not before it starts waiting.
+    ///
+    /// This guards the locked remove; it cannot replay the old race. Before
+    /// the fix a remove never waited for the index at all, so there was no
+    /// moment for the test to wedge a pull into.
+    #[tokio::test]
+    async fn remove_takes_a_tag_indexed_while_it_waited() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
+        let images =
+            crate::images::ImageManager::new(temp_dir.path().join("images"), db, vec![]).unwrap();
+        let store = images.store();
+        let manifest = seed_cached_image(store, "quay.io/acme/app:v1").await;
+
+        // A pull part-way through `update_index` holds the read lock.
+        let pull = store.inner.read().await;
+        let remove = tokio::spawn({
+            let images = images.clone();
+            async move { images.remove("quay.io/acme/app").await }
+        });
+        // The lock is fair, so once the remove queues for it no reader gets
+        // in; nothing signals that moment, so it is polled.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while store.inner.try_read().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the remove never waited for the index");
+        let pulled = CachedImage {
+            manifest_digest: manifest.manifest_digest,
+            config_digest: manifest.config_digest,
+            layers: vec![],
+            cached_at: chrono::Utc::now().to_rfc3339(),
+            complete: true,
+        };
+        pull.index.upsert("quay.io/acme/app:v2", &pulled).unwrap();
+        drop(pull);
+
+        remove.await.unwrap().unwrap();
+
+        let left: Vec<String> = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(reference, _)| reference)
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
     }
 
     /// Build a cache entry the store will actually accept: the manifest, its
