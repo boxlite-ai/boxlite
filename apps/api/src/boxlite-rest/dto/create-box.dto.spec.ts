@@ -374,17 +374,17 @@ describe('REST create inbound default contract', () => {
   const meta = { type: 'body' as const, metatype: CreateBoxDto }
 
   it.each([
-    ['network omitted', undefined, false],
-    ['empty network', {}, false],
-    ['legacy flat outbound enabled', { mode: 'enabled' }, false],
-    ['legacy flat outbound disabled', { mode: 'disabled' }, false],
-    ['nested outbound only', { outbound: { mode: 'enabled' } }, false],
-    ['inbound enabled', { inbound: { mode: 'enabled' } }, true],
-    ['inbound disabled', { inbound: { mode: 'disabled' } }, false],
-  ])('maps %s to the expected public value', async (_label, network, expectedPublic) => {
+    ['network omitted', undefined, 'disabled'],
+    ['empty network', {}, 'disabled'],
+    ['legacy flat outbound enabled', { mode: 'enabled' }, 'disabled'],
+    ['legacy flat outbound disabled', { mode: 'disabled' }, 'disabled'],
+    ['nested outbound only', { outbound: { mode: 'enabled' } }, 'disabled'],
+    ['inbound enabled', { inbound: { mode: 'enabled' } }, 'enabled'],
+    ['inbound disabled', { inbound: { mode: 'disabled' } }, 'disabled'],
+  ])('maps %s to the expected inbound mode', async (_label, network, expectedMode) => {
     const dto: CreateBoxDto = await pipe.transform({ image: 'alpine:latest', network }, meta)
 
-    expect(createBoxToCreateBox(dto).public).toBe(expectedPublic)
+    expect(createBoxToCreateBox(dto).inboundMode).toBe(expectedMode)
   })
 
   it('keeps the OpenAPI omission defaults aligned with the REST create behavior', () => {

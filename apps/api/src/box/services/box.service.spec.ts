@@ -479,7 +479,7 @@ describe('BoxService image reporting', () => {
   })
 })
 
-describe('BoxService public defaults', () => {
+describe('BoxService inbound defaults', () => {
   function makeCreateService(overrides: Record<string, unknown> = {}) {
     const boxRepository = { insert: jest.fn(async (box: any) => box) } as any
     const warmPoolService = { fetchWarmPoolBox: jest.fn().mockResolvedValue(undefined) }
@@ -829,8 +829,9 @@ describe('BoxService public defaults', () => {
   })
 
   it.each([
-    [{ networkBlockAll: true }, { boxLimitedNetworkEgress: false }, { outboundMode: 'disabled' }],
-    [{ networkAllowList: '10.0.0.0/8' }, { boxLimitedNetworkEgress: false }, { outboundAllowNet: ['10.0.0.0/8'] }],
+    [{ outboundMode: 'disabled' }, { boxLimitedNetworkEgress: false }, { outboundMode: 'disabled' }],
+    [{ outboundAllowNet: ['10.0.0.0/8'] }, { boxLimitedNetworkEgress: false }, { outboundAllowNet: ['10.0.0.0/8'] }],
+    [{ outboundMode: 'enabled' }, { boxLimitedNetworkEgress: true }, { outboundMode: 'enabled' }],
     [{}, { boxLimitedNetworkEgress: true }, { outboundMode: 'disabled' }],
   ])(
     'creates a fresh box instead of claiming a warm box when network policy is required',
@@ -851,11 +852,11 @@ describe('BoxService public defaults', () => {
 
   it.each([
     [undefined, 'disabled'],
-    [true, 'enabled'],
-  ])('persists public=%s as inbound %s on a fresh box', async (requestedPublic, expectedMode) => {
+    ['enabled', 'enabled'],
+  ])('persists inbound mode %s as %s on a fresh box', async (requestedMode, expectedMode) => {
     const { service, boxRepository } = makeCreateService()
 
-    await service.create({ name: 'fresh-box', public: requestedPublic } as any, { id: 'org-1' } as any, Context.user())
+    await service.create({ name: 'fresh-box', inboundMode: requestedMode } as any, { id: 'org-1' } as any, Context.user())
 
     expect(boxRepository.insert).toHaveBeenCalledWith(
       expect.objectContaining({ inboundMode: expectedMode, outboundMode: 'enabled' }),
@@ -929,8 +930,8 @@ describe('BoxService public defaults', () => {
 
   it.each([
     [undefined, 'disabled'],
-    [true, 'enabled'],
-  ])('persists public=%s as inbound %s on an assigned warm-pool box', async (requestedPublic, expectedMode) => {
+    ['enabled', 'enabled'],
+  ])('persists inbound mode %s as %s on an assigned warm-pool box', async (requestedMode, expectedMode) => {
     const warmPoolBox = { id: 'warm-box', runnerId: 'runner-1', name: 'warm-box' } as any
     const update = jest.fn().mockResolvedValue(warmPoolBox)
     const service = Object.create(BoxService.prototype) as BoxService
@@ -943,7 +944,7 @@ describe('BoxService public defaults', () => {
 
     await (service as any).assignWarmPoolBox(
       warmPoolBox,
-      { name: 'assigned-box', public: requestedPublic },
+      { name: 'assigned-box', inboundMode: requestedMode },
       { id: 'org-1' },
       {},
     )

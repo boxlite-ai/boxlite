@@ -6,6 +6,7 @@
 
 import { BoxDto } from '../../box/dto/box.dto'
 import { BoxState } from '../../box/enums/box-state.enum'
+import { NetworkMode } from '../../box/enums/network-mode.enum'
 import {
   AUTO_DELETE_DISABLED,
   DEFAULT_AUTO_STOP_SECONDS,
@@ -71,14 +72,13 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
     hosts: secret.hosts,
     placeholder: secret.placeholder,
   }))
-  // Only an explicit inbound.mode=enabled makes the box public. Omitting
-  // inbound (including the legacy flat network shape) keeps it private.
-  createDto.public = dto.network?.inbound?.mode === 'enabled'
+  // Only an explicit inbound.mode=enabled enables inbound access. Omitting
+  // inbound (including the legacy flat network shape) leaves it disabled.
+  createDto.inboundMode = dto.network?.inbound?.mode === 'enabled' ? NetworkMode.ENABLED : NetworkMode.DISABLED
   if (dto.network) {
     const allowNet = dto.network.outbound?.allow_net?.map((entry) => entry.trim()).filter(Boolean)
-    createDto.networkBlockAll = dto.network.outbound?.mode === 'disabled'
-    createDto.networkAllowList =
-      dto.network.outbound?.mode === 'enabled' && allowNet?.length ? allowNet.join(',') : undefined
+    createDto.outboundMode = dto.network.outbound?.mode === 'disabled' ? NetworkMode.DISABLED : NetworkMode.ENABLED
+    createDto.outboundAllowNet = dto.network.outbound?.mode === 'enabled' && allowNet?.length ? allowNet : undefined
   }
   return createDto
 }

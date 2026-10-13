@@ -13,14 +13,10 @@ const HOSTNAME_LABEL_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/
 /**
  * Validates network allow list entries accepted by the Box API/core contract:
  * exact IPv4, IPv4 CIDR, exact hostname, and wildcard hostname.
- * @param networkAllowList - Comma-separated string of network addresses
- * @returns null if valid, error message string if invalid
+ * Blank entries are ignored. Throws on the first invalid entry.
  */
-export function validateNetworkAllowList(networkAllowList: string): void {
-  const networks = networkAllowList
-    .split(',')
-    .map((net: string) => net.trim())
-    .filter(Boolean)
+export function validateNetworkAllowList(allowNet: string[]): void {
+  const networks = allowNet.map((net: string) => net.trim()).filter(Boolean)
 
   if (networks.length > MAX_NETWORK_ALLOW_LIST_ENTRIES) {
     throw new Error(`Network allow list cannot contain more than ${MAX_NETWORK_ALLOW_LIST_ENTRIES} networks`)

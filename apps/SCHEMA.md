@@ -395,7 +395,8 @@ or `archived`.
 | `daemonVersion` | `character varying` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |
 
-The network policy columns use the `/v1` NetworkSpec vocabulary. The control-plane
+The network policy columns use the `/v1` NetworkSpec vocabulary, and the API's
+internal create input carries them as modes and an entry list, unchanged. The control-plane
 `Box` DTO and the runner create body still present them as `public`,
 `networkBlockAll` and a comma-joined `networkAllowList`; the API translates at
 those boundaries (`box/utils/network-policy.util.ts`) until the clients move

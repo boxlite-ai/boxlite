@@ -29,15 +29,6 @@ export function isOutboundBlocked(mode: NetworkMode): boolean {
   return mode === NetworkMode.DISABLED
 }
 
-/** Comma-joined allowlist → entries; `undefined` when nothing is listed. */
-export function allowNetFromList(list: string | undefined): string[] | undefined {
-  const entries = (list ?? '')
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-  return entries.length > 0 ? entries : undefined
-}
-
 /** Entries → the comma-joined shape; `undefined` when nothing is listed. */
 export function allowListFromAllowNet(allowNet: string[] | null | undefined): string | undefined {
   return allowNet && allowNet.length > 0 ? allowNet.join(',') : undefined

@@ -46,12 +46,7 @@ import { BoxDto, BoxDtoReads, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
 import { NetworkMode } from '../enums/network-mode.enum'
-import {
-  allowNetFromList,
-  inboundModeFromPublic,
-  isInboundEnabled,
-  outboundModeFromBlockAll,
-} from '../utils/network-policy.util'
+import { isInboundEnabled, outboundModeFromBlockAll } from '../utils/network-policy.util'
 import { VolumeService } from './volume.service'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import {
@@ -334,17 +329,16 @@ export class BoxService {
       box.mem = mem
       box.disk = disk
 
-      // POL-205: an unset public value on the internal create DTO defaults private.
-      box.inboundMode = inboundModeFromPublic(createBoxDto.public)
+      // POL-205: an unset inbound mode on the internal create DTO defaults disabled.
+      box.inboundMode = createBoxDto.inboundMode ?? NetworkMode.DISABLED
 
       // An explicit request wins; otherwise the organization's limited-egress
       // default decides.
-      box.outboundMode = outboundModeFromBlockAll(
-        createBoxDto.networkBlockAll ?? Boolean(organization.boxLimitedNetworkEgress),
-      )
+      box.outboundMode =
+        createBoxDto.outboundMode ?? outboundModeFromBlockAll(Boolean(organization.boxLimitedNetworkEgress))
 
-      if (createBoxDto.networkAllowList !== undefined) {
-        box.outboundAllowNet = this.resolveNetworkAllowList(createBoxDto.networkAllowList)
+      if (createBoxDto.outboundAllowNet !== undefined) {
+        box.outboundAllowNet = this.resolveOutboundAllowNet(createBoxDto.outboundAllowNet)
       }
 
       const lifecyclePolicy = this.resolveLifecyclePolicy({
@@ -411,7 +405,7 @@ export class BoxService {
     const now = new Date()
     const updateData: Partial<Box> = {
       // POL-205: same default as the fresh-box path — see the comment there.
-      inboundMode: inboundModeFromPublic(createBoxDto.public),
+      inboundMode: createBoxDto.inboundMode ?? NetworkMode.DISABLED,
       labels: createBoxDto.labels || {},
       organizationId: organization.id,
       createdAt: now,
@@ -426,12 +420,12 @@ export class BoxService {
     updateData.autoDelete = lifecyclePolicy.autoDelete
     updateData.autoResume = lifecyclePolicy.autoResume
 
-    if (createBoxDto.networkBlockAll !== undefined) {
-      updateData.outboundMode = outboundModeFromBlockAll(createBoxDto.networkBlockAll)
+    if (createBoxDto.outboundMode !== undefined) {
+      updateData.outboundMode = createBoxDto.outboundMode
     }
 
-    if (createBoxDto.networkAllowList !== undefined) {
-      updateData.outboundAllowNet = this.resolveNetworkAllowList(createBoxDto.networkAllowList)
+    if (createBoxDto.outboundAllowNet !== undefined) {
+      updateData.outboundAllowNet = this.resolveOutboundAllowNet(createBoxDto.outboundAllowNet)
     }
 
     if (!warmPoolBox.runnerId) {
@@ -1425,7 +1419,7 @@ export class BoxService {
     }
 
     if (networkAllowList !== undefined) {
-      updateData.outboundAllowNet = this.resolveNetworkAllowList(networkAllowList)
+      updateData.outboundAllowNet = this.resolveOutboundAllowNet(networkAllowList.split(','))
     }
 
     const updatedBox = await this.boxRepository.update(box.id, { updateData, entity: box })
@@ -1648,14 +1642,15 @@ export class BoxService {
     return { autoStop, autoDelete, autoResume }
   }
 
-  private resolveNetworkAllowList(networkAllowList: string): string[] | undefined {
+  private resolveOutboundAllowNet(allowNet: string[]): string[] | undefined {
     try {
-      validateNetworkAllowList(networkAllowList)
+      validateNetworkAllowList(allowNet)
     } catch (error) {
       throw new BadRequestError(error instanceof Error ? error.message : 'Invalid network allow list')
     }
 
-    return allowNetFromList(networkAllowList)
+    const entries = allowNet.map((entry) => entry.trim()).filter(Boolean)
+    return entries.length > 0 ? entries : undefined
   }
 
   private resolveVolumes(volumes: BoxVolume[]): BoxVolume[] {

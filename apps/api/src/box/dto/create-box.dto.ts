@@ -7,6 +7,7 @@
 import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, IsInt, Min } from 'class-validator'
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
+import { NetworkMode } from '../enums/network-mode.enum'
 import { BoxSecret, BoxVolume } from './box.dto'
 
 @ApiSchema({ name: 'CreateBox' })
@@ -95,29 +96,31 @@ export class CreateBoxDto {
   labels?: { [key: string]: string }
 
   @ApiPropertyOptional({
-    description: 'Whether the box http preview is publicly accessible',
-    default: true,
-    example: true,
+    description: 'Inbound mode: `enabled` lets the proxy serve exposed services without sign-in',
+    enum: NetworkMode,
+    default: NetworkMode.DISABLED,
   })
   @IsOptional()
-  @IsBoolean()
-  public?: boolean
+  @IsEnum(NetworkMode)
+  inboundMode?: NetworkMode
 
   @ApiPropertyOptional({
-    description: 'Whether to block all network access for the box',
-    example: false,
+    description: "Outbound mode; unset follows the organization's limited-egress default",
+    enum: NetworkMode,
   })
   @IsOptional()
-  @IsBoolean()
-  networkBlockAll?: boolean
+  @IsEnum(NetworkMode)
+  outboundMode?: NetworkMode
 
   @ApiPropertyOptional({
-    description: 'Comma-separated list of allowed CIDR network addresses for the box',
-    example: '192.168.1.0/16,10.0.0.0/24',
+    description: 'Hosts and CIDRs outbound traffic may reach; unset allows every destination',
+    type: [String],
+    example: ['api.openai.com', '10.0.0.0/8'],
   })
   @IsOptional()
-  @IsString()
-  networkAllowList?: string
+  @IsArray()
+  @IsString({ each: true })
+  outboundAllowNet?: string[]
 
   @ApiPropertyOptional({
     description: 'The box class type',
