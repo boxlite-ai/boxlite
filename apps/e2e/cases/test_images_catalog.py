@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import warnings
 
 import pytest
 import pytest_asyncio
@@ -100,10 +101,13 @@ async def clean_catalog(images):
         for name in (CATALOG_NAME, UNPULLABLE_NAME):
             try:
                 await images.remove(name)
-            except (boxlite.NotFoundError, boxlite.InvalidStateError):
-                # Absent, or still held by a box — neither of which this
-                # fixture can or should resolve.
+            except boxlite.NotFoundError:
                 pass
+            except boxlite.InvalidStateError as held:
+                # A box from an earlier, interrupted run still holds it. This
+                # fixture cannot remove that box; say so, or the step that
+                # expects the image absent fails without naming the cause.
+                warnings.warn(f"{name} stays in the catalog: {held}", stacklevel=1)
 
     await drop()
     yield

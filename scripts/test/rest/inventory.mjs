@@ -70,7 +70,7 @@ const operationSignals = {
   startBox: [/startbox/, /\.start\(/, /test_.*start/, /start box/],
   stopBox: [/stopbox/, /\.stop\(/, /test_.*stop/, /stop box/],
   importBox: [/importbox/, /\.import\(/, /\/import\b/],
-  listImages: [/listimages/, /images\(\)\.list/, /images\.list\(/, /\/images\b/],
+  listImages: [/listimages/, /images\(\)\.list/, /images\.list\(/, /\/images(?![\/\w])/],
   getImage: [/getimage/, /images\(\)\.get/, /images\.get\(/, /\/images\/\{/],
   getImageUsage: [/getimageusage/, /images\.usage\(/, /\/images\/usage\b/],
   removeImage: [/removeimage/, /images\.remove\(/],
