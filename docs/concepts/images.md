@@ -11,10 +11,10 @@ Use `BoxOptions.cmd` to supply new arguments.
 
 | User entrypoint | User cmd | Main command |
 | --- | --- | --- |
-| Omitted | Omitted | Image ENTRYPOINT + image CMD |
-| Omitted | Provided | Image ENTRYPOINT + user cmd |
-| Nonempty | Omitted | User entrypoint only |
-| Nonempty | Provided | User entrypoint + user cmd |
+| Omitted | Omitted or empty | Image ENTRYPOINT + image CMD |
+| Omitted | Nonempty | Image ENTRYPOINT + user cmd |
+| Nonempty | Omitted or empty | User entrypoint only |
+| Nonempty | Nonempty | User entrypoint + user cmd |
 
 For an image with `CMD ["sleep", "infinity"]`, setting
 `entrypoint=["python3", "-m", "http.server", "8080"]` runs that HTTP server

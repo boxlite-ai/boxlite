@@ -288,11 +288,11 @@ fn apply_user_overrides(
 ) {
     if let Some(ep) = entrypoint_override {
         config.entrypoint = ep.to_vec();
-        if !ep.is_empty() && cmd_override.is_none() {
+        if !ep.is_empty() {
             config.cmd.clear();
         }
     }
-    if let Some(cmd) = cmd_override {
+    if let Some(cmd) = cmd_override.filter(|cmd| !cmd.is_empty()) {
         config.cmd = cmd.to_vec();
     }
     if let Some(user) = user_override {
@@ -501,14 +501,14 @@ mod tests {
                 vec!["python3", "--version"],
             ),
             (Some(vec!["python3"]), Some(vec![]), vec!["python3"]),
-            (None, Some(vec![]), vec!["image-init"]),
+            (None, Some(vec![]), vec!["image-init", "sleep", "infinity"]),
             (Some(vec![]), None, vec!["sleep", "infinity"]),
             (
                 Some(vec![]),
                 Some(vec!["echo", "hello"]),
                 vec!["echo", "hello"],
             ),
-            (Some(vec![]), Some(vec![]), vec![]),
+            (Some(vec![]), Some(vec![]), vec!["sleep", "infinity"]),
         ];
 
         for image_has_entrypoint in [false, true] {

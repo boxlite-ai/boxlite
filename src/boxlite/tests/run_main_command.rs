@@ -119,6 +119,33 @@ async fn empty_entrypoint_preserves_image_cmd_on_start_and_restart() {
     .await;
 }
 
+#[tokio::test]
+async fn empty_cmd_preserves_image_cmd_on_start_and_restart() {
+    assert_main_argv_on_start_and_restart(
+        BoxOptions {
+            cmd: Some(vec![]),
+            tty: true,
+            ..common::alpine_opts()
+        },
+        &["/bin/sh"],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn empty_entrypoint_and_cmd_preserve_image_cmd_on_start_and_restart() {
+    assert_main_argv_on_start_and_restart(
+        BoxOptions {
+            entrypoint: Some(vec![]),
+            cmd: Some(vec![]),
+            tty: true,
+            ..common::alpine_opts()
+        },
+        &["/bin/sh"],
+    )
+    .await;
+}
+
 async fn assert_main_argv_on_start_and_restart(options: BoxOptions, expected: &[&str]) {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
