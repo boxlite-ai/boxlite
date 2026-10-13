@@ -120,18 +120,24 @@ Threshold behavior follows [Codecov's status configuration](https://docs.codecov
 4. Run quality and tests (`make lint && make fmt:check && make test`)
 5. Commit with clear messages — see [Commit & PR messages](#commit--pr-messages)
 6. Open a Pull Request
-7. CI converts unacknowledged PRs to draft. Read the current diff, check that the description accurately explains it, then post the exact `/reviewed <full-head-SHA>` command from the bot comment. Only a new, unedited comment from the PR author counts. Once `Author reviewed the PR` passes, click **Ready for review**. A new commit, or editing/deleting the only acknowledgment, returns the PR to draft and requires a fresh comment. Forks use the same flow. Maintainer approval remains separate
+7. CI converts unacknowledged PRs to draft. Read the current diff, check that **How it works** explains its mechanism or rationale and that the design doc's research matches its sources, then post the exact `/reviewed <full-head-SHA>` command from the bot comment. Only a new, unedited comment from the PR author counts. Once `Author reviewed the PR` passes, click **Ready for review**. A new commit, or editing/deleting the only acknowledgment, returns the PR to draft and requires a fresh comment. Forks use the same flow. Maintainer approval remains separate
 8. Sign the [BoxLite Contributor License Agreement](./docs/legal/CLA.md) when CLA Assistant asks you to do so
 
 ### Updating agent tooling
 
 Run `./.agent-tooling/install.sh` in each worktree after a tooling upgrade to
 refresh hooks and managed guidance. Keep committed bootstrap scripts synchronized
-with the adopted release templates.
+with the adopted release templates, `.github/pull_request_template.md` with the
+release's PR template (keeping this guide's word limits), and the
+`AGENT_TOOLING_REV` pin in `.github/workflows/author-review.yml` with a reviewed
+release revision.
 
 The 0.1.26 Claude bootstrap checks the adopted manifest version and reinstalls a
 stale project plugin when an update leaves it unchanged, preserving project
-settings. Run `/reload-plugins` afterward to activate the refreshed plugin.
+settings. Run `/reload-plugins` afterward to activate the refreshed plugin. Since
+0.1.27, an agent's commit or push is refused while its session's plugin version
+differs from the one the repository's Git hooks run; reload or start a new session,
+then retry.
 
 ### Watching CI and PR feedback
 
@@ -174,8 +180,10 @@ Write for a reviewer skimming in ~30 seconds. Describe the change, not the proce
 **PRs** — title is a Conventional-Commit subject. Use
 [`.github/pull_request_template.md`](./.github/pull_request_template.md) as a starting
 point; choose bullets, a real example, a table, a diagram, or short prose by clarity.
-Start with a `## TL;DR` of one short sentence; diagrams, source annotations, and
-section order are optional.
+Start with a `## TL;DR` of one short sentence. Explain the mechanism or rationale
+under `## How it works`; the local PR gate rejects a missing, empty, or
+placeholder-only section. Link the docs the PR adds or updates on the
+`Documentation:` line. Diagrams, source annotations, and section order are optional.
 
 - Link the design doc on the `Design doc:` line: a 1–3 page GitHub issue, Notion
   page, or Linear issue, in that preference order. It includes related work and
@@ -201,12 +209,14 @@ section order are optional.
   report the observed failure with all production changes reverted and the pass with
   the complete fix restored.
 
-The shared hook applies these limits to the text agents post to GitHub: PR bodies,
-drafts included, and issues, comments, reviews, discussions, and release notes, whether
-sent through `gh` flags or API `body=` fields. It rejects text it cannot inspect, and
-titles or bodies carrying private context such as conversation attribution, memory
-citations, or local home paths. Later bot additions are outside this check; the
-writing rules still apply.
+The shared hook checks the text agents post to GitHub: PR bodies, drafts included,
+and issues, comments, reviews, discussions, and release notes, whether sent through
+`gh` flags or API `body=` fields. It enforces the paragraph and list-item limits and
+requires a `## TL;DR` section of at most 39 words; it does not count the 120-word
+total. It rejects text over 8,000 characters or that it cannot inspect, and titles or
+bodies carrying private context such as conversation attribution, memory citations,
+or local home paths. Later bot additions are outside this check; the writing rules
+still apply.
 
 Illustrative example; behavior and test results are hypothetical:
 
@@ -217,10 +227,16 @@ Reduce routine SDK CI work while retaining weekly compatibility coverage.
 
 Design doc: https://github.com/example/repo/issues/123
 
+Documentation: https://github.com/example/repo/blob/main/docs/ci.md#sdk-jobs
+
+## How it works
+
 - A PR changing both SDKs runs 11 jobs instead of 21.
 - Full platform combinations run weekly and on manual requests.
 
-Verification: workflow checks passed. Hosted CI timing has not been measured.
+## Verification
+
+Workflow checks passed. Hosted CI timing has not been measured.
 ```
 
 **Never put in a commit or PR** the process that produced the change (conversation / AI / step-by-step narrative), pasted logs or tickets, or secrets.
