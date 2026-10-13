@@ -96,3 +96,42 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `boxlite/__init__.py` imports these names from the extension in one
+    /// statement, so a class it names but the module never registers fails
+    /// that import, and the package loads with no native API at all.
+    #[test]
+    fn module_registers_every_class_the_package_imports() {
+        let source = include_str!("../boxlite/__init__.py");
+        let opening = "from .boxlite import (";
+        let start = source
+            .find(opening)
+            .expect("the package imports the extension")
+            + opening.len();
+        let end = start
+            + source[start..]
+                .find(')')
+                .expect("the import list is closed");
+        let names: Vec<&str> = source[start..end]
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .collect();
+        assert!(names.contains(&"ImageDetail"), "{names:?}");
+
+        Python::attach(|py| {
+            let module = PyModule::new(py, "boxlite").unwrap();
+            boxlite_python(&module).unwrap();
+            for name in names {
+                assert!(
+                    module.hasattr(name).unwrap(),
+                    "the extension registers no {name}"
+                );
+            }
+        });
+    }
+}

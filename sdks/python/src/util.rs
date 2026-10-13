@@ -117,6 +117,40 @@ mod tests {
         }
     }
 
+    /// `map_err` imports its classes from the `boxlite` package beside this
+    /// crate, as the extension does from its installed package.
+    fn put_the_package_on_the_import_path(py: Python<'_>) {
+        let path = py.import("sys").unwrap().getattr("path").unwrap();
+        let package_root = env!("CARGO_MANIFEST_DIR");
+        if !path.contains(package_root).unwrap() {
+            path.call_method1("insert", (0, package_root)).unwrap();
+        }
+    }
+
+    /// Existing `except RuntimeError` handlers must keep catching every
+    /// failure, and the text a caller logs must not change.
+    #[test]
+    fn every_variant_is_raised_as_its_class_with_the_message_unchanged() {
+        Python::attach(|py| {
+            put_the_package_on_the_import_path(py);
+            for err in every_variant() {
+                let (_, class, _) = err.http();
+                let message = err.to_string();
+
+                let raised = map_err(err);
+
+                let raised_class = raised.get_type(py);
+                assert_eq!(raised_class.module().unwrap(), "boxlite.errors");
+                assert_eq!(raised_class.name().unwrap(), class);
+                assert!(
+                    raised.is_instance_of::<PyRuntimeError>(py),
+                    "{class} is not a RuntimeError"
+                );
+                assert_eq!(raised.value(py).to_string(), message);
+            }
+        });
+    }
+
     /// The Python classes are written out by hand in `errors.py`; this reads
     /// that file so a class missing there, or carrying another code, fails
     /// here rather than when a user first meets that failure.
