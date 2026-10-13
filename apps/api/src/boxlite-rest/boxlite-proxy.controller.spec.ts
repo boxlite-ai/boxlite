@@ -9,6 +9,7 @@ import { ForbiddenException, RequestTimeoutException } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
+import { AttachTicketService } from './attach-ticket.service'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 
@@ -25,15 +26,13 @@ const activeAuth = {
 
 function makeHarness() {
   const boxService = {
-    findOneByIdOrName: jest
-      .fn()
-      .mockResolvedValue({
-        id: 'box-uuid',
-        runnerId: 'runner-1',
-        autoResume: true,
-        state: 'started',
-        inboundMode: 'enabled',
-      }),
+    findOneByIdOrName: jest.fn().mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+      state: 'started',
+      inboundMode: 'enabled',
+    }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
     getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://3000-box.proxy.test'),
   }
@@ -45,13 +44,28 @@ function makeHarness() {
     declarePublic: jest.fn().mockResolvedValue(undefined),
   }
   const tunnelRes = { setHeader: jest.fn() }
+  const attachTickets = new AttachTicketService(fakeRedis() as never)
   const controller = new (BoxliteProxyController as any)(
     boxService,
     runnerService,
     autoResume,
     tunnelService,
+    attachTickets,
   ) as BoxliteProxyController
-  return { controller, boxService, autoResume, tunnelService, tunnelRes }
+  return { controller, boxService, autoResume, tunnelService, tunnelRes, attachTickets }
+}
+
+/** The two Redis calls `AttachTicketService` makes, over a map. */
+function fakeRedis() {
+  const store = new Map<string, string>()
+  return {
+    set: async (key: string, value: string) => (store.set(key, value), 'OK'),
+    getdel: async (key: string) => {
+      const value = store.get(key) ?? null
+      store.delete(key)
+      return value
+    },
+  }
 }
 
 describe('BoxliteProxyController', () => {
@@ -497,5 +511,24 @@ describe('BoxliteProxyController', () => {
     res.emit('close')
     jest.advanceTimersByTime(900_000)
     expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
+  })
+
+  // The ticket must name the box by id, whatever the URL called it, so the
+  // attach upgrade can compare it with the box it resolves.
+  it('issues an attach ticket bound to the caller, the box id and the execution', async () => {
+    const { controller, boxService, attachTickets } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({ id: 'box-uuid' })
+    const authContext = { userId: 'user-1', organizationId: 'org-1' } as never
+
+    const issued = await controller.issueAttachTicket(authContext, 'my-box', 'exec-1')
+
+    expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('my-box', 'org-1')
+    expect(issued.expires_in).toBe(30)
+    await expect(attachTickets.consume(issued.ticket)).resolves.toEqual({
+      userId: 'user-1',
+      organizationId: 'org-1',
+      boxId: 'box-uuid',
+      execId: 'exec-1',
+    })
   })
 })

@@ -16,6 +16,7 @@ import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import type { Runner } from '../box/entities/runner.entity'
 import { BoxAutoResumeService } from './box-auto-resume.service'
+import { AttachTicketService } from './attach-ticket.service'
 
 type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunner?: Runner
@@ -24,8 +25,12 @@ type RunnerUpgradeRequest = IncomingMessage & {
 
 // Matches /api/v1/boxes/<id>/executions/<id>/attach and the
 // /api/v1/<tenant>/boxes/<id>/executions/<id>/attach shape with optional query string.
-// Named groups: `tenant` (optional org id / path prefix) and `boxId`.
-const ATTACH_PATH = /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/executions\/[^/]+\/attach(?:\?.*)?$/
+// Named groups: `tenant` (optional org id / path prefix), `boxId` and `execId`.
+const ATTACH_PATH =
+  /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/executions\/(?<execId>[^/?]+)\/attach(?:\?.*)?$/
+
+type AttachMatch = { boxId: string; execId: string; tenant?: string }
+type AttachAuth = { organization: Organization; ticketBoxId?: string }
 
 /**
  * Singleton WebSocket proxy for `/attach` upgrades.
@@ -53,6 +58,7 @@ export class BoxliteWsProxyService {
     // Exported by AuthModule (already imported here). Resolves to `undefined`
     // when `skipConnections` is set, so the JWT path guards on it.
     @Inject(JwtStrategy) private readonly jwtStrategy: JwtStrategy | undefined,
+    private readonly attachTickets: AttachTicketService,
   ) {
     this.proxy = createProxyMiddleware({
       ws: true,
@@ -86,14 +92,15 @@ export class BoxliteWsProxyService {
   }
 
   /**
-   * Box id (+ optional tenant/org id) when the URL is an `/attach` WS upgrade.
-   * The tenant is the organization for JWT auth (an API key carries its own org).
+   * Box, execution and optional tenant/org id when the URL is an `/attach` WS
+   * upgrade. The tenant is the organization for JWT and ticket auth (an API key
+   * carries its own org).
    */
-  matchAttachPath(url: string | undefined): { boxId: string; tenant?: string } | null {
+  matchAttachPath(url: string | undefined): AttachMatch | null {
     if (!url) return null
-    const groups = url.match(ATTACH_PATH)?.groups as { boxId: string; tenant?: string } | undefined
+    const groups = url.match(ATTACH_PATH)?.groups as AttachMatch | undefined
     if (!groups) return null
-    return { boxId: groups.boxId, tenant: groups.tenant }
+    return { boxId: groups.boxId, execId: groups.execId, tenant: groups.tenant }
   }
 
   /**
@@ -107,7 +114,10 @@ export class BoxliteWsProxyService {
       return
     }
 
-    const auth = await this.authenticate(req, match.tenant)
+    // Browsers cannot set `Authorization` on a WebSocket; they send a ticket.
+    const auth = req.headers['authorization']
+      ? await this.authenticate(req, match.tenant)
+      : await this.authenticateTicket(req, match)
     if (!auth) {
       this.respondAndClose(socket, 401, 'Unauthorized')
       return
@@ -119,6 +129,14 @@ export class BoxliteWsProxyService {
         this.respondAndClose(socket, 404, 'Not Found')
         return
       }
+      // A ticket names the box it was issued for, by id; the URL may use a name.
+      if (auth.ticketBoxId !== undefined && auth.ticketBoxId !== box.id) {
+        this.respondAndClose(socket, 401, 'Unauthorized')
+        return
+      }
+      // The runner authenticates the proxy, not the ticket; keep it out of
+      // the forwarded URL and the runner's logs.
+      req.url = withoutTicket(req.url ?? '')
       if (box.autoResume) {
         await this.autoResume.ensureReady(box.id, auth.organization)
       }
@@ -148,7 +166,8 @@ export class BoxliteWsProxyService {
 
   /**
    * Inline authentication for WS upgrades, mirroring the API-key + JWT halves of
-   * CombinedAuthGuard. Membership-only, like the HTTP exec/attach routes
+   * CombinedAuthGuard. Browsers, which cannot send the header, use
+   * `authenticateTicket` instead. Membership-only, like the HTTP exec/attach routes
    * (`BoxliteProxyController`), which carry no resource-permission decorator.
    * Never throws — any failure resolves to `null` (a 401), so the fire-and-forget
    * `upgrade` caller can't leak a hung socket.
@@ -170,7 +189,7 @@ export class BoxliteWsProxyService {
    * ApiKeyStrategy / OrganizationAccessGuard. Upgrade frequency is low; if
    * upgrade latency becomes a concern, add caching as a follow-up.
    */
-  private async authenticate(req: IncomingMessage, urlTenant?: string): Promise<{ organization: Organization } | null> {
+  private async authenticate(req: IncomingMessage, urlTenant?: string): Promise<AttachAuth | null> {
     try {
       const header = req.headers['authorization']
       const headerValue = Array.isArray(header) ? header[0] : header
@@ -213,6 +232,27 @@ export class BoxliteWsProxyService {
     }
   }
 
+  /**
+   * Ticket auth for browsers (see `AttachTicketService`). The ticket is spent
+   * on first use whatever the outcome, must name this execution and the URL's
+   * organization, and its user must still be a member, as on the JWT path.
+   * Never throws, for the same reason as `authenticate`.
+   */
+  private async authenticateTicket(req: IncomingMessage, match: AttachMatch): Promise<AttachAuth | null> {
+    try {
+      const ticket = new URL(req.url ?? '', 'http://attach.invalid').searchParams.get('ticket')
+      if (!ticket) return null
+      const grant = await this.attachTickets.consume(ticket)
+      if (!grant || grant.execId !== match.execId || grant.organizationId !== match.tenant) return null
+      const membership = await this.organizationUserService.findOne(grant.organizationId, grant.userId)
+      if (!membership) return null
+      const organization = await this.organizationService.findOne(grant.organizationId)
+      return organization ? { organization, ticketBoxId: grant.boxId } : null
+    } catch {
+      return null
+    }
+  }
+
   private respondAndClose(socket: Socket, status: number, reason: string): void {
     try {
       socket.write(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
@@ -221,4 +261,10 @@ export class BoxliteWsProxyService {
     }
     socket.destroy()
   }
+}
+
+function withoutTicket(url: string): string {
+  const parsed = new URL(url, 'http://attach.invalid')
+  parsed.searchParams.delete('ticket')
+  return parsed.pathname + parsed.search
 }

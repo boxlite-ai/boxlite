@@ -41,6 +41,7 @@ import { AUTO_RESUME_TIMEOUT_SECONDS, BoxAutoResumeService } from './box-auto-re
 import { BoxState } from '../box/enums/box-state.enum'
 import { TunnelService } from '../box/services/tunnel.service'
 import { isInboundEnabled } from '../box/utils/network-policy.util'
+import { ATTACH_TICKET_TTL_SECONDS, AttachTicketService } from './attach-ticket.service'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -75,6 +76,7 @@ export class BoxliteProxyController {
     private readonly runnerService: RunnerService,
     private readonly autoResume: BoxAutoResumeService,
     private readonly tunnelService: TunnelService,
+    private readonly attachTickets: AttachTicketService,
   ) {}
 
   @All(':boxId/exec')
@@ -134,6 +136,26 @@ export class BoxliteProxyController {
       next,
       USER_OPERATION,
     )
+  }
+
+  // Browsers cannot send `Authorization` on a WebSocket, so the dashboard
+  // trades its bearer for a one-time ticket the attach upgrade accepts instead.
+  // Membership-only, like the exec and attach routes it unlocks.
+  @Post(':boxId/executions/:execId/attach-ticket')
+  @HttpCode(HttpStatus.OK)
+  async issueAttachTicket(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Param('execId') execId: string,
+  ): Promise<{ ticket: string; expires_in: number }> {
+    const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+    const ticket = await this.attachTickets.issue({
+      userId: authContext.userId,
+      organizationId: authContext.organizationId,
+      boxId: box.id,
+      execId,
+    })
+    return { ticket, expires_in: ATTACH_TICKET_TTL_SECONDS }
   }
 
   @Get(':boxId/executions/:execId')

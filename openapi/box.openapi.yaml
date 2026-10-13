@@ -850,6 +850,17 @@ paths:
 
             A value outside this enum is rejected with `400`, never treated as
             the writable default.
+        - name: ticket
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Cloud API only. A one-time ticket from `POST .../attach-ticket`,
+            sent instead of an `Authorization` header by browsers, which
+            cannot set headers on a WebSocket. Spent on first use; a missing,
+            expired, reused or mismatched ticket gets `401`. The server
+            removes it before the attach reaches the runtime.
       responses:
         "101":
           description: WebSocket upgrade successful; bidirectional protocol begins.
@@ -863,6 +874,40 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /{prefix}/boxes/{box_id}/executions/{exec_id}/attach-ticket:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/execId"
+    post:
+      operationId: createAttachTicket
+      summary: Get a one-time ticket for the attach WebSocket
+      description: |
+        Cloud API only; `boxlite serve` does not implement it. Returns a
+        ticket that authenticates one `GET .../attach` upgrade for this
+        execution, as the caller, through its `ticket` query parameter.
+        For browsers, which cannot send `Authorization` on a WebSocket.
+        The ticket expires after `expires_in` seconds.
+      tags: [Execution]
+      responses:
+        "200":
+          description: Ticket issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ticket, expires_in]
+                properties:
+                  ticket:
+                    type: string
+                    description: Opaque, single-use credential
+                  expires_in:
+                    type: integer
+                    description: Seconds until the ticket expires
+                    example: 30
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 
   /{prefix}/boxes/{box_id}/executions/{exec_id}/signal:
     parameters:

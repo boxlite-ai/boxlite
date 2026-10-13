@@ -162,17 +162,23 @@ describe('BoxLite REST routing', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
     )
 
-    expect(service.matchAttachPath('/api/v1/boxes/box-1/executions/exec-1/attach')).toEqual({ boxId: 'box-1' })
-    expect(service.matchAttachPath('/api/v1/default/boxes/box-1/executions/exec-1/attach')).toEqual({
+    expect(service.matchAttachPath('/api/v1/boxes/box-1/executions/exec-1/attach')).toEqual({
       boxId: 'box-1',
+      execId: 'exec-1',
+    })
+    expect(service.matchAttachPath('/api/v1/default/boxes/box-1/executions/exec-1/attach?ticket=t')).toEqual({
+      boxId: 'box-1',
+      execId: 'exec-1',
       tenant: 'default',
     })
   })
 
   it('does not route HTTP duplex tunnels through the websocket proxy', () => {
     const service = new BoxliteWsProxyService(
+      {} as any,
       {} as any,
       {} as any,
       {} as any,
