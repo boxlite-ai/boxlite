@@ -51,9 +51,8 @@ so an installed or locally built BoxLite keeps its own images, boxes and
 database. macOS extracts the runtime into its versioned directory under
 `~/Library/Application Support/boxlite/runtimes`. The box mounts the repository
 at `/src` and the output directory at `/out`, so the output can be anywhere on the
-host. The wrapper creates it and resolves `..` and symlinks on the host first: a
-symlink followed inside the box would land on a guest-only path. It rejects a
-symlink to a missing directory and a path containing `:`, the volume separator.
+host. The wrapper makes the output path absolute and creates it first, because
+BoxLite mounts only an existing absolute host path.
 
 `make test:vmm:boot` skips the host build tests on hosts without GNU coreutils
 (macOS); the box tests run everywhere.

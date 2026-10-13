@@ -73,16 +73,11 @@ check_resources() {
         fail "$(( free_kib / 1024 )) MiB free on $dir; the build box needs $box_disk_gib GiB"
 }
 
-# The output directory is mounted at /out, so create it and resolve symlinks and .. on
-# the host; the box would otherwise follow a link to a guest-only path.
+# The output directory is mounted at /out. BoxLite mounts only an existing absolute host
+# path; a relative one names a managed volume.
 prepare_output() {
-    local path
-    [[ $output != *:* ]] || fail "output path cannot contain ':' (volume separator): $output"
-    [[ ! -L $output || -d $output ]] || fail "output is a symlink to a missing directory: $output"
-    mkdir -p -- "$output" || fail "cannot create output directory: $output"
-    path=$(cd -- "$output" && pwd -P) || fail "cannot resolve output directory: $output"
-    [[ $path != *:* ]] || fail "output path cannot contain ':' (volume separator): $path"
-    output=$path
+    [[ $output == /* ]] || output="$PWD/$output"
+    mkdir -p -- "$output"
 }
 
 sha256() {

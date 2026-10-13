@@ -136,18 +136,13 @@ class BoxBuildContract(unittest.TestCase):
         self.assertIn("SHA256 mismatch", self.run_box(expected=1).stderr)
         self.assertEqual(self.calls("boxlite"), [])
 
-    def test_mounts_the_resolved_output_directory(self):
-        elsewhere = self.fixture / "elsewhere"
-        (self.repo / "link").symlink_to(elsewhere / "kernel")
-        for output in (str(elsewhere / "kernel"), "target/../../elsewhere/kernel", "link"):
+    def test_mounts_the_output_directory(self):
+        for output, host in ((str(self.fixture / "elsewhere"), self.fixture / "elsewhere"),
+                             ("kernel", self.repo / "kernel")):
             with self.subTest(output=output):
                 self.run_box("--output", output)
-                self.assertIn(f"{elsewhere / 'kernel'}:/out", self.calls("boxlite")[-1][0])
-        self.assertTrue((elsewhere / "kernel").is_dir())
-        self.assertIn("cannot contain", self.run_box("--output", "a:b", expected=1).stderr)
-        self.assertFalse((self.repo / "a:b").exists())
-        (self.repo / "dangling").symlink_to(elsewhere / "missing")
-        self.assertIn("symlink to a missing directory", self.run_box("--output", "dangling", expected=1).stderr)
+                self.assertIn(f"{host}:/out", self.calls("boxlite")[-1][0])
+                self.assertTrue(host.is_dir())
 
     def test_caps_cpus_at_guest_kernel_limit(self):
         result = self.run_box("--jobs", "24")
