@@ -154,7 +154,7 @@ The same route workflow works with local and remote runtimes:
   `TunnelForwarder` has `Addr() net.Addr`, `Wait(ctx) error`, and repeatable
   `Close() error`; canceling a wait context does not close the listener.
 - `tunnel.URI() (string, error)` returns the public URL of a remotely served tunnel, or an empty string for a local one.
-- `tunnel.Connect(ctx) (net.Conn, error)` consumes the prepared connection.
+- `tunnel.Connect(ctx) (net.Conn, error)` consumes the prepared tunnel and opens its connection.
 
 Choose `Connect` or `Forward`; a forwarder prepares fresh tunnels for later
 clients. This differs from `WithPort`, which creates a persistent,

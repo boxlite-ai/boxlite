@@ -433,7 +433,7 @@ pub struct BoxState {
 | Inspect | `BoxTunnel::uri(&self) -> Option<&str>` | Read the prepared public URL; `None` for a local box |
 | Descriptor | `BoxConnection::raw_fd(&self) -> Option<RawFd>` | Borrowed fd; `None` for a remotely served connection |
 | Take fd | `BoxConnection::into_fd(self) -> BoxliteResult<OwnedFd>` | Consume the connection and own its descriptor |
-| Connect | `BoxTunnel::connect(self) -> BoxliteResult<BoxConnection>` | Consume the prepared tunnel into its byte stream |
+| Connect | `async fn BoxTunnel::connect(self) -> BoxliteResult<BoxConnection>` | Consume the prepared tunnel into its byte stream |
 | Split | `BoxConnection::into_split(self) -> (BoxReader, BoxWriter)` | Halves that read and write concurrently |
 | Half-close | `BoxWriter::shutdown(&mut self) -> BoxliteResult<()>` | Signal EOF; a peer that already hung up is success, not an error |
 

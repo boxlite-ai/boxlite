@@ -51,7 +51,7 @@ class NetworkHandle:
         self._owner = box
 
     async def tunnel(self, port: int) -> BoxTunnel:
-        """Establish and return a one-shot tunnel for a port inside the box."""
+        """Prepare a one-shot tunnel for a port inside the box."""
         if not self._owner._started:
             raise RuntimeError(
                 "Box not started. Use 'async with SimpleBox(...) as box:' "
@@ -343,7 +343,7 @@ class SimpleBox:
         )
 
     async def tunnel(self, port: int) -> BoxTunnel:
-        """Establish and return a one-shot tunnel for a port inside this box."""
+        """Prepare a one-shot tunnel for a port inside this box."""
         return await self.network.tunnel(port)
 
     async def metrics(self):

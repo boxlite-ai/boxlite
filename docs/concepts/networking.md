@@ -49,9 +49,11 @@ QEMU's user-mode networking stack.
 ## Service access across runtimes
 
 The box network tunnel API is portable across local and REST runtimes, but its
-transport is backend-specific. `tunnel()` eagerly prepares one local gvproxy or
-remote service-proxy connection. `uri()` inspects its public URI, while `connect()`
-or `forward()` consumes that prepared one-shot tunnel into a byte stream or listener.
+transport is backend-specific. On both runtimes `tunnel()` only prepares: it
+checks that the box can carry the tunnel and, on a REST runtime, mints its public
+URI, but opens no connection. `uri()` inspects that URI. `connect()`, or each
+client of `forward()`, opens the connection, so it fails while nothing in the box
+listens on the port.
 For a remote public box, preparing the tunnel registers that guest port as public.
 The proxy accepts HTTP/WebSocket previews, including signed URLs, and raw CONNECT
 only when the box is public and the port has an active declaration. Getting a

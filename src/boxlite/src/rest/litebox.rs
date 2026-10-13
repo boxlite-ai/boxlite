@@ -532,18 +532,28 @@ impl BoxBackend for RestBox {
 
 #[async_trait]
 impl BoxNetworkBackend for RestBox {
+    async fn prepare_tunnel(&self, target: SocketAddr) -> BoxliteResult<Option<String>> {
+        self.tunnel_endpoint(target).await.map(Some)
+    }
+
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+        let endpoint = self.tunnel_endpoint(target).await?;
+        let connection = self.client.connect_box_network_tunnel(&endpoint).await?;
+        Ok(BoxTunnel::remote(endpoint, connection))
+    }
+}
+
+impl RestBox {
+    /// Register `target`'s port as a public tunnel and return its URI.
+    async fn tunnel_endpoint(&self, target: SocketAddr) -> BoxliteResult<String> {
         if target.ip().to_string() != crate::net::constants::GUEST_IP {
             return Err(BoxliteError::Unsupported(
                 "REST box tunnels only support service ports on the guest IP".into(),
             ));
         }
-
-        let port = target.port();
-        let box_id = self.box_id_str();
-        let endpoint = self.client.prepare_box_tunnel(&box_id, port).await?;
-        let connection = self.client.connect_box_network_tunnel(&endpoint).await?;
-        Ok(BoxTunnel::remote(endpoint, connection))
+        self.client
+            .prepare_box_tunnel(&self.box_id_str(), target.port())
+            .await
     }
 }
 

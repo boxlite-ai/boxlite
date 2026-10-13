@@ -192,7 +192,7 @@ impl PyBoxTunnel {
     fn connect<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let tunnel = self.take()?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let (reader, writer) = tunnel.connect().map_err(map_err)?.into_split();
+            let (reader, writer) = tunnel.connect().await.map_err(map_err)?.into_split();
             Ok(PyBoxConnection {
                 reader: Arc::new(tokio::sync::Mutex::new(Some(reader))),
                 writer: Arc::new(tokio::sync::Mutex::new(Some(writer))),

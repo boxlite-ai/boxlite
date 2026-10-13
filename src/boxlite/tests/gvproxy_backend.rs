@@ -256,8 +256,11 @@ async fn live_gvproxy_backend_expose_privileged_port_surfaces_permission_denied(
     );
 }
 
+// The control socket acks a tunnel only once the guest accepts it. No VM is
+// attached here, so the guest dial fails and the handshake must fail with it
+// rather than hand back a pipe that closes at once.
 #[tokio::test]
-async fn live_gvproxy_backend_tunnel_handshake_returns_fd() {
+async fn live_gvproxy_backend_tunnel_requires_the_guest_to_accept() {
     let dir = tempfile::Builder::new()
         .prefix("bl-live-gvproxy-tunnel-")
         .tempdir_in("/tmp")
@@ -266,7 +269,13 @@ async fn live_gvproxy_backend_tunnel_handshake_returns_fd() {
     wait_for_services(&backend, control_sock).await;
 
     let target: SocketAddr = "192.168.127.2:8080".parse().unwrap();
-    let tunnel = backend.tunnel(target).await.expect("tunnel handshake");
+    let error = backend
+        .tunnel(target)
+        .await
+        .expect_err("a guest that does not accept must not yield a tunnel");
 
-    assert_eq!(tunnel.peer_addr(), target);
+    assert!(
+        format!("{error}").contains("tunnel handshake: cannot dial guest"),
+        "error should carry the bridge's refusal: {error}"
+    );
 }

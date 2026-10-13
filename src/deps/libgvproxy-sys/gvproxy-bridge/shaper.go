@@ -350,9 +350,9 @@ func (f *framer) decodeLen() int {
 // ---------------------------------------------------------------------------
 
 // shaperStats stays internal to the bridge for now. The live stats path (GET
-// /stats over the control socket) serves vn.ServicesMux() directly, so there is
-// no bridge-owned mux to inject into, and the FFI stats path has no callers on
-// the Rust side. Surfacing these belongs with that plumbing, not here.
+// /stats over the control socket) is gvproxy's own handler, which controlMux
+// passes through unchanged, and the FFI stats path has no callers on the Rust
+// side. Surfacing these belongs with that plumbing, not here.
 type shaperStats struct {
 	txThrottledEvents atomic.Int64
 	txThrottledNs     atomic.Int64
@@ -748,9 +748,9 @@ func (c *shapedConn) Close() error {
 		err = c.Conn.Close()
 
 		// The only reader of these counters. There is no path from here to the
-		// control socket's /stats (it serves vn.ServicesMux directly, with no
-		// bridge-owned mux to inject into), so without this line an RX queue
-		// overflow would leave no trace anywhere.
+		// control socket's /stats (gvproxy's own handler, passed through by
+		// controlMux), so without this line an RX queue overflow would leave no
+		// trace anywhere.
 		s := c.stats.snapshot()
 		logrus.WithFields(logrus.Fields{
 			"tx_throttled_events": s.TxThrottledEvents,

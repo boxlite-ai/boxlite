@@ -450,7 +450,7 @@ pub unsafe extern "C" fn boxlite_tunnel_connect(
             }
         };
         let owned_fd = tunnel_ref.tokio_rt.block_on(async {
-            let connection = prepared.connect()?;
+            let connection = prepared.connect().await?;
             // A socket-backed connection already owns exactly the descriptor
             // the caller wants, so surrender it instead of inserting another
             // socket pair and copy task. Only the remote transport, whose
