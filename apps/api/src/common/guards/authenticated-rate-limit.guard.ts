@@ -15,6 +15,7 @@ import { THROTTLER_SCOPE_KEY } from '../decorators/throttler-scope.decorator'
 import { AuthContextType } from '../interfaces/auth-context.interface'
 
 type RateLimitAuthContext = AuthContextType & {
+  organizationId?: string
   userId?: string
 }
 
@@ -38,14 +39,13 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
 
   protected async getTracker(req: Request): Promise<string> {
     const user = (req as AuthenticatedRequest).user
-    const organizationId = this.getOrganizationId(user)
 
-    // Share the organization quota only when its identity has been verified.
-    if (organizationId) {
-      return `auth:org:${organizationId}`
+    // Track by organization ID when available (shared quota per org)
+    if (user?.organizationId) {
+      return `auth:org:${user.organizationId}`
     }
 
-    // JWT requests before organization authorization use the user's quota.
+    // Fallback to user ID for non-org routes (e.g., /users/me)
     if (user?.userId) {
       return `auth:user:${user.userId}`
     }
@@ -103,7 +103,8 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
           }
         }
 
-        const orgId = this.getOrganizationId(request.user)
+        const user = request.user
+        const orgId = user?.organizationId
         if (orgId) {
           const orgLimits = await this.getCachedOrganizationRateLimits(orgId)
           if (orgLimits) {
@@ -148,12 +149,6 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
       return super.handleRequest(requestProps)
     }
     return true
-  }
-
-  private getOrganizationId(user: RateLimitAuthContext | undefined): string | undefined {
-    // JWT organizationId comes from a request header until organization access succeeds.
-    if (user && 'organization' in user) return user.organization.id
-    return user && 'apiKey' in user ? user.apiKey?.organizationId : undefined
   }
 
   private isValidAuthContext(user: RateLimitAuthContext | undefined): boolean {
