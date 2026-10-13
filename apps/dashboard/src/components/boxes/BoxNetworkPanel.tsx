@@ -179,9 +179,9 @@ export function BoxNetworkPanel({
             <AlertDialogTitle>Open this box&apos;s preview URLs to anyone?</AlertDialogTitle>
             {/* Scoped deliberately. Inbound access only makes the proxy skip
                 authentication for preview traffic (get_box_target.go:87) and
-                raw tunnel CONNECTs (tunnel.go:43). The web terminal stays
-                authenticated even with it enabled — the same line exempts
-                TERMINAL_PORT — and the management API is untouched. An earlier
+                raw tunnel CONNECTs (tunnel.go:43). The web terminal does not
+                go through the proxy: it attaches over `/v1` with the member's
+                own credentials, and the management API is untouched. An earlier
                 "Make this box public?" read as handing over the whole box. */}
             <AlertDialogDescription>
               Anyone who knows a preview URL will reach <strong>any port your box is serving</strong> without signing

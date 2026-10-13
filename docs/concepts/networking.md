@@ -57,8 +57,9 @@ guest port as public. The proxy accepts HTTP/WebSocket previews, including signe
 URLs, and raw CONNECT only when inbound access is enabled and the port has an
 active declaration. Getting a preview URL alone does not declare the port. Boxes
 with inbound access disabled cannot expose guest service ports through previews,
-even with a credential. The authenticated web
-terminal uses reserved port 22222 without a tunnel declaration.
+even with a credential. The dashboard's web terminal does not use previews: it
+runs a TTY execution over the `/v1` attach WebSocket, signing the upgrade with a
+one-time ticket because a browser cannot send `Authorization` on a WebSocket.
 
 Explicit host port publication is a separate local-runtime feature that owns a
 TCP listener and accepts repeated connections.

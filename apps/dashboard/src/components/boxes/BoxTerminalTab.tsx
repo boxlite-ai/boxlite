@@ -3,12 +3,11 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { RoutePath } from '@/enums/RoutePath'
 import { useStartBoxMutation } from '@/hooks/mutations/useStartBoxMutation'
-import { useTerminalSessionQuery } from '@/hooks/queries/useTerminalSessionQuery'
 import { useBoxSessionContext } from '@/hooks/useBoxSessionContext'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { getBoxRouteId } from '@/lib/box-identity'
@@ -16,9 +15,9 @@ import { handleApiError } from '@/lib/error-handling'
 import { isStoppable } from '@/lib/utils/box'
 import { Box, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { Spinner } from '@/components/ui/spinner'
-import { Play, RefreshCw, TerminalSquare } from '@/components/ui/icon'
+import { Play, TerminalSquare } from '@/components/ui/icon'
 import { toast } from 'sonner'
-import { BoxTerminalFrame } from './BoxTerminalFrame'
+import { BoxTerminal } from './BoxTerminal'
 
 export function BoxTerminalTab({ box, refreshSignal = 0 }: { box: Box; refreshSignal?: number }) {
   const running = isStoppable(box)
@@ -38,27 +37,10 @@ export function BoxTerminalTab({ box, refreshSignal = 0 }: { box: Box; refreshSi
 
   const [activated, setActivated] = useState(() => isTerminalActivated(box.id))
 
-  const {
-    data: session,
-    isLoading,
-    isError,
-    isFetching,
-    reset,
-    refetch,
-  } = useTerminalSessionQuery(box.id, running && activated)
-  const lastRefreshSignalRef = useRef(refreshSignal)
-
   const handleConnect = () => {
     activateTerminal(box.id)
     setActivated(true)
   }
-
-  useEffect(() => {
-    if (refreshSignal === lastRefreshSignalRef.current) return
-    lastRefreshSignalRef.current = refreshSignal
-    if (!running || !activated) return
-    void refetch()
-  }, [activated, refetch, refreshSignal, running])
 
   if (!running) {
     return (
@@ -108,49 +90,13 @@ export function BoxTerminalTab({ box, refreshSignal = 0 }: { box: Box; refreshSi
     )
   }
 
-  // Loading / fetching
-  if (isLoading || isFetching) {
-    return (
-      <div className="flex flex-1 flex-col p-5 font-mono text-body text-muted-foreground">
-        <span className="flex items-center gap-3">
-          <span className="text-brand">&gt;</span> connecting to {box.name ?? box.id}
-          <Spinner className="size-3.5" />
-        </span>
-      </div>
-    )
-  }
-
-  // Error
-  if (isError || !session) {
-    return (
-      <div className="flex-1 flex flex-col p-2 sm:p-4">
-        <div className="flex-1 min-h-0 flex">
-          <Empty className="border-0">
-            <EmptyHeader>
-              <EmptyTitle>Failed to connect</EmptyTitle>
-              <EmptyDescription>Something went wrong while connecting to the terminal.</EmptyDescription>
-            </EmptyHeader>
-            <Button variant="outline" size="sm" onClick={() => reset()}>
-              <RefreshCw className="size-4" />
-              Retry
-            </Button>
-          </Empty>
-        </div>
-      </div>
-    )
-  }
-
   // Active session
   const fullscreenHref = RoutePath.BOX_TERMINAL.replace(':boxId', getBoxRouteId(box))
   return (
     <div className="flex-1 flex flex-col">
       <div className="relative flex-1 min-h-0 bg-black overflow-hidden">
-        <BoxTerminalFrame
-          key={session.url}
-          sessionUrl={session.url}
-          fullscreenHref={fullscreenHref}
-          className="h-full"
-        />
+        {/* A refresh reconnects: the key change mounts a fresh shell. */}
+        <BoxTerminal key={refreshSignal} boxId={box.id} fullscreenHref={fullscreenHref} className="h-full" />
       </div>
     </div>
   )

@@ -14,8 +14,7 @@ const mocks = vi.hoisted(() => ({
   box: undefined as unknown,
   volumes: [] as { id: string; name: string }[],
   boxRefetch: vi.fn(),
-  terminalRefetch: vi.fn(),
-  terminalReset: vi.fn(),
+  terminalMounts: vi.fn(),
   navigate: vi.fn(),
   setSearchParams: vi.fn(),
   mutateAsync: vi.fn(),
@@ -90,17 +89,6 @@ vi.mock('@/hooks/queries/useVolumesQuery', () => ({
   useVolumesQuery: () => ({ data: mocks.volumes }),
 }))
 
-vi.mock('@/hooks/queries/useTerminalSessionQuery', () => ({
-  useTerminalSessionQuery: () => ({
-    data: { url: 'https://terminal.example/session-1', expiresAt: Date.now() + 300000 },
-    isLoading: false,
-    isError: false,
-    isFetching: false,
-    refetch: mocks.terminalRefetch,
-    reset: mocks.terminalReset,
-  }),
-}))
-
 vi.mock('@/hooks/mutations/useStartBoxMutation', () => ({
   useStartBoxMutation: () => ({ isPending: false, mutateAsync: mocks.mutateAsync }),
 }))
@@ -117,9 +105,15 @@ vi.mock('@/hooks/mutations/useDeleteBoxMutation', () => ({
   useDeleteBoxMutation: () => ({ isPending: false, mutateAsync: mocks.mutateAsync }),
 }))
 
-vi.mock('./BoxTerminalFrame', () => ({
-  BoxTerminalFrame: ({ sessionUrl }: { sessionUrl: string }) => <div data-testid="terminal-frame">{sessionUrl}</div>,
-}))
+vi.mock('./BoxTerminal', async () => {
+  const { useEffect } = await import('react')
+  return {
+    BoxTerminal: ({ boxId }: { boxId: string }) => {
+      useEffect(() => mocks.terminalMounts(), [])
+      return <div data-testid="terminal">{boxId}</div>
+    },
+  }
+})
 
 function makeRunningBox(): Box {
   return {
@@ -179,9 +173,8 @@ describe('BoxDetails refresh', () => {
   it('reconnects an active terminal when the detail refresh button is clicked', async () => {
     await renderBoxDetails()
 
-    expect(mocks.terminalRefetch).not.toHaveBeenCalled()
-    const frameBeforeRefresh = document.querySelector('[data-testid="terminal-frame"]')
-    expect(frameBeforeRefresh).not.toBeNull()
+    expect(mocks.terminalMounts).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('[data-testid="terminal"]')).not.toBeNull()
 
     const refreshButton = document.querySelector<HTMLButtonElement>('button[title="refresh"]')
     expect(refreshButton).not.toBeNull()
@@ -192,8 +185,8 @@ describe('BoxDetails refresh', () => {
     await flushReactWork()
 
     expect(mocks.boxRefetch).toHaveBeenCalledTimes(1)
-    expect(mocks.terminalRefetch).toHaveBeenCalledTimes(1)
-    expect(document.querySelector('[data-testid="terminal-frame"]')).toBe(frameBeforeRefresh)
+    // A fresh mount is a fresh shell: the refresh reconnects.
+    expect(mocks.terminalMounts).toHaveBeenCalledTimes(2)
   })
 
   // The list page navigates here by id, so the name the user gave the box must

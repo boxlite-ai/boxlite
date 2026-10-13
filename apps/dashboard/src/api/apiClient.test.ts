@@ -137,3 +137,41 @@ describe('ApiClient.getTunnelUrl', () => {
     expect(requests[0].params).toEqual({ port: 3000 })
   })
 })
+
+describe('ApiClient terminal session', () => {
+  async function clientRecording(responses: Record<string, unknown>) {
+    vi.resetModules()
+    const axios = (await import('axios')).default
+    const requests: Array<{ method?: string; url?: string; data?: string }> = []
+    axios.defaults.adapter = (async (cfg: { method?: string; url?: string; data?: string }) => {
+      requests.push(cfg)
+      const data = Object.entries(responses).find(([suffix]) => cfg.url?.endsWith(suffix))?.[1] ?? {}
+      return { data, status: 200, statusText: '', headers: {}, config: cfg }
+    }) as never
+    const { ApiClient } = await import('./apiClient')
+    return { api: new ApiClient(config, 'tok'), requests }
+  }
+
+  it('starts a login shell on a pseudo-terminal', async () => {
+    const { api, requests } = await clientRecording({ '/exec': { execution_id: 'exec-1' } })
+
+    await expect(api.startTerminalExec('org-1', 'box-1')).resolves.toBe('exec-1')
+
+    expect(requests[0].method).toBe('post')
+    expect(requests[0].url).toBe('/v1/org-1/boxes/box-1/exec')
+    expect(JSON.parse(requests[0].data ?? '')).toMatchObject({ command: '/bin/sh', tty: true })
+  })
+
+  // The ticket rides in the URL because a browser WebSocket carries no
+  // Authorization header; the bearer only ever goes to the ticket route.
+  it('buys a ticket with the bearer and puts it in the attach WebSocket URL', async () => {
+    const { api, requests } = await clientRecording({ '/attach-ticket': { ticket: 'tkt-1' } })
+
+    const url = await api.terminalAttachUrl('org-1', 'box-1', 'exec-1')
+
+    expect(requests[0].method).toBe('post')
+    expect(requests[0].url).toBe('/v1/org-1/boxes/box-1/executions/exec-1/attach-ticket')
+    expect(url).toBe('ws://api.test/api/v1/org-1/boxes/box-1/executions/exec-1/attach?ticket=tkt-1')
+    expect(url).not.toContain('tok')
+  })
+})
