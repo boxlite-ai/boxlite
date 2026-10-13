@@ -19,8 +19,6 @@ import { useState } from 'react'
 export type BoxPreviewUrlDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** True while anyone with the URL can open it, i.e. inbound access is enabled. */
-  inboundEnabled: boolean
   /** Resolved URL for the port last submitted, if any. */
   url?: string
   isFetching?: boolean
@@ -42,7 +40,6 @@ export type BoxPreviewUrlDialogProps = {
 export function BoxPreviewUrlDialog({
   open,
   onOpenChange,
-  inboundEnabled,
   url,
   isFetching = false,
   error,
@@ -97,9 +94,10 @@ export function BoxPreviewUrlDialog({
             </div>
 
             {/* Who can use it matters at the moment of copying, which is here
-                rather than back on the sheet. */}
+                rather than back on the sheet. The dialog only opens with
+                inbound access enabled, so the answer is always the same. */}
             <p className="text-[11px] uppercase tracking-[1px] text-muted-foreground">
-              {inboundEnabled ? 'anyone with this url can open it' : 'only your organization can open it'}
+              anyone with this url can open it
             </p>
 
             {/* Stated here because it cannot be diagnosed afterwards: the URL

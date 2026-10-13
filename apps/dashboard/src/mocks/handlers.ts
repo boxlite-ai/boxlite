@@ -196,16 +196,16 @@ export const handlers = [
     box.network.inbound = { mode, allow_net: [] }
     return HttpResponse.json(box.network.inbound)
   }),
-  http.get(`${API_URL}/box/:boxIdOrName/ports/:port/preview-url`, ({ params }) => {
-    const boxId = String(params.boxIdOrName)
+  // Refuses without inbound access, like the real route.
+  http.post(`${API_URL}/v1/:prefix/boxes/:boxId/network/tunnel`, ({ params, request }) => {
+    const boxId = String(params.boxId)
+    const box = MOCK_BOXES.find((b) => b.id === boxId)
+    if (box?.network?.inbound.mode !== NetworkMode.ENABLED) return new HttpResponse(null, { status: 409 })
+    const port = new URL(request.url).searchParams.get('port')
     // Mirrors the real hex-encoded direct-preview host shape. Hand-rolled
     // rather than via Buffer, which does not exist in the browser.
     const encodedBoxId = [...boxId].map((char) => char.charCodeAt(0).toString(16).padStart(2, '0')).join('')
-    return HttpResponse.json({
-      boxId,
-      url: `https://${params.port}-d-${encodedBoxId}.proxy.mock.boxlite.ai`,
-      token: 'mock0boxauthtoken0000000000000000',
-    })
+    return HttpResponse.json({ uri: `https://${port}-d-${encodedBoxId}.proxy.mock.boxlite.ai` })
   }),
   http.get(`${API_URL}/box/:boxIdOrName/ports/:port/signed-preview-url`, ({ params, request }) => {
     const port = Number(params.port)

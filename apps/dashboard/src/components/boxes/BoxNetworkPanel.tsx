@@ -55,16 +55,19 @@ function InlineAction({
   children,
   onClick,
   disabled,
+  title,
 }: {
   children: ReactNode
   onClick: () => void
   disabled?: boolean
+  title?: string
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
+      title={title}
       // The two actions on this sheet are the ones that make a box reachable
       // from outside; they get a button's weight, not a footnote's.
       className={cn(
@@ -85,7 +88,7 @@ export type BoxNetworkPanelProps = {
   /** False for viewers, who see the state but cannot change exposure. */
   canManage: boolean
   onToggleInbound: (next: NetworkMode) => void
-  /** Opens the port prompt that resolves a preview URL. */
+  /** Opens the port prompt that resolves a public URL; needs inbound access. */
   onGetUrl: () => void
 }
 
@@ -95,6 +98,13 @@ function outboundLabel(outbound: NetworkInfo['outbound']): string {
   const allowed = outbound.allow_net.length
   if (allowed === 0) return 'enabled'
   return `enabled · ${allowed} ${allowed === 1 ? 'host' : 'hosts'} allowed`
+}
+
+/** Why "get url" is unavailable: the tunnel route needs inbound access and WRITE_BOXES. */
+function getUrlHint(inboundEnabled: boolean, canManage: boolean): string | undefined {
+  if (!canManage) return 'Getting a url needs permission to manage this box'
+  if (!inboundEnabled) return 'Enable inbound access to get a url'
+  return undefined
 }
 
 /**
@@ -118,7 +128,19 @@ export function BoxNetworkPanel({
 
   return (
     <>
-      <SectionHeader title="network" right={<InlineAction onClick={onGetUrl}>get url</InlineAction>} />
+      {/* A URL is a tunnel: the API grants it only with inbound access, to members who can manage the box. */}
+      <SectionHeader
+        title="network"
+        right={
+          <InlineAction
+            onClick={onGetUrl}
+            disabled={!inboundEnabled || !canManage}
+            title={getUrlHint(inboundEnabled, canManage)}
+          >
+            get url
+          </InlineAction>
+        }
+      />
 
       {/* Sheet convention: grey key, foreground value; hue carries the risk
           signal (amber when inbound is enabled). Outbound is read-only: no
@@ -130,11 +152,10 @@ export function BoxNetworkPanel({
       </div>
 
       {/* Inbound access only lets the proxy skip sign-in for the services the
-          box exposes. The URLs carry no credential (`getPortPreviewUrl` returns
-          `url` and `token` separately), so with it disabled a non-member is
-          bounced through OIDC and refused by the org-membership check in
-          preview.controller.ts. Access is credential-based, not network-based:
-          no layer enforces an inbound allowlist yet. */}
+          box exposes; with it disabled a non-member is bounced through OIDC and
+          refused by the org-membership check in preview.controller.ts. Access
+          is credential-based, not network-based: no layer enforces an inbound
+          allowlist yet. */}
       <div className="mb-[6px] flex items-baseline gap-2">
         <span className="whitespace-nowrap text-muted-foreground">inbound</span>
         <span className="-translate-y-1 min-w-[8px] flex-1 border-b border-dotted border-border" />

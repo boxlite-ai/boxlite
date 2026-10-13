@@ -27,12 +27,14 @@ describe('BoxNetworkPanel', () => {
     container.remove()
   })
 
-  function render(info: NetworkInfo | undefined, onToggleInbound = vi.fn()) {
+  function render(info: NetworkInfo | undefined, onToggleInbound = vi.fn(), canManage = true) {
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
     act(() => {
-      root.render(<BoxNetworkPanel network={info} canManage onToggleInbound={onToggleInbound} onGetUrl={vi.fn()} />)
+      root.render(
+        <BoxNetworkPanel network={info} canManage={canManage} onToggleInbound={onToggleInbound} onGetUrl={vi.fn()} />,
+      )
     })
     return onToggleInbound
   }
@@ -71,5 +73,18 @@ describe('BoxNetworkPanel', () => {
 
     expect(row('inbound')).toBe('inboundunknown')
     expect(container.querySelector('[aria-label="Inbound access"]')).toBeNull()
+  })
+
+  // A url is a tunnel, which needs inbound access; the control says so up front.
+  // The tunnel route also needs WRITE_BOXES, which viewers lack.
+  it.each([
+    [NetworkMode.ENABLED, true, false],
+    [NetworkMode.DISABLED, true, true],
+    [NetworkMode.ENABLED, false, true],
+  ])('with inbound %s and canManage %s, get url disabled is %s', (inbound, canManage, disabled) => {
+    render(network(inbound, NetworkMode.ENABLED), vi.fn(), canManage)
+
+    const getUrl = [...container.querySelectorAll('button')].find((button) => button.textContent === 'get url')
+    expect(getUrl?.disabled).toBe(disabled)
   })
 })

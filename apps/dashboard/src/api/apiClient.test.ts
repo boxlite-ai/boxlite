@@ -145,3 +145,23 @@ describe('ApiClient.setBoxInboundMode', () => {
     expect((request.headers as { Authorization?: string }).Authorization).toBe('Bearer tok')
   })
 })
+
+describe('ApiClient.getTunnelUrl', () => {
+  it('asks the /v1 tunnel route for a port, as the SDK does', async () => {
+    vi.resetModules()
+    const axios = (await import('axios')).default
+    const requests: Array<{ method?: string; url?: string; params?: unknown }> = []
+    axios.defaults.adapter = (async (cfg: never) => {
+      requests.push(cfg)
+      return { data: { uri: 'https://3000-d-62.proxy.test' }, status: 200, statusText: '', headers: {}, config: cfg }
+    }) as never
+    const { ApiClient } = await import('./apiClient')
+
+    const uri = await new ApiClient(config, 'tok').getTunnelUrl('org-1', 'box-1', 3000)
+
+    expect(uri).toBe('https://3000-d-62.proxy.test')
+    expect(requests[0].method).toBe('post')
+    expect(requests[0].url).toBe('/v1/org-1/boxes/box-1/network/tunnel')
+    expect(requests[0].params).toEqual({ port: 3000 })
+  })
+})

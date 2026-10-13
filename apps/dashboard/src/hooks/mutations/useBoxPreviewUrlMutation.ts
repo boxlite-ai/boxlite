@@ -13,14 +13,11 @@ interface BoxPreviewUrlVariables {
 }
 
 /**
- * Resolves the preview URL for one port of a box.
+ * Resolves the public URL for one port of a box through the tunnel route
+ * `box.network.tunnel()` uses, which needs inbound access.
  *
- * A mutation rather than a query, even though it reads: it runs in response to a
- * click for a port the user names, and the result must not be cached — the
- * endpoint also returns the box auth token, which has no reason to sit in a
- * shared store where devtools, a HAR capture or error reporting would pick it
- * up. `useMutation` gives the imperative call, `isPending` and `error` without
- * a cache entry.
+ * A mutation rather than a query: it runs for a port the user names, and it
+ * changes state, declaring the port public.
  */
 export const useBoxPreviewUrlMutation = () => {
   const api = useApi()
@@ -29,8 +26,7 @@ export const useBoxPreviewUrlMutation = () => {
   return useMutation({
     mutationFn: async ({ boxId, port }: BoxPreviewUrlVariables): Promise<string> => {
       if (!selectedOrganization?.id) throw new Error('Missing organization')
-      const { data } = await api.boxApi.getPortPreviewUrl(boxId, port, selectedOrganization.id)
-      return data.url
+      return api.getTunnelUrl(selectedOrganization.id, boxId, port)
     },
   })
 }

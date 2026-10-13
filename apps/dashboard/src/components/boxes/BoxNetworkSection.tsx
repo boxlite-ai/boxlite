@@ -68,7 +68,6 @@ export function BoxNetworkSection({ box, canManage }: { box: Box; canManage: boo
       <BoxPreviewUrlDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        inboundEnabled={box.network?.inbound.mode === NetworkMode.ENABLED}
         url={previewUrl.data}
         isFetching={previewUrl.isPending}
         error={previewUrl.isError ? 'Could not get a URL for that port.' : undefined}
