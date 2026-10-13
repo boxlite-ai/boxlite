@@ -19,7 +19,7 @@ import type { ApiKey } from '../api-key/api-key.entity'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import type { Runner } from '../box/entities/runner.entity'
-import { BoxAutoResumeService } from './box-auto-resume.service'
+import { BoxAutoResumeService } from '../box/services/box-auto-resume.service'
 import { hasOrganizationResourcePermissions } from '../organization/guards/organization-resource-action.guard'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 

@@ -5,7 +5,21 @@
  */
 
 import Redis from 'ioredis'
-import { Controller, Get, Param, Logger, NotFoundException, UseGuards, Req, ParseIntPipe } from '@nestjs/common'
+import {
+  Controller,
+  Get,
+  Post,
+  Param,
+  Logger,
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
+  UseGuards,
+  Req,
+  ParseIntPipe,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common'
 import { BoxService } from '../services/box.service'
 import { ApiResponse, ApiOperation, ApiParam, ApiTags, ApiOAuth2, ApiBearerAuth, ApiExcludeEndpoint } from '@nestjs/swagger'
 import { InjectRedis } from '@nestjs-modules/ioredis'
@@ -13,6 +27,9 @@ import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { OrganizationUserService } from '../../organization/services/organization-user.service'
 import { TunnelService } from '../services/tunnel.service'
 import { ProxyGuard } from '../guards/proxy.guard'
+import { OrganizationService } from '../../organization/services/organization.service'
+import { AUTO_RESUMABLE_STATES, BoxAutoResumeService } from '../services/box-auto-resume.service'
+import { BoxState } from '../enums/box-state.enum'
 
 @ApiTags('preview')
 @Controller('preview')
@@ -24,6 +41,8 @@ export class PreviewController {
     private readonly boxService: BoxService,
     private readonly organizationUserService: OrganizationUserService,
     private readonly tunnelService: TunnelService,
+    private readonly organizationService: OrganizationService,
+    private readonly autoResume: BoxAutoResumeService,
   ) {}
 
   @Get(':boxId/tunnels/:port')
@@ -37,6 +56,39 @@ export class PreviewController {
       throw new NotFoundException('Tunnel not found')
     }
     return true
+  }
+
+  // The preview proxy calls this when the runner refuses a guest-port dial
+  // because the box is not running. It takes the same steps as SDK exec's
+  // auto-resume in BoxliteProxyController.proxyToRunner, so preview and SDK
+  // traffic share one policy, one lock and one start. The proxy has no
+  // organization identity, so the organization comes from the box row.
+  @Post(':boxId/ensure-ready')
+  @ApiExcludeEndpoint()
+  @UseGuards(CombinedAuthGuard, ProxyGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async ensureReady(@Param('boxId') boxId: string): Promise<void> {
+    const box = await this.boxService.findOne(boxId)
+    const organization = await this.organizationService.findOne(box.organizationId)
+    if (!organization) {
+      throw new NotFoundException(`Box with ID ${boxId} not found`)
+    }
+
+    if (!box.autoResume) {
+      throw new ConflictException(`Box ${boxId} has auto-resume disabled`)
+    }
+    // An archived or resizing box never reaches STARTED here; refuse it now
+    // instead of letting every proxy retry wait for a start that never comes.
+    if (box.state !== BoxState.STARTED && !AUTO_RESUMABLE_STATES.includes(box.state)) {
+      throw new BadRequestException(`Box ${boxId} cannot be resumed (state: ${box.state})`)
+    }
+
+    // Activity before the start, so the AutoStop sweeper cannot reap the box
+    // being woken.
+    await this.boxService
+      .updateLastActivityAt(box.id, new Date())
+      .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
+    await this.autoResume.ensureReady(box.id, organization)
   }
 
   @Get(':boxId/public')

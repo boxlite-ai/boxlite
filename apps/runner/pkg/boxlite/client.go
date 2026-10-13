@@ -54,6 +54,11 @@ type Client struct {
 	volumeCleanupMutex  sync.Mutex
 	lastVolumeCleanup   time.Time
 	volumeCleanup       volumeCleanupConfig
+
+	// afterGuestStateCheck runs right after DialGuestPort's persisted-state
+	// check, before it fetches a handle. Tests use it to land a stop in that
+	// window; nil in production.
+	afterGuestStateCheck func(boxID string)
 }
 
 // ClientConfig holds configuration for the BoxLite client.
@@ -826,7 +831,7 @@ func (c *Client) forgetBox(boxId string) {
 // An unmapped handle is instead leaked for the process lifetime — Close only
 // frees what is still in the map. The cost is one handle per request that finds
 // its box down: calls that go on to boot it stop there, while ones that refuse a
-// stopped box (metrics, a guest-port dial) pay it again on every retry. That is
+// stopped box (metrics) pay it again on every retry. That is
 // affordable only because it tracks request volume — which is why GetBoxInfo
 // reads through the runtime rather than coming through here.
 // Ref-counting the wrapper is the real fix, and it belongs in the SDK.
