@@ -399,10 +399,8 @@ pub struct BoxOptions {
 
     /// Override the image's ENTRYPOINT directive.
     ///
-    /// When set, completely replaces the image's ENTRYPOINT. A nonempty override
-    /// also clears the image's CMD unless `cmd` is set. An empty vector removes
-    /// only the image's ENTRYPOINT, keeping its CMD when `cmd` is omitted.
-    /// Applies on first start and restart.
+    /// A nonempty value also clears the image's CMD unless `cmd` is set.
+    /// `[]` clears only ENTRYPOINT. Applies on first start and restart.
     /// Use with `cmd` to build the full command:
     ///   Final execution = entrypoint + cmd
     ///

@@ -6,9 +6,9 @@ BoxLite uses OCI-compatible container images with intelligent caching.
 
 An image's `ENTRYPOINT` and `CMD` form the container's main command.
 `BoxOptions.entrypoint` replaces the image's entrypoint; a nonempty override also
-discards the image's default CMD. Use `BoxOptions.cmd` to supply new arguments
-explicitly,
-as with [Docker's entrypoint override](https://docs.docker.com/engine/containers/run/#default-entrypoint).
+discards the image's default CMD, as with
+[Docker's entrypoint override](https://docs.docker.com/engine/containers/run/#default-entrypoint).
+Use `BoxOptions.cmd` to supply new arguments.
 
 | User entrypoint | User cmd | Main command |
 | --- | --- | --- |
@@ -19,22 +19,16 @@ as with [Docker's entrypoint override](https://docs.docker.com/engine/containers
 | `[]` | Omitted | Image CMD only |
 | `[]` | Provided | User cmd only |
 
-An empty SDK entrypoint list (`entrypoint=[]`) clears only the image ENTRYPOINT
-and preserves the image CMD when `cmd` is omitted. This preserves BoxLite's
-existing empty-list behavior and differs from Docker CLI's `--entrypoint=""`,
-which also clears the image CMD. An explicit `cmd=[]` still clears CMD;
-setting both overrides to `[]` leaves no command and cannot start a box.
+`[]` explicitly clears the corresponding field.
 
 For an image with `CMD ["sleep", "infinity"]`, setting
 `entrypoint=["python3", "-m", "http.server", "8080"]` runs that HTTP server
 without appending `sleep infinity`. The CLI's `--entrypoint EXEC` and trailing
 `COMMAND` use the same override rules.
 
-These rules apply on first start and every stop/start. Earlier releases retained
-the image CMD with a nonempty entrypoint-only override. Pass those arguments
-explicitly in `cmd` when creating boxes that need the previous behavior.
-Previously created boxes with nonempty entrypoint-only options also adopt the
-new rules on their next start under the updated runtime.
+These rules apply on every start, including existing boxes. Earlier releases
+appended the image CMD to nonempty entrypoint overrides. To keep those arguments,
+set `cmd` explicitly when creating the box.
 
 ## Image pull flow
 
