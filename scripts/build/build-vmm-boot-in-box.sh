@@ -73,12 +73,16 @@ check_resources() {
         fail "$(( free_kib / 1024 )) MiB free on $dir; the build box needs $box_disk_gib GiB"
 }
 
-# The repository is the box's only mount, so the output must live inside it.
-box_output() {
-    [[ $output == /* ]] || output="$PWD/$output"
-    [[ /$output/ != */../* && /$output/ != */./* ]] || fail "output must be inside the repository without . or ..: $output"
-    [[ $output == "$root"/?* ]] || fail "output must be inside the repository ($root): $output"
-    echo "/src/${output#"$root"/}"
+# The output directory is mounted at /out, so create it and resolve symlinks and .. on
+# the host; the box would otherwise follow a link to a guest-only path.
+prepare_output() {
+    local path
+    [[ $output != *:* ]] || fail "output path cannot contain ':' (volume separator): $output"
+    [[ ! -L $output || -d $output ]] || fail "output is a symlink to a missing directory: $output"
+    mkdir -p -- "$output" || fail "cannot create output directory: $output"
+    path=$(cd -- "$output" && pwd -P) || fail "cannot resolve output directory: $output"
+    [[ $path != *:* ]] || fail "output path cannot contain ':' (volume separator): $path"
+    output=$path
 }
 
 sha256() {
@@ -119,16 +123,17 @@ apt-get update -qq
 apt-get install -y -qq --no-install-recommends build-essential bc bison flex curl ca-certificates \
     xz-utils libelf-dev gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu >/dev/null
 mkdir -p /var/tmp/boxlite-vmm-boot
-TMPDIR=/var/tmp/boxlite-vmm-boot exec bash scripts/build/build-vmm-boot.sh --output "$1" --jobs "$2"
+TMPDIR=/var/tmp/boxlite-vmm-boot exec bash scripts/build/build-vmm-boot.sh --output /out --jobs "$1"
 BOX
 
 parse_args "$@"
 target=$(release_target)
 check_resources
-in_box_output=$(box_output)
+prepare_output
 source "$root/src/vmm/boot/boxlite.lock"
 fetch_boxlite "$target"
 # Keep this BoxLite's images, boxes, database and extracted runtime away from any other install.
 export BOXLITE_HOME="$state" XDG_DATA_HOME="$state/xdg"
 "$boxlite_dir/boxlite" run --rm --cpus "$jobs" --memory "$box_memory_mib" --disk-size "$box_disk_gib" \
-    -v "$root:/src" -w /src "$BUILDER_IMAGE" bash -c "$inner" bash "$in_box_output" "$jobs"
+    -v "$root:/src" -v "$output:/out" -w /src "$BUILDER_IMAGE" bash -c "$inner" bash "$jobs"
+printf 'Kernel artifacts on the host: %s\n' "$output"

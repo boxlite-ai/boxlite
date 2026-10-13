@@ -56,7 +56,8 @@ class BoxBuildContract(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="boxlite-box-build-test-")
         self.addCleanup(self.temporary.cleanup)
-        self.fixture = Path(self.temporary.name)
+        # Resolved, as the wrapper resolves paths (macOS /tmp is a symlink).
+        self.fixture = Path(self.temporary.name).resolve()
         self.repo = self.fixture / "repo"
         self.script = self.repo / "scripts/build/build-vmm-boot-in-box.sh"
         self.script.parent.mkdir(parents=True)
@@ -76,8 +77,12 @@ class BoxBuildContract(unittest.TestCase):
         self.cache = self.repo / "target/vmm/boot/.cache"
         self.bin = self.fixture / "bin"
         self.bin.mkdir()
-        for name in ("awk", "bash", "dirname", "getconf", "mkdir", "mv", "rm", "tar", "gzip", "sha256sum"):
+        for name in ("awk", "bash", "dirname", "getconf", "mkdir", "mv", "rm", "tar", "gzip"):
             (self.bin / name).symlink_to(shutil.which(name))
+        # macOS has only shasum; the wrapper falls back to it when sha256sum is missing.
+        for name in ("sha256sum", "shasum"):
+            if shutil.which(name):
+                (self.bin / name).symlink_to(shutil.which(name))
         for name in ("uname", "curl", "free", "vm_stat", "df"):
             (self.bin / name).write_text(TOOL)
             (self.bin / name).chmod(0o755)
@@ -97,20 +102,22 @@ class BoxBuildContract(unittest.TestCase):
 
     def test_builds_inside_a_pinned_box_with_isolated_state(self):
         self.run_box()
-        self.run_box()
+        output = self.repo / "target/vmm/boot/x86_64"
+        self.assertIn(f"Kernel artifacts on the host: {output}", self.run_box().stdout)
         self.assertEqual(len(self.calls("curl")), 1)
         self.assertIn("/v9.9.9/boxlite-cli-v9.9.9-x86_64-unknown-linux-gnu.tar.gz",
                       " ".join(self.calls("curl")[0][0]))
         args, env = self.calls("boxlite")[0]
         state = self.repo / "target/vmm/boot/.boxlite"
         self.assertEqual(env, {"BOXLITE_HOME": str(state), "XDG_DATA_HOME": str(state / "xdg")})
-        self.assertEqual(args[:12], ["run", "--rm", "--cpus", "2", "--memory", "4096", "--disk-size", "4",
-                                     "-v", f"{self.repo}:/src", "-w", "/src"])
-        self.assertEqual(args[12:15], [IMAGE, "bash", "-c"])
-        self.assertIn("TMPDIR=/var/tmp/boxlite-vmm-boot", args[15])
-        self.assertIn("gcc-x86-64-linux-gnu", args[15])
-        self.assertIn("scripts/build/build-vmm-boot.sh", args[15])
-        self.assertEqual(args[16:], ["bash", "/src/target/vmm/boot/x86_64", "2"])
+        self.assertEqual(args[:14], ["run", "--rm", "--cpus", "2", "--memory", "4096", "--disk-size", "4",
+                                     "-v", f"{self.repo}:/src", "-v", f"{output}:/out", "-w", "/src"])
+        self.assertTrue(output.is_dir())
+        self.assertEqual(args[14:17], [IMAGE, "bash", "-c"])
+        self.assertIn("TMPDIR=/var/tmp/boxlite-vmm-boot", args[17])
+        self.assertIn("gcc-x86-64-linux-gnu", args[17])
+        self.assertIn("scripts/build/build-vmm-boot.sh --output /out", args[17])
+        self.assertEqual(args[18:], ["bash", "2"])
         self.assertEqual(self.run_box(expected=3, BOX_TEST_EXIT="3").returncode, 3)
 
     def test_selects_the_release_for_each_supported_host(self):
@@ -121,16 +128,26 @@ class BoxBuildContract(unittest.TestCase):
                 self.assertIn(f"boxlite-cli-v9.9.9-{target}.tar.gz", " ".join(self.calls("curl")[-1][0]))
         self.assertIn("unsupported host", self.run_box(expected=1, BOX_TEST_HOST="Darwin-x86_64").stderr)
 
-    def test_rejects_unverified_releases_and_outputs_outside_the_repository(self):
+    def test_rejects_unverified_releases(self):
         self.assertIn("SHA256 mismatch", self.run_box(expected=1, BOX_TEST_MODE="bad-download").stderr)
         self.assertEqual(list(self.cache.iterdir()), [])
         tarball = self.cache / "boxlite-cli-v9.9.9-x86_64-unknown-linux-gnu.tar.gz"
         tarball.write_bytes(b"corrupt")
         self.assertIn("SHA256 mismatch", self.run_box(expected=1).stderr)
-        for output in (str(self.fixture / "elsewhere"), "target/../../elsewhere", str(self.repo)):
-            with self.subTest(output=output):
-                self.assertIn("inside the repository", self.run_box("--output", output, expected=1).stderr)
         self.assertEqual(self.calls("boxlite"), [])
+
+    def test_mounts_the_resolved_output_directory(self):
+        elsewhere = self.fixture / "elsewhere"
+        (self.repo / "link").symlink_to(elsewhere / "kernel")
+        for output in (str(elsewhere / "kernel"), "target/../../elsewhere/kernel", "link"):
+            with self.subTest(output=output):
+                self.run_box("--output", output)
+                self.assertIn(f"{elsewhere / 'kernel'}:/out", self.calls("boxlite")[-1][0])
+        self.assertTrue((elsewhere / "kernel").is_dir())
+        self.assertIn("cannot contain", self.run_box("--output", "a:b", expected=1).stderr)
+        self.assertFalse((self.repo / "a:b").exists())
+        (self.repo / "dangling").symlink_to(elsewhere / "missing")
+        self.assertIn("symlink to a missing directory", self.run_box("--output", "dangling", expected=1).stderr)
 
     def test_caps_cpus_at_guest_kernel_limit(self):
         result = self.run_box("--jobs", "24")
@@ -161,7 +178,9 @@ class BoxBuildContract(unittest.TestCase):
                                  "BOOT_OUTPUT=out dir $(touch BAD)", "BOOT_JOBS=3"], cwd=self.repo,
                                 env=self.env, text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(self.calls("boxlite")[0][0][-3:], ["bash", "/src/out dir $(touch BAD)", "3"])
+        args = self.calls("boxlite")[0][0]
+        self.assertIn(f"{self.repo}/out dir $(touch BAD):/out", args)
+        self.assertEqual(args[-2:], ["bash", "3"])
         self.assertFalse((self.repo / "BAD").exists())
 
 

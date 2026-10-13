@@ -49,8 +49,14 @@ digest-pinned `ubuntu:24.04` builder image. The release is downloaded into
 `BOXLITE_HOME` and, on Linux, `XDG_DATA_HOME` point at `target/vmm/boot/.boxlite`,
 so an installed or locally built BoxLite keeps its own images, boxes and
 database. macOS extracts the runtime into its versioned directory under
-`~/Library/Application Support/boxlite/runtimes`. The repository is the box's
-only mount, so the output must be inside it.
+`~/Library/Application Support/boxlite/runtimes`. The box mounts the repository
+at `/src` and the output directory at `/out`, so the output can be anywhere on the
+host. The wrapper creates it and resolves `..` and symlinks on the host first: a
+symlink followed inside the box would land on a guest-only path. It rejects a
+symlink to a missing directory and a path containing `:`, the volume separator.
+
+`make test:vmm:boot` skips the host build tests on hosts without GNU coreutils
+(macOS); the box tests run everywhere.
 
 The box installs the packages listed below on every run, so it needs network
 access. Sources are extracted to the box's ext4 root disk (`/tmp` there is tmpfs,

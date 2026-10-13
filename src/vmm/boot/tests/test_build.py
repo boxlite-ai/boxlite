@@ -59,6 +59,9 @@ elif name == "make":
 '''
 
 
+# The host build runs only on Linux and links GNU coreutils into its fixture; macOS has
+# neither sha256sum nor GNU date, so skip instead of failing in setUp.
+@unittest.skipUnless(shutil.which("sha256sum"), "host build needs GNU coreutils (Linux)")
 class BootBuildContract(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="boxlite-boot-test-")
