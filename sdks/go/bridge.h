@@ -23,6 +23,9 @@ extern CBoxCopyCb cbCopy(void);
 
 extern CBoxImagePullCb cbImagePull(void);
 extern CBoxImageListCb cbImageList(void);
+extern CBoxImageGetCb cbImageGet(void);
+extern CBoxImageRemoveCb cbImageRemove(void);
+extern CBoxImageUsageCb cbImageUsage(void);
 
 extern CBoxVolumeCreateCb cbVolumeCreate(void);
 extern CBoxVolumeListCb cbVolumeList(void);

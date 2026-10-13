@@ -171,12 +171,36 @@ class TestBoxliteManagementMethods:
     def test_method_exists(self, cls, method):
         assert hasattr(cls, method), f"Boxlite missing method: {method}"
 
-    def test_rest_runtime_images_unsupported(self):
+    @pytest.mark.asyncio
+    async def test_rest_runtime_refuses_pull_without_a_request(self):
+        # A REST runtime pulls when a box is created, so `pull` answers
+        # without a request: the unreachable URL never comes into it.
         runtime = boxlite.Boxlite.rest(
             boxlite.BoxliteRestOptions(url="http://localhost:1")
         )
-        with pytest.raises(RuntimeError, match="Image operations not supported"):
-            _ = runtime.images
+        # Caught as `RuntimeError` on purpose: handlers written before the
+        # classes existed must still catch it.
+        with pytest.raises(RuntimeError) as caught:
+            await runtime.images.pull("alpine:latest")
+
+        assert type(caught.value).__name__ == "UnsupportedError"
+        assert type(caught.value) is boxlite.UnsupportedError
+        assert caught.value.code == "unsupported"
+        assert "pulls an image when a box is created" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_removing_a_missing_box_raises_not_found(self, tmp_path):
+        runtime = boxlite.Boxlite(boxlite.Options(home_dir=str(tmp_path)))
+        try:
+            with pytest.raises(RuntimeError) as caught:
+                await runtime.remove("no-such-box")
+
+            assert type(caught.value).__name__ == "NotFoundError"
+            assert type(caught.value) is boxlite.NotFoundError
+            assert caught.value.code == "not_found"
+            assert str(caught.value) == "not found: no-such-box"
+        finally:
+            await runtime.shutdown()
 
 
 class TestSyncBoxliteManagementMethods:

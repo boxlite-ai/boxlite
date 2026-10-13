@@ -154,7 +154,7 @@ fn to_c_str(s: &str) -> *mut c_char {
         .unwrap_or(ptr::null_mut())
 }
 
-fn into_raw_slice<T>(items: Vec<T>) -> (*mut T, c_int) {
+pub(crate) fn into_raw_slice<T>(items: Vec<T>) -> (*mut T, c_int) {
     let count = c_int::try_from(items.len()).expect("C metadata list exceeds c_int::MAX");
     if items.is_empty() {
         return (ptr::null_mut(), 0);
@@ -166,7 +166,7 @@ fn into_raw_slice<T>(items: Vec<T>) -> (*mut T, c_int) {
     (items_ptr, count)
 }
 
-unsafe fn free_raw_slice<T>(items: *mut T, count: c_int) {
+pub(crate) unsafe fn free_raw_slice<T>(items: *mut T, count: c_int) {
     if items.is_null() || count < 0 {
         return;
     }

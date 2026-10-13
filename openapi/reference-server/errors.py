@@ -3,9 +3,11 @@
 Split out of `server.py` so it can be exercised without the server's
 third-party dependencies, the same reason `config.py` is a module of its own.
 
-The Python SDK raises every runtime failure as a bare `RuntimeError` carrying
-`BoxliteError`'s Display text, so the class has to be read back off the message
-prefix. What each prefix maps to is `BoxliteError::http()`
+The Python SDK raises a runtime failure as a `boxlite.errors` class whose
+message is `BoxliteError`'s Display text. The class is read back off that
+message's prefix rather than the exception's type, so this module needs only
+the stdlib and its tests run without the binding. What each prefix maps to is
+`BoxliteError::http()`
 (src/shared/src/errors.rs) — the same triple the CLI's `boxlite serve` and the
 cloud runner answer from, so one failure is one class whichever server the
 client talked to.
@@ -18,7 +20,7 @@ from __future__ import annotations
 # Ordered so no prefix shadows a longer one: `unsupported engine kind` does not
 # start with `unsupported:`, so its row is reachable below that one.
 ERROR_MAP = [
-    ("box not found:", 404, "NotFoundError", "not_found"),
+    ("not found:", 404, "NotFoundError", "not_found"),
     ("already exists:", 409, "AlreadyExistsError", "already_exists"),
     ("invalid state:", 409, "InvalidStateError", "invalid_state"),
     ("stopped:", 409, "StoppedError", "stopped"),

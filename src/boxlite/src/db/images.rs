@@ -117,6 +117,20 @@ impl ImageIndexStore {
         Ok(rows_affected > 0)
     }
 
+    /// Remove every one of `references` from the index in one transaction, so
+    /// on error none of them is removed.
+    pub fn remove_all(&self, references: &[String]) -> BoxliteResult<()> {
+        let mut conn = self.db.conn();
+        let tx = db_err!(conn.transaction())?;
+        for reference in references {
+            db_err!(tx.execute(
+                "DELETE FROM image_index WHERE reference = ?1",
+                params![reference]
+            ))?;
+        }
+        db_err!(tx.commit())
+    }
+
     /// Get number of cached images in index.
     pub fn len(&self) -> BoxliteResult<usize> {
         let conn = self.db.conn();

@@ -19,7 +19,9 @@ use crate::advanced_options::{
 };
 use crate::box_handle::PyBox;
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
-use crate::images::{PyImageHandle, PyImageInfo, PyImagePullResult};
+use crate::images::{
+    PyImageDetail, PyImageHandle, PyImageInfo, PyImagePullResult, PyImageUsage, PyImageVersion,
+};
 use crate::info::{
     PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus, PyInboundNetworkInfo, PyNetworkInfo,
     PyOutboundNetworkInfo, PyPublishedPort,
@@ -60,6 +62,9 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyImageHandle>()?;
     m.add_class::<PyImageInfo>()?;
     m.add_class::<PyImagePullResult>()?;
+    m.add_class::<PyImageDetail>()?;
+    m.add_class::<PyImageVersion>()?;
+    m.add_class::<PyImageUsage>()?;
     m.add_class::<PyVolumeHandle>()?;
     m.add_class::<PyVolumeInfo>()?;
     m.add_class::<PyBoxInfo>()?;
@@ -90,4 +95,43 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySecret>()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `boxlite/__init__.py` imports these names from the extension in one
+    /// statement, so a class it names but the module never registers fails
+    /// that import, and the package loads with no native API at all.
+    #[test]
+    fn module_registers_every_class_the_package_imports() {
+        let source = include_str!("../boxlite/__init__.py");
+        let opening = "from .boxlite import (";
+        let start = source
+            .find(opening)
+            .expect("the package imports the extension")
+            + opening.len();
+        let end = start
+            + source[start..]
+                .find(')')
+                .expect("the import list is closed");
+        let names: Vec<&str> = source[start..end]
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .collect();
+        assert!(names.contains(&"ImageDetail"), "{names:?}");
+
+        Python::attach(|py| {
+            let module = PyModule::new(py, "boxlite").unwrap();
+            boxlite_python(&module).unwrap();
+            for name in names {
+                assert!(
+                    module.hasattr(name).unwrap(),
+                    "the extension registers no {name}"
+                );
+            }
+        });
+    }
 }

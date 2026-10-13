@@ -4,12 +4,14 @@
  * Tests the error hierarchy and exception behavior.
  */
 
+import { readFileSync } from "node:fs";
 import { describe, test, expect } from "vitest";
 import {
   BoxliteError,
   ExecError,
   TimeoutError,
   ParseError,
+  errorCode,
 } from "../lib/errors.js";
 
 describe("BoxliteError", () => {
@@ -162,5 +164,54 @@ describe("Error Hierarchy", () => {
         expect(e).toBeInstanceOf(BoxliteError);
       }
     }
+  });
+});
+
+// The prefix each variant's Display starts with and the code
+// `BoxliteError::http()` gives it, read out of the Rust source so `errorCode`
+// is checked against what the runtime emits rather than against a copy.
+const RUST_ERRORS = readFileSync(
+  new URL("../../../src/shared/src/errors.rs", import.meta.url),
+  "utf8",
+);
+
+function runtimeVariants(): Array<{
+  name: string;
+  display: string;
+  code?: string;
+}> {
+  const codes = new Map<string, string>();
+  const http = RUST_ERRORS.slice(RUST_ERRORS.indexOf("pub fn http("));
+  for (const arm of http.matchAll(
+    /((?:BoxliteError::\w+(?:\(_\))?\s*\|?\s*)+)=>\s*\{?\s*\(\d+,\s*"\w+",\s*"(\w+)"\)/g,
+  )) {
+    for (const variant of arm[1].matchAll(/BoxliteError::(\w+)/g)) {
+      codes.set(variant[1], arm[2]);
+    }
+  }
+  return [...RUST_ERRORS.matchAll(/#\[error\("([^"]*)"\)\]\s*(\w+)/g)].map(
+    ([, display, name]) => ({
+      name,
+      display: display.replace("{0}", ""),
+      code: codes.get(name),
+    }),
+  );
+}
+
+describe("errorCode", () => {
+  test("reads the code of every failure the runtime reports", () => {
+    const variants = runtimeVariants();
+    expect(variants).toHaveLength(21);
+
+    for (const { name, display, code } of variants) {
+      expect(code, `${name} has no arm in http()`).toBeDefined();
+      expect(errorCode(new Error(`${display}detail`)), name).toBe(code);
+    }
+  });
+
+  test("is undefined for anything the runtime did not report", () => {
+    expect(errorCode(new Error("boom"))).toBeUndefined();
+    expect(errorCode("not found: a string, not an Error")).toBeUndefined();
+    expect(errorCode(undefined)).toBeUndefined();
   });
 });
