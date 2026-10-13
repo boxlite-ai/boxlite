@@ -63,8 +63,9 @@ The proxy accepts HTTP/WebSocket previews, including signed URLs, and raw CONNEC
 only when the box has inbound access enabled and the port has an active
 declaration. Getting a preview URL alone does not declare the port. A box with
 inbound access disabled cannot expose guest service ports through previews,
-even with a credential. The authenticated web terminal uses reserved port 22222
-without a tunnel declaration.
+even with a credential. The dashboard's web terminal does not use previews: it
+runs a TTY execution over the `/v1` attach WebSocket, signing the upgrade with a
+one-time ticket because a browser cannot send `Authorization` on a WebSocket.
 A request to a declared port on a stopped box with auto-resume on wakes the box.
 It succeeds if the box's `cmd` serves the port within 30 seconds; otherwise the
 proxy answers `503` with `Retry-After`.
