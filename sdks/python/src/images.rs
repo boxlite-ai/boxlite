@@ -326,6 +326,9 @@ mod tests {
             size_bytes,
             source_ref: format!("quay.io/acme/app@{digest}"),
             recorded_at: (SystemTime::UNIX_EPOCH + Duration::from_secs(recorded_secs)).into(),
+            tags: Vec::new(),
+            last_used_at: None,
+            upstream_missing_at: None,
         }
     }
 
@@ -335,6 +338,7 @@ mod tests {
             tags: vec!["v2".to_string(), "v1".to_string()],
             curated: true,
             versions,
+            history: Vec::new(),
         }
     }
 
