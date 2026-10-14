@@ -53,7 +53,8 @@ transport is backend-specific. On both runtimes `tunnel()` only prepares: it
 checks that the box can carry the tunnel and, on a REST runtime, mints its public
 URI, but opens no connection. `uri()` inspects that URI. `connect()`, or each
 client of `forward()`, opens the connection, so it fails while nothing in the box
-listens on the port.
+listens on the port. `connect()` reuses the prepared URI; each forwarded client
+prepares again.
 For a remote public box, preparing the tunnel registers that guest port as public.
 The proxy accepts HTTP/WebSocket previews, including signed URLs, and raw CONNECT
 only when the box is public and the port has an active declaration. Getting a

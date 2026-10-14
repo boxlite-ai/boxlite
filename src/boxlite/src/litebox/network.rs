@@ -277,6 +277,12 @@ impl TunnelOpener {
     async fn open(&self) -> BoxliteResult<BoxTunnel> {
         self.network_backend.tunnel(self.target).await
     }
+
+    async fn open_prepared(&self, uri: Option<&str>) -> BoxliteResult<BoxTunnel> {
+        self.network_backend
+            .open_prepared_tunnel(self.target, uri)
+            .await
+    }
 }
 
 /// A prepared, one-shot tunnel to one TCP service inside a box.
@@ -350,11 +356,11 @@ impl BoxTunnel {
     /// listens on the port.
     pub async fn connect(self) -> BoxliteResult<BoxConnection> {
         let transport = match self.transport {
-            TunnelTransport::Pending { .. } => {
+            TunnelTransport::Pending { uri } => {
                 let opener = self.opener.ok_or_else(|| {
                     BoxliteError::Internal("tunnel is missing its network opener".into())
                 })?;
-                opener.open().await?.transport
+                opener.open_prepared(uri.as_deref()).await?.transport
             }
             transport => transport,
         };
@@ -752,18 +758,30 @@ mod tests {
     }
 
     /// A backend that, like a REST runtime, mints a public URI when a tunnel
-    /// is prepared, and opens an echo connection only on request.
+    /// is prepared, prepares again inside every `tunnel()`, and opens an echo
+    /// connection only on request.
     struct UriNetworkBackend {
         opens: AtomicUsize,
+        prepares: AtomicUsize,
     }
 
     #[async_trait::async_trait]
     impl BoxNetworkBackend for UriNetworkBackend {
         async fn prepare_tunnel(&self, _target: SocketAddr) -> BoxliteResult<Option<String>> {
+            self.prepares.fetch_add(1, Ordering::SeqCst);
             Ok(Some("https://3000-box.proxy.example.test".into()))
         }
 
         async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+            let uri = self.prepare_tunnel(target).await?;
+            self.open_prepared_tunnel(target, uri.as_deref()).await
+        }
+
+        async fn open_prepared_tunnel(
+            &self,
+            target: SocketAddr,
+            _uri: Option<&str>,
+        ) -> BoxliteResult<BoxTunnel> {
             self.opens.fetch_add(1, Ordering::SeqCst);
             EchoNetworkBackend.tunnel(target).await
         }
@@ -775,6 +793,7 @@ mod tests {
     async fn tunnel_exposes_its_uri_without_opening_a_connection() {
         let backend = Arc::new(UriNetworkBackend {
             opens: AtomicUsize::new(0),
+            prepares: AtomicUsize::new(0),
         });
         let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3000);
 
@@ -787,6 +806,9 @@ mod tests {
 
         let mut connection = tunnel.connect().await.unwrap();
         assert_eq!(backend.opens.load(Ordering::SeqCst), 1);
+        // connect() reuses what tunnel() prepared: on REST each prepare is an
+        // API call that also re-declares the port.
+        assert_eq!(backend.prepares.load(Ordering::SeqCst), 1);
         connection.write_all(b"one").await.unwrap();
         let mut echoed = [0; 3];
         connection.read_exact(&mut echoed).await.unwrap();
