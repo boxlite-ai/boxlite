@@ -11,7 +11,6 @@ All URIs are relative to *http://localhost*
 |[**recover**](#recover) | **POST** /boxes/{boxId}/recover | Recover box from error state|
 |[**start**](#start) | **POST** /boxes/{boxId}/start | Start box|
 |[**stop**](#stop) | **POST** /boxes/{boxId}/stop | Stop box|
-|[**updateNetworkSettings**](#updatenetworksettings) | **POST** /boxes/{boxId}/network-settings | Update box network settings|
 
 # **create**
 > StartBoxResponse create(box)
@@ -412,66 +411,6 @@ const { status, data } = await apiInstance.stop(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | Box stopped |  -  |
-|**400** | Bad Request |  -  |
-|**401** | Unauthorized |  -  |
-|**404** | Not Found |  -  |
-|**409** | Conflict |  -  |
-|**500** | Internal Server Error |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **updateNetworkSettings**
-> string updateNetworkSettings(box)
-
-Update box network settings
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration,
-    UpdateNetworkSettingsDTO
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxId: string; //Box ID (default to undefined)
-let box: UpdateNetworkSettingsDTO; //Update network settings
-
-const { status, data } = await apiInstance.updateNetworkSettings(
-    boxId,
-    box
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **box** | **UpdateNetworkSettingsDTO**| Update network settings | |
-| **boxId** | [**string**] | Box ID | defaults to undefined|
-
-
-### Return type
-
-**string**
-
-### Authorization
-
-[Bearer](../README.md#Bearer)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Network settings updated |  -  |
 |**400** | Bad Request |  -  |
 |**401** | Unauthorized |  -  |
 |**404** | Not Found |  -  |

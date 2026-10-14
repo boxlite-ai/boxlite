@@ -34,7 +34,6 @@ export enum AuditAction {
   SET_GENERAL_STATUS = 'set_general_status',
   ACTIVATE = 'activate',
   DEACTIVATE = 'deactivate',
-  UPDATE_NETWORK_SETTINGS = 'update_network_settings',
   SEND_WEBHOOK_MESSAGE = 'send_webhook_message',
   INITIALIZE_WEBHOOKS = 'initialize_webhooks',
   UPDATE_BOX_DEFAULT_LIMITED_NETWORK_EGRESS = 'update_box_default_limited_network_egress',

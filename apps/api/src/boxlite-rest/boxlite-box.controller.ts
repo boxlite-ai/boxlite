@@ -237,9 +237,7 @@ export class BoxliteBoxController {
     return boxToBoxResponse(dto)
   }
 
-  // The dashboard, CLI and SDKs all change inbound mode here. The deprecated
-  // `POST /api/box/:id/public/:isPublic` changes the same mode and requires
-  // WRITE_BOXES, so requiring it here too keeps neither route weaker.
+  // The dashboard, CLI and SDKs all change inbound mode here, and only here.
   @Put(':boxId/network/inbound')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @ApiResponse({

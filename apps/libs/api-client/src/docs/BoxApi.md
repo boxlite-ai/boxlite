@@ -4,15 +4,12 @@ All URIs are relative to *http://localhost:3000*
 
 |Method | HTTP request | Description|
 |------------- | ------------- | -------------|
-|[**expireSignedPortPreviewUrl**](#expiresignedportpreviewurl) | **POST** /box/{boxIdOrName}/ports/{port}/signed-preview-url/{token}/expire | Expire signed preview URL for a box port|
 |[**getBox**](#getbox) | **GET** /box/{boxIdOrName} | Get box details|
 |[**getBoxLogs**](#getboxlogs) | **GET** /box/{boxId}/telemetry/logs | Get box logs|
 |[**getBoxMetrics**](#getboxmetrics) | **GET** /box/{boxId}/telemetry/metrics | Get box metrics|
 |[**getBoxTraceSpans**](#getboxtracespans) | **GET** /box/{boxId}/telemetry/traces/{traceId} | Get trace spans|
 |[**getBoxTraces**](#getboxtraces) | **GET** /box/{boxId}/telemetry/traces | Get box traces|
 |[**getBoxesForRunner**](#getboxesforrunner) | **GET** /box/for-runner | Get boxes for the authenticated runner|
-|[**getPortPreviewUrl**](#getportpreviewurl) | **GET** /box/{boxIdOrName}/ports/{port}/preview-url | Get preview URL for a box port|
-|[**getSignedPortPreviewUrl**](#getsignedportpreviewurl) | **GET** /box/{boxIdOrName}/ports/{port}/signed-preview-url | Get signed preview URL for a box port|
 |[**getToolboxProxyUrl**](#gettoolboxproxyurl) | **GET** /box/{boxId}/toolbox-proxy-url | Get toolbox proxy URL for a box|
 |[**listBoxes**](#listboxes) | **GET** /box | List all boxes|
 |[**listBoxesPaginated**](#listboxespaginated) | **GET** /box/paginated | List all boxes paginated|
@@ -22,66 +19,6 @@ All URIs are relative to *http://localhost:3000*
 |[**setAutostopInterval**](#setautostopinterval) | **POST** /box/{boxIdOrName}/autostop/{interval} | Set box auto-stop interval|
 |[**updateBoxState**](#updateboxstate) | **PUT** /box/{boxId}/state | Update box state|
 |[**updateLastActivity**](#updatelastactivity) | **POST** /box/{boxId}/last-activity | Update box last activity|
-|[**updatePublicStatus**](#updatepublicstatus) | **POST** /box/{boxIdOrName}/public/{isPublic} | Update public status|
-
-# **expireSignedPortPreviewUrl**
-> expireSignedPortPreviewUrl()
-
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxIdOrName: string; //ID or name of the box
-let port: number; //Port number to expire signed preview URL for
-let token: string; //Token to expire signed preview URL for
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.expireSignedPortPreviewUrl(
-    boxIdOrName,
-    port,
-    token,
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | |
-| **port** | [**number**] | Port number to expire signed preview URL for | |
-| **token** | [**string**] | Token to expire signed preview URL for | |
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-void (empty response body)
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: Not defined
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Signed preview URL has been expired |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **getBox**
 > Box getBox()
@@ -450,121 +387,6 @@ const { status, data } = await apiInstance.getBoxesForRunner(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | List of boxes for the authenticated runner |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **getPortPreviewUrl**
-> PortPreviewUrl getPortPreviewUrl()
-
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxIdOrName: string; //ID or name of the box
-let port: number; //Port number to get preview URL for
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.getPortPreviewUrl(
-    boxIdOrName,
-    port,
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | |
-| **port** | [**number**] | Port number to get preview URL for | |
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-**PortPreviewUrl**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Preview URL for the specified port |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **getSignedPortPreviewUrl**
-> SignedPortPreviewUrl getSignedPortPreviewUrl()
-
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxIdOrName: string; //ID or name of the box
-let port: number; //Port number to get signed preview URL for
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-let expiresInSeconds: number; //Expiration time in seconds (default: 60 seconds) (optional) (default to undefined)
-
-const { status, data } = await apiInstance.getSignedPortPreviewUrl(
-    boxIdOrName,
-    port,
-    xBoxLiteOrganizationID,
-    expiresInSeconds
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | |
-| **port** | [**number**] | Port number to get signed preview URL for | |
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-| **expiresInSeconds** | [**number**] | Expiration time in seconds (default: 60 seconds) | (optional) defaults to undefined|
-
-
-### Return type
-
-**SignedPortPreviewUrl**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Signed preview URL for the specified port |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
@@ -1113,62 +935,6 @@ void (empty response body)
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**201** | Last activity has been updated |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **updatePublicStatus**
-> Box updatePublicStatus()
-
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxIdOrName: string; //ID or name of the box
-let isPublic: boolean; //Public status to set
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.updatePublicStatus(
-    boxIdOrName,
-    isPublic,
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **boxIdOrName** | [**string**] | ID or name of the box | |
-| **isPublic** | [**boolean**] | Public status to set | |
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-**Box**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Public status has been successfully updated |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

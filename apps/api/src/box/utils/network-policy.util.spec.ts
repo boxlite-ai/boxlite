@@ -1,16 +1,8 @@
 import { NetworkMode } from '../enums/network-mode.enum'
-import { allowListFromAllowNet, inboundModeFromPublic, outboundModeFromBlockAll } from './network-policy.util'
+import { allowListFromAllowNet, outboundModeFromBlockAll } from './network-policy.util'
 
 describe('network policy translation', () => {
-  // Polarity differs per direction: public → enabled, blockAll → disabled.
-  it.each([
-    [true, NetworkMode.ENABLED],
-    [false, NetworkMode.DISABLED],
-    [undefined, NetworkMode.DISABLED],
-  ])('maps public=%s to inbound %s', (isPublic, expected) => {
-    expect(inboundModeFromPublic(isPublic)).toBe(expected)
-  })
-
+  // blockAll is the inverse of the outbound mode.
   it.each([
     [true, NetworkMode.DISABLED],
     [false, NetworkMode.ENABLED],

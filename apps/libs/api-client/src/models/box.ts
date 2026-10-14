@@ -52,21 +52,6 @@ export interface Box {
      */
     'labels': { [key: string]: string; };
     /**
-     * Whether inbound access is enabled. Deprecated: read `network.inbound.mode`
-     * @deprecated
-     */
-    'public': boolean;
-    /**
-     * Whether outbound access is disabled. Deprecated: read `network.outbound.mode`
-     * @deprecated
-     */
-    'networkBlockAll': boolean;
-    /**
-     * Comma-separated outbound allowlist. Deprecated: read `network.outbound.allow_net`
-     * @deprecated
-     */
-    'networkAllowList'?: string;
-    /**
      * The network policy in both directions
      */
     'network'?: NetworkInfo;

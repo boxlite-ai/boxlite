@@ -25,7 +25,7 @@ the request path), see [`apps/README.md`](../README.md).
   background goroutines do, and how they share the embedded BoxLite runtime.
 - Every major workflow the runner exposes:
   - **Box lifecycle** — create / start / stop / destroy / resize /
-    recover / network-settings / info / backup
+    recover / info / backup
   - **Artifact management** — async pull, async build, log streaming,
     info-or-error, removal, tag, registry inspect
   - **Execution + attach** — the long-lived stdio bridge (in depth, with
@@ -160,7 +160,6 @@ crash handling live in the runtime, not the runner.
 | `POST` | `/boxes/:id/destroy` | `Destroy` | Tear down completely |
 | `POST` | `/boxes/:id/recover` | `Recover` | Bring an `error` box back via a named strategy |
 | `POST` | `/boxes/:id/is-recoverable` | `IsRecoverable` | Static check against `common.IsRecoverable(reason)` |
-| `POST` | `/boxes/:id/network-settings` | `UpdateNetworkSettings` | Set block-all / allow-list |
 | `POST` | `/boxes/:id/backup` | `CreateBackup` | Kick off async backup; updates `BackupInfoCache` |
 | `GET` | `/boxes/:id` | `Info` | Combined state + backup state + runtime version |
 
@@ -457,8 +456,9 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 
 ### 7. Terminal preview
 
-`Any /boxes/:boxId/toolbox/*path` — the legacy route is kept for the
-dashboard terminal preview only:
+`Any /boxes/:boxId/toolbox/*path` — a legacy route that nothing reaches
+any more: the dashboard terminal runs over `/v1` exec and attach, and the
+proxy no longer forwards port 22222. Its removal is tracked as POL-912.
 
 - **HTTP GET** — returns the embedded xterm.js page (HTML + CDN links
   in `proxy.go`).
@@ -467,8 +467,8 @@ dashboard terminal preview only:
   are sent as WebSocket text messages; input is read from the same
   socket and written to the execution's stdin.
 
-This is a convenience surface for the dashboard, not the supported
-programmatic stdio channel — use `/attach` for that.
+It was never the supported programmatic stdio channel — use `/attach`
+for that.
 
 ---
 
@@ -563,8 +563,7 @@ the Swagger UI (development only).
 | `POST` | `/boxes/:id/backup` | Async backup |
 | `POST` | `/boxes/:id/recover` | Recover from error state |
 | `POST` | `/boxes/:id/is-recoverable` | Check whether an error reason is recoverable |
-| `POST` | `/boxes/:id/network-settings` | Update block-all / allow-list |
-| `Any` | `/boxes/:id/toolbox/*path` | Terminal preview only |
+| `Any` | `/boxes/:id/toolbox/*path` | Legacy terminal; unused, removal in POL-912 |
 | `POST` | `/artifacts/pull` | Async pull (mirror + optional push) |
 | `POST` | `/artifacts/build` | Async build |
 | `GET` | `/artifacts/exists` | Local existence check |

@@ -37,8 +37,6 @@ import type { RecoverBoxDTO } from '../models';
 import type { StartBoxResponse } from '../models';
 // @ts-ignore
 import type { StopBoxDTO } from '../models';
-// @ts-ignore
-import type { UpdateNetworkSettingsDTO } from '../models';
 /**
  * BoxApi - axios parameter creator
  */
@@ -325,48 +323,6 @@ export const BoxApiAxiosParamCreator = function (configuration?: Configuration) 
                 options: localVarRequestOptions,
             };
         },
-        /**
-         * Update box network settings
-         * @summary Update box network settings
-         * @param {string} boxId Box ID
-         * @param {UpdateNetworkSettingsDTO} box Update network settings
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        updateNetworkSettings: async (boxId: string, box: UpdateNetworkSettingsDTO, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxId' is not null or undefined
-            assertParamExists('updateNetworkSettings', 'boxId', boxId)
-            // verify required parameter 'box' is not null or undefined
-            assertParamExists('updateNetworkSettings', 'box', box)
-            const localVarPath = `/boxes/{boxId}/network-settings`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication Bearer required
-            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
-
-            localVarHeaderParameter['Content-Type'] = 'application/json';
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(box, localVarRequestOptions, configuration)
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
     }
 };
 
@@ -472,20 +428,6 @@ export const BoxApiFp = function(configuration?: Configuration) {
             const localVarOperationServerBasePath = operationServerMap['BoxApi.stop']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
-        /**
-         * Update box network settings
-         * @summary Update box network settings
-         * @param {string} boxId Box ID
-         * @param {UpdateNetworkSettingsDTO} box Update network settings
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async updateNetworkSettings(boxId: string, box: UpdateNetworkSettingsDTO, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<string>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.updateNetworkSettings(boxId, box, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['BoxApi.updateNetworkSettings']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
     }
 };
 
@@ -569,17 +511,6 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
          */
         stop(boxId: string, box?: StopBoxDTO, options?: RawAxiosRequestConfig): AxiosPromise<string> {
             return localVarFp.stop(boxId, box, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * Update box network settings
-         * @summary Update box network settings
-         * @param {string} boxId Box ID
-         * @param {UpdateNetworkSettingsDTO} box Update network settings
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        updateNetworkSettings(boxId: string, box: UpdateNetworkSettingsDTO, options?: RawAxiosRequestConfig): AxiosPromise<string> {
-            return localVarFp.updateNetworkSettings(boxId, box, options).then((request) => request(axios, basePath));
         },
     };
 };
@@ -668,18 +599,6 @@ export class BoxApi extends BaseAPI {
      */
     public stop(boxId: string, box?: StopBoxDTO, options?: RawAxiosRequestConfig) {
         return BoxApiFp(this.configuration).stop(boxId, box, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * Update box network settings
-     * @summary Update box network settings
-     * @param {string} boxId Box ID
-     * @param {UpdateNetworkSettingsDTO} box Update network settings
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public updateNetworkSettings(boxId: string, box: UpdateNetworkSettingsDTO, options?: RawAxiosRequestConfig) {
-        return BoxApiFp(this.configuration).updateNetworkSettings(boxId, box, options).then((request) => request(this.axios, this.basePath));
     }
 }
 

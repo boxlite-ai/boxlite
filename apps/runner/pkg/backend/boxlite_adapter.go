@@ -46,10 +46,6 @@ func (a *BoxliteAdapter) RecoverBox(ctx context.Context, boxId string, recoverDt
 	return a.client.RecoverBox(ctx, boxId, recoverDto)
 }
 
-func (a *BoxliteAdapter) UpdateNetworkSettings(ctx context.Context, boxId string, settings dto.UpdateNetworkSettingsDTO) error {
-	return a.client.UpdateNetworkSettings(ctx, boxId, settings)
-}
-
 func (a *BoxliteAdapter) GetBoxInfo(ctx context.Context, boxId string) (models.BoxInfo, error) {
 	return a.client.GetBoxInfo(ctx, boxId)
 }

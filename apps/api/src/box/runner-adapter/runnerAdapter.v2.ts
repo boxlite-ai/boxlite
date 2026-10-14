@@ -192,13 +192,4 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   async recoverBox(): Promise<void> {
     throw new Error('Recovering boxes with runner API version 2 is not supported')
   }
-
-  async updateNetworkSettings(
-    _boxId: string,
-    _networkBlockAll?: boolean,
-    _networkAllowList?: string,
-    _networkLimitEgress?: boolean,
-  ): Promise<void> {
-    throw new Error('Live network settings updates with runner API version 2 are not supported')
-  }
 }

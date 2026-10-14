@@ -97,9 +97,6 @@ func (p *Proxy) tunnelTarget(request *http.Request) (string, uint16, error) {
 	} else if ok {
 		boxID = decoded
 	}
-	if port == TERMINAL_PORT {
-		return "", 0, fmt.Errorf("terminal port is reserved")
-	}
 	return boxID, port, nil
 }
 

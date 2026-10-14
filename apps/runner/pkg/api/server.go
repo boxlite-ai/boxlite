@@ -138,7 +138,6 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		boxController.POST("/:boxId/stop", controllers.Stop)
 		boxController.POST("/:boxId/recover", controllers.Recover)
 		boxController.POST("/:boxId/is-recoverable", controllers.IsRecoverable)
-		boxController.POST("/:boxId/network-settings", controllers.UpdateNetworkSettings)
 
 		// Add proxy endpoint within the box controller for toolbox
 		// Using Any() to handle all HTTP methods for the toolbox proxy

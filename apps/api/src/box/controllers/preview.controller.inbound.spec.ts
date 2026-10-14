@@ -2,7 +2,7 @@ import { NotFoundException } from '@nestjs/common'
 import { PreviewController } from './preview.controller'
 import { NetworkMode } from '../enums/network-mode.enum'
 
-// The proxy asks these routes on every preview and tunnel request, so the
+// The proxy asks this route on every preview and tunnel request, so the
 // answers come from a short Redis cache that must also remember a missing box.
 function makeController() {
   const store = new Map<string, string>()
@@ -36,32 +36,6 @@ describe('PreviewController inbound mode', () => {
 
     await expect(controller.getBoxInboundMode('nope')).rejects.toBeInstanceOf(NotFoundException)
     await expect(controller.getBoxInboundMode('nope')).rejects.toBeInstanceOf(NotFoundException)
-
-    expect(boxService.getInboundMode).toHaveBeenCalledTimes(1)
-  })
-
-  // The deprecated boolean route keeps its contract: a private box is
-  // indistinguishable from a missing one.
-  it.each([
-    [NetworkMode.ENABLED, true],
-    [NetworkMode.DISABLED, null],
-  ])('maps inbound %s onto the deprecated public route as %s', async (mode, expected) => {
-    const { controller, boxService } = makeController()
-    boxService.getInboundMode.mockResolvedValue(mode)
-
-    if (expected === null) {
-      await expect(controller.isBoxPublic('AbCdEf123456')).rejects.toBeInstanceOf(NotFoundException)
-    } else {
-      expect(await controller.isBoxPublic('AbCdEf123456')).toBe(expected)
-    }
-  })
-
-  it('shares one cache entry between both routes', async () => {
-    const { controller, boxService } = makeController()
-    boxService.getInboundMode.mockResolvedValue(NetworkMode.ENABLED)
-
-    await controller.isBoxPublic('AbCdEf123456')
-    expect(await controller.getBoxInboundMode('AbCdEf123456')).toBe(NetworkMode.ENABLED)
 
     expect(boxService.getInboundMode).toHaveBeenCalledTimes(1)
   })

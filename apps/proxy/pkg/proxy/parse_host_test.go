@@ -4,11 +4,9 @@
 package proxy
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/boxlite-ai/proxy/cmd/proxy/config"
 	"github.com/gin-gonic/gin"
@@ -31,27 +29,23 @@ func TestParseHostRejectsOutOfRangePort(t *testing.T) {
 	}
 }
 
-func TestZeroPaddedTerminalPortRoutesToTerminal(t *testing.T) {
-	proxy := newTunnelProxy(t, http.StatusNotFound)
-	if err := proxy.boxAuthKeyValidCache.Set(context.Background(), "AbCdEf123456:owner-key", true, time.Minute); err != nil {
-		t.Fatal(err)
-	}
+func TestPort22222RoutesToGuestLikeAnyPort(t *testing.T) {
+	proxy := newTunnelProxy(t, http.StatusOK)
 	request := httptest.NewRequest(http.MethodGet, "http://022222-d-416243644566313233343536.proxy.test/", nil)
-	request.Header.Set(BOX_AUTH_KEY_HEADER, "owner-key")
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = request
 
 	target, err := proxy.GetProxyTarget(ctx)
 	stopActivityPoll(ctx)
 	if err != nil || target == nil {
-		t.Fatalf("zero-padded terminal port rejected: target=%v err=%v", target, err)
+		t.Fatalf("declared port 22222 rejected: target=%v err=%v", target, err)
 	}
-	if target.URL.Path != "/boxes/AbCdEf123456/toolbox/proxy/22222/" {
-		t.Fatalf("zero-padded terminal port reached %s, want the runner terminal", target.URL)
+	if target.URL.Host != "AbCdEf123456:22222" {
+		t.Fatalf("port 22222 reached %s, want the guest port", target.URL)
 	}
 }
 
-func TestZeroPaddedTerminalPortSkipsBrowserWarning(t *testing.T) {
+func TestPort22222GetsBrowserWarning(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	engine.Use((&Proxy{config: &config.Config{}}).browserWarningMiddleware())
@@ -61,7 +55,7 @@ func TestZeroPaddedTerminalPortSkipsBrowserWarning(t *testing.T) {
 	response := httptest.NewRecorder()
 
 	engine.ServeHTTP(response, request)
-	if response.Code != http.StatusNoContent {
-		t.Fatalf("zero-padded terminal port got status %d, want the terminal to skip the warning page", response.Code)
+	if response.Code == http.StatusNoContent {
+		t.Fatal("port 22222 skipped the browser warning page")
 	}
 }

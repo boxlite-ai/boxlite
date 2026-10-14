@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ import (
 func newTunnelProxy(t *testing.T, accessStatus int) *Proxy {
 	t.Helper()
 	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/api/preview/AbCdEf123456/tunnels/3000" {
+		if strings.HasPrefix(request.URL.Path, "/api/preview/AbCdEf123456/tunnels/") {
 			writer.WriteHeader(accessStatus)
 			return
 		}
@@ -48,6 +49,7 @@ func newTunnelProxy(t *testing.T, accessStatus int) *Proxy {
 	}
 	proxy := &Proxy{
 		apiclient:                  apiclient.NewAPIClient(clientConfig),
+		config:                     &config.Config{},
 		boxInboundCache:            publicCache,
 		boxAuthKeyValidCache:       common_cache.NewMapCache[bool](ctx),
 		boxRunnerCache:             runnerCache,
@@ -132,7 +134,7 @@ func TestAuthenticatedPrivateServicePreviewIsDenied(t *testing.T) {
 	}
 }
 
-func TestSignedServicePreviewRequiresTunnel(t *testing.T) {
+func TestSignInCookieServicePreviewRequiresTunnel(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		accessStatus int
@@ -145,29 +147,28 @@ func TestSignedServicePreviewRequiresTunnel(t *testing.T) {
 			proxy := newTunnelProxy(t, test.accessStatus)
 			proxy.config = &config.Config{}
 			proxy.secureCookie = securecookie.New([]byte("test-cookie-signing-key-with-32-bytes"), nil)
-			token := "signedtoken12345"
-			if err := proxy.boxInboundCache.Set(context.Background(), token, false, time.Minute); err != nil {
+			if err := proxy.boxInboundCache.Set(context.Background(), "AbCdEf123456", false, time.Minute); err != nil {
 				t.Fatal(err)
 			}
-			cookieValue, err := proxy.secureCookie.Encode(BOX_AUTH_COOKIE_NAME+token, "AbCdEf123456")
+			cookieValue, err := proxy.secureCookie.Encode(BOX_AUTH_COOKIE_NAME+"AbCdEf123456", "AbCdEf123456")
 			if err != nil {
 				t.Fatal(err)
 			}
-			request := httptest.NewRequest(http.MethodGet, "http://3000-"+token+".proxy.test/", nil)
-			request.AddCookie(&http.Cookie{Name: BOX_AUTH_COOKIE_NAME + token, Value: cookieValue})
+			request := httptest.NewRequest(http.MethodGet, "http://3000-d-416243644566313233343536.proxy.test/", nil)
+			request.AddCookie(&http.Cookie{Name: BOX_AUTH_COOKIE_NAME + "AbCdEf123456", Value: cookieValue})
 			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 			ctx.Request = request
 
 			target, err := proxy.GetProxyTarget(ctx)
 			stopActivityPoll(ctx)
 			if (err == nil && target != nil) != test.allowed {
-				t.Fatalf("signed preview allowed = %t, want %t (target=%v, err=%v)", err == nil && target != nil, test.allowed, target, err)
+				t.Fatalf("signed-in preview allowed = %t, want %t (target=%v, err=%v)", err == nil && target != nil, test.allowed, target, err)
 			}
 		})
 	}
 }
 
-func TestPrivateTerminalPreviewRemainsAvailable(t *testing.T) {
+func TestPrivatePort22222IsDeniedLikeAnyPort(t *testing.T) {
 	proxy := newTunnelProxy(t, http.StatusNotFound)
 	ctx := context.Background()
 	if err := proxy.boxInboundCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
@@ -183,8 +184,43 @@ func TestPrivateTerminalPreviewRemainsAvailable(t *testing.T) {
 
 	target, err := proxy.GetProxyTarget(ginCtx)
 	stopActivityPoll(ginCtx)
-	if err != nil || target == nil {
-		t.Fatalf("private terminal rejected: target=%v err=%v", target, err)
+	if err == nil || target != nil {
+		t.Fatalf("private port 22222 reached a target: target=%v err=%v", target, err)
+	}
+}
+
+func TestFailedSignInDoesNotResolveHostAsSignedToken(t *testing.T) {
+	var tokenLookups atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasSuffix(request.URL.Path, "/box-id") {
+			tokenLookups.Add(1)
+		}
+		writer.WriteHeader(http.StatusNotFound)
+	}))
+	defer api.Close()
+	clientConfig := apiclient.NewConfiguration()
+	clientConfig.Servers[0].URL = api.URL + "/api"
+	ctx := context.Background()
+	inboundCache := common_cache.NewMapCache[bool](ctx)
+	if err := inboundCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	proxy := &Proxy{
+		apiclient:       apiclient.NewAPIClient(clientConfig),
+		config:          &config.Config{},
+		boxInboundCache: inboundCache,
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://3000-d-416243644566313233343536.proxy.test/", nil)
+	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ginCtx.Request = request
+
+	target, err := proxy.GetProxyTarget(ginCtx)
+	stopActivityPoll(ginCtx)
+	if err == nil || target != nil {
+		t.Fatalf("unauthenticated private box reached a target: target=%v err=%v", target, err)
+	}
+	if n := tokenLookups.Load(); n != 0 {
+		t.Fatalf("proxy asked the API to resolve the host as a signed token %d times", n)
 	}
 }
 

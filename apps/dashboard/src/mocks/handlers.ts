@@ -136,23 +136,6 @@ export const handlers = [
     const encodedBoxId = [...boxId].map((char) => char.charCodeAt(0).toString(16).padStart(2, '0')).join('')
     return HttpResponse.json({ uri: `https://${port}-d-${encodedBoxId}.proxy.mock.boxlite.ai` })
   }),
-  http.get(`${API_URL}/box/:boxIdOrName/ports/:port/signed-preview-url`, ({ params, request }) => {
-    const port = Number(params.port)
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      return HttpResponse.json({ statusCode: 400, message: 'Invalid port' }, { status: 400 })
-    }
-    const expiresIn = new URL(request.url).searchParams.get('expiresInSeconds') ?? '60'
-    const token = `mock${Math.random().toString(36).slice(2, 14)}`
-    return HttpResponse.json({
-      boxId: String(params.boxIdOrName),
-      port,
-      token,
-      url: `https://${port}-${token}.proxy.mock.boxlite.ai?ttl=${expiresIn}`,
-    })
-  }),
-  http.post(`${API_URL}/box/:boxIdOrName/ports/:port/signed-preview-url/:token/expire`, () => {
-    return new HttpResponse(null, { status: 201 })
-  }),
   // Volumes. Deletion mirrors the real service (volume.service.ts:74-113):
   // a volume still mounted by a live box is refused with 409, and a successful
   // delete only moves the row to `pending_delete` — the reconciler finishes it

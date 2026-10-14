@@ -56,13 +56,6 @@ export interface RunnerAdapter {
   stopBox(boxId: string, force?: boolean): Promise<void>
   destroyBox(boxId: string): Promise<void>
 
-  updateNetworkSettings(
-    boxId: string,
-    networkBlockAll?: boolean,
-    networkAllowList?: string,
-    networkLimitEgress?: boolean,
-  ): Promise<void>
-
   recoverBox(box: Box): Promise<void>
 }
 

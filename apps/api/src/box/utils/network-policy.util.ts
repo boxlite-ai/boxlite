@@ -8,14 +8,10 @@ import { NetworkMode } from '../enums/network-mode.enum'
 /**
  * Translates between the box row's network policy columns (`inboundMode`,
  * `outboundMode`, `outboundAllowNet`) and the Daytona-era flag shape
- * (`public`, `networkBlockAll`, comma-joined `networkAllowList`) that the
- * control-plane DTOs and the runner wire still speak. Keeping the translation
- * in one place is what lets those contracts outlive the columns they named.
+ * (`networkBlockAll`, comma-joined `networkAllowList`) that the runner wire
+ * still speaks. Keeping the translation in one place is what lets that
+ * contract outlive the columns it named.
  */
-
-export function inboundModeFromPublic(isPublic: boolean | undefined): NetworkMode {
-  return isPublic ? NetworkMode.ENABLED : NetworkMode.DISABLED
-}
 
 export function isInboundEnabled(mode: NetworkMode): boolean {
   return mode === NetworkMode.ENABLED

@@ -60,21 +60,19 @@ describe('BoxDto network policy', () => {
     return box
   }
 
-  // `network` reads the policy columns; the deprecated flags are computed
-  // from the same columns, so both shapes must describe one policy.
+  // `network` is the only shape of the policy; the Daytona-era flags are gone.
   it.each([
-    [NetworkMode.ENABLED, NetworkMode.ENABLED, ['api.openai.com', '10.0.0.0/8'], true, false, 'api.openai.com,10.0.0.0/8'],
-    [NetworkMode.DISABLED, NetworkMode.DISABLED, null, false, true, undefined],
-  ])(
-    'reports inbound %s and outbound %s in both shapes',
-    (inbound, outbound, allowNet, isPublic, blockAll, allowList) => {
-      const dto = BoxDto.fromBox(box(inbound, outbound, allowNet), 'https://proxy.invalid')
+    [NetworkMode.ENABLED, NetworkMode.ENABLED, ['api.openai.com', '10.0.0.0/8']],
+    [NetworkMode.DISABLED, NetworkMode.DISABLED, null],
+  ])('reports inbound %s and outbound %s only under network', (inbound, outbound, allowNet) => {
+    const dto = BoxDto.fromBox(box(inbound, outbound, allowNet), 'https://proxy.invalid')
 
-      expect(dto.network).toEqual({
-        outbound: { mode: outbound, allow_net: allowNet ?? [] },
-        inbound: { mode: inbound, allow_net: [] },
-      })
-      expect([dto.public, dto.networkBlockAll, dto.networkAllowList]).toEqual([isPublic, blockAll, allowList])
-    },
-  )
+    expect(dto.network).toEqual({
+      outbound: { mode: outbound, allow_net: allowNet ?? [] },
+      inbound: { mode: inbound, allow_net: [] },
+    })
+    expect(dto).not.toHaveProperty('public')
+    expect(dto).not.toHaveProperty('networkBlockAll')
+    expect(dto).not.toHaveProperty('networkAllowList')
+  })
 })

@@ -23,7 +23,6 @@ type BoxBackend interface {
 	Stop(ctx context.Context, boxId string, force bool) error
 	Destroy(ctx context.Context, boxId string) error
 	RecoverBox(ctx context.Context, boxId string, recoverDto dto.RecoverBoxDTO) error
-	UpdateNetworkSettings(ctx context.Context, boxId string, settings dto.UpdateNetworkSettingsDTO) error
 	GetBoxInfo(ctx context.Context, boxId string) (models.BoxInfo, error)
 
 	// Migration — move a box between runners through a portable archive.

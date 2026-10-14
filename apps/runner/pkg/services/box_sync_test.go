@@ -226,3 +226,22 @@ func TestPerformSyncStillReconcilesStartedBoxesWhenTransitionalQueryIsRejected(t
 		t.Fatalf("stopped box reported as %q, want %q", got, apiclient.BOXSTATE_STOPPED)
 	}
 }
+
+// The API no longer sends the Daytona-era `public` and `networkBlockAll` box
+// fields. A runner on this client must still read boxes without them.
+func TestGetRemoteBoxStatesDecodesBoxWithoutDeprecatedNetworkFlags(t *testing.T) {
+	box := remoteBox("box-1", apiclient.BOXSTATE_STARTED)
+	delete(box, "public")
+	delete(box, "networkBlockAll")
+	api := &runnerAPIStub{startedBoxes: []map[string]any{box}}
+	server := httptest.NewServer(api.handler(t))
+	defer server.Close()
+
+	states, err := newSyncServiceForTest(server, &stubBoxReader{}).GetRemoteBoxStates(context.Background())
+	if err != nil {
+		t.Fatalf("box without deprecated network flags rejected: %v", err)
+	}
+	if states["box-1"] != apiclient.BOXSTATE_STARTED {
+		t.Fatalf("box-1 state = %q, want %q", states["box-1"], apiclient.BOXSTATE_STARTED)
+	}
+}

@@ -108,10 +108,6 @@ func (f *fakeBackend) RecoverBox(context.Context, string, dto.RecoverBoxDTO) err
 	return fmt.Errorf("RecoverBox must not be called by a migration job")
 }
 
-func (f *fakeBackend) UpdateNetworkSettings(context.Context, string, dto.UpdateNetworkSettingsDTO) error {
-	return fmt.Errorf("UpdateNetworkSettings must not be called by a migration job")
-}
-
 func (f *fakeBackend) GetBoxInfo(context.Context, string) (models.BoxInfo, error) {
 	return models.BoxInfo{}, fmt.Errorf("GetBoxInfo must not be called by a migration job")
 }

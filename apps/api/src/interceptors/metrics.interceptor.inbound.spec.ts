@@ -41,24 +41,4 @@ describe('MetricsInterceptor inbound mode', () => {
       }),
     )
   })
-
-  it.each([
-    ['true', 'enabled'],
-    ['false', 'disabled'],
-  ])('maps the deprecated POST public/%s route onto mode %s', async (isPublic, mode) => {
-    const { interceptor, posthog } = makeInterceptor()
-
-    await (interceptor as any).recordMetrics(
-      request('POST', '/api/box/:boxIdOrName/public/:isPublic', { boxIdOrName: 'box-1', isPublic }),
-      { statusCode: 200 },
-      0,
-    )
-
-    expect(posthog.capture).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: 'api_box_inbound_mode_updated',
-        properties: expect.objectContaining({ box_id: 'box-1', box_inbound_mode: mode }),
-      }),
-    )
-  })
 })

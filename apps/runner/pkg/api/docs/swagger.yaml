@@ -231,15 +231,6 @@ definitions:
       force:
         type: boolean
     type: object
-  UpdateNetworkSettingsDTO:
-    properties:
-      networkAllowList:
-        type: string
-      networkBlockAll:
-        type: boolean
-      networkLimitEgress:
-        type: boolean
-    type: object
   dto.SecretDTO:
     properties:
       hosts:
@@ -462,52 +453,6 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Check if box error is recoverable
-      tags:
-        - box
-  /boxes/{boxId}/network-settings:
-    post:
-      description: Update box network settings
-      operationId: UpdateNetworkSettings
-      parameters:
-        - description: Box ID
-          in: path
-          name: boxId
-          required: true
-          type: string
-        - description: Update network settings
-          in: body
-          name: box
-          required: true
-          schema:
-            $ref: '#/definitions/UpdateNetworkSettingsDTO'
-      produces:
-        - application/json
-      responses:
-        '200':
-          description: Network settings updated
-          schema:
-            type: string
-        '400':
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '401':
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '404':
-          description: Not Found
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '409':
-          description: Conflict
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '500':
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-      summary: Update box network settings
       tags:
         - box
   /boxes/{boxId}/recover:

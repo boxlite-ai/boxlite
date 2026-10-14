@@ -145,13 +145,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
               request.query?.force === 'true',
             )
             break
-          case '/api/box/:boxIdOrName/public/:isPublic':
-            this.captureUpdateInboundMode(
-              props,
-              request.params.boxIdOrName,
-              request.params.isPublic === 'true' ? 'enabled' : 'disabled',
-            )
-            break
           case '/api/box/:boxIdOrName/autostop/:interval':
             this.captureSetAutostopInterval(props, request.params.boxIdOrName, parseInt(request.params.interval))
             break

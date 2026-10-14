@@ -2102,50 +2102,6 @@ paths:
       summary: Update box state
       tags:
       - box
-  /box/{boxIdOrName}/public/{isPublic}:
-    post:
-      operationId: updatePublicStatus
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Public status to set
-        explode: false
-        in: path
-        name: isPublic
-        required: true
-        schema:
-          type: boolean
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
-          description: Public status has been successfully updated
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Update public status
-      tags:
-      - box
   /box/{boxId}/last-activity:
     post:
       operationId: updateLastActivity
@@ -2266,150 +2222,6 @@ paths:
         - profile
         - email
       summary: Set box auto-delete interval
-      tags:
-      - box
-  /box/{boxIdOrName}/ports/{port}/preview-url:
-    get:
-      operationId: getPortPreviewUrl
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Port number to get preview URL for
-        explode: false
-        in: path
-        name: port
-        required: true
-        schema:
-          type: number
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PortPreviewUrl"
-          description: Preview URL for the specified port
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get preview URL for a box port
-      tags:
-      - box
-  /box/{boxIdOrName}/ports/{port}/signed-preview-url:
-    get:
-      operationId: getSignedPortPreviewUrl
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Port number to get signed preview URL for
-        explode: false
-        in: path
-        name: port
-        required: true
-        schema:
-          type: integer
-        style: simple
-      - description: "Expiration time in seconds (default: 60 seconds)"
-        explode: true
-        in: query
-        name: expiresInSeconds
-        required: false
-        schema:
-          type: integer
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SignedPortPreviewUrl"
-          description: Signed preview URL for the specified port
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get signed preview URL for a box port
-      tags:
-      - box
-  /box/{boxIdOrName}/ports/{port}/signed-preview-url/{token}/expire:
-    post:
-      operationId: expireSignedPortPreviewUrl
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Port number to expire signed preview URL for
-        explode: false
-        in: path
-        name: port
-        required: true
-        schema:
-          type: integer
-        style: simple
-      - description: Token to expire signed preview URL for
-        explode: false
-        in: path
-        name: token
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: Signed preview URL has been expired
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Expire signed preview URL for a box port
       tags:
       - box
   /box/{boxId}/toolbox-proxy-url:
@@ -2775,29 +2587,6 @@ paths:
       summary: Read the inbound mode of a box
       tags:
       - preview
-  /preview/{boxId}/public:
-    get:
-      deprecated: true
-      operationId: isBoxPublic
-      parameters:
-      - description: ID of the box
-        explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                type: boolean
-          description: Public status of the box
-      summary: Check if box is public
-      tags:
-      - preview
   /preview/{boxId}/validate/{authToken}:
     get:
       operationId: isValidAuthToken
@@ -2853,36 +2642,6 @@ paths:
         - profile
         - email
       summary: Check if user has access to the box
-      tags:
-      - preview
-  /preview/{signedPreviewToken}/{port}/box-id:
-    get:
-      operationId: getBoxIdFromSignedPreviewUrlToken
-      parameters:
-      - description: Signed preview URL token
-        explode: false
-        in: path
-        name: signedPreviewToken
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Port number to get box ID from signed preview URL token
-        explode: false
-        in: path
-        name: port
-        required: true
-        schema:
-          type: number
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                type: string
-          description: Box ID from signed preview URL token
-      summary: Get box ID from signed preview URL token
       tags:
       - preview
   /volumes:
@@ -5797,9 +5556,6 @@ components:
           NODE_ENV: production
         labels:
           boxlite.io/public: "true"
-        public: false
-        networkBlockAll: false
-        networkAllowList: "192.168.1.0/16,10.0.0.0/24"
         network: ""
         target: local
         image: boxlite/base
@@ -5860,21 +5616,6 @@ components:
           example:
             boxlite.io/public: "true"
           type: object
-        public:
-          deprecated: true
-          description: "Whether inbound access is enabled. Deprecated: read `network.inbound.mode`"
-          example: false
-          type: boolean
-        networkBlockAll:
-          deprecated: true
-          description: "Whether outbound access is disabled. Deprecated: read `network.outbound.mode`"
-          example: false
-          type: boolean
-        networkAllowList:
-          deprecated: true
-          description: "Comma-separated outbound allowlist. Deprecated: read `network.outbound.allow_net`"
-          example: "192.168.1.0/16,10.0.0.0/24"
-          type: string
         network:
           allOf:
           - $ref: "#/components/schemas/NetworkInfo"
@@ -5991,9 +5732,7 @@ components:
       - labels
       - memory
       - name
-      - networkBlockAll
       - organizationId
-      - public
       - target
       - toolboxProxyUrl
       - user
@@ -6009,9 +5748,6 @@ components:
             NODE_ENV: production
           labels:
             boxlite.io/public: "true"
-          public: false
-          networkBlockAll: false
-          networkAllowList: "192.168.1.0/16,10.0.0.0/24"
           network: ""
           target: local
           image: boxlite/base
@@ -6049,9 +5785,6 @@ components:
             NODE_ENV: production
           labels:
             boxlite.io/public: "true"
-          public: false
-          networkBlockAll: false
-          networkAllowList: "192.168.1.0/16,10.0.0.0/24"
           network: ""
           target: local
           image: boxlite/base
@@ -6152,58 +5885,6 @@ components:
           type: boolean
       required:
       - state
-      type: object
-    PortPreviewUrl:
-      example:
-        boxId: "123456"
-        url: "https://{port}-{encodedBoxId}.{proxyDomain}"
-        token: ul67qtv-jl6wb9z5o3eii-ljqt9qed6l
-      properties:
-        boxId:
-          description: ID of the box
-          example: "123456"
-          type: string
-        url:
-          description: Preview url
-          example: "https://{port}-{encodedBoxId}.{proxyDomain}"
-          type: string
-        token:
-          description: Access token
-          example: ul67qtv-jl6wb9z5o3eii-ljqt9qed6l
-          type: string
-      required:
-      - boxId
-      - token
-      - url
-      type: object
-    SignedPortPreviewUrl:
-      example:
-        boxId: "123456"
-        port: 3000
-        token: jl6wb9z5o3eii
-        url: "https://{port}-{token}.{proxyDomain}"
-      properties:
-        boxId:
-          description: ID of the box
-          example: "123456"
-          type: string
-        port:
-          description: Port number of the signed preview URL
-          example: 3000
-          type: integer
-        token:
-          description: Token of the signed preview URL
-          example: jl6wb9z5o3eii
-          type: string
-        url:
-          description: Signed preview url
-          example: "https://{port}-{token}.{proxyDomain}"
-          type: string
-      required:
-      - boxId
-      - port
-      - token
-      - url
       type: object
     ToolboxProxyUrl:
       example:

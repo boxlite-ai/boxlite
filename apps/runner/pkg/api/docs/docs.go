@@ -266,75 +266,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/boxes/{boxId}/network-settings": {
-            "post": {
-                "description": "Update box network settings",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "box"
-                ],
-                "summary": "Update box network settings",
-                "operationId": "UpdateNetworkSettings",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Box ID",
-                        "name": "boxId",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Update network settings",
-                        "name": "box",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/UpdateNetworkSettingsDTO"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Network settings updated",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/boxes/{boxId}/recover": {
             "post": {
                 "description": "Recover box from error state using specified recovery type",
@@ -945,20 +876,6 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "force": {
-                    "type": "boolean"
-                }
-            }
-        },
-        "UpdateNetworkSettingsDTO": {
-            "type": "object",
-            "properties": {
-                "networkAllowList": {
-                    "type": "string"
-                },
-                "networkBlockAll": {
-                    "type": "boolean"
-                },
-                "networkLimitEgress": {
                     "type": "boolean"
                 }
             }

@@ -97,13 +97,14 @@ func TestTunnelTargetUsesPreviewAuthority(t *testing.T) {
 	}
 }
 
-func TestTunnelTargetRejectsTerminalPort(t *testing.T) {
+func TestTunnelTargetAcceptsPort22222(t *testing.T) {
 	for _, port := range []string{"22222", "022222"} {
 		request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
 		request.Host = port + "-d-416243644566313233343536.proxy.test:443"
 
-		if _, _, err := (&Proxy{}).tunnelTarget(request); err == nil {
-			t.Fatalf("terminal port %s accepted as a public CONNECT tunnel", port)
+		boxID, target, err := (&Proxy{}).tunnelTarget(request)
+		if err != nil || boxID != "AbCdEf123456" || target != 22222 {
+			t.Fatalf("tunnelTarget(%s) = %s:%d, %v; want AbCdEf123456:22222", port, boxID, target, err)
 		}
 	}
 }

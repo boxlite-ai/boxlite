@@ -17,7 +17,6 @@ import {
   BoxApi,
   EnumsBoxState,
   DefaultApi,
-  UpdateNetworkSettingsDTO,
   RecoverBoxDTO,
 } from '@boxlite-ai/runner-api-client'
 import { Box } from '../entities/box.entity'
@@ -309,21 +308,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
 
   async destroyBox(boxId: string): Promise<void> {
     await this.boxApiClient.destroy(boxId)
-  }
-
-  async updateNetworkSettings(
-    boxId: string,
-    networkBlockAll?: boolean,
-    networkAllowList?: string,
-    networkLimitEgress?: boolean,
-  ): Promise<void> {
-    const updateNetworkSettingsDto: UpdateNetworkSettingsDTO = {
-      networkBlockAll: networkBlockAll,
-      networkAllowList: networkAllowList,
-      networkLimitEgress: networkLimitEgress,
-    }
-
-    await this.boxApiClient.updateNetworkSettings(boxId, updateNetworkSettingsDto)
   }
 
   async recoverBox(box: Box): Promise<void> {

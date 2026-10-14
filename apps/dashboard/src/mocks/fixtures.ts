@@ -118,8 +118,6 @@ function buildBox(overrides: Partial<Box> & Pick<Box, 'id' | 'name' | 'state'>):
     user: MOCK_USER.email,
     env: {},
     labels: {},
-    public: false,
-    networkBlockAll: false,
     network: {
       outbound: { mode: NetworkMode.ENABLED, allow_net: [] },
       inbound: { mode: NetworkMode.DISABLED, allow_net: [] },

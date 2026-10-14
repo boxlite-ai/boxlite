@@ -97,47 +97,6 @@ func Destroy(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, "Box destroyed")
 }
 
-// UpdateNetworkSettings godoc
-//
-//	@Tags			box
-//	@Summary		Update box network settings
-//	@Description	Update box network settings
-//	@Produce		json
-//	@Param			boxId	path		string							true	"Box ID"
-//	@Param			box		body		dto.UpdateNetworkSettingsDTO	true	"Update network settings"
-//	@Success		200		{string}	string							"Network settings updated"
-//	@Failure		400		{object}	common_errors.ErrorResponse
-//	@Failure		401		{object}	common_errors.ErrorResponse
-//	@Failure		404		{object}	common_errors.ErrorResponse
-//	@Failure		409		{object}	common_errors.ErrorResponse
-//	@Failure		500		{object}	common_errors.ErrorResponse
-//	@Router			/boxes/{boxId}/network-settings [post]
-//
-//	@id				UpdateNetworkSettings
-func UpdateNetworkSettings(ctx *gin.Context) {
-	var updateNetworkSettingsDto dto.UpdateNetworkSettingsDTO
-	err := ctx.ShouldBindJSON(&updateNetworkSettingsDto)
-	if err != nil {
-		ctx.Error(common_errors.NewInvalidBodyRequestError(err))
-		return
-	}
-
-	boxId := ctx.Param("boxId")
-	runner, err := runner.GetInstance(nil)
-	if err != nil {
-		ctx.Error(err)
-		return
-	}
-
-	err = runner.Boxlite.UpdateNetworkSettings(ctx.Request.Context(), boxId, updateNetworkSettingsDto)
-	if err != nil {
-		ctx.Error(err)
-		return
-	}
-
-	ctx.JSON(http.StatusOK, "Network settings updated")
-}
-
 // Start 			godoc
 //
 //	@Tags			box

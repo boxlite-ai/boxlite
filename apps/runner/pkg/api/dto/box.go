@@ -38,12 +38,6 @@ type CreateBoxDTO struct {
 	RegionId       *string `json:"regionId,omitempty"`
 } //	@name	CreateBoxDTO
 
-type UpdateNetworkSettingsDTO struct {
-	NetworkBlockAll    *bool   `json:"networkBlockAll,omitempty"`
-	NetworkAllowList   *string `json:"networkAllowList,omitempty"`
-	NetworkLimitEgress *bool   `json:"networkLimitEgress,omitempty"`
-} //	@name	UpdateNetworkSettingsDTO
-
 type RecoverBoxDTO struct {
 	FromVolumeId     string            `json:"fromVolumeId,omitempty"`
 	OsUser           string            `json:"osUser" validate:"required"`

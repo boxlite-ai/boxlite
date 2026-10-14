@@ -26,7 +26,6 @@ docs/RunnerMetrics.md
 docs/RunnerServiceInfo.md
 docs/StartBoxResponse.md
 docs/StopBoxDTO.md
-docs/UpdateNetworkSettingsDTO.md
 git_push.sh
 index.ts
 models/box-info-response.ts
@@ -45,4 +44,3 @@ models/runner-metrics.ts
 models/runner-service-info.ts
 models/start-box-response.ts
 models/stop-box-dto.ts
-models/update-network-settings-dto.ts

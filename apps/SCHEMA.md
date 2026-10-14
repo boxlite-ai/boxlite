@@ -378,10 +378,9 @@ The network policy columns use the `/v1` NetworkSpec vocabulary, and the API's
 internal create input carries them as modes and an entry list, unchanged. The control-plane
 `Box` DTO reports them as `network.outbound {mode, allow_net}` and
 `network.inbound {mode, allow_net}`, the same `NetworkInfo` schema the `/v1` box
-read returns. It also still serves the deprecated `public`, `networkBlockAll` and
-comma-joined `networkAllowList`, and the runner create body still takes that flag
-shape; the API translates at those boundaries (`box/utils/network-policy.util.ts`)
-until the dashboard and runner move off it (POL-827).
+read returns, and nothing else. Only the runner create and recover bodies still take
+the flag shape (`networkBlockAll`, comma-joined `networkAllowList`); the API
+translates at that boundary (`box/utils/network-policy.util.ts`).
 
 **Unique:** `(organizationId, name)`.
 

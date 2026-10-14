@@ -72,33 +72,6 @@ export class PreviewController {
     return this.cachedInboundMode(boxId)
   }
 
-  // Replaced by `GET :boxId/inbound`; kept one release so a proxy built against
-  // the previous client keeps working through the rolling deploy.
-  @Get(':boxId/public')
-  @ApiOperation({
-    summary: 'Check if box is public',
-    operationId: 'isBoxPublic',
-    deprecated: true,
-  })
-  @ApiParam({
-    name: 'boxId',
-    description: 'ID of the box',
-    type: 'string',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Public status of the box',
-    type: Boolean,
-  })
-  async isBoxPublic(@Param('boxId') boxId: string): Promise<boolean> {
-    //  a private box answers 404 like a missing one, so this cannot be used to
-    //  probe whether a box exists
-    if ((await this.cachedInboundMode(boxId)) !== NetworkMode.ENABLED) {
-      throw new NotFoundException(`Box with ID ${boxId} not found`)
-    }
-    return true
-  }
-
   // 3-second cache: the proxy asks on every preview and tunnel request. A
   // missing box is cached too, so repeated probes do not reach the database.
   private async cachedInboundMode(boxId: string): Promise<NetworkMode> {
@@ -199,32 +172,5 @@ export class PreviewController {
     //  if user has access, keep it in cache longer
     await this.redis.setex(`preview:access:${boxId}:${userId}`, 30, '1')
     return true
-  }
-
-  @Get(':signedPreviewToken/:port/box-id')
-  @ApiOperation({
-    summary: 'Get box ID from signed preview URL token',
-    operationId: 'getBoxIdFromSignedPreviewUrlToken',
-  })
-  @ApiParam({
-    name: 'signedPreviewToken',
-    description: 'Signed preview URL token',
-    type: 'string',
-  })
-  @ApiParam({
-    name: 'port',
-    description: 'Port number to get box ID from signed preview URL token',
-    type: 'number',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Box ID from signed preview URL token',
-    type: String,
-  })
-  async getBoxIdFromSignedPreviewUrlToken(
-    @Param('signedPreviewToken') signedPreviewToken: string,
-    @Param('port') port: number,
-  ): Promise<string> {
-    return this.boxService.getBoxIdFromSignedPreviewUrlToken(signedPreviewToken, port)
   }
 }

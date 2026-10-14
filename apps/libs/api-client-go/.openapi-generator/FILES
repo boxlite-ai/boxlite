@@ -97,7 +97,6 @@ model_paginated_jobs.go
 model_paginated_logs.go
 model_paginated_traces.go
 model_poll_jobs_response.go
-model_port_preview_url.go
 model_posthog_config.go
 model_rate_limit_config.go
 model_rate_limit_entry.go
@@ -111,7 +110,6 @@ model_runner_healthcheck.go
 model_runner_service_health.go
 model_runner_state.go
 model_send_webhook_dto.go
-model_signed_port_preview_url.go
 model_storage_access_dto.go
 model_toolbox_proxy_url.go
 model_trace_span.go

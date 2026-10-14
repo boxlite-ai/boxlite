@@ -53,14 +53,13 @@ import {
 import { createRangeFilter } from '../../common/utils/range-filter'
 import { BusinessEventActorKind, recordBusinessEvent } from '../../common/utils/business-event.util'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
-import { customAlphabet as customNanoid, nanoid, urlAlphabet } from 'nanoid'
+import { nanoid } from 'nanoid'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { validateMountPaths, validateSubpaths } from '../utils/volume-mount-path-validation.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { Job } from '../entities/job.entity'
 import { JobService } from './job.service'
 import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
-import { PortPreviewUrlDto, SignedPortPreviewUrlDto } from '../dto/port-preview-url.dto'
 import { RegionService } from '../../region/services/region.service'
 import { BoxCreatedEvent } from '../events/box-create.event'
 import { InjectRedis } from '@nestjs-modules/ioredis'
@@ -94,7 +93,6 @@ const DEFAULT_BOX_CPU = 1
 const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
-const TERMINAL_PREVIEW_PORT = 22222
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
@@ -805,33 +803,6 @@ export class BoxService {
     return box.region
   }
 
-  async getPortPreviewUrl(boxIdOrName: string, organizationId: string, port: number): Promise<PortPreviewUrlDto> {
-    if (port < 1 || port > 65535) {
-      throw new BadRequestError('Invalid port')
-    }
-
-    const proxyDomain = this.configService.getOrThrow('proxy.domain')
-    const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
-
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-    // Keep the established terminal hostname stable. Service previews use an
-    // encoded ID so mixed-case box IDs remain safe in DNS hostnames.
-    const previewBoxId = port === TERMINAL_PREVIEW_PORT ? box.id : encodeDirectPreviewBoxId(box.id)
-
-    let url = `${proxyProtocol}://${port}-${previewBoxId}.${proxyDomain}`
-
-    const region = await this.regionService.findOne(box.region, true)
-    if (region && region.proxyUrl) {
-      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${previewBoxId}.`)
-    }
-
-    return {
-      boxId: box.id,
-      url,
-      token: box.authToken,
-    }
-  }
-
   async getNetworkTunnelUrl(boxIdOrName: string, organizationId: string, port: number): Promise<string> {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
@@ -848,73 +819,6 @@ export class BoxService {
       url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${endpointId}.`)
     }
     return url
-  }
-
-  /**
-   * Sign access to a box's listening port through the shared preview proxy.
-   * The hostname carries the guest port while clients use the proxy's public listener.
-   */
-  async getSignedPortPreviewUrl(
-    boxIdOrName: string,
-    organizationId: string,
-    port: number,
-    expiresInSeconds = 60,
-  ): Promise<SignedPortPreviewUrlDto> {
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      throw new BadRequestError('Invalid port')
-    }
-    if (expiresInSeconds < 1 || expiresInSeconds > 60 * 60 * 24) {
-      throw new BadRequestError('expiresInSeconds must be between 1 second and 24 hours')
-    }
-
-    const proxyDomain = this.configService.getOrThrow('proxy.domain')
-    const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
-
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-
-    const token = customNanoid(urlAlphabet.replace('_', '').replace('-', ''))(16).toLocaleLowerCase()
-
-    const lockKey = `box:signed-preview-url-token:${port}:${token}`
-    await this.redis.setex(lockKey, expiresInSeconds, box.id)
-
-    let url = `${proxyProtocol}://${port}-${token}.${proxyDomain}`
-
-    const region = await this.regionService.findOne(box.region, true)
-    if (region && region.proxyUrl) {
-      // Insert port and box.id into the custom proxy URL
-      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${token}.`)
-    }
-
-    return {
-      boxId: box.id,
-      port,
-      token,
-      url,
-    }
-  }
-
-  async getBoxIdFromSignedPreviewUrlToken(token: string, port: number): Promise<string> {
-    const lockKey = `box:signed-preview-url-token:${port}:${token}`
-    const boxId = await this.redis.get(lockKey)
-    if (!boxId) {
-      throw new ForbiddenException('Invalid or expired token')
-    }
-    return boxId
-  }
-
-  async expireSignedPreviewUrlToken(
-    boxIdOrName: string,
-    organizationId: string,
-    token: string,
-    port: number,
-  ): Promise<void> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-    if (!box) {
-      throw new NotFoundException(`Box with ID or name ${boxIdOrName} not found`)
-    }
-
-    const lockKey = `box:signed-preview-url-token:${port}:${token}`
-    await this.redis.del(lockKey)
   }
 
   async destroy(
@@ -1373,38 +1277,6 @@ export class BoxService {
     }
 
     return await this.boxRepository.update(box.id, { updateData, entity: box })
-  }
-
-  async updateNetworkSettings(
-    boxIdOrName: string,
-    networkBlockAll?: boolean,
-    networkAllowList?: string,
-    organizationId?: string,
-  ): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-
-    const updateData: Partial<Box> = {}
-
-    if (networkBlockAll !== undefined) {
-      updateData.outboundMode = outboundModeFromBlockAll(networkBlockAll)
-    }
-
-    if (networkAllowList !== undefined) {
-      updateData.outboundAllowNet = this.resolveOutboundAllowNet(networkAllowList.split(','))
-    }
-
-    const updatedBox = await this.boxRepository.update(box.id, { updateData, entity: box })
-
-    // Update network settings on the runner
-    if (box.runnerId) {
-      const runner = await this.runnerService.findOne(box.runnerId)
-      if (runner) {
-        const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-        await runnerAdapter.updateNetworkSettings(box.id, networkBlockAll, networkAllowList)
-      }
-    }
-
-    return updatedBox
   }
 
   // used by internal services to update the state of a box to resolve domain and runner state mismatch
