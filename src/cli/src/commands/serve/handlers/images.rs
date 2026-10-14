@@ -251,6 +251,8 @@ mod tests {
         let (status, body) = read(get_image(state, Path("quay.io/acme/app".into())).await).await;
 
         assert_eq!(status, StatusCode::OK);
+        // An upstream that predates tag history leaves those fields at their
+        // defaults, and serve still names every one of them.
         assert_eq!(
             body,
             json!({
@@ -259,7 +261,9 @@ mod tests {
                     "digest": "sha256:aa", "size_bytes": 42,
                     "source_ref": "quay.io/acme/app:v1",
                     "recorded_at": "2026-01-02T03:04:05+00:00",
+                    "tags": [], "last_used_at": null, "upstream_missing_at": null,
                 }],
+                "history": [],
             })
         );
     }
