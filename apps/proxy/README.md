@@ -125,9 +125,10 @@ when the box and its service come up within 10 seconds
 3. The proxy calls `POST /api/preview/{boxId}/ensure-ready`. The API takes the same steps as SDK
    auto-resume: it refuses a box with auto-resume off, refuses a box in a state that cannot
    resume (such as archived or resizing), records activity, checks that the organization is not
-   suspended, and starts the box under its state-change lock. Concurrent requests for one box
-   share one call per proxy replica, and the API lock turns the calls from all replicas into one
-   start.
+   suspended, and starts the box under its state-change lock. A box the API records as started and
+   meant to stay started, such as one paused for a snapshot, is never refused, whatever its
+   auto-resume setting, so the proxy keeps polling until it thaws. Concurrent requests for one box share one call per proxy
+   replica, and the API lock turns the calls from all replicas into one start.
 4. A resumed box replays its `cmd`, so its service listens a few seconds after the box starts.
    The box's network acks a tunnel only once the guest accepts it, so the runner answers `502`
    until then. The proxy polls the dial every 200 ms, and concurrent requests for one port share

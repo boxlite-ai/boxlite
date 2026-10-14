@@ -30,6 +30,7 @@ import { ProxyGuard } from '../guards/proxy.guard'
 import { OrganizationService } from '../../organization/services/organization.service'
 import { AUTO_RESUMABLE_STATES, BoxAutoResumeService } from '../services/box-auto-resume.service'
 import { BoxState } from '../enums/box-state.enum'
+import { BoxDesiredState } from '../enums/box-desired-state.enum'
 
 @ApiTags('preview')
 @Controller('preview')
@@ -75,16 +76,17 @@ export class PreviewController {
     }
 
     if (!box.autoResume) {
+      // A box paused for a snapshot is STARTED and meant to stay so: the proxy
+      // keeps polling until it thaws. Auto-resume boxes go on below.
+      if (box.state === BoxState.STARTED && box.desiredState === BoxDesiredState.STARTED) return
       throw new ConflictException(`Box ${boxId} has auto-resume disabled`)
     }
-    // An archived or resizing box never reaches STARTED here; refuse it now
-    // instead of letting every proxy retry wait for a start that never comes.
+    // Refuse at once a state (archived, resizing, ...) that never reaches STARTED.
     if (box.state !== BoxState.STARTED && !AUTO_RESUMABLE_STATES.includes(box.state)) {
       throw new BadRequestException(`Box ${boxId} cannot be resumed (state: ${box.state})`)
     }
 
-    // Activity before the start, so the AutoStop sweeper cannot reap the box
-    // being woken.
+    // Activity first, so the AutoStop sweeper cannot reap the box being woken.
     await this.boxService
       .updateLastActivityAt(box.id, new Date())
       .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))

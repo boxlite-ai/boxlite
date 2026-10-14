@@ -83,6 +83,30 @@ describe('PreviewController ensure-ready', () => {
     expect(calls).toEqual([])
   })
 
+  it('lets the proxy keep polling a started box, such as one paused for a snapshot, even with auto-resume off', async () => {
+    boxService.findOne.mockResolvedValue({ ...box, state: BoxState.STARTED, desiredState: 'started', autoResume: false })
+
+    await expect(controller.ensureReady('box-1')).resolves.toBeUndefined()
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
+  })
+
+  it.each(['stopped', 'destroyed'])(
+    'refuses a box with auto-resume off whose desired state is %s, not a paused one',
+    async (desiredState) => {
+      boxService.findOne.mockResolvedValue({ ...box, state: BoxState.STARTED, desiredState, autoResume: false })
+
+      await expect(controller.ensureReady('box-1')).rejects.toBeInstanceOf(ConflictException)
+    },
+  )
+
+  it('still hands an auto-resume box caught mid-stop to auto-resume, which restarts it', async () => {
+    boxService.findOne.mockResolvedValue({ ...box, state: BoxState.STARTED, desiredState: 'stopped' })
+
+    await controller.ensureReady('box-1')
+
+    expect(autoResume.ensureReady).toHaveBeenCalledWith('box-1', organization)
+  })
+
   it.each([BoxState.ARCHIVED, BoxState.ARCHIVING, BoxState.RESIZING, BoxState.ERROR])(
     'refuses a box in the %s state at once instead of waiting for a start that never comes',
     async (state) => {
