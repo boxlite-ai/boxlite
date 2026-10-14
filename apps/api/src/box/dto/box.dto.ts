@@ -11,7 +11,6 @@ import { IMAGE_PREPARATION_RETRY_AFTER_MS } from '../constants/box-progress.cons
 import { Box } from '../entities/box.entity'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
-import { allowListFromAllowNet } from '../utils/network-policy.util'
 import { NetworkInfoResponseDto } from './network-info.dto'
 import { BoxProgressPhase } from '../enums/box-progress-phase.enum'
 import { reportedBoxState } from '../utils/box-state.util'
@@ -134,27 +133,6 @@ export class BoxDto {
     example: { 'boxlite.io/public': 'true' },
   })
   labels: { [key: string]: string }
-
-  @ApiProperty({
-    description: 'Whether inbound access is enabled. Deprecated: read `network.inbound.mode`',
-    example: false,
-    deprecated: true,
-  })
-  public: boolean
-
-  @ApiProperty({
-    description: 'Whether outbound access is disabled. Deprecated: read `network.outbound.mode`',
-    example: false,
-    deprecated: true,
-  })
-  networkBlockAll: boolean
-
-  @ApiPropertyOptional({
-    description: 'Comma-separated outbound allowlist. Deprecated: read `network.outbound.allow_net`',
-    example: '192.168.1.0/16,10.0.0.0/24',
-    deprecated: true,
-  })
-  networkAllowList?: string
 
   // Always sent, but optional in the schema: the generated Go client rejects a
   // response missing a required field, and a runner on the new client still
@@ -396,11 +374,6 @@ export class BoxDto {
       gpu: box.gpu,
       memory: box.mem,
       disk: box.disk,
-      // The flag shape is kept on the wire for the dashboard and Go clients;
-      // the row stores the policy as per-direction enabled flags.
-      public: box.inboundEnabled,
-      networkBlockAll: !box.outboundEnabled,
-      networkAllowList: allowListFromAllowNet(box.outboundAllowNet),
       network: NetworkInfoResponseDto.fromBox(box),
       labels: box.labels,
       volumes: box.volumes,

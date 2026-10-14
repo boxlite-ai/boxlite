@@ -59,8 +59,8 @@ export interface RunnerAdapter {
 
   updateNetworkSettings(
     boxId: string,
-    networkBlockAll?: boolean,
-    networkAllowList?: string,
+    outboundEnabled?: boolean,
+    outboundAllowNet?: string[],
     networkLimitEgress?: boolean,
   ): Promise<void>
 

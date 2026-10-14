@@ -122,7 +122,6 @@ docs/PaginatedJobs.md
 docs/PaginatedLogs.md
 docs/PaginatedTraces.md
 docs/PollJobsResponse.md
-docs/PortPreviewUrl.md
 docs/PosthogConfig.md
 docs/PreviewApi.md
 docs/RateLimitConfig.md
@@ -142,7 +141,6 @@ docs/RunnerServiceHealth.md
 docs/RunnerState.md
 docs/RunnersApi.md
 docs/SendWebhookDto.md
-docs/SignedPortPreviewUrl.md
 docs/StorageAccessDto.md
 docs/ToolboxProxyUrl.md
 docs/TraceSpan.md
@@ -259,7 +257,6 @@ models/paginated-jobs.ts
 models/paginated-logs.ts
 models/paginated-traces.ts
 models/poll-jobs-response.ts
-models/port-preview-url.ts
 models/posthog-config.ts
 models/rate-limit-config.ts
 models/rate-limit-entry.ts
@@ -275,7 +272,6 @@ models/runner-service-health.ts
 models/runner-state.ts
 models/runner.ts
 models/send-webhook-dto.ts
-models/signed-port-preview-url.ts
 models/storage-access-dto.ts
 models/toolbox-proxy-url.ts
 models/trace-span.ts

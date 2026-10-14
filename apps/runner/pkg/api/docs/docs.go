@@ -962,13 +962,16 @@ const docTemplate = `{
         "UpdateNetworkSettingsDTO": {
             "type": "object",
             "properties": {
-                "networkAllowList": {
-                    "type": "string"
-                },
-                "networkBlockAll": {
+                "networkLimitEgress": {
                     "type": "boolean"
                 },
-                "networkLimitEgress": {
+                "outboundAllowNet": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "outboundEnabled": {
                     "type": "boolean"
                 }
             }

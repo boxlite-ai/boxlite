@@ -160,7 +160,7 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Boxes and preview access</b> · 22 routes</summary>
+<summary><b>Boxes and preview access</b> · 16 routes</summary>
 
 | Method | Path                                                                    | What it does                                          |
 | ------ | ----------------------------------------------------------------------- | ----------------------------------------------------- |
@@ -171,21 +171,15 @@ serves and the events it emits are catalogued below alongside its routes.
 | `POST` | `/api/box/{boxIdOrName}/recover`                                        | Requests recovery of a box in an error state.         |
 | `PUT`  | `/api/box/{boxIdOrName}/labels`                                         | Replaces a box's labels.                              |
 | `PUT`  | `/api/box/{boxId}/state`                                                | Updates the control plane's recorded box state.       |
-| `POST` | `/api/box/{boxIdOrName}/public/{isPublic}`                              | Makes a box public or private.                        |
 | `POST` | `/api/box/{boxId}/last-activity`                                        | Records the box's latest activity time.               |
 | `POST` | `/api/box/{boxIdOrName}/autostop/{interval}`                            | Sets the box auto-stop interval.                      |
 | `POST` | `/api/box/{boxIdOrName}/autodelete/{interval}`                          | Sets the box auto-delete interval.                    |
-| `GET`  | `/api/box/{boxIdOrName}/ports/{port}/preview-url`                       | Returns the preview URL for a box port.               |
-| `GET`  | `/api/box/{boxIdOrName}/ports/{port}/signed-preview-url`                | Creates a signed preview URL for a box port.          |
-| `POST` | `/api/box/{boxIdOrName}/ports/{port}/signed-preview-url/{token}/expire` | Expires a signed preview URL token.                   |
 | `GET`  | `/api/box/{boxId}/toolbox-proxy-url`                                    | Returns the box toolbox proxy URL.                    |
 | `POST` | `/api/box/{boxIdOrName}/attach-tickets`                                 | Issues a 30-second, single-use ticket for one `/v1` attach upgrade. |
 | `GET`  | `/api/preview/{boxId}/inbound`                                          | Reports a box's inbound mode (`enabled` or `disabled`) to the proxy. |
 | `GET`  | `/api/preview/{boxId}/tunnels/{port}`                                   | Checks an active public tunnel for the proxy.          |
 | `POST` | `/api/preview/{boxId}/ensure-ready`                                     | Wakes a stopped box for the proxy, by auto-resume rules. |
-| `GET`  | `/api/preview/{boxId}/validate/{authToken}`                             | Validates a box preview authentication token.         |
 | `GET`  | `/api/preview/{boxId}/access`                                           | Checks whether the caller may preview a box.          |
-| `GET`  | `/api/preview/{signedPreviewToken}/{port}/box-id`                       | Resolves a signed preview token and port to a box ID. |
 
 </details>
 
@@ -537,7 +531,7 @@ runtime and its microVMs.
 </details>
 
 <details>
-<summary><b>Box lifecycle and toolbox</b> · 9 routes</summary>
+<summary><b>Box lifecycle</b> · 8 routes</summary>
 
 | Method | Path                               | What it does                                                                                    |
 | ------ | ---------------------------------- | ----------------------------------------------------------------------------------------------- |
@@ -549,7 +543,6 @@ runtime and its microVMs.
 | `POST` | `/boxes/{boxId}/recover`           | Recovers a local box.                                                                           |
 | `POST` | `/boxes/{boxId}/is-recoverable`    | Checks whether a local box can be recovered.                                                    |
 | `POST` | `/boxes/{boxId}/network-settings`  | Changes a local box's network settings.                                                         |
-| `ANY`  | `/boxes/{boxId}/toolbox/{path...}` | Serves the box web terminal (xterm.js page and WebSocket shell); other paths return `410 Gone`. |
 
 </details>
 

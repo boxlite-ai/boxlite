@@ -61,25 +61,23 @@ func TestCacheErrorsDoNotLogPreviewCredentials(t *testing.T) {
 		boxInboundCache:      failingSetCache[bool]{},
 		boxAuthKeyValidCache: failingSetCache[bool]{},
 	}
-	signedToken := "signed-preview-token-secret"
+	boxID := "AbCdEf123456"
 	authKey := "auth-key-secret"
 
-	if _, err := proxy.getBoxInboundEnabled(context.Background(), signedToken); err != nil {
+	if _, err := proxy.getBoxInboundEnabled(context.Background(), boxID); err != nil {
 		t.Fatalf("getBoxInboundEnabled() error = %v", err)
 	}
 	// A rejection, because only rejections are cached -- an acceptance never reaches
 	// the failing Set and so would never produce the log line asserted below.
-	if _, err := proxy.validateAndCache(context.Background(), signedToken, authKey, func() (bool, error) {
+	if _, err := proxy.validateAndCache(context.Background(), boxID, authKey, func() (bool, error) {
 		return false, nil
 	}); err != nil {
 		t.Fatalf("validateAndCache() error = %v", err)
 	}
 
 	logs := output.String()
-	for _, secret := range []string{signedToken, authKey} {
-		if strings.Contains(logs, secret) {
-			t.Errorf("cache error log contains preview credential %q", secret)
-		}
+	if strings.Contains(logs, authKey) {
+		t.Errorf("cache error log contains preview credential %q", authKey)
 	}
 	for _, message := range []string{"Failed to set box inbound mode in cache", "Failed to set box auth key valid in cache"} {
 		if !strings.Contains(logs, message) {

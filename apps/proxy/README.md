@@ -41,7 +41,7 @@ flowchart TB
 
     client client_to_proxy@-->|"preview host request"| proxy
     proxy proxy_to_api@-->|"access, runner, activity"| api
-    proxy proxy_to_runner@-->|"tunnel or terminal"| runner_api
+    proxy proxy_to_runner@-->|"tunnel"| runner_api
     runner_api runner_to_boxlite@-->|"DialGuestPort"| boxlite_core
     boxlite_core boxlite_to_boxes@-->|"guest TCP"| boxes
     client client_to_idp@-.->|"login, inbound disabled"| idp
@@ -54,17 +54,15 @@ flowchart TB
 
 The proxy asks the API whether the box has inbound access enabled and whether the requested guest
 port has an active public tunnel. It resolves the box's runner and records activity before forwarding.
-The web terminal uses the runner's terminal endpoint and always requires authentication.
 
 ## Preview hosts
 
-The first label of the host is `<port>-<id>`, where `<id>` takes one of three forms:
+The first label of the host is `<port>-<id>`, where `<id>` takes one of two forms:
 
-| `<id>`     | Meaning                                                                 | Minted by                                                                                          |
-| ---------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `d-<hex>`  | Hex-encoded box ID: box IDs are mixed-case, and hostnames are not       | `getPortPreviewUrl`, `getNetworkTunnelUrl` in [`box.service.ts`](../api/src/box/services/box.service.ts) |
-| `<box ID>` | Raw box ID, kept for terminal URLs on port 22222                        | `getPortPreviewUrl`                                                                                |
-| `<token>`  | Signed preview token, which the API resolves to a box ID               | `getSignedPortPreviewUrl`                                                                          |
+| `<id>`     | Meaning                                                           | Minted by                                                                    |
+| ---------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `d-<hex>`  | Hex-encoded box ID: box IDs are mixed-case, and hostnames are not | `getNetworkTunnelUrl` in [`box.service.ts`](../api/src/box/services/box.service.ts) |
+| `<box ID>` | Raw box ID, still accepted from URLs minted before the encoding   | nothing current                                                              |
 
 A host without a `<port>-` label serves only the utility routes listed in
 [`apps/API.md`](../API.md#preview-proxy-api).
@@ -74,7 +72,6 @@ A host without a `<port>-` label serves only the utility routes listed in
 | Request                          | Upstream                                                      | Access rule                              |
 | -------------------------------- | ------------------------------------------------------------- | ---------------------------------------- |
 | HTTP or WebSocket to a guest port | Reverse proxy over a runner CONNECT tunnel to the guest port  | Inbound enabled and active tunnel declaration |
-| Port 22222                       | Runner's `/boxes/<id>/toolbox/proxy/22222` terminal endpoint  | Authenticated; no tunnel declaration     |
 | Raw `CONNECT` to a guest port    | TCP tunnel through the runner                                 | Inbound enabled and active tunnel declaration |
 
 The HTTP path in code:
@@ -83,17 +80,17 @@ The HTTP path in code:
   StartProxy (— · apps/proxy/pkg/proxy/proxy.go:80) — registers the catch-all route for preview hosts
     └─ NewProxyRequestHandler (— · apps/libs/common-go/pkg/proxy/proxy.go:116) — reverse proxy for one request
       ├─ GetProxyTarget (Proxy · apps/proxy/pkg/proxy/get_box_target.go:49) — choose the upstream
-        ├─ parseHost (Proxy · apps/proxy/pkg/proxy/get_box_target.go:358) — canonical port plus box ID or signed token
-        ├─ getBoxInboundEnabled (Proxy · apps/proxy/pkg/proxy/get_box_target.go:247) — ask the API for the inbound mode, cached 3 s
-        ├─ Authenticate (Proxy · apps/proxy/pkg/proxy/auth.go:18) — resolve signed hosts or authorize sign-in/terminal access
+        ├─ parseHost (Proxy · apps/proxy/pkg/proxy/get_box_target.go:340) — canonical port plus box ID
+        ├─ getBoxInboundEnabled (Proxy · apps/proxy/pkg/proxy/get_box_target.go:229) — ask the API for the inbound mode, cached 3 s
+        ├─ Authenticate (Proxy · apps/proxy/pkg/proxy/auth.go:17) — authorize access to a box with inbound disabled
         ├─ hasPublicTunnelAccess (Proxy · apps/proxy/pkg/proxy/tunnel_access.go:15) — check every guest service port
-        └─ updateLastActivity (Proxy · apps/proxy/pkg/proxy/get_box_target.go:429) — renew activity every 50 s
-      └─ dialGuestPort (Proxy · apps/proxy/pkg/proxy/get_box_target.go:163) — dial each new upstream connection
-        └─ dialGuestPortWithWake (Proxy · apps/proxy/pkg/proxy/guest_wake.go:51) — dial, waking a stopped box
-          ├─ getBoxRunnerInfo (Proxy · apps/proxy/pkg/proxy/get_box_target.go:205) — runner URL and key, cached 2 min
-          ├─ dialRunnerTunnel (— · apps/proxy/pkg/proxy/tunnel.go:122) — CONNECT through the runner to the guest port
-          ├─ wakeBox (Proxy · apps/proxy/pkg/proxy/guest_wake.go:146) — POST ensure-ready to the API, once per box
-          └─ waitForGuestPort (Proxy · apps/proxy/pkg/proxy/guest_wake.go:99) — poll the woken port, once per port
+        └─ updateLastActivity (Proxy · apps/proxy/pkg/proxy/get_box_target.go:411) — renew activity every 50 s
+      └─ dialGuestPort (Proxy · apps/proxy/pkg/proxy/get_box_target.go:145) — dial each new upstream connection
+        └─ dialGuestPortWithWake (Proxy · apps/proxy/pkg/proxy/guest_wake.go:52) — dial, waking a stopped box
+          ├─ getBoxRunnerInfo (Proxy · apps/proxy/pkg/proxy/get_box_target.go:187) — runner URL and key, cached 2 min
+          ├─ dialRunnerTunnel (— · apps/proxy/pkg/proxy/tunnel.go:118) — CONNECT through the runner to the guest port
+          ├─ wakeBox (Proxy · apps/proxy/pkg/proxy/guest_wake.go:174) — POST ensure-ready to the API, once per box
+          └─ waitForGuestPort (Proxy · apps/proxy/pkg/proxy/guest_wake.go:125) — poll the woken port, once per port
 ```
 
 The upstream URL `http://<box ID>:<port>` is only a routing key. `dialGuestPort` is the transport's
@@ -108,8 +105,7 @@ destroying/archiving states. The API caches allowed and denied verdicts in Redis
 the proxy does not cache tunnel verdicts. Declaring a port clears its cached denial. A revoked
 tunnel or a box whose inbound access was disabled can still admit new requests until a cached allowance expires;
 existing connections continue until they close. If the tunnel check fails, both paths return
-502. Ports are parsed as numbers, so `022222` is still the terminal port and cannot be used
-for raw CONNECT.
+502. Ports are parsed as numbers, so `03000` and `3000` name the same guest port.
 
 ## Waking a stopped box
 
@@ -140,20 +136,15 @@ when the box and its service come up within 30 seconds
    with `Retry-After: 3` and code `BOX_STARTING`, and the start keeps going.
 
 Only a port that passed the tunnel check reaches this path, so an undeclared port never wakes a
-box. Port 22222 does not wake a box.
+box.
 
 ## Authentication
 
-A signed preview host, a box with inbound disabled, or port 22222 takes the first credential that works
-([`auth.go`](pkg/proxy/auth.go)):
+A box with inbound disabled takes the first credential that works ([`auth.go`](pkg/proxy/auth.go)):
 
 1. `Authorization: Bearer <API key or JWT>`: the API checks box access with the caller's own token.
-2. `X-BoxLite-Preview-Token` header: the API validates the preview token. The header is removed
-   before forwarding.
-3. `BOXLITE_BOX_AUTH_KEY` query parameter: the same check. A valid key is removed from the query.
-4. `boxlite-box-auth-<id>` cookie: signed with `PROXY_API_KEY` and trusted without an API call.
-5. A signed preview token in the host: the API resolves it to a box ID, and the proxy sets the cookie.
-6. Otherwise, a 307 redirect to the OIDC provider with PKCE. `/callback` exchanges the code, checks
+2. `boxlite-box-auth-<id>` cookie: signed with `PROXY_API_KEY` and trusted without an API call.
+3. Otherwise, a 307 redirect to the OIDC provider with PKCE. `/callback` exchanges the code, checks
    access, sets the cookie, and sends the browser back to the original URL.
 
 Credential checks cache only rejections, for 2 minutes. Accepted credentials go back to the API on
@@ -165,8 +156,8 @@ re-checks it with the API.
 
 | Situation                                                  | HTTP or WebSocket                                                   | `CONNECT`                    |
 | ---------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------- |
-| Inbound is disabled and the port is not 22222              | `404` after credential resolution; previews need inbound enabled | `403`, whatever the credential |
-| Inbound is enabled but the port has no active declaration  | `404`, including for a signed preview URL | `404` |
+| Inbound is disabled                                        | `404` after credential resolution; previews need inbound enabled | `403`, whatever the credential |
+| Inbound is enabled but the port has no active declaration  | `404`                                     | `404` |
 | The tunnel access API is unavailable                       | `502`                                     | `502` |
 | The host has no `<port>-<id>` label                        | `404`, except the utility routes                                    | `400`                        |
 | The API still fails the visibility check after its retries | `400`                                                               | `502`                        |
@@ -176,8 +167,8 @@ re-checks it with the API.
 | The runner, or a running box's port, is unreachable        | `502`, code `BAD_GATEWAY`                                           | `502`                        |
 
 Guest-dial failures on the HTTP path return the JSON error body that the proxy's other errors use.
-Port 22222 needs a credential even with inbound enabled. SDK and CLI callers should always send one:
-without it they get the browser redirect, not a `401`.
+A box with inbound disabled needs a credential. SDK and CLI callers should always send one: without it
+they get the browser redirect, not a `401`.
 
 ## Box activity
 
@@ -204,7 +195,7 @@ caches in memory unless its stage adds them.
 - **CORS** allows any origin, with credentials. A request carrying `X-BoxLite-Disable-CORS: true`
   leaves CORS to the app in the box.
 - **Preview warning**: with `PREVIEW_WARNING_ENABLED`, browsers see an interstitial page until they
-  accept it, which sets a cookie for 1 day. Non-browser clients, WebSockets, port 22222, and requests
+  accept it, which sets a cookie for 1 day. Non-browser clients, WebSockets, and requests
   carrying `X-BoxLite-Skip-Preview-Warning: true` skip it.
 - **Shutdown** waits up to `SHUTDOWN_TIMEOUT_SEC` (default 1 hour) for open requests and tunnels. A
   second signal forces the exit.
@@ -219,11 +210,11 @@ is internal and changes together with the API and the runner.
 | Service | Call                                                                                                     | Credential                                              |
 | ------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | API     | `GET /api/config` at startup, for unset OIDC settings                                                    | `PROXY_API_KEY`                                         |
-| API     | `GET /api/preview/{boxId}/inbound`, `/validate/{token}`, `/tunnels/{port}`; `GET /api/preview/{token}/{port}/box-id` | `PROXY_API_KEY` |
+| API     | `GET /api/preview/{boxId}/inbound`, `/tunnels/{port}`                                                    | `PROXY_API_KEY`                                         |
 | API     | `GET /api/preview/{boxId}/access`                                                                        | The caller's bearer token                               |
 | API     | `GET /api/runners/by-box/{boxId}`, `POST /api/box/{boxId}/last-activity`                                 | `PROXY_API_KEY`                                         |
 | API     | `POST /api/preview/{boxId}/ensure-ready`, when the runner reports the box is not running                 | `PROXY_API_KEY`                                         |
-| Runner  | `CONNECT /v1/boxes/{boxId}/network/tunnel?port={port}`; `/boxes/{boxId}/toolbox/proxy/22222/...`         | The runner's key from `by-box`, in `X-BoxLite-Authorization` |
+| Runner  | `CONNECT /v1/boxes/{boxId}/network/tunnel?port={port}`                                                   | The runner's key from `by-box`, in `X-BoxLite-Authorization` |
 
 ## Configuration
 

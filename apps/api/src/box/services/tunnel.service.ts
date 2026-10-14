@@ -11,8 +11,7 @@ import { Repository } from 'typeorm'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Tunnel } from '../entities/tunnel.entity'
 
-const TERMINAL_PORT = 22222
-// Same window as the other preview checks (preview:inbound, preview:token): the proxy
+// Same window as the other preview checks (preview:inbound, preview:access): the proxy
 // asks on every request, and a revoked or unpublished tunnel stays open this long.
 const ACCESS_CACHE_TTL_SECONDS = 3
 
@@ -63,7 +62,7 @@ export class TunnelService {
   }
 
   private assertPort(port: number): void {
-    if (!Number.isInteger(port) || port < 1 || port > 65535 || port === TERMINAL_PORT) {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new BadRequestError('Invalid tunnel port')
     }
   }

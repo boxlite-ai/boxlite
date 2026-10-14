@@ -105,3 +105,23 @@ describe('RunnerAdapterV0 createBox', () => {
     )
   })
 })
+
+describe('RunnerAdapterV0 updateNetworkSettings', () => {
+  // The network-settings body speaks the same outbound policy as create and
+  // recover; the Daytona-era flag pair is not sent.
+  it('sends the outbound policy as the enabled flag and entries', async () => {
+    const adapter = new RunnerAdapterV0()
+    const updateNetworkSettings = jest.fn().mockResolvedValue(undefined)
+    ;(adapter as any).boxApiClient = { updateNetworkSettings }
+
+    await adapter.updateNetworkSettings('box-1', false, ['api.openai.com', '10.0.0.0/8'])
+
+    const body = updateNetworkSettings.mock.calls[0][1]
+    expect(updateNetworkSettings).toHaveBeenCalledWith('box-1', expect.anything())
+    expect(body).toEqual(
+      expect.objectContaining({ outboundEnabled: false, outboundAllowNet: ['api.openai.com', '10.0.0.0/8'] }),
+    )
+    expect(body).not.toHaveProperty('networkBlockAll')
+    expect(body).not.toHaveProperty('networkAllowList')
+  })
+})

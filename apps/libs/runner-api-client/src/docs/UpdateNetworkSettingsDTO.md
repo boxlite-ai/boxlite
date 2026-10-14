@@ -5,9 +5,9 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**networkAllowList** | **string** |  | [optional] [default to undefined]
-**networkBlockAll** | **boolean** |  | [optional] [default to undefined]
 **networkLimitEgress** | **boolean** |  | [optional] [default to undefined]
+**outboundAllowNet** | **Array&lt;string&gt;** |  | [optional] [default to undefined]
+**outboundEnabled** | **boolean** |  | [optional] [default to undefined]
 
 ## Example
 
@@ -15,9 +15,9 @@ Name | Type | Description | Notes
 import { UpdateNetworkSettingsDTO } from './api';
 
 const instance: UpdateNetworkSettingsDTO = {
-    networkAllowList,
-    networkBlockAll,
     networkLimitEgress,
+    outboundAllowNet,
+    outboundEnabled,
 };
 ```
 

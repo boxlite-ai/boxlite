@@ -150,47 +150,6 @@ export class PreviewController {
     }
   }
 
-  @Get(':boxId/validate/:authToken')
-  @ApiOperation({
-    summary: 'Check if box auth token is valid',
-    operationId: 'isValidAuthToken',
-  })
-  @ApiParam({
-    name: 'boxId',
-    description: 'ID of the box',
-    type: 'string',
-  })
-  @ApiParam({
-    name: 'authToken',
-    description: 'Auth token of the box',
-    type: 'string',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Box auth token validation status',
-    type: Boolean,
-  })
-  async isValidAuthToken(@Param('boxId') boxId: string, @Param('authToken') authToken: string): Promise<boolean> {
-    const cached = await this.redis.get(`preview:token:${boxId}:${authToken}`)
-    if (cached) {
-      if (cached === '1') {
-        return true
-      }
-      throw new NotFoundException(`Box with ID ${boxId} not found`)
-    }
-    const box = await this.boxService.findOne(boxId)
-    if (!box) {
-      await this.redis.setex(`preview:token:${boxId}:${authToken}`, 3, '0')
-      throw new NotFoundException(`Box with ID ${boxId} not found`)
-    }
-    if (box.authToken === authToken) {
-      await this.redis.setex(`preview:token:${boxId}:${authToken}`, 3, '1')
-      return true
-    }
-    await this.redis.setex(`preview:token:${boxId}:${authToken}`, 3, '0')
-    throw new NotFoundException(`Box with ID ${boxId} not found`)
-  }
-
   @Get(':boxId/access')
   @ApiOperation({
     summary: 'Check if user has access to the box',
@@ -226,32 +185,5 @@ export class PreviewController {
     //  if user has access, keep it in cache longer
     await this.redis.setex(`preview:access:${boxId}:${userId}`, 30, '1')
     return true
-  }
-
-  @Get(':signedPreviewToken/:port/box-id')
-  @ApiOperation({
-    summary: 'Get box ID from signed preview URL token',
-    operationId: 'getBoxIdFromSignedPreviewUrlToken',
-  })
-  @ApiParam({
-    name: 'signedPreviewToken',
-    description: 'Signed preview URL token',
-    type: 'string',
-  })
-  @ApiParam({
-    name: 'port',
-    description: 'Port number to get box ID from signed preview URL token',
-    type: 'number',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Box ID from signed preview URL token',
-    type: String,
-  })
-  async getBoxIdFromSignedPreviewUrlToken(
-    @Param('signedPreviewToken') signedPreviewToken: string,
-    @Param('port') port: number,
-  ): Promise<string> {
-    return this.boxService.getBoxIdFromSignedPreviewUrlToken(signedPreviewToken, port)
   }
 }

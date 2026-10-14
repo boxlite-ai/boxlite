@@ -198,8 +198,8 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
   async updateNetworkSettings(
     _boxId: string,
-    _networkBlockAll?: boolean,
-    _networkAllowList?: string,
+    _outboundEnabled?: boolean,
+    _outboundAllowNet?: string[],
     _networkLimitEgress?: boolean,
   ): Promise<void> {
     throw new Error('Live network settings updates with runner API version 2 are not supported')

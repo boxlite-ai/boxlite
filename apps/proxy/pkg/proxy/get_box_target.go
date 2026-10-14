@@ -35,7 +35,7 @@ const (
 	// rides on: nothing evicts these entries, and with config.Redis unset the cache
 	// is in-process and out of the API's reach entirely, so any TTL at all is a
 	// window in which a deleted key still reaches the box. The API absorbs the
-	// revalidation traffic in Redis (preview:token, preview:access), so the cost is
+	// revalidation traffic in Redis (preview:access), so the cost is
 	// a round trip per request, not a database lookup per request.
 	//
 	// A rejection is not what a revoked credential rides on, so shortening it
@@ -48,37 +48,35 @@ const (
 
 func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, error) {
 	// Extract port and box ID from the host header.
-	// Expected format: 1234-<boxId | token>.proxy.domain
-	targetPort, boxIdOrSignedToken, _, err := p.parseHost(ctx.Request.Host)
+	// Expected format: 1234-<boxId>.proxy.domain
+	targetPort, boxId, _, err := p.parseHost(ctx.Request.Host)
 	if err != nil {
 		ctx.Error(common_errors.NewBadRequestError(err))
 		return nil, err
 	}
 	targetPath := requestEscapedPath(ctx.Request.URL, ctx.Param("path"))
 
-	if boxIdOrSignedToken == "" {
-		ctx.Error(common_errors.NewBadRequestError(errors.New("box ID or signed token is required")))
-		return nil, errors.New("box ID or signed token is required")
+	if boxId == "" {
+		ctx.Error(common_errors.NewBadRequestError(errors.New("box ID is required")))
+		return nil, errors.New("box ID is required")
 	}
 
-	boxId := boxIdOrSignedToken
-	if decodedBoxId, ok, decodeErr := decodeDirectPreviewBoxID(boxIdOrSignedToken); decodeErr != nil {
+	if decodedBoxId, ok, decodeErr := decodeDirectPreviewBoxID(boxId); decodeErr != nil {
 		ctx.Error(common_errors.NewBadRequestError(decodeErr))
 		return nil, decodeErr
 	} else if ok {
 		boxId = decodedBoxId
-		boxIdOrSignedToken = decodedBoxId
 	}
 
-	inboundEnabled, err := p.getBoxInboundEnabled(ctx, boxIdOrSignedToken)
+	inboundEnabled, err := p.getBoxInboundEnabled(ctx, boxId)
 	if err != nil {
 		ctx.Error(common_errors.NewBadRequestError(fmt.Errorf("failed to get box inbound mode: %w", err)))
 		return nil, fmt.Errorf("failed to get box inbound mode: %w", err)
 	}
 
-	if !*inboundEnabled || targetPort == TERMINAL_PORT {
+	if !*inboundEnabled {
 		var didRedirect bool
-		boxId, didRedirect, err = p.Authenticate(ctx, boxIdOrSignedToken, float32(targetPort))
+		boxId, didRedirect, err = p.Authenticate(ctx, boxId)
 		if err != nil {
 			if !didRedirect {
 				ctx.Error(err)
@@ -86,18 +84,16 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 			return nil, err
 		}
 	}
-	if targetPort != TERMINAL_PORT {
-		allowed, err := p.hasPublicTunnelAccess(ctx.Request.Context(), boxId, targetPort)
-		if err != nil {
-			wrappedErr := fmt.Errorf("check tunnel access: %w", err)
-			ctx.Error(common_errors.NewCustomError(http.StatusBadGateway, wrappedErr.Error(), "BAD_GATEWAY"))
-			return nil, wrappedErr
-		}
-		if !allowed {
-			wrappedErr := errors.New("tunnel not found")
-			ctx.Error(common_errors.NewNotFoundError(wrappedErr))
-			return nil, wrappedErr
-		}
+	allowed, err := p.hasPublicTunnelAccess(ctx.Request.Context(), boxId, targetPort)
+	if err != nil {
+		wrappedErr := fmt.Errorf("check tunnel access: %w", err)
+		ctx.Error(common_errors.NewCustomError(http.StatusBadGateway, wrappedErr.Error(), "BAD_GATEWAY"))
+		return nil, wrappedErr
+	}
+	if !allowed {
+		wrappedErr := errors.New("tunnel not found")
+		ctx.Error(common_errors.NewNotFoundError(wrappedErr))
+		return nil, wrappedErr
 	}
 
 	// Stamp the API's span vocabulary (boxlite.* — see the API's
@@ -131,33 +127,19 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 		"X-Forwarded-Port":  forwardedPort,
 	}
 
-	if targetPort != TERMINAL_PORT {
-		target, err := url.Parse("http://" + net.JoinHostPort(boxId, strconv.Itoa(int(targetPort))) + targetPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse guest target URL: %w", err)
-		}
-		return &common_proxy.RequestTarget{
-			URL:       target,
-			Host:      forwardedHost,
-			Headers:   headers,
-			Transport: p.guestPortTransport,
-			ErrorHandler: func(writer http.ResponseWriter, _ *http.Request, err error) {
-				ctx.Error(guestDialFailure(writer.Header(), err))
-			},
-		}, nil
-	}
-
-	runnerInfo, err := p.getBoxRunnerInfo(ctx, boxId)
+	target, err := url.Parse("http://" + net.JoinHostPort(boxId, strconv.Itoa(int(targetPort))) + targetPath)
 	if err != nil {
-		ctx.Error(common_errors.NewBadRequestError(fmt.Errorf("failed to get runner info: %w", err)))
-		return nil, fmt.Errorf("failed to get runner info: %w", err)
+		return nil, fmt.Errorf("failed to parse guest target URL: %w", err)
 	}
-	target, err := url.Parse(fmt.Sprintf("%s/boxes/%s/toolbox/proxy/%d%s", strings.TrimRight(runnerInfo.ApiUrl, "/"), boxId, targetPort, targetPath))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse terminal target URL: %w", err)
-	}
-	headers["X-BoxLite-Authorization"] = fmt.Sprintf("Bearer %s", runnerInfo.ApiKey)
-	return &common_proxy.RequestTarget{URL: target, Host: target.Host, Headers: headers}, nil
+	return &common_proxy.RequestTarget{
+		URL:       target,
+		Host:      forwardedHost,
+		Headers:   headers,
+		Transport: p.guestPortTransport,
+		ErrorHandler: func(writer http.ResponseWriter, _ *http.Request, err error) {
+			ctx.Error(guestDialFailure(writer.Header(), err))
+		},
+	}, nil
 }
 
 func (p *Proxy) dialGuestPort(ctx context.Context, network string, address string) (net.Conn, error) {
@@ -286,30 +268,6 @@ func (p *Proxy) getBoxInboundEnabled(ctx context.Context, boxId string) (*bool, 
 	return &enabled, nil
 }
 
-func (p *Proxy) getBoxAuthKeyValid(ctx context.Context, boxId string, authKey string) (*bool, error) {
-	apiValidation := func() (bool, error) {
-		_, resp, err := p.apiclient.PreviewAPI.IsValidAuthToken(context.Background(), boxId, authKey).Execute()
-		if resp != nil && resp.StatusCode == http.StatusOK {
-			return true, nil
-		}
-		openapiErr := common_errors.ConvertOpenAPIError(err)
-
-		if openapiErr != nil {
-			if resp != nil && resp.StatusCode >= 400 && resp.StatusCode < 500 &&
-				resp.StatusCode != http.StatusRequestTimeout && resp.StatusCode != http.StatusTooManyRequests {
-				return false, nil
-			}
-			if !common_errors.IsRetryableOpenAPIError(openapiErr) {
-				return false, &utils.NonRetryableError{Err: openapiErr}
-			}
-			return false, openapiErr
-		}
-		return false, nil
-	}
-
-	return p.validateAndCache(ctx, boxId, authKey, apiValidation)
-}
-
 func (p *Proxy) getBoxBearerTokenValid(ctx context.Context, boxId string, bearerToken string) (*bool, error) {
 	apiValidation := func() (bool, error) {
 		return p.hasBoxAccess(ctx, boxId, bearerToken)
@@ -354,8 +312,8 @@ func (p *Proxy) validateAndCache(
 }
 
 // parseHost returns the target port as a number, so every caller compares one
-// canonical form: a label like "022222" is TERMINAL_PORT, not a guest port.
-func (p *Proxy) parseHost(host string) (targetPort uint16, boxIdOrSignedToken string, baseHost string, err error) {
+// canonical form: a label like "03000" is port 3000.
+func (p *Proxy) parseHost(host string) (targetPort uint16, boxId string, baseHost string, err error) {
 	// Extract port and box ID from the host header
 	// Expected format: 1234-some-id-uuid.proxy.domain
 	if host == "" {
@@ -384,11 +342,11 @@ func (p *Proxy) parseHost(host string) (targetPort uint16, boxIdOrSignedToken st
 		return 0, "", "", fmt.Errorf("invalid port '%s': must be 1-65535", before)
 	}
 
-	boxIdOrSignedToken = after
+	boxId = after
 	// Join remaining parts to form the base domain (e.g., "proxy.domain")
 	baseHost = strings.Join(parts[1:], ".")
 
-	return uint16(port), boxIdOrSignedToken, baseHost, nil
+	return uint16(port), boxId, baseHost, nil
 }
 
 func decodeDirectPreviewBoxID(value string) (string, bool, error) {

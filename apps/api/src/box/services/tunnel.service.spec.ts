@@ -43,8 +43,17 @@ describe('TunnelService', () => {
 
     await expect(service.declarePublic('AbCdEf123456', 3000)).rejects.toBeInstanceOf(ConflictException)
     await expect(service.declarePublic('AbCdEf123456', 0)).rejects.toThrow('Invalid tunnel port')
-    await expect(service.declarePublic('AbCdEf123456', 22222)).rejects.toThrow('Invalid tunnel port')
     expect(repository.query).toHaveBeenCalledTimes(1)
+  })
+
+  // 22222 was reserved for the runner's web terminal, which the dashboard no
+  // longer reaches through the proxy; it is now an ordinary guest port.
+  it('declares port 22222 like any other port', async () => {
+    const { service, repository } = makeService()
+
+    await service.declarePublic('AbCdEf123456', 22222)
+
+    expect(repository.query).toHaveBeenCalledWith(expect.any(String), ['AbCdEf123456', 22222])
   })
 
   it('requires an active public tunnel and a box with inbound enabled', async () => {

@@ -316,14 +316,14 @@ export class RunnerAdapterV0 implements RunnerAdapter {
 
   async updateNetworkSettings(
     boxId: string,
-    networkBlockAll?: boolean,
-    networkAllowList?: string,
+    outboundEnabled?: boolean,
+    outboundAllowNet?: string[],
     networkLimitEgress?: boolean,
   ): Promise<void> {
     const updateNetworkSettingsDto: UpdateNetworkSettingsDTO = {
-      networkBlockAll: networkBlockAll,
-      networkAllowList: networkAllowList,
-      networkLimitEgress: networkLimitEgress,
+      outboundEnabled,
+      outboundAllowNet,
+      networkLimitEgress,
     }
 
     await this.boxApiClient.updateNetworkSettings(boxId, updateNetworkSettingsDto)

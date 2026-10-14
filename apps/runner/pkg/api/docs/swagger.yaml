@@ -245,11 +245,13 @@ definitions:
     type: object
   UpdateNetworkSettingsDTO:
     properties:
-      networkAllowList:
-        type: string
-      networkBlockAll:
-        type: boolean
       networkLimitEgress:
+        type: boolean
+      outboundAllowNet:
+        items:
+          type: string
+        type: array
+      outboundEnabled:
         type: boolean
     type: object
   dto.SecretDTO:

@@ -6,9 +6,9 @@ asserts a sandbox's reach to the internet is what the create call asked for —
 :7-16 curls an external host with access enabled, :20-30 expects the same curl
 to fail with it disabled. BoxLite says it with
 `NetworkSpec(outbound=OutboundNetworkSpec(mode=..., allow_net=[...]))`, which
-the API turns into the runner's `networkBlockAll` / `networkAllowList`
-(apps/api/src/boxlite-rest/mappers/box-to-box.mapper.ts:73-77,
-apps/runner/pkg/api/dto/box.go:29).
+the API turns into the runner's `outboundEnabled` / `outboundAllowNet`
+(apps/api/src/boxlite-rest/mappers/box-to-box.mapper.ts:79-81,
+apps/runner/pkg/api/dto/box.go:31).
 
 `test_box_management.py` covers the inbound half (preview reachability). The
 outbound half had no cloud coverage, and a silently-unenforced policy is the

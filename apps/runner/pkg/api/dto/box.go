@@ -40,10 +40,11 @@ type CreateBoxDTO struct {
 	RegionId       *string `json:"regionId,omitempty"`
 } //	@name	CreateBoxDTO
 
+// Same outbound policy shape as CreateBoxDTO; an omitted field is left unchanged.
 type UpdateNetworkSettingsDTO struct {
-	NetworkBlockAll    *bool   `json:"networkBlockAll,omitempty"`
-	NetworkAllowList   *string `json:"networkAllowList,omitempty"`
-	NetworkLimitEgress *bool   `json:"networkLimitEgress,omitempty"`
+	OutboundEnabled    *bool    `json:"outboundEnabled,omitempty"`
+	OutboundAllowNet   []string `json:"outboundAllowNet,omitempty"`
+	NetworkLimitEgress *bool    `json:"networkLimitEgress,omitempty"`
 } //	@name	UpdateNetworkSettingsDTO
 
 type RecoverBoxDTO struct {

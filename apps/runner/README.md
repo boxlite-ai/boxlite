@@ -33,7 +33,6 @@ the request path), see [`apps/README.md`](../README.md).
   - **File I/O** — tar-framed upload and download
   - **Per-box metrics** — CPU / memory / net / exec counters
   - **Runner info** — host CPU / memory / disk + service health
-  - **Toolbox proxy** — browser xterm.js over WebSocket
 - The background services spawned at startup — box state sync,
   metrics collector, v2 job poller, v2 healthcheck.
 - The complete REST surface (one consolidated table).
@@ -77,7 +76,6 @@ If you want the formal API schema, see
 │    boxlite_exec_attach.go  GET /attach (WebSocket)                       │
 │    boxlite_files.go        PUT/GET /files                                │
 │    boxlite_metrics.go      GET /metrics                                  │
-│    proxy.go                terminal preview (xterm.js + WS)              │
 │    info.go, health.go      /info, /                                      │
 │                                                                          │
 │  pkg/services/           BoxService, BoxSyncService              │
@@ -160,7 +158,7 @@ crash handling live in the runtime, not the runner.
 | `POST` | `/boxes/:id/destroy` | `Destroy` | Tear down completely |
 | `POST` | `/boxes/:id/recover` | `Recover` | Bring an `error` box back via a named strategy |
 | `POST` | `/boxes/:id/is-recoverable` | `IsRecoverable` | Static check against `common.IsRecoverable(reason)` |
-| `POST` | `/boxes/:id/network-settings` | `UpdateNetworkSettings` | Set block-all / allow-list |
+| `POST` | `/boxes/:id/network-settings` | `UpdateNetworkSettings` | Set the outbound policy (`outboundEnabled` / `outboundAllowNet`) |
 | `POST` | `/boxes/:id/backup` | `CreateBackup` | Kick off async backup; updates `BackupInfoCache` |
 | `GET` | `/boxes/:id` | `Info` | Combined state + backup state + runtime version |
 
@@ -462,21 +460,6 @@ durations, and network counters. All values come from
 The Prometheus endpoint is the standard `promhttp.Handler()` and exposes
 the counters maintained in `pkg/common/` (operation counts, etc.).
 
-### 7. Terminal preview
-
-`Any /boxes/:boxId/toolbox/*path` — the legacy route is kept for the
-dashboard terminal preview only:
-
-- **HTTP GET** — returns the embedded xterm.js page (HTML + CDN links
-  in `proxy.go`).
-- **WebSocket** — bridges browser keystrokes to a fresh `/bin/sh`
-  execution started via `r.Boxlite.StartExecution(...)`. Output frames
-  are sent as WebSocket text messages; input is read from the same
-  socket and written to the execution's stdin.
-
-This is a convenience surface for the dashboard, not the supported
-programmatic stdio channel — use `/attach` for that.
-
 ---
 
 ## Background services
@@ -570,8 +553,7 @@ the Swagger UI (development only).
 | `POST` | `/boxes/:id/backup` | Async backup |
 | `POST` | `/boxes/:id/recover` | Recover from error state |
 | `POST` | `/boxes/:id/is-recoverable` | Check whether an error reason is recoverable |
-| `POST` | `/boxes/:id/network-settings` | Update block-all / allow-list |
-| `Any` | `/boxes/:id/toolbox/*path` | Terminal preview only |
+| `POST` | `/boxes/:id/network-settings` | Update the outbound policy |
 | `POST` | `/artifacts/pull` | Async pull (mirror + optional push) |
 | `POST` | `/artifacts/build` | Async build |
 | `GET` | `/artifacts/exists` | Local existence check |
@@ -662,7 +644,7 @@ scripts/build/fix-go-symbols.sh target/debug/libboxlite.a
   - [`pkg/api/controllers/artifact.go`](pkg/api/controllers/artifact.go) — pull/build/inspect
   - [`pkg/api/controllers/boxlite_exec.go`](pkg/api/controllers/boxlite_exec.go) — exec create / signal / resize / status / legacy I/O
   - [`pkg/api/controllers/boxlite_exec_attach.go`](pkg/api/controllers/boxlite_exec_attach.go) — `/attach` WebSocket
-  - [`pkg/api/controllers/boxlite_files.go`](pkg/api/controllers/boxlite_files.go), [`boxlite_metrics.go`](pkg/api/controllers/boxlite_metrics.go), [`proxy.go`](pkg/api/controllers/proxy.go), [`info.go`](pkg/api/controllers/info.go)
+  - [`pkg/api/controllers/boxlite_files.go`](pkg/api/controllers/boxlite_files.go), [`boxlite_metrics.go`](pkg/api/controllers/boxlite_metrics.go), [`info.go`](pkg/api/controllers/info.go)
 
 - **Services / state**:
   - [`pkg/services/box.go`](pkg/services/box.go), [`sandbox_sync.go`](pkg/services/sandbox_sync.go)
