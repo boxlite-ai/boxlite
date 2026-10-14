@@ -1193,6 +1193,9 @@ impl BoxImpl {
     /// The box's network control backend (gvproxy ServicesMux client), owned in
     /// `LiveState` beside `guest_session`. Lazily starts the box like any live
     /// operation. `Unsupported` when the box was created network-disabled.
+    ///
+    /// The owner accessor; the first caller lands with the outer SDK/CLI layer.
+    #[allow(dead_code)]
     pub(crate) async fn network(&self) -> BoxliteResult<&dyn NetworkBackend> {
         self.live_state()
             .await?
@@ -1615,10 +1618,6 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
 #[async_trait::async_trait]
 impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
-    async fn prepare_tunnel(&self, _target: SocketAddr) -> BoxliteResult<Option<String>> {
-        self.network().await.map(|_| None)
-    }
-
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
         let network = self
             .live_state()
@@ -1626,9 +1625,11 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
             .network
             .clone()
             .ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))?;
-        Ok(BoxTunnel::local(
-            network.tunnel(target).await?.into_owned_fd()?,
-        ))
+        Ok(BoxTunnel::pending(None, async move {
+            Ok(BoxTunnel::local(
+                network.tunnel(target).await?.into_owned_fd()?,
+            ))
+        }))
     }
 }
 

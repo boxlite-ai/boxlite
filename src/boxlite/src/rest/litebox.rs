@@ -532,25 +532,13 @@ impl BoxBackend for RestBox {
 
 #[async_trait]
 impl BoxNetworkBackend for RestBox {
-    async fn prepare_tunnel(&self, target: SocketAddr) -> BoxliteResult<Option<String>> {
-        self.tunnel_endpoint(target).await.map(Some)
-    }
-
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
         let endpoint = self.tunnel_endpoint(target).await?;
-        self.open_prepared_tunnel(target, Some(&endpoint)).await
-    }
-
-    async fn open_prepared_tunnel(
-        &self,
-        target: SocketAddr,
-        uri: Option<&str>,
-    ) -> BoxliteResult<BoxTunnel> {
-        let Some(endpoint) = uri else {
-            return self.tunnel(target).await;
-        };
-        let connection = self.client.connect_box_network_tunnel(endpoint).await?;
-        Ok(BoxTunnel::remote(endpoint.to_string(), connection))
+        let client = self.client.clone();
+        Ok(BoxTunnel::pending(Some(endpoint.clone()), async move {
+            let connection = client.connect_box_network_tunnel(&endpoint).await?;
+            Ok(BoxTunnel::remote(endpoint, connection))
+        }))
     }
 }
 

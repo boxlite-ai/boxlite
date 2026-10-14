@@ -251,13 +251,18 @@ impl AsyncWrite for BoxWriter {
     }
 }
 
+/// Opens a prepared tunnel. Not polled until `connect()`, so preparing a
+/// tunnel reaches nothing inside the box.
+type OpenTunnel = Pin<Box<dyn Future<Output = BoxliteResult<BoxTunnel>> + Send>>;
+
 /// The transport a [`BoxTunnel`] was built over.
 enum TunnelTransport {
-    /// Prepared but not opened: `connect()` opens it, so a port nothing
+    /// Prepared but not opened: `connect()` runs `open`, so a port nothing
     /// listens on fails there rather than in `tunnel()`. `uri` is the public
     /// URI the backend minted while preparing, if any.
     Pending {
         uri: Option<String>,
+        open: OpenTunnel,
     },
     Local(OwnedFd),
     #[cfg(feature = "rest")]
@@ -276,12 +281,6 @@ struct TunnelOpener {
 impl TunnelOpener {
     async fn open(&self) -> BoxliteResult<BoxTunnel> {
         self.network_backend.tunnel(self.target).await
-    }
-
-    async fn open_prepared(&self, uri: Option<&str>) -> BoxliteResult<BoxTunnel> {
-        self.network_backend
-            .open_prepared_tunnel(self.target, uri)
-            .await
     }
 }
 
@@ -313,16 +312,29 @@ impl BoxTunnel {
         }
     }
 
-    fn pending(opener: TunnelOpener, uri: Option<String>) -> Self {
+    /// A prepared tunnel that `open` opens on `connect()`. `uri` is the public
+    /// URI minted while preparing, if any.
+    pub(crate) fn pending<F>(uri: Option<String>, open: F) -> Self
+    where
+        F: Future<Output = BoxliteResult<BoxTunnel>> + Send + 'static,
+    {
         Self {
-            transport: TunnelTransport::Pending { uri },
-            opener: Some(opener),
+            transport: TunnelTransport::Pending {
+                uri,
+                open: Box::pin(open),
+            },
+            opener: None,
         }
+    }
+
+    fn with_opener(mut self, opener: TunnelOpener) -> Self {
+        self.opener = Some(opener);
+        self
     }
 
     pub fn uri(&self) -> Option<&str> {
         match &self.transport {
-            TunnelTransport::Pending { uri } => uri.as_deref(),
+            TunnelTransport::Pending { uri, .. } => uri.as_deref(),
             TunnelTransport::Local(_) => None,
             #[cfg(feature = "rest")]
             TunnelTransport::Remote { uri, .. } => Some(uri),
@@ -356,12 +368,7 @@ impl BoxTunnel {
     /// listens on the port.
     pub async fn connect(self) -> BoxliteResult<BoxConnection> {
         let transport = match self.transport {
-            TunnelTransport::Pending { uri } => {
-                let opener = self.opener.ok_or_else(|| {
-                    BoxliteError::Internal("tunnel is missing its network opener".into())
-                })?;
-                opener.open_prepared(uri.as_deref()).await?.transport
-            }
+            TunnelTransport::Pending { open, .. } => open.await?.transport,
             transport => transport,
         };
         Self::connect_transport(transport)
@@ -427,8 +434,10 @@ impl NetworkHandle {
             network_backend: Arc::clone(&self.network_backend),
             target,
         };
-        let uri = self.network_backend.prepare_tunnel(target).await?;
-        Ok(BoxTunnel::pending(opener, uri))
+        self.network_backend
+            .tunnel(target)
+            .await
+            .map(|tunnel| tunnel.with_opener(opener))
     }
 }
 
@@ -738,18 +747,30 @@ mod tests {
         assert_eq!(&response, b"one");
     }
 
+    /// A prepared tunnel that runs `open` only on `connect()`, as a real
+    /// backend's does.
+    fn pending_tunnel(
+        open: impl FnOnce() -> BoxliteResult<BoxTunnel> + Send + 'static,
+    ) -> BoxTunnel {
+        BoxTunnel::pending(None, async move { open() })
+    }
+
+    fn echo_tunnel() -> BoxTunnel {
+        let (sdk, mut peer) = UnixStream::pair().unwrap();
+        tokio::spawn(async move {
+            let (mut reader, mut writer) = peer.split();
+            let _ = tokio::io::copy(&mut reader, &mut writer).await;
+        });
+        let fd: OwnedFd = sdk.into_std().unwrap().into();
+        BoxTunnel::local(fd)
+    }
+
     struct EchoNetworkBackend;
 
     #[async_trait::async_trait]
     impl BoxNetworkBackend for EchoNetworkBackend {
         async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-            let (sdk, mut peer) = UnixStream::pair().unwrap();
-            tokio::spawn(async move {
-                let (mut reader, mut writer) = peer.split();
-                let _ = tokio::io::copy(&mut reader, &mut writer).await;
-            });
-            let fd: OwnedFd = sdk.into_std().unwrap().into();
-            Ok(BoxTunnel::local(fd))
+            Ok(pending_tunnel(|| Ok(echo_tunnel())))
         }
     }
 
@@ -757,33 +778,26 @@ mod tests {
         NetworkHandle::new(Arc::new(EchoNetworkBackend))
     }
 
-    /// A backend that, like a REST runtime, mints a public URI when a tunnel
-    /// is prepared, prepares again inside every `tunnel()`, and opens an echo
-    /// connection only on request.
+    /// A backend that, like a REST runtime, mints a public URI in every
+    /// `tunnel()` and opens an echo connection only on `connect()`.
+    #[derive(Default)]
     struct UriNetworkBackend {
-        opens: AtomicUsize,
+        opens: Arc<AtomicUsize>,
         prepares: AtomicUsize,
     }
 
     #[async_trait::async_trait]
     impl BoxNetworkBackend for UriNetworkBackend {
-        async fn prepare_tunnel(&self, _target: SocketAddr) -> BoxliteResult<Option<String>> {
+        async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
             self.prepares.fetch_add(1, Ordering::SeqCst);
-            Ok(Some("https://3000-box.proxy.example.test".into()))
-        }
-
-        async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-            let uri = self.prepare_tunnel(target).await?;
-            self.open_prepared_tunnel(target, uri.as_deref()).await
-        }
-
-        async fn open_prepared_tunnel(
-            &self,
-            target: SocketAddr,
-            _uri: Option<&str>,
-        ) -> BoxliteResult<BoxTunnel> {
-            self.opens.fetch_add(1, Ordering::SeqCst);
-            EchoNetworkBackend.tunnel(target).await
+            let opens = Arc::clone(&self.opens);
+            Ok(BoxTunnel::pending(
+                Some("https://3000-box.proxy.example.test".into()),
+                async move {
+                    opens.fetch_add(1, Ordering::SeqCst);
+                    Ok(echo_tunnel())
+                },
+            ))
         }
     }
 
@@ -791,10 +805,7 @@ mod tests {
     // connect() opens a connection.
     #[tokio::test]
     async fn tunnel_exposes_its_uri_without_opening_a_connection() {
-        let backend = Arc::new(UriNetworkBackend {
-            opens: AtomicUsize::new(0),
-            prepares: AtomicUsize::new(0),
-        });
+        let backend = Arc::new(UriNetworkBackend::default());
         let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3000);
 
         let tunnel = NetworkHandle::new(backend.clone())
@@ -817,15 +828,19 @@ mod tests {
 
     /// A backend whose guest refuses every port, like a box whose service has
     /// not started listening yet.
+    #[derive(Default)]
     struct RefusingNetworkBackend {
-        attempts: AtomicUsize,
+        attempts: Arc<AtomicUsize>,
     }
 
     #[async_trait::async_trait]
     impl BoxNetworkBackend for RefusingNetworkBackend {
         async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-            self.attempts.fetch_add(1, Ordering::SeqCst);
-            Err(BoxliteError::Network("guest refused the port".into()))
+            let attempts = Arc::clone(&self.attempts);
+            Ok(pending_tunnel(move || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err(BoxliteError::Network("guest refused the port".into()))
+            }))
         }
     }
 
@@ -833,9 +848,7 @@ mod tests {
     // listening yet fails the connection, not the tunnel.
     #[tokio::test]
     async fn tunnel_reports_a_closed_port_on_connect_not_on_tunnel() {
-        let backend = Arc::new(RefusingNetworkBackend {
-            attempts: AtomicUsize::new(0),
-        });
+        let backend = Arc::new(RefusingNetworkBackend::default());
         let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3000);
 
         let tunnel = NetworkHandle::new(backend.clone())
@@ -861,12 +874,6 @@ mod tests {
                 "box networking is disabled".into(),
             ))
         }
-
-        async fn prepare_tunnel(&self, _target: SocketAddr) -> BoxliteResult<Option<String>> {
-            Err(BoxliteError::Unsupported(
-                "box networking is disabled".into(),
-            ))
-        }
     }
 
     // Deferring the connection must not defer errors about the box itself, or
@@ -884,33 +891,42 @@ mod tests {
         assert!(matches!(err, BoxliteError::Unsupported(_)), "{err}");
     }
 
+    #[derive(Default)]
     struct FailSecondNetworkBackend {
-        attempts: AtomicUsize,
+        attempts: Arc<AtomicUsize>,
     }
 
     #[async_trait::async_trait]
     impl BoxNetworkBackend for FailSecondNetworkBackend {
-        async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-            if self.attempts.fetch_add(1, Ordering::SeqCst) == 1 {
-                return Err(BoxliteError::Network("intentional setup failure".into()));
-            }
-            EchoNetworkBackend.tunnel(target).await
+        async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+            let attempts = Arc::clone(&self.attempts);
+            Ok(pending_tunnel(move || {
+                if attempts.fetch_add(1, Ordering::SeqCst) == 1 {
+                    return Err(BoxliteError::Network("intentional setup failure".into()));
+                }
+                Ok(echo_tunnel())
+            }))
         }
     }
 
+    #[derive(Default)]
     struct HoldingNetworkBackend {
-        attempts: AtomicUsize,
-        peers: Mutex<Vec<UnixStream>>,
+        attempts: Arc<AtomicUsize>,
+        peers: Arc<Mutex<Vec<UnixStream>>>,
     }
 
     #[async_trait::async_trait]
     impl BoxNetworkBackend for HoldingNetworkBackend {
         async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-            let (sdk, peer) = UnixStream::pair().unwrap();
-            self.attempts.fetch_add(1, Ordering::SeqCst);
-            self.peers.lock().unwrap().push(peer);
-            let fd: OwnedFd = sdk.into_std().unwrap().into();
-            Ok(BoxTunnel::local(fd))
+            let attempts = Arc::clone(&self.attempts);
+            let peers = Arc::clone(&self.peers);
+            Ok(pending_tunnel(move || {
+                let (sdk, peer) = UnixStream::pair().unwrap();
+                attempts.fetch_add(1, Ordering::SeqCst);
+                peers.lock().unwrap().push(peer);
+                let fd: OwnedFd = sdk.into_std().unwrap().into();
+                Ok(BoxTunnel::local(fd))
+            }))
         }
     }
 
@@ -946,10 +962,7 @@ mod tests {
 
     #[tokio::test]
     async fn forward_reports_bound_address_before_accepting() {
-        let backend = Arc::new(HoldingNetworkBackend {
-            attempts: AtomicUsize::new(0),
-            peers: Mutex::new(Vec::new()),
-        });
+        let backend = Arc::new(HoldingNetworkBackend::default());
         let tunnel = NetworkHandle::new(backend.clone())
             .tunnel("127.0.0.1:8080".parse().unwrap())
             .await
@@ -976,10 +989,7 @@ mod tests {
 
     #[tokio::test]
     async fn tunnel_rejects_zero_guest_port_before_opening() {
-        let backend = Arc::new(HoldingNetworkBackend {
-            attempts: AtomicUsize::new(0),
-            peers: Mutex::new(Vec::new()),
-        });
+        let backend = Arc::new(HoldingNetworkBackend::default());
         let error = match NetworkHandle::new(backend.clone())
             .tunnel("127.0.0.1:0".parse().unwrap())
             .await
@@ -1032,9 +1042,7 @@ mod tests {
 
     #[tokio::test]
     async fn forward_client_setup_failure_does_not_stop_later_clients() {
-        let network = NetworkHandle::new(Arc::new(FailSecondNetworkBackend {
-            attempts: AtomicUsize::new(0),
-        }));
+        let network = NetworkHandle::new(Arc::new(FailSecondNetworkBackend::default()));
         let forwarder = network
             .tunnel("127.0.0.1:8080".parse().unwrap())
             .await
@@ -1071,10 +1079,7 @@ mod tests {
 
     #[tokio::test]
     async fn forward_acquires_all_64_permits_before_accepting_another_client() {
-        let backend = Arc::new(HoldingNetworkBackend {
-            attempts: AtomicUsize::new(0),
-            peers: Mutex::new(Vec::new()),
-        });
+        let backend = Arc::new(HoldingNetworkBackend::default());
         let network = NetworkHandle::new(backend.clone());
         let forwarder = network
             .tunnel("127.0.0.1:8080".parse().unwrap())
@@ -1236,10 +1241,7 @@ mod tests {
 
     #[tokio::test]
     async fn tunnel_uri_is_none_when_the_backend_mints_none() {
-        let backend = Arc::new(HoldingNetworkBackend {
-            attempts: AtomicUsize::new(0),
-            peers: Mutex::new(Vec::new()),
-        });
+        let backend = Arc::new(HoldingNetworkBackend::default());
         let tunnel = NetworkHandle::new(backend.clone())
             .tunnel("127.0.0.1:8080".parse().unwrap())
             .await
