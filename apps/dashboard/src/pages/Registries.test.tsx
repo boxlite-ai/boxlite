@@ -116,6 +116,48 @@ describe('the registries page', () => {
     expect(field('registry-password').value).toBe('')
   })
 
+  it('keeps the form available after a failed create and reports the failure', async () => {
+    const refusal = new Error('A login already exists for this prefix')
+    mocks.create.mockRejectedValue(refusal)
+    open()
+    act(() => {
+      typeInto(field('registry-prefix'), 'acme/')
+      typeInto(field('registry-username'), 'acme-bot')
+      typeInto(field('registry-password'), PASSWORD)
+    })
+    await act(async () => field('registry-password').form?.requestSubmit())
+
+    expect(mocks.create).toHaveBeenCalledWith({
+      credential: { registryHost: 'ghcr.io', repositoryPrefix: 'acme/', username: 'acme-bot', password: PASSWORD },
+      organizationId: 'org-1',
+    })
+    expect(mocks.handleApiError).toHaveBeenCalledWith(refusal, 'Failed to add a login for ghcr.io')
+    expect(field('registry-prefix').value).toBe('acme/')
+    expect(mocks.reset).not.toHaveBeenCalled()
+  })
+
+  it('removes a confirmed login and closes the confirmation', async () => {
+    const trash = document.querySelector('button[title="Remove the login for ghcr.io"]') as HTMLButtonElement
+    act(() => trash.click())
+    const confirm = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Remove')
+    await act(async () => confirm?.click())
+
+    expect(mocks.remove).toHaveBeenCalledWith({ id: 'credential-1', organizationId: 'org-1' })
+    expect(mocks.handleApiError).not.toHaveBeenCalled()
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+  })
+
+  it('forgets the password when the dialog close button dismisses the form', () => {
+    open()
+    act(() => typeInto(field('registry-password'), PASSWORD))
+    const close = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Close')
+    expect(close).toBeDefined()
+    act(() => close?.click())
+    open()
+    expect(field('registry-password').value).toBe('')
+    expect(mocks.reset).toHaveBeenCalled()
+  })
+
   // Container Registry serves the same images from a host per region, and each
   // takes the same service account key.
   it.each(['gcr.io', 'us.gcr.io', 'eu.gcr.io', 'asia.gcr.io'])(

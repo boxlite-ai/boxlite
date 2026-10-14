@@ -108,4 +108,16 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
     // Marker cleared so a later genuine 401 still gets its one recovery attempt.
     expect(window.sessionStorage.getItem('boxlite.reauth-attempted')).toBeNull()
   })
+
+  it('registry requests preserve removal refusals through the shared interceptor', async () => {
+    const refusal = 'Cannot remove login while box-1 pulls through it'
+    const onUnauthorized = vi.fn()
+    const api = await makeClient(onUnauthorized, 409, { message: refusal })
+    const { BoxliteError } = await import('./errors')
+
+    const error = await api.registriesApi.deleteRegistryCredential('credential-1', 'org-1').catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(BoxliteError)
+    expect((error as Error).message).toBe(refusal)
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
 })
