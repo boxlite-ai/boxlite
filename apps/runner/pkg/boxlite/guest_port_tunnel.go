@@ -22,7 +22,7 @@ var ErrBoxNotRunning = errors.New("box is not running")
 //
 // A stopped box is refused from the runtime's persisted state, before any
 // handle is fetched: fetching one for a stopped box evicts and leaks a handle,
-// and the proxy retries the dial every 200 ms (see evictBox). The state is then
+// and the proxy retries the dial every 500 ms (see evictBox). The state is then
 // checked again on the handle the tunnel uses. A handle that was attached when
 // its box stopped is spent and fails instead of booting, so a stop landing
 // between the two checks cannot restart the box. Known gap, accepted: a fresh

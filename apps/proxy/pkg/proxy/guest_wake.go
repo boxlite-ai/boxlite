@@ -22,7 +22,7 @@ import (
 var guestWakeBudget = 10 * time.Second
 
 const (
-	guestDialRetryInterval = 200 * time.Millisecond
+	guestDialRetryInterval = 500 * time.Millisecond
 	boxStartingRetryAfter  = "3"
 	runnerBoxNotRunning    = "box_not_running"
 )

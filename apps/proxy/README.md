@@ -131,7 +131,7 @@ when the box and its service come up within 10 seconds
    replica, and the API lock turns the calls from all replicas into one start.
 4. A resumed box replays its `cmd`, so its service listens a few seconds after the box starts.
    The box's network acks a tunnel only once the guest accepts it, so the runner answers `502`
-   until then. The proxy polls the dial every 200 ms, and concurrent requests for one port share
+   until then. The proxy polls the dial every 500 ms, and concurrent requests for one port share
    that poll. The poll closes the connection it gets, then each request dials its own. A request
    that arrives during this window gets `502` on its first dial, not `box_not_running`, so it
    joins the wake in progress for that box rather than failing.

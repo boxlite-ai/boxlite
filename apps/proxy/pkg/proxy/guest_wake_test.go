@@ -279,8 +279,8 @@ func TestConcurrentRequestsToAWakingBoxShareOnePoll(t *testing.T) {
 			t.Fatalf("request %d = %d, want 200", i, code)
 		}
 	}
-	// One poll every 200 ms for a second is about 5 refused dials; a poll per
-	// request would be about 100.
+	// One poll every 500 ms for a second is about 2 refused dials; a poll per
+	// request would be about 40.
 	if refused := runner.refusedHits.Load(); refused > 10 {
 		t.Fatalf("refused dials while waking = %d, want one shared poll (<= 10)", refused)
 	}
