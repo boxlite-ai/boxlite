@@ -183,7 +183,7 @@ function runtimeVariants(): Array<{
   const codes = new Map<string, string>();
   const http = RUST_ERRORS.slice(RUST_ERRORS.indexOf("pub fn http("));
   for (const arm of http.matchAll(
-    /((?:BoxliteError::\w+(?:\(_\))?\s*\|?\s*)+)=>\s*\{?\s*\(\d+,\s*"\w+",\s*"(\w+)"\)/g,
+    /((?:BoxliteError::\w+(?:\(_\))?\s*(?:\|\s*)?)+)=>\s*\{?\s*\(\d+,\s*"\w+",\s*"(\w+)"\)/g,
   )) {
     for (const variant of arm[1].matchAll(/BoxliteError::(\w+)/g)) {
       codes.set(variant[1], arm[2]);
