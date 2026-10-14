@@ -14,7 +14,26 @@ export type PullFailure = {
 // The runtime writes the registry's error codes into a failed pull's message,
 // `failed to pull manifest [MANIFEST_UNKNOWN]: …`, and nothing else in that
 // message is stable: what follows the colon is each registry's own wording.
-const REGISTRY_CODES = /failed to pull [^[\n]*? \[([A-Z_]+(?:, [A-Z_]+)*)\]: /g
+const FAILED_PULL = 'failed to pull '
+const CODE_LIST = / \[([A-Z_]+(?:, [A-Z_]+)*)\]: /g
+
+/**
+ * The code lists in a runner's message: each ` [A, B]: ` that has
+ * `failed to pull ` before it on its line, with no other `[` in between.
+ *
+ * Found bracket first and read back to the bracket before, so each character
+ * is read a bounded number of times. Matching from `failed to pull ` instead
+ * rescans the rest of the line from every repeat of it.
+ */
+function codeListsOf(reason: string): string[] {
+  return reason
+    .split('\n')
+    .flatMap((line) =>
+      [...line.matchAll(CODE_LIST)]
+        .filter((match) => line.slice(line.lastIndexOf('[', match.index) + 1, match.index).includes(FAILED_PULL))
+        .map((match) => match[1]),
+    )
+}
 
 const MISSING = new Set(['MANIFEST_UNKNOWN', 'NAME_UNKNOWN'])
 const REFUSED = new Set(['DENIED', 'UNAUTHORIZED'])
@@ -33,7 +52,7 @@ export function pullFailureOf(reason: string): PullFailure | undefined {
   if (typeof reason !== 'string') {
     return undefined
   }
-  const codes = [...new Set([...reason.matchAll(REGISTRY_CODES)].flatMap((match) => match[1].split(', ')))]
+  const codes = [...new Set(codeListsOf(reason).flatMap((list) => list.split(', ')))]
   if (codes.length === 0) {
     return undefined
   }

@@ -55,4 +55,12 @@ describe('pullFailureOf', () => {
   it('does not take a bracketed word elsewhere in the message for a code', () => {
     expect(pullFailureOf('box failed to start: see [MANIFEST_UNKNOWN] in the docs')).toBeUndefined()
   })
+
+  it('reads a message that repeats `failed to pull ` in linear time', () => {
+    const reason = 'failed to pull '.repeat(40_000)
+    const started = performance.now()
+
+    expect(pullFailureOf(reason)).toBeUndefined()
+    expect(performance.now() - started).toBeLessThan(1_000)
+  })
 })
