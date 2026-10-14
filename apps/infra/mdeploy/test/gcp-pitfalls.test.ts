@@ -1916,17 +1916,20 @@ test('the proxy, the API and the runner read the same registries and the same ho
   const service = fileURLToPath(new URL('../../../image-service/', import.meta.url))
   const api = fileURLToPath(new URL('../../../api/src/', import.meta.url))
   const runner = fileURLToPath(new URL('../../../runner/', import.meta.url))
-  const hosts = REGISTRY_PROXY_UPSTREAM_HOSTS.join(',')
-
-  assert.match(
-    readFileSync(`${service}cmd/registry-proxy/config/config.go`, 'utf8'),
-    new RegExp(`envconfig:"${REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE}" default:"${hosts}"`),
+  // The hosts are compared as text, never built into a pattern: an unescaped
+  // `.` in `us.gcr.io` would also match `usXgcr.io`.
+  const proxyDefault = readFileSync(`${service}cmd/registry-proxy/config/config.go`, 'utf8').match(
+    new RegExp(`envconfig:"${REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE}" default:"([^"]*)"`),
   )
+  assert.equal(proxyDefault?.[1], REGISTRY_PROXY_UPSTREAM_HOSTS.join(','))
   const apiProxy = readFileSync(`${api}registry/utils/registry-proxy.util.ts`, 'utf8')
   assert.match(apiProxy, new RegExp(`'${REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE}'`))
   // However the formatter wraps the array: the same hosts, in the same order.
-  const quoted = REGISTRY_PROXY_UPSTREAM_HOSTS.map((host) => `'${host.replaceAll('.', '\\.')}'`).join(',\\s*')
-  assert.match(apiProxy, new RegExp(`\\[\\s*${quoted},?\\s*\\]`))
+  const fallback = apiProxy.match(/FALLBACK_CREDENTIALED_HOSTS = \[([^\]]*)\]/)
+  assert.deepEqual(
+    [...(fallback?.[1] ?? '').matchAll(/'([^']*)'/g)].map((quoted) => quoted[1]),
+    REGISTRY_PROXY_UPSTREAM_HOSTS,
+  )
   assert.match(apiProxy, new RegExp(`'${REGISTRY_PROXY_HOST_VARIABLE}'`))
   assert.match(
     readFileSync(`${runner}cmd/runner/config/config.go`, 'utf8'),
