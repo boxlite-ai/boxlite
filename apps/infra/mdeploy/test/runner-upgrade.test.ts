@@ -635,13 +635,19 @@ test('a caller with no collector endpoint leaves that key alone', () => {
 })
 
 test('the GCP policy resolves the endpoint rather than casting it', () => {
-  // `request.otlpUrl` is an Output. Cast instead of resolved it renders as
-  // Pulumi's `[toString]` refusal text, and the fleet is then converged onto
-  // that — the trap `renderRunnerBoot` already records for the boot script.
+  // `request.otlpUrl` is an Output, and `request.registryProxyHost` may be one.
+  // Cast instead of resolved, either renders as Pulumi's `[toString]` refusal
+  // text, and the fleet is then converged onto that — the trap
+  // `renderRunnerBoot` already records for the boot script.
   const gcp = readFileSync(fileURLToPath(new URL('../stack/providers/gcp/runners.ts', import.meta.url)), 'utf8')
   const policy = gcp.slice(gcp.indexOf('const unitEnvPolicy'), gcp.indexOf('const scripts'))
-  assert.match(policy, /\$resolve\(\[request\.apiUrl, request\.otlpUrl\]\)/, 'both addresses must be resolved together')
+  assert.match(
+    policy,
+    /\$resolve\(\[request\.apiUrl, request\.otlpUrl, request\.registryProxyHost \?\? ''\]\)/,
+    'every address must be resolved together',
+  )
   assert.match(policy, /otlpUrl: otlpUrl as string/, 'and the resolved one is what reaches the renderer')
+  assert.match(policy, /registryProxyHost: \(proxyHost as string\) \|\| null/, 'and so does the resolved proxy host')
 })
 
 test('a caller with no control-plane address converges only the binary', () => {
