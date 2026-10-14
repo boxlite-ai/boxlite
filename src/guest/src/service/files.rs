@@ -479,10 +479,10 @@ impl Files for GuestServer {
         match source_is_dir {
             // Streaming path: unpack directly from the byte stream. The hint
             // carries the *source* shape, but the destination can still force
-            // directory mode — same as `detect_extraction_mode` in the legacy
-            // path. Fold the destination-side signals back in here so
-            // "single file → existing directory" keeps landing inside it
-            // (Unix cp semantics), not overwriting the directory path.
+            // directory mode — same as the staged path's `unpack`. Fold the
+            // destination-side signals back in here so "single file →
+            // existing directory" keeps landing inside it (Unix cp
+            // semantics), not overwriting the directory path.
             Some(source_is_dir) => {
                 let force_directory =
                     source_is_dir || dest_path.ends_with('/') || dest_root.is_dir();
@@ -595,6 +595,9 @@ impl Files for GuestServer {
                     .await
                     .map_err(|e| Status::internal(format!("failed to flush temp file: {}", e)))?;
 
+                // dest_path may have a trailing '/' indicating directory mode.
+                let force_directory = dest_path.ends_with('/');
+
                 // Names the archive carries, read once: the mount check below
                 // and the ownership hand-off afterwards must agree on what
                 // this copy wrote. Shared rather than cloned — an archive may
@@ -602,6 +605,7 @@ impl Files for GuestServer {
                 let entry_paths: Arc<[PathBuf]> = boxlite_shared::tar::entry_paths(
                     staged.path().to_path_buf(),
                     dest_root.clone(),
+                    force_directory,
                 )
                 .await
                 .map_err(BoxliteError::into_validation_status)?
@@ -619,8 +623,6 @@ impl Files for GuestServer {
                 let before =
                     DestBefore::sample(dest_root.clone(), Arc::clone(&entry_paths)).await?;
 
-                // dest_path may have a trailing '/' indicating directory mode.
-                let force_directory = dest_path.ends_with('/');
                 boxlite_shared::tar::unpack(
                     staged.path().to_path_buf(),
                     dest_root.clone(),

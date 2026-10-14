@@ -328,10 +328,22 @@ host runtime, the shim, and the guest agent.
   decides where each entry lands and writes it there with tar-rs's `Entry::unpack`, or creates the
   hard link itself. tar-rs's `unpack_in` would take the place from the entry's own name, so
   extraction repeats its checks: missing parents are created only inside the destination, a parent
-  that resolves outside it is refused, and a hard link's target is looked up in the destination. A
-  directory copied to a missing destination becomes it, as `docker cp` lands it: when the first
-  entry is a directory `X/`, `X/a` lands as `a`. Entries are written as they are read, so a later
-  entry outside `X/` fails the copy as the caller's error, keeping what was written.
+  that resolves outside it is refused, and a hard link's target is looked up in the destination.
+  The archive's first entry decides where a copy lands, as `docker cp` lands it, so no side channel
+  has to say whether the source was a directory:
+
+  | Destination | First entry | Lands |
+  | --- | --- | --- |
+  | An existing directory, or a path ending in `/` | anything | every entry inside it, under its own name |
+  | Missing | directory `X/` | `X` as the destination: `X/a` lands as `a` (`./` roots nothing) |
+  | An existing non-directory | directory | nothing: the copy is refused |
+  | Missing, or an existing non-directory | file or symlink with a one-part name | that entry as the destination |
+  | Missing | file with a nested name (`app/main.py`) | every entry inside it, under its own name |
+
+  Records about other entries (PAX headers, GNU long names) never decide. Entries are written as
+  they are read, so an entry the first one rules out fails the copy as the caller's error, keeping
+  what was written: one outside `X/`, anything after a file that became the destination, or a hard
+  link leading the archive. An empty archive lands nothing.
 
 ## Concurrency model
 

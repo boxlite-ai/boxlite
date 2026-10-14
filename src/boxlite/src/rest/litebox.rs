@@ -405,8 +405,8 @@ impl BoxBackend for RestBox {
         };
         // The header carries the *source* shape; the destination's own
         // signals — an existing directory, or a trailing slash naming one —
-        // must still win for a single file, matching the legacy
-        // `detect_extraction_mode` and Unix cp semantics.
+        // must still win for a single file, matching the file-based `unpack`
+        // and Unix cp semantics.
         let dest_wants_dir = host_dst.as_os_str().to_string_lossy().ends_with('/');
         let force_directory = source_is_dir || host_dst.is_dir() || dest_wants_dir;
 
@@ -1686,7 +1686,7 @@ mod tests {
     /// Streaming copy_out must fold the destination's directory-ness back into
     /// the archive shape: a single-file source whose destination is an existing
     /// directory lands *inside* it (Unix cp semantics), not at the directory
-    /// path — mirroring `detect_extraction_mode` in the legacy path.
+    /// path — as the file-based `unpack` lands it.
     #[tokio::test]
     async fn copy_out_places_single_file_inside_existing_directory() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1840,7 +1840,7 @@ mod tests {
 
     /// A destination with a trailing slash names a directory even when it
     /// does not exist yet: a single-file source must land *inside* it (the
-    /// legacy `detect_extraction_mode` trailing-slash rule), not fail to
+    /// file-based `unpack` trailing-slash rule), not fail to
     /// unpack at the directory-designated path.
     #[tokio::test]
     async fn copy_out_trailing_slash_forces_directory_mode() {

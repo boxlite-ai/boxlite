@@ -555,6 +555,9 @@ boxlite inspect -l --format yaml
 Copy files/folders between host and box. Exactly one of `SRC` or `DST` must be a `BOX:PATH` reference.
 A directory `SRC` lands as `docker cp` lands it: it becomes a `DST` that does not exist, and
 lands under its own name in one that does. End `SRC` with `/.` to copy its contents either way.
+A file `SRC`, or a symlink copied without `--follow-symlinks`, becomes `DST`, or lands inside it
+when `DST` is a directory or ends in `/`. A directory cannot replace a file: copying one onto an
+existing file `DST` fails.
 
 **Options:**
 
