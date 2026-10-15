@@ -478,7 +478,7 @@ runtime and its microVMs.
 | `PUT`     | `/v1/boxes/{boxId}/files?path={path}`          | Uploads a tar stream into the local box.              |
 | `GET`     | `/v1/boxes/{boxId}/files?path={path}`          | Downloads a local box path as a tar stream.           |
 | `GET`     | `/v1/boxes/{boxId}/metrics`                    | Returns local box metrics.                            |
-| `CONNECT` | `/v1/boxes/{boxId}/network/tunnel?port={port}` | Opens a raw bidirectional TCP tunnel to a guest port; `409 box_not_running` for a box that is not running. |
+| `CONNECT` | `/v1/boxes/{boxId}/network/tunnel?port={port}` | Opens a raw bidirectional TCP tunnel to a guest port; answers `409` with code `box_not_running` for a box that is not running, which the proxy uses to wake the box. |
 
 </details>
 
