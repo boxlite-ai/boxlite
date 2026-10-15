@@ -23,6 +23,17 @@ info:
     transfer, service tunnels, and image management as a multi-tenant
     service.
 
+    ## Image API migration (breaking change)
+
+    The image catalog replaces the former pull and digest-ID operations.
+    `POST /{prefix}/images/pull` and `HEAD /{prefix}/images/{image_id}` are
+    removed. Create a box with an image reference to pull it. Replace the
+    former `GET /{prefix}/images/{image_id}` with
+    `GET /{prefix}/images/{image_name}`, using the URL-encoded registry and
+    repository as one path segment. The response is now ImageDetail with
+    versions; inspect their digests to check for a particular build.
+    Regenerate clients from this specification before upgrading servers.
+
     ## Design Principles
 
     This specification follows industry-standard HTTP API patterns:

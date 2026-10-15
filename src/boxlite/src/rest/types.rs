@@ -538,12 +538,12 @@ pub(crate) struct ListVolumesResponse {
 // Images
 // ============================================================================
 
-/// When the server recorded something; now when the time does not parse,
-/// matching how a volume's creation time is read.
+/// When the server recorded something; epoch when the time does not parse,
+/// matching the local image cache's deterministic fallback.
 fn recorded_time(raw: &str) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::parse_from_rfc3339(raw)
         .map(|time| time.with_timezone(&chrono::Utc))
-        .unwrap_or_else(|_| chrono::Utc::now())
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH)
 }
 
 /// One reference, as `GET /v1/{prefix}/images` lists it.
@@ -940,6 +940,48 @@ fn parse_box_status(status: &str) -> BoxStatus {
 mod tests {
     use super::*;
     use crate::runtime::options::BoxOptions;
+
+    #[test]
+    fn rest_recorded_timestamps_are_stable_across_conversions() {
+        for (raw, seconds) in [
+            ("invalid", 0),
+            ("", 0),
+            ("1970-01-02T02:00:00+02:00", 86_400),
+        ] {
+            let info: ImageInfoResponse = serde_json::from_value(serde_json::json!({
+                "reference": "quay.io/acme/app:latest",
+                "repository": "quay.io/acme/app", "tag": "latest",
+                "id": "sha256:abc", "cached_at": raw
+            }))
+            .unwrap();
+            let detail: ImageDetailResponse = serde_json::from_value(serde_json::json!({
+                "name": "quay.io/acme/app",
+                "versions": [{
+                    "digest": "sha256:abc", "source_ref": "quay.io/acme/app:latest",
+                    "recorded_at": raw
+                }],
+                "history": [{"tag": "latest", "to_digest": "sha256:abc", "moved_at": raw}]
+            }))
+            .unwrap();
+            let registry: RegistryCredentialResponse = serde_json::from_value(serde_json::json!({
+                "id": "registry-1", "registry_host": "quay.io",
+                "username": "reader", "created_at": raw
+            }))
+            .unwrap();
+            let detail = detail.into_image_detail();
+            let expected = chrono::DateTime::from_timestamp(seconds, 0).unwrap();
+            assert_eq!(
+                [
+                    info.into_image_info().cached_at,
+                    detail.versions[0].recorded_at,
+                    detail.history[0].moved_at,
+                    registry.into_registry_credential().created_at,
+                ],
+                [expected; 4],
+                "wire timestamp: {raw:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_create_box_request_serialization() {

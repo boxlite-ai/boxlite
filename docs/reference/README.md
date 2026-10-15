@@ -63,6 +63,26 @@ runner, preview proxy, telemetry collector — catalogued separately in
 [`apps/API.md`](../../apps/API.md). Those are deployment internals, not part of
 the portable contract above.
 
+### Image API migration (breaking change)
+
+The image catalog replaces the old pull and digest-ID image operations. Regenerate
+clients from the current OpenAPI specification before upgrading servers.
+
+| Previous operation | Replacement |
+|--------------------|-------------|
+| `POST /{prefix}/images/pull` | Create a box with an image reference; there is no standalone REST pull operation |
+| `GET /{prefix}/images/{image_id}` | `GET /{prefix}/images/{image_name}` returns `ImageDetail`, including its versions, instead of a single `ImageInfo` |
+| `HEAD /{prefix}/images/{image_id}` | Get the image by name and inspect `versions[].digest`; a missing image returns 404 |
+
+`image_name` is the registry and repository, without a tag or digest, URL-encoded
+as one segment: `quay.io/acme/app` becomes `quay.io%2Facme%2Fapp`. An old digest ID
+is not an image name. `DELETE /{prefix}/images/{image_name}` removes the name and
+its tags, subject to dependency checks; it is part of the current API.
+
+The REST SDK maps malformed image recording times, tag-event times and registry
+creation times to `1970-01-01T00:00:00Z`, so repeated reads do not invent newer
+timestamps. Valid RFC 3339 timestamps retain their instant.
+
 ---
 
 ## Quick reference
