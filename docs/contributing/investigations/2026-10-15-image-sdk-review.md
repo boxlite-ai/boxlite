@@ -58,6 +58,12 @@ Estimated production additions are under 60 lines, including a reusable API-only
 Make test entry point. Reuse the workspace YAML parser and declare Ajv explicitly
 for semantic contract tests.
 
+The API tests read the Box specification outside the Nx workspace. Its default
+test inputs cover project files, not this contract. Add an
+[Nx runtime input](https://nx.dev/docs/reference/inputs#runtime-inputs) using
+`git hash-object ../openapi/box.openapi.yaml` so schema-only edits invalidate
+cached test results while retaining existing project/dependency inputs.
+
 ### Validation plan
 
 Before production edits, validate nullable fields and actual controller outputs
@@ -77,6 +83,11 @@ OpenAPI Generator 7.23.0 accepted the specification. Regenerated TypeScript mode
 passed strict nullability compilation; the five affected Go models compiled and
 preserved explicit nulls through JSON round trips. Run the checked-in regressions
 with `make test:apps:api FILTER='Box API JSON Schema nullability'`.
+
+Cache verification: replacing only the specification with its pre-fix version
+initially replayed a cached pass. With the runtime input present, the same edit
+executed the tests and produced 32 null-validation failures; restoring the
+corrected specification returned the passing result.
 
 Full generated Go client compilation encounters invalid `CreateBoxRequest`
 constructor syntax; generating from the pre-fix specification produces the
