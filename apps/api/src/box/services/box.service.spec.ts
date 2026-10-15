@@ -12,6 +12,7 @@ import { RunnerState } from '../enums/runner-state.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BoxEvents } from '../constants/box-events.constants'
 import Redis from 'ioredis'
+import { promises as dns } from 'node:dns'
 import { Repository } from 'typeorm'
 import { Image } from '../../image/entities/image.entity'
 import { ImageVersion } from '../../image/entities/image-version.entity'
@@ -612,12 +613,15 @@ describe('BoxService public defaults', () => {
     }
 
     let allowlistBefore: string | undefined
+    let lookup: jest.SpyInstance
     beforeEach(() => {
       allowlistBefore = process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
       process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = 'quay.io'
+      lookup = jest.spyOn(dns, 'lookup').mockResolvedValue([{ address: '93.184.216.34', family: 4 }] as never)
     })
 
     afterEach(() => {
+      lookup.mockRestore()
       if (allowlistBefore === undefined) {
         delete process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
       } else {

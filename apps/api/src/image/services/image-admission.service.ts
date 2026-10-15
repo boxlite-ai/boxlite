@@ -12,6 +12,7 @@ import { Organization } from '../../organization/entities/organization.entity'
 import { Image } from '../entities/image.entity'
 import { ImageColdPullRateLimitedError, ImageCountLimitReachedError } from '../errors/image-admission.error'
 import { assertHostIsAllowed, imageRegistryAllowlist, isCuratedSelector, parseImageRef } from '../utils/image-ref.util'
+import { assertRegistryResolvesPublic } from '../utils/registry-address.util'
 import { ResolvedImage } from './image-resolver.service'
 
 /** Cold pulls one organization may start per window, unless an operator sets another. */
@@ -45,7 +46,8 @@ function positiveIntegerFromEnv(name: string, fallback: number): number {
  * recognise. Refusing everything was itself a protection: the runner pulls onto
  * a disk it shares with other tenants. Opening it therefore has to put back,
  * one at a time, each thing the blanket refusal was doing — which registries
- * may be reached, and how fast one organization may start downloads.
+ * may be reached, where their names may point, and how fast one organization
+ * may start downloads.
  *
  * The per-organization catalog limit lives here too, and could not until the
  * registrar existed to write the rows it counts. It counts kinds of image
@@ -80,6 +82,7 @@ export class ImageAdmissionService {
     const allowlist = imageRegistryAllowlist()
     const { host, repository } = parseImageRef(ref)
     assertHostIsAllowed(host, allowlist)
+    await assertRegistryResolvesPublic(host)
 
     await this.assertWithinCatalogLimit(organization, `${host}/${repository}`)
   }

@@ -5,6 +5,7 @@
 
 import { HttpStatus } from '@nestjs/common'
 import Redis from 'ioredis'
+import { promises as dns } from 'node:dns'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { IsNull, Repository } from 'typeorm'
 import { Organization } from '../../organization/entities/organization.entity'
@@ -25,9 +26,11 @@ describe('ImageAdmissionService', () => {
   let redis: RedisMock
   let images: ImageRepositoryMock
   let service: ImageAdmissionService
+  let lookup: jest.SpyInstance
 
   beforeEach(() => {
     process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = 'quay.io,gcr.io'
+    lookup = jest.spyOn(dns, 'lookup').mockResolvedValue([{ address: '93.184.216.34', family: 4 }] as never)
     redis = {
       incr: jest.fn().mockResolvedValue(1),
       expire: jest.fn().mockResolvedValue(1),
@@ -42,6 +45,7 @@ describe('ImageAdmissionService', () => {
 
   afterEach(() => {
     delete process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
+    lookup.mockRestore()
   })
 
   it('admits an allowed registry', async () => {
@@ -54,6 +58,12 @@ describe('ImageAdmissionService', () => {
 
   it('refuses a host that points back inside the deployment', async () => {
     await expect(service.assert(organization, '169.254.169.254/acme/app:v1')).rejects.toThrow(BadRequestError)
+  })
+
+  it('refuses an allowed registry whose name resolves inside the deployment', async () => {
+    lookup.mockResolvedValue([{ address: '169.254.169.254', family: 4 }])
+    await expect(service.assert(organization, 'quay.io/acme/app:v1')).rejects.toThrow(BadRequestError)
+    expect(images.exists).not.toHaveBeenCalled()
   })
 
   it('refuses a malformed ref', async () => {
