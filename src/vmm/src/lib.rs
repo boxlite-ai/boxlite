@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Native VMM skeleton with VM and vCPU entry points, plus x86_64 ELF kernel
-//! decoding. `Vm::new` validates the configuration, creates the host VM and
+//! loading. `Vm::new` validates the configuration, creates the host VM and
 //! registers guest RAM; the `run` entry points are placeholders that panic
 //! if called.
 //!

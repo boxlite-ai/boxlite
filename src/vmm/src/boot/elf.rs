@@ -1,11 +1,13 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Decodes an x86_64 ELF `vmlinux` into the segments the VMM places at the
-//! physical addresses its program headers name. Every check runs over the
-//! immutable image; placement in guest RAM and the copy are the next slice.
+//! Loads an x86_64 ELF `vmlinux` at the physical addresses its program headers
+//! name. The whole image is decoded and checked against guest RAM before a
+//! byte is written, so a rejected image leaves guest RAM untouched.
 
 use std::io;
+
+use vm_memory::{Bytes, GuestAddress, GuestMemoryBackend};
 
 use super::KernelLayout;
 
@@ -25,6 +27,12 @@ const PT_DYNAMIC: u32 = 2;
 const PT_INTERP: u32 = 3;
 /// Program header flag of an executable segment.
 const PF_X: u32 = 1;
+/// The first MiB holds `boot_params` at 0x7000, the command line at 0x2_0000
+/// and the MP table at 0x9_FC00, then the legacy VGA and ROM hole. The kernel
+/// stays above it.
+const KERNEL_MIN_ADDR: u64 = 0x10_0000;
+/// Granule for zero-filling BSS.
+const ZERO_PAGE: [u8; 4096] = [0; 4096];
 
 /// One `PT_LOAD` segment, placed physically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +46,47 @@ pub(crate) struct Segment {
     /// Offset of the file-backed bytes in the image.
     pub(crate) offset: usize,
     pub(crate) executable: bool,
+}
+
+/// Copies the kernel's loadable segments into `ram` and zero-fills their BSS.
+///
+/// Every segment must lie at or above 1 MiB and inside `ram`. Nothing is
+/// written unless all checks pass; bytes between segments are left untouched.
+pub(crate) fn load_elf<M: GuestMemoryBackend>(ram: &M, image: &[u8]) -> io::Result<KernelLayout> {
+    let (segments, layout) = parse(image)?;
+    for segment in &segments {
+        placeable(ram, segment)?;
+    }
+    for segment in &segments {
+        let file_len = (segment.file_end - segment.start) as usize;
+        let bytes = &image[segment.offset..segment.offset + file_len];
+        ram.write_slice(bytes, GuestAddress(segment.start))
+            .map_err(io::Error::other)?;
+        let mut address = segment.file_end;
+        while address < segment.end {
+            let chunk = ((segment.end - address) as usize).min(ZERO_PAGE.len());
+            ram.write_slice(&ZERO_PAGE[..chunk], GuestAddress(address))
+                .map_err(io::Error::other)?;
+            address += chunk as u64;
+        }
+    }
+    Ok(layout)
+}
+
+/// Checks that `segment` sits at or above the first MiB and inside `ram`.
+fn placeable<M: GuestMemoryBackend>(ram: &M, segment: &Segment) -> io::Result<()> {
+    let Segment { start, end, .. } = *segment;
+    if start < KERNEL_MIN_ADDR {
+        return Err(invalid(format!(
+            "load range {start:#x}..{end:#x} is below the first MiB"
+        )));
+    }
+    if !GuestMemoryBackend::check_range(ram, GuestAddress(start), (end - start) as usize) {
+        return Err(invalid(format!(
+            "load range {start:#x}..{end:#x} is not backed by guest RAM"
+        )));
+    }
+    Ok(())
 }
 
 /// Decodes the headers and checks every segment against the image.

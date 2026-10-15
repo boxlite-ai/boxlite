@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Guest boot loading. The VMM is the boot loader: it writes the kernel into
-//! guest RAM itself. This increment decodes an x86_64 ELF `vmlinux`; placing
-//! it in guest RAM, `boot_params`, the command line, the MP table and the
-//! entry registers follow in later M1 slices.
+//! guest RAM itself. This increment loads an x86_64 ELF `vmlinux`;
+//! `boot_params`, the command line, the MP table and the entry registers
+//! follow in later M1 slices.
 
 pub(crate) mod elf;
 

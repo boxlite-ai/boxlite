@@ -1,11 +1,14 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Tests for ELF decoding: one synthetic image exercises every rule.
+//! Tests for the ELF loader: one synthetic image exercises every decoding
+//! and placement rule.
 
 use std::io;
 
-use super::{Segment, parse};
+use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap};
+
+use super::{Segment, load_elf, parse};
 use crate::boot::KernelLayout;
 
 /// Physical start, file offset, file size, memory size and flags of each
@@ -188,4 +191,103 @@ fn rejects_dynamic_images_and_images_without_load_segments() {
         put32(&mut image, header(index), 4);
     }
     reject(&image, "is outside file-backed executable segments");
+}
+
+/// RAM for the synthetic images: the fixture's segments end below 2 MiB.
+const RAM_SIZE: usize = 2 << 20;
+
+fn ram(size: usize) -> GuestMemoryMmap<()> {
+    GuestMemoryMmap::from_ranges(&[(GuestAddress(0), size)]).expect("anonymous guest RAM")
+}
+
+fn read(ram: &GuestMemoryMmap<()>, address: u64, len: usize) -> Vec<u8> {
+    let mut bytes = vec![0; len];
+    ram.read_slice(&mut bytes, GuestAddress(address))
+        .expect("read guest RAM");
+    bytes
+}
+
+fn fill(ram: &GuestMemoryMmap<()>, address: u64, len: usize, value: u8) {
+    ram.write_slice(&vec![value; len], GuestAddress(address))
+        .expect("write guest RAM");
+}
+
+fn reject_load(image: &[u8], reason: &str) {
+    let error = load_elf(&ram(RAM_SIZE), image).expect_err(reason);
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
+    assert!(error.to_string().contains(reason), "{error}");
+}
+
+#[test]
+fn loads_file_bytes_at_physical_addresses_and_zeroes_bss() {
+    let ram = ram(RAM_SIZE);
+    let span = (FIXTURE_LAYOUT.end - FIXTURE_LAYOUT.start) as usize;
+    fill(&ram, FIXTURE_LAYOUT.start, span, 0xff);
+
+    assert_eq!(load_elf(&ram, &fixture()).unwrap(), FIXTURE_LAYOUT);
+
+    let mut code = b"CODE1234".to_vec();
+    code.resize(0x20, 0);
+    assert_eq!(read(&ram, 0x10_0000, 0x20), code);
+    assert_eq!(
+        read(&ram, 0x10_0020, 0x1fe0),
+        vec![0xff; 0x1fe0],
+        "gap must stay untouched"
+    );
+    let mut data = b"DATA".to_vec();
+    data.resize(0x10, 0);
+    assert_eq!(read(&ram, 0x10_2000, 0x10), data);
+    assert_eq!(
+        read(&ram, 0x10_2010, 0xff0),
+        vec![0xff; 0xff0],
+        "gap must stay untouched"
+    );
+    assert_eq!(
+        read(&ram, 0x10_3000, 0x80),
+        vec![0; 0x80],
+        "BSS-only segment must be zero"
+    );
+    assert_eq!(
+        read(&ram, 0, 0x10_0000),
+        vec![0; 0x10_0000],
+        "first MiB must stay untouched"
+    );
+}
+
+#[test]
+fn accepts_a_segment_ending_exactly_at_the_end_of_ram() {
+    let mut image = fixture();
+    let last = header(2);
+    put64(&mut image, last + 40, RAM_SIZE as u64 - 0x10_3000);
+    let layout = load_elf(&ram(RAM_SIZE), &image).unwrap();
+    assert_eq!(layout.end, RAM_SIZE as u64);
+
+    put64(&mut image, last + 40, RAM_SIZE as u64 - 0x10_3000 + 1);
+    reject_load(&image, "is not backed by guest RAM");
+}
+
+#[test]
+fn rejects_segments_below_the_first_mib_or_outside_ram() {
+    let last = header(2);
+    for (field, value, reason) in [
+        (last + 24, 0x0f_ff00, "is below the first MiB"),
+        (last + 40, 0x20_0000, "is not backed by guest RAM"),
+    ] {
+        let mut image = fixture();
+        put64(&mut image, field, value);
+        reject_load(&image, reason);
+    }
+}
+
+#[test]
+fn leaves_ram_untouched_on_rejection() {
+    let ram = ram(RAM_SIZE);
+    let span = (FIXTURE_LAYOUT.end - FIXTURE_LAYOUT.start) as usize;
+    fill(&ram, FIXTURE_LAYOUT.start, span, 0xff);
+    for (field, value) in [(header(2) + 24, 0x10_2008), (header(2) + 40, 0x20_0000)] {
+        let mut image = fixture();
+        put64(&mut image, field, value);
+        load_elf(&ram, &image).expect_err("rejected image");
+        assert_eq!(read(&ram, FIXTURE_LAYOUT.start, span), vec![0xff; span]);
+    }
 }
