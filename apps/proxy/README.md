@@ -134,7 +134,8 @@ when the box and its service come up within 30 seconds
    until then. The proxy polls the dial every 500 ms, and concurrent requests for one port share
    that poll. The poll closes the connection it gets, then each request dials its own. A request
    that arrives during this window gets `502` on its first dial, not `box_not_running`, so it
-   joins the wake in progress for that box rather than failing.
+   joins the wake in progress for that box rather than failing. The wake lasts as long as the
+   shared poll, so it stays joinable even after the request that started it hangs up.
 5. The request is served once its dial succeeds. If 30 seconds pass first, the client gets `503`
    with `Retry-After: 3` and code `BOX_STARTING`, and the start keeps going.
 

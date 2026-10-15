@@ -61,10 +61,15 @@ func (p *Proxy) dialGuestPortWithWake(ctx context.Context, boxID string, port ui
 	var deadline time.Time
 	switch {
 	case isBoxNotRunning(err):
-		deadline = time.Now().Add(guestWakeBudget)
-		p.wakeDeadlines.Store(boxID, deadline)
-		defer p.wakeDeadlines.CompareAndDelete(boxID, deadline)
+		// The wake outlives this request: the shared poll clears the entry
+		// when it ends (waitForGuestPort), so a request that hangs up here
+		// leaves the wake joinable for the ones still to come. Requests that
+		// start it together share its deadline, so that clearing ends it.
+		deadline = p.startWake(boxID)
 		if err := p.wakeBox(ctx, boxID, deadline); err != nil {
+			if ctx.Err() == nil {
+				p.wakeDeadlines.CompareAndDelete(boxID, deadline) // the box will not start
+			}
 			return nil, err
 		}
 	case p.waking(boxID, &deadline):
@@ -77,11 +82,31 @@ func (p *Proxy) dialGuestPortWithWake(ctx context.Context, boxID string, port ui
 	return dialRunnerTunnel(ctx, runnerInfo, boxID, port)
 }
 
+// startWake returns the deadline of boxID's wake, starting one when none is
+// within its budget.
+func (p *Proxy) startWake(boxID string) time.Time {
+	deadline := time.Now().Add(guestWakeBudget)
+	for {
+		current, loaded := p.wakeDeadlines.LoadOrStore(boxID, deadline)
+		if !loaded {
+			return deadline
+		}
+		if time.Now().Before(current.(time.Time)) {
+			return current.(time.Time)
+		}
+		p.wakeDeadlines.CompareAndDelete(boxID, current) // expired: start anew
+	}
+}
+
 // waking reports whether a wake for boxID is still within its budget, and if
 // so sets deadline to that budget's end.
 func (p *Proxy) waking(boxID string, deadline *time.Time) bool {
 	value, ok := p.wakeDeadlines.Load(boxID)
-	if !ok || !time.Now().Before(value.(time.Time)) {
+	if !ok {
+		return false
+	}
+	if !time.Now().Before(value.(time.Time)) {
+		p.wakeDeadlines.CompareAndDelete(boxID, value) // a wake nobody polled
 		return false
 	}
 	*deadline = value.(time.Time)
@@ -103,6 +128,8 @@ func (p *Proxy) waitForGuestPort(ctx context.Context, runnerInfo *RunnerInfo, bo
 		// Detached so one client hanging up does not fail the others.
 		pollCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 		defer cancel()
+		// The wake ends with this poll, not with any one request waiting on it.
+		defer p.wakeDeadlines.CompareAndDelete(boxID, deadline)
 		return nil, pollGuestPort(pollCtx, runnerInfo, boxID, port)
 	})
 	select {

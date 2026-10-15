@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -313,6 +314,97 @@ func TestRequestArrivingDuringAWakeJoinsIt(t *testing.T) {
 	}
 	if response := <-first; response.Code != http.StatusOK {
 		t.Fatalf("waking request = %d, want 200", response.Code)
+	}
+}
+
+// The wake belongs to the shared poll, not to the request that started it: when
+// that request hangs up mid-wake, a request whose dial then gets 502 still
+// joins the wake and is served once the service listens.
+func TestWakeOutlivesTheRequestThatStartedIt(t *testing.T) {
+	runner := newFakeRunner(t)
+	runner.listenAfter = 1500 * time.Millisecond
+	api := newFakeAPI(t, runner, http.StatusNoContent)
+	proxy := newWakeTestProxy(t, runner, api)
+
+	starterCtx, hangUp := context.WithCancel(context.Background())
+	starter := make(chan error, 1)
+	go func() {
+		conn, err := proxy.dialGuestPortWithWake(starterCtx, wakeTestBoxID, 3000)
+		if conn != nil {
+			conn.Close()
+		}
+		starter <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for !runner.running.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("the starting request never woke the box")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	hangUp()
+	if err := <-starter; !errors.Is(err, context.Canceled) {
+		t.Fatalf("starting request = %v, want it to stop on its own cancellation", err)
+	}
+
+	conn, err := proxy.dialGuestPortWithWake(context.Background(), wakeTestBoxID, 3000)
+	if err != nil {
+		t.Fatalf("request after the starter hung up = %v, want it to join the wake", err)
+	}
+	conn.Close()
+}
+
+// A wake that several requests start together belongs to its shared poll,
+// not to any of them: when they all hang up mid-wake, a late request still
+// joins it and is served, and once that poll ends a 502 from a service that
+// then goes down fails at once rather than waiting out a leftover deadline.
+func TestWakeStartedByConcurrentRequestsEndsWithItsPoll(t *testing.T) {
+	previous := guestWakeBudget
+	guestWakeBudget = 3 * time.Second
+	t.Cleanup(func() { guestWakeBudget = previous })
+	runner := newFakeRunner(t)
+	runner.listenAfter = 500 * time.Millisecond
+	api := newFakeAPI(t, runner, http.StatusNoContent)
+	proxy := newWakeTestProxy(t, runner, api)
+
+	// Which starter runs the shared poll is up to the scheduler, so repeat.
+	for round := range 5 {
+		runner.running.Store(false)
+		runner.refusedDials.Store(0)
+		startersCtx, hangUp := context.WithCancel(context.Background())
+		var wg sync.WaitGroup
+		for range 5 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if conn, err := proxy.dialGuestPortWithWake(startersCtx, wakeTestBoxID, 3000); err == nil {
+					conn.Close()
+				}
+			}()
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for !runner.running.Load() {
+			if time.Now().After(deadline) {
+				t.Fatalf("round %d: the starting requests never woke the box", round)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		hangUp()
+		wg.Wait()
+
+		conn, err := proxy.dialGuestPortWithWake(context.Background(), wakeTestBoxID, 3000)
+		if err != nil {
+			t.Fatalf("round %d: request after the starters hung up = %v, want it to join the wake", round, err)
+		}
+		conn.Close()
+
+		runner.refusedDials.Store(1000) // the service goes down on a running box
+		started := time.Now()
+		_, err = proxy.dialGuestPortWithWake(context.Background(), wakeTestBoxID, 3000)
+		if errors.Is(err, errBoxStarting) || time.Since(started) > time.Second {
+			t.Fatalf("round %d: request after the wake = %v after %s, want a 502 at once",
+				round, err, time.Since(started))
+		}
 	}
 }
 
