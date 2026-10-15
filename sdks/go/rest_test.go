@@ -541,6 +541,10 @@ var imageCatalogCalls = []struct {
 		_, err := images.Usage(ctx)
 		return err
 	}},
+	{"MoveTag", func(ctx context.Context, images *Images) error {
+		_, err := images.MoveTag(ctx, "quay.io/acme/app", "stable", newDigest)
+		return err
+	}},
 }
 
 // callInBackground starts call and returns where its error will arrive.

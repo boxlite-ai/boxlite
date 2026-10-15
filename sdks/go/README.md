@@ -161,6 +161,9 @@ anything is sent. A catalog fills each version's `Tags`, `LastUsedAt` and
 newest first, where `FromDigest` is empty for a new tag and `Actor` for a move
 a pull recorded. A local cache fills only `Tags`.
 
+Like other image operations, `MoveTag` honors context cancellation while waiting
+for a reply and rejects calls after the image handle or runtime has closed.
+
 ### Private Registry Logins
 
 On a runtime from `NewRest`, `rt.Registries()` manages the logins the server
