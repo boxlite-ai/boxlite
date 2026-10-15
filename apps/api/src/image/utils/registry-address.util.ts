@@ -36,6 +36,8 @@ for (const [network, prefix] of [
 for (const [network, prefix] of [
   ['::', 128],
   ['::1', 128],
+  ['64:ff9b:1::', 48], // local-use NAT64, not globally reachable
+  ['2001:db8::', 32], // documentation
   ['fc00::', 7], // unique local
   ['fe80::', 10], // link-local
   ['fec0::', 10], // site-local, deprecated but still answered
@@ -73,7 +75,7 @@ export function isNonPublicAddress(address: string): boolean {
     return true
   }
   // An IPv4 address in IPv6 clothing is the same address: mapped, compatible,
-  // the NAT64 prefixes a DNS64 resolver synthesizes from an A record
+  // the NAT64 well-known prefix a DNS64 resolver synthesizes from an A record
   // (`64:ff9b::a9fe:a9fe` is the metadata endpoint), and 6to4.
   const groups = ipv6Groups(address)
   const ipv4 = (high: number, low: number) => `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`
@@ -81,7 +83,7 @@ export function isNonPublicAddress(address: string): boolean {
   if (zero(0, 5) && (groups[5] === 0 || groups[5] === 0xffff)) {
     return isNonPublicAddress(ipv4(groups[6], groups[7]))
   }
-  if (groups[0] === 0x64 && groups[1] === 0xff9b && (zero(2, 6) || groups[2] === 1)) {
+  if (groups[0] === 0x64 && groups[1] === 0xff9b && zero(2, 6)) {
     return isNonPublicAddress(ipv4(groups[6], groups[7]))
   }
   if (groups[0] === 0x2002) {
