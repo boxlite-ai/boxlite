@@ -1,36 +1,39 @@
 # boxlite-vmm
 
-Workspace skeleton for BoxLite's native VMM. The crate-visible VM and vCPU `run`
-entry points sketch event dispatch, guest exits, and worker cleanup with inline
-`todo!()` operations that panic if called. VM event labels stay local to
-`Vm::run`; vCPU exits use `boxlite_hypervisor::VcpuExit`, and `Error` wraps
-`boxlite_hypervisor::Error` with its cause chain intact. This crate cannot
-create or boot a VM yet. The [VMM design](../../docs/contributing/architecture/vmm/README.md)
-specifies the lifecycle API, memory layout, buses, interrupts, and threads it
-will implement.
+Workspace for BoxLite's native VMM. The VM lifecycle entry points still
+sketch event dispatch, guest exits, and worker cleanup with inline `todo!()`
+operations that panic if called; the address buses, interrupt routing, and
+x86_64 legacy devices (8250 serial, CMOS RTC, i8042) are implemented. VM
+event labels stay local to `Vm::run`; vCPU exits use
+`boxlite_hypervisor::VcpuExit`, and `Error` wraps `boxlite_hypervisor::Error`
+with its cause chain intact. This crate cannot create or boot a VM yet. The
+[VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
+lifecycle API, memory layout, buses, interrupts, and threads it will implement.
 
-The lifecycle types and `Error` remain crate-visible while those entry points
-are placeholders. M1 will make the implemented `Vm`, `VmExit`, `Error` and
-`Result` public together; M2's engine adapter will then consume that API and
-inspect the error's host cause.
+`Error`, `Result`, and the bus, interrupt, and device modules are public
+now; the lifecycle types `Vm` and `VmExit` go public with the lifecycle
+task that implements them, and M2's engine adapter will then consume that
+API and inspect the error's host cause.
 
 ```text
 boxlite-vmm
 └── boxlite-hypervisor
 ```
 
-| Module | Planned responsibility |
+| Module | Responsibility |
 | --- | --- |
 | `vm` | VM facade and lifecycle coordination |
 | `config` | Machine configuration and boundary validation |
 | `error` | VMM errors that keep the hypervisor's cause chain |
 | `memory` | Backing-memory ownership and guest address layout |
 | `vcpu` | Worker threads, stop coordination, and exit handling |
-| `irq` | Device interrupt assignment and routing; HVF and KVM provide the controller, WHP (M10) only local APICs |
-| `bus` | Address-range registration and device I/O dispatch |
+| `irq` | Interrupt routing: `InterruptTarget` and the devices' `IrqSender` (implemented) |
+| `bus` | Address-range registration and device I/O dispatch, MMIO and x86_64 ports (implemented) |
+| `devices` | x86_64 legacy devices: 8250 serial, CMOS RTC, i8042 reset (implemented) |
 
-Backend implementation and guest boot follow in M1. Virtio devices, the BoxLite
-engine adapter, engine selection, and `native` feature wiring follow in M2.
+The KVM backend, vCPU threads, and guest boot complete M1's first-boot task.
+Virtio devices, the BoxLite engine adapter, engine selection, and `native`
+feature wiring follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
 
