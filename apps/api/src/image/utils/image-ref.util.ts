@@ -150,10 +150,11 @@ function isInternalAddress(host: string): boolean {
 }
 
 /**
- * The allowlist is the gate, and it is the only one: a host on it is reachable,
- * a host off it is not, whatever the host looks like.
+ * The allowlist is the gate on names: a host on it is reachable, a host off it
+ * is not, whatever the host looks like. Where an allowed name points is a
+ * separate question, which `assertRegistryResolvesPublic` asks next.
  *
- * Internal addresses are therefore not a second check — an earlier version
+ * Addresses written as hosts need no second check here — an earlier version
  * refused them separately, which changed nothing, because a host off the list
  * is already refused and a host on it was put there by an operator. What is
  * left is the part that does carry: a tenant who names the metadata endpoint

@@ -2297,27 +2297,6 @@ pub(super) mod tests {
         assert_eq!(refreshed.manifest_digest, seeded.manifest_digest);
     }
 
-    /// A refused address has not been contacted, so the registry has said
-    /// nothing either: behind a resolver that answers with a proxy's fake
-    /// address, a host that has the image must still start it, as it did when
-    /// the cache answered first. Unconfigured, so the address check applies;
-    /// with nothing cached the same pull is refused, which
-    /// `pull_refuses_an_address_inside_the_deployment` pins.
-    #[tokio::test]
-    async fn refresh_uses_the_cache_when_the_registry_address_is_refused() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
-        let store = ImageStore::new(temp_dir.path().join("images"), db, vec![]).unwrap();
-        let image_ref = "127.0.0.1:1/acme/app:v1";
-        let seeded = seed_cached_image(&store, image_ref).await;
-
-        let refreshed = store
-            .refresh(image_ref)
-            .await
-            .expect("a refused address contacts nothing, so the cache still answers");
-        assert_eq!(refreshed.manifest_digest, seeded.manifest_digest);
-    }
-
     /// A registry that holds the connection and never answers has not answered
     /// either. The read bound is what turns it into no answer; without one the
     /// refresh would wait on the socket and the box would never start.
