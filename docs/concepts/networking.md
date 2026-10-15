@@ -56,6 +56,8 @@ client of `forward()`, opens the connection, so it fails while nothing in the bo
 listens on the port. `connect()` reuses the prepared URI; each forwarded client
 prepares again.
 For a remote public box, preparing the tunnel registers that guest port as public.
+It does not wake a stopped box with auto-resume on; the `CONNECT` does. A box
+whose auto-resume is off, or whose state cannot resume, is refused at once.
 The proxy accepts HTTP/WebSocket previews, including signed URLs, and raw CONNECT
 only when the box is public and the port has an active declaration. Getting a
 preview URL alone does not declare the port. Private boxes cannot expose guest
