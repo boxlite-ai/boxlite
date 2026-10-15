@@ -18,8 +18,9 @@ import (
 
 // A stopped box's first request should succeed when the box and its service
 // come up within guestWakeBudget. Past that, the client gets 503 + Retry-After
-// while the start continues in the background.
-var guestWakeBudget = 10 * time.Second
+// while the start continues in the background. It matches the API's
+// AUTO_RESUME_TIMEOUT_SECONDS, the time the API waits for a box to start.
+var guestWakeBudget = 30 * time.Second
 
 const (
 	guestDialRetryInterval = 500 * time.Millisecond

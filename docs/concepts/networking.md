@@ -64,7 +64,7 @@ preview URL alone does not declare the port. Private boxes cannot expose guest
 service ports through previews, even with a credential. The authenticated web
 terminal uses reserved port 22222 without a tunnel declaration.
 A request to a declared port on a stopped box with auto-resume on wakes the box.
-It succeeds if the box's `cmd` serves the port within 10 seconds; otherwise the
+It succeeds if the box's `cmd` serves the port within 30 seconds; otherwise the
 proxy answers `503` with `Retry-After`.
 
 Explicit host port publication is a separate local-runtime feature that owns a

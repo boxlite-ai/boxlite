@@ -114,7 +114,7 @@ for raw CONNECT.
 ## Waking a stopped box
 
 A request to a declared port on a stopped box wakes it. The aim is that the first request succeeds
-when the box and its service come up within 10 seconds
+when the box and its service come up within 30 seconds
 ([`guest_wake.go`](pkg/proxy/guest_wake.go)):
 
 1. The proxy dials first, so a running box costs no extra API call. A failed dial to a running
@@ -135,7 +135,7 @@ when the box and its service come up within 10 seconds
    that poll. The poll closes the connection it gets, then each request dials its own. A request
    that arrives during this window gets `502` on its first dial, not `box_not_running`, so it
    joins the wake in progress for that box rather than failing.
-5. The request is served once its dial succeeds. If 10 seconds pass first, the client gets `503`
+5. The request is served once its dial succeeds. If 30 seconds pass first, the client gets `503`
    with `Retry-After: 3` and code `BOX_STARTING`, and the start keeps going.
 
 Only a port that passed the tunnel check reaches this path, so an undeclared port never wakes a
@@ -169,7 +169,7 @@ re-checks it with the API.
 | The tunnel access API is unavailable                       | `502`                                     | `502` |
 | The host has no `<port>-<id>` label                        | `404`, except the utility routes                                    | `400`                        |
 | The API still fails the visibility check after its retries | `400`                                                               | `502`                        |
-| A woken box, or its service, is not up after 10 s           | `503`, `Retry-After: 3`, code `BOX_STARTING`              | `503`, `Retry-After: 3`      |
+| A woken box, or its service, is not up after 30 s           | `503`, `Retry-After: 3`, code `BOX_STARTING`              | `503`, `Retry-After: 3`      |
 | The box is stopped and auto-resume is off                  | `503`, code `BOX_STOPPED`                                           | `503`                        |
 | The organization is suspended, or the box is in error, archived or resizing | `409`, code `BOX_UNAVAILABLE`                      | `409`                        |
 | The runner, or a running box's port, is unreachable        | `502`, code `BAD_GATEWAY`                                           | `502`                        |
