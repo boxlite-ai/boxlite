@@ -60,7 +60,7 @@ Create a JSON configuration file with your registry preferences:
 
 - `image_registries` (optional): Per-registry settings for fully qualified pulls and, when `search` is true, unqualified image fallback.
 - `transport: "http"` enables a plain HTTP registry.
-- `skip_verify: true` disables TLS certificate and hostname verification for HTTPS registries.
+- `skip_verify: true` disables TLS certificate and hostname verification for HTTPS registries. Without it, certificates are checked against the system certificate store and BoxLite's bundled roots, so a registry whose CA is installed on the host needs no `skip_verify`.
 - `auth` can be `{ "type": "basic", "username": "...", "password": "..." }` or `{ "type": "bearer", "token": "..." }`.
 
 ### 2. Using the configuration file
@@ -197,3 +197,38 @@ def load_boxlite_options(config_path: str):
 # Use it
 runtime = boxlite.Boxlite(load_boxlite_options("./config.json"))
 ```
+
+## Pulling through a proxy
+
+BoxLite pulls images from your own process, not a daemon, so the Docker daemon's proxy
+(for example, from its systemd unit) does not apply. By default, the runtime uses
+`HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` from its own environment.
+
+To configure the proxy explicitly, add `image_registry_proxy` to the configuration file, or
+set `BoxliteOptions::image_registry_proxy` in Rust:
+
+```json
+{
+  "image_registry_proxy": {
+    "https_proxy": "http://proxy.corp.example:3128",
+    "no_proxy": "localhost,127.0.0.1,.corp.example"
+  }
+}
+```
+
+- If the proxy intercepts TLS, install its CA in the system certificate store, as you would
+  for Docker. Pulls trust that store as well as BoxLite's bundled roots.
+- The proxy resolves the registry names it carries, so pulls work where only the proxy can
+  resolve them.
+- Unlike Docker, a proxy URL in `image_registry_proxy` makes pulls ignore the proxy
+  environment variables.
+- Unlike Docker, `no_proxy` takes `.corp.example` rather than `*.corp.example`, and no ports.
+
+See [`image_registry_proxy`](../reference/configuration.md#image_registry_proxy) for the
+full rules.
+
+The Python, Node.js, Go, and C SDKs do not expose `image_registry_proxy` yet. Under them,
+set `HTTPS_PROXY` and `NO_PROXY` in the process environment before creating the runtime.
+
+Programs inside a box do not inherit this proxy; pass `HTTPS_PROXY` and related variables
+to the box with `env` if they need it.

@@ -18,8 +18,7 @@ use chrono::{DateTime, Utc};
 use super::blob_source::{BlobSource, LocalBundleBlobSource, StoreBlobSource};
 use super::object::ImageObject;
 use crate::db::Database;
-use crate::images::store::{ImageStore, SharedImageStore};
-use crate::runtime::options::ImageRegistry;
+use crate::images::store::{ImageStore, RegistryAccess, SharedImageStore};
 use crate::runtime::types::ImageInfo;
 use boxlite_shared::errors::BoxliteResult;
 use oci_client::Reference;
@@ -98,13 +97,13 @@ impl ImageManager {
     /// # Arguments
     /// * `images_dir` - Directory for image cache
     /// * `db` - Database for image index
-    /// * `image_registries` - Registry transport, TLS, auth, and search settings
+    /// * `access` - Registry transport, TLS, auth, and search settings, and the proxy
     pub fn new(
         images_dir: PathBuf,
         db: Database,
-        image_registries: Vec<ImageRegistry>,
+        access: impl Into<RegistryAccess>,
     ) -> BoxliteResult<Self> {
-        let store = Arc::new(ImageStore::new(images_dir, db, image_registries)?);
+        let store = Arc::new(ImageStore::new(images_dir, db, access)?);
         Ok(Self { store })
     }
 

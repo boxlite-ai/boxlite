@@ -19,6 +19,7 @@ async fn resize_tty_changes_the_window_the_process_sees() {
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();

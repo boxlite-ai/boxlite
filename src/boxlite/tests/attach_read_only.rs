@@ -26,6 +26,7 @@ async fn stdin_is_available(options: AttachOptions) -> bool {
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 

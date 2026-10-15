@@ -1,6 +1,6 @@
 use crate::db::{BoxStore, Database};
 use crate::experimental::ExperimentalFeatures;
-use crate::images::{ImageDiskManager, ImageManager};
+use crate::images::{ImageDiskManager, ImageManager, RegistryAccess};
 use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
 use crate::lock::{FileLockManager, LockManager};
@@ -302,16 +302,16 @@ impl RuntimeImpl {
             ))
         })?;
 
-        let image_manager =
-            ImageManager::new(layout.images_dir(), db.clone(), options.image_registries).map_err(
-                |e| {
-                    BoxliteError::Storage(format!(
-                        "Failed to initialize image manager at {}: {}",
-                        layout.images_dir().display(),
-                        e
-                    ))
-                },
-            )?;
+        let registry_access =
+            RegistryAccess::new(options.image_registries, options.image_registry_proxy)?;
+        let image_manager = ImageManager::new(layout.images_dir(), db.clone(), registry_access)
+            .map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to initialize image manager at {}: {}",
+                    layout.images_dir().display(),
+                    e
+                ))
+            })?;
 
         let base_disk_store = crate::db::BaseDiskStore::new(db.clone());
         let base_disk_mgr =
@@ -2186,6 +2186,7 @@ mod tests {
         let options = BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
+            ..Default::default()
         };
         let runtime = RuntimeImpl::new_for_test(options).expect("Failed to create runtime");
         (runtime, temp_dir)

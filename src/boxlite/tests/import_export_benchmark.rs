@@ -93,6 +93,7 @@ async fn test_import_export_1gib_benchmark() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create benchmark runtime");
 

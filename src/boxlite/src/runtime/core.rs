@@ -563,6 +563,7 @@ mod tests {
         let runtime = BoxliteRuntime::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
+            ..Default::default()
         })
         .expect("local runtime");
         (runtime, temp_dir)

@@ -16,7 +16,11 @@
 use crate::db::{CachedImage, Database, ImageIndexStore};
 use crate::images::manager::{ImageManifest, LayerInfo};
 use crate::images::storage::ImageStorage;
-use crate::runtime::options::{ImageRegistry, ImageRegistryAuth, RegistryTransport};
+use crate::images::{image_registry_proxy, system_trust};
+use crate::runtime::options::{
+    ImageRegistry, ImageRegistryAuth, ImageRegistryProxy, RegistryTransport,
+};
+use boxlite_shared::errors::with_causes;
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use oci_client::Reference;
 use oci_client::client::{ClientConfig, ClientProtocol};
@@ -55,6 +59,35 @@ impl ImageStoreInner {
 // IMAGE STORE (thread-safe facade)
 // ============================================================================
 
+/// How pulls reach registries: per-registry settings and the proxy in front of them.
+#[derive(Clone, Debug, Default)]
+pub struct RegistryAccess {
+    registries: Vec<ImageRegistry>,
+    proxy: Option<ImageRegistryProxy>,
+}
+
+impl RegistryAccess {
+    /// Fails with a `Config` error when the proxy settings are invalid.
+    pub fn new(
+        registries: Vec<ImageRegistry>,
+        proxy: Option<ImageRegistryProxy>,
+    ) -> BoxliteResult<Self> {
+        if let Some(proxy) = &proxy {
+            image_registry_proxy::validate(proxy)?;
+        }
+        Ok(Self { registries, proxy })
+    }
+}
+
+impl From<Vec<ImageRegistry>> for RegistryAccess {
+    fn from(registries: Vec<ImageRegistry>) -> Self {
+        Self {
+            registries,
+            proxy: None,
+        }
+    }
+}
+
 /// Thread-safe OCI image store.
 ///
 /// Provides a simple, thread-safe API for image operations. Locking is handled
@@ -84,6 +117,8 @@ pub struct ImageStore {
     registries: Vec<String>,
     /// Registry transport, TLS, auth, and search settings.
     image_registries: Vec<ImageRegistry>,
+    /// Proxy for registry requests; `None` reads the proxy environment variables.
+    image_registry_proxy: Option<ImageRegistryProxy>,
 }
 
 impl std::fmt::Debug for ImageStore {
@@ -98,12 +133,16 @@ impl ImageStore {
     /// # Arguments
     /// * `images_dir` - Directory for image cache
     /// * `db` - Database for image index
-    /// * `image_registries` - Registry transport, TLS, auth, and search settings
+    /// * `access` - Registry transport, TLS, auth, and search settings, and the proxy
     pub fn new(
         images_dir: PathBuf,
         db: Database,
-        image_registries: Vec<ImageRegistry>,
+        access: impl Into<RegistryAccess>,
     ) -> BoxliteResult<Self> {
+        let RegistryAccess {
+            registries: image_registries,
+            proxy: image_registry_proxy,
+        } = access.into();
         validate_image_registries(&image_registries)?;
 
         let inner = ImageStoreInner::new(images_dir, db)?;
@@ -112,6 +151,7 @@ impl ImageStore {
             inner: RwLock::new(inner),
             registries,
             image_registries,
+            image_registry_proxy,
         })
     }
 
@@ -618,7 +658,9 @@ impl ImageStore {
         &self,
         reference: &Reference,
     ) -> Result<ImageManifest, RegistryPullError> {
-        let client = self.client_for(reference);
+        let mut config = client_config_for_registry(reference.registry(), &self.image_registries);
+        image_registry_proxy::apply(self.image_registry_proxy.as_ref(), &mut config);
+        let client = registry_client(reference.registry(), config).await?;
         let auth = registry_auth_for(reference.registry(), &self.image_registries);
 
         // Step 0: Fetch the token first. Left to the manifest request, the
@@ -1113,13 +1155,6 @@ impl ImageStore {
         Ok(())
     }
 
-    fn client_for(&self, reference: &Reference) -> oci_client::Client {
-        oci_client::Client::new(client_config_for_registry(
-            reference.registry(),
-            &self.image_registries,
-        ))
-    }
-
     /// Parse OCI image manifest from file path.
     ///
     /// Reads an OCI ImageManifest from the given path and extracts
@@ -1184,6 +1219,26 @@ fn client_config_for_registry(host: &str, image_registries: &[ImageRegistry]) ->
         read_timeout: Some(REGISTRY_READ_TIMEOUT),
         ..Default::default()
     }
+}
+
+/// Build the client for one pull. It trusts the system certificate store on
+/// top of the bundled roots, and it fails where `Client::new` would log the
+/// error and fall back to a default client without the proxy and TLS settings.
+async fn registry_client(
+    host: &str,
+    mut config: ClientConfig,
+) -> BoxliteResult<oci_client::Client> {
+    config.extra_root_certificates = system_trust::root_certificates().await;
+    build_client(config).map_err(|causes| {
+        BoxliteError::Config(format!(
+            "failed to create registry client for '{host}': {causes}"
+        ))
+    })
+}
+
+/// `Client::try_from`, with the causes reqwest leaves out of its message.
+pub(super) fn build_client(config: ClientConfig) -> Result<oci_client::Client, String> {
+    oci_client::Client::try_from(config).map_err(|e| with_causes(&e))
 }
 
 /// The index key a build is found by wherever it was pulled from: its

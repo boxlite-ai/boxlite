@@ -177,7 +177,7 @@ use. Executing invocations reject unsupported options; Clap's `--help` and
 | `--debug` | all commands except `completion` | Enable debug output. Precedence: `--debug` > `RUST_LOG` env > default (`warn`). |
 | `--home PATH` | local runtime + credentials | Absolute BoxLite home directory (default: `~/.boxlite`). `BOXLITE_HOME` is the env spelling. |
 | `--registry REGISTRY` | `run`, `create`, `pull`, `serve` | Image registry (repeatable; prepended to config). |
-| `--config PATH` | local-capable commands | JSON config file path (e.g. for `home_dir` and `image_registries`). |
+| `--config PATH` | local-capable commands | JSON config file path (e.g. for `home_dir`, `image_registries`, and `image_registry_proxy`). |
 | `--url URL` | REST-capable commands | Connect to a remote BoxLite REST server instead of the local runtime. Env: `BOXLITE_REST_URL`. |
 | `--profile NAME` | REST-capable commands + `auth` | Named credential profile in `<BOXLITE_HOME>/credentials.toml`. Default `default`. Env: `BOXLITE_PROFILE`. |
 | `--path-prefix VALUE` | REST box/volume commands | Routing-slot value for `/v1/<prefix>/...`; overrides the selected profile. Env: `BOXLITE_REST_PATH_PREFIX`. |

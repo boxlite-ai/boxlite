@@ -2,10 +2,12 @@ mod archive;
 mod blob_source;
 mod config;
 mod image_disk;
+mod image_registry_proxy;
 mod manager;
 mod object;
 mod storage;
 mod store;
+mod system_trust;
 
 pub(crate) use archive::whiteout;
 pub use archive::{LayerExtractor, OverrideFileType, OverrideStat, SafeRoot};
@@ -13,6 +15,7 @@ pub use config::ContainerImageConfig;
 pub use image_disk::ImageDiskManager;
 pub use manager::ImageManager;
 pub use object::{ImageObject, ResolvedImage};
+pub use store::RegistryAccess;
 
 /// Cache and registry fixtures for tests of code that pulls through an
 /// [`ImageManager`], so they exercise the real store rather than a stand-in.

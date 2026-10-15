@@ -364,6 +364,54 @@ Base directory for BoxLite runtime data.
 runtime = boxlite.Boxlite(boxlite.Options(home_dir="/custom/path"))
 ```
 
+### `image_registry_proxy`
+
+Proxy for the registry requests the runtime makes while pulling images. Set it as
+`BoxliteOptions::image_registry_proxy` in Rust or in the CLI's `--config` file; the Python,
+Node.js, Go, and C SDKs do not expose it yet and use only the environment variables below.
+Traffic from inside a box never uses it; pass a box its own proxy variables with `env`.
+
+**Default:** unset. The runtime then reads `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and
+`NO_PROXY`, or their lowercase forms, from its own environment on every pull.
+
+| Field | Meaning |
+| --- | --- |
+| `https_proxy` | Proxy URL for HTTPS registries, such as `http://proxy.corp.example:3128`. |
+| `http_proxy` | Proxy URL for registries with `transport: "http"`. |
+| `no_proxy` | Comma-separated hosts, domains, IPs, or CIDRs that bypass the proxy. |
+
+**Example (`--config` JSON):**
+```json
+{
+  "image_registry_proxy": {
+    "https_proxy": "http://proxy.corp.example:3128",
+    "no_proxy": "localhost,127.0.0.1,.corp.example"
+  }
+}
+```
+
+**Notes:**
+- Setting `https_proxy` or `http_proxy` replaces the environment for pulls: every proxy
+  variable is ignored, `NO_PROXY` included, so list exceptions in `no_proxy`.
+- Proxy URLs must start with `http://` or `https://`. Credentials go in the URL,
+  percent-encoded (`http://user:pass@proxy:3128`); debug output masks them. SOCKS proxies
+  are not supported.
+- `no_proxy` needs a proxy URL in the same block. It follows curl's rules, not Docker's:
+  - `corp.example` and `.corp.example` both match the domain and its subdomains, and `*`
+    alone matches every host.
+  - IP addresses and CIDRs are allowed.
+  - `*.corp.example` and `host:port` entries match nothing, and `localhost` is proxied
+    unless listed.
+- The proxy resolves the registry names it carries, so pulls work where only the proxy can
+  resolve them.
+- Pulls trust the system certificate store as well as BoxLite's bundled Mozilla roots, as
+  Docker does. Install the CA of a TLS-intercepting proxy, or of an `https://` proxy, there,
+  for example with `update-ca-certificates` on Debian or Ubuntu.
+- Each pull reads the store, so a new CA needs no restart.
+  [`SSL_CERT_FILE` and `SSL_CERT_DIR`](#ssl_cert_file-ssl_cert_dir) replace it for pulls.
+- An invalid setting, such as a misspelled URL scheme, fails runtime creation instead of
+  letting pulls bypass the proxy.
+
 ## Environment variables
 
 ### `BOXLITE_HOME`
@@ -422,4 +470,31 @@ pull with a `resource_exhausted` error (HTTP 429).
 # Allow larger images (e.g. ML images with huge layers)
 export BOXLITE_MAX_LAYER_DECOMPRESSED_SIZE=53687091200
 boxlite pull my-image:latest
+```
+
+### `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`
+
+Proxy for image pulls while [`image_registry_proxy`](#image_registry_proxy) sets no proxy URL.
+
+- Lowercase forms also work, and `ALL_PROXY` covers whichever of the other two is unset.
+- The runtime reads them from its own process on every pull and does not pass them into
+  boxes.
+- `NO_PROXY` matching, and name resolution by the proxy, work as under
+  [`image_registry_proxy`](#image_registry_proxy).
+
+**Example:**
+```bash
+HTTPS_PROXY=http://proxy.corp.example:3128 NO_PROXY=localhost,127.0.0.1 python script.py
+```
+
+### `SSL_CERT_FILE`, `SSL_CERT_DIR`
+
+CA certificates that image pulls trust in place of the system certificate store. BoxLite's
+bundled Mozilla roots still apply. `SSL_CERT_FILE` names a PEM file, and `SSL_CERT_DIR` a
+`:`-separated list of directories whose files are read as PEM. The runtime reads them from
+its own process and does not pass them into boxes.
+
+**Example:**
+```bash
+SSL_CERT_FILE=/etc/ssl/certs/corp-bundle.pem boxlite pull alpine
 ```

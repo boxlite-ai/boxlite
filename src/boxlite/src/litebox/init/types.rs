@@ -477,6 +477,7 @@ mod tests {
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: vec![],
+            ..Default::default()
         })
         .expect("create runtime");
 

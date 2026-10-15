@@ -49,6 +49,47 @@ pub struct BoxliteOptions {
     /// ```
     #[serde(default)]
     pub image_registries: Vec<ImageRegistry>,
+    /// Proxy for image pulls.
+    ///
+    /// `None` (default) keeps reading `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`,
+    /// and `NO_PROXY` from the process environment. Box traffic never uses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_registry_proxy: Option<ImageRegistryProxy>,
+}
+
+/// Proxy settings for the registry requests made while pulling images.
+///
+/// Setting `http_proxy` or `https_proxy` replaces every proxy environment
+/// variable, `NO_PROXY` included. Invalid settings fail runtime creation.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageRegistryProxy {
+    /// Proxy URL (`http://` or `https://`) for `RegistryTransport::Http` registries.
+    pub http_proxy: Option<String>,
+    /// Proxy URL (`http://` or `https://`) for `RegistryTransport::Https` registries.
+    pub https_proxy: Option<String>,
+    /// Comma-separated hosts, domains, IPs, or CIDRs that bypass the proxy.
+    pub no_proxy: Option<String>,
+}
+
+impl fmt::Debug for ImageRegistryProxy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let redact = |url: &Option<String>| url.as_deref().map(redact_url_credentials);
+        f.debug_struct("ImageRegistryProxy")
+            .field("http_proxy", &redact(&self.http_proxy))
+            .field("https_proxy", &redact(&self.https_proxy))
+            .field("no_proxy", &self.no_proxy)
+            .finish()
+    }
+}
+
+/// Mask everything between `scheme://` and the last `@`, such as `user:password@`.
+fn redact_url_credentials(url: &str) -> String {
+    let start = url.find("://").map_or(0, |i| i + "://".len());
+    match url.rfind('@') {
+        Some(at) if at >= start => format!("{}***{}", &url[..start], &url[at..]),
+        _ => url.to_string(),
+    }
 }
 
 /// Registry host configuration for OCI image pulls.
@@ -174,6 +215,7 @@ impl Default for BoxliteOptions {
         Self {
             home_dir: default_home_dir(),
             image_registries: Vec::new(),
+            image_registry_proxy: None,
         }
     }
 }
@@ -258,6 +300,7 @@ mod registry_options_tests {
                     .with_basic_auth("alice", password.as_str()),
                 ImageRegistry::https("registry.example.com").with_bearer_auth(token.as_str()),
             ],
+            ..Default::default()
         };
 
         let value = serde_json::to_value(options).unwrap();
@@ -310,6 +353,26 @@ mod registry_options_tests {
         assert!(basic.contains("alice"));
         assert!(!basic.contains(&password));
         assert!(!bearer.contains(&token));
+    }
+
+    #[test]
+    fn image_registry_proxy_rejects_unknown_keys() {
+        // Docker's daemon.json spelling must fail instead of leaving pulls on
+        // the environment proxy.
+        let config = json!({ "image_registry_proxy": { "https-proxy": "http://proxy:3128" } });
+        assert!(serde_json::from_value::<BoxliteOptions>(config).is_err());
+    }
+
+    #[test]
+    fn image_registry_proxy_debug_masks_credentials() {
+        let password = test_registry_password();
+        let url = format!("http://alice:{password}@proxy.corp:3128");
+        let config = json!({ "image_registry_proxy": { "https_proxy": url } });
+        let options: BoxliteOptions = serde_json::from_value(config).unwrap();
+
+        let debug = format!("{options:?}");
+        assert!(debug.contains("http://***@proxy.corp:3128"), "{debug}");
+        assert!(!debug.contains(&password), "{debug}");
     }
 }
 
