@@ -10,6 +10,7 @@ import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { ImageDetailDto } from '../image/dto/image.dto'
 import { ImageCatalogService, ImageReference } from '../image/services/image-catalog.service'
@@ -65,7 +66,7 @@ type RestImageUsage = { count: number; limit: number; known_bytes: number }
  */
 @Controller(['v1/images', 'v1/:prefix/images'])
 @ApiExcludeController()
-@UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
+@UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard, AuthenticatedRateLimitGuard)
 export class BoxliteImageController {
   constructor(private readonly imageCatalogService: ImageCatalogService) {}
 

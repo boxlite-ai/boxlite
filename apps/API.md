@@ -379,6 +379,13 @@ form. The tables write that as `[/{prefix}]`; clients can discover their prefix
 through `GET /api/v1/me`. Except for configuration discovery, these routes use
 combined bearer authentication, then organization authorization.
 
+Image and registry management routes also consume the organization's authenticated
+request quota, shared with `/api/images`, `/api/registries`, and other routes using
+that quota. Canonical and prefixed SDK paths use the same counter. After the quota
+is exhausted, requests return HTTP 429 with `Retry-After-authenticated` before
+catalog changes or registry credential operations run; switching API surfaces
+does not reset it.
+
 Resource permissions are enforced per route. A box mutation — create, start,
 stop, exec, signal, resize, execution kill, file transfer, WebSocket attach, and
 the network routes — requires `write:boxes`; deleting a box requires

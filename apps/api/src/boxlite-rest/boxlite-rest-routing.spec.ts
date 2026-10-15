@@ -9,6 +9,7 @@ import { Test } from '@nestjs/testing'
 import { ValidationPipe, type INestApplication } from '@nestjs/common'
 import type { AddressInfo } from 'net'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
@@ -80,6 +81,8 @@ describe('BoxLite REST routing', () => {
         },
       })
       .overrideGuard(OrganizationResourceActionGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(AuthenticatedRateLimitGuard)
       .useValue({ canActivate: () => true })
       .compile()
 
