@@ -5,6 +5,17 @@ use thiserror::Error;
 /// Result type for Boxlite operations.
 pub type BoxliteResult<T> = Result<T, BoxliteError>;
 
+/// Render an error with its sources, `": "`-joined. Many errors keep the
+/// useful reason in `source()`: `tar`'s `Display` names the operation it was
+/// attempting and drops the errno, and reqwest's names only the request.
+pub fn with_causes(err: &dyn std::error::Error) -> String {
+    let chain = std::iter::successors(Some(err), |err| err.source());
+    chain
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(": ")
+}
+
 #[derive(Debug, Error)]
 pub enum BoxliteError {
     #[error("unsupported engine kind")]

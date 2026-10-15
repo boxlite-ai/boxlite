@@ -4,6 +4,7 @@
 //! duplicating tar building/extraction logic.
 
 use crate::constants::files::{COPY_CHUNKS_IN_FLIGHT, COPY_CHUNK_SIZE};
+use crate::errors::with_causes;
 use crate::{BoxByteStream, BoxliteError, BoxliteResult};
 use futures::StreamExt;
 use std::collections::HashSet;
@@ -208,22 +209,6 @@ fn pack_task_body<W: Write>(src: &Path, writer: W, opts: &PackContext) -> Boxlit
 }
 
 // ── Unpack ────────────────────────────────────────────────────────
-
-/// An error's own message followed by every cause beneath it.
-///
-/// `tar`'s `Display` names the operation it was attempting and drops the errno
-/// that stopped it, so `failed to create \`/x/y\`` reaches the caller with no
-/// hint whether the disk was full, the path was not a directory, or permission
-/// was denied. Walking `source()` puts the reason back.
-fn with_causes(err: &dyn std::error::Error) -> String {
-    let mut detail = err.to_string();
-    let mut cause = err.source();
-    while let Some(next) = cause {
-        detail.push_str(&format!(": {}", next));
-        cause = next.source();
-    }
-    detail
-}
 
 /// Controls how a tar archive is unpacked to a destination.
 pub struct UnpackContext {
