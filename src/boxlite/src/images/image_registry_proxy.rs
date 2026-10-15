@@ -214,11 +214,12 @@ mod tests {
     }
 
     #[test]
-    fn invalid_proxy_fails_runtime_creation_as_config_error() {
-        let home = tempfile::tempdir_in("/tmp").unwrap();
+    fn invalid_proxy_fails_runtime_creation_as_config_error_without_touching_home() {
+        let parent = tempfile::tempdir_in("/tmp").unwrap();
+        let home = parent.path().join("boxlite-home");
         let proxy = serde_json::from_value(json!({ "https_proxy": "socks5://p:1080" }));
         let options = BoxliteOptions {
-            home_dir: home.path().to_path_buf(),
+            home_dir: home.clone(),
             image_registry_proxy: Some(proxy.unwrap()),
             ..Default::default()
         };
@@ -227,5 +228,9 @@ mod tests {
             Err(other) => panic!("invalid proxy reported as {other}"),
             Ok(_) => panic!("invalid proxy accepted"),
         }
+        assert!(
+            !home.exists(),
+            "invalid options must fail before the home directory is created"
+        );
     }
 }

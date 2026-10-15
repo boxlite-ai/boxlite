@@ -253,6 +253,8 @@ impl RuntimeImpl {
                 options.home_dir.display()
             )));
         }
+        let registry_access =
+            RegistryAccess::new(options.image_registries, options.image_registry_proxy)?;
 
         // Configure bind mount support based on platform
         #[cfg(target_os = "linux")]
@@ -302,8 +304,6 @@ impl RuntimeImpl {
             ))
         })?;
 
-        let registry_access =
-            RegistryAccess::new(options.image_registries, options.image_registry_proxy)?;
         let image_manager = ImageManager::new(layout.images_dir(), db.clone(), registry_access)
             .map_err(|e| {
                 BoxliteError::Storage(format!(
