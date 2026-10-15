@@ -37,6 +37,11 @@ case in this suite is using the same fixtures and the same path.
 
 ## Prereqs
 
+`BOXLITE_E2E_CATALOG_IMAGE` accepts tagged, digest-pinned, and untagged
+references, including registry ports such as `registry.local:5000/acme/app`.
+The catalog tests retain the port when deriving the repository name and the
+deliberately unpullable test image.
+
 Set up via the bootstrap script (one-time per machine):
 
 ```bash

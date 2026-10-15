@@ -266,6 +266,23 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
     expect(await catalog.usage(ORG)).toEqual({ count: 1, limit: 20, knownBytes: 0 })
   })
 
+  it('lists only tags of ready versions, in order, in both list and detail', async () => {
+    await use('quay.io/acme/app:z-ready')
+    await use('quay.io/acme/app:a-ready')
+    await use('quay.io/acme/app:removed', { digest: OTHER_DIGEST })
+    await dataSource.getRepository(ImageVersion).update({ digest: OTHER_DIGEST }, { state: ImageVersionState.DELETED })
+
+    const [listed] = await ownImages()
+    expect(listed).toMatchObject({ tags: ['a-ready', 'z-ready'], versionCount: 1 })
+    expect((await catalog.get(ORG, 'quay.io/acme/app')).tags).toEqual(['a-ready', 'z-ready'])
+    expect((await catalog.listReferences(ORG)).map((ref) => ref.tag)).toEqual(['a-ready', 'z-ready'])
+
+    await dataSource.getRepository(ImageVersion).update({ digest: DIGEST }, { state: ImageVersionState.DELETED })
+    expect((await ownImages())[0].tags).toEqual([])
+    expect((await catalog.get(ORG, 'quay.io/acme/app')).tags).toEqual([])
+    expect(await catalog.listReferences(ORG)).toEqual([])
+  })
+
   /**
    * The cascade only fires on a real delete, so a soft-deleted image keeps its
    * versions and tags. Every read has to join back and filter them out — miss

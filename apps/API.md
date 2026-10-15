@@ -209,6 +209,10 @@ serves and the events it emits are catalogued below alongside its routes.
 `null` means no pull has recorded that observation; it does not confirm current
 registry availability.
 
+List and detail responses expose tags only for READY versions, matching the
+versions a box can resolve. Tags of non-ready versions remain stored but are
+omitted from those responses.
+
 | Method   | Path                               | What it does                                                                                                                |
 | -------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `GET`    | `/api/images`                      | Lists the organization's images together with the operator's curated set.                                                   |

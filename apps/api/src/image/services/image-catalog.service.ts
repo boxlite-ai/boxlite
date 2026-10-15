@@ -409,10 +409,13 @@ export class ImageCatalogService {
     if (imageIds.length === 0) {
       return grouped
     }
-    const tags = await this.tagRepository.find({
-      where: { imageId: In(imageIds) },
-      order: { name: 'ASC' },
-    })
+    const tags = await this.tagRepository
+      .createQueryBuilder('tag')
+      .innerJoin('image_version', 'version', 'version.id = tag."versionId"')
+      .where('tag."imageId" IN (:...imageIds)', { imageIds })
+      .andWhere('version.state = :state', { state: ImageVersionState.READY })
+      .orderBy('tag.name', 'ASC')
+      .getMany()
     for (const tag of tags) {
       const bucket = grouped.get(tag.imageId)
       if (bucket) {

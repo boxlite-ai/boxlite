@@ -27,5 +27,12 @@ def default_image() -> str:
     return os.environ.get(IMAGE_ENV_VAR) or base_image_ref()
 
 
+def repository_name(ref: str) -> str:
+    """Remove the digest and tag while preserving an optional registry port."""
+    ref = ref.split("@", 1)[0]
+    head, separator, tail = ref.rpartition(":")
+    return head if separator and "/" not in tail else ref
+
+
 if __name__ == "__main__":
     print(default_image())
