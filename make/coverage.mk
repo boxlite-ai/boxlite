@@ -53,6 +53,11 @@ coverage\:bindings:
 		-p boxlite-python --no-default-features --lib $(NEXTEST_FILTER) || rc=$$?; \
 	exit $$rc
 
+# Language tests exercise the exported bindings that Rust lib tests cannot see.
+# Keep their profiles separate from the core collector and upload both reports.
+coverage\:bindings\:external:
+	@bash $(SCRIPT_DIR)/test/coverage-bindings.sh
+
 # Render collected profiles, including partial results from a failed test run.
 coverage\:report:
 	@mkdir -p target/coverage

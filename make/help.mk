@@ -92,6 +92,7 @@ help:
 	@echo "    make coverage              - Generate HTML coverage report (unit tests)"
 	@echo "    make coverage:lcov         - Generate LCOV output for CI upload"
 	@echo "    make coverage:report       - Render collected Rust profiles as LCOV and HTML"
+	@echo "    make coverage:bindings:external - Measure native SDK calls from C, Python and Node"
 	@echo "    make coverage:go           - Collect Go SDK, bridge, runner, image-service coverage"
 	@echo "    make coverage:python       - Collect Python SDK coverage"
 	@echo "    make coverage:node         - Collect Node.js SDK coverage"

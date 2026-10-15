@@ -6,7 +6,7 @@ set(CMAKE_C_STANDARD 11)
 # Find the BoxLite library
 set(BOXLITE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
 set(BOXLITE_INCLUDE_DIR "${BOXLITE_ROOT}/sdks/c/include")
-set(BOXLITE_LIB_DIR "${BOXLITE_ROOT}/target/debug")
+set(BOXLITE_LIB_DIR "${BOXLITE_ROOT}/target/debug" CACHE PATH "Directory containing the native SDK library")
 
 # Detect platform and set library name
 if(APPLE)

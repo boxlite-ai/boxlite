@@ -494,7 +494,7 @@ test\:unit\:c:
 	@echo "🧪 Running C SDK unit tests..."
 	@$(MAKE) dev:c
 	@mkdir -p sdks/c/tests/build
-	@cd sdks/c/tests/build && cmake ..
+	@cd sdks/c/tests/build && cmake .. -DBOXLITE_LIB_DIR="$(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/debug"
 	@cd sdks/c/tests/build && cmake --build . -j
 	@cd sdks/c/tests/build && ctest --verbose --output-on-failure -L unit $(CTEST_FILTER)
 
@@ -503,7 +503,7 @@ test\:integration\:c:
 	@echo "🧪 Running C SDK integration tests (requires VM)..."
 	@$(MAKE) dev:c
 	@mkdir -p sdks/c/tests/build
-	@cd sdks/c/tests/build && cmake ..
+	@cd sdks/c/tests/build && cmake .. -DBOXLITE_LIB_DIR="$(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/debug"
 	@cd sdks/c/tests/build && cmake --build . -j
 	@cd sdks/c/tests/build && ctest --verbose --output-on-failure -L integration $(CTEST_FILTER)
 

@@ -198,14 +198,21 @@ class TestTheSyncFace:
         url, replies, requests = server
         replies[("POST", "/v1/registries")] = (201, LOGIN)
         replies[("GET", "/v1/registries")] = (200, {"registries": [LOGIN]})
+        replies[("DELETE", f"/v1/registries/{LOGIN_ID}")] = (204, None)
 
         with sync.rest(boxlite.BoxliteRestOptions(url=url)) as runtime:
             created = runtime.registries.create(
                 registry_host="ghcr.io", username="acme-bot", password=PASSWORD
             )
             listed = runtime.registries.list()
+            runtime.registries.remove(created.id)
 
         assert created.id == LOGIN_ID
         assert [login.id for login in listed] == [LOGIN_ID]
+        assert [(method, path) for method, path, _ in requests] == [
+            ("POST", "/v1/registries"),
+            ("GET", "/v1/registries"),
+            ("DELETE", f"/v1/registries/{LOGIN_ID}"),
+        ]
         # Without a prefix, none is sent: the server covers the whole registry.
         assert "repository_prefix" not in json.loads(requests[0][2])
