@@ -158,8 +158,8 @@ next starts.
 and a `sha256:` digest; either malformed fails with `ErrInvalidArgument` before
 anything is sent. A catalog fills each version's `Tags`, `LastUsedAt` and
 `UpstreamMissingAt` (nil when unset) and the detail's `History` of tag moves,
-newest first, where `FromDigest` is empty for a new tag and `Actor` for a move
-a pull recorded. A local cache fills only `Tags`.
+newest first. `FromDigest` is empty for a new tag, and `Actor` is empty when a
+pull records the event. A local cache fills only `Tags`.
 
 Like other image operations, `MoveTag` honors context cancellation while waiting
 for a reply and rejects calls after the image handle or runtime has closed.
