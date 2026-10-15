@@ -4,7 +4,7 @@
  */
 
 import { ConflictException, NotFoundException, NotImplementedException } from '@nestjs/common'
-import { Repository } from 'typeorm'
+import { EntityManager, Repository } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
 import { RegistryCredential } from '../entities/registry-credential.entity'
 import { SecretStore } from '../stores/secret.store'
@@ -28,6 +28,7 @@ function build({
     findOneBy: jest.fn(async () => row),
     delete: jest.fn(async () => calls.push('delete')),
     find: jest.fn(async () => [row]),
+    manager: {} as EntityManager,
   }
   const builder = {
     where: jest.fn(() => builder),
@@ -36,12 +37,17 @@ function build({
     getMany: jest.fn(async () => boxes),
   }
   const lookup = { findForRepository: jest.fn(async () => (picked ? { id: picked } : null)) }
+  const manager = {
+    findOne: jest.fn(async () => credentials.findOneBy()),
+    delete: jest.fn(async () => credentials.delete()),
+    getRepository: jest.fn(() => ({ createQueryBuilder: () => builder })),
+  }
+  credentials.manager.transaction = jest.fn(async (_isolation, callback) => callback(manager)) as never
   store.destroy.mockImplementation(async () => {
     calls.push('destroy')
   })
   const service = new RegistriesService(
     credentials as unknown as Repository<RegistryCredential>,
-    { createQueryBuilder: () => builder } as unknown as Repository<Box>,
     store as unknown as SecretStore,
     lookup as unknown as RegistryCredentialService,
   )
@@ -137,8 +143,8 @@ describe('RegistriesService', () => {
         through: `${PROXY}/${ORG}/ghcr.io/%`,
       })
       // And each one is matched by its upstream repository, not the proxy ref.
-      expect(lookup.findForRepository).toHaveBeenCalledWith(ORG, 'ghcr.io', 'acme/app')
-      expect(lookup.findForRepository).toHaveBeenCalledWith(ORG, 'ghcr.io', 'acme/tool')
+      expect(lookup.findForRepository).toHaveBeenCalledWith(ORG, 'ghcr.io', 'acme/app', expect.any(Object))
+      expect(lookup.findForRepository).toHaveBeenCalledWith(ORG, 'ghcr.io', 'acme/tool', expect.any(Object))
     })
 
     it('lets a login go when a longer one is what its boxes pull through', async () => {

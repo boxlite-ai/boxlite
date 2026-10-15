@@ -453,6 +453,11 @@ the portable contract, which the runner's own route registration enforces.
 The same logins as `/api/registries`, in the box API's snake_case shapes, for
 SDK clients.
 
+Credential deletion and private-image box persistence coordinate in PostgreSQL.
+If they overlap, the contending request returns 409 and can be retried. A box
+whose resolved proxy reference has lost its credential is also rejected before
+it is saved. Once a dependent box commits, deletion returns 409 with its ID.
+
 </details>
 
 ## Runner API
