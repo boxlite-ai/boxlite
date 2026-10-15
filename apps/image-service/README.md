@@ -171,6 +171,10 @@ yarn nx serve image-service
 Coverage is reported through `make coverage:go` from the repository root, which
 is also what CI uploads.
 
+Secret-reader tests use a local TLS server and temporary files. They verify
+malformed or oversized payload rejection, cancellation before a request, and
+missing-file errors without accessing real registry passwords.
+
 Locally it is one of the native processes `apps/infra-local` supervises:
 `make up` builds and starts it, and `make restart COMPONENTS=registry-proxy`
 rebuilds it from source.
