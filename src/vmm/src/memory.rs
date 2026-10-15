@@ -3,15 +3,16 @@
 
 //! Backing-memory ownership and guest address layout.
 //!
-//! [`GuestRam`] allocates the RAM a VM uses. Host-side users of guest memory
-//! hold clones of the shared [`Arc`] and go through vm-memory's volatile
-//! access API, never plain references. Registering the RAM with the host
-//! hypervisor, and the lifetime rules that come with it, follow in the next
-//! slice.
+//! [`GuestRam`] allocates the RAM a VM uses and registers it with the host
+//! hypervisor. It releases the backing only after every registration has been
+//! removed again: a `GuestRam` dropped while a registration may still exist
+//! leaks the backing instead, so the host VM never references freed memory.
+//! Host-side users of guest memory hold clones of the shared [`Arc`] and go
+//! through vm-memory's volatile access API, never plain references.
 
 use std::{io, ptr::NonNull, sync::Arc};
 
-use boxlite_hypervisor::MemoryRegion;
+use boxlite_hypervisor::{MemoryRegion, Vm};
 use vm_memory::{GuestAddress, GuestMemoryBackend, GuestMemoryRegion};
 
 use crate::error::{Error, Result};
@@ -54,11 +55,14 @@ pub(crate) fn ram_ranges(memory_mib: u32) -> Vec<(GuestAddress, usize)> {
 #[derive(Debug)]
 pub(crate) struct GuestRam {
     memory: Arc<GuestMemoryMmap>,
+    /// Regions `0..mapped`, in ascending address order, are registered with
+    /// the host VM.
+    mapped: usize,
 }
 
 impl GuestRam {
     /// Allocates zero-filled anonymous memory for `ranges`, which must be
-    /// ascending and non-overlapping.
+    /// ascending and non-overlapping. Nothing is registered yet.
     pub(crate) fn new(ranges: &[(GuestAddress, usize)]) -> Result<Self> {
         let bytes = ranges.iter().map(|(_, size)| *size as u64).sum();
         let memory =
@@ -68,6 +72,7 @@ impl GuestRam {
             })?;
         Ok(Self {
             memory: Arc::new(memory),
+            mapped: 0,
         })
     }
 
@@ -84,6 +89,56 @@ impl GuestRam {
             host_addr: NonNull::new(region.as_ptr()).expect("mmap returned a null mapping"),
             size: region.len() as usize,
         })
+    }
+
+    /// Registers every region with `vm`, lowest address first. A failure
+    /// removes the regions registered so far and returns the failure.
+    ///
+    /// # Panics
+    ///
+    /// Panics if regions are already registered: one backing may back only
+    /// one guest range in one VM.
+    pub(crate) fn map<V: Vm + ?Sized>(&mut self, vm: &V) -> Result<()> {
+        assert!(self.mapped == 0, "guest RAM is already mapped");
+        let regions: Vec<MemoryRegion> = self.regions().collect();
+        for region in &regions {
+            // SAFETY: the region is a private anonymous mapping this `GuestRam`
+            // owns, and it backs only this guest range. The backing stays
+            // mapped until `unmap` succeeds for every region: `Drop` leaks it
+            // otherwise. Host-side access goes through vm-memory's volatile API
+            // on `memory`, never through Rust references.
+            if let Err(error) = unsafe { vm.map_memory(region) } {
+                // A failed rollback leaves `mapped` above zero, so `Drop` leaks.
+                let _ = self.unmap(vm);
+                return Err(error.into());
+            }
+            self.mapped += 1;
+        }
+        Ok(())
+    }
+
+    /// Removes the registered regions, highest address first. A failure keeps
+    /// that region and the ones below it registered; calling again retries.
+    pub(crate) fn unmap<V: Vm + ?Sized>(&mut self, vm: &V) -> Result<()> {
+        while self.mapped > 0 {
+            let region = self
+                .regions()
+                .nth(self.mapped - 1)
+                .expect("registered region");
+            vm.unmap_memory(&region)?;
+            self.mapped -= 1;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for GuestRam {
+    fn drop(&mut self) {
+        if self.mapped > 0 {
+            // The host VM may still reference the range; leaking beats freeing
+            // memory the guest can still write.
+            std::mem::forget(Arc::clone(&self.memory));
+        }
     }
 }
 

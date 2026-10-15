@@ -78,7 +78,7 @@ backend and x86 instruction decoding in the WHP one; `boxlite-vmm` sees none.
 The backend is chosen at compile time, because no host has more than one of HVF,
 KVM and WHP. M1 adds `HvfVm` and `KvmVm`, M10 adds `WhpVm`, and each implements
 the traits in `src/hypervisor/src/`. `boxlite-vmm` is written against those
-traits, so its tests can drive a fake backend, and M4's fault-injection tests
+traits, so its tests can drive a mock backend, and M4's fault-injection tests
 need no hypervisor.
 
 | Operation | Contract | HVF | KVM | WHP (M10) |
