@@ -17,7 +17,8 @@ use crate::BoxInfo;
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{
-    AttachOptions, BoxCommand, BoxTunnel, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution,
+    AttachOptions, BoxCommand, BoxConnection, BoxTunnel, ExecResult, ExecStderr, ExecStdin,
+    ExecStdout, Execution,
 };
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
@@ -535,9 +536,9 @@ impl BoxNetworkBackend for RestBox {
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
         let endpoint = self.tunnel_endpoint(target).await?;
         let client = self.client.clone();
-        Ok(BoxTunnel::pending(Some(endpoint.clone()), async move {
+        Ok(BoxTunnel::new(Some(endpoint.clone()), async move {
             let connection = client.connect_box_network_tunnel(&endpoint).await?;
-            Ok(BoxTunnel::remote(endpoint, connection))
+            Ok(BoxConnection::new(connection))
         }))
     }
 }

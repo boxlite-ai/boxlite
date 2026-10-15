@@ -140,6 +140,17 @@ impl BoxConnection {
         }
     }
 
+    /// Adopt a connected unix-socket descriptor, such as a local gvproxy tunnel.
+    pub(crate) fn from_fd(fd: OwnedFd) -> BoxliteResult<Self> {
+        let stream = std::os::unix::net::UnixStream::from(fd);
+        stream.set_nonblocking(true).map_err(|error| {
+            BoxliteError::Network(format!("configure tunnel descriptor: {error}"))
+        })?;
+        tokio::net::UnixStream::from_std(stream)
+            .map(Self::new)
+            .map_err(|error| BoxliteError::Network(format!("open tunnel descriptor: {error}")))
+    }
+
     /// Split into halves that can read and write concurrently.
     ///
     /// Bidirectional traffic needs this: holding one lock across a large write
@@ -251,26 +262,9 @@ impl AsyncWrite for BoxWriter {
     }
 }
 
-/// Opens a prepared tunnel. Not polled until `connect()`, so preparing a
-/// tunnel reaches nothing inside the box.
-type OpenTunnel = Pin<Box<dyn Future<Output = BoxliteResult<BoxTunnel>> + Send>>;
-
-/// The transport a [`BoxTunnel`] was built over.
-enum TunnelTransport {
-    /// Prepared but not opened: `connect()` runs `open`, so a port nothing
-    /// listens on fails there rather than in `tunnel()`. `uri` is the public
-    /// URI the backend minted while preparing, if any.
-    Pending {
-        uri: Option<String>,
-        open: OpenTunnel,
-    },
-    Local(OwnedFd),
-    #[cfg(feature = "rest")]
-    Remote {
-        uri: String,
-        connection: BoxConnection,
-    },
-}
+/// Opens a prepared tunnel's connection. Not polled until `connect()`, so
+/// preparing a tunnel reaches nothing inside the box.
+type OpenTunnel = Pin<Box<dyn Future<Output = BoxliteResult<BoxConnection>> + Send>>;
 
 #[derive(Clone)]
 struct TunnelOpener {
@@ -286,43 +280,22 @@ impl TunnelOpener {
 
 /// A prepared, one-shot tunnel to one TCP service inside a box.
 pub struct BoxTunnel {
-    transport: TunnelTransport,
+    /// The public URI the backend minted while preparing, if any.
+    uri: Option<String>,
+    open: OpenTunnel,
     opener: Option<TunnelOpener>,
 }
 
 impl BoxTunnel {
-    pub(crate) fn local(fd: OwnedFd) -> Self {
-        Self {
-            transport: TunnelTransport::Local(fd),
-            opener: None,
-        }
-    }
-
-    #[cfg(feature = "rest")]
-    pub(crate) fn remote<T>(uri: String, connection: T) -> Self
+    /// A prepared tunnel whose connection `open` opens on `connect()`, so a
+    /// port nothing listens on fails there rather than in `tunnel()`.
+    pub(crate) fn new<F>(uri: Option<String>, open: F) -> Self
     where
-        T: Transport + 'static,
+        F: Future<Output = BoxliteResult<BoxConnection>> + Send + 'static,
     {
         Self {
-            transport: TunnelTransport::Remote {
-                uri,
-                connection: BoxConnection::new(connection),
-            },
-            opener: None,
-        }
-    }
-
-    /// A prepared tunnel that `open` opens on `connect()`. `uri` is the public
-    /// URI minted while preparing, if any.
-    pub(crate) fn pending<F>(uri: Option<String>, open: F) -> Self
-    where
-        F: Future<Output = BoxliteResult<BoxTunnel>> + Send + 'static,
-    {
-        Self {
-            transport: TunnelTransport::Pending {
-                uri,
-                open: Box::pin(open),
-            },
+            uri,
+            open: Box::pin(open),
             opener: None,
         }
     }
@@ -333,33 +306,7 @@ impl BoxTunnel {
     }
 
     pub fn uri(&self) -> Option<&str> {
-        match &self.transport {
-            TunnelTransport::Pending { uri, .. } => uri.as_deref(),
-            TunnelTransport::Local(_) => None,
-            #[cfg(feature = "rest")]
-            TunnelTransport::Remote { uri, .. } => Some(uri),
-        }
-    }
-
-    fn connect_transport(transport: TunnelTransport) -> BoxliteResult<BoxConnection> {
-        match transport {
-            TunnelTransport::Pending { .. } => Err(BoxliteError::Internal(
-                "tunnel transport was not opened".into(),
-            )),
-            TunnelTransport::Local(fd) => {
-                let stream = std::os::unix::net::UnixStream::from(fd);
-                stream.set_nonblocking(true).map_err(|error| {
-                    BoxliteError::Network(format!("configure tunnel descriptor: {error}"))
-                })?;
-                tokio::net::UnixStream::from_std(stream)
-                    .map(BoxConnection::new)
-                    .map_err(|error| {
-                        BoxliteError::Network(format!("open tunnel descriptor: {error}"))
-                    })
-            }
-            #[cfg(feature = "rest")]
-            TunnelTransport::Remote { connection, .. } => Ok(connection),
-        }
+        self.uri.as_deref()
     }
 
     /// Consume this prepared tunnel into its single connection.
@@ -367,11 +314,7 @@ impl BoxTunnel {
     /// This opens the connection, so it fails while nothing in the box
     /// listens on the port.
     pub async fn connect(self) -> BoxliteResult<BoxConnection> {
-        let transport = match self.transport {
-            TunnelTransport::Pending { open, .. } => open.await?.transport,
-            transport => transport,
-        };
-        Self::connect_transport(transport)
+        self.open.await
     }
 
     /// Consume this prepared tunnel into a local multi-connection forwarder.
@@ -732,37 +675,21 @@ mod tests {
 
     use super::*;
 
-    #[cfg(feature = "rest")]
-    #[tokio::test]
-    async fn remote_tunnel_exposes_uri_and_yields_its_connection() {
-        let (stream, mut peer) = UnixStream::pair().unwrap();
-        let tunnel = BoxTunnel::remote("https://3000-box.proxy.example.test".to_string(), stream);
-
-        assert_eq!(tunnel.uri(), Some("https://3000-box.proxy.example.test"));
-
-        let mut connection = tunnel.connect().await.unwrap();
-        peer.write_all(b"one").await.unwrap();
-        let mut response = [0; 3];
-        connection.read_exact(&mut response).await.unwrap();
-        assert_eq!(&response, b"one");
-    }
-
     /// A prepared tunnel that runs `open` only on `connect()`, as a real
     /// backend's does.
     fn pending_tunnel(
-        open: impl FnOnce() -> BoxliteResult<BoxTunnel> + Send + 'static,
+        open: impl FnOnce() -> BoxliteResult<BoxConnection> + Send + 'static,
     ) -> BoxTunnel {
-        BoxTunnel::pending(None, async move { open() })
+        BoxTunnel::new(None, async move { open() })
     }
 
-    fn echo_tunnel() -> BoxTunnel {
+    fn echo_connection() -> BoxConnection {
         let (sdk, mut peer) = UnixStream::pair().unwrap();
         tokio::spawn(async move {
             let (mut reader, mut writer) = peer.split();
             let _ = tokio::io::copy(&mut reader, &mut writer).await;
         });
-        let fd: OwnedFd = sdk.into_std().unwrap().into();
-        BoxTunnel::local(fd)
+        BoxConnection::new(sdk)
     }
 
     struct EchoNetworkBackend;
@@ -770,7 +697,7 @@ mod tests {
     #[async_trait::async_trait]
     impl BoxNetworkBackend for EchoNetworkBackend {
         async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-            Ok(pending_tunnel(|| Ok(echo_tunnel())))
+            Ok(pending_tunnel(|| Ok(echo_connection())))
         }
     }
 
@@ -791,11 +718,11 @@ mod tests {
         async fn tunnel(&self, _target: SocketAddr) -> BoxliteResult<BoxTunnel> {
             self.prepares.fetch_add(1, Ordering::SeqCst);
             let opens = Arc::clone(&self.opens);
-            Ok(BoxTunnel::pending(
+            Ok(BoxTunnel::new(
                 Some("https://3000-box.proxy.example.test".into()),
                 async move {
                     opens.fetch_add(1, Ordering::SeqCst);
-                    Ok(echo_tunnel())
+                    Ok(echo_connection())
                 },
             ))
         }
@@ -904,7 +831,7 @@ mod tests {
                 if attempts.fetch_add(1, Ordering::SeqCst) == 1 {
                     return Err(BoxliteError::Network("intentional setup failure".into()));
                 }
-                Ok(echo_tunnel())
+                Ok(echo_connection())
             }))
         }
     }
@@ -924,8 +851,7 @@ mod tests {
                 let (sdk, peer) = UnixStream::pair().unwrap();
                 attempts.fetch_add(1, Ordering::SeqCst);
                 peers.lock().unwrap().push(peer);
-                let fd: OwnedFd = sdk.into_std().unwrap().into();
-                Ok(BoxTunnel::local(fd))
+                Ok(BoxConnection::new(sdk))
             }))
         }
     }
@@ -1260,7 +1186,7 @@ mod tests {
         let fd = OwnedFd::from(stream.into_std().unwrap());
         let transport_fd = fd.as_raw_fd();
 
-        let connection = BoxTunnel::local(fd).connect().await.unwrap();
+        let connection = BoxConnection::from_fd(fd).unwrap();
         // Borrowing reports the same descriptor without consuming anything.
         assert_eq!(connection.raw_fd(), Some(transport_fd));
 
