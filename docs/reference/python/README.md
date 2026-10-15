@@ -131,6 +131,9 @@ registry. The password goes up once: `RegistryCredential` has `id`,
 id that is not a UUID, before any request.
 
 ```python
+import os
+from boxlite import Boxlite, BoxliteRestOptions, BoxOptions
+
 runtime = Boxlite.rest(BoxliteRestOptions.from_env())
 login = await runtime.registries.create(
     registry_host="ghcr.io",

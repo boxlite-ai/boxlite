@@ -255,8 +255,9 @@ async def test_once_the_box_is_gone_the_login_can_be(rt):
     await rt.remove(box_id, force=True)
     state["boxes"].remove(box_id)
 
-    login_id = state.pop("login").id
+    login_id = state["login"].id
     await rt.registries.remove(login_id)
+    state.pop("login")
     with pytest.raises(boxlite.NotFoundError) as again:
         await rt.registries.remove(login_id)
     assert "image" not in str(again.value).lower(), again.value

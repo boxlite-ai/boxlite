@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 
 use boxlite::runtime::{NewRegistryCredential, RegistryCredential, RegistryHandle};
 use napi::bindgen_prelude::*;
@@ -40,7 +40,7 @@ impl From<RegistryCredential> for JsRegistryCredential {
     }
 }
 
-/// A registry login to add. No `Debug`: it holds the password.
+/// A registry login to add. `Debug` omits the password.
 #[napi(object)]
 pub struct JsNewRegistryCredential {
     #[napi(js_name = "registryHost")]
@@ -51,6 +51,16 @@ pub struct JsNewRegistryCredential {
     pub username: String,
     /// Password or access token.
     pub password: String,
+}
+
+impl fmt::Debug for JsNewRegistryCredential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JsNewRegistryCredential")
+            .field("registry_host", &self.registry_host)
+            .field("repository_prefix", &self.repository_prefix)
+            .field("username", &self.username)
+            .finish_non_exhaustive()
+    }
 }
 
 impl From<JsNewRegistryCredential> for NewRegistryCredential {
@@ -68,6 +78,12 @@ impl From<JsNewRegistryCredential> for NewRegistryCredential {
 #[napi]
 pub struct JsRegistryHandle {
     pub(crate) handle: Arc<RegistryHandle>,
+}
+
+impl fmt::Debug for JsRegistryHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JsRegistryHandle").finish_non_exhaustive()
+    }
 }
 
 #[napi]

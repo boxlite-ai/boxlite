@@ -1161,6 +1161,11 @@ is not a UUID reaches it as `InvalidArgument` without a request.
 | `CRegistryCredential` | `id`, `registry_host`, `repository_prefix` (empty for the whole registry), `username`, `created_by` (NULL when unknown), `created_at` (Unix seconds); no password | From a create callback, owned; free with `boxlite_free_registry_credential()` |
 | `CRegistryCredentialList` | `items`/`count` | The callback owns it; free with `boxlite_free_registry_credential_list()` |
 
+Registry strings are non-null, except `created_by` when unknown. If any
+server-returned field contains an interior NUL byte, create and list callbacks
+receive `Internal` and no result. The SDK rejects the response without changing
+credential IDs; list conversion frees any entries already converted.
+
 ---
 
 ### Metrics

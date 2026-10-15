@@ -126,6 +126,10 @@ export BOXLITE_E2E_PROFILE=p1
 export BOXLITE_E2E_CLI=/path/to/boxlite   # CLI binary built with REST support
 ```
 
+Private-image cleanup keeps its login record until deletion succeeds. If the
+removal step fails, teardown retries that login; a transient failure must not
+leave an untracked credential that prevents the next run.
+
 Then run the profile into `~/.boxlite/credentials.toml` so the CLI
 picks it up (one-time per machine):
 

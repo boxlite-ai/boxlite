@@ -61,25 +61,33 @@ pub struct CRegistryCredentialList {
     pub count: c_int,
 }
 
-fn to_c_str(s: &str) -> *mut c_char {
-    CString::new(s)
-        .map(|c| c.into_raw())
-        .unwrap_or(ptr::null_mut())
+fn credential_string(value: &str, field: &str) -> Result<CString, BoxliteError> {
+    CString::new(value).map_err(|_| {
+        BoxliteError::Internal(format!("registry credential {field} contains a NUL byte"))
+    })
 }
 
 impl CRegistryCredential {
-    fn from_credential(credential: &RegistryCredential) -> Self {
-        Self {
-            id: to_c_str(&credential.id),
-            registry_host: to_c_str(&credential.registry_host),
-            repository_prefix: to_c_str(&credential.repository_prefix),
-            username: to_c_str(&credential.username),
-            created_by: credential
-                .created_by
-                .as_deref()
-                .map_or(ptr::null_mut(), to_c_str),
+    fn from_credential(credential: &RegistryCredential) -> Result<Self, BoxliteError> {
+        // Keep ownership until every field is valid, so partial conversion cannot leak.
+        let id = credential_string(&credential.id, "id")?;
+        let registry_host = credential_string(&credential.registry_host, "registry_host")?;
+        let repository_prefix =
+            credential_string(&credential.repository_prefix, "repository_prefix")?;
+        let username = credential_string(&credential.username, "username")?;
+        let created_by = credential
+            .created_by
+            .as_deref()
+            .map(|value| credential_string(value, "created_by"))
+            .transpose()?;
+        Ok(Self {
+            id: id.into_raw(),
+            registry_host: registry_host.into_raw(),
+            repository_prefix: repository_prefix.into_raw(),
+            username: username.into_raw(),
+            created_by: created_by.map_or(ptr::null_mut(), CString::into_raw),
             created_at: credential.created_at.timestamp(),
-        }
+        })
     }
 }
 
@@ -93,13 +101,15 @@ unsafe fn free_str(s: *mut c_char) {
     }
 }
 
-unsafe fn free_credential_strings(credential: &CRegistryCredential) {
-    unsafe {
-        free_str(credential.id);
-        free_str(credential.registry_host);
-        free_str(credential.repository_prefix);
-        free_str(credential.username);
-        free_str(credential.created_by);
+impl Drop for CRegistryCredential {
+    fn drop(&mut self) {
+        unsafe {
+            free_str(self.id);
+            free_str(self.registry_host);
+            free_str(self.repository_prefix);
+            free_str(self.username);
+            free_str(self.created_by);
+        }
     }
 }
 
@@ -108,8 +118,7 @@ pub unsafe fn free_registry_credential(credential: *mut CRegistryCredential) {
         if credential.is_null() {
             return;
         }
-        let credential = Box::from_raw(credential);
-        free_credential_strings(&credential);
+        drop(Box::from_raw(credential));
     }
 }
 
@@ -119,11 +128,6 @@ pub unsafe fn free_registry_credential_list(list: *mut CRegistryCredentialList) 
             return;
         }
         let list = Box::from_raw(list);
-        if !list.items.is_null() && list.count >= 0 {
-            for idx in 0..list.count as usize {
-                free_credential_strings(&*list.items.add(idx));
-            }
-        }
         free_raw_slice(list.items, list.count);
     }
 }
@@ -323,17 +327,17 @@ unsafe fn registry_list(
         let user_data = user_data as usize;
 
         handle_ref.tokio_rt.spawn(async move {
-            let result = core_handle.list().await.map(|logins| {
+            let result = core_handle.list().await.and_then(|logins| {
                 let (items, count) = into_raw_slice(
                     logins
                         .iter()
                         .map(CRegistryCredential::from_credential)
-                        .collect(),
+                        .collect::<Result<Vec<_>, _>>()?,
                 );
-                OwnedFfiPtr::new_with(
+                Ok(OwnedFfiPtr::new_with(
                     Box::new(CRegistryCredentialList { items, count }),
                     free_registry_credential_list,
-                )
+                ))
             });
             push_event(
                 &queue,
@@ -368,11 +372,11 @@ unsafe fn registry_create(
         let user_data = user_data as usize;
 
         handle_ref.tokio_rt.spawn(async move {
-            let result = core_handle.create(&login).await.map(|created| {
-                OwnedFfiPtr::new_with(
-                    Box::new(CRegistryCredential::from_credential(&created)),
+            let result = core_handle.create(&login).await.and_then(|created| {
+                Ok(OwnedFfiPtr::new_with(
+                    Box::new(CRegistryCredential::from_credential(&created)?),
                     free_registry_credential,
-                )
+                ))
             });
             push_event(
                 &queue,
@@ -440,6 +444,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn registry_strings_reject_interior_nul() {
+        let _guard = crate::FREE_STR_LOCK.lock().unwrap();
+        let mut accepted = Vec::new();
+        for field in [
+            "id",
+            "registry_host",
+            "repository_prefix",
+            "username",
+            "created_by",
+        ] {
+            let mut credential = login(Some("user-1"));
+            let value = match field {
+                "id" => &mut credential.id,
+                "registry_host" => &mut credential.registry_host,
+                "repository_prefix" => &mut credential.repository_prefix,
+                "username" => &mut credential.username,
+                _ => credential.created_by.as_mut().unwrap(),
+            };
+            value.push('\0');
+            match CRegistryCredential::from_credential(&credential) {
+                Ok(converted) => {
+                    accepted.push(field);
+                    unsafe { free_registry_credential(Box::into_raw(Box::new(converted))) };
+                }
+                Err(error) => {
+                    assert!(matches!(error, BoxliteError::Internal(_)));
+                    assert!(error.to_string().contains(field));
+                }
+            }
+        }
+        assert!(accepted.is_empty(), "accepted invalid fields: {accepted:?}");
+
+        let before = crate::FREE_STR_CALLS.load(Ordering::SeqCst);
+        let logins = [login(Some("user-1")), login(Some("invalid\0actor"))];
+        let result = logins
+            .iter()
+            .map(CRegistryCredential::from_credential)
+            .collect::<Result<Vec<_>, _>>();
+        assert!(
+            result.is_err(),
+            "a malformed list entry must fail the whole list"
+        );
+        assert_eq!(crate::FREE_STR_CALLS.load(Ordering::SeqCst) - before, 5);
+    }
+
     /// An event dropped before dispatch, as on shutdown, frees every string
     /// it holds, the optional `created_by` included.
     #[test]
@@ -448,7 +498,7 @@ mod tests {
         let before = crate::FREE_STR_CALLS.load(Ordering::SeqCst);
 
         drop(OwnedFfiPtr::new_with(
-            Box::new(CRegistryCredential::from_credential(&login(Some("user-1")))),
+            Box::new(CRegistryCredential::from_credential(&login(Some("user-1"))).unwrap()),
             free_registry_credential,
         ));
         let logins = [login(None), login(Some("user-1"))];
@@ -456,7 +506,8 @@ mod tests {
             logins
                 .iter()
                 .map(CRegistryCredential::from_credential)
-                .collect(),
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap(),
         );
         drop(OwnedFfiPtr::new_with(
             Box::new(CRegistryCredentialList { items, count }),
