@@ -83,6 +83,23 @@ The REST SDK maps malformed image recording times, tag-event times and registry
 creation times to `1970-01-01T00:00:00Z`, so repeated reads do not invent newer
 timestamps. Valid RFC 3339 timestamps retain their instant.
 
+### Nullable response fields
+
+The Box API uses OpenAPI 3.1.1 and JSON Schema type unions such as
+`type: [string, "null"]` and `type: [integer, "null"]`. A field's presence is
+controlled separately by `required`: an optional nullable field may be omitted
+or explicitly null, while a required identifier must still be present and non-null.
+
+Image versions may have null sizes, last-use times or upstream-missing times.
+Tag history may have a null prior digest or actor; registry credentials may have
+a null creator. `ImageInfo.size_bytes` and image-list `next_page_token` also allow
+null; those two contracts predate the image catalog stack.
+
+Regenerate clients derived from the Box specification and verify their nullable
+types. The correction changes the schema, not server JSON or core SDK behavior.
+The separately generated product API clients use an OpenAPI 3.0 contract, where
+`nullable: true` remains valid.
+
 ---
 
 ## Quick reference

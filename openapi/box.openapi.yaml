@@ -1782,8 +1782,7 @@ components:
           type: string
           description: Human-readable label. Optional.
         path_prefix:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: |
             Routing-slot value the client should substitute into the
             `{prefix}` URL parameter on box-scoped requests. Opaque
@@ -1812,9 +1811,8 @@ components:
             so under-scoped credentials surface immediately rather than
             at first use.
         expires_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
           description: |
             Optional expiry. `null` for long-lived dashboard-issued keys;
             ISO 8601 timestamp for rotating credentials.
@@ -1942,8 +1940,7 @@ components:
           maxLength: 128
           example: 01HJK4TNRPQSXYZ8WM6NCVT9R5
         name:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: User-defined name (unique within the routing-slot scope)
           example: my-box
         status:
@@ -1965,8 +1962,7 @@ components:
             activity, which is always the case for a server without an
             AutoStop sweeper.
         pid:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: VMM subprocess PID (null if not running)
         image:
           type: string
@@ -2503,8 +2499,7 @@ components:
           items:
             $ref: "#/components/schemas/Box"
         next_page_token:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: |
             Opaque token for next page. Null or absent if no more results.
 
@@ -2569,19 +2564,16 @@ components:
             - killed
             - timed_out
         exit_code:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Process exit code (null while running)
         started_at:
           type: string
           format: date-time
         duration_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Total execution duration in milliseconds
         error_message:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Diagnostic message if process died unexpectedly
 
     SignalRequest:
@@ -2669,29 +2661,23 @@ components:
           type: integer
           description: Bytes received from box via stdout/stderr (monotonic)
         cpu_percent:
-          type: number
+          type: [number, "null"]
           format: float
-          nullable: true
           description: CPU usage percentage (0.0 - 100.0)
         memory_bytes:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Current memory usage in bytes
         network_bytes_sent:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Network bytes sent (host → guest)
         network_bytes_received:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Network bytes received (guest → host)
         network_tcp_connections:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Current ESTABLISHED TCP connections
         network_tcp_errors:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Total failed TCP connection attempts
         boot_timing:
           $ref: "#/components/schemas/BootTiming"
@@ -2701,36 +2687,28 @@ components:
       description: Stage-level initialization timing breakdown (milliseconds)
       properties:
         total_create_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Total time from create() to box ready
         guest_boot_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Time from subprocess spawn to guest agent ready
         filesystem_setup_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: "Stage 1: directory structure creation"
         image_prepare_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: "Stage 2: image pull and layer extraction"
         guest_rootfs_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: "Stage 3: guest rootfs bootstrap"
         box_config_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: "Stage 4: disk and network configuration"
         box_spawn_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: "Stage 5: subprocess spawn"
         container_init_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: "Stage 6: container initialization inside guest"
 
     # =======================================================================
@@ -2762,8 +2740,7 @@ components:
           format: date-time
           description: When the build this reference names was recorded
         size_bytes:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Image size in bytes
 
     ImageDetail:
@@ -2803,8 +2780,7 @@ components:
           type: string
           description: Manifest digest
         size_bytes:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Sum of the layer sizes the manifest declares, when known
         source_ref:
           type: string
@@ -2818,14 +2794,12 @@ components:
           items:
             type: string
         last_used_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
           description: When a box last started from this build. Null when that is not known
         upstream_missing_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
           description: |
             When a pull first found the build gone from its registry. Runners
             that cached it still start it. Null while it is not known to be gone.
@@ -2839,15 +2813,13 @@ components:
           type: string
           example: stable
         from_digest:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Build the tag pointed at before. Null when the tag did not exist yet
         to_digest:
           type: string
           description: Build the tag points at from then on
         actor:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Who moved the tag. Null when a pull recorded it
         moved_at:
           type: string
@@ -2888,8 +2860,7 @@ components:
           items:
             $ref: "#/components/schemas/ImageInfo"
         next_page_token:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Opaque token for next page
 
     # =======================================================================
@@ -2941,8 +2912,7 @@ components:
           type: string
           example: acme-bot
         created_by:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: The user who added it
         created_at:
           type: string

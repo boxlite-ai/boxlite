@@ -560,6 +560,10 @@ test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 	@cd apps/infra && IAM_PERMISSIONS_BOUNDARY_STAGE=ci npm run sst -- install --stage ci
 	@cd apps/infra && npm run typecheck
 
+test\:apps\:api: _ensure-apps-deps
+	@echo "🧪 Running API unit tests..."
+	@cd apps && yarn nx run api:test --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',)
+
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
 	@$(MAKE) test:apps:infra

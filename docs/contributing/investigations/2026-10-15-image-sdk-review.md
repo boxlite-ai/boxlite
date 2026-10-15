@@ -1,6 +1,7 @@
 ## TL;DR
 
-Make malformed REST timestamps deterministic and document the breaking image API migration raised in #1952.
+Make malformed REST timestamps deterministic, correct nullable Box API schemas,
+and document the breaking image API migration raised in #1952.
 
 ## Scope and evidence
 
@@ -19,3 +20,64 @@ Before production edits, deserialize wire responses through all four conversion 
 Tracking: https://github.com/boxlite-ai/boxlite/issues/1948
 
 Observed: with only the new regression present, all four converted timestamps were the current clock instead of epoch. After the fallback change, all 127 REST tests and five OpenAPI reference-server tests passed; Rust formatting passed. VM tests were not required or run.
+
+## OpenAPI nullability correction
+
+The Box API declares OpenAPI 3.1.1 but uses the 3.0 `nullable` keyword. A standard
+JSON Schema consumer therefore rejects explicit nulls that the servers return.
+Correct the schema without changing response JSON, field presence, or SDK runtime
+behavior. Keep this correction in the existing image registry stack.
+
+### Evidence and alternatives
+
+- [OpenAPI 3.1.1, schema objects](https://spec.openapis.org/oas/v3.1.1.html#schema-object)
+  uses JSON Schema 2020-12 semantics.
+  [Validation section 6.1.1](https://json-schema.org/draft/2020-12/json-schema-validation#section-6.1.1)
+  permits a union in `type`; `required` independently controls field presence.
+- At `23fbfbd1`, `BoxliteImageController.toImageDetail` copies nullable sizes,
+  timestamps, prior digests and actors into response fields. The registry
+  controller copies nullable `createdBy`. Rust REST response types already use
+  `Option` for these fields. Changing server values would break this contract.
+- `ImageInfo.size_bytes` and `ListImagesResponse.next_page_token` have the same
+  defect on main, before this stack. Authentication, box, execution and metrics
+  schemas also use `nullable`; correct every occurrence in the Box document.
+- The generated product clients consume `dist/apps/api/openapi.json`, an
+  OpenAPI 3.0 document. Its
+  [nullable semantics](https://spec.openapis.org/oas/v3.0.3#schema-object)
+  are valid; leave that specification and its generated clients unchanged.
+- [Ajv](https://ajv.js.org/json-schema.html#nullable-openapi) accepts `nullable`
+  as an extension even in its 2020-12 validator. Regression tests must ignore
+  that annotation to exercise standard JSON Schema behavior.
+
+### Approach and acceptance
+
+Replace each scalar type plus `nullable: true` with a type union containing the
+quoted string `"null"`. Preserve required lists, formats, constraints and all
+other schema content. Prefer this over `oneOf`, which adds unnecessary nesting.
+Estimated production additions are under 60 lines, including a reusable API-only
+Make test entry point. Reuse the workspace YAML parser and declare Ajv explicitly
+for semantic contract tests.
+
+### Validation plan
+
+Before production edits, validate nullable fields and actual controller outputs
+against the checked-in schema; observe type-validation failures. After correction,
+accept nulls and ordinary values, reject incorrect types, and verify optional
+fields may be absent while required identifiers still reject absence or null.
+Run the focused API tests and existing OpenAPI suite. Check generated Box client
+types in a temporary directory; no generated client in the repository consumes
+this specification. Document the regeneration requirement in the HTTP reference.
+
+Observed: reverting every non-test file left 32 null-validation failures and four
+passing presence checks. Restoring the correction passed all 36 checks, the
+existing image/registry controller and routing tests, and the OpenAPI unit suite.
+Structural comparison confirmed that only the 30 nullable scalar schemas changed.
+
+OpenAPI Generator 7.23.0 accepted the specification. Regenerated TypeScript models
+passed strict nullability compilation; the five affected Go models compiled and
+preserved explicit nulls through JSON round trips. Run the checked-in regressions
+with `make test:apps:api FILTER='Box API JSON Schema nullability'`.
+
+Full generated Go client compilation encounters invalid `CreateBoxRequest`
+constructor syntax; generating from the pre-fix specification produces the
+identical file. This existing generator limitation is outside the nullability fix.
