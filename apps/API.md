@@ -16,6 +16,9 @@ The inventory is implementation-grounded:
   [`boxlite-rest`](./api/src/boxlite-rest/). They are excluded from the product
   OpenAPI document because their portable contract lives in
   [`openapi/box.openapi.yaml`](../openapi/box.openapi.yaml).
+- The registry proxy's runner credential lookup is an internal service route.
+  It is excluded from the Cloud OpenAPI document and generated customer clients;
+  the proxy owns its request and response handling.
 - Runner, proxy, and collector routes come from their runtime registration in
   [`server.go`](./runner/pkg/api/server.go),
   [`proxy.go`](./proxy/pkg/proxy/proxy.go), and
@@ -218,7 +221,7 @@ serves and the events it emits are catalogued below alongside its routes.
 | `GET`    | `/api/runners`                         | Lists runners.                                                 |
 | `POST`   | `/api/runners`                         | Registers a runner.                                            |
 | `GET`    | `/api/runners/me`                      | Returns the authenticated runner's identity and configuration. |
-| `GET`    | `/api/runners/me/registry-credentials` | Finds the registry login a pull uses, without its password.    |
+| `GET`    | `/api/runners/me/registry-credentials` | Internal registry-proxy lookup; excluded from customer OpenAPI and SDKs. |
 | `GET`    | `/api/runners/by-box/{boxId}`          | Resolves the runner assigned to a box.                         |
 | `GET`    | `/api/runners/{id}`                    | Gets a runner by ID.                                           |
 | `GET`    | `/api/runners/{id}/full`               | Gets a runner with its full related data.                      |

@@ -5,9 +5,12 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"time"
 
@@ -128,25 +131,63 @@ func (f *credentialFinder) loginFrom(ctx context.Context, org string, found foun
 }
 
 func (f *credentialFinder) ask(ctx context.Context, apiKey string, org, host, repository string) (foundCredential, error) {
-	credential, response, err := f.api.RunnersAPI.
-		GetRegistryCredentialForAuthenticatedRunner(context.WithValue(ctx, apiclient.ContextAccessToken, apiKey)).
-		OrganizationId(org).
-		Host(host).
-		Repository(repository).
-		Execute()
-	switch {
-	case response == nil:
+	// This proxy-only operation is deliberately absent from the customer SDK.
+	config := f.api.GetConfig()
+	baseURL, err := config.ServerURLWithContext(ctx, "")
+	if err != nil {
 		return foundCredential{}, fmt.Errorf("%w: %w", ErrCredentialUnavailable, err)
-	case response.StatusCode == http.StatusNotFound:
+	}
+	endpoint, err := url.Parse(baseURL)
+	if err != nil {
+		return foundCredential{}, fmt.Errorf("%w: %w", ErrCredentialUnavailable, err)
+	}
+	endpoint = endpoint.JoinPath("runners/me/registry-credentials")
+	query := endpoint.Query()
+	query.Set("organizationId", org)
+	query.Set("host", host)
+	query.Set("repository", repository)
+	endpoint.RawQuery = query.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return foundCredential{}, fmt.Errorf("%w: %w", ErrCredentialUnavailable, err)
+	}
+	for name, value := range config.DefaultHeader {
+		request.Header.Set(name, value)
+	}
+	request.Header.Set("User-Agent", config.UserAgent)
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Authorization", "Bearer "+apiKey)
+	response, err := config.HTTPClient.Do(request)
+	if err != nil {
+		return foundCredential{}, fmt.Errorf("%w: %w", ErrCredentialUnavailable, err)
+	}
+	defer response.Body.Close()
+	switch response.StatusCode {
+	case http.StatusNotFound:
 		return foundCredential{none: true}, nil
-	case response.StatusCode == http.StatusForbidden:
+	case http.StatusForbidden:
 		return foundCredential{forbidden: true}, nil
-	case err != nil:
+	case http.StatusOK:
+	default:
 		return foundCredential{}, fmt.Errorf("%w: control plane answered %s", ErrCredentialUnavailable, response.Status)
-	case credential == nil || credential.SecretVersion == "":
+	}
+	var credential struct {
+		Kind          string  `json:"kind"`
+		Username      *string `json:"username"`
+		SecretVersion string  `json:"secretVersion"`
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return foundCredential{}, fmt.Errorf("%w: %w", ErrCredentialUnavailable, err)
+	}
+	if err := json.Unmarshal(body, &credential); err != nil || credential.Username == nil {
+		return foundCredential{}, fmt.Errorf("%w: invalid credential response", ErrCredentialUnavailable)
+	}
+	if credential.SecretVersion == "" {
 		return foundCredential{}, fmt.Errorf("%w: control plane named no secret", ErrCredentialUnavailable)
-	case credential.Kind != apiclient.REGISTRYCREDENTIALKIND_BASIC:
+	}
+	if credential.Kind != "basic" {
 		return foundCredential{}, fmt.Errorf("%w: kind %q is not one this proxy speaks", ErrCredentialUnavailable, credential.Kind)
 	}
-	return foundCredential{username: credential.Username, secretVersion: credential.SecretVersion}, nil
+	return foundCredential{username: *credential.Username, secretVersion: credential.SecretVersion}, nil
 }

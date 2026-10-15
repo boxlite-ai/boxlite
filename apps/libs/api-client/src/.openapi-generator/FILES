@@ -130,7 +130,6 @@ docs/Runner.md
 docs/RunnerFull.md
 docs/RunnerHealthMetrics.md
 docs/RunnerHealthcheck.md
-docs/RunnerRegistryCredential.md
 docs/RunnerServiceHealth.md
 docs/RunnerState.md
 docs/RunnersApi.md
@@ -256,7 +255,6 @@ models/registry-credential.ts
 models/runner-full.ts
 models/runner-health-metrics.ts
 models/runner-healthcheck.ts
-models/runner-registry-credential.ts
 models/runner-service-health.ts
 models/runner-state.ts
 models/runner.ts

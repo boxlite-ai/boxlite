@@ -4,7 +4,7 @@
  */
 
 import { Controller, ForbiddenException, Get, NotFoundException, Query, UseGuards } from '@nestjs/common'
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger'
+import { ApiBearerAuth, ApiExcludeController, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { RunnerAuthGuard } from '../../auth/runner-auth.guard'
 import { RunnerContextDecorator } from '../../common/decorators/runner-context.decorator'
@@ -26,6 +26,7 @@ import { RegistryCredentialService } from '../services/registry-credential.servi
  * proxy on a runner's behalf, which keeps every answer here — a login, "none"
  * and a refusal — for a minute per runner, and meters each runner's pulls.
  */
+@ApiExcludeController()
 @ApiTags('runners')
 @Controller('runners/me/registry-credentials')
 @UseGuards(CombinedAuthGuard, RunnerAuthGuard)

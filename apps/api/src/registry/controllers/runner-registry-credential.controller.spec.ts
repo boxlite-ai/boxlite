@@ -3,11 +3,18 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ForbiddenException, NotFoundException } from '@nestjs/common'
+import { ForbiddenException, NotFoundException, type INestApplication } from '@nestjs/common'
+import { SwaggerModule } from '@nestjs/swagger'
+import { Test } from '@nestjs/testing'
+import type { AddressInfo } from 'net'
+import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
+import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
 import { RunnerContext } from '../../common/interfaces/runner-context.interface'
+import { getOpenApiConfig } from '../../openapi.config'
 import { RegistryCredential } from '../entities/registry-credential.entity'
 import { RegistryCredentialKind } from '../enums/registry-credential-kind.enum'
 import { RegistryCredentialService } from '../services/registry-credential.service'
+import { RegistriesController } from './registries.controller'
 import { RunnerRegistryCredentialController } from './runner-registry-credential.controller'
 
 const LOOKUP = { organizationId: '00000000-0000-4000-8000-000000000001', host: 'ghcr.io', repository: 'acme/app' }
@@ -62,5 +69,62 @@ describe('RunnerRegistryCredentialController', () => {
     // Not even whether a credential exists: that is itself about the other
     // organization.
     expect(findForRepository).not.toHaveBeenCalled()
+  })
+})
+
+describe('Registry OpenAPI boundary', () => {
+  let app: INestApplication
+  const credential = { kind: RegistryCredentialKind.BASIC, username: 'acme-bot', secretVersion: 'secret-version-1' }
+  const credentials = {
+    runnerServes: jest.fn().mockResolvedValue(true),
+    findForRepository: jest.fn().mockResolvedValue(credential),
+  }
+
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({
+      controllers: [RegistriesController, RunnerRegistryCredentialController],
+      providers: [{ provide: RegistryCredentialService, useValue: credentials }],
+    })
+      .useMocker(() => ({}))
+      .overrideGuard(AuthenticatedRateLimitGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(CombinedAuthGuard)
+      .useValue({
+        canActivate: (context) => {
+          context.switchToHttp().getRequest().user = RUNNER
+          return true
+        },
+      })
+      .compile()
+    app = moduleRef.createNestApplication()
+    app.setGlobalPrefix('api')
+    await app.listen(0, '127.0.0.1')
+  })
+
+  afterAll(async () => {
+    await app?.close()
+  })
+
+  it('exports tenant registry operations without the internal lookup or its schemas', () => {
+    const document = SwaggerModule.createDocument(app, getOpenApiConfig('http://localhost'))
+
+    expect(document.paths['/api/registries']?.get?.operationId).toBe('listRegistryCredentials')
+    expect(document.paths['/api/registries']?.post?.operationId).toBe('createRegistryCredential')
+    expect(document.paths['/api/registries/{id}']?.delete?.operationId).toBe('deleteRegistryCredential')
+    expect(document.paths['/api/runners/me/registry-credentials']).toBeUndefined()
+    expect(document.components?.schemas?.RunnerRegistryCredential).toBeUndefined()
+    expect(document.components?.schemas?.RegistryCredentialLookup).toBeUndefined()
+  })
+
+  it('still serves the internal lookup to the registry proxy', async () => {
+    const { port } = app.getHttpServer().address() as AddressInfo
+    const response = await fetch(
+      `http://127.0.0.1:${port}/api/runners/me/registry-credentials?${new URLSearchParams(LOOKUP)}`,
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual(credential)
+    expect(credentials.runnerServes).toHaveBeenCalledWith(RUNNER.runnerId, LOOKUP.organizationId)
+    expect(credentials.findForRepository).toHaveBeenCalledWith(LOOKUP.organizationId, LOOKUP.host, LOOKUP.repository)
   })
 })
