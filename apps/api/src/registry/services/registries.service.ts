@@ -21,8 +21,8 @@ import { CreateRegistryCredentialDto } from '../dto/registry-credential.dto'
 import { RegistryCredential } from '../entities/registry-credential.entity'
 import { RegistryCredentialKind } from '../enums/registry-credential-kind.enum'
 import { SecretStore } from '../stores/secret.store'
+import { matchingCredential } from '../utils/matching-credential'
 import { registryProxyHost } from '../utils/registry-proxy.util'
-import { RegistryCredentialService } from './registry-credential.service'
 
 /** The injection token the module binds `createSecretStore`'s answer to. */
 export const SECRET_STORE = Symbol('SECRET_STORE')
@@ -46,7 +46,6 @@ export class RegistriesService {
     private readonly credentials: Repository<RegistryCredential>,
     @Inject(SECRET_STORE)
     private readonly store: SecretStore | null,
-    private readonly lookup: RegistryCredentialService,
   ) {}
 
   list(organizationId: string): Promise<RegistryCredential[]> {
@@ -151,10 +150,14 @@ export class RegistriesService {
       .select(['box.id', 'box.image'])
       .getMany()
 
+    if (candidates.length === 0) return []
+    const credentials = await manager.getRepository(RegistryCredential).find({
+      where: { organizationId: credential.organizationId, registryHost: credential.registryHost },
+    })
     const inUse: string[] = []
     for (const box of candidates) {
-      const { host, repository } = parseImageRef(upstreamRefOf(box.image as string))
-      const picked = await this.lookup.findForRepository(credential.organizationId, host, repository, manager)
+      const { repository } = parseImageRef(upstreamRefOf(box.image as string))
+      const picked = matchingCredential(credentials, repository)
       if (picked?.id === credential.id) {
         inUse.push(box.id)
       }

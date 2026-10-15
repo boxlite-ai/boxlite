@@ -119,7 +119,7 @@ describeIfDatabase('Registry credential deletion concurrency (integration, real 
     const lookup = (db: DataSource) =>
       new RegistryCredentialService(db.getRepository(RegistryCredential), db.getRepository(Box))
     store = { put: jest.fn().mockResolvedValue('test-secret-version'), destroy: jest.fn().mockResolvedValue(undefined) }
-    registries = new RegistriesService(deleterDb.getRepository(RegistryCredential), store, lookup(deleterDb))
+    registries = new RegistriesService(deleterDb.getRepository(RegistryCredential), store)
     credential = await registries.create(organization.id, 'test-user', {
       registryHost: 'ghcr.io',
       repositoryPrefix: 'acme/',
@@ -152,6 +152,34 @@ describeIfDatabase('Registry credential deletion concurrency (integration, real 
       maxCreatedBoxes,
     })
   }
+
+  it('reads credential candidates once while preserving longest-prefix dependencies', async () => {
+    await registries.create(organization.id, 'test-user', {
+      registryHost: 'ghcr.io',
+      repositoryPrefix: 'acme/team/',
+      username: 'test-user',
+      password: 'test-only-password',
+    })
+    const dependent = await create()
+    const shadowed = [
+      await create(undefined, 'ghcr.io/acme/team/app:1'),
+      await create(undefined, 'ghcr.io/acme/team/tool:1'),
+    ]
+    const queries = jest.spyOn(deleterDb.logger, 'logQuery')
+    try {
+      const result = await outcome(registries.delete(organization.id, credential.id))
+      expect(result.error).toBeInstanceOf(ConflictException)
+      const message = (result.error as ConflictException).message
+      expect(message).toContain(dependent.id)
+      for (const box of shadowed) expect(message).not.toContain(box.id)
+      expect(store.destroy).not.toHaveBeenCalled()
+      expect(
+        queries.mock.calls.filter(([sql]) => sql.startsWith('SELECT') && sql.includes('FROM "registry_credential"')),
+      ).toHaveLength(2)
+    } finally {
+      queries.mockRestore()
+    }
+  })
 
   it.each([undefined, 10])('rejects creation while deletion owns the credential (box limit %s)', async (limit) => {
     const gate = barrier()

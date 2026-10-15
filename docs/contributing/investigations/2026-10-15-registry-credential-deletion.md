@@ -24,6 +24,12 @@ Deletion opens a READ COMMITTED transaction, locks its credential exclusively, c
 
 No schema change, new dependency, or resolver API is required. Expected production additions are below 120 lines.
 
+Deletion reads candidate credentials once through its transaction manager and
+matches dependent boxes in memory with the same longest-prefix helper. This
+replaces one repeated credential query per box and preserves the row lock.
+The single-repository lookup service no longer needs a transaction-manager
+argument or an injection into the deletion service.
+
 ## Validation
 
 | Ordering | Controlled boundary | Required result |
@@ -37,3 +43,10 @@ No schema change, new dependency, or resolver API is required. Expected producti
 The reproduction runs against PostgreSQL with controlled promises, not timing sleeps. It exercises real resolver, repository, and deletion service code; runner selection and the secret-store boundary are test fixtures. With production unchanged, all six concurrency cases failed because the conflicting operation succeeded. With the fix, all six passed; the focused run passed 76 tests, including creation-admission regressions. Scoped lint and formatting also passed. Secret-store crash recovery and distributed Redis behavior are not exercised here.
 
 Tracking context: https://github.com/boxlite-ai/boxlite/issues/1948
+
+The query-count regression creates three boxes across broad and narrow
+credentials. Before optimization, deletion correctly identified the dependent
+box but read credential rows four times. After optimization it reads twice (the
+locked target plus one candidate snapshot), with the dependent-box check intact.
+All 99 selected credential, resolver, admission and box tests passed, along with
+scoped lint and formatting.

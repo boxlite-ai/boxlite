@@ -9,7 +9,6 @@ import { Box } from '../../box/entities/box.entity'
 import { RegistryCredential } from '../entities/registry-credential.entity'
 import { SecretStore } from '../stores/secret.store'
 import { RegistriesService } from './registries.service'
-import { RegistryCredentialService } from './registry-credential.service'
 
 const PROXY = 'registry-proxy-abc.a.run.app'
 const ORG = '0aaa0000-0000-4000-8000-000000000001'
@@ -17,7 +16,13 @@ const REQUEST = { registryHost: 'ghcr.io', repositoryPrefix: 'acme/', username: 
 
 function build({
   store = { put: jest.fn(async () => 'version-1'), destroy: jest.fn(async () => undefined) },
-  row = { id: 'credential-1', organizationId: ORG, registryHost: 'ghcr.io', secretVersion: 'version-1' },
+  row = {
+    id: 'credential-1',
+    organizationId: ORG,
+    registryHost: 'ghcr.io',
+    repositoryPrefix: 'acme/',
+    secretVersion: 'version-1',
+  },
   boxes = [] as Partial<Box>[],
   picked = 'credential-1' as string | null,
 } = {}) {
@@ -27,7 +32,9 @@ function build({
     findOneByOrFail: jest.fn(async () => ({ ...row })),
     findOneBy: jest.fn(async () => row),
     delete: jest.fn(async () => calls.push('delete')),
-    find: jest.fn(async () => [row]),
+    find: jest.fn(async () =>
+      picked === row.id ? [row] : picked ? [{ ...row, id: picked, repositoryPrefix: 'acme/app/' }] : [],
+    ),
     manager: {} as EntityManager,
   }
   const builder = {
@@ -36,11 +43,12 @@ function build({
     select: jest.fn(() => builder),
     getMany: jest.fn(async () => boxes),
   }
-  const lookup = { findForRepository: jest.fn(async () => (picked ? { id: picked } : null)) }
   const manager = {
     findOne: jest.fn(async () => credentials.findOneBy()),
     delete: jest.fn(async () => credentials.delete()),
-    getRepository: jest.fn(() => ({ createQueryBuilder: () => builder })),
+    getRepository: jest.fn((entity) =>
+      entity === RegistryCredential ? credentials : { createQueryBuilder: () => builder },
+    ),
   }
   credentials.manager.transaction = jest.fn(async (_isolation, callback) => callback(manager)) as never
   store.destroy.mockImplementation(async () => {
@@ -49,9 +57,8 @@ function build({
   const service = new RegistriesService(
     credentials as unknown as Repository<RegistryCredential>,
     store as unknown as SecretStore,
-    lookup as unknown as RegistryCredentialService,
   )
-  return { service, credentials, store, builder, calls, lookup }
+  return { service, credentials, store, builder, calls }
 }
 
 describe('RegistriesService', () => {
@@ -123,7 +130,7 @@ describe('RegistriesService', () => {
 
   describe('delete', () => {
     it('refuses with the ids of the boxes still pulling through it', async () => {
-      const { service, store, builder, lookup } = build({
+      const { service, store, builder, credentials } = build({
         boxes: [
           { id: 'box-1', image: `${PROXY}/${ORG}/ghcr.io/acme/app:1` },
           { id: 'box-2', image: `${PROXY}/${ORG}/ghcr.io/acme/tool@sha256:${'a'.repeat(64)}` },
@@ -142,9 +149,8 @@ describe('RegistriesService', () => {
       expect(builder.andWhere).toHaveBeenCalledWith('box.image LIKE :through', {
         through: `${PROXY}/${ORG}/ghcr.io/%`,
       })
-      // And each one is matched by its upstream repository, not the proxy ref.
-      expect(lookup.findForRepository).toHaveBeenCalledWith(ORG, 'ghcr.io', 'acme/app', expect.any(Object))
-      expect(lookup.findForRepository).toHaveBeenCalledWith(ORG, 'ghcr.io', 'acme/tool', expect.any(Object))
+      expect(credentials.find).toHaveBeenCalledTimes(1)
+      expect(credentials.find).toHaveBeenCalledWith({ where: { organizationId: ORG, registryHost: 'ghcr.io' } })
     })
 
     it('lets a login go when a longer one is what its boxes pull through', async () => {

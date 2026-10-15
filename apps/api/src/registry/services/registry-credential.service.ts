@@ -5,7 +5,7 @@
 
 import { Injectable } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { EntityManager, Not, Repository } from 'typeorm'
+import { Not, Repository } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { RegistryCredential } from '../entities/registry-credential.entity'
@@ -49,10 +49,8 @@ export class RegistryCredentialService {
     organizationId: string,
     registryHost: string,
     repository: string,
-    manager?: EntityManager,
   ): Promise<RegistryCredential | null> {
-    const credentials = manager?.getRepository(RegistryCredential) ?? this.credentials
-    const candidates = await credentials.find({ where: { organizationId, registryHost } })
+    const candidates = await this.credentials.find({ where: { organizationId, registryHost } })
     return matchingCredential(candidates, repository)
   }
 

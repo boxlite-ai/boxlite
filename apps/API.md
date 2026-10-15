@@ -457,6 +457,8 @@ Credential deletion and private-image box persistence coordinate in PostgreSQL.
 If they overlap, the contending request returns 409 and can be retried. A box
 whose resolved proxy reference has lost its credential is also rejected before
 it is saved. Once a dependent box commits, deletion returns 409 with its ID.
+The dependency check reads candidate credentials once for the organization and
+registry host, then matches each box in memory using the longest repository prefix.
 
 </details>
 
