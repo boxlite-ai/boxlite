@@ -276,23 +276,28 @@ describe("image catalog on a REST runtime", () => {
       "PUT /v1/images/quay.io%2Facme%2Fapp/tags/stable",
       JSON.stringify({ digest: NEW }),
     ]);
-    expect(detail.versions).toEqual([
-      {
-        digest: NEW,
-        sourceRef: "quay.io/acme/app:v2",
-        recordedAt: "2026-09-02T00:00:00+00:00",
-        tags: ["stable"],
-        lastUsedAt: "2026-09-03T00:00:00+00:00",
-      },
-    ]);
-    expect(detail.history).toEqual([
-      {
-        tag: "stable",
-        fromDigest: OLD,
-        toDigest: NEW,
-        actor: "user-1",
-        movedAt: "2026-09-04T00:00:00+00:00",
-      },
-    ]);
+    expect(detail).toEqual({
+      name: "quay.io/acme/app",
+      tags: ["stable"],
+      curated: false,
+      versions: [
+        {
+          digest: NEW,
+          sourceRef: "quay.io/acme/app:v2",
+          recordedAt: "2026-09-02T00:00:00+00:00",
+          tags: ["stable"],
+          lastUsedAt: "2026-09-03T00:00:00+00:00",
+        },
+      ],
+      history: [
+        {
+          tag: "stable",
+          fromDigest: OLD,
+          toDigest: NEW,
+          actor: "user-1",
+          movedAt: "2026-09-04T00:00:00+00:00",
+        },
+      ],
+    });
   });
 });

@@ -152,8 +152,10 @@ the cache whenever it starts: after the remove that start fetches it from the
 registry again, and fails while the registry is unreachable.
 
 `move_tag` takes a tag the OCI distribution spec accepts and a `sha256:`
-digest that one of the image's versions lists; either is refused with
-`InvalidArgument` before anything is sent. In a catalog, each version of an
+digest. Malformed inputs are refused locally with `InvalidArgument` before
+anything is sent. The catalog also returns `InvalidArgument` when a
+well-formed digest does not belong to one of the image's versions.
+In a catalog, each version of an
 `ImageDetail` carries the `tags` on it, its `last_used_at`, and the
 `upstream_missing_at` a failed pull set when its registry no longer had it;
 the detail's `history` holds the latest tag moves, newest first, as
