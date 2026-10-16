@@ -85,11 +85,39 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
     expect(error).not.toBeInstanceOf(EmailVerificationRequiredError)
   })
 
+  // The catalog's delete refusal is only useful for the box ids in its message;
+  // an image client built outside the shared instance would hand the page a
+  // raw axios error and the toast would fall back to a generic line.
+  it('image requests share the error handling: a 409 refusal keeps the box ids', async () => {
+    const refusal = "Image 'quay.io/acme/app' cannot be removed while 2 box(es) can still boot from it: box-1, box-2"
+    const onUnauthorized = vi.fn(() => Promise.resolve())
+    const api = await makeClient(onUnauthorized, 409, { statusCode: 409, error: 'Conflict', message: refusal })
+
+    const { BoxliteError } = await import('./errors')
+
+    const error = await api.imageApi.deleteImage('img-1', 'org-1').catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(BoxliteError)
+    expect((error as Error).message).toBe(refusal)
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
   it('a rejecting onUnauthorized resets state and surfaces an error (no hang)', async () => {
     const onUnauthorized = vi.fn(() => Promise.reject(new Error('redirect start failed')))
     const api = await makeClient(onUnauthorized)
     await expect(api.organizationsApi.listOrganizations()).rejects.toBeTruthy()
     // Marker cleared so a later genuine 401 still gets its one recovery attempt.
     expect(window.sessionStorage.getItem('boxlite.reauth-attempted')).toBeNull()
+  })
+
+  it('registry requests preserve removal refusals through the shared interceptor', async () => {
+    const refusal = 'Cannot remove login while box-1 pulls through it'
+    const onUnauthorized = vi.fn()
+    const api = await makeClient(onUnauthorized, 409, { message: refusal })
+    const { BoxliteError } = await import('./errors')
+
+    const error = await api.registriesApi.deleteRegistryCredential('credential-1', 'org-1').catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(BoxliteError)
+    expect((error as Error).message).toBe(refusal)
+    expect(onUnauthorized).not.toHaveBeenCalled()
   })
 })

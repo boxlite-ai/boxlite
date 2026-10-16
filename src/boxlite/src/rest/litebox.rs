@@ -17,7 +17,8 @@ use crate::BoxInfo;
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{
-    AttachOptions, BoxCommand, BoxTunnel, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution,
+    AttachOptions, BoxCommand, BoxConnection, BoxTunnel, ExecResult, ExecStderr, ExecStdin,
+    ExecStdout, Execution,
 };
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
@@ -533,17 +534,26 @@ impl BoxBackend for RestBox {
 #[async_trait]
 impl BoxNetworkBackend for RestBox {
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+        let endpoint = self.tunnel_endpoint(target).await?;
+        let client = self.client.clone();
+        Ok(BoxTunnel::new(Some(endpoint.clone()), async move {
+            let connection = client.connect_box_network_tunnel(&endpoint).await?;
+            Ok(BoxConnection::new(connection))
+        }))
+    }
+}
+
+impl RestBox {
+    /// Register `target`'s port as a public tunnel and return its URI.
+    async fn tunnel_endpoint(&self, target: SocketAddr) -> BoxliteResult<String> {
         if target.ip().to_string() != crate::net::constants::GUEST_IP {
             return Err(BoxliteError::Unsupported(
                 "REST box tunnels only support service ports on the guest IP".into(),
             ));
         }
-
-        let port = target.port();
-        let box_id = self.box_id_str();
-        let endpoint = self.client.prepare_box_tunnel(&box_id, port).await?;
-        let connection = self.client.connect_box_network_tunnel(&endpoint).await?;
-        Ok(BoxTunnel::remote(endpoint, connection))
+        self.client
+            .prepare_box_tunnel(&self.box_id_str(), target.port())
+            .await
     }
 }
 
@@ -2606,5 +2616,55 @@ mod tests {
         );
 
         server.await.unwrap();
+    }
+
+    /// `connect()` opens the tunnel `tunnel()` prepared: one `POST
+    /// /network/tunnel` per tunnel, not a second one for the connection.
+    #[tokio::test]
+    async fn connect_reuses_the_prepared_rest_tunnel() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let posts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_posts = posts.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let posts = server_posts.clone();
+                tokio::spawn(async move {
+                    let head = String::from_utf8(read_request_head(&mut socket).await).unwrap();
+                    if head.starts_with("POST") {
+                        posts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let body = format!(r#"{{"uri":"http://127.0.0.1:{port}"}}"#);
+                        let reply = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        socket.write_all(reply.as_bytes()).await.unwrap();
+                    } else {
+                        socket
+                            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                            .await
+                            .unwrap();
+                        let (mut reader, mut writer) = socket.split();
+                        let _ = tokio::io::copy(&mut reader, &mut writer).await;
+                    }
+                });
+            }
+        });
+
+        let network = crate::litebox::NetworkHandle::new(Arc::new(rest_box_for(port, "tun-box")));
+        let target = format!("{}:3000", crate::net::constants::GUEST_IP);
+        let tunnel = network.tunnel(target.parse().unwrap()).await.unwrap();
+        assert_eq!(
+            tunnel.uri(),
+            Some(format!("http://127.0.0.1:{port}").as_str())
+        );
+
+        let mut connection = tunnel.connect().await.unwrap();
+        connection.write_all(b"ping").await.unwrap();
+        let mut echoed = [0; 4];
+        connection.read_exact(&mut echoed).await.unwrap();
+        assert_eq!(&echoed, b"ping");
+        assert_eq!(posts.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

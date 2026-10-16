@@ -158,15 +158,54 @@ for info in boxes:
 
 #### Runtime Image Management
 
+`runtime.images` holds the images a runtime can boot from: the local cache on
+an embedded runtime, the server's catalog on `Boxlite.rest(...)`. `list`, `get`
+and `remove` run unchanged against either; `usage` is REST only.
+
 ```python
 runtime = boxlite.Boxlite.default()
 
-pull = await runtime.images.pull("alpine:latest")
-print(pull.reference, pull.config_digest, pull.layer_count)
-
 for image in await runtime.images.list():
     print(image.repository, image.tag, image.id)
+
+detail = await runtime.images.get("docker.io/library/alpine")
+print(detail.tags, [version.digest for version in detail.versions])
+await runtime.images.remove("docker.io/library/alpine")
 ```
+
+`pull` fills a local cache ahead of time. A REST runtime refuses it with
+`UnsupportedError`, because creating a box there pulls the image:
+
+```python
+pull = await runtime.images.pull("alpine:latest")
+print(pull.reference, pull.config_digest, pull.layer_count)
+```
+
+See [the Python reference](../../docs/reference/python/README.md#boxliteimagehandle)
+for each method on each runtime.
+
+#### Private Registry Logins
+
+On `Boxlite.rest(...)`, `runtime.registries` manages the logins the server
+pulls private images with. The password goes up once and is never returned.
+A local runtime raises `UnsupportedError`: pass `image_registries` to
+`boxlite.Options` instead.
+
+```python
+runtime = boxlite.Boxlite.rest(boxlite.BoxliteRestOptions.from_env())
+
+login = await runtime.registries.create(
+    registry_host="ghcr.io",
+    repository_prefix="acme/",  # leave out for the whole registry
+    username="acme-bot",
+    password=os.environ["GHCR_TOKEN"],
+)
+box = await runtime.create(boxlite.BoxOptions(image="ghcr.io/acme/private-app:1"))
+...
+await runtime.registries.remove(login.id)  # refused while a box pulls through it
+```
+
+See [the Python reference](../../docs/reference/python/README.md#boxliteregistryhandle).
 
 ### Remote BoxLite server (REST)
 
@@ -820,6 +859,11 @@ from boxlite import BoxliteError, ExecError, TimeoutError, ParseError
 
 **ParseError** - Failed to parse output
 
+**NotFoundError**, **InvalidStateError**, **UnsupportedError**, … - A failure
+the runtime reported, one class per kind, each with a `code` such as
+`not_found`. Every one is also a `RuntimeError`. The full list is in
+[the Python reference](../../docs/reference/python/README.md#runtime-failures).
+
 ### Common Error Patterns
 
 ```python
@@ -884,7 +928,7 @@ sudo usermod -aG kvm $USER
 **Solutions:**
 - Check internet connectivity
 - Verify image name and tag exist: `docker pull <image>`
-- For private images, pass `image_registries=[boxlite.ImageRegistry(...)]` when creating `boxlite.Options`
+- For private images, pass `image_registries=[boxlite.ImageRegistry(...)]` when creating `boxlite.Options`; on `Boxlite.rest(...)`, add a login with `runtime.registries.create(...)`
 
 ### Performance Issues
 

@@ -3,18 +3,21 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from 'typeorm'
+import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from 'typeorm'
 import { Image } from './image.entity'
 import { ImageVersion } from './image-version.entity'
 
-// The digest a tag resolved to the first time it was pulled. S1 never moves a
-// tag: once `app:latest` is recorded it keeps pointing at that version. The
-// escape hatch is deleting the image and using it again — which nothing can do
-// yet, because the endpoint that deletes one ships with the catalog API, so
-// until then a recorded tag is final. Moving a tag becomes a first-class
-// operation later, which is when this table starts changing.
+// The digest a tag resolved to the first time it was pulled. Nothing moves a
+// tag today: once `app:latest` is recorded it keeps pointing at that version.
+// The escape hatch is `DELETE /images/:idOrRef` and then using the reference
+// again, which brings the name back as a fresh entry. Moving a tag becomes a
+// first-class operation later, which is when this table starts changing.
 @Entity()
 @Unique('image_tag_image_name_unique', ['imageId', 'name'])
+// Postgres does not index a foreign key for you, and `versionId` restricts:
+// deleting a version scans this table whole for references. That scan is on
+// the catalog's delete path, so the index belongs with it.
+@Index('image_tag_version_index', ['versionId'])
 export class ImageTag {
   @PrimaryGeneratedColumn('uuid')
   id: string

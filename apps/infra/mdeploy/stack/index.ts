@@ -22,7 +22,7 @@
  */
 
 import type { Api, ApiCapability, ApiDependencies, ApiProvider } from './api.ts'
-import { API_PORT } from './api.ts'
+import { API_PORT, publicHostsFor } from './api.ts'
 import type { AlarmProvider, AlarmSubjects } from './alarms.ts'
 import type { Cache, CacheProvider } from './cache.ts'
 import { CACHE_PASSWORD_VARIABLE, cacheEnvironment } from './cache.ts'
@@ -41,9 +41,18 @@ import { mailEnvironment } from './mail.ts'
 import type { Network, NetworkProvider } from './network.ts'
 import type { RegistryProxy, RegistryProxyProvider } from './registry-proxy.ts'
 import {
+  registryCredentialEnvironment,
+  type RegistryCredentialStore,
+  type RegistryCredentialStoreProvider,
+} from './registry-credentials.ts'
+import {
   REGISTRY_PROXY_CONTROL_PLANE_VARIABLE,
+  REGISTRY_PROXY_HOST_VARIABLE,
   REGISTRY_PROXY_PORT,
   REGISTRY_PROXY_PORT_VARIABLE,
+  REGISTRY_PROXY_UPSTREAM_HOSTS,
+  REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE,
+  registryProxyHostOf,
 } from './registry-proxy.ts'
 import { runnerApiUrl } from './runner-boot.ts'
 import type { RunnerAssignment, RunnerProvider, RunnerSlot, Runners } from './runners.ts'
@@ -145,7 +154,13 @@ export type StackProviders = {
    * service rather than a cluster task, so it takes its placement from the
    * network directly. The other cloud answers with the inactive handle.
    */
-  registryProxy: (input: { network: Network; dependsOn: any[] }) => RegistryProxyProvider
+  registryProxy: (input: {
+    network: Network
+    dependsOn: any[]
+    registryCredentials: RegistryCredentialStore
+  }) => RegistryProxyProvider
+  /** Where registry passwords live: on the proxy's cloud, and inactive on the other. */
+  registryCredentials: RegistryCredentialStoreProvider
   /**
    * One host's registration token, minted so it survives the next deploy.
    *
@@ -255,6 +270,7 @@ export const deployStack = ({
     ...config.clickhouse,
     retentionHours: clickHouseRetentionFor(config.clickhouse.mode, inputs.clickHouseRetentionHours),
   })
+  const registryCredentials: RegistryCredentialStore = providers.registryCredentials()
 
   /*
    * The network's own rules, which reach every workload through the cluster.
@@ -353,6 +369,46 @@ export const deployStack = ({
     throw new Error('the fleet is empty; a stage runs at least one runner, which the API seeds its row from')
   }
 
+  /*
+   * The registry proxy, before the API because the API is handed its host: a
+   * private image is given to a runner as a ref under that host, and only the
+   * resolver writes one. The proxy asks the API about every caller — a
+   * runner's key is an opaque column, not a signed token — but it reaches the
+   * API by `api.<domain>`, which the stage's domain fixes before either
+   * exists, so nothing of the API's is needed to build it. Until the API
+   * answers, a caller is told to retry, as during any restart of it.
+   *
+   * Its whole environment is the stack's. The logins it presents upstream are
+   * read from the credential store at pull time rather than delivered here,
+   * and it reads nothing a stage would tune, so there is no store group for it
+   * — one with nothing in it would be a place for a stale copy to sit. It is
+   * told which store and which registries, as the API is, so the two cannot
+   * name different ones.
+   *
+   * Telemetry on, for the reason the edge proxy's note further down gives: the
+   * binary declares both switches without a default, and one left unset ships
+   * nothing while looking healthy.
+   */
+  const registryProxy: RegistryProxy = providers.registryProxy({
+    network,
+    dependsOn: placed,
+    registryCredentials,
+  })({
+    image: imageFor(images, 'registry-proxy'),
+    environment: {
+      OTEL_LOGGING_ENABLED: 'true',
+      OTEL_TRACING_ENABLED: 'true',
+      OTEL_EXPORTER_OTLP_ENDPOINT: collector.otlpUrl,
+      ENVIRONMENT: inputs.stage,
+      [REGISTRY_PROXY_PORT_VARIABLE]: String(REGISTRY_PROXY_PORT),
+      [REGISTRY_PROXY_CONTROL_PLANE_VARIABLE]: runnerApiUrl(`https://${publicHostsFor({ domain: inputs.domain }).api}`),
+      [REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE]: REGISTRY_PROXY_UPSTREAM_HOSTS.join(','),
+      ...registryCredentialEnvironment(registryCredentials),
+    },
+  })
+  /** What the API writes into private refs, and what a runner presents its key to. */
+  const registryProxyHost = registryProxy.active ? registryProxy.url.apply(registryProxyHostOf) : null
+
   const apiEnvironment = {
     ...inputs.apiEnvironment,
     // The first host's token, which is the one row the API seeds itself. Every
@@ -362,6 +418,13 @@ export const deployStack = ({
     ...cacheEnvironment(cache),
     ...mailEnvironment(mail),
     ...clickHouseEnvironment(clickhouse, 'reader'),
+    ...registryCredentialEnvironment(registryCredentials),
+    ...(registryProxyHost
+      ? {
+          [REGISTRY_PROXY_HOST_VARIABLE]: registryProxyHost,
+          [REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE]: REGISTRY_PROXY_UPSTREAM_HOSTS.join(','),
+        }
+      : {}),
     /*
      * `DB_TLS_ENABLED` is not here. It used to be, as a constant `'true'`
      * written after `databaseEnvironment` and therefore winning over it — which
@@ -413,7 +476,7 @@ export const deployStack = ({
     domain: inputs.domain,
     environment: apiEnvironment,
     secrets: inputs.apiSecrets,
-    capabilities: capabilitiesFor({ storage, clickhouse }),
+    capabilities: capabilitiesFor({ storage, clickhouse, registryCredentials }),
   })
 
   const proxyEnvironment = {
@@ -454,34 +517,6 @@ export const deployStack = ({
     apiUrl: api.address,
     environment: proxyEnvironment,
     secrets: inputs.proxySecrets,
-  })
-
-  /*
-   * The registry proxy, after the API because it asks the API about every
-   * caller: a runner's key is an opaque column, not a signed token, so there is
-   * no checking one without the control plane answering.
-   *
-   * Its whole environment is the stack's. It holds no credentials in this
-   * release and reads nothing a stage would tune, so there is no store group
-   * for it — one with nothing in it would be a place for a stale copy to sit.
-   *
-   * Telemetry on, for the reason the proxy's note above gives: the binary
-   * declares both switches without a default, and one left unset ships
-   * nothing while looking healthy.
-   */
-  const registryProxy: RegistryProxy = providers.registryProxy({
-    network,
-    dependsOn: [...placed, ...api.ready],
-  })({
-    image: imageFor(images, 'registry-proxy'),
-    environment: {
-      OTEL_LOGGING_ENABLED: 'true',
-      OTEL_TRACING_ENABLED: 'true',
-      OTEL_EXPORTER_OTLP_ENDPOINT: collector.otlpUrl,
-      ENVIRONMENT: inputs.stage,
-      [REGISTRY_PROXY_PORT_VARIABLE]: String(REGISTRY_PROXY_PORT),
-      [REGISTRY_PROXY_CONTROL_PLANE_VARIABLE]: api.address.apply(runnerApiUrl),
-    },
   })
 
   const runnerEnvironment = {
@@ -526,6 +561,7 @@ export const deployStack = ({
     binary: inputs.runnerBinary,
     apiUrl: api.address,
     otlpUrl: collector.otlpUrl,
+    registryProxyHost,
     environment: runnerEnvironment,
     secrets: inputs.runnerSecrets,
   })
@@ -552,19 +588,26 @@ export const deployStack = ({
  *
  * List its own bucket, which is the boot probe; create, tag and delete the
  * volume buckets it owns, which is bounded by the storage module's prefix; vend
- * a scoped credential for one of them; and read telemetry back, which exists
- * only where a stage keeps any. Nothing here names an ARN or a role — the
- * provider bundle expands each sentence into its cloud's own grants.
+ * a scoped credential for one of them; read telemetry back, which exists only
+ * where a stage keeps any; and write registry passwords it cannot read back,
+ * which exists only where the registry proxy does. Nothing here names an ARN or
+ * a role — the provider bundle expands each sentence into its cloud's own
+ * grants.
  */
 export const capabilitiesFor = ({
   storage,
   clickhouse,
+  registryCredentials,
 }: {
   storage: Storage
   clickhouse: ClickHouse
+  registryCredentials: RegistryCredentialStore
 }): ApiCapability[] => [
   { kind: 'list-own-bucket', storage },
   { kind: 'manage-volume-buckets', storage },
   { kind: 'vend-volume-credentials', storage },
   ...(clickhouse.active ? ([{ kind: 'read-telemetry', clickhouse }] as ApiCapability[]) : []),
+  ...(registryCredentials.active
+    ? ([{ kind: 'write-registry-credentials', store: registryCredentials }] as ApiCapability[])
+    : []),
 ]

@@ -68,11 +68,14 @@ func TestUpstreamTokensAreKeptPerRepositoryAndOrganization(t *testing.T) {
 	first := oci.Upstream{Endpoint: "ghcr.io", Repository: "acme/app"}
 	second := oci.Upstream{Endpoint: "ghcr.io", Repository: "acme/other"}
 
-	if tokenKey("acme", first) == tokenKey("acme", second) {
+	if tokenKey("runner-7", "acme", first) == tokenKey("runner-7", "acme", second) {
 		t.Error("two repositories share a token key, so a scoped token would be offered where it cannot work")
 	}
-	if tokenKey("acme", first) == tokenKey("globex", first) {
+	if tokenKey("runner-7", "acme", first) == tokenKey("runner-7", "globex", first) {
 		t.Error("two organizations share a token key")
+	}
+	if tokenKey("runner-7", "acme", first) == tokenKey("runner-9", "acme", first) {
+		t.Error("two runners share a token key, so one runner's login-bought token would serve the other")
 	}
 }
 

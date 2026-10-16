@@ -13,9 +13,10 @@ served, so the digest a client verifies still holds.
 
 - Place in the platform: [`apps/README.md`](../README.md)
 
-> **Status: no credentials yet.** The proxy pulls what an upstream serves
-> anonymously. Registry credentials, and with them private images, arrive with
-> the credential store.
+> **Private images.** An organization's login for ghcr.io, Docker Hub, quay.io
+> or one of Container Registry's gcr.io hosts is read from the credential store
+> when a pull needs it. The proxy can read those passwords and write none; the
+> API is the reverse.
 
 ## Endpoints
 
@@ -60,6 +61,14 @@ The organization comes from the path and only from the path. A caller's own
 credential says which runner is calling, never which organization: runners are
 shared and belong to none.
 
+These refs are the API's and the runner's alone. The API writes
+`<proxy>/<org>/ghcr.io/acme/app:1.2` for a box whose image an organization's
+login covers, and a tenant never reads it back: the box's image is
+`ghcr.io/acme/app:1.2`, and a pull that fails is recorded with that name, in
+both the ref and the `/v2/` URL a registry client prints. A failure that names
+only this proxy, such as its `/v2/` being unreachable, reads as "the registry
+proxy", without its address.
+
 ## What a pull passes through
 
 ```
@@ -72,13 +81,38 @@ GET /v2/acme/ghcr.io/acme/app/manifests/1.2   Authorization: Basic …
  │
  ├─ forward        GET https://ghcr.io/v2/acme/app/manifests/1.2
  │                  └─ 401 → read the challenge, fetch a token, retry once
- │                     the token is kept per (org, endpoint, repository)
+ │                     the token is kept per (runner, org, endpoint, repository)
+ │                     ├─ login?  control plane, as the runner, cached     403 if it hosts no box of the org · 503 if it cannot be asked
+ │                     ├─ secret  Secret Manager, only on a token miss
+ │                     └─ token   bought with the login: kept ≤ 5 minutes   403 if the login is refused
  │
  └─ relay          status, headers and body, unread and unmodified
 ```
 
 The caller's own credential stops at `authenticate`: it identifies a runner to
 this proxy and means nothing upstream, so it is never forwarded.
+
+A runner is given an organization's login only while it hosts a box of that
+organization, and both the answer and the token that login buys are kept per
+runner, so one runner's token never serves another's pull. A runner key alone is not enough: an organization can run
+runners of its own, and one of those naming another organization in a pull
+path would otherwise be handed that organization's private images. A path
+whose organization is not an organization id is pulled anonymously without
+asking.
+
+The credential finder calls the internal control-plane route
+`GET /api/runners/me/registry-credentials` directly with the runner's bearer
+token. This operation and its secret-version response model are excluded from
+the customer OpenAPI document and generated SDKs. The proxy reuses its configured
+control-plane HTTP client and base URL; 404 means anonymous access, while 403
+refuses the pull and other failures report the credential as unavailable.
+
+An organization's login travels to one place, the registry's token endpoint,
+and only when that endpoint is the registry's own host or one it is known to
+use (`auth.docker.io` for Docker Hub). The pull itself carries the token the
+login bought, never the login. A token bought with a login is kept five
+minutes at most, whatever the registry states — gcr.io states twelve hours —
+because that cache is how long a deleted login keeps working here.
 
 Unmodified takes one deliberate act. Go's HTTP transport offers `gzip` on any
 request that did not ask for an encoding itself, then decodes the answer and
@@ -100,7 +134,8 @@ chooses, since a blob handed off with a `302` names an address we did not pick.
 | Package | Holds | Must not know |
 | --- | --- | --- |
 | `internal/oci/` | The distribution protocol: how a pull spells itself in a URL, which endpoint serves a registry host, how to issue that pull upstream. | That anyone is authenticated, rate-limited, or proxied at all. |
-| `internal/proxy/` | What only the registry proxy needs: the `<org>/<host>/<repository>` convention, the HTTP surface, caller authentication, per-runner and per-organization rate limiting, upstream token exchange, and the address rule. | — |
+| `internal/proxy/` | What only the registry proxy needs: the `<org>/<host>/<repository>` convention, the HTTP surface, caller authentication, per-runner and per-organization rate limiting, finding an organization's login, upstream token exchange, and the address rule. | — |
+| `internal/secrets/` | Reading a password from Secret Manager or a local directory. | Whose password it is, or what it is for. |
 | `cmd/registry-proxy/` | The binary: configuration, telemetry, signals. | — |
 
 The line matters more than it looks. `internal/oci` is reusable by a second
@@ -115,7 +150,9 @@ steps.
 | `REGISTRY_PROXY_PORT` | `4100` | Listen port. Not 5000, the registry convention, because macOS binds it for AirPlay. |
 | `SHUTDOWN_TIMEOUT_SEC` | `3600` | How long a drain may take. A blob is one long response, so this has to outlast the longest pull in flight or a deploy truncates an image mid-layer. |
 | `BOXLITE_API_URL` | — | **Required.** The control plane. A runner API key is an opaque column rather than a signed token, so a caller can only be checked by asking. |
-| `REGISTRY_PROXY_UPSTREAM_HOSTS` | `ghcr.io,docker.io` | Registries this proxy will pull from, written as the names an operator knows — never `registry-1.docker.io`. |
+| `REGISTRY_PROXY_UPSTREAM_HOSTS` | `ghcr.io,docker.io,quay.io,gcr.io,us.gcr.io,eu.gcr.io,asia.gcr.io` | Registries this proxy will pull from, written as the names an operator knows — never `registry-1.docker.io`. |
+| `REGISTRY_SECRET_STORE` | — | Where organizations' registry passwords are read from: `gcp` (Secret Manager) or `file`. Unset, every pull is anonymous. The API writes them under the same name. |
+| `REGISTRY_SECRET_DIR` | — | The directory the `file` store reads, on a local stack. |
 | `REGISTRY_PROXY_CREDENTIAL_TTL` | `60s` | How long a verified caller is taken on trust. Also the delay between revoking a runner and this proxy noticing. |
 | `REGISTRY_PROXY_REJECTION_TTL` | `30s` | How long a refused credential is remembered, so a caller with a bad key cannot turn this proxy into a load generator aimed at the control plane. |
 | `REGISTRY_PROXY_PULLS_PER_SECOND` / `REGISTRY_PROXY_PULL_BURST` | `50` / `200` | The rate each runner and each organization may pull at. Requests, not bytes: the burst has to clear a whole image. |
@@ -141,6 +178,10 @@ yarn nx serve image-service
 Coverage is reported through `make coverage:go` from the repository root, which
 is also what CI uploads.
 
+Secret-reader tests use a local TLS server and temporary files. They verify
+malformed or oversized payload rejection, cancellation before a request, and
+missing-file errors without accessing real registry passwords.
+
 Locally it is one of the native processes `apps/infra-local` supervises:
 `make up` builds and starts it, and `make restart COMPONENTS=registry-proxy`
 rebuilds it from source.
@@ -158,14 +199,19 @@ defaults, and each is there because the default loses a pull:
 | HTTP/2 port (`h2c`) | Cloud Run caps an HTTP/1 response at 32 MiB unless it is chunked. A blob relayed with the upstream's own `Content-Length` is not, so over HTTP/1 every layer past that size would fail in production and pass in every test. The binary serves HTTP/1 and HTTP/2 on one port. |
 | Request timeout of an hour | A blob is one response and a large layer takes minutes. Cloud Run's default of five minutes cuts it off. |
 
-A runner reaches it at its own `run.app` address. Runners are VMs on a subnet
+A runner reaches it at its own `run.app` address, which the stack writes to both
+the API, as the host of the refs it hands out for private images, and every
+runner, as `REGISTRY_PROXY_HOST`. So the proxy is built before the API, and
+reaches the API by `api.<domain>`, a name the domain fixes before either
+exists. Runners are VMs on a subnet
 with Google's private access, which is what lets them reach an internal-ingress
 service without a load balancer — the same path they take to the telemetry
 collector.
 
-It runs as its own service account, not the control plane's. It holds no
-credentials yet, but it is the process that will, and whatever it is granted
-then should be granted to it alone.
+It runs as its own service account, not the control plane's, because it is
+the one process that reads registry passwords. That account holds
+`secretmanager.secretAccessor` on secrets named `registry-credential-*` and
+nothing else in Secret Manager.
 
 ## Known limits
 
@@ -189,8 +235,8 @@ then should be granted to it alone.
   but the cloud permits it as a subnet range. There is no setting to refuse it:
   a deployment that must is a change to `offInternet` in
   `internal/proxy/guard.go`.
-- An allowed registry names its own token endpoint, and any HTTPS one is
-  accepted: Docker Hub's is on a different host from its registry, so the two
-  cannot be required to match. Nothing is sent to it today, because the
-  exchange is anonymous. It becomes a way to steer a credential the moment one
-  exists, and belongs with the credential store that introduces it.
+- An allowed registry names its own token endpoint. An anonymous exchange
+  accepts any HTTPS one, since it carries nothing. An exchange that carries a
+  login accepts only the registry's own host and the ones in
+  `tokenHostsBeyond` (`internal/proxy/token.go`); a registry that moves its
+  token endpoint elsewhere fails private pulls until that table names it.

@@ -46,12 +46,16 @@ export const IMAGE_COUNT_LIMIT_CODE = 'image_count_limit_reached'
  * the catalog is therefore never refused *by this limit* — it adds no kind.
  * The cold-pull budget is a separate gate, spent only by a ref the catalog
  * cannot answer — a new tag of a name it already holds, say.
+ *
+ * The message names the remedy because there is one: `DELETE /images/:idOrRef`
+ * takes an entry out of the catalog, which frees a slot. It deliberately did
+ * not while that route was still unbuilt.
  */
 export class ImageCountLimitReachedError extends HttpException {
   constructor(limit: number) {
     super(
       {
-        message: `This organization already holds its limit of ${limit} images. This limit does not apply to the images it already holds.`,
+        message: `This organization already holds its limit of ${limit} images. Remove one from the catalog before using a new image; boxes can still be created from the images it already holds.`,
         code: IMAGE_COUNT_LIMIT_CODE,
       },
       HttpStatus.BAD_REQUEST,

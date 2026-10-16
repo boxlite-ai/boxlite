@@ -14,6 +14,8 @@ import {
 import {
   ApiKeysApi,
   AuditApi,
+  ImagesApi,
+  RegistriesApi,
   Configuration,
   OrganizationsApi,
   RegionsApi,
@@ -75,6 +77,8 @@ export class ApiClient {
   private _organizationsApi: OrganizationsApi
   private _billingApi: BillingApiClient
   private _volumeApi: VolumesApi
+  private _imageApi: ImagesApi
+  private _registriesApi: RegistriesApi
   private _auditApi: AuditApi
   private _regionsApi: RegionsApi
   private _runnersApi: RunnersApi
@@ -143,6 +147,8 @@ export class ApiClient {
     this._organizationsApi = new OrganizationsApi(this.config, undefined, axiosInstance)
     this._billingApi = new BillingApiClient(config.billingApiUrl || window.location.origin, accessToken)
     this._volumeApi = new VolumesApi(this.config, undefined, axiosInstance)
+    this._imageApi = new ImagesApi(this.config, undefined, axiosInstance)
+    this._registriesApi = new RegistriesApi(this.config, undefined, axiosInstance)
     this._auditApi = new AuditApi(this.config, undefined, axiosInstance)
     this._regionsApi = new RegionsApi(this.config, undefined, axiosInstance)
     this._runnersApi = new RunnersApi(this.config, undefined, axiosInstance)
@@ -236,6 +242,14 @@ export class ApiClient {
 
   public get volumeApi() {
     return this._volumeApi
+  }
+
+  public get imageApi() {
+    return this._imageApi
+  }
+
+  public get registriesApi() {
+    return this._registriesApi
   }
 
   public get auditApi() {

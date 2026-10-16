@@ -6,6 +6,7 @@
 import { Redis } from 'ioredis'
 import { LoginEventRecorder } from './login-event.recorder'
 import { recordBusinessEvent } from '../common/utils/business-event.util'
+import { Context } from '../common/context/context'
 
 jest.mock('../common/utils/business-event.util', () => ({
   recordBusinessEvent: jest.fn(),
@@ -44,7 +45,7 @@ describe('LoginEventRecorder.recordFirstUse', () => {
       name: 'user.login',
       outcome: 'success',
       correlationId: 'user-1',
-      actorKind: 'user',
+      ctx: Context.user(),
     })
   })
 

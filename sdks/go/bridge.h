@@ -23,11 +23,18 @@ extern CBoxCopyCb cbCopy(void);
 
 extern CBoxImagePullCb cbImagePull(void);
 extern CBoxImageListCb cbImageList(void);
+extern CBoxImageGetCb cbImageGet(void);
+extern CBoxImageRemoveCb cbImageRemove(void);
+extern CBoxImageUsageCb cbImageUsage(void);
 
 extern CBoxVolumeCreateCb cbVolumeCreate(void);
 extern CBoxVolumeListCb cbVolumeList(void);
 extern CBoxVolumeGetCb cbVolumeGet(void);
 extern CBoxVolumeRemoveCb cbVolumeRemove(void);
+
+extern CBoxRegistryCreateCb cbRegistryCreate(void);
+extern CBoxRegistryListCb cbRegistryList(void);
+extern CBoxRegistryRemoveCb cbRegistryRemove(void);
 
 extern CBoxInfoCb cbInfo(void);
 extern CBoxInfoListCb cbInfoList(void);

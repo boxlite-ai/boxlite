@@ -200,6 +200,46 @@ pub(super) struct ListVolumesResponse {
     pub volumes: Vec<VolumeResponse>,
 }
 
+/// One reference, as `GET /v1/images` lists it.
+#[derive(Serialize)]
+pub(super) struct ImageInfoResponse {
+    pub reference: String,
+    pub repository: String,
+    pub tag: String,
+    pub id: String,
+    pub cached_at: String,
+    pub size_bytes: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub(super) struct ListImagesResponse {
+    pub images: Vec<ImageInfoResponse>,
+}
+
+#[derive(Serialize)]
+pub(super) struct ImageVersionResponse {
+    pub digest: String,
+    pub size_bytes: Option<u64>,
+    pub source_ref: String,
+    pub recorded_at: String,
+}
+
+/// Body for `GET /v1/images/{name}`.
+#[derive(Serialize)]
+pub(super) struct ImageDetailResponse {
+    pub name: String,
+    pub tags: Vec<String>,
+    pub curated: bool,
+    pub versions: Vec<ImageVersionResponse>,
+}
+
+#[derive(Serialize)]
+pub(super) struct ImageUsageResponse {
+    pub count: u64,
+    pub limit: u64,
+    pub known_bytes: u64,
+}
+
 // ============================================================================
 // Execution Types
 // ============================================================================

@@ -485,8 +485,9 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		instance.vn = vn
 		instance.vnMu.Unlock()
 
-		// Bind gvproxy's ServicesMux to a host unix socket so the boxlite core
-		// can drive dynamic port forwarding / DNS / leases on the running box.
+		// Bind gvproxy's ServicesMux (via controlMux, which replaces /tunnel) to
+		// a host unix socket so the boxlite core can drive dynamic port
+		// forwarding / DNS / leases on the running box.
 		// ServicesMux (not Mux) excludes the raw L2 /connect, so the VM's NIC
 		// can never be attached through this socket.
 		var controlListener net.Listener
@@ -504,7 +505,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 				controlListener = l
 				logrus.WithField("path", config.ControlSocketPath).Info("Serving gvproxy ServicesMux")
 				go func() {
-					if sErr := http.Serve(l, vn.ServicesMux()); sErr != nil && ctx.Err() == nil {
+					if sErr := http.Serve(l, controlMux(vn.ServicesMux(), vn.DialContextTCP)); sErr != nil && ctx.Err() == nil {
 						logrus.WithError(sErr).Error("gvproxy services HTTP server exited")
 					}
 				}()

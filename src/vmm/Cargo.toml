@@ -10,3 +10,4 @@ description = "Virtual machine lifecycle and device model for BoxLite"
 
 [dependencies]
 boxlite-hypervisor.workspace = true
+vm-memory = { version = "0.18.0", features = ["backend-mmap"] }

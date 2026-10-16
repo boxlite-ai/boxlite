@@ -4,6 +4,8 @@
  */
 
 import { Box } from '../entities/box.entity'
+import { BoxProgressPhase } from '../enums/box-progress-phase.enum'
+import { BoxState } from '../enums/box-state.enum'
 import { BoxService } from './box.service'
 
 // create() persists the box before it converts, so a rejection from the
@@ -13,13 +15,25 @@ describe('BoxService DTO conversion', () => {
   const activityFailure = new Error('READONLY You cannot write against a read only replica')
 
   const exitCodeReader = (code?: number) => ({ getExitCode: jest.fn().mockResolvedValue(code) })
+  const preparationReader = (preparing: Box[] = []) => ({
+    preparingImage: jest.fn().mockResolvedValue(new Set(preparing.map((box) => box.id))),
+  })
 
-  function createService(boxActivityService: unknown, boxExitCodeService: unknown = exitCodeReader()): BoxService {
+  // Named, because two optional collaborators passed by position are one slip
+  // from trading places.
+  function createService(
+    boxActivityService: unknown,
+    {
+      boxExitCodeService = exitCodeReader(),
+      imagePreparationService = preparationReader(),
+    }: { boxExitCodeService?: unknown; imagePreparationService?: unknown } = {},
+  ): BoxService {
     const service = Object.create(BoxService.prototype) as BoxService
     Object.assign(service as any, {
       logger: { warn: jest.fn(), error: jest.fn() },
       boxActivityService,
       boxExitCodeService,
+      imagePreparationService,
       resolveToolboxProxyUrl: jest.fn().mockResolvedValue('https://proxy.test/toolbox'),
       resolveToolboxProxyUrls: jest.fn(
         async (regionIds: string[]) => new Map(regionIds.map((id) => [id, `https://${id}.test/toolbox`])),
@@ -50,6 +64,51 @@ describe('BoxService DTO conversion', () => {
     expect(dtos.map((dto) => dto.lastActivityAt)).toEqual([undefined, undefined])
   })
 
+  // Same rule as the activity read, for the same reason: what a box is waiting
+  // on is commentary, and losing the catalog must not turn a create that
+  // already persisted a box into a failure the caller retries.
+  it('serves a box without progress when the preparation read fails', async () => {
+    const box = new Box('us', 'data-loader')
+    const service = createService(
+      { getLastActivityAt: jest.fn().mockResolvedValue(null) },
+      { imagePreparationService: { preparingImage: jest.fn().mockRejectedValue(new Error('catalog unavailable')) } },
+    )
+
+    const dto = await service.toBoxDto(box)
+
+    expect(dto.id).toBe(box.id)
+    expect(dto.progress).toBeUndefined()
+  })
+
+  it('serves a box list without progress when the preparation read fails', async () => {
+    const boxes = [new Box('us', 'data-loader'), new Box('eu', 'log-shipper')]
+    const service = createService(
+      { getLastActivityAtMany: jest.fn().mockResolvedValue(new Map()) },
+      { imagePreparationService: { preparingImage: jest.fn().mockRejectedValue(new Error('catalog unavailable')) } },
+    )
+
+    const dtos = await service.toBoxDtos(boxes)
+
+    expect(dtos.map((dto) => dto.id)).toEqual(boxes.map((box) => box.id))
+    expect(dtos.map((dto) => dto.progress)).toEqual([undefined, undefined])
+  })
+
+  // One read answers the whole page, so the answer has to land on the box it
+  // is about rather than on every box in the list.
+  it('reports progress in a list only for the boxes still waiting on their image', async () => {
+    const waiting = new Box('us', 'data-loader')
+    const cached = new Box('us', 'log-shipper')
+    const service = createService(
+      { getLastActivityAtMany: jest.fn().mockResolvedValue(new Map()) },
+      { imagePreparationService: preparationReader([waiting]) },
+    )
+
+    const [waitingDto, cachedDto] = await service.toBoxDtos([waiting, cached])
+
+    expect(waitingDto.progress?.phase).toBe(BoxProgressPhase.PREPARING_IMAGE)
+    expect(cachedDto.progress).toBeUndefined()
+  })
+
   it('still fails the conversion when the toolbox proxy URL cannot be resolved', async () => {
     const box = new Box('us', 'data-loader')
     const service = createService({ getLastActivityAt: jest.fn().mockResolvedValue(null) })
@@ -67,7 +126,10 @@ describe('BoxService DTO conversion', () => {
   it('does not ask the runner for an exit code on the event path', async () => {
     const box = new Box('us', 'data-loader')
     const reader = exitCodeReader(137)
-    const service = createService({ getLastActivityAt: jest.fn().mockResolvedValue(null) }, reader)
+    const service = createService(
+      { getLastActivityAt: jest.fn().mockResolvedValue(null) },
+      { boxExitCodeService: reader },
+    )
 
     const dto = await service.toBoxDto(box)
 
@@ -78,12 +140,31 @@ describe('BoxService DTO conversion', () => {
   it('asks the runner when a tenant reads the box', async () => {
     const box = new Box('us', 'data-loader')
     const reader = exitCodeReader(137)
-    const service = createService({ getLastActivityAt: jest.fn().mockResolvedValue(null) }, reader)
+    const service = createService(
+      { getLastActivityAt: jest.fn().mockResolvedValue(null) },
+      { boxExitCodeService: reader },
+    )
 
     const dto = await service.toBoxDtoWithExitCode(box)
 
     expect(reader.getExitCode).toHaveBeenCalledWith(box)
     expect(dto.exitCode).toBe(137)
+  })
+
+  // A caller that polls a creating box reads it through the tenant's read, not
+  // the event path, so that is where it has to learn the image is still being
+  // prepared — the progress field exists for exactly that caller.
+  it('tells a tenant polling a creating box that its image is being prepared', async () => {
+    const box = new Box('us', 'data-loader')
+    box.state = BoxState.CREATING
+    const service = createService(
+      { getLastActivityAt: jest.fn().mockResolvedValue(null) },
+      { imagePreparationService: preparationReader([box]) },
+    )
+
+    const dto = await service.toBoxDtoWithExitCode(box)
+
+    expect(dto.progress?.phase).toBe(BoxProgressPhase.PREPARING_IMAGE)
   })
 
   // 0 is a value; absence has to survive serialization as a missing field,
@@ -93,7 +174,10 @@ describe('BoxService DTO conversion', () => {
     ['a box that recorded none', undefined, undefined],
   ])('reads %s', async (_case, read, expected) => {
     const box = new Box('us', 'data-loader')
-    const service = createService({ getLastActivityAt: jest.fn().mockResolvedValue(null) }, exitCodeReader(read))
+    const service = createService(
+      { getLastActivityAt: jest.fn().mockResolvedValue(null) },
+      { boxExitCodeService: exitCodeReader(read) },
+    )
 
     const dto = await service.toBoxDtoWithExitCode(box)
 

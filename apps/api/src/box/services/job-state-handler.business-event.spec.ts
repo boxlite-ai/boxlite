@@ -49,7 +49,6 @@ describe('JobStateHandlerService business events', () => {
       name: 'box.create',
       outcome: 'exception',
       correlationId: 'box-1',
-      orgId: 'org-1',
       exceptionType: 'runner_job_failed',
     })
   })
@@ -63,7 +62,6 @@ describe('JobStateHandlerService business events', () => {
       name: 'box.delete',
       outcome: 'success',
       correlationId: 'box-1',
-      orgId: 'org-1',
     })
   })
 
@@ -76,7 +74,6 @@ describe('JobStateHandlerService business events', () => {
       name: 'box.stop',
       outcome: 'success',
       correlationId: 'box-1',
-      orgId: 'org-1',
     })
   })
 

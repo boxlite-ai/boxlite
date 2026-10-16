@@ -399,7 +399,8 @@ pub struct BoxOptions {
 
     /// Override the image's ENTRYPOINT directive.
     ///
-    /// When set, completely replaces the image's ENTRYPOINT.
+    /// A nonempty value also discards the image's default CMD.
+    /// `[]` clears only ENTRYPOINT. Applies on first start and restart.
     /// Use with `cmd` to build the full command:
     ///   Final execution = entrypoint + cmd
     ///
@@ -410,8 +411,8 @@ pub struct BoxOptions {
 
     /// Override the image's CMD directive.
     ///
-    /// The image ENTRYPOINT is preserved; these args replace the image's CMD.
-    /// Final execution = image_entrypoint + cmd.
+    /// A nonempty value replaces the image's CMD; an empty value is treated as omitted.
+    /// Combined with the selected entrypoint to form the main command.
     ///
     /// Example: For `docker:dind` (ENTRYPOINT=["dockerd-entrypoint.sh"]),
     /// setting `cmd = vec!["--iptables=false"]` produces:

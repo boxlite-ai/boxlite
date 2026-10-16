@@ -23,7 +23,7 @@ import (
 // non-200 stops every deployment from ever reporting ready.
 func TestRouterServesHealthWithTheRunningVersion(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	NewRouter(&config.Config{}, nil).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, HealthPath, nil))
+	NewRouter(&config.Config{}, nil, nil).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, HealthPath, nil))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("GET %s = %d, want 200", HealthPath, recorder.Code)
@@ -50,7 +50,7 @@ func TestRouterServesHealthWithTheRunningVersion(t *testing.T) {
 // from the configuration — so an unauthenticated version check must challenge.
 func TestRouterChallengesAnUnauthenticatedVersionCheck(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	NewRouter(&config.Config{}, nil).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v2/", nil))
+	NewRouter(&config.Config{}, nil, nil).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v2/", nil))
 
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("GET /v2/ = %d, want 401", recorder.Code)
@@ -62,7 +62,7 @@ func TestRouterChallengesAnUnauthenticatedVersionCheck(t *testing.T) {
 
 // A path that is not a pull endpoint must not be mistaken for one.
 func TestRouterDoesNotServeWritesOrDiscovery(t *testing.T) {
-	router := NewRouter(&config.Config{}, nil)
+	router := NewRouter(&config.Config{}, nil, nil)
 
 	for _, request := range []*http.Request{
 		httptest.NewRequest(http.MethodPut, "/v2/acme/ghcr.io/acme/app/manifests/1.2", nil),
@@ -141,7 +141,7 @@ func TestServeStopsListeningAfterTheDrain(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
-	go func() { served <- serve(ctx, listener, NewRouter(&config.Config{}, nil), 5*time.Second) }()
+	go func() { served <- serve(ctx, listener, NewRouter(&config.Config{}, nil, nil), 5*time.Second) }()
 
 	response, err := http.Get("http://" + address + HealthPath)
 	if err != nil {
@@ -201,7 +201,7 @@ func TestServeSpeaksHTTP2InTheClear(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = serve(ctx, listener, NewRouter(&config.Config{}, nil), time.Second) }()
+	go func() { _ = serve(ctx, listener, NewRouter(&config.Config{}, nil, nil), time.Second) }()
 
 	// Prior knowledge, which is how Cloud Run opens the connection: no TLS and
 	// no Upgrade dance, the HTTP/2 preface straight away.
@@ -228,7 +228,7 @@ func TestServeStillSpeaksHTTP1(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = serve(ctx, listener, NewRouter(&config.Config{}, nil), time.Second) }()
+	go func() { _ = serve(ctx, listener, NewRouter(&config.Config{}, nil, nil), time.Second) }()
 
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)

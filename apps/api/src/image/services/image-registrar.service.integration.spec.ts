@@ -128,6 +128,22 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
     expect(tag).toMatchObject({ imageId: image.id, name: 'v1', versionId: version.id })
   })
 
+  it('files a private image under its upstream name, not the registry proxy', async () => {
+    const proxy = 'registry-proxy-abc.a.run.app'
+    process.env.REGISTRY_PROXY_HOST = proxy
+    try {
+      await report(`${proxy}/${ORG}/ghcr.io/acme/app:v1`)
+    } finally {
+      delete process.env.REGISTRY_PROXY_HOST
+    }
+
+    const [image] = await dataSource.getRepository(Image).find()
+    expect(image).toMatchObject({ organizationId: ORG, name: 'ghcr.io/acme/app' })
+    const [version] = await dataSource.getRepository(ImageVersion).find()
+    // What the tenant asked for, which is also what the catalog answers to.
+    expect(version.sourceSpec).toEqual({ sourceRef: 'ghcr.io/acme/app:v1' })
+  })
+
   /**
    * A report can arrive more than once for the same box — the runner retries,
    * and a replayed job starts the same box again.
@@ -153,10 +169,9 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
   })
 
   /**
-   * S1 does not move tags. A tag that resolved once keeps naming that build,
-   * and deleting the image is what will pick up a move once the catalog API
-   * exposes a delete — without this, an upstream tag move would silently
-   * change what a box boots from.
+   * Nothing moves tags today. A tag that resolved once keeps naming that
+   * build, and deleting the image is what picks up a move — without this, an
+   * upstream tag move would silently change what a box boots from.
    */
   it('leaves a tag pointing at the build it first resolved to', async () => {
     await report('quay.io/acme/app:v1', DIGEST)
@@ -248,11 +263,9 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
   })
 
   /**
-   * Deleting an image is how a tenant will pick up a tag that moved. Using it
+   * Deleting an image is how a tenant picks up a tag that moved. Using it
    * again has to bring it back — as a new active row beside the soft-deleted
-   * one, which is exactly what the partial unique index exists to allow. The
-   * delete itself ships with the catalog API; the index has to be right before
-   * it does, or the first delete is also a migration.
+   * one, which is exactly what the partial unique index exists to allow.
    */
   it('gives a soft-deleted name a new active row when the image is used again', async () => {
     await report('quay.io/acme/app:v1')

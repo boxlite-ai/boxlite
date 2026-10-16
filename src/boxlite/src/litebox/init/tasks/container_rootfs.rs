@@ -277,9 +277,8 @@ fn create_cow_disk(
     }
 }
 
-/// Apply user overrides to container image config (entrypoint, CMD, user,
-/// and working dir) — the docker `run` override set, applied to the init
-/// process configuration.
+/// Apply entrypoint, CMD, user, and working directory overrides to the
+/// container's init process configuration.
 fn apply_user_overrides(
     config: &mut ContainerImageConfig,
     entrypoint_override: Option<&[String]>,
@@ -289,8 +288,11 @@ fn apply_user_overrides(
 ) {
     if let Some(ep) = entrypoint_override {
         config.entrypoint = ep.to_vec();
+        if !ep.is_empty() {
+            config.cmd.clear();
+        }
     }
-    if let Some(cmd) = cmd_override {
+    if let Some(cmd) = cmd_override.filter(|cmd| !cmd.is_empty()) {
         config.cmd = cmd.to_vec();
     }
     if let Some(user) = user_override {
@@ -466,16 +468,84 @@ async fn prepare_disk_rootfs(
 #[cfg(test)]
 mod tests {
     use super::{
-        image_for_new_disk, image_for_restart, names_one_build, pinned_ref, records_resolved_image,
+        apply_user_overrides, image_for_new_disk, image_for_restart, names_one_build, pinned_ref,
+        records_resolved_image,
     };
     use crate::db::Database;
     use crate::images::test_support::{registry_answering, seed_cached_build};
-    use crate::images::{ImageManager, ResolvedImage};
+    use crate::images::{ContainerImageConfig, ImageManager, ResolvedImage};
     use crate::runtime::options::{ImageRegistry, RootfsSpec};
 
     const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const FIRST: &str = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee0";
     const NEWER: &str = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee1";
+
+    #[test]
+    fn entrypoint_and_cmd_overrides_resolve_image_defaults() {
+        let strings = |args: &[&str]| {
+            args.iter()
+                .map(|arg| (*arg).to_string())
+                .collect::<Vec<_>>()
+        };
+        let cases = [
+            (None, None, vec!["image-init", "sleep", "infinity"]),
+            (None, Some(vec!["--help"]), vec!["image-init", "--help"]),
+            (
+                Some(vec!["python3", "-m", "http.server"]),
+                None,
+                vec!["python3", "-m", "http.server"],
+            ),
+            (
+                Some(vec!["python3"]),
+                Some(vec!["--version"]),
+                vec!["python3", "--version"],
+            ),
+            (Some(vec!["python3"]), Some(vec![]), vec!["python3"]),
+            (None, Some(vec![]), vec!["image-init", "sleep", "infinity"]),
+            (Some(vec![]), None, vec!["sleep", "infinity"]),
+            (
+                Some(vec![]),
+                Some(vec!["echo", "hello"]),
+                vec!["echo", "hello"],
+            ),
+            (Some(vec![]), Some(vec![]), vec!["sleep", "infinity"]),
+        ];
+
+        for image_has_entrypoint in [false, true] {
+            for (entrypoint, cmd, expected) in &cases {
+                let mut config = ContainerImageConfig {
+                    entrypoint: if image_has_entrypoint {
+                        strings(&["image-init"])
+                    } else {
+                        vec![]
+                    },
+                    cmd: strings(&["sleep", "infinity"]),
+                    ..Default::default()
+                };
+                let entrypoint = entrypoint.as_deref().map(strings);
+                let cmd = cmd.as_deref().map(strings);
+                let expected = if !image_has_entrypoint && entrypoint.is_none() {
+                    &expected[1..]
+                } else {
+                    expected.as_slice()
+                };
+
+                apply_user_overrides(
+                    &mut config,
+                    entrypoint.as_deref(),
+                    cmd.as_deref(),
+                    None,
+                    None,
+                );
+
+                assert_eq!(
+                    config.final_cmd(),
+                    expected,
+                    "image_has_entrypoint={image_has_entrypoint}, entrypoint={entrypoint:?}, cmd={cmd:?}"
+                );
+            }
+        }
+    }
 
     /// An image manager whose one registry answers 404 to everything, so any
     /// pull that asks it fails and only the cache can answer.

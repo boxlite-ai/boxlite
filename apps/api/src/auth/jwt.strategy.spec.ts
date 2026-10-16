@@ -11,6 +11,7 @@ import { JwtStrategy, requireVerifiedAuth0DatabaseEmail } from './jwt.strategy'
 import { UserService } from '../user/user.service'
 import { TypedConfigService } from '../config/typed-config.service'
 import { LoginEventRecorder } from './login-event.recorder'
+import { Context } from '../common/context/context'
 import {
   EMAIL_VERIFICATION_REQUIRED_CODE,
   EmailVerificationRequiredException,
@@ -60,8 +61,17 @@ describe('JwtStrategy.validate — auto-created user', () => {
     expect(userService.create).toHaveBeenCalledTimes(1)
     expect(userService.create).toHaveBeenCalledWith(
       expect.objectContaining({ defaultOrganizationDefaultRegionId: DEFAULT_REGION_ID }),
-      'user',
+      expect.anything(),
     )
+  })
+
+  it('creates a first-login user as a registration by the user', async () => {
+    const { strategy, userService } = buildStrategy()
+    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
+
+    await strategy.validate(request, { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true })
+
+    expect(userService.create).toHaveBeenCalledWith(expect.anything(), Context.user())
   })
 
   it('rejects an unverified Auth0 database identity before local user creation', async () => {

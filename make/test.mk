@@ -279,9 +279,13 @@ _ensure-kvm:
 	@test -r /dev/kvm -a -w /dev/kvm || { echo "Read/write access to /dev/kvm is required" >&2; exit 1; }
 
 # Run the ignored hardware tests explicitly and bound a stalled guest with a timeout.
+# Both crates run even when one fails, so one report shows every result.
 test\:integration\:vmm\:kvm: _ensure-kvm
-	@cargo test -p boxlite-hypervisor --lib --no-run
-	@timeout 60s cargo test -p boxlite-hypervisor --lib kvm::vm::tests:: -- --ignored --test-threads=1
+	@cargo test -p boxlite-hypervisor -p boxlite-vmm --lib --no-run
+	@status=0; \
+	timeout 60s cargo test -p boxlite-hypervisor --lib kvm::vm::tests:: -- --ignored --test-threads=1 || status=1; \
+	timeout 60s cargo test -p boxlite-vmm --lib vm::tests:: -- --ignored --test-threads=1 || status=1; \
+	exit $$status
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
 # excluded from test:unit:rust because the zygote suite forks real processes.
@@ -422,6 +426,9 @@ test\:unit\:openapi:
 	@echo "🧪 Running OpenAPI reference-server unit tests..."
 	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
 
+test\:unit\:scripts:
+	@python3 -m unittest discover -s tests/scripts -p 'test_*.py' -v
+
 # CLI integration tests.
 test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🧪 Running CLI integration tests..."
@@ -490,7 +497,7 @@ test\:unit\:c:
 	@echo "🧪 Running C SDK unit tests..."
 	@$(MAKE) dev:c
 	@mkdir -p sdks/c/tests/build
-	@cd sdks/c/tests/build && cmake ..
+	@cd sdks/c/tests/build && cmake .. -DBOXLITE_LIB_DIR="$(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/debug"
 	@cd sdks/c/tests/build && cmake --build . -j
 	@cd sdks/c/tests/build && ctest --verbose --output-on-failure -L unit $(CTEST_FILTER)
 
@@ -499,7 +506,7 @@ test\:integration\:c:
 	@echo "🧪 Running C SDK integration tests (requires VM)..."
 	@$(MAKE) dev:c
 	@mkdir -p sdks/c/tests/build
-	@cd sdks/c/tests/build && cmake ..
+	@cd sdks/c/tests/build && cmake .. -DBOXLITE_LIB_DIR="$(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/debug"
 	@cd sdks/c/tests/build && cmake --build . -j
 	@cd sdks/c/tests/build && ctest --verbose --output-on-failure -L integration $(CTEST_FILTER)
 

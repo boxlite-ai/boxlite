@@ -41,7 +41,9 @@ import { BoxRepository } from '../repositories/box.repository'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { sanitizeBoxError } from '../utils/sanitize-error.util'
-import { recordBusinessEvent } from '../../common/utils/business-event.util'
+import { recordBoxRequested } from '../utils/box-business-event.util'
+import { Context } from '../../common/context/context'
+import { PlatformReason } from '../../common/context/platform-reason.enum'
 
 @Injectable()
 export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown {
@@ -137,13 +139,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
                   },
                 })
 
-                recordBusinessEvent({
-                  name: 'box.stop',
-                  outcome: 'requested',
-                  correlationId: box.id,
-                  orgId: box.organizationId,
-                  actorKind: 'auto_stop',
-                })
+                recordBoxRequested('box.stop', box.id, Context.platform(PlatformReason.AUTO_STOP))
 
                 this.syncInstanceState(box.id).catch(this.logger.error)
               } catch (error) {
@@ -218,13 +214,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
                   },
                 })
 
-                recordBusinessEvent({
-                  name: 'box.delete',
-                  outcome: 'requested',
-                  correlationId: box.id,
-                  orgId: box.organizationId,
-                  actorKind: 'auto_delete',
-                })
+                recordBoxRequested('box.delete', box.id, Context.platform(PlatformReason.AUTO_DELETE))
 
                 this.syncInstanceState(box.id).catch(this.logger.error)
               } catch (error) {

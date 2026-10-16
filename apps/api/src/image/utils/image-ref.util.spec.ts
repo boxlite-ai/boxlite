@@ -4,7 +4,16 @@
  */
 
 import { BadRequestError } from '../../exceptions/bad-request.exception'
-import { assertHostIsAllowed, imageRegistryAllowlist, isCuratedSelector, parseImageRef } from './image-ref.util'
+import {
+  assertHostIsAllowed,
+  assertNotThroughRegistryProxy,
+  catalogNameOf,
+  imageRegistryAllowlist,
+  isCuratedSelector,
+  parseImageRef,
+  proxyRefOf,
+  upstreamRefOf,
+} from './image-ref.util'
 
 describe('image ref utilities', () => {
   const savedEnv = { ...process.env }
@@ -48,6 +57,45 @@ describe('image ref utilities', () => {
       ['overlong', `docker.io/acme/${'a'.repeat(600)}`],
     ])('rejects %s', (_label, ref) => {
       expect(() => parseImageRef(ref)).toThrow(BadRequestError)
+    })
+  })
+
+  describe('catalogNameOf', () => {
+    /**
+     * The registrar writes under this name and the catalog, the resolver and the
+     * delete guard all look up by it, so every spelling of one image has to
+     * reach the same key — including the short form that is not even a prefix
+     * of it.
+     */
+    it.each([
+      ['acme/app', 'docker.io/acme/app'],
+      ['acme/app:v1', 'docker.io/acme/app'],
+      [`acme/app@sha256:${'a'.repeat(64)}`, 'docker.io/acme/app'],
+      ['python', 'docker.io/library/python'],
+      ['quay.io/acme/app:v1', 'quay.io/acme/app'],
+    ])('names %s as %s', (ref, expected) => {
+      expect(catalogNameOf(ref)).toBe(expected)
+    })
+
+    it.each([
+      ['undefined', undefined],
+      ['null', null],
+      ['empty', ''],
+    ])('names nothing for %s', (_label, ref) => {
+      expect(catalogNameOf(ref)).toBeUndefined()
+    })
+
+    /**
+     * Its callers are readers comparing a stored reference against a catalog
+     * row. A stored reference that no longer parses is not the image being
+     * asked about, and throwing would turn that answer into a failed read.
+     */
+    it.each([
+      ['an uppercase repository', 'docker.io/Acme/App'],
+      ['surrounding whitespace', ' acme/app'],
+      ['a short digest', 'acme/app@sha256:deadbeef'],
+    ])('names nothing, rather than throwing, for %s', (_label, ref) => {
+      expect(catalogNameOf(ref)).toBeUndefined()
     })
   })
 
@@ -101,6 +149,52 @@ describe('image ref utilities', () => {
       ['acme/app', false],
     ])('isCuratedSelector(%s) is %s', (image, expected) => {
       expect(isCuratedSelector(image as string | undefined)).toBe(expected)
+    })
+  })
+  describe('registry proxy refs', () => {
+    const PROXY = 'registry-proxy-abc.a.run.app'
+    const ORG = '0aaa0000-0000-4000-8000-000000000001'
+
+    beforeEach(() => {
+      process.env.REGISTRY_PROXY_HOST = PROXY
+    })
+
+    it('spells the three ways to name one Docker Hub image as one path', () => {
+      const refs = ['alpine:3.20', 'docker.io/alpine:3.20', 'library/alpine:3.20'].map((ref) =>
+        proxyRefOf(PROXY, ORG, parseImageRef(ref)),
+      )
+
+      expect(new Set(refs)).toEqual(new Set([`${PROXY}/${ORG}/docker.io/library/alpine:3.20`]))
+    })
+
+    it('pins by digest when the ref does', () => {
+      const digest = `sha256:${'a'.repeat(64)}`
+
+      expect(proxyRefOf(PROXY, ORG, parseImageRef(`ghcr.io/acme/app@${digest}`))).toBe(
+        `${PROXY}/${ORG}/ghcr.io/acme/app@${digest}`,
+      )
+    })
+
+    it('reads a proxy ref back as the upstream ref it stands for', () => {
+      const proxied = proxyRefOf(PROXY, ORG, parseImageRef('ghcr.io/acme/app:1.2'))
+
+      expect(upstreamRefOf(proxied)).toBe('ghcr.io/acme/app:1.2')
+      // So the catalog files it under the name the tenant uses, not the proxy.
+      expect(catalogNameOf(proxied)).toBe('ghcr.io/acme/app')
+    })
+
+    it('leaves every other ref alone', () => {
+      expect(upstreamRefOf('ghcr.io/acme/app:1.2')).toBe('ghcr.io/acme/app:1.2')
+      delete process.env.REGISTRY_PROXY_HOST
+      expect(upstreamRefOf(`${PROXY}/${ORG}/ghcr.io/acme/app:1.2`)).toBe(`${PROXY}/${ORG}/ghcr.io/acme/app:1.2`)
+    })
+
+    it('refuses a ref a tenant wrote against the proxy itself', () => {
+      // Naming another organization in the path would borrow its login.
+      expect(() => assertNotThroughRegistryProxy(parseImageRef(`${PROXY}/other-org/ghcr.io/x/y:1`).host)).toThrow(
+        BadRequestError,
+      )
+      expect(() => assertNotThroughRegistryProxy('ghcr.io')).not.toThrow()
     })
   })
 })

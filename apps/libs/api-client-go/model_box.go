@@ -84,6 +84,8 @@ type Box struct {
 	RunnerId *string `json:"runnerId,omitempty"`
 	// The toolbox proxy URL for the box
 	ToolboxProxyUrl string `json:"toolboxProxyUrl"`
+	// What a box still being created is waiting on. Absent once it has started, and absent while it is being created from an image that has already been pulled
+	Progress *BoxProgress `json:"progress,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -1003,6 +1005,38 @@ func (o *Box) SetToolboxProxyUrl(v string) {
 	o.ToolboxProxyUrl = v
 }
 
+// GetProgress returns the Progress field value if set, zero value otherwise.
+func (o *Box) GetProgress() BoxProgress {
+	if o == nil || IsNil(o.Progress) {
+		var ret BoxProgress
+		return ret
+	}
+	return *o.Progress
+}
+
+// GetProgressOk returns a tuple with the Progress field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *Box) GetProgressOk() (*BoxProgress, bool) {
+	if o == nil || IsNil(o.Progress) {
+		return nil, false
+	}
+	return o.Progress, true
+}
+
+// HasProgress returns a boolean if a field has been set.
+func (o *Box) HasProgress() bool {
+	if o != nil && !IsNil(o.Progress) {
+		return true
+	}
+
+	return false
+}
+
+// SetProgress gets a reference to the given BoxProgress and assigns it to the Progress field.
+func (o *Box) SetProgress(v BoxProgress) {
+	o.Progress = &v
+}
+
 func (o Box) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -1078,6 +1112,9 @@ func (o Box) ToMap() (map[string]interface{}, error) {
 		toSerialize["runnerId"] = o.RunnerId
 	}
 	toSerialize["toolboxProxyUrl"] = o.ToolboxProxyUrl
+	if !IsNil(o.Progress) {
+		toSerialize["progress"] = o.Progress
+	}
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -1165,6 +1202,7 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "daemonVersion")
 		delete(additionalProperties, "runnerId")
 		delete(additionalProperties, "toolboxProxyUrl")
+		delete(additionalProperties, "progress")
 		o.AdditionalProperties = additionalProperties
 	}
 

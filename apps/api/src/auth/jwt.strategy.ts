@@ -16,6 +16,7 @@ import { CustomHeaders } from '../common/constants/header.constants'
 import { TypedConfigService } from '../config/typed-config.service'
 import { EmailVerificationRequiredException } from '../exceptions/email-verification-required.exception'
 import { LoginEventRecorder } from './login-event.recorder'
+import { Context } from '../common/context/context'
 
 interface JwtStrategyConfig {
   jwksUri: string
@@ -106,7 +107,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
           // organization.defaultRegionId fail for every OIDC-created user.
           defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
         },
-        'user',
+        Context.user(),
       )
       this.logger.debug(`Created new user with ID: ${userId}`)
     } else if (user.name === 'Unknown' || !user.email) {

@@ -8,9 +8,10 @@
  * hold: once registry credentials exist, this is the one process that reads
  * them, and keeping them out of the control plane is the point.
  *
- * It holds none yet. The release that introduces it pulls only what an
- * upstream serves anonymously, which is why there is no `secrets` channel
- * here — a channel with nothing in it would be a grant waiting for a reason.
+ * It reads them from the credential store when a pull needs one, not from its
+ * environment, which is why there is no `secrets` channel here: an
+ * organization adds and removes a login at run time, and a channel is fixed at
+ * deploy.
  *
  * Deployed on one cloud. The handle says so rather than the bundle throwing: a
  * stage on the other cloud deploys everything else and reports no proxy, which
@@ -57,3 +58,30 @@ export const REGISTRY_PROXY_CONTROL_PLANE_VARIABLE = 'BOXLITE_API_URL'
 
 /** Where the platform asks whether the process is up. */
 export const REGISTRY_PROXY_HEALTH_PATH = '/health'
+
+/**
+ * The registries a login may be registered for, which are also the ones the
+ * proxy pulls from. Said once and written to both the API and the proxy: a
+ * host the API accepted a login for and the proxy then refuses is a private
+ * pull that fails with a 403 nobody expected.
+ */
+export const REGISTRY_PROXY_UPSTREAM_HOSTS = [
+  'ghcr.io',
+  'docker.io',
+  'quay.io',
+  'gcr.io',
+  'us.gcr.io',
+  'eu.gcr.io',
+  'asia.gcr.io',
+]
+export const REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE = 'REGISTRY_PROXY_UPSTREAM_HOSTS'
+
+/**
+ * The variable the API and the runners read the proxy's host from: the API to
+ * write it into the refs it hands out, a runner to know which registry its own
+ * key is for.
+ */
+export const REGISTRY_PROXY_HOST_VARIABLE = 'REGISTRY_PROXY_HOST'
+
+/** The host a pull names, from the origin the platform serves the proxy at. */
+export const registryProxyHostOf = (url: string): string => new URL(url).host

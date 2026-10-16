@@ -93,6 +93,9 @@ type RequestTarget struct {
 	Host      string
 	Headers   map[string]string
 	Transport http.RoundTripper
+	// ErrorHandler handles an error reaching the target. Nil keeps the
+	// ReverseProxy default, an empty 502.
+	ErrorHandler func(http.ResponseWriter, *http.Request, error)
 }
 
 // ProxyRequest handles proxying requests to a box's container
@@ -148,6 +151,7 @@ func NewProxyRequestHandler(getProxyTarget func(*gin.Context) (*RequestTarget, e
 			},
 			Transport:      target.Transport,
 			ModifyResponse: modifyResponse,
+			ErrorHandler:   target.ErrorHandler,
 		}
 		if reverseProxy.Transport == nil {
 			reverseProxy.Transport = proxyTransport

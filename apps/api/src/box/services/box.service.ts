@@ -21,6 +21,7 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { ImageAdmissionService } from '../../image/services/image-admission.service'
+import { ImagePreparationService } from '../../image/services/image-preparation.service'
 import { ImageResolverService } from '../../image/services/image-resolver.service'
 import { ImageRegistrarService, ReportedImage } from '../../image/services/image-registrar.service'
 import { BoxWarmPoolService } from './box-warm-pool.service'
@@ -40,7 +41,7 @@ import { OrganizationEvents } from '../../organization/constants/organization-ev
 import { OrganizationSuspendedBoxStoppedEvent } from '../../organization/events/organization-suspended-box-stopped.event'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { WarmPool } from '../entities/warm-pool.entity'
-import { BoxDto, BoxVolume } from '../dto/box.dto'
+import { BoxDto, BoxDtoReads, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
 import { VolumeService } from './volume.service'
@@ -52,7 +53,9 @@ import {
   DEFAULT_BOX_SORT_DIRECTION,
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
-import { BusinessEventActorKind, recordBusinessEvent } from '../../common/utils/business-event.util'
+import { recordBoxRequested, recordWarmPoolClaim } from '../utils/box-business-event.util'
+import { Context } from '../../common/context/context'
+import { PlatformReason } from '../../common/context/platform-reason.enum'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { customAlphabet as customNanoid, nanoid, urlAlphabet } from 'nanoid'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
@@ -81,7 +84,7 @@ import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
-import { isCuratedSelector } from '../../image/utils/image-ref.util'
+import { isCuratedSelector, withoutRegistryProxy } from '../../image/utils/image-ref.util'
 import {
   AUTO_DELETE_DISABLED,
   AUTO_STOP_DISABLED,
@@ -103,8 +106,6 @@ const TERMINAL_PREVIEW_PORT = 22222
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
-  // Who asked for the box, recorded on its box.create business events.
-  actorKind?: BusinessEventActorKind
 }
 
 @Injectable()
@@ -133,6 +134,7 @@ export class BoxService {
     private readonly imageAdmissionService: ImageAdmissionService,
     private readonly imageResolverService: ImageResolverService,
     private readonly imageRegistrarService: ImageRegistrarService,
+    private readonly imagePreparationService: ImagePreparationService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -218,6 +220,7 @@ export class BoxService {
   async create(
     createBoxDto: CreateBoxDto,
     organization: Organization,
+    ctx: Context,
     options: BoxCreationOptions = {},
   ): Promise<BoxDto> {
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
@@ -244,7 +247,9 @@ export class BoxService {
       // anything else is looked up in this organization's catalog — pinned to
       // the digest it first resolved to if the catalog knows it, passed through
       // as typed if it does not, which is how an image gets pulled the first
-      // time.
+      // time. A repository the organization registered a login for is handed
+      // over either way as a registry proxy ref, so that is what `box.image`
+      // records for a private image.
       const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
       const image = resolvedImage.ref
       const needsFreshBox = requiresFreshBox(createBoxDto, organization, resolvedImage)
@@ -287,7 +292,7 @@ export class BoxService {
           })
 
           if (warmPoolBox) {
-            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, options)
+            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, ctx, options.maxCreatedBoxes)
           }
         }
       }
@@ -367,13 +372,7 @@ export class BoxService {
             })
       })
 
-      recordBusinessEvent({
-        name: 'box.create',
-        outcome: 'requested',
-        correlationId: insertedBox.id,
-        orgId: insertedBox.organizationId,
-        actorKind: options.actorKind,
-      })
+      recordBoxRequested('box.create', insertedBox.id, ctx)
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
@@ -397,9 +396,9 @@ export class BoxService {
     warmPoolBox: Box,
     createBoxDto: CreateBoxDto,
     organization: Organization,
-    options: BoxCreationOptions,
+    ctx: Context,
+    maxCreatedBoxes?: number,
   ): Promise<BoxDto> {
-    const { maxCreatedBoxes } = options
     const now = new Date()
     const updateData: Partial<Box> = {
       // POL-205: same default as the fresh-box path — see the comment there.
@@ -456,16 +455,7 @@ export class BoxService {
       previousOrganizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
     })
 
-    // A claimed warm box is already started, so the request and its success
-    // commit together.
-    const createEvent = {
-      name: 'box.create',
-      correlationId: updatedBox.id,
-      orgId: organization.id,
-      actorKind: options.actorKind,
-    } as const
-    recordBusinessEvent({ ...createEvent, outcome: 'requested' })
-    recordBusinessEvent({ ...createEvent, outcome: 'success' })
+    recordWarmPoolClaim(updatedBox.id, ctx)
 
     // Treat this as a newly started box
     this.eventEmitter.emit(
@@ -957,11 +947,7 @@ export class BoxService {
     await this.redis.del(lockKey)
   }
 
-  async destroy(
-    boxIdOrName: string,
-    organizationId: string | undefined,
-    actorKind: BusinessEventActorKind,
-  ): Promise<Box> {
+  async destroy(boxIdOrName: string, organizationId: string | undefined, ctx: Context): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
     if (box.pending) {
@@ -975,13 +961,7 @@ export class BoxService {
       whereCondition: { pending: box.pending, state: box.state },
     })
 
-    recordBusinessEvent({
-      name: 'box.delete',
-      outcome: 'requested',
-      correlationId: updatedBox.id,
-      orgId: updatedBox.organizationId,
-      actorKind,
-    })
+    recordBoxRequested('box.delete', updatedBox.id, ctx)
 
     this.eventEmitter.emit(BoxEvents.DESTROYED, new BoxDestroyedEvent(updatedBox))
     return updatedBox
@@ -1059,12 +1039,7 @@ export class BoxService {
     return updated
   }
 
-  async stop(
-    boxIdOrName: string,
-    organizationId: string | undefined,
-    actorKind: BusinessEventActorKind,
-    force?: boolean,
-  ): Promise<Box> {
+  async stop(boxIdOrName: string, organizationId: string | undefined, ctx: Context, force?: boolean): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
     this.assertBoxNotErrored(box)
@@ -1091,13 +1066,7 @@ export class BoxService {
       whereCondition: { pending: false, state: box.state },
     })
 
-    recordBusinessEvent({
-      name: 'box.stop',
-      outcome: 'requested',
-      correlationId: updatedBox.id,
-      orgId: updatedBox.organizationId,
-      actorKind,
-    })
+    recordBoxRequested('box.stop', updatedBox.id, ctx)
 
     this.eventEmitter.emit(BoxEvents.STOPPED, new BoxStoppedEvent(updatedBox, force))
 
@@ -1187,19 +1156,32 @@ export class BoxService {
    * between "unknown" and "idle" decides whether a box is stopped.
    */
   async toBoxDto(box: Box): Promise<BoxDto> {
-    const [toolboxProxyUrl, lastActivityAt] = await this.resolveDtoMetadata(box)
-    return BoxDto.fromBox(box, toolboxProxyUrl, lastActivityAt)
+    const [toolboxProxyUrl, reads] = await this.resolveDtoMetadata(box)
+    return BoxDto.fromBox(box, toolboxProxyUrl, reads)
   }
 
-  /** The two out-of-entity values every conversion needs, read together. */
-  private async resolveDtoMetadata(box: Box): Promise<[string, Date | null]> {
-    return Promise.all([
+  /**
+   * The out-of-entity values every single-box conversion needs, read together.
+   * The preparation read is here rather than in {@link toBoxDto} alone because
+   * a caller polling a creating box reads it through
+   * {@link toBoxDtoWithExitCode}, and that is the caller progress is for.
+   */
+  private async resolveDtoMetadata(box: Box): Promise<[string, BoxDtoReads]> {
+    const [toolboxProxyUrl, lastActivityAt, preparing] = await Promise.all([
       this.resolveToolboxProxyUrl(box.region),
       this.boxActivityService.getLastActivityAt(box.id).catch((err) => {
         this.logger.warn(`Failed to read last activity for box ${box.id}: ${err}`)
         return null
       }),
+      // Degrades to absent for the same reason as the activity read: what the
+      // box is waiting on is commentary on the box, and losing it must not turn
+      // a successful create into a failed one.
+      this.imagePreparationService.preparingImage([box]).catch((err) => {
+        this.logger.warn(`Failed to read image preparation for box ${box.id}: ${err}`)
+        return new Set<string>()
+      }),
     ])
+    return [toolboxProxyUrl, { lastActivityAt, preparingImage: preparing.has(box.id) }]
   }
 
   /**
@@ -1217,11 +1199,11 @@ export class BoxService {
    * Only the two endpoints that answer a tenant's read use this.
    */
   async toBoxDtoWithExitCode(box: Box): Promise<BoxDto> {
-    const [[toolboxProxyUrl, lastActivityAt], exitCode] = await Promise.all([
+    const [[toolboxProxyUrl, reads], exitCode] = await Promise.all([
       this.resolveDtoMetadata(box),
       this.boxExitCodeService.getExitCode(box),
     ])
-    return BoxDto.fromBox(box, toolboxProxyUrl, lastActivityAt, exitCode)
+    return BoxDto.fromBox(box, toolboxProxyUrl, { ...reads, exitCode })
   }
 
   /**
@@ -1233,11 +1215,15 @@ export class BoxService {
    * client that needs it reads the box itself.
    */
   async toBoxDtos(boxes: Box[]): Promise<BoxDto[]> {
-    const [urlMap, activityMap] = await Promise.all([
+    const [urlMap, activityMap, preparing] = await Promise.all([
       this.resolveToolboxProxyUrls(boxes.map((s) => s.region)),
       this.boxActivityService.getLastActivityAtMany(boxes.map((s) => s.id)).catch((err) => {
         this.logger.warn(`Failed to read last activity for ${boxes.length} boxes: ${err}`)
         return new Map<string, Date>()
+      }),
+      this.imagePreparationService.preparingImage(boxes).catch((err) => {
+        this.logger.warn(`Failed to read image preparation for ${boxes.length} boxes: ${err}`)
+        return new Set<string>()
       }),
     ])
     return boxes.map((s) => {
@@ -1245,7 +1231,7 @@ export class BoxService {
       if (!url) {
         throw new NotFoundException(`Toolbox proxy URL not resolved for region ${s.region}`)
       }
-      return BoxDto.fromBox(s, url, activityMap.get(s.id))
+      return BoxDto.fromBox(s, url, { lastActivityAt: activityMap.get(s.id), preparingImage: preparing.has(s.id) })
     })
   }
 
@@ -1539,7 +1525,8 @@ export class BoxService {
     }
 
     if (errorReason !== undefined) {
-      updateData.errorReason = errorReason
+      // The runner's words, which can name the registry proxy ref it pulled.
+      updateData.errorReason = withoutRegistryProxy(errorReason)
       if (newState === BoxState.ERROR) {
         updateData.recoverable = recoverable
       }
@@ -1586,7 +1573,9 @@ export class BoxService {
       return
     }
 
-    const destroyPromises = boxes.map((box) => this.destroy(box.id, undefined, 'warm_pool'))
+    const destroyPromises = boxes.map((box) =>
+      this.destroy(box.id, undefined, Context.platform(PlatformReason.WARM_POOL)),
+    )
     const results = await Promise.allSettled(destroyPromises)
 
     // Log any failed box destructions
@@ -1611,7 +1600,7 @@ export class BoxService {
 
   @OnEvent(OrganizationEvents.SUSPENDED_BOX_STOPPED)
   async handleSuspendedBoxStopped(event: OrganizationSuspendedBoxStoppedEvent) {
-    await this.stop(event.boxId, undefined, 'org_suspension').catch((error) => {
+    await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSPENSION)).catch((error) => {
       //  log the error for now, but don't throw it as it will be retried
       this.logger.error(`Error stopping box from suspended organization. BoxId: ${event.boxId}: `, error)
     })

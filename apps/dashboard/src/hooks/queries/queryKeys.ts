@@ -72,6 +72,23 @@ export const queryKeys = {
         ...(page !== undefined && perPage !== undefined ? [{ page, perPage }] : []),
       ] as const,
   },
+  images: {
+    all: ['images'] as const,
+    list: (organizationId: string) => [...queryKeys.images.all, organizationId, 'list'] as const,
+    // One image can be cached under several keys: the route takes its id or any
+    // reference that names it.
+    details: (organizationId: string) => [...queryKeys.images.all, organizationId, 'detail'] as const,
+    detail: (organizationId: string, idOrRef: string) =>
+      [...queryKeys.images.details(organizationId), idOrRef] as const,
+    // Kept apart from the list rather than derived from it: the count is of
+    // the organization's own images, and the list also carries the curated set,
+    // which belongs to no organization and counts against no limit.
+    usage: (organizationId: string) => [...queryKeys.images.all, organizationId, 'usage'] as const,
+  },
+  registries: {
+    all: ['registries'] as const,
+    list: (organizationId: string) => [...queryKeys.registries.all, organizationId, 'list'] as const,
+  },
   volumes: {
     all: ['volumes'] as const,
     list: (organizationId: string) => [...queryKeys.volumes.all, organizationId, 'list'] as const,

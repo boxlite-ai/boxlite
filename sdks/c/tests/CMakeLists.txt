@@ -6,7 +6,7 @@ set(CMAKE_C_STANDARD 11)
 # Find the BoxLite library
 set(BOXLITE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
 set(BOXLITE_INCLUDE_DIR "${BOXLITE_ROOT}/sdks/c/include")
-set(BOXLITE_LIB_DIR "${BOXLITE_ROOT}/target/debug")
+set(BOXLITE_LIB_DIR "${BOXLITE_ROOT}/target/debug" CACHE PATH "Directory containing the native SDK library")
 
 # Detect platform and set library name
 if(APPLE)
@@ -40,6 +40,8 @@ set(TEST_TARGETS
     test_volume_ffi
     test_rest
     test_info
+    test_images
+    test_registries
 )
 
 foreach(TARGET ${TEST_TARGETS})
@@ -81,6 +83,12 @@ set_tests_properties(test_volume_ffi PROPERTIES LABELS "unit;ffi")
 # true unit test — runs under `make test:unit:c` (ctest -L unit).
 set_tests_properties(test_rest PROPERTIES LABELS "unit")
 set_tests_properties(test_info PROPERTIES LABELS "unit")
+# test_images serves the REST side from a forked loopback server and reads the
+# local side from an empty cache, so it needs no VM either.
+set_tests_properties(test_images PROPERTIES LABELS "unit")
+# test_registries is the same: a forked loopback server and a local runtime
+# that refuses the handle.
+set_tests_properties(test_registries PROPERTIES LABELS "unit")
 
 message(STATUS "BoxLite C Tests Configuration:")
 message(STATUS "  Include dir: ${BOXLITE_INCLUDE_DIR}")

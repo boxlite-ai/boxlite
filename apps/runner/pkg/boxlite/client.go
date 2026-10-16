@@ -54,6 +54,11 @@ type Client struct {
 	volumeCleanupMutex  sync.Mutex
 	lastVolumeCleanup   time.Time
 	volumeCleanup       volumeCleanupConfig
+
+	// afterGuestStateCheck runs right after DialGuestPort's persisted-state
+	// check, before it fetches a handle. Tests use it to land a stop in that
+	// window; nil in production.
+	afterGuestStateCheck func(boxID string)
 }
 
 // ClientConfig holds configuration for the BoxLite client.
@@ -193,11 +198,11 @@ func warnOnPartialRegistryProxy(logger *slog.Logger, proxy RegistryProxy) {
 // Core matches credentials by host, and this runtime pulls the operator's
 // curated images and references tenants named from the same hosts. A
 // credential here would be spent on any tenant reference to its host, so the
-// runtime holds none and every image pulls anonymously — which is why the
-// curated images must be public. The proxy's entry is the exception that
-// proves it: it carries the runner's own key, not a registry's, which is safe
-// only while no tenant reference names the proxy host — a reference the API's
-// image admission has to refuse.
+// runtime holds none: a public image pulls anonymously — which is why the
+// curated images must be public — and a private one goes to the proxy. The
+// proxy's entry is the exception that proves it: it carries the runner's own
+// key, not a registry's, and only the API writes a ref under the proxy host,
+// so no reference a tenant wrote reaches it.
 // With no proxy configured this is byte-for-byte the anonymous list, so the
 // proxy is safe to ship dark. Kept as a pure function so that is testable
 // without constructing a real runtime.
@@ -826,7 +831,7 @@ func (c *Client) forgetBox(boxId string) {
 // An unmapped handle is instead leaked for the process lifetime — Close only
 // frees what is still in the map. The cost is one handle per request that finds
 // its box down: calls that go on to boot it stop there, while ones that refuse a
-// stopped box (metrics, a guest-port dial) pay it again on every retry. That is
+// stopped box (metrics) pay it again on every retry. That is
 // affordable only because it tracks request volume — which is why GetBoxInfo
 // reads through the runtime rather than coming through here.
 // Ref-counting the wrapper is the real fix, and it belongs in the SDK.

@@ -16,6 +16,9 @@ The inventory is implementation-grounded:
   [`boxlite-rest`](./api/src/boxlite-rest/). They are excluded from the product
   OpenAPI document because their portable contract lives in
   [`openapi/box.openapi.yaml`](../openapi/box.openapi.yaml).
+- The registry proxy's runner credential lookup is an internal service route.
+  It is excluded from the Cloud OpenAPI document and generated customer clients;
+  the proxy owns its request and response handling.
 - Runner, proxy, and collector routes come from their runtime registration in
   [`server.go`](./runner/pkg/api/server.go),
   [`proxy.go`](./proxy/pkg/proxy/proxy.go), and
@@ -157,7 +160,7 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Boxes and preview access</b> · 19 routes</summary>
+<summary><b>Boxes and preview access</b> · 21 routes</summary>
 
 | Method | Path                                                                    | What it does                                          |
 | ------ | ----------------------------------------------------------------------- | ----------------------------------------------------- |
@@ -178,6 +181,7 @@ serves and the events it emits are catalogued below alongside its routes.
 | `GET`  | `/api/box/{boxId}/toolbox-proxy-url`                                    | Returns the box toolbox proxy URL.                    |
 | `GET`  | `/api/preview/{boxId}/public`                                           | Reports whether a box is publicly reachable.          |
 | `GET`  | `/api/preview/{boxId}/tunnels/{port}`                                   | Checks an active public tunnel for the proxy.         |
+| `POST` | `/api/preview/{boxId}/ensure-ready`                                     | Wakes a stopped box for the proxy, by auto-resume rules. |
 | `GET`  | `/api/preview/{boxId}/validate/{authToken}`                             | Validates a box preview authentication token.         |
 | `GET`  | `/api/preview/{boxId}/access`                                           | Checks whether the caller may preview a box.          |
 | `GET`  | `/api/preview/{signedPreviewToken}/{port}/box-id`                       | Resolves a signed preview token and port to a box ID. |
@@ -199,24 +203,36 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Runners and jobs</b> · 14 routes</summary>
+<summary><b>Registry credentials</b> · 3 routes</summary>
 
-| Method   | Path                           | What it does                                                   |
-| -------- | ------------------------------ | -------------------------------------------------------------- |
-| `GET`    | `/api/runners`                 | Lists runners.                                                 |
-| `POST`   | `/api/runners`                 | Registers a runner.                                            |
-| `GET`    | `/api/runners/me`              | Returns the authenticated runner's identity and configuration. |
-| `GET`    | `/api/runners/by-box/{boxId}`  | Resolves the runner assigned to a box.                         |
-| `GET`    | `/api/runners/{id}`            | Gets a runner by ID.                                           |
-| `GET`    | `/api/runners/{id}/full`       | Gets a runner with its full related data.                      |
-| `DELETE` | `/api/runners/{id}`            | Deletes a runner.                                              |
-| `PATCH`  | `/api/runners/{id}/scheduling` | Enables or disables scheduling onto a runner.                  |
-| `PATCH`  | `/api/runners/{id}/draining`   | Enables or disables runner draining.                           |
-| `POST`   | `/api/runners/healthcheck`     | Records or checks runner health.                               |
-| `GET`    | `/api/jobs`                    | Lists jobs assigned to the authenticated runner.               |
-| `GET`    | `/api/jobs/poll`               | Long-polls for work assigned to the runner.                    |
-| `GET`    | `/api/jobs/{jobId}`            | Gets a job by ID.                                              |
-| `POST`   | `/api/jobs/{jobId}/status`     | Reports job progress, success, or failure.                     |
+| Method   | Path                   | What it does                                                                          |
+| -------- | ---------------------- | ------------------------------------------------------------------------------------- |
+| `GET`    | `/api/registries`      | Lists the organization's private registry logins, without passwords.                  |
+| `POST`   | `/api/registries`      | Adds a login; the password is stored where the API cannot read it and never returned. |
+| `DELETE` | `/api/registries/{id}` | Removes a login, unless a box still pulls through it (409 lists the boxes).           |
+
+</details>
+
+<details>
+<summary><b>Runners and jobs</b> · 15 routes</summary>
+
+| Method   | Path                                   | What it does                                                   |
+| -------- | -------------------------------------- | -------------------------------------------------------------- |
+| `GET`    | `/api/runners`                         | Lists runners.                                                 |
+| `POST`   | `/api/runners`                         | Registers a runner.                                            |
+| `GET`    | `/api/runners/me`                      | Returns the authenticated runner's identity and configuration. |
+| `GET`    | `/api/runners/me/registry-credentials` | Internal registry-proxy lookup; excluded from customer OpenAPI and SDKs. |
+| `GET`    | `/api/runners/by-box/{boxId}`          | Resolves the runner assigned to a box.                         |
+| `GET`    | `/api/runners/{id}`                    | Gets a runner by ID.                                           |
+| `GET`    | `/api/runners/{id}/full`               | Gets a runner with its full related data.                      |
+| `DELETE` | `/api/runners/{id}`                    | Deletes a runner.                                              |
+| `PATCH`  | `/api/runners/{id}/scheduling`         | Enables or disables scheduling onto a runner.                  |
+| `PATCH`  | `/api/runners/{id}/draining`           | Enables or disables runner draining.                           |
+| `POST`   | `/api/runners/healthcheck`             | Records or checks runner health.                               |
+| `GET`    | `/api/jobs`                            | Lists jobs assigned to the authenticated runner.               |
+| `GET`    | `/api/jobs/poll`                       | Long-polls for work assigned to the runner.                    |
+| `GET`    | `/api/jobs/{jobId}`                    | Gets a job by ID.                                              |
+| `POST`   | `/api/jobs/{jobId}/status`             | Reports job progress, success, or failure.                     |
 
 </details>
 
@@ -352,7 +368,8 @@ the network routes — requires `write:boxes`; deleting a box requires
 `delete:boxes`. Box reads (list, get, head, execution status, metrics) carry no
 permission and are reached by any member, because the model has no `read:boxes`.
 Volume routes require `read:volumes`, `write:volumes`, or `delete:volumes` to
-match. Attaching a managed volume while creating a box is authorized
+match, and registry login routes `read:registries`, `write:registries`, or
+`delete:registries`. Attaching a managed volume while creating a box is authorized
 independently of `write:boxes`: the caller must also hold `read:volumes` and
 `write:volumes`, so a box-only credential cannot reach another's volume data
 (GHSA-2qqv-7cwv-mj8h). A system admin and an interactive owner without an API key
@@ -424,6 +441,27 @@ the portable contract, which the runner's own route registration enforces.
 
 </details>
 
+<details>
+<summary><b>Registries</b> · 3 routes</summary>
+
+| Method   | Path                                 | What it does                                                                     |
+| -------- | ------------------------------------ | -------------------------------------------------------------------------------- |
+| `GET`    | `/api/v1[/{prefix}]/registries`      | Lists the organization's private registry logins, without passwords.             |
+| `POST`   | `/api/v1[/{prefix}]/registries`      | Adds a login; a second one for the same registry and prefix is `already_exists`. |
+| `DELETE` | `/api/v1[/{prefix}]/registries/{id}` | Removes a login, unless a box still pulls through it (409 lists the boxes).      |
+
+The same logins as `/api/registries`, in the box API's snake_case shapes, for
+SDK clients.
+
+Credential deletion and private-image box persistence coordinate in PostgreSQL.
+If they overlap, the contending request returns 409 and can be retried. A box
+whose resolved proxy reference has lost its credential is also rejected before
+it is saved. Once a dependent box commits, deletion returns 409 with its ID.
+The dependency check reads candidate credentials once for the organization and
+registry host, then matches each box in memory using the longest repository prefix.
+
+</details>
+
 ## Runner API
 
 **Service:** `apps/runner` · **Base path:** `/` · **Port:** `3003` in
@@ -477,7 +515,7 @@ runtime and its microVMs.
 | `PUT`     | `/v1/boxes/{boxId}/files?path={path}`          | Uploads a tar stream into the local box.              |
 | `GET`     | `/v1/boxes/{boxId}/files?path={path}`          | Downloads a local box path as a tar stream.           |
 | `GET`     | `/v1/boxes/{boxId}/metrics`                    | Returns local box metrics.                            |
-| `CONNECT` | `/v1/boxes/{boxId}/network/tunnel?port={port}` | Opens a raw bidirectional TCP tunnel to a guest port. |
+| `CONNECT` | `/v1/boxes/{boxId}/network/tunnel?port={port}` | Opens a raw bidirectional TCP tunnel to a guest port; answers `409` with code `box_not_running` for a box that is not running, which the proxy uses to wake the box. |
 
 </details>
 

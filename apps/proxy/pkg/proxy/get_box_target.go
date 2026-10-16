@@ -141,6 +141,9 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 			Host:      forwardedHost,
 			Headers:   headers,
 			Transport: p.guestPortTransport,
+			ErrorHandler: func(writer http.ResponseWriter, _ *http.Request, err error) {
+				ctx.Error(guestDialFailure(writer.Header(), err))
+			},
 		}, nil
 	}
 
@@ -169,11 +172,7 @@ func (p *Proxy) dialGuestPort(ctx context.Context, network string, address strin
 	if err != nil || port == 0 {
 		return nil, fmt.Errorf("invalid guest port %q", rawPort)
 	}
-	runnerInfo, err := p.getBoxRunnerInfo(ctx, boxID)
-	if err != nil {
-		return nil, fmt.Errorf("resolve runner for box %s: %w", boxID, err)
-	}
-	return dialRunnerTunnel(ctx, runnerInfo, boxID, uint16(port))
+	return p.dialGuestPortWithWake(ctx, boxID, uint16(port))
 }
 
 func requestEscapedPath(requestURL *url.URL, fallbackPath string) string {

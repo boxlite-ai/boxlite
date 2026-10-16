@@ -373,7 +373,7 @@ export class NetworkHandle {
   /** @internal */
   constructor(private readonly ensureBox: () => Promise<BoxLike>) {}
 
-  /** Establish and return a one-shot tunnel for a port inside this box. */
+  /** Prepare a one-shot tunnel for a port inside this box. */
   async tunnel(port: number): Promise<BoxTunnel> {
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new RangeError("port must be an integer between 1 and 65535");
@@ -860,7 +860,7 @@ export class SimpleBox {
     return box.metrics();
   }
 
-  /** Establish and return a one-shot tunnel to a port inside this box. */
+  /** Prepare a one-shot tunnel to a port inside this box. */
   async tunnel(port: number): Promise<BoxTunnel> {
     return this.network.tunnel(port);
   }

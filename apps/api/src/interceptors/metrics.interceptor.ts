@@ -43,7 +43,6 @@ type CommonCaptureProps = {
   userAgent: string
   error?: string
   source: string
-  isDeprecated?: boolean
   sdkVersion?: string
   environment?: string
 }
@@ -117,7 +116,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
       userAgent,
       error,
       source: Array.isArray(source) ? source[0] : source,
-      isDeprecated: request.route.path.includes('/images'),
       sdkVersion,
       environment: this.configService.get('posthog.environment'),
     }
@@ -204,6 +202,9 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
             break
           case '/api/volumes/:volumeId':
             this.captureDeleteVolume(props, request.params.volumeId)
+            break
+          case '/api/images/:idOrRef':
+            this.captureDeleteImage(props, request.params.idOrRef)
             break
         }
         break
@@ -641,6 +642,14 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     })
   }
 
+  // Delete is the catalog's only mutation — an image enters it by being used,
+  // not by being created — so it is the only event there is to capture.
+  private captureDeleteImage(props: CommonCaptureProps, idOrRef: string) {
+    this.capture('api_image_deleted', props, 'api_image_deletion_failed', {
+      image_id_or_ref: idOrRef,
+    })
+  }
+
   private captureUpdateOrganizationExperimentalConfig(
     props: CommonCaptureProps,
     experimentalConfig: Record<string, any> | null,
@@ -689,7 +698,6 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
       user_agent: props.userAgent,
       error: props.error,
       source: props.source,
-      is_deprecated: props.isDeprecated,
       sdk_version: props.sdkVersion,
       environment: props.environment,
       boxlite_version: this.version,

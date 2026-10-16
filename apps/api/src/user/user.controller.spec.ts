@@ -15,6 +15,7 @@ jest.mock('axios', () => ({
 
 import axios from 'axios'
 import { UserController } from './user.controller'
+import { Context } from '../common/context/context'
 
 const get = axios.get as jest.Mock
 const post = axios.post as jest.Mock
@@ -27,6 +28,7 @@ const TOKEN_URL = 'https://tokens.example.net/oauth/token?realm=boxlite'
 function makeController() {
   const userService = {
     findOne: jest.fn(),
+    create: jest.fn(),
   }
   const values: Record<string, unknown> = {
     'oidc.issuer': OIDC_ISSUER,
@@ -144,5 +146,15 @@ describe('UserController OIDC Management API requests', () => {
       `${MANAGEMENT_BASE_URL}/users/auth0%7Cprimary%2Faccount%3Ftenant%3Dboxlite/identities/github%3Aenterprise/secondary%2Faccount%3Fsource%3Dgithub`,
       expect.any(Object),
     )
+  })
+})
+
+describe('UserController.create', () => {
+  it('creates the user as a registration by an admin', async () => {
+    const { controller, userService } = makeController()
+
+    await controller.create({ id: 'user-1', name: 'User One' } as any)
+
+    expect(userService.create).toHaveBeenCalledWith({ id: 'user-1', name: 'User One' }, Context.admin())
   })
 })

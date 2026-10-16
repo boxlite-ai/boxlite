@@ -11,7 +11,7 @@ import { ImageTag } from '../entities/image-tag.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { ImageSourceKind } from '../enums/image-source-kind.enum'
 import { CuratedImagePinService } from './curated-image-pin.service'
-import { IMPLICIT_TAG, isSha256Digest, parseImageRef } from '../utils/image-ref.util'
+import { IMPLICIT_TAG, isSha256Digest, parseImageRef, upstreamRefOf } from '../utils/image-ref.util'
 
 /** What a runner reported about the image a box actually booted from. */
 export type ReportedImage = {
@@ -93,7 +93,10 @@ export class ImageRegistrarService {
       }
       return
     }
-    const imageRef = image.ref
+    // Filed under the upstream name. A private image boots from a registry
+    // proxy ref, and a catalog keyed by that would list the proxy as the
+    // registry and miss every lookup made by the name the tenant uses.
+    const imageRef = upstreamRefOf(image.ref)
 
     const { host, repository, tag, digest } = parseImageRef(imageRef)
     const name = `${host}/${repository}`
@@ -117,10 +120,8 @@ export class ImageRegistrarService {
       // Both branches of the upsert return the row, and a name held only by a
       // soft-deleted image does not conflict at all: the insert succeeds and
       // the organization gets a fresh active row. That is what the partial
-      // index is for — deleting an image is how a tenant will pick up a moved
-      // tag, and using it again brings it back as a new entry. Nothing soft-
-      // deletes a row yet; the index has to be right before something does, or
-      // the first delete is also a migration.
+      // index is for — deleting an image is how a tenant picks up a moved tag,
+      // and using it again brings it back as a new entry.
       const imageId: string | undefined = image.raw?.[0]?.id
       if (!imageId) {
         throw new Error(`Image upsert for '${name}' returned no row`)
@@ -163,8 +164,8 @@ export class ImageRegistrarService {
 
       // `DO NOTHING`, not an update: a tag that already points somewhere stays
       // there. Following a moved tag would change what a box boots from with
-      // nobody asking, and deleting the image is the intended way to pick up a
-      // move, once the catalog API exposes one.
+      // nobody asking, and `DELETE /images/:idOrRef` is the intended way to
+      // pick up a move.
       await manager
         .createQueryBuilder()
         .insert()

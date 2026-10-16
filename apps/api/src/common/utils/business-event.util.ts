@@ -5,17 +5,17 @@
 
 import { Logger } from '@nestjs/common'
 import { getServiceType } from './app-mode'
+import { Context } from '../context/context'
 
 export type BusinessEventName = 'user.registration' | 'user.login' | 'box.create' | 'box.stop' | 'box.delete'
 
-export type BusinessEventActorKind = 'user' | 'admin' | 'auto_stop' | 'auto_delete' | 'org_suspension' | 'warm_pool'
-
-interface BusinessEventBase {
+export interface BusinessEventBase {
   name: BusinessEventName
-  // The user id for a registration, the box id for a box event.
+  // The user id for a registration, the box id for a box event. Anything else
+  // about that entity, such as its organization, is read from its table.
   correlationId: string
-  orgId?: string
-  actorKind?: BusinessEventActorKind
+  // Absent only on job outcome events: the runner reports after the request ends.
+  ctx?: Context
 }
 
 export type BusinessEvent =
@@ -43,6 +43,28 @@ export function recordBusinessEvent(event: BusinessEvent): void {
   logger.log(message, attributes)
 }
 
+/**
+ * Records an operation's whole event lifecycle: requested before op runs, then
+ * success when it resolves or exception, categorized by classifyError, when it
+ * throws. The error is rethrown.
+ */
+export async function recordOutcomes<T>(
+  event: BusinessEventBase,
+  op: () => Promise<T>,
+  classifyError: (error: unknown) => string,
+): Promise<T> {
+  recordBusinessEvent({ ...event, outcome: 'requested' })
+  let result: T
+  try {
+    result = await op()
+  } catch (error) {
+    recordBusinessEvent({ ...event, outcome: 'exception', exceptionType: classifyError(error) })
+    throw error
+  }
+  recordBusinessEvent({ ...event, outcome: 'success' })
+  return result
+}
+
 function toLogAttributes(event: BusinessEvent): Record<string, string> {
   const attributes: Record<string, string> = {
     'event.name': event.name,
@@ -52,11 +74,11 @@ function toLogAttributes(event: BusinessEvent): Record<string, string> {
     'event.timestamp': new Date().toISOString(),
   }
 
-  if (event.orgId) {
-    attributes['org.id'] = event.orgId
+  if (event.ctx) {
+    attributes['actor.kind'] = event.ctx.actorKind
   }
-  if (event.actorKind) {
-    attributes['actor.kind'] = event.actorKind
+  if (event.ctx?.reason) {
+    attributes['event.reason'] = event.ctx.reason
   }
   if (event.outcome === 'exception') {
     attributes['exception.type'] = event.exceptionType

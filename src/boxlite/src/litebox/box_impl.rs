@@ -24,8 +24,8 @@ use crate::disk::Disk;
 use crate::event_listener::EventListener;
 #[cfg(target_os = "linux")]
 use crate::fs::BindMountHandle;
-use crate::litebox::BoxTunnel;
 use crate::litebox::copy::{CopyOptions, CopySourceKind};
+use crate::litebox::{BoxConnection, BoxTunnel};
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::net::NetworkBackend;
@@ -1625,9 +1625,9 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
             .network
             .clone()
             .ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))?;
-        Ok(BoxTunnel::local(
-            network.tunnel(target).await?.into_owned_fd()?,
-        ))
+        Ok(BoxTunnel::new(None, async move {
+            BoxConnection::from_fd(network.tunnel(target).await?.into_owned_fd()?)
+        }))
     }
 }
 

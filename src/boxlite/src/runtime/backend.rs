@@ -167,7 +167,11 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 )]
 #[async_trait]
 pub(crate) trait BoxNetworkBackend: Send + Sync {
-    /// Establish a one-shot tunnel to a service port inside the box.
+    /// Prepare a one-shot tunnel to a service port inside the box.
+    ///
+    /// Check here that the box can carry the tunnel and mint any public URI,
+    /// but open no connection: return a [`BoxTunnel::new`] whose future opens
+    /// it on `connect()`, so a port nothing listens on fails there.
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
 }
 

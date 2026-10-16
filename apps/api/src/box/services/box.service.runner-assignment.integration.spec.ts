@@ -24,9 +24,10 @@ const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 // `@PrimaryGeneratedColumn('uuid')` makes TypeORM issue
 // `CREATE EXTENSION IF NOT EXISTS "uuid-ossp"` on connect, and that statement is
 // not atomic — a sibling suite doing the same concurrently collides on
-// pg_extension_name_index. usage.service.integration.spec.ts also drops and
-// recreates schema public wholesale, which would take the extension with it. A
-// private database removes both couplings.
+// pg_extension_name_index. A private database removes that coupling.
+// (usage.service.integration.spec.ts drops and recreates schema public
+// wholesale, which would have taken the extension with it; it now does so
+// inside a private database of its own for the same reason.)
 const databaseName = `runner_assignment_${process.pid}_${randomUUID().replaceAll('-', '')}`
 const schemaName = 'public'
 const organizationId = '00000000-0000-4000-8000-0000000000ff'

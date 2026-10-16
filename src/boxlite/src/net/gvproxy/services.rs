@@ -447,6 +447,9 @@ impl NetworkBackend for GvproxyBackend {
         // so we speak it raw (not via hyper): send gvproxy's request, read its
         // literal "OK" ack, and the socket becomes a raw pipe to the guest target.
         // Mirrors gvproxy's own `transport.Tunnel` (`POST /tunnel?ip=&port=`).
+        // The bridge acks only once the guest accepted the connection
+        // (`controlMux` in gvproxy-bridge), so a port nothing listens on fails
+        // here instead of yielding a pipe that closes at once.
         let ctl = self.control_socket_path.clone();
         let handshake = async {
             let mut stream = UnixStream::connect(&ctl).await.map_err(|e| {
@@ -467,11 +470,14 @@ impl NetworkBackend for GvproxyBackend {
             stream.read_exact(&mut ack).await.map_err(|e| {
                 BoxliteError::Network(format!("gvproxy tunnel ack read failed: {e}"))
             })?;
-            Ok::<_, BoxliteError>((stream, ack))
+            if &ack != b"OK" {
+                return Err(tunnel_rejection(&mut stream, ack).await);
+            }
+            Ok::<_, BoxliteError>(stream)
         };
 
         // Bound only the handshake; the returned tunnel itself is long-lived.
-        let (stream, ack) = tokio::time::timeout(REQUEST_TIMEOUT, handshake)
+        let stream = tokio::time::timeout(REQUEST_TIMEOUT, handshake)
             .await
             .map_err(|_| {
                 BoxliteError::Network(format!(
@@ -480,15 +486,48 @@ impl NetworkBackend for GvproxyBackend {
                 ))
             })??;
 
-        if &ack != b"OK" {
-            return Err(BoxliteError::Network(format!(
-                "gvproxy tunnel handshake: expected \"OK\", got {:?}",
-                String::from_utf8_lossy(&ack)
-            )));
-        }
-
         Ok(BoxInternalTunnel::from_local(stream, target))
     }
+}
+
+/// Most of a rejected tunnel's reply that is worth reading for its cause.
+const TUNNEL_REJECTION_LIMIT: usize = 4096;
+
+/// Turn a non-`"OK"` tunnel reply into an error that keeps its cause.
+///
+/// The bridge refuses a tunnel with a plain HTTP error whose body says why,
+/// such as `cannot dial guest: connection refused`; `ack` holds its first two
+/// bytes.
+async fn tunnel_rejection(stream: &mut UnixStream, ack: [u8; 2]) -> BoxliteError {
+    let mut reply = ack.to_vec();
+    let mut chunk = [0u8; 512];
+    while reply.len() < TUNNEL_REJECTION_LIMIT && !http_reply_complete(&reply) {
+        match stream.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(read) => reply.extend_from_slice(&chunk[..read]),
+        }
+    }
+    let reply = String::from_utf8_lossy(&reply);
+    let cause = match reply.split_once("\r\n\r\n") {
+        Some((head, body)) if head.starts_with("HTTP/") => body.trim().to_string(),
+        _ => format!("expected \"OK\", got {reply:?}"),
+    };
+    BoxliteError::Network(format!("gvproxy tunnel handshake: {cause}"))
+}
+
+/// Whether `reply` holds a whole HTTP response, judged by its Content-Length.
+fn http_reply_complete(reply: &[u8]) -> bool {
+    let Some(head_end) = reply.windows(4).position(|w| w == b"\r\n\r\n") else {
+        return false;
+    };
+    let head = String::from_utf8_lossy(&reply[..head_end]);
+    let length = head
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    reply.len() >= head_end + 4 + length
 }
 
 /// Parse gvproxy's `/stats` body onto the neutral [`NetworkBackendStats`]'s typed
@@ -1476,6 +1515,58 @@ mod tests {
         assert!(format!("{err}").contains(r#"expected "OK""#), "err: {err}");
     }
 
+    /// The bridge refuses a tunnel the guest would not accept with an HTTP
+    /// error. Its body names the cause and must reach the caller.
+    #[tokio::test]
+    async fn tunnel_rejection_keeps_the_bridge_cause() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::UnixListener;
+
+        let dir = tempfile::Builder::new()
+            .prefix("bl-tuntest-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let net_sock = dir.path().join("net.sock");
+        let ctl = super::super::control_socket_path(&net_sock);
+        let listener = UnixListener::bind(&ctl).unwrap();
+        let (done, hold_open) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let mut b = [0u8; 1];
+            let mut req = Vec::new();
+            while !req.ends_with(b"\r\n\r\n") {
+                conn.read_exact(&mut b).await.unwrap();
+                req.push(b[0]);
+            }
+            let body = "cannot dial guest: connection refused\n";
+            let reply = format!(
+                "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            conn.write_all(reply.as_bytes()).await.unwrap();
+            // Keep-alive: the bridge does not close after the error.
+            let _ = hold_open.await;
+        });
+
+        let config = NetworkBackendConfig {
+            socket_path: net_sock,
+            allow_net: Vec::new(),
+            secrets: Vec::new(),
+            ca_dir: dir.path().to_path_buf(),
+            rate_limit: Default::default(),
+        };
+        let target: SocketAddr = "192.168.127.2:8080".parse().unwrap();
+        let err = GvproxyBackend::from_config(&config)
+            .tunnel(target)
+            .await
+            .unwrap_err();
+        drop(done);
+        assert!(
+            format!("{err}").contains("cannot dial guest: connection refused"),
+            "err: {err}"
+        );
+    }
+
     /// End-to-end over a live gvproxy instance: the core dials the services
     /// socket to expose a forward, sees it in `/all`, unexposes it, and sees it
     /// gone. No VM is needed — the ServicesMux answers independently of the tap.
@@ -1541,14 +1632,14 @@ mod tests {
         );
     }
 
-    /// End-to-end over a live gvproxy instance: dial `/tunnel` and verify the
-    /// `"OK"` handshake. gvproxy writes `"OK"` *before* it dials the guest, so the
-    /// handshake completes even with no guest listening — enough to exercise the
-    /// raw-hijack protocol without a VM. Requires the libgvproxy dylib; `--ignored`.
+    /// End-to-end over a live gvproxy instance: dial `/tunnel` with no VM
+    /// attached. The bridge acks only once the guest accepts (`controlMux`), so
+    /// the handshake must fail with the bridge's cause rather than hand back a
+    /// pipe that closes at once. Requires the libgvproxy dylib; `--ignored`.
     #[cfg(feature = "gvproxy")]
     #[tokio::test]
     #[ignore]
-    async fn tunnel_handshake_over_services_socket() {
+    async fn tunnel_handshake_over_services_socket_requires_the_guest() {
         use crate::net::gvproxy::GvproxyInstance;
 
         let dir = tempfile::Builder::new()
@@ -1579,8 +1670,13 @@ mod tests {
             .expect("services socket is bound before create returns");
 
         let target: SocketAddr = "192.168.127.2:8080".parse().unwrap();
-        let tunnel = backend.tunnel(target).await.expect("tunnel handshake");
-        assert_eq!(tunnel.peer_addr(), target);
-        // The owned OS fd is recoverable for an SDK handoff.
+        let err = backend
+            .tunnel(target)
+            .await
+            .expect_err("a guest that does not accept must not yield a tunnel");
+        assert!(
+            format!("{err}").contains("cannot dial guest"),
+            "error should carry the bridge's cause: {err}"
+        );
     }
 }

@@ -7,6 +7,7 @@ import { Injectable, Logger } from '@nestjs/common'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { recordBusinessEvent } from '../common/utils/business-event.util'
+import { Context } from '../common/context/context'
 
 /** The token claims that identify one issued token. */
 export interface IssuedToken {
@@ -50,6 +51,6 @@ export class LoginEventRecorder {
       return
     }
 
-    recordBusinessEvent({ name: 'user.login', outcome: 'success', correlationId: userId, actorKind: 'user' })
+    recordBusinessEvent({ name: 'user.login', outcome: 'success', correlationId: userId, ctx: Context.user() })
   }
 }

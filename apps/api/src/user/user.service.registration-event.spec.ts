@@ -3,14 +3,17 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { Logger } from '@nestjs/common'
 import { UserService } from './user.service'
-import { recordBusinessEvent } from '../common/utils/business-event.util'
-
-jest.mock('../common/utils/business-event.util', () => ({ recordBusinessEvent: jest.fn() }))
+import { Context } from '../common/context/context'
+import { PlatformReason } from '../common/context/platform-reason.enum'
 
 describe('UserService registration events', () => {
+  // Every [message, attributes] the service logged, at info or error level, in order.
+  let logged: [string, Record<string, string>][]
+
   function makeService(transaction: jest.Mock) {
-    const eventEmitter = { emitAsync: jest.fn().mockResolvedValue([{ id: 'org-1' }]) }
+    const eventEmitter = { emitAsync: jest.fn().mockResolvedValue([]) }
     const service = new UserService({} as never, eventEmitter as never, { transaction } as never)
     jest.spyOn(service as never, 'generatePrivateKey').mockResolvedValue({
       privateKey: 'private-key',
@@ -21,40 +24,56 @@ describe('UserService registration events', () => {
 
   const committingTransaction = () => jest.fn(async (callback) => callback({ save: jest.fn(async (entity) => entity) }))
 
-  beforeEach(() => jest.mocked(recordBusinessEvent).mockClear())
-
-  it('records requested then success with the default organization it created', async () => {
-    const service = makeService(committingTransaction())
-
-    await service.create({ id: 'user-1', name: 'User One' } as never, 'user')
-
-    expect(jest.mocked(recordBusinessEvent).mock.calls).toEqual([
-      [{ name: 'user.registration', outcome: 'requested', correlationId: 'user-1', actorKind: 'user' }],
-      [{ name: 'user.registration', outcome: 'success', correlationId: 'user-1', actorKind: 'user', orgId: 'org-1' }],
-    ])
+  beforeEach(() => {
+    logged = []
+    const record = (message: string, attributes: Record<string, string>) => void logged.push([message, attributes])
+    jest.spyOn(Logger.prototype, 'log').mockImplementation(record as never)
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(record as never)
   })
 
-  it('records an exception instead of success when the transaction fails, and rethrows', async () => {
+  afterEach(() => jest.restoreAllMocks())
+
+  it('records requested then success with the context actor and no organization', async () => {
+    const service = makeService(committingTransaction())
+
+    await service.create({ id: 'user-1', name: 'User One' } as never, Context.user())
+
+    expect(logged.map(([message]) => message)).toEqual(['user.registration requested', 'user.registration success'])
+    for (const [, attributes] of logged) {
+      expect(attributes).toEqual(expect.objectContaining({ 'correlation.id': 'user-1', 'actor.kind': 'user' }))
+      expect(attributes).not.toHaveProperty('org.id')
+    }
+  })
+
+  it('records a conflict as user_conflict instead of success, and rethrows', async () => {
     const conflict = Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' })
     const service = makeService(jest.fn().mockRejectedValue(conflict))
 
-    await expect(service.create({ id: 'user-1', name: 'User One' } as never, 'user')).rejects.toBe(conflict)
+    await expect(service.create({ id: 'user-1', name: 'User One' } as never, Context.admin())).rejects.toBe(conflict)
 
-    expect(recordBusinessEvent).toHaveBeenLastCalledWith({
-      name: 'user.registration',
-      outcome: 'exception',
-      correlationId: 'user-1',
-      actorKind: 'user',
-      exceptionType: 'user_conflict',
-    })
-    expect(recordBusinessEvent).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: 'success' }))
+    expect(logged.map(([message]) => message)).toEqual(['user.registration requested', 'user.registration exception'])
+    expect(logged[1][1]).toEqual(expect.objectContaining({ 'actor.kind': 'admin', 'exception.type': 'user_conflict' }))
   })
 
-  it('records nothing for a create that is not a registration', async () => {
+  it('records any other failure as internal', async () => {
+    const service = makeService(jest.fn().mockRejectedValue(new Error('connection reset')))
+
+    await expect(service.create({ id: 'user-1', name: 'User One' } as never, Context.user())).rejects.toThrow()
+
+    expect(logged[1]).toEqual([
+      'user.registration exception',
+      expect.objectContaining({ 'exception.type': 'internal' }),
+    ])
+  })
+
+  it('records the admin seed as a platform bootstrap registration', async () => {
     const service = makeService(committingTransaction())
 
-    await service.create({ id: 'admin', name: 'Admin' } as never)
+    await service.create({ id: 'admin', name: 'Admin' } as never, Context.platform(PlatformReason.BOOTSTRAP))
 
-    expect(recordBusinessEvent).not.toHaveBeenCalled()
+    expect(logged[1]).toEqual([
+      'user.registration success',
+      expect.objectContaining({ 'actor.kind': 'platform', 'event.reason': 'bootstrap' }),
+    ])
   })
 })

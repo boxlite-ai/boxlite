@@ -81,3 +81,12 @@ what to do next, and any dialog it opens must be the same one the rest of the UI
 opens. A second entry point to the same guide is a bug, not a convenience —
 mounting one twice has already caused duplicate API keys to be minted
 (issue #1491).
+
+## Registry login tests
+
+Registry query and mutation tests use a real QueryClient with mocked API calls.
+They verify organization isolation, refusal before sending an unscoped request,
+and invalidation after successful changes. Page tests cover confirmation and
+failed submissions; API client tests check that removal refusals retain their
+message through the shared interceptor. Keep these boundaries covered when
+changing registry logins, alongside password cleanup on dialog close.

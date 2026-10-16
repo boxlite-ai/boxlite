@@ -334,6 +334,17 @@ jobs:
         timeout-minutes: 5
         run: make coverage:vmm:kvm
 
+      - uses: actions/setup-node@v4
+        if: matrix.platform.target == 'linux-x64-gnu'
+        with:
+          node-version: '22'
+
+      - name: Measure native bindings through SDK callers
+        if: matrix.platform.target == 'linux-x64-gnu'
+        env:
+          BOXLITE_DEPS_STUB: '1'
+        run: make coverage:bindings:external
+
       - name: Run OpenAPI reference-server unit tests
         # Keyed on BoxliteError's Display text (src/shared/src/errors.rs, in this
         # filter), so a new variant must add its row there before the reference
@@ -348,6 +359,16 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           files: target/coverage/lcov.info
+          flags: rust-unit
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
+
+      - name: Upload external native binding coverage
+        if: matrix.platform.target == 'linux-x64-gnu'
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/native-sdk/lcov.info,target/coverage/python/coverage.xml
           flags: rust-unit
           use_oidc: true
           disable_search: true

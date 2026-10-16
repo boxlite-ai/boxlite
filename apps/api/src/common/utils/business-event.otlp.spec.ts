@@ -10,6 +10,8 @@ import { InMemoryLogRecordExporter, LoggerProvider, SimpleLogRecordProcessor } f
 import { LoggerModule, Logger as PinoLogger } from 'nestjs-pino'
 import { swapMessageAndObject } from './pino.util'
 import { recordBusinessEvent } from './business-event.util'
+import { Context } from '../context/context'
+import { PlatformReason } from '../context/platform-reason.enum'
 
 // Jest loads modules through its own registry, so PinoInstrumentation's require
 // hook never fires here. Apply the same patch tracing.ts installs, by hand, so
@@ -50,8 +52,7 @@ describe('recordBusinessEvent through the API logging stack', () => {
       name: 'box.delete',
       outcome: 'requested',
       correlationId: 'box-1',
-      orgId: 'org-1',
-      actorKind: 'auto_delete',
+      ctx: Context.platform(PlatformReason.AUTO_DELETE),
     })
 
     const record = exporter.getFinishedLogRecords().find((log) => log.body === 'box.delete requested')
@@ -60,8 +61,8 @@ describe('recordBusinessEvent through the API logging stack', () => {
         'event.name': 'box.delete',
         'event.outcome': 'requested',
         'correlation.id': 'box-1',
-        'org.id': 'org-1',
-        'actor.kind': 'auto_delete',
+        'actor.kind': 'platform',
+        'event.reason': 'auto_delete',
         'service.type': 'api',
       }),
     )

@@ -4,16 +4,30 @@
  */
 
 import { Injectable, RequestTimeoutException } from '@nestjs/common'
-import { BoxService } from '../box/services/box.service'
-import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
-import { RedisLockProvider } from '../box/common/redis-lock.provider'
-import { getStateChangeLockKey } from '../box/utils/lock-key.util'
-import { Box } from '../box/entities/box.entity'
-import { BoxState } from '../box/enums/box-state.enum'
-import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
-import { Organization } from '../organization/entities/organization.entity'
+import { BoxService } from './box.service'
+import { BoxStateWaiterService } from './box-state-waiter.service'
+import { RedisLockProvider } from '../common/redis-lock.provider'
+import { getStateChangeLockKey } from '../utils/lock-key.util'
+import { Box } from '../entities/box.entity'
+import { BoxState } from '../enums/box-state.enum'
+import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { Organization } from '../../organization/entities/organization.entity'
 
 export const AUTO_RESUME_TIMEOUT_SECONDS = 30
+
+// States an auto-resume may wait out: either the box is stopped (or on its
+// way there) and can be started again, or it is already on its way up. Every
+// other non-STARTED state — ERROR, ARCHIVED/ARCHIVING, DESTROYED/DESTROYING,
+// RESIZING, UNKNOWN — either never reaches STARTED on its own or needs an
+// explicit operator action, so waiting 30s to time out is strictly worse for
+// the caller than an immediate refusal.
+export const AUTO_RESUMABLE_STATES: readonly BoxState[] = [
+  BoxState.STOPPED,
+  BoxState.STOPPING,
+  BoxState.STARTING,
+  BoxState.CREATING,
+  BoxState.RESTORING,
+]
 
 @Injectable()
 export class BoxAutoResumeService {

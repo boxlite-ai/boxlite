@@ -26,6 +26,7 @@ import { useVolumesQuery } from '@/hooks/queries/useVolumesQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useVolumeWsSync } from '@/hooks/useVolumeWsSync'
 import { handleApiError } from '@/lib/error-handling'
+import { timeAgo } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { OrganizationRolePermissionsEnum, VolumeDto, VolumeState } from '@boxlite-ai/api-client'
 import { useQueryClient } from '@tanstack/react-query'
@@ -45,22 +46,6 @@ const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]+$/
 // right it sat. The last column is therefore fixed, and this string exists
 // once so the two can no longer diverge.
 const ROW_GRID = 'grid grid-cols-[1.6fr_1.2fr_1fr_0.8fr_0.85fr_104px] items-center gap-3 px-2'
-
-// `lastUsedAt` is written only when a box that mounts the volume is created
-// (volume.service.ts:254-272), never on read or write — so it is the moment a
-// mount most recently *began*, not the last time bytes moved. Labelled "latest
-// mount" rather than "last used" (a long-running writer disproves that) and
-// rather than "last mounted", whose past tense would suggest the mount has
-// since ended — something this page has no way to know.
-function timeAgo(value?: string | null): string {
-  if (!value) return 'never'
-  const minutes = Math.floor((Date.now() - new Date(value).getTime()) / 60_000)
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  return `${Math.floor(hours / 24)}d ago`
-}
 
 // Transitional states read as `warn` rather than blending in with the healthy
 // ones: a volume stuck in `pending_delete` is exactly the leak this page exists
@@ -230,6 +215,12 @@ const Volumes: React.FC = () => {
               <span>Volume ID</span>
               <span>Status</span>
               <span>Created</span>
+              {/* `lastUsedAt` is written only when a box that mounts the volume is
+                  created (volume.service.ts:254-272), never on read or write — so it
+                  is the moment a mount most recently *began*, not the last time bytes
+                  moved. "Latest mount" rather than "last used" (a long-running writer
+                  disproves that), and rather than "last mounted", whose past tense
+                  would suggest the mount has since ended — which this page cannot know. */}
               <span>Latest mount</span>
               <span className="text-right">Actions</span>
             </div>

@@ -51,7 +51,7 @@ class SyncNetworkHandle:
         self._owner = box
 
     def tunnel(self, port: int) -> SyncBoxTunnel:
-        """Establish and return a one-shot tunnel for a port inside the box."""
+        """Prepare a one-shot tunnel for a port inside the box."""
         if not isinstance(port, int) or not 1 <= port <= 65535:
             raise ValueError("port must be an integer between 1 and 65535")
         tunnel = self._owner._create_tunnel(port)
