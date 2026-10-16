@@ -42,7 +42,7 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	if !*inboundEnabled {
-		http.Error(writer, "box is not public", http.StatusForbidden)
+		http.Error(writer, "box inbound access is disabled", http.StatusForbidden)
 		return
 	}
 	allowed, err := p.hasPublicTunnelAccess(request.Context(), boxID, port)

@@ -140,41 +140,6 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
         },
         /**
          * 
-         * @summary Check if box is public
-         * @param {string} boxId ID of the box
-         * @param {*} [options] Override http request option.
-         * @deprecated
-         * @throws {RequiredError}
-         */
-        isBoxPublic: async (boxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxId' is not null or undefined
-            assertParamExists('isBoxPublic', 'boxId', boxId)
-            const localVarPath = `/preview/{boxId}/public`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
          * @summary Check if box auth token is valid
          * @param {string} boxId ID of the box
          * @param {string} authToken Auth token of the box
@@ -262,20 +227,6 @@ export const PreviewApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
-         * @summary Check if box is public
-         * @param {string} boxId ID of the box
-         * @param {*} [options] Override http request option.
-         * @deprecated
-         * @throws {RequiredError}
-         */
-        async isBoxPublic(boxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<boolean>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.isBoxPublic(boxId, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['PreviewApi.isBoxPublic']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
          * @summary Check if box auth token is valid
          * @param {string} boxId ID of the box
          * @param {string} authToken Auth token of the box
@@ -330,17 +281,6 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          * 
-         * @summary Check if box is public
-         * @param {string} boxId ID of the box
-         * @param {*} [options] Override http request option.
-         * @deprecated
-         * @throws {RequiredError}
-         */
-        isBoxPublic(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<boolean> {
-            return localVarFp.isBoxPublic(boxId, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
          * @summary Check if box auth token is valid
          * @param {string} boxId ID of the box
          * @param {string} authToken Auth token of the box
@@ -389,18 +329,6 @@ export class PreviewApi extends BaseAPI {
      */
     public hasBoxAccess(boxId: string, options?: RawAxiosRequestConfig) {
         return PreviewApiFp(this.configuration).hasBoxAccess(boxId, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Check if box is public
-     * @param {string} boxId ID of the box
-     * @param {*} [options] Override http request option.
-     * @deprecated
-     * @throws {RequiredError}
-     */
-    public isBoxPublic(boxId: string, options?: RawAxiosRequestConfig) {
-        return PreviewApiFp(this.configuration).isBoxPublic(boxId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

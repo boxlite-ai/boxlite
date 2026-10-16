@@ -156,8 +156,9 @@ pub(crate) fn envelope_message(text: &str) -> Option<String> {
 
 /// A peer that answered with a status and a plain sentence rather than one of
 /// our envelopes — the CONNECT tunnel handshake, which our own proxy answers
-/// with 405 for the wrong method, 400 for a bad target, 403 for a box that is
-/// not public, and 502 for a runner or visibility lookup it cannot reach.
+/// with 405 for the wrong method, 400 for a bad target, 403 for a box with
+/// inbound access disabled, and 502 for a runner or inbound-mode lookup it
+/// cannot reach.
 ///
 /// It plainly answered, so nothing here may be attributed to an intermediary:
 /// that is the misattribution the codeless-body path exists to remove, and a

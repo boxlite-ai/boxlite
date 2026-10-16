@@ -2775,29 +2775,6 @@ paths:
       summary: Read the inbound mode of a box
       tags:
       - preview
-  /preview/{boxId}/public:
-    get:
-      deprecated: true
-      operationId: isBoxPublic
-      parameters:
-      - description: ID of the box
-        explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                type: boolean
-          description: Public status of the box
-      summary: Check if box is public
-      tags:
-      - preview
   /preview/{boxId}/validate/{authToken}:
     get:
       operationId: isValidAuthToken
