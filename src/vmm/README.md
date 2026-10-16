@@ -17,12 +17,14 @@ inspect the error's host cause.
 ```text
 boxlite-vmm
 ├── boxlite-hypervisor
-└── vm-memory
+├── vm-memory
+└── linux-loader (Linux x86_64 ELF loading)
 ```
 
 | Module | Planned responsibility |
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, then allocate and register RAM on host backend `H`; `run` is a placeholder |
+| `boot` | On Linux x86_64, load the pinned ELF kernel through linux-loader; boot data and entry setup follow |
 | `config` | `VmConfig { vcpu_count, memory_mib }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB |
 | `error` | VMM errors that keep the hypervisor's cause chain |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
@@ -61,6 +63,35 @@ backstop. Unit tests drive these paths with a recording mock backend. The
 `memory` and `vm` tests and that backend live in `tests/` and are included as
 unit-test modules, which keeps them outside the counted sources and the
 coverage denominator; `config` and `error` keep inline test modules.
+
+## Kernel loading
+
+On Linux x86_64, `boot::elf::load_elf(ram, image)` delegates ELF parsing and
+segment loading to rust-vmm's linux-loader and returns the entry address as
+`io::Result<u64>`. It uses vm-memory 0.18 and linux-loader 0.14 with only the
+ELF feature. The function stays crate-visible until the lifecycle slice wires
+it into `Vm::new`; the VM cannot boot Linux yet.
+
+Pass the pinned `vmlinux` from `make vmm:boot` and fresh zero-filled guest
+RAM before guest execution. BSS relies on that initial zero state. Validation
+and copying follow the library's behavior; a failed load may have changed RAM,
+so discard that RAM before retrying.
+
+The hardware probe requires Linux x86_64, read/write `/dev/kvm`, binutils
+`readelf`, and a `vmlinux` whose segments fit in its 128 MiB of RAM:
+
+```sh
+make vmm:boot
+make test:integration:vmm:elf
+# To qualify a different artifact:
+make test:integration:vmm:elf VMM_KERNEL=/absolute/path/to/vmlinux
+```
+
+`VMM_KERNEL` defaults to `target/vmm/boot/x86_64/vmlinux`. The probe compares
+the entry and loaded bytes with independent `readelf` output, checks BSS in
+fresh RAM, then runs a vCPU checksum over the loaded span. Missing hardware
+or kernel input fails qualification. This proves loading and guest visibility;
+boot data, CPU entry setup and Linux execution belong to later slices.
 
 ## Build
 
