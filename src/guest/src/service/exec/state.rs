@@ -1,7 +1,9 @@
 use crate::service::exec::error::ExecutionError;
 use crate::service::exec::exec_handle::ExecHandle;
 use crate::service::exec::output::{OutputManager, OutputTerminalSummary};
-use crate::service::exec::process_instance::ProcessInstance;
+use crate::service::exec::process_instance::{
+    process_group_alive, signal_process_group, ProcessInstance,
+};
 use boxlite_shared::ExecOutput;
 use futures::{Stream, StreamExt as _};
 use std::os::unix::io::AsRawFd;
@@ -73,6 +75,10 @@ pub(crate) struct ExecutionState {
     /// status, and one that arrives before the process exits simply waits.
     exit: crate::reaper::ExitSlot,
     process: Option<ProcessInstance>,
+    /// Captured at spawn, while the leader is still live. A group outlives its
+    /// leader, so a forced kill that arrives after the leader was reaped can
+    /// still reach the children it left holding this execution's pipes.
+    group: Option<nix::unistd::Pid>,
     shutdown_managed: bool,
     consumer_lease: Arc<std::sync::atomic::AtomicBool>,
     /// Classified once: the container-death diagnosis drains init's pipes, so a
@@ -90,6 +96,7 @@ impl ExecutionState {
     ) -> Self {
         let output = OutputManager::new(handle.stdout(), handle.stderr());
         let consumer_lease = output.consumer_lease_flag();
+        let group = process.and_then(|process| process.own_process_group());
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 output,
@@ -102,10 +109,20 @@ impl ExecutionState {
             })),
             exit,
             process,
+            group,
             shutdown_managed,
             consumer_lease,
             terminal_exit: Arc::new(OnceCell::new()),
         }
+    }
+
+    /// Whether anything this execution spawned is still running.
+    ///
+    /// The leader's own exit does not end the job when it forked children into
+    /// its process group: those survivors still hold the exec's pipes and are
+    /// still subject to its deadline.
+    pub(super) fn job_group_alive(&self) -> bool {
+        self.group.is_some_and(process_group_alive)
     }
 
     /// Whether a reader is currently streaming this execution's output.
@@ -503,9 +520,17 @@ impl ExecutionState {
             task.abort();
             let _ = task.await;
         }
+        // The deadline is not this entry's resource to reclaim while the job's
+        // process group still has members: aborting here -- from prune after
+        // RETAIN_GRACE, or from the SSH release once output reaches EOF --
+        // would strand those survivors past a deadline nothing else enforces.
+        // The watcher retires itself once the group empties, so leaving it
+        // running costs one polling task and no correctness.
         if let Some(task) = timeout_task {
-            task.abort();
-            let _ = task.await;
+            if !self.job_group_alive() {
+                task.abort();
+                let _ = task.await;
+            }
         }
         output.shutdown_drains().await;
         if self.shutdown_managed {
@@ -541,10 +566,26 @@ impl ExecutionState {
         if inner.released {
             return Ok(false);
         }
-        let Some(process) = self.process else {
-            return Ok(false);
+        // Address the group captured at spawn rather than re-deriving it from
+        // the leader: an escalation that follows a graceful signal runs after
+        // the leader is typically already reaped, and a leader-anchored lookup
+        // would refuse exactly when survivors still need the forced kill.
+        //
+        // The group arm therefore carries no identity guard, and no cheap one
+        // exists: an empty group already reports ESRCH without help, and a
+        // re-allocated pgid reads as alive, so a liveness probe here would be
+        // inert. Nothing else supplies the guarantee either -- `released` is set
+        // whenever resources are reclaimed, not when the group drains -- so a
+        // caller that reaches this after its group emptied and the number was
+        // re-allocated would signal an unrelated group. Reaching orphans
+        // requires addressing the group without proof of identity; the residual
+        // risk is that re-allocation, which needs the guest to exhaust its PID
+        // space inside the call window.
+        let result = match (process_group, self.group, self.process) {
+            (true, Some(group), _) => signal_process_group(group, signal),
+            (_, _, Some(process)) => process.signal(signal, process_group),
+            (_, _, None) => Ok(false),
         };
-        let result = process.signal(signal, process_group);
         drop(inner);
         result
     }
@@ -739,6 +780,166 @@ mod release_tests {
             status.signal(),
             Some(nix::sys::signal::Signal::SIGKILL as i32)
         );
+    }
+
+    /// An `ExecutionState` whose leader forked into its own group and exited,
+    /// leaving one live descendant. Returns the pipe peers so the caller keeps
+    /// the exec's output open for as long as it needs to.
+    async fn forking_state_with_live_group() -> (
+        ExecutionState,
+        Pid,
+        (
+            std::os::fd::OwnedFd,
+            std::os::fd::OwnedFd,
+            std::os::fd::OwnedFd,
+        ),
+    ) {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "sleep 30 & exit 0"]);
+        // SAFETY: `setpgid` is async-signal-safe and this closure allocates and
+        // locks nothing between fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                if nix::libc::setpgid(0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().expect("spawn group leader");
+        let leader = Pid::from_raw(child.id() as i32);
+        let process = ProcessInstance::capture(leader).expect("capture while live");
+
+        tokio::task::spawn_blocking(move || {
+            let _fence = crate::reaper::reap_fence();
+            child.wait().expect("wait for leader")
+        })
+        .await
+        .expect("wait task must not panic");
+
+        let (stdin_peer, stdin) = pipe().unwrap();
+        let (stdout, stdout_peer) = pipe().unwrap();
+        let (stderr, stderr_peer) = pipe().unwrap();
+        let state = ExecutionState::new(
+            ExecHandle::new(leader, stdin, stdout, Some(stderr))
+                .expect("test pipes must register with Tokio"),
+            ExitSlot::settled_for_test(ExitStatus::Code(0)),
+            Some(process),
+        );
+        (state, leader, (stdin_peer, stdout_peer, stderr_peer))
+    }
+
+    /// Releasing an entry must not retire a deadline the job still needs.
+    ///
+    /// `prune_inner` reaches this after RETAIN_GRACE and the SSH path reaches
+    /// it at output EOF — neither proves the process group ended, so aborting
+    /// the watcher there would strand survivors past their deadline.
+    #[tokio::test]
+    async fn release_keeps_the_deadline_while_the_group_lives() {
+        let (state, leader, _peers) = forking_state_with_live_group().await;
+        assert!(state.job_group_alive());
+
+        let timeout_task = tokio::spawn(std::future::pending());
+        let timeout_abort = timeout_task.abort_handle();
+        state.set_timeout_task(timeout_task).await;
+
+        assert!(state.release_resources().await);
+        assert!(
+            !timeout_abort.is_finished(),
+            "release retired a deadline whose group was still live"
+        );
+
+        let _ = nix::sys::signal::kill(
+            Pid::from_raw(-leader.as_raw()),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+        timeout_abort.abort();
+    }
+
+    /// A group kill must reach members that outlived the leader.
+    ///
+    /// `ProcessInstance::signal`'s start-time guard refuses once the leader is
+    /// reaped, which is exactly when the SSH bridge's forced stage runs. The
+    /// state captures the pgid at construction so that stage still lands.
+    #[tokio::test]
+    async fn group_kill_reaches_members_that_outlived_the_leader() {
+        use std::os::unix::process::CommandExt;
+
+        let _test_guard = crate::reaper::reap_test_guard().await;
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "sleep 30 & echo $!"]);
+        command.stdout(std::process::Stdio::piped());
+        // SAFETY: `setpgid` is async-signal-safe and this closure allocates and
+        // locks nothing between fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                if nix::libc::setpgid(0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().expect("spawn group leader");
+        let leader = Pid::from_raw(child.id() as i32);
+        let process = ProcessInstance::capture(leader).expect("read child identity");
+
+        let (stdin_peer, stdin) = pipe().unwrap();
+        let (stdout, stdout_peer) = pipe().unwrap();
+        let (stderr, stderr_peer) = pipe().unwrap();
+        let (exit, _exit_tx) = ExitSlot::pending_for_test();
+        let state = ExecutionState::new(
+            ExecHandle::new(leader, stdin, stdout, Some(stderr))
+                .expect("test pipes must register with Tokio"),
+            exit,
+            Some(process),
+        );
+
+        // Read one line: the forked `sleep` inherits stdout, so waiting for EOF
+        // would wait out the whole workload.
+        let descendant = {
+            use std::io::Read;
+            let mut out = child.stdout.take().expect("piped stdout");
+            let mut buf = String::new();
+            let mut byte = [0u8; 1];
+            while out.read(&mut byte).expect("read descendant pid") == 1 {
+                if byte[0] == b'\n' {
+                    break;
+                }
+                buf.push(byte[0] as char);
+            }
+            Pid::from_raw(buf.trim().parse::<i32>().expect("descendant pid line"))
+        };
+
+        // Let the leader exit and be reaped, so the start-time guard would now
+        // refuse a leader-anchored signal.
+        tokio::task::spawn_blocking(move || {
+            let _fence = crate::reaper::reap_fence();
+            child.wait().expect("wait for leader")
+        })
+        .await
+        .expect("wait task must not panic");
+
+        assert!(
+            state.job_group_alive(),
+            "the descendant must outlive its leader for this test to mean anything"
+        );
+        assert!(
+            state.kill(nix::sys::signal::Signal::SIGKILL, true).await,
+            "group kill must be delivered after the leader was reaped"
+        );
+
+        let mut gone = false;
+        for _ in 0..50 {
+            if nix::sys::signal::kill(descendant, None).is_err() {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(gone, "descendant {descendant} survived the group kill");
+        drop((stdin_peer, stdout_peer, stderr_peer));
     }
 
     #[tokio::test]
