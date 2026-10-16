@@ -35,14 +35,17 @@ for arg in "$@"; do
 done
 
 echo "=== stop + disable services ==="
+sudo systemctl stop boxlite-proxy 2>/dev/null || true
 sudo systemctl stop boxlite-runner 2>/dev/null || true
 sudo systemctl stop boxlite-api 2>/dev/null || true
 sudo systemctl disable boxlite-runner 2>/dev/null || true
 sudo systemctl disable boxlite-api 2>/dev/null || true
+sudo systemctl disable boxlite-proxy 2>/dev/null || true
 
 echo "=== remove systemd unit files ==="
 sudo rm -f /etc/systemd/system/boxlite-api.service \
-           /etc/systemd/system/boxlite-runner.service
+           /etc/systemd/system/boxlite-runner.service \
+           /etc/systemd/system/boxlite-proxy.service
 sudo systemctl daemon-reload
 
 echo "=== remove API env file ==="
@@ -50,6 +53,7 @@ sudo rm -f "$ENV_FILE"
 
 echo "=== remove deployed runner binary ==="
 sudo rm -f /usr/local/bin/boxlite-runner
+sudo rm -f /usr/local/bin/boxlite-proxy
 
 echo "=== remove docker registry container ==="
 sudo docker rm -f boxlite-registry 2>/dev/null || true
