@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"io"
 	"net"
@@ -148,5 +149,99 @@ func TestControlTunnelRejectsAMethodOtherThanPost(t *testing.T) {
 
 	if response.StatusCode != http.StatusMethodNotAllowed || dialed.Load() {
 		t.Fatalf("GET /tunnel = %d, dialed %v; want 405 without a guest dial", response.StatusCode, dialed.Load())
+	}
+}
+
+// A request without a valid ip and port is refused before any guest dial.
+func TestControlTunnelRejectsAMissingTarget(t *testing.T) {
+	for _, query := range []string{"port=18080", "ip=192.168.127.2&port=nope", "ip=192.168.127.2&port=70000"} {
+		var dialed atomic.Bool
+		handler := dialFirstTunnel(func(context.Context, string) (net.Conn, error) {
+			dialed.Store(true)
+			return nil, syscall.ECONNREFUSED
+		})
+		response := httptest.NewRecorder()
+		handler(response, httptest.NewRequest(http.MethodPost, "/tunnel?"+query, nil))
+
+		if response.Code != http.StatusBadRequest || dialed.Load() {
+			t.Errorf("POST /tunnel?%s = %d, dialed %v; want 400 without a guest dial", query, response.Code, dialed.Load())
+		}
+	}
+}
+
+// closeTrackingConn records whether the guest connection the bridge dialed was
+// closed, so a failed handshake cannot leak it.
+type closeTrackingConn struct {
+	net.Conn
+	closed atomic.Bool
+}
+
+func (c *closeTrackingConn) Close() error {
+	c.closed.Store(true)
+	return c.Conn.Close()
+}
+
+// failingConn is a client connection whose writes fail, as one that hung up does.
+type failingConn struct{ net.Conn }
+
+func (failingConn) Write([]byte) (int, error) { return 0, syscall.EPIPE }
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, syscall.EPIPE }
+
+// hijackWriter is a ResponseWriter whose Hijack answers with the given result.
+type hijackWriter struct {
+	*httptest.ResponseRecorder
+	hijack func() (net.Conn, *bufio.ReadWriter, error)
+}
+
+func (w hijackWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) { return w.hijack() }
+
+// Once the guest accepted, every way the ack can fail to reach the client must
+// close that guest connection rather than leave it open.
+func TestControlTunnelClosesTheGuestWhenTheAckCannotBeSent(t *testing.T) {
+	pendingFlush := func() *bufio.ReadWriter {
+		writer := bufio.NewWriter(failingWriter{})
+		writer.WriteString("pending")
+		return bufio.NewReadWriter(bufio.NewReader(strings.NewReader("")), writer)
+	}
+	emptyBuffers := func() *bufio.ReadWriter {
+		return bufio.NewReadWriter(bufio.NewReader(strings.NewReader("")), bufio.NewWriter(io.Discard))
+	}
+	for _, tc := range []struct {
+		name   string
+		writer func() http.ResponseWriter
+	}{
+		{"writer cannot hijack", func() http.ResponseWriter { return httptest.NewRecorder() }},
+		{"hijack fails", func() http.ResponseWriter {
+			return hijackWriter{httptest.NewRecorder(), func() (net.Conn, *bufio.ReadWriter, error) {
+				return nil, nil, syscall.ECONNRESET
+			}}
+		}},
+		{"buffered reply cannot be flushed", func() http.ResponseWriter {
+			client, _ := net.Pipe()
+			return hijackWriter{httptest.NewRecorder(), func() (net.Conn, *bufio.ReadWriter, error) {
+				return client, pendingFlush(), nil
+			}}
+		}},
+		{"ack cannot be written", func() http.ResponseWriter {
+			client, _ := net.Pipe()
+			return hijackWriter{httptest.NewRecorder(), func() (net.Conn, *bufio.ReadWriter, error) {
+				return failingConn{client}, emptyBuffers(), nil
+			}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			guestSide, _ := net.Pipe()
+			guest := &closeTrackingConn{Conn: guestSide}
+			handler := dialFirstTunnel(func(context.Context, string) (net.Conn, error) { return guest, nil })
+
+			handler(tc.writer(), httptest.NewRequest(http.MethodPost, "/tunnel?ip=192.168.127.2&port=18080", nil))
+
+			if !guest.closed.Load() {
+				t.Fatal("the dialed guest connection was left open")
+			}
+		})
 	}
 }
