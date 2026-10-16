@@ -54,6 +54,7 @@ help:
 	@echo "    make test:unit:vmm          - Run only the hypervisor and VMM crate unit tests"
 	@echo "    make test:vmm:boot          - Test the kernel build contracts with stubbed tools"
 	@echo "    make test:integration:vmm:kvm - Qualify KVM VM creation and VMM RAM mapping (Linux x86_64)"
+	@echo "    make test:integration:vmm:elf - Load VMM_KERNEL (ELF vmlinux) into guest RAM and verify through KVM"
 	@echo "    make coverage:vmm:kvm      - Add KVM hardware coverage to existing unit profiles"
 	@echo "    make test:guest-perms       - Run guest ownership tests (privileged cases use sudo)"
 	@echo "    make test:guest-artifacts   - Build and qualify the standalone guest artifacts"
