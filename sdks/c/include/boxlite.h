@@ -322,10 +322,10 @@ typedef struct CImageVersion {
   char *source_ref;
   // When this build was recorded, in Unix seconds.
   int64_t recorded_at;
-  // The image's tags that point at this build: `tags_count` strings, null
+  // The image's aliases that point at this build: `aliases_count` strings, null
   // only when the count is zero.
-  char **tags;
-  int tags_count;
+  char **aliases;
+  int aliases_count;
   // When a box last started from this build.
   int64_t last_used_at;
   int has_last_used_at;
@@ -334,23 +334,23 @@ typedef struct CImageVersion {
   int has_upstream_missing_at;
 } CImageVersion;
 
-// One move of a tag, or the pull that first recorded it, owned by its
+// An alias registration or historical binding change, owned by its
 // enclosing [`CImageDetail`]. Versions are named by digest.
-typedef struct CImageTagEvent {
-  char *tag;
-  // The build the tag pointed at before; null when the tag was new.
+typedef struct CImageAliasEvent {
+  char *alias;
+  // The build the alias pointed at before; null when the alias was new.
   char *from_digest;
   char *to_digest;
-  // Who moved the tag; null when a pull recorded it.
+  // Who recorded the alias; null when a pull recorded it.
   char *actor;
-  // When the tag moved, in Unix seconds.
-  int64_t moved_at;
-} CImageTagEvent;
+  // When the alias moved, in Unix seconds.
+  int64_t recorded_at;
+} CImageAliasEvent;
 
 // An image name and every build of it the runtime holds.
 //
-// `tags` points to `tags_count` strings, `versions` to `versions_count`
-// entries, newest first, and `history` to `history_count` tag moves, the
+// `aliases` points to `aliases_count` strings, `versions` to `versions_count`
+// entries, newest first, and `history` to `history_count` alias history entries, the
 // latest first; each array is null only when its count is zero. A local cache
 // leaves `history` empty. The callback that receives a detail owns it, nested
 // strings and arrays included, and releases it once with
@@ -358,14 +358,14 @@ typedef struct CImageTagEvent {
 typedef struct CImageDetail {
   // Registry and repository without a tag, such as "docker.io/library/alpine".
   char *name;
-  char **tags;
-  int tags_count;
+  char **aliases;
+  int aliases_count;
   // Non-zero when the operator provides the image rather than a box having
   // pulled it. Only a REST runtime's catalog has these.
   int curated;
   struct CImageVersion *versions;
   int versions_count;
-  struct CImageTagEvent *history;
+  struct CImageAliasEvent *history;
   int history_count;
 } CImageDetail;
 
@@ -395,6 +395,8 @@ typedef struct CImageUsage {
 // Image usage completion. The usage (null on failure) and error pointers are
 // borrowed for callback dispatch only; there is nothing to free.
 typedef void (*CBoxImageUsageCb)(struct CImageUsage*, CBoxliteError*, void*);
+
+typedef struct RegistryHandle CBoxliteRegistryHandle;
 
 // A concrete host listener published to a guest port.
 //
@@ -569,8 +571,6 @@ typedef struct BoxliteSocketAddress {
   uint16_t port;
   const char *path;
 } BoxliteSocketAddress;
-
-typedef struct RegistryHandle CBoxliteRegistryHandle;
 
 // A registry login the server pulls private images with. It has no
 // password field: the server never returns one.
@@ -1023,7 +1023,7 @@ enum BoxliteErrorCode boxlite_image_usage(CBoxliteImageHandle *handle,
                                           void *user_data,
                                           CBoxliteError *out_error);
 
-// Queue a move of an image's tag onto the version with a digest, with the
+// Queue creation of a catalog alias for a ready version, with the
 // same dispatch contract as [`boxlite_image_get`]. The callback receives the
 // image as it now is. Boxes already created keep the version they have.
 //
@@ -1037,13 +1037,41 @@ enum BoxliteErrorCode boxlite_image_usage(CBoxliteImageHandle *handle,
 //
 // As for [`boxlite_image_get`], with `tag` and `digest` held to the same
 // rules as `name`.
-enum BoxliteErrorCode boxlite_image_move_tag(CBoxliteImageHandle *handle,
-                                             const char *name,
-                                             const char *tag,
-                                             const char *digest,
-                                             CBoxImageGetCb cb,
-                                             void *user_data,
-                                             CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_image_create_alias(CBoxliteImageHandle *handle,
+                                                 const char *name,
+                                                 const char *alias,
+                                                 const char *digest,
+                                                 CBoxImageGetCb cb,
+                                                 void *user_data,
+                                                 CBoxliteError *out_error);
+
+// Queue deletion of one catalog alias. Versions and existing boxes remain.
+//
+// # Safety
+//
+// As for [`boxlite_image_remove`], with `alias` held to the same rules as `name`.
+enum BoxliteErrorCode boxlite_image_delete_alias(CBoxliteImageHandle *handle,
+                                                 const char *name,
+                                                 const char *alias,
+                                                 CBoxImageRemoveCb cb,
+                                                 void *user_data,
+                                                 CBoxliteError *out_error);
+
+// Create a handle for the registry logins a REST server pulls private images
+// with.
+//
+// On success ownership of `*out_handle` transfers to the caller, which must
+// release it with `boxlite_registry_free`. A local runtime answers
+// `Unsupported`: it pulls with the logins in its `image_registries` option.
+// `out_error` may be null and otherwise receives synchronous failures.
+//
+// # Safety
+//
+// `images` must be a live image handle and `out_handle` must be non-null
+// and writable. The returned handle must not be used after it is freed.
+enum BoxliteErrorCode boxlite_image_registries(CBoxliteImageHandle *images,
+                                               CBoxliteRegistryHandle **out_handle,
+                                               CBoxliteError *out_error);
 
 void boxlite_image_free(CBoxliteImageHandle *handle);
 
@@ -1051,12 +1079,12 @@ void boxlite_free_image_info_list(struct CImageInfoList *list);
 
 void boxlite_free_image_pull_result(struct CImagePullResult *result);
 
-// Free a `CImageDetail` with its tags, versions, and their strings.
+// Free a `CImageDetail` with its aliases, versions, and their strings.
 //
 // # Safety
 //
 // `detail` must be null or a pointer handed to a `boxlite_image_get` or
-// `boxlite_image_move_tag` callback that has not already been freed.
+// `boxlite_image_create_alias` callback that has not already been freed.
 void boxlite_free_image_detail(struct CImageDetail *detail);
 
 enum BoxliteErrorCode boxlite_box_info(CBoxHandle *handle,
@@ -1347,11 +1375,11 @@ enum BoxliteErrorCode boxlite_registry_remove(CBoxliteRegistryHandle *handle,
                                               void *user_data,
                                               CBoxliteError *out_error);
 
-// Free a handle returned by `boxlite_runtime_registries`.
+// Free a handle returned by `boxlite_image_registries`.
 //
 // # Safety
 //
-// `handle` must be null or a pointer from `boxlite_runtime_registries` that
+// `handle` must be null or a pointer from `boxlite_image_registries` that
 // has not been freed. It must not be used afterwards.
 void boxlite_registry_free(CBoxliteRegistryHandle *handle);
 
@@ -1484,22 +1512,6 @@ enum BoxliteErrorCode boxlite_runtime_images(CBoxliteRuntime *runtime,
 enum BoxliteErrorCode boxlite_runtime_volumes(CBoxliteRuntime *runtime,
                                               CBoxliteVolumeHandle **out_handle,
                                               CBoxliteError *out_error);
-
-// Create a handle for the registry logins a REST server pulls private images
-// with.
-//
-// On success ownership of `*out_handle` transfers to the caller, which must
-// release it with `boxlite_registry_free`. A local runtime answers
-// `Unsupported`: it pulls with the logins in its `image_registries` option.
-// `out_error` may be null and otherwise receives synchronous failures.
-//
-// # Safety
-//
-// `runtime` must be a live runtime pointer and `out_handle` must be non-null
-// and writable. The returned handle must not be used after it is freed.
-enum BoxliteErrorCode boxlite_runtime_registries(CBoxliteRuntime *runtime,
-                                                 CBoxliteRegistryHandle **out_handle,
-                                                 CBoxliteError *out_error);
 
 // Async + callback variant of runtime shutdown.
 //

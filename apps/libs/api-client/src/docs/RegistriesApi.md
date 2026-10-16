@@ -4,9 +4,9 @@ All URIs are relative to *http://localhost:3000*
 
 |Method | HTTP request | Description|
 |------------- | ------------- | -------------|
-|[**createRegistryCredential**](#createregistrycredential) | **POST** /registries | Add a registry credential|
-|[**deleteRegistryCredential**](#deleteregistrycredential) | **DELETE** /registries/{id} | Remove a registry credential|
-|[**listRegistryCredentials**](#listregistrycredentials) | **GET** /registries | List registry credentials|
+|[**createRegistryCredential**](#createregistrycredential) | **POST** /images/registries | Add a registry credential|
+|[**deleteRegistryCredential**](#deleteregistrycredential) | **DELETE** /images/registries/{id} | Remove a registry credential|
+|[**listRegistryCredentials**](#listregistrycredentials) | **GET** /images/registries | List registry credentials|
 
 # **createRegistryCredential**
 > RegistryCredential createRegistryCredential(createRegistryCredential)

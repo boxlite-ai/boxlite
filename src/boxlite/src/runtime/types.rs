@@ -696,8 +696,8 @@ pub struct ImageDetail {
     /// Registry and repository, without a tag (e.g. "docker.io/library/alpine").
     pub name: String,
 
-    /// Tags held for this name.
-    pub tags: Vec<String>,
+    /// Aliases held for this name.
+    pub aliases: Vec<String>,
 
     /// Provided by the operator rather than pulled by a box. Only a catalog
     /// has these; a local cache never does.
@@ -709,7 +709,7 @@ pub struct ImageDetail {
     /// Where each tag has pointed, newest first. Only a catalog keeps it, and
     /// only its most recent moves; a local cache answers it empty.
     #[serde(default)]
-    pub history: Vec<ImageTagEvent>,
+    pub history: Vec<ImageAliasEvent>,
 }
 
 /// One build of an image.
@@ -727,9 +727,9 @@ pub struct ImageVersion {
     /// When this build was recorded.
     pub recorded_at: DateTime<Utc>,
 
-    /// Tags that point at this build now.
+    /// Aliases that point at this build now.
     #[serde(default)]
-    pub tags: Vec<String>,
+    pub aliases: Vec<String>,
 
     /// When a box last started from this build, when that is known. Only a
     /// catalog tracks it.
@@ -742,23 +742,23 @@ pub struct ImageVersion {
     pub upstream_missing_at: Option<DateTime<Utc>>,
 }
 
-/// One move of a tag in a catalog, or the pull that first recorded the tag.
+/// A catalog alias registration or a historical binding change.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImageTagEvent {
-    /// The tag that moved.
-    pub tag: String,
+pub struct ImageAliasEvent {
+    /// The alias that was recorded.
+    pub alias: String,
 
-    /// The build it pointed at before; `None` when the tag did not exist yet.
+    /// The build it pointed at before; `None` when the alias did not exist yet.
     pub from_digest: Option<String>,
 
     /// The build it points at from then on.
     pub to_digest: String,
 
-    /// Who moved it; `None` when a pull recorded it.
+    /// Who recorded it; `None` when a pull recorded it.
     pub actor: Option<String>,
 
-    /// When it moved.
-    pub moved_at: DateTime<Utc>,
+    /// When the binding was recorded.
+    pub recorded_at: DateTime<Utc>,
 }
 
 /// How much of its image allowance a REST runtime's caller holds.

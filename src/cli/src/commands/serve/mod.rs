@@ -1814,7 +1814,11 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/v1/images/{name}",
             get(images::get_image).delete(images::remove_image),
         )
-        .route("/v1/images/{name}/tags/{tag}", put(images::move_image_tag))
+        .route("/v1/images/{name}/aliases", post(images::create_image_alias))
+        .route(
+            "/v1/images/{name}/aliases/{alias}",
+            axum::routing::delete(images::delete_image_alias),
+        )
         // Box CRUD (import first — static path before param path)
         .route("/v1/boxes/import", post(advanced::import_box))
         .route(
@@ -3434,11 +3438,11 @@ mod tests {
             "{usage}"
         );
 
-        // The cache keeps no catalog of tags, so a move is refused on its route
+        // The cache keeps no catalog of aliases, so creation is refused on its route
         // rather than read as some other request.
         let digest = format!("sha256:{}", "a".repeat(64));
         let moved = images
-            .move_tag("quay.io/acme/app", "stable", &digest)
+            .create_alias("quay.io/acme/app", "stable", &digest)
             .await
             .unwrap_err();
         assert!(

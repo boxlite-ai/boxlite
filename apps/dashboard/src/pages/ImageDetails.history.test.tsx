@@ -27,7 +27,7 @@ const version = (base: { id: string; digest: string }, extra: Record<string, unk
   ...base,
   sizeBytes: 4096,
   sourceRef: 'quay.io/acme/app:v1',
-  tags: [],
+  aliases: [],
   lastUsedAt: null,
   upstreamMissingAt: null,
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -39,14 +39,14 @@ const image = (extra: Record<string, unknown> = {}) => ({
   name: 'quay.io/acme/app',
   curated: false,
   curatedRef: null,
-  tags: ['stable', 'v1'],
+  aliases: ['stable', 'v1'],
   versionCount: 2,
   sizeBytes: 8192,
   lastUsedAt: null,
   createdAt: '2026-01-01T00:00:00.000Z',
   versions: [
-    version(V2, { tags: ['stable'] }),
-    version(V1, { tags: ['v1'], upstreamMissingAt: '2026-01-03T00:00:00.000Z' }),
+    version(V2, { aliases: ['stable'] }),
+    version(V1, { aliases: ['v1'], upstreamMissingAt: '2026-01-03T00:00:00.000Z' }),
   ],
   history: [],
   ...extra,
@@ -78,9 +78,9 @@ describe('ImageDetails', () => {
 
   /** What a version's row shows under `heading`, so a column is read by itself. */
   const cellOf = (digest: string, heading: string) => {
-    // The versions table's header, the only row with a Tags column: other
+    // The versions table's header, the only row with a Aliases column: other
     // headings, Last used among them, also label the image's own summary.
-    const header = [...container.querySelectorAll('span')].find((span) => span.textContent === 'Tags')?.parentElement
+    const header = [...container.querySelectorAll('span')].find((span) => span.textContent === 'Aliases')?.parentElement
     const row = container.querySelector(`[title="${digest}"]`)?.closest('div')
     if (!header || !row) {
       throw new Error(`no '${heading}' column, or no row for ${digest}`)
@@ -94,8 +94,8 @@ describe('ImageDetails', () => {
 
     const text = render()
 
-    expect(cellOf(V2.digest, 'Tags')).toBe('stable')
-    expect(cellOf(V1.digest, 'Tags')).toBe('v1')
+    expect(cellOf(V2.digest, 'Aliases')).toBe('stable')
+    expect(cellOf(V1.digest, 'Aliases')).toBe('v1')
     // Only the version the pull found gone carries the mark.
     expect(container.querySelectorAll('[title^="A pull found it gone"]')).toHaveLength(1)
     expect(text).toContain('Needs a new pull')
@@ -112,18 +112,18 @@ describe('ImageDetails', () => {
     expect(cellOf(V1.digest, 'Last used')).toBe('—')
   })
 
-  it('lists the moves of its tags, naming the versions by digest and a pull as the actor it had', () => {
+  it('lists the moves of its aliases, naming the versions by digest and a pull as the actor it had', () => {
     state.image = image({
       history: [
         {
-          tagName: 'stable',
+          aliasName: 'stable',
           fromVersionId: V1.id,
           toVersionId: V2.id,
           actorId: 'auth0|alice',
           createdAt: '2026-01-02T00:00:00.000Z',
         },
         {
-          tagName: 'stable',
+          aliasName: 'stable',
           fromVersionId: null,
           toVersionId: V1.id,
           actorId: null,
@@ -142,7 +142,7 @@ describe('ImageDetails', () => {
   })
 
   it('says older events are left out once the history is as long as the detail carries', () => {
-    const event = { tagName: 'stable', fromVersionId: V1.id, toVersionId: V2.id, actorId: 'auth0|alice' }
+    const event = { aliasName: 'stable', fromVersionId: V1.id, toVersionId: V2.id, actorId: 'auth0|alice' }
     state.image = image({
       history: Array.from({ length: 100 }, (_, index) => ({
         ...event,
@@ -154,24 +154,24 @@ describe('ImageDetails', () => {
   })
 
   /**
-   * The detail of an image with no history still renders. Tags recorded
+   * The detail of an image with no history still renders. Aliases recorded
    * before history was kept have no event, which is not the same as no tag.
    */
-  it('says tags with no history were recorded before it was kept', () => {
+  it('says aliases with no history were recorded before it was kept', () => {
     state.image = image()
 
-    expect(render()).toContain('these tags were recorded before tag moves were kept')
+    expect(render()).toContain('these aliases were recorded before registration history was kept')
   })
 
-  it('says no tag has been recorded when an image has neither tags nor history', () => {
-    state.image = image({ tags: [], versions: [version(V1)] })
+  it('says no tag has been recorded when an image has neither aliases nor history', () => {
+    state.image = image({ aliases: [], versions: [version(V1)] })
 
-    expect(render()).toContain('No tag has been recorded yet.')
+    expect(render()).toContain('No alias has been recorded yet.')
   })
 
-  it('says a curated image has no tags to move', () => {
-    state.image = image({ curated: true, curatedRef: 'ghcr.io/boxlite-ai/base:1', tags: [], versions: [] })
+  it('says a curated image has no aliases to move', () => {
+    state.image = image({ curated: true, curatedRef: 'ghcr.io/boxlite-ai/base:1', aliases: [], versions: [] })
 
-    expect(render()).toContain('Curated images have no tags to move')
+    expect(render()).toContain('Curated images have no catalog aliases')
   })
 })

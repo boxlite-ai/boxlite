@@ -1,18 +1,20 @@
-# MoveImageTag
+# CreateImageAlias
 
 
 ## Properties
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**alias** | **string** | New catalog alias; existing aliases are refused | [default to undefined]
 **versionId** | **string** | Version to point the tag at. It must be a ready version of this image | [default to undefined]
 
 ## Example
 
 ```typescript
-import { MoveImageTag } from './api';
+import { CreateImageAlias } from './api';
 
-const instance: MoveImageTag = {
+const instance: CreateImageAlias = {
+    alias,
     versionId,
 };
 ```

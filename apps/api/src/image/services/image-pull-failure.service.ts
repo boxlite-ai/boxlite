@@ -8,7 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
 import { boxImageIsOrgOwned } from '../../box/utils/image-ownership.util'
-import { ImageTag } from '../entities/image-tag.entity'
+import { ImageAlias } from '../entities/image-alias.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { parseImageRef, ParsedImageRef, upstreamRefOf } from '../utils/image-ref.util'
 import { pullFailureOf } from '../utils/pull-failure.util'
@@ -34,8 +34,8 @@ export class ImagePullFailureService {
   constructor(
     @InjectRepository(ImageVersion)
     private readonly versionRepository: Repository<ImageVersion>,
-    @InjectRepository(ImageTag)
-    private readonly tagRepository: Repository<ImageTag>,
+    @InjectRepository(ImageAlias)
+    private readonly tagRepository: Repository<ImageAlias>,
   ) {}
 
   /**
@@ -76,28 +76,28 @@ export class ImagePullFailureService {
         : `Failed to pull image '${ref}': ${parsed.host} refused the pull (${codes}). The image is private or does not exist, and no registry login of the organization covers it.`
     }
 
-    let tags: string[] | undefined
+    let aliases: string[] | undefined
     try {
-      tags = parsed.digest
+      aliases = parsed.digest
         ? await this.markMissing(box.organizationId, `${parsed.host}/${parsed.repository}`, parsed.digest)
         : undefined
     } catch (error) {
       this.logger.warn(`Could not mark '${ref}' as gone upstream; recording the runtime's reason: ${error}`)
       return reason
     }
-    if (tags === undefined) {
+    if (aliases === undefined) {
       return `Failed to pull image '${ref}': ${parsed.host} has no such image (${codes}). Check the repository and the tag.`
     }
     const move =
-      tags.length === 0
+      aliases.length === 0
         ? 'Use a version its registry still has'
-        : `Move ${tags.length === 1 ? 'the tag' : 'the tags'} ${tags.map((tag) => `'${tag}'`).join(', ')} to a version its registry still has`
+        : `Move ${aliases.length === 1 ? 'the tag' : 'the aliases'} ${aliases.map((tag) => `'${tag}'`).join(', ')} to a version its registry still has`
     return `Failed to pull image '${ref}': ${parsed.host} no longer has it (${codes}). Boxes on runners that already hold it still start. ${move}, or remove the image from the catalog and use the reference again.`
   }
 
   /**
    * Mark the organization's version of this build as gone upstream, keeping
-   * the first time it was found gone, and name the tags that point at it.
+   * the first time it was found gone, and name the aliases that point at it.
    * Undefined when the catalog does not hold the build.
    */
   private async markMissing(organizationId: string, name: string, digest: string): Promise<string[] | undefined> {
@@ -124,7 +124,7 @@ export class ImagePullFailureService {
       .where('id = :id', { id: version.id })
       .execute()
 
-    const tags = await this.tagRepository.find({ where: { versionId: version.id }, order: { name: 'ASC' } })
-    return tags.map((tag) => tag.name)
+    const aliases = await this.tagRepository.find({ where: { versionId: version.id }, order: { name: 'ASC' } })
+    return aliases.map((tag) => tag.name)
   }
 }

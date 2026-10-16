@@ -1,7 +1,8 @@
+use crate::registries::JsRegistryHandle;
 use std::sync::Arc;
 
 use boxlite::ImageHandle;
-use boxlite::runtime::types::{ImageDetail, ImageInfo, ImageTagEvent, ImageUsage, ImageVersion};
+use boxlite::runtime::types::{ImageAliasEvent, ImageDetail, ImageInfo, ImageUsage, ImageVersion};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -68,8 +69,8 @@ pub struct JsImageVersion {
     /// When this build was recorded, as an RFC 3339 string.
     #[napi(js_name = "recordedAt")]
     pub recorded_at: String,
-    /// The image's tags that point at this build.
-    pub tags: Vec<String>,
+    /// The image's aliases that point at this build.
+    pub aliases: Vec<String>,
     /// When a box last started from this build; absent when unknown.
     #[napi(js_name = "lastUsedAt")]
     pub last_used_at: Option<String>,
@@ -86,39 +87,39 @@ impl From<ImageVersion> for JsImageVersion {
             size_bytes: version.size_bytes.map(js_number),
             source_ref: version.source_ref,
             recorded_at: version.recorded_at.to_rfc3339(),
-            tags: version.tags,
+            aliases: version.aliases,
             last_used_at: version.last_used_at.map(|time| time.to_rfc3339()),
             upstream_missing_at: version.upstream_missing_at.map(|time| time.to_rfc3339()),
         }
     }
 }
 
-/// One move of a tag, or the pull that first recorded it; versions named by
+/// An alias registration or historical binding change; versions named by
 /// digest.
 #[napi(object)]
 #[derive(Clone, Debug)]
-pub struct JsImageTagEvent {
-    pub tag: String,
-    /// The build the tag pointed at before; absent when the tag was new.
+pub struct JsImageAliasEvent {
+    pub alias: String,
+    /// The build the alias pointed at before; absent when the alias was new.
     #[napi(js_name = "fromDigest")]
     pub from_digest: Option<String>,
     #[napi(js_name = "toDigest")]
     pub to_digest: String,
-    /// Who moved the tag; absent when a pull recorded it.
+    /// Who recorded the alias; absent when a pull recorded it.
     pub actor: Option<String>,
     /// As an RFC 3339 string.
-    #[napi(js_name = "movedAt")]
-    pub moved_at: String,
+    #[napi(js_name = "recordedAt")]
+    pub recorded_at: String,
 }
 
-impl From<ImageTagEvent> for JsImageTagEvent {
-    fn from(event: ImageTagEvent) -> Self {
+impl From<ImageAliasEvent> for JsImageAliasEvent {
+    fn from(event: ImageAliasEvent) -> Self {
         Self {
-            tag: event.tag,
+            alias: event.alias,
             from_digest: event.from_digest,
             to_digest: event.to_digest,
             actor: event.actor,
-            moved_at: event.moved_at.to_rfc3339(),
+            recorded_at: event.recorded_at.to_rfc3339(),
         }
     }
 }
@@ -129,20 +130,20 @@ impl From<ImageTagEvent> for JsImageTagEvent {
 pub struct JsImageDetail {
     /// Registry and repository without a tag, such as "docker.io/library/alpine".
     pub name: String,
-    pub tags: Vec<String>,
+    pub aliases: Vec<String>,
     /// Provided by the server's operator rather than pulled by a box.
     pub curated: bool,
     /// Newest first.
     pub versions: Vec<JsImageVersion>,
-    /// The latest tag moves, newest first; empty on a local cache.
-    pub history: Vec<JsImageTagEvent>,
+    /// The latest alias history entries, newest first; empty on a local cache.
+    pub history: Vec<JsImageAliasEvent>,
 }
 
 impl From<ImageDetail> for JsImageDetail {
     fn from(detail: ImageDetail) -> Self {
         Self {
             name: detail.name,
-            tags: detail.tags,
+            aliases: detail.aliases,
             curated: detail.curated,
             versions: detail
                 .versions
@@ -152,7 +153,7 @@ impl From<ImageDetail> for JsImageDetail {
             history: detail
                 .history
                 .into_iter()
-                .map(JsImageTagEvent::from)
+                .map(JsImageAliasEvent::from)
                 .collect(),
         }
     }
@@ -202,6 +203,16 @@ impl JsImageHandle {
         })
     }
 
+    /// Get the server's registry logins. Throws `unsupported` on a local
+    /// runtime, which pulls with the logins in `imageRegistries` instead.
+    #[napi(getter)]
+    pub fn registries(&self) -> Result<JsRegistryHandle> {
+        let handle = self.handle.registries().map_err(map_err)?;
+        Ok(JsRegistryHandle {
+            handle: Arc::new(handle),
+        })
+    }
+
     /// List cached images for this runtime.
     #[napi]
     pub async fn list(&self) -> Result<Vec<JsImageInfo>> {
@@ -233,21 +244,29 @@ impl JsImageHandle {
         Ok(JsImageUsage::from(usage))
     }
 
-    /// Point a tag of an image name at the version with that digest; REST
+    /// Create a catalog alias for a ready version, refusing an existing alias; REST
     /// runtimes only.
-    #[napi(js_name = "moveTag")]
-    pub async fn move_tag(
+    #[napi(js_name = "createAlias")]
+    pub async fn create_alias(
         &self,
         name: String,
-        tag: String,
+        alias: String,
         digest: String,
     ) -> Result<JsImageDetail> {
         let handle = Arc::clone(&self.handle);
         let detail = handle
-            .move_tag(&name, &tag, &digest)
+            .create_alias(&name, &alias, &digest)
             .await
             .map_err(map_err)?;
         Ok(JsImageDetail::from(detail))
+    }
+    /// Delete only a catalog alias; REST runtimes only.
+    #[napi(js_name = "deleteAlias")]
+    pub async fn delete_alias(&self, name: String, alias: String) -> Result<()> {
+        self.handle
+            .delete_alias(&name, &alias)
+            .await
+            .map_err(map_err)
     }
 }
 
@@ -269,7 +288,7 @@ mod tests {
             size_bytes,
             source_ref: format!("quay.io/acme/app@{digest}"),
             recorded_at: (SystemTime::UNIX_EPOCH + Duration::from_secs(recorded_secs)).into(),
-            tags: Vec::new(),
+            aliases: Vec::new(),
             last_used_at: None,
             upstream_missing_at: None,
         }
@@ -290,7 +309,7 @@ mod tests {
     fn image_detail_keeps_every_version_newest_first() {
         let detail = JsImageDetail::from(ImageDetail {
             name: "quay.io/acme/app".to_string(),
-            tags: vec!["v2".to_string(), "v1".to_string()],
+            aliases: vec!["v2".to_string(), "v1".to_string()],
             curated: true,
             versions: vec![
                 version("sha256:bb", Some(4096), 2),
@@ -300,7 +319,7 @@ mod tests {
         });
 
         assert_eq!(detail.name, "quay.io/acme/app");
-        assert_eq!(detail.tags, ["v2", "v1"]);
+        assert_eq!(detail.aliases, ["v2", "v1"]);
         assert!(detail.curated);
         let [newest, oldest] = detail.versions.as_slice() else {
             panic!("expected two versions, got {:?}", detail.versions);
@@ -390,7 +409,7 @@ mod tests {
     fn get_reads_the_name_and_its_versions_from_a_rest_server() {
         let (url, server) = http_server(vec![(
             200,
-            r#"{"name":"quay.io/acme/app","tags":["v1"],"curated":false,"versions":[{"digest":"sha256:aa","size_bytes":42,"source_ref":"quay.io/acme/app:v1","recorded_at":"2026-01-02T03:04:05Z"}]}"#,
+            r#"{"name":"quay.io/acme/app","aliases":["v1"],"curated":false,"versions":[{"digest":"sha256:aa","size_bytes":42,"source_ref":"quay.io/acme/app:v1","recorded_at":"2026-01-02T03:04:05Z"}]}"#,
         )]);
 
         let detail = block_on(images_at(url).get("quay.io/acme/app".to_string())).unwrap();

@@ -223,11 +223,11 @@ pub unsafe extern "C" fn boxlite_registry_remove(
     }
 }
 
-/// Free a handle returned by `boxlite_runtime_registries`.
+/// Free a handle returned by `boxlite_image_registries`.
 ///
 /// # Safety
 ///
-/// `handle` must be null or a pointer from `boxlite_runtime_registries` that
+/// `handle` must be null or a pointer from `boxlite_image_registries` that
 /// has not been freed. It must not be used afterwards.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_registry_free(handle: *mut CBoxliteRegistryHandle) {

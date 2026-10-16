@@ -8,10 +8,11 @@ import { TypeOrmModule } from '@nestjs/typeorm'
 import { Box } from '../box/entities/box.entity'
 import { OrganizationModule } from '../organization/organization.module'
 import { RegistryModule } from '../registry/registry.module'
+import { RegistriesController } from '../registry/controllers/registries.controller'
 import { ImageController } from './controllers/image.controller'
 import { Image } from './entities/image.entity'
-import { ImageTag } from './entities/image-tag.entity'
-import { ImageTagEvent } from './entities/image-tag-event.entity'
+import { ImageAlias } from './entities/image-alias.entity'
+import { ImageAliasEvent } from './entities/image-alias-event.entity'
 import { ImageVersion } from './entities/image-version.entity'
 import { CuratedImagePinService } from './services/curated-image-pin.service'
 import { ImageAdmissionService } from './services/image-admission.service'
@@ -24,8 +25,8 @@ import { ImageResolverService } from './services/image-resolver.service'
 // The catalog's own module: the gate that decides whether an image may be
 // used at all, the resolver that turns it into the ref a runner is given, the
 // registrar that records what that ref turned out to be — in the catalog for a
-// tenant's image, as a per-runner pin for a curated one — the catalog the five
-// HTTP routes read, which also moves tags, the preparation service that says
+// tenant's image, as a per-runner pin for a curated one — the catalog the six
+// HTTP routes read, which also creates and deletes aliases, the preparation service that says
 // whether a box is still waiting on a first pull, and the service that explains
 // a pull that failed and marks a version its registry no longer has. The
 // entities are registered here because the app uses `autoLoadEntities` — this
@@ -41,9 +42,10 @@ import { ImageResolverService } from './services/image-resolver.service'
   imports: [
     OrganizationModule,
     RegistryModule,
-    TypeOrmModule.forFeature([Image, ImageVersion, ImageTag, ImageTagEvent, Box]),
+    TypeOrmModule.forFeature([Image, ImageVersion, ImageAlias, ImageAliasEvent, Box]),
   ],
-  controllers: [ImageController],
+  // The static nested resource must match before /images/:idOrRef.
+  controllers: [RegistriesController, ImageController],
   providers: [
     ImageAdmissionService,
     ImageCatalogService,

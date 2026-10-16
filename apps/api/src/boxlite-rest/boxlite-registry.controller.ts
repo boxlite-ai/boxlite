@@ -29,14 +29,14 @@ type RestRegistryCredential = {
 }
 
 /**
- * Registry logins on the box API, where an SDK's `rt.registries()` manages them.
+ * Registry logins on the box API, where an SDK's `rt.images().unwrap().registries()` manages them.
  *
- * The console manages the same logins through `/api/registries`
+ * The console manages the same logins through `/api/images/registries`
  * (`registries.controller.ts`); this answers in the box API's snake_case
  * shapes (`openapi/box.openapi.yaml`), on the same permissions and with the
  * same audit records. Neither an answer nor a record carries the password.
  */
-@Controller(['v1/registries', 'v1/:prefix/registries'])
+@Controller(['v1/images/registries', 'v1/:prefix/images/registries'])
 @ApiExcludeController()
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard, AuthenticatedRateLimitGuard)
 export class BoxliteRegistryController {

@@ -29,11 +29,11 @@ type ImageVersion struct {
 	SizeBytes float32 `json:"sizeBytes"`
 	// The reference the caller asked for, kept verbatim as provenance
 	SourceRef string `json:"sourceRef"`
-	// Tags that point at this version now, so a reference with one of them boots it
-	Tags []string `json:"tags"`
+	// Aliases that point at this version now, so a reference with one of them boots it
+	Aliases []string `json:"aliases"`
 	// When a box last started from this version. Null when none has since this was recorded
 	LastUsedAt NullableString `json:"lastUsedAt"`
-	// When a pull of this version first failed because its registry no longer has it. Runners that cached it still start it; elsewhere, move its tags to a version the registry still has. Null while no pull has found it gone
+	// When a pull of this version first failed because its registry no longer has it. Runners that cached it still start it; elsewhere, create a new alias for a version the registry still has. Null while no pull has found it gone
 	UpstreamMissingAt NullableString `json:"upstreamMissingAt"`
 	// When this version was first recorded
 	CreatedAt string `json:"createdAt"`
@@ -46,13 +46,13 @@ type _ImageVersion ImageVersion
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewImageVersion(id string, digest string, sizeBytes float32, sourceRef string, tags []string, lastUsedAt NullableString, upstreamMissingAt NullableString, createdAt string) *ImageVersion {
+func NewImageVersion(id string, digest string, sizeBytes float32, sourceRef string, aliases []string, lastUsedAt NullableString, upstreamMissingAt NullableString, createdAt string) *ImageVersion {
 	this := ImageVersion{}
 	this.Id = id
 	this.Digest = digest
 	this.SizeBytes = sizeBytes
 	this.SourceRef = sourceRef
-	this.Tags = tags
+	this.Aliases = aliases
 	this.LastUsedAt = lastUsedAt
 	this.UpstreamMissingAt = upstreamMissingAt
 	this.CreatedAt = createdAt
@@ -163,28 +163,28 @@ func (o *ImageVersion) SetSourceRef(v string) {
 	o.SourceRef = v
 }
 
-// GetTags returns the Tags field value
-func (o *ImageVersion) GetTags() []string {
+// GetAliases returns the Aliases field value
+func (o *ImageVersion) GetAliases() []string {
 	if o == nil {
 		var ret []string
 		return ret
 	}
 
-	return o.Tags
+	return o.Aliases
 }
 
-// GetTagsOk returns a tuple with the Tags field value
+// GetAliasesOk returns a tuple with the Aliases field value
 // and a boolean to check if the value has been set.
-func (o *ImageVersion) GetTagsOk() ([]string, bool) {
+func (o *ImageVersion) GetAliasesOk() ([]string, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.Tags, true
+	return o.Aliases, true
 }
 
-// SetTags sets field value
-func (o *ImageVersion) SetTags(v []string) {
-	o.Tags = v
+// SetAliases sets field value
+func (o *ImageVersion) SetAliases(v []string) {
+	o.Aliases = v
 }
 
 // GetLastUsedAt returns the LastUsedAt field value
@@ -277,7 +277,7 @@ func (o ImageVersion) ToMap() (map[string]interface{}, error) {
 	toSerialize["digest"] = o.Digest
 	toSerialize["sizeBytes"] = o.SizeBytes
 	toSerialize["sourceRef"] = o.SourceRef
-	toSerialize["tags"] = o.Tags
+	toSerialize["aliases"] = o.Aliases
 	toSerialize["lastUsedAt"] = o.LastUsedAt.Get()
 	toSerialize["upstreamMissingAt"] = o.UpstreamMissingAt.Get()
 	toSerialize["createdAt"] = o.CreatedAt
@@ -298,7 +298,7 @@ func (o *ImageVersion) UnmarshalJSON(data []byte) (err error) {
 		"digest",
 		"sizeBytes",
 		"sourceRef",
-		"tags",
+		"aliases",
 		"lastUsedAt",
 		"upstreamMissingAt",
 		"createdAt",
@@ -335,7 +335,7 @@ func (o *ImageVersion) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "digest")
 		delete(additionalProperties, "sizeBytes")
 		delete(additionalProperties, "sourceRef")
-		delete(additionalProperties, "tags")
+		delete(additionalProperties, "aliases")
 		delete(additionalProperties, "lastUsedAt")
 		delete(additionalProperties, "upstreamMissingAt")
 		delete(additionalProperties, "createdAt")

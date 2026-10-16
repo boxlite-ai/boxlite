@@ -15,7 +15,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 
 const VERSION_GRID = 'grid grid-cols-[1.3fr_0.8fr_0.5fr_1.2fr_0.6fr_0.6fr] items-center gap-3 px-2'
 const HISTORY_GRID = 'grid grid-cols-[0.7fr_1.4fr_0.9fr_0.6fr] items-center gap-3 px-2'
-// The most tag events an image's detail carries, newest first: the API's
+// The most alias events an image's detail carries, newest first: the API's
 // IMAGE_HISTORY_LIMIT. A full page means older events exist and are not shown.
 const HISTORY_LIMIT = 100
 
@@ -40,13 +40,13 @@ function Field({ label, value, title }: { label: string; value: React.ReactNode;
 }
 
 /**
- * One image, the builds recorded for it, and where its tags have pointed.
+ * One image, the builds recorded for it, and where its aliases have pointed.
  *
  * Each version answers the question the list cannot: which build a box boots
- * from, which tags point at it now, when a box last used it, and whether its
+ * from, which aliases point at it now, when a box last used it, and whether its
  * registry was found not to have it any more. The reference the caller typed
  * is provenance rather than an address — the tag it names may have moved
- * upstream since. The history below is the latest moves of its tags, newest
+ * upstream since. The history below is its latest alias registrations, newest
  * first.
  */
 const ImageDetails: React.FC = () => {
@@ -97,9 +97,9 @@ const ImageDetails: React.FC = () => {
               </PanelNote>
             ) : (
               <PanelNote>
-                Tags: {image.tags.length > 0 ? image.tags.join(', ') : 'none recorded'}. A pull never moves a tag:
-                moving one to another version rolls boxes created afterwards onto it, and boxes already created keep
-                theirs.
+                Aliases: {image.aliases.length > 0 ? image.aliases.join(', ') : 'none recorded'}. Registry pulls seed
+                aliases without overwriting them. Changing an alias requires explicit deletion followed by creation;
+                existing boxes keep their version.
               </PanelNote>
             )}
           </Panel>
@@ -112,7 +112,7 @@ const ImageDetails: React.FC = () => {
               )}
             >
               <span>Digest</span>
-              <span>Tags</span>
+              <span>Aliases</span>
               <span>Size</span>
               <span>Pulled from</span>
               <span>Last used</span>
@@ -144,7 +144,7 @@ const ImageDetails: React.FC = () => {
                     )}
                   </span>
                   <span className="truncate font-mono text-meta text-muted-foreground">
-                    {version.tags.length > 0 ? version.tags.join(', ') : '—'}
+                    {version.aliases.length > 0 ? version.aliases.join(', ') : '—'}
                   </span>
                   <span className="font-mono text-meta tabular-nums text-muted-foreground">
                     {formatBytes(version.sizeBytes)}
@@ -171,28 +171,28 @@ const ImageDetails: React.FC = () => {
                 'border-b border-border pb-2 font-mono text-label uppercase text-muted-foreground',
               )}
             >
-              <span>Tag</span>
-              <span>Moved</span>
+              <span>Alias</span>
+              <span>Version</span>
               <span>By</span>
               <span>When</span>
             </div>
             {image.history.length === 0 ? (
               <p className="px-2 py-[16px] font-mono text-meta text-muted-foreground">
-                {/* A pull writes a tag's first event, so tags with no history
+                {/* A pull writes a tag's first event, so aliases with no history
                     were recorded before history was kept; no event is backfilled. */}
                 {image.curated
-                  ? 'Curated images have no tags to move; the operator pins their reference.'
-                  : image.tags.length > 0
-                    ? 'No history yet: these tags were recorded before tag moves were kept.'
-                    : 'No tag has been recorded yet.'}
+                  ? 'Curated images have no catalog aliases; the operator pins their reference.'
+                  : image.aliases.length > 0
+                    ? 'No history yet: these aliases were recorded before registration history was kept.'
+                    : 'No alias has been recorded yet.'}
               </p>
             ) : (
               image.history.map((event) => (
                 <div
-                  key={`${event.tagName}-${event.createdAt}-${event.toVersionId}`}
+                  key={`${event.aliasName}-${event.createdAt}-${event.toVersionId}`}
                   className={cn(HISTORY_GRID, 'border-b border-border/60 py-[13px] text-body')}
                 >
-                  <span className="truncate font-mono text-meta text-foreground">{event.tagName}</span>
+                  <span className="truncate font-mono text-meta text-foreground">{event.aliasName}</span>
                   <span className="truncate font-mono text-meta text-muted-foreground">
                     {versionLabel(event.fromVersionId, digests)} → {versionLabel(event.toVersionId, digests)}
                   </span>

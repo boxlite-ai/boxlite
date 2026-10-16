@@ -225,8 +225,9 @@ type imageCatalog struct {
 func newImageCatalog(t *testing.T) *imageCatalog {
 	t.Helper()
 	catalog := &imageCatalog{replies: map[string]imageReply{
+		"DELETE /v1/images/quay.io%2Facme%2Fapp/aliases/stable": {status: http.StatusNoContent},
 		"GET /v1/images/quay.io%2Facme%2Fapp": {http.StatusOK, `{
-			"name":"quay.io/acme/app","tags":["v1","v2"],"curated":true,
+			"name":"quay.io/acme/app","aliases":["v1","v2"],"curated":true,
 			"versions":[
 				{"digest":"sha256:bb","size_bytes":4096,"source_ref":"quay.io/acme/app:v2",
 				 "recorded_at":"2026-09-01T00:00:00Z"},
@@ -235,21 +236,21 @@ func newImageCatalog(t *testing.T) *imageCatalog {
 			]
 		}`},
 		// An operator-provided image: the cloud has recorded no build of it.
-		"GET /v1/images/base":                    {http.StatusOK, `{"name":"base","tags":[],"curated":true,"versions":[]}`},
+		"GET /v1/images/base":                    {http.StatusOK, `{"name":"base","aliases":[],"curated":true,"versions":[]}`},
 		"GET /v1/images/usage":                   {http.StatusOK, `{"count":3,"limit":20,"known_bytes":8192}`},
 		"DELETE /v1/images/quay.io%2Facme%2Fapp": {status: http.StatusNoContent},
-		"PUT /v1/images/quay.io%2Facme%2Fapp/tags/stable": {http.StatusOK, `{
-			"name":"quay.io/acme/app","tags":["stable"],"curated":false,
+		"POST /v1/images/quay.io%2Facme%2Fapp/aliases": {http.StatusCreated, `{
+			"name":"quay.io/acme/app","aliases":["stable"],"curated":false,
 			"versions":[
 				{"digest":"` + newDigest + `","size_bytes":null,"source_ref":"quay.io/acme/app:v2",
-				 "recorded_at":"2026-09-01T00:00:00Z","tags":["stable"],
+				 "recorded_at":"2026-09-01T00:00:00Z","aliases":["stable"],
 				 "last_used_at":"2026-09-02T00:00:00Z","upstream_missing_at":null}
 			],
 			"history":[
-				{"tag":"stable","from_digest":"` + oldDigest + `","to_digest":"` + newDigest + `",
-				 "actor":"user-1","moved_at":"2026-09-03T00:00:00Z"},
-				{"tag":"stable","from_digest":null,"to_digest":"` + oldDigest + `",
-				 "actor":null,"moved_at":"2026-08-15T12:30:00Z"}
+				{"alias":"stable","from_digest":"` + oldDigest + `","to_digest":"` + newDigest + `",
+				 "actor":"user-1","recorded_at":"2026-09-03T00:00:00Z"},
+				{"alias":"stable","from_digest":null,"to_digest":"` + oldDigest + `",
+				 "actor":null,"recorded_at":"2026-08-15T12:30:00Z"}
 			]
 		}`},
 	}}
@@ -355,8 +356,8 @@ func TestRestImagesGetReadsTheNameAndItsVersions(t *testing.T) {
 	if detail.Name != "quay.io/acme/app" || !detail.Curated {
 		t.Errorf("Name=%q Curated=%v", detail.Name, detail.Curated)
 	}
-	if !reflect.DeepEqual(detail.Tags, []string{"v1", "v2"}) {
-		t.Errorf("Tags: got %q", detail.Tags)
+	if !reflect.DeepEqual(detail.Aliases, []string{"v1", "v2"}) {
+		t.Errorf("Aliases: got %q", detail.Aliases)
 	}
 	if len(detail.Versions) != 2 {
 		t.Fatalf("Versions: got %d, want 2", len(detail.Versions))
@@ -422,8 +423,8 @@ func TestRestImagesGetOfACuratedImageHasNoBuilds(t *testing.T) {
 	if detail.Name != "base" || !detail.Curated {
 		t.Errorf("Name=%q Curated=%v", detail.Name, detail.Curated)
 	}
-	if len(detail.Tags) != 0 || len(detail.Versions) != 0 {
-		t.Errorf("Tags=%q Versions=%+v, want neither", detail.Tags, detail.Versions)
+	if len(detail.Aliases) != 0 || len(detail.Versions) != 0 {
+		t.Errorf("Aliases=%q Versions=%+v, want neither", detail.Aliases, detail.Versions)
 	}
 }
 
@@ -541,10 +542,26 @@ var imageCatalogCalls = []struct {
 		_, err := images.Usage(ctx)
 		return err
 	}},
-	{"MoveTag", func(ctx context.Context, images *Images) error {
-		_, err := images.MoveTag(ctx, "quay.io/acme/app", "stable", newDigest)
+	{"CreateAlias", func(ctx context.Context, images *Images) error {
+		_, err := images.CreateAlias(ctx, "quay.io/acme/app", "stable", newDigest)
 		return err
 	}},
+	{"DeleteAlias", func(ctx context.Context, images *Images) error {
+		return images.DeleteAlias(ctx, "quay.io/acme/app", "stable")
+	}},
+}
+
+func TestRestImagesDeleteAliasRemovesOnlyTheBinding(t *testing.T) {
+	catalog := newImageCatalog(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := catalog.images(t).DeleteAlias(ctx, "quay.io/acme/app", "stable"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"DELETE /v1/images/quay.io%2Facme%2Fapp/aliases/stable"}
+	if got := catalog.received(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("requests: %q", got)
+	}
 }
 
 // callInBackground starts call and returns where its error will arrive.
@@ -655,17 +672,17 @@ func TestRestImagesCallsOnAClosedHandleFailWithoutARequest(t *testing.T) {
 	}
 }
 
-func TestRestImagesMoveTagPutsTheDigestAndReadsTheMovedImage(t *testing.T) {
+func TestRestImagesCreateAliasPostsTheAliasAndReadsTheImage(t *testing.T) {
 	catalog := newImageCatalog(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	detail, err := catalog.images(t).MoveTag(ctx, "quay.io/acme/app", "stable", newDigest)
+	detail, err := catalog.images(t).CreateAlias(ctx, "quay.io/acme/app", "stable", newDigest)
 	if err != nil {
-		t.Fatalf("MoveTag: %v", err)
+		t.Fatalf("CreateAlias: %v", err)
 	}
 
-	want := []string{`PUT /v1/images/quay.io%2Facme%2Fapp/tags/stable {"digest":"` + newDigest + `"}`}
+	want := []string{`POST /v1/images/quay.io%2Facme%2Fapp/aliases {"alias":"stable","digest":"` + newDigest + `"}`}
 	if got := catalog.received(); !reflect.DeepEqual(got, want) {
 		t.Errorf("requests: got %q, want %q", got, want)
 	}
@@ -673,8 +690,8 @@ func TestRestImagesMoveTagPutsTheDigestAndReadsTheMovedImage(t *testing.T) {
 		t.Fatalf("Versions: got %d, want 1", len(detail.Versions))
 	}
 	version := detail.Versions[0]
-	if !reflect.DeepEqual(version.Tags, []string{"stable"}) {
-		t.Errorf("version.Tags: got %q", version.Tags)
+	if !reflect.DeepEqual(version.Aliases, []string{"stable"}) {
+		t.Errorf("version.Aliases: got %q", version.Aliases)
 	}
 	if want := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC); version.LastUsedAt == nil || !version.LastUsedAt.Equal(want) {
 		t.Errorf("version.LastUsedAt: got %v, want %v", version.LastUsedAt, want)
@@ -682,19 +699,19 @@ func TestRestImagesMoveTagPutsTheDigestAndReadsTheMovedImage(t *testing.T) {
 	if version.UpstreamMissingAt != nil {
 		t.Errorf("version.UpstreamMissingAt: got %v, want nil", version.UpstreamMissingAt)
 	}
-	wantHistory := []ImageTagEvent{
-		{Tag: "stable", FromDigest: oldDigest, ToDigest: newDigest, Actor: "user-1",
-			MovedAt: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)},
-		{Tag: "stable", ToDigest: oldDigest,
-			MovedAt: time.Date(2026, 8, 15, 12, 30, 0, 0, time.UTC)},
+	wantHistory := []ImageAliasEvent{
+		{Alias: "stable", FromDigest: oldDigest, ToDigest: newDigest, Actor: "user-1",
+			RecordedAt: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)},
+		{Alias: "stable", ToDigest: oldDigest,
+			RecordedAt: time.Date(2026, 8, 15, 12, 30, 0, 0, time.UTC)},
 	}
 	if len(detail.History) != len(wantHistory) {
 		t.Fatalf("History: got %+v, want %+v", detail.History, wantHistory)
 	}
 	for idx, event := range detail.History {
 		want := wantHistory[idx]
-		if event.Tag != want.Tag || event.FromDigest != want.FromDigest ||
-			event.ToDigest != want.ToDigest || event.Actor != want.Actor || !event.MovedAt.Equal(want.MovedAt) {
+		if event.Alias != want.Alias || event.FromDigest != want.FromDigest ||
+			event.ToDigest != want.ToDigest || event.Actor != want.Actor || !event.RecordedAt.Equal(want.RecordedAt) {
 			t.Errorf("History[%d]: got %+v, want %+v", idx, event, want)
 		}
 	}

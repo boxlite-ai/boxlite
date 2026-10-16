@@ -133,7 +133,7 @@ const Images: React.FC = () => {
           className={cn(ROW_GRID, 'border-b border-border pb-2 font-mono text-label uppercase text-muted-foreground')}
         >
           <span>Name</span>
-          <span>Tags</span>
+          <span>Aliases</span>
           <span>Versions</span>
           <span>Size</span>
           <span>Last used</span>
@@ -154,7 +154,7 @@ const Images: React.FC = () => {
                   {image.curated && <CuratedMark />}
                 </button>
                 <span className="truncate font-mono text-meta text-muted-foreground">
-                  {image.tags.length > 0 ? image.tags.join(', ') : '—'}
+                  {image.aliases.length > 0 ? image.aliases.join(', ') : '—'}
                 </span>
                 <span className="font-mono text-meta tabular-nums text-muted-foreground">
                   {image.curated ? '—' : image.versionCount}
@@ -212,8 +212,8 @@ const Images: React.FC = () => {
                   reference again brings it back as a new entry.
                 </p>
                 <p>
-                  A pull never moves a recorded tag, so this is also how to pick up where a tag points upstream now. To
-                  point a tag at a version already recorded, move it through the API or an SDK instead.
+                  A pull never overwrites a catalog alias. To change one binding, explicitly delete that alias and
+                  create it again through the API or an SDK.
                 </p>
                 <p>If any box that has not been destroyed can still boot from this image, removal is refused.</p>
               </div>

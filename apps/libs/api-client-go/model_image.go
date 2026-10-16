@@ -29,8 +29,8 @@ type Image struct {
 	Curated bool `json:"curated"`
 	// The exact reference a curated image resolves to. Null for catalog images, which resolve through their versions
 	CuratedRef NullableString `json:"curatedRef"`
-	// Tags recorded for this image. Empty for curated images, whose reference the operator pins
-	Tags []string `json:"tags"`
+	// Aliases recorded for this image. Empty for curated images, whose reference the operator pins
+	Aliases []string `json:"aliases"`
 	// How many pulled manifest digests this image holds
 	VersionCount float32 `json:"versionCount"`
 	// Sum of the pulled versions’ declared sizes, in bytes. Layers shared between versions are counted once per version. Null for curated images, whose bytes this system never measured
@@ -48,13 +48,13 @@ type _Image Image
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewImage(name string, id NullableString, curated bool, curatedRef NullableString, tags []string, versionCount float32, sizeBytes NullableFloat32, lastUsedAt NullableString, createdAt NullableString) *Image {
+func NewImage(name string, id NullableString, curated bool, curatedRef NullableString, aliases []string, versionCount float32, sizeBytes NullableFloat32, lastUsedAt NullableString, createdAt NullableString) *Image {
 	this := Image{}
 	this.Name = name
 	this.Id = id
 	this.Curated = curated
 	this.CuratedRef = curatedRef
-	this.Tags = tags
+	this.Aliases = aliases
 	this.VersionCount = versionCount
 	this.SizeBytes = sizeBytes
 	this.LastUsedAt = lastUsedAt
@@ -170,28 +170,28 @@ func (o *Image) SetCuratedRef(v string) {
 	o.CuratedRef.Set(&v)
 }
 
-// GetTags returns the Tags field value
-func (o *Image) GetTags() []string {
+// GetAliases returns the Aliases field value
+func (o *Image) GetAliases() []string {
 	if o == nil {
 		var ret []string
 		return ret
 	}
 
-	return o.Tags
+	return o.Aliases
 }
 
-// GetTagsOk returns a tuple with the Tags field value
+// GetAliasesOk returns a tuple with the Aliases field value
 // and a boolean to check if the value has been set.
-func (o *Image) GetTagsOk() ([]string, bool) {
+func (o *Image) GetAliasesOk() ([]string, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.Tags, true
+	return o.Aliases, true
 }
 
-// SetTags sets field value
-func (o *Image) SetTags(v []string) {
-	o.Tags = v
+// SetAliases sets field value
+func (o *Image) SetAliases(v []string) {
+	o.Aliases = v
 }
 
 // GetVersionCount returns the VersionCount field value
@@ -310,7 +310,7 @@ func (o Image) ToMap() (map[string]interface{}, error) {
 	toSerialize["id"] = o.Id.Get()
 	toSerialize["curated"] = o.Curated
 	toSerialize["curatedRef"] = o.CuratedRef.Get()
-	toSerialize["tags"] = o.Tags
+	toSerialize["aliases"] = o.Aliases
 	toSerialize["versionCount"] = o.VersionCount
 	toSerialize["sizeBytes"] = o.SizeBytes.Get()
 	toSerialize["lastUsedAt"] = o.LastUsedAt.Get()
@@ -332,7 +332,7 @@ func (o *Image) UnmarshalJSON(data []byte) (err error) {
 		"id",
 		"curated",
 		"curatedRef",
-		"tags",
+		"aliases",
 		"versionCount",
 		"sizeBytes",
 		"lastUsedAt",
@@ -370,7 +370,7 @@ func (o *Image) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "id")
 		delete(additionalProperties, "curated")
 		delete(additionalProperties, "curatedRef")
-		delete(additionalProperties, "tags")
+		delete(additionalProperties, "aliases")
 		delete(additionalProperties, "versionCount")
 		delete(additionalProperties, "sizeBytes")
 		delete(additionalProperties, "lastUsedAt")

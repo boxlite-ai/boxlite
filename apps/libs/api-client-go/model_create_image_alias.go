@@ -16,38 +16,65 @@ import (
 	"fmt"
 )
 
-// checks if the MoveImageTag type satisfies the MappedNullable interface at compile time
-var _ MappedNullable = &MoveImageTag{}
+// checks if the CreateImageAlias type satisfies the MappedNullable interface at compile time
+var _ MappedNullable = &CreateImageAlias{}
 
-// MoveImageTag struct for MoveImageTag
-type MoveImageTag struct {
+// CreateImageAlias struct for CreateImageAlias
+type CreateImageAlias struct {
+	// New catalog alias; existing aliases are refused
+	Alias string `json:"alias"`
 	// Version to point the tag at. It must be a ready version of this image
 	VersionId string `json:"versionId"`
 	AdditionalProperties map[string]interface{}
 }
 
-type _MoveImageTag MoveImageTag
+type _CreateImageAlias CreateImageAlias
 
-// NewMoveImageTag instantiates a new MoveImageTag object
+// NewCreateImageAlias instantiates a new CreateImageAlias object
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewMoveImageTag(versionId string) *MoveImageTag {
-	this := MoveImageTag{}
+func NewCreateImageAlias(alias string, versionId string) *CreateImageAlias {
+	this := CreateImageAlias{}
+	this.Alias = alias
 	this.VersionId = versionId
 	return &this
 }
 
-// NewMoveImageTagWithDefaults instantiates a new MoveImageTag object
+// NewCreateImageAliasWithDefaults instantiates a new CreateImageAlias object
 // This constructor will only assign default values to properties that have it defined,
 // but it doesn't guarantee that properties required by API are set
-func NewMoveImageTagWithDefaults() *MoveImageTag {
-	this := MoveImageTag{}
+func NewCreateImageAliasWithDefaults() *CreateImageAlias {
+	this := CreateImageAlias{}
 	return &this
 }
 
+// GetAlias returns the Alias field value
+func (o *CreateImageAlias) GetAlias() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.Alias
+}
+
+// GetAliasOk returns a tuple with the Alias field value
+// and a boolean to check if the value has been set.
+func (o *CreateImageAlias) GetAliasOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.Alias, true
+}
+
+// SetAlias sets field value
+func (o *CreateImageAlias) SetAlias(v string) {
+	o.Alias = v
+}
+
 // GetVersionId returns the VersionId field value
-func (o *MoveImageTag) GetVersionId() string {
+func (o *CreateImageAlias) GetVersionId() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -58,7 +85,7 @@ func (o *MoveImageTag) GetVersionId() string {
 
 // GetVersionIdOk returns a tuple with the VersionId field value
 // and a boolean to check if the value has been set.
-func (o *MoveImageTag) GetVersionIdOk() (*string, bool) {
+func (o *CreateImageAlias) GetVersionIdOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -66,11 +93,11 @@ func (o *MoveImageTag) GetVersionIdOk() (*string, bool) {
 }
 
 // SetVersionId sets field value
-func (o *MoveImageTag) SetVersionId(v string) {
+func (o *CreateImageAlias) SetVersionId(v string) {
 	o.VersionId = v
 }
 
-func (o MoveImageTag) MarshalJSON() ([]byte, error) {
+func (o CreateImageAlias) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
@@ -78,8 +105,9 @@ func (o MoveImageTag) MarshalJSON() ([]byte, error) {
 	return json.Marshal(toSerialize)
 }
 
-func (o MoveImageTag) ToMap() (map[string]interface{}, error) {
+func (o CreateImageAlias) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	toSerialize["alias"] = o.Alias
 	toSerialize["versionId"] = o.VersionId
 
 	for key, value := range o.AdditionalProperties {
@@ -89,11 +117,12 @@ func (o MoveImageTag) ToMap() (map[string]interface{}, error) {
 	return toSerialize, nil
 }
 
-func (o *MoveImageTag) UnmarshalJSON(data []byte) (err error) {
+func (o *CreateImageAlias) UnmarshalJSON(data []byte) (err error) {
 	// This validates that all required properties are included in the JSON object
 	// by unmarshalling the object into a generic map with string keys and checking
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
+		"alias",
 		"versionId",
 	}
 
@@ -111,19 +140,20 @@ func (o *MoveImageTag) UnmarshalJSON(data []byte) (err error) {
 		}
 	}
 
-	varMoveImageTag := _MoveImageTag{}
+	varCreateImageAlias := _CreateImageAlias{}
 
-	err = json.Unmarshal(data, &varMoveImageTag)
+	err = json.Unmarshal(data, &varCreateImageAlias)
 
 	if err != nil {
 		return err
 	}
 
-	*o = MoveImageTag(varMoveImageTag)
+	*o = CreateImageAlias(varCreateImageAlias)
 
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "alias")
 		delete(additionalProperties, "versionId")
 		o.AdditionalProperties = additionalProperties
 	}
@@ -131,38 +161,38 @@ func (o *MoveImageTag) UnmarshalJSON(data []byte) (err error) {
 	return err
 }
 
-type NullableMoveImageTag struct {
-	value *MoveImageTag
+type NullableCreateImageAlias struct {
+	value *CreateImageAlias
 	isSet bool
 }
 
-func (v NullableMoveImageTag) Get() *MoveImageTag {
+func (v NullableCreateImageAlias) Get() *CreateImageAlias {
 	return v.value
 }
 
-func (v *NullableMoveImageTag) Set(val *MoveImageTag) {
+func (v *NullableCreateImageAlias) Set(val *CreateImageAlias) {
 	v.value = val
 	v.isSet = true
 }
 
-func (v NullableMoveImageTag) IsSet() bool {
+func (v NullableCreateImageAlias) IsSet() bool {
 	return v.isSet
 }
 
-func (v *NullableMoveImageTag) Unset() {
+func (v *NullableCreateImageAlias) Unset() {
 	v.value = nil
 	v.isSet = false
 }
 
-func NewNullableMoveImageTag(val *MoveImageTag) *NullableMoveImageTag {
-	return &NullableMoveImageTag{value: val, isSet: true}
+func NewNullableCreateImageAlias(val *CreateImageAlias) *NullableCreateImageAlias {
+	return &NullableCreateImageAlias{value: val, isSet: true}
 }
 
-func (v NullableMoveImageTag) MarshalJSON() ([]byte, error) {
+func (v NullableCreateImageAlias) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.value)
 }
 
-func (v *NullableMoveImageTag) UnmarshalJSON(src []byte) error {
+func (v *NullableCreateImageAlias) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }

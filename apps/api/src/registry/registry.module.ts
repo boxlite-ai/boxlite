@@ -8,7 +8,6 @@ import { TypeOrmModule } from '@nestjs/typeorm'
 import { Box } from '../box/entities/box.entity'
 import { TypedConfigService } from '../config/typed-config.service'
 import { OrganizationModule } from '../organization/organization.module'
-import { RegistriesController } from './controllers/registries.controller'
 import { RunnerRegistryCredentialController } from './controllers/runner-registry-credential.controller'
 import { RegistryCredential } from './entities/registry-credential.entity'
 import { RegistriesService, SECRET_STORE } from './services/registries.service'
@@ -25,7 +24,7 @@ import { createSecretStore } from './stores/secret.store'
 // is exported for the box API's routes to the same logins.
 @Module({
   imports: [OrganizationModule, TypeOrmModule.forFeature([RegistryCredential, Box])],
-  controllers: [RegistriesController, RunnerRegistryCredentialController],
+  controllers: [RunnerRegistryCredentialController],
   providers: [
     RegistryCredentialService,
     RegistriesService,

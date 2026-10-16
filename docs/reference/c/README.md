@@ -1036,11 +1036,12 @@ against either; pull is local only and usage REST only. Free the handle with
 | Function | Local runtime | REST runtime |
 |----------|---------------|--------------|
 | `boxlite_image_pull()` | Pulls into the cache | `Unsupported`: creating a box pulls |
-| `boxlite_image_list()` | One row per cached reference | One row per catalog tag |
+| `boxlite_image_list()` | One row per cached reference | Catalog alias and digest references |
 | `boxlite_image_get()` | The cache entries under the name | The catalog entry with its versions |
 | `boxlite_image_remove()` | Forgets the name; layers stay | Removes the catalog entry; `InvalidState` while a box can boot from it |
 | `boxlite_image_usage()` | `Unsupported` | `count`, `limit`, `known_bytes` |
-| `boxlite_image_move_tag()` | `Unsupported`: a cache resolves a tag afresh for each new box | Points the tag at the version with that digest; boxes already created keep theirs |
+| `boxlite_image_create_alias()` | `Unsupported` | Creates a new alias; existing names conflict |
+| `boxlite_image_delete_alias()` | `Unsupported` | Removes only the named alias |
 
 ```c
 BoxliteErrorCode boxlite_image_get(
@@ -1066,10 +1067,10 @@ BoxliteErrorCode boxlite_image_usage(
     CBoxliteError* out_error
 );
 
-BoxliteErrorCode boxlite_image_move_tag(
+BoxliteErrorCode boxlite_image_create_alias(
     CBoxliteImageHandle* handle,
     const char* name,
-    const char* tag,
+    const char* alias,
     const char* digest,         // "sha256:" and 64 lowercase hex digits
     CBoxImageGetCb cb,          // the image as it now is, as for a get
     void* user_data,
@@ -1077,25 +1078,36 @@ BoxliteErrorCode boxlite_image_move_tag(
 );
 ```
 
-All four follow the post-and-drain contract of the info functions: `Ok`
+These operations follow the post-and-drain contract of the info functions: `Ok`
 means queued, and the callback runs in `boxlite_runtime_drain()`. `name` is
 an image name such as `"docker.io/library/alpine"`, copied before the call
 returns. A name the runtime does not hold reaches the callback as `NotFound`.
 A reference with a tag or digest (`"quay.io/acme/app:v1"`) reaches it as
-`InvalidArgument`, since a remove takes every tag of the name. Locally, a box
+`InvalidArgument`, since a remove takes every alias of the name. Locally, a box
 built from a removed image reads the image's configuration from the registry
-when it next starts. `boxlite_image_move_tag()` copies `tag` and `digest` as it
-does `name`; a tag the OCI distribution spec refuses or a malformed digest
+when it next starts. `boxlite_image_create_alias()` copies `alias` and `digest` as it
+does `name`; an alias that does not use OCI tag syntax or a malformed digest
 reaches the callback as `InvalidArgument` before anything is sent.
 
-A catalog fills every field below; a local cache fills a version's `tags` and
+Alias creation returns `AlreadyExists` through the callback for every existing
+name, even when its digest matches. Explicit deletion uses the image-remove
+callback shape and removes no versions:
+
+```c
+BoxliteErrorCode boxlite_image_delete_alias(
+    CBoxliteImageHandle* handle, const char* name, const char* alias,
+    CBoxImageRemoveCb cb, void* user_data, CBoxliteError* out_error
+);
+```
+
+A catalog fills every field below; a local cache fills a version's `aliases` and
 leaves its optional times unset and `history` empty.
 
 | Type | Fields | Ownership |
 |------|--------|-----------|
-| `CImageDetail` | `name`, `tags`/`tags_count`, `curated` (non-zero for operator-provided images), `versions`/`versions_count` (newest first), `history`/`history_count` (latest tag moves, newest first) | The callback owns it; free with `boxlite_free_image_detail()` |
-| `CImageVersion` | `digest`, `size_bytes` (valid when `has_size` is non-zero), `source_ref`, `recorded_at` (Unix seconds), `tags`/`tags_count`, `last_used_at` and `upstream_missing_at` (Unix seconds, valid when `has_last_used_at` / `has_upstream_missing_at` is non-zero) | Owned by its `CImageDetail` |
-| `CImageTagEvent` | `tag`, `from_digest` (NULL when the tag was new), `to_digest`, `actor` (NULL when a pull recorded the tag), `moved_at` (Unix seconds) | Owned by its `CImageDetail` |
+| `CImageDetail` | `name`, `aliases`/`aliases_count`, `curated` (non-zero for operator-provided images), `versions`/`versions_count` (newest first), `history`/`history_count` (alias registration history, newest first) | The callback owns it; free with `boxlite_free_image_detail()` |
+| `CImageVersion` | `digest`, `size_bytes` (valid when `has_size` is non-zero), `source_ref`, `recorded_at` (Unix seconds), `aliases`/`aliases_count`, `last_used_at` and `upstream_missing_at` (Unix seconds, valid when `has_last_used_at` / `has_upstream_missing_at` is non-zero) | Owned by its `CImageDetail` |
+| `CImageAliasEvent` | `alias`, `from_digest` (NULL for alias creation), `to_digest`, `actor` (NULL when a pull seeded the alias), `recorded_at` (Unix seconds) | Owned by its `CImageDetail` |
 | `CImageUsage` | `count`, `limit`, `known_bytes` | Borrowed for the callback; nothing to free |
 
 ```c
@@ -1132,7 +1144,7 @@ if (error.code != Ok) {
 
 ### Registries
 
-`boxlite_runtime_registries()` returns a `CBoxliteRegistryHandle*` for the
+`boxlite_image_registries()` returns a `CBoxliteRegistryHandle*` for the
 logins a REST server presents when it pulls a private image for a box. A
 runtime from `boxlite_runtime_new()` answers `Unsupported`: it pulls with the
 logins in its `image_registries` option instead. Free the handle with
@@ -1414,10 +1426,11 @@ if (code != Ok) {
 | `boxlite_image_get()` | Queue a read of an image name's builds |
 | `boxlite_image_remove()` | Queue removal of an image name |
 | `boxlite_image_usage()` | Queue a read of the image allowance (REST runtimes) |
-| `boxlite_image_move_tag()` | Queue a move of an image tag (REST runtimes) |
+| `boxlite_image_create_alias()` | Create a catalog alias; existing names conflict (REST runtimes) |
+| `boxlite_image_delete_alias()` | Delete one catalog alias (REST runtimes) |
 | `boxlite_image_free()` | Free the image handle |
 | `boxlite_free_image_detail()` | Free an image detail |
-| `boxlite_runtime_registries()` | Get the registry login handle (REST runtimes) |
+| `boxlite_image_registries()` | Get the registry login handle (REST runtimes) |
 | `boxlite_registry_list()` | Queue a list of registry logins |
 | `boxlite_registry_create()` | Queue adding a registry login |
 | `boxlite_registry_remove()` | Queue removing a registry login |

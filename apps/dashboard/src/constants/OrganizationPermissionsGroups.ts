@@ -13,7 +13,7 @@ export const ORGANIZATION_ROLE_PERMISSIONS_GROUPS: { name: string; permissions: 
       permissions: [OrganizationRolePermissionsEnum.WRITE_BOXES, OrganizationRolePermissionsEnum.DELETE_BOXES],
     },
     {
-      // Write moves a tag. An image enters the catalog by being used, so
+      // Write creates and deletes aliases. An image enters the catalog by being used, so
       // creating a box records it without any of these.
       name: 'Images',
       permissions: [

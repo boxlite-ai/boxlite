@@ -14,9 +14,9 @@ use super::client::ApiClient;
 use super::litebox::RestBox;
 use super::options::BoxliteRestOptions;
 use super::types::{
-    BoxResponse, CreateBoxRequest, CreateRegistryRequest, CreateVolumeRequest, ImageDetailResponse,
-    ImageInfoResponse, ImageUsageResponse, ListBoxesResponse, ListImagesResponse,
-    ListRegistriesResponse, ListVolumesResponse, MoveTagRequest, RegistryCredentialResponse,
+    BoxResponse, CreateAliasRequest, CreateBoxRequest, CreateRegistryRequest, CreateVolumeRequest,
+    ImageDetailResponse, ImageInfoResponse, ImageUsageResponse, ListBoxesResponse,
+    ListImagesResponse, ListRegistriesResponse, ListVolumesResponse, RegistryCredentialResponse,
     RuntimeMetricsResponse, VolumeResponse,
 };
 use crate::images::ImageObject;
@@ -114,17 +114,35 @@ impl ImageBackend for RestRuntime {
         })
     }
 
-    async fn move_tag(&self, name: &str, tag: &str, digest: &str) -> BoxliteResult<ImageDetail> {
-        let path = format!("{}/tags/{}", image_path(name), urlencoding::encode(tag));
-        let resp: ImageDetailResponse = self.client.put(&path, &MoveTagRequest { digest }).await?;
+    async fn create_alias(
+        &self,
+        name: &str,
+        alias: &str,
+        digest: &str,
+    ) -> BoxliteResult<ImageDetail> {
+        let path = format!("{}/aliases", image_path(name));
+        let resp: ImageDetailResponse = self
+            .client
+            .post(&path, &CreateAliasRequest { alias, digest })
+            .await?;
         Ok(resp.into_image_detail())
+    }
+
+    async fn delete_alias(&self, name: &str, alias: &str) -> BoxliteResult<()> {
+        self.client
+            .delete(&format!(
+                "{}/aliases/{}",
+                image_path(name),
+                urlencoding::encode(alias)
+            ))
+            .await
     }
 }
 
 #[async_trait::async_trait]
 impl RegistryBackend for RestRuntime {
     async fn list_registries(&self) -> BoxliteResult<Vec<RegistryCredential>> {
-        let resp: ListRegistriesResponse = self.client.get("/registries").await?;
+        let resp: ListRegistriesResponse = self.client.get("/images/registries").await?;
         Ok(resp
             .registries
             .into_iter()
@@ -137,12 +155,15 @@ impl RegistryBackend for RestRuntime {
         credential: &NewRegistryCredential,
     ) -> BoxliteResult<RegistryCredential> {
         let request = CreateRegistryRequest::from_credential(credential);
-        let resp: RegistryCredentialResponse = self.client.post("/registries", &request).await?;
+        let resp: RegistryCredentialResponse =
+            self.client.post("/images/registries", &request).await?;
         Ok(resp.into_registry_credential())
     }
 
     async fn remove_registry(&self, id: &str) -> BoxliteResult<()> {
-        self.client.delete(&format!("/registries/{id}")).await
+        self.client
+            .delete(&format!("/images/registries/{id}"))
+            .await
     }
 }
 
@@ -1030,7 +1051,7 @@ mod tests {
     fn images_on(port: u16) -> crate::runtime::ImageHandle {
         let runtime =
             RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
-        crate::runtime::ImageHandle::new(Arc::new(runtime))
+        crate::runtime::ImageHandle::new(Arc::new(runtime), None)
     }
 
     #[tokio::test]
@@ -1058,7 +1079,7 @@ mod tests {
     #[tokio::test]
     async fn images_get_sends_the_name_as_one_segment() {
         let (port, server) = json_server(vec![
-            r#"{"name":"quay.io/acme/app","tags":["v1"],"curated":false,"versions":[{"digest":"sha256:aa","size_bytes":42,"source_ref":"quay.io/acme/app:v1","recorded_at":"2026-01-02T03:04:05Z"}]}"#,
+            r#"{"name":"quay.io/acme/app","aliases":["v1"],"curated":false,"versions":[{"digest":"sha256:aa","size_bytes":42,"source_ref":"quay.io/acme/app:v1","recorded_at":"2026-01-02T03:04:05Z"}]}"#,
         ])
         .await;
 
@@ -1069,7 +1090,7 @@ mod tests {
             ["GET /v1/images/quay.io%2Facme%2Fapp HTTP/1.1"]
         );
         assert_eq!(detail.name, "quay.io/acme/app");
-        assert_eq!(detail.tags, ["v1"]);
+        assert_eq!(detail.aliases, ["v1"]);
         assert_eq!(detail.versions[0].digest, "sha256:aa");
         assert_eq!(detail.versions[0].size_bytes, Some(42));
         assert_eq!(detail.versions[0].source_ref, "quay.io/acme/app:v1");
@@ -1116,28 +1137,31 @@ mod tests {
         assert_eq!((usage.count, usage.limit, usage.known_bytes), (3, 20, 4096));
     }
 
-    const MOVED_DETAIL: &str = r#"{"name":"quay.io/acme/app","tags":["stable"],"curated":false,"versions":[{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size_bytes":42,"source_ref":"quay.io/acme/app:v2","recorded_at":"2026-01-02T03:04:05Z","tags":["stable"],"last_used_at":"2026-01-03T00:00:00Z","upstream_missing_at":null}],"history":[{"tag":"stable","from_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","to_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","actor":"auth0|alice","moved_at":"2026-01-04T00:00:00Z"}]}"#;
+    const MOVED_DETAIL: &str = r#"{"name":"quay.io/acme/app","aliases":["stable"],"curated":false,"versions":[{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size_bytes":42,"source_ref":"quay.io/acme/app:v2","recorded_at":"2026-01-02T03:04:05Z","aliases":["stable"],"last_used_at":"2026-01-03T00:00:00Z","upstream_missing_at":null}],"history":[{"alias":"stable","from_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","to_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","actor":"auth0|alice","recorded_at":"2026-01-04T00:00:00Z"}]}"#;
 
-    /// The name and the tag are one segment each, and the digest goes in the
-    /// body; the answer is the image as it now is, history included.
+    /// The image name is one URL segment; alias and digest go in the body.
+    /// The response carries the image and its retained history.
     #[tokio::test]
-    async fn images_move_tag_puts_the_digest_and_reads_the_moved_image() {
+    async fn images_create_alias_posts_the_binding_and_reads_the_image() {
         let digest = format!("sha256:{}", "b".repeat(64));
-        let (port, server) = recording_server(200, MOVED_DETAIL).await;
+        let (port, server) = recording_server(201, MOVED_DETAIL).await;
 
         let detail = images_on(port)
-            .move_tag("quay.io/acme/app", "stable", &digest)
+            .create_alias("quay.io/acme/app", "stable", &digest)
             .await
             .unwrap();
 
         let (request_line, request_body) = server.await.unwrap();
         assert_eq!(
             request_line,
-            "PUT /v1/images/quay.io%2Facme%2Fapp/tags/stable HTTP/1.1"
+            "POST /v1/images/quay.io%2Facme%2Fapp/aliases HTTP/1.1"
         );
         let sent: serde_json::Value = serde_json::from_str(&request_body).unwrap();
-        assert_eq!(sent, serde_json::json!({ "digest": digest }));
-        assert_eq!(detail.versions[0].tags, ["stable"]);
+        assert_eq!(
+            sent,
+            serde_json::json!({ "alias": "stable", "digest": digest })
+        );
+        assert_eq!(detail.versions[0].aliases, ["stable"]);
         assert_eq!(
             detail.versions[0]
                 .last_used_at
@@ -1146,20 +1170,20 @@ mod tests {
         );
         assert!(detail.versions[0].upstream_missing_at.is_none());
         let moved = &detail.history[0];
-        assert_eq!(moved.tag, "stable");
+        assert_eq!(moved.alias, "stable");
         assert_eq!(
             moved.from_digest.as_deref(),
             Some(&*format!("sha256:{}", "a".repeat(64)))
         );
         assert_eq!(moved.to_digest, digest);
         assert_eq!(moved.actor.as_deref(), Some("auth0|alice"));
-        assert_eq!(moved.moved_at.to_rfc3339(), "2026-01-04T00:00:00+00:00");
+        assert_eq!(moved.recorded_at.to_rfc3339(), "2026-01-04T00:00:00+00:00");
     }
 
     /// A digest the image has no version for, or a curated image, is the
     /// server's 400.
     #[tokio::test]
-    async fn images_move_tag_the_server_refuses_is_invalid_argument() {
+    async fn images_create_alias_the_server_refuses_is_invalid_argument() {
         let (port, _server) = http_server(vec![(
             400,
             r#"{"error":{"message":"Digest 'sha256:...' is not a version of image 'quay.io/acme/app'","type":"InvalidArgumentError","code":"invalid_argument"}}"#,
@@ -1167,7 +1191,7 @@ mod tests {
         .await;
 
         let error = images_on(port)
-            .move_tag(
+            .create_alias(
                 "quay.io/acme/app",
                 "stable",
                 &format!("sha256:{}", "c".repeat(64)),
@@ -1182,14 +1206,17 @@ mod tests {
     /// Checked before anything is sent: the runtime points at a port nothing
     /// listens on, so a request would surface as a connection error instead.
     #[tokio::test]
-    async fn images_move_tag_refuses_a_bad_name_tag_or_digest_without_a_request() {
+    async fn images_create_alias_refuses_a_bad_name_tag_or_digest_without_a_request() {
         let digest = format!("sha256:{}", "b".repeat(64));
         for (name, tag, digest) in [
             ("quay.io/acme/app:v1", "stable", digest.as_str()),
             ("quay.io/acme/app", "-stable", digest.as_str()),
             ("quay.io/acme/app", "stable", "latest"),
         ] {
-            let error = images_on(1).move_tag(name, tag, digest).await.unwrap_err();
+            let error = images_on(1)
+                .create_alias(name, tag, digest)
+                .await
+                .unwrap_err();
             assert!(
                 matches!(error, BoxliteError::InvalidArgument(_)),
                 "{name} {tag} {digest}: {error}"
@@ -1197,19 +1224,50 @@ mod tests {
         }
     }
 
-    /// A server from before tag moves answers a detail without history or the
+    #[tokio::test]
+    async fn images_create_alias_duplicate_is_already_exists() {
+        let (port, _server) = http_server(vec![(
+            409,
+            r#"{"statusCode":409,"message":"alias exists","code":"already_exists"}"#,
+        )])
+        .await;
+        let error = images_on(port)
+            .create_alias(
+                "quay.io/acme/app",
+                "stable",
+                &format!("sha256:{}", "b".repeat(64)),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::AlreadyExists(_)), "{error}");
+    }
+
+    #[tokio::test]
+    async fn images_delete_alias_removes_only_the_named_binding() {
+        let (port, server) = http_server(vec![(204, "")]).await;
+        images_on(port)
+            .delete_alias("quay.io/acme/app", "stable")
+            .await
+            .unwrap();
+        assert_eq!(
+            server.await.unwrap(),
+            ["DELETE /v1/images/quay.io%2Facme%2Fapp/aliases/stable HTTP/1.1"]
+        );
+    }
+
+    /// A server from before alias history answers a detail without history or the
     /// newer version fields; it still reads, with them empty.
     #[tokio::test]
     async fn images_get_from_a_server_without_history_reads_it_empty() {
         let (port, _server) = json_server(vec![
-            r#"{"name":"quay.io/acme/app","tags":["v1"],"curated":false,"versions":[{"digest":"sha256:aa","size_bytes":42,"source_ref":"quay.io/acme/app:v1","recorded_at":"2026-01-02T03:04:05Z"}]}"#,
+            r#"{"name":"quay.io/acme/app","aliases":["v1"],"curated":false,"versions":[{"digest":"sha256:aa","size_bytes":42,"source_ref":"quay.io/acme/app:v1","recorded_at":"2026-01-02T03:04:05Z"}]}"#,
         ])
         .await;
 
         let detail = images_on(port).get("quay.io/acme/app").await.unwrap();
 
         assert!(detail.history.is_empty());
-        assert!(detail.versions[0].tags.is_empty());
+        assert!(detail.versions[0].aliases.is_empty());
         assert!(detail.versions[0].last_used_at.is_none());
         assert!(detail.versions[0].upstream_missing_at.is_none());
     }
@@ -1242,6 +1300,8 @@ mod tests {
 
     fn registries_on(port: u16) -> crate::runtime::RegistryHandle {
         crate::BoxliteRuntime::rest(BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+            .unwrap()
+            .images()
             .unwrap()
             .registries()
             .unwrap()
@@ -1306,7 +1366,10 @@ mod tests {
 
         let logins = registries_on(port).list().await.unwrap();
 
-        assert_eq!(server.await.unwrap(), ["GET /v1/registries HTTP/1.1"]);
+        assert_eq!(
+            server.await.unwrap(),
+            ["GET /v1/images/registries HTTP/1.1"]
+        );
         assert_eq!(logins.len(), 1);
         assert_eq!(logins[0].id, LOGIN_ID);
         assert_eq!(logins[0].registry_host, "ghcr.io");
@@ -1328,7 +1391,7 @@ mod tests {
         let created = registries_on(port).create(&new_login()).await.unwrap();
 
         let (request_line, request_body) = server.await.unwrap();
-        assert_eq!(request_line, "POST /v1/registries HTTP/1.1");
+        assert_eq!(request_line, "POST /v1/images/registries HTTP/1.1");
         let sent: serde_json::Value = serde_json::from_str(&request_body).unwrap();
         assert_eq!(
             sent,
@@ -1377,7 +1440,7 @@ mod tests {
 
         assert_eq!(
             server.await.unwrap(),
-            [format!("DELETE /v1/registries/{LOGIN_ID} HTTP/1.1")]
+            [format!("DELETE /v1/images/registries/{LOGIN_ID} HTTP/1.1")]
         );
     }
 

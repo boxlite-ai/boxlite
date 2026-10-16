@@ -6,18 +6,18 @@
 import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import { type ExecutionContext, type INestApplication } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
+import { MODULE_METADATA } from '@nestjs/common/constants'
 import { Test } from '@nestjs/testing'
 import { ThrottlerStorageService } from '@nestjs/throttler'
 import type { Redis } from 'ioredis'
 import type { AddressInfo } from 'net'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
-import { ImageController } from '../image/controllers/image.controller'
+import { ImageModule } from '../image/image.module'
 import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
 import { OrganizationService } from '../organization/services/organization.service'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
-import { RegistriesController } from '../registry/controllers/registries.controller'
 import { RegistriesService } from '../registry/services/registries.service'
 import { SystemRole } from '../user/enums/system-role.enum'
 import { BoxliteImageController } from './boxlite-image.controller'
@@ -30,14 +30,19 @@ const sdkOperations = [
   { method: 'GET', path: '/images/usage' },
   { method: 'GET', path: `/images/${imageName}` },
   { method: 'DELETE', path: `/images/${imageName}` },
-  { method: 'PUT', path: `/images/${imageName}/tags/stable`, body: { digest: `sha256:${'a'.repeat(64)}` } },
-  { method: 'GET', path: '/registries' },
   {
     method: 'POST',
-    path: '/registries',
+    path: `/images/${imageName}/aliases`,
+    body: { alias: 'stable', digest: `sha256:${'a'.repeat(64)}` },
+  },
+  { method: 'DELETE', path: `/images/${imageName}/aliases/stable` },
+  { method: 'GET', path: '/images/registries' },
+  {
+    method: 'POST',
+    path: '/images/registries',
     body: { registry_host: 'ghcr.io', username: 'test-user', password: 'test-only-password' },
   },
-  { method: 'DELETE', path: `/registries/${credentialId}` },
+  { method: 'DELETE', path: `/images/registries/${credentialId}` },
 ]
 
 describe('BoxLite management rate limits', () => {
@@ -47,13 +52,14 @@ describe('BoxLite management rate limits', () => {
   let services: jest.Mock[]
 
   beforeEach(async () => {
-    const detail = { name: 'quay.io/acme/app', tags: [], curated: false, versions: [], history: [] }
+    const detail = { name: 'quay.io/acme/app', aliases: [], curated: false, versions: [], history: [] }
     const images = {
       list: jest.fn().mockResolvedValue([]),
       listReferences: jest.fn().mockResolvedValue([]),
       usage: jest.fn().mockResolvedValue({ count: 0, limit: 20, knownBytes: 0 }),
       get: jest.fn().mockResolvedValue(detail),
-      moveTag: jest.fn().mockResolvedValue(detail),
+      createAlias: jest.fn().mockResolvedValue(detail),
+      deleteAlias: jest.fn().mockResolvedValue(undefined),
       delete: jest.fn().mockResolvedValue(undefined),
     }
     const registries = {
@@ -81,7 +87,11 @@ describe('BoxLite management rate limits', () => {
     await limiter.onModuleInit()
 
     const moduleRef = await Test.createTestingModule({
-      controllers: [ImageController, RegistriesController, BoxliteImageController, BoxliteRegistryController],
+      controllers: [
+        ...Reflect.getMetadata(MODULE_METADATA.CONTROLLERS, ImageModule),
+        BoxliteRegistryController,
+        BoxliteImageController,
+      ],
       providers: [
         { provide: ImageCatalogService, useValue: images },
         { provide: RegistriesService, useValue: registries },
@@ -131,7 +141,7 @@ describe('BoxLite management rate limits', () => {
 
   describe.each(['', '/default', '/org-1'])('SDK prefix "%s"', (prefix) => {
     it.each(sdkOperations)('rejects $method $path after the console exhausts the organization quota', async (op) => {
-      expect((await request('/registries', { headers: { 'x-test-user': 'user-1' } })).status).toBe(200)
+      expect((await request('/images/registries', { headers: { 'x-test-user': 'user-1' } })).status).toBe(200)
       expect((await request('/images', { headers: { 'x-test-user': 'user-2' } })).status).toBe(200)
       services.forEach((service) => service.mockClear())
 
@@ -149,9 +159,16 @@ describe('BoxLite management rate limits', () => {
 
   it('shares the SDK quota with console requests while keeping organizations independent', async () => {
     expect((await request('/v1/images')).status).toBe(200)
-    expect((await request('/v1/default/registries', { headers: { 'x-test-user': 'user-2' } })).status).toBe(200)
+    expect((await request('/v1/default/images/registries', { headers: { 'x-test-user': 'user-2' } })).status).toBe(200)
 
-    expect((await request('/registries', { headers: { 'x-test-user': 'user-3' } })).status).toBe(429)
+    expect((await request('/images/registries', { headers: { 'x-test-user': 'user-3' } })).status).toBe(429)
     expect((await request('/v1/images', { headers: { 'x-test-org': 'org-2' } })).status).toBe(200)
+  })
+
+  it('routes nested registries before the image name parameter', async () => {
+    const response = await fetch(`${baseUrl}/images/registries`)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual([])
+    expect((await request('/registries')).status).toBe(404)
   })
 })

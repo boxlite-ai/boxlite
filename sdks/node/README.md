@@ -246,7 +246,7 @@ await box.stop();
 `runtime.images` holds the images a runtime can boot from: the local cache on
 an embedded runtime, the server's catalog on `JsBoxlite.rest(...)`. The same
 code runs against either; `pull` is local only (a REST runtime pulls when a
-box is created) and `usage` and `moveTag` are REST only.
+box is created) and `usage`, `createAlias` and `deleteAlias` are REST only.
 
 ```typescript
 import { JsBoxlite } from "boxlite";
@@ -259,7 +259,7 @@ for (const image of images) {
 }
 
 const detail = await runtime.images.get("docker.io/library/alpine");
-console.log(detail.tags, detail.versions.map((version) => version.digest));
+console.log(detail.aliases, detail.versions.map((version) => version.digest));
 await runtime.images.remove("docker.io/library/alpine");
 ```
 
@@ -276,13 +276,13 @@ for each method on each runtime.
 
 ### Private Registry Logins
 
-On `JsBoxlite.rest(...)`, `runtime.registries` manages the logins the server
+On `JsBoxlite.rest(...)`, `runtime.images.registries` manages the logins the server
 pulls private images with. The password goes up once and is never returned.
 A local runtime throws `unsupported`: pass `imageRegistries` to its options
 instead.
 
 ```typescript
-const login = await runtime.registries.create({
+const login = await runtime.images.registries.create({
   registryHost: "ghcr.io",
   repositoryPrefix: "acme/", // omit for the whole registry
   username: "acme-bot",
@@ -290,7 +290,7 @@ const login = await runtime.registries.create({
 });
 const box = await runtime.create({ image: "ghcr.io/acme/private-app:1" });
 // ...
-await runtime.registries.remove(login.id); // refused while a box pulls through it
+await runtime.images.registries.remove(login.id); // refused while a box pulls through it
 ```
 
 See [the Node.js reference](../../docs/reference/nodejs/README.md#registryhandle).

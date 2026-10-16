@@ -117,7 +117,7 @@ func (a *RegistriesAPIService) CreateRegistryCredentialExecute(r RegistriesAPICr
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/registries"
+	localVarPath := localBasePath + "/images/registries"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -230,7 +230,7 @@ func (a *RegistriesAPIService) DeleteRegistryCredentialExecute(r RegistriesAPIDe
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/registries/{id}"
+	localVarPath := localBasePath + "/images/registries/{id}"
 	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -329,7 +329,7 @@ func (a *RegistriesAPIService) ListRegistryCredentialsExecute(r RegistriesAPILis
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/registries"
+	localVarPath := localBasePath + "/images/registries"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}

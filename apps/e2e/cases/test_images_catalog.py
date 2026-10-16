@@ -190,7 +190,7 @@ async def test_a_second_box_adds_no_second_version(rt, images):
                 "a second box on the same reference recorded another version; it "
                 "resolved through the registry instead of through the catalog"
             )
-            assert after.tags == before.tags
+            assert after.aliases == before.aliases
 
         await hold_through_report_window(unchanged)
     finally:

@@ -62,6 +62,7 @@ model_box_state.go
 model_box_volume.go
 model_boxlite_configuration.go
 model_create_api_key.go
+model_create_image_alias.go
 model_create_linked_account.go
 model_create_organization.go
 model_create_organization_invitation.go
@@ -76,8 +77,8 @@ model_create_volume.go
 model_health_controller_check_200_response.go
 model_health_controller_check_200_response_info_value.go
 model_image.go
+model_image_alias_event.go
 model_image_detail.go
-model_image_tag_event.go
 model_image_usage.go
 model_image_version.go
 model_job.go
@@ -87,7 +88,6 @@ model_log_entry.go
 model_metric_data_point.go
 model_metric_series.go
 model_metrics_response.go
-model_move_image_tag.go
 model_oidc_config.go
 model_organization.go
 model_organization_box_default_limited_network_egress.go

@@ -7,8 +7,8 @@ import { Injectable } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, EntityManager, IsNull } from 'typeorm'
 import { Image } from '../entities/image.entity'
-import { ImageTag } from '../entities/image-tag.entity'
-import { ImageTagEvent } from '../entities/image-tag-event.entity'
+import { ImageAlias } from '../entities/image-alias.entity'
+import { ImageAliasEvent } from '../entities/image-alias-event.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { ImageSourceKind } from '../enums/image-source-kind.enum'
 import { CuratedImagePinService } from './curated-image-pin.service'
@@ -166,14 +166,13 @@ export class ImageRegistrarService {
         return
       }
 
-      // `DO NOTHING`, not an update: a tag that already points somewhere stays
-      // there. Following a moved tag would change what a box boots from with
-      // nobody asking; a tag moves only when someone moves it, and picking up
-      // where it points upstream is `DELETE /images/:idOrRef`.
+      // A registry pull seeds a catalog alias only while that name is absent.
+      // Existing bindings remain pinned even if the upstream tag changes.
+      // Replacing an alias requires explicit deletion and creation.
       const recorded = await manager
         .createQueryBuilder()
         .insert()
-        .into(ImageTag)
+        .into(ImageAlias)
         .values({ imageId, name: recordedTag, versionId: version.id })
         .orIgnore()
         .returning(['id'])
@@ -181,11 +180,10 @@ export class ImageRegistrarService {
       if (recorded.raw.length === 0) {
         return
       }
-      // The tag's first event, so the history starts where the tag did. No
-      // actor: a pull recorded it, not anyone moving it.
-      await manager.insert(ImageTagEvent, {
+      // The alias's first event. No actor: a registry pull recorded it.
+      await manager.insert(ImageAliasEvent, {
         imageId,
-        tagName: recordedTag,
+        aliasName: recordedTag,
         fromVersionId: null,
         toVersionId: version.id,
         actorId: null,

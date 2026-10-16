@@ -24,9 +24,24 @@ import (
 type ImagesAPI interface {
 
 	/*
+	CreateImageAlias Create an image alias
+
+	Creates a catalog alias for a ready version. Existing aliases are refused, including the same binding. The upstream registry and existing boxes are unchanged.
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param idOrRef Catalog ID or URL-encoded image name
+	@return ImagesAPICreateImageAliasRequest
+	*/
+	CreateImageAlias(ctx context.Context, idOrRef string) ImagesAPICreateImageAliasRequest
+
+	// CreateImageAliasExecute executes the request
+	//  @return ImageDetail
+	CreateImageAliasExecute(r ImagesAPICreateImageAliasRequest) (*ImageDetail, *http.Response, error)
+
+	/*
 	DeleteImage Remove an image from the catalog
 
-	Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; to point it at a version already recorded, move the tag instead.
+	Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; aliases for recorded versions are created and deleted explicitly.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
@@ -36,6 +51,21 @@ type ImagesAPI interface {
 
 	// DeleteImageExecute executes the request
 	DeleteImageExecute(r ImagesAPIDeleteImageRequest) (*http.Response, error)
+
+	/*
+	DeleteImageAlias Delete an image alias
+
+	Removes only the catalog binding. Versions, existing boxes and alias history remain.
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param idOrRef Catalog ID or URL-encoded image name
+	@param alias Catalog alias to delete
+	@return ImagesAPIDeleteImageAliasRequest
+	*/
+	DeleteImageAlias(ctx context.Context, idOrRef string, alias string) ImagesAPIDeleteImageAliasRequest
+
+	// DeleteImageAliasExecute executes the request
+	DeleteImageAliasExecute(r ImagesAPIDeleteImageAliasRequest) (*http.Response, error)
 
 	/*
 	GetImage Get image details
@@ -77,26 +107,134 @@ type ImagesAPI interface {
 	// ListImagesExecute executes the request
 	//  @return []Image
 	ListImagesExecute(r ImagesAPIListImagesRequest) ([]Image, *http.Response, error)
-
-	/*
-	MoveImageTag Point a tag at a version
-
-	Moves the tag to one of the image’s versions, or creates it there. Boxes created afterwards with the tag boot that version; boxes already created keep the version they were resolved to, and nothing is pulled. Every move is recorded in the image’s history.
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
-	@param tag Tag to point at the version
-	@return ImagesAPIMoveImageTagRequest
-	*/
-	MoveImageTag(ctx context.Context, idOrRef string, tag string) ImagesAPIMoveImageTagRequest
-
-	// MoveImageTagExecute executes the request
-	//  @return ImageDetail
-	MoveImageTagExecute(r ImagesAPIMoveImageTagRequest) (*ImageDetail, *http.Response, error)
 }
 
 // ImagesAPIService ImagesAPI service
 type ImagesAPIService service
+
+type ImagesAPICreateImageAliasRequest struct {
+	ctx context.Context
+	ApiService ImagesAPI
+	idOrRef string
+	createImageAlias *CreateImageAlias
+	xBoxLiteOrganizationID *string
+}
+
+func (r ImagesAPICreateImageAliasRequest) CreateImageAlias(createImageAlias CreateImageAlias) ImagesAPICreateImageAliasRequest {
+	r.createImageAlias = &createImageAlias
+	return r
+}
+
+// Use with JWT to specify the organization ID
+func (r ImagesAPICreateImageAliasRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) ImagesAPICreateImageAliasRequest {
+	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
+	return r
+}
+
+func (r ImagesAPICreateImageAliasRequest) Execute() (*ImageDetail, *http.Response, error) {
+	return r.ApiService.CreateImageAliasExecute(r)
+}
+
+/*
+CreateImageAlias Create an image alias
+
+Creates a catalog alias for a ready version. Existing aliases are refused, including the same binding. The upstream registry and existing boxes are unchanged.
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param idOrRef Catalog ID or URL-encoded image name
+ @return ImagesAPICreateImageAliasRequest
+*/
+func (a *ImagesAPIService) CreateImageAlias(ctx context.Context, idOrRef string) ImagesAPICreateImageAliasRequest {
+	return ImagesAPICreateImageAliasRequest{
+		ApiService: a,
+		ctx: ctx,
+		idOrRef: idOrRef,
+	}
+}
+
+// Execute executes the request
+//  @return ImageDetail
+func (a *ImagesAPIService) CreateImageAliasExecute(r ImagesAPICreateImageAliasRequest) (*ImageDetail, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPost
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *ImageDetail
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "ImagesAPIService.CreateImageAlias")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/images/{idOrRef}/aliases"
+	localVarPath = strings.Replace(localVarPath, "{"+"idOrRef"+"}", url.PathEscape(parameterValueToString(r.idOrRef, "idOrRef")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.createImageAlias == nil {
+		return localVarReturnValue, nil, reportError("createImageAlias is required and must be specified")
+	}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{"application/json"}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	if r.xBoxLiteOrganizationID != nil {
+		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
+	}
+	// body params
+	localVarPostBody = r.createImageAlias
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
 
 type ImagesAPIDeleteImageRequest struct {
 	ctx context.Context
@@ -118,7 +256,7 @@ func (r ImagesAPIDeleteImageRequest) Execute() (*http.Response, error) {
 /*
 DeleteImage Remove an image from the catalog
 
-Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; to point it at a version already recorded, move the tag instead.
+Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; aliases for recorded versions are created and deleted explicitly.
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
@@ -147,6 +285,112 @@ func (a *ImagesAPIService) DeleteImageExecute(r ImagesAPIDeleteImageRequest) (*h
 
 	localVarPath := localBasePath + "/images/{idOrRef}"
 	localVarPath = strings.Replace(localVarPath, "{"+"idOrRef"+"}", url.PathEscape(parameterValueToString(r.idOrRef, "idOrRef")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	if r.xBoxLiteOrganizationID != nil {
+		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type ImagesAPIDeleteImageAliasRequest struct {
+	ctx context.Context
+	ApiService ImagesAPI
+	idOrRef string
+	alias string
+	xBoxLiteOrganizationID *string
+}
+
+// Use with JWT to specify the organization ID
+func (r ImagesAPIDeleteImageAliasRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) ImagesAPIDeleteImageAliasRequest {
+	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
+	return r
+}
+
+func (r ImagesAPIDeleteImageAliasRequest) Execute() (*http.Response, error) {
+	return r.ApiService.DeleteImageAliasExecute(r)
+}
+
+/*
+DeleteImageAlias Delete an image alias
+
+Removes only the catalog binding. Versions, existing boxes and alias history remain.
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param idOrRef Catalog ID or URL-encoded image name
+ @param alias Catalog alias to delete
+ @return ImagesAPIDeleteImageAliasRequest
+*/
+func (a *ImagesAPIService) DeleteImageAlias(ctx context.Context, idOrRef string, alias string) ImagesAPIDeleteImageAliasRequest {
+	return ImagesAPIDeleteImageAliasRequest{
+		ApiService: a,
+		ctx: ctx,
+		idOrRef: idOrRef,
+		alias: alias,
+	}
+}
+
+// Execute executes the request
+func (a *ImagesAPIService) DeleteImageAliasExecute(r ImagesAPIDeleteImageAliasRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodDelete
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "ImagesAPIService.DeleteImageAlias")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/images/{idOrRef}/aliases/{alias}"
+	localVarPath = strings.Replace(localVarPath, "{"+"idOrRef"+"}", url.PathEscape(parameterValueToString(r.idOrRef, "idOrRef")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"alias"+"}", url.PathEscape(parameterValueToString(r.alias, "alias")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -492,134 +736,6 @@ func (a *ImagesAPIService) ListImagesExecute(r ImagesAPIListImagesRequest) ([]Im
 	if r.xBoxLiteOrganizationID != nil {
 		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
 	}
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return localVarReturnValue, nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-	if err != nil {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: err.Error(),
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	return localVarReturnValue, localVarHTTPResponse, nil
-}
-
-type ImagesAPIMoveImageTagRequest struct {
-	ctx context.Context
-	ApiService ImagesAPI
-	idOrRef string
-	tag string
-	moveImageTag *MoveImageTag
-	xBoxLiteOrganizationID *string
-}
-
-func (r ImagesAPIMoveImageTagRequest) MoveImageTag(moveImageTag MoveImageTag) ImagesAPIMoveImageTagRequest {
-	r.moveImageTag = &moveImageTag
-	return r
-}
-
-// Use with JWT to specify the organization ID
-func (r ImagesAPIMoveImageTagRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) ImagesAPIMoveImageTagRequest {
-	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
-	return r
-}
-
-func (r ImagesAPIMoveImageTagRequest) Execute() (*ImageDetail, *http.Response, error) {
-	return r.ApiService.MoveImageTagExecute(r)
-}
-
-/*
-MoveImageTag Point a tag at a version
-
-Moves the tag to one of the image’s versions, or creates it there. Boxes created afterwards with the tag boot that version; boxes already created keep the version they were resolved to, and nothing is pulled. Every move is recorded in the image’s history.
-
- @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
- @param tag Tag to point at the version
- @return ImagesAPIMoveImageTagRequest
-*/
-func (a *ImagesAPIService) MoveImageTag(ctx context.Context, idOrRef string, tag string) ImagesAPIMoveImageTagRequest {
-	return ImagesAPIMoveImageTagRequest{
-		ApiService: a,
-		ctx: ctx,
-		idOrRef: idOrRef,
-		tag: tag,
-	}
-}
-
-// Execute executes the request
-//  @return ImageDetail
-func (a *ImagesAPIService) MoveImageTagExecute(r ImagesAPIMoveImageTagRequest) (*ImageDetail, *http.Response, error) {
-	var (
-		localVarHTTPMethod   = http.MethodPut
-		localVarPostBody     interface{}
-		formFiles            []formFile
-		localVarReturnValue  *ImageDetail
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "ImagesAPIService.MoveImageTag")
-	if err != nil {
-		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/images/{idOrRef}/tags/{tag}"
-	localVarPath = strings.Replace(localVarPath, "{"+"idOrRef"+"}", url.PathEscape(parameterValueToString(r.idOrRef, "idOrRef")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"tag"+"}", url.PathEscape(parameterValueToString(r.tag, "tag")), -1)
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-	if r.moveImageTag == nil {
-		return localVarReturnValue, nil, reportError("moveImageTag is required and must be specified")
-	}
-
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{"application/json"}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{"application/json"}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	if r.xBoxLiteOrganizationID != nil {
-		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
-	}
-	// body params
-	localVarPostBody = r.moveImageTag
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
 		return localVarReturnValue, nil, err

@@ -597,42 +597,43 @@ pub(crate) struct ImageVersionResponse {
     pub source_ref: String,
     pub recorded_at: String,
     #[serde(default)]
-    pub tags: Vec<String>,
+    pub aliases: Vec<String>,
     #[serde(default)]
     pub last_used_at: Option<String>,
     #[serde(default)]
     pub upstream_missing_at: Option<String>,
 }
 
-/// One move of a tag, as an image's `history` lists it.
+/// One alias history entry, including bindings recorded by pulls.
 #[derive(Debug, Deserialize)]
-pub(crate) struct ImageTagEventResponse {
-    pub tag: String,
+pub(crate) struct ImageAliasEventResponse {
+    pub alias: String,
     #[serde(default)]
     pub from_digest: Option<String>,
     pub to_digest: String,
     #[serde(default)]
     pub actor: Option<String>,
-    pub moved_at: String,
+    pub recorded_at: String,
 }
 
-/// Response for `GET /v1/{prefix}/images/{name}` and for a tag move.
+/// Response for `GET /v1/{prefix}/images/{name}` and for alias creation.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ImageDetailResponse {
     pub name: String,
     #[serde(default)]
-    pub tags: Vec<String>,
+    pub aliases: Vec<String>,
     #[serde(default)]
     pub curated: bool,
     #[serde(default)]
     pub versions: Vec<ImageVersionResponse>,
     #[serde(default)]
-    pub history: Vec<ImageTagEventResponse>,
+    pub history: Vec<ImageAliasEventResponse>,
 }
 
-/// Body for `PUT /v1/{prefix}/images/{name}/tags/{tag}`.
+/// Body for `POST /v1/{prefix}/images/{name}/aliases`.
 #[derive(Debug, Serialize)]
-pub(crate) struct MoveTagRequest<'a> {
+pub(crate) struct CreateAliasRequest<'a> {
+    pub alias: &'a str,
     pub digest: &'a str,
 }
 
@@ -640,7 +641,7 @@ impl ImageDetailResponse {
     pub fn into_image_detail(self) -> crate::runtime::types::ImageDetail {
         crate::runtime::types::ImageDetail {
             name: self.name,
-            tags: self.tags,
+            aliases: self.aliases,
             curated: self.curated,
             versions: self
                 .versions
@@ -652,15 +653,15 @@ impl ImageDetailResponse {
                     digest: version.digest,
                     size_bytes: version.size_bytes,
                     source_ref: version.source_ref,
-                    tags: version.tags,
+                    aliases: version.aliases,
                 })
                 .collect(),
             history: self
                 .history
                 .into_iter()
-                .map(|event| crate::runtime::types::ImageTagEvent {
-                    moved_at: recorded_time(&event.moved_at),
-                    tag: event.tag,
+                .map(|event| crate::runtime::types::ImageAliasEvent {
+                    recorded_at: recorded_time(&event.recorded_at),
+                    alias: event.alias,
                     from_digest: event.from_digest,
                     to_digest: event.to_digest,
                     actor: event.actor,
@@ -682,7 +683,7 @@ pub(crate) struct ImageUsageResponse {
 // Registries
 // ============================================================================
 
-/// Body for `POST /v1/{prefix}/registries`. No `Debug`: it holds the password.
+/// Body for `POST /v1/{prefix}/images/registries`. No `Debug`: it holds the password.
 #[derive(Serialize)]
 pub(crate) struct CreateRegistryRequest<'a> {
     pub registry_host: &'a str,
@@ -703,7 +704,7 @@ impl<'a> CreateRegistryRequest<'a> {
     }
 }
 
-/// One login, as `/v1/{prefix}/registries` answers it. There is no password
+/// One login, as `/v1/{prefix}/images/registries` answers it. There is no password
 /// field, so one a server sent back is dropped here.
 #[derive(Debug, Deserialize)]
 pub(crate) struct RegistryCredentialResponse {
@@ -730,7 +731,7 @@ impl RegistryCredentialResponse {
     }
 }
 
-/// Response for `GET /v1/{prefix}/registries`.
+/// Response for `GET /v1/{prefix}/images/registries`.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ListRegistriesResponse {
     pub registries: Vec<RegistryCredentialResponse>,
@@ -960,7 +961,7 @@ mod tests {
                     "digest": "sha256:abc", "source_ref": "quay.io/acme/app:latest",
                     "recorded_at": raw
                 }],
-                "history": [{"tag": "latest", "to_digest": "sha256:abc", "moved_at": raw}]
+                "history": [{"tag": "latest", "to_digest": "sha256:abc", "recorded_at": raw}]
             }))
             .unwrap();
             let registry: RegistryCredentialResponse = serde_json::from_value(serde_json::json!({
@@ -974,7 +975,7 @@ mod tests {
                 [
                     info.into_image_info().cached_at,
                     detail.versions[0].recorded_at,
-                    detail.history[0].moved_at,
+                    detail.history[0].recorded_at,
                     registry.into_registry_credential().created_at,
                 ],
                 [expected; 4],

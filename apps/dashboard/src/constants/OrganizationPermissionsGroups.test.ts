@@ -43,8 +43,8 @@ describe('permission groups', () => {
    * not: the role file carried an Images group that granted `*:templates`, and
    * the API key file had no Images group at all. A key that can read the
    * catalog but cannot be granted that scope is the failure this holds off —
-   * and `write:images` is the only scope that moves a tag, so a role or key
-   * without it could read the catalog but never roll an image out or back.
+   * and `write:images` is the scope for alias creation and deletion, so a role or key
+   * without it could read the catalog but never create or delete catalog aliases.
    */
   it.each(PERMISSION_GROUPS)('offer the catalog scopes in %s', (_source, groups) => {
     const images = groups.find((group) => group.name === 'Images')

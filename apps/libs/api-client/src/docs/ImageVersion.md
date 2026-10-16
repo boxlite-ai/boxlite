@@ -9,9 +9,9 @@ Name | Type | Description | Notes
 **digest** | **string** | OCI manifest digest this version was pulled at | [default to undefined]
 **sizeBytes** | **number** | Sum of the layer sizes the manifest declared, in bytes | [default to undefined]
 **sourceRef** | **string** | The reference the caller asked for, kept verbatim as provenance | [default to undefined]
-**tags** | **Array&lt;string&gt;** | Tags that point at this version now, so a reference with one of them boots it | [default to undefined]
+**aliases** | **Array&lt;string&gt;** | Aliases that point at this version now, so a reference with one of them boots it | [default to undefined]
 **lastUsedAt** | **string** | When a box last started from this version. Null when none has since this was recorded | [default to undefined]
-**upstreamMissingAt** | **string** | When a pull of this version first failed because its registry no longer has it. Runners that cached it still start it; elsewhere, move its tags to a version the registry still has. Null while no pull has found it gone | [default to undefined]
+**upstreamMissingAt** | **string** | When a pull of this version first failed because its registry no longer has it. Runners that cached it still start it; elsewhere, create a new alias for a version the registry still has. Null while no pull has found it gone | [default to undefined]
 **createdAt** | **string** | When this version was first recorded | [default to undefined]
 
 ## Example
@@ -24,7 +24,7 @@ const instance: ImageVersion = {
     digest,
     sizeBytes,
     sourceRef,
-    tags,
+    aliases,
     lastUsedAt,
     upstreamMissingAt,
     createdAt,

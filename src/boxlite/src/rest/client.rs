@@ -275,15 +275,6 @@ impl ApiClient {
         self.send_json(builder).await
     }
 
-    pub async fn put<B: Serialize, T: DeserializeOwned>(
-        &self,
-        path: &str,
-        body: &B,
-    ) -> BoxliteResult<T> {
-        let builder = self.http.put(self.url(path)).json(body);
-        self.send_json(builder).await
-    }
-
     pub async fn post_no_content<B: Serialize>(&self, path: &str, body: &B) -> BoxliteResult<()> {
         let builder = self.http.post(self.url(path)).json(body);
         self.send_no_content(builder).await

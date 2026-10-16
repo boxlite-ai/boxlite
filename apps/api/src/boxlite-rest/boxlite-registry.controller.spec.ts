@@ -57,8 +57,8 @@ describe('BoxliteRegistryController', () => {
 
   it('is mounted with and without a routing prefix, like the other box API routes', () => {
     expect(Reflect.getMetadata(PATH_METADATA, BoxliteRegistryController)).toEqual([
-      'v1/registries',
-      'v1/:prefix/registries',
+      'v1/images/registries',
+      'v1/:prefix/images/registries',
     ])
   })
 

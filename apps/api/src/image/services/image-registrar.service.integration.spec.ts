@@ -7,8 +7,8 @@ import { randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { Image } from '../entities/image.entity'
-import { ImageTag } from '../entities/image-tag.entity'
-import { ImageTagEvent } from '../entities/image-tag-event.entity'
+import { ImageAlias } from '../entities/image-alias.entity'
+import { ImageAliasEvent } from '../entities/image-alias-event.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { isCuratedSelector } from '../utils/image-ref.util'
 import { CuratedImagePinService } from './curated-image-pin.service'
@@ -37,7 +37,7 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema: schemaName,
-      entities: [Image, ImageVersion, ImageTag, ImageTagEvent],
+      entities: [Image, ImageVersion, ImageAlias, ImageAliasEvent],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       synchronize: false,
@@ -126,7 +126,7 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
       storageRef: `quay.io/acme/app@${DIGEST}`,
     })
 
-    const [tag] = await dataSource.getRepository(ImageTag).find()
+    const [tag] = await dataSource.getRepository(ImageAlias).find()
     expect(tag).toMatchObject({ imageId: image.id, name: 'v1', versionId: version.id })
   })
 
@@ -181,15 +181,15 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
     await report('quay.io/acme/app:v1', OTHER_DIGEST)
 
     const versions = await dataSource.getRepository(ImageVersion).find()
-    const tags = await dataSource.getRepository(ImageTag).find()
-    const events = await dataSource.getRepository(ImageTagEvent).find()
+    const aliases = await dataSource.getRepository(ImageAlias).find()
+    const events = await dataSource.getRepository(ImageAliasEvent).find()
     const first = versions.find((version) => version.digest === DIGEST)
 
     expect(versions).toHaveLength(2)
-    expect(tags).toHaveLength(1)
-    expect(tags[0].versionId).toBe(first?.id)
+    expect(aliases).toHaveLength(1)
+    expect(aliases[0].versionId).toBe(first?.id)
     expect(events).toHaveLength(1)
-    expect(events[0]).toMatchObject({ tagName: 'v1', toVersionId: first?.id })
+    expect(events[0]).toMatchObject({ aliasName: 'v1', toVersionId: first?.id })
   })
 
   /**
@@ -199,13 +199,13 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
   it('starts the history of a tag a pull records', async () => {
     await report('quay.io/acme/app:v1')
 
-    const [tag] = await dataSource.getRepository(ImageTag).find()
-    const events = await dataSource.getRepository(ImageTagEvent).find()
+    const [tag] = await dataSource.getRepository(ImageAlias).find()
+    const events = await dataSource.getRepository(ImageAliasEvent).find()
 
     expect(events).toHaveLength(1)
     expect(events[0]).toMatchObject({
       imageId: tag.imageId,
-      tagName: 'v1',
+      aliasName: 'v1',
       fromVersionId: null,
       toVersionId: tag.versionId,
       actorId: null,
@@ -247,7 +247,7 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
   it('records a bare repository under the tag the registry served it as', async () => {
     await report('quay.io/acme/app')
 
-    const [tag] = await dataSource.getRepository(ImageTag).find()
+    const [tag] = await dataSource.getRepository(ImageAlias).find()
     expect(tag?.name).toBe('latest')
     expect(await countOf('image_version')).toBe(1)
   })

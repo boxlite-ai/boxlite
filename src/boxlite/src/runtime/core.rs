@@ -459,9 +459,10 @@ impl BoxliteRuntime {
     /// # }
     /// ```
     pub fn images(&self) -> BoxliteResult<crate::runtime::ImageHandle> {
-        Ok(crate::runtime::ImageHandle::new(Arc::clone(
-            &self.image_backend,
-        )))
+        Ok(crate::runtime::ImageHandle::new(
+            Arc::clone(&self.image_backend),
+            self.registry_backend.as_ref().map(Arc::clone),
+        ))
     }
 
     // ========================================================================
@@ -534,46 +535,6 @@ impl BoxliteRuntime {
             Some(backend) => Ok(crate::runtime::auth::AuthHandle::new(Arc::clone(backend))),
             None => Err(BoxliteError::Unsupported(
                 "identity (auth) is only available on REST runtimes".to_string(),
-            )),
-        }
-    }
-
-    /// Get a handle for the registry logins the server pulls private images
-    /// with (list, create, remove).
-    ///
-    /// # Errors
-    ///
-    /// Returns `BoxliteError::Unsupported` for non-REST runtimes: a local
-    /// runtime pulls with the logins in `BoxliteOptions::image_registries`.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use boxlite::{BoxliteRuntime, BoxliteRestOptions};
-    /// use boxlite::runtime::NewRegistryCredential;
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let runtime = BoxliteRuntime::rest(BoxliteRestOptions::from_env()?)?;
-    /// let login = runtime
-    ///     .registries()?
-    ///     .create(&NewRegistryCredential {
-    ///         registry_host: "ghcr.io".into(),
-    ///         repository_prefix: Some("acme/".into()),
-    ///         username: "acme-bot".into(),
-    ///         password: std::env::var("GHCR_TOKEN")?,
-    ///     })
-    ///     .await?;
-    /// println!("added {}", login.id);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn registries(&self) -> BoxliteResult<crate::runtime::RegistryHandle> {
-        match &self.registry_backend {
-            Some(backend) => Ok(crate::runtime::RegistryHandle::new(Arc::clone(backend))),
-            None => Err(BoxliteError::Unsupported(
-                "registry logins are only available on REST runtimes; a local runtime \
-                 pulls with the logins in its options' image_registries"
-                    .to_string(),
             )),
         }
     }
@@ -650,6 +611,8 @@ mod tests {
         let (runtime, _dir) = local_runtime();
 
         let err = runtime
+            .images()
+            .unwrap()
             .registries()
             .err()
             .expect("a local runtime has no registry logins");

@@ -14,8 +14,8 @@ import { supportedImages } from '../../box/constants/curated-images.constant'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { Organization } from '../../organization/entities/organization.entity'
 import { Image } from '../entities/image.entity'
-import { ImageTag } from '../entities/image-tag.entity'
-import { ImageTagEvent } from '../entities/image-tag-event.entity'
+import { ImageAlias } from '../entities/image-alias.entity'
+import { ImageAliasEvent } from '../entities/image-alias-event.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { CuratedImagePinService } from './curated-image-pin.service'
 import { ImageCatalogService } from './image-catalog.service'
@@ -46,7 +46,7 @@ describeIfDatabase('ImagePreparationService (integration, real Postgres)', () =>
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema: schemaName,
-      entities: [Image, ImageVersion, ImageTag, ImageTagEvent, Box, BoxLastActivity, BoxMigration],
+      entities: [Image, ImageVersion, ImageAlias, ImageAliasEvent, Box, BoxLastActivity, BoxMigration],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       synchronize: false,
@@ -70,8 +70,8 @@ describeIfDatabase('ImagePreparationService (integration, real Postgres)', () =>
     catalog = new ImageCatalogService(
       dataSource.getRepository(Image),
       dataSource.getRepository(ImageVersion),
-      dataSource.getRepository(ImageTag),
-      dataSource.getRepository(ImageTagEvent),
+      dataSource.getRepository(ImageAlias),
+      dataSource.getRepository(ImageAliasEvent),
       dataSource.getRepository(Box),
     )
   })

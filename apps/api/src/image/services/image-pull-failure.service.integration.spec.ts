@@ -8,8 +8,8 @@ import { DataSource } from 'typeorm'
 import { supportedImages } from '../../box/constants/curated-images.constant'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { Image } from '../entities/image.entity'
-import { ImageTag } from '../entities/image-tag.entity'
-import { ImageTagEvent } from '../entities/image-tag-event.entity'
+import { ImageAlias } from '../entities/image-alias.entity'
+import { ImageAliasEvent } from '../entities/image-alias-event.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { ImageVersionState } from '../enums/image-version-state.enum'
 import { CuratedImagePinService } from './curated-image-pin.service'
@@ -47,7 +47,7 @@ describeIfDatabase('ImagePullFailureService (integration, real Postgres)', () =>
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema: schemaName,
-      entities: [Image, ImageVersion, ImageTag, ImageTagEvent],
+      entities: [Image, ImageVersion, ImageAlias, ImageAliasEvent],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       synchronize: false,
@@ -66,7 +66,7 @@ describeIfDatabase('ImagePullFailureService (integration, real Postgres)', () =>
     } as unknown as CuratedImagePinService)
     pullFailures = new ImagePullFailureService(
       dataSource.getRepository(ImageVersion),
-      dataSource.getRepository(ImageTag),
+      dataSource.getRepository(ImageAlias),
     )
   })
 
@@ -107,7 +107,7 @@ describeIfDatabase('ImagePullFailureService (integration, real Postgres)', () =>
       .where('image."organizationId" = :organizationId', { organizationId })
       .getMany()
 
-  it('marks a build the catalog holds and names the tags that still point at it', async () => {
+  it('marks a build the catalog holds and names the aliases that still point at it', async () => {
     await recordV1()
 
     const reason = await pullFailures.reasonFor({ organizationId: ORG, image: PINNED }, unknownManifest(PINNED))

@@ -1245,33 +1245,29 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
-  /{prefix}/images/{image_name}/tags/{tag}:
+  /{prefix}/images/{image_name}/aliases:
     parameters:
       - $ref: "#/components/parameters/prefix"
       - $ref: "#/components/parameters/imageName"
-      - $ref: "#/components/parameters/imageTag"
-
-    put:
-      operationId: moveImageTag
-      summary: Point a tag at a build
+    post:
+      operationId: createImageAlias
+      summary: Create an image alias
       description: |
-        Point a tag of the image at the build with this digest, creating the
-        tag if it does not exist. Boxes created afterwards with the tag boot
-        that build; boxes already created keep what they booted, and nothing
-        is pulled. Every move is kept in the image's history. A digest that is
-        not a ready build of this image, a tag OCI would refuse, or an image
-        the operator provides is refused with `InvalidArgumentError`. A server
-        that keeps no catalog of tags answers `UnsupportedError`.
+        Create a catalog alias for a ready build of this image. Existing aliases
+        are refused with AlreadyExistsError, including an identical binding.
+        Delete an alias explicitly before creating it again. The registry and
+        existing boxes are unchanged, and nothing is pulled. A local runtime
+        without a catalog answers UnsupportedError.
       tags: [Images]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/MoveImageTagRequest"
+              $ref: "#/components/schemas/CreateImageAliasRequest"
       responses:
-        "200":
-          description: The image as it now is
+        "201":
+          description: Image details including the created alias
           content:
             application/json:
               schema:
@@ -1280,11 +1276,34 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/images/{image_name}/aliases/{alias}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/imageName"
+      - $ref: "#/components/parameters/imageAlias"
+    delete:
+      operationId: deleteImageAlias
+      summary: Delete an image alias
+      description: |
+        Remove only this catalog binding. Versions, creation history, the
+        upstream registry and existing boxes remain unchanged. An absent image
+        or alias answers NotFoundError. Local runtimes answer UnsupportedError.
+      tags: [Images]
+      responses:
+        "204":
+          description: The alias was deleted
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 
   # -------------------------------------------------------------------------
   # Registries
   # -------------------------------------------------------------------------
-  /{prefix}/registries:
+  /{prefix}/images/registries:
     parameters:
       - $ref: "#/components/parameters/prefix"
 
@@ -1345,7 +1364,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /{prefix}/registries/{registry_id}:
+  /{prefix}/images/registries/{registry_id}:
     parameters:
       - $ref: "#/components/parameters/prefix"
       - $ref: "#/components/parameters/registryId"
@@ -1479,11 +1498,11 @@ components:
         type: string
       example: "quay.io%2Facme%2Fapp"
 
-    imageTag:
-      name: tag
+    imageAlias:
+      name: alias
       in: path
       required: true
-      description: Tag to point at the build
+      description: Catalog alias to delete
       schema:
         type: string
       example: stable
@@ -2746,13 +2765,13 @@ components:
     ImageDetail:
       type: object
       description: An image name and every build held under it (maps to ImageDetail)
-      required: [name, tags, curated, versions]
+      required: [name, aliases, curated, versions]
       properties:
         name:
           type: string
           description: Registry and repository, without a tag
           example: quay.io/acme/app
-        tags:
+        aliases:
           type: array
           items:
             type: string
@@ -2770,7 +2789,7 @@ components:
             Where each tag has pointed, newest first. A server may keep only
             the most recent moves; one that keeps no catalog answers it empty.
           items:
-            $ref: "#/components/schemas/ImageTagEvent"
+            $ref: "#/components/schemas/ImageAliasEvent"
 
     ImageVersion:
       type: object
@@ -2788,7 +2807,7 @@ components:
         recorded_at:
           type: string
           format: date-time
-        tags:
+        aliases:
           type: array
           description: Tags that point at this build now
           items:
@@ -2804,12 +2823,12 @@ components:
             When a pull first found the build gone from its registry. Runners
             that cached it still start it. Null while it is not known to be gone.
 
-    ImageTagEvent:
+    ImageAliasEvent:
       type: object
-      description: One move of a tag, or the pull that first recorded it
-      required: [tag, to_digest, moved_at]
+      description: One alias creation, including an alias seeded by a registry pull
+      required: [alias, to_digest, recorded_at]
       properties:
-        tag:
+        alias:
           type: string
           example: stable
         from_digest:
@@ -2821,14 +2840,19 @@ components:
         actor:
           type: [string, "null"]
           description: Who moved the tag. Null when a pull recorded it
-        moved_at:
+        recorded_at:
           type: string
           format: date-time
 
-    MoveImageTagRequest:
+    CreateImageAliasRequest:
       type: object
-      required: [digest]
+      required: [alias, digest]
       properties:
+        alias:
+          type: string
+          description: New catalog alias; existing names cannot be overwritten
+          pattern: "^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$"
+          example: stable
         digest:
           type: string
           description: Manifest digest of a build the image holds

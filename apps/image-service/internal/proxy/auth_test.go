@@ -45,7 +45,7 @@ func newStubControlPlane(t *testing.T, keyToRunner map[string]string) *stubContr
 	plane := &stubControlPlane{}
 	plane.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		plane.asked.Add(1)
-		if r.URL.Path == "/runners/me/registry-credentials" {
+		if r.URL.Path == "/runners/me/images/registry-credentials" {
 			plane.lookups.Add(1)
 			key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			plane.lookupKey.Store(key)

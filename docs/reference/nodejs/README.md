@@ -83,59 +83,52 @@ boxes.forEach(info => console.log(`${info.id}: ${info.state.status}`));
 
 ### `ImageHandle`
 
-The images a runtime can boot from: the local cache on `new JsBoxlite(...)`
-or `JsBoxlite.withDefaultConfig()`, the server's catalog on
-`JsBoxlite.rest(...)`. `list()`, `get()` and `remove()` run unchanged against
-either; `pull()` is local only and `usage()` REST only. Read it from the
-`runtime.images` getter.
+The images a runtime can boot from: the local cache on an embedded runtime,
+the server catalog on a REST runtime. Registry credentials are accessed through
+`runtime.images.registries`.
 
-| Method | Signature | Local runtime | REST runtime |
-|--------|-----------|---------------|--------------|
-| `pull()` | `(reference: string) => Promise<ImagePullResult>` | Pulls into the cache | Rejects with `unsupported`: creating a box pulls |
-| `list()` | `() => Promise<ImageInfo[]>` | One row per cached reference | One row per catalog tag, then one per untagged version by digest |
-| `get()` | `(name: string) => Promise<ImageDetail>` | The cache entries under the name | The catalog entry with its versions |
-| `remove()` | `(name: string) => Promise<void>` | Forgets the name; layers stay | Removes the catalog entry; `invalid_state` while a box can boot from it |
-| `usage()` | `() => Promise<ImageUsage>` | Rejects with `unsupported` | `count`, `limit`, `knownBytes` |
-| `moveTag()` | `(name: string, tag: string, digest: string) => Promise<ImageDetail>` | Rejects with `unsupported`: a cache resolves a tag afresh for each new box | Points the tag at the version with that digest; boxes already created keep theirs |
+| Operation | Embedded runtime | REST runtime |
+|-----------|------------------|--------------|
+| `pull` | Pulls into the cache | Unsupported; creating a box pulls |
+| `list` | One row per cached reference | Catalog alias and digest references |
+| `get` | Cached versions under the name | Catalog versions, aliases and history |
+| `remove` | Forgets the name; layers stay | Removes the entry; refused while a box can boot from it |
+| `usage` | Unsupported | Image count, allowance and known bytes |
+| `createAlias()` | Unsupported | Creates a new alias for a ready digest; existing names conflict |
+| `deleteAlias()` | Unsupported | Removes only the named alias; absent names return NotFound |
 
-`get()` and `remove()` take an image name such as `"docker.io/library/alpine"`;
-a reference with a tag or digest rejects with `invalid_argument`, since a
-remove takes every tag of the name. A name nothing is held under rejects with
-`not_found`. The codes are what [`errorCode(err)`](#errorcodeerr) returns.
-Locally, a box built from a removed image reads the image's configuration from
-the registry when it next starts.
+`get` and `remove` take an image name, without a tag or digest, such as
+`quay.io/acme/app`. Alias names use OCI tag syntax; creation takes the
+`sha256:` digest of a ready version recorded for that image.
 
-`moveTag()` takes a tag the OCI distribution spec accepts and a `sha256:`
-digest; either malformed rejects with `invalid_argument` before anything is
-sent. A catalog fills every field below; a local cache fills a version's
-`tags` and leaves `lastUsedAt`, `upstreamMissingAt` and `history` empty.
+A registry tag belongs to the upstream registry. A BoxLite alias belongs to
+the runtime catalog and selects a recorded digest independently. A successful
+pull seeds an alias from the registry tag; it never overwrites an existing
+binding. Creating an alias never pushes a registry tag or pulls image bytes.
 
-| Type | Fields |
-|------|--------|
-| `ImageDetail` | `name`, `tags`, `curated`, `versions: ImageVersion[]` (newest first), `history: ImageTagEvent[]` (latest moves, newest first) |
-| `ImageVersion` | `digest`, `sizeBytes` (absent when unknown), `sourceRef`, `recordedAt` (RFC 3339), `tags`, `lastUsedAt` and `upstreamMissingAt` (absent when unset) |
-| `ImageTagEvent` | `tag`, `fromDigest` (absent when the tag was new), `toDigest`, `actor` (absent when a pull recorded the tag), `movedAt` |
-| `ImageUsage` | `count`, `limit`, `knownBytes` |
+Alias creation refuses every existing name, even for the same digest, with
+`AlreadyExists`. Delete the alias explicitly before creating it again. Deletion
+removes only the binding: versions and existing boxes keep their digests.
+Creation history remains available; deletion is recorded by the server audit log.
+
+Image details and versions expose `aliases`. Their `history` contains
+`ImageAliasEvent` records with `alias`, optional `from_digest`, `to_digest`,
+optional `actor` and `recorded_at`. A local cache mirrors its cached registry
+tags in `aliases`, leaves history empty and refuses alias writes.
 
 ```typescript
-import { JsBoxlite, BoxliteRestOptions } from 'boxlite';
-
-const runtime = JsBoxlite.rest(new BoxliteRestOptions({ url: 'http://localhost:8100' }));
-// or JsBoxlite.withDefaultConfig()
-for (const image of await runtime.images.list()) {
-  console.log(image.reference, image.id);
-}
-const detail = await runtime.images.get('docker.io/library/alpine');
-console.log(detail.tags, detail.versions.map((version) => version.digest));
-// REST runtimes: roll `stable` onto the newest version.
-await runtime.images.moveTag('docker.io/library/alpine', 'stable', detail.versions[0].digest);
-await runtime.images.remove('docker.io/library/alpine');
+const detail = await runtime.images.get('quay.io/acme/app');
+await runtime.images.createAlias(detail.name, 'verified', detail.versions[0].digest);
+await runtime.images.deleteAlias(detail.name, 'verified');
+const logins = await runtime.images.registries.list();
 ```
+
+The JavaScript event fields use `fromDigest`, `toDigest` and `recordedAt`.
 
 ### `RegistryHandle`
 
 The logins a REST server presents when it pulls a private image for a box.
-Read it from the `runtime.registries` getter, which throws `unsupported` on a
+Read it from the `runtime.images.registries` getter, which throws `unsupported` on a
 local runtime: that one pulls with the logins in `imageRegistries` instead.
 
 | Method | Signature | Description |
@@ -155,14 +148,14 @@ password field. `remove()` rejects an id that is not a UUID with
 
 ```typescript
 const runtime = JsBoxlite.rest(new BoxliteRestOptions({ url: 'http://localhost:8100' }));
-const login = await runtime.registries.create({
+const login = await runtime.images.registries.create({
   registryHost: 'ghcr.io',
   repositoryPrefix: 'acme/',
   username: 'acme-bot',
   password: process.env.GHCR_TOKEN!,
 });
 const box = await runtime.create({ image: 'ghcr.io/acme/private-app:1' });
-for (const entry of await runtime.registries.list()) {
+for (const entry of await runtime.images.registries.list()) {
   console.log(entry.registryHost, entry.repositoryPrefix, entry.username);
 }
 ```

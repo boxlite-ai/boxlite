@@ -28,7 +28,7 @@ const FALLBACK_ALLOWLIST = ['docker.io', 'quay.io', 'gcr.io', 'public.ecr.aws']
 const MAX_REF_LENGTH = 512
 
 export const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/
-const TAG_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/
+export const TAG_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/
 // Lowercase alphanumerics, separated by a single `.`, `_`, `__` or `-`. This is
 // what rejects `..`, `../`, a leading separator, and an empty segment.
 const PATH_SEGMENT_PATTERN = /^[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*$/
@@ -73,10 +73,17 @@ export function isSha256Digest(value: string): boolean {
   return DIGEST_PATTERN.test(value)
 }
 
-/** Refuse a tag OCI would not accept: the rule a ref's tag and a tag being moved share. */
+/** Registry tags and catalog aliases use the same OCI-compatible syntax. */
 export function assertTagName(tag: string): void {
   if (!TAG_PATTERN.test(tag)) {
     throw new BadRequestError(`Image tag '${tag}' is not a valid OCI tag`)
+  }
+}
+
+/** Catalog aliases use tag-compatible syntax without changing a registry tag. */
+export function assertAliasName(alias: string): void {
+  if (!TAG_PATTERN.test(alias)) {
+    throw new BadRequestError(`Image alias '${alias}' must use OCI tag syntax`)
   }
 }
 

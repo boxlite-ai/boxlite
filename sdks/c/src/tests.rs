@@ -841,12 +841,12 @@ mod image_catalog {
     const APP_DETAIL: Route = Route {
         request_line: "GET /v1/images/quay.io%2Facme%2Fapp HTTP/1.1",
         status: "200 OK",
-        body: r#"{"name":"quay.io/acme/app","tags":["v1","v2"],"curated":true,"versions":[{"digest":"sha256:bb","size_bytes":4096,"source_ref":"quay.io/acme/app:v2","recorded_at":"2026-09-01T00:00:00Z"},{"digest":"sha256:aa","size_bytes":null,"source_ref":"quay.io/acme/app:v1","recorded_at":"2026-08-15T12:30:00Z"}]}"#,
+        body: r#"{"name":"quay.io/acme/app","aliases":["v1","v2"],"curated":true,"versions":[{"digest":"sha256:bb","size_bytes":4096,"source_ref":"quay.io/acme/app:v2","recorded_at":"2026-09-01T00:00:00Z"},{"digest":"sha256:aa","size_bytes":null,"source_ref":"quay.io/acme/app:v1","recorded_at":"2026-08-15T12:30:00Z"}]}"#,
     };
     const BARE_DETAIL: Route = Route {
         request_line: "GET /v1/images/docker.io%2Flibrary%2Fbusybox HTTP/1.1",
         status: "200 OK",
-        body: r#"{"name":"docker.io/library/busybox","tags":[],"curated":false,"versions":[]}"#,
+        body: r#"{"name":"docker.io/library/busybox","aliases":[],"curated":false,"versions":[]}"#,
     };
     const GONE_DETAIL: Route = Route {
         request_line: "GET /v1/images/quay.io%2Facme%2Fgone HTTP/1.1",
@@ -958,7 +958,7 @@ mod image_catalog {
     #[derive(Debug, PartialEq)]
     struct DetailSeen {
         name: String,
-        tags: Vec<String>,
+        aliases: Vec<String>,
         curated: c_int,
         versions: Vec<VersionSeen>,
         /// The documented contract: an array pointer is null exactly when its
@@ -1000,7 +1000,7 @@ mod image_catalog {
                 return;
             };
             let name = owned_string(seen.name);
-            let tags = entries(seen.tags, seen.tags_count)
+            let aliases = entries(seen.aliases, seen.aliases_count)
                 .iter()
                 .map(|&tag| owned_string(tag))
                 .collect();
@@ -1014,7 +1014,7 @@ mod image_catalog {
                     recorded_at: version.recorded_at,
                 })
                 .collect();
-            let arrays_null_iff_empty = seen.tags.is_null() == (seen.tags_count == 0)
+            let arrays_null_iff_empty = seen.aliases.is_null() == (seen.aliases_count == 0)
                 && seen.versions.is_null() == (seen.versions_count == 0);
             let curated = seen.curated;
 
@@ -1024,7 +1024,7 @@ mod image_catalog {
 
             delivery.value = Some(DetailSeen {
                 name,
-                tags,
+                aliases,
                 curated,
                 versions,
                 arrays_null_iff_empty,
@@ -1227,18 +1227,18 @@ mod image_catalog {
         };
         let expected = DetailSeen {
             name: "quay.io/acme/app".into(),
-            tags: vec!["v1".into(), "v2".into()],
+            aliases: vec!["v1".into(), "v2".into()],
             curated: 1,
             versions: vec![newer, older],
             arrays_null_iff_empty: true,
-            // The name, two tags, and each version's digest and source_ref.
+            // The name, two aliases, and each version's digest and source_ref.
             strings_freed: 7,
         };
         assert_eq!(got.value, Some(expected));
     }
 
     #[test]
-    fn get_of_a_name_with_no_tags_or_versions_hands_over_null_arrays() {
+    fn get_of_a_name_with_no_aliases_or_versions_hands_over_null_arrays() {
         let images = Images::on_rest_server(&[BARE_DETAIL]);
 
         let got = images.get(c"docker.io/library/busybox");
@@ -1247,7 +1247,7 @@ mod image_catalog {
         assert_eq!(got.code, Some(BoxliteErrorCode::Ok), "{}", got.message);
         let expected = DetailSeen {
             name: "docker.io/library/busybox".into(),
-            tags: vec![],
+            aliases: vec![],
             curated: 0,
             versions: vec![],
             arrays_null_iff_empty: true,

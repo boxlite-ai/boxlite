@@ -30,15 +30,15 @@ Complete API documentation for each SDK:
 
 | Surface | Documentation | Description |
 |---------|---------------|-------------|
-| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 31 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images, registries |
+| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 32 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images, registries |
 | **Reference server** | [`openapi/reference-server/`](../../openapi/reference-server/README.md) | A partial implementation used as a client test fixture, not a conformance target |
 
 The spec is the contract, not an inventory of any one server, and no
-implementation currently serves all 31 paths:
+implementation currently serves all 32 paths:
 
 | Server | Serves | Does not serve |
 |--------|--------|----------------|
-| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | registries, `network/tunnel`, `network/inbound`. Volume routes are registered but every operation answers `400 UnsupportedError`, as do `images/usage` and `images/{name}/tags/{tag}` |
+| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | registries, `network/tunnel`, `network/inbound`. Volume routes are registered but every operation answers `400 UnsupportedError`, as do `images/usage` and both alias write routes |
 | reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, and `DELETE …/executions/{exec_id}` (kill) |
 
 Read each server's routes rather than either README — both under-report.
@@ -77,11 +77,31 @@ clients from the current OpenAPI specification before upgrading servers.
 `image_name` is the registry and repository, without a tag or digest, URL-encoded
 as one segment: `quay.io/acme/app` becomes `quay.io%2Facme%2Fapp`. An old digest ID
 is not an image name. `DELETE /{prefix}/images/{image_name}` removes the name and
-its tags, subject to dependency checks; it is part of the current API.
+its aliases, subject to dependency checks; it is part of the current API.
 
-The REST SDK maps malformed image recording times, tag-event times and registry
+The REST SDK maps malformed image recording times, alias-event times and registry
 creation times to `1970-01-01T00:00:00Z`, so repeated reads do not invent newer
 timestamps. Valid RFC 3339 timestamps retain their instant.
+
+Catalog `tags` fields are now `aliases`; history uses `ImageAliasEvent` with
+`alias` and `recorded_at`. Create a binding with `POST …/images/{name}/aliases`
+using `{alias, digest}`; an existing name returns `409 already_exists`, even
+for the same digest. Replace one only by explicitly deleting
+`…/images/{name}/aliases/{alias}` before creating it again. There is no move API.
+Registry tags and existing boxes remain unchanged.
+
+Registry routes also move under images:
+
+| Surface | Current path |
+|---------|--------------|
+| Product API | `/api/images/registries` |
+| Box API | `/api/v1[/{prefix}]/images/registries` |
+| Internal proxy lookup | `/api/runners/me/images/registry-credentials` |
+
+SDK registry handles move from the runtime root to `runtime.images.registries`
+(Python/Node), `runtime.images()?.registries()?` (Rust), `images.Registries()`
+(Go) and `boxlite_image_registries()` (C). Existing image methods stay on the
+image handle. The internal lookup stays excluded from customer OpenAPI and SDKs.
 
 ### Nullable response fields
 
@@ -91,7 +111,7 @@ controlled separately by `required`: an optional nullable field may be omitted
 or explicitly null, while a required identifier must still be present and non-null.
 
 Image versions may have null sizes, last-use times or upstream-missing times.
-Tag history may have a null prior digest or actor; registry credentials may have
+Alias history may have a null prior digest or actor; registry credentials may have
 a null creator. `ImageInfo.size_bytes` and image-list `next_page_token` also allow
 null; those two contracts predate the image catalog stack.
 

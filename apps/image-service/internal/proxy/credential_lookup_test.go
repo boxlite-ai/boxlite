@@ -36,7 +36,7 @@ func TestCredentialLookupHTTPContract(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet || r.URL.Path != "/api/runners/me/registry-credentials" {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/runners/me/images/registry-credentials" {
 					t.Errorf("lookup route = %s %s", r.Method, r.URL.Path)
 				}
 				if r.Header.Get("Authorization") != "Bearer runner-key" {

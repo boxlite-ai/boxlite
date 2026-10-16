@@ -52,7 +52,7 @@ describe('Box API JSON Schema nullability', () => {
     ],
     ImageInfo: ['size_bytes'],
     ImageVersion: ['size_bytes', 'last_used_at', 'upstream_missing_at'],
-    ImageTagEvent: ['from_digest', 'actor'],
+    ImageAliasEvent: ['from_digest', 'actor'],
     ListImagesResponse: ['next_page_token'],
     RegistryCredential: ['created_by'],
   }
@@ -93,14 +93,14 @@ describe('Box API JSON Schema nullability', () => {
       ]),
       get: jest.fn().mockResolvedValue({
         name: 'quay.io/acme/app',
-        tags: ['v1'],
+        aliases: ['v1'],
         curated: false,
         versions: [
           {
             digest: 'sha256:aa',
             sourceRef: 'quay.io/acme/app:v1',
             createdAt: recordedAt.toISOString(),
-            tags: ['v1'],
+            aliases: ['v1'],
             sizeBytes: null,
             lastUsedAt: null,
             upstreamMissingAt: null,
@@ -108,7 +108,7 @@ describe('Box API JSON Schema nullability', () => {
         ],
         history: [
           {
-            tagName: 'v1',
+            aliasName: 'v1',
             fromDigest: null,
             toDigest: 'sha256:aa',
             actorId: null,
@@ -149,7 +149,7 @@ describe('Box API JSON Schema nullability', () => {
       { digest: 'sha256:aa', source_ref: 'quay.io/acme/app:v1', recorded_at: '2026-10-01T00:00:00Z' },
       'digest',
     ],
-    ['ImageTagEvent', { tag: 'v1', to_digest: 'sha256:aa', moved_at: '2026-10-01T00:00:00Z' }, 'to_digest'],
+    ['ImageAliasEvent', { alias: 'v1', to_digest: 'sha256:aa', recorded_at: '2026-10-01T00:00:00Z' }, 'to_digest'],
     [
       'RegistryCredential',
       {

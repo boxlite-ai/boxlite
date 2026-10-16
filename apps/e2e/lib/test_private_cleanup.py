@@ -1,10 +1,10 @@
 """Exercise the private-image case's cleanup without SDK or VM fixtures."""
 
-from pathlib import Path
 import runpy
 import sys
-from types import SimpleNamespace
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 PRIVATE_CASE = Path(__file__).resolve().parents[1] / "cases/test_images_private.py"
@@ -25,11 +25,15 @@ class PrivateCleanupTest(unittest.IsolatedAsyncioTestCase):
         with patch.dict(sys.modules, dependencies):
             case = runpy.run_path(str(PRIVATE_CASE))
         runtime = SimpleNamespace(
-            registries=SimpleNamespace(
-                list=AsyncMock(return_value=[]),
-                remove=AsyncMock(side_effect=[ConnectionError("delete failed"), None]),
+            images=SimpleNamespace(
+                get=AsyncMock(),
+                registries=SimpleNamespace(
+                    list=AsyncMock(return_value=[]),
+                    remove=AsyncMock(
+                        side_effect=[ConnectionError("delete failed"), None]
+                    ),
+                ),
             ),
-            images=SimpleNamespace(get=AsyncMock()),
             remove=AsyncMock(),
         )
         fixture = case["only_what_this_case_made"](runtime)
@@ -44,7 +48,7 @@ class PrivateCleanupTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(StopAsyncIteration):
             await anext(fixture)
         self.assertEqual(
-            runtime.registries.remove.await_args_list,
+            runtime.images.registries.remove.await_args_list,
             [call("login-1"), call("login-1")],
         )
 

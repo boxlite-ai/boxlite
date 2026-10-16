@@ -7,17 +7,15 @@ import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn, U
 import { Image } from './image.entity'
 import { ImageVersion } from './image-version.entity'
 
-// The version a tag points at. A pull records a tag the first time it resolves
-// it and never moves it after that, so `app:latest` keeps booting the build it
-// first pulled. Only someone moving it on purpose does, and every move is an
-// `image_tag_event` row.
-@Entity()
+// Catalog aliases select ready versions independently of upstream registry tags.
+// Explicit storage names preserve the existing migration and deployed data.
+@Entity('image_tag')
 @Unique('image_tag_image_name_unique', ['imageId', 'name'])
 // Postgres does not index a foreign key for you, and `versionId` restricts:
 // deleting a version scans this table whole for references. That scan is on
 // the catalog's delete path, so the index belongs with it.
 @Index('image_tag_version_index', ['versionId'])
-export class ImageTag {
+export class ImageAlias {
   @PrimaryGeneratedColumn('uuid')
   id: string
 
@@ -34,8 +32,8 @@ export class ImageTag {
   @Column({ type: 'uuid' })
   versionId: string
 
-  // RESTRICT, not CASCADE: a version a tag still names must not disappear
-  // underneath it, or the tag would resolve to nothing.
+  // RESTRICT, not CASCADE: a version an alias still names must not disappear
+  // underneath it, or the alias would resolve to nothing.
   @ManyToOne(() => ImageVersion, { onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'versionId' })
   version: ImageVersion

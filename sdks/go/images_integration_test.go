@@ -197,8 +197,8 @@ func TestImagesUsageIsUnsupportedLocally(t *testing.T) {
 	requireErrorCode(t, err, ErrUnsupported, "")
 }
 
-func TestImagesMoveTagIsUnsupportedLocally(t *testing.T) {
-	_, err := localImages(t).MoveTag(context.Background(), "quay.io/acme/app", "stable", newDigest)
+func TestImagesCreateAliasIsUnsupportedLocally(t *testing.T) {
+	_, err := localImages(t).CreateAlias(context.Background(), "quay.io/acme/app", "stable", newDigest)
 
 	requireErrorCode(t, err, ErrUnsupported, "")
 }

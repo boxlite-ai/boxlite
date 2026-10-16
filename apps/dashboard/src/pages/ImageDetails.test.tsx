@@ -35,7 +35,7 @@ const ORG_IMAGE = {
   name: 'quay.io/acme/app',
   curated: false,
   curatedRef: null,
-  tags: ['v1', 'latest'],
+  aliases: ['v1', 'latest'],
   versionCount: 2,
   sizeBytes: 4096,
   lastUsedAt: null,
@@ -46,7 +46,7 @@ const ORG_IMAGE = {
       id: 'ver-2',
       digest: 'sha256:bbbb',
       sizeBytes: 2048,
-      tags: ['latest'],
+      aliases: ['latest'],
       lastUsedAt: null,
       upstreamMissingAt: null,
       sourceRef: 'quay.io/acme/app:latest',
@@ -56,7 +56,7 @@ const ORG_IMAGE = {
       id: 'ver-1',
       digest: 'sha256:aaaa',
       sizeBytes: 2048,
-      tags: ['v1'],
+      aliases: ['v1'],
       lastUsedAt: null,
       upstreamMissingAt: null,
       sourceRef: 'quay.io/acme/app:v1',
@@ -71,7 +71,7 @@ const CURATED_IMAGE = {
   name: 'python',
   curated: true,
   curatedRef: 'docker.io/library/python:3.12-slim',
-  tags: [],
+  aliases: [],
   versionCount: 0,
   versions: [],
 }
@@ -125,7 +125,7 @@ describe('ImageDetails', () => {
     expect(mocks.getImage).toHaveBeenCalledWith('img-1', 'org-1')
     expect(document.querySelector('h1')?.textContent).toBe('quay.io/acme/app')
     expect(text()).toContain('This organization')
-    expect(text()).toContain('Tags: v1, latest.')
+    expect(text()).toContain('Aliases: v1, latest.')
     // Each row keeps the reference the caller typed, next to the digest it got.
     for (const version of ORG_IMAGE.versions) {
       expect(document.querySelector(`[title="${version.digest}"]`)?.textContent).toBe(version.digest)
@@ -134,11 +134,11 @@ describe('ImageDetails', () => {
   })
 
   it('says when an organization image has no build recorded yet', async () => {
-    mocks.getImage.mockResolvedValue({ data: { ...ORG_IMAGE, tags: [], versionCount: 0, versions: [] } })
+    mocks.getImage.mockResolvedValue({ data: { ...ORG_IMAGE, aliases: [], versionCount: 0, versions: [] } })
     await renderPage()
 
     expect(text()).toContain('No versions recorded yet.')
-    expect(text()).toContain('Tags: none recorded.')
+    expect(text()).toContain('Aliases: none recorded.')
   })
 
   // A curated image is operator configuration: it has no catalog row to

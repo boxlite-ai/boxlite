@@ -32,8 +32,8 @@ export interface ImageVersion {
   sourceRef: string;
   /** When this build was recorded, as an RFC 3339 string. */
   recordedAt: string;
-  /** The image's tags that point at this build. */
-  tags: string[];
+  /** The image's aliases that point at this build. */
+  aliases: string[];
   /** When a box last started from this build; absent when unknown. */
   lastUsedAt?: string;
   /**
@@ -43,29 +43,29 @@ export interface ImageVersion {
   upstreamMissingAt?: string;
 }
 
-/** One move of a tag, or the pull that first recorded it; versions named by digest. */
-export interface ImageTagEvent {
-  tag: string;
-  /** The build the tag pointed at before; absent when the tag was new. */
+/** An alias registration or historical binding change; versions named by digest. */
+export interface ImageAliasEvent {
+  alias: string;
+  /** The build the alias pointed at before; absent when the alias was new. */
   fromDigest?: string;
   toDigest: string;
-  /** Who moved the tag; absent when a pull recorded it. */
+  /** Who recorded the alias; absent when a pull recorded it. */
   actor?: string;
   /** As an RFC 3339 string. */
-  movedAt: string;
+  recordedAt: string;
 }
 
 /** An image name and every build the runtime holds under it. */
 export interface ImageDetail {
   /** Registry and repository without a tag, such as `docker.io/library/alpine`. */
   name: string;
-  tags: string[];
+  aliases: string[];
   /** Provided by the server's operator rather than pulled by a box. */
   curated: boolean;
   /** Newest first. */
   versions: ImageVersion[];
-  /** The latest tag moves, newest first; empty on a local cache. */
-  history: ImageTagEvent[];
+  /** The latest alias history entries, newest first; empty on a local cache. */
+  history: ImageAliasEvent[];
 }
 
 /** Images held against the allowance, on a REST runtime. */
@@ -84,6 +84,7 @@ export interface ImageUsage {
  * the server's catalog on a REST runtime.
  */
 export interface ImageHandle {
+  readonly registries: RegistryHandle;
   /** Pull into the local cache. A REST runtime refuses: creating a box pulls. */
   pull(reference: string): Promise<ImagePullResult>;
   list(): Promise<ImageInfo[]>;
@@ -110,7 +111,12 @@ export interface ImageHandle {
    * @throws `unsupported` locally, and `invalid_argument` for a malformed
    * name, tag or `sha256:` digest.
    */
-  moveTag(name: string, tag: string, digest: string): Promise<ImageDetail>;
+  createAlias(
+    name: string,
+    alias: string,
+    digest: string,
+  ): Promise<ImageDetail>;
+  deleteAlias(name: string, alias: string): Promise<void>;
 }
 
 /** Metadata for a managed volume returned by the native runtime. */
@@ -627,7 +633,6 @@ export interface JsBoxlite {
    * @throws `unsupported` on a local runtime, which pulls with the logins in
    * `imageRegistries` instead.
    */
-  readonly registries: RegistryHandle;
   remove(idOrName: string, force?: boolean | null): Promise<void>;
   close(): void;
   shutdown(timeout?: number | null): Promise<void>;

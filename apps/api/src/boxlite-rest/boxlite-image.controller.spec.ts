@@ -9,7 +9,7 @@ import { Reflector } from '@nestjs/core'
 import { plainToInstance } from 'class-transformer'
 import { validate } from 'class-validator'
 import { BoxliteImageController } from './boxlite-image.controller'
-import { MoveTagDto } from './dto/move-tag.dto'
+import { CreateAliasDto } from './dto/create-alias.dto'
 import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
@@ -27,7 +27,7 @@ describe('BoxliteImageController', () => {
     id: 'image-1',
     curated: false,
     curatedRef: null,
-    tags: ['v1'],
+    aliases: ['v1'],
     versionCount: 1,
     sizeBytes: 4096,
     lastUsedAt: null,
@@ -38,7 +38,7 @@ describe('BoxliteImageController', () => {
         digest: 'sha256:aa',
         sizeBytes: 4096,
         sourceRef: 'quay.io/acme/app:v1',
-        tags: ['v1'],
+        aliases: ['v1'],
         lastUsedAt: '2026-09-02T00:00:00.000Z',
         upstreamMissingAt: null,
         createdAt: recordedAt.toISOString(),
@@ -46,7 +46,7 @@ describe('BoxliteImageController', () => {
     ],
     history: [
       {
-        tagName: 'v1',
+        aliasName: 'v1',
         fromVersionId: 'version-0',
         fromDigest: OTHER_DIGEST,
         toVersionId: 'version-1',
@@ -60,7 +60,7 @@ describe('BoxliteImageController', () => {
   // The same detail in the box API's shape: versions named by digest only.
   const restDetail = {
     name: 'quay.io/acme/app',
-    tags: ['v1'],
+    aliases: ['v1'],
     curated: false,
     versions: [
       {
@@ -68,18 +68,18 @@ describe('BoxliteImageController', () => {
         size_bytes: 4096,
         source_ref: 'quay.io/acme/app:v1',
         recorded_at: recordedAt.toISOString(),
-        tags: ['v1'],
+        aliases: ['v1'],
         last_used_at: '2026-09-02T00:00:00.000Z',
         upstream_missing_at: null,
       },
     ],
     history: [
       {
-        tag: 'v1',
+        alias: 'v1',
         from_digest: OTHER_DIGEST,
         to_digest: DIGEST,
         actor: 'auth0|alice',
-        moved_at: '2026-09-03T00:00:00.000Z',
+        recorded_at: '2026-09-03T00:00:00.000Z',
       },
     ],
   }
@@ -98,7 +98,8 @@ describe('BoxliteImageController', () => {
       ]),
       usage: jest.fn().mockResolvedValue({ count: 3, limit: 20, knownBytes: 8192 }),
       get: jest.fn().mockResolvedValue(catalogDetail),
-      moveTag: jest.fn().mockResolvedValue(catalogDetail),
+      createAlias: jest.fn().mockResolvedValue(catalogDetail),
+      deleteAlias: jest.fn().mockResolvedValue(undefined),
       delete: jest.fn().mockResolvedValue(undefined),
     }
     return {
@@ -139,10 +140,10 @@ describe('BoxliteImageController', () => {
   it('moves a tag to the version the digest names, as the caller who asked', async () => {
     const { controller, imageCatalogService } = createController()
 
-    await expect(controller.moveTag(caller, 'quay.io/acme/app', 'stable', { digest: DIGEST })).resolves.toEqual(
-      restDetail,
-    )
-    expect(imageCatalogService.moveTag).toHaveBeenCalledWith(
+    await expect(
+      controller.createAlias(caller, 'quay.io/acme/app', { alias: 'stable', digest: DIGEST }),
+    ).resolves.toEqual(restDetail)
+    expect(imageCatalogService.createAlias).toHaveBeenCalledWith(
       organization,
       'quay.io/acme/app',
       'stable',
@@ -152,7 +153,7 @@ describe('BoxliteImageController', () => {
   })
 
   it('takes only a sha256 digest as the version to move a tag to', async () => {
-    const errorsFor = async (body: object) => validate(plainToInstance(MoveTagDto, body))
+    const errorsFor = async (body: object) => validate(plainToInstance(CreateAliasDto, { alias: 'stable', ...body }))
 
     expect(await errorsFor({ digest: DIGEST })).toEqual([])
     for (const digest of [undefined, '', 'sha256:aa', DIGEST.toUpperCase(), `sha512:${'a'.repeat(64)}`]) {
@@ -164,7 +165,8 @@ describe('BoxliteImageController', () => {
     ['list', OrganizationResourcePermission.READ_IMAGES],
     ['usage', OrganizationResourcePermission.READ_IMAGES],
     ['get', OrganizationResourcePermission.READ_IMAGES],
-    ['moveTag', OrganizationResourcePermission.WRITE_IMAGES],
+    ['createAlias', OrganizationResourcePermission.WRITE_IMAGES],
+    ['deleteAlias', OrganizationResourcePermission.WRITE_IMAGES],
     ['remove', OrganizationResourcePermission.DELETE_IMAGES],
   ] as const)('requires exactly its own scope on %s', (name, scope) => {
     // The guard reads this and nothing else, so a route with the wrong scope

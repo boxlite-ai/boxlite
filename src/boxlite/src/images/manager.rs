@@ -210,17 +210,17 @@ impl ImageManager {
             return Err(BoxliteError::NotFound(format!("image {name}")));
         }
 
-        let mut tags: Vec<String> = held
+        let mut aliases: Vec<String> = held
             .iter()
             .filter(|entry| !entry.is_alias())
             .filter_map(|entry| entry.parsed.tag().map(str::to_string))
             .collect();
-        tags.sort();
-        tags.dedup();
+        aliases.sort();
+        aliases.dedup();
 
         Ok(ImageDetail {
             name,
-            tags,
+            aliases,
             curated: false,
             versions: versions_of(&held),
             // A cache keeps no record of where a tag pointed before.
@@ -328,7 +328,7 @@ impl HeldReference {
     }
 }
 
-/// One version per build, newest first, each with the tags that name it. A
+/// One version per build, newest first, each with the aliases that name it. A
 /// build's tag names it ahead of the digest alias a pull also keeps for it.
 fn versions_of(held: &[HeldReference]) -> Vec<ImageVersion> {
     let mut by_build: HashMap<&str, ImageVersion> = HashMap::new();
@@ -341,7 +341,7 @@ fn versions_of(held: &[HeldReference]) -> Vec<ImageVersion> {
                 size_bytes: None,
                 source_ref: entry.reference.clone(),
                 recorded_at,
-                tags: Vec::new(),
+                aliases: Vec::new(),
                 // A cache records neither a build's last use nor its registry
                 // losing it; only a catalog does.
                 last_used_at: None,
@@ -359,13 +359,13 @@ fn versions_of(held: &[HeldReference]) -> Vec<ImageVersion> {
         if !entry.is_alias()
             && let Some(tag) = entry.parsed.tag()
         {
-            version.tags.push(tag.to_string());
+            version.aliases.push(tag.to_string());
         }
     }
     let mut versions: Vec<ImageVersion> = by_build.into_values().collect();
     for version in &mut versions {
-        version.tags.sort();
-        version.tags.dedup();
+        version.aliases.sort();
+        version.aliases.dedup();
     }
     versions.sort_by_key(|version| std::cmp::Reverse(version.recorded_at));
     versions
@@ -536,7 +536,7 @@ mod tests {
         );
     }
 
-    /// Everything a pull of `app` left behind is one image: both tags, the
+    /// Everything a pull of `app` left behind is one image: both aliases, the
     /// digest alias of the first, and nothing from another repository.
     #[tokio::test]
     async fn get_gathers_every_build_held_under_a_name() {
@@ -552,7 +552,7 @@ mod tests {
         let detail = images.get("quay.io/acme/app").await.unwrap();
 
         assert_eq!(detail.name, "quay.io/acme/app");
-        assert_eq!(detail.tags, ["v1", "v2"]);
+        assert_eq!(detail.aliases, ["v1", "v2"]);
         assert!(!detail.curated);
         let mut versions: Vec<(&str, &str)> = detail
             .versions
@@ -569,7 +569,7 @@ mod tests {
         );
     }
 
-    /// Each build names the tags the cache holds for it, and none of its
+    /// Each build names the aliases the cache holds for it, and none of its
     /// digest alias.
     #[tokio::test]
     async fn get_names_the_tags_on_each_build() {
@@ -584,14 +584,14 @@ mod tests {
 
         let detail = images.get("quay.io/acme/app").await.unwrap();
 
-        let mut tags: Vec<(&str, Vec<String>)> = detail
+        let mut aliases: Vec<(&str, Vec<String>)> = detail
             .versions
             .iter()
-            .map(|v| (v.digest.as_str(), v.tags.clone()))
+            .map(|v| (v.digest.as_str(), v.aliases.clone()))
             .collect();
-        tags.sort();
+        aliases.sort();
         assert_eq!(
-            tags,
+            aliases,
             [
                 (FIRST, vec!["stable".to_string(), "v1".to_string()]),
                 (NEWER, vec!["v2".to_string()]),
@@ -609,7 +609,7 @@ mod tests {
         let detail = images.get("docker.io/library/alpine").await.unwrap();
 
         assert_eq!(detail.name, "docker.io/library/alpine");
-        assert_eq!(detail.tags, ["3.20"]);
+        assert_eq!(detail.aliases, ["3.20"]);
     }
 
     #[tokio::test]

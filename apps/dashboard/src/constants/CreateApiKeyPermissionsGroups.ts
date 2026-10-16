@@ -12,7 +12,7 @@ export const CREATE_API_KEY_PERMISSIONS_GROUPS: { name: string; permissions: Cre
     permissions: [CreateApiKeyPermissionsEnum.WRITE_BOXES, CreateApiKeyPermissionsEnum.DELETE_BOXES],
   },
   {
-    // Write moves a tag, which is how an image is rolled out or back.
+    // Write creates and deletes catalog aliases without silent replacement.
     // Using an image records it without any of these.
     name: 'Images',
     permissions: [

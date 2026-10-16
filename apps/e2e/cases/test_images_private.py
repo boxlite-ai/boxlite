@@ -2,7 +2,7 @@
 Private images, end to end.
 
 The whole claim, against a real stack: with no login a private image does not
-pull; with one registered through `rt.registries`, a box boots from the image
+pull; with one registered through `rt.images.registries`, a box boots from the image
 reference exactly as it is written, reads it back that way, and the login
 cannot be removed while that box stands. The password goes up once and is
 never seen again.
@@ -57,9 +57,9 @@ import re
 
 import pytest
 import pytest_asyncio
+from e2e_auth import request_json
 
 import boxlite
-from e2e_auth import request_json
 
 PRIVATE_IMAGE = os.environ.get("BOXLITE_E2E_PRIVATE_IMAGE", "")
 USERNAME = os.environ.get("BOXLITE_E2E_PRIVATE_USERNAME", "")
@@ -85,7 +85,7 @@ state: dict = {"boxes": []}
 async def _register(rt):
     """Register this case's login. pytest prints each frame's arguments, so the
     password is read here rather than passed in."""
-    return await rt.registries.create(
+    return await rt.images.registries.create(
         registry_host=_HOST,
         repository_prefix=PREFIX,
         username=USERNAME,
@@ -120,7 +120,7 @@ async def _create_recorded(rt, **options):
 @pytest_asyncio.fixture(scope="module", autouse=True)
 async def only_what_this_case_made(rt):
     """Refuse to start over someone's login; afterwards remove what this case made."""
-    for login in await rt.registries.list():
+    for login in await rt.images.registries.list():
         if login.registry_host == _HOST and login.repository_prefix == PREFIX:
             pytest.fail(
                 f"this organization already has a login for {_HOST}/{PREFIX}; this case adds "
@@ -146,7 +146,7 @@ async def only_what_this_case_made(rt):
             leftovers.append(f"box {box_id}: {failure}")
     if "login" in state:
         try:
-            await rt.registries.remove(state["login"].id)
+            await rt.images.registries.remove(state["login"].id)
         except boxlite.NotFoundError:
             pass
         except Exception as failure:
@@ -202,7 +202,9 @@ async def test_a_login_is_stored_and_its_password_is_never_returned(rt):
 
     assert login.registry_host == _HOST
     assert login.repository_prefix == PREFIX
-    listed = next(row for row in await rt.registries.list() if row.id == login.id)
+    listed = next(
+        row for row in await rt.images.registries.list() if row.id == login.id
+    )
     for where, row in (("the created login", login), ("the list", listed)):
         has_password_field = hasattr(row, "password")
         assert not has_password_field, f"{where} has a password field"
@@ -234,16 +236,16 @@ async def test_the_private_image_boots_by_the_reference_as_written(rt):
     # The upstream ref, not the registry proxy's: a caller that creates
     # another box from what it read must be handed something admission takes.
     image = body["image"]
-    assert image == PRIVATE_IMAGE or (state["catalog_existed"] and _is_this_image(image)), (
-        f"read back {image!r} for {PRIVATE_IMAGE!r}"
-    )
+    assert image == PRIVATE_IMAGE or (
+        state["catalog_existed"] and _is_this_image(image)
+    ), f"read back {image!r} for {PRIVATE_IMAGE!r}"
 
 
 @pytest.mark.asyncio
 async def test_a_login_in_use_cannot_be_removed(rt):
     """Step 5. The box standing on it is named."""
     with pytest.raises(boxlite.InvalidStateError) as refused:
-        await rt.registries.remove(state["login"].id)
+        await rt.images.registries.remove(state["login"].id)
 
     assert state["box"].id in str(refused.value), refused.value
 
@@ -256,8 +258,8 @@ async def test_once_the_box_is_gone_the_login_can_be(rt):
     state["boxes"].remove(box_id)
 
     login_id = state["login"].id
-    await rt.registries.remove(login_id)
+    await rt.images.registries.remove(login_id)
     state.pop("login")
     with pytest.raises(boxlite.NotFoundError) as again:
-        await rt.registries.remove(login_id)
+        await rt.images.registries.remove(login_id)
     assert "image" not in str(again.value).lower(), again.value

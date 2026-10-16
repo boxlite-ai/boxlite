@@ -32,15 +32,15 @@ export interface ImageVersion {
      */
     'sourceRef': string;
     /**
-     * Tags that point at this version now, so a reference with one of them boots it
+     * Aliases that point at this version now, so a reference with one of them boots it
      */
-    'tags': Array<string>;
+    'aliases': Array<string>;
     /**
      * When a box last started from this version. Null when none has since this was recorded
      */
     'lastUsedAt': string | null;
     /**
-     * When a pull of this version first failed because its registry no longer has it. Runners that cached it still start it; elsewhere, move its tags to a version the registry still has. Null while no pull has found it gone
+     * When a pull of this version first failed because its registry no longer has it. Runners that cached it still start it; elsewhere, create a new alias for a version the registry still has. Null while no pull has found it gone
      */
     'upstreamMissingAt': string | null;
     /**

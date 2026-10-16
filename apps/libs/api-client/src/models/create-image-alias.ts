@@ -14,7 +14,11 @@
 
 
 
-export interface MoveImageTag {
+export interface CreateImageAlias {
+    /**
+     * New catalog alias; existing aliases are refused
+     */
+    'alias': string;
     /**
      * Version to point the tag at. It must be a ready version of this image
      */

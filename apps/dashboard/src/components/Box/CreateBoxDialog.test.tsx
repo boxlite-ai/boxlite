@@ -18,7 +18,7 @@ const state = vi.hoisted(() => ({
   // The catalog behind the image suggestions. Empty by default: the dialog has
   // to work before an organization has pulled anything, which is the state
   // every new organization is in.
-  catalogImages: [] as { name: string; curated: boolean; tags: string[] }[],
+  catalogImages: [] as { name: string; curated: boolean; aliases: string[] }[],
 }))
 
 const LIVE_PRICES = {
@@ -379,7 +379,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     })
 
     it('offers a curated image under its short name and never a tag', async () => {
-      state.catalogImages = [{ name: 'python', curated: true, tags: [] }]
+      state.catalogImages = [{ name: 'python', curated: true, aliases: [] }]
       await renderOpen()
 
       await openDropdown('Choose a known image')
@@ -387,8 +387,8 @@ describe('CreateBoxDialog per-org resource cap', () => {
       expect(menuItems()).toEqual(['python'])
     })
 
-    it('offers an organization image with its tag when exactly one is recorded', async () => {
-      state.catalogImages = [{ name: 'quay.io/acme/app', curated: false, tags: ['v1'] }]
+    it('offers an organization image with its alias when exactly one is recorded', async () => {
+      state.catalogImages = [{ name: 'quay.io/acme/app', curated: false, aliases: ['v1'] }]
       await renderOpen()
 
       await openDropdown('Choose a known image')
@@ -396,10 +396,10 @@ describe('CreateBoxDialog per-org resource cap', () => {
       expect(menuItems()).toEqual(['quay.io/acme/app:v1'])
     })
 
-    // Picking one of several tags for the user would silently decide something
+    // Picking one of several aliases for the user would silently decide something
     // they never said; the bare name leaves the choice with them.
-    it('offers the bare name when several tags are recorded', async () => {
-      state.catalogImages = [{ name: 'quay.io/acme/app', curated: false, tags: ['v1', 'latest'] }]
+    it('offers the bare name when several aliases are recorded', async () => {
+      state.catalogImages = [{ name: 'quay.io/acme/app', curated: false, aliases: ['v1', 'latest'] }]
       await renderOpen()
 
       await openDropdown('Choose a known image')
@@ -408,7 +408,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     })
 
     it('fills the field from a suggestion and submits it', async () => {
-      state.catalogImages = [{ name: 'quay.io/acme/app', curated: false, tags: ['v1'] }]
+      state.catalogImages = [{ name: 'quay.io/acme/app', curated: false, aliases: ['v1'] }]
       await renderOpen()
 
       await openDropdown('Choose a known image')

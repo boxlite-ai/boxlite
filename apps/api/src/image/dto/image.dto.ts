@@ -4,9 +4,10 @@
  */
 
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
-import { IsUUID } from 'class-validator'
+import { IsUUID, Matches } from 'class-validator'
+import { TAG_PATTERN } from '../utils/image-ref.util'
 
-/** How many tag events an image's detail carries: enough to read recent moves, bounded however long it lives. */
+/** How many tag events an image's detail carries: enough to read recent registrations, bounded however long it lives. */
 export const IMAGE_HISTORY_LIMIT = 100
 
 @ApiSchema({ name: 'ImageVersion' })
@@ -33,11 +34,11 @@ export class ImageVersionDto {
   sourceRef: string
 
   @ApiProperty({
-    description: 'Tags that point at this version now, so a reference with one of them boots it',
+    description: 'Aliases that point at this version now, so a reference with one of them boots it',
     example: ['stable'],
     type: [String],
   })
-  tags: string[]
+  aliases: string[]
 
   @ApiProperty({
     description: 'When a box last started from this version. Null when none has since this was recorded',
@@ -48,7 +49,7 @@ export class ImageVersionDto {
 
   @ApiProperty({
     description:
-      'When a pull of this version first failed because its registry no longer has it. Runners that cached it still start it; elsewhere, move its tags to a version the registry still has. Null while no pull has found it gone',
+      'When a pull of this version first failed because its registry no longer has it. Runners that cached it still start it; elsewhere, create a new alias for a version the registry still has. Null while no pull has found it gone',
     example: '2026-01-02T00:00:00.000Z',
     nullable: true,
   })
@@ -58,50 +59,54 @@ export class ImageVersionDto {
   createdAt: string
 }
 
-@ApiSchema({ name: 'ImageTagEvent' })
-export class ImageTagEventDto {
-  @ApiProperty({ description: 'The tag that moved', example: 'stable' })
-  tagName: string
+@ApiSchema({ name: 'ImageAliasEvent' })
+export class ImageAliasEventDto {
+  @ApiProperty({ description: 'The alias that moved', example: 'stable' })
+  aliasName: string
 
   @ApiProperty({
-    description: 'Version the tag pointed at before. Null when the tag did not exist yet',
+    description: 'Version the alias pointed at before. Null when the alias did not exist yet',
     example: '123e4567-e89b-12d3-a456-426614174000',
     nullable: true,
   })
   fromVersionId: string | null
 
   @ApiProperty({
-    description: 'Digest of the version the tag pointed at before. Null when the tag did not exist yet',
+    description: 'Previous digest in historical records. Null for alias creation',
     example: 'sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4',
     nullable: true,
   })
   fromDigest: string | null
 
   @ApiProperty({
-    description: 'Version the tag points at from then on',
+    description: 'Version selected by the alias',
     example: '123e4567-e89b-12d3-a456-426614174001',
   })
   toVersionId: string
 
   @ApiProperty({
-    description: 'Digest of the version the tag points at from then on',
+    description: 'Digest selected by the alias',
     example: 'sha256:b5ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4',
   })
   toDigest: string
 
   @ApiProperty({
-    description: 'Who moved the tag. Null when a box pulling the image is what recorded it',
+    description: 'Who created the alias. Null when a registry pull seeded it',
     example: 'auth0|6512bd43d9caa6e02c990b0a',
     nullable: true,
   })
   actorId: string | null
 
-  @ApiProperty({ description: 'When the tag moved', example: '2026-01-01T00:00:00.000Z' })
+  @ApiProperty({ description: 'When the alias was recorded', example: '2026-01-01T00:00:00.000Z' })
   createdAt: string
 }
 
-@ApiSchema({ name: 'MoveImageTag' })
-export class MoveImageTagDto {
+@ApiSchema({ name: 'CreateImageAlias' })
+export class CreateImageAliasDto {
+  @ApiProperty({ description: 'New catalog alias; existing aliases are refused', example: 'stable' })
+  @Matches(TAG_PATTERN)
+  alias: string
+
   @ApiProperty({
     description: 'Version to point the tag at. It must be a ready version of this image',
     example: '123e4567-e89b-12d3-a456-426614174000',
@@ -142,11 +147,11 @@ export class ImageDto {
   curatedRef: string | null
 
   @ApiProperty({
-    description: 'Tags recorded for this image. Empty for curated images, whose reference the operator pins',
+    description: 'Aliases recorded for this image. Empty for curated images, whose reference the operator pins',
     example: ['v1', 'latest'],
     type: [String],
   })
-  tags: string[]
+  aliases: string[]
 
   @ApiProperty({
     description: 'How many pulled manifest digests this image holds',
@@ -186,10 +191,10 @@ export class ImageDetailDto extends ImageDto {
   versions: ImageVersionDto[]
 
   @ApiProperty({
-    description: `Where each tag has pointed, newest first and at most ${IMAGE_HISTORY_LIMIT} events. Empty for curated images`,
-    type: [ImageTagEventDto],
+    description: `Alias registration history, newest first and at most ${IMAGE_HISTORY_LIMIT} events. Empty for curated images`,
+    type: [ImageAliasEventDto],
   })
-  history: ImageTagEventDto[]
+  history: ImageAliasEventDto[]
 }
 
 @ApiSchema({ name: 'ImageUsage' })

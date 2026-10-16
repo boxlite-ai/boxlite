@@ -14,7 +14,7 @@ import { BoxService } from '../../box/services/box.service'
 import { Context } from '../../common/context/context'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { Image } from '../../image/entities/image.entity'
-import { ImageTag } from '../../image/entities/image-tag.entity'
+import { ImageAlias } from '../../image/entities/image-alias.entity'
 import { ImageVersion } from '../../image/entities/image-version.entity'
 import { ImageResolverService } from '../../image/services/image-resolver.service'
 import { Organization } from '../../organization/entities/organization.entity'
@@ -89,7 +89,7 @@ describeIfDatabase('Registry credential deletion concurrency (integration, real 
     const options = {
       ...connection,
       database: databaseName,
-      entities: [Box, BoxLastActivity, BoxMigration, RegistryCredential, Image, ImageTag, ImageVersion],
+      entities: [Box, BoxLastActivity, BoxMigration, RegistryCredential, Image, ImageAlias, ImageVersion],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
     }

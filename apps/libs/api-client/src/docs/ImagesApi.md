@@ -4,16 +4,78 @@ All URIs are relative to *http://localhost:3000*
 
 |Method | HTTP request | Description|
 |------------- | ------------- | -------------|
+|[**createImageAlias**](#createimagealias) | **POST** /images/{idOrRef}/aliases | Create an image alias|
 |[**deleteImage**](#deleteimage) | **DELETE** /images/{idOrRef} | Remove an image from the catalog|
+|[**deleteImageAlias**](#deleteimagealias) | **DELETE** /images/{idOrRef}/aliases/{alias} | Delete an image alias|
 |[**getImage**](#getimage) | **GET** /images/{idOrRef} | Get image details|
 |[**getImageUsage**](#getimageusage) | **GET** /images/usage | Get image usage|
 |[**listImages**](#listimages) | **GET** /images | List images|
-|[**moveImageTag**](#moveimagetag) | **PUT** /images/{idOrRef}/tags/{tag} | Point a tag at a version|
+
+# **createImageAlias**
+> ImageDetail createImageAlias(createImageAlias)
+
+Creates a catalog alias for a ready version. Existing aliases are refused, including the same binding. The upstream registry and existing boxes are unchanged.
+
+### Example
+
+```typescript
+import {
+    ImagesApi,
+    Configuration,
+    CreateImageAlias
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new ImagesApi(configuration);
+
+let idOrRef: string; //Catalog ID or URL-encoded image name
+let createImageAlias: CreateImageAlias; //
+let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
+
+const { status, data } = await apiInstance.createImageAlias(
+    idOrRef,
+    createImageAlias,
+    xBoxLiteOrganizationID
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **createImageAlias** | **CreateImageAlias**|  | |
+| **idOrRef** | [**string**] | Catalog ID or URL-encoded image name | |
+| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
+
+
+### Return type
+
+**ImageDetail**
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**201** | Image details including the new alias |  -  |
+|**400** | Invalid alias, target version or curated image |  -  |
+|**404** | No such image in this organization |  -  |
+|**409** | The alias already exists |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **deleteImage**
 > deleteImage()
 
-Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; to point it at a version already recorded, move the tag instead.
+Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; aliases for recorded versions are created and deleted explicitly.
 
 ### Example
 
@@ -64,6 +126,64 @@ void (empty response body)
 |**400** | Curated images belong to the operator and cannot be removed |  -  |
 |**404** | No such image in this organization |  -  |
 |**409** | Boxes that have not been destroyed can still boot from this image |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **deleteImageAlias**
+> deleteImageAlias()
+
+Removes only the catalog binding. Versions, existing boxes and alias history remain.
+
+### Example
+
+```typescript
+import {
+    ImagesApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new ImagesApi(configuration);
+
+let idOrRef: string; //Catalog ID or URL-encoded image name
+let alias: string; //Catalog alias to delete
+let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
+
+const { status, data } = await apiInstance.deleteImageAlias(
+    idOrRef,
+    alias,
+    xBoxLiteOrganizationID
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **idOrRef** | [**string**] | Catalog ID or URL-encoded image name | |
+| **alias** | [**string**] | Catalog alias to delete | |
+| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
+
+
+### Return type
+
+void (empty response body)
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: Not defined
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**204** | The alias was deleted |  -  |
+|**404** | The image or alias does not exist |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
@@ -220,69 +340,6 @@ const { status, data } = await apiInstance.listImages(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | The images this organization can boot from |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **moveImageTag**
-> ImageDetail moveImageTag(moveImageTag)
-
-Moves the tag to one of the image’s versions, or creates it there. Boxes created afterwards with the tag boot that version; boxes already created keep the version they were resolved to, and nothing is pulled. Every move is recorded in the image’s history.
-
-### Example
-
-```typescript
-import {
-    ImagesApi,
-    Configuration,
-    MoveImageTag
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new ImagesApi(configuration);
-
-let idOrRef: string; //Catalog ID, or any reference that names the image — URL-encode a reference
-let tag: string; //Tag to point at the version
-let moveImageTag: MoveImageTag; //
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.moveImageTag(
-    idOrRef,
-    tag,
-    moveImageTag,
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **moveImageTag** | **MoveImageTag**|  | |
-| **idOrRef** | [**string**] | Catalog ID, or any reference that names the image — URL-encode a reference | |
-| **tag** | [**string**] | Tag to point at the version | |
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-**ImageDetail**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: application/json
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | The image, with the tag where it now points |  -  |
-|**400** | The tag is not a valid OCI tag, the version is not a ready version of this image, or the image is curated |  -  |
-|**404** | No such image in this organization |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

@@ -28,7 +28,8 @@ describe('ImageController routing', () => {
   let catalog: {
     list: jest.Mock
     get: jest.Mock
-    moveTag: jest.Mock
+    createAlias: jest.Mock
+    deleteAlias: jest.Mock
     delete: jest.Mock
     usage: jest.Mock
   }
@@ -42,7 +43,8 @@ describe('ImageController routing', () => {
     catalog = {
       list: jest.fn().mockResolvedValue([]),
       get: jest.fn().mockResolvedValue({ name: 'quay.io/acme/app' }),
-      moveTag: jest.fn().mockResolvedValue({ name: 'quay.io/acme/app' }),
+      createAlias: jest.fn().mockResolvedValue({ name: 'quay.io/acme/app' }),
+      deleteAlias: jest.fn().mockResolvedValue(undefined),
       delete: jest.fn().mockResolvedValue(undefined),
       usage: jest.fn().mockResolvedValue({ count: 1, limit: 20, knownBytes: 42 }),
     }
@@ -173,11 +175,13 @@ describe('ImageController routing', () => {
     expect(catalog.list).toHaveBeenCalledWith(ORGANIZATION)
   })
 
-  it('moves a tag on a URL-encoded reference, as the caller who asked', async () => {
-    const response = await request('PUT', '/api/images/quay.io%2Facme%2Fapp/tags/stable', { versionId: VERSION_ID })
-
-    expect(response.status).toBe(200)
-    expect(catalog.moveTag).toHaveBeenCalledWith(
+  it('creates an alias on an encoded image name', async () => {
+    const response = await request('POST', '/api/images/quay.io%2Facme%2Fapp/aliases', {
+      alias: 'stable',
+      versionId: VERSION_ID,
+    })
+    expect(response.status).toBe(201)
+    expect(catalog.createAlias).toHaveBeenCalledWith(
       ORGANIZATION,
       'quay.io/acme/app',
       'stable',
@@ -186,11 +190,33 @@ describe('ImageController routing', () => {
     )
   })
 
-  it.each([{}, { versionId: 'v2' }])('refuses to move a tag to %j before reaching the catalog', async (body) => {
-    const response = await request('PUT', '/api/images/quay.io%2Facme%2Fapp/tags/stable', body)
+  it.each([{}, { alias: '-bad', versionId: VERSION_ID }, { alias: 'stable', versionId: 'v2' }])(
+    'refuses invalid alias creation %j before reaching the catalog',
+    async (body) => {
+      expect((await request('POST', '/api/images/quay.io%2Facme%2Fapp/aliases', body)).status).toBe(400)
+      expect(catalog.createAlias).not.toHaveBeenCalled()
+    },
+  )
 
-    expect(response.status).toBe(400)
-    expect(catalog.moveTag).not.toHaveBeenCalled()
+  it('surfaces an existing alias as a conflict', async () => {
+    catalog.createAlias.mockRejectedValue(new ConflictException({ message: 'alias exists', code: 'already_exists' }))
+    expect(
+      (await request('POST', '/api/images/quay.io%2Facme%2Fapp/aliases', { alias: 'stable', versionId: VERSION_ID }))
+        .status,
+    ).toBe(409)
+  })
+
+  it('deletes an alias explicitly', async () => {
+    expect((await request('DELETE', '/api/images/quay.io%2Facme%2Fapp/aliases/stable')).status).toBe(204)
+    expect(catalog.deleteAlias).toHaveBeenCalledWith(ORGANIZATION, 'quay.io/acme/app', 'stable')
+  })
+
+  it('does not expose tag or alias replacement routes', async () => {
+    for (const selector of ['tags', 'aliases']) {
+      expect(
+        (await request('PUT', `/api/images/quay.io%2Facme%2Fapp/${selector}/stable`, { versionId: VERSION_ID })).status,
+      ).toBe(404)
+    }
   })
 })
 
@@ -202,7 +228,8 @@ describe('ImageController permissions', () => {
     ['listImages', OrganizationResourcePermission.READ_IMAGES],
     ['getImageUsage', OrganizationResourcePermission.READ_IMAGES],
     ['getImage', OrganizationResourcePermission.READ_IMAGES],
-    ['moveImageTag', OrganizationResourcePermission.WRITE_IMAGES],
+    ['createImageAlias', OrganizationResourcePermission.WRITE_IMAGES],
+    ['deleteImageAlias', OrganizationResourcePermission.WRITE_IMAGES],
     ['deleteImage', OrganizationResourcePermission.DELETE_IMAGES],
   ] as const)('requires exactly its own scope on %s', (name, scope) => {
     // The guard reads this and nothing else, so a route with the wrong scope

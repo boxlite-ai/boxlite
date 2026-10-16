@@ -161,7 +161,7 @@ for info in boxes:
 `runtime.images` holds the images a runtime can boot from: the local cache on
 an embedded runtime, the server's catalog on `Boxlite.rest(...)`. The same
 code runs against either; `pull` is local only (a REST runtime pulls when a
-box is created) and `usage` and `move_tag` are REST only.
+box is created) and `usage`, `create_alias` and `delete_alias` are REST only.
 
 ```python
 runtime = boxlite.Boxlite.default()
@@ -170,7 +170,7 @@ for image in await runtime.images.list():
     print(image.repository, image.tag, image.id)
 
 detail = await runtime.images.get("docker.io/library/alpine")
-print(detail.tags, [version.digest for version in detail.versions])
+print(detail.aliases, [version.digest for version in detail.versions])
 await runtime.images.remove("docker.io/library/alpine")
 ```
 
@@ -187,7 +187,7 @@ for each method on each runtime.
 
 #### Private Registry Logins
 
-On `Boxlite.rest(...)`, `runtime.registries` manages the logins the server
+On `Boxlite.rest(...)`, `runtime.images.registries` manages the logins the server
 pulls private images with. The password goes up once and is never returned.
 A local runtime raises `UnsupportedError`: pass `image_registries` to
 `boxlite.Options` instead.
@@ -195,7 +195,7 @@ A local runtime raises `UnsupportedError`: pass `image_registries` to
 ```python
 runtime = boxlite.Boxlite.rest(boxlite.BoxliteRestOptions.from_env())
 
-login = await runtime.registries.create(
+login = await runtime.images.registries.create(
     registry_host="ghcr.io",
     repository_prefix="acme/",  # leave out for the whole registry
     username="acme-bot",
@@ -203,7 +203,7 @@ login = await runtime.registries.create(
 )
 box = await runtime.create(boxlite.BoxOptions(image="ghcr.io/acme/private-app:1"))
 ...
-await runtime.registries.remove(login.id)  # refused while a box pulls through it
+await runtime.images.registries.remove(login.id)  # refused while a box pulls through it
 ```
 
 See [the Python reference](../../docs/reference/python/README.md#boxliteregistryhandle).
@@ -929,7 +929,7 @@ sudo usermod -aG kvm $USER
 **Solutions:**
 - Check internet connectivity
 - Verify image name and tag exist: `docker pull <image>`
-- For private images, pass `image_registries=[boxlite.ImageRegistry(...)]` when creating `boxlite.Options`; on `Boxlite.rest(...)`, add a login with `runtime.registries.create(...)`
+- For private images, pass `image_registries=[boxlite.ImageRegistry(...)]` when creating `boxlite.Options`; on `Boxlite.rest(...)`, add a login with `runtime.images.registries.create(...)`
 
 ### Performance Issues
 

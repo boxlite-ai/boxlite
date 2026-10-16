@@ -101,7 +101,6 @@ let runtime = BoxliteRuntime::default_runtime();
 | `metrics` | `async fn metrics(&self) -> RuntimeMetrics` | Get runtime-wide metrics |
 | `remove` | `async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()>` | Remove box completely |
 | `images` | `fn images(&self) -> BoxliteResult<ImageHandle>` | The images this runtime can boot from; never fails |
-| `registries` | `fn registries(&self) -> BoxliteResult<RegistryHandle>` | The server's registry logins; `Unsupported` on an embedded runtime |
 
 #### Example
 
@@ -133,54 +132,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### ImageHandle
 
 The images a runtime can boot from: the local cache on an embedded runtime,
-the server's catalog on a REST one. Obtained with `runtime.images()?`.
+the server catalog on a REST runtime. Registry credentials are accessed through
+`runtime.images()?.registries()?`.
 
-| Method | Signature | Embedded runtime | REST runtime |
-|--------|-----------|------------------|--------------|
-| `pull` | `async fn pull(&self, image_ref: &str) -> BoxliteResult<ImageObject>` | Pulls into the cache | `Unsupported`: a box's create pulls |
-| `list` | `async fn list(&self) -> BoxliteResult<Vec<ImageInfo>>` | One row per cached reference | One row per catalog tag |
-| `get` | `async fn get(&self, name: &str) -> BoxliteResult<ImageDetail>` | The cache entries under the name | The catalog entry, with its versions |
-| `remove` | `async fn remove(&self, name: &str) -> BoxliteResult<()>` | Forgets the name; layers stay | Removes the catalog entry; refused while a box can boot from it |
-| `usage` | `async fn usage(&self) -> BoxliteResult<ImageUsage>` | `Unsupported`: a cache has no limit | Images held, the limit, and their declared bytes |
-| `move_tag` | `async fn move_tag(&self, name: &str, tag: &str, digest: &str) -> BoxliteResult<ImageDetail>` | `Unsupported`: a cache resolves a tag afresh for each new box | Points the tag at the version with that digest; boxes already created keep theirs |
+| Operation | Embedded runtime | REST runtime |
+|-----------|------------------|--------------|
+| `pull` | Pulls into the cache | Unsupported; creating a box pulls |
+| `list` | One row per cached reference | Catalog alias and digest references |
+| `get` | Cached versions under the name | Catalog versions, aliases and history |
+| `remove` | Forgets the name; layers stay | Removes the entry; refused while a box can boot from it |
+| `usage` | Unsupported | Image count, allowance and known bytes |
+| `create_alias` | Unsupported | Creates a new alias for a ready digest; existing names conflict |
+| `delete_alias` | Unsupported | Removes only the named alias; absent names return NotFound |
 
-`get` and `remove` take an image name such as `docker.io/library/alpine`; a
-reference with a tag or digest is refused with `InvalidArgument`, since a
-remove takes every tag of the name. Locally, `remove` deletes no layers and
-refuses nothing, but a box built from the image reads its configuration from
-the cache whenever it starts: after the remove that start fetches it from the
-registry again, and fails while the registry is unreachable.
+`get` and `remove` take an image name, without a tag or digest, such as
+`quay.io/acme/app`. Alias names use OCI tag syntax; creation takes the
+`sha256:` digest of a ready version recorded for that image.
 
-`move_tag` takes a tag the OCI distribution spec accepts and a `sha256:`
-digest. Malformed inputs are refused locally with `InvalidArgument` before
-anything is sent. The catalog also returns `InvalidArgument` when a
-well-formed digest does not belong to one of the image's versions.
-In a catalog, each version of an
-`ImageDetail` carries the `tags` on it, its `last_used_at`, and the
-`upstream_missing_at` a failed pull set when its registry no longer had it;
-the detail's `history` holds the latest tag moves, newest first, as
-`ImageTagEvent`s naming versions by digest. A local cache fills a version's
-`tags` and leaves the rest empty.
+A registry tag belongs to the upstream registry. A BoxLite alias belongs to
+the runtime catalog and selects a recorded digest independently. A successful
+pull seeds an alias from the registry tag; it never overwrites an existing
+binding. Creating an alias never pushes a registry tag or pulls image bytes.
+
+Alias creation refuses every existing name, even for the same digest, with
+`AlreadyExists`. Delete the alias explicitly before creating it again. Deletion
+removes only the binding: versions and existing boxes keep their digests.
+Creation history remains available; deletion is recorded by the server audit log.
+
+Image details and versions expose `aliases`. Their `history` contains
+`ImageAliasEvent` records with `alias`, optional `from_digest`, `to_digest`,
+optional `actor` and `recorded_at`. A local cache mirrors its cached registry
+tags in `aliases`, leaves history empty and refuses alias writes.
 
 ```rust
 let images = runtime.images()?;
-for image in images.list().await? {
-    println!("{} {}", image.reference, image.id);
-}
-let detail = images.get("docker.io/library/alpine").await?;
-println!("{:?}", detail.tags);
-// REST runtimes: roll `stable` onto the newest version.
-let detail = images
-    .move_tag("docker.io/library/alpine", "stable", &detail.versions[0].digest)
-    .await?;
-println!("{:?}", detail.history.first());
-images.remove("docker.io/library/alpine").await?;
+let detail = images.get("quay.io/acme/app").await?;
+images.create_alias(&detail.name, "verified", &detail.versions[0].digest).await?;
+images.delete_alias(&detail.name, "verified").await?;
+let logins = images.registries()?.list().await?;
 ```
 
 ### RegistryHandle
 
 The logins a REST server presents when it pulls a private image for a box.
-Obtained with `runtime.registries()?`, which an embedded runtime refuses with
+Obtained with `runtime.images()?.registries()?`, which an embedded runtime refuses with
 `Unsupported`: it pulls with the logins in `BoxliteOptions::image_registries`.
 
 | Method | Signature | Description |
@@ -199,7 +194,7 @@ id that is not a UUID with `InvalidArgument` before sending a request.
 ```rust
 use boxlite::runtime::NewRegistryCredential;
 
-let registries = runtime.registries()?;
+let registries = runtime.images()?.registries()?;
 let login = registries
     .create(&NewRegistryCredential {
         registry_host: "ghcr.io".into(),

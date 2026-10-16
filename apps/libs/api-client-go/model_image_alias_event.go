@@ -16,37 +16,37 @@ import (
 	"fmt"
 )
 
-// checks if the ImageTagEvent type satisfies the MappedNullable interface at compile time
-var _ MappedNullable = &ImageTagEvent{}
+// checks if the ImageAliasEvent type satisfies the MappedNullable interface at compile time
+var _ MappedNullable = &ImageAliasEvent{}
 
-// ImageTagEvent struct for ImageTagEvent
-type ImageTagEvent struct {
-	// The tag that moved
-	TagName string `json:"tagName"`
-	// Version the tag pointed at before. Null when the tag did not exist yet
+// ImageAliasEvent struct for ImageAliasEvent
+type ImageAliasEvent struct {
+	// The alias that moved
+	AliasName string `json:"aliasName"`
+	// Version the alias pointed at before. Null when the alias did not exist yet
 	FromVersionId NullableString `json:"fromVersionId"`
-	// Digest of the version the tag pointed at before. Null when the tag did not exist yet
+	// Previous digest in historical records. Null for alias creation
 	FromDigest NullableString `json:"fromDigest"`
-	// Version the tag points at from then on
+	// Version selected by the alias
 	ToVersionId string `json:"toVersionId"`
-	// Digest of the version the tag points at from then on
+	// Digest selected by the alias
 	ToDigest string `json:"toDigest"`
-	// Who moved the tag. Null when a box pulling the image is what recorded it
+	// Who created the alias. Null when a registry pull seeded it
 	ActorId NullableString `json:"actorId"`
-	// When the tag moved
+	// When the alias was recorded
 	CreatedAt string `json:"createdAt"`
 	AdditionalProperties map[string]interface{}
 }
 
-type _ImageTagEvent ImageTagEvent
+type _ImageAliasEvent ImageAliasEvent
 
-// NewImageTagEvent instantiates a new ImageTagEvent object
+// NewImageAliasEvent instantiates a new ImageAliasEvent object
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewImageTagEvent(tagName string, fromVersionId NullableString, fromDigest NullableString, toVersionId string, toDigest string, actorId NullableString, createdAt string) *ImageTagEvent {
-	this := ImageTagEvent{}
-	this.TagName = tagName
+func NewImageAliasEvent(aliasName string, fromVersionId NullableString, fromDigest NullableString, toVersionId string, toDigest string, actorId NullableString, createdAt string) *ImageAliasEvent {
+	this := ImageAliasEvent{}
+	this.AliasName = aliasName
 	this.FromVersionId = fromVersionId
 	this.FromDigest = fromDigest
 	this.ToVersionId = toVersionId
@@ -56,41 +56,41 @@ func NewImageTagEvent(tagName string, fromVersionId NullableString, fromDigest N
 	return &this
 }
 
-// NewImageTagEventWithDefaults instantiates a new ImageTagEvent object
+// NewImageAliasEventWithDefaults instantiates a new ImageAliasEvent object
 // This constructor will only assign default values to properties that have it defined,
 // but it doesn't guarantee that properties required by API are set
-func NewImageTagEventWithDefaults() *ImageTagEvent {
-	this := ImageTagEvent{}
+func NewImageAliasEventWithDefaults() *ImageAliasEvent {
+	this := ImageAliasEvent{}
 	return &this
 }
 
-// GetTagName returns the TagName field value
-func (o *ImageTagEvent) GetTagName() string {
+// GetAliasName returns the AliasName field value
+func (o *ImageAliasEvent) GetAliasName() string {
 	if o == nil {
 		var ret string
 		return ret
 	}
 
-	return o.TagName
+	return o.AliasName
 }
 
-// GetTagNameOk returns a tuple with the TagName field value
+// GetAliasNameOk returns a tuple with the AliasName field value
 // and a boolean to check if the value has been set.
-func (o *ImageTagEvent) GetTagNameOk() (*string, bool) {
+func (o *ImageAliasEvent) GetAliasNameOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.TagName, true
+	return &o.AliasName, true
 }
 
-// SetTagName sets field value
-func (o *ImageTagEvent) SetTagName(v string) {
-	o.TagName = v
+// SetAliasName sets field value
+func (o *ImageAliasEvent) SetAliasName(v string) {
+	o.AliasName = v
 }
 
 // GetFromVersionId returns the FromVersionId field value
 // If the value is explicit nil, the zero value for string will be returned
-func (o *ImageTagEvent) GetFromVersionId() string {
+func (o *ImageAliasEvent) GetFromVersionId() string {
 	if o == nil || o.FromVersionId.Get() == nil {
 		var ret string
 		return ret
@@ -102,7 +102,7 @@ func (o *ImageTagEvent) GetFromVersionId() string {
 // GetFromVersionIdOk returns a tuple with the FromVersionId field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *ImageTagEvent) GetFromVersionIdOk() (*string, bool) {
+func (o *ImageAliasEvent) GetFromVersionIdOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -110,13 +110,13 @@ func (o *ImageTagEvent) GetFromVersionIdOk() (*string, bool) {
 }
 
 // SetFromVersionId sets field value
-func (o *ImageTagEvent) SetFromVersionId(v string) {
+func (o *ImageAliasEvent) SetFromVersionId(v string) {
 	o.FromVersionId.Set(&v)
 }
 
 // GetFromDigest returns the FromDigest field value
 // If the value is explicit nil, the zero value for string will be returned
-func (o *ImageTagEvent) GetFromDigest() string {
+func (o *ImageAliasEvent) GetFromDigest() string {
 	if o == nil || o.FromDigest.Get() == nil {
 		var ret string
 		return ret
@@ -128,7 +128,7 @@ func (o *ImageTagEvent) GetFromDigest() string {
 // GetFromDigestOk returns a tuple with the FromDigest field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *ImageTagEvent) GetFromDigestOk() (*string, bool) {
+func (o *ImageAliasEvent) GetFromDigestOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -136,12 +136,12 @@ func (o *ImageTagEvent) GetFromDigestOk() (*string, bool) {
 }
 
 // SetFromDigest sets field value
-func (o *ImageTagEvent) SetFromDigest(v string) {
+func (o *ImageAliasEvent) SetFromDigest(v string) {
 	o.FromDigest.Set(&v)
 }
 
 // GetToVersionId returns the ToVersionId field value
-func (o *ImageTagEvent) GetToVersionId() string {
+func (o *ImageAliasEvent) GetToVersionId() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -152,7 +152,7 @@ func (o *ImageTagEvent) GetToVersionId() string {
 
 // GetToVersionIdOk returns a tuple with the ToVersionId field value
 // and a boolean to check if the value has been set.
-func (o *ImageTagEvent) GetToVersionIdOk() (*string, bool) {
+func (o *ImageAliasEvent) GetToVersionIdOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -160,12 +160,12 @@ func (o *ImageTagEvent) GetToVersionIdOk() (*string, bool) {
 }
 
 // SetToVersionId sets field value
-func (o *ImageTagEvent) SetToVersionId(v string) {
+func (o *ImageAliasEvent) SetToVersionId(v string) {
 	o.ToVersionId = v
 }
 
 // GetToDigest returns the ToDigest field value
-func (o *ImageTagEvent) GetToDigest() string {
+func (o *ImageAliasEvent) GetToDigest() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -176,7 +176,7 @@ func (o *ImageTagEvent) GetToDigest() string {
 
 // GetToDigestOk returns a tuple with the ToDigest field value
 // and a boolean to check if the value has been set.
-func (o *ImageTagEvent) GetToDigestOk() (*string, bool) {
+func (o *ImageAliasEvent) GetToDigestOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -184,13 +184,13 @@ func (o *ImageTagEvent) GetToDigestOk() (*string, bool) {
 }
 
 // SetToDigest sets field value
-func (o *ImageTagEvent) SetToDigest(v string) {
+func (o *ImageAliasEvent) SetToDigest(v string) {
 	o.ToDigest = v
 }
 
 // GetActorId returns the ActorId field value
 // If the value is explicit nil, the zero value for string will be returned
-func (o *ImageTagEvent) GetActorId() string {
+func (o *ImageAliasEvent) GetActorId() string {
 	if o == nil || o.ActorId.Get() == nil {
 		var ret string
 		return ret
@@ -202,7 +202,7 @@ func (o *ImageTagEvent) GetActorId() string {
 // GetActorIdOk returns a tuple with the ActorId field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *ImageTagEvent) GetActorIdOk() (*string, bool) {
+func (o *ImageAliasEvent) GetActorIdOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -210,12 +210,12 @@ func (o *ImageTagEvent) GetActorIdOk() (*string, bool) {
 }
 
 // SetActorId sets field value
-func (o *ImageTagEvent) SetActorId(v string) {
+func (o *ImageAliasEvent) SetActorId(v string) {
 	o.ActorId.Set(&v)
 }
 
 // GetCreatedAt returns the CreatedAt field value
-func (o *ImageTagEvent) GetCreatedAt() string {
+func (o *ImageAliasEvent) GetCreatedAt() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -226,7 +226,7 @@ func (o *ImageTagEvent) GetCreatedAt() string {
 
 // GetCreatedAtOk returns a tuple with the CreatedAt field value
 // and a boolean to check if the value has been set.
-func (o *ImageTagEvent) GetCreatedAtOk() (*string, bool) {
+func (o *ImageAliasEvent) GetCreatedAtOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -234,11 +234,11 @@ func (o *ImageTagEvent) GetCreatedAtOk() (*string, bool) {
 }
 
 // SetCreatedAt sets field value
-func (o *ImageTagEvent) SetCreatedAt(v string) {
+func (o *ImageAliasEvent) SetCreatedAt(v string) {
 	o.CreatedAt = v
 }
 
-func (o ImageTagEvent) MarshalJSON() ([]byte, error) {
+func (o ImageAliasEvent) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
@@ -246,9 +246,9 @@ func (o ImageTagEvent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(toSerialize)
 }
 
-func (o ImageTagEvent) ToMap() (map[string]interface{}, error) {
+func (o ImageAliasEvent) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
-	toSerialize["tagName"] = o.TagName
+	toSerialize["aliasName"] = o.AliasName
 	toSerialize["fromVersionId"] = o.FromVersionId.Get()
 	toSerialize["fromDigest"] = o.FromDigest.Get()
 	toSerialize["toVersionId"] = o.ToVersionId
@@ -263,12 +263,12 @@ func (o ImageTagEvent) ToMap() (map[string]interface{}, error) {
 	return toSerialize, nil
 }
 
-func (o *ImageTagEvent) UnmarshalJSON(data []byte) (err error) {
+func (o *ImageAliasEvent) UnmarshalJSON(data []byte) (err error) {
 	// This validates that all required properties are included in the JSON object
 	// by unmarshalling the object into a generic map with string keys and checking
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
-		"tagName",
+		"aliasName",
 		"fromVersionId",
 		"fromDigest",
 		"toVersionId",
@@ -291,20 +291,20 @@ func (o *ImageTagEvent) UnmarshalJSON(data []byte) (err error) {
 		}
 	}
 
-	varImageTagEvent := _ImageTagEvent{}
+	varImageAliasEvent := _ImageAliasEvent{}
 
-	err = json.Unmarshal(data, &varImageTagEvent)
+	err = json.Unmarshal(data, &varImageAliasEvent)
 
 	if err != nil {
 		return err
 	}
 
-	*o = ImageTagEvent(varImageTagEvent)
+	*o = ImageAliasEvent(varImageAliasEvent)
 
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
-		delete(additionalProperties, "tagName")
+		delete(additionalProperties, "aliasName")
 		delete(additionalProperties, "fromVersionId")
 		delete(additionalProperties, "fromDigest")
 		delete(additionalProperties, "toVersionId")
@@ -317,38 +317,38 @@ func (o *ImageTagEvent) UnmarshalJSON(data []byte) (err error) {
 	return err
 }
 
-type NullableImageTagEvent struct {
-	value *ImageTagEvent
+type NullableImageAliasEvent struct {
+	value *ImageAliasEvent
 	isSet bool
 }
 
-func (v NullableImageTagEvent) Get() *ImageTagEvent {
+func (v NullableImageAliasEvent) Get() *ImageAliasEvent {
 	return v.value
 }
 
-func (v *NullableImageTagEvent) Set(val *ImageTagEvent) {
+func (v *NullableImageAliasEvent) Set(val *ImageAliasEvent) {
 	v.value = val
 	v.isSet = true
 }
 
-func (v NullableImageTagEvent) IsSet() bool {
+func (v NullableImageAliasEvent) IsSet() bool {
 	return v.isSet
 }
 
-func (v *NullableImageTagEvent) Unset() {
+func (v *NullableImageAliasEvent) Unset() {
 	v.value = nil
 	v.isSet = false
 }
 
-func NewNullableImageTagEvent(val *ImageTagEvent) *NullableImageTagEvent {
-	return &NullableImageTagEvent{value: val, isSet: true}
+func NewNullableImageAliasEvent(val *ImageAliasEvent) *NullableImageAliasEvent {
+	return &NullableImageAliasEvent{value: val, isSet: true}
 }
 
-func (v NullableImageTagEvent) MarshalJSON() ([]byte, error) {
+func (v NullableImageAliasEvent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.value)
 }
 
-func (v *NullableImageTagEvent) UnmarshalJSON(src []byte) error {
+func (v *NullableImageAliasEvent) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }

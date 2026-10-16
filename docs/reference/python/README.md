@@ -78,54 +78,51 @@ for info in await runtime.list_info():
 
 ### `boxlite.ImageHandle`
 
-The images a runtime can boot from: the local cache on `Boxlite.default()`
-or `Boxlite(options)`, the server's catalog on `Boxlite.rest(...)`. `list()`,
-`get()` and `remove()` run unchanged against either; `pull()` is local only
-and `usage()` REST only.
+The images a runtime can boot from: the local cache on an embedded runtime,
+the server catalog on a REST runtime. Registry credentials are accessed through
+`runtime.images.registries`.
 
-| Method | Signature | Local runtime | REST runtime |
-|--------|-----------|---------------|--------------|
-| `pull()` | `async (reference: str) -> ImagePullResult` | Pulls into the cache | Raises `UnsupportedError`: creating a box pulls |
-| `list()` | `async () -> List[ImageInfo]` | One row per cached reference | One row per catalog tag |
-| `get()` | `async (name: str) -> ImageDetail` | The cache entries under the name | The catalog entry with its versions |
-| `remove()` | `async (name: str) -> None` | Forgets the name; layers stay | Removes the catalog entry; `InvalidStateError` while a box can boot from it |
-| `usage()` | `async () -> ImageUsage` | Raises `UnsupportedError` | `count`, `limit`, `known_bytes` |
-| `move_tag()` | `async (name: str, tag: str, digest: str) -> ImageDetail` | Raises `UnsupportedError`: a cache resolves a tag afresh for each new box | Points the tag at the version with that digest; boxes already created keep theirs |
+| Operation | Embedded runtime | REST runtime |
+|-----------|------------------|--------------|
+| `pull` | Pulls into the cache | Unsupported; creating a box pulls |
+| `list` | One row per cached reference | Catalog alias and digest references |
+| `get` | Cached versions under the name | Catalog versions, aliases and history |
+| `remove` | Forgets the name; layers stay | Removes the entry; refused while a box can boot from it |
+| `usage` | Unsupported | Image count, allowance and known bytes |
+| `create_alias()` | Unsupported | Creates a new alias for a ready digest; existing names conflict |
+| `delete_alias()` | Unsupported | Removes only the named alias; absent names return NotFound |
 
-`get()` and `remove()` take an image name such as `"docker.io/library/alpine"`;
-a reference with a tag or digest raises `InvalidArgumentError`, since a remove
-takes every tag of the name. Locally, a box built from a removed image reads
-the image's configuration from the registry when it next starts.
+`get` and `remove` take an image name, without a tag or digest, such as
+`quay.io/acme/app`. Alias names use OCI tag syntax; creation takes the
+`sha256:` digest of a ready version recorded for that image.
 
-`move_tag()` takes a tag the OCI distribution spec accepts and a `sha256:`
-digest; either malformed raises `InvalidArgumentError` before anything is
-sent. A catalog fills every field below; a local cache fills a version's
-`tags` and leaves `last_used_at`, `upstream_missing_at` and `history` empty.
+A registry tag belongs to the upstream registry. A BoxLite alias belongs to
+the runtime catalog and selects a recorded digest independently. A successful
+pull seeds an alias from the registry tag; it never overwrites an existing
+binding. Creating an alias never pushes a registry tag or pulls image bytes.
 
-| Type | Fields |
-|------|--------|
-| `ImageDetail` | `name`, `tags`, `curated`, `versions: List[ImageVersion]`, `history: List[ImageTagEvent]` (latest moves, newest first) |
-| `ImageVersion` | `digest`, `size_bytes` (`None` when unknown), `source_ref`, `recorded_at`, `tags`, `last_used_at` and `upstream_missing_at` (`None` when unset) |
-| `ImageTagEvent` | `tag`, `from_digest` (`None` when the tag was new), `to_digest`, `actor` (`None` when a pull recorded the tag), `moved_at` |
-| `ImageUsage` | `count`, `limit`, `known_bytes` |
+Alias creation refuses every existing name, even for the same digest, with
+`AlreadyExists`. Delete the alias explicitly before creating it again. Deletion
+removes only the binding: versions and existing boxes keep their digests.
+Creation history remains available; deletion is recorded by the server audit log.
+
+Image details and versions expose `aliases`. Their `history` contains
+`ImageAliasEvent` records with `alias`, optional `from_digest`, `to_digest`,
+optional `actor` and `recorded_at`. A local cache mirrors its cached registry
+tags in `aliases`, leaves history empty and refuses alias writes.
 
 ```python
-runtime = Boxlite.rest(BoxliteRestOptions.from_env())  # or Boxlite.default()
-for image in await runtime.images.list():
-    print(image.reference, image.id)
-detail = await runtime.images.get("docker.io/library/alpine")
-print(detail.tags, [v.digest for v in detail.versions])
-# REST runtimes: roll `stable` onto the newest version.
-detail = await runtime.images.move_tag(
-    "docker.io/library/alpine", "stable", detail.versions[0].digest
-)
-await runtime.images.remove("docker.io/library/alpine")
+detail = await runtime.images.get("quay.io/acme/app")
+digest = detail.versions[0].digest
+await runtime.images.create_alias(detail.name, "verified", digest)
+await runtime.images.delete_alias(detail.name, "verified")
+logins = await runtime.images.registries.list()
 ```
 
 ### `boxlite.RegistryHandle`
 
 The logins a REST server presents when it pulls a private image for a box.
-`runtime.registries` raises `UnsupportedError` on a local runtime, which pulls
+`runtime.images.registries` raises `UnsupportedError` on a local runtime, which pulls
 with the logins in `Options(image_registries=...)` instead.
 
 | Method | Signature | Description |
@@ -146,14 +143,14 @@ import os
 from boxlite import Boxlite, BoxliteRestOptions, BoxOptions
 
 runtime = Boxlite.rest(BoxliteRestOptions.from_env())
-login = await runtime.registries.create(
+login = await runtime.images.registries.create(
     registry_host="ghcr.io",
     repository_prefix="acme/",
     username="acme-bot",
     password=os.environ["GHCR_TOKEN"],
 )
 box = await runtime.create(BoxOptions(image="ghcr.io/acme/private-app:1"))
-for login in await runtime.registries.list():
+for login in await runtime.images.registries.list():
     print(login.registry_host, login.repository_prefix, login.username)
 ```
 
@@ -916,7 +913,7 @@ from boxlite import BoxliteRestOptions, SyncBoxlite
 
 with SyncBoxlite.rest(BoxliteRestOptions.from_env()) as runtime:
     print(runtime.images.usage())
-    print(runtime.registries.list())
+    print(runtime.images.registries.list())
 ```
 
 #### `SyncSimpleBox`

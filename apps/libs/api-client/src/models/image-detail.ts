@@ -15,7 +15,7 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
-import type { ImageTagEvent } from './image-tag-event';
+import type { ImageAliasEvent } from './image-alias-event';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { ImageVersion } from './image-version';
@@ -38,9 +38,9 @@ export interface ImageDetail {
      */
     'curatedRef': string | null;
     /**
-     * Tags recorded for this image. Empty for curated images, whose reference the operator pins
+     * Aliases recorded for this image. Empty for curated images, whose reference the operator pins
      */
-    'tags': Array<string>;
+    'aliases': Array<string>;
     /**
      * How many pulled manifest digests this image holds
      */
@@ -62,8 +62,8 @@ export interface ImageDetail {
      */
     'versions': Array<ImageVersion>;
     /**
-     * Where each tag has pointed, newest first and at most 100 events. Empty for curated images
+     * Alias registration history, newest first and at most 100 events. Empty for curated images
      */
-    'history': Array<ImageTagEvent>;
+    'history': Array<ImageAliasEvent>;
 }
 

@@ -512,7 +512,7 @@ Uniqueness is a partial index rather than a table constraint, so a soft-deleted
 name can be used again; `image_org_lastused_index` serves the count the
 admission gate takes when a create names an image the organization does not
 hold yet, and the per-org listing the catalog API serves. A soft delete leaves
-the versions and tags behind — the cascade only fires on a real delete — so
+the versions and aliases behind — the cascade only fires on a real delete — so
 every catalog read joins back to `image` and filters `deletedAt IS NULL`.
 
 ### `image_version`
@@ -539,11 +539,18 @@ on the box that attempted it. The one thing a failed pull writes here is
 The digest is unique per image, not per organization: the same public image
 reached through two upstream paths is normal usage.
 
+Catalog bindings are called **aliases** in the API, SDKs and entity classes.
+`ImageAlias` and `ImageAliasEvent` map to the existing `image_tag` and
+`image_tag_event` storage names; `aliasName` maps to column `tagName`.
+These explicit mappings preserve existing data and rolling-deployment compatibility.
+Alias creation uses the unique image/name constraint and refuses conflicts;
+deletion removes only the binding. Registry tags remain upstream reference metadata.
+
 ### `image_tag`
 
-The version a tag points at. A pull records a tag the first time it resolves it
-and never moves it after that; only someone moving it on purpose does, and
-every move is an `image_tag_event` row. Picking up where a tag points upstream
+The version a catalog alias selects. Pulls seed aliases from registry tags.
+Explicit creation refuses every existing name; replacing a binding requires
+deleting the alias and creating it again. Picking up where a tag points upstream
 is `DELETE /images/:idOrRef` followed by using the reference again, which brings
 the name back as a fresh entry.
 
@@ -555,15 +562,15 @@ the name back as a fresh entry.
 | `versionId` | `uuid` | → `image_version.id`, **restrict** delete |
 | `updatedAt` | `timestamptz` | |
 
-`versionId` restricts rather than cascades: a version a tag still names must not
+`versionId` restricts rather than cascades: a version an alias still names must not
 disappear underneath it. Postgres does not index a foreign key on its own, and
 this one is walked whenever a version is deleted, so `image_tag_version_index`
 covers it.
 
 ### `image_tag_event`
 
-Where each tag has pointed. A row is written when a pull first records a tag and
-each time the tag is moved, and never updated, so the history of an image is
+Alias registration history. A row is written when a pull seeds an alias or
+an explicit creation succeeds, and is never updated. The history of an image is
 this table read newest first.
 
 | Column | Type | Notes |
@@ -571,14 +578,14 @@ this table read newest first.
 | `id` | `uuid` | primary key |
 | `imageId` | `uuid` | → `image.id`, cascade delete |
 | `tagName` | `character varying(128)` | |
-| `fromVersionId` | `uuid` | nullable; → `image_version.id`, **restrict** delete. Null when the tag did not exist before |
+| `fromVersionId` | `uuid` | nullable; → `image_version.id`, **restrict** delete. Null for alias creation |
 | `toVersionId` | `uuid` | → `image_version.id`, **restrict** delete |
-| `actorId` | `character varying` | nullable; the identity provider subject of whoever moved it. Null when a pull recorded the tag |
+| `actorId` | `character varying` | nullable; the identity provider subject of whoever created it. Null when a pull seeded the alias |
 | `createdAt` | `timestamptz` | default `clock_timestamp()` |
 
 `createdAt` is the moment the row is written, not the start of its transaction:
-a move writes it after taking the tag's row lock, so concurrent moves sort in the
-order they took effect. `image_tag_event_image_created_index` on
+registration writes use the time the row is inserted, so concurrent creations
+sort by their observed write time. `image_tag_event_image_created_index` on
 `("imageId","createdAt")` serves the newest-first read backwards.
 
 ### `registry_credential`

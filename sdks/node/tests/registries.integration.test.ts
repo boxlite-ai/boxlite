@@ -36,7 +36,7 @@ describe("registry logins on a local runtime", () => {
     try {
       let err: unknown;
       try {
-        void runtime.registries;
+        void runtime.images.registries;
       } catch (caught) {
         err = caught;
       }
@@ -97,12 +97,12 @@ describe("registry logins on a REST runtime", () => {
   });
 
   test("list reads each login", async () => {
-    replies.set("GET /v1/registries", {
+    replies.set("GET /v1/images/registries", {
       status: 200,
       body: { registries: [LOGIN] },
     });
 
-    const logins = await runtime.registries.list();
+    const logins = await runtime.images.registries.list();
 
     expect(logins).toEqual([
       {
@@ -118,12 +118,12 @@ describe("registry logins on a REST runtime", () => {
 
   test("create sends the login and hands back no password", async () => {
     // A broken server that echoed the password back.
-    replies.set("POST /v1/registries", {
+    replies.set("POST /v1/images/registries", {
       status: 201,
       body: { ...LOGIN, password: PASSWORD },
     });
 
-    const created = await runtime.registries.create({
+    const created = await runtime.images.registries.create({
       registryHost: "ghcr.io",
       repositoryPrefix: "acme/",
       username: "acme-bot",
@@ -141,7 +141,7 @@ describe("registry logins on a REST runtime", () => {
   });
 
   test("a second login for a held prefix is already_exists", async () => {
-    replies.set("POST /v1/registries", {
+    replies.set("POST /v1/images/registries", {
       status: 409,
       body: {
         message: "A credential for ghcr.io/ already exists",
@@ -150,7 +150,7 @@ describe("registry logins on a REST runtime", () => {
     });
 
     const err = await failureOf(
-      runtime.registries.create({
+      runtime.images.registries.create({
         registryHost: "ghcr.io",
         username: "acme-bot",
         password: PASSWORD,
@@ -165,31 +165,31 @@ describe("registry logins on a REST runtime", () => {
   });
 
   test("remove deletes the login by id", async () => {
-    replies.set(`DELETE /v1/registries/${LOGIN_ID}`, { status: 204 });
+    replies.set(`DELETE /v1/images/registries/${LOGIN_ID}`, { status: 204 });
 
-    await runtime.registries.remove(LOGIN_ID);
+    await runtime.images.registries.remove(LOGIN_ID);
 
     expect(requests.map((request) => request.route)).toEqual([
-      `DELETE /v1/registries/${LOGIN_ID}`,
+      `DELETE /v1/images/registries/${LOGIN_ID}`,
     ]);
   });
 
   test("remove of a login in use is invalid_state naming the box", async () => {
-    replies.set(`DELETE /v1/registries/${LOGIN_ID}`, {
+    replies.set(`DELETE /v1/images/registries/${LOGIN_ID}`, {
       status: 409,
       body: {
         message: "cannot be removed while 1 box(es) pull through it: box-1",
       },
     });
 
-    const err = await failureOf(runtime.registries.remove(LOGIN_ID));
+    const err = await failureOf(runtime.images.registries.remove(LOGIN_ID));
 
     expect(errorCode(err)).toBe("invalid_state");
     expect(err.message).toContain("box-1");
   });
 
   test("remove refuses an id that is not a UUID without a request", async () => {
-    const err = await failureOf(runtime.registries.remove("../images"));
+    const err = await failureOf(runtime.images.registries.remove("../images"));
 
     expect(errorCode(err)).toBe("invalid_argument");
     expect(requests).toEqual([]);

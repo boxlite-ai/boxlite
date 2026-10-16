@@ -48,6 +48,6 @@ export enum OrganizationResourcePermission {
   READ_REGISTRIES = 'read:registries',
 
   // Appended for the same reason, apart from the other image scopes. Using an
-  // image still records it without this; what it guards is moving a tag.
+  // image still records it without this; what it guards is alias creation and deletion.
   WRITE_IMAGES = 'write:images',
 }

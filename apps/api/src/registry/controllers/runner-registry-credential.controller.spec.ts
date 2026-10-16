@@ -108,10 +108,10 @@ describe('Registry OpenAPI boundary', () => {
   it('exports tenant registry operations without the internal lookup or its schemas', () => {
     const document = SwaggerModule.createDocument(app, getOpenApiConfig('http://localhost'))
 
-    expect(document.paths['/api/registries']?.get?.operationId).toBe('listRegistryCredentials')
-    expect(document.paths['/api/registries']?.post?.operationId).toBe('createRegistryCredential')
-    expect(document.paths['/api/registries/{id}']?.delete?.operationId).toBe('deleteRegistryCredential')
-    expect(document.paths['/api/runners/me/registry-credentials']).toBeUndefined()
+    expect(document.paths['/api/images/registries']?.get?.operationId).toBe('listRegistryCredentials')
+    expect(document.paths['/api/images/registries']?.post?.operationId).toBe('createRegistryCredential')
+    expect(document.paths['/api/images/registries/{id}']?.delete?.operationId).toBe('deleteRegistryCredential')
+    expect(document.paths['/api/runners/me/images/registry-credentials']).toBeUndefined()
     expect(document.components?.schemas?.RunnerRegistryCredential).toBeUndefined()
     expect(document.components?.schemas?.RegistryCredentialLookup).toBeUndefined()
   })
@@ -119,7 +119,7 @@ describe('Registry OpenAPI boundary', () => {
   it('still serves the internal lookup to the registry proxy', async () => {
     const { port } = app.getHttpServer().address() as AddressInfo
     const response = await fetch(
-      `http://127.0.0.1:${port}/api/runners/me/registry-credentials?${new URLSearchParams(LOOKUP)}`,
+      `http://127.0.0.1:${port}/api/runners/me/images/registry-credentials?${new URLSearchParams(LOOKUP)}`,
     )
 
     expect(response.status).toBe(200)

@@ -186,7 +186,7 @@ describe('BoxLite REST routing', () => {
     const catalog = {
       get: jest
         .fn()
-        .mockResolvedValue({ name: 'quay.io/acme/app', tags: [], curated: false, versions: [], history: [] }),
+        .mockResolvedValue({ name: 'quay.io/acme/app', aliases: [], curated: false, versions: [], history: [] }),
     }
     await startApp([BoxliteImageController], [{ provide: ImageCatalogService, useValue: catalog }])
 
@@ -196,48 +196,70 @@ describe('BoxLite REST routing', () => {
     expect(catalog.get).toHaveBeenCalledWith({ id: 'org-123' }, 'quay.io/acme/app')
   })
 
-  it('moves a tag on an encoded image name, with or without a routing prefix', async () => {
+  it('creates and deletes aliases with either routing prefix', async () => {
     const digest = `sha256:${'a'.repeat(64)}`
     const catalog = {
-      moveTag: jest
-        .fn()
-        .mockResolvedValue({ name: 'quay.io/acme/app', tags: [], curated: false, versions: [], history: [] }),
+      createAlias: jest.fn().mockResolvedValue({
+        name: 'quay.io/acme/app',
+        aliases: ['stable'],
+        curated: false,
+        versions: [],
+        history: [],
+      }),
+      deleteAlias: jest.fn().mockResolvedValue(undefined),
     }
     await startApp([BoxliteImageController], [{ provide: ImageCatalogService, useValue: catalog }])
     const address = app.getHttpServer().address() as AddressInfo
-
     for (const prefix of ['', '/default']) {
-      const response = await fetch(
-        `http://127.0.0.1:${address.port}/api/v1${prefix}/images/quay.io%2Facme%2Fapp/tags/stable`,
-        { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ digest }) },
-      )
-      expect(response.status).toBe(200)
+      const url = `http://127.0.0.1:${address.port}/api/v1${prefix}/images/quay.io%2Facme%2Fapp/aliases`
+      const created = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ alias: 'stable', digest }),
+      })
+      expect(created.status).toBe(201)
+      expect((await created.json()).aliases).toEqual(['stable'])
+      expect((await fetch(`${url}/stable`, { method: 'DELETE' })).status).toBe(204)
+      for (const selector of ['tags', 'aliases']) {
+        expect((await put(`/api/v1${prefix}/images/quay.io%2Facme%2Fapp/${selector}/stable`, { digest })).status).toBe(
+          404,
+        )
+      }
     }
-    expect(catalog.moveTag).toHaveBeenCalledTimes(2)
-    expect(catalog.moveTag).toHaveBeenCalledWith({ id: 'org-123' }, 'quay.io/acme/app', 'stable', { digest }, undefined)
+    expect(catalog.createAlias).toHaveBeenCalledWith(
+      { id: 'org-123' },
+      'quay.io/acme/app',
+      'stable',
+      { digest },
+      undefined,
+    )
+    expect(catalog.deleteAlias).toHaveBeenCalledWith({ id: 'org-123' }, 'quay.io/acme/app', 'stable')
   })
 
-  it('refuses a tag move whose body names no sha256 digest before the catalog is asked', async () => {
-    const catalog = { moveTag: jest.fn() }
+  it('validates alias creation before asking the catalog', async () => {
+    const catalog = { createAlias: jest.fn() }
     await startApp([BoxliteImageController], [{ provide: ImageCatalogService, useValue: catalog }])
     const address = app.getHttpServer().address() as AddressInfo
-
-    for (const body of [{}, { digest: 'latest' }, { digest: `sha256:${'A'.repeat(64)}` }]) {
-      const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/images/quay.io%2Facme%2Fapp/tags/stable`, {
-        method: 'PUT',
+    for (const body of [
+      {},
+      { alias: 'stable', digest: 'latest' },
+      { alias: '-bad', digest: `sha256:${'a'.repeat(64)}` },
+    ]) {
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/images/quay.io%2Facme%2Fapp/aliases`, {
+        method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       })
       expect(response.status).toBe(400)
     }
-    expect(catalog.moveTag).not.toHaveBeenCalled()
+    expect(catalog.createAlias).not.toHaveBeenCalled()
   })
 
   it('answers registry logins with or without a routing prefix', async () => {
     const registries = { list: jest.fn().mockResolvedValue([]) }
     await startApp([BoxliteRegistryController], [{ provide: RegistriesService, useValue: registries }])
 
-    for (const path of ['/api/v1/registries', '/api/v1/default/registries']) {
+    for (const path of ['/api/v1/images/registries', '/api/v1/default/images/registries']) {
       const response = await get(path)
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ registries: [] })
@@ -250,7 +272,7 @@ describe('BoxLite REST routing', () => {
     await startApp([BoxliteRegistryController], [{ provide: RegistriesService, useValue: registries }])
     const address = app.getHttpServer().address() as AddressInfo
 
-    const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/registries/not-a-uuid`, {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/images/registries/not-a-uuid`, {
       method: 'DELETE',
     })
 

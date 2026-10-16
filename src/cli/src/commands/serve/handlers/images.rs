@@ -2,8 +2,8 @@
 //!
 //! These answer from `runtime.images()`, which on the embedded runtime `serve`
 //! runs is the local image cache. `usage` counts a catalog against a limit, and
-//! a cache has neither, so it responds `400 UnsupportedError`; so does moving a
-//! tag, since a cache keeps no catalog of tags.
+//! a cache has neither, so it responds `400 UnsupportedError`; so do alias
+//! creation and deletion, since a cache keeps no catalog of aliases.
 
 use std::sync::Arc;
 
@@ -15,8 +15,8 @@ use axum::response::{IntoResponse, Response};
 use boxlite::runtime::types::ImageDetail;
 
 use super::super::types::{
-    ImageDetailResponse, ImageInfoResponse, ImageTagEventResponse, ImageUsageResponse,
-    ImageVersionResponse, ListImagesResponse, MoveTagRequest,
+    CreateAliasRequest, ImageAliasEventResponse, ImageDetailResponse, ImageInfoResponse,
+    ImageUsageResponse, ImageVersionResponse, ListImagesResponse,
 };
 use super::super::{AppState, error_from_boxlite};
 
@@ -60,26 +60,43 @@ pub(in crate::commands::serve) async fn get_image(
     }
 }
 
-pub(in crate::commands::serve) async fn move_image_tag(
+pub(in crate::commands::serve) async fn create_image_alias(
     State(state): State<Arc<AppState>>,
-    Path((name, tag)): Path<(String, String)>,
-    Json(request): Json<MoveTagRequest>,
+    Path(name): Path<String>,
+    Json(request): Json<CreateAliasRequest>,
 ) -> Response {
     let handle = match state.runtime.images() {
         Ok(h) => h,
         Err(e) => return error_from_boxlite(&e),
     };
-    match handle.move_tag(&name, &tag, &request.digest).await {
-        Ok(detail) => Json(detail_response(detail)).into_response(),
+    match handle
+        .create_alias(&name, &request.alias, &request.digest)
+        .await
+    {
+        Ok(detail) => (StatusCode::CREATED, Json(detail_response(detail))).into_response(),
         Err(e) => error_from_boxlite(&e),
     }
 }
 
-/// An image in the box API's shape, for a read and for a tag move alike.
+pub(in crate::commands::serve) async fn delete_image_alias(
+    State(state): State<Arc<AppState>>,
+    Path((name, alias)): Path<(String, String)>,
+) -> Response {
+    let handle = match state.runtime.images() {
+        Ok(h) => h,
+        Err(e) => return error_from_boxlite(&e),
+    };
+    match handle.delete_alias(&name, &alias).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => error_from_boxlite(&e),
+    }
+}
+
+/// An image in the box API's shape, for a read and for alias creation alike.
 fn detail_response(detail: ImageDetail) -> ImageDetailResponse {
     ImageDetailResponse {
         name: detail.name,
-        tags: detail.tags,
+        aliases: detail.aliases,
         curated: detail.curated,
         versions: detail
             .versions
@@ -91,15 +108,15 @@ fn detail_response(detail: ImageDetail) -> ImageDetailResponse {
                 digest: version.digest,
                 size_bytes: version.size_bytes,
                 source_ref: version.source_ref,
-                tags: version.tags,
+                aliases: version.aliases,
             })
             .collect(),
         history: detail
             .history
             .into_iter()
-            .map(|event| ImageTagEventResponse {
-                moved_at: event.moved_at.to_rfc3339(),
-                tag: event.tag,
+            .map(|event| ImageAliasEventResponse {
+                recorded_at: event.recorded_at.to_rfc3339(),
+                alias: event.alias,
                 from_digest: event.from_digest,
                 to_digest: event.to_digest,
                 actor: event.actor,
@@ -156,7 +173,7 @@ mod tests {
     use axum::response::{IntoResponse, Response};
     use axum::routing::{delete, get};
     use boxlite::BoxliteRuntime;
-    use boxlite::runtime::types::{ImageTagEvent, ImageVersion};
+    use boxlite::runtime::types::{ImageAliasEvent, ImageVersion};
     use chrono::{TimeZone, Utc};
     use serde_json::{Value, json};
     use tokio::sync::RwLock;
@@ -237,7 +254,7 @@ mod tests {
             "/v1/images/{name}",
             get(|Path(name): Path<String>| async move {
                 axum::Json(json!({
-                    "name": name, "tags": ["v1"], "curated": true,
+                    "name": name, "aliases": ["v1"], "curated": true,
                     "versions": [{
                         "digest": "sha256:aa", "size_bytes": 42,
                         "source_ref": format!("{name}:v1"),
@@ -251,17 +268,17 @@ mod tests {
         let (status, body) = read(get_image(state, Path("quay.io/acme/app".into())).await).await;
 
         assert_eq!(status, StatusCode::OK);
-        // An upstream that predates tag history leaves those fields at their
+        // An upstream that predates alias history leaves those fields at their
         // defaults, and serve still names every one of them.
         assert_eq!(
             body,
             json!({
-                "name": "quay.io/acme/app", "tags": ["v1"], "curated": true,
+                "name": "quay.io/acme/app", "aliases": ["v1"], "curated": true,
                 "versions": [{
                     "digest": "sha256:aa", "size_bytes": 42,
                     "source_ref": "quay.io/acme/app:v1",
                     "recorded_at": "2026-01-02T03:04:05+00:00",
-                    "tags": [], "last_used_at": null, "upstream_missing_at": null,
+                    "aliases": [], "last_used_at": null, "upstream_missing_at": null,
                 }],
                 "history": [],
             })
@@ -325,29 +342,29 @@ mod tests {
     }
 
     /// serve's body names each field a catalog's does, so a REST runtime
-    /// reads a version's tags and times, and the history, from serve too.
+    /// reads a version's aliases and times, and the history, from serve too.
     #[test]
-    fn a_detail_carries_version_tags_times_and_the_history() {
+    fn a_detail_carries_version_aliases_times_and_the_history() {
         let day = |day| Utc.with_ymd_and_hms(2026, 9, day, 0, 0, 0).unwrap();
         let detail = ImageDetail {
             name: "quay.io/acme/app".to_string(),
-            tags: vec!["stable".to_string()],
+            aliases: vec!["stable".to_string()],
             curated: false,
             versions: vec![ImageVersion {
                 digest: "sha256:bb".to_string(),
                 size_bytes: None,
                 source_ref: "quay.io/acme/app:v2".to_string(),
                 recorded_at: day(1),
-                tags: vec!["stable".to_string()],
+                aliases: vec!["stable".to_string()],
                 last_used_at: Some(day(2)),
                 upstream_missing_at: None,
             }],
-            history: vec![ImageTagEvent {
-                tag: "stable".to_string(),
+            history: vec![ImageAliasEvent {
+                alias: "stable".to_string(),
                 from_digest: Some("sha256:aa".to_string()),
                 to_digest: "sha256:bb".to_string(),
                 actor: None,
-                moved_at: day(3),
+                recorded_at: day(3),
             }],
         };
 
@@ -357,23 +374,23 @@ mod tests {
             body,
             json!({
                 "name": "quay.io/acme/app",
-                "tags": ["stable"],
+                "aliases": ["stable"],
                 "curated": false,
                 "versions": [{
                     "digest": "sha256:bb",
                     "size_bytes": null,
                     "source_ref": "quay.io/acme/app:v2",
                     "recorded_at": "2026-09-01T00:00:00+00:00",
-                    "tags": ["stable"],
+                    "aliases": ["stable"],
                     "last_used_at": "2026-09-02T00:00:00+00:00",
                     "upstream_missing_at": null,
                 }],
                 "history": [{
-                    "tag": "stable",
+                    "alias": "stable",
                     "from_digest": "sha256:aa",
                     "to_digest": "sha256:bb",
                     "actor": null,
-                    "moved_at": "2026-09-03T00:00:00+00:00",
+                    "recorded_at": "2026-09-03T00:00:00+00:00",
                 }],
             })
         );

@@ -29,8 +29,8 @@ type ImageDetail struct {
 	Curated bool `json:"curated"`
 	// The exact reference a curated image resolves to. Null for catalog images, which resolve through their versions
 	CuratedRef NullableString `json:"curatedRef"`
-	// Tags recorded for this image. Empty for curated images, whose reference the operator pins
-	Tags []string `json:"tags"`
+	// Aliases recorded for this image. Empty for curated images, whose reference the operator pins
+	Aliases []string `json:"aliases"`
 	// How many pulled manifest digests this image holds
 	VersionCount float32 `json:"versionCount"`
 	// Sum of the pulled versions’ declared sizes, in bytes. Layers shared between versions are counted once per version. Null for curated images, whose bytes this system never measured
@@ -41,8 +41,8 @@ type ImageDetail struct {
 	CreatedAt NullableString `json:"createdAt"`
 	// Every pulled version, newest first
 	Versions []ImageVersion `json:"versions"`
-	// Where each tag has pointed, newest first and at most 100 events. Empty for curated images
-	History []ImageTagEvent `json:"history"`
+	// Alias registration history, newest first and at most 100 events. Empty for curated images
+	History []ImageAliasEvent `json:"history"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -52,13 +52,13 @@ type _ImageDetail ImageDetail
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewImageDetail(name string, id NullableString, curated bool, curatedRef NullableString, tags []string, versionCount float32, sizeBytes NullableFloat32, lastUsedAt NullableString, createdAt NullableString, versions []ImageVersion, history []ImageTagEvent) *ImageDetail {
+func NewImageDetail(name string, id NullableString, curated bool, curatedRef NullableString, aliases []string, versionCount float32, sizeBytes NullableFloat32, lastUsedAt NullableString, createdAt NullableString, versions []ImageVersion, history []ImageAliasEvent) *ImageDetail {
 	this := ImageDetail{}
 	this.Name = name
 	this.Id = id
 	this.Curated = curated
 	this.CuratedRef = curatedRef
-	this.Tags = tags
+	this.Aliases = aliases
 	this.VersionCount = versionCount
 	this.SizeBytes = sizeBytes
 	this.LastUsedAt = lastUsedAt
@@ -176,28 +176,28 @@ func (o *ImageDetail) SetCuratedRef(v string) {
 	o.CuratedRef.Set(&v)
 }
 
-// GetTags returns the Tags field value
-func (o *ImageDetail) GetTags() []string {
+// GetAliases returns the Aliases field value
+func (o *ImageDetail) GetAliases() []string {
 	if o == nil {
 		var ret []string
 		return ret
 	}
 
-	return o.Tags
+	return o.Aliases
 }
 
-// GetTagsOk returns a tuple with the Tags field value
+// GetAliasesOk returns a tuple with the Aliases field value
 // and a boolean to check if the value has been set.
-func (o *ImageDetail) GetTagsOk() ([]string, bool) {
+func (o *ImageDetail) GetAliasesOk() ([]string, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.Tags, true
+	return o.Aliases, true
 }
 
-// SetTags sets field value
-func (o *ImageDetail) SetTags(v []string) {
-	o.Tags = v
+// SetAliases sets field value
+func (o *ImageDetail) SetAliases(v []string) {
+	o.Aliases = v
 }
 
 // GetVersionCount returns the VersionCount field value
@@ -327,9 +327,9 @@ func (o *ImageDetail) SetVersions(v []ImageVersion) {
 }
 
 // GetHistory returns the History field value
-func (o *ImageDetail) GetHistory() []ImageTagEvent {
+func (o *ImageDetail) GetHistory() []ImageAliasEvent {
 	if o == nil {
-		var ret []ImageTagEvent
+		var ret []ImageAliasEvent
 		return ret
 	}
 
@@ -338,7 +338,7 @@ func (o *ImageDetail) GetHistory() []ImageTagEvent {
 
 // GetHistoryOk returns a tuple with the History field value
 // and a boolean to check if the value has been set.
-func (o *ImageDetail) GetHistoryOk() ([]ImageTagEvent, bool) {
+func (o *ImageDetail) GetHistoryOk() ([]ImageAliasEvent, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -346,7 +346,7 @@ func (o *ImageDetail) GetHistoryOk() ([]ImageTagEvent, bool) {
 }
 
 // SetHistory sets field value
-func (o *ImageDetail) SetHistory(v []ImageTagEvent) {
+func (o *ImageDetail) SetHistory(v []ImageAliasEvent) {
 	o.History = v
 }
 
@@ -364,7 +364,7 @@ func (o ImageDetail) ToMap() (map[string]interface{}, error) {
 	toSerialize["id"] = o.Id.Get()
 	toSerialize["curated"] = o.Curated
 	toSerialize["curatedRef"] = o.CuratedRef.Get()
-	toSerialize["tags"] = o.Tags
+	toSerialize["aliases"] = o.Aliases
 	toSerialize["versionCount"] = o.VersionCount
 	toSerialize["sizeBytes"] = o.SizeBytes.Get()
 	toSerialize["lastUsedAt"] = o.LastUsedAt.Get()
@@ -388,7 +388,7 @@ func (o *ImageDetail) UnmarshalJSON(data []byte) (err error) {
 		"id",
 		"curated",
 		"curatedRef",
-		"tags",
+		"aliases",
 		"versionCount",
 		"sizeBytes",
 		"lastUsedAt",
@@ -428,7 +428,7 @@ func (o *ImageDetail) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "id")
 		delete(additionalProperties, "curated")
 		delete(additionalProperties, "curatedRef")
-		delete(additionalProperties, "tags")
+		delete(additionalProperties, "aliases")
 		delete(additionalProperties, "versionCount")
 		delete(additionalProperties, "sizeBytes")
 		delete(additionalProperties, "lastUsedAt")

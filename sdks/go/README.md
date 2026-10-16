@@ -140,11 +140,12 @@ fmt.Println(pull.Reference, pull.ConfigDigest, pull.LayerCount)
 | Method | Local runtime | REST runtime |
 |--------|---------------|--------------|
 | `Pull` | Pulls into the cache | `ErrUnsupported`: creating a box pulls |
-| `List` | One row per cached reference | One row per catalog tag |
+| `List` | One row per cached reference | Catalog alias and digest references |
 | `Get` | The cache entries under the name | The catalog entry with its versions |
 | `Remove` | Forgets the name; layers stay | Removes the catalog entry; `ErrInvalidState` while a box can boot from it |
 | `Usage` | `ErrUnsupported` | `ImageUsage{Count, Limit, KnownBytes}` |
-| `MoveTag` | `ErrUnsupported`: a cache resolves a tag afresh for each new box | Points the tag at the version with that digest; boxes already created keep theirs |
+| `CreateAlias` | `ErrUnsupported` | Creates a new alias; existing names conflict |
+| `DeleteAlias` | `ErrUnsupported` | Removes only the named alias |
 
 `Get` and `Remove` take an image name such as `"docker.io/library/alpine"`. A
 reference with a tag or digest fails with `ErrInvalidArgument`, since a remove
@@ -154,24 +155,29 @@ takes every tag of the name; a name the runtime does not hold fails with
 from a removed image reads the image's configuration from the registry when it
 next starts.
 
-`MoveTag(ctx, name, tag, digest)` takes a tag the OCI distribution spec accepts
-and a `sha256:` digest; either malformed fails with `ErrInvalidArgument` before
-anything is sent. A catalog fills each version's `Tags`, `LastUsedAt` and
-`UpstreamMissingAt` (nil when unset) and the detail's `History` of tag moves,
-newest first. `FromDigest` is empty for a new tag, and `Actor` is empty when a
-pull records the event. A local cache fills only `Tags`.
+`CreateAlias(ctx, name, alias, digest)` creates a new catalog binding to an
+existing ready digest. An existing name returns `ErrAlreadyExists`, including
+an identical binding. `DeleteAlias(ctx, name, alias)` removes only the binding;
+an absent alias returns `ErrNotFound`. Neither operation changes registry tags,
+versions or existing boxes. Local runtimes return `ErrUnsupported`.
 
-Like other image operations, `MoveTag` honors context cancellation while waiting
-for a reply and rejects calls after the image handle or runtime has closed.
+`ImageDetail.Aliases` and `ImageVersion.Aliases` hold catalog aliases. History
+entries are `ImageAliasEvent` values with `Alias` and `RecordedAt`. Registry
+tags remain in image references and `ImageInfo.Tag`.
 
 ### Private Registry Logins
 
-On a runtime from `NewRest`, `rt.Registries()` manages the logins the server
+On a runtime from `NewRest`, `images.Registries()` after `rt.Images()` manages the logins the server
 pulls private images with. A runtime from `NewRuntime` returns
 `ErrUnsupported`: pass `WithImageRegistries` instead.
 
 ```go
-registries, err := rt.Registries()
+images, err := rt.Images()
+if err != nil {
+	log.Fatal(err)
+}
+defer images.Close()
+registries, err := images.Registries()
 if err != nil {
 	log.Fatal(err)
 }
