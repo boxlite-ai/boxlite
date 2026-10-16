@@ -205,11 +205,15 @@ serves and the events it emits are catalogued below alongside its routes.
 <details>
 <summary><b>Image catalog</b> · 5 routes</summary>
 
+`upstreamMissingAt` records when a pull first found a version missing upstream.
+`null` means no pull has recorded that observation; it does not confirm current
+registry availability.
+
 | Method   | Path                               | What it does                                                                                                                |
 | -------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `GET`    | `/api/images`                      | Lists the organization's images together with the operator's curated set.                                                   |
 | `GET`    | `/api/images/usage`                | Counts held images against the limit and sums the sizes their versions declared.                                            |
-| `GET`    | `/api/images/{idOrRef}`            | Gets an image, its versions with their tags, last use and whether the registry still has them, and the last 100 tag events. |
+| `GET`    | `/api/images/{idOrRef}`            | Gets an image, its versions with their tags, last-use and upstream-missing timestamps, and the last 100 tag events. |
 | `PUT`    | `/api/images/{idOrRef}/tags/{tag}` | Points a tag at a ready version and records the move; boxes already created keep their version.                             |
 | `DELETE` | `/api/images/{idOrRef}`            | Removes the catalog entry, not the bytes, unless a box can still boot from it (409 lists the boxes).                        |
 

@@ -81,6 +81,7 @@ async def fresh_image(rt):
     try:
         await rt.images.remove(NAME)
     except boxlite.NotFoundError:
+        # An absent entry already satisfies the empty-catalog precondition.
         pass
     yield
     try:
