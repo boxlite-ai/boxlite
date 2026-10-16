@@ -87,4 +87,16 @@ describe('OrganizationAccessGuard', () => {
     expect(mocks.organizationService.findOne).not.toHaveBeenCalled()
     expect(mocks.organizationUserService.findOne).not.toHaveBeenCalled()
   })
+
+  // The membership lookup answers for any user: TypeORM drops a where condition
+  // whose value is undefined, so a lookup without a user id returns a member.
+  it('refuses a machine credential, which names no user, in any organization', async () => {
+    const { guard } = createGuard()
+    const request = {
+      params: { prefix: 'org-123' },
+      user: { role: 'runner', runnerId: 'runner-1' },
+    }
+
+    await expect(guard.canActivate(httpContext(request))).resolves.toBe(false)
+  })
 })

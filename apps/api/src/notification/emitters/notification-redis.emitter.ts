@@ -82,4 +82,8 @@ export class NotificationRedisEmitter extends NotificationEmitter implements OnM
     }
     this.emitter.to(organizationId).emit(RunnerEvents.UNSCHEDULABLE_UPDATED, runner)
   }
+
+  leaveOrganizationRoom(userId: string, organizationId: string) {
+    this.emitter.in(userId).socketsLeave(organizationId)
+  }
 }

@@ -15,6 +15,28 @@ const base = { STACK_DOMAIN: 'dev.boxlite.ai', OIDC_ISSUER_BASE_URL: 'https://au
 const assemble = (environment: Record<string, string | undefined>, declaration = groups([])) =>
   apiEnvironmentFrom({ environment, declaration, region: 'ap-southeast-1', stage: 'dev', home: 'aws' })
 
+test('the declared API group delivers the organization invitation lifetime on both clouds', () => {
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+  const apiKeys = declared.envSelectGroup.api
+  const optionalKeys = declared.envOptional.api
+  assert.ok(apiKeys)
+  assert.ok(optionalKeys)
+  const required = Object.fromEntries(
+    apiKeys.filter((key) => !optionalKeys.includes(key)).map((key) => [key, 'fixture']),
+  )
+  for (const home of ['aws', 'gcp'] as const) {
+    const { environment } = apiEnvironmentFrom({
+      environment: { ...base, ...required, ORGANIZATION_INVITATION_TTL_SECONDS: '3600' },
+      declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
+      region: 'us-east1',
+      stage: 'dev',
+      home,
+    })
+    assert.equal(environment.ORGANIZATION_INVITATION_TTL_SECONDS, '3600', home)
+  }
+})
+
 test('the two dashboard origins are different on purpose, and both have a default', () => {
   // Static assets go through the CDN at the root domain; the dashboard's API
   // client talks to api.<domain> directly, because the CDN caps a WebSocket at

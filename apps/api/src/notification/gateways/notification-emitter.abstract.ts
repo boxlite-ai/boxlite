@@ -31,4 +31,6 @@ export abstract class NotificationEmitter {
     newState: RunnerState,
   ): void
   abstract emitRunnerUnschedulableUpdated(runner: RunnerDto, organizationId: string | null): void
+  /** Takes every socket of the user out of the organization room, across all gateway nodes. */
+  abstract leaveOrganizationRoom(userId: string, organizationId: string): void
 }

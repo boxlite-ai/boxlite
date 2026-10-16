@@ -6,13 +6,15 @@
 
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { EntityManager, Repository, ArrayOverlap } from 'typeorm'
+import { EntityManager, Repository, ArrayOverlap, FindOptionsWhere } from 'typeorm'
 import { ApiKey } from './api-key.entity'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { RedisLockProvider } from '../box/common/redis-lock.provider'
 import { OnAsyncEvent } from '../common/decorators/on-async-event.decorator'
 import { OrganizationEvents } from '../organization/constants/organization-events.constant'
 import { OrganizationResourcePermissionsUnassignedEvent } from '../organization/events/organization-resource-permissions-unassigned.event'
+import { OrganizationUserRemovedEvent } from '../organization/events/organization-user-removed.event'
+import { TransactionalEvent } from '../common/events/transactional.event'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import {
@@ -200,14 +202,31 @@ export class ApiKeyService {
   async handleOrganizationResourcePermissionsUnassignedEvent(
     payload: OrganizationResourcePermissionsUnassignedEvent,
   ): Promise<void> {
-    const apiKeysToRevoke = await this.apiKeyRepository.find({
-      where: {
-        organizationId: payload.organizationId,
-        userId: payload.userId,
-        permissions: ArrayOverlap(payload.unassignedPermissions),
-      },
+    await this.revokeWithinTransaction(payload, {
+      organizationId: payload.organizationId,
+      userId: payload.userId,
+      permissions: ArrayOverlap(payload.unassignedPermissions),
     })
+  }
 
-    await Promise.all(apiKeysToRevoke.map((apiKey) => this.deleteWithEntityManager(payload.entityManager, apiKey)))
+  @OnAsyncEvent({
+    event: OrganizationEvents.USER_REMOVED,
+  })
+  async handleOrganizationUserRemovedEvent(payload: OrganizationUserRemovedEvent): Promise<void> {
+    await this.revokeWithinTransaction(payload, {
+      organizationId: payload.organizationId,
+      userId: payload.userId,
+    })
+  }
+
+  // Deletes the keys in the event's transaction, and clears their cached validation
+  // only once it commits.
+  private async revokeWithinTransaction(event: TransactionalEvent, where: FindOptionsWhere<ApiKey>): Promise<void> {
+    const apiKeysToRevoke = await event.entityManager.find(ApiKey, { where })
+
+    await event.entityManager.remove(apiKeysToRevoke)
+    event.afterCommit(async () => {
+      await Promise.all(apiKeysToRevoke.map((apiKey) => this.invalidateApiKeyCache(apiKey.keyHash)))
+    })
   }
 }

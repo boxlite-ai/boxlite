@@ -16,6 +16,13 @@ For a new OIDC setup, follow the selected cloud’s [GCP](gcp/identity-and-mail.
 Other compatible OIDC providers need equivalent manual setup.
 Application invitation mail and the identity provider's verification/reset mail are separate systems.
 
+Invitation emails reuse the black BoxLite wordmark at
+`<DASHBOARD_URL>/auth0/boxlite-black-3f7875da.png`, served by the dashboard's public assets.
+It displays at 32 pixels high with proportional width, matching the Auth0 reset email.
+Keep the asset filename aligned with [Auth0 branding](../auth0/branding/ASSETS.md) when updating the logo.
+The invitation email tests check both the branding path and the referenced public file, so a
+branding migration cannot silently leave emails pointing to a deleted asset.
+
 ## Auth0 email-first login policy
 
 Run this only for a dedicated BoxLite Auth0 tenant. Identifier First is a
@@ -321,6 +328,8 @@ Use the [GCP SMTP procedure](gcp/identity-and-mail.md#application-mail) or
 [AWS SES procedure](aws/identity-and-mail.md#application-mail) for the application sender.
 When mail is disabled, invitations may be created without delivery. Verify application invitations
 and identity-provider verification/reset messages independently.
+An invitation email links to `<DASHBOARD_URL>/dashboard/user/invitations?id=<invitation>`, so set
+`DASHBOARD_URL` to the console's origin, not to a path under it.
 
 ## Universal Login branding
 

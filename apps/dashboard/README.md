@@ -90,3 +90,49 @@ and invalidation after successful changes. Page tests cover confirmation and
 failed submissions; API client tests check that removal refusals retain their
 message through the shared interceptor. Keep these boundaries covered when
 changing registry logins, alongside password cleanup on dialog close.
+
+## Every invitee joins as an owner
+
+An organization has no finer roles yet, so inviting asks only for an email
+address: a role picker would offer choices the product does not have. For the
+same reason a pending invitation can be cancelled but not edited, and a member
+can be removed but not given another role. The member whose personal
+organization this is has no remove action, because the API refuses that
+removal.
+
+The profile menu's Organization entry opens two tabs. General shows the editable
+name and copyable ID. Member combines members and outgoing invitations in one
+table, with Member, Invited, and Expired statuses. Owners can invite, remove members,
+and cancel invitations. Expired invitations offer Remove (with confirmation) and
+Resend. Resending creates a new invitation with the same permissions and the current
+default lifetime, then removes the expired record. Creation failure preserves the
+old row; cleanup failure reports that the new invitation exists and refreshes both
+rows, so the owner can remove the expired one. The old link remains unusable.
+The page shows the current organization's name; switching stays in the profile menu.
+The Member tab can be bookmarked at
+`/dashboard/settings?tab=member`; older `/dashboard/members` links redirect there.
+
+## Accepting an invitation opens the organization
+
+Opening an email invitation link automatically accepts it after sign-in with the
+invited email address. The console preserves the link through sign-in and makes
+one acceptance request per visit, including under React effect replay. Expired,
+cancelled, or mismatched invitations show an error and keep the current organization.
+
+Email links are the only console entry for accepting invitations; there is no
+personal invitation list or pending-count badge. Successful acceptance refreshes
+the organization list, switches to the joined organization, and opens its Member tab.
+Existing emailed URLs remain valid. Opening `/dashboard/user/invitations` without
+an invitation ID redirects to the current organization's Member tab without accepting anything.
+
+The new selection is saved only after membership validation succeeds. If switching
+fails, acceptance still succeeds. The page explains that joining succeeded and
+asks the user to switch through the profile menu. The console keeps the previous
+organization both on screen and for the next reload.
+
+## The organization you pick is the one you come back to
+
+A user in more than one organization switches between them from the profile
+menu, which marks the personal one. The pick is kept in `localStorage`, so the
+next login opens the same organization; if the user was removed from it in the
+meantime, the console falls back to their personal organization.

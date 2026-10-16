@@ -21,6 +21,7 @@ interface CancelOrganizationInvitationDialogProps {
   onOpenChange: (open: boolean) => void
   onCancelInvitation: () => Promise<boolean>
   loading: boolean
+  expired?: boolean
 }
 
 export const CancelOrganizationInvitationDialog: React.FC<CancelOrganizationInvitationDialogProps> = ({
@@ -28,6 +29,7 @@ export const CancelOrganizationInvitationDialog: React.FC<CancelOrganizationInvi
   onOpenChange,
   onCancelInvitation,
   loading,
+  expired = false,
 }) => {
   const handleCancelInvitation = async () => {
     const success = await onCancelInvitation()
@@ -40,9 +42,11 @@ export const CancelOrganizationInvitationDialog: React.FC<CancelOrganizationInvi
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Cancel Invitation</DialogTitle>
+          <DialogTitle>{expired ? 'Remove Invitation' : 'Cancel Invitation'}</DialogTitle>
           <DialogDescription>
-            Are you sure you want to cancel this invitation to join the organization?
+            {expired
+              ? 'Remove this expired invitation from the organization member list?'
+              : 'Are you sure you want to cancel this invitation to join the organization?'}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -57,7 +61,7 @@ export const CancelOrganizationInvitationDialog: React.FC<CancelOrganizationInvi
             </Button>
           ) : (
             <Button variant="destructive" onClick={handleCancelInvitation}>
-              Confirm
+              {expired ? 'Remove' : 'Confirm'}
             </Button>
           )}
         </DialogFooter>

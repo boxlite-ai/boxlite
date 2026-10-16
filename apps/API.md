@@ -14,8 +14,8 @@ The inventory is implementation-grounded:
   prefix applied in [`main.ts`](./api/src/main.ts).
 - Hosted BoxLite-compatible routes come from the controllers in
   [`boxlite-rest`](./api/src/boxlite-rest/). They are excluded from the product
-  OpenAPI document because their portable contract lives in
-  [`openapi/box.openapi.yaml`](../openapi/box.openapi.yaml).
+  OpenAPI document because their contracts live in [`openapi/box.openapi.yaml`](../openapi/box.openapi.yaml)
+  and, for cloud-only members and invitations, [`openapi/tenant.openapi.yaml`](../openapi/tenant.openapi.yaml).
 - The registry proxy's runner credential lookup is an internal service route.
   It is excluded from the Cloud OpenAPI document and generated customer clients;
   the proxy owns its request and response handling.
@@ -120,23 +120,23 @@ serves and the events it emits are catalogued below alongside its routes.
 | `DELETE` | `/api/organizations/{organizationId}`                                    | Deletes an organization.                                 |
 | `PATCH`  | `/api/organizations/{organizationId}/name`                               | Changes an organization's name.                          |
 | `PATCH`  | `/api/organizations/{organizationId}/default-region`                     | Sets the organization's default region.                  |
-| `POST`   | `/api/organizations/{organizationId}/leave`                              | Removes the caller from the organization.                |
+| `POST`   | `/api/organizations/{organizationId}/leave`                              | Removes the caller and revokes their API keys here.      |
 | `POST`   | `/api/organizations/{organizationId}/suspend`                            | Suspends the organization.                               |
 | `POST`   | `/api/organizations/{organizationId}/unsuspend`                          | Restores a suspended organization.                       |
 | `GET`    | `/api/organizations/by-box-id/{boxId}`                                   | Resolves the organization that owns a box.               |
 | `POST`   | `/api/organizations/{organizationId}/box-default-limited-network-egress` | Changes the default limited-egress policy for new boxes. |
 | `PUT`    | `/api/organizations/{organizationId}/experimental-config`                | Replaces the organization's experimental configuration.  |
 | `GET`    | `/api/organizations/{organizationId}/users`                              | Lists organization members.                              |
-| `POST`   | `/api/organizations/{organizationId}/users/{userId}/access`              | Changes a member's organization access.                  |
-| `DELETE` | `/api/organizations/{organizationId}/users/{userId}`                     | Removes a member from the organization.                  |
+| `POST`   | `/api/organizations/{organizationId}/users/{userId}/access`              | Changes access; refuses to demote a default-org creator. |
+| `DELETE` | `/api/organizations/{organizationId}/users/{userId}`                     | Removes a member and revokes their API keys here.        |
 | `GET`    | `/api/organizations/invitations`                                         | Lists invitations addressed to the caller.               |
 | `GET`    | `/api/organizations/invitations/count`                                   | Counts invitations addressed to the caller.              |
 | `POST`   | `/api/organizations/invitations/{invitationId}/accept`                   | Accepts an organization invitation.                      |
 | `POST`   | `/api/organizations/invitations/{invitationId}/decline`                  | Declines an organization invitation.                     |
-| `GET`    | `/api/organizations/{organizationId}/invitations`                        | Lists the organization's pending invitations.            |
+| `GET`    | `/api/organizations/{organizationId}/invitations`                        | Lists pending invitations, including expired ones.       |
 | `POST`   | `/api/organizations/{organizationId}/invitations`                        | Creates an organization invitation.                      |
 | `PUT`    | `/api/organizations/{organizationId}/invitations/{invitationId}`         | Changes a pending invitation.                            |
-| `POST`   | `/api/organizations/{organizationId}/invitations/{invitationId}/cancel`  | Cancels a pending invitation.                            |
+| `POST`   | `/api/organizations/{organizationId}/invitations/{invitationId}/cancel`  | Cancels a pending invitation, even after expiry.          |
 
 </details>
 
@@ -345,7 +345,7 @@ release fetched over HTTPS.
 
 | Protocol                 | Path, topic, or event          | What it does                                                                                                                           |
 | ------------------------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Socket.IO over WebSocket | `/api/socket.io/`              | Authenticates a JWT or API key, joins user and organization rooms, and streams resource notifications.                                 |
+| Socket.IO over WebSocket | `/api/socket.io/`              | Authenticates a JWT or API key and joins the user room, plus the organization room for members only; removal ejects the member. |
 | Socket.IO event          | `box.created`                  | Notifies an organization that a box was created.                                                                                       |
 | Socket.IO event          | `box.state.updated`            | Notifies an organization that a box's observed state changed.                                                                          |
 | Socket.IO event          | `box.desired-state.updated`    | Notifies an organization that a box's desired state changed.                                                                           |
@@ -506,6 +506,33 @@ whose resolved proxy reference has lost its credential is also rejected before
 it is saved. Once a dependent box commits, deletion returns 409 with its ID.
 The dependency check reads candidate credentials once for the organization and
 registry host, then matches each box in memory using the longest repository prefix.
+
+</details>
+
+<details>
+<summary><b>Members and invitations</b> · 5 routes</summary>
+
+Contract: [`openapi/tenant.openapi.yaml`](../openapi/tenant.openapi.yaml), cloud-only and meant for the CLI
+and SDKs, which do not call it yet. Reads need membership; writes need the owner role. Any API key
+of an owner qualifies, whatever permissions it was created with.
+Invitees accept in the console, through `/api/organizations/invitations/{invitationId}/accept`.
+Email links accept automatically after sign-in with the invited email address.
+New invitations without an explicit `expiresAt` (Cloud API) or `expires_at` (Tenant API)
+use `ORGANIZATION_INVITATION_TTL_SECONDS`, defaulting to `604800` (seven days).
+Changing this deployment setting leaves existing deadlines unchanged; see
+[invitation link lifetime](./infra/docs/configuration.md#invitation-link-lifetime).
+
+Expired pending invitations can be cancelled but cannot be accepted. The Cloud API
+organization listing retains them for console removal or resending; the Tenant API
+and personal incoming-invitation listings return only unexpired pending invitations.
+
+| Method   | Path                                                   | What it does                                                        |
+| -------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
+| `GET`    | `/api/v1[/{prefix}]/members`                           | Lists the organization's members.                                   |
+| `DELETE` | `/api/v1[/{prefix}]/members/{user_id}`                 | Removes a member and revokes their API keys in the organization.    |
+| `POST`   | `/api/v1[/{prefix}]/invitations`                       | Invites an email as an owner; `409` if already a member or invited. |
+| `GET`    | `/api/v1[/{prefix}]/invitations`                       | Lists pending, unexpired invitations.                               |
+| `DELETE` | `/api/v1[/{prefix}]/invitations/{invitation_id}`       | Cancels a pending invitation; `409` once it is no longer pending.   |
 
 </details>
 
