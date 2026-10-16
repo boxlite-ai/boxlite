@@ -45,6 +45,11 @@ describe('isNonPublicAddress', () => {
     '64:ff9b::a9fe:a9fe',
     '64:ff9b:1::a9fe:a9fe',
     '2002:a9fe:a9fe::',
+    // Each form carries every range of the table, not only the /16 above.
+    '::ffff:100.64.0.1',
+    '::10.0.0.1',
+    '64:ff9b::ac1f:ffff',
+    '2002:6440:1::',
     // Not an address at all: a resolver answer this check cannot vouch for.
     'not-an-address',
   ])('refuses %s', (address) => {
@@ -67,6 +72,11 @@ describe('isNonPublicAddress', () => {
     '2606:4700:4700::1111',
     '2606:4700:4700:0:0:0:0:1111',
     '2002:0101:0101::',
+    // The edge of a range, in each form: one address outside it is public.
+    '::ffff:8.8.8.8',
+    '::808:808',
+    '64:ff9b::ac20:1',
+    '2002:6480:1::',
   ])('keeps %s reachable', (address) => {
     expect(isNonPublicAddress(address)).toBe(false)
   })

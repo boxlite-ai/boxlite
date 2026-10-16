@@ -64,12 +64,29 @@ describe('image ref utilities', () => {
      * metadata endpoint is told that is why, instead of being handed a registry
      * list and left to guess which entry to copy.
      */
-    it.each(['169.254.169.254', '127.0.0.1', '10.1.2.3', '192.168.0.9', '172.16.0.1', '[::1]', 'localhost'])(
-      'refuses %s and says it resolves inside the deployment',
-      (host) => {
-        expect(() => assertHostIsAllowed(host, ['quay.io'])).toThrow(/resolves inside the deployment/)
-      },
-    )
+    it.each([
+      '169.254.169.254',
+      '127.0.0.1',
+      '10.1.2.3',
+      '192.168.0.9',
+      '172.16.0.1',
+      '[::1]',
+      'localhost',
+      // Every range the admission check refuses, not only the common private ones,
+      // and the shapes IPv6 carries them in.
+      '100.64.0.1',
+      '0.0.0.0:5000',
+      '[::ffff:169.254.169.254]',
+      '[64:ff9b::a9fe:a9fe]:5000',
+    ])('refuses %s and says it resolves inside the deployment', (host) => {
+      expect(() => assertHostIsAllowed(host, ['quay.io'])).toThrow(/resolves inside the deployment/)
+    })
+
+    // A name that only starts like an address is a name: it is refused for not
+    // being on the list, not for pointing inside.
+    it.each(['10.example.com', '127.evil.com:5000'])('refuses %s as a name that is not allowed', (host) => {
+      expect(() => assertHostIsAllowed(host, ['quay.io'])).toThrow(/is not allowed/)
+    })
 
     it('lets an operator name an internal host explicitly', () => {
       // The local stack points at a registry on the loopback. Deciding what

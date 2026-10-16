@@ -32,6 +32,15 @@ for (const [network, prefix] of [
   ['240.0.0.0', 4], // reserved, broadcast included
 ] as const) {
   NON_PUBLIC.addSubnet(network, prefix, 'ipv4')
+  // An IPv4 address in IPv6 clothing is the same address: compatible, the NAT64
+  // well-known prefix a DNS64 resolver synthesizes from an A record
+  // (`64:ff9b::a9fe:a9fe` is the metadata endpoint), and 6to4. The mapped form
+  // (`::ffff:a.b.c.d`) needs no entry: BlockList checks it against the IPv4 rules.
+  const [a, b, c, d] = network.split('.').map(Number)
+  const hex = (high: number, low: number) => ((high << 8) | low).toString(16)
+  NON_PUBLIC.addSubnet(`::${network}`, 96 + prefix, 'ipv6')
+  NON_PUBLIC.addSubnet(`64:ff9b::${network}`, 96 + prefix, 'ipv6')
+  NON_PUBLIC.addSubnet(`2002:${hex(a, b)}:${hex(c, d)}::`, 16 + prefix, 'ipv6')
 }
 for (const [network, prefix] of [
   ['::', 128],
@@ -46,54 +55,15 @@ for (const [network, prefix] of [
   NON_PUBLIC.addSubnet(network, prefix, 'ipv6')
 }
 
-/** The eight 16-bit groups of an IPv6 address, a trailing dotted quad included. */
-function ipv6Groups(address: string): number[] {
-  const quad = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(address)
-  const text = quad
-    ? `${address.slice(0, quad.index)}${((Number(quad[1]) << 8) | Number(quad[2])).toString(16)}:${((Number(quad[3]) << 8) | Number(quad[4])).toString(16)}`
-    : address
-  const groups = (part: string) => (part ? part.split(':').map((group) => parseInt(group, 16)) : [])
-  const [head, tail] = text.split('::')
-  if (tail === undefined) {
-    return groups(head)
-  }
-  const left = groups(head)
-  const right = groups(tail)
-  return [...left, ...new Array<number>(8 - left.length - right.length).fill(0), ...right]
-}
-
 /** Whether no public registry can be at `address`, an IPv4 or IPv6 literal. */
 export function isNonPublicAddress(address: string): boolean {
   const family = isIP(address)
-  if (family === 4) {
-    return NON_PUBLIC.check(address, 'ipv4')
-  }
-  if (family !== 6) {
-    return true
-  }
-  if (NON_PUBLIC.check(address, 'ipv6')) {
-    return true
-  }
-  // An IPv4 address in IPv6 clothing is the same address: mapped, compatible,
-  // the NAT64 well-known prefix a DNS64 resolver synthesizes from an A record
-  // (`64:ff9b::a9fe:a9fe` is the metadata endpoint), and 6to4.
-  const groups = ipv6Groups(address)
-  const ipv4 = (high: number, low: number) => `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`
-  const zero = (from: number, to: number) => groups.slice(from, to).every((group) => group === 0)
-  if (zero(0, 5) && (groups[5] === 0 || groups[5] === 0xffff)) {
-    return isNonPublicAddress(ipv4(groups[6], groups[7]))
-  }
-  if (groups[0] === 0x64 && groups[1] === 0xff9b && zero(2, 6)) {
-    return isNonPublicAddress(ipv4(groups[6], groups[7]))
-  }
-  if (groups[0] === 0x2002) {
-    return isNonPublicAddress(ipv4(groups[1], groups[2]))
-  }
-  return false
+  // Not an address at all: a resolver answer this check cannot vouch for.
+  return family === 0 || NON_PUBLIC.check(address, family === 4 ? 'ipv4' : 'ipv6')
 }
 
 /** The host part of `host[:port]`, with an IPv6 literal's brackets removed. */
-function registryHostname(host: string): string {
+export function registryHostname(host: string): string {
   if (host.startsWith('[')) {
     return host.slice(1, host.indexOf(']'))
   }

@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { isIP } from 'node:net'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { supportedImages } from '../../box/constants/curated-images.constant'
+import { isNonPublicAddress, registryHostname } from './registry-address.util'
 
 /** Env var carrying the registry hosts a box image may be pulled from. */
 const ALLOWLIST_ENV = 'BOXLITE_IMAGE_REGISTRY_ALLOWLIST'
@@ -135,18 +137,8 @@ export function parseImageRef(ref: string): ParsedImageRef {
 
 /** Addresses that resolve inside the deployment rather than out to a registry. */
 function isInternalAddress(host: string): boolean {
-  const hostname = host.replace(/:\d+$/, '').replace(/^\[|\]$/g, '')
-  return (
-    hostname === 'localhost' ||
-    /^127\./.test(hostname) ||
-    /^10\./.test(hostname) ||
-    /^192\.168\./.test(hostname) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
-    /^169\.254\./.test(hostname) ||
-    hostname === '::1' ||
-    /^fe80:/i.test(hostname) ||
-    /^f[cd][0-9a-f]{2}:/i.test(hostname)
-  )
+  const hostname = registryHostname(host)
+  return hostname === 'localhost' || (isIP(hostname) !== 0 && isNonPublicAddress(hostname))
 }
 
 /**
