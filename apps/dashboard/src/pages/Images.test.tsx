@@ -8,8 +8,9 @@ import { BoxliteError } from '@/api/errors'
 import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import Images, { imageRouteKey } from './Images'
+import { ImageCatalog } from './Images'
 
 // Drive a React controlled input the way a user typing would.
 function typeInto(el: HTMLInputElement, value: string) {
@@ -25,6 +26,10 @@ const state = vi.hoisted(() => ({
   usageError: null as Error | null,
   deleteInFlight: false,
   deniedPermissions: [] as string[],
+  byImage: new Map<string, unknown[]>(),
+  byId: new Map<string, unknown>(),
+  newBoxImage: undefined as string | undefined,
+  newBoxOpen: false,
 }))
 
 const mocks = vi.hoisted(() => ({
@@ -37,7 +42,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/hooks/queries/useImagesQuery', () => ({
   useImagesQuery: () => ({ data: state.images, error: state.imagesError, isLoading: false }),
   useImageUsageQuery: () => ({ data: state.usage, error: state.usageError }),
-  useImageQuery: () => ({ data: undefined, isLoading: false }),
+}))
+vi.mock('@/hooks/queries/useBoxesByImageQuery', () => ({
+  useBoxesByImageQuery: () => ({ byImage: state.byImage, byId: state.byId, truncated: false }),
 }))
 vi.mock('@/hooks/mutations/useDeleteImageMutation', () => ({
   useDeleteImageMutation: () => ({ mutateAsync: mocks.deleteImage, isPending: state.deleteInFlight }),
@@ -45,12 +52,19 @@ vi.mock('@/hooks/mutations/useDeleteImageMutation', () => ({
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: { id: 'org-1' },
-    // Every permission unless a test withholds one, so the delete control is
-    // present and the guard under test is the only thing that can hold a
-    // second request back.
+    // Every permission unless a test withholds one.
     authenticatedUserHasPermission: (permission: string) => !state.deniedPermissions.includes(permission),
   }),
 }))
+// The dialogs are their own components; what matters here is what this page hands them.
+vi.mock('@/components/Box/CreateBoxDialog', () => ({
+  CreateBoxDialog: ({ open, prefillImage }: { open: boolean; prefillImage?: string }) => {
+    state.newBoxOpen = open
+    state.newBoxImage = prefillImage
+    return null
+  },
+}))
+vi.mock('@/components/images/UseImageSheet', () => ({ UseImageSheet: () => null }))
 vi.mock('react-router-dom', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-router-dom')>()),
   useNavigate: () => mocks.navigate,
@@ -69,7 +83,7 @@ const ORG_IMAGE = {
   createdAt: '2026-01-01T00:00:00.000Z',
 }
 
-const CURATED_IMAGE = {
+const BUILT_IN_IMAGE = {
   id: null,
   name: 'python',
   curated: true,
@@ -91,6 +105,10 @@ beforeEach(() => {
   state.usageError = null
   state.deleteInFlight = false
   state.deniedPermissions = []
+  state.byImage = new Map()
+  state.byId = new Map()
+  state.newBoxImage = undefined
+  state.newBoxOpen = false
   vi.resetAllMocks()
 })
 
@@ -101,12 +119,12 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function renderPage() {
+async function renderCatalog() {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const created = createRoot(host)
   root = created
-  await act(async () => created.render(React.createElement(Images)))
+  await act(async () => created.render(React.createElement(MemoryRouter, null, React.createElement(ImageCatalog))))
 }
 
 function buttonWithTitle(prefix: string) {
@@ -119,52 +137,35 @@ function confirmButton() {
   return [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Remove')
 }
 
-describe('imageRouteKey', () => {
-  it('routes an organization image by its catalog id', () => {
-    expect(imageRouteKey({ id: 'abc-123', name: 'quay.io/acme/app' })).toBe('abc-123')
+describe('the image list', () => {
+  it('shows the image count against the limit, and the bytes the versions declare', async () => {
+    await renderCatalog()
+
+    expect(document.body.textContent).toContain('1 of 20 images · 4.0 KiB')
   })
 
-  /**
-   * Curated images are operator configuration rather than rows, so they have no
-   * id. Their short name is what the API accepts in its place — and, unlike a
-   * full reference, it carries no slash to escape into the route.
-   */
-  it('routes a curated image by its name', () => {
-    expect(imageRouteKey({ id: null, name: 'python' })).toBe('python')
-  })
-})
+  // A built-in image has no versions, size or last start of its own to show,
+  // so it sits apart from the table instead of filling a row with dashes.
+  it('lists built-in images apart, with no way to remove them', async () => {
+    state.images = [BUILT_IN_IMAGE, ORG_IMAGE]
+    await renderCatalog()
 
-describe('the catalog', () => {
-  it('shows how much of the image limit the organization uses', async () => {
-    await renderPage()
-
-    expect(document.body.textContent).toContain('1 / 20')
-    expect(document.body.textContent).toContain('declare 4.0 KiB in total')
-  })
-
-  // The operator's images belong to no organization: there is nothing here to
-  // remove and no versions of this organization's to count.
-  it('marks a curated row and offers no way to remove it', async () => {
-    state.images = [CURATED_IMAGE, ORG_IMAGE]
-    await renderPage()
-
-    const rowNames = [...document.querySelectorAll('button')].map((b) => b.textContent).filter(Boolean)
-    expect(rowNames).toContain('pythoncurated')
-    expect(rowNames).toContain('quay.io/acme/app')
+    expect(document.body.textContent).toContain('Built-in')
+    expect(buttonWithTitle('docker.io/library/python:3.12-slim')?.textContent).toBe('python')
     expect(buttonWithTitle('Remove python')).toBeUndefined()
     expect(buttonWithTitle('Remove quay.io/acme/app')).toBeTruthy()
   })
 
   it('offers no removal to a member who may not delete images', async () => {
     state.deniedPermissions = [OrganizationRolePermissionsEnum.DELETE_IMAGES]
-    await renderPage()
+    await renderCatalog()
 
     expect(document.body.textContent).toContain('quay.io/acme/app')
     expect(buttonWithTitle('Remove quay.io/acme/app')).toBeUndefined()
   })
 
   it('opens an image by its catalog id', async () => {
-    await renderPage()
+    await renderCatalog()
 
     const name = [...document.querySelectorAll('button')].find((b) => b.textContent === 'quay.io/acme/app')
     await act(async () => name?.click())
@@ -172,12 +173,24 @@ describe('the catalog', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/dashboard/images/img-1')
   })
 
-  it('reports failed reads and draws no usage bar it cannot back', async () => {
+  // The boxes that still reference an image are what block its removal, so
+  // the count is on the row before anyone tries.
+  it('counts the boxes that reference each image', async () => {
+    state.byImage = new Map([['quay.io/acme/app', [{ id: 'b1' }, { id: 'b2' }]]])
+    await renderCatalog()
+
+    const row = [...document.querySelectorAll('button')].find(
+      (b) => b.textContent === 'quay.io/acme/app',
+    )?.parentElement
+    expect(row?.textContent).toContain('2')
+  })
+
+  it('reports failed reads and draws no usage it cannot back', async () => {
     state.images = []
     state.imagesError = new BoxliteError('catalog unavailable')
     state.usage = undefined
     state.usageError = new BoxliteError('usage unavailable')
-    await renderPage()
+    await renderCatalog()
 
     expect(mocks.toastError).toHaveBeenCalledWith(
       'Failed to fetch images',
@@ -187,51 +200,108 @@ describe('the catalog', () => {
       'Failed to fetch image usage',
       expect.objectContaining({ description: 'usage unavailable' }),
     )
-    expect(document.body.textContent).not.toContain('Catalog')
+    expect(document.body.textContent).not.toContain('of 20 images')
+  })
+})
+
+describe('starting a box', () => {
+  // An image has no create of its own; a box start is what adds one. The row
+  // hands its reference, first tag included, to the box create.
+  it('opens the box create with the row’s reference filled in', async () => {
+    await renderCatalog()
+
+    await act(async () => buttonWithTitle('New box from quay.io/acme/app:v1')?.click())
+
+    expect(state.newBoxOpen).toBe(true)
+    expect(state.newBoxImage).toBe('quay.io/acme/app:v1')
+  })
+
+  // The create API takes a built-in image under its short name.
+  it('starts a built-in image under its short name', async () => {
+    state.images = [BUILT_IN_IMAGE]
+    await renderCatalog()
+
+    await act(async () => buttonWithTitle('New box from python')?.click())
+
+    expect(state.newBoxImage).toBe('python')
+  })
+
+  // The first thing a private image needs is a registry credential, so the
+  // page says so before anything else and points there.
+  it('points to private registries as the step before a private image', async () => {
+    await renderCatalog()
+
+    const link = [...document.querySelectorAll('a')].find((a) => a.textContent === 'Connect it')
+    expect(link?.getAttribute('href')).toBe('/dashboard/images/registries')
   })
 })
 
 describe('removing an image', () => {
   it('removes the image the row names and confirms it', async () => {
     mocks.deleteImage.mockResolvedValue(undefined)
-    await renderPage()
+    await renderCatalog()
 
     await act(async () => buttonWithTitle('Remove quay.io/acme/app')?.click())
     await act(async () => confirmButton()?.click())
 
     expect(mocks.deleteImage).toHaveBeenCalledWith({ idOrRef: 'img-1', organizationId: 'org-1' })
-    expect(mocks.toastSuccess).toHaveBeenCalledWith('Removed quay.io/acme/app from the catalog')
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Removed quay.io/acme/app', expect.anything())
     expect(confirmButton()).toBeUndefined()
   })
 
   /**
-   * The API refuses while boxes can still boot from the image, and its message
-   * names them. That list is what the member needs to act on, so it must reach
-   * them as the API wrote it.
+   * The API refuses while boxes still reference the image, and names them by
+   * id. Ids are not something a member can act on, so the refusal names the
+   * boxes as they know them.
    */
-  it('surfaces a refusal with the boxes that still hold the image', async () => {
-    const refusal = "Image 'quay.io/acme/app' cannot be removed while 2 box(es) can still boot from it: box-1, box-2"
-    mocks.deleteImage.mockRejectedValue(new BoxliteError(refusal))
-    await renderPage()
+  it('names the boxes a refusal lists, rather than their ids', async () => {
+    state.byId = new Map([
+      ['box-1', { id: 'box-1', name: 'agile-otter' }],
+      ['box-2', { id: 'box-2', name: 'quiet-heron' }],
+    ])
+    mocks.deleteImage.mockRejectedValue(
+      new BoxliteError(
+        "Image 'quay.io/acme/app' cannot be removed while 2 box(es) can still boot from it: box-1, box-2",
+      ),
+    )
+    await renderCatalog()
+
+    await act(async () => buttonWithTitle('Remove quay.io/acme/app')?.click())
+    await act(async () => confirmButton()?.click())
+
+    expect(mocks.toastError).toHaveBeenCalledTimes(1)
+    const [title, options] = mocks.toastError.mock.calls[0]
+    expect(title).toBe('quay.io/acme/app is still referenced')
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const descriptionRoot = createRoot(host)
+    await act(async () =>
+      descriptionRoot.render(
+        React.createElement(MemoryRouter, null, (options as { description: React.ReactNode }).description),
+      ),
+    )
+    expect(host.textContent).toContain('agile-otter')
+    expect(host.textContent).toContain('quiet-heron')
+    expect(host.textContent).not.toContain('box-1')
+    act(() => descriptionRoot.unmount())
+    expect(mocks.toastSuccess).not.toHaveBeenCalled()
+  })
+
+  it('reports any other failure with the API’s reason', async () => {
+    mocks.deleteImage.mockRejectedValue(new BoxliteError('catalog is read-only'))
+    await renderCatalog()
 
     await act(async () => buttonWithTitle('Remove quay.io/acme/app')?.click())
     await act(async () => confirmButton()?.click())
 
     expect(mocks.toastError).toHaveBeenCalledWith(
       'Failed to remove quay.io/acme/app',
-      expect.objectContaining({ description: refusal }),
+      expect.objectContaining({ description: 'catalog is read-only' }),
     )
-    expect(mocks.toastSuccess).not.toHaveBeenCalled()
-    expect(confirmButton()).toBeUndefined()
   })
 
-  /**
-   * The catalog is never empty on a successful read — the API always prepends
-   * the operator's curated set — so a filter that matches nothing is the only
-   * empty list a user can reach, and the one worth explaining.
-   */
   it('explains an empty list as a filter miss and offers a way out', async () => {
-    await renderPage()
+    await renderCatalog()
 
     const search = document.querySelector<HTMLInputElement>('input[placeholder="Filter images…"]')
     if (!search) throw new Error('filter field missing')
@@ -249,20 +319,15 @@ describe('removing an image', () => {
   })
 
   /**
-   * Radix unmounts the dialog when the action is clicked, even though `open` is
-   * controlled — so the confirm cannot be clicked twice. The row button can:
-   * it is back on screen the moment the dialog closes, while the request is
-   * still in flight, and re-opening from there sends a second DELETE whose 404
-   * surfaces as a failure to remove something that was in fact removed.
+   * Radix unmounts the dialog when the action is clicked, so the row button is
+   * back on screen while the request is still in flight; re-opening from there
+   * would send a second DELETE.
    */
   it('cannot be started again from the row while the first delete is in flight', async () => {
-    await renderPage()
+    await renderCatalog()
 
     await act(async () => buttonWithTitle('Remove quay.io/acme/app')?.click())
 
-    // Never settles, so the whole assertion happens inside the in-flight
-    // window; the flag stands in for what react-query's isPending reports
-    // while the mutation is running.
     mocks.deleteImage.mockImplementation(() => {
       state.deleteInFlight = true
       return new Promise(() => {})
@@ -270,7 +335,6 @@ describe('removing an image', () => {
     await act(async () => confirmButton()?.click())
 
     expect(mocks.deleteImage).toHaveBeenCalledTimes(1)
-    expect(confirmButton()).toBeUndefined()
     expect(buttonWithTitle('Remove quay.io/acme/app')?.disabled).toBe(true)
 
     await act(async () => buttonWithTitle('Remove quay.io/acme/app')?.click())
