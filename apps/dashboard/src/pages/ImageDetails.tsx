@@ -7,18 +7,32 @@ import { AsciiButton, Panel, PanelNote, SectionTitle } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import { UseImageSheet } from '@/components/images/UseImageSheet'
 import { BoxState } from '@/components/BoxTable/BoxState'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { ArrowLeft } from '@/components/ui/icon'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { RoutePath } from '@/enums/RoutePath'
+import { usePinImageTagMutation, useUnpinImageTagMutation } from '@/hooks/mutations/useImageAliasMutations'
 import { useBoxesByImageQuery } from '@/hooks/queries/useBoxesByImageQuery'
 import { useImageQuery } from '@/hooks/queries/useImagesQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
 import { formatBytes, timeAgo } from '@/lib/format'
-import { imageStartRef, shortDigest } from '@/lib/image-ref'
+import { imageStartRef, shortDigest, TAG_PATTERN } from '@/lib/image-ref'
 import { cn } from '@/lib/utils'
 import { ImageDetail, ImageVersion, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import React, { useEffect, useMemo, useState } from 'react'
 import { generatePath, Link, useNavigate, useParams } from 'react-router-dom'
+import { toast } from 'sonner'
 
 const TAG_GRID = 'grid grid-cols-[0.8fr_1.6fr_1fr_80px] items-center gap-3 px-2'
 const VERSION_GRID = 'grid grid-cols-[1.3fr_0.8fr_0.5fr_1.2fr_0.6fr_0.6fr_90px] items-center gap-3 px-2'
@@ -56,18 +70,24 @@ function EmptyRow({ children }: { children: React.ReactNode }) {
  * reference it, and when each tag was pinned.
  *
  * A tag here is pinned: it keeps the digest it first resolved to, whatever
- * the registry's tag does later.
+ * the registry's tag does later. Pinning and unpinning are the two writes the
+ * API offers; there is no move, so repointing is an unpin and a pin.
  */
 const ImageDetails: React.FC = () => {
   const navigate = useNavigate()
   const { idOrRef } = useParams<{ idOrRef: string }>()
-  const { organizationMembers, authenticatedUserHasPermission } = useSelectedOrganization()
+  const { selectedOrganization, organizationMembers, authenticatedUserHasPermission } = useSelectedOrganization()
   const { data: image, isLoading, error } = useImageQuery(idOrRef)
   const { byImage, truncated } = useBoxesByImageQuery()
+  const pinTag = usePinImageTagMutation()
+  const unpinTag = useUnpinImageTagMutation()
 
+  const canWrite = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_IMAGES)
   const canCreateBox = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
   const [newBoxImage, setNewBoxImage] = useState<string | null>(null)
   const [codeRef, setCodeRef] = useState<string | null>(null)
+  const [pinning, setPinning] = useState(false)
+  const [pinForm, setPinForm] = useState({ alias: '', versionId: '' })
 
   useEffect(() => {
     if (error) handleApiError(error, 'Failed to fetch image')
@@ -82,6 +102,42 @@ const ImageDetails: React.FC = () => {
     [organizationMembers],
   )
   const boxes = image ? (byImage.get(image.name) ?? []) : []
+  const readyVersions = image?.versions ?? []
+
+  const openPin = () => {
+    setPinForm({ alias: '', versionId: readyVersions[0]?.id ?? '' })
+    setPinning(true)
+  }
+
+  const handlePin = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!image || !idOrRef) return
+    try {
+      await pinTag.mutateAsync({ idOrRef, ...pinForm, organizationId: selectedOrganization?.id })
+      const version = versionsById.get(pinForm.versionId)
+      toast.success(`Pinned ${pinForm.alias}`, {
+        description: version ? `${image.name}:${pinForm.alias} now starts ${shortDigest(version.digest)}` : undefined,
+      })
+      setPinning(false)
+    } catch (err) {
+      handleApiError(err, `Could not pin ${pinForm.alias}`)
+    }
+  }
+
+  const handleUnpin = async (alias: string) => {
+    if (!image || !idOrRef) return
+    try {
+      await unpinTag.mutateAsync({ idOrRef, alias, organizationId: selectedOrganization?.id })
+      toast.success(`Unpinned ${alias}`, {
+        description: `Boxes already running keep their version. ${image.name}:${alias} is free to pin again.`,
+      })
+    } catch (err) {
+      handleApiError(err, `Could not unpin ${alias}`)
+    }
+  }
+
+  const tagIsValid = TAG_PATTERN.test(pinForm.alias)
+  const tagTaken = image?.aliases.includes(pinForm.alias) ?? false
 
   return (
     <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col px-4 pt-5 sm:px-6 lg:px-[40px] lg:pt-[26px]">
@@ -128,7 +184,16 @@ const ImageDetails: React.FC = () => {
           </Panel>
 
           <div className="mt-[18px] flex min-h-0 flex-1 flex-col overflow-y-auto">
-            {!image.curated && <TagsSection image={image} versionsById={versionsById} />}
+            {!image.curated && (
+              <TagsSection
+                image={image}
+                versionsById={versionsById}
+                canWrite={canWrite}
+                busy={pinTag.isPending || unpinTag.isPending}
+                onPin={openPin}
+                onUnpin={handleUnpin}
+              />
+            )}
 
             <SectionTitle title="Versions" />
             <HeaderRow grid={VERSION_GRID}>
@@ -237,6 +302,68 @@ const ImageDetails: React.FC = () => {
               </>
             )}
           </div>
+
+          <Dialog open={pinning} onOpenChange={(open) => !open && setPinning(false)}>
+            <DialogContent>
+              <form onSubmit={handlePin}>
+                <DialogHeader>
+                  <DialogTitle>Pin a tag</DialogTitle>
+                  <DialogDescription>
+                    Boxes that start from <span className="font-mono text-foreground">{image.name}:tag</span> get this
+                    version until the tag is unpinned.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3 py-4">
+                  <div className="space-y-1">
+                    <Label htmlFor="pin-tag">Tag</Label>
+                    <Input
+                      id="pin-tag"
+                      value={pinForm.alias}
+                      onChange={(event) => setPinForm({ ...pinForm, alias: event.target.value })}
+                      placeholder="stable"
+                      spellCheck={false}
+                      className="font-mono"
+                      autoFocus
+                      required
+                    />
+                    {pinForm.alias && !tagIsValid && (
+                      <PanelNote>
+                        Letters, digits, `_`, `.` and `-`; up to 128 characters, not starting with `.` or `-`.
+                      </PanelNote>
+                    )}
+                    {tagTaken && <PanelNote>{pinForm.alias} is already pinned. Unpin it first.</PanelNote>}
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="pin-version">Version</Label>
+                    <Select
+                      value={pinForm.versionId}
+                      onValueChange={(value) => setPinForm({ ...pinForm, versionId: value })}
+                    >
+                      <SelectTrigger id="pin-version" className="h-9 w-full font-mono">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {readyVersions.map((version) => (
+                          <SelectItem key={version.id} value={version.id} className="font-mono">
+                            {shortDigest(version.digest)} · {version.aliases.join(', ') || 'no tag'} ·{' '}
+                            {formatBytes(version.sizeBytes)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={() => setPinning(false)}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" disabled={!tagIsValid || tagTaken || !pinForm.versionId || pinTag.isPending}>
+                    Pin
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
         </>
       )}
 
@@ -250,14 +377,38 @@ const ImageDetails: React.FC = () => {
   )
 }
 
-function TagsSection({ image, versionsById }: { image: ImageDetail; versionsById: Map<string, ImageVersion> }) {
+function TagsSection({
+  image,
+  versionsById,
+  canWrite,
+  busy,
+  onPin,
+  onUnpin,
+}: {
+  image: ImageDetail
+  versionsById: Map<string, ImageVersion>
+  canWrite: boolean
+  busy: boolean
+  onPin: () => void
+  onUnpin: (alias: string) => void
+}) {
   // Each tag's version is the one listing it; the detail keeps that on the version.
   const versionOf = (alias: string) => [...versionsById.values()].find((version) => version.aliases.includes(alias))
   const pinnedAt = (alias: string) => image.history.find((event) => event.aliasName === alias)
 
   return (
     <div className="mb-[26px]">
-      <SectionTitle title="Tags" count={`${image.aliases.length} pinned`} />
+      <SectionTitle
+        title="Tags"
+        count={`${image.aliases.length} pinned`}
+        right={
+          canWrite && (
+            <AsciiButton onClick={onPin} disabled={busy || image.versions.length === 0}>
+              Pin a tag
+            </AsciiButton>
+          )
+        }
+      />
       <HeaderRow grid={TAG_GRID}>
         <span>Tag</span>
         <span>Pinned to</span>
@@ -279,14 +430,25 @@ function TagsSection({ image, versionsById }: { image: ImageDetail; versionsById
               <span className="font-mono text-meta text-muted-foreground">
                 {event ? `${timeAgo(event.createdAt)}${event.actorId ? '' : ' on first pull'}` : '—'}
               </span>
-              <span />
+              <div className="flex justify-end">
+                {canWrite && (
+                  <button
+                    type="button"
+                    onClick={() => onUnpin(alias)}
+                    disabled={busy}
+                    className="px-2 py-[3px] font-mono text-label uppercase text-muted-foreground transition-colors hover:text-destructive disabled:opacity-40"
+                  >
+                    Unpin
+                  </button>
+                )}
+              </div>
             </div>
           )
         })
       )}
       <PanelNote>
-        A tag stays pinned to the digest it first resolved to; a new push upstream does not move it. Boxes already
-        running are unaffected either way.
+        A tag stays pinned to the digest it first resolved to; a new push upstream does not move it. To repoint one,
+        unpin it and pin it again. Boxes already running are unaffected either way.
       </PanelNote>
     </div>
   )

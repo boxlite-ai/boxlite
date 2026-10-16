@@ -145,6 +145,11 @@ Likewise the pin history says "unpins are not recorded", because the API
 writes no event when a tag is unpinned, and a history that dropped a tag
 without saying so would look like a bug.
 
+Pinning checks what the API will refuse before sending: a name that is not OCI
+tag syntax, and a name already pinned, which the API refuses even for the same
+version because there is no move. Repointing a tag is an unpin and a pin, and
+the page says so where the tags are listed.
+
 The same page lists every box that still references the image, stopped ones
 included: those are exactly the boxes that block its removal. And who pinned a
 tag is a member's name, or "first pull", never an identity-provider id.

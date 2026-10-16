@@ -12,6 +12,12 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ImageDetails from './ImageDetails'
 
+function typeInto(el: HTMLInputElement, value: string) {
+  const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
+  desc?.set?.call(el, value)
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
 const state = vi.hoisted(() => ({
   image: undefined as unknown,
   isLoading: false,
@@ -23,6 +29,8 @@ const state = vi.hoisted(() => ({
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  pin: vi.fn(),
+  unpin: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }))
@@ -32,6 +40,10 @@ vi.mock('@/hooks/queries/useImagesQuery', () => ({
 }))
 vi.mock('@/hooks/queries/useBoxesByImageQuery', () => ({
   useBoxesByImageQuery: () => ({ byImage: state.byImage, truncated: false }),
+}))
+vi.mock('@/hooks/mutations/useImageAliasMutations', () => ({
+  usePinImageTagMutation: () => ({ mutateAsync: mocks.pin, isPending: false }),
+  useUnpinImageTagMutation: () => ({ mutateAsync: mocks.unpin, isPending: false }),
 }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
@@ -135,6 +147,8 @@ beforeEach(() => {
   state.deniedPermissions = []
   state.newBoxImage = undefined
   vi.resetAllMocks()
+  mocks.pin.mockResolvedValue(undefined)
+  mocks.unpin.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -158,6 +172,7 @@ async function renderPage() {
 
 const text = () => document.body.textContent ?? ''
 const button = (label: string) => [...document.querySelectorAll('button')].find((b) => b.textContent === label)
+const buttons = (label: string) => [...document.querySelectorAll('button')].filter((b) => b.textContent === label)
 
 describe('an organization image', () => {
   it('lists its tags with the digest each is pinned to, and every version', async () => {
@@ -252,6 +267,74 @@ describe('starting a box', () => {
   })
 })
 
+describe('pinning and unpinning tags', () => {
+  it('pins a tag to the version chosen', async () => {
+    await renderPage()
+    await act(async () => button('Pin a tag')?.click())
+
+    await act(async () => typeInto(document.getElementById('pin-tag') as HTMLInputElement, 'stable'))
+    await act(async () => (document.getElementById('pin-tag') as HTMLInputElement).form?.requestSubmit())
+
+    expect(mocks.pin).toHaveBeenCalledWith({
+      idOrRef: 'img-1',
+      alias: 'stable',
+      versionId: 'ver-2',
+      organizationId: 'org-1',
+    })
+  })
+
+  // The API refuses an existing name even for the same version; the form says
+  // so before sending, and what to do instead.
+  it('refuses a tag that is already pinned before sending it', async () => {
+    await renderPage()
+    await act(async () => button('Pin a tag')?.click())
+
+    await act(async () => typeInto(document.getElementById('pin-tag') as HTMLInputElement, 'v1'))
+
+    expect(text()).toContain('v1 is already pinned. Unpin it first.')
+    expect(button('Pin')?.disabled).toBe(true)
+  })
+
+  it('refuses a name that is not OCI tag syntax before sending it', async () => {
+    await renderPage()
+    await act(async () => button('Pin a tag')?.click())
+
+    await act(async () => typeInto(document.getElementById('pin-tag') as HTMLInputElement, '-bad'))
+
+    expect(text()).toContain('Letters, digits')
+    expect(button('Pin')?.disabled).toBe(true)
+  })
+
+  it('reports the API’s reason when a pin is refused', async () => {
+    mocks.pin.mockRejectedValue(new BoxliteError('version is not ready'))
+    await renderPage()
+    await act(async () => button('Pin a tag')?.click())
+    await act(async () => typeInto(document.getElementById('pin-tag') as HTMLInputElement, 'stable'))
+    await act(async () => (document.getElementById('pin-tag') as HTMLInputElement).form?.requestSubmit())
+
+    expect(mocks.toastError).toHaveBeenCalledWith(
+      'Could not pin stable',
+      expect.objectContaining({ description: 'version is not ready' }),
+    )
+  })
+
+  it('unpins the tag its row names', async () => {
+    await renderPage()
+
+    await act(async () => buttons('Unpin')[1]?.click())
+
+    expect(mocks.unpin).toHaveBeenCalledWith({ idOrRef: 'img-1', alias: 'v1', organizationId: 'org-1' })
+  })
+
+  it('offers no pin or unpin to a member who may not change images', async () => {
+    state.deniedPermissions = [OrganizationRolePermissionsEnum.WRITE_IMAGES]
+    await renderPage()
+
+    expect(button('Pin a tag')).toBeUndefined()
+    expect(buttons('Unpin')).toHaveLength(0)
+  })
+})
+
 describe('a built-in image', () => {
   // Operator configuration: nothing of this organization's to pin, count or remove.
   it('is presented as built-in, with its tag managed and nothing to pin', async () => {
@@ -261,6 +344,7 @@ describe('a built-in image', () => {
     expect(text()).toContain('Built-in')
     expect(text()).toContain('docker.io/library/python:3.12-slim')
     expect(text()).toContain('not counted against your limit')
+    expect(button('Pin a tag')).toBeUndefined()
     expect(text()).not.toContain('Pin history')
   })
 
@@ -292,7 +376,7 @@ describe('reading the image', () => {
       'Failed to fetch image',
       expect.objectContaining({ description: 'image not found' }),
     )
-    expect(text()).not.toContain('Tags')
+    expect(button('Pin a tag')).toBeUndefined()
   })
 
   it('goes back to the images list', async () => {
