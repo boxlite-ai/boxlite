@@ -1718,6 +1718,7 @@ components:
             - ConfigError
             - InternalError
             - TimeoutError
+            - AlreadyInitializedError
           example: NotFoundError
         code:
           type: string
@@ -1746,6 +1747,7 @@ components:
             - config_error
             - internal
             - timeout
+            - already_initialized
           example: not_found
         request_id:
           type: string

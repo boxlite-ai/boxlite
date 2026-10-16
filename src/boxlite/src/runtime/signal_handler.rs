@@ -17,6 +17,11 @@ pub const DEFAULT_SHUTDOWN_TIMEOUT_SECS: i32 = 10;
 /// Flag to track if signal handler has been installed (install only once).
 static SIGNAL_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(test)]
+pub(crate) fn is_signal_handler_installed() -> bool {
+    SIGNAL_HANDLER_INSTALLED.load(Ordering::SeqCst)
+}
+
 /// Install signal handlers for graceful shutdown.
 ///
 /// This function spawns a dedicated thread that listens for SIGTERM and SIGINT
