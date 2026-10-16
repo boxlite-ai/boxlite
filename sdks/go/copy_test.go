@@ -28,19 +28,6 @@ func TestWriteCopyOutChunkRejectsShortWrite(t *testing.T) {
 	}
 }
 
-func TestDeliverCopyOutMetaMapsKnownKinds(t *testing.T) {
-	var got []bool
-	onMeta := func(sourceIsDir bool) { got = append(got, sourceIsDir) }
-
-	deliverCopyOutMeta(CopySourceUnknown, onMeta)
-	deliverCopyOutMeta(CopySourceFile, onMeta)
-	deliverCopyOutMeta(CopySourceDir, onMeta)
-
-	if len(got) != 2 || got[0] || !got[1] {
-		t.Fatalf("metadata callbacks = %v, want [false true]", got)
-	}
-}
-
 func TestCopyOutBoundaryError(t *testing.T) {
 	closing := make(chan struct{})
 	if err := copyOutBoundaryError(context.Background(), closing); err != nil {

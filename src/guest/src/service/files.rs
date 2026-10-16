@@ -533,9 +533,9 @@ impl Files for GuestServer {
         let include_parent = req.include_parent;
         let follow_symlinks = req.follow_symlinks;
 
-        // Stream the tar directly from disk (no temp file); the first chunk
-        // carries the source_is_dir shape hint.
-        let (source_is_dir, tar_stream) = boxlite_shared::tar::pack_stream(
+        // Stream the tar directly from disk (no temp file). Its first entry
+        // tells the receiver how it lands.
+        let tar_stream = boxlite_shared::tar::pack_stream(
             src_path,
             boxlite_shared::tar::PackContext {
                 follow_symlinks,
@@ -547,16 +547,11 @@ impl Files for GuestServer {
 
         let (tx, rx) = mpsc::channel::<Result<DownloadChunk, Status>>(4);
         tokio::spawn(async move {
-            let mut first = true;
             let mut stream = tar_stream;
             while let Some(item) = stream.next().await {
                 match item {
                     Ok(data) => {
-                        let chunk = DownloadChunk {
-                            data,
-                            source_is_dir: if first { Some(source_is_dir) } else { None },
-                        };
-                        first = false;
+                        let chunk = DownloadChunk { data };
                         if tx.send(Ok(chunk)).await.is_err() {
                             break;
                         }

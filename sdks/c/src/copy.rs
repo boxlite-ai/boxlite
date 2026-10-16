@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use boxlite::litebox::copy::CopyOptions;
-use boxlite::{BoxByteStream, BoxliteError, CopySourceKind};
+use boxlite::{BoxByteStream, BoxliteError};
 use futures::StreamExt;
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::sync::mpsc;
@@ -147,37 +147,6 @@ unsafe fn box_copy_out(
 
 // ─── Streaming copy ────────────────────────────────────────────────────────
 
-/// Streaming-copy source shape. For copy-in, `BoxliteCopySourceKindUnknown`
-/// means the caller cannot tell; the guest lands every upload by the
-/// archive's first entry regardless. For copy-out, it means the peer omitted
-/// the hint. The C-ABI mirror of the core `CopySourceKind`.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BoxliteCopySourceKind {
-    BoxliteCopySourceKindUnknown = 0,
-    BoxliteCopySourceKindFile = 1,
-    BoxliteCopySourceKindDir = 2,
-}
-
-fn source_kind_to_c(source: CopySourceKind) -> i32 {
-    match source {
-        CopySourceKind::Unknown => BoxliteCopySourceKind::BoxliteCopySourceKindUnknown as i32,
-        CopySourceKind::File => BoxliteCopySourceKind::BoxliteCopySourceKindFile as i32,
-        CopySourceKind::Dir => BoxliteCopySourceKind::BoxliteCopySourceKindDir as i32,
-    }
-}
-
-/// Maps the C tri-state to [`CopySourceKind`]. Takes the raw integer because C
-/// callers can pass any value, and unrecognized values must behave as Unknown
-/// rather than guess.
-fn source_kind_from_c(kind: i32) -> CopySourceKind {
-    match kind {
-        1 => CopySourceKind::File,
-        2 => CopySourceKind::Dir,
-        _ => CopySourceKind::Unknown,
-    }
-}
-
 /// Opaque handle for a streaming copy-in (push archive bytes into the guest).
 ///
 /// The lifecycle is fixed, and the third step is not optional:
@@ -285,22 +254,16 @@ impl CBoxCopyOutStream {
 
 /// Begin downloading `guest_src` as a pull-based raw archive stream.
 ///
-/// This call blocks until the stream and its optional source-shape hint are
-/// ready. On success the returned handle must be released with
-/// [`boxlite_copy_out_free`]. A non-null `out_source_kind` is initialized to
-/// `BoxliteCopySourceKindUnknown` and updated to the `...File` or `...Dir`
-/// variant when the peer supplies the hint.
+/// This call blocks until the stream is ready. On success the returned handle
+/// must be released with [`boxlite_copy_out_free`]. The archive's first entry
+/// tells the receiver how it lands.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_copy_out_start(
     handle: *mut CBoxHandle,
     guest_src: *const c_char,
-    out_source_kind: *mut i32,
     out_error: *mut CBoxliteError,
 ) -> *mut CBoxCopyOutStream {
     unsafe {
-        if !out_source_kind.is_null() {
-            *out_source_kind = BoxliteCopySourceKind::BoxliteCopySourceKindUnknown as i32;
-        }
         if handle.is_null() {
             write_error(out_error, null_pointer_error("handle"));
             return std::ptr::null_mut();
@@ -323,15 +286,10 @@ pub unsafe extern "C" fn boxlite_copy_out_start(
             .tokio_rt
             .block_on(lite.copy_out_stream(src.as_str(), CopyOptions::default()))
         {
-            Ok((bytes, source)) => {
-                if !out_source_kind.is_null() {
-                    *out_source_kind = source_kind_to_c(source);
-                }
-                Box::into_raw(Box::new(CBoxCopyOutStream::new(
-                    bytes,
-                    handle_ref.tokio_rt.clone(),
-                )))
-            }
+            Ok(bytes) => Box::into_raw(Box::new(CBoxCopyOutStream::new(
+                bytes,
+                handle_ref.tokio_rt.clone(),
+            ))),
             Err(error) => {
                 write_error(out_error, error);
                 std::ptr::null_mut()
@@ -404,20 +362,12 @@ pub unsafe extern "C" fn boxlite_copy_out_free(stream: *mut CBoxCopyOutStream) {
     }
 }
 
-/// Begin a streaming copy-in, returning an opaque transfer handle.
-///
-/// `source_kind` describes the archive shape: `BoxliteCopySourceKind`'s
-/// discriminant (`...Unknown`=0, `...File`=1, `...Dir`=2), or 0 when the
-/// caller cannot tell (older clients). The guest lands the archive by its
-/// first entry whatever the kind says.
-/// Taken as an integer because C callers can pass any value, and
-/// out-of-range discriminants must behave as Unknown rather than as an
-/// invalid Rust enum.
+/// Begin a streaming copy-in, returning an opaque transfer handle. The
+/// guest lands the archive by its first entry.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_copy_in_start(
     handle: *mut CBoxHandle,
     guest_dst: *const c_char,
-    source_kind: i32,
     copy_cb: CBoxCopyCb,
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
@@ -439,8 +389,6 @@ pub unsafe extern "C" fn boxlite_copy_in_start(
             return std::ptr::null_mut();
         };
 
-        let source = source_kind_from_c(source_kind);
-
         let handle_ref = &*handle;
         let lite = handle_ref.handle.clone();
         let queue = handle_ref.queue.clone();
@@ -453,7 +401,7 @@ pub unsafe extern "C" fn boxlite_copy_in_start(
 
         handle_ref.tokio_rt.spawn(async move {
             let result = lite
-                .copy_in_stream(bytes, dst.as_str(), source, CopyOptions::default())
+                .copy_in_stream(bytes, dst.as_str(), CopyOptions::default())
                 .await;
             push_event(
                 &queue,
@@ -627,83 +575,19 @@ mod tests {
     }
 
     #[test]
-    fn copy_out_start_null_handle_resets_source_kind_and_reports_error() {
-        let mut source_kind = BoxliteCopySourceKind::BoxliteCopySourceKindDir as i32;
+    fn copy_out_start_null_handle_reports_error() {
         let mut error = CBoxliteError::default();
 
-        let stream = unsafe {
-            boxlite_copy_out_start(
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                &mut source_kind,
-                &mut error,
-            )
-        };
-        assert!(stream.is_null());
-        assert_eq!(
-            source_kind,
-            BoxliteCopySourceKind::BoxliteCopySourceKindUnknown as i32
-        );
-        assert_error_contains(&error, BoxliteErrorCode::InvalidArgument, "handle is null");
-        unsafe { crate::error::boxlite_error_free(&mut error) };
-
-        source_kind = BoxliteCopySourceKind::BoxliteCopySourceKindDir as i32;
-        let stream = unsafe {
-            boxlite_copy_out_start(
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                &mut source_kind,
-                std::ptr::null_mut(),
-            )
-        };
-        assert!(stream.is_null());
-        assert_eq!(
-            source_kind,
-            BoxliteCopySourceKind::BoxliteCopySourceKindUnknown as i32
-        );
-
-        let stream = unsafe {
-            boxlite_copy_out_start(
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                std::ptr::null_mut(),
-                &mut error,
-            )
-        };
+        let stream =
+            unsafe { boxlite_copy_out_start(std::ptr::null_mut(), std::ptr::null(), &mut error) };
         assert!(stream.is_null());
         assert_error_contains(&error, BoxliteErrorCode::InvalidArgument, "handle is null");
         unsafe { crate::error::boxlite_error_free(&mut error) };
 
         let stream = unsafe {
-            boxlite_copy_out_start(
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
+            boxlite_copy_out_start(std::ptr::null_mut(), std::ptr::null(), std::ptr::null_mut())
         };
         assert!(stream.is_null());
-    }
-
-    #[test]
-    fn source_kind_round_trips_across_the_c_abi() {
-        for (c_kind, core) in [
-            (
-                BoxliteCopySourceKind::BoxliteCopySourceKindUnknown,
-                CopySourceKind::Unknown,
-            ),
-            (
-                BoxliteCopySourceKind::BoxliteCopySourceKindFile,
-                CopySourceKind::File,
-            ),
-            (
-                BoxliteCopySourceKind::BoxliteCopySourceKindDir,
-                CopySourceKind::Dir,
-            ),
-        ] {
-            assert_eq!(source_kind_from_c(c_kind as i32), core);
-            assert_eq!(source_kind_to_c(core), c_kind as i32);
-        }
     }
 
     #[test]
@@ -929,13 +813,5 @@ mod tests {
             drain_rt.block_on(rx.recv()).is_none(),
             "free must close the channel"
         );
-    }
-
-    #[test]
-    fn unrecognized_kind_behaves_as_unknown() {
-        // C callers can cast any integer to the enum; out-of-range values
-        // must not be guessed into a shape.
-        assert_eq!(source_kind_from_c(7), CopySourceKind::Unknown);
-        assert_eq!(source_kind_from_c(-1), CopySourceKind::Unknown);
     }
 }
