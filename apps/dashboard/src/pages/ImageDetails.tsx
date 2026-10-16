@@ -3,30 +3,30 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Panel, PanelNote } from '@/components/ascii'
+import { AsciiButton, Panel, PanelNote, SectionTitle } from '@/components/ascii'
+import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
+import { UseImageSheet } from '@/components/images/UseImageSheet'
+import { BoxState } from '@/components/BoxTable/BoxState'
 import { ArrowLeft } from '@/components/ui/icon'
 import { RoutePath } from '@/enums/RoutePath'
+import { useBoxesByImageQuery } from '@/hooks/queries/useBoxesByImageQuery'
 import { useImageQuery } from '@/hooks/queries/useImagesQuery'
+import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
 import { formatBytes, timeAgo } from '@/lib/format'
+import { imageStartRef, shortDigest } from '@/lib/image-ref'
 import { cn } from '@/lib/utils'
-import React, { useEffect } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { ImageDetail, ImageVersion, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
+import React, { useEffect, useMemo, useState } from 'react'
+import { generatePath, Link, useNavigate, useParams } from 'react-router-dom'
 
-const VERSION_GRID = 'grid grid-cols-[1.3fr_0.8fr_0.5fr_1.2fr_0.6fr_0.6fr] items-center gap-3 px-2'
+const TAG_GRID = 'grid grid-cols-[0.8fr_1.6fr_1fr_80px] items-center gap-3 px-2'
+const VERSION_GRID = 'grid grid-cols-[1.3fr_0.8fr_0.5fr_1.2fr_0.6fr_0.6fr_90px] items-center gap-3 px-2'
+const BOX_GRID = 'grid grid-cols-[1fr_1fr_1fr] items-center gap-3 px-2'
 const HISTORY_GRID = 'grid grid-cols-[0.7fr_1.4fr_0.9fr_0.6fr] items-center gap-3 px-2'
 // The most alias events an image's detail carries, newest first: the API's
 // IMAGE_HISTORY_LIMIT. A full page means older events exist and are not shown.
 const HISTORY_LIMIT = 100
-
-/** A version as the history names it: its short digest, or its id when the detail no longer lists it. */
-function versionLabel(versionId: string | null, digests: Map<string, string>): string {
-  if (versionId === null) {
-    return 'new'
-  }
-  const digest = digests.get(versionId)
-  return digest ? `${digest.slice(0, 19)}…` : versionId
-}
 
 function Field({ label, value, title }: { label: string; value: React.ReactNode; title?: string }) {
   return (
@@ -39,25 +39,49 @@ function Field({ label, value, title }: { label: string; value: React.ReactNode;
   )
 }
 
+function HeaderRow({ grid, children }: { grid: string; children: React.ReactNode }) {
+  return (
+    <div className={cn(grid, 'border-b border-border pb-2 font-mono text-label uppercase text-muted-foreground')}>
+      {children}
+    </div>
+  )
+}
+
+function EmptyRow({ children }: { children: React.ReactNode }) {
+  return <p className="px-2 py-[16px] font-mono text-meta text-muted-foreground">{children}</p>
+}
+
 /**
- * One image, the builds recorded for it, and where its aliases have pointed.
+ * One image: its pinned tags, the versions behind them, the boxes that still
+ * reference it, and when each tag was pinned.
  *
- * Each version answers the question the list cannot: which build a box boots
- * from, which aliases point at it now, when a box last used it, and whether its
- * registry was found not to have it any more. The reference the caller typed
- * is provenance rather than an address — the tag it names may have moved
- * upstream since. The history below is its latest alias registrations, newest
- * first.
+ * A tag here is pinned: it keeps the digest it first resolved to, whatever
+ * the registry's tag does later.
  */
 const ImageDetails: React.FC = () => {
   const navigate = useNavigate()
   const { idOrRef } = useParams<{ idOrRef: string }>()
+  const { organizationMembers, authenticatedUserHasPermission } = useSelectedOrganization()
   const { data: image, isLoading, error } = useImageQuery(idOrRef)
-  const digests = new Map((image?.versions ?? []).map((version) => [version.id, version.digest]))
+  const { byImage, truncated } = useBoxesByImageQuery()
+
+  const canCreateBox = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
+  const [newBoxImage, setNewBoxImage] = useState<string | null>(null)
+  const [codeRef, setCodeRef] = useState<string | null>(null)
 
   useEffect(() => {
     if (error) handleApiError(error, 'Failed to fetch image')
   }, [error])
+
+  const versionsById = useMemo(
+    () => new Map((image?.versions ?? []).map((version) => [version.id, version])),
+    [image?.versions],
+  )
+  const membersById = useMemo(
+    () => new Map(organizationMembers.map((member) => [member.userId, member.name || member.email])),
+    [organizationMembers],
+  )
+  const boxes = image ? (byImage.get(image.name) ?? []) : []
 
   return (
     <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col px-4 pt-5 sm:px-6 lg:px-[40px] lg:pt-[26px]">
@@ -74,147 +98,245 @@ const ImageDetails: React.FC = () => {
 
       {image && (
         <>
-          <div className="mb-[18px] flex items-end justify-between">
+          <div className="mb-[18px] flex flex-wrap items-end justify-between gap-3">
             <h1 className="truncate font-display text-page font-semibold text-foreground">{image.name}</h1>
+            <div className="flex items-center gap-2">
+              <AsciiButton onClick={() => setCodeRef(imageStartRef(image))} title="The create call in your SDK">
+                Code
+              </AsciiButton>
+              {canCreateBox && (
+                <AsciiButton variant="primary" onClick={() => setNewBoxImage(imageStartRef(image))}>
+                  New box
+                </AsciiButton>
+              )}
+            </div>
           </div>
 
           <Panel className="px-[18px] py-[16px]">
             <div className="grid grid-cols-2 gap-5 sm:grid-cols-4">
-              <Field
-                label="Source"
-                value={image.curated ? 'Operator (curated)' : 'This organization'}
-                title={image.curatedRef ?? undefined}
-              />
+              <Field label="Source" value={image.curated ? 'Built-in' : 'Pulled by your boxes'} />
               <Field label="Versions" value={image.curated ? '—' : image.versionCount} />
-              <Field label="Size" value={formatBytes(image.sizeBytes)} />
-              <Field label="Last used" value={timeAgo(image.lastUsedAt)} />
+              <Field label="Size" value={image.curated ? '—' : formatBytes(image.sizeBytes)} />
+              <Field label="Last started" value={image.curated ? '—' : timeAgo(image.lastUsedAt)} />
             </div>
-            {image.curated ? (
+            {image.curated && (
               <PanelNote>
-                Provided by the operator and shared by every organization, pinned to{' '}
-                <span className="text-foreground">{image.curatedRef}</span>. It is not in this organization&rsquo;s
-                catalog, so it cannot be removed and does not count against the limit.
-              </PanelNote>
-            ) : (
-              <PanelNote>
-                Aliases: {image.aliases.length > 0 ? image.aliases.join(', ') : 'none recorded'}. Registry pulls seed
-                aliases without overwriting them. Changing an alias requires explicit deletion followed by creation;
-                existing boxes keep their version.
+                Maintained by BoxLite as <span className="text-foreground">{image.curatedRef}</span>. Free, always
+                available, and not counted against your limit. Its tag is managed for you.
               </PanelNote>
             )}
           </Panel>
 
           <div className="mt-[18px] flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <div
-              className={cn(
-                VERSION_GRID,
-                'border-b border-border pb-2 font-mono text-label uppercase text-muted-foreground',
-              )}
-            >
+            {!image.curated && <TagsSection image={image} versionsById={versionsById} />}
+
+            <SectionTitle title="Versions" />
+            <HeaderRow grid={VERSION_GRID}>
               <span>Digest</span>
-              <span>Aliases</span>
+              <span>Tags</span>
               <span>Size</span>
               <span>Pulled from</span>
-              <span>Last used</span>
-              <span>Recorded</span>
-            </div>
-
+              <span>Last started</span>
+              <span>First seen</span>
+              <span />
+            </HeaderRow>
             {image.versions.length === 0 ? (
-              <p className="px-2 py-[16px] font-mono text-meta text-muted-foreground">
+              <EmptyRow>
                 {image.curated
-                  ? 'Curated images are operator configuration, so no versions are recorded for them.'
+                  ? 'Built-in images are operator configuration; no versions are recorded for them.'
                   : 'No versions recorded yet.'}
-              </p>
+              </EmptyRow>
             ) : (
               image.versions.map((version) => (
-                <div key={version.id} className={cn(VERSION_GRID, 'border-b border-border/60 py-[13px] text-body')}>
-                  <span className="flex min-w-0 flex-col">
-                    <span title={version.digest} className="truncate font-mono text-meta text-foreground">
-                      {version.digest}
-                    </span>
-                    {/* A pull found the registry no longer has it. Runners that
-                        cached it still start it; elsewhere it cannot be pulled. */}
-                    {version.upstreamMissingAt && (
-                      <span
-                        title={`A pull found it gone from its registry ${timeAgo(version.upstreamMissingAt)}`}
-                        className="font-mono text-label uppercase text-destructive"
-                      >
-                        Needs a new pull
-                      </span>
-                    )}
-                  </span>
-                  <span className="truncate font-mono text-meta text-muted-foreground">
-                    {version.aliases.length > 0 ? version.aliases.join(', ') : '—'}
-                  </span>
-                  <span className="font-mono text-meta tabular-nums text-muted-foreground">
-                    {formatBytes(version.sizeBytes)}
-                  </span>
-                  {/* What the caller typed, kept verbatim. Not where the bytes
-                      live now: the tag it names may have moved upstream. */}
-                  <span title={version.sourceRef} className="truncate font-mono text-meta text-muted-foreground">
-                    {version.sourceRef}
-                  </span>
-                  {/* Null is a version recorded before last use was tracked:
-                      unknown, which "never" would misstate. */}
-                  <span className="font-mono text-meta text-muted-foreground">
-                    {version.lastUsedAt ? timeAgo(version.lastUsedAt) : '—'}
-                  </span>
-                  <span className="font-mono text-meta text-muted-foreground">{timeAgo(version.createdAt)}</span>
-                </div>
+                <VersionRow
+                  key={version.id}
+                  image={image}
+                  version={version}
+                  onUse={canCreateBox ? () => setNewBoxImage(`${image.name}@${version.digest}`) : undefined}
+                />
               ))
             )}
 
-            <h2 className="mt-[26px] mb-2 px-2 font-mono text-label uppercase text-muted-foreground">History</h2>
-            <div
-              className={cn(
-                HISTORY_GRID,
-                'border-b border-border pb-2 font-mono text-label uppercase text-muted-foreground',
-              )}
-            >
-              <span>Alias</span>
-              <span>Version</span>
-              <span>By</span>
-              <span>When</span>
-            </div>
-            {image.history.length === 0 ? (
-              <p className="px-2 py-[16px] font-mono text-meta text-muted-foreground">
-                {/* A pull writes a tag's first event, so aliases with no history
-                    were recorded before history was kept; no event is backfilled. */}
-                {image.curated
-                  ? 'Curated images have no catalog aliases; the operator pins their reference.'
-                  : image.aliases.length > 0
-                    ? 'No history yet: these aliases were recorded before registration history was kept.'
-                    : 'No alias has been recorded yet.'}
-              </p>
-            ) : (
-              image.history.map((event) => (
-                <div
-                  key={`${event.aliasName}-${event.createdAt}-${event.toVersionId}`}
-                  className={cn(HISTORY_GRID, 'border-b border-border/60 py-[13px] text-body')}
-                >
-                  <span className="truncate font-mono text-meta text-foreground">{event.aliasName}</span>
-                  <span className="truncate font-mono text-meta text-muted-foreground">
-                    {versionLabel(event.fromVersionId, digests)} → {versionLabel(event.toVersionId, digests)}
-                  </span>
-                  {/* No actor: a box pulling the image recorded the tag. */}
-                  <span
-                    title={event.actorId ?? undefined}
-                    className="truncate font-mono text-meta text-muted-foreground"
-                  >
-                    {event.actorId ?? 'a pull'}
-                  </span>
-                  <span className="font-mono text-meta text-muted-foreground">{timeAgo(event.createdAt)}</span>
+            {!image.curated && (
+              <>
+                <div className="mt-[26px]">
+                  <SectionTitle
+                    title="Boxes referencing this image"
+                    count={
+                      boxes.length === 0
+                        ? 'none'
+                        : `${boxes.length}${truncated ? '+' : ''} · all must be destroyed before removal`
+                    }
+                  />
                 </div>
-              ))
-            )}
-            {image.history.length >= HISTORY_LIMIT && (
-              <p className="px-2 py-[12px] font-mono text-meta text-muted-foreground">
-                Showing the latest {HISTORY_LIMIT} events; older ones are not listed.
-              </p>
+                {boxes.length === 0 ? (
+                  <EmptyRow>No box references it, so it can be removed.</EmptyRow>
+                ) : (
+                  <>
+                    <HeaderRow grid={BOX_GRID}>
+                      <span>Box</span>
+                      <span>State</span>
+                      <span>Created</span>
+                    </HeaderRow>
+                    {boxes.map((box) => (
+                      <div key={box.id} className={cn(BOX_GRID, 'border-b border-border/60 py-[11px] text-body')}>
+                        <Link
+                          to={generatePath(RoutePath.BOX_DETAILS, { boxId: box.id })}
+                          className="truncate font-mono text-meta font-medium text-foreground hover:underline"
+                        >
+                          {box.name}
+                        </Link>
+                        <BoxState state={box.state} errorReason={box.errorReason} className="text-meta" />
+                        <span className="font-mono text-meta text-muted-foreground">{timeAgo(box.createdAt)}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                <div className="mt-[26px]">
+                  <SectionTitle title="Pin history" count="unpins are not recorded" />
+                </div>
+                <HeaderRow grid={HISTORY_GRID}>
+                  <span>Tag</span>
+                  <span>Pinned to</span>
+                  <span>By</span>
+                  <span>When</span>
+                </HeaderRow>
+                {image.history.length === 0 ? (
+                  <EmptyRow>
+                    {image.aliases.length > 0
+                      ? 'No history: these tags were pinned before history was kept.'
+                      : 'No tag has been pinned yet.'}
+                  </EmptyRow>
+                ) : (
+                  image.history.map((event) => (
+                    <div
+                      key={`${event.aliasName}-${event.createdAt}-${event.toVersionId}`}
+                      className={cn(HISTORY_GRID, 'border-b border-border/60 py-[11px] text-body')}
+                    >
+                      <span className="truncate font-mono text-meta text-foreground">{event.aliasName}</span>
+                      <span className="truncate font-mono text-meta text-muted-foreground" title={event.toDigest}>
+                        {shortDigest(event.toDigest)}
+                      </span>
+                      {/* No actor: the first pull of that tag pinned it. */}
+                      <span
+                        title={event.actorId ?? undefined}
+                        className="truncate font-mono text-meta text-muted-foreground"
+                      >
+                        {event.actorId ? (membersById.get(event.actorId) ?? 'a member') : 'first pull'}
+                      </span>
+                      <span className="font-mono text-meta text-muted-foreground">{timeAgo(event.createdAt)}</span>
+                    </div>
+                  ))
+                )}
+                {image.history.length >= HISTORY_LIMIT && (
+                  <p className="px-2 py-[12px] font-mono text-meta text-muted-foreground">
+                    Showing the latest {HISTORY_LIMIT} events; older ones are not listed.
+                  </p>
+                )}
+              </>
             )}
           </div>
         </>
       )}
+
+      <CreateBoxDialog
+        open={newBoxImage !== null}
+        onOpenChange={(open) => !open && setNewBoxImage(null)}
+        prefillImage={newBoxImage ?? undefined}
+      />
+      <UseImageSheet imageRef={codeRef} onClose={() => setCodeRef(null)} />
+    </div>
+  )
+}
+
+function TagsSection({ image, versionsById }: { image: ImageDetail; versionsById: Map<string, ImageVersion> }) {
+  // Each tag's version is the one listing it; the detail keeps that on the version.
+  const versionOf = (alias: string) => [...versionsById.values()].find((version) => version.aliases.includes(alias))
+  const pinnedAt = (alias: string) => image.history.find((event) => event.aliasName === alias)
+
+  return (
+    <div className="mb-[26px]">
+      <SectionTitle title="Tags" count={`${image.aliases.length} pinned`} />
+      <HeaderRow grid={TAG_GRID}>
+        <span>Tag</span>
+        <span>Pinned to</span>
+        <span>Since</span>
+        <span />
+      </HeaderRow>
+      {image.aliases.length === 0 ? (
+        <EmptyRow>No tag is pinned. Boxes can still start from a digest.</EmptyRow>
+      ) : (
+        image.aliases.map((alias) => {
+          const version = versionOf(alias)
+          const event = pinnedAt(alias)
+          return (
+            <div key={alias} className={cn(TAG_GRID, 'border-b border-border/60 py-[11px] text-body')}>
+              <span className="truncate font-mono text-meta font-medium text-foreground">{alias}</span>
+              <span className="truncate font-mono text-meta text-muted-foreground" title={version?.digest}>
+                {version ? shortDigest(version.digest) : '—'}
+              </span>
+              <span className="font-mono text-meta text-muted-foreground">
+                {event ? `${timeAgo(event.createdAt)}${event.actorId ? '' : ' on first pull'}` : '—'}
+              </span>
+              <span />
+            </div>
+          )
+        })
+      )}
+      <PanelNote>
+        A tag stays pinned to the digest it first resolved to; a new push upstream does not move it. Boxes already
+        running are unaffected either way.
+      </PanelNote>
+    </div>
+  )
+}
+
+function VersionRow({ image, version, onUse }: { image: ImageDetail; version: ImageVersion; onUse?: () => void }) {
+  return (
+    <div className={cn(VERSION_GRID, 'border-b border-border/60 py-[13px] text-body')}>
+      <span className="flex min-w-0 flex-col">
+        <span title={version.digest} className="truncate font-mono text-meta text-foreground">
+          {version.digest}
+        </span>
+        {/* Recorded once, when a pull found the registry without this digest;
+            nothing clears it, so it is past tense: the copy here still starts. */}
+        {version.upstreamMissingAt && (
+          <span
+            title={`A pull ${timeAgo(version.upstreamMissingAt)} found this digest gone from ${image.name.split('/')[0]}. BoxLite's copy still starts boxes.`}
+            className="font-mono text-label uppercase text-yellow-600 dark:text-yellow-400"
+          >
+            Gone upstream {timeAgo(version.upstreamMissingAt)}
+          </span>
+        )}
+      </span>
+      <span className="truncate font-mono text-meta text-muted-foreground">
+        {version.aliases.length > 0 ? version.aliases.join(', ') : '—'}
+      </span>
+      <span className="font-mono text-meta tabular-nums text-muted-foreground">{formatBytes(version.sizeBytes)}</span>
+      {/* What the caller typed, kept verbatim. Not where the bytes live now:
+          the tag it names may have moved upstream. */}
+      <span title={version.sourceRef} className="truncate font-mono text-meta text-muted-foreground">
+        {version.sourceRef}
+      </span>
+      {/* Null is a version recorded before last start was tracked: unknown,
+          which "never" would misstate. */}
+      <span className="font-mono text-meta text-muted-foreground">
+        {version.lastUsedAt ? timeAgo(version.lastUsedAt) : '—'}
+      </span>
+      <span className="font-mono text-meta text-muted-foreground">{timeAgo(version.createdAt)}</span>
+      <div className="flex justify-end">
+        {onUse && (
+          <button
+            type="button"
+            onClick={onUse}
+            title="New box pinned to this digest"
+            className="px-2 py-[3px] font-mono text-label uppercase text-muted-foreground transition-colors hover:text-foreground"
+          >
+            New box
+          </button>
+        )}
+      </div>
     </div>
   )
 }

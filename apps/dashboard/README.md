@@ -134,6 +134,21 @@ Built-in images sit apart from the table. They are operator configuration with
 no versions, size or recorded starts, so a row for them would be a line of
 dashes, and a "never" under last started would be false.
 
+## A state the API records once is told in the past tense
+
+Some fields are set once and never cleared. `upstreamMissingAt` is written the
+first time a pull finds a digest gone from its registry, and nothing resets it
+if the registry gets it back. The image page therefore says "Gone upstream 5h
+ago", with "BoxLite's copy still starts boxes" on hover, rather than a present
+tense "Missing" that would turn false the moment the registry recovered.
+Likewise the pin history says "unpins are not recorded", because the API
+writes no event when a tag is unpinned, and a history that dropped a tag
+without saying so would look like a bug.
+
+The same page lists every box that still references the image, stopped ones
+included: those are exactly the boxes that block its removal. And who pinned a
+tag is a member's name, or "first pull", never an identity-provider id.
+
 ## A failure carries the way to its fix
 
 When the API's reason names something the reader can fix on another page, the
