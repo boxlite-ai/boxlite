@@ -4,11 +4,12 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { BoxliteError } from '@/api/errors'
 import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-
-import Registries from './Registries'
+import { RegistriesPanel } from './Registries'
 
 // Drive a React controlled input the way a user typing would.
 function typeInto(el: HTMLInputElement, value: string) {
@@ -19,13 +20,27 @@ function typeInto(el: HTMLInputElement, value: string) {
 
 const PASSWORD = 'ghp_not-a-real-token'
 
-const state = vi.hoisted(() => ({ credentials: [] as unknown[], listError: null as unknown }))
-const mocks = vi.hoisted(() => ({ create: vi.fn(), remove: vi.fn(), reset: vi.fn(), handleApiError: vi.fn() }))
+const state = vi.hoisted(() => ({
+  credentials: [] as unknown[],
+  listError: null as unknown,
+  byId: new Map<string, unknown>(),
+}))
+const mocks = vi.hoisted(() => ({
+  create: vi.fn(),
+  remove: vi.fn(),
+  reset: vi.fn(),
+  handleApiError: vi.fn(),
+  toastError: vi.fn(),
+  toastSuccess: vi.fn(),
+}))
 
 vi.mock('@/lib/error-handling', () => ({ handleApiError: mocks.handleApiError }))
-
+vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess } }))
 vi.mock('@/hooks/queries/useRegistriesQuery', () => ({
-  useRegistriesQuery: () => ({ data: state.credentials, error: state.listError }),
+  useRegistriesQuery: () => ({ data: state.credentials, error: state.listError, isLoading: false }),
+}))
+vi.mock('@/hooks/queries/useBoxesByImageQuery', () => ({
+  useBoxesByImageQuery: () => ({ byId: state.byId }),
 }))
 vi.mock('@/hooks/mutations/useRegistryMutations', () => ({
   useCreateRegistryMutation: () => ({ mutateAsync: mocks.create, reset: mocks.reset, isPending: false }),
@@ -34,170 +49,206 @@ vi.mock('@/hooks/mutations/useRegistryMutations', () => ({
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: { id: 'org-1' },
+    organizationMembers: [{ userId: 'user-1', name: 'Chen Ming', email: 'chen@example.com' }],
     authenticatedUserHasPermission: () => true,
   }),
 }))
 
-describe('the registries page', () => {
-  let root: Root | null = null
-  let host: HTMLDivElement
+const CREDENTIAL = {
+  id: 'credential-1',
+  kind: 'basic',
+  registryHost: 'ghcr.io',
+  repositoryPrefix: 'acme/',
+  username: 'acme-bot',
+  createdBy: 'user-1',
+  createdAt: '2026-01-01T00:00:00.000Z',
+}
 
-  beforeEach(() => {
-    globalThis.IS_REACT_ACT_ENVIRONMENT = true
-    state.credentials = [
-      {
-        id: 'credential-1',
-        kind: 'basic',
-        registryHost: 'ghcr.io',
-        repositoryPrefix: 'acme/',
-        username: 'acme-bot',
-        createdBy: null,
-        createdAt: '2026-01-01T00:00:00.000Z',
-      },
-    ]
-    mocks.create.mockReset().mockResolvedValue({})
-    mocks.remove.mockReset().mockResolvedValue(undefined)
-    mocks.handleApiError.mockReset()
-    mocks.reset.mockReset()
-    state.listError = null
-    host = document.createElement('div')
-    document.body.appendChild(host)
-    root = createRoot(host)
-    act(() => root?.render(<Registries />))
+let root: Root | null = null
+let host: HTMLDivElement
+
+async function renderPanel(entry = '/dashboard/images/registries') {
+  host = document.createElement('div')
+  document.body.appendChild(host)
+  root = createRoot(host)
+  await act(async () =>
+    root?.render(React.createElement(MemoryRouter, { initialEntries: [entry] }, React.createElement(RegistriesPanel))),
+  )
+}
+
+beforeEach(() => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  state.credentials = [CREDENTIAL]
+  state.listError = null
+  state.byId = new Map()
+  vi.resetAllMocks()
+  mocks.create.mockResolvedValue({})
+  mocks.remove.mockResolvedValue(undefined)
+})
+
+afterEach(() => {
+  act(() => root?.unmount())
+  root = null
+  document.body.innerHTML = ''
+})
+
+const button = (text: string) => [...document.querySelectorAll('button')].find((b) => b.textContent === text)
+const field = (id: string) => document.getElementById(id) as HTMLInputElement
+const open = () => act(() => button('Connect a registry')?.click())
+
+async function fillAndSubmit(values: { prefix?: string; username?: string; password?: string }) {
+  act(() => {
+    if (values.prefix !== undefined) typeInto(field('registry-prefix'), values.prefix)
+    typeInto(field('registry-username'), values.username ?? 'acme-bot')
+    typeInto(field('registry-password'), values.password ?? PASSWORD)
   })
+  await act(async () => field('registry-password').form?.requestSubmit())
+}
 
-  afterEach(() => {
-    act(() => root?.unmount())
-    root = null
-    document.body.innerHTML = ''
-  })
+describe('the credential list', () => {
+  it('lists a credential by what it covers, who it pulls as, and who added it', async () => {
+    await renderPanel()
 
-  const open = () => {
-    const add = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Add login')
-    act(() => add?.click())
-  }
-  const field = (id: string) => document.getElementById(id) as HTMLInputElement
-
-  it('lists a login by where it applies and who it logs in as', () => {
     expect(host.textContent).toContain('ghcr.io')
-    expect(host.textContent).toContain('acme/')
+    expect(host.textContent).toContain('acme/*')
     expect(host.textContent).toContain('acme-bot')
+    expect(host.textContent).toContain('by Chen Ming')
   })
 
-  it('takes the password in a masked field, and sends it only in the create', async () => {
+  it('reports a list that failed rather than showing an empty one', async () => {
+    const failure = new Error('403')
+    state.credentials = []
+    state.listError = failure
+    await renderPanel()
+
+    expect(mocks.handleApiError).toHaveBeenCalledWith(failure, 'Failed to fetch registry credentials')
+    expect(host.textContent).toContain('could not be loaded')
+    expect(host.textContent).not.toContain('No private registry connected')
+  })
+
+  // A deploy without a secret store answers 501. That is a state of the
+  // environment, not a failure, and there is nothing to connect.
+  it('says private registries are off where the deploy does not support them', async () => {
+    state.credentials = []
+    state.listError = new BoxliteError('Registry credentials are not configured for this deployment')
+    await renderPanel()
+
+    expect(host.textContent).toContain('not enabled in this environment')
+    expect(button('Connect a registry')).toBeUndefined()
+    expect(mocks.handleApiError).not.toHaveBeenCalled()
+  })
+})
+
+describe('connecting a registry', () => {
+  it('takes the secret in a masked field, and sends it only in the create', async () => {
+    await renderPanel()
     open()
     expect(field('registry-password').type).toBe('password')
 
-    act(() => {
-      typeInto(field('registry-username'), 'acme-bot')
-      typeInto(field('registry-password'), PASSWORD)
-    })
-    await act(async () => {
-      field('registry-password').form?.requestSubmit()
-    })
+    await fillAndSubmit({})
 
     expect(mocks.create).toHaveBeenCalledWith({
       credential: { registryHost: 'ghcr.io', repositoryPrefix: '', username: 'acme-bot', password: PASSWORD },
       organizationId: 'org-1',
     })
-    // Saved, and the form holding it is gone, and so is the mutation's copy.
     expect(document.getElementById('registry-password')).toBeNull()
     expect(mocks.reset).toHaveBeenCalled()
   })
 
-  it('forgets a typed password when the dialog is closed without saving', () => {
+  // The API takes whole path segments ending in a slash; one left off is
+  // completed rather than refused.
+  it('completes a repository prefix typed without its trailing slash', async () => {
+    await renderPanel()
+    open()
+
+    act(() => typeInto(field('registry-prefix'), 'acme'))
+    expect(host.ownerDocument.body.textContent).toContain('ghcr.io/acme/*')
+    await fillAndSubmit({})
+
+    expect(mocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({ credential: expect.objectContaining({ repositoryPrefix: 'acme/' }) }),
+    )
+  })
+
+  it('forgets a typed secret when the dialog is closed without saving', async () => {
+    await renderPanel()
     open()
     act(() => typeInto(field('registry-password'), PASSWORD))
 
-    const cancel = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Cancel')
-    act(() => cancel?.click())
+    act(() => button('Cancel')?.click())
     open()
 
     expect(field('registry-password').value).toBe('')
   })
 
-  it('keeps the form available after a failed create and reports the failure', async () => {
-    const refusal = new Error('A login already exists for this prefix')
-    mocks.create.mockRejectedValue(refusal)
+  it('says which credential is in the way of a duplicate, and keeps the form', async () => {
+    mocks.create.mockRejectedValue(
+      new BoxliteError('A credential for ghcr.io/acme/ already exists; remove it before adding another'),
+    )
+    await renderPanel()
     open()
-    act(() => {
-      typeInto(field('registry-prefix'), 'acme/')
-      typeInto(field('registry-username'), 'acme-bot')
-      typeInto(field('registry-password'), PASSWORD)
-    })
-    await act(async () => field('registry-password').form?.requestSubmit())
+    await fillAndSubmit({ prefix: 'acme/' })
 
-    expect(mocks.create).toHaveBeenCalledWith({
-      credential: { registryHost: 'ghcr.io', repositoryPrefix: 'acme/', username: 'acme-bot', password: PASSWORD },
-      organizationId: 'org-1',
-    })
-    expect(mocks.handleApiError).toHaveBeenCalledWith(refusal, 'Failed to add a login for ghcr.io')
+    expect(mocks.toastError).toHaveBeenCalledWith('ghcr.io/acme/* already has a credential', expect.anything())
     expect(field('registry-prefix').value).toBe('acme/')
     expect(mocks.reset).not.toHaveBeenCalled()
   })
 
-  it('removes a confirmed login and closes the confirmation', async () => {
-    const trash = document.querySelector('button[title="Remove the login for ghcr.io"]') as HTMLButtonElement
-    act(() => trash.click())
-    const confirm = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Remove')
-    await act(async () => confirm?.click())
+  it('reports any other failure with the API’s reason', async () => {
+    const refusal = new BoxliteError('registry host not allowed')
+    mocks.create.mockRejectedValue(refusal)
+    await renderPanel()
+    open()
+    await fillAndSubmit({})
+
+    expect(mocks.handleApiError).toHaveBeenCalledWith(refusal, 'Could not connect ghcr.io')
+  })
+
+  // A box whose private pull was refused links here with the registry named,
+  // so the form opens on it with that registry's instructions.
+  it('opens on the registry a link names, with that registry’s instructions', async () => {
+    await renderPanel('/dashboard/images/registries?connect=gcr.io')
+
+    expect(field('registry-username')).not.toBeNull()
+    expect(document.body.textContent).toContain('Google Container Registry (gcr.io)')
+    expect(document.body.textContent).toContain('oauth2accesstoken')
+  })
+
+  it('ignores a link naming a registry the API does not accept', async () => {
+    await renderPanel('/dashboard/images/registries?connect=evil.example.com')
+
+    expect(document.getElementById('registry-username')).toBeNull()
+  })
+})
+
+describe('removing a credential', () => {
+  it('removes a confirmed credential and closes the confirmation', async () => {
+    await renderPanel()
+    act(() =>
+      (document.querySelector('button[title="Remove the credential for ghcr.io"]') as HTMLButtonElement).click(),
+    )
+    await act(async () => button('Remove')?.click())
 
     expect(mocks.remove).toHaveBeenCalledWith({ id: 'credential-1', organizationId: 'org-1' })
-    expect(mocks.handleApiError).not.toHaveBeenCalled()
     expect(document.querySelector('[role="alertdialog"]')).toBeNull()
   })
 
-  it('forgets the password when the dialog close button dismisses the form', () => {
-    open()
-    act(() => typeInto(field('registry-password'), PASSWORD))
-    const close = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Close')
-    expect(close).toBeDefined()
-    act(() => close?.click())
-    open()
-    expect(field('registry-password').value).toBe('')
-    expect(mocks.reset).toHaveBeenCalled()
-  })
+  // The API refuses while boxes pull through the credential and lists them by
+  // id; the reader is told which boxes, by name.
+  it('names the boxes a refusal lists', async () => {
+    state.byId = new Map([['a1b2c3', { id: 'a1b2c3', name: 'agile-otter' }]])
+    mocks.remove.mockRejectedValue(
+      new BoxliteError('Registry credential credential-1 cannot be removed while 1 box(es) pull through it: a1b2c3'),
+    )
+    await renderPanel()
+    act(() =>
+      (document.querySelector('button[title="Remove the credential for ghcr.io"]') as HTMLButtonElement).click(),
+    )
+    await act(async () => button('Remove')?.click())
 
-  // Container Registry serves the same images from a host per region, and each
-  // takes the same service account key.
-  it.each(['gcr.io', 'us.gcr.io', 'eu.gcr.io', 'asia.gcr.io'])(
-    'warns about service account keys once %s is chosen',
-    (host) => {
-      open()
-      const registry = document.getElementById('registry-host') as HTMLSelectElement
-      expect(document.body.textContent).not.toContain('service account keys')
-
-      act(() => {
-        registry.value = host
-        registry.dispatchEvent(new Event('change', { bubbles: true }))
-      })
-
-      expect(registry.value).toBe(host)
-      expect(document.body.textContent).toContain('service account keys')
-    },
-  )
-
-  it('shows why a login could not be removed, which names the boxes still pulling', async () => {
-    const refusal = new Error('cannot be removed while 1 box(es) pull through it: a1b2c3')
-    mocks.remove.mockRejectedValue(refusal)
-    const trash = document.querySelector('button[title="Remove the login for ghcr.io"]') as HTMLButtonElement
-    act(() => trash.click())
-
-    const confirm = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Remove')
-    await act(async () => confirm?.click())
-
-    expect(mocks.remove).toHaveBeenCalledWith({ id: 'credential-1', organizationId: 'org-1' })
-    expect(mocks.handleApiError).toHaveBeenCalledWith(refusal, 'Failed to remove the login for ghcr.io')
-  })
-
-  it('reports a list that failed rather than showing an empty one', () => {
-    const failure = new Error('403')
-    state.credentials = []
-    state.listError = failure
-    act(() => root?.render(<Registries />))
-
-    expect(mocks.handleApiError).toHaveBeenCalledWith(failure, 'Failed to fetch registry logins')
-    expect(host.textContent).toContain('could not be loaded')
-    expect(host.textContent).not.toContain('No logins yet')
+    expect(mocks.toastError).toHaveBeenCalledWith(
+      'Still in use',
+      expect.objectContaining({ description: expect.stringContaining('agile-otter') }),
+    )
   })
 })

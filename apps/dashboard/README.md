@@ -120,11 +120,25 @@ first pull says PULLING IMAGE, not STARTING, so a minute in that state reads as
 work rather than a hang. And a box's image links to its catalog entry once a
 start has put it there.
 
-## Registry login tests
+## Private registries say what to fetch, and what a credential covers
+
+A credential is write-only once saved, and nothing can test it, so the form is
+where it has to be right. It is built per registry: GitHub, Docker Hub, Quay
+and each Container Registry host get their own steps (where to make the token,
+which scope, what the username is), and the scope a credential will cover is
+shown as it is typed (`ghcr.io/acme/*`), with an unterminated prefix completed
+rather than refused. The registries offered are the API's default
+`REGISTRY_PROXY_UPSTREAM_HOSTS`; a stack configured with others needs
+`PROVIDERS` changed with it.
+
+Refusals are named in the reader's terms: a duplicate says which scope already
+has a credential, and a removal refused because boxes pull through it names
+those boxes rather than their ids. A deploy with no secret store answers 501,
+which is a state of the environment, not an error, so the panel says private
+registries are off there and offers nothing to connect.
 
 Registry query and mutation tests use a real QueryClient with mocked API calls.
 They verify organization isolation, refusal before sending an unscoped request,
-and invalidation after successful changes. Page tests cover confirmation and
-failed submissions; API client tests check that removal refusals retain their
-message through the shared interceptor. Keep these boundaries covered when
-changing registry logins, alongside password cleanup on dialog close.
+and invalidation after successful changes. Panel tests cover the masked secret
+and its cleanup on close, prefix completion, the `?connect=` link, duplicates,
+and refusals named by box.
