@@ -14,6 +14,12 @@ Run these from `apps/`:
 | `yarn nx run dashboard:test` | Vitest suite |
 | `yarn nx run dashboard:test --coverage` | Same, writing lcov to `target/coverage/dashboard` |
 
+`npm run start:mock` (from `apps/`) serves the console against the MSW handlers
+in `src/mocks`, with no backend and no login. Its `VITE_BASE_API_URL` must end in
+`/api`: `ConfigProvider` appends routes to that base directly, while the
+handlers are mounted under `VITE_API_URL`. When the two disagree, `/config`
+goes unanswered and the console never leaves its loading screen.
+
 `DASHBOARD_API_PROXY_TARGET` points the dev server at a remote API
 (`https://dev.boxlite.ai`) through the same-origin proxy, so the browser never
 makes a CORS-gated request.
