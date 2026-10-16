@@ -75,24 +75,37 @@ func BoxliteExec(ctx *gin.Context) {
 
 	execId, err := execManager.Start(ctx.Request.Context(), bx, boxId, startOpts)
 	if err != nil {
-		// Classify so a stopped / wrong-state box surfaces as 4xx, not
-		// 500. Without this the box-stopped case leaks
-		//   internal error: HTTP 500 Internal Server Error:
-		//   {"error":"exec failed: failed to start execution: boxlite: stopped:
-		//    Handle invalidated after stop(). ... (code=11)"}
-		// and the SDK's 'all 5xx is bug' guard fires. The Go SDK already
-		// gives us a typed bool for the two states that aren't 500 from
-		// the runner's perspective (the box exists but isn't accepting
-		// execs right now).
-		if sdkboxlite.IsStopped(err) || sdkboxlite.IsInvalidState(err) {
-			ctx.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
-			return
-		}
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
+		writeExecStartError(ctx, err)
 		return
 	}
 
 	ctx.JSON(http.StatusCreated, ExecResponse{ExecutionID: execId})
+}
+
+// writeExecStartError answers a failed exec start: box-state conflicts and
+// known runtime classes keep their 4xx envelope, everything else stays a 500.
+func writeExecStartError(ctx *gin.Context, err error) {
+	if sdkboxlite.IsStopped(err) || sdkboxlite.IsInvalidState(err) {
+		ctx.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
+		return
+	}
+	if class, message, ok := execStartErrorClass(err); ok {
+		respondError(ctx, class.status, message, class.errorType, class.code)
+		return
+	}
+	ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
+}
+
+// execStartErrorClass maps a runtime error to its typed envelope when the
+// exec-start branch may answer it; server faults fall through to a plain 500.
+func execStartErrorClass(err error) (copyErrorClass, string, bool) {
+	var runtimeErr *sdkboxlite.Error
+	if errors.As(err, &runtimeErr) {
+		if class, ok := copyErrorClasses[runtimeErr.Code]; ok && class.status < http.StatusInternalServerError {
+			return class, runtimeErr.Message, true
+		}
+	}
+	return copyErrorClass{}, "", false
 }
 
 // allowedExecSignals is the whitelist of POSIX signal numbers callers may
