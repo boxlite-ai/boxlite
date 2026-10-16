@@ -215,6 +215,7 @@ How BoxLite embeds a runtime and runs OCI containers inside micro-VMs. Details �
 
 ## Documentation
 
+- [BoxLite plugin for Codex and Claude Code](./plugins/boxlite/README.md) — install from GitHub, authenticate, and build or deploy an application
 - [API & CLI Reference](./docs/reference/) — SDK API references (Python, Node.js, Rust, C), the `boxlite` CLI reference, and the REST API contract ([`openapi/box.openapi.yaml`](./openapi/box.openapi.yaml))
 - [Using BoxLite with AI agents](./docs/guides/ai-agent-integration.md) — concurrency, timeouts, security, file transfer
 - [Examples](./examples/) — Sample code for common use cases

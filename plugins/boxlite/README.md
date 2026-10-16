@@ -4,17 +4,31 @@ Build or adapt an app, deploy it through the BoxLite CLI, return its registered 
 
 ## Install and use
 
-For a standalone marketplace supplied as a test package, extract it and use its absolute directory:
+### From GitHub
+
+You need Git, Make, Python 3.9+ and the Codex or Claude Code CLI. Download the source and generate the standalone marketplace:
 
 ~~~sh
-codex plugin marketplace add ABSOLUTE_MARKETPLACE_DIRECTORY
+git clone --depth 1 --branch main https://github.com/boxlite-ai/boxlite.git boxlite-plugin
+cd boxlite-plugin
+make plugin:boxlite:dist
+~~~
+
+This validates and packages the skills; it does not build the BoxLite CLI. Run the installation commands below from the cloned repository root. Keep the checkout because it provides the local marketplace source.
+
+### Install in Codex or Claude Code
+
+For a supplied test marketplace archive, extract it and replace the marketplace path below with the extracted marketplace's absolute directory.
+
+~~~sh
+codex plugin marketplace add "$PWD/target/plugins/boxlite-marketplace"
 codex plugin add boxlite@boxlite
 ~~~
 
 For Claude Code:
 
 ~~~sh
-claude plugin marketplace add ABSOLUTE_MARKETPLACE_DIRECTORY
+claude plugin marketplace add "$PWD/target/plugins/boxlite-marketplace"
 claude plugin install boxlite@boxlite
 claude plugin list
 claude plugin details boxlite
@@ -33,3 +47,11 @@ Claude Code also accepts /boxlite:boxlite-setup and /boxlite:boxlite. Repository
 The optional deploy helper requires host Python 3.9+ and the guest's provided Python 3. It uses the standard library and installs no helper dependencies.
 
 Keep app source, deployment state, credentials and CLI build caches outside this plugin. Online documentation is a conditional reference. This package has no application template, MCP server or lifecycle hook. Its optional helpers manage an app through the existing CLI.
+
+## Privacy and support
+
+BoxLite is provided by Polygala, Inc. See the [privacy policy](https://boxlite.ai/legal/privacy) and [service terms](https://boxlite.ai/legal/terms). Contact [support@boxlite.ai](mailto:support@boxlite.ai) for support and review questions; privacy requests go to [privacy@boxlite.ai](mailto:privacy@boxlite.ai).
+
+The skills send user-selected application files and commands to BoxLite Cloud and use Auth0 for login. The CLI stores the selected profile's credentials locally. The optional deployment helper uses the selected CLI profile and rejects a nonempty BOXLITE_API_KEY environment variable before running commands; it does not forward credentials to an application's registered health URL. Source builds fetch the pinned official GitHub repository and its toolchains. Cloud retention and third-party processing follow the published policy.
+
+Both listing icons use the same opaque white 512px square PNG, with the existing white-background brand artwork centered at its native size so the black outlines remain visible on dark host surfaces. Claude discovers its icon at .claude-plugin/icon.png; the OpenAI manifests reference assets/boxlite-icon.png. Keep these copies identical and preserve the white backdrop when updating the artwork. The Claude manifest sets the display name and public links explicitly so its support link does not depend on README-link inference.

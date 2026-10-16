@@ -4,7 +4,8 @@
   "description": "Skills for building, deploying and updating apps on BoxLite cloud.",
   "author": {
     "name": "BoxLite",
-    "url": "https://boxlite.ai"
+    "url": "https://boxlite.ai",
+    "email": "support@boxlite.ai"
   },
   "homepage": "https://docs.boxlite.ai",
   "repository": "https://github.com/boxlite-ai/boxlite",
@@ -15,5 +16,10 @@
     "deployment",
     "cli",
     "skills"
-  ]
+  ],
+  "displayName": "BoxLite",
+  "supportUrl": "https://boxlite.ai/contact",
+  "privacyPolicyUrl": "https://boxlite.ai/legal/privacy",
+  "termsOfServiceUrl": "https://boxlite.ai/legal/terms",
+  "documentationUrl": "https://docs.boxlite.ai"
 }
