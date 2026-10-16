@@ -105,6 +105,25 @@ opens. A second entry point to the same guide is a bug, not a convenience —
 mounting one twice has already caused duplicate API keys to be minted
 (issue #1491).
 
+## A list with no create says how its rows arrive
+
+The API has no create for an image: one enters the catalog when a box first
+starts from it. So the Images page has no "New image" button, which would
+promise a registration step that does not exist. It says how an image arrives
+instead, as three steps across the top: connect a private registry if the image
+needs one, start a box from it, and it is listed once the box runs. The first
+is the only step a reader may have to take beforehand, so it links to Private
+registries; the second opens the box create.
+
+Every image row and every built-in image offers "New box", the same create
+dialog the Boxes page uses with the image filled in, so starting from an image
+is one click wherever the image is shown. The SDK call for the same start sits
+behind "Show the SDK call" for readers who will paste it rather than click.
+
+Built-in images sit apart from the table. They are operator configuration with
+no versions, size or recorded starts, so a row for them would be a line of
+dashes, and a "never" under last started would be false.
+
 ## A failure carries the way to its fix
 
 When the API's reason names something the reader can fix on another page, the
