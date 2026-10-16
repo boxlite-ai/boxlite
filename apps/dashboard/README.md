@@ -186,8 +186,12 @@ those boxes rather than their ids. A deploy with no secret store answers 501,
 which is a state of the environment, not an error, so the panel says private
 registries are off there and offers nothing to connect.
 
+## Registry login tests
+
 Registry query and mutation tests use a real QueryClient with mocked API calls.
 They verify organization isolation, refusal before sending an unscoped request,
-and invalidation after successful changes. Panel tests cover the masked secret
-and its cleanup on close, prefix completion, the `?connect=` link, duplicates,
-and refusals named by box.
+and invalidation after successful changes. Page tests cover confirmation and
+failed submissions, and API client tests check that removal refusals retain
+their message through the shared interceptor. Panel tests cover the masked
+secret and its cleanup on close, prefix completion, the `?connect=` link,
+duplicates, and refusals named by box.

@@ -376,6 +376,7 @@ describe('reading the image', () => {
       'Failed to fetch image',
       expect.objectContaining({ description: 'image not found' }),
     )
+    expect(text()).not.toContain('Tags')
     expect(button('Pin a tag')).toBeUndefined()
   })
 
