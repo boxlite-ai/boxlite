@@ -24,7 +24,7 @@ boxlite-vmm
 | Module | Planned responsibility |
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, then allocate and register RAM on host backend `H`; `run` is a placeholder |
-| `boot` | On Linux x86_64, load the pinned ELF kernel through linux-loader; boot data and entry setup follow |
+| `boot` | Linux x86_64 boot: load the pinned ELF kernel through linux-loader and prepare the 64-bit entry state (GDT, identity page tables, registers); boot data and lifecycle wiring follow |
 | `config` | `VmConfig { vcpu_count, memory_mib }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB |
 | `error` | VMM errors that keep the hypervisor's cause chain |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
@@ -93,7 +93,25 @@ make test:integration:vmm:elf VMM_KERNEL=/absolute/path/to/vmlinux
 the entry and loaded bytes with independent `readelf` output, checks BSS in
 fresh RAM, then runs a vCPU checksum over the loaded span. Missing hardware
 or kernel input fails qualification. This proves loading and guest visibility;
-boot data, CPU entry setup and Linux execution belong to later slices.
+boot data and Linux execution belong to later slices.
+
+## Long-mode entry
+
+On Linux x86_64, `boot::entry::long_mode_entry(ram, entry, boot_params)`
+writes the state that the Linux 64-bit boot protocol requires
+(`Documentation/arch/x86/boot.rst`, "64-bit Boot Protocol") and returns the
+boot vCPU registers. vCPU workers will apply them after the vCPU's CPUID and
+MSRs; nothing calls it from `Vm` yet.
+
+- Guest RAM: the GDT at `0x500` holds flat `__BOOT_CS` (`0x10`) and
+  `__BOOT_DS` (`0x18`). Page tables from `0x9000` identity-map
+  `[0, MMIO_HOLE_START)`, where all RAM lies, with 2 MiB pages, whatever the
+  RAM size, and leave the hole unmapped. Nothing is written unless RAM covers
+  `0x500..0xE000`.
+- Registers: 64-bit mode with paging (CR0 PE, ET and PG; CR4 PAE; EFER LME
+  and LMA), interrupts off, RIP at `entry`, RSI at `boot_params`, a stack
+  below `0x8FF0`, and segments decoded from the GDT entries. There is no IDT,
+  so an exception before Linux installs its own resets the guest.
 
 ## Build
 
@@ -111,11 +129,14 @@ make fmt:check:rust
 ```
 
 On Linux x86_64 with read/write access to `/dev/kvm`,
-`make test:integration:vmm:kvm` also runs this crate's hardware test: a VM
-with the largest layout and a flat 32-bit guest that reads the last RAM byte
-and reports it on port `0x3f8`. The 3 GiB allocation is `MAP_NORESERVE`, so
-only the touched pages are committed; a host with `vm.overcommit_memory=2`
-refuses it. CI runs the same test through `make coverage:vmm:kvm`.
+`make test:integration:vmm:kvm` also runs this crate's hardware tests on VMs
+with the largest layout. A flat 32-bit guest reads the last RAM byte and
+reports it on port `0x3f8`. A 64-bit guest entered through
+`long_mode_entry` reloads its segments from the GDT in RAM, reads markers at
+RSI and at the top of RAM, and stores RFLAGS, CR0, CR3, CR4 and EFER for the
+test to compare. The 3 GiB allocation is `MAP_NORESERVE`, so only the touched
+pages are committed; a host with `vm.overcommit_memory=2` refuses it. CI runs
+the same tests through `make coverage:vmm:kvm`.
 
 With the corresponding Rust targets installed, the crate can also be compiled
 for each host with a backend module without booting a VM:
