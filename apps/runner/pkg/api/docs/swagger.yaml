@@ -63,8 +63,8 @@ definitions:
         type: array
       outboundEnabled:
         description: |-
-          Outbound network policy. A body without outboundEnabled reads as false,
-          so a request missing the policy gets no egress rather than full egress.
+          Outbound network policy. outboundEnabled is required: a request without
+          it is rejected rather than started with a guessed policy.
         type: boolean
       regionId:
         type: string
@@ -91,6 +91,7 @@ definitions:
       - id
       - image
       - osUser
+      - outboundEnabled
     type: object
   ErrorResponse:
     description: Error response
@@ -158,8 +159,8 @@ definitions:
         type: array
       outboundEnabled:
         description: |-
-          Outbound network policy. A body without outboundEnabled reads as false,
-          so a request missing the policy gets no egress rather than full egress.
+          Outbound network policy. outboundEnabled is required: a request without
+          it is rejected rather than started with a guessed policy.
         type: boolean
       secrets:
         items:
@@ -175,6 +176,7 @@ definitions:
     required:
       - errorReason
       - osUser
+      - outboundEnabled
     type: object
   RegistryDTO:
     properties:

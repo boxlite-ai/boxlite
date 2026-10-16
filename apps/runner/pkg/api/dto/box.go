@@ -26,9 +26,9 @@ type CreateBoxDTO struct {
 	RunAsUser    string            `json:"runAsUser,omitempty"`
 	Volumes      []VolumeDTO       `json:"volumes,omitempty"`
 	Secrets      []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
-	// Outbound network policy. A body without outboundEnabled reads as false,
-	// so a request missing the policy gets no egress rather than full egress.
-	OutboundEnabled  bool              `json:"outboundEnabled"`
+	// Outbound network policy. outboundEnabled is required: a request without
+	// it is rejected rather than started with a guessed policy.
+	OutboundEnabled  *bool             `json:"outboundEnabled" validate:"required"`
 	OutboundAllowNet []string          `json:"outboundAllowNet,omitempty"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
 	AuthToken        *string           `json:"authToken,omitempty"`
@@ -56,9 +56,9 @@ type RecoverBoxDTO struct {
 	Env          map[string]string `json:"env,omitempty"`
 	Volumes      []VolumeDTO       `json:"volumes,omitempty"`
 	Secrets      []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
-	// Outbound network policy. A body without outboundEnabled reads as false,
-	// so a request missing the policy gets no egress rather than full egress.
-	OutboundEnabled  bool     `json:"outboundEnabled"`
+	// Outbound network policy. outboundEnabled is required: a request without
+	// it is rejected rather than started with a guessed policy.
+	OutboundEnabled  *bool    `json:"outboundEnabled" validate:"required"`
 	OutboundAllowNet []string `json:"outboundAllowNet,omitempty"`
 	ErrorReason      string   `json:"errorReason" validate:"required"`
 } //	@name	RecoverBoxDTO

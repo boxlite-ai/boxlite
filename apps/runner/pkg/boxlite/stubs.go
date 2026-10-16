@@ -15,11 +15,18 @@ import (
 func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.RecoverBoxDTO) error {
 	c.logger.Info("recover box", "box", boxId)
 
+	// Check before Destroy: a request that cannot be recreated must not cost
+	// the box it was meant to recover.
+	createDto := recoverCreateDto(boxId, recoverDto)
+	if _, err := networkSpec(createDto); err != nil {
+		return err
+	}
+
 	if err := c.Destroy(ctx, boxId); err != nil {
 		c.logger.Warn("failed to destroy during recover", "error", err)
 	}
 
-	_, _, err := c.Create(ctx, recoverCreateDto(boxId, recoverDto))
+	_, _, err := c.Create(ctx, createDto)
 	return err
 }
 

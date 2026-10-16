@@ -46,6 +46,7 @@ func TestCreateAppliesSecrets(t *testing.T) {
 // cannot: RecoverBox must route through the pure function, or a hand-rolled
 // DTO could drop fields again without any test noticing.
 func TestRecoverForwardsSecrets(t *testing.T) {
+	outboundEnabled := true
 	recoverDto := dto.RecoverBoxDTO{
 		FromVolumeId: "vol-1",
 		OsUser:       "root",
@@ -59,7 +60,7 @@ func TestRecoverForwardsSecrets(t *testing.T) {
 			{Name: "openai", Value: "sk-test", Hosts: []string{"api.openai.com"}, Placeholder: "<BOXLITE_SECRET:openai>"},
 			{Name: "github", Value: "gh-test"},
 		},
-		OutboundEnabled:  true,
+		OutboundEnabled:  &outboundEnabled,
 		OutboundAllowNet: []string{"10.0.0.0/8"},
 	}
 
@@ -97,8 +98,8 @@ func TestRecoverForwardsSecrets(t *testing.T) {
 			t.Errorf("createDto.Secrets[%d] = %+v, want %+v", i, createDto.Secrets[i], secret)
 		}
 	}
-	if !createDto.OutboundEnabled {
-		t.Errorf("createDto.OutboundEnabled = false, want true")
+	if createDto.OutboundEnabled == nil || !*createDto.OutboundEnabled {
+		t.Errorf("createDto.OutboundEnabled = %v, want true", createDto.OutboundEnabled)
 	}
 	if !reflect.DeepEqual(createDto.OutboundAllowNet, recoverDto.OutboundAllowNet) {
 		t.Errorf("createDto.OutboundAllowNet = %v, want %v", createDto.OutboundAllowNet, recoverDto.OutboundAllowNet)

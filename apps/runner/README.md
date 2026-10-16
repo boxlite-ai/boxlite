@@ -165,9 +165,10 @@ crash handling live in the runtime, not the runner.
 | `GET` | `/boxes/:id` | `Info` | Combined state + backup state + runtime version |
 
 `Create` and `Recover` take the outbound network policy as
-`outboundEnabled` and an `outboundAllowNet` entry list. A body without
-`outboundEnabled`, such as a job queued by an API that predates it, reads as
-outbound disabled, so a missing policy never grants full egress
+`outboundEnabled` and an `outboundAllowNet` entry list. `outboundEnabled` is
+required: a body without it, such as a job queued by an API that predates it,
+is rejected as an invalid argument before the runner mounts volumes, creates
+a box, or (for `Recover`) destroys the old one
 (`networkSpec` in [`pkg/boxlite/client.go`](pkg/boxlite/client.go)).
 
 `Info` is the only endpoint that fans out: it pulls live state from the

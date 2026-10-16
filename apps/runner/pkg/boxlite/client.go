@@ -22,6 +22,7 @@ import (
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/models"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
+	"github.com/containerd/errdefs"
 	"go.opentelemetry.io/otel/propagation"
 )
 
@@ -77,12 +78,20 @@ type ClientConfig struct {
 	VolumeCleanupExclusionPeriod time.Duration
 }
 
+// errMissingOutboundPolicy rejects a create or recover request that carries no
+// outbound policy. Guessing one would either open egress the caller meant to
+// block or cut egress it meant to allow, and the box would start silently wrong.
+var errMissingOutboundPolicy = errdefs.ErrInvalidArgument.WithMessage("outboundEnabled is required")
+
 // networkSpec maps the create request's outbound policy onto the SDK spec.
-func networkSpec(boxDto dto.CreateBoxDTO) boxlite.NetworkSpec {
-	if !boxDto.OutboundEnabled {
-		return boxlite.NetworkSpec{Mode: boxlite.NetworkModeDisabled}
+func networkSpec(boxDto dto.CreateBoxDTO) (boxlite.NetworkSpec, error) {
+	if boxDto.OutboundEnabled == nil {
+		return boxlite.NetworkSpec{}, errMissingOutboundPolicy
 	}
-	return boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled, AllowNet: allowNetEntries(boxDto.OutboundAllowNet)}
+	if !*boxDto.OutboundEnabled {
+		return boxlite.NetworkSpec{Mode: boxlite.NetworkModeDisabled}, nil
+	}
+	return boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled, AllowNet: allowNetEntries(boxDto.OutboundAllowNet)}, nil
 }
 
 // allowNetEntries trims entries and drops blanks; nil when nothing is left.
@@ -383,6 +392,13 @@ func (c *Client) Close() error {
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
+	// Before any side effect: a request without a policy must not leave
+	// volume mounts or a box behind.
+	network, err := networkSpec(boxDto)
+	if err != nil {
+		return "", "", err
+	}
+
 	// API sends cores / GB / GB as small integers (see apps/api Box entity).
 	cpus := int(boxDto.CpuQuota)
 	if cpus < 1 {
@@ -449,7 +465,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		}
 	}
 
-	opts = append(opts, boxlite.WithNetwork(networkSpec(boxDto)))
+	opts = append(opts, boxlite.WithNetwork(network))
 
 	// GetOrCreate (not Create) so a CREATE_BOX replay is idempotent. The local
 	// box name is boxDto.Id — the control plane's globally-unique box id — so if

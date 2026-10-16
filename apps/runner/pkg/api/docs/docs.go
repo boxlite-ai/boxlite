@@ -636,7 +636,8 @@ const docTemplate = `{
             "required": [
                 "id",
                 "image",
-                "osUser"
+                "osUser",
+                "outboundEnabled"
             ],
             "properties": {
                 "authToken": {
@@ -704,7 +705,7 @@ const docTemplate = `{
                     }
                 },
                 "outboundEnabled": {
-                    "description": "Outbound network policy. A body without outboundEnabled reads as false,\nso a request missing the policy gets no egress rather than full egress.",
+                    "description": "Outbound network policy. outboundEnabled is required: a request without\nit is rejected rather than started with a guessed policy.",
                     "type": "boolean"
                 },
                 "regionId": {
@@ -799,7 +800,8 @@ const docTemplate = `{
             "type": "object",
             "required": [
                 "errorReason",
-                "osUser"
+                "osUser",
+                "outboundEnabled"
             ],
             "properties": {
                 "cpuQuota": {
@@ -836,7 +838,7 @@ const docTemplate = `{
                     }
                 },
                 "outboundEnabled": {
-                    "description": "Outbound network policy. A body without outboundEnabled reads as false,\nso a request missing the policy gets no egress rather than full egress.",
+                    "description": "Outbound network policy. outboundEnabled is required: a request without\nit is rejected rather than started with a guessed policy.",
                     "type": "boolean"
                 },
                 "secrets": {

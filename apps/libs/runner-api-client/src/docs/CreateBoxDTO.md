@@ -20,7 +20,7 @@ Name | Type | Description | Notes
 **osUser** | **string** |  | [default to undefined]
 **otelEndpoint** | **string** |  | [optional] [default to undefined]
 **outboundAllowNet** | **Array&lt;string&gt;** |  | [optional] [default to undefined]
-**outboundEnabled** | **boolean** | Outbound network policy. A body without outboundEnabled reads as false, so a request missing the policy gets no egress rather than full egress. | [optional] [default to undefined]
+**outboundEnabled** | **boolean** | Outbound network policy. outboundEnabled is required: a request without it is rejected rather than started with a guessed policy. | [default to undefined]
 **regionId** | **string** |  | [optional] [default to undefined]
 **registry** | [**RegistryDTO**](RegistryDTO.md) |  | [optional] [default to undefined]
 **runAsUser** | **string** |  | [optional] [default to undefined]
