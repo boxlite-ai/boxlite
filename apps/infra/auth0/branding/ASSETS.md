@@ -12,8 +12,8 @@ into the dashboard build and Nest serves them through the stack domain.
 
 | Public file                            | Source                                                                  | SHA-256                                                            |
 | -------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `boxlite-light-7461080f.png`           | `apps/dashboard/src/assets/boxlite-light.png`                           | `7461080f603fa7a01912bfa3c622020c488c55a42821a1544a804fa98f53dcba` |
-| `boxlite-black-b34c6511.png`           | `apps/dashboard/src/assets/boxlite-black.png`                           | `b34c6511f13074f39bde1f0da310f6e0e1ed0b91ac10d690c73c66bdd5be65ab` |
+| `boxlite-light-a86a8b84.png`           | `apps/dashboard/src/assets/boxlite-light.png`                           | `a86a8b847d59de489d573b6f75f5935d09ffa406f0d0607a8312ebd977ad9fc7` |
+| `boxlite-black-f6efad9e.png`           | `apps/dashboard/src/assets/boxlite-black.png`                           | `f6efad9e3aca17eae3620c093ae820d1dbf74dcbe45d14a17c8a3329edbd0b16` |
 | `ibm-plex-mono-400-ba204497.woff2`     | `@ibm/plex-mono@2.5.0` `fonts/complete/woff2/IBMPlexMono-Regular.woff2` | `ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350` |
 | `IBM-Plex-OFL-d741e57d.txt`            | `@ibm/plex-mono@2.5.0` `LICENSE.txt` (normalized text)                  | `d741e57d5f865e294df801f96b7b5161a88b211df65887e4358d271c9fc5fb4f` |
 | `github-invertocat-white-ccd84c89.svg` | `brand.github.com` `GitHub_Logos.zip` `SVG/GitHub_Invertocat_White.svg` | `ccd84c89b1056345608fc3489357f8acc7397e49a3cdc2d418b6c8016911d47b` |
