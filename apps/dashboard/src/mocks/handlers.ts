@@ -18,9 +18,12 @@ import { Invoice, PaginatedInvoices } from '@/billing-api/types/Invoice'
 import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
 import { Plan } from '@/billing-api/types/Plan'
 import type { UsageConcurrencySeriesDto } from '@boxlite-ai/api-client'
+import { catalogNameOf } from '@/lib/image-ref'
 import { http, HttpResponse } from 'msw'
 import {
   MOCK_BOXES,
+  MOCK_IMAGE_DETAILS,
+  MOCK_IMAGE_LIMIT,
   MOCK_ORGANIZATION,
   MOCK_ORGANIZATION_MEMBER,
   MOCK_PAGINATED_BOXES,
@@ -49,6 +52,13 @@ function quickstartHandoffDemoBox() {
     createdAt: new Date().toISOString(),
     public: stage === 'published',
   }
+}
+
+/** Boxes that block an image's removal: every one not destroyed, as the API counts them. */
+function boxesReferencing(imageName: string) {
+  return MOCK_BOXES.filter(
+    (box) => box.desiredState !== 'destroyed' && box.image != null && catalogNameOf(box.image) === imageName,
+  )
 }
 
 export const handlers = [
@@ -188,6 +198,126 @@ export const handlers = [
     const row = MOCK_VOLUMES.find((v) => v.id === id)
     if (!row) return new HttpResponse(null, { status: 404 })
     row.state = 'pending_delete' as (typeof row)['state']
+    return new HttpResponse(null, { status: 204 })
+  }),
+
+  // Image catalog. Deleting an image is soft and answers 409 while a box can
+  // still boot from it, naming those boxes by id; curated images cannot be
+  // deleted at all.
+  http.get(`${API_URL}/images/usage`, () => {
+    const owned = MOCK_IMAGE_DETAILS.filter((i) => !i.curated)
+    return HttpResponse.json({
+      count: owned.length,
+      limit: MOCK_IMAGE_LIMIT,
+      knownBytes: owned.reduce((sum, i) => sum + (i.sizeBytes ?? 0), 0),
+    })
+  }),
+  http.get(`${API_URL}/images`, () =>
+    HttpResponse.json(
+      MOCK_IMAGE_DETAILS.map((detail) => {
+        const image: Partial<typeof detail> = { ...detail }
+        delete image.versions
+        delete image.history
+        return image
+      }),
+    ),
+  ),
+  http.get(`${API_URL}/images/:idOrRef`, ({ params }) => {
+    const key = decodeURIComponent(String(params.idOrRef))
+    const image = MOCK_IMAGE_DETAILS.find((i) => i.id === key || i.name === key)
+    return image ? HttpResponse.json(image) : new HttpResponse(null, { status: 404 })
+  }),
+  http.delete(`${API_URL}/images/:idOrRef`, ({ params }) => {
+    const key = decodeURIComponent(String(params.idOrRef))
+    const index = MOCK_IMAGE_DETAILS.findIndex((i) => i.id === key || i.name === key)
+    if (index < 0) return new HttpResponse(null, { status: 404 })
+    const image = MOCK_IMAGE_DETAILS[index]
+    if (image.curated) {
+      return HttpResponse.json(
+        { statusCode: 403, message: 'Curated images belong to the operator', error: 'Forbidden' },
+        { status: 403 },
+      )
+    }
+    const holders = boxesReferencing(image.name)
+    if (holders.length > 0) {
+      return HttpResponse.json(
+        {
+          statusCode: 409,
+          message: `Image '${image.name}' cannot be removed while ${holders.length} box(es) can still boot from it: ${holders.map((b) => b.id).join(', ')}`,
+          error: 'Conflict',
+        },
+        { status: 409 },
+      )
+    }
+    MOCK_IMAGE_DETAILS.splice(index, 1)
+    return new HttpResponse(null, { status: 204 })
+  }),
+  // Pinning answers as the API does: OCI tag syntax, a READY version of this
+  // image, and 409 for any existing name, the same version included.
+  http.post(`${API_URL}/images/:idOrRef/aliases`, async ({ params, request }) => {
+    const key = decodeURIComponent(String(params.idOrRef))
+    const image = MOCK_IMAGE_DETAILS.find((i) => i.id === key || i.name === key)
+    if (!image) return new HttpResponse(null, { status: 404 })
+    const body = (await request.json()) as { alias: string; versionId: string }
+    if (image.curated) {
+      return HttpResponse.json(
+        {
+          statusCode: 400,
+          message: `Image '${image.name}' is provided by the operator, so its aliases cannot be changed`,
+        },
+        { status: 400 },
+      )
+    }
+    if (!/^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/.test(body.alias)) {
+      return HttpResponse.json(
+        { statusCode: 400, message: `Image alias '${body.alias}' must use OCI tag syntax` },
+        { status: 400 },
+      )
+    }
+    const version = image.versions.find((v) => v.id === body.versionId)
+    if (!version) {
+      return HttpResponse.json(
+        { statusCode: 400, message: `Version '${body.versionId}' is not a version of image '${image.name}'` },
+        { status: 400 },
+      )
+    }
+    if (image.aliases.includes(body.alias)) {
+      return HttpResponse.json(
+        {
+          statusCode: 409,
+          message: `Alias '${body.alias}' already exists for image '${image.name}'; delete it explicitly before creating it again`,
+          code: 'already_exists',
+        },
+        { status: 409 },
+      )
+    }
+    image.aliases.push(body.alias)
+    version.aliases.push(body.alias)
+    image.history.unshift({
+      aliasName: body.alias,
+      fromVersionId: null,
+      fromDigest: null,
+      toVersionId: version.id,
+      toDigest: version.digest,
+      actorId: MOCK_ORGANIZATION_MEMBER.userId,
+      createdAt: new Date().toISOString(),
+    })
+    return new HttpResponse(null, { status: 201 })
+  }),
+  // Unpinning writes no history event, as the API does not.
+  http.delete(`${API_URL}/images/:idOrRef/aliases/:alias`, ({ params }) => {
+    const key = decodeURIComponent(String(params.idOrRef))
+    const alias = decodeURIComponent(String(params.alias))
+    const image = MOCK_IMAGE_DETAILS.find((i) => i.id === key || i.name === key)
+    if (!image) return new HttpResponse(null, { status: 404 })
+    if (!image.aliases.includes(alias)) {
+      return HttpResponse.json(
+        { statusCode: 404, message: `Alias '${alias}' not found for image '${image.name}'` },
+        { status: 404 },
+      )
+    }
+    image.aliases = image.aliases.filter((a) => a !== alias)
+    for (const version of image.versions) version.aliases = version.aliases.filter((a) => a !== alias)
     return new HttpResponse(null, { status: 204 })
   }),
 
