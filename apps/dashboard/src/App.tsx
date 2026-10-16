@@ -185,6 +185,8 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.BOXES)} element={<Boxes />} />
         <Route path={getRouteSubPath(RoutePath.VOLUMES)} element={<Volumes />} />
         <Route path={getRouteSubPath(RoutePath.IMAGES)} element={<Images />} />
+        {/* The static segment is declared before `:idOrRef`, as the API orders its routes. */}
+        <Route path={getRouteSubPath(RoutePath.IMAGE_REGISTRIES)} element={<Registries />} />
         <Route path={getRouteSubPath(RoutePath.IMAGE_DETAILS)} element={<ImageDetails />} />
         <Route path={getRouteSubPath(RoutePath.REGISTRIES)} element={<Registries />} />
         {/* Plan, wallet and usage are sections of the one Billing page. The old

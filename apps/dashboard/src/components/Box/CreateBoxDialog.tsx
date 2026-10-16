@@ -558,6 +558,7 @@ export const CreateBoxDialog = ({
   onOpenChange,
   onCreated,
   prefillVolume,
+  prefillImage,
 }: {
   className?: string
   /**
@@ -576,6 +577,8 @@ export const CreateBoxDialog = ({
    * selector to hand it — see MountRow above.
    */
   prefillVolume?: string
+  /** Image reference to start from, as the Images page hands it over from a row. */
+  prefillImage?: string
 }) => {
   const navigate = useNavigate()
   const [internalOpen, setInternalOpen] = useState(false)
@@ -629,7 +632,7 @@ export const CreateBoxDialog = ({
     if (!open || wasOpen) return
 
     setName('')
-    setImageRef('')
+    setImageRef(prefillImage ?? '')
     setCpu(initialCpu)
     setMemory(initialMemory)
     setDisk(initialDisk)
@@ -642,7 +645,7 @@ export const CreateBoxDialog = ({
     setSizePreset('small')
     setSubmitting(false)
     setCapped({ cpu: false, memory: false, disk: false })
-  }, [open, initialCpu, initialMemory, initialDisk, prefillVolume])
+  }, [open, initialCpu, initialMemory, initialDisk, prefillVolume, prefillImage])
 
   useEffect(() => {
     if (!open) return

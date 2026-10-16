@@ -105,6 +105,21 @@ opens. A second entry point to the same guide is a bug, not a convenience —
 mounting one twice has already caused duplicate API keys to be minted
 (issue #1491).
 
+## A failure carries the way to its fix
+
+When the API's reason names something the reader can fix on another page, the
+page showing the failure links there, already pointed at the fix. A box whose
+private pull was refused for want of a credential shows "Connect a registry for
+quay.io", which opens the credential form with that registry chosen
+(`/dashboard/images/registries?connect=quay.io`). The match is on the API's
+own wording, so it is tested against that wording, and an unrelated error gets
+no link.
+
+The same goes for slow states the API reports: a box creating during its
+first pull says PULLING IMAGE, not STARTING, so a minute in that state reads as
+work rather than a hang. And a box's image links to its catalog entry once a
+start has put it there.
+
 ## Registry login tests
 
 Registry query and mutation tests use a real QueryClient with mocked API calls.

@@ -22,6 +22,8 @@ export enum RoutePath {
   BILLING = '/dashboard/billing',
   PRICING = '/dashboard/pricing',
   IMAGES = '/dashboard/images',
+  /** Registries live under Images, as they do in the API. */
+  IMAGE_REGISTRIES = '/dashboard/images/registries',
   REGISTRIES = '/dashboard/registries',
   VOLUMES = '/dashboard/volumes',
   LIMITS = '/dashboard/limits',

@@ -149,7 +149,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await flush()
   }
 
-  async function rerenderOpenWith(props: { prefillVolume?: string }) {
+  async function rerenderOpenWith(props: { prefillVolume?: string; prefillImage?: string }) {
     const host = document.createElement('div')
     document.body.appendChild(host)
     await act(async () => {
@@ -576,6 +576,18 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await submit()
 
     expect(mutationMocks.createBox).toHaveBeenCalledWith(expect.objectContaining({ name: undefined }))
+  })
+
+  // The Images page opens this from an image's row; the reference it hands
+  // over is what the box is created from.
+  it('submits the image it was pre-filled with', async () => {
+    await rerenderOpenWith({ prefillImage: 'ghcr.io/acme/agent:v1.4.2' })
+
+    await submit()
+
+    expect(mutationMocks.createBox).toHaveBeenCalledWith(
+      expect.objectContaining({ image: 'ghcr.io/acme/agent:v1.4.2' }),
+    )
   })
 
   it('submits the mounts it was pre-filled with', async () => {
