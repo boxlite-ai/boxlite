@@ -26,18 +26,25 @@ import { instanceFor } from 'naming'
 /**
  * What each requested size answers to, and the edition that tier is legal in.
  *
- * One constant rather than two, because they are one decision. `ENTERPRISE_PLUS`
- * accepts only the predefined `db-perf-optimized-N-*` machines; every tier here
- * is shared-core or custom, and those are `ENTERPRISE`'s alone. Leaving the
- * edition to the API is what makes this a create-time failure rather than a
- * choice — a PostgreSQL 16 instance defaults to `ENTERPRISE_PLUS`, and the
- * refusal that follows names the tier (`Invalid Tier (db-f1-micro) for
- * (ENTERPRISE_PLUS) Edition`) without mentioning the setting that caused it.
+ * One constant rather than three, because they are one decision. `ENTERPRISE_PLUS`
+ * accepts only the predefined `db-perf-optimized-N-*` machines, and the
+ * shared-core and custom tiers are `ENTERPRISE`'s alone. Leaving the edition to
+ * the API is what makes this a create-time failure rather than a choice — a
+ * PostgreSQL 16 instance defaults to `ENTERPRISE_PLUS`, and the refusal that
+ * follows names the tier (`Invalid Tier (db-f1-micro) for (ENTERPRISE_PLUS)
+ * Edition`) without mentioning the setting that caused it.
+ *
+ * `pools` rides here for the same reason the edition does: managed connection
+ * pooling is an Enterprise Plus feature, so it is legal on exactly the tiers
+ * that carry that edition. Written as a property of the tier, the illegal
+ * combination cannot be expressed — there is no way to ask a `db-f1-micro` to
+ * pool, because nothing reads `pools` from anywhere but this table.
  */
 export const MACHINE = {
-  small: { tier: 'db-f1-micro', edition: 'ENTERPRISE' },
-  standard: { tier: 'db-g1-small', edition: 'ENTERPRISE' },
-  medium: { tier: 'db-custom-2-7680', edition: 'ENTERPRISE' },
+  small: { tier: 'db-f1-micro', edition: 'ENTERPRISE', pools: false },
+  standard: { tier: 'db-g1-small', edition: 'ENTERPRISE', pools: false },
+  medium: { tier: 'db-custom-2-7680', edition: 'ENTERPRISE', pools: false },
+  large: { tier: 'db-perf-optimized-N-2', edition: 'ENTERPRISE_PLUS', pools: true },
 } as const
 
 /** Cloud SQL's own port, and the only one it listens on. */
@@ -86,6 +93,28 @@ export const gcpDatabaseProvider =
           tier: MACHINE[request.size].tier,
           // Declared beside the tier, never left to the API. See the note above.
           edition: MACHINE[request.size].edition,
+          /*
+           * Written only by a tier that pools, so every stage that does not is
+           * rendered exactly as it is today: this adds no field to any existing
+           * instance, and the first apply carrying a pooling block is the one
+           * that also asks for `large`.
+           *
+           * The cost is that moving a stage back down leaves pooling on in the
+           * project with nothing here saying so. That is the rarer accident —
+           * a downgrade is one deliberate edit, where writing the field
+           * unconditionally would put it on every apply of every stage, and
+           * whether a non-Enterprise-Plus instance even accepts it is not
+           * something this repository has established. Switch it off with the
+           * edition when that day comes.
+           *
+           * Transaction pooling is the default mode, and it forbids `SET`,
+           * `LISTEN`, `PREPARE`, temp tables, `WITH HOLD CURSOR` and
+           * session-level advisory locks. The control plane uses none of them —
+           * its only `SET` is the transaction-scoped `SET LOCAL lock_timeout`,
+           * which is safe — so the default stands rather than being pinned to
+           * session mode, which would pool far less.
+           */
+          ...(MACHINE[request.size].pools ? { connectionPoolConfigs: [{ connectionPoolingEnabled: true }] } : {}),
           // Regional survives the loss of one zone, at roughly double the cost.
           availabilityType: request.highlyAvailable ? 'REGIONAL' : 'ZONAL',
           backupConfiguration: {

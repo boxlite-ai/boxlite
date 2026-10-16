@@ -16,7 +16,27 @@
  * stops compiling.
  */
 
-export type DatabaseSize = 'small' | 'standard' | 'medium'
+/**
+ * How much database a stage asks for — and, at the top, what kind.
+ *
+ * `large` is the size at which a cloud may answer with a server-side connection
+ * pool, and on GCP it does. The two travel together there rather than by
+ * choice: pooling is an Enterprise Plus feature, that edition refuses
+ * shared-core machines and floors memory at 6.75-8 GB per vCPU, so the smallest
+ * instance that can pool is already several steps above `medium`.
+ *
+ * Like every other size this is a request, not a guarantee of mechanism, and
+ * the providers differ on it today: AWS renders the machine and keeps the
+ * client-side arithmetic, because its pooling is RDS Proxy and nothing builds
+ * one. A stage on AWS gets the size and not the relief.
+ *
+ * Why a stage wants it: below this size each client caps its own pool and the
+ * fleet keeps `instances x pool <= max_connections` true by hand. On Cloud Run
+ * every instance holds its own pool and scales alone, so no client can see the
+ * total — the arithmetic has to be redone whenever a service is added or a
+ * ceiling moves. A server-side pool retires that invariant.
+ */
+export type DatabaseSize = 'small' | 'standard' | 'medium' | 'large'
 
 export type DatabaseRequest = {
   /** The logical database inside the server. */
