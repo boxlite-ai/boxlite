@@ -284,7 +284,10 @@ On x86_64 the layout uses the values most surveyed VMMs share.
 
 | Address or port | Use | Precedent |
 | --- | --- | --- |
+| `0x500` | boot GDT: flat `__BOOT_CS` (`0x10`) and `__BOOT_DS` (`0x18`) | Firecracker, which uses selectors `0x8` and `0x10` |
 | `0x7000` | `boot_params` (the zero page) | five of six |
+| below `0x8FF0` | boot stack | Firecracker |
+| `0x9000`–`0xE000` | identity page tables: PML4, PDPT and one 2 MiB-page directory per GiB of RAM below the hole | Firecracker, which maps 1 GiB |
 | `0x2_0000` | kernel command line | five of six |
 | `0x9_FC00` | MP table, in the last KiB below 640 KiB | Firecracker, libkrun |
 | `0x10_0000` | `bzImage` load address; an ELF `vmlinux` loads where its headers say | four of six |
