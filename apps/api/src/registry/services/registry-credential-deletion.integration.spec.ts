@@ -11,6 +11,7 @@ import { BoxLastActivity } from '../../box/entities/box-last-activity.entity'
 import { BoxMigration } from '../../box/entities/box-migration.entity'
 import { BoxRepository } from '../../box/repositories/box.repository'
 import { BoxService } from '../../box/services/box.service'
+import { Context } from '../../common/context/context'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { Image } from '../../image/entities/image.entity'
 import { ImageTag } from '../../image/entities/image-tag.entity'
@@ -148,9 +149,12 @@ describeIfDatabase('Registry credential deletion concurrency (integration, real 
   })
 
   function create(maxCreatedBoxes?: number, requestedImage = image) {
-    return createService.create({ name: `test-${randomUUID()}`, image: requestedImage } as never, organization, {
-      maxCreatedBoxes,
-    })
+    return createService.create(
+      { name: `test-${randomUUID()}`, image: requestedImage } as never,
+      organization,
+      Context.user(),
+      { maxCreatedBoxes },
+    )
   }
 
   it('reads credential candidates once while preserving longest-prefix dependencies', async () => {

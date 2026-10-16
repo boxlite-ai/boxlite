@@ -55,7 +55,7 @@ coverage\:bindings:
 
 # Language tests exercise the exported bindings that Rust lib tests cannot see.
 # Keep their profiles separate from the core collector and upload both reports.
-coverage\:bindings\:external:
+coverage\:bindings\:external: test\:unit\:scripts
 	@bash $(SCRIPT_DIR)/test/coverage-bindings.sh
 
 # Render collected profiles, including partial results from a failed test run.

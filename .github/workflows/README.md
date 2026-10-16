@@ -99,6 +99,10 @@ and bypass change filters. Combined Rust and CLI coverage runs on all three plat
 non-VM integration tests and Linux guest tests. Codecov requires 90% coverage of changed lines
 and reports total coverage.
 
+`make coverage:bindings:external` runs `make test:unit:scripts` before collecting
+native SDK profiles. A relative `CARGO_TARGET_DIR` is resolved from the repository
+root once, so Python and Node builds share the report's object directory.
+
 Linux x64 also runs the native KVM hardware tests and adds their profiles before
 the Rust coverage upload. Missing `/dev/kvm` access fails this qualification.
 

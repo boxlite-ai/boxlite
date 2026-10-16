@@ -118,7 +118,7 @@ export class BoxRepository extends BaseRepository<Box> {
         throw new ConflictException('Registry credential was removed during box creation; retry the request')
       }
     } catch (error) {
-      if ((error as { code?: string }).code === '55P03') {
+      if ((error as { code?: string }).code === PG_LOCK_TIMEOUT_CODE) {
         throw new ConflictException('Registry credential is being removed; retry box creation')
       }
       throw error

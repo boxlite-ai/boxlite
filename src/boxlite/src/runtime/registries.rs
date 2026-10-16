@@ -64,7 +64,7 @@ impl fmt::Debug for NewRegistryCredential {
 /// Internal trait for registry logins. Only `RestRuntime` implements it.
 ///
 /// `id` arguments have passed [`checked_id`].
-#[allow(
+#[expect(
     clippy::double_must_use,
     reason = "async_trait generates a must-use boxed future"
 )]

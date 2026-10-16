@@ -426,6 +426,9 @@ test\:unit\:openapi:
 	@echo "🧪 Running OpenAPI reference-server unit tests..."
 	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
 
+test\:unit\:scripts:
+	@python3 -m unittest discover -s tests/scripts -p 'test_*.py' -v
+
 # CLI integration tests.
 test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🧪 Running CLI integration tests..."

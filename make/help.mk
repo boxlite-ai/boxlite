@@ -51,6 +51,7 @@ help:
 	@echo "    make test:unit:sdk          - Run SDK unit suites (Python + Node + C + Go)"
 	@echo "    make test:integration:sdk   - Run SDK integration suites (Python + Node + C)"
 	@echo "    make test:unit:rust         - Run Rust unit tests (nextest when available)"
+	@echo "    make test:unit:scripts      - Test build and coverage script contracts without native builds"
 	@echo "    make test:unit:vmm          - Run only the hypervisor and VMM crate unit tests"
 	@echo "    make test:vmm:boot          - Test the kernel build contracts with stubbed tools"
 	@echo "    make test:integration:vmm:kvm - Qualify KVM VM creation and VMM RAM mapping (Linux x86_64)"

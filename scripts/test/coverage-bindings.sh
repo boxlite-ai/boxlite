@@ -4,7 +4,13 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$root/target/native-sdk-coverage}"
+# SDK builds change directories; share one absolute object directory.
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$root/target/native-sdk-coverage}"
+case "$CARGO_TARGET_DIR" in
+    /*) ;;
+    *) CARGO_TARGET_DIR="$root/$CARGO_TARGET_DIR" ;;
+esac
+export CARGO_TARGET_DIR
 export SETUP_DONE=1
 
 # show-env instruments Cargo builds invoked by maturin, napi and make too.

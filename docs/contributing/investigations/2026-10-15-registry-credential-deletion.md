@@ -50,3 +50,8 @@ box but read credential rows four times. After optimization it reads twice (the
 locked target plus one candidate snapshot), with the dependent-box check intact.
 All 99 selected credential, resolver, admission and box tests passed, along with
 scoped lint and formatting.
+
+The registry SDK layer now includes these corrections and their regressions,
+because the backend layer has merged. The test calls `BoxService.create` with
+`Context.user()` before admission options, matching the current service contract.
+The focused service and PostgreSQL concurrency run passes all 16 selected tests.

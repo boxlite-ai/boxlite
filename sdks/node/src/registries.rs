@@ -119,3 +119,25 @@ impl JsRegistryHandle {
         handle.remove(&id).await.map_err(map_err)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credential_debug_omits_password_without_changing_the_request() {
+        let credential = JsNewRegistryCredential {
+            registry_host: "ghcr.io".into(),
+            repository_prefix: Some("acme/".into()),
+            username: "bot".into(),
+            password: "test-private-token".into(),
+        };
+
+        let debug = format!("{credential:?}");
+        assert!(debug.contains("ghcr.io"));
+        assert!(!debug.contains("test-private-token"));
+        assert!(!debug.contains("password"));
+        let request = NewRegistryCredential::from(credential);
+        assert_eq!(request.password, "test-private-token");
+    }
+}
