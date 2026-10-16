@@ -6,8 +6,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm'
 // polarity and the allowlist changes type, so this is add-backfill-sync rather
 // than a column rename. The trigger keeps both shapes equal while old and new
 // API instances overlap; the post-deploy migration drops it with the old columns.
-export class ReplaceBoxNetworkFlags1790400000000 implements MigrationInterface {
-  name = 'ReplaceBoxNetworkFlags1790400000000'
+export class ReplaceBoxNetworkFlags1791000000000 implements MigrationInterface {
+  name = 'ReplaceBoxNetworkFlags1791000000000'
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`ALTER TABLE "box" ADD "inboundEnabled" boolean NOT NULL DEFAULT false`)

@@ -3,8 +3,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm'
 // Contract half of replacing the network flags: once every API instance reads
 // `inboundEnabled` / `outboundEnabled` / `outboundAllowNet`, the sync trigger and the
 // flag columns it fed go. The split helper stays until the columns are gone.
-export class DropBoxNetworkFlags1790400000000 implements MigrationInterface {
-  name = 'DropBoxNetworkFlags1790400000000'
+export class DropBoxNetworkFlags1791000000000 implements MigrationInterface {
+  name = 'DropBoxNetworkFlags1791000000000'
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`DROP TRIGGER IF EXISTS box_network_policy_sync ON "box"`)

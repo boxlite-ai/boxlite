@@ -767,7 +767,7 @@ describe('BoxService inbound defaults', () => {
 
     it.each([
       ['a negative auto-stop interval', { autoStop: -5 }],
-      ['a network allow list that is not one', { networkAllowList: 'bad host!' }],
+      ['a network allow list that is not one', { outboundAllowNet: ['bad host!'] }],
     ])('spends none on a create refused for %s', async (_reason, input) => {
       const { service, redis } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
 

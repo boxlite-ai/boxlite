@@ -1,12 +1,12 @@
 import { QueryRunner } from 'typeorm'
-import { DropBoxNetworkFlags1790400000000 } from './1790400000000-drop-box-network-flags-migration'
+import { DropBoxNetworkFlags1791000000000 } from './1791000000000-drop-box-network-flags-migration'
 
-describe('DropBoxNetworkFlags1790400000000', () => {
+describe('DropBoxNetworkFlags1791000000000', () => {
   it('removes the sync trigger, then the flag columns, idempotently', async () => {
     const calls: string[] = []
     const runner = { query: jest.fn((sql: string) => calls.push(sql)) } as unknown as QueryRunner
 
-    const migration = new DropBoxNetworkFlags1790400000000()
+    const migration = new DropBoxNetworkFlags1791000000000()
     await migration.up(runner)
     await migration.up(runner)
 

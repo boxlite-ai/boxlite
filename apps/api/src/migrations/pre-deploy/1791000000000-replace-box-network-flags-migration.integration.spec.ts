@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { DataSource, QueryRunner } from 'typeorm'
-import { ReplaceBoxNetworkFlags1790400000000 } from './1790400000000-replace-box-network-flags-migration'
-import { DropBoxNetworkFlags1790400000000 } from '../post-deploy/1790400000000-drop-box-network-flags-migration'
+import { ReplaceBoxNetworkFlags1791000000000 } from './1791000000000-replace-box-network-flags-migration'
+import { DropBoxNetworkFlags1791000000000 } from '../post-deploy/1791000000000-drop-box-network-flags-migration'
 
 // The string-level specs pin the SQL; this one runs it. The sync trigger is
 // plpgsql that only a database can execute, and the backfill's polarity
@@ -80,8 +80,8 @@ describeIfDatabase('box network flags migrations (integration, real Postgres)', 
     return rows.map((row) => row.column_name)
   }
 
-  const preDeploy = new ReplaceBoxNetworkFlags1790400000000()
-  const postDeploy = new DropBoxNetworkFlags1790400000000()
+  const preDeploy = new ReplaceBoxNetworkFlags1791000000000()
+  const postDeploy = new DropBoxNetworkFlags1791000000000()
 
   it('backfills every flag combination with the right polarity', async () => {
     const seeded: FlagRow[] = []

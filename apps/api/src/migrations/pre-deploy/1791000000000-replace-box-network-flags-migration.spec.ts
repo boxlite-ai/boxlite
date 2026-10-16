@@ -1,11 +1,11 @@
 import { QueryRunner } from 'typeorm'
-import { ReplaceBoxNetworkFlags1790400000000 } from './1790400000000-replace-box-network-flags-migration'
+import { ReplaceBoxNetworkFlags1791000000000 } from './1791000000000-replace-box-network-flags-migration'
 
-describe('ReplaceBoxNetworkFlags1790400000000', () => {
+describe('ReplaceBoxNetworkFlags1791000000000', () => {
   function run() {
     const calls: string[] = []
     const runner = { query: jest.fn((sql: string) => calls.push(sql)) } as unknown as QueryRunner
-    return { runner, calls, migration: new ReplaceBoxNetworkFlags1790400000000() }
+    return { runner, calls, migration: new ReplaceBoxNetworkFlags1791000000000() }
   }
 
   it('adds the policy columns with private-inbound, open-outbound defaults', async () => {
