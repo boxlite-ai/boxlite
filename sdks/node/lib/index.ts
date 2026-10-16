@@ -42,6 +42,9 @@ export type {
   JsNetworkInfo,
   JsOptions,
   JsPublishedPort,
+  JsGitBranches,
+  JsGitFileStatus,
+  JsGitStatus,
 } from "./native-contracts.js";
 
 // The public `rest` takes the cross-SDK `BoxliteRestOptions` bag. The
@@ -101,6 +104,7 @@ export {
   BoxTunnel,
   TunnelForwarder,
   NetworkHandle,
+  GitHandle,
   type NetworkSpec,
   type SocketAddress,
   type AdvancedBoxOptions,

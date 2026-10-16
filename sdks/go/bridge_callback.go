@@ -216,6 +216,31 @@ func goBoxliteOnCopy(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	deliverUnitResult(userData, errPtr)
 }
 
+//export goBoxliteOnGitWrite
+func goBoxliteOnGitWrite(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
+//export goBoxliteOnGitGetConfig
+func goBoxliteOnGitGetConfig(value *C.char, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		freeBoxliteStringPayload(&value)
+		return
+	}
+	if !claimOrFreePayload(h, &value, freeBoxliteStringPayload) {
+		return
+	}
+	defer h.Delete()
+
+	ch, ok := h.Value().(chan handleResult[*C.char])
+	if !ok {
+		freeBoxliteStringPayload(&value)
+		return
+	}
+	ch <- handleResult[*C.char]{value: value, err: errorFromCError(errPtr)}
+}
+
 // ─── Image callbacks ───────────────────────────────────────────────────────
 
 //export goBoxliteOnImagePull

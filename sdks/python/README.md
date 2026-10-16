@@ -324,6 +324,7 @@ Handle to a running or stopped box.
 **Properties:**
 
 - `id: str` - Unique box identifier (ULID format)
+- `git: GitHandle` - Box-scoped git config operations
 
 **Methods:**
 
@@ -360,6 +361,54 @@ print(f"Box {info.id}: {info.state.status}")
 # Stop; by default this also removes the box
 await box.stop()
 ```
+
+### Git
+
+Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.git`. `scope` is
+`"global"` (default), `"local"`, or `"system"`; `"local"` requires `path`.
+
+**Methods:**
+
+- `configure_user(name, email, scope=None, path=None)`
+  Set `user.name` and `user.email` for commits in this box (async)
+
+- `set_config(key, value, scope=None, path=None)`
+  Write a git config value (async)
+
+- `get_config(key, scope=None, path=None) -> str`
+  Read a git config value (async)
+
+- `status(path) -> GitStatus`
+  Structured repository status (async): `current_branch` (`None` when
+  detached), `upstream`, `ahead`, `behind`, `branch_published`,
+  `head_commit`, and `file_status: list[GitFileStatus]` (empty when clean).
+  Each `GitFileStatus` has `path`, `orig_path`, `index_status`,
+  `worktree_status` (porcelain v2 XY codes), `staged` and `untracked`.
+  Paths with spaces or newlines are reported verbatim.
+
+- `branches(path) -> GitBranches`
+  Local branches (async): `current` and `names`
+
+**Example:**
+
+```python
+await box.git.configure_user("BoxLite Bot", "bot@boxlite.ai")
+await box.git.set_config(
+    "core.autocrlf", "input", scope="local", path="/workspace/repo"
+)
+email = await box.git.get_config("user.email", scope="local", path="/workspace/repo")
+
+st = await box.git.status("/workspace/repo")
+if st.file_status:
+    print([f.path for f in st.file_status])
+print(st.current_branch, st.ahead, st.behind, st.branch_published)
+
+b = await box.git.branches("/workspace/repo")
+print(b.current, b.names)
+```
+
+Synchronous wrappers (`SyncBox.git`, `SyncSimpleBox.git`) expose the same
+operations without `await`.
 
 ### Command Execution
 
@@ -429,6 +478,10 @@ async for line in stderr:
 Context manager for basic execution with automatic cleanup.
 
 **Parameters:** Same as `BoxOptions`
+
+**Properties:**
+
+- `git: GitHandle` - Box-scoped git config operations
 
 **Methods:**
 
