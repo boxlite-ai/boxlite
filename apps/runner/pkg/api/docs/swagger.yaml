@@ -50,10 +50,6 @@ definitions:
         additionalProperties:
           type: string
         type: object
-      networkAllowList:
-        type: string
-      networkBlockAll:
-        type: boolean
       organizationId:
         description: Nullable for backward compatibility
         type: string
@@ -61,6 +57,15 @@ definitions:
         type: string
       otelEndpoint:
         type: string
+      outboundAllowNet:
+        items:
+          type: string
+        type: array
+      outboundEnabled:
+        description: |-
+          Outbound network policy. A body without outboundEnabled reads as false,
+          so a request missing the policy gets no egress rather than full egress.
+        type: boolean
       regionId:
         type: string
       registry:
@@ -145,12 +150,17 @@ definitions:
       memoryQuota:
         minimum: 1
         type: integer
-      networkAllowList:
-        type: string
-      networkBlockAll:
-        type: boolean
       osUser:
         type: string
+      outboundAllowNet:
+        items:
+          type: string
+        type: array
+      outboundEnabled:
+        description: |-
+          Outbound network policy. A body without outboundEnabled reads as false,
+          so a request missing the policy gets no egress rather than full egress.
+        type: boolean
       secrets:
         items:
           $ref: '#/definitions/dto.SecretDTO'

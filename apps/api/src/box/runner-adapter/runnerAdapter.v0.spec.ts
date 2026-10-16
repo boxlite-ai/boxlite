@@ -6,10 +6,9 @@
 import { RunnerAdapterV0 } from './runnerAdapter.v0'
 
 describe('RunnerAdapterV0 createBox', () => {
-  // The runner wire still speaks the flag shape; the row stores modes. The
-  // polarity flip (outbound disabled -> blockAll true) and the comma join both
-  // happen here, so pin them at the boundary.
-  it('translates the outbound policy into the runner flag shape', async () => {
+  // The runner body carries the row's outbound policy as is; the Daytona-era
+  // networkBlockAll / networkAllowList pair is gone from the wire.
+  it('sends the outbound policy as the enabled flag and entries', async () => {
     const adapter = new RunnerAdapterV0()
     const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
     ;(adapter as any).boxApiClient = { create }
@@ -23,8 +22,10 @@ describe('RunnerAdapterV0 createBox', () => {
     } as any, 'base')
 
     expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({ networkBlockAll: true, networkAllowList: 'api.openai.com,10.0.0.0/8' }),
+      expect.objectContaining({ outboundEnabled: false, outboundAllowNet: ['api.openai.com', '10.0.0.0/8'] }),
     )
+    expect(create.mock.calls[0][0]).not.toHaveProperty('networkBlockAll')
+    expect(create.mock.calls[0][0]).not.toHaveProperty('networkAllowList')
   })
 
   it('passes secrets through to the runner create body', async () => {

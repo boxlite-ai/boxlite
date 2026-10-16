@@ -10,7 +10,6 @@ import axiosRetry from 'axios-retry'
 
 import { Injectable, Logger } from '@nestjs/common'
 import { RunnerAdapter, RunnerInfo, RunnerBoxInfo, StartBoxResponse } from './runnerAdapter'
-import { allowListFromAllowNet } from '../utils/network-policy.util'
 import { Runner } from '../entities/runner.entity'
 import {
   Configuration,
@@ -274,8 +273,8 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         hosts: secret.hosts,
         placeholder: secret.placeholder,
       })),
-      networkBlockAll: !box.outboundEnabled,
-      networkAllowList: allowListFromAllowNet(box.outboundAllowNet),
+      outboundEnabled: box.outboundEnabled,
+      outboundAllowNet: box.outboundAllowNet ?? undefined,
       metadata,
       authToken: box.authToken,
       organizationId: box.organizationId,
@@ -349,8 +348,8 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         mountPath: volume.mountPath,
         subpath: volume.subpath,
       })),
-      networkBlockAll: !box.outboundEnabled,
-      networkAllowList: allowListFromAllowNet(box.outboundAllowNet),
+      outboundEnabled: box.outboundEnabled,
+      outboundAllowNet: box.outboundAllowNet ?? undefined,
       errorReason: box.errorReason,
     }
     await this.boxApiClient.recover(box.id, recoverBoxDTO)

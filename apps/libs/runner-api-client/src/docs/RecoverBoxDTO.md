@@ -11,9 +11,9 @@ Name | Type | Description | Notes
 **fromVolumeId** | **string** |  | [optional] [default to undefined]
 **gpuQuota** | **number** |  | [optional] [default to undefined]
 **memoryQuota** | **number** |  | [optional] [default to undefined]
-**networkAllowList** | **string** |  | [optional] [default to undefined]
-**networkBlockAll** | **boolean** |  | [optional] [default to undefined]
 **osUser** | **string** |  | [default to undefined]
+**outboundAllowNet** | **Array&lt;string&gt;** |  | [optional] [default to undefined]
+**outboundEnabled** | **boolean** | Outbound network policy. A body without outboundEnabled reads as false, so a request missing the policy gets no egress rather than full egress. | [optional] [default to undefined]
 **secrets** | [**Array&lt;DtoSecretDTO&gt;**](DtoSecretDTO.md) |  | [optional] [default to undefined]
 **storageQuota** | **number** |  | [optional] [default to undefined]
 **volumes** | [**Array&lt;DtoVolumeDTO&gt;**](DtoVolumeDTO.md) |  | [optional] [default to undefined]
@@ -30,9 +30,9 @@ const instance: RecoverBoxDTO = {
     fromVolumeId,
     gpuQuota,
     memoryQuota,
-    networkAllowList,
-    networkBlockAll,
     osUser,
+    outboundAllowNet,
+    outboundEnabled,
     secrets,
     storageQuota,
     volumes,

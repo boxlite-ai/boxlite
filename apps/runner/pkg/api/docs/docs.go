@@ -687,12 +687,6 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
-                "networkAllowList": {
-                    "type": "string"
-                },
-                "networkBlockAll": {
-                    "type": "boolean"
-                },
                 "organizationId": {
                     "description": "Nullable for backward compatibility",
                     "type": "string"
@@ -702,6 +696,16 @@ const docTemplate = `{
                 },
                 "otelEndpoint": {
                     "type": "string"
+                },
+                "outboundAllowNet": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "outboundEnabled": {
+                    "description": "Outbound network policy. A body without outboundEnabled reads as false,\nso a request missing the policy gets no egress rather than full egress.",
+                    "type": "boolean"
                 },
                 "regionId": {
                     "type": "string"
@@ -822,14 +826,18 @@ const docTemplate = `{
                     "type": "integer",
                     "minimum": 1
                 },
-                "networkAllowList": {
-                    "type": "string"
-                },
-                "networkBlockAll": {
-                    "type": "boolean"
-                },
                 "osUser": {
                     "type": "string"
+                },
+                "outboundAllowNet": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "outboundEnabled": {
+                    "description": "Outbound network policy. A body without outboundEnabled reads as false,\nso a request missing the policy gets no egress rather than full egress.",
+                    "type": "boolean"
                 },
                 "secrets": {
                     "type": "array",

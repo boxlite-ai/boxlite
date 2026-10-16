@@ -46,8 +46,6 @@ func TestCreateAppliesSecrets(t *testing.T) {
 // cannot: RecoverBox must route through the pure function, or a hand-rolled
 // DTO could drop fields again without any test noticing.
 func TestRecoverForwardsSecrets(t *testing.T) {
-	networkBlockAll := true
-	networkAllowList := "10.0.0.0/8"
 	recoverDto := dto.RecoverBoxDTO{
 		FromVolumeId: "vol-1",
 		OsUser:       "root",
@@ -61,8 +59,8 @@ func TestRecoverForwardsSecrets(t *testing.T) {
 			{Name: "openai", Value: "sk-test", Hosts: []string{"api.openai.com"}, Placeholder: "<BOXLITE_SECRET:openai>"},
 			{Name: "github", Value: "gh-test"},
 		},
-		NetworkBlockAll:  &networkBlockAll,
-		NetworkAllowList: &networkAllowList,
+		OutboundEnabled:  true,
+		OutboundAllowNet: []string{"10.0.0.0/8"},
 	}
 
 	createDto := recoverCreateDto("box-1", recoverDto)
@@ -99,11 +97,11 @@ func TestRecoverForwardsSecrets(t *testing.T) {
 			t.Errorf("createDto.Secrets[%d] = %+v, want %+v", i, createDto.Secrets[i], secret)
 		}
 	}
-	if createDto.NetworkBlockAll == nil || !*createDto.NetworkBlockAll {
-		t.Errorf("createDto.NetworkBlockAll = %v, want true", createDto.NetworkBlockAll)
+	if !createDto.OutboundEnabled {
+		t.Errorf("createDto.OutboundEnabled = false, want true")
 	}
-	if createDto.NetworkAllowList == nil || *createDto.NetworkAllowList != networkAllowList {
-		t.Errorf("createDto.NetworkAllowList = %v, want %q", createDto.NetworkAllowList, networkAllowList)
+	if !reflect.DeepEqual(createDto.OutboundAllowNet, recoverDto.OutboundAllowNet) {
+		t.Errorf("createDto.OutboundAllowNet = %v, want %v", createDto.OutboundAllowNet, recoverDto.OutboundAllowNet)
 	}
 	if createDto.FromVolumeId != recoverDto.FromVolumeId {
 		t.Errorf("createDto.FromVolumeId = %q, want %q", createDto.FromVolumeId, recoverDto.FromVolumeId)

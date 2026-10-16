@@ -38,8 +38,8 @@ func recoverCreateDto(boxId string, recoverDto dto.RecoverBoxDTO) dto.CreateBoxD
 		Env:              recoverDto.Env,
 		Volumes:          recoverDto.Volumes,
 		Secrets:          recoverDto.Secrets,
-		NetworkBlockAll:  recoverDto.NetworkBlockAll,
-		NetworkAllowList: recoverDto.NetworkAllowList,
+		OutboundEnabled:  recoverDto.OutboundEnabled,
+		OutboundAllowNet: recoverDto.OutboundAllowNet,
 		FromVolumeId:     recoverDto.FromVolumeId,
 	}
 }

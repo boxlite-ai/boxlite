@@ -35,14 +35,17 @@ export interface CreateBoxDTO {
     'image': string;
     'memoryQuota'?: number;
     'metadata'?: { [key: string]: string; };
-    'networkAllowList'?: string;
-    'networkBlockAll'?: boolean;
     /**
      * Nullable for backward compatibility
      */
     'organizationId'?: string;
     'osUser': string;
     'otelEndpoint'?: string;
+    'outboundAllowNet'?: Array<string>;
+    /**
+     * Outbound network policy. A body without outboundEnabled reads as false, so a request missing the policy gets no egress rather than full egress.
+     */
+    'outboundEnabled'?: boolean;
     'regionId'?: string;
     'registry'?: RegistryDTO;
     'runAsUser'?: string;

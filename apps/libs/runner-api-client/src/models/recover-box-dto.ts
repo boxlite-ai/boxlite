@@ -27,9 +27,12 @@ export interface RecoverBoxDTO {
     'fromVolumeId'?: string;
     'gpuQuota'?: number;
     'memoryQuota'?: number;
-    'networkAllowList'?: string;
-    'networkBlockAll'?: boolean;
     'osUser': string;
+    'outboundAllowNet'?: Array<string>;
+    /**
+     * Outbound network policy. A body without outboundEnabled reads as false, so a request missing the policy gets no egress rather than full egress.
+     */
+    'outboundEnabled'?: boolean;
     'secrets'?: Array<DtoSecretDTO>;
     'storageQuota'?: number;
     'volumes'?: Array<DtoVolumeDTO>;

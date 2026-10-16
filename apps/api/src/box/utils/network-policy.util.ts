@@ -5,9 +5,9 @@
 
 /**
  * The box row stores the outbound allowlist as entries (`outboundAllowNet`),
- * while the control-plane DTO and the runner wire still speak the Daytona-era
- * comma-joined `networkAllowList`. Keeping the join in one place is what lets
- * those contracts outlive the column they named.
+ * while the control-plane DTO still speaks the Daytona-era comma-joined
+ * `networkAllowList`. Keeping the join in one place is what lets that contract
+ * outlive the column it named.
  */
 
 /** Entries → the comma-joined shape; `undefined` when nothing is listed. */

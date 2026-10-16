@@ -77,23 +77,23 @@ type ClientConfig struct {
 	VolumeCleanupExclusionPeriod time.Duration
 }
 
-func networkSpec(blockAll *bool, allowList *string) boxlite.NetworkSpec {
-	if blockAll != nil && *blockAll {
+// networkSpec maps the create request's outbound policy onto the SDK spec.
+func networkSpec(boxDto dto.CreateBoxDTO) boxlite.NetworkSpec {
+	if !boxDto.OutboundEnabled {
 		return boxlite.NetworkSpec{Mode: boxlite.NetworkModeDisabled}
 	}
+	return boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled, AllowNet: allowNetEntries(boxDto.OutboundAllowNet)}
+}
 
-	spec := boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled}
-	if allowList == nil {
-		return spec
-	}
-
-	for _, entry := range strings.Split(*allowList, ",") {
-		entry = strings.TrimSpace(entry)
-		if entry != "" {
-			spec.AllowNet = append(spec.AllowNet, entry)
+// allowNetEntries trims entries and drops blanks; nil when nothing is left.
+func allowNetEntries(entries []string) []string {
+	var allowNet []string
+	for _, entry := range entries {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			allowNet = append(allowNet, entry)
 		}
 	}
-	return spec
+	return allowNet
 }
 
 func boxRuntimeEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]string {
@@ -449,7 +449,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		}
 	}
 
-	opts = append(opts, boxlite.WithNetwork(networkSpec(boxDto.NetworkBlockAll, boxDto.NetworkAllowList)))
+	opts = append(opts, boxlite.WithNetwork(networkSpec(boxDto)))
 
 	// GetOrCreate (not Create) so a CREATE_BOX replay is idempotent. The local
 	// box name is boxDto.Id — the control plane's globally-unique box id — so if
