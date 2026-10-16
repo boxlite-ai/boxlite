@@ -4,7 +4,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/runner"
@@ -25,11 +24,10 @@ func BoxliteFileUpload(ctx *gin.Context) {
 		return
 	}
 
-	// Newer clients carry the archive shape; older clients omit it. Either way
-	// we stream straight into the guest, which lands every upload by the
-	// archive's first entry. No runner-side staging.
-	kind := parseSourceIsDir(ctx.Query("source_is_dir"))
-	if err := r.Boxlite.CopyInStream(ctx.Request.Context(), boxId, destPath, kind, ctx.Request.Body); err != nil {
+	// Stream straight into the guest, which lands the upload by the archive's
+	// first entry. No runner-side staging; an old client's source_is_dir
+	// query parameter is ignored.
+	if err := r.Boxlite.CopyInStream(ctx.Request.Context(), boxId, destPath, ctx.Request.Body); err != nil {
 		respondCopyError(ctx, err)
 		return
 	}
@@ -53,12 +51,8 @@ func BoxliteFileDownload(ctx *gin.Context) {
 
 	ctx.Header("Content-Type", "application/x-tar")
 
-	// Stream straight from the guest into the response. onMeta sets the
-	// archive-shape header before the first body byte; it is not invoked when
-	// the guest predates the hint.
-	err = r.Boxlite.CopyOutStream(ctx.Request.Context(), boxId, srcPath, ctx.Writer, func(sourceIsDir bool) {
-		ctx.Header("X-Boxlite-Source-Is-Dir", strconv.FormatBool(sourceIsDir))
-	})
+	// Stream straight from the guest into the response.
+	err = r.Boxlite.CopyOutStream(ctx.Request.Context(), boxId, srcPath, ctx.Writer)
 	if err == nil {
 		return
 	}
@@ -67,7 +61,6 @@ func BoxliteFileDownload(ctx *gin.Context) {
 		// does not exist) — the response is not yet committed, so we can still
 		// surface an error status.
 		ctx.Writer.Header().Del("Content-Type")
-		ctx.Writer.Header().Del("X-Boxlite-Source-Is-Dir")
 		respondCopyError(ctx, err)
 		return
 	}
@@ -79,23 +72,6 @@ func BoxliteFileDownload(ctx *gin.Context) {
 	slog.Error("boxlite copy_out failed mid-stream, aborting the response",
 		"boxId", boxId, "path", srcPath, "error", err)
 	panic(http.ErrAbortHandler)
-}
-
-// parseSourceIsDir maps the optional source_is_dir query parameter to a
-// copy-source kind. Absent or malformed values mean the client predates the
-// hint → Unknown; the guest lands the archive by its first entry either way.
-func parseSourceIsDir(raw string) boxlite.CopySourceKind {
-	if raw == "" {
-		return boxlite.CopySourceUnknown
-	}
-	b, err := strconv.ParseBool(raw)
-	if err != nil {
-		return boxlite.CopySourceUnknown
-	}
-	if b {
-		return boxlite.CopySourceDir
-	}
-	return boxlite.CopySourceFile
 }
 
 // copyErrorClass is the (status, type, code) triple a BoxLite error crosses the

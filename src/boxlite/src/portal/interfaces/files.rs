@@ -2,7 +2,6 @@
 //!
 //! Provides tar-based upload/download to the guest container rootfs.
 
-use crate::litebox::CopySourceKind;
 use boxlite_shared::{
     BoxByteStream, BoxliteError, BoxliteResult, DownloadRequest, FilesClient, UploadChunk,
 };
@@ -58,7 +57,6 @@ impl FilesInterface {
                         data: buf[..n].to_vec(),
                         mkdir_parents,
                         overwrite,
-                        source_is_dir: None,
                     };
                     first = false;
                     chunks.push(chunk);
@@ -135,12 +133,8 @@ impl FilesInterface {
         Ok(())
     }
 
-    /// Upload a byte stream to the guest and extract at `dest_path`.
-    ///
-    /// `source` is the archive shape (dir tree vs single file);
-    /// [`CopySourceKind::Unknown`] when the caller cannot tell. It is attached
-    /// to the first chunk only; guests that land by the archive's first entry
-    /// ignore it.
+    /// Upload a byte stream to the guest and extract at `dest_path`, landed
+    /// by the archive's first entry.
     pub async fn upload_stream<S>(
         &mut self,
         stream: S,
@@ -148,7 +142,6 @@ impl FilesInterface {
         container_id: Option<&str>,
         mkdir_parents: bool,
         overwrite: bool,
-        source: CopySourceKind,
     ) -> BoxliteResult<()>
     where
         S: futures::Stream<Item = std::io::Result<Vec<u8>>> + Send + 'static,
@@ -165,7 +158,6 @@ impl FilesInterface {
         let stream_err: std::sync::Arc<tokio::sync::Mutex<Option<std::io::Error>>> =
             std::sync::Arc::new(tokio::sync::Mutex::new(None));
         let stream_err_slot = stream_err.clone();
-        let source_is_dir = source.to_wire();
         let chunks = async_stream::stream! {
             futures::pin_mut!(stream);
             let mut first = true;
@@ -178,7 +170,6 @@ impl FilesInterface {
                             data,
                             mkdir_parents,
                             overwrite,
-                            source_is_dir: if first { source_is_dir } else { None },
                         };
                         first = false;
                     }
@@ -215,17 +206,15 @@ impl FilesInterface {
         }
     }
 
-    /// Download a path from the guest as a byte stream.
-    ///
-    /// Returns the stream plus the source shape read from the guest's first
-    /// chunk. [`CopySourceKind::Unknown`] means the guest predates the hint
-    /// (older peer).
+    /// Download a path from the guest as a byte stream. The guest's first
+    /// chunk is read before returning, so a refused or missing source fails
+    /// here rather than mid-stream.
     pub async fn download_stream(
         &mut self,
         container_src: &str,
         container_id: Option<&str>,
         follow_symlinks: bool,
-    ) -> BoxliteResult<(BoxByteStream, CopySourceKind)> {
+    ) -> BoxliteResult<BoxByteStream> {
         let request = download_request(container_src, container_id, follow_symlinks);
 
         let mut stream = self
@@ -236,7 +225,6 @@ impl FilesInterface {
             .into_inner();
 
         let first = stream.message().await.map_err(map_tonic_err)?;
-        let source = CopySourceKind::from_wire(first.as_ref().and_then(|c| c.source_is_dir));
         let mut first_data = first.map(|c| c.data);
 
         let out = async_stream::stream! {
@@ -259,7 +247,7 @@ impl FilesInterface {
             }
         };
 
-        Ok((Box::pin(out), source))
+        Ok(Box::pin(out))
     }
 }
 
