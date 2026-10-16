@@ -160,6 +160,46 @@ Choose `Connect` or `Forward`; a forwarder prepares fresh tunnels for later
 clients. This differs from `WithPort`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 
+## Git config
+
+`Box.Git()` returns a box-scoped handle for guest git config. `scope` is
+`"global"` (default), `"local"`, or `"system"`; `"local"` requires `Path`.
+Close the handle when finished; closing it does not stop the box.
+
+```go
+git, err := box.Git()
+if err != nil {
+	log.Fatal(err)
+}
+defer git.Close()
+
+ctx := context.Background()
+if err := git.ConfigureUser(ctx, "BoxLite Bot", "bot@boxlite.ai", nil); err != nil {
+	log.Fatal(err)
+}
+if err := git.SetConfig(ctx, "core.autocrlf", "input", &boxlite.GitConfigOptions{
+	Scope: "local",
+	Path:  "/workspace/repo",
+}); err != nil {
+	log.Fatal(err)
+}
+email, err := git.GetConfig(ctx, "user.email", &boxlite.GitConfigOptions{
+	Scope: "local",
+	Path:  "/workspace/repo",
+})
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(email)
+```
+
+- `git.ConfigureUser(ctx, name, email, opts)` sets `user.name` and `user.email`.
+- `git.SetConfig(ctx, key, value, opts)` writes a git config value.
+- `git.GetConfig(ctx, key, opts)` reads a git config value.
+- A nil `opts` is global scope. `GitConfigOptions{Scope: "local"}` without
+  `Path` returns an error with code `ErrInvalidArgument` and names the missing
+  argument.
+
 ## Development
 
 Build from source (requires Rust toolchain):

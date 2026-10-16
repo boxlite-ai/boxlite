@@ -691,6 +691,16 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::GitWrite {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::GitGetConfig {
+                cb,
+                user_data,
+                result,
+            } => dispatch_string_event(result, user_data, cb),
         }
     }
 }

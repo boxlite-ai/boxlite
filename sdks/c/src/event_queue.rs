@@ -217,6 +217,17 @@ pub(crate) type CTunnelForwarderWaitFn = extern "C" fn(*mut crate::CBoxliteError
 pub type CTunnelForwarderCloseCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CTunnelForwarderCloseFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
+/// Git write completion (`configure_user` / `set_config`).
+pub type CGitWriteCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CGitWriteFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
+/// Git get_config completion. On success the callback owns the non-null
+/// string and must release it with `boxlite_free_string`.
+pub type CGitGetConfigCb =
+    Option<extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CGitGetConfigFn =
+    extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void);
+
 // ─── Owned FFI payload ─────────────────────────────────────────────────────
 //
 // Wraps a `Box::into_raw`'d FFI struct that will eventually be transferred
@@ -458,6 +469,16 @@ pub enum RuntimeEvent {
         cb: CTunnelForwarderCloseFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
+    },
+    GitWrite {
+        cb: CGitWriteFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    GitGetConfig {
+        cb: CGitGetConfigFn,
+        user_data: usize,
+        result: Result<CString, BoxliteError>,
     },
 }
 

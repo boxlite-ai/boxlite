@@ -10,6 +10,7 @@ pub(crate) mod config;
 pub mod copy;
 mod crash_report;
 mod exec;
+mod git;
 mod init;
 pub(crate) mod local_snapshot;
 mod manager;
@@ -32,6 +33,8 @@ pub use network::{
 pub use snapshot::SnapshotHandle;
 pub use ssh::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
 pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
+
+pub use git::{GitBranches, GitFileStatus, GitHandle, GitStatus};
 
 pub(crate) use box_impl::SharedBoxImpl;
 pub(crate) use init::BoxBuilder;
@@ -238,6 +241,11 @@ impl LiteBox {
     /// Get a snapshot handle for snapshot operations.
     pub fn snapshots(&self) -> SnapshotHandle {
         SnapshotHandle::new(Arc::clone(&self.snapshot_backend))
+    }
+
+    /// Get a git handle for git operations.
+    pub fn git(&self) -> GitHandle {
+        GitHandle::new(Arc::clone(&self.box_backend))
     }
 
     /// Clone this box, creating a new box with a copy of its disks.

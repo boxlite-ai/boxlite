@@ -15,6 +15,7 @@ import type {
   JsBox,
   JsBoxInfo,
   JsBoxOptions,
+  JsGitHandle,
   JsVolumeSpec,
   NativeBoxConnection,
   NativeBoxTunnel,
@@ -368,6 +369,56 @@ export interface AdvancedBoxOptions {
   capabilities?: ContainerCapabilities;
 }
 
+/** Box-scoped git config operations for a SimpleBox. */
+export class GitHandle {
+  /** @internal */
+  constructor(
+    private readonly ensureBox: () => Promise<{ readonly git: JsGitHandle }>,
+  ) {}
+
+  /**
+   * Set `user.name` and `user.email` for commits in this box.
+   *
+   * `scope` is `"global"` (default), `"local"`, or `"system"`; `"local"`
+   * requires `path`.
+   */
+  async configureUser(
+    name: string,
+    email: string,
+    scope?: string | null,
+    path?: string | null,
+  ): Promise<void> {
+    const box = await this.ensureBox();
+    await box.git.configureUser(name, email, scope, path);
+  }
+
+  /**
+   * Write a git config value. Same `scope` / `path` rules as
+   * `configureUser`.
+   */
+  async setConfig(
+    key: string,
+    value: string,
+    scope?: string | null,
+    path?: string | null,
+  ): Promise<void> {
+    const box = await this.ensureBox();
+    await box.git.setConfig(key, value, scope, path);
+  }
+
+  /**
+   * Read a git config value. Same `scope` / `path` rules as `setConfig`.
+   */
+  async getConfig(
+    key: string,
+    scope?: string | null,
+    path?: string | null,
+  ): Promise<string> {
+    const box = await this.ensureBox();
+    return box.git.getConfig(key, scope, path);
+  }
+}
+
 /** Box-scoped network operations for a SimpleBox. */
 export class NetworkHandle {
   /** @internal */
@@ -465,6 +516,7 @@ export class SimpleBox {
   protected _reuseExisting: boolean;
   protected _created: boolean | null = null;
   readonly network: NetworkHandle;
+  readonly git: GitHandle;
 
   /**
    * Create a new SimpleBox.
@@ -542,6 +594,7 @@ export class SimpleBox {
     this._name = options.name;
     this._reuseExisting = options.reuseExisting ?? false;
     this.network = new NetworkHandle(() => this._ensureBox());
+    this.git = new GitHandle(() => this._ensureBox());
   }
 
   /**
