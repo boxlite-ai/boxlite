@@ -20,6 +20,7 @@ in `src/mocks`, with no backend and no login. Its `VITE_BASE_API_URL` must end i
 handlers are mounted under `VITE_API_URL`. When the two disagree, `/config`
 goes unanswered and the console never leaves its loading screen.
 
+<<<<<<< HEAD
 The image catalog mock answers the way the API does, so the console can be
 judged against real refusals rather than happy paths: a tenant image is listed
 under the name its reference normalises to (`python` is
@@ -29,6 +30,8 @@ the 409 names those boxes by id, not by name. Pinning a tag refuses OCI-invalid
 names and any existing name, even one bound to the same version, and an unpin
 writes no history event.
 
+=======
+>>>>>>> origin/main
 `DASHBOARD_API_PROXY_TARGET` points the dev server at a remote API
 (`https://dev.boxlite.ai`) through the same-origin proxy, so the browser never
 makes a CORS-gated request.
