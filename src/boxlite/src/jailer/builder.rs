@@ -5,7 +5,7 @@ use super::PathAccess;
 use super::sandbox::{PlatformSandbox, Sandbox};
 use crate::runtime::advanced_options::{ResourceLimits, SecurityOptions};
 use crate::runtime::layout::BoxFilesystemLayout;
-use crate::runtime::options::VolumeSpec;
+use crate::runtime::options::{MountSpec, VolumeSpec};
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 
@@ -27,6 +27,7 @@ use std::path::PathBuf;
 pub struct JailerBuilder {
     security: SecurityOptions,
     volumes: Vec<VolumeSpec>,
+    mounts: Vec<MountSpec>,
     box_id: Option<String>,
     layout: Option<BoxFilesystemLayout>,
     preserved_fds: Vec<(RawFd, i32)>,
@@ -47,6 +48,7 @@ impl JailerBuilder {
         Self {
             security: SecurityOptions::default(),
             volumes: Vec::new(),
+            mounts: Vec::new(),
             box_id: None,
             layout: None,
             preserved_fds: Vec::new(),
@@ -86,6 +88,15 @@ impl JailerBuilder {
     /// Add a single volume mount.
     pub fn with_volume(mut self, volume: VolumeSpec) -> Self {
         self.volumes.push(volume);
+        self
+    }
+
+    /// Set the typed mounts (`BoxOptions::mounts`).
+    ///
+    /// Like volumes, they are used for sandbox path restrictions: a bind
+    /// mount's directory becomes readable, and writable unless it is read-only.
+    pub fn with_mounts(mut self, mounts: Vec<MountSpec>) -> Self {
+        self.mounts = mounts;
         self
     }
 
@@ -341,6 +352,7 @@ impl JailerBuilder {
             sandbox,
             security: self.security,
             volumes: self.volumes,
+            mounts: self.mounts,
             box_id,
             layout,
             preserved_fds: self.preserved_fds,
@@ -443,6 +455,24 @@ mod tests {
             .expect("Should build successfully");
 
         assert_eq!(jailer.volumes().len(), 2);
+    }
+
+    /// Typed mounts reach the jailer beside volumes, not in their place.
+    #[test]
+    fn test_builder_with_mounts() {
+        let jailer = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_volume(VolumeSpec::bind_mount("/data", "/mnt/data"))
+            .with_mounts(vec![MountSpec::bind_mount("/output", "/mnt/output")])
+            .build()
+            .expect("Should build successfully");
+
+        assert_eq!(jailer.volumes().len(), 1);
+        assert_eq!(
+            jailer.mounts(),
+            [MountSpec::bind_mount("/output", "/mnt/output")]
+        );
     }
 
     #[test]
