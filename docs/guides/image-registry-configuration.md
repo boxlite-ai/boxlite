@@ -12,6 +12,21 @@ You can provide a list of custom registries. BoxLite will try to pull the image 
 
 **Fully qualified image references (e.g., `quay.io/prometheus/prometheus:v2.40.1`) always bypass this search mechanism and are pulled directly.**
 
+### Registry addresses and proxies
+
+The runtime lets its OCI HTTP client handle connections and DNS resolution. It does
+not resolve registry names beforehand or require their addresses to be public. Local
+and private registries do not need an `image_registries` entry just to permit access;
+use an entry when you need custom transport, TLS, authentication, or search settings.
+
+Image pulls use the application's proxy environment variables (`HTTP_PROXY`,
+`HTTPS_PROXY`, and `NO_PROXY`). For example, a proxy that resolves registry names can
+handle a pull even when the application host cannot resolve the registry itself.
+Proxy connectivity and TLS verification still apply.
+
+The hosted platform separately applies a [registry allowlist](../../apps/api/README.md#image-registry-admission)
+to tenant-supplied image references.
+
 ## CLI configuration
 
 The CLI layers configuration sources with the following priority (from lowest to highest):

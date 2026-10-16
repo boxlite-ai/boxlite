@@ -636,8 +636,6 @@ impl ImageStore {
         &self,
         reference: &Reference,
     ) -> Result<ImageManifest, RegistryPullError> {
-        assert_registry_is_public(reference.registry(), &self.image_registries).await?;
-
         let client = self.client_for(reference);
         let auth = registry_auth_for(reference.registry(), &self.image_registries);
 
@@ -1206,184 +1204,6 @@ fn client_config_for_registry(host: &str, image_registries: &[ImageRegistry]) ->
     }
 }
 
-/// Refuse a registry that is not out on the public internet.
-///
-/// The allowlist a tenant's reference passed is by name, and a name can point
-/// anywhere: whoever controls DNS for an allowed host can aim the pull at the
-/// instance metadata endpoint or at a neighbour's service, and the request
-/// leaves from the runner, with the runner's network position.
-///
-/// A host the operator configured explicitly is exempt. A local registry is
-/// loopback by definition, and which addresses this deployment may reach is the
-/// operator's decision rather than DNS's — the same stance the control plane
-/// takes when it allows an internal address that was put on its list by hand.
-///
-/// **Two gaps are accepted rather than closed, and both are the same shape.**
-///
-/// This resolves the name; `oci-client` resolves it again, per connection,
-/// through its own stack. A resolver that answers differently the second time
-/// — the very attacker named above — is not caught. Refusing a host whose DNS
-/// answers consistently private is what this buys, not a guarantee.
-///
-/// And it covers the initial host only. `oci-client` 0.15 builds its own
-/// reqwest client and exposes no hook for a redirect policy, a connector or a
-/// DNS resolver, so a registry that answers a blob request with a 302 to
-/// anywhere is followed unchecked — reqwest's default is up to ten hops.
-///
-/// Closing either one means vendoring the client, a hook upstream, or routing
-/// pulls through a gateway that is the only address a runner may reach.
-async fn assert_registry_is_public(
-    host: &str,
-    image_registries: &[ImageRegistry],
-) -> Result<(), RegistryPullError> {
-    if image_registries
-        .iter()
-        .any(|registry| registry.host == host)
-    {
-        return Ok(());
-    }
-
-    let hostname = registry_hostname(host);
-
-    // A literal is already the answer. Handing it to a resolver would only
-    // invite a different one than the address that gets connected to.
-    if let Ok(address) = hostname.parse::<std::net::IpAddr>() {
-        return refuse_non_public(host, &address).map_err(RegistryPullError::Unanswered);
-    }
-
-    // Every failure here is one the registry never answered: nothing has been
-    // sent to it yet. So a refresh may still start from the cache — offline,
-    // or behind a resolver that answers with a proxy's fake address — and that
-    // is safe, because falling back contacts nothing.
-    //
-    // The port is required by `lookup_host` and does not reach the result: only
-    // the addresses are read, and they are the same whichever port is asked
-    // for.
-    let resolved = tokio::net::lookup_host((hostname, 443))
-        .await
-        .map_err(|e| {
-            RegistryPullError::Unanswered(BoxliteError::Image(format!(
-                "failed to resolve registry host '{host}': {e}"
-            )))
-        })?;
-
-    for address in resolved {
-        refuse_non_public(host, &address.ip()).map_err(RegistryPullError::Unanswered)?;
-    }
-
-    Ok(())
-}
-
-fn refuse_non_public(host: &str, address: &std::net::IpAddr) -> BoxliteResult<()> {
-    if is_non_public_address(address) {
-        return Err(BoxliteError::Image(format!(
-            "registry host '{host}' is at {address}, which is not a public registry address"
-        )));
-    }
-    Ok(())
-}
-
-/// The host part of `host[:port]`, with an IPv6 literal's brackets removed.
-///
-/// Written out rather than reached for through `SocketAddr`, which needs a port
-/// this caller does not have and rejects the bare literals a registry list may
-/// perfectly well hold.
-fn registry_hostname(host: &str) -> &str {
-    if let Some(rest) = host.strip_prefix('[') {
-        // `[::1]` and `[::1]:5000` alike: the literal ends at the bracket.
-        return rest.split_once(']').map_or(rest, |(literal, _)| literal);
-    }
-    match host.split_once(':') {
-        // A single unbracketed colon separates a port. More than one means a
-        // bare IPv6 literal, which has no port to strip.
-        Some((name, rest)) if !rest.contains(':') => name,
-        _ => host,
-    }
-}
-
-/// Addresses a public registry cannot be at: inside a deployment, or not
-/// routable on the internet at all.
-///
-/// The second half is not pedantry — a resolver that answers with benchmarking
-/// or reserved space is either broken or redirecting, and either way the
-/// connection is not going to the registry the reference named.
-fn is_non_public_address(address: &std::net::IpAddr) -> bool {
-    match address {
-        std::net::IpAddr::V4(v4) => {
-            let [a, b, c, _] = v4.octets();
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.is_multicast()
-                || v4.is_documentation()
-                // No stable predicate for these (they exist behind the
-                // unstable `ip` feature): this host's own /8, carrier-grade
-                // NAT that cloud providers hand out internally, benchmarking
-                // space that some local DNS proxies answer with, IETF protocol
-                // assignments, and reserved space.
-                || a == 0
-                || (a == 100 && (64..128).contains(&b))
-                || (a == 198 && (18..20).contains(&b))
-                || (a == 192 && b == 0 && c == 0)
-                || a >= 240
-        }
-        std::net::IpAddr::V6(v6) => {
-            // The v6-native answers come first. `to_ipv4` below maps anything
-            // whose top 96 bits are zero, which includes `::1` — it would hand
-            // back `0.0.0.1` and call loopback public.
-            if v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_unique_local()
-                || v6.is_unicast_link_local()
-                || v6.is_multicast()
-                // Site-local, deprecated but still answered by some resolvers.
-                || (v6.segments()[0] & 0xffc0) == 0xfec0
-            {
-                return true;
-            }
-
-            // An IPv4 address in IPv6 clothing is the same address, in each of
-            // the shapes it arrives in: mapped, compatible, the NAT64 prefix a
-            // DNS64 resolver synthesizes from an A record — `64:ff9b::a9fe:a9fe`
-            // is the metadata endpoint — and 6to4.
-            if let Some(v4) = v6.to_ipv4() {
-                return is_non_public_address(&std::net::IpAddr::V4(v4));
-            }
-            let segments = v6.segments();
-            // The well-known prefix and RFC 8215's local-use one both carry an
-            // IPv4 address in the last two groups.
-            if segments[0] == 0x0064
-                && segments[1] == 0xff9b
-                && (segments[2..6] == [0; 4] || segments[2] == 0x0001)
-            {
-                return is_non_public_address(&std::net::IpAddr::V4(embedded_ipv4(
-                    segments[6],
-                    segments[7],
-                )));
-            }
-            if segments[0] == 0x2002 {
-                // 6to4 carries its IPv4 in the next two groups.
-                return is_non_public_address(&std::net::IpAddr::V4(embedded_ipv4(
-                    segments[1],
-                    segments[2],
-                )));
-            }
-            false
-        }
-    }
-}
-
-fn embedded_ipv4(high: u16, low: u16) -> std::net::Ipv4Addr {
-    std::net::Ipv4Addr::new(
-        (high >> 8) as u8,
-        (high & 0xff) as u8,
-        (low >> 8) as u8,
-        (low & 0xff) as u8,
-    )
-}
-
 /// The index key a build is found by wherever it was pulled from: its
 /// repository pinned to the manifest digest it resolved to.
 fn digest_key(reference: &Reference, manifest: &ImageManifest) -> String {
@@ -1730,148 +1550,77 @@ pub(super) mod tests {
         }
     }
 
-    /// The class this check exists for: the allowlist upstream is by name, and
-    /// a name can be pointed at the metadata endpoint or at a neighbour.
-    #[test]
-    fn addresses_a_public_registry_cannot_be_at() {
-        for address in [
-            "127.0.0.1",
-            "10.1.2.3",
-            "172.16.0.1",
-            "172.31.255.255",
-            "192.168.1.1",
-            "169.254.169.254",
-            "0.0.0.0",
-            "100.64.0.1",
-            "198.18.0.1",
-            "192.0.0.1",
-            "192.0.2.1",
-            "203.0.113.1",
-            "0.1.2.3",
-            "224.0.0.1",
-            "240.0.0.1",
-            "::1",
-            "::",
-            "fd00::1",
-            "fe80::1",
-            "fec0::1",
-            "ff02::1",
-            // The same IPv4 address in each of the shapes IPv6 carries it.
-            "::ffff:169.254.169.254",
-            "::169.254.169.254",
-            "64:ff9b::a9fe:a9fe",
-            "64:ff9b:1::a9fe:a9fe",
-            "2002:a9fe:a9fe::",
-        ] {
-            assert!(
-                is_non_public_address(&address.parse().unwrap()),
-                "{address} must be refused"
-            );
-        }
-    }
-
-    /// The other half: a check that refuses everything protects nothing, it
-    /// just stops the product working.
-    #[test]
-    fn public_addresses_stay_reachable() {
-        for address in [
-            "1.1.1.1",
-            "8.8.8.8",
-            "172.32.0.1",
-            "100.128.0.1",
-            "99.255.255.255",
-            "198.20.0.1",
-            "192.0.1.1",
-            "64:ff9b:2::0101:0101",
-            "2606:4700:4700::1111",
-            "2002:0101:0101::",
-        ] {
-            assert!(
-                !is_non_public_address(&address.parse().unwrap()),
-                "{address} must stay reachable"
-            );
-        }
-    }
-
-    /// A registry host may be a bare name, a name with a port, or an IPv6
-    /// literal with or without one. Getting the literal wrong resolves a
-    /// different string than the one that gets connected to — which on a
-    /// resolver that answers everything is a check that silently passes.
-    #[test]
-    fn registry_hostname_survives_every_shape_a_host_arrives_in() {
-        for (host, expected) in [
-            ("ghcr.io", "ghcr.io"),
-            ("registry.local:5000", "registry.local"),
-            ("[::1]", "::1"),
-            ("[::1]:5000", "::1"),
-            ("[2606:4700:4700::1111]:443", "2606:4700:4700::1111"),
-            ("::1", "::1"),
-            ("fd00::1", "fd00::1"),
-        ] {
-            assert_eq!(registry_hostname(host), expected, "host={host}");
-        }
-    }
-
-    /// A local registry is loopback by definition. Which addresses this
-    /// deployment may reach is the operator's decision, and configuring the
-    /// registry is how that decision is expressed.
+    /// The HTTP client must get to make the connection even when the registry
+    /// is on loopback and has no explicit runtime configuration.
     #[tokio::test]
-    async fn a_configured_registry_is_reachable_even_on_loopback() {
-        let registries = [ImageRegistry::http("127.0.0.1:25000")];
+    async fn pull_reaches_an_unconfigured_loopback_registry() {
+        use std::time::Duration;
+        use tokio::io::AsyncReadExt;
+        use tokio::time::timeout;
 
-        assert_registry_is_public("127.0.0.1:25000", &registries)
-            .await
-            .expect("an operator-configured registry is not DNS's call");
-    }
-
-    /// Literals, so the check answers without a resolver — these must not
-    /// depend on what this machine's DNS happens to say.
-    #[tokio::test]
-    async fn an_unconfigured_internal_address_is_refused() {
-        for host in [
-            "169.254.169.254",
-            "127.0.0.1:5000",
-            "[::1]:5000",
-            "[fd00::1]",
-        ] {
-            let error = assert_registry_is_public(host, &[])
+        const CHILD_ENV: &str = "BOXLITE_TEST_LOOPBACK_PULL_CHILD";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            // Isolate proxy settings without changing another test's environment.
+            let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "images::store::tests::pull_reaches_an_unconfigured_loopback_registry",
+                    "--nocapture",
+                ])
+                .env(CHILD_ENV, "1")
+                .kill_on_drop(true);
+            for name in [
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "NO_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+                "no_proxy",
+            ] {
+                command.env_remove(name);
+            }
+            let output = timeout(Duration::from_secs(10), command.output())
                 .await
-                .expect_err("an address inside the deployment must not be pulled from");
-
+                .expect("isolated pull test must finish")
+                .unwrap();
             assert!(
-                error.to_string().contains("not a public registry address"),
-                "host={host}, unexpected error: {error}"
+                output.status.success(),
+                "isolated pull test failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
             );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return;
         }
-    }
 
-    /// The check has to be on the pull path, not merely available: a reference
-    /// naming an address inside the deployment must not reach the registry
-    /// client at all. A literal, so this needs no resolver, and a port nothing
-    /// listens on, so removing the guard fails here in milliseconds rather
-    /// than hanging on a handshake with whatever answered.
-    #[tokio::test]
-    async fn pull_refuses_an_address_inside_the_deployment() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let image_ref = format!("{}/acme/app:v1", listener.local_addr().unwrap());
         let temp_dir = tempfile::tempdir().unwrap();
         let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
         let store = ImageStore::new(temp_dir.path().join("images"), db, vec![]).unwrap();
 
-        let error = store
-            .pull("127.0.0.1:1/acme/app:v1")
-            .await
-            .expect_err("an address inside the deployment must not be pulled from");
-
+        let (pull, received) = timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                store.pull(&image_ref),
+                timeout(Duration::from_secs(3), async {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut byte = [0u8; 1];
+                    assert_eq!(socket.read(&mut byte).await.unwrap(), 1);
+                    // Close during TLS: reaching the server, not a successful
+                    // image download, is the behavior this fixture observes.
+                }),
+            )
+        })
+        .await
+        .expect("pull and listener must finish");
         assert!(
-            error.to_string().contains("not a public registry address"),
-            "unexpected error: {error}"
+            received.is_ok(),
+            "pull must reach the loopback registry; pull result: {pull:?}",
         );
-    }
-
-    #[tokio::test]
-    async fn an_unconfigured_public_address_is_allowed() {
-        assert_registry_is_public("1.1.1.1", &[])
-            .await
-            .expect("a public address is what this check exists to let through");
+        pull.expect_err("the fixture closes the connection during TLS");
     }
 
     #[test]
