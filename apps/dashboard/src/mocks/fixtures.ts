@@ -11,6 +11,7 @@
 
 import type { Invoice } from '@/billing-api/types/Invoice'
 import type { WalletTransaction } from '@/billing-api/types/WalletTransaction'
+import { catalogNameOf } from '@/lib/image-ref'
 import {
   type Box,
   BoxClassEnum,
@@ -18,6 +19,8 @@ import {
   BoxProgressPhase,
   BoxState,
   ImageDetail,
+  RegistryCredential,
+  RegistryCredentialKind,
   type BoxliteConfiguration,
   type Organization,
   type OrganizationUser,
@@ -112,7 +115,7 @@ export const MOCK_ORGANIZATION_MEMBER: OrganizationUser = {
   updatedAt: nowDate,
 }
 
-function buildBox(overrides: Partial<Box> & Pick<Box, 'id' | 'name' | 'state'>): Box {
+export function buildBox(overrides: Partial<Box> & Pick<Box, 'id' | 'name' | 'state'>): Box {
   return {
     organizationId: MOCK_ORGANIZATION_ID,
     user: MOCK_USER.email,
@@ -569,3 +572,72 @@ export const MOCK_IMAGE_DETAILS: ImageDetail[] = [
 ]
 
 export const MOCK_IMAGE_LIMIT = 20
+
+export const MOCK_REGISTRY_CREDENTIALS: RegistryCredential[] = [
+  {
+    id: 'reg-ghcr-acme',
+    kind: RegistryCredentialKind.BASIC,
+    registryHost: 'ghcr.io',
+    repositoryPrefix: 'acme/',
+    username: 'acme-bot',
+    createdBy: 'mock-user',
+    createdAt: ago(5 * DAY),
+  },
+]
+
+/**
+ * What the API's registrar does when a box reaches STARTED: a tenant image
+ * enters the catalog under its normalised name, its first tag pinned; a
+ * known image gets its last start moved. Built-in images record nothing.
+ */
+export function registerImageFromBox(image: string) {
+  const name = catalogNameOf(image)
+  const builtIn = MOCK_IMAGE_DETAILS.find((i) => i.curated && (i.name === image || i.curatedRef === image))
+  if (builtIn) return
+  const existing = MOCK_IMAGE_DETAILS.find((i) => i.name === name)
+  const startedAt = new Date().toISOString()
+  if (existing) {
+    existing.lastUsedAt = startedAt
+    return
+  }
+  const tag = image.includes('@') ? null : (image.split('/').at(-1)?.split(':')[1] ?? 'latest')
+  const digest = `sha256:${Array.from({ length: 64 }, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('')}`
+  const versionId = `ver-${Math.abs(Date.now() % 100000000)}`
+  const sizeBytes = (40 + Math.floor(Math.random() * 200)) * MIB
+  MOCK_IMAGE_DETAILS.push({
+    name,
+    id: `img-${Math.abs(Date.now() % 100000000)}`,
+    curated: false,
+    curatedRef: null,
+    aliases: tag ? [tag] : [],
+    versionCount: 1,
+    sizeBytes,
+    lastUsedAt: startedAt,
+    createdAt: startedAt,
+    versions: [
+      {
+        id: versionId,
+        digest,
+        sizeBytes,
+        sourceRef: image,
+        aliases: tag ? [tag] : [],
+        lastUsedAt: startedAt,
+        upstreamMissingAt: null,
+        createdAt: startedAt,
+      },
+    ],
+    history: tag
+      ? [
+          {
+            aliasName: tag,
+            fromVersionId: null,
+            fromDigest: null,
+            toVersionId: versionId,
+            toDigest: digest,
+            actorId: null,
+            createdAt: startedAt,
+          },
+        ]
+      : [],
+  })
+}

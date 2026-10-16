@@ -17,7 +17,12 @@ import {
 import { Invoice, PaginatedInvoices } from '@/billing-api/types/Invoice'
 import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
 import { Plan } from '@/billing-api/types/Plan'
-import type { UsageConcurrencySeriesDto } from '@boxlite-ai/api-client'
+import {
+  BoxProgressPhase,
+  BoxState,
+  RegistryCredentialKind,
+  type UsageConcurrencySeriesDto,
+} from '@boxlite-ai/api-client'
 import { catalogNameOf } from '@/lib/image-ref'
 import { http, HttpResponse } from 'msw'
 import {
@@ -27,6 +32,9 @@ import {
   MOCK_ORGANIZATION,
   MOCK_ORGANIZATION_MEMBER,
   MOCK_PAGINATED_BOXES,
+  MOCK_REGISTRY_CREDENTIALS,
+  buildBox,
+  registerImageFromBox,
   MOCK_VOLUMES,
   MOCK_VOLUME_USAGE,
   buildInvoiceHistory,
@@ -59,6 +67,16 @@ function boxesReferencing(imageName: string) {
   return MOCK_BOXES.filter(
     (box) => box.desiredState !== 'destroyed' && box.image != null && catalogNameOf(box.image) === imageName,
   )
+}
+
+/** Boxes whose image a credential covers, which block the credential's removal. */
+function boxesPullingThrough(credential: { registryHost: string; repositoryPrefix: string }) {
+  return MOCK_BOXES.filter((box) => {
+    if (box.desiredState === 'destroyed' || !box.image) return false
+    const name = catalogNameOf(box.image)
+    const [host, ...rest] = name.split('/')
+    return host === credential.registryHost && `${rest.join('/')}/`.startsWith(credential.repositoryPrefix)
+  })
 }
 
 export const handlers = [
@@ -113,6 +131,48 @@ export const handlers = [
     if (isRunningCount) return HttpResponse.json({ items: items.slice(0, 1), total: 62, page: 1, totalPages: 62 })
     return HttpResponse.json({ items, total: items.length, page: 1, totalPages: 1 })
   }),
+  // The Box API's create, which the New Box dialog calls on the page's own
+  // origin. The box pulls for a moment, then starts; reaching STARTED is what
+  // puts its image in the catalog, as the API's registrar does.
+  http.post('*/v1/:organizationId/boxes', async ({ request }) => {
+    const body = (await request.json()) as { name?: string; image?: string; cpus?: number; memory_mib?: number }
+    const image = body.image || 'ghcr.io/boxlite-ai/boxlite-agent-base:mock'
+    const id = `mock-box-${Math.abs(Date.now() % 100000000)}`
+    const box = buildBox({
+      id,
+      name: body.name || `box-${id.slice(-5)}`,
+      state: BoxState.CREATING,
+      image,
+      cpu: body.cpus ?? 1,
+      memory: body.memory_mib ? body.memory_mib / 1024 : 1,
+      progress: { phase: BoxProgressPhase.PREPARING_IMAGE, retryAfterMs: 5000 },
+    })
+    MOCK_BOXES.unshift(box)
+    MOCK_PAGINATED_BOXES.items = MOCK_BOXES
+    MOCK_PAGINATED_BOXES.total = MOCK_BOXES.length
+    setTimeout(() => {
+      box.state = BoxState.STARTED
+      box.progress = undefined
+      registerImageFromBox(image)
+    }, 4000)
+    return HttpResponse.json(
+      {
+        box_id: id,
+        name: box.name,
+        status: 'creating',
+        created_at: box.createdAt,
+        updated_at: box.updatedAt,
+        image,
+        cpus: box.cpu,
+        memory_mib: (box.memory ?? 1) * 1024,
+        labels: {},
+        auto_stop: 0,
+        auto_delete: 0,
+      },
+      { status: 201 },
+    )
+  }),
+  http.post('*/v1/:organizationId/boxes/:boxId/start', () => new HttpResponse(null, { status: 204 })),
   http.get(`${API_URL}/box/:boxIdOrName`, ({ params }) => {
     const demo = quickstartHandoffDemoBox()
     const box =
@@ -201,9 +261,74 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
 
-  // Image catalog. Deleting an image is soft and answers 409 while a box can
-  // still boot from it, naming those boxes by id; curated images cannot be
-  // deleted at all.
+  // Image catalog and registry logins. Static registry routes are declared
+  // before `/images/:idOrRef`, as the real API orders them. Deleting a catalog
+  // image is soft and answers 409 while a box can still boot from it; curated
+  // images cannot be deleted at all.
+  // `localStorage['registries-unsupported'] = '1'` answers as a deploy with
+  // no secret store does (registries.service.ts), for that state of the panel.
+  http.get(`${API_URL}/images/registries`, () =>
+    globalThis.localStorage?.getItem('registries-unsupported') === '1'
+      ? HttpResponse.json(
+          {
+            statusCode: 501,
+            message: 'Registry credentials are not configured for this deployment',
+            code: 'unsupported',
+          },
+          { status: 501 },
+        )
+      : HttpResponse.json(MOCK_REGISTRY_CREDENTIALS),
+  ),
+  http.post(`${API_URL}/images/registries`, async ({ request }) => {
+    const body = (await request.json()) as {
+      registryHost: string
+      repositoryPrefix?: string
+      username: string
+      password: string
+    }
+    const repositoryPrefix = body.repositoryPrefix ?? ''
+    const taken = MOCK_REGISTRY_CREDENTIALS.some(
+      (c) => c.registryHost === body.registryHost && c.repositoryPrefix === repositoryPrefix,
+    )
+    if (taken) {
+      return HttpResponse.json(
+        {
+          statusCode: 409,
+          message: `A credential for ${body.registryHost}/${repositoryPrefix} already exists; remove it before adding another`,
+          error: 'Conflict',
+        },
+        { status: 409 },
+      )
+    }
+    const created = {
+      id: `reg-${Math.abs(Date.now() % 100000000)}`,
+      kind: RegistryCredentialKind.BASIC,
+      registryHost: body.registryHost,
+      repositoryPrefix,
+      username: body.username,
+      createdBy: 'mock-user',
+      createdAt: new Date().toISOString(),
+    }
+    MOCK_REGISTRY_CREDENTIALS.unshift(created)
+    return HttpResponse.json(created, { status: 201 })
+  }),
+  http.delete(`${API_URL}/images/registries/:id`, ({ params }) => {
+    const index = MOCK_REGISTRY_CREDENTIALS.findIndex((c) => c.id === params.id)
+    if (index < 0) return new HttpResponse(null, { status: 404 })
+    const holders = boxesPullingThrough(MOCK_REGISTRY_CREDENTIALS[index])
+    if (holders.length > 0) {
+      return HttpResponse.json(
+        {
+          statusCode: 409,
+          message: `Registry credential ${params.id} cannot be removed while ${holders.length} box(es) pull through it: ${holders.map((b) => b.id).join(', ')}`,
+          error: 'Conflict',
+        },
+        { status: 409 },
+      )
+    }
+    MOCK_REGISTRY_CREDENTIALS.splice(index, 1)
+    return new HttpResponse(null, { status: 204 })
+  }),
   http.get(`${API_URL}/images/usage`, () => {
     const owned = MOCK_IMAGE_DETAILS.filter((i) => !i.curated)
     return HttpResponse.json({

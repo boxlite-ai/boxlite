@@ -29,6 +29,14 @@ the 409 names those boxes by id, not by name. Pinning a tag refuses OCI-invalid
 names and any existing name, even one bound to the same version, and an unpin
 writes no history event.
 
+Registry credentials and box creation are mocked on the same terms. A
+credential is unique per registry and repository prefix, and removing one is
+refused while a box pulls through it. A box created from the console shows a
+first pull for a few seconds, then starts; reaching STARTED is what adds its
+image to the catalog, as the API's registrar does. `localStorage
+['registries-unsupported'] = '1'` answers the credential list with 501, as a
+deploy without a secret store does.
+
 `DASHBOARD_API_PROXY_TARGET` points the dev server at a remote API
 (`https://dev.boxlite.ai`) through the same-origin proxy, so the browser never
 makes a CORS-gated request.
