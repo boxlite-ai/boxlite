@@ -8,7 +8,6 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, OneToOne, Uniqu
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
-import { NetworkMode } from '../enums/network-mode.enum'
 import { BoxSecret, BoxVolume } from '../dto/box.dto'
 import { nanoid } from 'nanoid'
 import { BoxLastActivity } from './box-last-activity.entity'
@@ -146,17 +145,17 @@ export class Box {
   })
   env: { [key: string]: string } = {}
 
-  // Network policy, one column per direction, in the `/v1` NetworkSpec
-  // vocabulary. Inbound `enabled` lets the proxy serve the box's exposed
-  // services without sign-in; it never affects the terminal or the API.
-  @Column({ type: 'varchar', default: NetworkMode.DISABLED })
-  inboundMode: NetworkMode = NetworkMode.DISABLED
+  // Network policy, one flag per direction; true is the `/v1` NetworkSpec's
+  // `enabled`. Inbound enabled lets the proxy serve the box's exposed services
+  // without sign-in; it never affects the terminal or the API.
+  @Column({ type: 'boolean', default: false })
+  inboundEnabled = false
 
-  @Column({ type: 'varchar', default: NetworkMode.ENABLED })
-  outboundMode: NetworkMode = NetworkMode.ENABLED
+  @Column({ type: 'boolean', default: true })
+  outboundEnabled = true
 
   // Egress allowlist entries (hosts, wildcards, IPs, CIDRs). Null means full
-  // egress under outbound `enabled`; it is irrelevant under `disabled`.
+  // egress while outbound is enabled; it is irrelevant otherwise.
   @Column({ type: 'text', array: true, nullable: true })
   outboundAllowNet?: string[] | null
 

@@ -35,10 +35,10 @@ jest.mock('uuid', () => ({
 
 describe('BoxLite REST routing', () => {
   let app: INestApplication
-  let updateInboundMode: jest.Mock
+  let updateInboundEnabled: jest.Mock
 
   async function startRoutingTestApp() {
-    updateInboundMode = jest.fn((_boxId: string, inboundMode: string) => Promise.resolve({ inboundMode }))
+    updateInboundEnabled = jest.fn((_boxId: string, inboundEnabled: boolean) => Promise.resolve({ inboundEnabled }))
     await startApp(
       // The module's order, with the proxy controller's catch-all routes
       // present, so one that shadowed PUT network/inbound would fail below.
@@ -49,7 +49,7 @@ describe('BoxLite REST routing', () => {
           useValue: {
             findAllDeprecated: jest.fn().mockResolvedValue([]),
             toBoxDtos: jest.fn().mockResolvedValue([]),
-            updateInboundMode,
+            updateInboundEnabled,
           },
         },
         {
@@ -139,7 +139,7 @@ describe('BoxLite REST routing', () => {
 
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ mode })
-    expect(updateInboundMode).toHaveBeenCalledWith('box-1', mode, 'org-123')
+    expect(updateInboundEnabled).toHaveBeenCalledWith('box-1', mode === 'enabled', 'org-123')
   })
 
   it.each([
@@ -153,7 +153,7 @@ describe('BoxLite REST routing', () => {
     const response = await put('/api/v1/boxes/box-1/network/inbound', body)
 
     expect(response.status).toBe(400)
-    expect(updateInboundMode).not.toHaveBeenCalled()
+    expect(updateInboundEnabled).not.toHaveBeenCalled()
   })
 
   // Clients call the inbound route only when the server advertises it, so a

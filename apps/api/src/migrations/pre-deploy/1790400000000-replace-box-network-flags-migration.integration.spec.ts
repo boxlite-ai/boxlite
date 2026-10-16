@@ -5,12 +5,13 @@ import { DropBoxNetworkFlags1790400000000 } from '../post-deploy/1790400000000-d
 
 // The string-level specs pin the SQL; this one runs it. The sync trigger is
 // plpgsql that only a database can execute, and the backfill's polarity
-// (public → enabled, blockAll → disabled) is the kind of thing a typo flips.
+// (public → inbound enabled, blockAll → outbound not enabled) is the kind of
+// thing a typo flips.
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const schemaName = `box_network_flags_${process.pid}_${randomUUID().replaceAll('-', '')}`
 
 type FlagRow = { id: string; public: boolean; networkBlockAll: boolean; networkAllowList: string | null }
-type PolicyRow = { id: string; inboundMode: string; outboundMode: string; outboundAllowNet: string[] | null }
+type PolicyRow = { id: string; inboundEnabled: boolean; outboundEnabled: boolean; outboundAllowNet: string[] | null }
 
 describeIfDatabase('box network flags migrations (integration, real Postgres)', () => {
   let dataSource: DataSource
@@ -56,7 +57,7 @@ describeIfDatabase('box network flags migrations (integration, real Postgres)', 
 
   async function policy(id: string): Promise<PolicyRow> {
     const [row] = await queryRunner.query(
-      `SELECT "id", "inboundMode", "outboundMode", "outboundAllowNet" FROM "box" WHERE "id" = $1`,
+      `SELECT "id", "inboundEnabled", "outboundEnabled", "outboundAllowNet" FROM "box" WHERE "id" = $1`,
       [id],
     )
     return row
@@ -102,27 +103,27 @@ describeIfDatabase('box network flags migrations (integration, real Postgres)', 
     for (const row of seeded) {
       expect(await policy(row.id)).toEqual({
         id: row.id,
-        inboundMode: row.public ? 'enabled' : 'disabled',
-        outboundMode: row.networkBlockAll ? 'disabled' : 'enabled',
+        inboundEnabled: row.public,
+        outboundEnabled: !row.networkBlockAll,
         outboundAllowNet: row.networkAllowList ? ['api.openai.com', '10.0.0.0/8'] : null,
       })
     }
   })
 
   // During the rolling deploy an old API instance writes flags while a new one
-  // writes modes. Each side must see the other's writes in its own shape.
+  // writes the policy columns. Each side must see the other's writes in its own shape.
   it('keeps both shapes equal through inserts and updates from either API', async () => {
     await queryRunner.query(
       `INSERT INTO "box" ("id", "public", "networkBlockAll", "networkAllowList") VALUES ('oldapi000001', true, true, 'a.example, b.example')`,
     )
     expect(await policy('oldapi000001')).toMatchObject({
-      inboundMode: 'enabled',
-      outboundMode: 'disabled',
+      inboundEnabled: true,
+      outboundEnabled: false,
       outboundAllowNet: ['a.example', 'b.example'],
     })
 
     await queryRunner.query(
-      `INSERT INTO "box" ("id", "inboundMode", "outboundMode", "outboundAllowNet") VALUES ('newapi000001', 'enabled', 'disabled', ARRAY['c.example'])`,
+      `INSERT INTO "box" ("id", "inboundEnabled", "outboundEnabled", "outboundAllowNet") VALUES ('newapi000001', true, false, ARRAY['c.example'])`,
     )
     expect(await flags('newapi000001')).toMatchObject({
       public: true,
@@ -133,16 +134,16 @@ describeIfDatabase('box network flags migrations (integration, real Postgres)', 
     await queryRunner.query(`INSERT INTO "box" ("id") VALUES ('defaults0001')`)
     expect(await flags('defaults0001')).toMatchObject({ public: false, networkBlockAll: false, networkAllowList: null })
     expect(await policy('defaults0001')).toMatchObject({
-      inboundMode: 'disabled',
-      outboundMode: 'enabled',
+      inboundEnabled: false,
+      outboundEnabled: true,
       outboundAllowNet: null,
     })
 
     await queryRunner.query(`UPDATE "box" SET "public" = false, "networkAllowList" = NULL WHERE "id" = 'oldapi000001'`)
-    expect(await policy('oldapi000001')).toMatchObject({ inboundMode: 'disabled', outboundAllowNet: null })
+    expect(await policy('oldapi000001')).toMatchObject({ inboundEnabled: false, outboundAllowNet: null })
 
     await queryRunner.query(
-      `UPDATE "box" SET "inboundMode" = 'disabled', "outboundMode" = 'enabled', "outboundAllowNet" = NULL WHERE "id" = 'newapi000001'`,
+      `UPDATE "box" SET "inboundEnabled" = false, "outboundEnabled" = true, "outboundAllowNet" = NULL WHERE "id" = 'newapi000001'`,
     )
     expect(await flags('newapi000001')).toMatchObject({ public: false, networkBlockAll: false, networkAllowList: null })
 
@@ -155,14 +156,14 @@ describeIfDatabase('box network flags migrations (integration, real Postgres)', 
   it('drops the flags and the trigger after deploy, keeping the policy rows', async () => {
     await postDeploy.up(queryRunner)
 
-    expect(await columns()).toEqual(['id', 'inboundMode', 'outboundAllowNet', 'outboundMode'])
+    expect(await columns()).toEqual(['id', 'inboundEnabled', 'outboundAllowNet', 'outboundEnabled'])
     const [{ count }] = await queryRunner.query(
       `SELECT count(*)::int AS count FROM pg_trigger WHERE tgname = 'box_network_policy_sync'`,
     )
     expect(count).toBe(0)
     expect(await policy('newapi000001')).toMatchObject({
-      inboundMode: 'disabled',
-      outboundMode: 'enabled',
+      inboundEnabled: false,
+      outboundEnabled: true,
       outboundAllowNet: ['x.example', 'y.example'],
     })
   })

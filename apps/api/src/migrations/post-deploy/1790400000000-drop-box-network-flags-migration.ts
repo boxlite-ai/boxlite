@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm'
 
 // Contract half of replacing the network flags: once every API instance reads
-// `inboundMode` / `outboundMode` / `outboundAllowNet`, the sync trigger and the
+// `inboundEnabled` / `outboundEnabled` / `outboundAllowNet`, the sync trigger and the
 // flag columns it fed go. The split helper stays until the columns are gone.
 export class DropBoxNetworkFlags1790400000000 implements MigrationInterface {
   name = 'DropBoxNetworkFlags1790400000000'
@@ -23,8 +23,8 @@ export class DropBoxNetworkFlags1790400000000 implements MigrationInterface {
     await queryRunner.query(`ALTER TABLE "box" ADD "networkAllowList" character varying`)
     await queryRunner.query(`
       UPDATE "box" SET
-        "public" = "inboundMode" = 'enabled',
-        "networkBlockAll" = "outboundMode" = 'disabled',
+        "public" = "inboundEnabled",
+        "networkBlockAll" = NOT "outboundEnabled",
         "networkAllowList" = array_to_string("outboundAllowNet", ',')
     `)
   }

@@ -56,7 +56,7 @@ describe('TunnelService', () => {
     expect(builder.andWhere).toHaveBeenCalledWith('tunnel.port = :port', { port: 3000 })
     expect(builder.andWhere).toHaveBeenCalledWith('tunnel.access_mode = :mode', { mode: 'public' })
     expect(builder.andWhere).toHaveBeenCalledWith('tunnel.revoked_at IS NULL')
-    expect(builder.andWhere).toHaveBeenCalledWith('box.inboundMode = :inboundMode', { inboundMode: 'enabled' })
+    expect(builder.andWhere).toHaveBeenCalledWith('box.inboundEnabled = true')
   })
 
   it('caches both access verdicts briefly', async () => {

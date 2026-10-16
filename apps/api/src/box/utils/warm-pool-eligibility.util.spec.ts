@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { NetworkMode } from '../enums/network-mode.enum'
 import { requiresFreshBox } from './warm-pool-eligibility.util'
 
 const NO_ORG_EGRESS_LIMIT = { boxLimitedNetworkEgress: false }
@@ -29,7 +28,7 @@ describe('requiresFreshBox', () => {
 
   // Pre-existing behaviour, pinned here because the rule now lives in one place.
   it.each([
-    ['outboundMode', { outboundMode: NetworkMode.DISABLED }],
+    ['outboundEnabled', { outboundEnabled: false }],
     ['outboundAllowNet', { outboundAllowNet: ['api.openai.com'] }],
   ])('forces a fresh box when %s is requested', (_label, dto) => {
     expect(requiresFreshBox(dto, NO_ORG_EGRESS_LIMIT, CURATED)).toBe(true)
@@ -57,9 +56,9 @@ describe('requiresFreshBox', () => {
     expect(requiresFreshBox({}, NO_ORG_EGRESS_LIMIT, { isOrgOwned: true })).toBe(true)
   })
 
-  // `enabled` is a value the caller supplied, not an absence — it still pins the
+  // `true` is a value the caller supplied, not an absence — it still pins the
   // box to a network policy the pool was not provisioned for.
-  it('treats an explicit outboundMode: enabled as a policy override', () => {
-    expect(requiresFreshBox({ outboundMode: NetworkMode.ENABLED }, NO_ORG_EGRESS_LIMIT, CURATED)).toBe(true)
+  it('treats an explicit outboundEnabled: true as a policy override', () => {
+    expect(requiresFreshBox({ outboundEnabled: true }, NO_ORG_EGRESS_LIMIT, CURATED)).toBe(true)
   })
 })

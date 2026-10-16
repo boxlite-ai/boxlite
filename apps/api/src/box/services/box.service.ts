@@ -45,8 +45,6 @@ import { WarmPool } from '../entities/warm-pool.entity'
 import { BoxDto, BoxDtoReads, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
-import { NetworkMode } from '../enums/network-mode.enum'
-import { isInboundEnabled, outboundModeFromBlockAll } from '../utils/network-policy.util'
 import { VolumeService } from './volume.service'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import {
@@ -329,13 +327,12 @@ export class BoxService {
       box.mem = mem
       box.disk = disk
 
-      // POL-205: an unset inbound mode on the internal create DTO defaults disabled.
-      box.inboundMode = createBoxDto.inboundMode ?? NetworkMode.DISABLED
+      // POL-205: unset inbound access on the internal create DTO defaults disabled.
+      box.inboundEnabled = createBoxDto.inboundEnabled ?? false
 
       // An explicit request wins; otherwise the organization's limited-egress
       // default decides.
-      box.outboundMode =
-        createBoxDto.outboundMode ?? outboundModeFromBlockAll(Boolean(organization.boxLimitedNetworkEgress))
+      box.outboundEnabled = createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress
 
       if (createBoxDto.outboundAllowNet !== undefined) {
         box.outboundAllowNet = this.resolveOutboundAllowNet(createBoxDto.outboundAllowNet)
@@ -405,7 +402,7 @@ export class BoxService {
     const now = new Date()
     const updateData: Partial<Box> = {
       // POL-205: same default as the fresh-box path — see the comment there.
-      inboundMode: createBoxDto.inboundMode ?? NetworkMode.DISABLED,
+      inboundEnabled: createBoxDto.inboundEnabled ?? false,
       labels: createBoxDto.labels || {},
       organizationId: organization.id,
       createdAt: now,
@@ -420,8 +417,8 @@ export class BoxService {
     updateData.autoDelete = lifecyclePolicy.autoDelete
     updateData.autoResume = lifecyclePolicy.autoResume
 
-    if (createBoxDto.outboundMode !== undefined) {
-      updateData.outboundMode = createBoxDto.outboundMode
+    if (createBoxDto.outboundEnabled !== undefined) {
+      updateData.outboundEnabled = createBoxDto.outboundEnabled
     }
 
     if (createBoxDto.outboundAllowNet !== undefined) {
@@ -1128,11 +1125,11 @@ export class BoxService {
     return await this.start(box.id, organization)
   }
 
-  async updateInboundMode(boxIdOrName: string, inboundMode: NetworkMode, organizationId?: string): Promise<Box> {
+  async updateInboundEnabled(boxIdOrName: string, inboundEnabled: boolean, organizationId?: string): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
     const updateData: Partial<Box> = {
-      inboundMode,
+      inboundEnabled,
     }
 
     return await this.boxRepository.update(box.id, {
@@ -1415,7 +1412,7 @@ export class BoxService {
     const updateData: Partial<Box> = {}
 
     if (networkBlockAll !== undefined) {
-      updateData.outboundMode = outboundModeFromBlockAll(networkBlockAll)
+      updateData.outboundEnabled = !networkBlockAll
     }
 
     if (networkAllowList !== undefined) {
@@ -1599,7 +1596,7 @@ export class BoxService {
       throw new NotFoundException(`Box with ID ${boxId} not found`)
     }
 
-    return isInboundEnabled(box.inboundMode)
+    return box.inboundEnabled
   }
 
   @OnEvent(OrganizationEvents.SUSPENDED_BOX_STOPPED)

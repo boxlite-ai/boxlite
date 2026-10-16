@@ -3,31 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { NetworkMode } from '../enums/network-mode.enum'
-
 /**
- * Translates between the box row's network policy columns (`inboundMode`,
- * `outboundMode`, `outboundAllowNet`) and the Daytona-era flag shape
- * (`public`, `networkBlockAll`, comma-joined `networkAllowList`) that the
- * control-plane DTOs and the runner wire still speak. Keeping the translation
- * in one place is what lets those contracts outlive the columns they named.
+ * The box row stores the outbound allowlist as entries (`outboundAllowNet`),
+ * while the control-plane DTO and the runner wire still speak the Daytona-era
+ * comma-joined `networkAllowList`. Keeping the join in one place is what lets
+ * those contracts outlive the column they named.
  */
-
-export function inboundModeFromPublic(isPublic: boolean | undefined): NetworkMode {
-  return isPublic ? NetworkMode.ENABLED : NetworkMode.DISABLED
-}
-
-export function isInboundEnabled(mode: NetworkMode): boolean {
-  return mode === NetworkMode.ENABLED
-}
-
-export function outboundModeFromBlockAll(blockAll: boolean): NetworkMode {
-  return blockAll ? NetworkMode.DISABLED : NetworkMode.ENABLED
-}
-
-export function isOutboundBlocked(mode: NetworkMode): boolean {
-  return mode === NetworkMode.DISABLED
-}
 
 /** Entries → the comma-joined shape; `undefined` when nothing is listed. */
 export function allowListFromAllowNet(allowNet: string[] | null | undefined): string | undefined {

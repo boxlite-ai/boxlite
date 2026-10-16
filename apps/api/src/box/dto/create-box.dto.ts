@@ -7,7 +7,6 @@
 import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, IsInt, Min } from 'class-validator'
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
-import { NetworkMode } from '../enums/network-mode.enum'
 import { BoxSecret, BoxVolume } from './box.dto'
 
 @ApiSchema({ name: 'CreateBox' })
@@ -96,21 +95,19 @@ export class CreateBoxDto {
   labels?: { [key: string]: string }
 
   @ApiPropertyOptional({
-    description: 'Inbound mode: `enabled` lets the proxy serve exposed services without sign-in',
-    enum: NetworkMode,
-    default: NetworkMode.DISABLED,
+    description: 'Whether inbound access is enabled: the proxy serves exposed services without sign-in',
+    default: false,
   })
   @IsOptional()
-  @IsEnum(NetworkMode)
-  inboundMode?: NetworkMode
+  @IsBoolean()
+  inboundEnabled?: boolean
 
   @ApiPropertyOptional({
-    description: "Outbound mode; unset follows the organization's limited-egress default",
-    enum: NetworkMode,
+    description: "Whether outbound access is enabled; unset follows the organization's limited-egress default",
   })
   @IsOptional()
-  @IsEnum(NetworkMode)
-  outboundMode?: NetworkMode
+  @IsBoolean()
+  outboundEnabled?: boolean
 
   @ApiPropertyOptional({
     description: 'Hosts and CIDRs outbound traffic may reach; unset allows every destination',

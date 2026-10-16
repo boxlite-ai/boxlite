@@ -36,7 +36,6 @@ import { OrganizationAuthContext } from '../common/interfaces/auth-context.inter
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { Box } from '../box/entities/box.entity'
-import { NetworkMode } from '../box/enums/network-mode.enum'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
@@ -288,8 +287,8 @@ export class BoxliteBoxController {
     @Param('boxId') boxId: string,
     @Body() dto: InboundNetworkSpecDto,
   ): Promise<InboundNetworkSpecDto> {
-    const box = await this.boxService.updateInboundMode(boxId, dto.mode as NetworkMode, authContext.organizationId)
-    return { mode: box.inboundMode }
+    const box = await this.boxService.updateInboundEnabled(boxId, dto.mode === 'enabled', authContext.organizationId)
+    return { mode: box.inboundEnabled ? 'enabled' : 'disabled' }
   }
 
   private isStartAlreadyInProgress(box: Box): boolean {

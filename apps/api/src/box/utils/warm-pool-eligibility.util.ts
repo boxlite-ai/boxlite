@@ -29,7 +29,7 @@ import { ResolvedImage } from '../../image/services/image-resolver.service'
 export function requiresFreshBox(
   createBoxDto: Pick<
     CreateBoxDto,
-    'outboundMode' | 'outboundAllowNet' | 'runAsUser' | 'workingDir' | 'entrypoint' | 'cmd' | 'secrets'
+    'outboundEnabled' | 'outboundAllowNet' | 'runAsUser' | 'workingDir' | 'entrypoint' | 'cmd' | 'secrets'
   >,
   organization: { boxLimitedNetworkEgress?: boolean },
   resolvedImage: Pick<ResolvedImage, 'isOrgOwned'>,
@@ -46,7 +46,7 @@ export function requiresFreshBox(
 
   // Network policy is applied to the box at create time on the runner.
   const overridesNetworkPolicy =
-    createBoxDto.outboundMode !== undefined ||
+    createBoxDto.outboundEnabled !== undefined ||
     createBoxDto.outboundAllowNet !== undefined ||
     Boolean(organization.boxLimitedNetworkEgress)
 

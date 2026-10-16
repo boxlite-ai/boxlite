@@ -19,7 +19,6 @@ import {
 } from '@nestjs/common'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { BoxService } from '../services/box.service'
-import { inboundModeFromPublic } from '../utils/network-policy.util'
 import {
   ApiOAuth2,
   ApiResponse,
@@ -432,10 +431,10 @@ export class BoxController {
     @Param('boxIdOrName') boxIdOrName: string,
     @Param('isPublic') isPublic: boolean,
   ): Promise<BoxDto> {
-    const box = await this.boxService.updateInboundMode(
+    const box = await this.boxService.updateInboundEnabled(
       boxIdOrName,
       // The path segment reaches here as the string 'true' / 'false'.
-      inboundModeFromPublic(String(isPublic) === 'true'),
+      String(isPublic) === 'true',
       authContext.organizationId,
     )
     return this.boxService.toBoxDto(box)

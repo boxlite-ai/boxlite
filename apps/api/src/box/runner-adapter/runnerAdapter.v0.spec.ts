@@ -18,7 +18,7 @@ describe('RunnerAdapterV0 createBox', () => {
       id: 'box-1',
       image: 'base',
       env: {},
-      outboundMode: 'disabled',
+      outboundEnabled: false,
       outboundAllowNet: ['api.openai.com', '10.0.0.0/8'],
     } as any, 'base')
 
@@ -44,7 +44,7 @@ describe('RunnerAdapterV0 createBox', () => {
       secrets: [
         { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
       ],
-      outboundMode: 'enabled',
+      outboundEnabled: true,
       outboundAllowNet: undefined,
       authToken: undefined,
       organizationId: undefined,
@@ -89,7 +89,7 @@ describe('RunnerAdapterV0 createBox', () => {
       env: {},
       volumes: [],
       secrets: [{ name: 'openai', value: 'sk-test' }],
-      outboundMode: 'enabled',
+      outboundEnabled: true,
       outboundAllowNet: undefined,
       errorReason: 'crashed',
     } as any

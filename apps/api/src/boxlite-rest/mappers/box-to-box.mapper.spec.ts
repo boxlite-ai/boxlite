@@ -7,7 +7,10 @@ import { BoxState } from '../../box/enums/box-state.enum'
 import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
 
 describe('BoxLite lifecycle policy mapper', () => {
-  it.each(['enabled', 'disabled'] as const)('passes inbound.mode=%s through as the inbound mode', (mode) => {
+  it.each([
+    ['enabled', true],
+    ['disabled', false],
+  ] as const)('maps inbound.mode=%s to inbound enabled %s', (mode, expected) => {
     const mapped = createBoxToCreateBox({
       network: {
         outbound: { mode: 'enabled' },
@@ -15,29 +18,29 @@ describe('BoxLite lifecycle policy mapper', () => {
       },
     })
 
-    expect(mapped.inboundMode).toBe(mode)
+    expect(mapped.inboundEnabled).toBe(expected)
   })
 
   it('leaves inbound disabled and outbound to the organization default without a network spec', () => {
     const mapped = createBoxToCreateBox({})
 
-    expect([mapped.inboundMode, mapped.outboundMode, mapped.outboundAllowNet]).toEqual([
-      'disabled',
+    expect([mapped.inboundEnabled, mapped.outboundEnabled, mapped.outboundAllowNet]).toEqual([
+      false,
       undefined,
       undefined,
     ])
   })
 
   it.each([
-    ['enabled', [' api.openai.com ', '', '10.0.0.0/8'], 'enabled', ['api.openai.com', '10.0.0.0/8']],
-    ['enabled', [], 'enabled', undefined],
-    ['disabled', ['api.openai.com'], 'disabled', undefined],
+    ['enabled', [' api.openai.com ', '', '10.0.0.0/8'], true, ['api.openai.com', '10.0.0.0/8']],
+    ['enabled', [], true, undefined],
+    ['disabled', ['api.openai.com'], false, undefined],
   ] as const)(
-    'maps outbound %s with allow_net %j to mode %s and entries %j',
-    (mode, allowNet, expectedMode, expected) => {
+    'maps outbound %s with allow_net %j to enabled %s and entries %j',
+    (mode, allowNet, expectedEnabled, expected) => {
       const mapped = createBoxToCreateBox({ network: { outbound: { mode, allow_net: [...allowNet] } } })
 
-      expect(mapped.outboundMode).toBe(expectedMode)
+      expect(mapped.outboundEnabled).toBe(expectedEnabled)
       expect(mapped.outboundAllowNet).toEqual(expected)
     },
   )

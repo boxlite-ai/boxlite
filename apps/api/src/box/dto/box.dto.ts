@@ -11,7 +11,7 @@ import { IMAGE_PREPARATION_RETRY_AFTER_MS } from '../constants/box-progress.cons
 import { Box } from '../entities/box.entity'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
-import { allowListFromAllowNet, isInboundEnabled, isOutboundBlocked } from '../utils/network-policy.util'
+import { allowListFromAllowNet } from '../utils/network-policy.util'
 import { BoxProgressPhase } from '../enums/box-progress-phase.enum'
 import { reportedBoxState } from '../utils/box-state.util'
 import { upstreamRefOf } from '../../image/utils/image-ref.util'
@@ -384,9 +384,9 @@ export class BoxDto {
       memory: box.mem,
       disk: box.disk,
       // The flag shape is kept on the wire for the dashboard and Go clients;
-      // the row stores the policy as inbound/outbound modes.
-      public: isInboundEnabled(box.inboundMode),
-      networkBlockAll: isOutboundBlocked(box.outboundMode),
+      // the row stores the policy as per-direction enabled flags.
+      public: box.inboundEnabled,
+      networkBlockAll: !box.outboundEnabled,
       networkAllowList: allowListFromAllowNet(box.outboundAllowNet),
       labels: box.labels,
       volumes: box.volumes,

@@ -11,19 +11,19 @@ describe('ReplaceBoxNetworkFlags1790400000000', () => {
   it('adds the policy columns with private-inbound, open-outbound defaults', async () => {
     const { runner, calls, migration } = run()
     await migration.up(runner)
-    expect(calls).toContain(`ALTER TABLE "box" ADD "inboundMode" character varying NOT NULL DEFAULT 'disabled'`)
-    expect(calls).toContain(`ALTER TABLE "box" ADD "outboundMode" character varying NOT NULL DEFAULT 'enabled'`)
+    expect(calls).toContain(`ALTER TABLE "box" ADD "inboundEnabled" boolean NOT NULL DEFAULT false`)
+    expect(calls).toContain(`ALTER TABLE "box" ADD "outboundEnabled" boolean NOT NULL DEFAULT true`)
     expect(calls).toContain(`ALTER TABLE "box" ADD "outboundAllowNet" text[]`)
   })
 
   // The backfill is where meaning could flip: public=true is inbound enabled,
-  // while blockAll=true is outbound *disabled*.
+  // while blockAll=true is outbound *not* enabled.
   it('backfills each policy column from its flag with the right polarity', async () => {
     const { runner, calls, migration } = run()
     await migration.up(runner)
     const backfill = calls.find((sql) => sql.includes('UPDATE "box" SET'))
-    expect(backfill).toContain(`"inboundMode" = CASE WHEN "public" THEN 'enabled' ELSE 'disabled' END`)
-    expect(backfill).toContain(`"outboundMode" = CASE WHEN "networkBlockAll" THEN 'disabled' ELSE 'enabled' END`)
+    expect(backfill).toContain(`"inboundEnabled" = "public"`)
+    expect(backfill).toContain(`"outboundEnabled" = NOT "networkBlockAll"`)
     expect(backfill).toContain(`"outboundAllowNet" = box_allow_net_from_list("networkAllowList")`)
     expect(calls.findIndex((sql) => sql.includes('FUNCTION box_allow_net_from_list'))).toBeLessThan(
       calls.indexOf(backfill as string),
@@ -45,8 +45,8 @@ describe('ReplaceBoxNetworkFlags1790400000000', () => {
     expect(calls.slice(2)).toEqual(
       expect.arrayContaining([
         `ALTER TABLE "box" DROP COLUMN "outboundAllowNet"`,
-        `ALTER TABLE "box" DROP COLUMN "outboundMode"`,
-        `ALTER TABLE "box" DROP COLUMN "inboundMode"`,
+        `ALTER TABLE "box" DROP COLUMN "outboundEnabled"`,
+        `ALTER TABLE "box" DROP COLUMN "inboundEnabled"`,
       ]),
     )
   })
