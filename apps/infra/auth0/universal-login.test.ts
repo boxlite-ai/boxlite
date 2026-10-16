@@ -320,7 +320,7 @@ test('the checked-in source binds dev to the reviewed stack, issuer, tenant, and
   })
   assert.equal(
     source.theme.widget && (source.theme.widget as JsonObject).logo_url,
-    'https://dev.boxlite.ai/auth0/boxlite-light-a86a8b84.png',
+    'https://dev.boxlite.ai/auth0/boxlite-light-b231e25e.png',
   )
   const copy = new Map(source.prompts.map((prompt) => [prompt.prompt, prompt.text]))
   assert.deepEqual([...copy.keys()].sort(), ['login', 'login-id', 'signup', 'signup-id'])
@@ -333,7 +333,7 @@ test('the checked-in source binds dev to the reviewed stack, issuer, tenant, and
   ] as const) {
     assert.deepEqual(copy.get(prompt), { [prompt]: { title, description } })
   }
-  assert.equal(source.tenant.picture_url, 'https://dev.boxlite.ai/auth0/boxlite-black-f6efad9e.png')
+  assert.equal(source.tenant.picture_url, 'https://dev.boxlite.ai/auth0/boxlite-black-feab5f86.png')
   assert.equal('_comment' in source.theme, false)
   assert.equal('_comment' in source.tenant, false)
 })
@@ -356,8 +356,8 @@ test('the dashboard ships only the documented content-addressed Auth0 assets', (
   const root = join(import.meta.dirname, '..', '..', 'dashboard', 'public', 'auth0')
   const expectedHashes = {
     'IBM-Plex-OFL-d741e57d.txt': 'd741e57d5f865e294df801f96b7b5161a88b211df65887e4358d271c9fc5fb4f',
-    'boxlite-black-f6efad9e.png': 'f6efad9e3aca17eae3620c093ae820d1dbf74dcbe45d14a17c8a3329edbd0b16',
-    'boxlite-light-a86a8b84.png': 'a86a8b847d59de489d573b6f75f5935d09ffa406f0d0607a8312ebd977ad9fc7',
+    'boxlite-black-feab5f86.png': 'feab5f86d2ecfe7f94ada8ab90011d28ddff4086f0dc309f14decb190f3a2bfc',
+    'boxlite-light-b231e25e.png': 'b231e25ee2e6767520ecf3cba0847933776193534401799834c9b06da1276469',
     'github-invertocat-white-ccd84c89.svg': 'ccd84c89b1056345608fc3489357f8acc7397e49a3cdc2d418b6c8016911d47b',
     'ibm-plex-mono-400-ba204497.woff2': 'ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350',
   }
