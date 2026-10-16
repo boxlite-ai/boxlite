@@ -92,3 +92,10 @@ corrected specification returned the passing result.
 Full generated Go client compilation encounters invalid `CreateBoxRequest`
 constructor syntax; generating from the pre-fix specification produces the
 identical file. This existing generator limitation is outside the nullability fix.
+
+## Alias fixture maintenance
+
+The timestamp regression deserializes catalog history before checking timestamp
+conversion. History fixtures must use `alias`; the image-list `tag` field still
+names an OCI tag. Keep the epoch and timezone assertions unchanged. A stale
+history key fails deserialization before reaching those assertions.

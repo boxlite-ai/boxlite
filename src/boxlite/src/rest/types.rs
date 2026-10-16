@@ -961,7 +961,7 @@ mod tests {
                     "digest": "sha256:abc", "source_ref": "quay.io/acme/app:latest",
                     "recorded_at": raw
                 }],
-                "history": [{"tag": "latest", "to_digest": "sha256:abc", "recorded_at": raw}]
+                "history": [{"alias": "latest", "to_digest": "sha256:abc", "recorded_at": raw}]
             }))
             .unwrap();
             let registry: RegistryCredentialResponse = serde_json::from_value(serde_json::json!({
