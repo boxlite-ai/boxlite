@@ -138,9 +138,9 @@ impl FilesInterface {
     /// Upload a byte stream to the guest and extract at `dest_path`.
     ///
     /// `source` is the archive shape (dir tree vs single file);
-    /// [`CopySourceKind::Unknown`] when the caller cannot tell — the guest then
-    /// peeks the archive to decide extraction mode. It is attached to the first
-    /// chunk only.
+    /// [`CopySourceKind::Unknown`] when the caller cannot tell. It is attached
+    /// to the first chunk only; guests that land by the archive's first entry
+    /// ignore it.
     pub async fn upload_stream<S>(
         &mut self,
         stream: S,

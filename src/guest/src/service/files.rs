@@ -15,42 +15,10 @@ use std::collections::HashSet;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::info;
-
-const MAX_UPLOAD_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB safety cap
-
-/// A staged upload, deleted whenever it goes out of scope.
-///
-/// The guest's temp dir is RAM-backed, and a request leaves through half a
-/// dozen `?`s between creating this file and finishing with it — the size cap,
-/// a write error, a mount refusal, a failed extraction. Deleting at the end of
-/// the happy path only meant every one of those stranded up to
-/// [`MAX_UPLOAD_BYTES`] of guest memory for the life of the VM.
-///
-/// Hand-rolled rather than `tempfile::TempPath`: `tempfile` is a dev-dependency
-/// here, and this is not worth adding to what ships inside the VM.
-struct StagedTar(PathBuf);
-
-impl StagedTar {
-    fn new(path: PathBuf) -> Self {
-        Self(path)
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for StagedTar {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
 
 /// Open `rel` under `root`, with every symlink confined to `root`.
 ///
@@ -172,8 +140,9 @@ struct DestBefore {
 }
 
 impl DestBefore {
-    /// The streamed-arm variant: all facts are captured while they still
-    /// describe the tree before extraction creates each path.
+    /// Facts captured while they still describe the tree: the first two
+    /// before extraction starts, `existing_dirs` as extraction first reaches
+    /// each path.
     fn recorded(
         created_dirs: Vec<PathBuf>,
         dest_existed: bool,
@@ -183,28 +152,6 @@ impl DestBefore {
             created_dirs,
             dest_existed,
             existing_dirs,
-        }
-    }
-
-    /// Sample off the async worker: one `stat` per archive entry, and the
-    /// caller chooses how many entries there are — the same reason
-    /// [`boxlite_shared::tar::entry_paths`] runs on a blocking thread.
-    #[allow(clippy::result_large_err)]
-    async fn sample(dest_root: PathBuf, entry_paths: Arc<[PathBuf]>) -> Result<Self, Status> {
-        tokio::task::spawn_blocking(move || Self::sample_blocking(&dest_root, &entry_paths))
-            .await
-            .map_err(|e| Status::internal(format!("sample task join error: {e}")))
-    }
-
-    fn sample_blocking(dest_root: &Path, entry_paths: &[PathBuf]) -> Self {
-        Self {
-            created_dirs: missing_ancestors(dest_root),
-            dest_existed: dest_root.exists(),
-            existing_dirs: entry_paths
-                .iter()
-                .map(|rel| dest_root.join(rel))
-                .filter(|path| path.is_dir())
-                .collect(),
         }
     }
 
@@ -218,20 +165,14 @@ impl DestBefore {
     /// (`copy_in("./x", "/usr/local/bin/")`) or the archive does
     /// (`copy_in("./dist/.", "/usr/local")` carrying `bin/tool`) — handing either
     /// to the box user is a permission change nobody asked for. Files are
-    /// always ours, existing or not: extraction just overwrote them.
+    /// always ours, existing or not: extraction just overwrote them, and a
+    /// file landing as the destination is the destination itself.
     fn created(&self, dest_root: &Path, entry_paths: &[PathBuf]) -> Vec<PathBuf> {
-        let dest_is_dir = dest_root.is_dir();
         let mut targets = self.created_dirs.clone();
-        if !dest_is_dir || !self.dest_existed {
+        if !dest_root.is_dir() || !self.dest_existed {
             targets.push(dest_root.to_path_buf());
         }
-        targets.extend(entry_paths.iter().map(|rel| {
-            if dest_is_dir {
-                dest_root.join(rel)
-            } else {
-                dest_root.to_path_buf()
-            }
-        }));
+        targets.extend(entry_paths.iter().map(|rel| dest_root.join(rel)));
 
         // Second line of defence behind sanitize_entry_path: nothing outside the
         // destination gets chowned, whatever the archive claimed its names were.
@@ -296,6 +237,16 @@ fn unreadable_subtree_message(src_in_container: &Path, mount: &Path) -> String {
         mount.display(),
         src_in_container.display(),
     )
+}
+
+/// The status an upload's extraction error goes back as: a mount refusal from
+/// [`CopyTarget::payload_refusal`] as `failed_precondition`, like the other
+/// mount refusals, and anything else as the landing classifies it.
+fn payload_refusal_status(error: BoxliteError) -> Status {
+    match error {
+        BoxliteError::Unsupported(message) => Status::failed_precondition(message),
+        error => error.into_validation_status(),
+    }
 }
 
 /// Normalize a request path to how the container sees it: absolute, no `..`.
@@ -395,24 +346,28 @@ impl CopyTarget {
         &self.on_rootfs
     }
 
-    /// Refuse an upload whose payload would land under a mount.
+    /// A veto for extraction to ask before writing each entry, refusing one
+    /// that would land under a mount.
     ///
     /// The root can be perfectly reachable while the payload is not:
     /// `copy_in(dir, "/etc")` where `dir` contains `hosts` would write the
-    /// image's `/etc/hosts` beneath the bind, invisible to the box. Checked
-    /// against the archive's own entries so a single file to `/etc` — which
-    /// lands at `/etc/motd.txt`, under no mount — still works.
-    #[allow(clippy::result_large_err)]
-    fn refuse_shadowed_payload(&self, entry_paths: &[PathBuf]) -> Result<(), Status> {
-        for rel in entry_paths {
-            let landed = self.in_container.join(rel);
-            if let Some(mount) = deepest_covering(&landed, &self.mounts) {
-                return Err(Status::failed_precondition(unreachable_payload_message(
+    /// image's `/etc/hosts` beneath the bind, invisible to the box. Asked per
+    /// entry so a single file to `/etc` — which lands at `/etc/motd.txt`,
+    /// under no mount — still works. A refused entry is never written;
+    /// entries before it stay. The refusal travels as `Unsupported`, which
+    /// [`payload_refusal_status`] turns back into `failed_precondition`.
+    fn payload_refusal(&self) -> impl Fn(&Path) -> Result<(), BoxliteError> + Send + Sync {
+        let in_container = self.in_container.clone();
+        let mounts = self.mounts.clone();
+        move |rel: &Path| {
+            let landed = in_container.join(rel);
+            match deepest_covering(&landed, &mounts) {
+                Some(mount) => Err(BoxliteError::Unsupported(unreachable_payload_message(
                     &landed, &mount,
-                )));
+                ))),
+                None => Ok(()),
             }
         }
-        Ok(())
     }
 
     /// Refuse a read-out whose subtree contains a mount.
@@ -473,177 +428,70 @@ impl Files for GuestServer {
         // Overwrite / mkdir flags
         let mkdir_parents = first.mkdir_parents;
         let overwrite = first.overwrite;
-        let source_is_dir = first.source_is_dir;
         let first_data = first.data;
-
-        match source_is_dir {
-            // Streaming path: unpack directly from the byte stream. The hint
-            // carries the *source* shape, but the destination can still force
-            // directory mode — same as the staged path's `unpack`. Fold the
-            // destination-side signals back in here so "single file →
-            // existing directory" keeps landing inside it (Unix cp
-            // semantics), not overwriting the directory path.
-            Some(source_is_dir) => {
-                let force_directory =
-                    source_is_dir || dest_path.ends_with('/') || dest_root.is_dir();
-                let tar_stream: BoxByteStream = Box::pin(async_stream::stream! {
-                    if !first_data.is_empty() {
-                        yield Ok(first_data);
-                    }
-                    loop {
-                        match stream.message().await {
-                            Ok(Some(chunk)) => {
-                                if !chunk.data.is_empty() {
-                                    yield Ok(chunk.data);
-                                }
-                            }
-                            Ok(None) => break,
-                            Err(e) => {
-                                yield Err(std::io::Error::other(e));
-                                break;
-                            }
+        // The archive's first entry decides how it lands; only a trailing
+        // '/' the resolved path dropped has to be passed along.
+        let force_directory = dest_path.ends_with('/');
+        let tar_stream: BoxByteStream = Box::pin(async_stream::stream! {
+            if !first_data.is_empty() {
+                yield Ok(first_data);
+            }
+            loop {
+                match stream.message().await {
+                    Ok(Some(chunk)) => {
+                        if !chunk.data.is_empty() {
+                            yield Ok(chunk.data);
                         }
                     }
-                });
-
-                // The two pre-extraction facts the streamed path can still
-                // sample — whether the destination existed, and which
-                // ancestors mkdir_parents still has to conjure. Both must be
-                // captured BEFORE extraction: afterwards the ancestors exist
-                // and are indistinguishable from ones the image shipped.
-                let dest_existed = dest_root.exists();
-                let created_dirs = missing_ancestors(&dest_root);
-                let report = boxlite_shared::tar::unpack_stream(
-                    tar_stream,
-                    dest_root.clone(),
-                    boxlite_shared::tar::UnpackContext {
-                        overwrite,
-                        mkdir_parents,
-                        force_directory,
-                    },
-                )
-                .await
-                // An archive the landing refuses is the caller's to fix.
-                .map_err(BoxliteError::into_validation_status)?;
-                let boxlite_shared::tar::UnpackReport {
-                    entry_paths,
-                    preexisting_dirs,
-                } = report;
-                let existing_dirs = preexisting_dirs
-                    .into_iter()
-                    .map(|rel| dest_root.join(rel))
-                    .collect();
-                let entry_paths: Arc<[PathBuf]> = entry_paths.into();
-
-                // The stream cannot be pre-scanned without spooling, so the
-                // mount-shadow refusal runs after extraction: weaker than the
-                // hintless arm's refuse-before (a refused copy may have
-                // partially landed), but the failure surfaces instead of a
-                // silent write beneath the mount.
-                dest.refuse_shadowed_payload(&entry_paths)?;
-
-                // Hand the recorded paths to the box user, plus the
-                // ancestors captured above — the recording names what the
-                // archive made, the pre-sampled ancestors name what
-                // mkdir_parents made.
-                self.chown_to_container_user(
-                    &container_id,
-                    dest_root.clone(),
-                    Arc::clone(&entry_paths),
-                    DestBefore::recorded(created_dirs, dest_existed, existing_dirs),
-                )
-                .await;
-            }
-            // Legacy fallback for older hosts/runners that omit the hint:
-            // buffer to a size-capped temp file and detect the shape by peeking.
-            None => {
-                // Temp file to hold the tar stream. `StagedTar` owns the
-                // deletion, because every step from here to the end can leave
-                // through a `?`. Created only here — the hinted arm streams
-                // straight into extraction and never stages.
-                let staged = StagedTar::new(
-                    std::env::temp_dir()
-                        .join(format!("boxlite-upload-{}.tar", uuid::Uuid::new_v4())),
-                );
-                let mut file = File::create(staged.path())
-                    .await
-                    .map_err(|e| Status::internal(format!("failed to create temp file: {}", e)))?;
-
-                let mut total: u64 = 0;
-                if !first_data.is_empty() {
-                    total += first_data.len() as u64;
-                    if total > MAX_UPLOAD_BYTES {
-                        return Err(Status::resource_exhausted("upload too large"));
+                    Ok(None) => break,
+                    Err(e) => {
+                        yield Err(std::io::Error::other(e));
+                        break;
                     }
-                    file.write_all(&first_data).await.map_err(|e| {
-                        Status::internal(format!("failed to write temp file: {}", e))
-                    })?;
                 }
-
-                while let Some(chunk) = stream.message().await? {
-                    let len = chunk.data.len() as u64;
-                    total += len;
-                    if total > MAX_UPLOAD_BYTES {
-                        return Err(Status::resource_exhausted("upload too large"));
-                    }
-                    file.write_all(&chunk.data).await.map_err(|e| {
-                        Status::internal(format!("failed to write temp file: {}", e))
-                    })?;
-                }
-
-                file.flush()
-                    .await
-                    .map_err(|e| Status::internal(format!("failed to flush temp file: {}", e)))?;
-
-                // dest_path may have a trailing '/' indicating directory mode.
-                let force_directory = dest_path.ends_with('/');
-
-                // Names the archive carries, read once: the mount check below
-                // and the ownership hand-off afterwards must agree on what
-                // this copy wrote. Shared rather than cloned — an archive may
-                // carry a great many names.
-                let entry_paths: Arc<[PathBuf]> = boxlite_shared::tar::entry_paths(
-                    staged.path().to_path_buf(),
-                    dest_root.clone(),
-                    force_directory,
-                )
-                .await
-                .map_err(BoxliteError::into_validation_status)?
-                .into();
-
-                // The root cleared the mount check, but individual entries may
-                // still land under one. Refuse before touching the rootfs — a
-                // partially applied copy is worse than a refused one.
-                dest.refuse_shadowed_payload(&entry_paths)?;
-
-                // What is not there yet — unpack is about to create it, and it
-                // needs the same owner as the payload. Must be sampled *before*
-                // extraction, since afterwards there is no way to tell what we
-                // made from what the image already shipped.
-                let before =
-                    DestBefore::sample(dest_root.clone(), Arc::clone(&entry_paths)).await?;
-
-                boxlite_shared::tar::unpack(
-                    staged.path().to_path_buf(),
-                    dest_root.clone(),
-                    boxlite_shared::tar::UnpackContext {
-                        overwrite,
-                        mkdir_parents,
-                        force_directory,
-                    },
-                )
-                .await
-                .map_err(BoxliteError::into_validation_status)?;
-
-                // Hand the payload to the user the box actually runs as. tar
-                // preserves neither owner (it extracts as this process, root)
-                // nor any notion of who will read the file, so without this
-                // every copy_in lands root-owned and a non-root workload
-                // cannot open it.
-                self.chown_to_container_user(&container_id, dest_root.clone(), entry_paths, before)
-                    .await;
             }
-        }
+        });
+
+        // The two pre-extraction facts — whether the destination existed,
+        // and which ancestors mkdir_parents still has to conjure. Both must
+        // be captured BEFORE extraction: afterwards the ancestors exist and
+        // are indistinguishable from ones the image shipped.
+        let dest_existed = dest_root.exists();
+        let created_dirs = missing_ancestors(&dest_root);
+        let report = boxlite_shared::tar::unpack_stream_refusing(
+            tar_stream,
+            dest_root.clone(),
+            boxlite_shared::tar::UnpackContext {
+                overwrite,
+                mkdir_parents,
+                force_directory,
+            },
+            dest.payload_refusal(),
+        )
+        .await
+        .map_err(payload_refusal_status)?;
+        let boxlite_shared::tar::UnpackReport {
+            entry_paths,
+            preexisting_dirs,
+        } = report;
+        let existing_dirs = preexisting_dirs
+            .into_iter()
+            .map(|rel| dest_root.join(rel))
+            .collect();
+
+        // Hand the payload to the user the box actually runs as. tar
+        // preserves neither owner (it extracts as this process, root) nor
+        // any notion of who will read the file, so without this every
+        // copy_in lands root-owned and a non-root workload cannot open it.
+        // The report names what the archive made; the ancestors captured
+        // above name what mkdir_parents made.
+        self.chown_to_container_user(
+            &container_id,
+            dest_root.clone(),
+            entry_paths.into(),
+            DestBefore::recorded(created_dirs, dest_existed, existing_dirs),
+        )
+        .await;
 
         info!(
             dest = %dest_root.display(),
@@ -904,13 +752,14 @@ mod tests {
         // The root itself is clear — `/etc` merely contains a mount.
         assert!(deepest_covering(Path::new("/etc"), &etc.mounts).is_none());
 
-        let err = etc
-            .refuse_shadowed_payload(&[PathBuf::from("motd.txt"), PathBuf::from("hosts")])
-            .expect_err("an entry landing on the bind must be refused");
+        let refuse = etc.payload_refusal();
+        let err = payload_refusal_status(
+            refuse(Path::new("hosts")).expect_err("an entry landing on the bind must be refused"),
+        );
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition, "{err:?}");
         assert!(err.message().contains("'/etc/hosts' mount"), "{err:?}");
 
-        etc.refuse_shadowed_payload(&[PathBuf::from("motd.txt")])
-            .expect("an entry under no mount still copies");
+        refuse(Path::new("motd.txt")).expect("an entry under no mount still copies");
     }
 
     /// Reading out a directory that *contains* a mount would tar the shadowed
@@ -969,6 +818,20 @@ mod tests {
         }
     }
 
+    /// What the upload records about `dest` before extraction writes
+    /// `entries` (paths relative to it).
+    fn before_extraction(dest: &Path, entries: &[PathBuf]) -> DestBefore {
+        DestBefore::recorded(
+            missing_ancestors(dest),
+            dest.exists(),
+            entries
+                .iter()
+                .map(|rel| dest.join(rel))
+                .filter(|path| path.is_dir())
+                .collect(),
+        )
+    }
+
     /// Nothing the image shipped changes owner, however the copy reaches it.
     ///
     /// A destination directory is the shape the *request* names; an entry
@@ -982,7 +845,7 @@ mod tests {
         std::fs::create_dir_all(dest.join("bin")).unwrap();
         let entries = vec![PathBuf::from("bin"), PathBuf::from("bin/tool")];
 
-        let before = DestBefore::sample_blocking(&dest, &entries);
+        let before = before_extraction(&dest, &entries);
         std::fs::write(dest.join("bin/tool"), b"payload").unwrap();
 
         assert_eq!(
@@ -1001,7 +864,7 @@ mod tests {
         let dest = tmp.path().join("srv/probe");
         let entries = vec![PathBuf::from("pkg"), PathBuf::from("pkg/file.txt")];
 
-        let before = DestBefore::sample_blocking(&dest, &entries);
+        let before = before_extraction(&dest, &entries);
         std::fs::create_dir_all(dest.join("pkg")).unwrap();
         std::fs::write(dest.join("pkg/file.txt"), b"payload").unwrap();
 
@@ -1017,20 +880,18 @@ mod tests {
     }
 
     /// A destination *file* is ours whether or not it was there: extraction
-    /// just overwrote it, and single-file mode lands every entry on it.
+    /// just overwrote it. A file landing as the destination is reported with
+    /// no path below it, so the destination itself is the target.
     #[test]
     fn an_existing_destination_file_is_still_ours() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("payload.txt");
         std::fs::write(&dest, b"old").unwrap();
-        let entries = vec![PathBuf::from("payload.txt")];
 
-        let before = DestBefore::sample_blocking(&dest, &entries);
+        let before = before_extraction(&dest, &[]);
         std::fs::write(&dest, b"new").unwrap();
 
-        let created = before.created(&dest, &entries);
-        assert!(!created.is_empty());
-        assert!(created.iter().all(|target| target == &dest), "{created:?}");
+        assert_eq!(before.created(&dest, &[]), vec![dest.clone()]);
     }
 
     /// A symlinked directory the *image* shipped must still get the hand-off.
@@ -1138,33 +999,4 @@ mod tests {
         assert_eq!(to_container_path("tmp/x").unwrap(), PathBuf::from("/tmp/x"));
         assert!(to_container_path("/a/../b").is_err());
     }
-}
-
-/// The spool tar must be removed on drop — covering every error path of
-/// the hintless upload arm, not just the success path. The guest agent's
-/// /tmp is not visible to container processes, so this is asserted here
-/// rather than from the copy integration tests.
-#[test]
-fn staged_tar_removes_file_on_drop() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path: std::path::PathBuf = dir.path().join("spool.tar");
-    std::fs::write(&path, b"partial tar").unwrap();
-
-    {
-        let _guard = StagedTar::new(path.clone());
-        assert!(path.exists(), "guard must not remove the file while alive");
-    }
-
-    assert!(!path.exists(), "guard must remove the file on drop");
-}
-
-/// Dropping a guard whose file was already removed (or never created) is
-/// harmless — the error-path cleanup must not panic.
-#[test]
-fn staged_tar_tolerates_missing_file() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path: std::path::PathBuf = dir.path().join("never-created.tar");
-
-    let _guard = StagedTar::new(path);
-    // Dropping happens at end of scope; no panic is the assertion.
 }

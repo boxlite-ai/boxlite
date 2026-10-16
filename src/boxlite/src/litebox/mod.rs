@@ -170,8 +170,9 @@ impl LiteBox {
     /// Stream opaque transfer bytes into the container at `container_dst`.
     ///
     /// `source` is the archive shape (directory tree vs single file);
-    /// [`CopySourceKind::Unknown`] when the caller cannot tell — the guest then
-    /// peeks the archive to decide. Only the local backend supports this.
+    /// [`CopySourceKind::Unknown`] when the caller cannot tell. The guest
+    /// lands the archive by its first entry whatever it says. Only the local
+    /// backend supports this.
     ///
     /// Returns a `BoxFuture` (rather than being an `async fn`) so the future
     /// owns the downcast backend and never borrows `&self` across an await —

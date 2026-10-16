@@ -140,16 +140,14 @@ async fn streaming_roundtrip(bx: &LiteBox, tmp: &Path) {
     .await
     .expect("unpack_stream");
     assert_eq!(std::fs::read_to_string(&dest).unwrap(), "streaming hello");
-    assert_eq!(
-        report.entry_paths,
-        vec![std::path::PathBuf::from("stream-src.txt")]
-    );
+    // The file lands as the destination itself: no path below it to report.
+    assert!(report.entry_paths.is_empty(), "{:?}", report.entry_paths);
 }
 
 /// A single-file tar streamed WITHOUT a shape hint must land as that exact
-/// file — the guest's hintless path spools the archive and peeks it to decide
-/// (the pre-hint behavior). This is what an old-client upload looks like
-/// after the runner relays the body with hint=Unknown.
+/// file — the guest reads the archive's first entry, as it does for every
+/// upload. This is what an old-client upload looks like after the runner
+/// relays the body with hint=Unknown.
 async fn streaming_hintless_single_file(bx: &LiteBox, tmp: &Path) {
     let host_src = tmp.join("hintless-src.txt");
     std::fs::write(&host_src, b"hintless single\n").unwrap();
@@ -196,7 +194,7 @@ async fn streaming_hintless_directory(bx: &LiteBox, tmp: &Path) {
     .await
     .expect("pack_stream");
 
-    // Fresh dest, no trailing slash — only the guest's peek can decide.
+    // Fresh dest, no trailing slash — only the archive's first entry decides.
     bx.copy_in_stream(
         tar,
         "/root/hintless-dir",
@@ -287,10 +285,8 @@ async fn streaming_dir_rejects_non_recursive(bx: &LiteBox, tmp: &Path) {
 }
 
 /// A failed hintless upload surfaces as an error through the streaming path.
-/// The streamed bytes are not a tar archive, so the guest's peek/extract
-/// fails after spooling. (The spool cleanup itself is asserted by the guest
-/// crate's `TempUploadGuard` unit tests — the container cannot see the
-/// agent's own /tmp.)
+/// The streamed bytes are not a tar archive, so the guest's extraction
+/// fails.
 async fn streaming_hintless_corrupt_archive_fails(bx: &LiteBox, _tmp: &Path) {
     let tar: boxlite_shared::BoxByteStream =
         Box::pin(tokio_stream::iter(vec![Ok(b"not a tar archive".to_vec())]));
@@ -306,17 +302,15 @@ async fn streaming_hintless_corrupt_archive_fails(bx: &LiteBox, _tmp: &Path) {
     assert!(result.is_err(), "corrupt archive must fail the copy");
 }
 
-/// A hinted (streaming) upload whose archive names an entry under a mount
-/// must be refused — post-hoc for the stream (it cannot be pre-scanned
-/// without spooling), but the failure must surface instead of silently
-/// writing beneath the mount.
+/// An upload whose archive names an entry under a mount must be refused
+/// instead of silently writing beneath the mount. The guest asks before it
+/// writes each entry, so the refused one is never written.
 async fn streaming_payload_under_mount_is_refused(bx: &LiteBox, tmp: &Path) {
     let host_src = tmp.join("stream-mount-payload.txt");
     std::fs::write(&host_src, "PAYLOAD-STREAM-MOUNT\n").unwrap();
 
     // The entry lands under the guest's /tmp tmpfs mount: destination root
-    // is reachable, only the payload entry is shadowed — exactly the case
-    // the staged arm refuses via entry_paths pre-scan.
+    // is reachable, only the payload entry is shadowed.
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
@@ -389,8 +383,8 @@ async fn streaming_entry_outside_the_root_is_refused(bx: &LiteBox, _tmp: &Path) 
     assert_eq!(exec_exit_code(bx, landed).await, 0);
 }
 
-/// The hintless arm reads the whole archive before extracting, so the same
-/// archive is refused before anything lands.
+/// Without a hint the guest lands the archive the same way, as it streams
+/// by: the copy fails as the caller's error and keeps what it wrote.
 async fn streaming_hintless_entry_outside_the_root_is_refused(bx: &LiteBox, _tmp: &Path) {
     let err = bx
         .copy_in_stream(
@@ -406,8 +400,8 @@ async fn streaming_hintless_entry_outside_the_root_is_refused(bx: &LiteBox, _tmp
         matches!(err, boxlite::BoxliteError::InvalidArgument(_)),
         "got: {err}"
     );
-    let landed = BoxCommand::new("test").args(["-e", "/root/outside-root-hintless"]);
-    assert_ne!(exec_exit_code(bx, landed).await, 0, "nothing may land");
+    let landed = BoxCommand::new("test").args(["-f", "/root/outside-root-hintless/c.txt"]);
+    assert_eq!(exec_exit_code(bx, landed).await, 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1066,14 +1060,9 @@ async fn copy_in_landing_on_a_file_mount_is_refused(bx: &LiteBox, tmp: &Path) {
         "refusal should name the mount the entry would land on, got: {msg}"
     );
 
-    // The refusal must be total — the harmless sibling must not have landed
-    // either, or a partially applied copy is left behind.
-    let code = exec_exit_code(
-        bx,
-        BoxCommand::new("test").args(["-e", "/etc/harmless.txt"]),
-    )
-    .await;
-    assert_eq!(code, 1, "refused copy must leave nothing behind");
+    // The upload streams, so `hosts` is refused before it is written and the
+    // entries before it stay; whether `harmless.txt` came first is the
+    // archive's order, so it is not asserted either way.
 }
 
 /// Reading a directory that *contains* a mount walks the rootfs layer, so the

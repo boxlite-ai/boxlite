@@ -935,7 +935,9 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
   `BoxliteCopySourceKindDir` for a directory tree,
   `BoxliteCopySourceKindFile` for a single file, or
   `BoxliteCopySourceKindUnknown` when the caller cannot tell (older
-  clients); with that kind the guest peeks the archive to decide.
+  clients). The guest lands every upload by the archive's first entry, so
+  the kind does not change where it lands; `...Dir` makes a non-recursive
+  copy fail before anything is sent.
 
 Before:
 ```c

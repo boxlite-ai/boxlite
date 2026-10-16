@@ -4,9 +4,10 @@ use crate::BoxliteError;
 /// unknown.
 ///
 /// `Unknown` is the honest answer when the producer cannot tell (a peer that
-/// predates the hint, or a caller streaming bytes it did not pack). The
-/// receiver then peeks the archive to decide the extraction shape, which costs
-/// a staged copy — so pass `File`/`Dir` whenever the shape is known.
+/// predates the hint, or a caller streaming bytes it did not pack). The guest
+/// lands every upload by the archive's first entry, so the kind no longer
+/// changes where a copy-in lands; `Dir` still makes a non-recursive copy-in
+/// fail up front.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopySourceKind {
     Unknown,
@@ -109,7 +110,7 @@ mod tests {
     }
 
     /// Only `Dir` makes the caller validate recursion — an `Unknown` source
-    /// must not be treated as a directory before the guest has peeked.
+    /// must not be treated as a directory up front.
     #[test]
     fn only_dir_reports_a_directory_source() {
         assert!(CopySourceKind::Dir.is_dir());
