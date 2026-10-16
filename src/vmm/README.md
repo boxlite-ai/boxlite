@@ -27,6 +27,7 @@ boxlite-vmm
 | `error` | VMM errors that keep the hypervisor's cause chain |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
 | `boot` | Linux x86_64 boot: the 64-bit entry state (GDT, identity page tables, registers) |
+| `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
 | `vcpu` | Worker threads, stop coordination, and exit handling |
 | `irq` | Device interrupt assignment and routing; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `bus` | Address-range registration and device I/O dispatch |
@@ -81,6 +82,25 @@ MSRs; nothing calls it from `Vm` yet.
   below `0x8FF0`, and segments decoded from the GDT entries. There is no IDT,
   so an exception before Linux installs its own resets the guest.
 
+## CPU features
+
+`cpu_features::guest_cpuid(supported, index, count)` turns KVM's supported
+CPUID into vCPU `index`'s. KVM passes the host's APIC ID through and reports
+no topology, so it sets:
+
+- leaf 1: APIC ID `index`, `count` rounded up to a power of two, HTT when
+  `count > 1`, and the hypervisor and TSC-deadline bits;
+- leaf 0xB, and 0x1F when KVM lists it: an SMT level of one thread and a
+  core level of `count` cores whose shift of 6 covers every APIC ID up to 64;
+- on AMD and Hygon, 0x8000_001E (APIC and core ID `index`, node 0) and
+  0x8000_0008 ECX (ApicIdSize 6, `count - 1` more cores).
+
+Every other entry is kept, so vCPUs differ only in their APIC ID.
+`BOOT_MSRS` adds FAST_STRING to KVM's MISC_ENABLE and enables MTRRs with a
+write-back default; KVM already creates the other boot MSRs as zero. The
+local APIC keeps its KVM reset state, with LINT0 in ExtINT mode on the boot
+vCPU; Linux programs LINT1 itself.
+
 ## Build
 
 `make vmm:boot` builds the pinned x86_64 ELF kernel (`vmlinux`) inside a pinned
@@ -100,9 +120,10 @@ On Linux x86_64 with read/write access to `/dev/kvm`,
 `make test:integration:vmm:kvm` also runs this crate's hardware tests on VMs
 with the largest layout. A flat 32-bit guest reads the last RAM byte and
 reports it on port `0x3f8`. A 64-bit guest entered through
-`long_mode_entry` reloads its segments from the GDT in RAM, reads markers at
-RSI and at the top of RAM, and stores RFLAGS, CR0, CR3, CR4 and EFER for the
-test to compare. The 3 GiB allocation is `MAP_NORESERVE`, so only the touched
+`long_mode_entry`, with `guest_cpuid` and `BOOT_MSRS` applied, reloads its
+segments from the GDT in RAM, reads markers at RSI and at the top of RAM, and
+stores RFLAGS, CR0, CR3, CR4, EFER, CPUID leaves 1 and 0xB, MISC_ENABLE and
+MTRRdefType for the test to compare. The 3 GiB allocation is `MAP_NORESERVE`, so only the touched
 pages are committed; a host with `vm.overcommit_memory=2` refuses it. CI runs
 the same tests through `make coverage:vmm:kvm`.
 
