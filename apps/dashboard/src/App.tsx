@@ -31,6 +31,9 @@ import LandingPage from './pages/LandingPage'
 import Logout from './pages/Logout'
 import NotFound from './pages/NotFound'
 import Boxes from './pages/Boxes'
+import { ApiProvider } from './providers/ApiProvider'
+import { RegionsProvider } from './providers/RegionsProvider'
+import { BoxSessionProvider } from './providers/BoxSessionProvider'
 
 // Code-split the heavier, not-first-paint routes out of the main bundle. They
 // load on demand under the dashboard <Outlet> Suspense boundary, so the initial
@@ -41,18 +44,14 @@ const Keys = React.lazy(() => import('./pages/Keys'))
 const Billing = React.lazy(() => import('./pages/Billing'))
 const BillingPlanChange = React.lazy(() => import('./pages/BillingPlanChange'))
 const Volumes = React.lazy(() => import('./pages/Volumes'))
-const Images = React.lazy(() => import('./pages/Images'))
+const Images = React.lazy(() => import('./pages/ImagesPage'))
 const ImageDetails = React.lazy(() => import('./pages/ImageDetails'))
-const Registries = React.lazy(() => import('./pages/Registries'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
 const BoxDetails = React.lazy(() => import('./components/boxes').then((m) => ({ default: m.BoxDetails })))
 const BoxTerminalFullscreen = React.lazy(() =>
   import('./components/boxes').then((m) => ({ default: m.BoxTerminalFullscreen })),
 )
-import { ApiProvider } from './providers/ApiProvider'
-import { RegionsProvider } from './providers/RegionsProvider'
-import { BoxSessionProvider } from './providers/BoxSessionProvider'
 
 const HIDDEN_DASHBOARD_ROUTES = [
   RoutePath.MEMBERS,
@@ -184,11 +183,14 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.KEYS)} element={<Keys />} />
         <Route path={getRouteSubPath(RoutePath.BOXES)} element={<Boxes />} />
         <Route path={getRouteSubPath(RoutePath.VOLUMES)} element={<Volumes />} />
-        <Route path={getRouteSubPath(RoutePath.IMAGES)} element={<Images />} />
+        <Route path={getRouteSubPath(RoutePath.IMAGES)} element={<Images tab="images" />} />
         {/* The static segment is declared before `:idOrRef`, as the API orders its routes. */}
-        <Route path={getRouteSubPath(RoutePath.IMAGE_REGISTRIES)} element={<Registries />} />
+        <Route path={getRouteSubPath(RoutePath.IMAGE_REGISTRIES)} element={<Images tab="registries" />} />
         <Route path={getRouteSubPath(RoutePath.IMAGE_DETAILS)} element={<ImageDetails />} />
-        <Route path={getRouteSubPath(RoutePath.REGISTRIES)} element={<Registries />} />
+        <Route
+          path={getRouteSubPath(RoutePath.REGISTRIES)}
+          element={<Navigate to={RoutePath.IMAGE_REGISTRIES} replace />}
+        />
         {/* Plan, wallet and usage are sections of the one Billing page. The old
             per-surface paths stay as redirects so existing links keep working.
             The route is open to any member: the wallet/plan data is owner-scoped by

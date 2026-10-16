@@ -22,7 +22,7 @@ export enum RoutePath {
   BILLING = '/dashboard/billing',
   PRICING = '/dashboard/pricing',
   IMAGES = '/dashboard/images',
-  /** Registries live under Images, as they do in the API. */
+  /** Registries live under Images, as they do in the API. The old top-level path redirects here. */
   IMAGE_REGISTRIES = '/dashboard/images/registries',
   REGISTRIES = '/dashboard/registries',
   VOLUMES = '/dashboard/volumes',

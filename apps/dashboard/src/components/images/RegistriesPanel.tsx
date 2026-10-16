@@ -452,13 +452,3 @@ export function RegistriesPanel() {
     </div>
   )
 }
-
-/** The credentials page, until it becomes a tab of Images. */
-const Registries: React.FC = () => (
-  <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col px-4 pt-5 sm:px-6 lg:px-[40px] lg:pt-[26px]">
-    <h1 className="mb-[18px] font-display text-page font-semibold text-foreground lg:mb-[22px]">Private registries</h1>
-    <RegistriesPanel />
-  </div>
-)
-
-export default Registries

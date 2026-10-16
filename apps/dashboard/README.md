@@ -105,6 +105,16 @@ opens. A second entry point to the same guide is a bug, not a convenience —
 mounting one twice has already caused duplicate API keys to be minted
 (issue #1491).
 
+## Private registries are a tab of Images
+
+Someone who needs a private image is already on the Images page, so the
+credentials that let a box pull one are its second tab, not a top-level item.
+That is also how the API nests them (`/api/images/registries`). Each tab is its
+own route, `/dashboard/images` and `/dashboard/images/registries`, so a box's
+pull error can link straight to the second; the old `/dashboard/registries`
+redirects there. The static `registries` segment is routed before `:idOrRef`,
+as the API orders its routes, or it would read as an image named "registries".
+
 ## A list with no create says how its rows arrive
 
 The API has no create for an image: one enters the catalog when a box first

@@ -9,7 +9,7 @@ import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { RegistriesPanel } from './Registries'
+import { RegistriesPanel } from './RegistriesPanel'
 
 // Drive a React controlled input the way a user typing would.
 function typeInto(el: HTMLInputElement, value: string) {

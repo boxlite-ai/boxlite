@@ -10,7 +10,7 @@ import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ImageCatalog } from './Images'
+import { ImageCatalog } from './ImageCatalog'
 
 // Drive a React controlled input the way a user typing would.
 function typeInto(el: HTMLInputElement, value: string) {
