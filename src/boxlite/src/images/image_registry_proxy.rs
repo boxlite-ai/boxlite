@@ -4,10 +4,10 @@
 //! reqwest drops a proxy URL with an unknown scheme without an error, and the
 //! pull then goes direct.
 
+use boxlite_shared::errors::with_causes;
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use oci_client::client::ClientConfig;
 
-use super::store::build_client;
 use crate::runtime::options::ImageRegistryProxy;
 
 /// Reject settings that reqwest would ignore or misread.
@@ -21,7 +21,7 @@ pub(super) fn validate(proxy: &ImageRegistryProxy) -> BoxliteResult<()> {
     // reqwest parses the URLs only when a client is built.
     let mut config = ClientConfig::default();
     apply(Some(proxy), &mut config);
-    build_client(config).map_err(|causes| invalid(&causes))?;
+    oci_client::Client::try_from(config).map_err(|e| invalid(&with_causes(&e)))?;
     Ok(())
 }
 

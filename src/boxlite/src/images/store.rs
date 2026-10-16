@@ -658,9 +658,7 @@ impl ImageStore {
         &self,
         reference: &Reference,
     ) -> Result<ImageManifest, RegistryPullError> {
-        let mut config = client_config_for_registry(reference.registry(), &self.image_registries);
-        image_registry_proxy::apply(self.image_registry_proxy.as_ref(), &mut config);
-        let client = registry_client(reference.registry(), config).await?;
+        let client = self.client_for(reference).await?;
         let auth = registry_auth_for(reference.registry(), &self.image_registries);
 
         // Step 0: Fetch the token first. Left to the manifest request, the
@@ -1155,6 +1153,26 @@ impl ImageStore {
         Ok(())
     }
 
+    /// Build the client for one pull: through the proxy when one is set, and
+    /// trusting the system certificate store on top of the bundled roots. It
+    /// fails where `Client::new` would log the error and fall back to a default
+    /// client without the proxy and TLS settings.
+    async fn client_for(&self, reference: &Reference) -> BoxliteResult<oci_client::Client> {
+        let host = reference.registry();
+        let mut config = client_config_for_registry(host, &self.image_registries);
+        image_registry_proxy::apply(self.image_registry_proxy.as_ref(), &mut config);
+        // With verification off no root is consulted, so the store is not read.
+        if !config.accept_invalid_certificates {
+            config.extra_root_certificates = system_trust::root_certificates().await;
+        }
+        oci_client::Client::try_from(config).map_err(|e| {
+            BoxliteError::Config(format!(
+                "failed to create registry client for '{host}': {}",
+                with_causes(&e)
+            ))
+        })
+    }
+
     /// Parse OCI image manifest from file path.
     ///
     /// Reads an OCI ImageManifest from the given path and extracts
@@ -1221,26 +1239,6 @@ fn client_config_for_registry(host: &str, image_registries: &[ImageRegistry]) ->
     }
 }
 
-/// Build the client for one pull. It trusts the system certificate store on
-/// top of the bundled roots, and it fails where `Client::new` would log the
-/// error and fall back to a default client without the proxy and TLS settings.
-async fn registry_client(
-    host: &str,
-    mut config: ClientConfig,
-) -> BoxliteResult<oci_client::Client> {
-    config.extra_root_certificates = system_trust::root_certificates().await;
-    build_client(config).map_err(|causes| {
-        BoxliteError::Config(format!(
-            "failed to create registry client for '{host}': {causes}"
-        ))
-    })
-}
-
-/// `Client::try_from`, with the causes reqwest leaves out of its message.
-pub(super) fn build_client(config: ClientConfig) -> Result<oci_client::Client, String> {
-    oci_client::Client::try_from(config).map_err(|e| with_causes(&e))
-}
-
 /// The index key a build is found by wherever it was pulled from: its
 /// repository pinned to the manifest digest it resolved to.
 fn digest_key(reference: &Reference, manifest: &ImageManifest) -> String {
@@ -1269,9 +1267,8 @@ enum CacheUse {
 /// the image is gone or no longer this caller's to read.
 #[derive(Debug)]
 enum RegistryPullError {
-    /// Nothing reached the registry — its host did not resolve, resolved to an
-    /// address the pull refuses, or could not be connected to — or it failed on
-    /// its side (5xx).
+    /// Nothing reached the registry — its host did not resolve or could not be
+    /// connected to — or it failed on its side (5xx).
     Unanswered(BoxliteError),
     /// The registry throttled the pull (429). No answer about the image either,
     /// so the cache may stand in; kept apart so that, with nothing cached, the
@@ -1948,8 +1945,8 @@ pub(super) mod tests {
         host
     }
 
-    /// A store whose one registry is `host`, configured so the pull gets past
-    /// the address check and reaches the registry, with `app:v1` cached.
+    /// A store whose one registry is `host`, reached over plain HTTP, with
+    /// `app:v1` cached.
     async fn store_with_cached_image(
         temp_dir: &tempfile::TempDir,
         host: &str,
