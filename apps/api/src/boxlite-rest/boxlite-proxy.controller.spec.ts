@@ -164,7 +164,7 @@ describe('BoxliteProxyController', () => {
     expect(tunnelService.declarePublic).not.toHaveBeenCalled()
   })
 
-  it('rejects a tunnel request for a private box with 409', async () => {
+  it('rejects a tunnel request for a box with inbound access disabled with 409', async () => {
     const { controller, boxService } = makeHarness()
     boxService.findOneByIdOrName.mockResolvedValue({
       id: 'box-uuid',
