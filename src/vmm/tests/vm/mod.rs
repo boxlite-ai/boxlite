@@ -3,7 +3,7 @@
 
 //! `Vm` construction: validation before any host call, RAM registration on
 //! the mock backend, and real KVM VMs whose guests read the mapped RAM and run
-//! 64-bit code from the long-mode entry state.
+//! 64-bit code with the boot CPU state.
 
 use std::{cell::Cell, error::Error as _, io};
 
@@ -202,13 +202,17 @@ fn a_kvm_guest_reads_the_last_byte_of_the_mapped_layout() {
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
-fn a_kvm_guest_runs_64_bit_code_from_the_long_mode_entry_state() {
+fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
     use std::sync::Arc;
 
     use boxlite_hypervisor::VcpuExit;
     use vm_memory::{Bytes, GuestAddress};
 
-    use crate::{boot::entry::long_mode_entry, memory::MMIO_HOLE_START};
+    use crate::{
+        boot::entry::long_mode_entry,
+        cpu_features::{BOOT_MSRS, guest_cpuid},
+        memory::MMIO_HOLE_START,
+    };
 
     const ENTRY: u64 = 0x100_0000;
     const BOOT_PARAMS: u64 = 0x7000;
@@ -246,13 +250,32 @@ fn a_kvm_guest_runs_64_bit_code_from_the_long_mode_entry_state() {
         0x0f, 0x32, // rdmsr
         0x89, 0x47, 0x30, // mov [rdi + 0x30], eax
         0x89, 0x57, 0x34, // mov [rdi + 0x34], edx
+        0xb8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1
+        0x0f, 0xa2, // cpuid
+        0x89, 0x5f, 0x38, // mov [rdi + 0x38], ebx
+        0x89, 0x4f, 0x3c, // mov [rdi + 0x3c], ecx
+        0x89, 0x57, 0x40, // mov [rdi + 0x40], edx
+        0xb8, 0x0b, 0x00, 0x00, 0x00, // mov eax, 0xb
+        0xb9, 0x01, 0x00, 0x00, 0x00, // mov ecx, 1
+        0x0f, 0xa2, // cpuid
+        0x89, 0x5f, 0x44, // mov [rdi + 0x44], ebx
+        0x89, 0x57, 0x48, // mov [rdi + 0x48], edx
+        0xb9, 0xa0, 0x01, 0x00, 0x00, // mov ecx, 0x1a0 (MISC_ENABLE)
+        0x0f, 0x32, // rdmsr
+        0x89, 0x47, 0x50, // mov [rdi + 0x50], eax
+        0x89, 0x57, 0x54, // mov [rdi + 0x54], edx
+        0xb9, 0xff, 0x02, 0x00, 0x00, // mov ecx, 0x2ff (MTRRdefType)
+        0x0f, 0x32, // rdmsr
+        0x89, 0x47, 0x58, // mov [rdi + 0x58], eax
+        0x89, 0x57, 0x5c, // mov [rdi + 0x5c], edx
         0xba, 0xf8, 0x03, 0x00, 0x00, // mov edx, 0x3f8
         0xb0, b'L', // mov al, 'L'
         0xee, // out dx, al
         0x0f, 0x0b, // ud2
     ]);
 
-    let vm = Vm::new(config(1, MAX_MEMORY_MIB)).unwrap();
+    // Two vCPUs so the topology has a count to check; only vCPU 0 runs.
+    let vm = Vm::new(config(2, MAX_MEMORY_MIB)).unwrap();
     let memory = Arc::clone(vm.ram.memory());
     memory.write_slice(&program, GuestAddress(ENTRY)).unwrap();
     memory
@@ -260,10 +283,10 @@ fn a_kvm_guest_runs_64_bit_code_from_the_long_mode_entry_state() {
         .unwrap();
     memory.write_obj(TOP_MARKER, GuestAddress(top)).unwrap();
     let regs = long_mode_entry(&*memory, ENTRY, BOOT_PARAMS).unwrap();
+    let cpuid = guest_cpuid(vm.backend.supported_cpuid(), 0, 2);
 
     let mut vcpu = vm.backend.create_vcpu(0).unwrap();
-    vcpu.set_cpu_features(vm.backend.supported_cpuid(), &[])
-        .unwrap();
+    vcpu.set_cpu_features(&cpuid, &BOOT_MSRS).unwrap();
     vcpu.set_boot_registers(&regs).unwrap();
     match vcpu.run().unwrap() {
         VcpuExit::IoOut { port, bytes } => assert_eq!((port, bytes), (0x3f8, &b"L"[..])),
@@ -283,6 +306,17 @@ fn a_kvm_guest_runs_64_bit_code_from_the_long_mode_entry_state() {
             regs.efer
         ]
     );
+    let [ebx, ecx, edx, core_ebx, core_edx, _]: [u32; 6] =
+        memory.read_obj(GuestAddress(RESULTS + 0x38)).unwrap();
+    // Leaf 1: APIC ID 0 of 2 logical CPUs, hypervisor, TSC-deadline and HTT.
+    assert_eq!(ebx >> 16, 0x0002);
+    assert_eq!(ecx & ((1 << 31) | (1 << 24)), (1 << 31) | (1 << 24));
+    assert_eq!(edx & (1 << 28), 1 << 28);
+    // Leaf 0xB core level: 2 CPUs, x2APIC ID 0.
+    assert_eq!((core_ebx, core_edx), (2, 0));
+    // MISC_ENABLE with FAST_STRING; MTRRs on, write-back by default.
+    let msrs: [u64; 2] = memory.read_obj(GuestAddress(RESULTS + 0x50)).unwrap();
+    assert_eq!(msrs, [0x1801, 0x806]);
     // ud2 without an IDT escalates to a triple fault.
     assert!(matches!(vcpu.run().unwrap(), VcpuExit::Reset));
 }

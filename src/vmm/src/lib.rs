@@ -21,6 +21,12 @@ mod bus;
     expect(dead_code, reason = "Only the unwired Vm::new uses it.")
 )]
 mod config;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "vCPU workers are not wired yet.")
+)]
+mod cpu_features;
 mod error;
 mod irq;
 #[cfg_attr(

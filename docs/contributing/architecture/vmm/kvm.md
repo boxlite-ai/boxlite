@@ -216,7 +216,7 @@ sequenceDiagram
   box VM · guest software
     participant kernel as Linux kernel
   end
-  Note over thread0,host_api: Configure both CPUs with CPUID, MSRs, registers, FPU and local-APIC state<br/>Boot CPU: 64-bit entry, boot_params pointer, long mode, paging and interrupts masked
+  Note over thread0,host_api: Configure both CPUs with CPUID, MSRs, registers and FPU<br/>Boot CPU: 64-bit entry, boot_params pointer, long mode, paging and interrupts masked
   %% edge:kvm_7_e1
   thread0->>host_api: Set vCPU 0 boot state<br/>RIP = kernel entry, RSI = boot_params
   %% edge:kvm_7_e2
