@@ -44,6 +44,10 @@ Update these together when preparing a release:
 - `sdks/node/package.json` and `package-lock.json`: package version and lockfile root versions.
 - Root `package.json`: the `@boxlite-ai/boxlite` dependency range.
 
+For a version-only release, preserve dependency resolutions and registry checksums.
+In the Node lockfile, update only the top-level `version` and `packages[""].version`.
+Compatibility minimums in installation instructions stay tied to the earliest supported release.
+
 Select Cargo lock entries by package name: third-party dependencies can share the
 old version number. `boxlite-test-utils` keeps its independent version. The Go release
 workflow derives its `sdks/go/v...` tag from `Cargo.toml`. Version edits prepare source
