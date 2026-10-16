@@ -89,18 +89,15 @@ describe('BoxExitCodeService', () => {
 
   // Asking about a box that is up costs a round trip and can only ever answer
   // "none": a running box's previous code belongs to the run that ended.
-  it.each([
-    [BoxState.STARTED],
-    [BoxState.STARTING],
-    [BoxState.CREATING],
-    [BoxState.RESTORING],
-    [BoxState.DESTROYED],
-  ])('does not ask the runner about a box in %s', async (state) => {
-    const { service, runnerService } = serviceThatReads({ state: 'stopped', exitCode: 42 })
+  it.each([[BoxState.STARTED], [BoxState.STARTING], [BoxState.CREATING], [BoxState.RESTORING], [BoxState.DESTROYED]])(
+    'does not ask the runner about a box in %s',
+    async (state) => {
+      const { service, runnerService } = serviceThatReads({ state: 'stopped', exitCode: 42 })
 
-    await expect(service.getExitCode(boxIn(state))).resolves.toBeUndefined()
-    expect(runnerService.findOne).not.toHaveBeenCalled()
-  })
+      await expect(service.getExitCode(boxIn(state))).resolves.toBeUndefined()
+      expect(runnerService.findOne).not.toHaveBeenCalled()
+    },
+  )
 
   it('does not ask when the box has no runner', async () => {
     const { service, runnerService } = serviceThatReads({ state: 'stopped', exitCode: 42 })

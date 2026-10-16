@@ -313,12 +313,7 @@ export class BoxDto {
   // `exitCode` arrives as an argument for the same reason `lastActivityAt`
   // does: the control plane does not store it. It is read from the runner that
   // owns the box, and an unreadable one degrades to absent.
-  static fromBox(
-    box: Box,
-    toolboxProxyUrl: string,
-    lastActivityAt?: Date | null,
-    exitCode?: number,
-  ): BoxDto {
+  static fromBox(box: Box, toolboxProxyUrl: string, lastActivityAt?: Date | null, exitCode?: number): BoxDto {
     return {
       id: box.id,
       organizationId: box.organizationId,

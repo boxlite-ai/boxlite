@@ -7,7 +7,15 @@
 import Redis from 'ioredis'
 import { Controller, Get, Param, Logger, NotFoundException, UseGuards, Req, ParseIntPipe } from '@nestjs/common'
 import { BoxService } from '../services/box.service'
-import { ApiResponse, ApiOperation, ApiParam, ApiTags, ApiOAuth2, ApiBearerAuth, ApiExcludeEndpoint } from '@nestjs/swagger'
+import {
+  ApiResponse,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+  ApiOAuth2,
+  ApiBearerAuth,
+  ApiExcludeEndpoint,
+} from '@nestjs/swagger'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { OrganizationUserService } from '../../organization/services/organization-user.service'

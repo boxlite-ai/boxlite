@@ -271,9 +271,9 @@ describe('BoxliteBoxController volume attachment authorization', () => {
   it('refuses a member whose assigned roles lack the volume permissions', async () => {
     const { controller, boxService } = makeController()
 
-    await expect(
-      controller.createBox(memberContext([{ permissions: [WRITE_BOXES] }]), dtoWithVolume),
-    ).rejects.toThrow(/managed volume/)
+    await expect(controller.createBox(memberContext([{ permissions: [WRITE_BOXES] }]), dtoWithVolume)).rejects.toThrow(
+      /managed volume/,
+    )
     expect(boxService.create).not.toHaveBeenCalled()
   })
 

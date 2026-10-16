@@ -3,14 +3,21 @@ import { PreviewController } from './preview.controller'
 
 describe('PreviewController public tunnel check', () => {
   const access = jest.fn()
-  const controller = new PreviewController(null as never, null as never, null as never, {
-    isPublicAccessAllowed: access,
-  } as never)
+  const controller = new PreviewController(
+    null as never,
+    null as never,
+    null as never,
+    {
+      isPublicAccessAllowed: access,
+    } as never,
+  )
 
   beforeEach(() => access.mockReset())
 
   it('keeps the proxy-only endpoint out of generated API clients', () => {
-    expect(Reflect.getMetadata('swagger/apiExcludeEndpoint', controller.isPublicTunnelActive)).toEqual({ disable: true })
+    expect(Reflect.getMetadata('swagger/apiExcludeEndpoint', controller.isPublicTunnelActive)).toEqual({
+      disable: true,
+    })
   })
 
   it('accepts only an active public tunnel', async () => {
