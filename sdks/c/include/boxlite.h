@@ -95,6 +95,9 @@ typedef enum BoxliteCopySourceKind {
 // `boxlite_advanced_options_new`, freed via `boxlite_advanced_options_free`.
 typedef struct AdvancedBoxOptionsHandle AdvancedBoxOptionsHandle;
 
+// Opaque handle for git operations on a box.
+typedef struct BoxGitHandle BoxGitHandle;
+
 // Opaque handle to a running box.
 //
 // `handle` is wrapped in `Arc` so it can be cloned into Tokio tasks for
@@ -272,6 +275,12 @@ typedef struct ExecResult {
 } ExecResult;
 
 typedef struct ExecResult CBoxliteExecResult;
+
+typedef struct BoxGitHandle CBoxGitHandle;
+
+// Git status/branches JSON completion. On success the callback owns the
+// non-null string and must release it with `boxlite_free_string`.
+typedef void (*CGitJsonCb)(char*, CBoxliteError*, void*);
 
 typedef struct ImageHandle CBoxliteImageHandle;
 
@@ -824,6 +833,33 @@ enum BoxliteErrorCode boxlite_simple_run(CBoxliteSimple *box_runner,
 void boxlite_simple_free(CBoxliteSimple *box_runner);
 
 void boxlite_result_free(CBoxliteExecResult *result);
+
+// Borrow the box's git capability into a new owned handle.
+//
+// On success, `*out_git` must be released with `boxlite_git_free`.
+enum BoxliteErrorCode boxlite_box_git(CBoxHandle *handle,
+                                      CBoxGitHandle **out_git,
+                                      CBoxliteError *out_error);
+
+// Release a git handle. Accepts NULL and does not affect the box handle.
+void boxlite_git_free(CBoxGitHandle *git);
+
+// Status of the repository at `path` as a JSON object (fields match the
+// Rust `GitStatus`). The callback owns the string; free it with
+// `boxlite_free_string`.
+enum BoxliteErrorCode boxlite_git_status(CBoxGitHandle *git,
+                                         const char *path,
+                                         CGitJsonCb cb,
+                                         void *user_data,
+                                         CBoxliteError *out_error);
+
+// Local branches as a JSON object (`current`, `names`). Same ownership as
+// `boxlite_git_status`.
+enum BoxliteErrorCode boxlite_git_branches(CBoxGitHandle *git,
+                                           const char *path,
+                                           CGitJsonCb cb,
+                                           void *user_data,
+                                           CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_image_pull(CBoxliteImageHandle *handle,
                                          const char *image_ref,

@@ -15,6 +15,9 @@ import type {
   JsBox,
   JsBoxInfo,
   JsBoxOptions,
+  JsGitBranches,
+  JsGitHandle,
+  JsGitStatus,
   JsVolumeSpec,
   NativeBoxConnection,
   NativeBoxTunnel,
@@ -368,6 +371,26 @@ export interface AdvancedBoxOptions {
   capabilities?: ContainerCapabilities;
 }
 
+/** Box-scoped git operations for a SimpleBox. */
+export class GitHandle {
+  /** @internal */
+  constructor(
+    private readonly ensureBox: () => Promise<{ readonly git: JsGitHandle }>,
+  ) {}
+
+  /** Structured status of the repository at `path`. */
+  async status(path: string): Promise<JsGitStatus> {
+    const box = await this.ensureBox();
+    return box.git.status(path);
+  }
+
+  /** Local branches of the repository at `path`, plus the current one. */
+  async branches(path: string): Promise<JsGitBranches> {
+    const box = await this.ensureBox();
+    return box.git.branches(path);
+  }
+}
+
 /** Box-scoped network operations for a SimpleBox. */
 export class NetworkHandle {
   /** @internal */
@@ -465,6 +488,7 @@ export class SimpleBox {
   protected _reuseExisting: boolean;
   protected _created: boolean | null = null;
   readonly network: NetworkHandle;
+  readonly git: GitHandle;
 
   /**
    * Create a new SimpleBox.
@@ -542,6 +566,7 @@ export class SimpleBox {
     this._name = options.name;
     this._reuseExisting = options.reuseExisting ?? false;
     this.network = new NetworkHandle(() => this._ensureBox());
+    this.git = new GitHandle(() => this._ensureBox());
   }
 
   /**

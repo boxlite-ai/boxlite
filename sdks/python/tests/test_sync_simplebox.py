@@ -133,6 +133,36 @@ class TestSyncSimpleBox:
             assert "user=nobody" in result.stdout
 
 
+def _install_git_or_skip(box):
+    installed = box.exec("sh", "-c", "apk add --no-cache git")
+    if installed.exit_code != 0:
+        pytest.skip(f"apk add git failed: {installed.stderr}")
+
+
+class TestSyncSimpleBoxGit:
+    def test_status_and_branches(self, shared_sync_runtime):
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            _install_git_or_skip(box)
+            ident = box.exec("sh", "-c", "git config --global user.name 'BoxLite Bot' && git config --global user.email bot@boxlite.ai")
+            assert ident.exit_code == 0, ident.stderr
+            setup = box.exec(
+                "sh",
+                "-c",
+                "set -e\n"
+                "git init -q -b main /tmp/repo\n"
+                "echo hi > /tmp/repo/README.md\n"
+                "git -C /tmp/repo add README.md\n"
+                "git -C /tmp/repo -c commit.gpgsign=false commit -qm init\n",
+            )
+            assert setup.exit_code == 0, setup.stderr
+            status = box.git.status("/tmp/repo")
+            branches = box.git.branches("/tmp/repo")
+            assert status.file_status == []
+            assert status.current_branch == "main"
+            assert branches.current == "main"
+            assert branches.names == ["main"]
+
+
 class TestSyncSimpleBoxConcurrentStreams:
     """Test that stdout and stderr are read concurrently in sync API.
 

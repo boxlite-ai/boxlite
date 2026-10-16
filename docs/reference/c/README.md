@@ -42,6 +42,7 @@ The SDK provides two API styles:
   - [Runtime Management](#runtime-management)
   - [Box Management](#box-management)
   - [Network Tunnels](#network-tunnels)
+  - [Git](#git)
   - [Command Execution](#command-execution)
   - [Discovery & Introspection](#discovery--introspection)
   - [Metrics](#metrics)
@@ -762,6 +763,90 @@ local-only host listener that accepts repeated connections.
 
 ---
 
+### Git
+
+```c
+typedef void (*CGitJsonCb)(char* value, CBoxliteError* error, void* user_data);
+
+BoxliteErrorCode boxlite_box_git(
+    CBoxHandle* handle,
+    CBoxGitHandle** out_git,
+    CBoxliteError* out_error
+);
+void boxlite_git_free(CBoxGitHandle* git);
+
+BoxliteErrorCode boxlite_git_status(
+    CBoxGitHandle* git,
+    const char* path,
+    CGitJsonCb cb,
+    void* user_data,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_git_branches(
+    CBoxGitHandle* git,
+    const char* path,
+    CGitJsonCb cb,
+    void* user_data,
+    CBoxliteError* out_error
+);
+```
+
+`Ok` means the request was queued. Completions run later on
+`boxlite_runtime_drain()`, with the same borrowed-callback-error contract as
+`boxlite_box_info()`. On success the callback owns the non-NULL JSON string and must free it with `boxlite_free_string()`.
+`boxlite_git_free()` accepts NULL and does not affect the box handle.
+
+```c
+typedef struct {
+    int done;
+    char* json;
+} GitRequest;
+
+static void on_git_json(char* value, CBoxliteError* error, void* user_data) {
+    GitRequest* request = user_data;
+    if (error->code != Ok) {
+        fprintf(stderr, "git status failed: %s\n",
+                error->message ? error->message : "unknown error");
+    } else {
+        request->json = value;
+    }
+    request->done = 1;
+}
+
+CBoxGitHandle* git = NULL;
+if (boxlite_box_git(box, &git, &error) != Ok) {
+    fprintf(stderr, "git handle failed: %s\n",
+            error.message ? error.message : "unknown error");
+    boxlite_error_free(&error);
+    return 1;
+}
+
+GitRequest request = {0};
+if (boxlite_git_status(
+        git, "/workspace/repo", on_git_json, &request, &error) == Ok) {
+    while (!request.done) {
+        if (boxlite_runtime_drain(runtime, -1, &error) < 0) {
+            boxlite_error_free(&error);
+            break;
+        }
+    }
+}
+if (request.json) {
+    printf("status=%s\n", request.json);
+    boxlite_free_string(request.json);
+}
+boxlite_git_free(git);
+```
+
+`boxlite_git_status()` and `boxlite_git_branches()` deliver a JSON object
+string through `CGitJsonCb`; release it with
+`boxlite_free_string()`. Status fields: `current_branch`, `upstream`,
+`ahead`, `behind`, `branch_published`, `head_commit`, and `file_status[]`
+with `path`, `orig_path`, `index_status`, `worktree_status`. Branches
+fields: `current`, `names[]`.
+
+---
+
 ### Command execution
 
 #### boxlite_execute
@@ -1058,6 +1143,7 @@ BoxliteErrorCode boxlite_box_metrics(
 
 1. **All allocated strings must be freed**
    - `boxlite_box_id()` → `boxlite_free_string()`
+   - successful `boxlite_git_status()` / `boxlite_git_branches()` callback value → `boxlite_free_string()`
 
 2. **Error structs must be freed**
    - Caller-owned `CBoxliteError` output → `boxlite_error_free()`
@@ -1106,12 +1192,25 @@ Safe to call with NULL.
 
 ---
 
+#### boxlite_git_free
+
+Free a git handle.
+
+```c
+void boxlite_git_free(CBoxGitHandle* git);
+```
+
+Safe to call with NULL. Does not affect the box handle.
+
+---
+
 ## Thread safety
 
 | Component | Thread Safety |
 |-----------|---------------|
 | `CBoxliteRuntime` | Thread-safe |
 | `CBoxHandle` | **NOT** thread-safe - do not share across threads |
+| `CBoxGitHandle` | **NOT** thread-safe - do not share across threads |
 | `CBoxliteSimple` | **NOT** thread-safe - do not share across threads |
 | Callbacks | Invoked on the thread calling `boxlite_runtime_drain()` |
 
@@ -1239,6 +1338,10 @@ if (code != Ok) {
 | `boxlite_get()` | Reattach to box |
 | `boxlite_box_id()` | Get box ID |
 | `boxlite_box_free()` | Free box handle |
+| `boxlite_box_git()` | Borrow a box-scoped git handle |
+| `boxlite_git_free()` | Free a git handle |
+| `boxlite_git_status()` | Queue a structured status read (JSON) |
+| `boxlite_git_branches()` | Queue a local branch listing (JSON) |
 | `boxlite_box_info()` | Queue box info lookup |
 | `boxlite_box_metrics()` | Get box metrics |
 | `boxlite_execute()` | Execute command |

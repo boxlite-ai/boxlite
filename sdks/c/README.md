@@ -14,6 +14,7 @@ C bindings for the BoxLite runtime, providing a stable C API for integrating Box
   - [Simple API](#simple-api)
   - [Native API](#native-api)
     - [Network Tunnels](#network-tunnels)
+    - [Git](#git)
   - [Error Handling](#error-handling)
 - [Complete API Reference](#complete-api-reference)
 - [Examples](#examples)
@@ -532,6 +533,36 @@ for a local tunnel.
 This differs from `boxlite_options_add_port()`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 
+#### Git
+
+```c
+typedef void (*CGitJsonCb)(char* value, CBoxliteError* error, void* user_data);
+
+BoxliteErrorCode boxlite_box_git(
+    CBoxHandle* handle,
+    CBoxGitHandle** out_git,
+    CBoxliteError* out_error
+);
+void boxlite_git_free(CBoxGitHandle* git);
+
+BoxliteErrorCode boxlite_git_status(
+    CBoxGitHandle* git, const char* path,
+    CGitJsonCb cb, void* user_data, CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_git_branches(
+    CBoxGitHandle* git, const char* path,
+    CGitJsonCb cb, void* user_data, CBoxliteError* out_error
+);
+```
+
+`boxlite_git_status()` and `boxlite_git_branches()` deliver a JSON object
+(`current_branch`, `ahead`, `behind`, `file_status[]`, ... / `current`,
+`names[]`); free it with `boxlite_free_string()`.
+
+`Ok` means the request was queued. Completions run later on
+`boxlite_runtime_drain()`; the callback owns the non-NULL JSON string.
+`boxlite_git_free()` accepts NULL and does not affect the box handle.
+
 #### Discovery & Introspection
 
 ```c
@@ -734,6 +765,7 @@ make
 
 1. **All allocated strings must be freed**
    - `boxlite_box_id()` → `boxlite_free_string()`
+   - successful `boxlite_git_status()` / `boxlite_git_branches()` callback value → `boxlite_free_string()`
 
 2. **Error structs must be freed**
    - `CBoxliteError` → `boxlite_error_free()`
@@ -748,6 +780,7 @@ make
 4. **Handles have specific free functions**
    - `CBoxliteRuntime` → `boxlite_runtime_free()` (auto-frees all boxes)
    - `CBoxHandle` → `boxlite_box_free()`
+   - `CBoxGitHandle` → `boxlite_git_free()`
    - `CBoxliteSimple` → `boxlite_simple_free()`
 
 5. **All cleanup functions are NULL-safe**
@@ -799,6 +832,7 @@ leaks -atExit -- ./my_app
 
 - ✅ **`CBoxliteRuntime` is thread-safe** - Multiple threads can call runtime functions concurrently
 - ⚠️ **`CBoxHandle` is NOT thread-safe** - Don't share box handles across threads
+- ⚠️ **`CBoxGitHandle` is NOT thread-safe** - Don't share git handles across threads
 - ⚠️ **`CBoxliteSimple` is NOT thread-safe** - Don't share simple boxes across threads
 
 ### Best Practices

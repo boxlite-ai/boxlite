@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("boxlite.simplebox")
 
-__all__ = ["BoxTunnel", "NetworkHandle", "SimpleBox"]
+__all__ = ["BoxTunnel", "GitHandle", "NetworkHandle", "SimpleBox"]
 
 
 class StreamType(IntEnum):
@@ -58,6 +58,29 @@ class NetworkHandle:
                 "or call 'await box.start()' first."
             )
         return BoxTunnel(await self._owner._create_tunnel(port))
+
+
+class GitHandle:
+    """Git operations for a ``SimpleBox``."""
+
+    def __init__(self, box: "SimpleBox") -> None:
+        self._owner = box
+
+    def _native(self):
+        if not self._owner._started:
+            raise RuntimeError(
+                "Box not started. Use 'async with SimpleBox(...) as box:' "
+                "or call 'await box.start()' first."
+            )
+        return self._owner._box.git
+
+    async def status(self, path: str):
+        """Structured ``GitStatus`` of the repository at ``path``."""
+        return await self._native().status(path)
+
+    async def branches(self, path: str):
+        """``GitBranches`` (``current``, ``names``) of the repository at ``path``."""
+        return await self._native().branches(path)
 
 
 class SimpleBox:
@@ -138,6 +161,7 @@ class SimpleBox:
         self._started = False
         self._created: bool | None = None
         self._network = NetworkHandle(self)
+        self._git = GitHandle(self)
 
     async def _create_tunnel(self, port: int):
         """Establish a native tunnel handle for a service port."""
@@ -221,6 +245,13 @@ class SimpleBox:
         if not hasattr(self, "_network"):
             self._network = NetworkHandle(self)
         return self._network
+
+    @property
+    def git(self) -> GitHandle:
+        """Get the box-scoped git handle."""
+        if not hasattr(self, "_git"):
+            self._git = GitHandle(self)
+        return self._git
 
     async def exec(
         self,

@@ -10,6 +10,7 @@ Complete API reference for the BoxLite Node.js/TypeScript SDK.
 - [Runtime Management](#runtime-management)
 - [Box Handle](#box-handle)
 - [Network Tunnels](#network-tunnels)
+- [Git](#git)
 - [Command Execution](#command-execution)
 - [Box Types](#box-types)
 - [Error Types](#error-types)
@@ -218,6 +219,7 @@ Handle to a running or stopped box.
 | `id` | `string` | Unique box identifier (ULID) |
 | `name` | `string \| null` | User-defined name |
 | `network` | `JsNetworkHandle` | Box-scoped tunnel operations |
+| `git` | `JsGitHandle` | Box-scoped git operations |
 
 #### Methods
 
@@ -308,6 +310,28 @@ Each tunnel is one-shot. Choose `connect()` or `forward()`; a forwarder opens
 fresh tunnels for additional clients. This differs from `ports`, which
 creates a persistent, local-only host listener that accepts repeated
 connections from ordinary host applications.
+
+---
+
+## Git
+
+`JsBox` and `SimpleBox` expose `box.git` for read-only repository inspection.
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Status | `await box.git.status(path) => Promise<JsGitStatus>` | Structured working-tree status |
+| Branches | `await box.git.branches(path) => Promise<JsGitBranches>` | Local branches plus the current one |
+
+```typescript
+const st = await box.git.status("/workspace/repo");
+const { current, names } = await box.git.branches("/workspace/repo");
+```
+
+`JsGitStatus` has `currentBranch` (null when detached), `upstream`, `ahead`,
+`behind`, `branchPublished`, `headCommit` (null on an unborn branch), and
+`fileStatus: JsGitFileStatus[]` (empty when clean). Each entry has `path`,
+`origPath`, `indexStatus`, `worktreeStatus`, `staged`, `untracked`.
+`JsGitBranches` has `current` and `names`.
 
 ---
 
@@ -438,6 +462,7 @@ interface SimpleBoxOptions {
 |----------|------|-------------|
 | `id` | `string` | Box ID (throws if not started) |
 | `name` | `string \| undefined` | Box name |
+| `git` | `GitHandle` | Box-scoped git operations |
 
 #### Methods
 

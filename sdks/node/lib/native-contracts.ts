@@ -408,6 +408,39 @@ export interface JsNetworkHandle {
   tunnel(port: number): Promise<NativeBoxTunnel>;
 }
 
+/** One changed path; status codes are porcelain v2 XY letters. */
+export interface JsGitFileStatus {
+  path: string;
+  origPath?: string | null;
+  indexStatus: string;
+  worktreeStatus: string;
+  staged: boolean;
+  untracked: boolean;
+}
+
+/** Structured `git status` result. */
+export interface JsGitStatus {
+  currentBranch?: string | null;
+  upstream?: string | null;
+  ahead: number;
+  behind: number;
+  branchPublished: boolean;
+  headCommit?: string | null;
+  fileStatus: JsGitFileStatus[];
+}
+
+/** Local branches of a repository. */
+export interface JsGitBranches {
+  current?: string | null;
+  names: string[];
+}
+
+/** Box-scoped git operations on the native `JsBox`. */
+export interface JsGitHandle {
+  status(path: string): Promise<JsGitStatus>;
+  branches(path: string): Promise<JsGitBranches>;
+}
+
 export type SocketAddress =
   { type: "tcp"; host?: string; port: number } | { type: "unix"; path: string };
 
@@ -452,6 +485,7 @@ export interface JsBox {
   ): Promise<JsExecution>;
   readonly snapshot: JsSnapshotHandle;
   readonly network: JsNetworkHandle;
+  readonly git: JsGitHandle;
   cloneBox(
     options?: JsCloneOptions | null,
     name?: string | null,

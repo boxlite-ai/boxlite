@@ -160,6 +160,30 @@ Choose `Connect` or `Forward`; a forwarder prepares fresh tunnels for later
 clients. This differs from `WithPort`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 
+## Git
+
+`Box.Git()` returns a box-scoped handle for read-only git inspection.
+Close the handle when finished; closing it does not stop the box.
+
+```go
+git, err := box.Git()
+if err != nil {
+	log.Fatal(err)
+}
+defer git.Close()
+
+ctx := context.Background()
+st, err := git.Status(ctx, "/workspace/repo")
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(len(st.FileStatus), st.Ahead, st.Behind)
+```
+
+- `git.Status(ctx, path)` returns `*GitStatus` (`CurrentBranch`, `Upstream`,
+  `Ahead`, `Behind`, `BranchPublished`, `HeadCommit`, `FileStatus`).
+- `git.Branches(ctx, path)` returns `*GitBranches` (`Current`, `Names`).
+
 ## Development
 
 Build from source (requires Rust toolchain):
