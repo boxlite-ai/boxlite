@@ -45,11 +45,6 @@ describe('isNonPublicAddress', () => {
     '64:ff9b::a9fe:a9fe',
     '64:ff9b:1::a9fe:a9fe',
     '2002:a9fe:a9fe::',
-    // Each form carries every range of the table, not only the /16 above.
-    '::ffff:100.64.0.1',
-    '::10.0.0.1',
-    '64:ff9b::ac1f:ffff',
-    '2002:6440:1::',
     // Not an address at all: a resolver answer this check cannot vouch for.
     'not-an-address',
   ])('refuses %s', (address) => {
@@ -72,13 +67,24 @@ describe('isNonPublicAddress', () => {
     '2606:4700:4700::1111',
     '2606:4700:4700:0:0:0:0:1111',
     '2002:0101:0101::',
-    // The edge of a range, in each form: one address outside it is public.
-    '::ffff:8.8.8.8',
-    '::808:808',
-    '64:ff9b::ac20:1',
-    '2002:6480:1::',
   ])('keeps %s reachable', (address) => {
     expect(isNonPublicAddress(address)).toBe(false)
+  })
+
+  // Each IPv4 range is also listed in the forms IPv6 carries it in, with its
+  // prefix lengthened to match. One range pins that arithmetic: both of its
+  // edges are refused and the address just outside each is not.
+  const forms: [string, (high: string, low: string) => string][] = [
+    ['mapped', (high, low) => `::ffff:${high}:${low}`],
+    ['compatible', (high, low) => `::${high}:${low}`],
+    ['NAT64', (high, low) => `64:ff9b::${high}:${low}`],
+    ['6to4', (high, low) => `2002:${high}:${low}::`],
+  ]
+  it.each(forms)('carries 172.16.0.0/12 to its edges in the %s form', (_, form) => {
+    expect(isNonPublicAddress(form('ac10', '0'))).toBe(true) // 172.16.0.0
+    expect(isNonPublicAddress(form('ac1f', 'ffff'))).toBe(true) // 172.31.255.255
+    expect(isNonPublicAddress(form('ac0f', 'ffff'))).toBe(false) // 172.15.255.255
+    expect(isNonPublicAddress(form('ac20', '0'))).toBe(false) // 172.32.0.0
   })
 })
 
