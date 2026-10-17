@@ -142,7 +142,7 @@ describe('BoxliteBoxController request validation', () => {
   })
 })
 
-// Making a box public exposes its services to anyone, so this route must ask
+// Enabling inbound access exposes its services to anyone, so this route must ask
 // for the same permission as the dashboard's toggle. Read off the real
 // handler, as the pipe above is, so deleting the decorator fails here.
 describe('BoxliteBoxController permissions', () => {

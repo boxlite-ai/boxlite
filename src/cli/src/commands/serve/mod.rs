@@ -33,7 +33,9 @@ use boxlite::{
 use crate::cli::GlobalFlags;
 use crate::defaults::{LOCAL_SERVE_HOST, LOCAL_SERVE_PORT};
 
-use self::types::{BoxResponse, CreateBoxRequest, ErrorBody, ErrorDetail, ExecRequest};
+use self::types::{
+    BoxResponse, CreateBoxRequest, ErrorBody, ErrorDetail, ExecRequest, NetworkInfoResponse,
+};
 
 fn parse_api_key(raw: &str) -> Result<String, String> {
     if raw.is_empty() {
@@ -1116,6 +1118,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         auto_delete: info.auto_delete,
         auto_resume: info.auto_resume,
         exit_code: info.exit_code,
+        network: info.network.as_ref().map(NetworkInfoResponse::from),
     }
 }
 
@@ -2341,6 +2344,46 @@ mod tests {
         );
     }
 
+    /// The read-back must carry the policy the runtime holds, both
+    /// directions, so a remote `info()` or `inspect` can show it; and only
+    /// that, since host bindings mean nothing to a remote caller.
+    #[test]
+    fn a_box_response_carries_the_network_policy_and_nothing_local() {
+        let mut info = info_as_the_runtime_reports_it("running");
+        info.network = serde_json::from_value(serde_json::json!({
+            "outbound": { "mode": "enabled", "allow_net": ["api.openai.com"] },
+            "inbound": { "mode": "enabled" },
+            "published_ports": [
+                { "guest_port": 80, "host_ip": "127.0.0.1", "host_port": 8080, "protocol": "tcp" }
+            ],
+        }))
+        .ok();
+
+        let network = serde_json::to_value(box_info_to_response(&info))
+            .expect("serializable")
+            .get("network")
+            .cloned()
+            .expect("the policy must be on the wire");
+        assert_eq!(
+            network,
+            serde_json::json!({
+                "outbound": { "mode": "enabled", "allow_net": ["api.openai.com"] },
+                "inbound": { "mode": "enabled", "allow_net": [] },
+            })
+        );
+    }
+
+    /// A runtime that does not know the policy must not be reported as any
+    /// particular one: the field is left out, which the client reads as
+    /// unknown.
+    #[test]
+    fn a_box_with_unknown_network_omits_the_field() {
+        let mut info = info_as_the_runtime_reports_it("running");
+        info.network = None;
+        let value = serde_json::to_value(box_info_to_response(&info)).expect("serializable");
+        assert!(value.get("network").is_none());
+    }
+
     /// A box `serve` holds no policy for reports no deadline — a clone or an
     /// import must not inherit the source box's.
     #[tokio::test]
@@ -2777,7 +2820,7 @@ mod tests {
 
     #[test]
     fn build_box_options_omitted_inbound_defaults_to_disabled() {
-        // A request without inbound is private, whether `network` is absent,
+        // A request without inbound has it disabled, whether `network` is absent,
         // uses the legacy flat shape (which predates the split), or nests
         // only outbound.
         for network in [

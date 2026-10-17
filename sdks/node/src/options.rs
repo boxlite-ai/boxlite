@@ -386,9 +386,10 @@ pub struct JsOutboundNetworkSpec {
 }
 
 /// Aligned field-for-field with `JsOutboundNetworkSpec`: `mode="enabled"`
-/// means services the box exposes are publicly reachable, `mode="disabled"`
-/// means private. `allowNet` exists for shape symmetry only — no layer
-/// enforces an inbound allowlist yet, so a non-empty value is rejected.
+/// means services the box exposes are reachable without sign-in;
+/// `mode="disabled"` means unreachable from outside. `allowNet` exists for
+/// shape symmetry only — no layer enforces an inbound allowlist yet, so a
+/// non-empty value is rejected.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsInboundNetworkSpec {
@@ -1047,7 +1048,7 @@ mod tests {
     }
 
     /// The pre-split shape configured the outbound direction; it must keep
-    /// doing exactly that, and leave inbound at its default (private).
+    /// doing exactly that, and leave inbound at its default (disabled).
     #[test]
     fn legacy_flat_network_spec_converts_to_outbound() {
         let (outbound, inbound) = <(NetworkSpec, NetworkSpec)>::try_from(JsNetworkSpec {

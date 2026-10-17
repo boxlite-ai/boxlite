@@ -296,7 +296,7 @@ Configuration options for creating a box.
 `NetworkSpec` uses:
 
 - `outbound: OutboundNetworkSpec` - Guest egress policy
-- `inbound: InboundNetworkSpec` - Service access policy (default: `mode="disabled"`, private)
+- `inbound: InboundNetworkSpec` - Service access policy (default: `mode="disabled"`, unreachable from outside)
 
 The pre-split form `NetworkSpec(mode=..., allow_net=...)` still works and
 configures the outbound direction, positionally as well as by keyword.
