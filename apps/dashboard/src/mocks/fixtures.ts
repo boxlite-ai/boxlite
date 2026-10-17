@@ -22,6 +22,7 @@ import {
   RegistryCredential,
   RegistryCredentialKind,
   type BoxliteConfiguration,
+  NetworkMode,
   type Organization,
   type OrganizationUser,
   OrganizationUserRoleEnum,
@@ -123,6 +124,10 @@ export function buildBox(overrides: Partial<Box> & Pick<Box, 'id' | 'name' | 'st
     labels: {},
     public: false,
     networkBlockAll: false,
+    network: {
+      outbound: { mode: NetworkMode.ENABLED, allow_net: [] },
+      inbound: { mode: NetworkMode.DISABLED, allow_net: [] },
+    },
     target: 'mock',
     image: 'ghcr.io/boxlite-ai/boxlite-agent-base:mock',
     cpu: 1,
