@@ -16,6 +16,7 @@
 use crate::db::{CachedImage, Database, ImageIndexStore};
 use crate::images::manager::{ImageManifest, LayerInfo};
 use crate::images::storage::ImageStorage;
+use crate::images::system_trust;
 use crate::runtime::options::{ImageRegistry, ImageRegistryAuth, RegistryTransport};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use oci_client::Reference;
@@ -636,7 +637,7 @@ impl ImageStore {
         &self,
         reference: &Reference,
     ) -> Result<ImageManifest, RegistryPullError> {
-        let client = self.client_for(reference);
+        let client = self.client_for(reference).await?;
         let auth = registry_auth_for(reference.registry(), &self.image_registries);
 
         // Step 0: Fetch the token first. Left to the manifest request, the
@@ -1131,11 +1132,27 @@ impl ImageStore {
         Ok(())
     }
 
-    fn client_for(&self, reference: &Reference) -> oci_client::Client {
-        oci_client::Client::new(client_config_for_registry(
-            reference.registry(),
-            &self.image_registries,
-        ))
+    /// Build the client for one pull, trusting the system certificate store on
+    /// top of the bundled roots. It fails where `Client::new` would log the
+    /// error and fall back to a default client without the TLS settings.
+    async fn client_for(&self, reference: &Reference) -> BoxliteResult<oci_client::Client> {
+        let host = reference.registry();
+        let mut config = client_config_for_registry(host, &self.image_registries);
+        // With verification off no root is consulted, so the store is not read.
+        if !config.accept_invalid_certificates {
+            config.extra_root_certificates = system_trust::root_certificates().await;
+        }
+        oci_client::Client::try_from(config).map_err(|e| {
+            let mut message = e.to_string();
+            let mut source = std::error::Error::source(&e);
+            while let Some(cause) = source {
+                message.push_str(&format!(": {cause}"));
+                source = cause.source();
+            }
+            BoxliteError::Config(format!(
+                "failed to create registry client for '{host}': {message}"
+            ))
+        })
     }
 
     /// Parse OCI image manifest from file path.
@@ -1621,6 +1638,125 @@ pub(super) mod tests {
             "pull must reach the loopback registry; pull result: {pull:?}",
         );
         pull.expect_err("the fixture closes the connection during TLS");
+    }
+
+    /// A CA's PEM, and a TLS acceptor presenting a `localhost` certificate it issued.
+    fn tls_issued_by_a_private_ca() -> (String, tokio_rustls::TlsAcceptor) {
+        use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+
+        let ca_key = KeyPair::generate().unwrap();
+        let mut ca_params = CertificateParams::default();
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca = ca_params.self_signed(&ca_key).unwrap();
+        let leaf_key = KeyPair::generate().unwrap();
+        let leaf = CertificateParams::new(vec!["localhost".to_string()])
+            .unwrap()
+            .signed_by(&leaf_key, &ca, &ca_key)
+            .unwrap();
+        let key = rustls::pki_types::PrivatePkcs8KeyDer::from(leaf_key.serialize_der());
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![leaf.der().clone()], key.into())
+        .unwrap();
+        (ca.pem(), tokio_rustls::TlsAcceptor::from(Arc::new(config)))
+    }
+
+    #[tokio::test]
+    async fn pull_trusts_a_registry_ca_from_the_system_store() {
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::time::timeout;
+
+        const CHILD_IMAGE_ENV: &str = "BOXLITE_TEST_SYSTEM_TRUST_PULL_IMAGE";
+        if let Some(image_ref) = std::env::var_os(CHILD_IMAGE_ENV) {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
+            let store = ImageStore::new(temp_dir.path().join("images"), db, vec![]).unwrap();
+            let pulled = timeout(
+                Duration::from_secs(5),
+                store.pull(image_ref.to_str().unwrap()),
+            )
+            .await
+            .expect("pull must finish");
+            pulled.expect_err("the fixture serves no image");
+            return;
+        }
+
+        let (registry_ca, tls) = tls_issued_by_a_private_ca();
+        let (other_ca, _) = tls_issued_by_a_private_ca();
+        let ca_dir = tempfile::tempdir().unwrap();
+        for (store_holds_registry_ca, ca_pem) in [(true, registry_ca), (false, other_ca)] {
+            let ca_file = ca_dir.path().join(format!("{store_holds_registry_ca}.pem"));
+            std::fs::write(&ca_file, ca_pem).unwrap();
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let tls = tls.clone();
+            // The first request line, which only a completed TLS handshake can carry.
+            let server = tokio::spawn(async move {
+                let (tcp, _) = listener.accept().await.ok()?;
+                let mut stream = tls.accept(tcp).await.ok()?;
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n") && stream.read(&mut byte).await.ok()? == 1 {
+                    head.push(byte[0]);
+                }
+                let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n").await;
+                Some(String::from_utf8_lossy(&head).trim_end().to_string())
+            });
+
+            // A child process owns the trust store, so no other test sees SSL_CERT_FILE.
+            let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "images::store::tests::pull_trusts_a_registry_ca_from_the_system_store",
+                    "--nocapture",
+                ])
+                .env(CHILD_IMAGE_ENV, format!("localhost:{port}/acme/app:v1"))
+                .env("SSL_CERT_FILE", &ca_file)
+                .env_remove("SSL_CERT_DIR")
+                .kill_on_drop(true);
+            for name in [
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "NO_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+                "no_proxy",
+            ] {
+                command.env_remove(name);
+            }
+            let output = timeout(Duration::from_secs(10), command.output())
+                .await
+                .expect("isolated pull test must finish")
+                .unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "isolated pull test failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+
+            let request = timeout(Duration::from_secs(1), server)
+                .await
+                .ok()
+                .and_then(|joined| joined.unwrap());
+            let reached = request
+                .as_deref()
+                .is_some_and(|line| line.starts_with("GET /v2/"));
+            assert_eq!(
+                reached, store_holds_registry_ca,
+                "store holds the registry CA: {store_holds_registry_ca}; request: {request:?}",
+            );
+        }
     }
 
     #[test]
