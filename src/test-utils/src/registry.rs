@@ -17,7 +17,7 @@
 //! holding the exact bytes an upstream sent, since pulls verify digests.
 
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -53,6 +53,7 @@ pub fn local_registry() -> &'static LocalRegistry {
 }
 
 /// A registry on `127.0.0.1` serving one recording directory until dropped.
+#[derive(Debug)]
 pub struct LocalRegistry {
     host: String,
     runtime: Option<tokio::runtime::Runtime>,
@@ -191,7 +192,7 @@ struct Recording {
 impl Recording {
     async fn manifest(&self, name: &str, reference: &str) -> Found {
         let path = self.dir.join("manifests").join(name).join(reference);
-        if let Ok(body) = std::fs::read(&path) {
+        if let Ok(body) = tokio::fs::read(&path).await {
             return Ok((media_type(&body), body));
         }
         let fetch = |client: Client, image: Reference| async move {
@@ -203,12 +204,12 @@ impl Recording {
         };
         let body = self.first_upstream(name, reference, fetch).await;
         let body = body.map_err(|failures| ("MANIFEST_UNKNOWN", failures))?;
-        keep(&path, &body);
+        keep(path, body.clone()).await;
         Ok((media_type(&body), body))
     }
 
-    /// A recorded blob, or one streamed in from an upstream and on to the
-    /// client as it arrives, then recorded once the stream verifies.
+    /// A recorded blob streamed from disk, or one streamed in from an upstream
+    /// and on to the client as it arrives, then recorded once the stream verifies.
     async fn blob(
         &self,
         socket: &mut TcpStream,
@@ -217,9 +218,16 @@ impl Recording {
         head_only: bool,
     ) -> std::io::Result<()> {
         let path = self.dir.join("blobs").join(digest);
-        if let Ok(body) = std::fs::read(&path) {
-            let found = Ok(("application/octet-stream".to_owned(), body));
-            return reply(socket, found, head_only).await;
+        if let Ok(mut file) = tokio::fs::File::open(&path).await {
+            // Recorded only after its digest verified, so its name is its digest.
+            let length = file.metadata().await?.len();
+            socket
+                .write_all(blob_head(digest, Some(length)).as_bytes())
+                .await?;
+            if !head_only {
+                tokio::io::copy(&mut file, socket).await?;
+            }
+            return socket.shutdown().await;
         }
         let fetch = |client: Client, image: Reference| async move {
             client.pull_blob_stream(&image, digest).await
@@ -230,15 +238,9 @@ impl Recording {
                 return reply(socket, Err(("BLOB_UNKNOWN", failures)), head_only).await;
             }
         };
-        let length = upstream
-            .content_length
-            .map(|length| format!("Content-Length: {length}\r\n"))
-            .unwrap_or_default();
-        let head = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
-             Docker-Content-Digest: {digest}\r\n{length}Connection: close\r\n\r\n"
-        );
-        socket.write_all(head.as_bytes()).await?;
+        socket
+            .write_all(blob_head(digest, upstream.content_length).as_bytes())
+            .await?;
         let mut body = Vec::new();
         // The stream checks the digest and ends in an error on a mismatch.
         while let Some(chunk) = upstream.stream.next().await {
@@ -248,7 +250,7 @@ impl Recording {
             }
             body.extend_from_slice(&chunk);
         }
-        keep(&path, &body);
+        keep(path, body).await;
         socket.shutdown().await
     }
 
@@ -317,20 +319,37 @@ fn client_for(upstream: &ImageRegistry) -> Client {
     })
 }
 
-/// Write `body` to `path` whole or not at all: test processes record side by side.
-fn keep(path: &Path, body: &[u8]) {
-    let parent = path.parent().expect("a recording has a parent directory");
-    let written = std::fs::create_dir_all(parent).and_then(|()| {
-        let mut file = tempfile::NamedTempFile::new_in(parent)?;
-        std::io::Write::write_all(&mut file, body)?;
-        file.persist(path).map(drop).map_err(|e| e.error)
+/// Write `body` to `path` whole or not at all: test processes record side by
+/// side. A blocking thread does the writing, so a layer never stalls a worker.
+async fn keep(path: PathBuf, body: Vec<u8>) {
+    let recording = tokio::task::spawn_blocking(move || {
+        let parent = path.parent().expect("a recording has a parent directory");
+        let written = std::fs::create_dir_all(parent).and_then(|()| {
+            let mut file = tempfile::NamedTempFile::new_in(parent)?;
+            std::io::Write::write_all(&mut file, &body)?;
+            file.persist(&path).map(drop).map_err(|e| e.error)
+        });
+        if let Err(error) = written {
+            eprintln!(
+                "[test] local registry could not record {}: {error}",
+                path.display()
+            );
+        }
     });
-    if let Err(error) = written {
-        eprintln!(
-            "[test] local registry could not record {}: {error}",
-            path.display()
-        );
+    if let Err(error) = recording.await {
+        eprintln!("[test] local registry recording stopped: {error}");
     }
+}
+
+/// The response head for a blob; its digest is known before the body is sent.
+fn blob_head(digest: &str, length: Option<u64>) -> String {
+    let length = length
+        .map(|length| format!("Content-Length: {length}\r\n"))
+        .unwrap_or_default();
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
+         Docker-Content-Digest: {digest}\r\n{length}Connection: close\r\n\r\n"
+    )
 }
 
 /// The type a manifest names itself, or the OCI type its shape implies.
