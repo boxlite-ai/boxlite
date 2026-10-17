@@ -609,6 +609,7 @@ dependencies = [
  "futures",
  "tokio",
  "tracing",
+ "tungstenite 0.24.0",
 ]
 
 [[package]]

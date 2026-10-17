@@ -115,6 +115,16 @@ func newExecutionStreamState(opts ExecutionOptions) *executionStreamState {
 	}
 }
 
+func newAttachStreamState(opts AttachOptions) *executionStreamState {
+	return &executionStreamState{
+		stdout:   opts.Stdout,
+		stderr:   opts.Stderr,
+		onStdout: opts.OnStdout,
+		onStderr: opts.OnStderr,
+		drained:  make(chan struct{}),
+	}
+}
+
 func (s *executionStreamState) deliverStdout(data []byte) {
 	if s.released.Load() {
 		return
@@ -249,7 +259,57 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 		return nil, freeError(&cerr)
 	}
 
-	state := newExecutionStreamState(cfg)
+	return b.wireExecution(handle, newExecutionStreamState(cfg))
+}
+
+// AttachOptions are the sinks an attach session delivers the main command's
+// output to.
+//
+// Deliberately narrower than ExecutionOptions: an attach joins a session that
+// already exists, so the command, its environment, its working directory, its
+// TTY mode and its timeout were all fixed when the box was created and are not
+// the attaching client's to choose.
+type AttachOptions struct {
+	Stdout   io.Writer
+	Stderr   io.Writer
+	OnStdout func([]byte)
+	OnStderr func([]byte)
+}
+
+// AttachMainSession attaches to the box's main command session — the
+// container's init.
+//
+// `run IMAGE COMMAND` runs COMMAND *as* init (docker semantics), which is why
+// following it is an attach rather than an exec. The returned *Execution is an
+// ordinary one: Wait, Signal, Kill, ResizeTTY and Stdin all behave as they do
+// for StartExecution.
+//
+// Attaching boots the box and creates its container but does not run init —
+// Box.Start does. Callers go create → attach → start so a command that exits
+// immediately cannot outrun the stream. Only the main session is attachable;
+// a running exec keeps the *Execution it was created with.
+func (b *Box) AttachMainSession(_ context.Context, opts *AttachOptions) (*Execution, error) {
+	b.runtime.ensureDrainRunning()
+
+	cfg := AttachOptions{}
+	if opts != nil {
+		cfg = *opts
+	}
+
+	var handle *C.CExecutionHandle
+	var cerr C.CBoxliteError
+	if code := C.boxlite_box_attach_main(b.handle, &handle, &cerr); code != C.Ok {
+		return nil, freeError(&cerr)
+	}
+
+	return b.wireExecution(handle, newAttachStreamState(cfg))
+}
+
+// wireExecution registers the stream callbacks on a freshly returned C handle
+// and wraps it as an *Execution. Shared by StartExecution and
+// AttachMainSession — past the C call the two are the same object with the
+// same lifecycle.
+func (b *Box) wireExecution(handle *C.CExecutionHandle, state *executionStreamState) (*Execution, error) {
 	streamHandle := cgo.NewHandle(state)
 
 	if err := registerExecutionCallbacks(handle, streamHandle); err != nil {

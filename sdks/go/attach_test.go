@@ -1,0 +1,232 @@
+package boxlite
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/sha1"
+	"encoding/base64"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+)
+
+// sessionServer is a box API for one box, "box1", over loopback. Every
+// WebSocket it accepts plays the same session — "hi" on stdout, "oops" on
+// stderr, then exit code 7 — so a test can tell whether what the session
+// produced reached the caller. The upgrade is completed by hand because the
+// SDK has no WebSocket dependency to borrow a server from.
+type sessionServer struct {
+	*httptest.Server
+	// refuse, when non-zero, is the status the main-session upgrade is refused
+	// with. Fixed before the server starts, so handlers read it unlocked.
+	refuse   int
+	mu       sync.Mutex
+	requests []string
+}
+
+func newSessionServer(t *testing.T, refuse int) *sessionServer {
+	t.Helper()
+	s := &sessionServer{refuse: refuse}
+	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
+	t.Cleanup(s.Close)
+	return s
+}
+
+func (s *sessionServer) serve(w http.ResponseWriter, r *http.Request) {
+	request := r.Method + " " + r.URL.Path
+	s.mu.Lock()
+	s.requests = append(s.requests, request)
+	s.mu.Unlock()
+
+	switch request {
+	case "GET /v1/boxes/box1":
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"box_id":"box1","name":null,"status":"running",
+			"created_at":"2026-07-14T00:00:00Z","updated_at":"2026-07-14T00:00:00Z",
+			"pid":null,"image":"alpine:3.20","cpus":1,"memory_mib":256
+		}`)
+	case "GET /v1/boxes/box1/attach":
+		if s.refuse != 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(s.refuse)
+			_, _ = io.WriteString(w, `{"error":{"message":"main session already has an attached client","code":"already_exists"}}`)
+			return
+		}
+		playSession(w, r, "X-Boxlite-Execution-Id: init-1\r\n")
+	case "POST /v1/boxes/box1/exec":
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"execution_id":"exec-1"}`)
+	case "GET /v1/boxes/box1/executions/exec-1/attach":
+		playSession(w, r, "")
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// received returns the requests the server saw, as "METHOD /path".
+func (s *sessionServer) received() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.requests)
+}
+
+// box resolves box1 through a REST runtime pointed at the server.
+func (s *sessionServer) box(ctx context.Context, t *testing.T) *Box {
+	t.Helper()
+	rt, err := NewRest(BoxliteRestOptions{URL: s.URL})
+	if err != nil {
+		t.Fatalf("NewRest: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+	box, err := rt.Get(ctx, "box1")
+	if err != nil {
+		t.Fatalf("Get box1: %v", err)
+	}
+	t.Cleanup(func() { _ = box.Close() })
+	return box
+}
+
+// playSession upgrades the request, sends the session, and holds the
+// connection until the client hangs up, which it does on the exit frame.
+// extraHeaders is raw header lines added to the 101.
+func playSession(w http.ResponseWriter, r *http.Request, extraHeaders string) {
+	accept := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	conn, rw, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close()
+
+	_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+		"Sec-WebSocket-Accept: " + base64.StdEncoding.EncodeToString(accept[:]) + "\r\n" + extraHeaders + "\r\n")
+	writeServerFrame(rw, 0x2, []byte("\x01hi"))
+	writeServerFrame(rw, 0x2, []byte("\x02oops"))
+	writeServerFrame(rw, 0x1, []byte(`{"type":"exit","exit_code":7}`))
+	if rw.Flush() != nil {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_, _ = io.Copy(io.Discard, rw)
+}
+
+// writeServerFrame writes one final, unmasked frame; every payload here fits
+// the 7-bit length.
+func writeServerFrame(w *bufio.ReadWriter, opcode byte, payload []byte) {
+	_, _ = w.Write(append([]byte{0x80 | opcode, byte(len(payload))}, payload...))
+}
+
+// lockedBuffer is a bytes.Buffer an output callback can write while the test
+// reads it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// TestAttachMainSessionDeliversInitOutputAndExitCode: attaching joins init
+// over the container-attach route, every sink in AttachOptions receives what
+// init wrote, and Wait returns init's exit code.
+func TestAttachMainSessionDeliversInitOutputAndExitCode(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	server := newSessionServer(t, 0)
+	box := server.box(ctx, t)
+
+	var stdout, stderr, onStdout, onStderr lockedBuffer
+	execution, err := box.AttachMainSession(ctx, &AttachOptions{
+		Stdout:   &stdout,
+		Stderr:   &stderr,
+		OnStdout: func(p []byte) { _, _ = onStdout.Write(p) },
+		OnStderr: func(p []byte) { _, _ = onStderr.Write(p) },
+	})
+	if err != nil {
+		t.Fatalf("AttachMainSession: %v", err)
+	}
+	defer execution.Close()
+
+	code, err := execution.Wait(ctx)
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if code != 7 {
+		t.Errorf("exit code: got %d, want init's 7", code)
+	}
+	sinks := []struct {
+		name string
+		got  *lockedBuffer
+		want string
+	}{
+		{"Stdout", &stdout, "hi"},
+		{"OnStdout", &onStdout, "hi"},
+		{"Stderr", &stderr, "oops"},
+		{"OnStderr", &onStderr, "oops"},
+	}
+	for _, sink := range sinks {
+		if got := sink.got.String(); got != sink.want {
+			t.Errorf("%s: got %q, want %q", sink.name, got, sink.want)
+		}
+	}
+	if got := server.received(); !slices.Contains(got, "GET /v1/boxes/box1/attach") {
+		t.Errorf("attach must use the container-attach route, got %v", got)
+	}
+}
+
+// TestAttachMainSessionReturnsTheRefusal: a refused attach fails at the call,
+// typed so the caller can tell that another client holds the session.
+func TestAttachMainSessionReturnsTheRefusal(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	server := newSessionServer(t, http.StatusConflict)
+	box := server.box(ctx, t)
+
+	execution, err := box.AttachMainSession(ctx, nil)
+	if err == nil {
+		execution.Close()
+		t.Fatal("expected the refused attach to fail")
+	}
+	if !IsAlreadyExists(err) {
+		t.Fatalf("expected an already-exists error, got %v", err)
+	}
+}
+
+// TestStartExecutionDeliversOutputAndExitCode: an exec is wired by the same
+// code as an attach, so its output and exit code must reach the caller too.
+func TestStartExecutionDeliversOutputAndExitCode(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	server := newSessionServer(t, 0)
+	box := server.box(ctx, t)
+
+	var stdout lockedBuffer
+	execution, err := box.StartExecution(ctx, "sh", []string{"-c", "true"}, &ExecutionOptions{Stdout: &stdout})
+	if err != nil {
+		t.Fatalf("StartExecution: %v", err)
+	}
+	defer execution.Close()
+
+	code, err := execution.Wait(ctx)
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if code != 7 || stdout.String() != "hi" {
+		t.Errorf("got exit %d and stdout %q, want 7 and %q", code, stdout.String(), "hi")
+	}
+}

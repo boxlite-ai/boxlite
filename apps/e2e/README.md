@@ -220,16 +220,19 @@ unconditional mark.
 `test_cli_run_foreground_streams_command_output` is marked the same conditional
 way for a different reason. `boxlite run
 <image> <cmd>` without `-d` is create → WS `/boxes/{id}/attach` → `POST
-/start`, and on a cloud stage that upgrade comes back a bare 503 whose body
-(`upstream connect error or disconnect/reset before headers`) is an envelope
-the API never writes — so it is the load balancing in front of the API that
-refuses, though which hop is not established. Every other CLI case detaches,
-so nothing else touched that socket and the failure was invisible to a green
-suite. A local stack has no load balancer in front of `boxlite-api` on `:3000`
-(its `:3001` proxy serves box previews, not API ingress), so the mark applies
-only when the stage host is remote; what a local stack does with the attached
-form has not been tested. The create lands before the 503, so the case names
-its box and removes it by name in `finally` — the id is never printed.
+/start`. Until #1611 the API matched only the execution attach, so `main.ts`
+destroyed that upgrade without a response and the load balancer in front of
+the API reported a bare 503; the runner had no such route either (#1609). With
+#1611 the upgrade is routed, but a cloud create waits for the box to start and
+the runner's create starts init, so a command as short as `echo` can finish
+before the client attaches and take its output and exit code with it. The mark
+comes off when a cloud create stops running init before the attach. Every
+other CLI case detaches, so nothing else touched that socket and the failure
+was invisible to a green suite. A local stack runs the same API and runner, so
+it should fail the same way, but no one has run it there, so the mark applies
+only when the stage host is remote. The create lands before the failure, so
+the case names its box and removes it by name in `finally` — the id is never
+printed.
 
 ### Boxes must not outlive their run
 
