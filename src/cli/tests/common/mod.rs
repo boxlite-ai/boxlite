@@ -3,18 +3,16 @@
 pub mod serve;
 
 use assert_cmd::Command;
-use boxlite_test_utils::TEST_REGISTRIES;
 use boxlite_test_utils::home::PerTestBoxHome;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-fn write_registry_config(home: &std::path::Path) -> PathBuf {
+/// A `--config` listing the harness registries. The local registry is plain
+/// HTTP, which a `--registry` flag cannot express.
+pub fn write_registry_config(home: &std::path::Path) -> PathBuf {
     let path = home.join("test-runtime-config.json");
-    let registries = TEST_REGISTRIES
-        .iter()
-        .map(|host| serde_json::json!({ "host": host, "search": true }))
-        .collect::<Vec<_>>();
+    let registries = boxlite_test_utils::test_registries();
     let config = serde_json::to_vec(&serde_json::json!({ "image_registries": registries }))
         .expect("serialize test runtime config");
     fs::write(&path, config).expect("write test runtime config");

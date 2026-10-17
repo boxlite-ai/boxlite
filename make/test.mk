@@ -1,5 +1,5 @@
 PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
-PHONY_TARGETS += test\:integration\:vmm\:kvm _ensure-kvm test\:vmm\:boot
+PHONY_TARGETS += test\:integration\:vmm\:kvm _ensure-kvm test\:vmm\:boot _local-registry
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -463,13 +463,21 @@ test\:unit\:python: _ensure-python-deps
 	@# link libpython; see sdks/python/Cargo.toml.
 	@cargo test -p boxlite-python --no-default-features --lib $(CARGOTEST_FILTER)
 
+# Runs an SDK suite with the local test registry up and its address in
+# BOXLITE_TEST_REGISTRY, so its boxes resolve images without the internet
+# (src/boxlite/tests/README.md).
+WITH_LOCAL_REGISTRY = $(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/debug/with-local-registry
+
+_local-registry:
+	@cargo build -q -p boxlite-test-utils --bin with-local-registry
+
 # Python SDK integration tests.
-test\:integration\:python:
+test\:integration\:python: _local-registry
 	@$(MAKE) dev:python
 	@echo "🧪 Running Python SDK integration tests..."
 	@BOXLITE_HOME=$$(mktemp -d /tmp/boxlite-test-python-XXXXXX) && \
 	 trap "rm -rf $$BOXLITE_HOME" EXIT && \
-	 . .venv/bin/activate && cd sdks/python && BOXLITE_HOME=$$BOXLITE_HOME python -m pytest tests/ -v -m "integration" $(PYTEST_FILTER)
+	 . .venv/bin/activate && cd sdks/python && BOXLITE_HOME=$$BOXLITE_HOME $(WITH_LOCAL_REGISTRY) python -m pytest tests/ -v -m "integration" $(PYTEST_FILTER)
 
 # Python SDK full suite.
 test\:all\:python:
@@ -483,10 +491,10 @@ test\:unit\:node: _ensure-node-deps
 	@cargo test -p boxlite-node --lib $(CARGOTEST_FILTER)
 
 # Node.js SDK integration tests (requires VM environment).
-test\:integration\:node:
+test\:integration\:node: _local-registry
 	@$(MAKE) dev:node
 	@echo "🧪 Running Node.js SDK integration tests (requires VM)..."
-	@cd sdks/node && npm run test:integration -- $(VITEST_FILTER)
+	@cd sdks/node && $(WITH_LOCAL_REGISTRY) npm run test:integration -- $(VITEST_FILTER)
 
 # Node.js SDK full suite.
 test\:all\:node:

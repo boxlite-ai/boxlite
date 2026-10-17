@@ -19,6 +19,8 @@
 //! exactly like a pass. Linux-only by nature; on macOS there is no cgroupfs and
 //! every test reports SKIP.
 
+mod common;
+
 use assert_cmd::Command;
 use boxlite_test_utils::home::PerTestBoxHome;
 use std::path::{Path, PathBuf};
@@ -28,6 +30,8 @@ fn boxlite(home: &Path, args: &[&str], timeout: Duration) -> std::process::Outpu
     Command::new(env!("CARGO_BIN_EXE_boxlite"))
         .arg("--home")
         .arg(home)
+        .arg("--config")
+        .arg(common::write_registry_config(home))
         .args(args)
         .timeout(timeout)
         .output()
@@ -145,8 +149,6 @@ fn start_box(home: &PerTestBoxHome) -> String {
     let out = boxlite(
         home.path.as_path(),
         &[
-            "--registry",
-            "docker.m.daocloud.io",
             "run",
             "-d",
             "--memory",
