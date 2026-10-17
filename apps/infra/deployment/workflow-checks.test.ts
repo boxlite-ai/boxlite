@@ -276,6 +276,10 @@ test('a change to codecov.yml selects the suite that checks codecov.yml', () => 
 test('every test source is ignored, so a test-only change still qualifies for the empty upload', () => {
   const production = [
     '.github/workflows/test.yml',                    // runs the suites, is not one
+    'apps/libs/api-client-go/model_inbound_network_spec.go',   // generated client model
+    'apps/libs/api-client-go/model_outbound_network_spec.go',  // generated client model
+    'apps/libs/api-client/src/models/inbound-network-spec.ts', // generated client model
+    'apps/libs/api-client/src/models/outbound-network-spec.ts', // generated client model
     'make/test.mk',                                  // the recipes it calls
     'scripts/setup/setup-test.sh',                   // installs test tooling
     'sdks/go/images_cgo_test_support_dev.go',        // dev-tag cgo bridge, shipped
