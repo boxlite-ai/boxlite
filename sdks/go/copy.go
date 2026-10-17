@@ -14,8 +14,9 @@ import (
 
 // CopyInto copies a host file or directory into the box.
 //
-// A directory is copied under its own name; end hostSrc with "/." to copy
-// its contents instead, as docker cp does. Build that as a string:
+// A directory lands as docker cp lands it: it becomes a guestDst that does
+// not exist, and lands under its own name in one that does. End hostSrc with
+// "/." to copy its contents either way. Build that as a string:
 // filepath.Join drops the trailing ".".
 //
 // Copies land owned by the box's exec user, so a non-root workload can read
@@ -55,8 +56,9 @@ func (b *Box) CopyInto(ctx context.Context, hostSrc, guestDst string) error {
 
 // CopyOut copies a file or directory from the box to the host.
 //
-// A directory is copied under its own name; end guestSrc with "/." to copy
-// its contents instead, as docker cp does.
+// A directory lands as docker cp lands it: it becomes a hostDst that does
+// not exist, and lands under its own name in one that does. End guestSrc with
+// "/." to copy its contents either way.
 //
 // A source at or under a mount inside the box, or a directory containing one,
 // is refused: the archive would carry the underlying files rather than the ones
@@ -232,10 +234,11 @@ func normalizeCopySourceKind(kind CopySourceKind) CopySourceKind {
 // CopySourceUnknown when the caller cannot tell — the guest then peeks the
 // tar to decide.
 //
-// With CopySourceDir, an archive led by one directory becomes a guestDst that
-// does not exist, as docker cp lands a directory. Every later entry must then
-// lie under that directory: one that does not fails the copy with
-// ErrInvalidArgument, keeping the entries written before it.
+// An archive led by one directory becomes a guestDst that does not exist, as
+// docker cp lands a directory. Every later entry must then lie under that
+// directory, or the copy fails with ErrInvalidArgument: a CopySourceDir stream
+// keeps the entries written before it, and a CopySourceUnknown stream, which
+// the guest reads in full first, writes nothing.
 func (b *Box) CopyInStream(ctx context.Context, guestDst string, sourceKind CopySourceKind, r io.Reader) error {
 	if r == nil {
 		return &Error{Code: ErrInvalidArgument, Message: "copy-in reader must not be nil"}

@@ -57,15 +57,11 @@ describe("copyIn / copyOut integration", { timeout: 120_000 }, () => {
     expect(lsResult.stdout).toContain("b.txt");
 
     const dirDst = path.join(tmpDir, "dir-out");
-    // copyOut nests under dir-in/ too
+    // dir-out does not exist yet, so the directory becomes it.
     await box.copyOut("/root/dir-in", dirDst, { recursive: true });
 
-    expect(fs.readFileSync(path.join(dirDst, "dir-in", "a.txt"), "utf-8")).toBe(
-      "aaa\n",
-    );
-    expect(fs.readFileSync(path.join(dirDst, "dir-in", "b.txt"), "utf-8")).toBe(
-      "bbb\n",
-    );
+    expect(fs.readFileSync(path.join(dirDst, "a.txt"), "utf-8")).toBe("aaa\n");
+    expect(fs.readFileSync(path.join(dirDst, "b.txt"), "utf-8")).toBe("bbb\n");
   });
 
   test("overwrite existing file", async () => {

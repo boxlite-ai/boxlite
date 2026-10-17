@@ -206,9 +206,10 @@ async fn streaming_hintless_directory(bx: &LiteBox, tmp: &Path) {
     .await
     .expect("hintless directory copy_in_stream");
 
+    // A single-root archive becomes the missing destination.
     let out = exec_stdout(
         bx,
-        BoxCommand::new("cat").args(["/root/hintless-dir/hintless-src-dir/a.txt"]),
+        BoxCommand::new("cat").args(["/root/hintless-dir/a.txt"]),
     )
     .await;
     assert_eq!(out, "hintless dir a\n");
@@ -388,6 +389,27 @@ async fn streaming_entry_outside_the_root_is_refused(bx: &LiteBox, _tmp: &Path) 
     assert_eq!(exec_exit_code(bx, landed).await, 0);
 }
 
+/// The hintless arm reads the whole archive before extracting, so the same
+/// archive is refused before anything lands.
+async fn streaming_hintless_entry_outside_the_root_is_refused(bx: &LiteBox, _tmp: &Path) {
+    let err = bx
+        .copy_in_stream(
+            outside_root_archive(),
+            "/root/outside-root-hintless",
+            CopySourceKind::Unknown,
+            CopyOptions::default(),
+        )
+        .await
+        .expect_err("an entry outside the archive root must fail the copy");
+
+    assert!(
+        matches!(err, boxlite::BoxliteError::InvalidArgument(_)),
+        "got: {err}"
+    );
+    let landed = BoxCommand::new("test").args(["-e", "/root/outside-root-hintless"]);
+    assert_ne!(exec_exit_code(bx, landed).await, 0, "nothing may land");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn copy_integration() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
@@ -421,6 +443,7 @@ async fn copy_integration() {
     follow_symlinks_false_preserves_link(&bx, tmp.path()).await;
     follow_symlinks_true_dereferences(&bx, tmp.path()).await;
     dir_source_nests_inside_an_existing_dir(&bx, tmp.path()).await;
+    dir_source_becomes_a_missing_destination(&bx, tmp.path()).await;
     dot_suffix_copies_the_contents(&bx, tmp.path()).await;
     copy_in_creates_intermediate_dirs(&bx, tmp.path()).await;
     copy_out_nonexistent_errors(&bx, tmp.path()).await;
@@ -440,6 +463,7 @@ async fn copy_integration() {
     streaming_stream_error_after_data_fails(&bx, tmp.path()).await;
     streaming_dir_rejects_non_recursive(&bx, tmp.path()).await;
     streaming_entry_outside_the_root_is_refused(&bx, tmp.path()).await;
+    streaming_hintless_entry_outside_the_root_is_refused(&bx, tmp.path()).await;
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
@@ -790,6 +814,30 @@ async fn dir_source_nests_inside_an_existing_dir(bx: &LiteBox, tmp: &Path) {
 
     let out = exec_stdout(bx, BoxCommand::new("cat").args(["/root/parentdir/p.txt"])).await;
     assert_eq!(out, "parent\n");
+}
+
+/// POL-593: a directory copied to a destination that does not exist becomes
+/// it, both ways, as `docker cp` lands it.
+async fn dir_source_becomes_a_missing_destination(bx: &LiteBox, tmp: &Path) {
+    eprintln!("  [copy] dir_source_becomes_a_missing_destination");
+    let dir_src = tmp.join("landdir");
+    std::fs::create_dir(&dir_src).unwrap();
+    std::fs::write(dir_src.join("l.txt"), "landed\n").unwrap();
+
+    bx.copy_into(&dir_src, "/root/landed", CopyOptions::default())
+        .await
+        .expect("copy_into a missing destination");
+    let out = exec_stdout(bx, BoxCommand::new("cat").args(["/root/landed/l.txt"])).await;
+    assert_eq!(out, "landed\n");
+
+    let host_out = tmp.join("landed-out");
+    bx.copy_out("/root/landed", &host_out, CopyOptions::default())
+        .await
+        .expect("copy_out to a missing destination");
+    assert_eq!(
+        std::fs::read_to_string(host_out.join("l.txt")).unwrap(),
+        "landed\n"
+    );
 }
 
 /// `SRC/.` copies what is in the directory, both ways. The spelling is built
