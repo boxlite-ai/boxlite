@@ -324,6 +324,11 @@ host runtime, the shim, and the guest agent.
 - `BoxliteError`: Centralized error type.
 - `Constants`: Shared constants (e.g. socket paths, default ports).
 - `Transport`: gRPC transport utilities.
+- `tar`: Packs and unpacks the archives that copies carry between host and guest. Extraction
+  decides where each entry lands and writes it there with tar-rs's `Entry::unpack`, or creates the
+  hard link itself. tar-rs's `unpack_in` would take the place from the entry's own name, so
+  extraction repeats its checks: missing parents are created only inside the destination, a parent
+  that resolves outside it is refused, and a hard link's target is looked up in the destination.
 
 ## Concurrency model
 
