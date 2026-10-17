@@ -3,21 +3,6 @@
 The NestJS control-plane service. See the [apps hub](../README.md) for how it fits with the
 other services and [`API.md`](../API.md) for its interfaces.
 
-## Image registry admission
-
-`ImageAdmissionService` checks tenant-supplied image references before catalog lookup
-or job creation. `BOXLITE_IMAGE_REGISTRY_ALLOWLIST` configures exact registry
-`host[:port]` matches; when unset or empty, the built-in list applies. Curated image
-selectors bypass this check.
-
-Admission does not resolve registry names or filter their resulting IP addresses.
-An explicitly allowlisted `registry.corp.example:5000` remains allowed when it resolves
-to a private address, as does an explicitly allowlisted IP and port. The allowlist
-therefore trusts the selected registry names and their DNS resolution.
-
-Local SDK and CLI pulls follow the [runtime registry configuration](../../docs/guides/image-registry-configuration.md#registry-addresses-and-proxies)
-without the control plane's allowlist.
-
 ## Business events
 
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record
