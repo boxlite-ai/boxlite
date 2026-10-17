@@ -17,6 +17,7 @@ import {
   BoxDesiredState,
   BoxState,
   type BoxliteConfiguration,
+  NetworkMode,
   type Organization,
   type OrganizationUser,
   OrganizationUserRoleEnum,
@@ -118,6 +119,10 @@ function buildBox(overrides: Partial<Box> & Pick<Box, 'id' | 'name' | 'state'>):
     labels: {},
     public: false,
     networkBlockAll: false,
+    network: {
+      outbound: { mode: NetworkMode.ENABLED, allow_net: [] },
+      inbound: { mode: NetworkMode.DISABLED, allow_net: [] },
+    },
     target: 'mock',
     image: 'ghcr.io/boxlite-ai/boxlite-agent-base:mock',
     cpu: 1,

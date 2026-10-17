@@ -11,9 +11,10 @@ Name | Type | Description | Notes
 **user** | **string** | The user associated with the project | [default to undefined]
 **env** | **{ [key: string]: string; }** | Environment variables for the box | [default to undefined]
 **labels** | **{ [key: string]: string; }** | Labels for the box | [default to undefined]
-**_public** | **boolean** | Whether the box http preview is public | [default to undefined]
-**networkBlockAll** | **boolean** | Whether to block all network access for the box | [default to undefined]
-**networkAllowList** | **string** | Comma-separated list of allowed CIDR network addresses for the box | [optional] [default to undefined]
+**_public** | **boolean** | Whether inbound access is enabled. Deprecated: read &#x60;network.inbound.mode&#x60; | [default to undefined]
+**networkBlockAll** | **boolean** | Whether outbound access is disabled. Deprecated: read &#x60;network.outbound.mode&#x60; | [default to undefined]
+**networkAllowList** | **string** | Comma-separated outbound allowlist. Deprecated: read &#x60;network.outbound.allow_net&#x60; | [optional] [default to undefined]
+**network** | [**NetworkInfo**](NetworkInfo.md) | The network policy in both directions | [optional] [default to undefined]
 **target** | **string** | The target environment for the box | [default to undefined]
 **image** | **string** | The image used for the box | [optional] [default to undefined]
 **cpu** | **number** | The CPU quota for the box | [default to undefined]
@@ -53,6 +54,7 @@ const instance: Box = {
     _public,
     networkBlockAll,
     networkAllowList,
+    network,
     target,
     image,
     cpu,
