@@ -116,6 +116,21 @@ async fn test_shutdown_idempotent() {
 - `PerTestBoxHome::new_in(base)` — warm cache under a custom base directory (e.g., `~/.boxlite-it` for short socket paths)
 - `PerTestBoxHome::isolated_in(base)` — no cache under a custom base directory
 
+### `test_registries()` — the local registry
+
+Every box built from a tag asks its registry for that tag again, so a public registry in the test
+list puts the internet into every box start. `test_registries()` lists only the process's local
+registry (`registry::local_registry()`, plain HTTP on `127.0.0.1`), as designed in
+[#1996](https://github.com/boxlite-ai/boxlite/issues/1996).
+
+- It serves manifests and blobs recorded under `target/boxlite-test/registry/`. A miss is fetched
+  once from whichever `UPSTREAM_REGISTRIES` entry answers first, then replayed.
+- A recorded tag never moves. Delete `target/boxlite-test/registry/` to record current builds.
+- CLI tests pass it through `common::write_registry_config`, since `--registry` takes HTTPS hosts
+  only. `src/cli/tests/registry.rs` tests that flag, so it still reaches a public mirror.
+- Behind an HTTP proxy, set `no_proxy=127.0.0.1,localhost`; otherwise requests to the local
+  registry go through the proxy.
+
 ### macOS Socket Path Limits
 
 macOS has a ~104 character limit on Unix socket paths (`SUN_LEN`).
@@ -168,7 +183,11 @@ pkill -f boxlite-guest
 
 ### Image Pull Failures
 
-Tests pull `alpine:latest` by default. Ensure:
-1. Network connectivity to container registries
+Tests pull `alpine:latest` by default, through the local registry. Only an image it has not
+recorded needs the network. Ensure:
+1. Network connectivity to the `UPSTREAM_REGISTRIES` mirrors on first use
 2. No firewall blocking registry access
 3. Sufficient disk space for image cache (~50MB for Alpine)
+
+A `MANIFEST_UNKNOWN` or `BLOB_UNKNOWN` answer saying `no upstream has …` lists each upstream's
+error.

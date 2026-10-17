@@ -37,9 +37,8 @@ impl ServeChild {
 
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_boxlite"));
         cmd.arg("--home").arg(&home.path);
-        for reg in boxlite_test_utils::TEST_REGISTRIES {
-            cmd.arg("--registry").arg(reg);
-        }
+        cmd.arg("--config")
+            .arg(super::write_registry_config(&home.path));
         cmd.args(["serve", "--host", "127.0.0.1", "--port", &port.to_string()])
             .args(extra)
             .stdout(Stdio::null())
