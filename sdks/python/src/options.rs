@@ -268,10 +268,10 @@ pub(crate) struct PyOutboundNetworkSpec {
 /// Inbound network policy.
 ///
 /// Aligned field-for-field with `NetworkSpec`: `mode` accepts
-/// `"enabled"` (services the box exposes are publicly reachable) or
-/// `"disabled"` (private). `allow_net` exists for shape symmetry only — no
-/// layer enforces an inbound allowlist yet, so a non-empty value is
-/// rejected.
+/// `"enabled"` (services the box exposes are reachable without sign-in) or
+/// `"disabled"` (unreachable from outside). `allow_net` exists for shape
+/// symmetry only — no layer enforces an inbound allowlist yet, so a
+/// non-empty value is rejected.
 #[pyclass(name = "InboundNetworkSpec")]
 #[derive(Clone, Debug)]
 pub(crate) struct PyInboundNetworkSpec {
@@ -401,7 +401,7 @@ impl PyOutboundNetworkSpec {
 impl PyInboundNetworkSpec {
     /// Create an inbound network policy.
     ///
-    /// `mode` defaults to `"disabled"` (private) and `allow_net` defaults to
+    /// `mode` defaults to `"disabled"` and `allow_net` defaults to
     /// an empty allow list, meaning no host-based restriction.
     #[new]
     #[pyo3(signature = (mode="disabled".to_string(), allow_net=vec![]))]
@@ -1334,7 +1334,7 @@ mod tests {
         assert!(matches!(outbound, NetworkSpec::Enabled { .. }));
     }
 
-    /// A spec that only configures outbound leaves inbound private.
+    /// A spec that only configures outbound leaves inbound disabled.
     #[test]
     fn outbound_only_network_spec_keeps_inbound_disabled() {
         let (outbound, inbound) = <(NetworkSpec, NetworkSpec)>::try_from(PyNetworkSpec {

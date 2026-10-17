@@ -4,6 +4,8 @@
  */
 
 import { BoxState } from '../../box/enums/box-state.enum'
+import { Box } from '../../box/entities/box.entity'
+import { BoxDto } from '../../box/dto/box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
 
 describe('BoxLite lifecycle policy mapper', () => {
@@ -177,6 +179,23 @@ describe('BoxLite container process options mapper', () => {
     } as any)
 
     expect(response.exit_code).toBe(expected)
+  })
+
+  // The `/v1` read carries the control-plane policy unchanged, from the box
+  // row through `BoxDto` to the response.
+  it('reports the network policy of the box row', () => {
+    const row = new Box('us', 'net')
+    row.id = 'box-1'
+    row.inboundEnabled = true
+    row.outboundEnabled = true
+    row.outboundAllowNet = ['api.openai.com']
+
+    const response = boxToBoxResponse(BoxDto.fromBox(row, 'https://proxy.invalid'))
+
+    expect(response.network).toEqual({
+      outbound: { mode: 'enabled', allow_net: ['api.openai.com'] },
+      inbound: { mode: 'enabled', allow_net: [] },
+    })
   })
 
   it('omits exit_code when the box has none', () => {

@@ -529,11 +529,16 @@ Display detailed information on one or more boxes (JSON, YAML, or Go-style templ
 | `--latest` | `-l` | Inspect the most recently created box (cannot be used with BOX) |
 | `--format FMT` | `-f` | Output: `json`, `yaml`, or a Go template (e.g. `{{.State.Status}}`, `{{.Id}}`). Default: `json`. Table format is not supported. |
 
+`Network` holds both directions of the box's policy, `Outbound` and `Inbound`,
+each with `Mode` (`enabled` or `disabled`) and `AllowNet`. It is `null` when the
+runtime does not know the policy, such as a REST server that predates it.
+
 **Examples:**
 
 ```bash
 boxlite inspect mybox
 boxlite inspect -f '{{.State.Status}}' mybox
+boxlite inspect -f '{{.Network.Inbound.Mode}}' mybox
 boxlite inspect --latest -f yaml
 boxlite inspect box1 box2 -f json
 ```

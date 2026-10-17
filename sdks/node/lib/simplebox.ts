@@ -130,7 +130,7 @@ export interface OutboundNetworkSpec {
 }
 
 export interface InboundNetworkSpec {
-  /** Inbound mode: "enabled" (publicly reachable) or "disabled" (private). */
+  /** Inbound mode: "enabled" (reachable without sign-in) or "disabled" (unreachable from outside). */
   mode: "enabled" | "disabled";
   /**
    * Not supported yet: a non-empty value is rejected. Exists for shape

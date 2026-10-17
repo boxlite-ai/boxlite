@@ -8,9 +8,9 @@ import { Box } from '../entities/box.entity'
 import { NetworkMode } from '../enums/network-mode.enum'
 import { networkMode } from '../utils/network-policy.util'
 
-// The network policy in both directions, as the control-plane `Box` reports
-// it. Field names mirror the `/v1` create request, so the `/v1` box read can
-// reuse these schemas and both APIs share one schema per concept.
+// The network policy as both the control-plane `Box` and the `/v1` box read
+// report it, so the two APIs and the generated clients share one schema per
+// concept. Field names mirror the `/v1` create request.
 
 @ApiSchema({ name: 'OutboundNetworkSpec' })
 export class OutboundNetworkResponseDto {

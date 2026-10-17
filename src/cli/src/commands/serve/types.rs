@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use boxlite::{NetworkInfo, NetworkMode};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -137,9 +138,10 @@ pub(super) struct OutboundNetworkSpec {
 }
 
 /// Aligned field-for-field with [`OutboundNetworkSpec`]: `mode="enabled"`
-/// means services the box exposes are publicly reachable, `mode="disabled"`
-/// means private. `allow_net` exists for shape symmetry only — no layer
-/// enforces an inbound allowlist yet, so a non-empty value is rejected.
+/// means services the box exposes are reachable without sign-in,
+/// `mode="disabled"` keeps them unreachable from outside. `allow_net` exists
+/// for shape symmetry only — no layer enforces an inbound allowlist yet, so
+/// a non-empty value is rejected.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct InboundNetworkSpec {
@@ -169,6 +171,40 @@ pub(super) struct BoxResponse {
     /// "not finished" apart from "finished with 0".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    /// The policy in both directions. `None` only when the runtime does not
+    /// know it; the field is then left out so a client reads it as unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkInfoResponse>,
+}
+
+/// Network policy as `GET /v1/boxes/{box_id}` reports it: both directions and
+/// nothing else. Local host publications are not a remote caller's to use,
+/// so they stay off the wire, as do the deprecated flat mirrors.
+#[derive(Serialize)]
+pub(super) struct NetworkInfoResponse {
+    pub outbound: NetworkDirectionResponse,
+    pub inbound: NetworkDirectionResponse,
+}
+
+#[derive(Serialize)]
+pub(super) struct NetworkDirectionResponse {
+    pub mode: NetworkMode,
+    pub allow_net: Vec<String>,
+}
+
+impl From<&NetworkInfo> for NetworkInfoResponse {
+    fn from(network: &NetworkInfo) -> Self {
+        Self {
+            outbound: NetworkDirectionResponse {
+                mode: network.outbound.mode.clone(),
+                allow_net: network.outbound.allow_net.clone(),
+            },
+            inbound: NetworkDirectionResponse {
+                mode: network.inbound.mode.clone(),
+                allow_net: network.inbound.allow_net.clone(),
+            },
+        }
+    }
 }
 
 #[derive(Serialize)]

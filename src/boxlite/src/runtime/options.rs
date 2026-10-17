@@ -339,7 +339,7 @@ pub struct BoxOptions {
     /// `network` rather than a field inside it: the two directions are
     /// independent, and `network` keeps its pre-split meaning (egress
     /// only). Same type as `network` — both directions have identical
-    /// shape. Defaults to `Disabled` (private), unlike `network`.
+    /// shape. Defaults to `Disabled`, unlike `network`.
     #[serde(default = "NetworkSpec::disabled")]
     pub inbound_network: NetworkSpec,
     /// Explicit host publication for the local runtime.
@@ -1017,8 +1017,8 @@ pub struct OutboundNetworkConfig {
 
 /// Wire shape for the inbound direction, aligned field-for-field with
 /// [`OutboundNetworkConfig`]. `Enabled` means services the box exposes are
-/// publicly reachable; `Disabled` means they are private (unreachable from
-/// outside the box). `allow_net` exists for shape symmetry with outbound but
+/// reachable without sign-in; `Disabled` means they are unreachable from
+/// outside the box. `allow_net` exists for shape symmetry with outbound but
 /// is rejected when non-empty — no layer enforces an inbound allowlist yet.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

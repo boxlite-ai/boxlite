@@ -1088,9 +1088,9 @@ paths:
       operationId: updateInboundNetwork
       summary: Change a box's inbound access
       description: |
-        Makes an existing box public (`enabled`) or private (`disabled`),
-        the policy `network.inbound` sets at create. `enabled` makes the
-        box's services reachable through the remote proxy without
+        Enables or disables inbound access to an existing box, the policy
+        `network.inbound` sets at create. `enabled` makes the box's
+        services reachable through the remote proxy without
         authentication. `prepareTunnel` follows the new mode at once; the
         proxy applies it to new connections once its visibility cache
         expires, and does not close connections already open.
@@ -2043,6 +2043,25 @@ components:
             list. So absence in those responses says nothing either way: read
             the box itself to find out.
           example: 137
+        network:
+          $ref: "#/components/schemas/NetworkInfo"
+          description: |
+            The box's effective network policy, both directions. Absent from
+            a server that predates the field; a client then reports network
+            metadata as unknown rather than as any particular policy.
+
+    NetworkInfo:
+      type: object
+      description: |
+        Network policy as the server holds it. Mirrors the `network` of
+        `CreateBoxRequest` field for field, minus the deprecated flat
+        shape; `inbound.allow_net` is always empty today.
+      required: [outbound, inbound]
+      properties:
+        outbound:
+          $ref: "#/components/schemas/OutboundNetworkSpec"
+        inbound:
+          $ref: "#/components/schemas/InboundNetworkSpec"
 
     BoxStatus:
       type: string
@@ -2145,7 +2164,7 @@ components:
           $ref: "#/components/schemas/NetworkSpec"
           description: |
             Optional network policy. Omitting `network` defaults inbound
-            service access to `disabled` (private).
+            service access to `disabled`.
           default:
             inbound:
               mode: disabled
@@ -2345,8 +2364,9 @@ components:
           $ref: "#/components/schemas/InboundNetworkSpec"
           description: |
             Optional inbound service access policy. Omission means
-            `mode=disabled` (private), including for legacy flat network
-            requests. Send `mode=enabled` to make the box public.
+            `mode=disabled`, including for legacy flat network requests.
+            Send `mode=enabled` to let exposed services be reached without
+            sign-in.
           default:
             mode: disabled
         mode:
@@ -2401,8 +2421,9 @@ components:
           type: string
           enum: [enabled, disabled]
           description: |
-            `enabled` means service endpoints exposed from the box are publicly
-            reachable through the remote proxy. `disabled` means private.
+            `enabled` means service endpoints exposed from the box are
+            reachable through the remote proxy without sign-in. `disabled`
+            makes them unreachable through the proxy, even with a credential.
         allow_net:
           type: array
           items:
