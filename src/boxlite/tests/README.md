@@ -128,6 +128,13 @@ registry (`registry::local_registry()`, plain HTTP on `127.0.0.1`), as designed 
 - A recorded tag never moves. Delete `target/boxlite-test/registry/` to record current builds.
 - CLI tests pass it through `common::write_registry_config`, since `--registry` takes HTTPS hosts
   only. `src/cli/tests/registry.rs` tests that flag, so it still reaches a public mirror.
+- `make test:integration:python` and `make test:integration:node` run their suites under
+  `with-local-registry` (`src/test-utils/src/bin/`), which starts the same registry and sets
+  `BOXLITE_TEST_REGISTRY=127.0.0.1:<port>`. Their harnesses list only that registry when it is
+  set. Run without `make`, a suite pulls from public mirrors and its harness contract test
+  (`test_harness_registry.py`, `harness-registry.integration.test.ts`) fails.
+- The C suite's integration test calls `boxlite_simple_new`, which takes no registries, so it
+  still pulls from docker.io.
 - Behind an HTTP proxy, set `no_proxy=127.0.0.1,localhost`; otherwise requests to the local
   registry go through the proxy.
 

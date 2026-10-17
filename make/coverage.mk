@@ -114,15 +114,15 @@ coverage\:infra: _ensure-infra-deps
 		--reporter=lcov --reporter=text-summary --reports-dir=target/coverage/infra \
 		$(MAKE) test:apps:infra
 
-coverage\:python\:integration: dev\:python
+coverage\:python\:integration: dev\:python _local-registry
 	@mkdir -p target/coverage/python
 	@. .venv/bin/activate && cd sdks/python && \
-		python -m pytest tests/ -m "not e2e" $(PYTEST_FILTER) \
+		$(WITH_LOCAL_REGISTRY) python -m pytest tests/ -m "not e2e" $(PYTEST_FILTER) \
 		--cov=boxlite --cov-report=term-missing \
 		--cov-report=xml:../../target/coverage/python/coverage.xml
 
-coverage\:node\:integration: dev\:node
-	@cd sdks/node && npm run test:all -- --coverage $(VITEST_FILTER)
+coverage\:node\:integration: dev\:node _local-registry
+	@cd sdks/node && $(WITH_LOCAL_REGISTRY) npm run test:all -- --coverage $(VITEST_FILTER)
 
 coverage\:api: _ensure-apps-deps
 	@cd apps && yarn nx run api:test --coverage --skip-nx-cache $(if $(FILTER),--testNamePattern '$(FILTER)',)

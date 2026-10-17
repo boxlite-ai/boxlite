@@ -989,8 +989,11 @@ make dev:python
 # Install dev dependencies
 pip install -e ".[dev]"
 
-# Run tests
-python -m pytest sdks/python/tests/
+# Unit tests
+make test:unit:python
+
+# Integration tests (need a VM; boxes pull through the local test registry)
+make test:integration:python
 ```
 
 ### Building Wheels

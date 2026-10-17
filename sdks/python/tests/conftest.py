@@ -32,7 +32,7 @@ if os.environ.get("BOXLITE_REQUIRE_NATIVE") == "1":
 
 
 def _test_registries() -> list:
-    """Mirror list, built lazily.
+    """Registry list, built lazily.
 
     Must NOT run at conftest module scope: pytest imports conftest.py
     for every run (incl. the CI unit job `-m "not integration"`), and
@@ -42,12 +42,18 @@ def _test_registries() -> list:
     the unit job deselects all integration tests so the fixture never
     runs there.
 
-    Pull through mirrors before falling back to docker.io: anonymous
+    `make test:integration:python` runs pytest under `with-local-registry`,
+    which sets BOXLITE_TEST_REGISTRY to a registry on 127.0.0.1 that replays
+    recorded images (src/boxlite/tests/README.md). Run without it, the suite
+    fails test_harness_registry.py and pulls through mirrors before falling
+    back to docker.io: anonymous
     Docker Hub pulls are rate-limited (100/6h per IP) and intermittently
     return "Not authorized" under CI/hook load, flaking any image-pulling
-    integration test. Kept in sync with
-    sdks/node/tests/integration-setup.ts.
+    integration test. Kept in sync with sdks/node/tests/test-registries.ts.
     """
+    local = os.environ.get("BOXLITE_TEST_REGISTRY")
+    if local:
+        return [boxlite.ImageRegistry(host=local, transport="http", search=True)]
     return [
         boxlite.ImageRegistry(host="docker.m.daocloud.io", search=True),
         boxlite.ImageRegistry(host="docker.xuanyuan.me", search=True),
@@ -57,13 +63,19 @@ def _test_registries() -> list:
 
 
 @pytest.fixture(scope="session")
-def shared_runtime():
+def test_registries() -> list:
+    """The registries the shared runtime resolves images against."""
+    return _test_registries()
+
+
+@pytest.fixture(scope="session")
+def shared_runtime(test_registries):
     """Session-scoped async runtime shared across all async tests.
 
     This fixture creates a single Boxlite runtime that is reused across
     the entire test session, avoiding lock contention between tests.
     """
-    rt = boxlite.Boxlite(boxlite.Options(image_registries=_test_registries()))
+    rt = boxlite.Boxlite(boxlite.Options(image_registries=test_registries))
     yield rt
     # Runtime cleanup happens when Python garbage collects the object
 
