@@ -38,6 +38,19 @@ type PreviewAPI interface {
 	GetBoxIdFromSignedPreviewUrlTokenExecute(r PreviewAPIGetBoxIdFromSignedPreviewUrlTokenRequest) (string, *http.Response, error)
 
 	/*
+	GetBoxInboundMode Read the inbound mode of a box
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId ID of the box
+	@return PreviewAPIGetBoxInboundModeRequest
+	*/
+	GetBoxInboundMode(ctx context.Context, boxId string) PreviewAPIGetBoxInboundModeRequest
+
+	// GetBoxInboundModeExecute executes the request
+	//  @return string
+	GetBoxInboundModeExecute(r PreviewAPIGetBoxInboundModeRequest) (string, *http.Response, error)
+
+	/*
 	HasBoxAccess Check if user has access to the box
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -49,19 +62,6 @@ type PreviewAPI interface {
 	// HasBoxAccessExecute executes the request
 	//  @return bool
 	HasBoxAccessExecute(r PreviewAPIHasBoxAccessRequest) (bool, *http.Response, error)
-
-	/*
-	IsBoxPublic Check if box is public
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxId ID of the box
-	@return PreviewAPIIsBoxPublicRequest
-	*/
-	IsBoxPublic(ctx context.Context, boxId string) PreviewAPIIsBoxPublicRequest
-
-	// IsBoxPublicExecute executes the request
-	//  @return bool
-	IsBoxPublicExecute(r PreviewAPIIsBoxPublicRequest) (bool, *http.Response, error)
 
 	/*
 	IsValidAuthToken Check if box auth token is valid
@@ -186,25 +186,25 @@ func (a *PreviewAPIService) GetBoxIdFromSignedPreviewUrlTokenExecute(r PreviewAP
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type PreviewAPIHasBoxAccessRequest struct {
+type PreviewAPIGetBoxInboundModeRequest struct {
 	ctx context.Context
 	ApiService PreviewAPI
 	boxId string
 }
 
-func (r PreviewAPIHasBoxAccessRequest) Execute() (bool, *http.Response, error) {
-	return r.ApiService.HasBoxAccessExecute(r)
+func (r PreviewAPIGetBoxInboundModeRequest) Execute() (string, *http.Response, error) {
+	return r.ApiService.GetBoxInboundModeExecute(r)
 }
 
 /*
-HasBoxAccess Check if user has access to the box
+GetBoxInboundMode Read the inbound mode of a box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxId
- @return PreviewAPIHasBoxAccessRequest
+ @param boxId ID of the box
+ @return PreviewAPIGetBoxInboundModeRequest
 */
-func (a *PreviewAPIService) HasBoxAccess(ctx context.Context, boxId string) PreviewAPIHasBoxAccessRequest {
-	return PreviewAPIHasBoxAccessRequest{
+func (a *PreviewAPIService) GetBoxInboundMode(ctx context.Context, boxId string) PreviewAPIGetBoxInboundModeRequest {
+	return PreviewAPIGetBoxInboundModeRequest{
 		ApiService: a,
 		ctx: ctx,
 		boxId: boxId,
@@ -212,21 +212,21 @@ func (a *PreviewAPIService) HasBoxAccess(ctx context.Context, boxId string) Prev
 }
 
 // Execute executes the request
-//  @return bool
-func (a *PreviewAPIService) HasBoxAccessExecute(r PreviewAPIHasBoxAccessRequest) (bool, *http.Response, error) {
+//  @return string
+func (a *PreviewAPIService) GetBoxInboundModeExecute(r PreviewAPIGetBoxInboundModeRequest) (string, *http.Response, error) {
 	var (
 		localVarHTTPMethod   = http.MethodGet
 		localVarPostBody     interface{}
 		formFiles            []formFile
-		localVarReturnValue  bool
+		localVarReturnValue  string
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "PreviewAPIService.HasBoxAccess")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "PreviewAPIService.GetBoxInboundMode")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/preview/{boxId}/access"
+	localVarPath := localBasePath + "/preview/{boxId}/inbound"
 	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -287,25 +287,25 @@ func (a *PreviewAPIService) HasBoxAccessExecute(r PreviewAPIHasBoxAccessRequest)
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type PreviewAPIIsBoxPublicRequest struct {
+type PreviewAPIHasBoxAccessRequest struct {
 	ctx context.Context
 	ApiService PreviewAPI
 	boxId string
 }
 
-func (r PreviewAPIIsBoxPublicRequest) Execute() (bool, *http.Response, error) {
-	return r.ApiService.IsBoxPublicExecute(r)
+func (r PreviewAPIHasBoxAccessRequest) Execute() (bool, *http.Response, error) {
+	return r.ApiService.HasBoxAccessExecute(r)
 }
 
 /*
-IsBoxPublic Check if box is public
+HasBoxAccess Check if user has access to the box
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxId ID of the box
- @return PreviewAPIIsBoxPublicRequest
+ @param boxId
+ @return PreviewAPIHasBoxAccessRequest
 */
-func (a *PreviewAPIService) IsBoxPublic(ctx context.Context, boxId string) PreviewAPIIsBoxPublicRequest {
-	return PreviewAPIIsBoxPublicRequest{
+func (a *PreviewAPIService) HasBoxAccess(ctx context.Context, boxId string) PreviewAPIHasBoxAccessRequest {
+	return PreviewAPIHasBoxAccessRequest{
 		ApiService: a,
 		ctx: ctx,
 		boxId: boxId,
@@ -314,7 +314,7 @@ func (a *PreviewAPIService) IsBoxPublic(ctx context.Context, boxId string) Previ
 
 // Execute executes the request
 //  @return bool
-func (a *PreviewAPIService) IsBoxPublicExecute(r PreviewAPIIsBoxPublicRequest) (bool, *http.Response, error) {
+func (a *PreviewAPIService) HasBoxAccessExecute(r PreviewAPIHasBoxAccessRequest) (bool, *http.Response, error) {
 	var (
 		localVarHTTPMethod   = http.MethodGet
 		localVarPostBody     interface{}
@@ -322,12 +322,12 @@ func (a *PreviewAPIService) IsBoxPublicExecute(r PreviewAPIIsBoxPublicRequest) (
 		localVarReturnValue  bool
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "PreviewAPIService.IsBoxPublic")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "PreviewAPIService.HasBoxAccess")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/preview/{boxId}/public"
+	localVarPath := localBasePath + "/preview/{boxId}/access"
 	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 
 	localVarHeaderParams := make(map[string]string)

@@ -10,7 +10,7 @@ import { BoxEvents } from '../../box/constants/box-events.constants'
 import { BoxCreatedEvent } from '../../box/events/box-create.event'
 import { BoxDesiredStateUpdatedEvent } from '../../box/events/box-desired-state-updated.event'
 import { BoxDestroyedEvent } from '../../box/events/box-destroyed.event'
-import { BoxPublicStatusUpdatedEvent } from '../../box/events/box-public-status-updated.event'
+import { BoxInboundModeUpdatedEvent } from '../../box/events/box-inbound-mode-updated.event'
 import { BoxStartedEvent } from '../../box/events/box-started.event'
 import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
 import { BoxStoppedEvent } from '../../box/events/box-stopped.event'
@@ -60,9 +60,9 @@ export class AnalyticsService {
     this.logger.debug(`Box destroyed: ${JSON.stringify(event)}`)
   }
 
-  @OnEvent(BoxEvents.PUBLIC_STATUS_UPDATED)
-  async handleBoxPublicStatusUpdatedEvent(event: BoxPublicStatusUpdatedEvent) {
-    this.logger.debug(`Box public status updated: ${JSON.stringify(event)}`)
+  @OnEvent(BoxEvents.INBOUND_MODE_UPDATED)
+  async handleBoxInboundModeUpdatedEvent(event: BoxInboundModeUpdatedEvent) {
+    this.logger.debug(`Box inbound mode updated: ${JSON.stringify(event)}`)
   }
 
   @OnEvent(BoxEvents.DESIRED_STATE_UPDATED)

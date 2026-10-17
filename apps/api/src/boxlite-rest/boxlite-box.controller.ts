@@ -275,7 +275,7 @@ export class BoxliteBoxController {
     type: InboundNetworkSpecDto,
   })
   @Audit({
-    action: AuditAction.UPDATE_PUBLIC_STATUS,
+    action: AuditAction.UPDATE_INBOUND_ACCESS,
     targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxId,
     requestMetadata: {

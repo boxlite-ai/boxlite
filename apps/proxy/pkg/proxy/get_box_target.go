@@ -70,13 +70,13 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 		boxIdOrSignedToken = decodedBoxId
 	}
 
-	isPublic, err := p.getBoxPublic(ctx, boxIdOrSignedToken)
+	inboundEnabled, err := p.getBoxInboundEnabled(ctx, boxIdOrSignedToken)
 	if err != nil {
-		ctx.Error(common_errors.NewBadRequestError(fmt.Errorf("failed to get box public status: %w", err)))
-		return nil, fmt.Errorf("failed to get box public status: %w", err)
+		ctx.Error(common_errors.NewBadRequestError(fmt.Errorf("failed to get box inbound mode: %w", err)))
+		return nil, fmt.Errorf("failed to get box inbound mode: %w", err)
 	}
 
-	if !*isPublic || targetPort == TERMINAL_PORT {
+	if !*inboundEnabled || targetPort == TERMINAL_PORT {
 		var didRedirect bool
 		boxId, didRedirect, err = p.Authenticate(ctx, boxIdOrSignedToken, float32(targetPort))
 		if err != nil {
@@ -241,17 +241,22 @@ func (p *Proxy) getBoxRunnerInfo(ctx context.Context, boxId string) (*RunnerInfo
 	return &info, nil
 }
 
-func (p *Proxy) getBoxPublic(ctx context.Context, boxId string) (*bool, error) {
-	isPublicCache, err := p.boxPublicCache.Get(ctx, boxId)
+// Whether the box's inbound mode is `enabled`, which lets preview traffic and
+// raw tunnels skip sign-in. A box the API does not know (4xx) counts as not
+// enabled, so the request falls through to authentication like before.
+func (p *Proxy) getBoxInboundEnabled(ctx context.Context, boxId string) (*bool, error) {
+	cached, err := p.boxInboundCache.Get(ctx, boxId)
 	if err == nil {
-		return isPublicCache, nil
+		return cached, nil
 	}
 
-	var isPublic bool
-	err = utils.RetryWithExponentialBackoff(ctx, "getBoxPublic", proxyMaxRetries, proxyBaseDelay, proxyMaxDelay, func() error {
-		_, res, err := p.apiclient.PreviewAPI.IsBoxPublic(context.Background(), boxId).Execute()
+	var enabled bool
+	err = utils.RetryWithExponentialBackoff(ctx, "getBoxInboundMode", proxyMaxRetries, proxyBaseDelay, proxyMaxDelay, func() error {
+		mode, res, err := p.apiclient.PreviewAPI.GetBoxInboundMode(context.Background(), boxId).Execute()
 		if res != nil && res.StatusCode == http.StatusOK {
-			isPublic = true
+			// The generated client hands a string result back as the raw JSON
+			// body, quotes included, so strip them before comparing.
+			enabled = strings.Trim(strings.TrimSpace(mode), `"`) == "enabled"
 			return nil
 		}
 		openapiErr := common_errors.ConvertOpenAPIError(err)
@@ -259,7 +264,7 @@ func (p *Proxy) getBoxPublic(ctx context.Context, boxId string) (*bool, error) {
 		if openapiErr != nil {
 			if res != nil && res.StatusCode >= 400 && res.StatusCode < 500 &&
 				res.StatusCode != http.StatusRequestTimeout && res.StatusCode != http.StatusTooManyRequests {
-				isPublic = false
+				enabled = false
 				return nil
 			}
 			if !common_errors.IsRetryableOpenAPIError(openapiErr) {
@@ -267,18 +272,18 @@ func (p *Proxy) getBoxPublic(ctx context.Context, boxId string) (*bool, error) {
 			}
 			return openapiErr
 		}
-		isPublic = false
+		enabled = false
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	if cacheErr := p.boxPublicCache.Set(ctx, boxId, isPublic, 3*time.Second); cacheErr != nil {
-		slog.ErrorContext(ctx, "Failed to set box public in cache", "error", cacheErr)
+	if cacheErr := p.boxInboundCache.Set(ctx, boxId, enabled, 3*time.Second); cacheErr != nil {
+		slog.ErrorContext(ctx, "Failed to set box inbound mode in cache", "error", cacheErr)
 	}
 
-	return &isPublic, nil
+	return &enabled, nil
 }
 
 func (p *Proxy) getBoxAuthKeyValid(ctx context.Context, boxId string, authKey string) (*bool, error) {

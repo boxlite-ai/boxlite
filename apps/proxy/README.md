@@ -44,7 +44,7 @@ flowchart TB
     proxy proxy_to_runner@-->|"tunnel or terminal"| runner_api
     runner_api runner_to_boxlite@-->|"DialGuestPort"| boxlite_core
     boxlite_core boxlite_to_boxes@-->|"guest TCP"| boxes
-    client client_to_idp@-.->|"login, private boxes"| idp
+    client client_to_idp@-.->|"login, inbound disabled"| idp
     proxy proxy_to_idp@-.->|"code exchange"| idp
 
     class external scope_external
@@ -52,8 +52,8 @@ flowchart TB
     class runner_process scope_execution
 ```
 
-The proxy asks the API whether the box is public and whether the requested guest port has an
-active public tunnel. It resolves the box's runner and records activity before forwarding.
+The proxy asks the API whether the box has inbound access enabled and whether the requested guest
+port has an active public tunnel. It resolves the box's runner and records activity before forwarding.
 The web terminal uses the runner's terminal endpoint and always requires authentication.
 
 ## Preview hosts
@@ -73,9 +73,9 @@ A host without a `<port>-` label serves only the utility routes listed in
 
 | Request                          | Upstream                                                      | Access rule                              |
 | -------------------------------- | ------------------------------------------------------------- | ---------------------------------------- |
-| HTTP or WebSocket to a guest port | Reverse proxy over a runner CONNECT tunnel to the guest port  | Public box and active tunnel declaration |
+| HTTP or WebSocket to a guest port | Reverse proxy over a runner CONNECT tunnel to the guest port  | Inbound enabled and active tunnel declaration |
 | Port 22222                       | Runner's `/boxes/<id>/toolbox/proxy/22222` terminal endpoint  | Authenticated; no tunnel declaration     |
-| Raw `CONNECT` to a guest port    | TCP tunnel through the runner                                 | Public box and active tunnel declaration |
+| Raw `CONNECT` to a guest port    | TCP tunnel through the runner                                 | Inbound enabled and active tunnel declaration |
 
 The HTTP path in code:
 
@@ -83,11 +83,11 @@ The HTTP path in code:
   StartProxy (— · apps/proxy/pkg/proxy/proxy.go:80) — registers the catch-all route for preview hosts
     └─ NewProxyRequestHandler (— · apps/libs/common-go/pkg/proxy/proxy.go:116) — reverse proxy for one request
       ├─ GetProxyTarget (Proxy · apps/proxy/pkg/proxy/get_box_target.go:49) — choose the upstream
-        ├─ parseHost (Proxy · apps/proxy/pkg/proxy/get_box_target.go:353) — canonical port plus box ID or signed token
-        ├─ getBoxPublic (Proxy · apps/proxy/pkg/proxy/get_box_target.go:244) — ask the API, cached 3 s
-        ├─ Authenticate (Proxy · apps/proxy/pkg/proxy/auth.go:18) — resolve signed hosts or authorize private/terminal access
+        ├─ parseHost (Proxy · apps/proxy/pkg/proxy/get_box_target.go:358) — canonical port plus box ID or signed token
+        ├─ getBoxInboundEnabled (Proxy · apps/proxy/pkg/proxy/get_box_target.go:247) — ask the API for the inbound mode, cached 3 s
+        ├─ Authenticate (Proxy · apps/proxy/pkg/proxy/auth.go:18) — resolve signed hosts or authorize sign-in/terminal access
         ├─ hasPublicTunnelAccess (Proxy · apps/proxy/pkg/proxy/tunnel_access.go:15) — check every guest service port
-        └─ updateLastActivity (Proxy · apps/proxy/pkg/proxy/get_box_target.go:424) — renew activity every 50 s
+        └─ updateLastActivity (Proxy · apps/proxy/pkg/proxy/get_box_target.go:429) — renew activity every 50 s
       └─ dialGuestPort (Proxy · apps/proxy/pkg/proxy/get_box_target.go:163) — dial each new upstream connection
         └─ dialGuestPortWithWake (Proxy · apps/proxy/pkg/proxy/guest_wake.go:51) — dial, waking a stopped box
           ├─ getBoxRunnerInfo (Proxy · apps/proxy/pkg/proxy/get_box_target.go:205) — runner URL and key, cached 2 min
@@ -103,10 +103,10 @@ pooling reuses tunnels per box and port. Raw `CONNECT` requests skip this router
 `dialGuestPortWithWake`.
 
 Every new HTTP/WebSocket guest service request and raw CONNECT checks the API's public tunnel
-endpoint. It requires an unrevoked public declaration, a public box, and a box outside the
+endpoint. It requires an unrevoked public declaration, inbound access enabled, and a box outside the
 destroying/archiving states. The API caches allowed and denied verdicts in Redis for 3 seconds;
 the proxy does not cache tunnel verdicts. Declaring a port clears its cached denial. A revoked
-tunnel or a box made private can still admit new requests until a cached allowance expires;
+tunnel or a box whose inbound access was disabled can still admit new requests until a cached allowance expires;
 existing connections continue until they close. If the tunnel check fails, both paths return
 502. Ports are parsed as numbers, so `022222` is still the terminal port and cannot be used
 for raw CONNECT.
@@ -144,7 +144,7 @@ box. Port 22222 does not wake a box.
 
 ## Authentication
 
-A signed preview host, a private box, or port 22222 takes the first credential that works
+A signed preview host, a box with inbound disabled, or port 22222 takes the first credential that works
 ([`auth.go`](pkg/proxy/auth.go)):
 
 1. `Authorization: Bearer <API key or JWT>`: the API checks box access with the caller's own token.
@@ -165,8 +165,8 @@ re-checks it with the API.
 
 | Situation                                                  | HTTP or WebSocket                                                   | `CONNECT`                    |
 | ---------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------- |
-| The box is private and the port is not 22222               | `404` after credential resolution; private service previews are unavailable | `403`, whatever the credential |
-| The public box has no active declaration for the port      | `404`, including for a signed preview URL | `404` |
+| Inbound is disabled and the port is not 22222              | `404` after credential resolution; previews need inbound enabled | `403`, whatever the credential |
+| Inbound is enabled but the port has no active declaration  | `404`, including for a signed preview URL | `404` |
 | The tunnel access API is unavailable                       | `502`                                     | `502` |
 | The host has no `<port>-<id>` label                        | `404`, except the utility routes                                    | `400`                        |
 | The API still fails the visibility check after its retries | `400`                                                               | `502`                        |
@@ -176,7 +176,7 @@ re-checks it with the API.
 | The runner, or a running box's port, is unreachable        | `502`, code `BAD_GATEWAY`                                           | `502`                        |
 
 Guest-dial failures on the HTTP path return the JSON error body that the proxy's other errors use.
-Port 22222 needs a credential even on a public box. SDK and CLI callers should always send one:
+Port 22222 needs a credential even with inbound enabled. SDK and CLI callers should always send one:
 without it they get the browser redirect, not a `401`.
 
 ## Box activity
@@ -189,7 +189,7 @@ per-box cache drops reports made within the previous 45 seconds.
 
 | Cache                     | Key                 | TTL   |
 | ------------------------- | ------------------- | ----- |
-| Box is public             | box ID              | 3 s   |
+| Box inbound mode          | box ID              | 3 s   |
 | Runner URL and API key    | box ID              | 2 min |
 | Rejected credential       | box ID + credential | 2 min |
 | Activity already reported | box ID              | 45 s  |
@@ -219,7 +219,7 @@ is internal and changes together with the API and the runner.
 | Service | Call                                                                                                     | Credential                                              |
 | ------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | API     | `GET /api/config` at startup, for unset OIDC settings                                                    | `PROXY_API_KEY`                                         |
-| API     | `GET /api/preview/{boxId}/public`, `/validate/{token}`, `/tunnels/{port}`; `GET /api/preview/{token}/{port}/box-id` | `PROXY_API_KEY` |
+| API     | `GET /api/preview/{boxId}/inbound`, `/validate/{token}`, `/tunnels/{port}`; `GET /api/preview/{token}/{port}/box-id` | `PROXY_API_KEY` |
 | API     | `GET /api/preview/{boxId}/access`                                                                        | The caller's bearer token                               |
 | API     | `GET /api/runners/by-box/{boxId}`, `POST /api/box/{boxId}/last-activity`                                 | `PROXY_API_KEY`                                         |
 | API     | `POST /api/preview/{boxId}/ensure-ready`, when the runner reports the box is not running                 | `PROXY_API_KEY`                                         |
@@ -237,7 +237,7 @@ working directory override it, but loading stops at the first file that is missi
 | `PROXY_PROTOCOL`                                                                 | `http` or `https`, for redirects and `X-Forwarded-Proto` (required)                     |
 | `PROXY_API_KEY`                                                                  | Bearer key for API calls and the cookie-signing key (required)                          |
 | `BOXLITE_API_URL`                                                                | Control-plane API base URL, ending in `/api` (required)                                 |
-| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_DOMAIN`, `OIDC_PUBLIC_DOMAIN`, `OIDC_AUDIENCE` | Login for private boxes; an unset client ID, domain, or audience comes from the API's `/config` at startup |
+| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_DOMAIN`, `OIDC_PUBLIC_DOMAIN`, `OIDC_AUDIENCE` | Login for boxes with inbound disabled; an unset client ID, domain, or audience comes from the API's `/config` at startup |
 | `COOKIE_DOMAIN`                                                                  | Cookie domain; defaults to `.<request host>`                                            |
 | `ENABLE_TLS`, `TLS_CERT_FILE`, `TLS_KEY_FILE`                                    | Serve TLS directly; `ENABLE_TLS` also marks auth cookies `Secure`                       |
 | `REDIS_HOST` and the other `REDIS_*` settings                                    | Shared caches                                                                           |

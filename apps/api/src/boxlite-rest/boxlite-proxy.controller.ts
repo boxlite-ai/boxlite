@@ -224,12 +224,13 @@ export class BoxliteProxyController {
     // findOneByIdOrName already 404s for a missing/destroyed box.
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
 
-    // Tunnel URLs expose the box to the public internet. Only boxes persisted
-    // as public can use a tunnel.
-    // A private box should be accessed via the authenticated API, not a
-    // tunnel.
+    // Tunnel URLs expose the box to the public internet, so only a box with
+    // inbound access enabled can use one. Any other box is reached through
+    // the authenticated API.
     if (!box.inboundEnabled) {
-      throw new ConflictException(`Box ${boxId} is not public; set public: true before opening a tunnel`)
+      throw new ConflictException(
+        `Box ${boxId} has inbound access disabled; enable inbound access before opening a tunnel`,
+      )
     }
 
     // POL-326/POL-352: opening a tunnel is user activity, exactly like the

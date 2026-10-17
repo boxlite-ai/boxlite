@@ -313,7 +313,7 @@ describe('BoxliteBoxController inbound audit', () => {
 
     expect(auditService.createLog).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: AuditAction.UPDATE_PUBLIC_STATUS,
+        action: AuditAction.UPDATE_INBOUND_ACCESS,
         targetType: AuditTarget.BOX,
         targetId: 'box-1',
         metadata: { body: { mode: 'enabled' } },

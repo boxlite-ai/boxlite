@@ -1244,8 +1244,8 @@ mod tests {
         assert!(json["network"]["outbound"].is_null());
     }
 
-    /// Servers read an omitted inbound as private, so the flat shape is only
-    /// safe to send for a private box; an enabled inbound must travel nested.
+    /// Servers read an omitted inbound as disabled, so the flat shape is only
+    /// safe to send with inbound disabled; an enabled inbound must travel nested.
     #[test]
     fn test_create_box_request_network_shape_follows_inbound_mode() {
         use crate::runtime::options::{BoxOptions, NetworkSpec, RootfsSpec};
