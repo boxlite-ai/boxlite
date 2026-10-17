@@ -1,6 +1,6 @@
 //! Integration tests for security enforcement from GHSA-g6ww-w5j2-r7x3:
 //!
-//! 1. Read-only virtiofs volumes enforced at hypervisor level
+//! 1. Read-only virtiofs volumes and bind mounts enforced at hypervisor level
 //! 2. Dangerous capabilities excluded (CAP_SYS_ADMIN etc.)
 //! 3. TSI network isolation when network disabled
 //! 4. Protected-link sysctls block unprivileged hardlink attacks
@@ -13,9 +13,12 @@
 
 mod common;
 
-use boxlite::runtime::options::{BoxOptions, BoxliteOptions, NetworkSpec, RootfsSpec, VolumeSpec};
+use boxlite::runtime::options::{
+    BoxOptions, BoxliteOptions, MountSpec, NetworkSpec, RootfsSpec, VolumeSpec,
+};
 use boxlite::{BoxCommand, BoxliteRuntime, LiteBox};
 use futures::StreamExt;
+use std::path::Path;
 use tempfile::TempDir;
 
 // ============================================================================
@@ -72,9 +75,38 @@ async fn virtiofs_readonly_and_capabilities() {
 
     let rw_dir = TempDir::new_in("/tmp").unwrap();
 
+    let ro_mount_dir = TempDir::new_in("/tmp").unwrap();
+    std::fs::write(ro_mount_dir.path().join("note.txt"), "bind-mounted\n").unwrap();
+
+    let rw_mount_dir = TempDir::new_in("/tmp").unwrap();
+
+    // A file bound on its own, beside a sibling that must stay on the host.
+    let file_mount_dir = TempDir::new_in("/tmp").unwrap();
+    let file_mount_source = file_mount_dir.path().join("app.conf");
+    std::fs::write(&file_mount_source, "port=8080\n").unwrap();
+    std::fs::write(file_mount_dir.path().join("sibling.txt"), "host-only\n").unwrap();
+
     let bx = runtime
         .create(
             BoxOptions {
+                // Beside the volumes, so `usermount0` shares next to `uservol0`.
+                mounts: vec![
+                    MountSpec {
+                        read_only: true,
+                        ..MountSpec::bind_mount(
+                            ro_mount_dir.path().to_str().unwrap(),
+                            "/mnt/readonly",
+                        )
+                    },
+                    MountSpec::bind_mount(rw_mount_dir.path().to_str().unwrap(), "/mnt/writable"),
+                    MountSpec {
+                        read_only: true,
+                        ..MountSpec::bind_mount(
+                            file_mount_source.to_str().unwrap(),
+                            "/etc/boxlite-mount/app.conf",
+                        )
+                    },
+                ],
                 volumes: vec![
                     VolumeSpec {
                         managed_volume: None,
@@ -104,6 +136,9 @@ async fn virtiofs_readonly_and_capabilities() {
     readonly_volume_blocks_write(&bx).await;
     readonly_volume_blocks_remount(&bx).await;
     rw_volume_allows_write(&bx).await;
+    readonly_bind_mount_blocks_write(&bx, ro_mount_dir.path()).await;
+    rw_bind_mount_write_reaches_host(&bx, rw_mount_dir.path()).await;
+    single_file_bind_mount_shares_only_the_file(&bx).await;
     sealed_root_leaves_container_rootfs_writable(&bx).await;
     capabilities_exclude_sys_admin(&bx).await;
     capabilities_match_docker_defaults(&bx).await;
@@ -271,6 +306,69 @@ async fn rw_volume_allows_write(bx: &LiteBox) {
 
     let content = exec_stdout(bx, BoxCommand::new("cat").arg("/data/writable/test.txt")).await;
     assert_eq!(content.trim(), "ok");
+}
+
+/// A read-only bind mount shows its own directory, not the read-only volume
+/// shared beside it, and refuses writes the way the volume does.
+async fn readonly_bind_mount_blocks_write(bx: &LiteBox, host_dir: &Path) {
+    let content = exec_stdout(bx, BoxCommand::new("cat").arg("/mnt/readonly/note.txt")).await;
+    assert_eq!(content.trim(), "bind-mounted");
+
+    let exit = exec_exit_code(
+        bx,
+        BoxCommand::new("sh").args(["-c", "echo pwned > /mnt/readonly/hack.txt 2>&1"]),
+    )
+    .await;
+    assert_ne!(exit, 0, "writing to a read-only bind mount should fail");
+    assert!(
+        !host_dir.join("hack.txt").exists(),
+        "nothing may reach the host through a read-only bind mount"
+    );
+}
+
+/// A write through a writable bind mount lands in the host directory.
+async fn rw_bind_mount_write_reaches_host(bx: &LiteBox, host_dir: &Path) {
+    let exit = exec_exit_code(
+        bx,
+        BoxCommand::new("sh").args(["-c", "echo from-box > /mnt/writable/written.txt && sync"]),
+    )
+    .await;
+    assert_eq!(exit, 0, "writing to a writable bind mount should succeed");
+    assert_eq!(
+        std::fs::read_to_string(host_dir.join("written.txt")).unwrap(),
+        "from-box\n",
+        "a write through a writable bind mount must reach the host"
+    );
+}
+
+/// A single-file bind mount reaches the box as that one file, read-only, with
+/// nothing beside it at its target. That the virtio-fs share itself holds
+/// only the file is `stage_single_file`'s contract, tested in
+/// `volumes/staging.rs`.
+async fn single_file_bind_mount_shares_only_the_file(bx: &LiteBox) {
+    let content = exec_stdout(
+        bx,
+        BoxCommand::new("cat").arg("/etc/boxlite-mount/app.conf"),
+    )
+    .await;
+    assert_eq!(content.trim(), "port=8080");
+
+    let listing = exec_stdout(bx, BoxCommand::new("ls").arg("/etc/boxlite-mount")).await;
+    assert_eq!(
+        listing.trim(),
+        "app.conf",
+        "the file's host sibling must not appear"
+    );
+
+    let exit = exec_exit_code(
+        bx,
+        BoxCommand::new("sh").args(["-c", "echo pwned >> /etc/boxlite-mount/app.conf 2>&1"]),
+    )
+    .await;
+    assert_ne!(
+        exit, 0,
+        "writing to a read-only single-file mount should fail"
+    );
 }
 
 /// CAP_SYS_ADMIN must NOT be in the effective capability set.

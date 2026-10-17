@@ -7,7 +7,7 @@ use super::guest_entrypoint::GuestEntrypointBuilder;
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::DiskFormat;
 use crate::images::ContainerImageConfig;
-use crate::litebox::init::types::{InitPipelineContext, resolve_user_volumes};
+use crate::litebox::init::types::{InitPipelineContext, resolve_user_mounts, resolve_user_volumes};
 use crate::net::{NetworkBackend, NetworkBackendConfig};
 use crate::pipeline::PipelineTask;
 use crate::rootfs::guest::{GuestRootfs, Strategy};
@@ -147,6 +147,7 @@ async fn build_config(
     let ready_transport = BoxTransport::unix(layout.ready_socket_path());
 
     let user_volumes = resolve_user_volumes(&options.volumes)?;
+    let user_mounts = resolve_user_mounts(&options.mounts)?;
 
     // Prepare container directories (image/, rw/, rootfs/)
     let container_layout = layout.shared_layout().container(container_id.as_str());
@@ -207,6 +208,30 @@ async fn build_config(
             vol.owner_uid,
             vol.owner_gid,
             vol.subpath.clone(),
+        );
+    }
+    // Bind mounts from `options.mounts`, the same way: a directory is shared as
+    // is, a single file is staged on its own. Staged under `user-mounts/`, apart
+    // from `user-volumes/`, as their tags are.
+    for mount in &user_mounts {
+        let share_dir = match &mount.file_name {
+            None => mount.host_path.clone(),
+            Some(file_name) => {
+                let staging_dir = layout.shared_dir().join("user-mounts").join(&mount.tag);
+                stage_single_file(&staging_dir, &mount.host_path, file_name, mount.read_only)?;
+                staging_dir
+            }
+        };
+        container_mgr.add_volume(
+            container_id.as_str(),
+            &mount.tag,
+            &mount.tag,
+            share_dir,
+            &mount.target,
+            mount.read_only,
+            mount.owner_uid,
+            mount.owner_gid,
+            mount.file_name.clone(),
         );
     }
     let container_mounts = container_mgr.build_container_mounts();
