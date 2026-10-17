@@ -6,6 +6,7 @@ mod manager;
 mod object;
 mod storage;
 mod store;
+mod system_trust;
 
 pub(crate) use archive::whiteout;
 pub use archive::{LayerExtractor, OverrideFileType, OverrideStat, SafeRoot};

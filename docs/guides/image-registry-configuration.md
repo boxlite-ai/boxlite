@@ -12,6 +12,16 @@ You can provide a list of custom registries. BoxLite will try to pull the image 
 
 **Fully qualified image references (e.g., `quay.io/prometheus/prometheus:v2.40.1`) always bypass this search mechanism and are pulled directly.**
 
+## TLS trust
+
+HTTPS pulls trust the operating system's certificate store in addition to the Mozilla roots bundled with BoxLite, as Docker does. A registry or a TLS-intercepting proxy signed by a private CA works once that CA is installed in the system store:
+
+- **Linux**: add the CA to the distribution's trust store (for example `/usr/local/share/ca-certificates/` and `update-ca-certificates` on Debian and Ubuntu).
+- **macOS**: add it to the System keychain and mark it trusted.
+- **Windows (WSL2)**: add it to the WSL distribution's trust store as on Linux; the Windows certificate store is not read.
+
+The store is read on every pull, so a newly installed CA applies without restarting the application. When `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, BoxLite reads only those locations in place of the system store; the bundled roots still apply. Certificates the store holds but rustls cannot parse are skipped. `skip_verify: true` disables verification for that registry, so no store is consulted.
+
 ## CLI configuration
 
 The CLI layers configuration sources with the following priority (from lowest to highest):
