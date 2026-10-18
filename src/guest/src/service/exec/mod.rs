@@ -418,6 +418,11 @@ async fn spawn_execution(
             "failed to capture process identity; signals will be skipped"
         );
     }
+    // Share the process identity with the timeout watcher before the state
+    // takes it by value. `ProcessInstance` is `Clone` (not `Copy`) because it
+    // owns an `Arc<OwnedFd>` pidfd; the clone bumps the `Arc` refcount so
+    // both holders share one fd.
+    let process_for_timeout = process.clone();
 
     // Register this pid's exit slot at the spawn, not at the wait: a detached
     // exec sends no Wait until its caller chooses to, and in between the exit
@@ -461,7 +466,7 @@ async fn spawn_execution(
     // Step 3: Start timeout watcher (if requested)
     if req.timeout_ms > 0 {
         let timeout_task = timeout::start_timeout_watcher(
-            timeout::TimeoutTarget::new(process),
+            timeout::TimeoutTarget::new(process_for_timeout),
             execution_id.clone(),
             std::time::Duration::from_millis(req.timeout_ms),
         );
