@@ -424,8 +424,11 @@ pub struct PublishedPort {
 ```
 
 `network: None` means network information is unavailable, such as metadata from
-an older or remote producer. Within `NetworkInfo`, `published_ports: None`
-means the current handle does not know the lifecycle's publications.
+a REST server that predates the `network` field. A current server reports both
+directions for a remote box, so `info().network` carries the cloud box's
+outbound and inbound policy. Within `NetworkInfo`, `published_ports: None`
+means the current handle does not know the lifecycle's publications, which is
+always the case over REST: host bindings never travel on the wire.
 `Some(vec![])` means there are no active publications, and a populated vector
 contains concrete active local bindings. `PortSpec` remains the request type;
 resolved output uses `PublishedPort` so every reported host port is concrete.
@@ -951,7 +954,7 @@ pub enum NetworkSpec {
 
 The inbound direction — whether services the box exposes are reachable from
 outside it — is the sibling field `BoxOptions::inbound_network`, which reuses
-this same type: `Enabled` = reachable, `Disabled` = private (the default,
+this same type: `Enabled` = reachable, `Disabled` = unreachable (the default,
 `NetworkSpec::disabled()`). The two directions are independent, so a
 box may refuse egress while the services it exposes stay reachable, or the
 reverse.

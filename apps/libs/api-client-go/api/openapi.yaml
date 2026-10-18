@@ -2749,9 +2749,9 @@ paths:
       summary: Runner healthcheck
       tags:
       - runners
-  /preview/{boxId}/public:
+  /preview/{boxId}/inbound:
     get:
-      operationId: isBoxPublic
+      operationId: getBoxInboundMode
       parameters:
       - description: ID of the box
         explode: false
@@ -2766,9 +2766,13 @@ paths:
           content:
             application/json:
               schema:
-                type: boolean
-          description: Public status of the box
-      summary: Check if box is public
+                enum:
+                - enabled
+                - disabled
+                type: string
+          description: "Inbound mode of the box: `enabled` means the proxy may serve\
+            \ its services without sign-in"
+      summary: Read the inbound mode of a box
       tags:
       - preview
   /preview/{boxId}/validate/{authToken}:
@@ -6026,6 +6030,57 @@ components:
       - provider
       - userId
       type: object
+    NetworkMode:
+      description: Whether the guest may reach out
+      enum:
+      - enabled
+      - disabled
+      type: string
+    OutboundNetworkSpec:
+      properties:
+        mode:
+          allOf:
+          - $ref: "#/components/schemas/NetworkMode"
+          description: Whether the guest may reach out
+        allow_net:
+          description: Outbound allowlist in force; empty means unrestricted egress
+          example:
+          - api.openai.com
+          - 10.0.0.0/8
+          items:
+            type: string
+          type: array
+      required:
+      - allow_net
+      - mode
+      type: object
+    InboundNetworkSpec:
+      properties:
+        mode:
+          allOf:
+          - $ref: "#/components/schemas/NetworkMode"
+          description: Whether exposed services are reachable through the proxy without
+            sign-in
+        allow_net:
+          description: Reserved; no layer enforces an inbound allowlist yet
+          example: []
+          items:
+            type: string
+          type: array
+      required:
+      - allow_net
+      - mode
+      type: object
+    NetworkInfo:
+      properties:
+        outbound:
+          $ref: "#/components/schemas/OutboundNetworkSpec"
+        inbound:
+          $ref: "#/components/schemas/InboundNetworkSpec"
+      required:
+      - inbound
+      - outbound
+      type: object
     BoxState:
       description: The state of the box
       enum:
@@ -6109,6 +6164,7 @@ components:
         public: false
         networkBlockAll: false
         networkAllowList: "192.168.1.0/16,10.0.0.0/24"
+        network: ""
         target: local
         image: boxlite/base
         cpu: 2
@@ -6170,18 +6226,24 @@ components:
             boxlite.io/public: "true"
           type: object
         public:
-          description: Whether the box http preview is public
+          deprecated: true
+          description: "Whether inbound access is enabled. Deprecated: read `network.inbound.mode`"
           example: false
           type: boolean
         networkBlockAll:
-          description: Whether to block all network access for the box
+          deprecated: true
+          description: "Whether outbound access is disabled. Deprecated: read `network.outbound.mode`"
           example: false
           type: boolean
         networkAllowList:
-          description: Comma-separated list of allowed CIDR network addresses for
-            the box
+          deprecated: true
+          description: "Comma-separated outbound allowlist. Deprecated: read `network.outbound.allow_net`"
           example: "192.168.1.0/16,10.0.0.0/24"
           type: string
+        network:
+          allOf:
+          - $ref: "#/components/schemas/NetworkInfo"
+          description: The network policy in both directions
         target:
           description: The target environment for the box
           example: local
@@ -6321,6 +6383,7 @@ components:
           public: false
           networkBlockAll: false
           networkAllowList: "192.168.1.0/16,10.0.0.0/24"
+          network: ""
           target: local
           image: boxlite/base
           cpu: 2
@@ -6361,6 +6424,7 @@ components:
           public: false
           networkBlockAll: false
           networkAllowList: "192.168.1.0/16,10.0.0.0/24"
+          network: ""
           target: local
           image: boxlite/base
           cpu: 2

@@ -67,8 +67,9 @@ class IsUnsupportedInboundAllowNetConstraint implements ValidatorConstraintInter
 }
 
 // Aligned field-for-field with OutboundNetworkSpecDto: mode="enabled" means
-// services the box exposes are publicly reachable; mode="disabled" means
-// private. allow_net exists for wire-shape symmetry but is rejected when
+// services the box exposes are reachable through the proxy without sign-in;
+// mode="disabled" makes them unreachable through the proxy, even with a
+// credential. allow_net exists for wire-shape symmetry but is rejected when
 // non-empty until enforcement exists.
 export class InboundNetworkSpecDto {
   @IsIn(['enabled', 'disabled'])

@@ -340,7 +340,8 @@ pub struct OutboundNetworkInfo {
 
 /// Network configuration for inbound (internet → guest) traffic.
 ///
-/// Records whether the guest's exposed ports/preview are publicly reachable.
+/// Records whether the guest's exposed ports/preview are reachable without
+/// sign-in.
 /// `allow_net` is always empty today — an inbound allowlist is not yet
 /// enforced by any layer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,7 +351,7 @@ pub struct InboundNetworkInfo {
     pub allow_net: Vec<String>,
 }
 
-/// Metadata that omits inbound reads as private, matching the inbound
+/// Metadata that omits inbound reads as disabled, matching the inbound
 /// default of [`BoxOptions`](crate::runtime::options::BoxOptions).
 impl Default for InboundNetworkInfo {
     fn default() -> Self {
@@ -373,7 +374,7 @@ pub struct NetworkInfo {
     pub outbound: OutboundNetworkInfo,
 
     /// External reachability: whether the box's exposed ports/preview are
-    /// public. Its `allow_net` is always empty today (see
+    /// reachable without sign-in. Its `allow_net` is always empty today (see
     /// [`InboundNetworkInfo::allow_net`]).
     pub inbound: InboundNetworkInfo,
 
@@ -809,7 +810,7 @@ mod tests {
             network.outbound.allow_net,
             vec!["api.example.com".to_string()]
         );
-        // The direction the pre-split shape could not express reads as private.
+        // The direction the pre-split shape could not express reads as disabled.
         assert_eq!(network.inbound.mode, NetworkMode::Disabled);
         assert!(network.inbound.allow_net.is_empty());
         // And the deprecated mirrors follow outbound.

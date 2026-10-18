@@ -114,7 +114,7 @@ func TestTunnelConnectRejectsPrivateBoxBeforeRunnerDial(t *testing.T) {
 	if err := publicCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	proxy := &Proxy{boxPublicCache: publicCache}
+	proxy := &Proxy{boxInboundCache: publicCache}
 	request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
 	request.Host = "3000-d-416243644566313233343536.proxy.test:443"
 	response := httptest.NewRecorder()
@@ -163,7 +163,7 @@ func TestTunnelConnectRenewsBoxActivityBeforeStreaming(t *testing.T) {
 	clientConfig.Servers[0].URL = api.URL
 	proxy := &Proxy{
 		apiclient:                  apiclient.NewAPIClient(clientConfig),
-		boxPublicCache:             publicCache,
+		boxInboundCache:            publicCache,
 		boxRunnerCache:             runnerCache,
 		boxLastActivityUpdateCache: common_cache.NewMapCache[bool](ctx),
 	}

@@ -45,6 +45,8 @@ import { WarmPool } from '../entities/warm-pool.entity'
 import { BoxDto, BoxDtoReads, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
+import { NetworkMode } from '../enums/network-mode.enum'
+import { networkMode } from '../utils/network-policy.util'
 import { VolumeService } from './volume.service'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import {
@@ -1587,7 +1589,7 @@ export class BoxService {
     })
   }
 
-  async isBoxPublic(boxId: string): Promise<boolean> {
+  async getInboundMode(boxId: string): Promise<NetworkMode> {
     const box = await this.boxRepository.findOne({
       where: { id: boxId },
     })
@@ -1596,7 +1598,7 @@ export class BoxService {
       throw new NotFoundException(`Box with ID ${boxId} not found`)
     }
 
-    return box.inboundEnabled
+    return networkMode(box.inboundEnabled)
   }
 
   @OnEvent(OrganizationEvents.SUSPENDED_BOX_STOPPED)

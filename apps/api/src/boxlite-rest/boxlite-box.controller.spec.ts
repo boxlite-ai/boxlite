@@ -142,7 +142,7 @@ describe('BoxliteBoxController request validation', () => {
   })
 })
 
-// Making a box public exposes its services to anyone, so this route must ask
+// Enabling inbound access exposes its services to anyone, so this route must ask
 // for the same permission as the dashboard's toggle. Read off the real
 // handler, as the pipe above is, so deleting the decorator fails here.
 describe('BoxliteBoxController permissions', () => {
@@ -313,7 +313,7 @@ describe('BoxliteBoxController inbound audit', () => {
 
     expect(auditService.createLog).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: AuditAction.UPDATE_PUBLIC_STATUS,
+        action: AuditAction.UPDATE_INBOUND_ACCESS,
         targetType: AuditTarget.BOX,
         targetId: 'box-1',
         metadata: { body: { mode: 'enabled' } },

@@ -399,9 +399,12 @@ The network policy columns store the `/v1` NetworkSpec's `enabled` / `disabled`
 modes as booleans (`true` = `enabled`); the API converts `mode` strings at its
 edges, and its internal create input and the runner create and recover bodies
 carry the same `outboundEnabled` / `outboundAllowNet`. The control-plane `Box`
-DTO still presents them as `public`, `networkBlockAll` and a comma-joined
-`networkAllowList` (`box/utils/network-policy.util.ts`) until the dashboard and
-Go clients move (POL-827).
+DTO reports them as `network.outbound {mode, allow_net}` and
+`network.inbound {mode, allow_net}`, the same `NetworkInfo` schema the `/v1` box
+read returns. It also still serves the deprecated `public`,
+`networkBlockAll` and comma-joined `networkAllowList`
+(`box/utils/network-policy.util.ts`) until the dashboard and Go clients move
+off them (POL-827).
 
 **Unique:** `(organizationId, name)`.
 

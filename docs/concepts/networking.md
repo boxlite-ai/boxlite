@@ -55,14 +55,16 @@ URI, but opens no connection. `uri()` inspects that URI. `connect()`, or each
 client of `forward()`, opens the connection, so it fails while nothing in the box
 listens on the port. `connect()` reuses the prepared URI; each forwarded client
 prepares again.
-For a remote public box, preparing the tunnel registers that guest port as public.
-It does not wake a stopped box with auto-resume on; the `CONNECT` does. A box
-whose auto-resume is off, or whose state cannot resume, is refused at once.
+For a remote box with inbound access enabled, preparing the tunnel registers
+that guest port as public. It does not wake a stopped box with auto-resume on;
+the `CONNECT` does. A box whose auto-resume is off, or whose state cannot
+resume, is refused at once.
 The proxy accepts HTTP/WebSocket previews, including signed URLs, and raw CONNECT
-only when the box is public and the port has an active declaration. Getting a
-preview URL alone does not declare the port. Private boxes cannot expose guest
-service ports through previews, even with a credential. The authenticated web
-terminal uses reserved port 22222 without a tunnel declaration.
+only when the box has inbound access enabled and the port has an active
+declaration. Getting a preview URL alone does not declare the port. A box with
+inbound access disabled cannot expose guest service ports through previews,
+even with a credential. The authenticated web terminal uses reserved port 22222
+without a tunnel declaration.
 A request to a declared port on a stopped box with auto-resume on wakes the box.
 It succeeds if the box's `cmd` serves the port within 30 seconds; otherwise the
 proxy answers `503` with `Retry-After`.

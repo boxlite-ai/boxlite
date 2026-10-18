@@ -396,6 +396,10 @@ pub(crate) struct BoxResponse {
     pub auto_delete: u32,
     #[serde(default = "default_auto_resume")]
     pub auto_resume: bool,
+    /// The policy in both directions. A server that predates the field
+    /// omits it, which reads as "unknown", not as any particular policy.
+    #[serde(default)]
+    pub network: Option<crate::NetworkInfo>,
 }
 
 impl BoxResponse {
@@ -440,10 +444,10 @@ impl BoxResponse {
             image: self.image.clone(),
             cpus: self.cpus,
             memory_mib: self.memory_mib,
-            // The remote REST surface intentionally does not publish local
-            // host bindings. Missing network metadata is therefore distinct
-            // from a locally verified, resolved-empty publication list.
-            network: None,
+            // Local host bindings never travel over REST, so a published
+            // policy arrives with `published_ports: None`; a server that
+            // predates the field leaves the whole thing unknown.
+            network: self.network.clone(),
             labels: self.labels.clone(),
             auto_stop: self.auto_stop,
             auto_delete: self.auto_delete,
@@ -1244,8 +1248,8 @@ mod tests {
         assert!(json["network"]["outbound"].is_null());
     }
 
-    /// Servers read an omitted inbound as private, so the flat shape is only
-    /// safe to send for a private box; an enabled inbound must travel nested.
+    /// Servers read an omitted inbound as disabled, so the flat shape is only
+    /// safe to send with inbound disabled; an enabled inbound must travel nested.
     #[test]
     fn test_create_box_request_network_shape_follows_inbound_mode() {
         use crate::runtime::options::{BoxOptions, NetworkSpec, RootfsSpec};
@@ -1256,18 +1260,18 @@ mod tests {
             ..Default::default()
         };
 
-        let private = CreateBoxRequest::from_options(&with_inbound(NetworkSpec::Disabled), None);
-        let json = serde_json::to_value(&private).unwrap();
+        let disabled = CreateBoxRequest::from_options(&with_inbound(NetworkSpec::Disabled), None);
+        let json = serde_json::to_value(&disabled).unwrap();
         assert_eq!(json["network"]["mode"], "enabled");
         assert!(json["network"]["inbound"].is_null());
 
-        let public = CreateBoxRequest::from_options(
+        let enabled = CreateBoxRequest::from_options(
             &with_inbound(NetworkSpec::Enabled {
                 allow_net: Vec::new(),
             }),
             None,
         );
-        let json = serde_json::to_value(&public).unwrap();
+        let json = serde_json::to_value(&enabled).unwrap();
         assert_eq!(json["network"]["outbound"]["mode"], "enabled");
         assert_eq!(json["network"]["inbound"]["mode"], "enabled");
         assert!(json["network"]["mode"].is_null());
@@ -1350,6 +1354,42 @@ mod tests {
         assert_eq!(resp.cpus, 2);
         assert_eq!(resp.auto_stop, 900);
         assert_eq!(resp.auto_delete, 0);
+        assert!(
+            resp.network.is_none(),
+            "a server that predates the field leaves the policy unknown"
+        );
+    }
+
+    #[test]
+    fn test_box_response_network_maps_to_network_info() {
+        use crate::runtime::options::NetworkMode;
+
+        let json = r#"{
+            "box_id": "01J0000000000000000000000A",
+            "status": "running",
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:01:00Z",
+            "pid": null,
+            "image": "python:3.11",
+            "cpus": 2,
+            "memory_mib": 512,
+            "network": {
+                "outbound": { "mode": "enabled", "allow_net": ["api.openai.com"] },
+                "inbound": { "mode": "enabled" }
+            }
+        }"#;
+        let resp: BoxResponse = serde_json::from_str(json).unwrap();
+        let info = resp.to_box_info().expect("valid box_id should parse");
+
+        let network = info.network.expect("the server published the policy");
+        assert_eq!(network.outbound.mode, NetworkMode::Enabled);
+        assert_eq!(network.outbound.allow_net, vec!["api.openai.com"]);
+        assert_eq!(network.inbound.mode, NetworkMode::Enabled);
+        assert!(network.inbound.allow_net.is_empty());
+        assert!(
+            network.published_ports.is_none(),
+            "host bindings never travel over REST"
+        );
     }
 
     #[test]
@@ -1370,6 +1410,7 @@ mod tests {
             auto_stop: 1800,
             auto_delete: 604800,
             auto_resume: true,
+            network: None,
         };
         let info = resp.to_box_info().expect("valid ULID box_id should parse");
         assert_eq!(info.name.as_deref(), Some("mybox"));
@@ -1399,6 +1440,7 @@ mod tests {
             auto_stop: 1800,
             auto_delete: 0,
             auto_resume: true,
+            network: None,
         };
 
         let info = resp.to_box_info().expect("valid box_id should parse");
@@ -1435,6 +1477,7 @@ mod tests {
             auto_stop: 900,
             auto_delete: 0,
             auto_resume: true,
+            network: None,
         };
         let info = resp.to_box_info().expect("UUID box_id should parse");
         assert_eq!(info.id.as_str(), "d406c59d-eb09-4bc3-9b3a-62455c7e8f32");
@@ -1464,6 +1507,7 @@ mod tests {
             auto_stop: 900,
             auto_delete: 0,
             auto_resume: true,
+            network: None,
         };
         assert!(mk("").to_box_info().is_err(), "empty");
         assert!(mk("a/b").to_box_info().is_err(), "slash");
@@ -1537,6 +1581,7 @@ mod tests {
             auto_stop: 900,
             auto_delete: 0,
             auto_resume: true,
+            network: None,
         };
 
         // Legacy transient statuses map to Unknown (no longer valid)

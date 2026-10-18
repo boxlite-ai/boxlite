@@ -81,6 +81,7 @@ model_image_alias_event.go
 model_image_detail.go
 model_image_usage.go
 model_image_version.go
+model_inbound_network_spec.go
 model_job.go
 model_job_status.go
 model_job_type.go
@@ -88,6 +89,8 @@ model_log_entry.go
 model_metric_data_point.go
 model_metric_series.go
 model_metrics_response.go
+model_network_info.go
+model_network_mode.go
 model_oidc_config.go
 model_organization.go
 model_organization_box_default_limited_network_egress.go
@@ -98,6 +101,7 @@ model_organization_suspension.go
 model_organization_unsuspension.go
 model_organization_user.go
 model_otel_config.go
+model_outbound_network_spec.go
 model_paginated_audit_logs.go
 model_paginated_boxes.go
 model_paginated_jobs.go

@@ -33,6 +33,7 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     // 0 is a real exit code, so this passes the value through. A falsy check
     // here would report every clean exit as "no exit code recorded".
     exit_code: box.exitCode,
+    network: box.network,
   }
 }
 
