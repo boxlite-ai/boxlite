@@ -18,16 +18,16 @@ inspect the error's host cause.
 boxlite-vmm
 ├── boxlite-hypervisor
 ├── vm-memory
-└── linux-loader (Linux x86_64 ELF loading)
+└── linux-loader (Linux x86_64 ELF loading and boot parameters)
 ```
 
 | Module | Planned responsibility |
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, then allocate and register RAM on host backend `H`; `run` is a placeholder |
-| `config` | `VmConfig { vcpu_count, memory_mib }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB |
+| `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes |
 | `error` | VMM errors that keep the hypervisor's cause chain |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
-| `boot` | Linux x86_64 boot: load the pinned ELF kernel through linux-loader and set up the 64-bit entry state (GDT, identity page tables, registers); boot data follows |
+| `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, writes the zero page, E820 map and command line, and sets up the 64-bit entry state (GDT, identity page tables, registers); the MP table follows |
 | `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
 | `vcpu` | Worker threads, stop coordination, and exit handling |
 | `irq` | Device interrupt assignment and routing; HVF and KVM provide the controller, WHP (M10) only local APICs |
@@ -94,7 +94,34 @@ make test:integration:vmm:elf VMM_KERNEL=/absolute/path/to/vmlinux
 the entry and loaded bytes with independent `readelf` output, checks BSS in
 fresh RAM, then runs a vCPU checksum over the loaded span. Missing hardware
 or kernel input fails qualification. This proves loading and guest visibility;
-boot data and Linux execution belong to later slices.
+Linux execution belongs to a later slice.
+
+## Boot parameters
+
+On Linux x86_64, `boot::params::write_boot_params(ram, cmdline, ranges)` fills
+the zero page that RSI points to at the 64-bit entry
+(`Documentation/arch/x86/boot.rst`, `zero-page.rst`) and returns its address,
+`0x7000`:
+
+- Setup header: `type_of_loader` `0xFF`, `boot_flag` `0xAA55`, the `HdrS`
+  magic, a 16 MiB `kernel_alignment`, and `cmd_line_ptr` and `cmdline_size`
+  for the NUL-terminated command line at `0x2_0000`. The rest stays zero: no
+  `loadflags`, ACPI tables or initramfs.
+- E820: each RAM range as usable RAM outside `[0x9_FC00, 1 MiB)`, where the
+  MP table and the legacy BIOS areas go. More entries than the 128 table slots
+  fail with `InvalidInput` before anything is written.
+
+`VmConfig::validate` accepts a command line only if it is printable ASCII and
+shorter than 2048 bytes, the kernel's `COMMAND_LINE_SIZE` with the NUL.
+linux-loader's `Cmdline` refuses the same lines, after trimming surrounding
+whitespace.
+
+`boot::prepare(ram, config)` opens `config.kernel` and runs `load_elf`,
+`write_boot_params` and `long_mode_entry` in that order on fresh RAM, then
+returns a `BootSetup` with the boot vCPU registers. A failure names its step,
+`LoadKernel` or `WriteBootData`, and keeps the I/O cause. Nothing calls
+`prepare` from `Vm` yet. There is no MP table yet, so Linux turns off SMP and
+the IOAPIC; a later slice adds the table.
 
 ## Long-mode entry
 
