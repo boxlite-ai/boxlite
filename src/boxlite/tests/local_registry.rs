@@ -278,7 +278,7 @@ fn seed_image(dir: &Path, repository: &str, tag: &str) -> String {
     })
     .to_string();
     for (path, body) in [
-        (dir.join("blobs").join(digest(config)), &config[..]),
+        (dir.join("blobs").join(digest(config)), config),
         (dir.join("blobs").join(digest(layer)), &layer[..]),
         (
             dir.join("manifests").join(repository).join(tag),
