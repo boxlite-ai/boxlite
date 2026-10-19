@@ -3,13 +3,25 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Controller, Delete, Get, HttpCode, OnModuleDestroy, Post, Req, Res, UseGuards } from '@nestjs/common'
+import {
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  OnModuleDestroy,
+  Post,
+  Req,
+  Res,
+  UseFilters,
+  UseGuards,
+} from '@nestjs/common'
 import { AuthGuard } from '@nestjs/passport'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { createMcpHandler, type AuthInfo, type McpHttpHandler } from '@modelcontextprotocol/server'
 import { toNodeHandler, type NodeMcpRequestHandler } from '@modelcontextprotocol/node'
 import type { Request, Response } from 'express'
 import type { AuthContext } from '../common/interfaces/auth-context.interface'
+import { McpAuthChallengeFilter } from './mcp-auth-challenge.filter'
 import { MCP_CALLER_KEY, McpServerFactory } from './mcp-server.factory'
 import { McpOriginGuard } from './origin.guard'
 
@@ -24,11 +36,13 @@ const METHOD_NOT_ALLOWED = {
  *
  * Legacy (`initialize`-handshake) traffic is rejected with the supported
  * versions rather than served, and every POST is answered with one JSON body.
- * Only OAuth bearer tokens are accepted (the `jwt` strategy), not API keys.
+ * Only OAuth bearer tokens are accepted (the `jwt` strategy), not API keys; a
+ * 401 carries a bearer challenge naming the endpoint's OAuth discovery metadata.
  */
 @ApiExcludeController()
 @Controller('mcp')
 @UseGuards(McpOriginGuard, AuthGuard('jwt'))
+@UseFilters(McpAuthChallengeFilter)
 export class McpController implements OnModuleDestroy {
   private readonly handler: McpHttpHandler
   private readonly serve: NodeMcpRequestHandler

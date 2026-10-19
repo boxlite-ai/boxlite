@@ -4,35 +4,53 @@
  */
 
 import { Test } from '@nestjs/testing'
-import type { INestApplication } from '@nestjs/common'
+import { UnauthorizedException, type INestApplication } from '@nestjs/common'
 import { AuthGuard } from '@nestjs/passport'
 import type { AddressInfo } from 'net'
+import { FailedAuthTrackerService } from '../auth/failed-auth-tracker.service'
+import { JwtStrategy } from '../auth/jwt.strategy'
 import { BoxService } from '../box/services/box.service'
 import { BoxState } from '../box/enums/box-state.enum'
+import { TypedConfigService } from '../config/typed-config.service'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
+import { MCP_METADATA_PATH, McpAuthMetadata } from './mcp-auth-metadata'
 import { McpController } from './mcp.controller'
+import { McpMetadataController } from './mcp-metadata.controller'
 import { McpServerFactory } from './mcp-server.factory'
 
 const PROTOCOL = '2026-07-28'
 const CALLER = { userId: 'user-1', email: 'user@example.com', role: 'user' }
 const MEMBER_ORG = '11111111-1111-4111-8111-111111111111'
 const FOREIGN_ORG = '22222222-2222-4222-8222-222222222222'
+const RESOURCE = 'https://boxlite.test/api/mcp'
+const ISSUER = 'https://issuer.test/'
+const TOKEN = 'Bearer test-token'
 
 describe('McpController', () => {
   let app: INestApplication
+  let origin: string
   let baseUrl: string
   let exists: jest.Mock
   let findAllDeprecated: jest.Mock
+  let incrementFailedAuth: jest.Mock
 
   beforeAll(async () => {
     exists = jest.fn((organizationId: string, userId: string) =>
       Promise.resolve(organizationId === MEMBER_ORG && userId === CALLER.userId),
     )
     findAllDeprecated = jest.fn().mockResolvedValue([{ id: 'box-1' }])
+    incrementFailedAuth = jest.fn().mockResolvedValue(undefined)
     const moduleRef = await Test.createTestingModule({
-      controllers: [McpController],
+      controllers: [McpController, McpMetadataController],
       providers: [
         McpServerFactory,
+        McpAuthMetadata,
+        {
+          provide: TypedConfigService,
+          useValue: { get: (key: string) => (key === 'mcp.resourceUrl' ? RESOURCE : undefined) },
+        },
+        { provide: JwtStrategy, useValue: { issuer: ISSUER } },
+        { provide: FailedAuthTrackerService, useValue: { incrementFailedAuth } },
         { provide: OrganizationUserService, useValue: { exists } },
         {
           provide: BoxService,
@@ -43,21 +61,27 @@ describe('McpController', () => {
         },
       ],
     })
-      // This spec covers the MCP wiring, not the JWT strategy: the guard only
-      // hands the controller an authenticated caller.
+      // This spec covers the MCP wiring, not the JWT strategy: like the real
+      // guard, the stub refuses a request without a token with a 401 and
+      // otherwise hands the controller an authenticated caller.
       .overrideGuard(AuthGuard('jwt'))
       .useValue({
         canActivate: (context: any) => {
-          context.switchToHttp().getRequest().user = CALLER
+          const request = context.switchToHttp().getRequest()
+          if (!request.headers.authorization) {
+            throw new UnauthorizedException()
+          }
+          request.user = CALLER
           return true
         },
       })
       .compile()
 
     app = moduleRef.createNestApplication()
-    app.setGlobalPrefix('api')
+    app.setGlobalPrefix('api', { exclude: [MCP_METADATA_PATH] })
     await app.listen(0)
-    baseUrl = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/api/mcp`
+    origin = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`
+    baseUrl = `${origin}/api/mcp`
   })
 
   afterAll(async () => {
@@ -67,6 +91,7 @@ describe('McpController', () => {
   beforeEach(() => {
     exists.mockClear()
     findAllDeprecated.mockClear()
+    incrementFailedAuth.mockClear()
   })
 
   /** A 2026-07-28 request: the version and client identity travel in `_meta` and the mirrored headers. */
@@ -79,6 +104,7 @@ describe('McpController', () => {
     return fetch(baseUrl, {
       method: 'POST',
       headers: {
+        authorization: TOKEN,
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
         'mcp-protocol-version': version,
@@ -159,7 +185,11 @@ describe('McpController', () => {
   it('rejects a legacy initialize handshake with the supported versions', async () => {
     const response = await fetch(baseUrl, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      headers: {
+        authorization: TOKEN,
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
@@ -198,8 +228,30 @@ describe('McpController', () => {
   })
 
   it('offers no GET stream', async () => {
-    const response = await fetch(baseUrl, { headers: { accept: 'text/event-stream' } })
+    const response = await fetch(baseUrl, { headers: { authorization: TOKEN, accept: 'text/event-stream' } })
 
     expect(response.status).toBe(405)
+  })
+
+  it('answers a request without a token with a challenge naming the metadata', async () => {
+    const response = await fetch(baseUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    })
+    const challenge = response.headers.get('www-authenticate')
+
+    expect(response.status).toBe(401)
+    expect(challenge).toMatch(/^Bearer error="invalid_token"/)
+    expect(challenge).toContain('resource_metadata="https://boxlite.test/.well-known/oauth-protected-resource/api/mcp"')
+    // The global filter's logic still answers, so the failed attempt is counted.
+    expect(incrementFailedAuth).toHaveBeenCalledTimes(1)
+  })
+
+  it('serves the protected resource metadata outside the api prefix', async () => {
+    const response = await fetch(`${origin}/.well-known/oauth-protected-resource/api/mcp`)
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ resource: RESOURCE, authorization_servers: [ISSUER] })
   })
 })
