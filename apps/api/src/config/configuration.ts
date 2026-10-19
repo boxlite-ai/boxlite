@@ -427,6 +427,10 @@ const configuration = {
     managementApi: oidcManagementApiConfig(),
     accountLink: oidcAccountLinkConfig(),
   },
+  mcp: {
+    // The public URL of `/api/mcp`; setting it publishes the endpoint's OAuth discovery metadata.
+    resourceUrl: process.env.MCP_RESOURCE_URL,
+  },
   smtp: {
     host: process.env.SMTP_HOST,
     port: parseInt(process.env.SMTP_PORT || '587', 10),

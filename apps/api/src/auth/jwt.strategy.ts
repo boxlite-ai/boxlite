@@ -71,6 +71,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     this.logger.debug('JwtStrategy initialized')
   }
 
+  /** The issuer whose tokens this strategy accepts, as tokens and the issuer's own metadata name it. */
+  get issuer(): string {
+    return this.options.issuer
+  }
+
   async validate(request: Request, payload: any): Promise<AuthContext> {
     // Keep this before JIT user creation: an already-issued unverified Auth0
     // database token must not create local state while the Auth0 Action rollout
@@ -135,9 +140,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
   }
 
-  async verifyToken(token: string): Promise<JWTPayload> {
+  /** Verifies a token for the API's audience, or for another one the caller serves (the MCP endpoint). */
+  async verifyToken(token: string, audience: string = this.options.audience): Promise<JWTPayload> {
     const { payload } = await jwtVerify(token, this.JWKS, {
-      audience: this.options.audience,
+      audience,
       issuer: this.options.issuer,
       algorithms: ['RS256'],
     })
