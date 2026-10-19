@@ -487,6 +487,10 @@ const configuration = {
     managementApi: oidcManagementApiConfig(),
     accountLink: oidcAccountLinkConfig(),
   },
+  mcp: {
+    // The public URL of `/api/mcp`; setting it publishes the endpoint's OAuth discovery metadata.
+    resourceUrl: process.env.MCP_RESOURCE_URL,
+  },
   organizationInvitation: {
     ttlSeconds: organizationInvitationTtlSeconds(),
   },

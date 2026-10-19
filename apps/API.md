@@ -716,7 +716,17 @@ an earlier revision cannot connect.
 Only OAuth bearer tokens are accepted (the `jwt` strategy, so the API's own
 issuer and audience); API keys are not. A request carrying an `Origin` header is
 refused with `403`, because MCP hosts call from servers and CLIs, not browsers.
-No OAuth discovery metadata is published, so a host must already hold a token.
+
+A request without a valid token gets `401` with an RFC 6750 challenge that
+names the endpoint's RFC 9728 metadata, so a host can find where to sign in:
+`WWW-Authenticate: Bearer error="invalid_token", error_description="…", resource_metadata="<origin>/.well-known/oauth-protected-resource/api/mcp"`.
+The body and the failed-auth throttling are those of every other `401`. The
+metadata names `MCP_RESOURCE_URL` as the `resource` and the issuer the `jwt`
+strategy accepts as the only authorization server; it advertises no scopes.
+`MCP_RESOURCE_URL` is the endpoint's public URL, such as
+`https://dev.boxlite.ai/api/mcp`, and must name the `/api/mcp` route. Without
+it the challenge carries no `resource_metadata` and the metadata route answers
+as an unknown path does.
 
 <details>
 <summary><b>Transport</b> · 3 routes</summary>
@@ -726,6 +736,15 @@ No OAuth discovery metadata is published, so a host must already hold a token.
 | `POST`   | `/api/mcp` | Answers one JSON-RPC request: `server/discover`, `tools/list`, or `tools/call`. |
 | `GET`    | `/api/mcp` | Returns `405`; protocol 2026-07-28 has no GET stream.                           |
 | `DELETE` | `/api/mcp` | Returns `405`; there is no session to end.                                      |
+
+</details>
+
+<details>
+<summary><b>Discovery</b> · 1 route</summary>
+
+| Method | Path                                            | What it does                                                                     |
+| ------ | ----------------------------------------------- | -------------------------------------------------------------------------------- |
+| `GET`  | `/.well-known/oauth-protected-resource/api/mcp` | Returns the Protected Resource Metadata without auth, outside the `/api` prefix. |
 
 </details>
 
