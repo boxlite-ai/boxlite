@@ -319,6 +319,12 @@ export const apiEnvironmentFrom = ({
       ...(optional(environment, 'SVIX_SERVER_URL')
         ? { SVIX_SERVER_URL: optional(environment, 'SVIX_SERVER_URL') as string }
         : {}),
+      // The MCP endpoint's resource URL. No default: it moves /api/mcp onto its
+      // own token audience, which works only once the stage's Auth0 tenant has
+      // an API with that identifier.
+      ...(optional(environment, 'MCP_RESOURCE_URL')
+        ? { MCP_RESOURCE_URL: optional(environment, 'MCP_RESOURCE_URL') as string }
+        : {}),
       ...(optional(environment, 'BOX_MIGRATION_ARCHIVE_PREFIX')
         ? { BOX_MIGRATION_ARCHIVE_PREFIX: optional(environment, 'BOX_MIGRATION_ARCHIVE_PREFIX') as string }
         : {}),
