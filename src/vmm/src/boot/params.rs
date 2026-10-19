@@ -16,6 +16,7 @@ use linux_loader::{
 };
 use vm_memory::{GuestAddress, GuestMemoryBackend};
 
+use super::initramfs::LoadedInitramfs;
 use crate::config::MAX_CMDLINE_BYTES;
 
 /// `boot_params` (the zero page), as the design's x86_64 layout places it.
@@ -38,7 +39,8 @@ const E820_RAM: u32 = 1;
 
 /// Writes the command line at 0x2_0000 and `boot_params` at 0x7000, then
 /// returns the zero-page address the boot vCPU gets in RSI. Each of `ranges`
-/// becomes usable E820 RAM outside [0x9_FC00, 1 MiB).
+/// becomes usable E820 RAM outside [0x9_FC00, 1 MiB). When `initramfs` is
+/// provided, sets `ramdisk_image` and `ramdisk_size`.
 ///
 /// Fails with `InvalidInput`, writing nothing, if `cmdline`, once trimmed, is
 /// not printable ASCII under `MAX_CMDLINE_BYTES`, or if `ranges` need more
@@ -47,6 +49,7 @@ pub(crate) fn write_boot_params<M: GuestMemoryBackend>(
     ram: &M,
     cmdline: &str,
     ranges: &[(GuestAddress, usize)],
+    initramfs: Option<LoadedInitramfs>,
 ) -> io::Result<u64> {
     let mut line = Cmdline::new(MAX_CMDLINE_BYTES).map_err(io::Error::other)?;
     line.insert_str(cmdline)
@@ -64,6 +67,10 @@ pub(crate) fn write_boot_params<M: GuestMemoryBackend>(
     params.hdr.kernel_alignment = KERNEL_ALIGNMENT;
     params.hdr.cmd_line_ptr = CMDLINE_START as u32;
     params.hdr.cmdline_size = cmdline_size as u32;
+    if let Some(initramfs) = initramfs {
+        params.hdr.ramdisk_image = initramfs.address as u32;
+        params.hdr.ramdisk_size = initramfs.size as u32;
+    }
     let entries = e820_entries(ranges);
     let slots = params.e820_table.len();
     if entries.len() > slots {

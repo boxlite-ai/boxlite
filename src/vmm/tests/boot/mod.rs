@@ -44,7 +44,27 @@ fn config(kernel: PathBuf, cmdline: &str) -> VmConfig {
         vcpu_count: 1,
         memory_mib: MEMORY_MIB,
         kernel,
+        initramfs: None,
         cmdline: cmdline.into(),
+    }
+}
+
+/// The initramfs fixture in a temporary file, removed on drop.
+struct InitramfsFile(PathBuf);
+
+impl InitramfsFile {
+    fn new(test: &str) -> Self {
+        let name = format!("boxlite-vmm-{}-{test}.cpio", process::id());
+        let path = std::env::temp_dir().join(name);
+        fs::write(&path, crate::boot::initramfs::tests::fixture())
+            .expect("write the initramfs fixture");
+        Self(path)
+    }
+}
+
+impl Drop for InitramfsFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
     }
 }
 
@@ -78,6 +98,35 @@ fn enters_the_loaded_kernel_with_rsi_at_the_zero_page() {
         u64::from(MEMORY_MIB) << 20,
         "E820 ends where RAM ends"
     );
+    let hdr = params.hdr;
+    assert_eq!(
+        (hdr.ramdisk_image, hdr.ramdisk_size),
+        (0, 0),
+        "no initramfs configured"
+    );
+}
+
+#[test]
+fn loads_the_initramfs_at_the_top_of_guest_ram_and_records_it_in_the_zero_page() {
+    let kernel = KernelFile::new("prepare-initramfs-kernel");
+    let initramfs = InitramfsFile::new("prepare-initramfs");
+    let ram = ram();
+    let mut config = config(kernel.0.clone(), CMDLINE);
+    config.initramfs = Some(initramfs.0.clone());
+
+    let regs = prepare(&ram, &config).unwrap().boot_regs;
+
+    assert_eq!((regs.rip, regs.rsi), (ENTRY, 0x7000));
+    let memory = ram.memory();
+    let params: boot_params = memory.read_obj(GuestAddress(regs.rsi)).unwrap();
+    let hdr = params.hdr;
+    assert_eq!((hdr.ramdisk_image, hdr.ramdisk_size), (0x1f_f000, 372));
+
+    let mut written = vec![0u8; 372];
+    memory
+        .read_slice(&mut written, GuestAddress(hdr.ramdisk_image.into()))
+        .unwrap();
+    assert_eq!(written, crate::boot::initramfs::tests::fixture());
 }
 
 #[test]
@@ -93,6 +142,14 @@ fn a_failure_names_its_step_and_keeps_the_io_cause() {
             format!("failed to load the kernel {}", missing.display()),
             io::ErrorKind::NotFound,
         ),
+        (
+            VmConfig {
+                initramfs: Some(missing.clone()),
+                ..config(kernel.0.clone(), CMDLINE)
+            },
+            format!("failed to load the initramfs {}", missing.display()),
+            io::ErrorKind::NotFound,
+        ),
         // `Vm::new` validates first; this bypasses it.
         (
             config(kernel.0.clone(), "console=ttyS0\nquiet"),
@@ -104,7 +161,9 @@ fn a_failure_names_its_step_and_keeps_the_io_cause() {
         assert!(
             matches!(
                 error,
-                Error::LoadKernel { .. } | Error::WriteBootData { .. }
+                Error::LoadKernel { .. }
+                    | Error::LoadInitramfs { .. }
+                    | Error::WriteBootData { .. }
             ),
             "{error:?}"
         );
@@ -117,13 +176,13 @@ fn a_failure_names_its_step_and_keeps_the_io_cause() {
     }
 }
 
-/// Boots the kernel named by `VMM_KERNEL` on one KVM vCPU. A serial stub
-/// collects the earlycon log, which must show the boot data as Linux read it,
-/// up to the root-mount panic and the keyboard-controller reset that
-/// `panic=-1 reboot=k` turn it into.
+/// Boots the kernel named by `VMM_KERNEL` with the test initramfs on one KVM
+/// vCPU. A serial stub collects the earlycon log, which must show the boot data
+/// as Linux read it, up to /init running exit_group(42) and the panic
+/// `exitcode=0x00002a00` before the keyboard-controller reset.
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm and VMM_KERNEL naming an x86_64 vmlinux"]
-fn boots_linux_to_the_root_mount_panic() {
+fn boots_linux_to_the_init_exit_panic() {
     use std::{
         sync::mpsc,
         thread,
@@ -146,10 +205,12 @@ fn boots_linux_to_the_root_mount_panic() {
 
     let kernel = std::env::var_os("VMM_KERNEL")
         .expect("set VMM_KERNEL or run make test:integration:vmm:linux");
+    let initramfs = InitramfsFile::new("integration");
     let config = VmConfig {
         vcpu_count: 1,
         memory_mib: RAM_MIB,
         kernel: kernel.into(),
+        initramfs: Some(initramfs.0.clone()),
         cmdline: LINUX_CMDLINE.into(),
     };
     config.validate().unwrap();
@@ -232,5 +293,9 @@ fn boots_linux_to_the_root_mount_panic() {
         "{log}"
     );
     assert!(has_prefix("Memory: "), "{log}");
-    assert!(log.contains("VFS: Unable to mount root fs"), "{log}");
+    assert!(
+        log.contains("RAMDISK: [mem 0x0ffff000-0x0fffffff]"),
+        "{log}"
+    );
+    assert!(log.contains("exitcode=0x00002a00"), "{log}");
 }
