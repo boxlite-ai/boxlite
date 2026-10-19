@@ -2000,6 +2000,8 @@ mod tests {
     use boxlite::runtime::options::NetworkSpec;
     use std::time::Duration;
 
+    mod ssh;
+
     // --- API-key auth decision (pure; no runtime/network needed) ---
 
     #[test]
@@ -3792,54 +3794,6 @@ mod tests {
         );
 
         drop(clocks);
-        server.abort();
-        upstream.task.abort();
-    }
-
-    /// The SSH configure boundary answers malformed JSON, a wrong content
-    /// type, and a body missing required fields with the fixed sanitized
-    /// message — serde's own would quote the body, and the body carries a
-    /// private key. Extraction rejects before box resolution, so even a
-    /// missing box cannot outrank it.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn ssh_configure_rejects_bad_bodies_with_a_sanitized_400() {
-        let upstream = stub_upstream("running", true).await;
-        let state = Arc::new(AppState {
-            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
-                .expect("rest runtime"),
-            boxes: RwLock::new(HashMap::new()),
-            executions: RwLock::new(HashMap::new()),
-            api_key: None,
-            lifecycle: RwLock::new(HashMap::new()),
-            last_activity: RwLock::new(HashMap::new()),
-        });
-        let (base, server) = serve_router(state).await;
-        // Truncated JSON, a body missing required fields, and a complete body
-        // under the wrong content type — the only case whose JSON would parse.
-        let valid = r#"{"listen_address":"0","host_private_key":"","accounts":[]}"#;
-        let cases = [
-            ("application/json", r#"{"listen_address":"leak-me""#),
-            ("application/json", r#"{"host_private_key":"secret"}"#),
-            ("text/plain", valid),
-        ];
-
-        for (content_type, body) in cases {
-            let response = reqwest::Client::new()
-                .post(format!("{base}/v1/boxes/does-not-exist/ssh"))
-                .header("content-type", content_type)
-                .body(body)
-                .send()
-                .await
-                .expect("request must reach the server");
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{content_type}");
-            let body = response.text().await.expect("error body");
-            assert!(body.contains("invalid SSH configuration"), "{body}");
-            assert!(
-                !body.contains("leak-me") && !body.contains("secret"),
-                "the rejection must not echo the body: {body}"
-            );
-        }
-
         server.abort();
         upstream.task.abort();
     }

@@ -529,6 +529,8 @@ paths:
                 $ref: "#/components/schemas/SshStatus"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
 
   # -------------------------------------------------------------------------
   # Snapshot / Portability
