@@ -77,6 +77,7 @@ let options = BoxliteOptions {
         ImageRegistry::https("ghcr.io/myorg").with_search(true),
         ImageRegistry::https("registry.example.com").with_basic_auth("user", "password"),
     ],
+    ..Default::default()
 };
 let runtime = BoxliteRuntime::new(options)?;
 
@@ -220,6 +221,18 @@ pub struct BoxliteOptions {
 
     /// Registry transport, TLS, search, and auth configuration
     pub image_registries: Vec<ImageRegistry>,
+
+    /// Proxy for image pulls; `None` reads the proxy environment variables
+    pub image_registry_proxy: Option<ImageRegistryProxy>,
+}
+
+pub struct ImageRegistryProxy {
+    /// Proxy URL for `RegistryTransport::Http` registries.
+    pub http_proxy: Option<String>,
+    /// Proxy URL for `RegistryTransport::Https` registries.
+    pub https_proxy: Option<String>,
+    /// Comma-separated hosts, domains, IPs, or CIDRs that bypass the proxy.
+    pub no_proxy: Option<String>,
 }
 
 pub struct ImageRegistry {
@@ -239,7 +252,7 @@ pub struct ImageRegistry {
 #### Example
 
 ```rust
-use boxlite::{BoxliteOptions, ImageRegistry};
+use boxlite::{BoxliteOptions, ImageRegistry, ImageRegistryProxy};
 use std::path::PathBuf;
 
 let options = BoxliteOptions {
@@ -252,6 +265,10 @@ let options = BoxliteOptions {
             .with_skip_verify(true)
             .with_basic_auth("user", "password"),
     ],
+    image_registry_proxy: Some(ImageRegistryProxy {
+        https_proxy: Some("http://proxy.corp.example:3128".into()),
+        ..Default::default()
+    }),
 };
 // "alpine" tries ghcr.io/myorg/alpine, then docker.io/alpine,
 // then registry.local:5000/library/alpine.

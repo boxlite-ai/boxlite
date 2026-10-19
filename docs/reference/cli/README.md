@@ -967,7 +967,7 @@ Defaults:
 
 ## Configuration file
 
-`--config PATH` accepts a JSON file deserialized into `BoxliteOptions`. The primary field is `image_registries`; CLI flags like `--home` and `--registry` are layered on top after loading.
+`--config PATH` accepts a JSON file deserialized into `BoxliteOptions`. The primary field is `image_registries`; `image_registry_proxy` sets a pull proxy (see [Pull proxy](../../guides/image-registry-configuration.md#pull-proxy)). CLI flags like `--home` and `--registry` are layered on top after loading. A profile that targets a remote server ignores this file.
 
 ```json
 {

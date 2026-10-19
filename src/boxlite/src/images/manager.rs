@@ -20,7 +20,7 @@ use super::blob_source::{BlobSource, LocalBundleBlobSource, StoreBlobSource};
 use super::object::ImageObject;
 use crate::db::{CachedImage, Database};
 use crate::images::store::{ImageStore, SharedImageStore};
-use crate::runtime::options::ImageRegistry;
+use crate::runtime::options::{ImageRegistry, ImageRegistryProxy};
 use crate::runtime::types::{ImageDetail, ImageInfo, ImageVersion};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use oci_client::Reference;
@@ -71,7 +71,7 @@ pub(super) struct LayerInfo {
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let db = Database::open(&PathBuf::from("/tmp/boxlite.db"))?;
-/// let manager = ImageManager::new(PathBuf::from("/tmp/images"), db, vec![])?;
+/// let manager = ImageManager::new(PathBuf::from("/tmp/images"), db, vec![], None)?;
 ///
 /// // Pull an image
 /// let image = manager.pull("python:alpine").await?;
@@ -100,12 +100,19 @@ impl ImageManager {
     /// * `images_dir` - Directory for image cache
     /// * `db` - Database for image index
     /// * `image_registries` - Registry transport, TLS, auth, and search settings
+    /// * `image_registry_proxy` - Proxy for registry requests, already validated
     pub fn new(
         images_dir: PathBuf,
         db: Database,
         image_registries: Vec<ImageRegistry>,
+        image_registry_proxy: Option<ImageRegistryProxy>,
     ) -> BoxliteResult<Self> {
-        let store = Arc::new(ImageStore::new(images_dir, db, image_registries)?);
+        let store = Arc::new(ImageStore::new(
+            images_dir,
+            db,
+            image_registries,
+            image_registry_proxy,
+        )?);
         Ok(Self { store })
     }
 
@@ -405,7 +412,7 @@ mod tests {
     async fn a_pulled_tag_is_listed_once() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("test.db")).unwrap();
-        let images = ImageManager::new(dir.path().join("images"), db, vec![]).unwrap();
+        let images = ImageManager::new(dir.path().join("images"), db, vec![], None).unwrap();
         seed_cached_build(images.store(), "quay.io/acme/app:v1", FIRST).await;
         seed_cached_build(images.store(), &format!("quay.io/acme/app@{FIRST}"), FIRST).await;
         seed_cached_build(images.store(), &format!("quay.io/acme/app@{NEWER}"), NEWER).await;
@@ -428,7 +435,7 @@ mod tests {
     async fn an_image_pulled_by_its_index_digest_is_listed_once() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("test.db")).unwrap();
-        let images = ImageManager::new(dir.path().join("images"), db, vec![]).unwrap();
+        let images = ImageManager::new(dir.path().join("images"), db, vec![], None).unwrap();
         let index = format!("sha256:{}", "a".repeat(64));
         let pulled = format!("quay.io/acme/app@{index}");
         seed_cached_build(images.store(), &pulled, FIRST).await;
@@ -446,7 +453,7 @@ mod tests {
     async fn listed(seeds: &[(&str, &str)]) -> Vec<String> {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("test.db")).unwrap();
-        let images = ImageManager::new(dir.path().join("images"), db, vec![]).unwrap();
+        let images = ImageManager::new(dir.path().join("images"), db, vec![], None).unwrap();
         for (reference, build) in seeds {
             seed_cached_build(images.store(), reference, build).await;
         }
@@ -511,7 +518,7 @@ mod tests {
     async fn seeded(seeds: &[(&str, &str)]) -> (tempfile::TempDir, ImageManager) {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("test.db")).unwrap();
-        let images = ImageManager::new(dir.path().join("images"), db, vec![]).unwrap();
+        let images = ImageManager::new(dir.path().join("images"), db, vec![], None).unwrap();
         for (reference, build) in seeds {
             seed_cached_build(images.store(), reference, build).await;
         }
@@ -674,7 +681,8 @@ mod tests {
     async fn a_build_whose_stored_time_does_not_parse_reads_as_the_oldest() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("test.db")).unwrap();
-        let images = ImageManager::new(dir.path().join("images"), db.clone(), vec![]).unwrap();
+        let images =
+            ImageManager::new(dir.path().join("images"), db.clone(), vec![], None).unwrap();
         seed_cached_build(images.store(), "quay.io/acme/app:v2", NEWER).await;
         let unreadable_time = CachedImage {
             manifest_digest: FIRST.to_string(),

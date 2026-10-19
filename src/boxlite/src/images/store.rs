@@ -14,10 +14,13 @@
 //! - `layer_extracted()` - Get extracted layer path (extracts if needed)
 
 use crate::db::{CachedImage, Database, ImageIndexStore};
+use crate::images::image_registry_proxy;
 use crate::images::manager::{ImageManifest, LayerInfo};
 use crate::images::storage::ImageStorage;
 use crate::images::system_trust;
-use crate::runtime::options::{ImageRegistry, ImageRegistryAuth, RegistryTransport};
+use crate::runtime::options::{
+    ImageRegistry, ImageRegistryAuth, ImageRegistryProxy, RegistryTransport,
+};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use oci_client::Reference;
 use oci_client::client::{ClientConfig, ClientProtocol};
@@ -69,7 +72,7 @@ impl ImageStoreInner {
 /// # Example
 ///
 /// ```ignore
-/// let store = Arc::new(ImageStore::new(images_dir, db, vec![])?);
+/// let store = Arc::new(ImageStore::new(images_dir, db, vec![], None)?);
 ///
 /// // Pull image (thread-safe, releases lock during download)
 /// let manifest = store.pull("python:alpine").await?;
@@ -85,6 +88,8 @@ pub struct ImageStore {
     registries: Vec<String>,
     /// Registry transport, TLS, auth, and search settings.
     image_registries: Vec<ImageRegistry>,
+    /// Proxy for every registry request; `None` leaves it to the environment.
+    image_registry_proxy: Option<ImageRegistryProxy>,
 }
 
 impl std::fmt::Debug for ImageStore {
@@ -100,10 +105,13 @@ impl ImageStore {
     /// * `images_dir` - Directory for image cache
     /// * `db` - Database for image index
     /// * `image_registries` - Registry transport, TLS, auth, and search settings
+    /// * `image_registry_proxy` - Proxy for registry requests, already validated;
+    ///   `None` leaves proxying to the environment
     pub fn new(
         images_dir: PathBuf,
         db: Database,
         image_registries: Vec<ImageRegistry>,
+        image_registry_proxy: Option<ImageRegistryProxy>,
     ) -> BoxliteResult<Self> {
         validate_image_registries(&image_registries)?;
 
@@ -113,6 +121,7 @@ impl ImageStore {
             inner: RwLock::new(inner),
             registries,
             image_registries,
+            image_registry_proxy,
         })
     }
 
@@ -1132,12 +1141,14 @@ impl ImageStore {
         Ok(())
     }
 
-    /// Build the client for one pull, trusting the system certificate store on
-    /// top of the bundled roots. It fails where `Client::new` would log the
-    /// error and fall back to a default client without the TLS settings.
+    /// Build the client for one pull: through the proxy when one is set, and
+    /// trusting the system certificate store on top of the bundled roots. It
+    /// fails where `Client::new` would log the error and fall back to a default
+    /// client without the proxy and TLS settings.
     async fn client_for(&self, reference: &Reference) -> BoxliteResult<oci_client::Client> {
         let host = reference.registry();
         let mut config = client_config_for_registry(host, &self.image_registries);
+        image_registry_proxy::apply(self.image_registry_proxy.as_ref(), &mut config);
         // With verification off no root is consulted, so the store is not read.
         if !config.accept_invalid_certificates {
             config.extra_root_certificates = system_trust::root_certificates().await;
@@ -1617,7 +1628,7 @@ pub(super) mod tests {
         let image_ref = format!("{}/acme/app:v1", listener.local_addr().unwrap());
         let temp_dir = tempfile::tempdir().unwrap();
         let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
-        let store = ImageStore::new(temp_dir.path().join("images"), db, vec![]).unwrap();
+        let store = ImageStore::new(temp_dir.path().join("images"), db, vec![], None).unwrap();
 
         let (pull, received) = timeout(Duration::from_secs(5), async {
             tokio::join!(
@@ -1675,7 +1686,7 @@ pub(super) mod tests {
         if let Some(image_ref) = std::env::var_os(CHILD_IMAGE_ENV) {
             let temp_dir = tempfile::tempdir().unwrap();
             let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
-            let store = ImageStore::new(temp_dir.path().join("images"), db, vec![]).unwrap();
+            let store = ImageStore::new(temp_dir.path().join("images"), db, vec![], None).unwrap();
             let pulled = timeout(
                 Duration::from_secs(5),
                 store.pull(image_ref.to_str().unwrap()),
@@ -1925,7 +1936,7 @@ pub(super) mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], None).unwrap();
 
         // Load from local
         let manifest = store.load_from_local(bundle_dir.clone()).await.unwrap();
@@ -1944,7 +1955,8 @@ pub(super) mod tests {
     async fn forget_matching_keeps_every_reference_when_one_cannot_be_removed() {
         let temp_dir = tempfile::tempdir().unwrap();
         let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
-        let store = ImageStore::new(temp_dir.path().join("images"), db.clone(), vec![]).unwrap();
+        let store =
+            ImageStore::new(temp_dir.path().join("images"), db.clone(), vec![], None).unwrap();
         let tag = "quay.io/acme/app:v1".to_string();
         let manifest = seed_cached_image(&store, &tag).await;
         let alias = format!("quay.io/acme/app@{}", manifest.manifest_digest);
@@ -1987,7 +1999,8 @@ pub(super) mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
         let images =
-            crate::images::ImageManager::new(temp_dir.path().join("images"), db, vec![]).unwrap();
+            crate::images::ImageManager::new(temp_dir.path().join("images"), db, vec![], None)
+                .unwrap();
         let store = images.store();
         let manifest = seed_cached_image(store, "quay.io/acme/app:v1").await;
 
@@ -2258,6 +2271,7 @@ pub(super) mod tests {
             temp_dir.path().join("images"),
             db,
             vec![ImageRegistry::http(host)],
+            None,
         )
         .unwrap();
         let image_ref = format!("{host}/acme/app:v1");
@@ -2387,6 +2401,7 @@ pub(super) mod tests {
             temp_dir.path().join("images"),
             db,
             vec![ImageRegistry::http(&host)],
+            None,
         )
         .unwrap();
 
@@ -2505,6 +2520,7 @@ pub(super) mod tests {
             temp_dir.path().join("images"),
             db,
             vec![ImageRegistry::http(&host)],
+            None,
         )
         .unwrap();
 
@@ -2540,6 +2556,7 @@ pub(super) mod tests {
             temp_dir.path().join("images"),
             db,
             vec![ImageRegistry::http(&host)],
+            None,
         )
         .unwrap();
 
@@ -2623,6 +2640,7 @@ pub(super) mod tests {
             temp_dir.path().join("images"),
             db,
             vec![ImageRegistry::http(&host)],
+            None,
         )
         .unwrap();
 
@@ -2689,7 +2707,7 @@ pub(super) mod tests {
     async fn refresh_uses_the_cache_when_the_registry_address_is_refused() {
         let temp_dir = tempfile::tempdir().unwrap();
         let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
-        let store = ImageStore::new(temp_dir.path().join("images"), db, vec![]).unwrap();
+        let store = ImageStore::new(temp_dir.path().join("images"), db, vec![], None).unwrap();
         let image_ref = "127.0.0.1:1/acme/app:v1";
         let seeded = seed_cached_image(&store, image_ref).await;
 
@@ -2749,6 +2767,7 @@ pub(super) mod tests {
             temp_dir.path().join("images"),
             db,
             vec![ImageRegistry::http(&host)],
+            None,
         )
         .unwrap();
         let image_ref = format!("{host}/acme/app:v1");
@@ -2802,7 +2821,7 @@ pub(super) mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], None).unwrap();
 
         // Load from local
         let _manifest = store.load_from_local(bundle_dir.clone()).await.unwrap();
@@ -2837,7 +2856,7 @@ pub(super) mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], None).unwrap();
 
         // Load should fail
         let result = store.load_from_local(bundle_dir).await;
@@ -2863,7 +2882,7 @@ pub(super) mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], None).unwrap();
 
         // Load should fail
         let result = store.load_from_local(bundle_dir).await;
@@ -3062,7 +3081,7 @@ pub(super) mod tests {
 
     fn store_with_tmp(temp_dir: &Path) -> ImageStore {
         let db = Database::open(&temp_dir.join("test.db")).unwrap();
-        ImageStore::new(temp_dir.join("images"), db, vec![]).unwrap()
+        ImageStore::new(temp_dir.join("images"), db, vec![], None).unwrap()
     }
 
     /// Store `bytes` as a content-addressed config blob and return the digest
