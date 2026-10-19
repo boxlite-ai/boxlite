@@ -38,15 +38,17 @@ const E820_RAM: u32 = 1;
 
 /// Writes the command line at 0x2_0000 and `boot_params` at 0x7000, then
 /// returns the zero-page address the boot vCPU gets in RSI. Each of `ranges`
-/// becomes usable E820 RAM outside [0x9_FC00, 1 MiB).
+/// becomes usable E820 RAM outside [0x9_FC00, 1 MiB), and `initramfs`, the
+/// start and size of a loaded archive, goes into the setup header.
 ///
 /// Fails with `InvalidInput`, writing nothing, if `cmdline`, once trimmed, is
-/// not printable ASCII under `MAX_CMDLINE_BYTES`, or if `ranges` need more
-/// than the 128 E820 slots.
+/// not printable ASCII under `MAX_CMDLINE_BYTES`, if `ranges` need more
+/// than the 128 E820 slots, or if `initramfs` does not fit the 32-bit fields.
 pub(crate) fn write_boot_params<M: GuestMemoryBackend>(
     ram: &M,
     cmdline: &str,
     ranges: &[(GuestAddress, usize)],
+    initramfs: Option<(GuestAddress, usize)>,
 ) -> io::Result<u64> {
     let mut line = Cmdline::new(MAX_CMDLINE_BYTES).map_err(io::Error::other)?;
     line.insert_str(cmdline)
@@ -64,6 +66,18 @@ pub(crate) fn write_boot_params<M: GuestMemoryBackend>(
     params.hdr.kernel_alignment = KERNEL_ALIGNMENT;
     params.hdr.cmd_line_ptr = CMDLINE_START as u32;
     params.hdr.cmdline_size = cmdline_size as u32;
+    if let Some((start, size)) = initramfs {
+        let field = |value: u64| {
+            u32::try_from(value).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "the initramfs does not fit the 32-bit setup header fields",
+                )
+            })
+        };
+        params.hdr.ramdisk_image = field(start.0)?;
+        params.hdr.ramdisk_size = field(size as u64)?;
+    }
     let entries = e820_entries(ranges);
     let slots = params.e820_table.len();
     if entries.len() > slots {

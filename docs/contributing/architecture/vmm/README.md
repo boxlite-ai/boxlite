@@ -292,6 +292,7 @@ On x86_64 the layout uses the values most surveyed VMMs share.
 | `0x9_FC00` | MP table, in the last KiB below 640 KiB | Firecracker, libkrun |
 | `0x10_0000` | `bzImage` load address; an ELF `vmlinux` loads where its headers say | four of six |
 | below `0xC000_0000`, and above 4 GiB | RAM, split around the 32-bit MMIO hole | Firecracker, cloud-hypervisor, dragonball |
+| top of the RAM below `0xC000_0000` | initramfs, in the highest 4 KiB-aligned slot above the kernel | Firecracker, cloud-hypervisor |
 | `0xC000_0000`–`0xD000_0000` | 32-bit PCI BAR window, reserved for M9 | Firecracker, cloud-hypervisor and alioth give PCI BARs space in the hole |
 | `0xD000_0000`–`0xE000_0000` | virtio-mmio devices, 4 KiB each, with interrupts from GSI 5 | device window: libkrun, crosvm; GSI 5: Firecracker, libkrun, dragonball |
 | `0xE000_0000`–`0xF000_0000` | PCI ECAM, reserved for M9 | alioth |
