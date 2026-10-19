@@ -42,7 +42,7 @@ fn e820(params: &boot_params) -> Vec<(u64, u64, u32)> {
 fn fills_the_setup_header_and_writes_the_command_line() {
     let ram = ram(16 << 20);
     assert_eq!(
-        write_boot_params(&ram, CMDLINE, &ram_ranges(16)).unwrap(),
+        write_boot_params(&ram, CMDLINE, &ram_ranges(16), None).unwrap(),
         ZERO_PAGE
     );
 
@@ -76,6 +76,25 @@ fn fills_the_setup_header_and_writes_the_command_line() {
 }
 
 #[test]
+fn records_the_initramfs_in_the_setup_header() {
+    let ram = ram(16 << 20);
+    let initramfs = (GuestAddress(0xff_f000), 372);
+    write_boot_params(&ram, CMDLINE, &ram_ranges(16), Some(initramfs)).unwrap();
+    let hdr = zero_page(&ram).hdr;
+    assert_eq!((hdr.ramdisk_image, hdr.ramdisk_size), (0xff_f000, 372));
+}
+
+#[test]
+fn refuses_an_initramfs_beyond_the_32_bit_fields_before_writing() {
+    let ram = ram(1 << 20);
+    let above_4_gib = (GuestAddress(1 << 32), 1);
+    let error = write_boot_params(&ram, CMDLINE, &ram_ranges(1), Some(above_4_gib)).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    let byte: u8 = ram.read_obj(GuestAddress(ZERO_PAGE)).unwrap();
+    assert_eq!(byte, 0xff, "nothing written at the zero page");
+}
+
+#[test]
 fn lists_ram_as_usable_e820_entries_outside_the_low_memory_hole() {
     // [0x9_FC00, 1 MiB) holds the MP table and the legacy BIOS areas; 1 MiB
     // of RAM has nothing above it.
@@ -87,7 +106,7 @@ fn lists_ram_as_usable_e820_entries_outside_the_low_memory_hole() {
         (1, vec![(0, 0x9_fc00, E820_RAM)]),
     ] {
         let ram = ram((memory_mib as usize) << 20);
-        write_boot_params(&ram, CMDLINE, &ram_ranges(memory_mib)).unwrap();
+        write_boot_params(&ram, CMDLINE, &ram_ranges(memory_mib), None).unwrap();
         assert_eq!(e820(&zero_page(&ram)), expected, "{memory_mib} MiB");
     }
 }
@@ -100,14 +119,14 @@ fn refuses_more_e820_entries_than_the_zero_page_holds_before_writing() {
         .collect();
     let ram = ram(1 << 20);
 
-    let error = write_boot_params(&ram, CMDLINE, &ranges).unwrap_err();
+    let error = write_boot_params(&ram, CMDLINE, &ranges, None).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     for address in [ZERO_PAGE, 0x2_0000] {
         let byte: u8 = ram.read_obj(GuestAddress(address)).unwrap();
         assert_eq!(byte, 0xff, "nothing written at {address:#x}");
     }
 
-    write_boot_params(&ram, CMDLINE, &ranges[..128]).unwrap();
+    write_boot_params(&ram, CMDLINE, &ranges[..128], None).unwrap();
     assert_eq!(e820(&zero_page(&ram)).len(), 128);
 }
 
@@ -120,7 +139,7 @@ fn agrees_with_validate_on_command_line_limits() {
         ("console=ttyS0\nquiet".into(), false),
         ("init=/caf\u{e9}".into(), false),
     ] {
-        let written = write_boot_params(&ram(1 << 20), &cmdline, &ram_ranges(1));
+        let written = write_boot_params(&ram(1 << 20), &cmdline, &ram_ranges(1), None);
         assert_eq!(
             written.map_err(|error| error.kind()).err(),
             (!accepted).then_some(io::ErrorKind::InvalidInput),
@@ -131,6 +150,7 @@ fn agrees_with_validate_on_command_line_limits() {
             memory_mib: 1,
             kernel: "vmlinux".into(),
             cmdline,
+            initramfs: None,
         };
         assert_eq!(config.validate().is_ok(), accepted, "{config:?}");
     }
