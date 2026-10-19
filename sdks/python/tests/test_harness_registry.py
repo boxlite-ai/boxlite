@@ -34,5 +34,9 @@ def test_upstream_mode_lists_the_public_mirrors(test_registries):
     """In upstream mode make runs the suite without the local registry, so the
     harness lists the public mirrors it used before."""
     hosts = [registry.host for registry in test_registries]
-    assert "docker.io" in hosts, hosts
-    assert not any(map(_on_this_machine, hosts)), hosts
+    assert hosts == [
+        "docker.m.daocloud.io",
+        "docker.xuanyuan.me",
+        "docker.1ms.run",
+        "docker.io",
+    ]

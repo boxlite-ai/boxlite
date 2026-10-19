@@ -23,7 +23,10 @@ test.skipIf(upstream)("harness registries stay on this machine", () => {
 // In upstream mode make runs the suite without the local registry, so the
 // harness lists the public mirrors it used before.
 test.runIf(upstream)("upstream mode lists the public mirrors", () => {
-  const hosts = testRegistries().map((registry) => registry.host);
-  expect(hosts).toContain("docker.io");
-  expect(hosts.some(onThisMachine), hosts.join(", ")).toBe(false);
+  expect(testRegistries().map((registry) => registry.host)).toEqual([
+    "docker.m.daocloud.io",
+    "docker.xuanyuan.me",
+    "docker.1ms.run",
+    "docker.io",
+  ]);
 });
