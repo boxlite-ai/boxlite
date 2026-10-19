@@ -7,4 +7,5 @@ pub(super) mod images;
 pub(super) mod me;
 pub(super) mod metrics;
 pub(super) mod snapshots;
+pub(super) mod ssh;
 pub(super) mod volumes;

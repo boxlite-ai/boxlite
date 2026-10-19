@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 pub struct ServeChild {
     child: Child,
     port: u16,
+    api_key: Option<String>,
     // Serve's own home. Dropped *after* the child is signalled, so its boxes are
     // already stopped and the leaked-shim assertion in PerTestBoxHome's Drop is
     // satisfied.
@@ -18,6 +19,12 @@ pub struct ServeChild {
 
 impl ServeChild {
     pub fn start() -> Self {
+        Self::start_with(&[], None)
+    }
+
+    /// Start `boxlite serve` with extra `serve` arguments, e.g. `["--api-key",
+    /// "k"]`; pass the same key as `api_key` when it authenticates clients.
+    pub fn start_with(extra: &[&str], api_key: Option<&str>) -> Self {
         let home = boxlite_test_utils::home::PerTestBoxHome::new();
 
         // Ask the OS for a free port, then release it — a small race with
@@ -34,6 +41,7 @@ impl ServeChild {
             cmd.arg("--registry").arg(reg);
         }
         cmd.args(["serve", "--host", "127.0.0.1", "--port", &port.to_string()])
+            .args(extra)
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
@@ -41,6 +49,7 @@ impl ServeChild {
         let serve = Self {
             child,
             port,
+            api_key: api_key.map(str::to_string),
             _home: home,
         };
         serve.wait_ready();
@@ -57,11 +66,12 @@ impl ServeChild {
 
     /// Run a `boxlite --url` client command against this server.
     pub fn client(&self, args: &[&str]) -> std::process::Output {
-        Command::new(env!("CARGO_BIN_EXE_boxlite"))
-            .args(["--url", &self.url()])
-            .args(args)
-            .output()
-            .expect("boxlite --url")
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_boxlite"));
+        cmd.args(["--url", &self.url()]).args(args);
+        if let Some(key) = &self.api_key {
+            cmd.env("BOXLITE_API_KEY", key);
+        }
+        cmd.output().expect("boxlite --url")
     }
 
     /// Wait until the server reports no boxes.
@@ -97,8 +107,12 @@ impl ServeChild {
         let deadline = Instant::now() + Duration::from_secs(45);
         while Instant::now() < deadline {
             if TcpStream::connect(("127.0.0.1", self.port)).is_ok() {
-                let ok = Command::new(env!("CARGO_BIN_EXE_boxlite"))
-                    .args(["--url", &self.url(), "ps"])
+                let mut probe = Command::new(env!("CARGO_BIN_EXE_boxlite"));
+                probe.args(["--url", &self.url(), "ps"]);
+                if let Some(key) = &self.api_key {
+                    probe.env("BOXLITE_API_KEY", key);
+                }
+                let ok = probe
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status()

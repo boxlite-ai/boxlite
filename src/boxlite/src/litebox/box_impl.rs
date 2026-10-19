@@ -25,7 +25,7 @@ use crate::event_listener::EventListener;
 #[cfg(target_os = "linux")]
 use crate::fs::BindMountHandle;
 use crate::litebox::copy::{CopyOptions, CopySourceKind};
-use crate::litebox::{BoxConnection, BoxTunnel};
+use crate::litebox::{BoxConnection, BoxTunnel, SshConfig, SshStatus};
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::net::NetworkBackend;
@@ -1613,6 +1613,18 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         BoxImpl::export_box(self, options, dest).await
+    }
+
+    async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
+        BoxImpl::ssh_configure(self, config).await
+    }
+
+    async fn ssh_status(&self) -> BoxliteResult<SshStatus> {
+        BoxImpl::ssh_status(self).await
+    }
+
+    async fn ssh_disable(&self) -> BoxliteResult<SshStatus> {
+        BoxImpl::ssh_disable(self).await
     }
 }
 

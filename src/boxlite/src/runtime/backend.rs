@@ -9,7 +9,9 @@ use async_trait::async_trait;
 
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
-use crate::litebox::{AttachOptions, BoxCommand, BoxTunnel, Execution, LiteBox};
+use crate::litebox::{
+    AttachOptions, BoxCommand, BoxTunnel, Execution, LiteBox, SshConfig, SshStatus,
+};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
     BoxArchive, BoxOptions, CloneOptions, ExportOptions, SnapshotOptions,
@@ -155,6 +157,15 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
     ) -> BoxliteResult<Vec<LiteBox>>;
 
     async fn export_box(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive>;
+
+    /// Replace the guest's SSH configuration (see [`crate::litebox::SshHandle`]).
+    async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus>;
+
+    /// Read the guest's SSH state without starting the box.
+    async fn ssh_status(&self) -> BoxliteResult<SshStatus>;
+
+    /// Stop the guest's SSH listener without starting the box.
+    async fn ssh_disable(&self) -> BoxliteResult<SshStatus>;
 }
 
 /// Backend abstraction for box network operations.

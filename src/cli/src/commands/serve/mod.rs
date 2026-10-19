@@ -1394,6 +1394,8 @@ fn auth_allows(expected: Option<&str>, path: &str, bearer: Option<&str>) -> bool
 /// - a bare `GET`/`HEAD` on the box, which reads metadata rather than using the
 ///   box — a client watching `status` once a second would otherwise reset the
 ///   idle window before every sweep and AutoStop would never fire;
+/// - `GET`/`HEAD`/`DELETE` on `/ssh`, which observe or disable SSH without
+///   starting the box. `POST /ssh` configures it and does count;
 /// - `DELETE`, which is removing the box, not using it.
 ///
 /// `/stop` is excluded because it cannot matter: AutoStop ignores a box that is
@@ -1409,6 +1411,10 @@ fn activity_box_id<'a>(method: &Method, path: &'a str) -> Option<&'a str> {
     }
     // A read of the box resource itself is metadata, not use.
     if tail.is_empty() && matches!(*method, Method::GET | Method::HEAD | Method::DELETE) {
+        return None;
+    }
+    // SSH observations and disable must not hold a box open; configure does.
+    if tail == "ssh" && matches!(*method, Method::GET | Method::HEAD | Method::DELETE) {
         return None;
     }
     Some(box_id)
@@ -1792,7 +1798,7 @@ async fn get_or_attach_main_session(
 
 fn build_router(state: Arc<AppState>) -> Router {
     use handlers::{
-        advanced, boxes, config, executions, files, images, me, metrics, snapshots, volumes,
+        advanced, boxes, config, executions, files, images, me, metrics, snapshots, ssh, volumes,
     };
 
     Router::new()
@@ -1842,6 +1848,13 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/v1/boxes/{box_id}/stop",
             post(boxes::stop_box),
+        )
+        // Guest SSH control. POST may start the box; GET/DELETE only observe.
+        .route(
+            "/v1/boxes/{box_id}/ssh",
+            post(ssh::configure_ssh)
+                .get(ssh::status_ssh)
+                .delete(ssh::disable_ssh),
         )
         // Box metrics
         .route(
@@ -2775,6 +2788,13 @@ mod tests {
             activity_box_id(&Method::GET, "/v1/boxes/abc/files"),
             Some("abc")
         );
+
+        // SSH configure is use of the guest; status and disable only observe
+        // it, so a poller cannot hold a box open through them.
+        assert_eq!(activity_box_id(&post, "/v1/boxes/abc/ssh"), Some("abc"));
+        assert_eq!(activity_box_id(&Method::GET, "/v1/boxes/abc/ssh"), None);
+        assert_eq!(activity_box_id(&Method::DELETE, "/v1/boxes/abc/ssh"), None);
+        assert_eq!(activity_box_id(&Method::HEAD, "/v1/boxes/abc/ssh"), None);
 
         // Pollers must never hold a box open. A client watching `status` once a
         // second would otherwise reset the window before every sweep.
@@ -3772,6 +3792,54 @@ mod tests {
         );
 
         drop(clocks);
+        server.abort();
+        upstream.task.abort();
+    }
+
+    /// The SSH configure boundary answers malformed JSON, a wrong content
+    /// type, and a body missing required fields with the fixed sanitized
+    /// message — serde's own would quote the body, and the body carries a
+    /// private key. Extraction rejects before box resolution, so even a
+    /// missing box cannot outrank it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ssh_configure_rejects_bad_bodies_with_a_sanitized_400() {
+        let upstream = stub_upstream("running", true).await;
+        let state = Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
+                .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        });
+        let (base, server) = serve_router(state).await;
+        // Truncated JSON, a body missing required fields, and a complete body
+        // under the wrong content type — the only case whose JSON would parse.
+        let valid = r#"{"listen_address":"0","host_private_key":"","accounts":[]}"#;
+        let cases = [
+            ("application/json", r#"{"listen_address":"leak-me""#),
+            ("application/json", r#"{"host_private_key":"secret"}"#),
+            ("text/plain", valid),
+        ];
+
+        for (content_type, body) in cases {
+            let response = reqwest::Client::new()
+                .post(format!("{base}/v1/boxes/does-not-exist/ssh"))
+                .header("content-type", content_type)
+                .body(body)
+                .send()
+                .await
+                .expect("request must reach the server");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{content_type}");
+            let body = response.text().await.expect("error body");
+            assert!(body.contains("invalid SSH configuration"), "{body}");
+            assert!(
+                !body.contains("leak-me") && !body.contains("secret"),
+                "the rejection must not echo the body: {body}"
+            );
+        }
+
         server.abort();
         upstream.task.abort();
     }

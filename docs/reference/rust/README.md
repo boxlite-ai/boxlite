@@ -274,15 +274,19 @@ pub struct LiteBox {
 #### SSH control
 
 `LiteBox::ssh()` returns an owned, cloneable `SshHandle` without starting the box.
-Only `configure()` uses the implicit-start guard of exec, metrics, and file
-copying. `Configured` and `Stopped` boxes using image defaults can start implicitly.
-With an explicit `BoxOptions.cmd` or `entrypoint`, configuration returns
-`InvalidState` in these states; call `start()` first. `status()` and `disable()`
-never start the VM or main command: valid `Configured` and `Stopped` handles return
-disabled status with generation zero and empty address and host identity fields.
-Running handles use the existing guest, including after attach before start or
-runtime recovery. Other lifecycle states return `InvalidState`. These observations
-do not prevent concurrent configuration. The REST backend returns `Unsupported`.
+It works for local boxes and for REST-backed boxes whose server implements SSH
+control, as the local `boxlite serve` does. Only `configure()` uses the
+implicit-start guard of exec, metrics, and file copying. `Configured` and
+`Stopped` boxes using image defaults can start implicitly. With an explicit
+`BoxOptions.cmd` or `entrypoint`, configuration returns `InvalidState` in these
+states; call `start()` first; on a REST server a stopped box with
+`auto_resume=false` is refused instead of resumed. `status()` and `disable()`
+never start the VM or main command: valid `Configured` and `Stopped` handles
+return disabled status with generation zero and empty address and host identity
+fields. Running handles use the existing guest, including after attach before
+start or runtime recovery. Other lifecycle states return `InvalidState`. These
+observations do not prevent concurrent configuration. Deployments without SSH
+control answer `NotFound` or `Unsupported`; there is no capability negotiation.
 
 | Method | Signature |
 |--------|-----------|
@@ -302,14 +306,17 @@ These types are exported directly from `boxlite`, independently of protobuf:
 Configuration fields are explicit; the runtime neither generates keys nor stores
 configuration nor publishes ports. All types are `Clone + Debug + Send + Sync`;
 configuration Debug output redacts credentials, and status supports `PartialEq + Eq`.
+The types also implement `Serialize` + `Deserialize` for the REST boundary; the
+[OpenAPI schema](../../../openapi/box.openapi.yaml) owns the wire shape.
 
-After VM and container startup, each operation has a total 15-second budget:
-the guest's 10-second cleanup limit plus 5 seconds for communication and scheduling.
-Obtaining the SSH interface, connection setup, queueing, and the RPC consume this
-same budget, so delays can leave less than 10 seconds for guest cleanup.
-Runtime shutdown rejects new operations and cancels interface acquisition and RPCs.
-In-progress VM initialization finishes before cancellation is returned, preserving
-recovery of detached boxes; container startup retains its own cancellation.
+For a local box, after VM and container startup each operation has a total
+15-second budget: the guest's 10-second cleanup limit plus 5 seconds for
+communication and scheduling. Obtaining the SSH interface, connection setup,
+queueing, and the RPC consume this same budget, so delays can leave less than
+10 seconds for guest cleanup. Local runtime shutdown rejects new operations
+and cancels interface acquisition and RPCs. In-progress VM initialization
+finishes before cancellation is returned, preserving recovery of detached
+boxes; container startup retains its own cancellation.
 Operations are not retried. Cancellation/timeout cannot guarantee
 rollback. Invalidated handles return `Stopped`; drop all references to the old box
 and use `runtime.get()` to obtain a fresh handle for restart. Recovered stopped
@@ -318,8 +325,15 @@ boxes with an explicit main command still require `start()` before `configure()`
 including guest `DeadlineExceeded`, map to `BoxliteError::Rpc` and retain operation
 and gRPC status context. Missing response status is `Internal`.
 
-See the [SSH guide](../../guides/ssh.md) for an implicit-start example,
-validation, reconfiguration, disable, and generation semantics.
+A REST-backed `SshHandle` sends `POST`, `GET`, and `DELETE` to
+`/v1/boxes/{box_id}/ssh` (`/{prefix}/boxes/{box_id}/ssh` with a path prefix
+set). Each call is one request — every accepted configure restarts the guest
+listener, so neither layer retries it — and errors cross the standard
+`BoxliteError::http()` envelope (for example an upstream guest failure comes
+back as `503 upstream_unavailable`, which the client reports as `Portal`).
+
+See the [SSH guide](../../guides/ssh.md) for an implicit-start example, the
+HTTP contract, reconfiguration, disable, and generation semantics.
 
 #### Methods
 
@@ -328,7 +342,7 @@ validation, reconfiguration, disable, and generation semantics.
 | `id` | `fn id(&self) -> &BoxID` | Get box ID |
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
-| `ssh` | `fn ssh(&self) -> SshHandle` | Control local SSH; only configure may implicitly start the box |
+| `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH (local or REST-backed); only configure may implicitly start the box |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |

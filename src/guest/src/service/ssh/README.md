@@ -85,10 +85,10 @@ channel execution, forwarding, and shutdown through their completion points.
 
 - SSH starts disabled; `Guest.Init` must finish before `Configure`.
 - Host port forwarding is configured separately from the guest SSH listener.
-- The local Rust runtime exposes `LiteBox::ssh()` for configure, status, and
-  disable operations. The underlying guest RPC client is `boxlite_shared::SshClient`.
-- The REST backend returns `Unsupported`; CLI and other language SDKs do not
-  expose an SSH control API.
+- The Rust runtime exposes `LiteBox::ssh()` for local boxes and for REST-backed
+  boxes served by `boxlite serve`; the CLI and other language SDKs do not
+  expose an SSH control API. The local runtime's guest RPC client is
+  `boxlite_shared::SshClient`.
 - `SshConfig` supplies the listen address, host private key, and named accounts
   with authorized keys and/or a CA plus certificate principal.
 

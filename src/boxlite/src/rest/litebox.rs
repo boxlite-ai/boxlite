@@ -18,7 +18,7 @@ use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{
     AttachOptions, BoxCommand, BoxConnection, BoxTunnel, ExecResult, ExecStderr, ExecStdin,
-    ExecStdout, Execution,
+    ExecStdout, Execution, SshConfig, SshStatus,
 };
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
@@ -528,6 +528,25 @@ impl BoxBackend for RestBox {
         })?;
 
         Ok(crate::runtime::options::BoxArchive::new(output_path))
+    }
+
+    async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
+        // One request per call: the guest restarts SSH on every configure.
+        self.client
+            .post(&format!("/boxes/{}/ssh", self.box_id_str()), &config)
+            .await
+    }
+
+    async fn ssh_status(&self) -> BoxliteResult<SshStatus> {
+        self.client
+            .get(&format!("/boxes/{}/ssh", self.box_id_str()))
+            .await
+    }
+
+    async fn ssh_disable(&self) -> BoxliteResult<SshStatus> {
+        self.client
+            .delete_json(&format!("/boxes/{}/ssh", self.box_id_str()))
+            .await
     }
 }
 
@@ -1412,32 +1431,6 @@ mod tests {
         );
         let resp: BoxResponse = serde_json::from_str(&body).expect("BoxResponse");
         RestBox::new(client_for(port), resp.to_box_info().expect("to_box_info"))
-    }
-
-    /// An owned SSH handle must reject every REST operation even after LiteBox is dropped.
-    #[tokio::test]
-    async fn ssh_control_is_unsupported_on_rest() {
-        let backend = Arc::new(rest_box_for(1, "ssh-test"));
-        let sandbox = crate::LiteBox::new(backend.clone(), backend.clone(), backend);
-        let ssh = sandbox.ssh();
-        drop(sandbox);
-        assert!(matches!(
-            ssh.status().await,
-            Err(BoxliteError::Unsupported(_))
-        ));
-        assert!(matches!(
-            ssh.disable().await,
-            Err(BoxliteError::Unsupported(_))
-        ));
-        assert!(matches!(
-            ssh.configure(crate::SshConfig {
-                listen_address: String::new(),
-                host_private_key: String::new(),
-                accounts: vec![],
-            })
-            .await,
-            Err(BoxliteError::Unsupported(_))
-        ));
     }
 
     /// Send a minimal HTTP/1.1 200 OK with a JSON body.

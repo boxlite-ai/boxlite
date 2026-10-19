@@ -313,6 +313,12 @@ impl ApiClient {
         self.send_no_content(builder).await
     }
 
+    /// `DELETE` a resource that answers with its resulting JSON state.
+    pub async fn delete_json<T: DeserializeOwned>(&self, path: &str) -> BoxliteResult<T> {
+        let builder = self.http.delete(self.url(path));
+        self.send_json(builder).await
+    }
+
     pub async fn delete_with_query(&self, path: &str, query: &[(&str, &str)]) -> BoxliteResult<()> {
         let builder = self.http.delete(self.url(path)).query(query);
         self.send_no_content(builder).await

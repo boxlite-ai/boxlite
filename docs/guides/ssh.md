@@ -1,11 +1,14 @@
 # Guest SSH control
 
-SSH starts disabled. The local Rust runtime exposes `LiteBox::ssh()` to configure,
-query, or disable it. Only `configure()` follows the implicit-start policy of
-exec, metrics, and file copying. A `Configured` or `Stopped` box using the image's
-default command can start implicitly. If `BoxOptions.cmd` or `entrypoint`
-explicitly sets the main command, configuration returns `InvalidState` in these
-states; call `start()` first.
+SSH starts disabled. The Rust runtime exposes `LiteBox::ssh()` to configure,
+query, or disable it, for local boxes and for REST-backed boxes served by
+`boxlite serve` ([HTTP control](#http-control-with-boxlite-serve)). Only
+`configure()` follows the implicit-start policy of exec, metrics, and file
+copying. A `Configured` or `Stopped` box using the image's default command can
+start implicitly. If `BoxOptions.cmd` or `entrypoint` explicitly sets the main
+command, configuration returns `InvalidState` in these states; call `start()`
+first. On a REST server, a stopped box with `auto_resume=false` is refused
+instead of resumed.
 
 `status()` and `disable()` never start the VM or container main command. Valid
 `Configured` or `Stopped` handles return disabled status with generation zero and
@@ -15,10 +18,11 @@ before `start()` and after runtime recovery. Other lifecycle states return
 `InvalidState`. Results describe the state observed by the call; a concurrent
 `configure()` can subsequently enable SSH.
 
-Creating the handle alone does not start anything. The REST backend returns
-`Unsupported`; CLI and other language SDKs have no SSH control API.
-SSH does not publish a host port; configure network forwarding separately when needed.
-For component diagrams and implementation details, see
+Creating the handle alone does not start anything. Deployments without SSH
+control answer `404` or reject with `Unsupported`; there is no capability
+negotiation. The CLI and the other language SDKs expose no SSH control API.
+SSH does not publish a host port; configure network forwarding separately when
+needed. For component diagrams and implementation details, see
 [Guest SSH architecture](../../src/guest/src/service/ssh/README.md).
 
 ```rust,ignore
@@ -41,20 +45,70 @@ ssh.disable().await?;
 
 `SshHandle` owns its backend reference and can outlive the `LiteBox` borrow.
 A fresh handle to a running VM can query SSH without calling `start()` again.
-After startup, each operation has a total 15-second budget: the guest's 10-second
-cleanup limit plus 5 seconds for communication and scheduling. Obtaining the SSH
-interface, connection setup, queueing, and the RPC all consume this budget; VM and
-container startup time is excluded. Connection or queueing delays can leave less
-than 10 seconds for guest cleanup. Runtime shutdown rejects new SSH operations
-and cancels interface acquisition and RPCs. In-progress VM initialization finishes
-before cancellation is returned, so detached boxes remain recoverable; container
+For a local box, after startup each operation has a total 15-second budget:
+the guest's 10-second cleanup limit plus 5 seconds for communication and
+scheduling. Obtaining the SSH interface, connection setup, queueing, and the
+RPC all consume this budget; VM and container startup time is excluded.
+Connection or queueing delays can leave less than 10 seconds for guest cleanup.
+Local runtime shutdown rejects new SSH operations and cancels interface
+acquisition and RPCs. In-progress VM initialization finishes before
+cancellation is returned, so detached boxes remain recoverable; container
 startup retains its own cancellation. Operations are not automatically retried.
-Timeout or cancellation does not undo changes the guest may already have applied.
+Timeout or cancellation does not undo changes the guest may already have
+applied.
 Invalidated handles return `Stopped`; drop all references to the old box and
 obtain a fresh handle with `runtime.get()`. That handle can query or disable SSH
 without restarting the box. A stopped box with an explicit main command still
 requires `start()` before `configure()`.
 
+## HTTP control with `boxlite serve`
+
+The local server exposes the same handle at `/v1/boxes/{box_id}/ssh`. Against
+another compatible server the Rust client uses the existing `path_prefix`
+convention, `/{prefix}/boxes/{box_id}/ssh`:
+
+| Method   | Behavior |
+|----------|----------|
+| `POST`   | Replace the complete `SshConfig` body; returns the resulting `SshStatus`. Every accepted call fully restarts the guest listener, so never retry it automatically. |
+| `GET`    | Read `SshStatus`. Never starts the VM or its main command. |
+| `DELETE` | Disable SSH idempotently; returns `SshStatus`. Never starts the VM or its main command. |
+
+`POST` follows the resume policy above: it may start a `configured` box or
+resume a `stopped` box using the image's default command, refuses an explicit
+`cmd`/`entrypoint` in those two states until `start()` (a running box with an
+explicit command is already supported), and refuses a stopped box with
+`auto_resume=false`.
+`GET` and `DELETE` observe instead: a valid `configured`
+or `stopped` box reports disabled status with generation zero and empty
+address and host identity fields, without waking it. Only `POST` counts as box
+activity for AutoStop; `GET`, `HEAD`, and `DELETE` never hold a box open.
+
+A wrong content type, malformed JSON, or a body missing a required field is
+rejected with the fixed `400 invalid_argument` message `invalid SSH
+configuration`, which never echoes request values. Guest validation is
+authoritative: a semantically invalid configuration is `400` and leaves the
+running listener untouched. A lifecycle conflict is `409 invalid_state`; the
+AutoResume refusal answers `409 conflict` instead — the same class the other
+resume-gated routes use, not the local `invalid_state` variant. A missing box
+is `404 not_found`, and an upstream guest RPC failure is
+`503 upstream_unavailable`, which the Rust client reports as `Portal`. The
+server applies the same 15-second post-startup budget; the REST client's own
+300-second per-request timeout also covers startup, so a configure whose image
+pull or VM start runs longer can time out at the client while the server
+continues.
+
+Build the request body from local key files; do not commit it or paste a real
+private key into a document:
+
+```bash
+# ssh-config.json carries the SshConfig shape, built locally from your keys.
+curl -fsS -X POST "$BOXLITE_URL/v1/boxes/$BOX_ID/ssh" \
+  -H "Authorization: Bearer $BOXLITE_API_KEY" \
+  -H 'Content-Type: application/json' \
+  --data-binary @ssh-config.json
+```
+
+## Guest protocol and lifecycle
 The internal host-only `boxlite.v1.Ssh` gRPC service remains available on
 `sockets/box.sock` after `Guest.Init` succeeds. It exposes `Configure`, `Status`,
 and `Disable`; its schema is in `src/shared/proto/boxlite/v1/service.proto`.

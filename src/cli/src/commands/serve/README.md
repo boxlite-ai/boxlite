@@ -37,7 +37,7 @@ execute(ServeArgs, GlobalFlags)
   ├─ tokio::spawn(reaper_loop(state))       — orphan reaper + lifecycle sweep
   │                                            (30 s tick)
   │
-  ├─ build_router(state)                    — register 26 routes on axum::Router
+  ├─ build_router(state)                    — register the REST routes on axum::Router
   │
   ├─ TcpListener::bind(host:port)           — bind TCP socket
   │
@@ -74,7 +74,8 @@ execute(ServeArgs, GlobalFlags)
 │  └──────────────────────────────────────────────────┘  │
 │                                                        │
 │  Handlers:  config · boxes · executions                │
-│             files · metrics · snapshots · advanced     │
+│             files · metrics · snapshots · ssh          │
+│             advanced                                    │
 │                                                        │
 │  Background:  reaper_loop  (orphans + lifecycle sweep)  │
 └───────────────────────────────────────────────────────┘
@@ -103,6 +104,7 @@ by the request middleware and by client data frames on an attach.
 | `files`      | `handlers/files.rs`      | Tar-based file upload / download into / from boxes            |
 | `metrics`    | `handlers/metrics.rs`    | Runtime-level and per-box metrics                             |
 | `snapshots`  | `handlers/snapshots.rs`  | Snapshot CRUD + restore                                       |
+| `ssh`        | `handlers/ssh.rs`        | Guest SSH configure / status / disable                    |
 | `advanced`   | `handlers/advanced.rs`   | Clone, export, import                                         |
 
 ## Route Reference
@@ -134,6 +136,24 @@ other `--host` (e.g. `0.0.0.0`) unless an API key is set.
 | DELETE | `/v1/boxes/{box_id}`          | `boxes::remove_box`  | Remove box (`?force=true`)    |
 | POST   | `/v1/boxes/{box_id}/start`    | `boxes::start_box`   | Start a stopped box           |
 | POST   | `/v1/boxes/{box_id}/stop`     | `boxes::stop_box`    | Stop a running box            |
+
+### Guest SSH
+
+| Method | Path                       | Handler              | Description                                  |
+|--------|----------------------------|----------------------|----------------------------------------------|
+| POST   | `/v1/boxes/{box_id}/ssh`   | `ssh::configure_ssh` | Replace SSH configuration; returns status    |
+| GET    | `/v1/boxes/{box_id}/ssh`   | `ssh::status_ssh`    | Read SSH status without starting the box     |
+| DELETE | `/v1/boxes/{box_id}/ssh`   | `ssh::disable_ssh`   | Disable SSH idempotently without starting it |
+
+`POST` takes the direct `SshConfig` JSON body (not a wrapper) with
+`Content-Type: application/json` and answers with `SshStatus`; every accepted
+configure fully restarts the guest listener, so neither server nor client
+retries it. A wrong content type, malformed JSON, or a missing required field
+is rejected with the fixed sanitized `400 invalid_argument` message before box
+resolution. `POST` resolves through the resume resolver (like exec); `GET` and
+`DELETE` resolve through the fetch resolver and never start the box. Only
+`POST` stamps the idle clock. The [SSH guide](../../../../../docs/guides/ssh.md)
+owns the full contract.
 
 ### Command Execution
 

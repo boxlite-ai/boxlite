@@ -460,6 +460,76 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  /{prefix}/boxes/{box_id}/ssh:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: configureSsh
+      summary: Configure guest SSH
+      description: |
+        Replaces the guest's complete SSH configuration; every accepted call
+        fully restarts the listener, so it must not be retried automatically.
+        May start a `configured` or resume a `stopped` box on the image's
+        default command; in those two states an explicit `cmd`/`entrypoint`
+        requires a prior start (a running box with an explicit command is
+        supported), and a stopped box with `auto_resume=false` returns 409. An
+        invalid configuration is rejected without changing the listener
+        already running.
+      tags: [Boxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SshConfig"
+      responses:
+        "200":
+          description: SSH enabled; the response describes the new listener
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SshStatus"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+    get:
+      operationId: getSshStatus
+      summary: Get guest SSH status
+      description: |
+        Observes the listener without starting the VM or its main command; a
+        valid `configured` or `stopped` box reports disabled status with
+        generation zero and empty identity fields.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Current SSH status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SshStatus"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+    delete:
+      operationId: disableSsh
+      summary: Disable guest SSH
+      description: Stops guest SSH and disconnects clients; idempotent, and never starts the VM or its main command.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: SSH disabled or already disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SshStatus"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
   # -------------------------------------------------------------------------
   # Snapshot / Portability
   # -------------------------------------------------------------------------
@@ -2641,6 +2711,83 @@ components:
           minimum: 1
           description: Terminal height in rows
           example: 40
+
+    SshConfig:
+      type: object
+      description: Complete replacement SSH configuration; never persisted or logged by the runtime.
+      required: [listen_address, host_private_key, accounts]
+      properties:
+        listen_address:
+          type: string
+          description: Address the guest SSH listener binds.
+        host_private_key:
+          type: string
+          writeOnly: true
+          description: Unencrypted OpenSSH host private key; never returned.
+        accounts:
+          type: array
+          minItems: 1
+          description: Credentials accepted for SSH logins.
+          items:
+            $ref: "#/components/schemas/SshAccount"
+
+    SshAccount:
+      type: object
+      description: Credentials accepted for one SSH login (not a container OS identity).
+      required: [login]
+      properties:
+        login:
+          type: string
+          description: SSH login name.
+        authorized_keys:
+          type: array
+          default: []
+          description: |
+            OpenSSH public keys for this login; defaults to empty, but the guest
+            requires a key or CA to accept the account.
+          items:
+            type: string
+        ca:
+          description: Optional certificate authority; null means keys only.
+          oneOf:
+            - $ref: "#/components/schemas/SshCaConfig"
+            - type: "null"
+
+    SshCaConfig:
+      type: object
+      description: Certificate authority and required certificate principal.
+      required: [public_key, principal]
+      properties:
+        public_key:
+          type: string
+          description: OpenSSH public key of the certificate authority.
+        principal:
+          type: string
+          description: Certificate principal required for this account.
+
+    SshStatus:
+      type: object
+      description: |
+        Guest SSH listener state; contains no credentials. Every field is
+        required: never read a partial one as a disabled status.
+      required: [enabled, generation, listen_address, host_public_key, host_key_fingerprint]
+      properties:
+        enabled:
+          type: boolean
+          description: Whether the guest SSH listener is running.
+        generation:
+          type: integer
+          minimum: 0
+          description: Increments on each successful listener start.
+        listen_address:
+          type: string
+          description: Actual bound address; empty while disabled.
+        host_public_key:
+          type: string
+          description: Comment-free host public key; empty while disabled.
+        host_key_fingerprint:
+          type: string
+          description: SHA-256 host key fingerprint; empty while disabled.
 
     # =======================================================================
     # Network
