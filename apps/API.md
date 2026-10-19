@@ -709,9 +709,15 @@ including a legacy `initialize` handshake — is refused with `400` and
 `UnsupportedProtocolVersionError` (`-32022`) listing `2026-07-28`, so clients on
 an earlier revision cannot connect.
 
-Only OAuth bearer tokens are accepted (the `jwt` strategy, so the API's own
-issuer and audience); API keys are not. A request carrying an `Origin` header is
-refused with `403`, because MCP hosts call from servers and CLIs, not browsers.
+Only OAuth bearer tokens issued for this endpoint are accepted; API keys are
+not. A token must come from the API's issuer and name `MCP_RESOURCE_URL` as its
+audience (RFC 8707), so a dashboard token is refused here, and the REST API
+refuses a token issued for MCP alone; without `MCP_RESOURCE_URL` the API's own
+audience applies. The caller is mapped as the `jwt` strategy maps it. On Auth0 this needs
+an API whose identifier is `MCP_RESOURCE_URL`, with the Resource Parameter
+Compatibility Profile on so a host's `resource` parameter sets the audience. A
+request carrying an `Origin` header is refused with `403`, because MCP hosts call
+from servers and CLIs, not browsers.
 
 A request without a valid token gets `401` with an RFC 6750 challenge that
 names the endpoint's RFC 9728 metadata, so a host can find where to sign in:
