@@ -784,6 +784,7 @@ name = "boxlite-vmm"
 version = "0.10.7"
 dependencies = [
  "boxlite-hypervisor",
+ "linux-loader",
  "vm-memory 0.18.0",
 ]
 
@@ -3134,6 +3135,15 @@ dependencies = [
  "cc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "linux-loader"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d54207cb617cd75b10c57ad20235c914ab62b180ceeff2ef3111983670d3b321"
+dependencies = [
+ "vm-memory 0.18.0",
 ]
 
 [[package]]

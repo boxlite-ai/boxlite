@@ -1,5 +1,5 @@
 PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
-PHONY_TARGETS += test\:integration\:vmm\:kvm _ensure-kvm test\:vmm\:boot
+PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf _ensure-kvm test\:vmm\:boot
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -286,6 +286,16 @@ test\:integration\:vmm\:kvm: _ensure-kvm
 	timeout 60s cargo test -p boxlite-hypervisor --lib kvm::vm::tests:: -- --ignored --test-threads=1 || status=1; \
 	timeout 60s cargo test -p boxlite-vmm --lib vm::tests:: -- --ignored --test-threads=1 || status=1; \
 	exit $$status
+
+# make vmm:boot produces this kernel by default.
+VMM_KERNEL ?= $(CURDIR)/target/vmm/boot/x86_64/vmlinux
+export VMM_KERNEL
+
+# Load the real ELF kernel and read it through a KVM vCPU; this does not boot Linux.
+test\:integration\:vmm\:elf: _ensure-kvm
+	@test -r "$(VMM_KERNEL)" || { echo "VMM_KERNEL=$(VMM_KERNEL) is not readable; run make vmm:boot or set VMM_KERNEL" >&2; exit 1; }
+	@cargo test -p boxlite-vmm --lib --no-run
+	@timeout 60s cargo test -p boxlite-vmm --lib boot::elf::tests:: -- --ignored --test-threads=1
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
 # excluded from test:unit:rust because the zygote suite forks real processes.
