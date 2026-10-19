@@ -78,7 +78,7 @@ fn read(ram: &GuestMemoryMmap, address: u64, len: usize) -> Vec<u8> {
 }
 
 /// Loads an in-memory image through the reader a kernel file also goes through.
-fn load(ram: &GuestMemoryMmap, image: &[u8]) -> io::Result<u64> {
+fn load(ram: &GuestMemoryMmap, image: &[u8]) -> io::Result<super::LoadedKernel> {
     load_elf(ram, &mut Cursor::new(image))
 }
 
@@ -88,7 +88,9 @@ fn loads_physical_bytes_and_returns_the_kernel_entry() {
     let memory = ram.memory().as_ref();
     let image = fixture();
 
-    assert_eq!(load(memory, &image).unwrap(), ENTRY);
+    let loaded = load(memory, &image).unwrap();
+    assert_eq!(loaded.entry, ENTRY);
+    assert_eq!(loaded.end, 0x10_3080);
     for (paddr, offset, filesz, memsz, _) in SEGMENTS {
         let loaded = read(memory, paddr, memsz as usize);
         assert_eq!(
@@ -182,7 +184,7 @@ fn native_vmlinux_bytes_are_visible_to_a_kvm_vcpu() {
     let ram = ram(RAM_SIZE);
     let memory = ram.memory().as_ref();
     let mut kernel = std::fs::File::open(&path).expect("open VMM_KERNEL");
-    assert_eq!(load_elf(memory, &mut kernel).unwrap(), expected_entry);
+    assert_eq!(load_elf(memory, &mut kernel).unwrap().entry, expected_entry);
     let mut checksum = 0u32;
     for &(offset, paddr, filesz, memsz) in &oracle {
         let loaded = read(memory, paddr, memsz);

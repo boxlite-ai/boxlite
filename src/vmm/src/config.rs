@@ -29,6 +29,8 @@ pub(crate) struct VmConfig {
     pub(crate) memory_mib: u32,
     /// The ELF kernel image to load.
     pub(crate) kernel: PathBuf,
+    /// The initramfs archive to load at the top of guest RAM, if any.
+    pub(crate) initramfs: Option<PathBuf>,
     /// The kernel command line: printable ASCII, under `MAX_CMDLINE_BYTES`.
     pub(crate) cmdline: String,
 }
@@ -71,6 +73,7 @@ mod tests {
             vcpu_count,
             memory_mib,
             kernel: "vmlinux".into(),
+            initramfs: None,
             cmdline: "console=ttyS0".into(),
         }
     }

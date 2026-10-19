@@ -24,10 +24,10 @@ boxlite-vmm
 | Module | Planned responsibility |
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, then allocate and register RAM on host backend `H`; `run` is a placeholder |
-| `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes |
+| `config` | `VmConfig { vcpu_count, memory_mib, kernel, initramfs, cmdline }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes |
 | `error` | VMM errors that keep the hypervisor's cause chain |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
-| `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, writes the zero page, E820 map and command line, and sets up the 64-bit entry state (GDT, identity page tables, registers); the MP table follows |
+| `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, loads an initramfs at top of RAM, writes the zero page, E820 map and command line, and sets up the 64-bit entry state (GDT, identity page tables, registers); the MP table follows |
 | `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
 | `vcpu` | Worker threads, stop coordination, and exit handling |
 | `irq` | Device interrupt assignment and routing; HVF and KVM provide the controller, WHP (M10) only local APICs |
@@ -98,15 +98,16 @@ the [boot test](#boot-parameters) runs Linux itself.
 
 ## Boot parameters
 
-On Linux x86_64, `boot::params::write_boot_params(ram, cmdline, ranges)` fills
-the zero page that RSI points to at the 64-bit entry
+On Linux x86_64, `boot::params::write_boot_params(ram, cmdline, ranges, initramfs)`
+fills the zero page that RSI points to at the 64-bit entry
 (`Documentation/arch/x86/boot.rst`, `zero-page.rst`) and returns its address,
 `0x7000`:
 
 - Setup header: `type_of_loader` `0xFF`, `boot_flag` `0xAA55`, the `HdrS`
   magic, a 16 MiB `kernel_alignment`, and `cmd_line_ptr` and `cmdline_size`
-  for the NUL-terminated command line at `0x2_0000`. The rest stays zero: no
-  `loadflags`, ACPI tables or initramfs.
+  for the NUL-terminated command line at `0x2_0000`. When `initramfs` is
+  present, `ramdisk_image` and `ramdisk_size` record its placement; without
+  an initramfs both stay zero. The rest stays zero: no `loadflags` or ACPI tables.
 - E820: each RAM range as usable RAM outside `[0x9_FC00, 1 MiB)`, where the
   MP table and the legacy BIOS areas go. More entries than the 128 table slots
   fail with `InvalidInput` before anything is written.
@@ -116,12 +117,14 @@ shorter than 2048 bytes, the kernel's `COMMAND_LINE_SIZE` with the NUL.
 linux-loader's `Cmdline` refuses the same lines, after trimming surrounding
 whitespace.
 
-`boot::prepare(ram, config)` opens `config.kernel` and runs `load_elf`,
-`write_boot_params` and `long_mode_entry` in that order on fresh RAM, then
-returns a `BootSetup` with the boot vCPU registers. A failure names its step,
-`LoadKernel` or `WriteBootData`, and keeps the I/O cause. Nothing calls
-`prepare` from `Vm` yet. There is no MP table yet, so Linux turns off SMP and
-the IOAPIC; a later slice adds the table.
+`boot::prepare(ram, config)` opens `config.kernel` and `config.initramfs`
+(if set) and runs `load_elf`, `load_initramfs`, `write_boot_params` and
+`long_mode_entry` in that order on fresh RAM, then returns a `BootSetup` with
+the boot vCPU registers. An initramfs is placed at the top of RAM aligned down
+to 4 KiB (`align_down(ram_end - size, 4 KiB)`), above the kernel end. A failure
+names its step, `LoadKernel`, `LoadInitramfs` or `WriteBootData`, and keeps the
+I/O cause. Nothing calls `prepare` from `Vm` yet. There is no MP table yet, so
+Linux turns off SMP and the IOAPIC; a later slice adds the table.
 
 The boot test needs Linux x86_64, read/write `/dev/kvm` and the same
 `VMM_KERNEL` as the ELF probe:
@@ -130,16 +133,17 @@ The boot test needs Linux x86_64, read/write `/dev/kvm` and the same
 make test:integration:vmm:linux
 ```
 
-It runs `prepare` for 256 MiB of RAM and the command line
-`earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k`, then runs one KVM
-vCPU with the guest CPUID and boot MSRs. A test-local stub stands in for the
+It runs `prepare` for 256 MiB of RAM, the test initramfs archive, and the command
+line `earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k`, then runs one
+KVM vCPU with the guest CPUID and boot MSRs. A test-local stub stands in for the
 devices: it keeps the earlycon bytes written to `0x3f8`, reports the UART as
 idle on `0x3fd`, reads every other port and MMIO address as zero, and ignores
 other writes. The test passes when the guest writes `0xFE` to the i8042 port
 `0x64`, the reset `reboot=k` asks for after the panic, and the log shows the
-kernel version, the exact command line, the two E820 entries, the memory total
-and `VFS: Unable to mount root fs`. A watchdog kicks the vCPU after 30 seconds,
-so a hung boot fails with the log so far.
+kernel version, the exact command line, the two E820 entries, the memory total,
+the `RAMDISK:` region matching the zero page, and the panic `exitcode=0x00002a00`
+from `/init` calling `exit_group(42)`. A watchdog kicks the vCPU after 30
+seconds, so a hung boot fails with the log so far.
 
 ## Long-mode entry
 
