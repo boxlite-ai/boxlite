@@ -94,7 +94,7 @@ make test:integration:vmm:elf VMM_KERNEL=/absolute/path/to/vmlinux
 the entry and loaded bytes with independent `readelf` output, checks BSS in
 fresh RAM, then runs a vCPU checksum over the loaded span. Missing hardware
 or kernel input fails qualification. This proves loading and guest visibility;
-Linux execution belongs to a later slice.
+the [boot test](#boot-parameters) runs Linux itself.
 
 ## Boot parameters
 
@@ -122,6 +122,24 @@ returns a `BootSetup` with the boot vCPU registers. A failure names its step,
 `LoadKernel` or `WriteBootData`, and keeps the I/O cause. Nothing calls
 `prepare` from `Vm` yet. There is no MP table yet, so Linux turns off SMP and
 the IOAPIC; a later slice adds the table.
+
+The boot test needs Linux x86_64, read/write `/dev/kvm` and the same
+`VMM_KERNEL` as the ELF probe:
+
+```sh
+make test:integration:vmm:linux
+```
+
+It runs `prepare` for 256 MiB of RAM and the command line
+`earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k`, then runs one KVM
+vCPU with the guest CPUID and boot MSRs. A test-local stub stands in for the
+devices: it keeps the earlycon bytes written to `0x3f8`, reports the UART as
+idle on `0x3fd`, reads every other port and MMIO address as zero, and ignores
+other writes. The test passes when the guest writes `0xFE` to the i8042 port
+`0x64`, the reset `reboot=k` asks for after the panic, and the log shows the
+kernel version, the exact command line, the two E820 entries, the memory total
+and `VFS: Unable to mount root fs`. A watchdog kicks the vCPU after 30 seconds,
+so a hung boot fails with the log so far.
 
 ## Long-mode entry
 
