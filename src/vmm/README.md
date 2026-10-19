@@ -66,10 +66,12 @@ coverage denominator; `config` and `error` keep inline test modules.
 
 ## Kernel loading
 
-On Linux x86_64, `boot::elf::load_elf(ram, image)` delegates ELF parsing and
+On Linux x86_64, `boot::elf::load_elf(ram, kernel)` delegates ELF parsing and
 segment loading to rust-vmm's linux-loader and returns the entry address as
-`io::Result<u64>`. It uses vm-memory 0.18 and linux-loader 0.14 with only the
-ELF feature. The function stays crate-visible until the lifecycle slice wires
+`io::Result<u64>`. It reads `kernel` through a seekable reader, usually the
+kernel file, so segments go straight into guest RAM without buffering the
+whole image. It uses vm-memory 0.18 and linux-loader 0.14 with only the ELF
+feature. The function stays crate-visible until the lifecycle slice wires
 it into `Vm::new`; the VM cannot boot Linux yet.
 
 Pass the pinned `vmlinux` from `make vmm:boot` and fresh zero-filled guest

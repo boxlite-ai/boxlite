@@ -3,7 +3,7 @@
 
 //! Tests for the library-backed ELF adapter and guest visibility.
 
-use std::io;
+use std::io::{self, Cursor};
 
 use vm_memory::{Bytes, GuestAddress};
 
@@ -77,13 +77,18 @@ fn read(ram: &GuestMemoryMmap, address: u64, len: usize) -> Vec<u8> {
     bytes
 }
 
+/// Loads an in-memory image through the reader a kernel file also goes through.
+fn load(ram: &GuestMemoryMmap, image: &[u8]) -> io::Result<u64> {
+    load_elf(ram, &mut Cursor::new(image))
+}
+
 #[test]
 fn loads_physical_bytes_and_returns_the_kernel_entry() {
     let ram = ram(RAM_SIZE);
     let memory = ram.memory().as_ref();
     let image = fixture();
 
-    assert_eq!(load_elf(memory, &image).unwrap(), ENTRY);
+    assert_eq!(load(memory, &image).unwrap(), ENTRY);
     for (paddr, offset, filesz, memsz, _) in SEGMENTS {
         let loaded = read(memory, paddr, memsz as usize);
         assert_eq!(
@@ -102,7 +107,7 @@ fn preserves_the_library_error_for_invalid_or_truncated_images() {
     let valid = fixture();
     for image in [&[][..], &[0u8; 64][..], &valid[..valid.len() - 1]] {
         let ram = ram(RAM_SIZE);
-        let error = load_elf(ram.memory().as_ref(), image).expect_err("invalid ELF");
+        let error = load(ram.memory().as_ref(), image).expect_err("invalid ELF");
         assert_eq!(error.kind(), io::ErrorKind::Other);
         assert!(
             error
@@ -176,7 +181,8 @@ fn native_vmlinux_bytes_are_visible_to_a_kvm_vcpu() {
     // RAM is declared before the VM and vCPU so it outlives them during unwinding.
     let ram = ram(RAM_SIZE);
     let memory = ram.memory().as_ref();
-    assert_eq!(load_elf(memory, &image).unwrap(), expected_entry);
+    let mut kernel = std::fs::File::open(&path).expect("open VMM_KERNEL");
+    assert_eq!(load_elf(memory, &mut kernel).unwrap(), expected_entry);
     let mut checksum = 0u32;
     for &(offset, paddr, filesz, memsz) in &oracle {
         let loaded = read(memory, paddr, memsz);
