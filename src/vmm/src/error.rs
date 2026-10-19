@@ -37,6 +37,12 @@ pub(crate) enum Error {
         expect(dead_code, reason = "Only the Linux x86_64 boot module builds it.")
     )]
     LoadKernel { path: PathBuf, source: io::Error },
+    /// Opening or loading the initramfs failed.
+    #[cfg_attr(
+        all(test, not(all(target_os = "linux", target_arch = "x86_64"))),
+        expect(dead_code, reason = "Only the Linux x86_64 boot module builds it.")
+    )]
+    LoadInitramfs { path: PathBuf, source: io::Error },
     /// Writing boot data into guest RAM failed.
     #[cfg_attr(
         all(test, not(all(target_os = "linux", target_arch = "x86_64"))),
@@ -63,6 +69,9 @@ impl fmt::Display for Error {
             Self::LoadKernel { path, .. } => {
                 write!(f, "failed to load the kernel {}", path.display())
             }
+            Self::LoadInitramfs { path, .. } => {
+                write!(f, "failed to load the initramfs {}", path.display())
+            }
             Self::WriteBootData { what, .. } => {
                 write!(f, "failed to write the {what} into guest RAM")
             }
@@ -78,6 +87,7 @@ impl error::Error for Error {
             | Self::InvalidCommandLine(_) => None,
             Self::AllocateMemory { source, .. }
             | Self::LoadKernel { source, .. }
+            | Self::LoadInitramfs { source, .. }
             | Self::WriteBootData { source, .. } => Some(source),
             Self::Hypervisor(source) => Some(source),
         }
