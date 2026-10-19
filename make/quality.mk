@@ -3,6 +3,17 @@ PHONY_TARGETS += fmt lint clippy clippy\:vmm lint\:apps fmt\:apps fmt\:check\:ap
 clippy\:vmm:
 	@cargo clippy -p boxlite-hypervisor -p boxlite-vmm --all-targets -- -D warnings
 
+PHONY_TARGETS += lint\:startup fmt\:startup fmt\:check\:startup
+
+lint\:startup:
+	@.venv/bin/ruff check scripts/benchmark
+
+fmt\:startup:
+	@.venv/bin/ruff format scripts/benchmark
+
+fmt\:check\:startup:
+	@.venv/bin/ruff format --check scripts/benchmark
+
 # Smart format: only format changed components.
 fmt:
 ifeq ($(FMT_COMPONENTS),)
