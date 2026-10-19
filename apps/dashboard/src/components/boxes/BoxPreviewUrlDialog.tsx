@@ -27,7 +27,7 @@ export type BoxPreviewUrlDialogProps = {
 }
 
 /**
- * Asks for a port and returns that port's preview URL.
+ * Asks for a port and returns a URL for it.
  *
  * The port has to be asked for: the console cannot enumerate what is listening
  * inside a guest. `POST /exec` returns only an `execution_id` and its output is
@@ -54,7 +54,7 @@ export function BoxPreviewUrlDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="font-mono sm:max-w-[600px]">
         <DialogHeader>
-          <DialogTitle>Get a preview URL</DialogTitle>
+          <DialogTitle>Get a URL</DialogTitle>
           <DialogDescription>Make sure a server is already listening on that port inside the box.</DialogDescription>
         </DialogHeader>
 

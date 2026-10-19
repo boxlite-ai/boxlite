@@ -108,8 +108,8 @@ function getUrlHint(inboundEnabled: boolean, canManage: boolean): string | undef
 }
 
 /**
- * Both directions of the box's network policy, and a way to get a preview URL
- * for one of its ports.
+ * Both directions of the box's network policy, and a way to get a URL for one
+ * of its ports.
  *
  * The section does not list ports, because the console cannot enumerate what is
  * listening inside a guest — see `BoxPreviewUrlDialog` for why. Rather than
@@ -168,7 +168,9 @@ export function BoxNetworkPanel({
             checked={inboundEnabled}
             disabled={inboundPending}
             onCheckedChange={(next) => (next ? setConfirmingInbound(true) : onToggleInbound(NetworkMode.DISABLED))}
-            className="ml-1 scale-90"
+            // A text-less button's baseline is its bottom edge, so the row's
+            // baseline alignment would lift it above the text; center it.
+            className="ml-1 scale-90 self-center"
           />
         ) : null}
       </div>
