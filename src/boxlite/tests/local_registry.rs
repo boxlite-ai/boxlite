@@ -2,7 +2,9 @@
 
 mod common;
 
+use std::io::{Read, Write};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use boxlite::ImageRegistry;
 use boxlite::runtime::options::BoxliteOptions;
@@ -67,6 +69,72 @@ async fn an_upstream_that_is_down_does_not_fail_a_fetch() {
     assert_eq!(pull(&registry, "acme/app:v1").await, built);
 }
 
+/// A blob whose bytes fail their digest fails the pull and leaves nothing behind,
+/// not even a partial file, so the next attempt races the upstreams again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_blob_that_fails_its_digest_is_not_recorded() {
+    let source = tempfile::tempdir().unwrap();
+    seed_image(source.path(), "acme/app", "v1");
+    let layer = digest(b"layer bytes");
+    std::fs::write(source.path().join("blobs").join(&layer), b"LAYER BYTES").unwrap();
+    let upstream = LocalRegistry::start(source.path().to_path_buf(), Vec::new());
+
+    let recording = tempfile::tempdir().unwrap();
+    let registry = LocalRegistry::start(
+        recording.path().to_path_buf(),
+        vec![ImageRegistry::http(upstream.host())],
+    );
+    assert!(try_pull(&registry, "acme/app:v1").await.is_err());
+
+    // The pull stops at the bad layer, so the config may not have been asked
+    // for. The registry drops its temporary file when its own stream fails,
+    // which can come just after the client gives up.
+    let blobs = recording.path().join("blobs");
+    let verified_only = || names_in(&blobs).iter().all(|name| *name == digest(CONFIG));
+    assert!(
+        eventually(verified_only),
+        "only a verified blob may be recorded: {:?}",
+        names_in(&blobs)
+    );
+}
+
+/// A miss reaches disk as it arrives rather than after the whole layer, so a
+/// cold pull of a large image never holds its layers in memory.
+#[test]
+fn a_missed_blob_reaches_disk_as_it_arrives() {
+    let blob = vec![7u8; 256 * 1024];
+    let sent = blob.len() / 2;
+    let upstream = stalling_upstream(&blob, sent);
+    let recording = tempfile::tempdir().unwrap();
+    let registry = LocalRegistry::start(
+        recording.path().to_path_buf(),
+        vec![ImageRegistry::http(&upstream)],
+    );
+
+    let mut client = std::net::TcpStream::connect(registry.host()).unwrap();
+    let request = format!("GET /v2/acme/app/blobs/{} HTTP/1.1\r\n\r\n", digest(&blob));
+    client.write_all(request.as_bytes()).unwrap();
+    let mut response = Vec::new();
+    let mut chunk = [0u8; 16 * 1024];
+    while body_len(&response) < sent {
+        let read = client.read(&mut chunk).unwrap();
+        assert!(
+            read > 0,
+            "the registry closed after {} bytes",
+            body_len(&response)
+        );
+        response.extend_from_slice(&chunk[..read]);
+    }
+
+    // The upstream is stalled, so whatever is on disk arrived before the end.
+    let blobs = recording.path().join("blobs");
+    assert!(
+        eventually(|| bytes_in(&blobs) == sent as u64),
+        "{} of {sent} bytes on disk",
+        bytes_in(&blobs)
+    );
+}
+
 /// A path that climbs out of the recording is no route, so a request cannot
 /// read the files beside it.
 #[test]
@@ -90,9 +158,72 @@ fn a_path_out_of_the_recording_is_refused() {
     }
 }
 
+/// A registry that answers `/v2/`, then sends the first `sent` bytes of `blob`
+/// and holds the connection open, like a mirror stalled partway through.
+fn stalling_upstream(blob: &[u8], sent: usize) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let host = listener.local_addr().unwrap().to_string();
+    let (length, start) = (blob.len(), blob[..sent].to_vec());
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let (mut stream, start) = (stream.unwrap(), start.clone());
+            std::thread::spawn(move || {
+                let mut request = [0u8; 4096];
+                let read = stream.read(&mut request).unwrap_or(0);
+                if request[..read].starts_with(b"GET /v2/ ") {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    );
+                    return;
+                }
+                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {length}\r\n\r\n");
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&start);
+                std::thread::sleep(Duration::from_secs(60));
+            });
+        }
+    });
+    host
+}
+
+/// Body bytes in a raw response read so far.
+fn body_len(response: &[u8]) -> usize {
+    response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map_or(0, |end| response.len() - end - 4)
+}
+
+/// Whether `check` holds within a few seconds.
+fn eventually(mut check: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if check() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    check()
+}
+
+fn names_in(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect()
+}
+
+fn bytes_in(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .map(|entry| entry.unwrap().metadata().unwrap().len())
+        .sum()
+}
+
 /// The raw response to `GET path`, sent as written so nothing normalizes it.
 fn raw_get(host: &str, path: &str) -> String {
-    use std::io::{Read, Write};
     let mut stream = std::net::TcpStream::connect(host).unwrap();
     write!(stream, "GET {path} HTTP/1.1\r\nHost: {host}\r\n\r\n").unwrap();
     let mut response = String::new();
@@ -102,30 +233,34 @@ fn raw_get(host: &str, path: &str) -> String {
 
 /// The manifest digest a fresh runtime pulls `image` at, through `registry` alone.
 async fn pull(registry: &LocalRegistry, image: &str) -> String {
+    try_pull(registry, image)
+        .await
+        .expect("pull through the local registry")
+}
+
+async fn try_pull(registry: &LocalRegistry, image: &str) -> boxlite::BoxliteResult<String> {
     let home = PerTestBoxHome::isolated_in("/tmp");
     let runtime = common::non_vm_runtime(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: vec![registry.search_registry()],
     })
     .unwrap();
-    let pulled = runtime
-        .images()
-        .unwrap()
-        .pull(image)
-        .await
-        .expect("pull through the local registry");
+    let pulled = runtime.images().unwrap().pull(image).await;
     runtime
         .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
         .await
         .unwrap();
-    pulled.manifest_digest().to_owned()
+    Ok(pulled?.manifest_digest().to_owned())
 }
+
+/// The config blob of every image [`seed_image`] builds.
+const CONFIG: &[u8] =
+    br#"{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}"#;
 
 /// A one-layer image in the registry's layout, returning its manifest digest.
 /// Only a pull reads it, so the layer never has to unpack.
 fn seed_image(dir: &Path, repository: &str, tag: &str) -> String {
-    let config =
-        br#"{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}"#;
+    let config = CONFIG;
     let layer = b"layer bytes";
     let manifest = serde_json::json!({
         "schemaVersion": 2,

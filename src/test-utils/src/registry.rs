@@ -204,12 +204,14 @@ impl Recording {
         };
         let body = self.first_upstream(name, reference, fetch).await;
         let body = body.map_err(|failures| ("MANIFEST_UNKNOWN", failures))?;
-        keep(path, body.clone()).await;
+        let mut pending = Pending::create(path).await;
+        pending.write(&body).await;
+        pending.publish().await;
         Ok((media_type(&body), body))
     }
 
     /// A recorded blob streamed from disk, or one streamed in from an upstream
-    /// and on to the client as it arrives, then recorded once the stream verifies.
+    /// to the client and to disk as it arrives, published once the stream verifies.
     async fn blob(
         &self,
         socket: &mut TcpStream,
@@ -241,16 +243,17 @@ impl Recording {
         socket
             .write_all(blob_head(digest, upstream.content_length).as_bytes())
             .await?;
-        let mut body = Vec::new();
-        // The stream checks the digest and ends in an error on a mismatch.
+        let mut pending = Pending::create(path).await;
+        // The stream checks the digest and ends in an error on a mismatch,
+        // which drops the pending recording unpublished.
         while let Some(chunk) = upstream.stream.next().await {
             let chunk = chunk?;
             if !head_only {
                 socket.write_all(&chunk).await?;
             }
-            body.extend_from_slice(&chunk);
+            pending.write(&chunk).await;
         }
-        keep(path, body).await;
+        pending.publish().await;
         socket.shutdown().await
     }
 
@@ -319,25 +322,70 @@ fn client_for(upstream: &ImageRegistry) -> Client {
     })
 }
 
-/// Write `body` to `path` whole or not at all: test processes record side by
-/// side. A blocking thread does the writing, so a layer never stalls a worker.
-async fn keep(path: PathBuf, body: Vec<u8>) {
-    let recording = tokio::task::spawn_blocking(move || {
-        let parent = path.parent().expect("a recording has a parent directory");
-        let written = std::fs::create_dir_all(parent).and_then(|()| {
-            let mut file = tempfile::NamedTempFile::new_in(parent)?;
-            std::io::Write::write_all(&mut file, &body)?;
-            file.persist(&path).map(drop).map_err(|e| e.error)
-        });
-        if let Err(error) = written {
-            eprintln!(
-                "[test] local registry could not record {}: {error}",
-                path.display()
-            );
+/// A recording written to a temporary file as its bytes arrive and renamed into
+/// place only when published, so test processes recording side by side never
+/// see part of one. Dropped unpublished, it deletes its file. A recording that
+/// cannot be written is dropped, and the client is still answered.
+struct Pending {
+    path: PathBuf,
+    file: Option<(tokio::fs::File, tempfile::TempPath)>,
+}
+
+impl Pending {
+    async fn create(path: PathBuf) -> Self {
+        let parent = path
+            .parent()
+            .expect("a recording has a parent directory")
+            .to_owned();
+        let created = tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&parent)?;
+            tempfile::NamedTempFile::new_in(&parent)
+        })
+        .await
+        .map_err(std::io::Error::other)
+        .and_then(|created| created);
+        let mut pending = Self { path, file: None };
+        match created {
+            Ok(file) => {
+                let (file, temp) = file.into_parts();
+                pending.file = Some((tokio::fs::File::from_std(file), temp));
+            }
+            Err(error) => pending.drop_with(error),
         }
-    });
-    if let Err(error) = recording.await {
-        eprintln!("[test] local registry recording stopped: {error}");
+        pending
+    }
+
+    async fn write(&mut self, bytes: &[u8]) {
+        if let Some((file, _)) = &mut self.file
+            && let Err(error) = file.write_all(bytes).await
+        {
+            self.drop_with(error);
+        }
+    }
+
+    async fn publish(mut self) {
+        let Some((mut file, temp)) = self.file.take() else {
+            return;
+        };
+        let path = self.path.clone();
+        let published = match file.flush().await {
+            Ok(()) => tokio::task::spawn_blocking(move || temp.persist(&path))
+                .await
+                .map_err(std::io::Error::other)
+                .and_then(|persisted| persisted.map_err(|e| e.error)),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = published {
+            self.drop_with(error);
+        }
+    }
+
+    fn drop_with(&mut self, error: std::io::Error) {
+        eprintln!(
+            "[test] local registry could not record {}: {error}",
+            self.path.display()
+        );
+        self.file = None;
     }
 }
 
