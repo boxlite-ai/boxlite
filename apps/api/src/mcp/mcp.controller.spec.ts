@@ -5,7 +5,6 @@
 
 import { Test } from '@nestjs/testing'
 import { UnauthorizedException, type INestApplication } from '@nestjs/common'
-import { AuthGuard } from '@nestjs/passport'
 import type { AddressInfo } from 'net'
 import { FailedAuthTrackerService } from '../auth/failed-auth-tracker.service'
 import { JwtStrategy } from '../auth/jwt.strategy'
@@ -14,6 +13,7 @@ import { BoxState } from '../box/enums/box-state.enum'
 import { TypedConfigService } from '../config/typed-config.service'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { MCP_METADATA_PATH, McpAuthMetadata } from './mcp-auth-metadata'
+import { McpAuthGuard } from './mcp-auth.guard'
 import { McpController } from './mcp.controller'
 import { McpMetadataController } from './mcp-metadata.controller'
 import { McpServerFactory } from './mcp-server.factory'
@@ -61,10 +61,10 @@ describe('McpController', () => {
         },
       ],
     })
-      // This spec covers the MCP wiring, not the JWT strategy: like the real
-      // guard, the stub refuses a request without a token with a 401 and
-      // otherwise hands the controller an authenticated caller.
-      .overrideGuard(AuthGuard('jwt'))
+      // This spec covers the MCP wiring, not token checks (mcp-auth.guard.spec.ts):
+      // like the real guard, the stub refuses a request without a token with a 401
+      // and otherwise hands the controller an authenticated caller.
+      .overrideGuard(McpAuthGuard)
       .useValue({
         canActivate: (context: any) => {
           const request = context.switchToHttp().getRequest()

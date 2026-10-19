@@ -42,6 +42,11 @@ export class McpAuthMetadata {
     }
   }
 
+  /** The audience MCP tokens must name: the resource itself (RFC 8707), once a resource URL is set. */
+  get audience(): string | undefined {
+    return this.resource?.href
+  }
+
   /** The Protected Resource Metadata document. */
   document(): OAuthProtectedResourceMetadata {
     if (!this.resource) {
