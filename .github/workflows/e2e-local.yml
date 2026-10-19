@@ -72,6 +72,13 @@ on:
         description: 'Open SSH session on failure (via tmate)'
         type: boolean
         default: false
+      registries:
+        description: 'Registries tests pull from: local (recorded replay) or upstream (public mirrors)'
+        type: choice
+        options:
+          - local
+          - upstream
+        default: local
 
 # Single global concurrency group — only one e2e run at a time (the
 # persistent VM can only serve one job). A newer push queues behind
@@ -401,6 +408,8 @@ jobs:
         env:
           GH_RUN_ID: ${{ github.run_id }}
           GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+          # Pushes and labeled PRs carry no inputs, so they use the local registry.
+          BOXLITE_TEST_REGISTRIES: ${{ inputs.registries || 'local' }}
         run: |
           source "$HOME/.cargo/env" 2>/dev/null || true
           export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"

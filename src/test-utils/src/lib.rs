@@ -41,8 +41,20 @@ pub const UPSTREAM_REGISTRIES: &[&str] = &[
     "docker.io",
 ];
 
+/// `local` (the default) or `upstream`, which pulls straight from
+/// [`UPSTREAM_REGISTRIES`] as the suites did before the local registry.
+const REGISTRIES_MODE: &str = "BOXLITE_TEST_REGISTRIES";
+
 /// The registries every harness runtime lists: only this process's
-/// [`registry::local_registry`], which answers from its recordings.
+/// [`registry::local_registry`], which answers from its recordings, unless
+/// `BOXLITE_TEST_REGISTRIES=upstream` asks for the public mirrors.
 pub fn test_registries() -> Vec<boxlite::ImageRegistry> {
-    vec![registry::local_registry().search_registry()]
+    match std::env::var(REGISTRIES_MODE).as_deref() {
+        Ok("upstream") => UPSTREAM_REGISTRIES
+            .iter()
+            .map(|host| boxlite::ImageRegistry::https(*host).with_search(true))
+            .collect(),
+        Ok("local") | Err(_) => vec![registry::local_registry().search_registry()],
+        Ok(other) => panic!("{REGISTRIES_MODE}={other}: expected local or upstream"),
+    }
 }

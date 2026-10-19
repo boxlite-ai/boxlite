@@ -61,7 +61,12 @@ online runner, `start` stops it and boots it again with a new token.
   PRs re-run on every push while labeled; a fork PR runs only the head commit that was
   labeled — after new pushes, remove and re-add the label to approve the new code.
 - Manual `workflow_dispatch`, with an optional `debug` input that opens an SSH session if the
-  tests fail. A dispatch runs the selected branch's workflow, which is how a change to this
+  tests fail, and a `registries` input: `local` (the default, and what every push and labeled
+  PR uses) replays images from the
+  [local registry](../../../src/boxlite/tests/README.md#test_registries--the-local-registry);
+  `upstream` pulls from the public mirrors, as the suites did before it, e.g.
+  `gh workflow run e2e-local.yml -f registries=upstream`.
+  A dispatch runs the selected branch's workflow, which is how a change to this
   workflow is tested before it merges.
 
 ## VM & auth

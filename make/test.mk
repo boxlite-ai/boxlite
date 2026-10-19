@@ -499,8 +499,13 @@ test\:unit\:python: _ensure-python-deps
 
 # Runs an SDK suite with the local test registry up and its address in
 # BOXLITE_TEST_REGISTRY, so its boxes resolve images without the internet
-# (src/boxlite/tests/README.md).
+# (src/boxlite/tests/README.md). BOXLITE_TEST_REGISTRIES=upstream runs it
+# bare, so its harness pulls from the public mirrors as before.
+ifeq ($(BOXLITE_TEST_REGISTRIES),upstream)
+WITH_LOCAL_REGISTRY =
+else
 WITH_LOCAL_REGISTRY = $(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/debug/with-local-registry
+endif
 
 _local-registry:
 	@cargo build -q -p boxlite-test-utils --bin with-local-registry

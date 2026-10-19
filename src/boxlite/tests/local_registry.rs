@@ -16,6 +16,9 @@ use sha2::{Digest, Sha256};
 /// a host off this machine puts the internet into every box start.
 #[test]
 fn harness_registries_stay_on_this_machine() {
+    if std::env::var(REGISTRIES_MODE).as_deref() == Ok("upstream") {
+        return; // upstream_mode_lists_the_public_mirrors covers that run.
+    }
     let registries = common::test_registries();
     assert!(!registries.is_empty(), "the harness lists no registry");
     for registry in registries {
@@ -29,6 +32,28 @@ fn harness_registries_stay_on_this_machine() {
             registry.host
         );
     }
+}
+
+/// The variable that switches the harness back to the public mirrors.
+const REGISTRIES_MODE: &str = "BOXLITE_TEST_REGISTRIES";
+
+/// `upstream` mode lists the public mirrors again, so a run can still exercise
+/// the registries the suites pulled from before the local one.
+#[test]
+fn upstream_mode_lists_the_public_mirrors() {
+    let previous = std::env::var_os(REGISTRIES_MODE);
+    // SAFETY: nextest runs each test in its own process, and the cargo test
+    // fallback runs them one at a time; the old value comes back below.
+    unsafe { std::env::set_var(REGISTRIES_MODE, "upstream") };
+    let hosts: Vec<_> = common::test_registries()
+        .into_iter()
+        .map(|registry| registry.host)
+        .collect();
+    match previous {
+        Some(value) => unsafe { std::env::set_var(REGISTRIES_MODE, value) },
+        None => unsafe { std::env::remove_var(REGISTRIES_MODE) },
+    }
+    assert_eq!(hosts, common::UPSTREAM_REGISTRIES);
 }
 
 /// Once the registry has served an image, it serves it again with its upstream

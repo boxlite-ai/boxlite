@@ -135,6 +135,10 @@ registry (`registry::local_registry()`, plain HTTP on `127.0.0.1`), as designed 
   (`test_harness_registry.py`, `harness-registry.integration.test.ts`) fails.
 - The C suite's integration test calls `boxlite_simple_new`, which takes no registries, so it
   still pulls from docker.io.
+- `BOXLITE_TEST_REGISTRIES=upstream` switches every suite back to the public mirrors:
+  `test_registries()` returns `UPSTREAM_REGISTRIES` and make runs the SDK suites without the
+  wrapper. The contract tests then check for the mirrors instead. The default is `local`; any
+  other value makes `test_registries()` panic.
 - Behind an HTTP proxy, set `no_proxy=127.0.0.1,localhost`; otherwise requests to the local
   registry go through the proxy.
 
