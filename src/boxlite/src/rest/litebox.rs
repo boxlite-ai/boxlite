@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use reqwest::Method;
+use serde::Serialize;
 use tokio::sync::mpsc;
 
 use boxlite_shared::constants::files::FALLBACK_CAP_BYTES;
@@ -118,6 +119,34 @@ impl RestBox {
             Some(ExecStdout::new(stdout_rx)),
             Some(ExecStderr::new(stderr_rx)),
         )
+    }
+}
+
+/// Private REST request; public configuration types do not implement Serialize.
+/// Explicit mapping preserves empty key lists and null CA values.
+#[derive(Serialize)]
+struct SshConfigRequest<'a> {
+    listen_address: &'a str,
+    host_private_key: &'a str,
+    accounts: Vec<serde_json::Value>,
+}
+
+impl<'a> SshConfigRequest<'a> {
+    fn new(config: &'a SshConfig) -> Self {
+        let accounts = config.accounts.iter().map(|account| {
+            serde_json::json!({
+                "login": account.login,
+                "authorized_keys": account.authorized_keys,
+                "ca": account.ca.as_ref().map(|ca| {
+                    serde_json::json!({"public_key": ca.public_key, "principal": ca.principal})
+                }),
+            })
+        });
+        Self {
+            listen_address: &config.listen_address,
+            host_private_key: &config.host_private_key,
+            accounts: accounts.collect(),
+        }
     }
 }
 
@@ -532,8 +561,9 @@ impl BoxBackend for RestBox {
 
     async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
         // One request per call: the guest restarts SSH on every configure.
+        let request = SshConfigRequest::new(&config);
         self.client
-            .post(&format!("/boxes/{}/ssh", self.box_id_str()), &config)
+            .post(&format!("/boxes/{}/ssh", self.box_id_str()), &request)
             .await
     }
 

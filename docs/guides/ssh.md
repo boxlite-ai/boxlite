@@ -83,11 +83,20 @@ or `stopped` box reports disabled status with generation zero and empty
 address and host identity fields, without waking it. Only `POST` counts as box
 activity for AutoStop; `GET`, `HEAD`, and `DELETE` never hold a box open.
 
-A wrong content type, malformed JSON, or a body missing a required field is
-rejected with the fixed `400 invalid_argument` message `invalid SSH
-configuration`, which never echoes request values. Guest validation is
-authoritative: a semantically invalid configuration is `400` and leaves the
-running listener untouched. A lifecycle conflict is `409 invalid_state`; the
+A wrong content type, malformed JSON, a body missing a required field, or a
+body carrying an unknown field is rejected with the fixed `400 invalid_argument`
+message `invalid SSH configuration`, which never echoes request values. Unknown
+fields are refused at every level — the configuration, each account, and its CA —
+so a misspelled `authorized_key` cannot silently leave an account keyless. The
+body is parsed before the box is resolved, so a rejected body never reaches the
+backend. It still counts as activity: once authentication succeeds, the common
+middleware records a `POST`'s box activity before the body is parsed, so even a
+rejected configure is use of the box.
+The configuration types deserialize that body but do not serialize: the REST
+transport writes the request internally, so no caller can round-trip a private
+key through them. Guest validation is authoritative: a semantically invalid
+configuration is `400` and leaves the running listener untouched. A lifecycle
+conflict is `409 invalid_state`; the
 AutoResume refusal answers `409 conflict` instead — the same class the other
 resume-gated routes use, not the local `invalid_state` variant. A missing box
 is `404 not_found`, and an upstream guest RPC failure is

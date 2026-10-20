@@ -2718,6 +2718,7 @@ components:
       type: object
       description: Complete replacement SSH configuration; never persisted or logged by the runtime.
       required: [listen_address, host_private_key, accounts]
+      additionalProperties: false
       properties:
         listen_address:
           type: string
@@ -2737,6 +2738,7 @@ components:
       type: object
       description: Credentials accepted for one SSH login (not a container OS identity).
       required: [login]
+      additionalProperties: false
       properties:
         login:
           type: string
@@ -2759,6 +2761,7 @@ components:
       type: object
       description: Certificate authority and required certificate principal.
       required: [public_key, principal]
+      additionalProperties: false
       properties:
         public_key:
           type: string

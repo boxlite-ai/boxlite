@@ -148,12 +148,15 @@ other `--host` (e.g. `0.0.0.0`) unless an API key is set.
 `POST` takes the direct `SshConfig` JSON body (not a wrapper) with
 `Content-Type: application/json` and answers with `SshStatus`; every accepted
 configure fully restarts the guest listener, so neither server nor client
-retries it. A wrong content type, malformed JSON, or a missing required field
-is rejected with the fixed sanitized `400 invalid_argument` message before box
-resolution. `POST` resolves through the resume resolver (like exec); `GET` and
+retries it. A wrong content type, malformed JSON, a missing required field, or an
+unknown field at any level — configuration, account, or CA — is rejected with the
+fixed sanitized `400 invalid_argument` message before box resolution. `POST`
+resolves through the resume resolver (like exec); `GET` and
 `DELETE` resolve through the fetch resolver and never start the box. Only
-`POST` stamps the idle clock. The [SSH guide](../../../../../docs/guides/ssh.md)
-owns the full contract.
+`POST` stamps the idle clock: after authentication succeeds, the common
+middleware records box activity before the body is parsed, so a rejected
+configure still counts. The
+[SSH guide](../../../../../docs/guides/ssh.md) owns the full contract.
 
 ### Command Execution
 

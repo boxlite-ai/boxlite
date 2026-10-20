@@ -90,8 +90,22 @@ fn expected_config_json() -> serde_json::Value {
 
 /// The body every handler-side POST sends: the complete wire shape, so a
 /// rejection can only come from the boundary under test, never the payload.
+/// Spelled as JSON rather than through the public config type, which is
+/// deserialization-only.
 fn config_body() -> String {
-    serde_json::to_string(&full_config()).expect("serialize SshConfig")
+    expected_config_json().to_string()
+}
+
+/// The OpenAPI document `boxlite serve` answers to.
+fn openapi_spec() -> serde_yaml::Value {
+    serde_yaml::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../openapi/box.openapi.yaml"
+        ))
+        .expect("read openapi spec"),
+    )
+    .expect("parse openapi spec")
 }
 
 // ============================================================================
@@ -565,6 +579,230 @@ async fn ssh_configure_rejects_bad_bodies_with_a_sanitized_400() {
     upstream.task.abort();
 }
 
+/// Send one body to the real configure route and describe what is wrong if the
+/// answer is not the sanitized rejection: every case is checked, so a failure
+/// names all three levels at once instead of stopping at the first.
+async fn rejection_failure(level: &str, url: &str, body: &serde_json::Value) -> Option<String> {
+    let response = ssh_call(
+        "POST",
+        url,
+        None,
+        Some(("application/json", &body.to_string())),
+    )
+    .await;
+    let status = response.status();
+    let text = response.text().await.expect("error body");
+    let envelope: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    let mut why: Vec<String> = [
+        (status != StatusCode::BAD_REQUEST).then(|| format!("status {status}")),
+        (envelope["error"]["code"] != "invalid_argument")
+            .then(|| format!("code {}", envelope["error"]["code"])),
+        (envelope["error"]["message"] != "invalid SSH configuration")
+            .then(|| format!("message {}", envelope["error"]["message"])),
+        text.contains("leak-me")
+            .then(|| "the body was echoed".to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    why.sort();
+    (!why.is_empty()).then(|| format!("{level}: {}", why.join(", ")))
+}
+
+/// A misspelled field is refused, never dropped: these bodies carry credentials,
+/// so silently ignoring `authorized_key` would leave an account the operator
+/// believes is keyed. All three levels reject with the same sanitized 400 before
+/// the box is resolved, so nothing reaches the backend.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_configure_rejects_unknown_fields_at_every_level() {
+    let upstream = SshStub::local("running", true, Vec::new()).await;
+    let (base, _state, server) = serve_over(&upstream, None).await;
+
+    let cases = [
+        (
+            "top-level",
+            serde_json::json!({
+                "listen_address": "0.0.0.0:2222",
+                "host_private_key": "leak-me",
+                "accounts": [{"login": "alice", "authorized_keys": ["leak-me"]}],
+                "listen_port": "leak-me",
+            }),
+        ),
+        (
+            "account: `authorized_key` typo beside a valid CA",
+            serde_json::json!({
+                "listen_address": "0.0.0.0:2222",
+                "host_private_key": "leak-me",
+                "accounts": [{
+                    "login": "alice",
+                    "authorized_key": ["leak-me"],
+                    "ca": {"public_key": "leak-me", "principal": "leak-me"},
+                }],
+            }),
+        ),
+        (
+            "ca",
+            serde_json::json!({
+                "listen_address": "0.0.0.0:2222",
+                "host_private_key": "leak-me",
+                "accounts": [{
+                    "login": "alice",
+                    "ca": {
+                        "public_key": "leak-me",
+                        "principal": "leak-me",
+                        "certificate": "leak-me",
+                    },
+                }],
+            }),
+        ),
+    ];
+
+    let url = format!("{base}/v1/boxes/{STUB_BOX_ID}/ssh");
+    let mut failures = Vec::new();
+    for (level, body) in cases {
+        if let Some(failure) = rejection_failure(level, &url, &body).await {
+            failures.push(failure);
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+
+    assert!(
+        upstream.requests().is_empty(),
+        "a rejected body must be answered before any box work"
+    );
+
+    let spec = openapi_spec();
+    for name in ["SshConfig", "SshAccount", "SshCaConfig"] {
+        assert_eq!(
+            spec["components"]["schemas"][name]["additionalProperties"].as_bool(),
+            Some(false),
+            "{name} must refuse unknown fields in the spec too"
+        );
+    }
+    server.abort();
+    upstream.task.abort();
+}
+
+/// The shortcuts a hand-written body may take reach the guest in one complete
+/// form: omitted `authorized_keys` defaults to `[]`, and an omitted or explicit
+/// `ca: null` stays `null`, so no request needs the backend to guess.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_configure_transmits_defaulted_and_explicit_optional_fields() {
+    let ca = serde_json::json!({"public_key": "ca sentinel", "principal": "principal sentinel"});
+    let keys = serde_json::json!(["alice authorized sentinel"]);
+    let cases = [
+        (expected_config_json(), expected_config_json()),
+        (
+            serde_json::json!({
+                "listen_address": "0.0.0.0:2222",
+                "host_private_key": "private sentinel",
+                "accounts": [{"login": "bob", "ca": ca.clone()}],
+            }),
+            serde_json::json!({
+                "listen_address": "0.0.0.0:2222",
+                "host_private_key": "private sentinel",
+                "accounts": [{"login": "bob", "authorized_keys": [], "ca": ca.clone()}],
+            }),
+        ),
+        (
+            serde_json::json!({
+                "listen_address": "0.0.0.0:2222",
+                "host_private_key": "private sentinel",
+                "accounts": [{"login": "alice", "authorized_keys": keys.clone()}],
+            }),
+            serde_json::json!({
+                "listen_address": "0.0.0.0:2222",
+                "host_private_key": "private sentinel",
+                "accounts": [{"login": "alice", "authorized_keys": keys.clone(), "ca": null}],
+            }),
+        ),
+        (
+            serde_json::json!({
+                "listen_address": "0.0.0.0:2222",
+                "host_private_key": "private sentinel",
+                "accounts": [{"login": "alice", "authorized_keys": keys.clone(), "ca": null}],
+            }),
+            serde_json::json!({
+                "listen_address": "0.0.0.0:2222",
+                "host_private_key": "private sentinel",
+                "accounts": [{"login": "alice", "authorized_keys": keys.clone(), "ca": null}],
+            }),
+        ),
+    ];
+
+    for (sent, forwarded) in cases {
+        let upstream = SshStub::local("running", true, vec![(200, status_json(&disabled()))]).await;
+        let (base, _state, server) = serve_over(&upstream, None).await;
+        let response = ssh_call(
+            "POST",
+            &format!("{base}/v1/boxes/{STUB_BOX_ID}/ssh"),
+            None,
+            Some(("application/json", &sent.to_string())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "{sent}");
+        let requests = upstream.requests();
+        assert_eq!(requests.len(), 1, "{sent}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&requests[0].body).unwrap(),
+            forwarded,
+            "{sent}"
+        );
+        server.abort();
+        upstream.task.abort();
+    }
+}
+
+/// Wraps a type so `Serialize` can be detected at runtime. The bound is
+/// resolved at the call site; putting it on the test itself would turn the
+/// regression into a compile error instead of a failing assertion.
+struct IsSerialize<T>(std::marker::PhantomData<T>);
+
+trait SerializesViaSerde {
+    fn serializes(&self) -> bool;
+}
+
+impl<T: serde::Serialize> SerializesViaSerde for &IsSerialize<T> {
+    fn serializes(&self) -> bool {
+        true
+    }
+}
+
+/// Autoref fallback, chosen only when the impl above does not apply.
+impl<T> IsSerialize<T> {
+    fn serializes(&self) -> bool {
+        false
+    }
+}
+
+macro_rules! serializes {
+    ($type:ty) => {{
+        let wrapped = IsSerialize::<$type>(std::marker::PhantomData);
+        (&&wrapped).serializes()
+    }};
+}
+
+/// Configuration travels one way only: the REST client's private borrowed
+/// request type serializes a configuration, so no caller can round-trip a
+/// private key through the public types. `SshStatus` is a response body and
+/// implements both directions.
+#[test]
+fn ssh_configuration_types_deserialize_but_do_not_serialize() {
+    assert!(serializes!(SshStatus), "SshStatus is a response body");
+    let serializing: Vec<&str> = [
+        ("SshConfig", serializes!(SshConfig)),
+        ("SshAccount", serializes!(SshAccount)),
+        ("SshCaConfig", serializes!(SshCaConfig)),
+    ]
+    .into_iter()
+    .filter_map(|(name, serializes)| serializes.then_some(name))
+    .collect();
+    assert!(
+        serializing.is_empty(),
+        "configuration types must not serialize: {serializing:?}"
+    );
+}
+
 /// The happy path through the real handlers: every method answers with the
 /// backend's status JSON decoded, the configure body crosses intact, and
 /// only configure — which may boot the box — resets the idle clock; `GET`,
@@ -709,14 +947,7 @@ async fn ssh_delete_409_is_declared_in_the_openapi_contract() {
     server.abort();
     upstream.task.abort();
 
-    let spec: serde_yaml::Value = serde_yaml::from_str(
-        &std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../openapi/box.openapi.yaml"
-        ))
-        .expect("read openapi spec"),
-    )
-    .expect("parse openapi spec");
+    let spec = openapi_spec();
     let declared =
         spec["paths"]["/{prefix}/boxes/{box_id}/ssh"]["delete"]["responses"]["409"]["$ref"]
             .as_str();

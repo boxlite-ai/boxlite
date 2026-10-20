@@ -18,7 +18,10 @@ enum StartupPolicy {
 }
 
 /// Complete guest SSH configuration. Keys are never persisted by the runtime.
-#[derive(Clone, Serialize, Deserialize)]
+///
+/// Configuration deserializes strictly; REST serialization stays internal.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SshConfig {
     pub listen_address: String,
     pub host_private_key: String,
@@ -26,7 +29,8 @@ pub struct SshConfig {
 }
 
 /// Credentials accepted for one SSH login (not a container OS identity).
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SshAccount {
     pub login: String,
     #[serde(default)]
@@ -36,7 +40,8 @@ pub struct SshAccount {
 }
 
 /// Certificate authority and required certificate principal.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SshCaConfig {
     pub public_key: String,
     pub principal: String,

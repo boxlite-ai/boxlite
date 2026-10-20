@@ -306,7 +306,9 @@ These types are exported directly from `boxlite`, independently of protobuf:
 Configuration fields are explicit; the runtime neither generates keys nor stores
 configuration nor publishes ports. All types are `Clone + Debug + Send + Sync`;
 configuration Debug output redacts credentials, and status supports `PartialEq + Eq`.
-The types also implement `Serialize` + `Deserialize` for the REST boundary; the
+The configuration types implement `Deserialize` but not `Serialize`;
+`SshStatus` implements `Serialize` + `Deserialize`. Unknown fields are refused in
+the configuration, account, and CA objects (not in `SshStatus`), and the
 [OpenAPI schema](../../../openapi/box.openapi.yaml) owns the wire shape.
 
 For a local box, after VM and container startup each operation has a total
