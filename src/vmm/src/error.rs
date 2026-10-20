@@ -17,7 +17,7 @@ pub(crate) type Result<T> = std::result::Result<T, Error>;
     not(test),
     expect(
         dead_code,
-        reason = "Only the unwired Vm::new and boot::prepare build these."
+        reason = "Only the unwired Vm::new, boot::prepare and buses build these."
     )
 )]
 pub(crate) enum Error {
@@ -31,6 +31,8 @@ pub(crate) enum Error {
     Hypervisor(boxlite_hypervisor::Error),
     /// The kernel command line is too long or not printable ASCII.
     InvalidCommandLine(&'static str),
+    /// A bus range is empty, wraps, or overlaps a registered range.
+    Overlap { base: u64, len: u64 },
     /// Opening or loading the kernel image failed.
     #[cfg_attr(
         all(test, not(all(target_os = "linux", target_arch = "x86_64"))),
@@ -66,6 +68,10 @@ impl fmt::Display for Error {
             Self::InvalidCommandLine(reason) => {
                 write!(f, "invalid kernel command line: {reason}")
             }
+            Self::Overlap { base, len } => write!(
+                f,
+                "bus range at {base:#x} of {len:#x} bytes is empty, wraps or overlaps another"
+            ),
             Self::LoadKernel { path, .. } => {
                 write!(f, "failed to load the kernel {}", path.display())
             }
@@ -84,7 +90,8 @@ impl error::Error for Error {
         match self {
             Self::InvalidVcpuCount(_)
             | Self::InvalidMemorySize(_)
-            | Self::InvalidCommandLine(_) => None,
+            | Self::InvalidCommandLine(_)
+            | Self::Overlap { .. } => None,
             Self::AllocateMemory { source, .. }
             | Self::LoadKernel { source, .. }
             | Self::LoadInitramfs { source, .. }

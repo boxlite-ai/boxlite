@@ -30,8 +30,8 @@ boxlite-vmm
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map and command line, and sets up the 64-bit entry state (GDT, identity page tables, registers); the MP table follows |
 | `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
 | `vcpu` | Worker threads, stop coordination, and exit handling |
-| `irq` | Device interrupt assignment and routing; HVF and KVM provide the controller, WHP (M10) only local APICs |
-| `bus` | Address-range registration and device I/O dispatch |
+| `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line that raises edges; HVF and KVM provide the controller, WHP (M10) only local APICs |
+| `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
 
 Backend implementation and guest boot follow in M1. Virtio devices, the BoxLite
 engine adapter, engine selection, and `native` feature wiring follow in M2.
@@ -200,6 +200,32 @@ Every other entry is kept, so vCPUs differ only in their APIC ID.
 write-back default; KVM already creates the other boot MSRs as zero. The
 local APIC keeps its KVM reset state, with LINT0 in ExtINT mode on the boot
 vCPU; Linux programs LINT1 itself.
+
+## Buses and interrupt lines
+
+`bus::Buses` holds an MMIO bus on every host and a port bus on x86_64.
+`Buses::dispatch` takes a vCPU exit, serves `MmioRead`, `MmioWrite`, `IoIn`
+and `IoOut`, and returns every other exit to the caller. A device registers a
+`BusRange` and sees offsets from its base:
+
+- An access must lie entirely inside one range. An access that no device
+  holds, that crosses a range end, or whose device was dropped reads `0xFF`
+  and its write is dropped, as on a PC bus with nothing driving it.
+- Reads reach the device zero-filled, so a device that fills part of the
+  buffer never leaks what the hypervisor left in it.
+- `BusRange::new` rejects empty and wrapping ranges and `insert` rejects
+  overlapping ones, both with `Overlap`.
+- Buses hold `Weak` references; the device manager owns the devices.
+- A device whose lock an earlier panic poisoned stops the next access too,
+  as in Firecracker and cloud-hypervisor: that panic was a VMM bug, since no
+  guest input may panic the VMM.
+
+`irq::IrqLine` is one device interrupt line over `IrqChip`, which every host
+VM implements through `Vm::set_irq_line`. `pulse` raises an edge, a set
+followed by a clear. `IrqLine` is not `Clone`, so a device cannot share its
+line; the device manager creates one per line.
+Nothing registers devices or raises lines yet; the later steps of
+[#2031](https://github.com/boxlite-ai/boxlite/issues/2031) add the devices.
 
 ## Build
 

@@ -312,11 +312,22 @@ today.
   `write(&mut self, offset: u64, data: &[u8])`. These are the most common
   shapes among seven surveyed VMMs: `Bus` in six, `BusDevice` in four, and
   offset-based access in all seven.
-- **Registration.** `insert` rejects overlapping ranges with `Overlap`.
-  Devices register while the VM is built; M6 and M7 change the guest without
-  adding bus devices.
+- **Registration.** `BusRange::new` rejects empty and wrapping ranges and
+  `insert` rejects overlapping ones, both with `Overlap`. Buses hold `Weak`
+  references and the device manager owns the devices, as in Firecracker's
+  `vstate/bus.rs`. Devices register while the VM is built; M6 and M7 change
+  the guest without adding bus devices.
+- **Dispatch.** `Buses::dispatch` serves MMIO and port exits and returns every
+  other exit to the vCPU loop. An access must lie entirely inside one range,
+  as in Firecracker's bus; one that crosses a range end counts as unclaimed.
+  An unclaimed access reads `0xFF` and drops writes, as cloud-hypervisor does
+  and as QEMU does for ports. A claimed read reaches the device zero-filled,
+  as in cloud-hypervisor's bus, so stale `kvm_run` bytes never leak to the
+  guest.
 - **Locking.** A vCPU thread holds a device's lock for one register access and
-  hands anything that can block to the device's worker.
+  hands anything that can block to the device's worker. A lock that an
+  earlier panic poisoned stops the next access too, as Firecracker and
+  cloud-hypervisor do: the panic was a VMM bug, never guest input.
 
 ### Interrupts
 
@@ -328,9 +339,13 @@ today.
 - **Raising an interrupt.** Devices raise their lines from their own threads
   through the VMM's interrupt path, which calls `Vm::set_irq_line` and then
   unparks halted vCPUs.
-- **Naming.** M1 names the type devices hold. The survey found no dominant
-  name: `VirtioInterrupt`, `InterruptSourceGroup` and `IrqSender` each appear
-  once or twice.
+- **Naming.** Devices hold an `IrqLine`, which is not `Clone`, so a device
+  cannot share its line; `pulse` raises an edge. It calls the object-safe `IrqChip` trait,
+  which every host VM implements through `Vm::set_irq_line`, as crosvm puts
+  `service_irq` on its `IrqChip`. The step that parks halted vCPUs wraps
+  `IrqChip` to unpark them. The survey found no dominant name:
+  `VirtioInterrupt`, `InterruptSourceGroup` and `IrqSender` each appear once
+  or twice.
 
 ### Devices by milestone
 
