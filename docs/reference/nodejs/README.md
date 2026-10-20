@@ -281,10 +281,13 @@ OCI `EXPOSE` declarations do not publish host ports.
 interface Secret {
   name: string;
   value: string;
-  hosts?: string[];
-  placeholder?: string; // Default: `<BOXLITE_SECRET:${name}>`
+  hosts?: string[]; // Box creation requires at least one host
+  placeholder?: string; // Default: `<BOXLITE_SECRET:${name}>`; must not be empty
 }
 ```
+
+Only request headers sent to `hosts` carry the real value; bodies and URLs keep
+the placeholder.
 
 ---
 

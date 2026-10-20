@@ -51,6 +51,9 @@ CLI tests are integration tests: they pull images, create boxes, and run real co
   - Uses `CARGO_BIN_EXE_boxlite` and `--home` pointing at a shared directory (e.g. `/tmp/bl`).
   - Uses a global lock so tests don’t run concurrently against the same home.
   - Pre-pulls images, sets a timeout (e.g. 60s), and exposes `cleanup_box` / `cleanup_boxes`.
+- **REST end to end:** `run_rest_e2e.rs` and `secret_canary.rs` start `boxlite serve` through `ServeChild` in `boxlite-cli/tests/common/serve.rs`; `start_logged` keeps serve's `debug` output in a file.
+  - `secret_canary.rs` gives a box a fresh secret value, sends it through the MITM proxy, then fails if the value appears in a REST response, the guest's environment, serve's output, or a file under serve's home other than the database and disk images.
+  - Run these with `BOXLITE_HOME` unset or pointing at an empty directory: `ServeChild` probes readiness with a client that has no `--home`, so a saved cloud profile redirects it and serve never looks ready.
 
 Tests use `assert_cmd::Command` and `predicates` to assert exit codes and stdout/stderr. New tests should use `common::boxlite()` and clean up any boxes they create (e.g. with `--rm` or `ctx.cleanup_box(...)`).
 

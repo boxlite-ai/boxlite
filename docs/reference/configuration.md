@@ -122,11 +122,19 @@ Host-side secret substitution rules for outbound HTTPS requests.
 **Shape:**
 - `name`: human-readable secret name
 - `value`: real secret value
-- `hosts`: matching hosts for substitution
-- `placeholder`: optional guest-visible token, defaults to `<BOXLITE_SECRET:{name}>`
+- `hosts`: hosts whose requests receive the value; at least one, with no empty
+  entry, or box creation fails
+- `placeholder`: optional guest-visible token, defaults to `<BOXLITE_SECRET:{name}>`;
+  box creation rejects an empty one
 
 **Notes:**
 - The guest sees only the placeholder, never the real secret value.
+- Only request header values are substituted. The body, the URL path and
+  query, and WebSocket frames reach the host with the placeholder unchanged,
+  since a host could store or echo them back to the guest.
+- A host that echoes request headers (an HTTP echo service, for example)
+  returns the real value to the guest. Bind a secret only to hosts you trust
+  with it.
 - The placeholder is also exposed as `BOXLITE_SECRET_<NAME>` inside the guest.
 - **A secret is an egress grant as well as a credential.** Every host this
   matches becomes reachable on port 443 without a rule of its own — declaring

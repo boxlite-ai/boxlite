@@ -18,6 +18,18 @@ pub struct ServeChild {
 
 impl ServeChild {
     pub fn start() -> Self {
+        Self::spawn(Stdio::null(), Stdio::null(), None)
+    }
+
+    /// Like [`start`](Self::start), but serve logs at `debug` into `log`, for
+    /// tests that inspect what it writes.
+    pub fn start_logged(log: &std::path::Path) -> Self {
+        let file = std::fs::File::create(log).expect("create serve log");
+        let err = file.try_clone().expect("clone serve log");
+        Self::spawn(file.into(), err.into(), Some("debug"))
+    }
+
+    fn spawn(stdout: Stdio, stderr: Stdio, rust_log: Option<&str>) -> Self {
         let home = boxlite_test_utils::home::PerTestBoxHome::new();
 
         // Ask the OS for a free port, then release it — a small race with
@@ -34,8 +46,11 @@ impl ServeChild {
             cmd.arg("--registry").arg(reg);
         }
         cmd.args(["serve", "--host", "127.0.0.1", "--port", &port.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdout(stdout)
+            .stderr(stderr);
+        if let Some(level) = rust_log {
+            cmd.env("RUST_LOG", level);
+        }
 
         let child = cmd.spawn().expect("spawn boxlite serve");
         let serve = Self {
@@ -53,6 +68,11 @@ impl ServeChild {
 
     pub fn url(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
+    }
+
+    /// Serve's home directory: its database, box state, and logs.
+    pub fn home(&self) -> &std::path::Path {
+        &self._home.path
     }
 
     /// Run a `boxlite --url` client command against this server.

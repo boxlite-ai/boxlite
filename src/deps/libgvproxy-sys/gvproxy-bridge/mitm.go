@@ -16,6 +16,18 @@ import (
 	"time"
 )
 
+// SecretConfig holds a secret's placeholder mapping for header substitution.
+type SecretConfig struct {
+	Name        string   `json:"name"`
+	Hosts       []string `json:"hosts"`
+	Placeholder string   `json:"placeholder"`
+	Value       string   `json:"value"`
+}
+
+func (s SecretConfig) String() string {
+	return "SecretConfig{Name:" + s.Name + ", Placeholder:" + s.Placeholder + ", Value:[REDACTED]}"
+}
+
 // BoxCA signs short-lived host certificates with the persisted per-box CA.
 type BoxCA struct {
 	cert      *x509.Certificate
@@ -175,15 +187,20 @@ func (ca *BoxCA) generateHostCert(hostname string, now time.Time) (*tls.Certific
 	return tlsCert, nil
 }
 
-// substituteHeaders replaces secret placeholders in request headers and URL query.
+// substituteHeaders replaces secret placeholders in request header values only.
+// The body, URL and WebSocket frames are guest content a host may store or
+// echo back, so a value written there could return to the guest.
 func substituteHeaders(req *http.Request, secrets []SecretConfig) {
-	if len(secrets) == 0 {
-		return
-	}
-
 	pairs := make([]string, 0, len(secrets)*2)
 	for _, s := range secrets {
-		pairs = append(pairs, s.Placeholder, s.Value)
+		// An empty placeholder would make the replacer insert the value at
+		// every position. Create rejects one; this guards boxes stored before.
+		if s.Placeholder != "" {
+			pairs = append(pairs, s.Placeholder, s.Value)
+		}
+	}
+	if len(pairs) == 0 {
+		return
 	}
 	r := strings.NewReplacer(pairs...)
 
@@ -191,10 +208,6 @@ func substituteHeaders(req *http.Request, secrets []SecretConfig) {
 		for i, v := range vals {
 			req.Header[key][i] = r.Replace(v)
 		}
-	}
-
-	if req.URL != nil && req.URL.RawQuery != "" {
-		req.URL.RawQuery = r.Replace(req.URL.RawQuery)
 	}
 }
 

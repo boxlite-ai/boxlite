@@ -480,11 +480,13 @@ pub(crate) struct PySecret {
 
     /// Hostnames where this secret should be injected.
     /// Supports exact matches ("api.openai.com") and wildcards ("*.openai.com").
+    /// Box creation requires at least one, with no empty entry.
     #[pyo3(get, set)]
     pub(crate) hosts: Vec<String>,
 
     /// The placeholder string that appears in guest HTTP headers.
-    /// Defaults to ``<BOXLITE_SECRET:{name}>`` if not set explicitly.
+    /// Defaults to ``<BOXLITE_SECRET:{name}>`` if not set explicitly; an
+    /// explicit empty string is rejected at box creation.
     #[pyo3(get, set)]
     pub(crate) placeholder: Option<String>,
 }

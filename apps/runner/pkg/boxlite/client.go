@@ -137,13 +137,28 @@ func boxRuntimeEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]stri
 // a live runtime (see secret_options_test.go). The SDK applies the
 // `<BOXLITE_SECRET:{name}>` placeholder default when Placeholder is empty, so an
 // omitted placeholder is passed through as-is rather than synthesized here.
+//
+// It drops empty host entries and any secret left without a host. Box
+// creation rejects both, but recovery and the re-create of a box this runner
+// lost re-send the stored secrets, and a box stored before that rule may hold
+// them. gvproxy never substituted such a secret, so the box loses no working
+// credential.
 func secretSpecs(secrets []dto.SecretDTO) []boxlite.Secret {
 	specs := make([]boxlite.Secret, 0, len(secrets))
 	for _, secret := range secrets {
+		hosts := make([]string, 0, len(secret.Hosts))
+		for _, host := range secret.Hosts {
+			if host != "" {
+				hosts = append(hosts, host)
+			}
+		}
+		if len(hosts) == 0 {
+			continue
+		}
 		specs = append(specs, boxlite.Secret{
 			Name:        secret.Name,
 			Value:       secret.Value,
-			Hosts:       secret.Hosts,
+			Hosts:       hosts,
 			Placeholder: secret.Placeholder,
 		})
 	}
@@ -425,7 +440,11 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	for k, v := range boxRuntimeEnv(ctx, boxDto) {
 		opts = append(opts, boxlite.WithEnv(k, v))
 	}
-	for _, secret := range secretSpecs(boxDto.Secrets) {
+	secrets := secretSpecs(boxDto.Secrets)
+	if dropped := len(boxDto.Secrets) - len(secrets); dropped > 0 {
+		c.logger.Warn("dropping stored secrets without hosts; they were never substituted", "box", boxDto.Id, "dropped", dropped)
+	}
+	for _, secret := range secrets {
 		opts = append(opts, boxlite.WithSecret(secret))
 	}
 

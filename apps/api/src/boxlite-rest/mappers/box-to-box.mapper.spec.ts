@@ -89,12 +89,12 @@ describe('BoxLite lifecycle policy mapper', () => {
     ])
   })
 
-  it('passes a secret without hosts/placeholder through untouched', () => {
+  it('passes a secret without a placeholder through untouched', () => {
     const mapped = createBoxToCreateBox({
-      secrets: [{ name: 'openai', value: 'sk-test' }],
+      secrets: [{ name: 'openai', value: 'sk-test', hosts: ['api.openai.com'] }],
     })
 
-    expect(mapped.secrets).toEqual([{ name: 'openai', value: 'sk-test' }])
+    expect(mapped.secrets).toEqual([{ name: 'openai', value: 'sk-test', hosts: ['api.openai.com'] }])
   })
 
   it('returns the effective second-based policy', () => {

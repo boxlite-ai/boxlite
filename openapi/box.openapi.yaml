@@ -2436,8 +2436,10 @@ components:
 
     SecretSpec:
       type: object
-      description: Outbound HTTPS secret substitution rule
-      required: [name, value]
+      description: |
+        Outbound HTTPS secret substitution rule. The placeholder is replaced
+        only in request header values sent to `hosts`; the body and URL keep it.
+      required: [name, value, hosts]
       properties:
         name:
           type: string
@@ -2447,14 +2449,17 @@ components:
           description: Real secret value. Never enters the guest VM.
         hosts:
           type: array
+          minItems: 1
           items:
             type: string
-          description: Matching hosts for this secret. Empty means no host restriction.
+            minLength: 1
+          description: Hosts whose requests receive this secret. At least one is required.
         placeholder:
           type: string
+          minLength: 1
           description: |
             Placeholder string visible inside the guest.
-            Defaults to `<BOXLITE_SECRET:{name}>` when omitted.
+            Defaults to `<BOXLITE_SECRET:{name}>` when omitted; must not be empty.
 
     Snapshot:
       type: object

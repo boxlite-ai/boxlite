@@ -214,7 +214,8 @@ func cPortProtocol(p PortProtocol) uint32 {
 	}
 }
 
-// Secret configures outbound HTTPS secret substitution.
+// Secret configures outbound HTTPS secret substitution in request headers.
+// Hosts must name at least one host, or box creation fails.
 type Secret struct {
 	Name        string
 	Value       string

@@ -72,7 +72,8 @@ export class BoxSecret {
   value: string
 
   @ApiPropertyOptional({
-    description: 'Matching hosts for this secret. Empty means no host restriction.',
+    description:
+      'Hosts whose requests receive this secret, in request headers only. At least one is required; boxes stored before that rule may hold none, and such a secret is never substituted.',
     example: ['api.openai.com'],
     isArray: true,
     type: String,

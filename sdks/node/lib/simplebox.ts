@@ -92,10 +92,10 @@ export interface Secret {
   /** Real secret value. Never enters the guest VM. */
   value: string;
 
-  /** Matching hosts for secret substitution. */
+  /** Hosts whose request headers receive the value. Box creation requires at least one. */
   hosts?: string[];
 
-  /** Placeholder exposed to guest code. */
+  /** Placeholder exposed to guest code. Must not be empty. */
   placeholder?: string;
 }
 

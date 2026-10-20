@@ -316,6 +316,10 @@ impl BoxOptions {
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
         options.sanitize_remote()?;
+        // Here, not in `sanitize_remote`: `get_or_create` runs that before it
+        // looks up an existing box, which keeps the secrets it was made with.
+        // The server checks again.
+        options.validate_secrets()?;
 
         // Validate only the caller's requested policy. An unset auto_stop means
         // "no auto-stop", so it must not borrow the server's default here —
@@ -697,6 +701,59 @@ mod tests {
                 "GET /v1/boxes/named HTTP/1.1"
             ]
         );
+    }
+
+    fn hostless_secret_options() -> BoxOptions {
+        BoxOptions {
+            secrets: vec![crate::runtime::options::Secret {
+                name: "openai".into(),
+                hosts: vec![],
+                placeholder: "<BOXLITE_SECRET:openai>".into(),
+                value: "sk-test".into(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// A REST client refuses the same malformed secrets as a local create,
+    /// before the request leaves the process.
+    #[tokio::test]
+    async fn remote_create_rejects_a_secret_without_hosts() {
+        let runtime = RestRuntime::new(&BoxliteRestOptions::new("http://localhost:1")).unwrap();
+
+        let error = match RuntimeBackend::create(&runtime, hostless_secret_options(), None).await {
+            Err(error) => error,
+            Ok(_) => panic!("a secret without hosts must be refused"),
+        };
+
+        assert!(
+            matches!(error, BoxliteError::InvalidArgument(_)),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains("hosts"), "got: {error}");
+    }
+
+    /// Create refuses a secret without hosts, but a box made before that rule
+    /// may hold one. Re-attaching by name with the caller's original options
+    /// must return that box, not fail the create-time check.
+    #[tokio::test]
+    async fn remote_get_or_create_reattaches_a_box_with_a_hostless_secret() {
+        let (port, server) = json_server(vec![BOX_RESPONSE]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let reattached = RuntimeBackend::get_or_create(
+            &runtime,
+            hostless_secret_options(),
+            Some("named".into()),
+        )
+        .await;
+
+        match reattached {
+            Ok((_, created)) => assert!(!created, "the existing box must be returned"),
+            Err(error) => panic!("re-attaching must not run the create-time check: {error}"),
+        }
+        assert_eq!(server.await.unwrap(), ["GET /v1/boxes/named HTTP/1.1"]);
     }
 
     #[tokio::test]

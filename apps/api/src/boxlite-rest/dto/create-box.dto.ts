@@ -8,6 +8,7 @@ import { BadRequestException, Logger } from '@nestjs/common'
 import { Transform, Type, plainToInstance } from 'class-transformer'
 import {
   ArrayMaxSize,
+  ArrayNotEmpty,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -189,13 +190,18 @@ export class SecretSpecDto {
   @IsNotEmpty()
   value: string
 
-  @IsOptional()
+  // gvproxy substitutes a secret only for the hosts it lists, so a secret
+  // without one would be stored and never injected.
   @IsArray()
+  @ArrayNotEmpty()
   @IsString({ each: true })
-  hosts?: string[]
+  @IsNotEmpty({ each: true })
+  hosts: string[]
 
+  // An empty placeholder would splice the value into every header byte.
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   placeholder?: string
 }
 

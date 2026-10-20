@@ -171,6 +171,14 @@ is rejected as an invalid argument before the runner mounts volumes, creates
 a box, or (for `Recover`) destroys the old one
 (`networkSpec` in [`pkg/boxlite/client.go`](pkg/boxlite/client.go)).
 
+`Create` and `Recover` hand the box's secrets to the runtime. The control
+plane re-sends a stored box's secrets when it recovers the box or re-creates
+one this runner lost, and a box stored before creation required hosts may
+hold a secret without one. `secretSpecs` drops empty host entries and any
+secret left without a host, and `Create` logs a warning: gvproxy never
+substituted such a secret, and the runtime would refuse it
+([`pkg/boxlite/client.go`](pkg/boxlite/client.go)).
+
 `Info` is the only endpoint that fans out: it pulls live state from the
 runtime _and_ backup state from `BackupInfoCache`, then fetches the
 runtime version only when the box is `STARTED`. See

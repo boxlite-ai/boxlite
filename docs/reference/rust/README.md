@@ -1046,11 +1046,14 @@ Outbound HTTPS secret substitution rule.
 ```rust
 pub struct Secret {
     pub name: String,
-    pub hosts: Vec<String>,
-    pub placeholder: String, // default: <BOXLITE_SECRET:{name}>
+    pub hosts: Vec<String>,  // at least one, no empty entry
+    pub placeholder: String, // non-empty, e.g. <BOXLITE_SECRET:{name}>
     pub value: String,
 }
 ```
+
+Box creation rejects a secret that breaks either rule. The placeholder is
+replaced only in request header values sent to `hosts`; bodies and URLs keep it.
 
 ### PortSpec
 
