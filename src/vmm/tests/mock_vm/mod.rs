@@ -25,6 +25,10 @@ pub(crate) enum Call {
         host_addr: usize,
         size: usize,
     },
+    SetIrqLine {
+        line: u32,
+        level: bool,
+    },
 }
 
 impl Call {
@@ -98,6 +102,7 @@ impl MockVm {
                 size,
                 source,
             },
+            Call::SetIrqLine { line, .. } => Error::SetIrqLine { line, source },
         })
     }
 }
@@ -117,8 +122,8 @@ impl Vm for MockVm {
         Ok(MockVcpu)
     }
 
-    fn set_irq_line(&self, _line: u32, _level: bool) -> Result<()> {
-        Ok(())
+    fn set_irq_line(&self, line: u32, level: bool) -> Result<()> {
+        self.record(Call::SetIrqLine { line, level })
     }
 }
 

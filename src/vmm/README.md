@@ -205,6 +205,28 @@ write-back default; KVM already creates the other boot MSRs as zero. The
 local APIC keeps its KVM reset state, with LINT0 in ExtINT mode on the boot
 vCPU; Linux programs LINT1 itself.
 
+## Device buses and interrupt lines
+
+`bus::Bus` routes memory-mapped and port I/O accesses to registered
+`BusDevice` implementations. Non-overlapping ranges are enforced at
+registration time; overlapping, zero-length, or wrapping registrations fail
+with `Error::Overlap`.
+
+- Devices are registered as `Weak<Mutex<dyn BusDevice>>`, ensuring the bus
+  does not extend device lifetimes.
+- Reads to unmapped ranges or dead weak references return all-ones (`0xFF`),
+  and writes are silently dropped.
+- Read buffers are zeroed before dispatching to the device, and relative
+  offsets within the device's registered range are passed to device handlers.
+- `bus::Buses` combines MMIO and port I/O buses, and `dispatch` routes
+  `VcpuExit::MmioRead`, `VcpuExit::MmioWrite`, `VcpuExit::IoIn`, and
+  `VcpuExit::IoOut`, returning other exits unhandled.
+
+`irq::IrqLine` wraps interrupt line assertions on an `IrqChip` (such as a host
+`Vm`). An interrupt line is owned by a single device and tracks asserted state:
+`pulse()` asserts then deasserts the line for edge-triggered interrupts, while
+dropping an `IrqLine` deasserts it if still asserted.
+
 ## Build
 
 `make vmm:boot` builds the pinned x86_64 ELF kernel (`vmlinux`) inside a pinned

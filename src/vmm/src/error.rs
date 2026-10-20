@@ -52,6 +52,8 @@ pub(crate) enum Error {
         what: &'static str,
         source: io::Error,
     },
+    /// A device address range overlaps with an existing mapping, or is empty or wrapping.
+    Overlap,
 }
 
 impl fmt::Display for Error {
@@ -75,6 +77,7 @@ impl fmt::Display for Error {
             Self::WriteBootData { what, .. } => {
                 write!(f, "failed to write the {what} into guest RAM")
             }
+            Self::Overlap => f.write_str("bus range overlaps or is invalid"),
         }
     }
 }
@@ -84,7 +87,8 @@ impl error::Error for Error {
         match self {
             Self::InvalidVcpuCount(_)
             | Self::InvalidMemorySize(_)
-            | Self::InvalidCommandLine(_) => None,
+            | Self::InvalidCommandLine(_)
+            | Self::Overlap => None,
             Self::AllocateMemory { source, .. }
             | Self::LoadKernel { source, .. }
             | Self::LoadInitramfs { source, .. }

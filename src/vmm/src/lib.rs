@@ -15,6 +15,10 @@
     expect(dead_code, reason = "Vm::new does not load the kernel yet.")
 )]
 mod boot;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Device manager and vCPU workers wire them in D3.")
+)]
 mod bus;
 #[cfg_attr(
     not(test),
@@ -28,6 +32,10 @@ mod config;
 )]
 mod cpu_features;
 mod error;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Device manager wires it in D3.")
+)]
 mod irq;
 #[cfg_attr(
     not(test),
