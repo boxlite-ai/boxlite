@@ -32,6 +32,9 @@ mod config;
     expect(dead_code, reason = "vCPU workers are not wired yet.")
 )]
 mod cpu_features;
+#[cfg(target_arch = "x86_64")]
+#[cfg_attr(not(test), expect(dead_code, reason = "No VM registers devices yet."))]
+mod devices;
 mod error;
 #[cfg_attr(
     not(test),

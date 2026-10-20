@@ -351,7 +351,12 @@ today.
 
 - **M1:**
   - arm64: PL011, PL031 and PSCI;
-  - x86_64: 8250 serial, CMOS RTC, and the i8042 reset.
+  - x86_64: 8250 serial, CMOS RTC, and the i8042 reset. The CMOS RTC models
+    24-hour mode, holds its time while SET or a divider reset stops it, as
+    QEMU does, and keeps a guest-set time as an offset. Every release resumes
+    half a second into the written second, as Linux expects; QEMU does that
+    only after a divider reset. There is no IRQ 8, so guest `hwclock`, which
+    waits for an update interrupt, fails.
 - **M2:**
   - the virtio-mmio transport, with one split-virtqueue implementation;
   - virtio-blk, virtio-vsock, virtio-net, virtio-console and virtio-rng;
@@ -474,7 +479,7 @@ from the new VMM.
 | Network | virtio-net to gvproxy in the shim (a stream socket with 4-byte length prefixes on Linux, datagrams with the `VFKT` handshake on macOS), with 192.168.127.2/24 set by the agent | unchanged; no TSI | M2 |
 | Console | virtio-console `hvc0` into `console.log`, truncated at each boot | unchanged; M1 first boots on the PL011 or 8250 | M1–M2 |
 | Other devices | virtio-rng, and virtio-balloon with free page reporting (`libkrun/src/devices/src/virtio/balloon/device.rs:28-30`) | unchanged | M2 |
-| Wall clock | PL031 (arm64) or CMOS (x86_64) at boot; on macOS, resync over vsock datagram port 123 | the same at boot; M2 chooses the resync mechanism | M1–M2 |
+| Wall clock | PL031 (arm64) at boot; the x86_64 CMOS keeps no time (`libkrun/src/devices/src/legacy/x86_64/cmos.rs:8-79`); on macOS, resync over vsock datagram port 123 | PL031 on arm64; on x86_64 kvmclock at boot, then `RTC_HCTOSYS` sets the time once from the CMOS RTC; M2 chooses the resync mechanism | M1–M2 |
 | End of the VM | the agent writes `exit.json`, syncs and calls `reboot(RESTART)`; libkrun then exits the process | the same guest steps; `run()` returns `GuestReset` | M2 |
 | Start failure | libkrun reports every error as `-EINVAL`, and the adapter probes the hypervisor for the cause | typed errors | M2 |
 

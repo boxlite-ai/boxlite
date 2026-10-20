@@ -32,6 +32,7 @@ boxlite-vmm
 | `vcpu` | Worker threads, stop coordination, and exit handling |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line that raises edges; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
+| `devices` | x86_64 legacy devices on the port bus: the CMOS RTC so far |
 
 Backend implementation and guest boot follow in M1. Virtio devices, the BoxLite
 engine adapter, engine selection, and `native` feature wiring follow in M2.
@@ -224,8 +225,34 @@ and `IoOut`, and returns every other exit to the caller. A device registers a
 VM implements through `Vm::set_irq_line`. `pulse` raises an edge, a set
 followed by a clear. `IrqLine` is not `Clone`, so a device cannot share its
 line; the device manager creates one per line.
-Nothing registers devices or raises lines yet; the later steps of
-[#2031](https://github.com/boxlite-ai/boxlite/issues/2031) add the devices.
+Nothing registers devices or raises lines yet; the last step of
+[#2031](https://github.com/boxlite-ai/boxlite/issues/2031) wires them up.
+
+## CMOS RTC
+
+On x86_64, `devices::cmos::CmosRtc` is the MC146818 behind ports `0x70`
+(index) and `0x71` (data). Linux reads it once at boot through
+`RTC_HCTOSYS`; the boot wall clock itself comes from kvmclock.
+
+- The time is an injected clock, the host wall clock outside tests, plus an
+  offset that keeps any time the guest sets.
+- As in QEMU, the time registers hold still while register B's SET bit or a
+  divider reset in register A stops the clock.
+- On any release the written time resumes half a second into its second,
+  because Linux writes half a second early (`set_offset_nsec` in
+  `rtc-cmos.c`). QEMU adds the half second only when the divider restarts
+  and otherwise keeps the old phase, which would put a Linux write on AMD,
+  where only SET is used, up to half a second off.
+- A write while the clock runs takes effect at once.
+- Time registers read in BCD unless register B selects binary. Only 24-hour
+  mode is modelled, so register B always reads with that bit set.
+- Register A starts at `0x26` and never reports an update in progress;
+  register C reads 0 and register D reads `0x80`. The remaining bytes are
+  NVRAM.
+- Linux writes the century byte only through ACPI, so a two-digit year
+  00–69 means 20xx and 70–99 means 19xx unless the guest writes it.
+- There is no IRQ 8, so alarm, update and periodic interrupts never fire:
+  `hwclock` in the guest waits 10 s for an update interrupt and fails.
 
 ## Build
 
