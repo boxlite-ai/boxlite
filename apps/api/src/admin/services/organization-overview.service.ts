@@ -11,9 +11,17 @@ import { BoxUsagePeriod } from '../../usage/entities/box-usage-period.entity'
 import { User } from '../../user/user.entity'
 import { cursorFor, cursorValue, uuidCursorValue } from '../utils/pagination'
 import { GIB, INACTIVE_BOX_STATES, latestDate } from '../utils/projection'
+import { registrationAfter, registrationCursor, type RegistrationQuery } from '../utils/organization-metadata'
 
-type ListQuery = { query?: string; cursor?: string; limit: number }
-type DetailQuery = { memberCursor?: string; boxCursor?: string; memberLimit: number; boxLimit: number }
+type ListQuery = RegistrationQuery & { metadata?: boolean }
+type DetailQuery = {
+  memberCursor?: string
+  boxCursor?: string
+  memberLimit: number
+  boxLimit: number
+  metadata?: boolean
+  includeUsage?: boolean
+}
 type ImpactState = 'impacted' | 'not_impacted'
 type UsagePeriod = Pick<BoxUsagePeriod, 'startAt' | 'endAt' | 'cpu' | 'disk'>
 type Fraction = { numerator: bigint; denominator: bigint }
@@ -88,7 +96,7 @@ export class AdminOrganizationOverviewService {
   ) {}
 
   async list(input: ListQuery) {
-    const after = uuidCursorValue(input.cursor)
+    const after = input.metadata ? null : uuidCursorValue(input.cursor)
     const search = input.query
       ? [
           ...(isUuid(input.query)
@@ -97,20 +105,31 @@ export class AdminOrganizationOverviewService {
           { name: ILike(escapedLike(input.query)), ...(after ? { id: MoreThan(after) } : {}) },
         ]
       : undefined
-    const organizations = await this.organizationRepository.find({
-      where: search ? search : after ? { id: MoreThan(after) } : {},
-      select: { id: true, name: true, updatedAt: true },
-      order: { id: 'ASC' },
-      take: input.limit + 1,
-    })
+    const organizations = input.metadata
+      ? await this.registrationRows(input)
+      : await this.organizationRepository.find({
+          where: search ? search : after ? { id: MoreThan(after) } : {},
+          select: { id: true, name: true, updatedAt: true },
+          order: { id: 'ASC' },
+          take: input.limit + 1,
+        })
     const page = organizations.slice(0, input.limit)
     const nextOrganization = organizations.length > input.limit ? page.at(-1) : undefined
     const stats = await this.organizationStats(page.map((organization) => organization.id))
+    const creators =
+      input.metadata && page.length
+        ? await this.userRepository.find({
+            where: { id: In([...new Set(page.map((row) => row.createdBy))]) },
+            select: { id: true, email: true, name: true },
+          })
+        : []
+    const creatorsById = new Map(creators.map((user) => [user.id, user]))
     const summaries = page.map((organization) => {
       const organizationStats = stats.get(organization.id) ?? emptyStats()
       return {
         organizationId: organization.id,
         name: organization.name,
+        ...(input.metadata ? this.registration(organization, creatorsById) : {}),
         memberCount: organizationStats.memberCount,
         boxCount: organizationStats.boxCount,
         impactState: impactState(organizationStats.impactedBoxCount > 0),
@@ -121,9 +140,54 @@ export class AdminOrganizationOverviewService {
     })
     return {
       items: summaries,
-      nextCursor: nextOrganization ? cursorFor(nextOrganization.id) : null,
+      nextCursor: nextOrganization
+        ? input.metadata
+          ? registrationCursor(input, nextOrganization)
+          : cursorFor(nextOrganization.id)
+        : null,
       limit: input.limit,
       observedAt: latestDate(summaries.map((summary) => new Date(summary.observedAt)))?.toISOString() ?? null,
+    }
+  }
+
+  private registrationRows(input: RegistrationQuery): Promise<Organization[]> {
+    const after = registrationAfter(input)
+    const created = `date_trunc('milliseconds', organization."createdAt")`
+    const rows = this.organizationRepository
+      .createQueryBuilder('organization')
+      .select([
+        'organization.id',
+        'organization.name',
+        'organization.createdAt',
+        'organization.createdBy',
+        'organization.updatedAt',
+      ])
+      .orderBy(created, 'ASC')
+      .addOrderBy('organization.id', 'ASC')
+      .take(input.limit + 1)
+    if (input.query)
+      rows.andWhere(
+        isUuid(input.query)
+          ? '(organization.id = :searchId OR organization.name ILIKE :search)'
+          : 'organization.name ILIKE :search',
+        { searchId: input.query, search: escapedLike(input.query) },
+      )
+    if (input.createdFrom) rows.andWhere('organization."createdAt" >= :from', { from: input.createdFrom })
+    if (input.createdTo) rows.andWhere('organization."createdAt" < :to', { to: input.createdTo })
+    if (after)
+      rows.andWhere(`(${created}, organization.id) > (CAST(:createdAt AS timestamptz), CAST(:id AS uuid))`, {
+        createdAt: after.createdAt,
+        id: after.id,
+      })
+    return rows.getMany()
+  }
+
+  private registration(organization: Organization, users: Map<string, User>) {
+    const creator = users.get(organization.createdBy)
+    return {
+      createdAt: timestamp(organization.createdAt),
+      createdBy: organization.createdBy,
+      creator: creator ? { userId: creator.id, email: creator.email || null, displayName: creator.name } : null,
     }
   }
 
@@ -182,7 +246,12 @@ export class AdminOrganizationOverviewService {
     const boxAfter = cursorValue(input.boxCursor)
     const organization = await this.organizationRepository.findOne({
       where: { id: organizationId },
-      select: { id: true, name: true, updatedAt: true },
+      select: {
+        id: true,
+        name: true,
+        updatedAt: true,
+        ...(input.metadata ? { createdAt: true, createdBy: true } : {}),
+      },
     })
     if (!organization) return null
 
@@ -212,7 +281,7 @@ export class AdminOrganizationOverviewService {
         order: { id: 'ASC' },
         take: input.boxLimit + 1,
       }),
-      this.currentMonthUsage(organizationId),
+      input.includeUsage === false ? undefined : this.currentMonthUsage(organizationId),
       // Impact is a property of the whole organization, not of the requested page, so it
       // gets its own bounded query instead of a scan the page happens to have loaded.
       // The row count is bounded by `take`, and the row width by this projection: an
@@ -229,9 +298,15 @@ export class AdminOrganizationOverviewService {
         .take(input.boxLimit)
         .getMany(),
     ])
-    const users = memberships.length
+    const userIds = [
+      ...new Set([
+        ...memberships.map((membership) => membership.userId),
+        ...(input.metadata ? [organization.createdBy] : []),
+      ]),
+    ]
+    const users = userIds.length
       ? await this.userRepository.find({
-          where: { id: In(memberships.map((membership) => membership.userId)) },
+          where: { id: In(userIds) },
           select: { id: true, email: true, name: true },
         })
       : []
@@ -244,6 +319,7 @@ export class AdminOrganizationOverviewService {
     return {
       organizationId,
       name: organization.name,
+      ...(input.metadata ? this.registration(organization, usersById) : {}),
       members: {
         items: memberPage.flatMap((membership) => {
           const user = usersById.get(membership.userId)
@@ -283,7 +359,7 @@ export class AdminOrganizationOverviewService {
           summary: `${box.name}: ${box.state} (desired ${box.desiredState})`,
         })),
       },
-      usage,
+      ...(usage ? { usage } : {}),
       observedAt: timestamp(organization.updatedAt),
     }
   }

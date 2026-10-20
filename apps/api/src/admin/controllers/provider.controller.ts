@@ -39,6 +39,8 @@ import {
 } from '../dto/provider-overview.dto'
 import { AdminOrganizationOverviewService } from '../services/organization-overview.service'
 import { AdminPlatformOverviewService } from '../services/platform-overview.service'
+import { AdminOrganizationMetadataPageDto, AdminOrganizationMetadataResultDto } from '../dto/organization-metadata.dto'
+import { metadataQueryError, parseMetadataSections, parseRegistrationQuery } from '../utils/organization-metadata'
 
 const bounded = (value: string | undefined, fallback: number): number => {
   const parsed = value === undefined ? fallback : Number(value)
@@ -185,6 +187,49 @@ export class AdminProviderController {
       ...(cursor ? { cursor } : {}),
       limit: bounded(limit, 50),
     })
+  }
+
+  @Get('organizations/metadata')
+  @ApiOperation({ summary: 'List organization registration metadata', operationId: 'adminListOrganizationMetadata' })
+  @ApiQuery({ name: 'q', required: false, minLength: 2, maxLength: 200 })
+  @ApiQuery({
+    name: 'createdFrom',
+    required: false,
+    type: String,
+    description: 'Inclusive RFC 3339 instant, at most millisecond precision.',
+  })
+  @ApiQuery({
+    name: 'createdTo',
+    required: false,
+    type: String,
+    description: 'Exclusive RFC 3339 instant, at most millisecond precision.',
+  })
+  @ApiCursorQueries()
+  @ApiOkResponse({ type: AdminOrganizationMetadataPageDto })
+  organizationMetadataList(@Query() query: Record<string, unknown>, @Res({ passthrough: true }) response: Response) {
+    response.setHeader('Cache-Control', 'private, no-store')
+    return this.organizationsService.list({ ...parseRegistrationQuery(query), metadata: true })
+  }
+
+  @Get('organizations/:organizationId/metadata')
+  @ApiOperation({
+    summary: 'Get organization metadata with optional usage',
+    operationId: 'adminGetOrganizationMetadata',
+  })
+  @ApiParam({ name: 'organizationId', description: 'Organization ID' })
+  @ApiQuery({ name: 'memberCursor', required: false })
+  @ApiQuery({ name: 'boxCursor', required: false })
+  @ApiQuery({ name: 'sectionLimit', required: false, type: Number, minimum: 1, maximum: 200 })
+  @ApiQuery({ name: 'include', required: false, enum: ['usage'], description: 'Omit to avoid reading usage.' })
+  @ApiOkResponse({ type: AdminOrganizationMetadataResultDto })
+  @ApiBadRequestResponse({ description: 'Invalid metadata query' })
+  async organizationMetadata(
+    @Param('organizationId', new ParseUUIDPipe({ exceptionFactory: metadataQueryError })) organizationId: string,
+    @Query() query: Record<string, unknown>,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader('Cache-Control', 'private, no-store')
+    return { item: await this.organizationsService.detail(organizationId, parseMetadataSections(query)) }
   }
 
   @Get('organizations/:organizationId')

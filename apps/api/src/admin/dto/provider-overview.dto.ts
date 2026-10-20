@@ -2,7 +2,7 @@ import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 
 type HealthState = 'critical' | 'degraded' | 'healthy' | 'unknown'
 
-class AdminCursorPageDto {
+export class AdminCursorPageDto {
   @ApiPropertyOptional({ nullable: true, description: 'Opaque cursor for the next page' })
   nextCursor: string | null
 

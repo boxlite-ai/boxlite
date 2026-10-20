@@ -63,6 +63,29 @@ const serviceWith = () => {
 describe('AdminOrganizationOverviewService', () => {
   afterEach(() => jest.useRealTimers())
 
+  it('omits usage reads for a metadata partition and reads the stored creator independently of membership', async () => {
+    const { service, organizations, memberships, users, boxes, usagePeriods } = serviceWith()
+    organizations.findOne.mockResolvedValue({
+      id: 'org-1',
+      name: 'Example',
+      createdAt: new Date('2026-10-01T00:00:00Z'),
+      createdBy: 'original-creator',
+      updatedAt: new Date('2026-10-20T00:00:00Z'),
+    })
+    memberships.find.mockResolvedValue([])
+    boxes.find.mockResolvedValue([])
+    users.find.mockResolvedValue([{ id: 'original-creator', email: 'creator@example.invalid', name: 'Creator' }])
+    const query = { memberLimit: 50, boxLimit: 50, metadata: true, includeUsage: false }
+    const result = await service.detail('org-1', query)
+    expect(usagePeriods.manager.transaction).not.toHaveBeenCalled()
+    expect(result).toMatchObject({
+      createdAt: '2026-10-01T00:00:00.000Z',
+      createdBy: 'original-creator',
+      creator: { userId: 'original-creator', email: 'creator@example.invalid' },
+    })
+    expect(result).not.toHaveProperty('usage')
+  })
+
   it('returns the organization projection and treats wildcard characters literally', async () => {
     const { service, organizations, memberships, boxes } = serviceWith()
     organizations.find.mockResolvedValue([{ id: 'org-1', name: 'Acme', updatedAt: new Date('2026-08-30T01:00:00Z') }])
@@ -97,6 +120,24 @@ describe('AdminOrganizationOverviewService', () => {
       _value: '%Acme\\_\\%%',
     })
     expect(boxes.find).not.toHaveBeenCalled()
+  })
+
+  it('keeps creator identity when the user has no email and batches creators for the page', async () => {
+    const { service, organizations, users, usagePeriods } = serviceWith()
+    organizations.builder.getMany.mockResolvedValue([
+      {
+        id: '00000000-0000-4000-8000-000000000001',
+        name: 'Example',
+        createdBy: 'creator',
+        createdAt: new Date('2026-10-01T00:00:00Z'),
+        updatedAt: new Date('2026-10-01T00:00:00Z'),
+      },
+    ])
+    users.find.mockResolvedValue([{ id: 'creator', email: '', name: 'Creator' }])
+    const page = await service.list({ metadata: true, limit: 2 })
+    expect(page.items[0]).toMatchObject({ createdBy: 'creator', creator: { userId: 'creator', email: null } })
+    expect(users.find).toHaveBeenCalledTimes(1)
+    expect(usagePeriods.manager.transaction).not.toHaveBeenCalled()
   })
 
   it('composes bounded member and box partitions without sensitive fields', async () => {

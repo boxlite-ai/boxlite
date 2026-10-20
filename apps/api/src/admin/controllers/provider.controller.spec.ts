@@ -1,8 +1,10 @@
 import { NotFoundException, type INestApplication } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger'
 import type { AddressInfo } from 'net'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { SystemActionGuard } from '../../auth/system-action.guard'
+import { AllExceptionsFilter } from '../../filters/all-exceptions.filter'
 import { AdminOrganizationOverviewService } from '../services/organization-overview.service'
 import { AdminPlatformOverviewService } from '../services/platform-overview.service'
 import { AdminProviderController } from './provider.controller'
@@ -48,6 +50,77 @@ describe('AdminProviderController', () => {
 
       expect(canonical.status).toBe(200)
       expect(formerConsumerRoute.status).toBe(404)
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('mounts metadata before the legacy ID route and requires explicit usage selection', async () => {
+    const list = jest.fn().mockResolvedValue({ items: [], nextCursor: null, limit: 50, observedAt: null })
+    const detail = jest.fn().mockResolvedValue(null)
+    const module = await Test.createTestingModule({
+      controllers: [AdminProviderController],
+      providers: [
+        { provide: AdminOrganizationOverviewService, useValue: { list, detail } },
+        { provide: AdminPlatformOverviewService, useValue: {} },
+      ],
+    })
+      .overrideGuard(CombinedAuthGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(SystemActionGuard)
+      .useValue({ canActivate: () => true })
+      .compile()
+    const app = module.createNestApplication()
+    app.setGlobalPrefix('api')
+    app.useGlobalFilters(new AllExceptionsFilter({ incrementFailedAuth: jest.fn() } as never))
+    await app.listen(0)
+    try {
+      const address = app.getHttpServer().address() as AddressInfo
+      const base = `http://127.0.0.1:${address.port}/api/admin/organizations`
+      const page = await fetch(`${base}/metadata?createdFrom=2026-10-01T00:00:00Z`)
+      expect(page.status).toBe(200)
+      const spec = SwaggerModule.createDocument(app, new DocumentBuilder().addBearerAuth().build())
+      expect(spec.paths['/api/admin/organizations/metadata'].get?.operationId).toBe('adminListOrganizationMetadata')
+      const schemas = spec.components?.schemas
+      expect(schemas?.AdminOrganizationCreator).toMatchObject({
+        properties: { email: { type: 'string', nullable: true } },
+      })
+      expect(schemas?.AdminOrganizationMetadata).toMatchObject({
+        required: expect.arrayContaining(['createdAt', 'createdBy', 'creator', 'members', 'boxes']),
+      })
+      expect(list).toHaveBeenCalledWith(
+        expect.objectContaining({ metadata: true, createdFrom: '2026-10-01T00:00:00.000Z' }),
+      )
+      const id = '00000000-0000-4000-8000-000000000001'
+      const missing = await fetch(`${base}/${id}/metadata`)
+      expect(missing.status).toBe(200)
+      expect(await missing.json()).toEqual({ item: null })
+      expect(missing.headers.get('cache-control')).toBe('private, no-store')
+      expect(detail).toHaveBeenLastCalledWith(id, expect.objectContaining({ metadata: true, includeUsage: false }))
+      expect((await fetch(`${base}/${id}/metadata?include=usage`)).status).toBe(200)
+      expect(detail).toHaveBeenLastCalledWith(id, expect.objectContaining({ includeUsage: true }))
+      expect((await fetch(`${base}/${id}/metadata?include=billing`)).status).toBe(400)
+      expect((await fetch(`${base}/not-uuid/metadata`)).status).toBe(400)
+      expect(detail).toHaveBeenCalledTimes(2)
+      expect((await fetch(`${base}/${id}`)).status).toBe(404)
+      for (const path of [
+        '/metadata?unknown=value',
+        '/not-uuid/metadata',
+        `/${id}/metadata?include=billing`,
+        `/${id}/metadata?memberCursor=invalid!`,
+        `/${id}/metadata?boxCursor=invalid!`,
+      ]) {
+        const invalid = await fetch(`${base}${path}`)
+        expect(invalid.status).toBe(400)
+        expect(await invalid.json()).toMatchObject({
+          statusCode: 400,
+          code: 'invalid_organization_metadata_query',
+          message: 'Invalid organization metadata query',
+        })
+      }
+      const legacyInvalid = await fetch(`${base}/not-uuid`)
+      expect(legacyInvalid.status).toBe(400)
+      expect(await legacyInvalid.json()).not.toHaveProperty('code')
     } finally {
       await app.close()
     }
