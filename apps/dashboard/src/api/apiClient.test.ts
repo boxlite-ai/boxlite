@@ -193,13 +193,25 @@ describe('ApiClient terminal session', () => {
   // The ticket rides in the URL because a browser WebSocket carries no
   // Authorization header; the bearer only ever goes to the ticket route.
   it('buys a ticket with the bearer and puts it in the attach WebSocket URL', async () => {
-    const { api, requests } = await clientRecording({ '/attach-ticket': { ticket: 'tkt-1' } })
+    const { api, requests } = await clientRecording({ '/attach-tickets': { ticket: 'tkt-1' } })
 
     const url = await api.terminalAttachUrl('org-1', 'box-1', 'exec-1')
 
     expect(requests[0].method).toBe('post')
-    expect(requests[0].url).toBe('/v1/org-1/boxes/box-1/executions/exec-1/attach-ticket')
+    expect(requests[0].url).toBe('http://api.test/api/box/box-1/attach-tickets')
+    expect(JSON.parse(requests[0].data ?? '')).toEqual({ executionId: 'exec-1' })
     expect(url).toBe('ws://api.test/api/v1/org-1/boxes/box-1/executions/exec-1/attach?ticket=tkt-1')
     expect(url).not.toContain('tok')
+  })
+
+  // Ends the shell a terminal leaves behind, so it does not wait for the
+  // runner's idle reaper.
+  it('kills a terminal execution', async () => {
+    const { api, requests } = await clientRecording({})
+
+    await api.killTerminalExec('org-1', 'box-1', 'exec-1')
+
+    expect(requests[0].method).toBe('delete')
+    expect(requests[0].url).toBe('/v1/org-1/boxes/box-1/executions/exec-1')
   })
 })

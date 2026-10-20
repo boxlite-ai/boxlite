@@ -255,19 +255,23 @@ export class ApiClient {
   /**
    * The attach WebSocket URL for an execution, carrying a one-time ticket:
    * a browser cannot send `Authorization` on a WebSocket, so the ticket is
-   * bought here with the bearer and spent by the upgrade.
+   * bought from the cloud API with the bearer and spent by the `/v1` upgrade.
    */
   public async terminalAttachUrl(organizationId: string, boxId: string, execId: string): Promise<string> {
     const executionPath = this.v1BoxPath(organizationId, boxId, `/executions/${encodeURIComponent(execId)}`)
-    const response = await this.http.post<{ ticket: string }>(
-      `${executionPath}/attach-ticket`,
-      undefined,
-      this.v1Config(),
-    )
+    const { data } = await this._boxApi.createAttachTicket(boxId, { executionId: execId }, organizationId)
     const url = new URL(`${this.config.basePath}${executionPath}/attach`, window.location.origin)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-    url.searchParams.set('ticket', response.data.ticket)
+    url.searchParams.set('ticket', data.ticket)
     return url.toString()
+  }
+
+  /** Ends an execution, so a terminal's shell does not wait for the runner's idle reaper. */
+  public async killTerminalExec(organizationId: string, boxId: string, execId: string): Promise<void> {
+    await this.http.delete(
+      this.v1BoxPath(organizationId, boxId, `/executions/${encodeURIComponent(execId)}`),
+      this.v1Config(),
+    )
   }
 
   private v1BoxPath(organizationId: string, boxId: string, suffix: string): string {

@@ -66,6 +66,9 @@ inbound access disabled cannot expose guest service ports through previews,
 even with a credential. The dashboard's web terminal does not use previews: it
 runs a TTY execution over the `/v1` attach WebSocket, signing the upgrade with a
 one-time ticket because a browser cannot send `Authorization` on a WebSocket.
+Each terminal session is a new shell, ended when the terminal closes in the
+dashboard; a shell left by a closed page is ended once it has had no client
+for 5 minutes.
 A request to a declared port on a stopped box with auto-resume on wakes the box.
 It succeeds if the box's `cmd` serves the port within 30 seconds; otherwise the
 proxy answers `503` with `Retry-After`.
