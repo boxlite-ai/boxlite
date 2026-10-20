@@ -827,16 +827,7 @@ Commerce, which does not currently call them.
 
 Admission applies the plan value to the organization's non-finalized Box total.
 `STOPPED` and `UNKNOWN` Boxes count, while `ERROR`, `DESTROYING`, `DESTROYED`,
-`ARCHIVING`, and `ARCHIVED` do not. Concurrent creates for one organization
-queue on a transaction-scoped advisory lock keyed by the organization, then
-count and write under `READ COMMITTED`, so a burst waits instead of failing;
-a wait longer than 5 s returns `503` with `Retry-After: 5`
-([`box.repository.ts`](./api/src/box/repositories/box.repository.ts)).
-A queued create holds a pooled database connection while it waits. At the
-default pool of 10, a local 100-create burst finished in under 1 s, and other
-queries on that pool waited up to 0.9 s. A stuck lock holder can pin the pool
-for the full 5 s timeout.
-The billing client is hand-written rather
+`ARCHIVING`, and `ARCHIVED` do not. The billing client is hand-written rather
 than generated, so neither side detects its divergence. Five of its 20 routes —
 the billing-email group — have no
 implementation in Commerce, of which only `email/verify` has a live caller here
