@@ -47,31 +47,22 @@ make test:integration:cli
 The `serve` command has two test surfaces with different responsibilities:
 
 - **Inline unit modules** (`src/cli/src/commands/serve/mod.rs` `mod tests` and
-  its child `serve/tests/*.rs`) cover the no-VM boundaries: pure decisions,
-  the handlers behind `build_router` over a REST runtime pointed at a
-  recording axum stub, the public REST transport, and spec regressions
-  against `openapi/box.openapi.yaml`. They need no VM and run fast with:
+  its child `serve/tests/*.rs`) cover request shape, error mapping,
+  middleware, REST transport, and OpenAPI contracts without a VM:
 
   ```bash
   make test:unit:cli
   ```
 
 - **Integration tests** (`src/cli/tests/*.rs`, e.g. `ssh_rest.rs`) run the
-  real `boxlite serve` child and a real guest. They own everything only the
-  VM can prove — listener lifecycle across configure generations, startup
-  gates with a real main command, teardown — and run with:
+  real `boxlite serve` process and a guest to verify VM-dependent behavior:
 
   ```bash
   make test:integration:cli FILTER=ssh_rest
   ```
 
-Which surface a new `serve` test belongs in is decided by what it proves:
-request shape, error mapping, middleware, and contract declarations go in
-the inline modules; guest behavior goes in the integration files. The CI
-coverage pass (`make coverage:lcov`) selects the CLI binary's unit tests
-plus only the `auth` integration target (`-p boxlite-cli --bins --test
-auth`); integration files such as `ssh_rest.rs` are not selected, so a
-boundary test placed there is invisible to patch coverage.
+The [CI coverage selection](../../../make/coverage.mk) includes CLI unit
+tests and the `auth` integration target, excluding VM suites such as `ssh_rest.rs`.
 
 VM integration tests pull images, create boxes, and run real commands. They require a working VM environment (KVM on Linux or Hypervisor.framework on macOS). Tests use a shared test home (`/tmp/bl`), a global lock to avoid concurrent use, and pre-pulled images (`alpine:latest`, `python:alpine`) to reduce rate limits.
 

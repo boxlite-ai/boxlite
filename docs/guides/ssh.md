@@ -73,38 +73,21 @@ convention, `/{prefix}/boxes/{box_id}/ssh`:
 | `GET`    | Read `SshStatus`. Never starts the VM or its main command. |
 | `DELETE` | Disable SSH idempotently; returns `SshStatus`. Never starts the VM or its main command. |
 
-`POST` follows the resume policy above: it may start a `configured` box or
-resume a `stopped` box using the image's default command, refuses an explicit
-`cmd`/`entrypoint` in those two states until `start()` (a running box with an
-explicit command is already supported), and refuses a stopped box with
-`auto_resume=false`.
-`GET` and `DELETE` observe instead: a valid `configured`
-or `stopped` box reports disabled status with generation zero and empty
-address and host identity fields, without waking it. Only `POST` counts as box
-activity for AutoStop; `GET`, `HEAD`, and `DELETE` never hold a box open.
+The lifecycle and resume rules above also apply over HTTP. Authenticated
+`POST` requests count as AutoStop activity, including rejected configurations;
+`GET`, `HEAD`, and `DELETE` do not.
 
-A wrong content type, malformed JSON, a body missing a required field, or a
-body carrying an unknown field is rejected with the fixed `400 invalid_argument`
-message `invalid SSH configuration`, which never echoes request values. Unknown
-fields are refused at every level — the configuration, each account, and its CA —
-so a misspelled `authorized_key` cannot silently leave an account keyless. The
-body is parsed before the box is resolved, so a rejected body never reaches the
-backend. It still counts as activity: once authentication succeeds, the common
-middleware records a `POST`'s box activity before the body is parsed, so even a
-rejected configure is use of the box.
-The configuration types deserialize that body but do not serialize: the REST
-transport writes the request internally, so no caller can round-trip a private
-key through them. Guest validation is authoritative: a semantically invalid
-configuration is `400` and leaves the running listener untouched. A lifecycle
-conflict is `409 invalid_state`; the
-AutoResume refusal answers `409 conflict` instead — the same class the other
-resume-gated routes use, not the local `invalid_state` variant. A missing box
-is `404 not_found`, and an upstream guest RPC failure is
-`503 upstream_unavailable`, which the Rust client reports as `Portal`. The
-server applies the same 15-second post-startup budget; the REST client's own
-300-second per-request timeout also covers startup, so a configure whose image
-pull or VM start runs longer can time out at the client while the server
-continues.
+Send JSON with the fields defined in the [OpenAPI contract](../../openapi/box.openapi.yaml).
+Unknown fields are rejected in the configuration, accounts, and CA objects.
+Malformed bodies return `400 invalid_argument` with `invalid SSH configuration`,
+without echoing request values. Invalid configurations leave the running
+listener untouched. Other errors include `404 not_found`, `409 invalid_state`
+for lifecycle conflicts (`409 conflict` for AutoResume refusal), and
+`503 upstream_unavailable` for guest RPC failures.
+
+The Rust client's 300-second request timeout includes startup; a timeout does
+not undo configuration or stop work still running on the server. See the
+[Rust SSH reference](../reference/rust/README.md#ssh-control) for types and API details.
 
 Build the request body from local key files; do not commit it or paste a real
 private key into a document:

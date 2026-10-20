@@ -11,9 +11,9 @@
 //!    runtime pointed at the same kind of stub, through real sockets —
 //!    missing boxes, auth, backend error mapping, the sanitized body
 //!    rejection, the idle-stamp policy, and the AutoResume gate.
-//! 3. The OpenAPI contract: `disableSsh`'s 409, driven through the real
-//!    handler, must be declared in `openapi/box.openapi.yaml` under the
-//!    shared error ref.
+//! 3. The OpenAPI contract: every method's 409 and 503, driven through the
+//!    real handlers, must be declared in `openapi/box.openapi.yaml` under
+//!    the shared error refs.
 //!
 //! What genuinely needs a VM — the guest listener across configure
 //! generations, invalid-configuration preservation, disable idempotence, the
@@ -481,24 +481,27 @@ async fn ssh_routes_refuse_requests_without_the_api_key() {
 /// Backend failures keep their class through both mappings (HTTP →
 /// `BoxliteError` in the client, `BoxliteError` → HTTP in the handler), for
 /// every method: 409 `invalid_state` and 503 `upstream_unavailable` must
-/// arrive as themselves, not as a generic server fault.
+/// arrive as themselves and be declared in OpenAPI under the shared error refs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ssh_routes_map_backend_errors_to_the_wire_contract() {
+    let spec = openapi_spec();
     let cases = [
         (
             "invalid_state",
             StatusCode::CONFLICT,
             "InvalidStateError",
             "invalid_state",
+            "#/components/responses/ConflictError",
         ),
         (
             "upstream_unavailable",
             StatusCode::SERVICE_UNAVAILABLE,
             "UpstreamUnavailableError",
             "upstream_unavailable",
+            "#/components/responses/ServiceUnavailableError",
         ),
     ];
-    for (code, status, error_type, error_code) in cases {
+    for (code, status, error_type, error_code, error_ref) in cases {
         for method in ["POST", "GET", "DELETE"] {
             let upstream = SshStub::local(
                 "running",
@@ -515,6 +518,14 @@ async fn ssh_routes_map_backend_errors_to_the_wire_contract() {
             )
             .await;
             assert_eq!(response.status(), status, "{method} {code}");
+            let declared = spec["paths"]["/{prefix}/boxes/{box_id}/ssh"]
+                [method.to_ascii_lowercase()]["responses"][response.status().as_str()]["$ref"]
+                .as_str();
+            assert_eq!(
+                declared,
+                Some(error_ref),
+                "{method} {status} OpenAPI response"
+            );
             let body: serde_json::Value = response.json().await.expect("error body");
             assert_eq!(body["error"]["type"], error_type, "{method} {code}");
             assert_eq!(body["error"]["code"], error_code, "{method} {code}");
@@ -916,44 +927,4 @@ async fn ssh_configure_refuses_before_any_ssh_operation_when_auto_resume_is_off(
     );
     server.abort();
     upstream.task.abort();
-}
-
-// ============================================================================
-// OpenAPI contract: what the handlers answer must be what the spec declares.
-// ============================================================================
-
-/// `disableSsh` can answer 409 — the backend maps `InvalidState` through the
-/// handler — so the spec must declare that status under the shared
-/// ConflictError ref. The 409 is driven through the real handler first: what
-/// the spec must declare is what the route actually answers. The other
-/// methods' error statuses are already pinned by the loops above.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ssh_delete_409_is_declared_in_the_openapi_contract() {
-    let upstream = SshStub::local(
-        "running",
-        true,
-        vec![(409, error_envelope("invalid_state"))],
-    )
-    .await;
-    let (base, _state, server) = serve_over(&upstream, None).await;
-    let response = ssh_call(
-        "DELETE",
-        &format!("{base}/v1/boxes/{STUB_BOX_ID}/ssh"),
-        None,
-        None,
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    server.abort();
-    upstream.task.abort();
-
-    let spec = openapi_spec();
-    let declared =
-        spec["paths"]["/{prefix}/boxes/{box_id}/ssh"]["delete"]["responses"]["409"]["$ref"]
-            .as_str();
-    assert_eq!(
-        declared,
-        Some("#/components/responses/ConflictError"),
-        "disableSsh must declare its 409 under the ConflictError ref"
-    );
 }
