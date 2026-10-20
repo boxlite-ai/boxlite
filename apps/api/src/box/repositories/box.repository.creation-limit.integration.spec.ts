@@ -5,6 +5,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { DataSource, EntityManager, Repository } from 'typeorm'
+import { IsolationLevel } from 'typeorm/driver/types/IsolationLevel'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { Box } from '../entities/box.entity'
@@ -34,28 +35,44 @@ function newBox(name: string, owner = organizationId): Box {
   return box
 }
 
+// Waits until another admission for the organization is queued on its advisory
+// lock. Gives up after a grace period, so an admission that never queues still
+// races the paused one instead of hanging the test.
+async function waitForQueuedAdmission(dataSource: DataSource, owner: string): Promise<void> {
+  const deadline = Date.now() + 2000
+  while (Date.now() < deadline) {
+    const [{ waiting }] = await dataSource.query(
+      `SELECT count(*)::int AS waiting FROM pg_locks
+       WHERE locktype = 'advisory' AND NOT granted AND objid::bigint = (hashtext($1)::bigint & 4294967295)`,
+      [owner],
+    )
+    if (waiting > 0) {
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+// Pauses the first admission right after its count until a competing admission
+// is waiting, so both compete for the final slot.
 function installInitialCountBarrier(dataSource: DataSource): jest.SpyInstance {
   const transaction = dataSource.transaction.bind(dataSource)
-  let initialCountCalls = 0
-  let releaseBarrier!: () => void
-  const barrier = new Promise<void>((resolve) => (releaseBarrier = resolve))
+  let paused = false
 
   return jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: unknown[]) => {
-    if (args[0] !== 'SERIALIZABLE' || typeof args[1] !== 'function') {
+    if (typeof args[0] !== 'string' || typeof args[1] !== 'function') {
       return transaction(args[0] as (entityManager: EntityManager) => Promise<unknown>)
     }
 
+    const isolation = args[0] as IsolationLevel
     const callback = args[1] as (entityManager: EntityManager) => Promise<unknown>
-    return transaction('SERIALIZABLE', async (entityManager) => {
+    return transaction(isolation, async (entityManager) => {
       const count = entityManager.count.bind(entityManager)
       entityManager.count = async (...countArgs: Parameters<EntityManager['count']>) => {
         const result = await count(...countArgs)
-        initialCountCalls++
-        if (initialCountCalls <= 2) {
-          if (initialCountCalls === 2) {
-            releaseBarrier()
-          }
-          await barrier
+        if (!paused) {
+          paused = true
+          await waitForQueuedAdmission(dataSource, organizationId)
         }
         return result
       }
@@ -159,6 +176,17 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
     } finally {
       barrier.mockRestore()
     }
+  })
+
+  it('admits a same-organization burst up to the limit without contention failures', async () => {
+    const burst = 50
+    const results = await Promise.allSettled(
+      Array.from({ length: burst }, (_, index) => repository.insert(newBox(`burst-${index}`), burst)),
+    )
+
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    expect(failures.map((failure) => (failure.reason as Error).name)).toEqual([])
+    expect(await boxes.countBy({ organizationId })).toBe(burst)
   })
 
   it.each(Object.values(BoxState))('applies the creation-count policy to state %s', async (state) => {

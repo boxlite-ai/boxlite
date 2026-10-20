@@ -6,6 +6,7 @@
 import { ConflictException } from '@nestjs/common'
 import { randomUUID } from 'node:crypto'
 import { DataSource, EntityManager } from 'typeorm'
+import { IsolationLevel } from 'typeorm/driver/types/IsolationLevel'
 import { Box } from '../../box/entities/box.entity'
 import { BoxLastActivity } from '../../box/entities/box-last-activity.entity'
 import { BoxMigration } from '../../box/entities/box-migration.entity'
@@ -218,7 +219,7 @@ describeIfDatabase('Registry credential deletion concurrency (integration, real 
           }
           return persist(manager)
         }
-        return args[0] === 'SERIALIZABLE' ? transaction('SERIALIZABLE', gated) : transaction(gated)
+        return typeof args[0] === 'string' ? transaction(args[0] as IsolationLevel, gated) : transaction(gated)
       })
       const creating = outcome(create(limit))
       try {

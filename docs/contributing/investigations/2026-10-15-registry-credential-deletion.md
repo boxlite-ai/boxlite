@@ -4,7 +4,7 @@ Serialize registry credential deletion with private-image box persistence so a c
 
 ## Scope
 
-- Coordinate `RegistriesService.delete` and `BoxRepository.insert`, including generated-name retries and optional SERIALIZABLE box-limit admission.
+- Coordinate `RegistriesService.delete` and `BoxRepository.insert`, including generated-name retries and optional box-limit admission.
 - Preserve longest-prefix credential matching, curated/public image behavior, and the existing 409 refusal for credentials used by live boxes.
 - Cover both operation orderings with real PostgreSQL transactions before changing production code.
 - Secret-store/database crash atomicity and catalog-entry deletion are separate concerns.
@@ -12,7 +12,7 @@ Serialize registry credential deletion with private-image box persistence so a c
 ## Related work and lessons
 
 - At `7e41ef35`, `RegistriesService.delete` checks dependent boxes before destroying the password, without a transaction. `BoxService.create` resolves the proxy reference before placement and `BoxRepository.insert`; neither operation locks credentials. A create can resolve the existing login and persist after deletion checked for boxes.
-- PostgreSQL [row locks](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS) last until transaction end. Shared row locks permit concurrent creators but conflict with the exclusive lock required by deletion. Under SERIALIZABLE, locking a row deleted since the snapshot raises a serialization failure, which existing box admission retries.
+- PostgreSQL [row locks](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS) last until transaction end. Shared row locks permit concurrent creators but conflict with the exclusive lock required by deletion. Box-limit admission runs under READ COMMITTED (POL-822), where each statement reads a fresh snapshot, so the shared-lock read sees a credential deleted before it as missing, and creation returns 409.
 - TypeORM [transactions](https://typeorm.io/docs/advanced-topics/transactions/) require transaction-scoped managers for participating queries. Dependency checks and credential deletion must use the same manager holding the lock.
 - A lock only on deletion leaves creation uncoordinated. A process mutex fails across API replicas. Holding a lock from image resolution through runner placement unnecessarily keeps a database connection across unrelated work. Rechecking the proxy reference at the existing box-persistence transaction is the smallest durable boundary.
 
@@ -36,7 +36,7 @@ argument or an injection into the deletion service.
 | --- | --- | --- |
 | Deletion first | Pause secret destruction after the dependent-box query; attempt a real box create | Creation returns 409, no box is saved, deletion can finish |
 | Creation first | Pause the box transaction after INSERT and before commit; delete the credential | Deletion returns 409 without destroying the secret; creation commits |
-| Resolution before completed deletion | Pause runner placement after the real resolver returns a proxy ref; delete, then resume creation | Creation returns 409, including with SERIALIZABLE admission |
+| Resolution before completed deletion | Pause runner placement after the real resolver returns a proxy ref; delete, then resume creation | Creation returns 409, including with box-limit admission |
 | Existing dependent box | Create and commit, then delete | 409 identifies the dependent box |
 | Curated images | Create without a proxy ref after credential deletion | Existing behavior is preserved |
 
