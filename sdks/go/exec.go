@@ -179,25 +179,16 @@ type executionStdin struct {
 
 // Exec executes a command and returns the buffered result.
 func (b *Box) Exec(ctx context.Context, name string, arg ...string) (*ExecResult, error) {
-	cmd := b.Command(name, arg...)
-
 	var stdoutBuf, stderrBuf []byte
-	execution, err := b.StartExecution(ctx, cmd.Path, cmd.Args, &ExecutionOptions{
-		Stdout: &bytesCollector{buf: &stdoutBuf},
-		Stderr: &bytesCollector{buf: &stderrBuf},
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer execution.Close()
-
-	exitCode, err := execution.Wait(ctx)
-	if err != nil {
+	cmd := b.Command(name, arg...)
+	cmd.Stdout = &bytesCollector{buf: &stdoutBuf}
+	cmd.Stderr = &bytesCollector{buf: &stderrBuf}
+	if err := cmd.Run(ctx); err != nil {
 		return nil, err
 	}
 
 	return &ExecResult{
-		ExitCode: exitCode,
+		ExitCode: cmd.exitCode,
 		Stdout:   string(stdoutBuf),
 		Stderr:   string(stderrBuf),
 	}, nil
@@ -528,6 +519,8 @@ func (b *Box) Command(name string, arg ...string) *Cmd {
 // fields inherit the container default — same semantics as os/exec.Cmd
 // with the addition of Timeout, which bounds wall-clock lifetime
 // (zero = unbounded, matching the C-FFI's `timeout_secs <= 0` convention).
+// The process's stdin is closed as soon as it starts (EOF), as os/exec does
+// for a nil Stdin; use StartExecution to feed input.
 type Cmd struct {
 	Path   string
 	Args   []string
@@ -560,6 +553,13 @@ func (c *Cmd) Run(ctx context.Context) error {
 		return err
 	}
 	defer execution.Close()
+
+	// Nothing on this path feeds stdin, so hand the process EOF right away.
+	// Otherwise a stdin reader such as `cat` never exits and Wait blocks
+	// until the context expires.
+	if err := execution.Stdin.Close(); err != nil {
+		return err
+	}
 
 	exitCode, err := execution.Wait(ctx)
 	if err != nil {
