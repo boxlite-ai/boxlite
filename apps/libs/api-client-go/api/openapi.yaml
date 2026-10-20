@@ -3796,6 +3796,134 @@ paths:
       summary: List organization operational summaries
       tags:
       - admin
+  /admin/organizations/metadata:
+    get:
+      operationId: adminListOrganizationMetadata
+      parameters:
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          example: 50
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      - description: Opaque cursor returned by the previous page
+        explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: "Exclusive RFC 3339 instant, at most millisecond precision."
+        explode: true
+        in: query
+        name: createdTo
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: "Inclusive RFC 3339 instant, at most millisecond precision."
+        explode: true
+        in: query
+        name: createdFrom
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: q
+        required: false
+        schema:
+          maxLength: 200
+          minLength: 2
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOrganizationMetadataPage"
+          description: ""
+        "400":
+          description: Invalid metadata query
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List organization registration metadata
+      tags:
+      - admin
+  /admin/organizations/{organizationId}/metadata:
+    get:
+      operationId: adminGetOrganizationMetadata
+      parameters:
+      - description: Organization ID
+        explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Omit to avoid reading usage.
+        explode: true
+        in: query
+        name: include
+        required: false
+        schema:
+          enum:
+          - usage
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: sectionLimit
+        required: false
+        schema:
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      - explode: true
+        in: query
+        name: boxCursor
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: memberCursor
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOrganizationMetadataResult"
+          description: ""
+        "400":
+          description: Invalid metadata query
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get organization metadata with optional usage
+      tags:
+      - admin
   /admin/organizations/{organizationId}:
     get:
       operationId: adminGetOrganizationOverview
@@ -8318,6 +8446,120 @@ components:
       - items
       - limit
       type: object
+    AdminOrganizationCreator:
+      properties:
+        userId:
+          type: string
+        email:
+          description: "Current email, not necessarily the email at registration."
+          format: email
+          nullable: true
+          type: string
+        displayName:
+          type: string
+      required:
+      - displayName
+      - email
+      - userId
+      type: object
+    AdminOrganizationMetadataSummary:
+      example:
+        organizationId: organizationId
+        name: name
+        memberCount: 6.027456183070403
+        boxCount: 1.4658129805029452
+        impactState: impacted
+        observedAt: 2000-01-23T04:56:07.000+00:00
+        createdAt: 2000-01-23T04:56:07.000+00:00
+        createdBy: createdBy
+        creator: "{}"
+      properties:
+        organizationId:
+          type: string
+        name:
+          type: string
+        memberCount:
+          type: number
+        boxCount:
+          type: number
+        impactState:
+          enum:
+          - impacted
+          - not_impacted
+          type: string
+        observedAt:
+          format: date-time
+          type: string
+        createdAt:
+          description: "Organization creation time, at millisecond precision."
+          format: date-time
+          type: string
+        createdBy:
+          description: Stored creator ID; account linking replaces it with the primary
+            user ID.
+          type: string
+        creator:
+          allOf:
+          - $ref: "#/components/schemas/AdminOrganizationCreator"
+          nullable: true
+          type: object
+      required:
+      - boxCount
+      - createdAt
+      - createdBy
+      - creator
+      - impactState
+      - memberCount
+      - name
+      - observedAt
+      - organizationId
+      type: object
+    AdminOrganizationMetadataPage:
+      example:
+        nextCursor: nextCursor
+        limit: 16.93648099017413
+        items:
+        - organizationId: organizationId
+          name: name
+          memberCount: 6.027456183070403
+          boxCount: 1.4658129805029452
+          impactState: impacted
+          observedAt: 2000-01-23T04:56:07.000+00:00
+          createdAt: 2000-01-23T04:56:07.000+00:00
+          createdBy: createdBy
+          creator: "{}"
+        - organizationId: organizationId
+          name: name
+          memberCount: 6.027456183070403
+          boxCount: 1.4658129805029452
+          impactState: impacted
+          observedAt: 2000-01-23T04:56:07.000+00:00
+          createdAt: 2000-01-23T04:56:07.000+00:00
+          createdBy: createdBy
+          creator: "{}"
+        observedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        nextCursor:
+          description: Opaque cursor for the next page
+          nullable: true
+          type: string
+        limit:
+          maximum: 200
+          minimum: 1
+          type: number
+        items:
+          items:
+            $ref: "#/components/schemas/AdminOrganizationMetadataSummary"
+          type: array
+        observedAt:
+          format: date-time
+          nullable: true
+          type: string
+      required:
+      - items
+      - limit
+      - observedAt
+      type: object
     AdminOrganizationMember:
       example:
         userId: userId
@@ -8512,6 +8754,61 @@ components:
       - periodEnd
       - periodStart
       - storageByteSeconds
+      type: object
+    AdminOrganizationMetadata:
+      properties:
+        organizationId:
+          type: string
+        name:
+          type: string
+        members:
+          $ref: "#/components/schemas/AdminOrganizationMemberPage"
+        boxes:
+          $ref: "#/components/schemas/AdminOrganizationBoxPage"
+        impact:
+          $ref: "#/components/schemas/AdminOrganizationImpact"
+        usage:
+          $ref: "#/components/schemas/AdminOrganizationUsage"
+        observedAt:
+          format: date-time
+          type: string
+        createdAt:
+          description: "Organization creation time, at millisecond precision."
+          format: date-time
+          type: string
+        createdBy:
+          description: Stored creator ID; account linking replaces it with the primary
+            user ID.
+          type: string
+        creator:
+          allOf:
+          - $ref: "#/components/schemas/AdminOrganizationCreator"
+          nullable: true
+          type: object
+      required:
+      - boxes
+      - createdAt
+      - createdBy
+      - creator
+      - impact
+      - members
+      - name
+      - observedAt
+      - organizationId
+      type: object
+    AdminOrganizationMetadataResult:
+      example:
+        item: "{}"
+      properties:
+        item:
+          allOf:
+          - $ref: "#/components/schemas/AdminOrganizationMetadata"
+          description: Null means the organization does not exist. Usage is included
+            only when explicitly requested.
+          nullable: true
+          type: object
+      required:
+      - item
       type: object
     AdminOrganizationDetail:
       example:

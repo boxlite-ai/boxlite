@@ -105,3 +105,21 @@ without usage, call `/api/admin/organizations/{organizationId}/metadata?sectionL
 continue `members.nextCursor` and `boxes.nextCursor` independently using `memberCursor` and
 `boxCursor`. Unknown parameters, invalid dates/UUIDs, and incompatible cursors return 400.
 Invalid credentials return 401; an authenticated non-admin caller is denied with 403.
+
+### Generated clients
+
+Metadata query parameters have explicit Swagger string types because the controller validates
+the complete query object at runtime; reflection cannot infer its individual fields. The
+nullable `creator` and `item` references generate typed nullable models in TypeScript and Go.
+After changing these contracts, regenerate the committed clients from `apps/` with the pinned
+generator in `openapitools.json`:
+
+```bash
+yarn nx run api-client:generate:api-client
+yarn nx run api-client-go:generate:api-client
+yarn nx run analytics-api-client:generate:api-client
+```
+
+Use the example API environment and a local Redis for offline export, as in the API client
+drift workflow. Commit the generated methods, models, OpenAPI document, and generator indexes
+together; a second generation must leave those files unchanged.

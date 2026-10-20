@@ -191,7 +191,7 @@ export class AdminProviderController {
 
   @Get('organizations/metadata')
   @ApiOperation({ summary: 'List organization registration metadata', operationId: 'adminListOrganizationMetadata' })
-  @ApiQuery({ name: 'q', required: false, minLength: 2, maxLength: 200 })
+  @ApiQuery({ name: 'q', required: false, type: String, minLength: 2, maxLength: 200 })
   @ApiQuery({
     name: 'createdFrom',
     required: false,
@@ -204,7 +204,9 @@ export class AdminProviderController {
     type: String,
     description: 'Exclusive RFC 3339 instant, at most millisecond precision.',
   })
-  @ApiCursorQueries()
+  @ApiQuery({ name: 'cursor', required: false, type: String, description: 'Opaque cursor returned by the previous page' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, minimum: 1, maximum: 200, example: 50 })
+  @ApiBadRequestResponse({ description: 'Invalid metadata query' })
   @ApiOkResponse({ type: AdminOrganizationMetadataPageDto })
   organizationMetadataList(@Query() query: Record<string, unknown>, @Res({ passthrough: true }) response: Response) {
     response.setHeader('Cache-Control', 'private, no-store')
@@ -217,8 +219,8 @@ export class AdminProviderController {
     operationId: 'adminGetOrganizationMetadata',
   })
   @ApiParam({ name: 'organizationId', description: 'Organization ID' })
-  @ApiQuery({ name: 'memberCursor', required: false })
-  @ApiQuery({ name: 'boxCursor', required: false })
+  @ApiQuery({ name: 'memberCursor', required: false, type: String })
+  @ApiQuery({ name: 'boxCursor', required: false, type: String })
   @ApiQuery({ name: 'sectionLimit', required: false, type: Number, minimum: 1, maximum: 200 })
   @ApiQuery({ name: 'include', required: false, enum: ['usage'], description: 'Omit to avoid reading usage.' })
   @ApiOkResponse({ type: AdminOrganizationMetadataResultDto })

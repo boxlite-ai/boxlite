@@ -81,6 +81,18 @@ describe('AdminProviderController', () => {
       expect(page.status).toBe(200)
       const spec = SwaggerModule.createDocument(app, new DocumentBuilder().addBearerAuth().build())
       expect(spec.paths['/api/admin/organizations/metadata'].get?.operationId).toBe('adminListOrganizationMetadata')
+      for (const [path, names] of [
+        ['/api/admin/organizations/metadata', ['q', 'cursor']],
+        ['/api/admin/organizations/{organizationId}/metadata', ['memberCursor', 'boxCursor']],
+      ] as const) {
+        for (const name of names) {
+          expect(spec.paths[path].get?.parameters).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ name, schema: expect.objectContaining({ type: 'string' }) }),
+            ]),
+          )
+        }
+      }
       const schemas = spec.components?.schemas
       expect(schemas?.AdminOrganizationCreator).toMatchObject({
         properties: { email: { type: 'string', nullable: true } },

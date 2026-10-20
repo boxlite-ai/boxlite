@@ -36,6 +36,10 @@ import type { AdminJobOverviewPage } from '../models';
 // @ts-ignore
 import type { AdminOrganizationDetail } from '../models';
 // @ts-ignore
+import type { AdminOrganizationMetadataPage } from '../models';
+// @ts-ignore
+import type { AdminOrganizationMetadataResult } from '../models';
+// @ts-ignore
 import type { AdminOrganizationOverviewPage } from '../models';
 // @ts-ignore
 import type { AdminRegionOverview } from '../models';
@@ -246,6 +250,66 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Get organization metadata with optional usage
+         * @param {string} organizationId Organization ID
+         * @param {AdminGetOrganizationMetadataIncludeEnum} [include] Omit to avoid reading usage.
+         * @param {number} [sectionLimit] 
+         * @param {string} [boxCursor] 
+         * @param {string} [memberCursor] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetOrganizationMetadata: async (organizationId: string, include?: AdminGetOrganizationMetadataIncludeEnum, sectionLimit?: number, boxCursor?: string, memberCursor?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('adminGetOrganizationMetadata', 'organizationId', organizationId)
+            const localVarPath = `/admin/organizations/{organizationId}/metadata`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (include !== undefined) {
+                localVarQueryParameter['include'] = include;
+            }
+
+            if (sectionLimit !== undefined) {
+                localVarQueryParameter['sectionLimit'] = sectionLimit;
+            }
+
+            if (boxCursor !== undefined) {
+                localVarQueryParameter['boxCursor'] = boxCursor;
+            }
+
+            if (memberCursor !== undefined) {
+                localVarQueryParameter['memberCursor'] = memberCursor;
+            }
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
@@ -472,6 +536,67 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
 
             if (limit !== undefined) {
                 localVarQueryParameter['limit'] = limit;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary List organization registration metadata
+         * @param {number} [limit] 
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {string} [createdTo] Exclusive RFC 3339 instant, at most millisecond precision.
+         * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most millisecond precision.
+         * @param {string} [q] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListOrganizationMetadata: async (limit?: number, cursor?: string, createdTo?: string, createdFrom?: string, q?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/organizations/metadata`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            if (cursor !== undefined) {
+                localVarQueryParameter['cursor'] = cursor;
+            }
+
+            if (createdTo !== undefined) {
+                localVarQueryParameter['createdTo'] = createdTo;
+            }
+
+            if (createdFrom !== undefined) {
+                localVarQueryParameter['createdFrom'] = createdFrom;
+            }
+
+            if (q !== undefined) {
+                localVarQueryParameter['q'] = q;
             }
 
             localVarHeaderParameter['Accept'] = 'application/json';
@@ -779,6 +904,23 @@ export const AdminApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Get organization metadata with optional usage
+         * @param {string} organizationId Organization ID
+         * @param {AdminGetOrganizationMetadataIncludeEnum} [include] Omit to avoid reading usage.
+         * @param {number} [sectionLimit] 
+         * @param {string} [boxCursor] 
+         * @param {string} [memberCursor] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetOrganizationMetadata(organizationId: string, include?: AdminGetOrganizationMetadataIncludeEnum, sectionLimit?: number, boxCursor?: string, memberCursor?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationMetadataResult>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetOrganizationMetadata(organizationId, include, sectionLimit, boxCursor, memberCursor, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetOrganizationMetadata']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Get organization operational detail
          * @param {string} organizationId Organization ID
          * @param {string} [memberCursor] Opaque member page cursor
@@ -845,6 +987,23 @@ export const AdminApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.adminListJobsOverview(cursor, limit, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListJobsOverview']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary List organization registration metadata
+         * @param {number} [limit] 
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {string} [createdTo] Exclusive RFC 3339 instant, at most millisecond precision.
+         * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most millisecond precision.
+         * @param {string} [q] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminListOrganizationMetadata(limit?: number, cursor?: string, createdTo?: string, createdFrom?: string, q?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationMetadataPage>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListOrganizationMetadata(limit, cursor, createdTo, createdFrom, q, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListOrganizationMetadata']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -977,6 +1136,20 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
         },
         /**
          * 
+         * @summary Get organization metadata with optional usage
+         * @param {string} organizationId Organization ID
+         * @param {AdminGetOrganizationMetadataIncludeEnum} [include] Omit to avoid reading usage.
+         * @param {number} [sectionLimit] 
+         * @param {string} [boxCursor] 
+         * @param {string} [memberCursor] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetOrganizationMetadata(organizationId: string, include?: AdminGetOrganizationMetadataIncludeEnum, sectionLimit?: number, boxCursor?: string, memberCursor?: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationMetadataResult> {
+            return localVarFp.adminGetOrganizationMetadata(organizationId, include, sectionLimit, boxCursor, memberCursor, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Get organization operational detail
          * @param {string} organizationId Organization ID
          * @param {string} [memberCursor] Opaque member page cursor
@@ -1029,6 +1202,20 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          */
         adminListJobsOverview(cursor?: string, limit?: number, options?: RawAxiosRequestConfig): AxiosPromise<AdminJobOverviewPage> {
             return localVarFp.adminListJobsOverview(cursor, limit, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary List organization registration metadata
+         * @param {number} [limit] 
+         * @param {string} [cursor] Opaque cursor returned by the previous page
+         * @param {string} [createdTo] Exclusive RFC 3339 instant, at most millisecond precision.
+         * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most millisecond precision.
+         * @param {string} [q] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListOrganizationMetadata(limit?: number, cursor?: string, createdTo?: string, createdFrom?: string, q?: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationMetadataPage> {
+            return localVarFp.adminListOrganizationMetadata(limit, cursor, createdTo, createdFrom, q, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1148,6 +1335,21 @@ export class AdminApi extends BaseAPI {
 
     /**
      * 
+     * @summary Get organization metadata with optional usage
+     * @param {string} organizationId Organization ID
+     * @param {AdminGetOrganizationMetadataIncludeEnum} [include] Omit to avoid reading usage.
+     * @param {number} [sectionLimit] 
+     * @param {string} [boxCursor] 
+     * @param {string} [memberCursor] 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetOrganizationMetadata(organizationId: string, include?: AdminGetOrganizationMetadataIncludeEnum, sectionLimit?: number, boxCursor?: string, memberCursor?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetOrganizationMetadata(organizationId, include, sectionLimit, boxCursor, memberCursor, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Get organization operational detail
      * @param {string} organizationId Organization ID
      * @param {string} [memberCursor] Opaque member page cursor
@@ -1204,6 +1406,21 @@ export class AdminApi extends BaseAPI {
      */
     public adminListJobsOverview(cursor?: string, limit?: number, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminListJobsOverview(cursor, limit, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary List organization registration metadata
+     * @param {number} [limit] 
+     * @param {string} [cursor] Opaque cursor returned by the previous page
+     * @param {string} [createdTo] Exclusive RFC 3339 instant, at most millisecond precision.
+     * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most millisecond precision.
+     * @param {string} [q] 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminListOrganizationMetadata(limit?: number, cursor?: string, createdTo?: string, createdFrom?: string, q?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListOrganizationMetadata(limit, cursor, createdTo, createdFrom, q, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1265,3 +1482,8 @@ export class AdminApi extends BaseAPI {
     }
 }
 
+export const AdminGetOrganizationMetadataIncludeEnum = {
+    USAGE: 'usage',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+export type AdminGetOrganizationMetadataIncludeEnum = typeof AdminGetOrganizationMetadataIncludeEnum[keyof typeof AdminGetOrganizationMetadataIncludeEnum];

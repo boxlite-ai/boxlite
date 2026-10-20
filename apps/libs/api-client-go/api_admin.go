@@ -86,6 +86,19 @@ type AdminAPI interface {
 	AdminGetJobOverviewExecute(r AdminAPIAdminGetJobOverviewRequest) (*AdminJobOverview, *http.Response, error)
 
 	/*
+	AdminGetOrganizationMetadata Get organization metadata with optional usage
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param organizationId Organization ID
+	@return AdminAPIAdminGetOrganizationMetadataRequest
+	*/
+	AdminGetOrganizationMetadata(ctx context.Context, organizationId string) AdminAPIAdminGetOrganizationMetadataRequest
+
+	// AdminGetOrganizationMetadataExecute executes the request
+	//  @return AdminOrganizationMetadataResult
+	AdminGetOrganizationMetadataExecute(r AdminAPIAdminGetOrganizationMetadataRequest) (*AdminOrganizationMetadataResult, *http.Response, error)
+
+	/*
 	AdminGetOrganizationOverview Get organization operational detail
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -147,6 +160,18 @@ type AdminAPI interface {
 	// AdminListJobsOverviewExecute executes the request
 	//  @return AdminJobOverviewPage
 	AdminListJobsOverviewExecute(r AdminAPIAdminListJobsOverviewRequest) (*AdminJobOverviewPage, *http.Response, error)
+
+	/*
+	AdminListOrganizationMetadata List organization registration metadata
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return AdminAPIAdminListOrganizationMetadataRequest
+	*/
+	AdminListOrganizationMetadata(ctx context.Context) AdminAPIAdminListOrganizationMetadataRequest
+
+	// AdminListOrganizationMetadataExecute executes the request
+	//  @return AdminOrganizationMetadataPage
+	AdminListOrganizationMetadataExecute(r AdminAPIAdminListOrganizationMetadataRequest) (*AdminOrganizationMetadataPage, *http.Response, error)
 
 	/*
 	AdminListOrganizationsOverview List organization operational summaries
@@ -729,6 +754,144 @@ func (a *AdminAPIService) AdminGetJobOverviewExecute(r AdminAPIAdminGetJobOvervi
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
+type AdminAPIAdminGetOrganizationMetadataRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+	organizationId string
+	include *string
+	sectionLimit *float32
+	boxCursor *string
+	memberCursor *string
+}
+
+// Omit to avoid reading usage.
+func (r AdminAPIAdminGetOrganizationMetadataRequest) Include(include string) AdminAPIAdminGetOrganizationMetadataRequest {
+	r.include = &include
+	return r
+}
+
+func (r AdminAPIAdminGetOrganizationMetadataRequest) SectionLimit(sectionLimit float32) AdminAPIAdminGetOrganizationMetadataRequest {
+	r.sectionLimit = &sectionLimit
+	return r
+}
+
+func (r AdminAPIAdminGetOrganizationMetadataRequest) BoxCursor(boxCursor string) AdminAPIAdminGetOrganizationMetadataRequest {
+	r.boxCursor = &boxCursor
+	return r
+}
+
+func (r AdminAPIAdminGetOrganizationMetadataRequest) MemberCursor(memberCursor string) AdminAPIAdminGetOrganizationMetadataRequest {
+	r.memberCursor = &memberCursor
+	return r
+}
+
+func (r AdminAPIAdminGetOrganizationMetadataRequest) Execute() (*AdminOrganizationMetadataResult, *http.Response, error) {
+	return r.ApiService.AdminGetOrganizationMetadataExecute(r)
+}
+
+/*
+AdminGetOrganizationMetadata Get organization metadata with optional usage
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param organizationId Organization ID
+ @return AdminAPIAdminGetOrganizationMetadataRequest
+*/
+func (a *AdminAPIService) AdminGetOrganizationMetadata(ctx context.Context, organizationId string) AdminAPIAdminGetOrganizationMetadataRequest {
+	return AdminAPIAdminGetOrganizationMetadataRequest{
+		ApiService: a,
+		ctx: ctx,
+		organizationId: organizationId,
+	}
+}
+
+// Execute executes the request
+//  @return AdminOrganizationMetadataResult
+func (a *AdminAPIService) AdminGetOrganizationMetadataExecute(r AdminAPIAdminGetOrganizationMetadataRequest) (*AdminOrganizationMetadataResult, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *AdminOrganizationMetadataResult
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminGetOrganizationMetadata")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/organizations/{organizationId}/metadata"
+	localVarPath = strings.Replace(localVarPath, "{"+"organizationId"+"}", url.PathEscape(parameterValueToString(r.organizationId, "organizationId")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	if r.include != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "include", r.include, "form", "")
+	}
+	if r.sectionLimit != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "sectionLimit", r.sectionLimit, "form", "")
+	}
+	if r.boxCursor != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "boxCursor", r.boxCursor, "form", "")
+	}
+	if r.memberCursor != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "memberCursor", r.memberCursor, "form", "")
+	}
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
 type AdminAPIAdminGetOrganizationOverviewRequest struct {
 	ctx context.Context
 	ApiService AdminAPI
@@ -1238,6 +1401,151 @@ func (a *AdminAPIService) AdminListJobsOverviewExecute(r AdminAPIAdminListJobsOv
 	}
 	if r.limit != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", r.limit, "form", "")
+	}
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
+type AdminAPIAdminListOrganizationMetadataRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+	limit *float32
+	cursor *string
+	createdTo *string
+	createdFrom *string
+	q *string
+}
+
+func (r AdminAPIAdminListOrganizationMetadataRequest) Limit(limit float32) AdminAPIAdminListOrganizationMetadataRequest {
+	r.limit = &limit
+	return r
+}
+
+// Opaque cursor returned by the previous page
+func (r AdminAPIAdminListOrganizationMetadataRequest) Cursor(cursor string) AdminAPIAdminListOrganizationMetadataRequest {
+	r.cursor = &cursor
+	return r
+}
+
+// Exclusive RFC 3339 instant, at most millisecond precision.
+func (r AdminAPIAdminListOrganizationMetadataRequest) CreatedTo(createdTo string) AdminAPIAdminListOrganizationMetadataRequest {
+	r.createdTo = &createdTo
+	return r
+}
+
+// Inclusive RFC 3339 instant, at most millisecond precision.
+func (r AdminAPIAdminListOrganizationMetadataRequest) CreatedFrom(createdFrom string) AdminAPIAdminListOrganizationMetadataRequest {
+	r.createdFrom = &createdFrom
+	return r
+}
+
+func (r AdminAPIAdminListOrganizationMetadataRequest) Q(q string) AdminAPIAdminListOrganizationMetadataRequest {
+	r.q = &q
+	return r
+}
+
+func (r AdminAPIAdminListOrganizationMetadataRequest) Execute() (*AdminOrganizationMetadataPage, *http.Response, error) {
+	return r.ApiService.AdminListOrganizationMetadataExecute(r)
+}
+
+/*
+AdminListOrganizationMetadata List organization registration metadata
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @return AdminAPIAdminListOrganizationMetadataRequest
+*/
+func (a *AdminAPIService) AdminListOrganizationMetadata(ctx context.Context) AdminAPIAdminListOrganizationMetadataRequest {
+	return AdminAPIAdminListOrganizationMetadataRequest{
+		ApiService: a,
+		ctx: ctx,
+	}
+}
+
+// Execute executes the request
+//  @return AdminOrganizationMetadataPage
+func (a *AdminAPIService) AdminListOrganizationMetadataExecute(r AdminAPIAdminListOrganizationMetadataRequest) (*AdminOrganizationMetadataPage, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *AdminOrganizationMetadataPage
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminListOrganizationMetadata")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/organizations/metadata"
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	if r.limit != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", r.limit, "form", "")
+	}
+	if r.cursor != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "cursor", r.cursor, "form", "")
+	}
+	if r.createdTo != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "createdTo", r.createdTo, "form", "")
+	}
+	if r.createdFrom != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "createdFrom", r.createdFrom, "form", "")
+	}
+	if r.q != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "q", r.q, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
