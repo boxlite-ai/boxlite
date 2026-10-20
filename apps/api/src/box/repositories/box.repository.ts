@@ -45,9 +45,13 @@ const PROXY_START_LOCK_TIMEOUT_MS = 2000
 // Same-organization admissions queue on a transaction-scoped advisory lock
 // keyed by the organization, so a burst waits instead of aborting. The lock
 // must come before the count, under READ COMMITTED: each statement then reads
-// a fresh snapshot that includes the previous holder's committed Box. Cap the
-// wait, since a queued admission pins a pooled connection.
+// a fresh snapshot that includes the previous holder's committed Box. Cap only
+// the advisory-lock wait, since a queued admission pins a pooled connection;
+// the count and persist keep the default lock_timeout.
 const CREATION_ADMISSION_LOCK_TIMEOUT_MS = 5000
+// First key of the two-key advisory lock: keeps this lock apart from other
+// advisory-lock uses. Each two-key advisory lock use takes its own value.
+export const CREATION_ADMISSION_LOCK_NAMESPACE = 0x424f5841 // 'BOXA'
 const CREATION_ADMISSION_RETRY_AFTER_SECONDS = 5
 
 const BOX_CREATION_LIMIT_EXCLUDED_STATES = [
@@ -202,24 +206,36 @@ export class BoxRepository extends BaseRepository<Box> {
       return this.dataSource.transaction(persist)
     }
 
-    try {
-      return await this.dataSource.transaction('READ COMMITTED', async (entityManager) => {
-        // SET LOCAL takes a literal, not a bind parameter; the value is a constant.
-        await entityManager.query(`SET LOCAL lock_timeout = '${CREATION_ADMISSION_LOCK_TIMEOUT_MS}ms'`)
-        await entityManager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [organizationId])
+    return this.dataSource.transaction('READ COMMITTED', async (entityManager) => {
+      await this.acquireCreationAdmissionLock(entityManager, organizationId)
 
-        const currentCount = await entityManager.count(Box, {
-          where: {
-            organizationId,
-            state: Not(In(BOX_CREATION_LIMIT_EXCLUDED_STATES)),
-          },
-        })
-        if (currentCount >= maxCreatedBoxes) {
-          throw new BoxCreationLimitExceededError(currentCount, maxCreatedBoxes)
-        }
-
-        return persist(entityManager)
+      const currentCount = await entityManager.count(Box, {
+        where: {
+          organizationId,
+          state: Not(In(BOX_CREATION_LIMIT_EXCLUDED_STATES)),
+        },
       })
+      if (currentCount >= maxCreatedBoxes) {
+        throw new BoxCreationLimitExceededError(currentCount, maxCreatedBoxes)
+      }
+
+      return persist(entityManager)
+    })
+  }
+
+  // One statement sets the wait cap, takes the lock, and restores the default,
+  // so only this lock wait can raise the admission 503. This relies on
+  // PostgreSQL evaluating select-list entries in order (ExecBuildProjectionInfo
+  // in src/backend/executor/execExpr.c); the docs leave expression order
+  // unspecified, so the real-Postgres integration spec checks both halves.
+  private async acquireCreationAdmissionLock(entityManager: EntityManager, organizationId: string): Promise<void> {
+    try {
+      await entityManager.query(
+        `SELECT set_config('lock_timeout', $1, true),
+                pg_advisory_xact_lock($2, hashtext($3)),
+                set_config('lock_timeout', (SELECT reset_val FROM pg_settings WHERE name = 'lock_timeout'), true)`,
+        [`${CREATION_ADMISSION_LOCK_TIMEOUT_MS}ms`, CREATION_ADMISSION_LOCK_NAMESPACE, organizationId],
+      )
     } catch (error) {
       if ((error as { code?: string }).code === PG_LOCK_TIMEOUT_CODE) {
         throw new BoxCreationAdmissionUnavailableError(

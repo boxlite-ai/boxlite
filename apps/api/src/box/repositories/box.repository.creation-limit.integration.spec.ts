@@ -11,8 +11,8 @@ import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constant
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxState } from '../enums/box-state.enum'
-import { BoxCreationLimitExceededError } from '../errors/box-creation-limit.error'
-import { BoxRepository } from './box.repository'
+import { BoxCreationAdmissionUnavailableError, BoxCreationLimitExceededError } from '../errors/box-creation-limit.error'
+import { BoxRepository, CREATION_ADMISSION_LOCK_NAMESPACE } from './box.repository'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const schemaName = `box_creation_limit_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -43,8 +43,9 @@ async function waitForQueuedAdmission(dataSource: DataSource, owner: string): Pr
   while (Date.now() < deadline) {
     const [{ waiting }] = await dataSource.query(
       `SELECT count(*)::int AS waiting FROM pg_locks
-       WHERE locktype = 'advisory' AND NOT granted AND objid::bigint = (hashtext($1)::bigint & 4294967295)`,
-      [owner],
+       WHERE locktype = 'advisory' AND NOT granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+         AND classid::bigint = $2 AND objid::bigint = (hashtext($1)::bigint & 4294967295) AND objsubid = 2`,
+      [owner, CREATION_ADMISSION_LOCK_NAMESPACE],
     )
     if (waiting > 0) {
       return
@@ -177,6 +178,63 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
       barrier.mockRestore()
     }
   })
+
+  it('lets a warm-pool assignment outwait a Box row lock held past the admission lock timeout', async () => {
+    const warmPoolBox = newBox('warm-locked', BOX_WARM_POOL_UNASSIGNED_ORGANIZATION)
+    warmPoolBox.state = BoxState.STARTED
+    warmPoolBox.pending = false
+    await boxes.insert(warmPoolBox)
+
+    // Stands in for updateWhere(): start/stop/sync hold this row lock.
+    const rowLockHolder = dataSource.createQueryRunner()
+    await rowLockHolder.connect()
+    await rowLockHolder.startTransaction()
+    try {
+      await rowLockHolder.manager.findOne(Box, { where: { id: warmPoolBox.id }, lock: { mode: 'pessimistic_write' } })
+
+      const assigning = repository.update(warmPoolBox.id, {
+        updateData: { organizationId, name: 'claimed-locked' },
+        entity: warmPoolBox,
+        maxCreatedBoxes: 1,
+      })
+      const settled = assigning.then(
+        () => undefined,
+        (error: unknown) => error,
+      )
+      const earlyFailure = await Promise.race([
+        settled,
+        new Promise((resolve) => setTimeout(() => resolve('still-waiting'), 6000)),
+      ])
+      expect(earlyFailure).toBe('still-waiting')
+
+      await rowLockHolder.commitTransaction()
+      await expect(assigning).resolves.toBeInstanceOf(Box)
+      expect(await boxes.countBy({ organizationId })).toBe(1)
+    } finally {
+      if (rowLockHolder.isTransactionActive) {
+        await rowLockHolder.rollbackTransaction()
+      }
+      await rowLockHolder.release()
+    }
+  }, 20_000)
+
+  it('returns the admission 503 once the advisory lock wait passes the admission lock timeout', async () => {
+    const lockHolder = dataSource.createQueryRunner()
+    await lockHolder.connect()
+    await lockHolder.startTransaction()
+    try {
+      await lockHolder.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
+        CREATION_ADMISSION_LOCK_NAMESPACE,
+        organizationId,
+      ])
+
+      await expect(repository.insert(newBox('blocked'), 1)).rejects.toBeInstanceOf(BoxCreationAdmissionUnavailableError)
+      expect(await boxes.countBy({ organizationId })).toBe(0)
+    } finally {
+      await lockHolder.rollbackTransaction()
+      await lockHolder.release()
+    }
+  }, 20_000)
 
   it('admits a same-organization burst up to the limit without contention failures', async () => {
     const burst = 50
