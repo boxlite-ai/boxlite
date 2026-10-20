@@ -3,7 +3,7 @@
 
 //! VMM errors.
 
-use std::{error, fmt, io};
+use std::{error, fmt, io, path::PathBuf};
 
 /// Result of a VMM operation.
 pub(crate) type Result<T> = std::result::Result<T, Error>;
@@ -15,7 +15,10 @@ pub(crate) type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "Only the unwired Vm::new builds these.")
+    expect(
+        dead_code,
+        reason = "Only the unwired Vm::new and boot::prepare build these."
+    )
 )]
 pub(crate) enum Error {
     /// The vCPU count is outside `1..=config::MAX_VCPUS`.
@@ -26,6 +29,23 @@ pub(crate) enum Error {
     AllocateMemory { bytes: u64, source: io::Error },
     /// A host hypervisor operation failed.
     Hypervisor(boxlite_hypervisor::Error),
+    /// The kernel command line is too long or not printable ASCII.
+    InvalidCommandLine(&'static str),
+    /// Opening or loading the kernel image failed.
+    #[cfg_attr(
+        all(test, not(all(target_os = "linux", target_arch = "x86_64"))),
+        expect(dead_code, reason = "Only the Linux x86_64 boot module builds it.")
+    )]
+    LoadKernel { path: PathBuf, source: io::Error },
+    /// Writing boot data into guest RAM failed.
+    #[cfg_attr(
+        all(test, not(all(target_os = "linux", target_arch = "x86_64"))),
+        expect(dead_code, reason = "Only the Linux x86_64 boot module builds it.")
+    )]
+    WriteBootData {
+        what: &'static str,
+        source: io::Error,
+    },
 }
 
 impl fmt::Display for Error {
@@ -37,6 +57,15 @@ impl fmt::Display for Error {
                 write!(f, "failed to allocate {bytes} bytes of guest RAM")
             }
             Self::Hypervisor(_) => f.write_str("hypervisor operation failed"),
+            Self::InvalidCommandLine(reason) => {
+                write!(f, "invalid kernel command line: {reason}")
+            }
+            Self::LoadKernel { path, .. } => {
+                write!(f, "failed to load the kernel {}", path.display())
+            }
+            Self::WriteBootData { what, .. } => {
+                write!(f, "failed to write the {what} into guest RAM")
+            }
         }
     }
 }
@@ -44,8 +73,12 @@ impl fmt::Display for Error {
 impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
-            Self::InvalidVcpuCount(_) | Self::InvalidMemorySize(_) => None,
-            Self::AllocateMemory { source, .. } => Some(source),
+            Self::InvalidVcpuCount(_)
+            | Self::InvalidMemorySize(_)
+            | Self::InvalidCommandLine(_) => None,
+            Self::AllocateMemory { source, .. }
+            | Self::LoadKernel { source, .. }
+            | Self::WriteBootData { source, .. } => Some(source),
             Self::Hypervisor(source) => Some(source),
         }
     }

@@ -1,10 +1,10 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Native VMM skeleton with VM and vCPU entry points, plus x86_64 ELF loading.
-//! `Vm::new` validates the configuration, creates the host VM and registers
-//! guest RAM; kernel loading is not wired into it yet. The `run` entry points
-//! are placeholders that panic if called.
+//! Native VMM skeleton with VM and vCPU entry points, plus x86_64 boot
+//! preparation. `Vm::new` validates the configuration, creates the host VM and
+//! registers guest RAM; boot preparation is not wired into it yet. The `run`
+//! entry points are placeholders that panic if called.
 //!
 //! The VMM owns the guest machine and delegates host operations to
 //! `boxlite-hypervisor`. BoxLite runtime integration belongs in its engine adapter.

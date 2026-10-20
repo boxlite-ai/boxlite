@@ -25,4 +25,4 @@ where
 
 #[cfg(test)]
 #[path = "../../tests/elf/mod.rs"]
-mod tests;
+pub(crate) mod tests;
