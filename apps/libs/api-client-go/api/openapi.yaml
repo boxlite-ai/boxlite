@@ -2448,6 +2448,48 @@ paths:
       summary: Get toolbox proxy URL for a box
       tags:
       - box
+  /box/{boxIdOrName}/attach-tickets:
+    post:
+      operationId: createAttachTicket
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: ID or name of the box
+        explode: false
+        in: path
+        name: boxIdOrName
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAttachTicket"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachTicket"
+          description: A single-use ticket for one attach upgrade to the execution
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get a one-time ticket for the attach WebSocket
+      tags:
+      - box
   /runners:
     get:
       operationId: listRunners
@@ -6599,6 +6641,33 @@ components:
           type: string
       required:
       - url
+      type: object
+    CreateAttachTicket:
+      example:
+        executionId: executionId
+      properties:
+        executionId:
+          description: The execution the ticket may attach to
+          type: string
+      required:
+      - executionId
+      type: object
+    AttachTicket:
+      example:
+        ticket: ticket
+        expiresIn: 30
+      properties:
+        ticket:
+          description: "Single-use credential for the attach WebSocket, sent as its\
+            \ `ticket` query parameter"
+          type: string
+        expiresIn:
+          description: Seconds until the ticket expires
+          example: 30
+          type: number
+      required:
+      - expiresIn
+      - ticket
       type: object
     CreateRunner:
       example:

@@ -4,6 +4,7 @@ All URIs are relative to *http://localhost:3000*
 
 |Method | HTTP request | Description|
 |------------- | ------------- | -------------|
+|[**createAttachTicket**](#createattachticket) | **POST** /box/{boxIdOrName}/attach-tickets | Get a one-time ticket for the attach WebSocket|
 |[**expireSignedPortPreviewUrl**](#expiresignedportpreviewurl) | **POST** /box/{boxIdOrName}/ports/{port}/signed-preview-url/{token}/expire | Expire signed preview URL for a box port|
 |[**getBox**](#getbox) | **GET** /box/{boxIdOrName} | Get box details|
 |[**getBoxLogs**](#getboxlogs) | **GET** /box/{boxId}/telemetry/logs | Get box logs|
@@ -23,6 +24,63 @@ All URIs are relative to *http://localhost:3000*
 |[**updateBoxState**](#updateboxstate) | **PUT** /box/{boxId}/state | Update box state|
 |[**updateLastActivity**](#updatelastactivity) | **POST** /box/{boxId}/last-activity | Update box last activity|
 |[**updatePublicStatus**](#updatepublicstatus) | **POST** /box/{boxIdOrName}/public/{isPublic} | Update public status|
+
+# **createAttachTicket**
+> AttachTicket createAttachTicket(createAttachTicket)
+
+
+### Example
+
+```typescript
+import {
+    BoxApi,
+    Configuration,
+    CreateAttachTicket
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new BoxApi(configuration);
+
+let boxIdOrName: string; //ID or name of the box
+let createAttachTicket: CreateAttachTicket; //
+let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
+
+const { status, data } = await apiInstance.createAttachTicket(
+    boxIdOrName,
+    createAttachTicket,
+    xBoxLiteOrganizationID
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **createAttachTicket** | **CreateAttachTicket**|  | |
+| **boxIdOrName** | [**string**] | ID or name of the box | |
+| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
+
+
+### Return type
+
+**AttachTicket**
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** | A single-use ticket for one attach upgrade to the execution |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **expireSignedPortPreviewUrl**
 > expireSignedPortPreviewUrl()

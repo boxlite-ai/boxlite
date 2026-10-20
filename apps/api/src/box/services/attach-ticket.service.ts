@@ -16,6 +16,8 @@ export type AttachTicketGrant = {
   organizationId: string
   boxId: string
   execId: string
+  /** The API key that bought the ticket, if any: it, not the user's role, authorizes the attach. */
+  apiKeyHash?: string
 }
 
 /**

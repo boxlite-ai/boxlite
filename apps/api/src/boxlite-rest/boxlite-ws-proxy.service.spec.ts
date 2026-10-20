@@ -8,7 +8,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware'
 import type { IncomingMessage } from 'http'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
-import { AttachTicketService } from './attach-ticket.service'
+import { AttachTicketService } from '../box/services/attach-ticket.service'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(() => ({
@@ -50,6 +50,7 @@ describe('BoxliteWsProxyService', () => {
   function buildAuthHarness() {
     const apiKeyService = {
       getApiKeyByValue: jest.fn().mockRejectedValue(new Error('api key not found')),
+      getApiKeyByHash: jest.fn().mockRejectedValue(new Error('api key not found')),
     }
     const organizationUserService = {
       findOne: jest.fn(),
@@ -380,6 +381,88 @@ describe('BoxliteWsProxyService', () => {
 
       expect(proxyHandler.upgrade).not.toHaveBeenCalled()
       expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('401'))
+    })
+
+    // The issue route resolves a prefix-less or `default` URL to the caller's
+    // org, so the attach URL may carry no org to compare the grant with.
+    it.each([
+      ['no prefix', '/api/v1/boxes/public-box/executions/exec-1/attach'],
+      ['the legacy default prefix', '/api/v1/default/boxes/public-box/executions/exec-1/attach'],
+    ])('accepts a ticket on an attach url with %s', async (_case, path) => {
+      const harness = ticketHarness()
+      const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
+      const ticket = await harness.attachTickets.issue(grant)
+
+      const { socket } = await upgradeWithTicket(harness, `${path}?ticket=${ticket}`)
+
+      expect(socket.write).not.toHaveBeenCalled()
+      expect(proxyHandler.upgrade).toHaveBeenCalledTimes(1)
+      expect(harness.boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
+    })
+
+    it('keeps the ticket out of the log when the upgrade fails after authentication', async () => {
+      const harness = ticketHarness()
+      harness.boxService.findOneByIdOrName.mockRejectedValue(new Error('box not found'))
+      const service = harness.service as unknown as BoxliteWsProxyService
+      const warn = jest.spyOn((service as unknown as { logger: { warn: (m: string) => void } }).logger, 'warn')
+      const ticket = await harness.attachTickets.issue(grant)
+
+      const { socket } = await upgradeWithTicket(harness, attachUrl(ticket))
+
+      expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('404'))
+      expect(warn).toHaveBeenCalled()
+      expect(warn.mock.calls.flat().join(' ')).not.toContain(ticket)
+    })
+
+    // A ticket bought with an API key carries that key's authority, not the
+    // user's interactive one: the key's permissions decide, and a key revoked
+    // or expired since is no longer good for the attach.
+    describe('issued with an API key', () => {
+      const keyGrant = { ...grant, apiKeyHash: 'key-hash-1' }
+      const apiKey = (overrides: Record<string, unknown> = {}) => ({
+        organizationId: 'org-1',
+        userId: 'user-1',
+        expiresAt: null,
+        permissions: [OrganizationResourcePermission.WRITE_BOXES],
+        ...overrides,
+      })
+
+      it("accepts it when the key has write:boxes though the user's role does not", async () => {
+        const harness = buildAuthHarness()
+        harness.organizationUserService.findOne.mockResolvedValue({
+          organizationId: 'org-1',
+          userId: 'user-1',
+          role: 'member',
+          assignedRoles: [],
+        })
+        harness.apiKeyService.getApiKeyByHash.mockResolvedValue(apiKey())
+        const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
+        const ticket = await harness.attachTickets.issue(keyGrant)
+
+        const { socket } = await upgradeWithTicket(harness, attachUrl(ticket))
+
+        expect(socket.write).not.toHaveBeenCalled()
+        expect(proxyHandler.upgrade).toHaveBeenCalledTimes(1)
+        expect(harness.apiKeyService.getApiKeyByHash).toHaveBeenCalledWith('key-hash-1')
+      })
+
+      it.each([
+        ['has been revoked', () => Promise.reject(new Error('api key not found'))],
+        ['has expired', () => Promise.resolve(apiKey({ expiresAt: new Date(Date.now() - 1000) }))],
+        ['lacks write:boxes', () => Promise.resolve(apiKey({ permissions: [] }))],
+        ['belongs to another user', () => Promise.resolve(apiKey({ userId: 'user-2' }))],
+        ['belongs to another organization', () => Promise.resolve(apiKey({ organizationId: 'org-2' }))],
+      ])('refuses it when the key %s, even for an owner', async (_case, lookup) => {
+        const harness = ticketHarness()
+        harness.apiKeyService.getApiKeyByHash.mockImplementation(lookup)
+        const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
+        const ticket = await harness.attachTickets.issue(keyGrant)
+
+        const { socket } = await upgradeWithTicket(harness, attachUrl(ticket))
+
+        expect(proxyHandler.upgrade).not.toHaveBeenCalled()
+        expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('401'))
+      })
     })
 
     it('refuses a ticket whose user has left the organization', async () => {

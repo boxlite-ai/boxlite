@@ -17,6 +17,7 @@ import { ProxyGuard } from '../guards/proxy.guard'
 import { RegionBoxAccessGuard } from '../guards/region-box-access.guard'
 import { RunnerService } from '../services/runner.service'
 import { BoxService } from '../services/box.service'
+import { AttachTicketService } from '../services/attach-ticket.service'
 import { BoxController } from './box.controller'
 
 // The real OrganizationResourceActionGuard runs here: it is the class-level
@@ -52,6 +53,7 @@ describe('BoxController reached by the preview proxy', () => {
         ProxyGuard,
         RegionBoxAccessGuard,
         { provide: RunnerService, useValue: {} },
+        { provide: AttachTicketService, useValue: {} },
         { provide: BoxService, useValue: boxService },
         { provide: OrganizationService, useValue: { findOne: jest.fn().mockResolvedValue(null) } },
         { provide: OrganizationUserService, useValue: { findOne: jest.fn().mockResolvedValue(null) } },

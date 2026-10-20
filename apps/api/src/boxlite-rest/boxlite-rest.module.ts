@@ -15,7 +15,6 @@ import { BoxliteConfigController } from './boxlite-config.controller'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
-import { AttachTicketService } from './attach-ticket.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
 import { BoxliteImageController } from './boxlite-image.controller'
 import { ImageModule } from '../image/image.module'
@@ -34,7 +33,7 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
     BoxliteRegistryController,
     BoxliteImageController,
   ],
-  providers: [BoxliteWsProxyService, CommerceBoxLimitService, AttachTicketService],
+  providers: [BoxliteWsProxyService, CommerceBoxLimitService],
   exports: [BoxliteWsProxyService],
 })
 export class BoxliteRestModule {}

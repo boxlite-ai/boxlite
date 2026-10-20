@@ -54,6 +54,7 @@ docs/Announcement.md
 docs/ApiKeyList.md
 docs/ApiKeyResponse.md
 docs/ApiKeysApi.md
+docs/AttachTicket.md
 docs/AuditApi.md
 docs/AuditLog.md
 docs/AuthApi.md
@@ -69,6 +70,7 @@ docs/BoxVolume.md
 docs/BoxliteConfiguration.md
 docs/ConfigApi.md
 docs/CreateApiKey.md
+docs/CreateAttachTicket.md
 docs/CreateImageAlias.md
 docs/CreateLinkedAccount.md
 docs/CreateOrganization.md
@@ -197,6 +199,7 @@ models/admin-runner.ts
 models/announcement.ts
 models/api-key-list.ts
 models/api-key-response.ts
+models/attach-ticket.ts
 models/audit-log.ts
 models/box-class.ts
 models/box-desired-state.ts
@@ -208,6 +211,7 @@ models/box-volume.ts
 models/box.ts
 models/boxlite-configuration.ts
 models/create-api-key.ts
+models/create-attach-ticket.ts
 models/create-image-alias.ts
 models/create-linked-account.ts
 models/create-organization-invitation.ts

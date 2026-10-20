@@ -61,6 +61,8 @@ import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-r
 import { SkipThrottle } from '@nestjs/throttler'
 import { ThrottlerScope } from '../../common/decorators/throttler-scope.decorator'
 import { ToolboxProxyUrlDto } from '../dto/toolbox-proxy-url.dto'
+import { AttachTicketDto, CreateAttachTicketDto } from '../dto/attach-ticket.dto'
+import { ATTACH_TICKET_TTL_SECONDS, AttachTicketService } from '../services/attach-ticket.service'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
@@ -80,6 +82,7 @@ export class BoxController {
     private readonly runnerService: RunnerService,
     private readonly boxService: BoxService,
     @InjectRedis() private readonly redis: Redis,
+    private readonly attachTickets: AttachTicketService,
   ) {
     this.redisSubscriber = this.redis.duplicate()
     this.redisSubscriber.subscribe(BOX_EVENT_CHANNEL)
@@ -707,6 +710,44 @@ export class BoxController {
   async getToolboxProxyUrl(@Param('boxId') boxId: string): Promise<ToolboxProxyUrlDto> {
     const url = await this.boxService.getToolboxProxyUrl(boxId)
     return new ToolboxProxyUrlDto(url)
+  }
+
+  // A browser cannot set `Authorization` on a WebSocket, so the dashboard trades
+  // its bearer here for a ticket the `/v1` attach upgrade accepts as `?ticket=`
+  // (see BoxliteWsProxyService). It lives on the cloud API, not the Box API,
+  // because only the cloud serves browsers. Requires write:boxes, like exec.
+  @Post(':boxIdOrName/attach-tickets')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Get a one-time ticket for the attach WebSocket',
+    operationId: 'createAttachTicket',
+  })
+  @ApiParam({
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
+    type: 'string',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'A single-use ticket for one attach upgrade to the execution',
+    type: AttachTicketDto,
+  })
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @UseGuards(BoxAccessGuard)
+  async createAttachTicket(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxIdOrName') boxIdOrName: string,
+    @Body() dto: CreateAttachTicketDto,
+  ): Promise<AttachTicketDto> {
+    const box = await this.boxService.findOneByIdOrName(boxIdOrName, authContext.organizationId)
+    const ticket = await this.attachTickets.issue({
+      userId: authContext.userId,
+      organizationId: authContext.organizationId,
+      boxId: box.id,
+      execId: dto.executionId,
+      apiKeyHash: authContext.apiKey?.keyHash,
+    })
+    return { ticket, expiresIn: ATTACH_TICKET_TTL_SECONDS }
   }
 
   // wait up to `timeoutSeconds` for the box to start; if it doesn’t, return current box

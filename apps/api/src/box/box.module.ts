@@ -56,6 +56,7 @@ import { BoxMigrationService } from './services/box-migration.service'
 import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.service'
 import { Tunnel } from './entities/tunnel.entity'
 import { TunnelService } from './services/tunnel.service'
+import { AttachTicketService } from './services/attach-ticket.service'
 
 @Module({
   imports: [
@@ -91,6 +92,7 @@ import { TunnelService } from './services/tunnel.service'
     BoxMigrationManager,
     BoxMigrationJobReceiver,
     TunnelService,
+    AttachTicketService,
     BoxAccessGuard,
     RunnerAccessGuard,
     RegionRunnerAccessGuard,
@@ -109,6 +111,7 @@ import { TunnelService } from './services/tunnel.service'
   exports: [
     BoxService,
     TunnelService,
+    AttachTicketService,
     RunnerService,
     RedisLockProvider,
     VolumeService,

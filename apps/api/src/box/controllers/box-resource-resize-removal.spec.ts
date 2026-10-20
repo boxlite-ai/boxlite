@@ -16,6 +16,7 @@ import { OrganizationResourceActionGuard } from '../../organization/guards/organ
 import { BoxAccessGuard } from '../guards/box-access.guard'
 import { RunnerService } from '../services/runner.service'
 import { BoxService } from '../services/box.service'
+import { AttachTicketService } from '../services/attach-ticket.service'
 import { BoxController } from './box.controller'
 
 function productBoxControllerPaths(): unknown[] {
@@ -66,6 +67,7 @@ describe('Box resource resize removal', () => {
       controllers: [BoxController],
       providers: [
         { provide: RunnerService, useValue: {} },
+        { provide: AttachTicketService, useValue: {} },
         { provide: BoxService, useValue: boxService },
         { provide: getRedisConnectionToken(), useValue: redis },
       ],

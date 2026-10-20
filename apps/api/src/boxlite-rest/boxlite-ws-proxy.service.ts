@@ -22,7 +22,7 @@ import type { Runner } from '../box/entities/runner.entity'
 import { BoxAutoResumeService } from '../box/services/box-auto-resume.service'
 import { hasOrganizationResourcePermissions } from '../organization/guards/organization-resource-action.guard'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
-import { AttachTicketService } from './attach-ticket.service'
+import { AttachTicketService } from '../box/services/attach-ticket.service'
 
 type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunner?: Runner
@@ -133,6 +133,9 @@ export class BoxliteWsProxyService {
       this.respondAndClose(socket, 401, 'Unauthorized')
       return
     }
+    // The runner authenticates the proxy, not the ticket. Drop it before
+    // anything below can log the URL or forward it to the runner.
+    req.url = withoutTicket(req.url ?? '')
 
     try {
       const box = await this.boxService.findOneByIdOrName(match.boxId, auth.organization.id)
@@ -145,9 +148,6 @@ export class BoxliteWsProxyService {
         this.respondAndClose(socket, 401, 'Unauthorized')
         return
       }
-      // The runner authenticates the proxy, not the ticket; keep it out of
-      // the forwarded URL and the runner's logs.
-      req.url = withoutTicket(req.url ?? '')
       if (box.autoResume) {
         await this.autoResume.ensureReady(box.id, auth.organization)
       }
@@ -274,9 +274,11 @@ export class BoxliteWsProxyService {
 
   /**
    * Ticket auth for browsers (see `AttachTicketService`). The ticket is spent
-   * on first use whatever the outcome, must name this execution and the URL's
-   * organization, and its user must still pass `authorizeAttach`, as on the JWT
-   * path.
+   * on first use whatever the outcome, must name this execution and, when the
+   * URL names one, the URL's organization (a prefix-less or `default` URL was
+   * resolved to the grant's org when the ticket was issued). Its credential
+   * must still pass `authorizeAttach`: the API key that bought it, which must
+   * still exist and be unexpired, or else the user, as on the JWT path.
    * Never throws, for the same reason as `authenticate`.
    */
   private async authenticateTicket(req: IncomingMessage, match: AttachMatch): Promise<AttachAuth | null> {
@@ -284,9 +286,17 @@ export class BoxliteWsProxyService {
       const ticket = new URL(req.url ?? '', 'http://attach.invalid').searchParams.get('ticket')
       if (!ticket) return null
       const grant = await this.attachTickets.consume(ticket)
-      if (!grant || grant.execId !== match.execId || grant.organizationId !== match.tenant) return null
+      if (!grant || grant.execId !== match.execId) return null
+      if (match.tenant && match.tenant !== 'default' && grant.organizationId !== match.tenant) return null
       const user = await this.userService.findOne(grant.userId)
-      if (!user || !(await this.authorizeAttach(user, grant.organizationId))) return null
+      if (!user) return null
+      let apiKey: ApiKey | undefined
+      if (grant.apiKeyHash) {
+        apiKey = await this.apiKeyService.getApiKeyByHash(grant.apiKeyHash)
+        if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return null
+        if (apiKey.organizationId !== grant.organizationId || apiKey.userId !== grant.userId) return null
+      }
+      if (!(await this.authorizeAttach(user, grant.organizationId, apiKey))) return null
       const organization = await this.organizationService.findOne(grant.organizationId)
       return organization ? { organization, ticketBoxId: grant.boxId } : null
     } catch {

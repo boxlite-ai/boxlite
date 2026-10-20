@@ -134,9 +134,13 @@ export class ApiKeyService {
   }
 
   async getApiKeyByValue(value: string): Promise<ApiKey> {
+    return this.getApiKeyByHash(generateApiKeyHash(value))
+  }
+
+  async getApiKeyByHash(keyHash: string): Promise<ApiKey> {
     const apiKey = await this.apiKeyRepository.findOne({
       where: {
-        keyHash: generateApiKeyHash(value),
+        keyHash,
       },
     })
 

@@ -22,9 +22,13 @@ import { DUMMY_BASE_URL, assertParamExists, setBearerAuthToObject, setSearchPara
 // @ts-ignore
 import { BASE_PATH, type RequestArgs, BaseAPI, operationServerMap } from '../base';
 // @ts-ignore
+import type { AttachTicket } from '../models';
+// @ts-ignore
 import type { Box } from '../models';
 // @ts-ignore
 import type { BoxLabels } from '../models';
+// @ts-ignore
+import type { CreateAttachTicket } from '../models';
 // @ts-ignore
 import type { MetricsResponse } from '../models';
 // @ts-ignore
@@ -48,6 +52,55 @@ import type { UpdateBoxStateDto } from '../models';
  */
 export const BoxApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
+        /**
+         * 
+         * @summary Get a one-time ticket for the attach WebSocket
+         * @param {string} boxIdOrName ID or name of the box
+         * @param {CreateAttachTicket} createAttachTicket 
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        createAttachTicket: async (boxIdOrName: string, createAttachTicket: CreateAttachTicket, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxIdOrName' is not null or undefined
+            assertParamExists('createAttachTicket', 'boxIdOrName', boxIdOrName)
+            // verify required parameter 'createAttachTicket' is not null or undefined
+            assertParamExists('createAttachTicket', 'createAttachTicket', createAttachTicket)
+            const localVarPath = `/box/{boxIdOrName}/attach-tickets`
+                .replace('{boxIdOrName}', encodeURIComponent(String(boxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xBoxLiteOrganizationID != null) {
+                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(createAttachTicket, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
         /**
          * 
          * @summary Expire signed preview URL for a box port
@@ -1140,6 +1193,21 @@ export const BoxApiFp = function(configuration?: Configuration) {
     return {
         /**
          * 
+         * @summary Get a one-time ticket for the attach WebSocket
+         * @param {string} boxIdOrName ID or name of the box
+         * @param {CreateAttachTicket} createAttachTicket 
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async createAttachTicket(boxIdOrName: string, createAttachTicket: CreateAttachTicket, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AttachTicket>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.createAttachTicket(boxIdOrName, createAttachTicket, xBoxLiteOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['BoxApi.createAttachTicket']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Expire signed preview URL for a box port
          * @param {string} boxIdOrName ID or name of the box
          * @param {number} port Port number to expire signed preview URL for
@@ -1460,6 +1528,18 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
     return {
         /**
          * 
+         * @summary Get a one-time ticket for the attach WebSocket
+         * @param {string} boxIdOrName ID or name of the box
+         * @param {CreateAttachTicket} createAttachTicket 
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        createAttachTicket(boxIdOrName: string, createAttachTicket: CreateAttachTicket, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<AttachTicket> {
+            return localVarFp.createAttachTicket(boxIdOrName, createAttachTicket, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Expire signed preview URL for a box port
          * @param {string} boxIdOrName ID or name of the box
          * @param {number} port Port number to expire signed preview URL for
@@ -1719,6 +1799,19 @@ export const BoxApiFactory = function (configuration?: Configuration, basePath?:
  * BoxApi - object-oriented interface
  */
 export class BoxApi extends BaseAPI {
+    /**
+     * 
+     * @summary Get a one-time ticket for the attach WebSocket
+     * @param {string} boxIdOrName ID or name of the box
+     * @param {CreateAttachTicket} createAttachTicket 
+     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public createAttachTicket(boxIdOrName: string, createAttachTicket: CreateAttachTicket, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return BoxApiFp(this.configuration).createAttachTicket(boxIdOrName, createAttachTicket, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
     /**
      * 
      * @summary Expire signed preview URL for a box port
