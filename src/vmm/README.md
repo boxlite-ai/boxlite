@@ -17,7 +17,9 @@ inspect the error's host cause.
 ```text
 boxlite-vmm
 ├── boxlite-hypervisor
+├── mio (the event loop's poller)
 ├── vm-memory
+├── vm-superio (x86_64: the 8250 UART and the i8042, 0.8.2 or later)
 └── linux-loader (Linux x86_64 ELF loading and boot parameters)
 ```
 
@@ -32,7 +34,8 @@ boxlite-vmm
 | `vcpu` | Worker threads, stop coordination, and exit handling |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line that raises edges; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
-| `devices` | x86_64 legacy devices on the port bus: the CMOS RTC so far |
+| `events` | `Event` (`GuestReset`, `DeviceFailed`), `EventSender`, and `EventLoop`, the poller the `run()` thread will wait on |
+| `devices` | x86_64 legacy devices on the port bus (the 8250 UART, the CMOS RTC and the i8042 reset) and `DeviceManager`, which owns them |
 
 Backend implementation and guest boot follow in M1. Virtio devices, the BoxLite
 engine adapter, engine selection, and `native` feature wiring follow in M2.
@@ -148,22 +151,33 @@ The boot tests need Linux x86_64, read/write `/dev/kvm` and the same
 make test:integration:vmm:linux
 ```
 
-Each runs `prepare` for 256 MiB of RAM and the command line
-`earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k`, then runs one KVM
-vCPU with the guest CPUID and boot MSRs. A test-local stub stands in for the
-devices: it keeps the earlycon bytes written to `0x3f8`, reports the UART as
-idle on `0x3fd`, reads every other port and MMIO address as zero, and ignores
-other writes. Each run ends when the guest writes `0xFE` to the i8042 port
-`0x64`, the reset `reboot=k` asks for after a panic; a watchdog kicks the vCPU
-after 30 seconds, so a hung boot fails with the log so far.
+Each runs `prepare` for 256 MiB of RAM, then runs one KVM vCPU with the guest
+CPUID and boot MSRs on the [legacy devices](#legacy-devices-and-events), with
+the CMOS RTC stopped at 2026-01-02T03:04:05Z. The test thread dispatches every
+exit to the buses and stops at the first event. A watchdog kicks the vCPU at
+the timeout, 30 seconds unless stated, so a hung boot fails with the serial
+log so far.
 
-- Without an initramfs, the log must show the kernel version, the exact
-  command line, the two E820 entries, the memory total and
-  `VFS: Unable to mount root fs`.
-- With a generated archive whose `/init`, a 132-byte static ELF, calls
-  `exit_group(42)`, the log must show the `RAMDISK:` range from the zero page,
-  `Unpacking initramfs...`, `Run /init as init process` and
+- With `earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k` and no
+  initramfs, the log must show the kernel version, the exact command line,
+  the two E820 entries, the memory total and `VFS: Unable to mount root fs`.
+- With the same command line and a generated archive whose `/init`, a
+  132-byte static ELF, calls `exit_group(42)`, the log must show the
+  `RAMDISK:` range from the zero page, `Unpacking initramfs...`,
+  `Run /init as init process` and
   `Attempted to kill init! exitcode=0x00002a00`, in that order.
+- With `console=ttyS0 panic=-1 reboot=k` and an `/init` that prints a line,
+  waits for the tty to send it and restarts the machine, the log must show
+  the 16550A on IRQ 4, `rtc_cmos rtc_cmos: setting system clock to
+  2026-01-02T03:04:05 UTC (1767323045)`, that line and
+  `reboot: Restarting system`, in that order, and GSI 4 must have been raised.
+- The same boot with every interrupt dropped must log
+  `Run /init as init process` but not the start of `/init`'s line, and end at
+  a 3-second timeout. Against vm-superio 0.8.1 it fails: the first 16 bytes
+  leave without IRQ 4.
+
+Each run but the last must end with `GuestReset`: `panic=-1 reboot=k` turns a
+panic, and the restart, into the i8042 reset.
 
 ## Long-mode entry
 
@@ -224,9 +238,9 @@ and `IoOut`, and returns every other exit to the caller. A device registers a
 `irq::IrqLine` is one device interrupt line over `IrqChip`, which every host
 VM implements through `Vm::set_irq_line`. `pulse` raises an edge, a set
 followed by a clear. `IrqLine` is not `Clone`, so a device cannot share its
-line; the device manager creates one per line.
-Nothing registers devices or raises lines yet; the last step of
-[#2031](https://github.com/boxlite-ai/boxlite/issues/2031) wires them up.
+line; the device manager creates one per line. On x86_64,
+[`DeviceManager`](#legacy-devices-and-events) registers the devices and gives
+the serial port its line; no VM creates it yet.
 
 ## CMOS RTC
 
@@ -253,6 +267,34 @@ On x86_64, `devices::cmos::CmosRtc` is the MC146818 behind ports `0x70`
   00–69 means 20xx and 70–99 means 19xx unless the guest writes it.
 - There is no IRQ 8, so alarm, update and periodic interrupts never fire:
   `hwclock` in the guest waits 10 s for an update interrupt and fails.
+
+## Legacy devices and events
+
+On x86_64, `devices::DeviceManager::new` creates the legacy devices,
+registers them on the port bus, and owns them:
+
+| Ports | Device | Behaviour |
+| --- | --- | --- |
+| `0x3F8`–`0x3FF` | `Serial8250`, vm-superio's 16550A | Output goes to a host sink; a pending, enabled THRE or RDA raises an edge on GSI 4; no input yet |
+| `0x70`–`0x71` | `CmosRtc` | See [CMOS RTC](#cmos-rtc) |
+| `0x60`, `0x64` | `I8042Port`, over vm-superio's i8042 | Reads 0; the first `0xFE` at `0x64` sends `GuestReset` |
+
+- vm-superio must be 0.8.2 or later. It raises THRE on every IER write, so
+  Linux's 8250 driver passes its THRE and TXEN probes and sends tty output on
+  IRQ 4. Against 0.8.1 the driver enables `UART_BUG_TXEN` and sends 16 bytes
+  without the interrupt.
+- A sink write that fails drops the byte and counts it
+  (`serial_dropped_bytes`); THRE still rises, so the guest keeps sending. A
+  failed interrupt sends `DeviceFailed`, once.
+- The ports between `0x60` and `0x64` are not the i8042's: KVM's in-kernel
+  PIT serves `0x61`. The guest kernel has no i8042 driver, so the reset is
+  all the device does.
+
+`events::EventLoop` owns a mio poller. Devices and vCPU threads `send` an
+`Event` through an `EventSender`, which queues it and wakes the poller;
+`wait(timeout)` returns the oldest event, and a zero timeout never enters the
+poller. Each device sends at most one event, so a guest cannot grow the
+queue.
 
 ## Build
 

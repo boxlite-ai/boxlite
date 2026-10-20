@@ -297,8 +297,8 @@ test\:integration\:vmm\:elf: _ensure-kvm
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout 60s cargo test -p boxlite-vmm --lib boot::elf::tests:: -- --ignored --test-threads=1
 
-# Boot the real kernel on KVM with a serial stub and no devices: up to its root-mount panic,
-# and with a generated initramfs up to the panic when its init exits.
+# Boot the real kernel on KVM and the legacy devices: up to its root-mount panic, up to the panic
+# when a generated init exits, and on a ttyS0 console until a generated init restarts.
 test\:integration\:vmm\:linux: _ensure-kvm
 	@test -r "$(VMM_KERNEL)" || { echo "VMM_KERNEL=$(VMM_KERNEL) is not readable; run make vmm:boot or set VMM_KERNEL" >&2; exit 1; }
 	@cargo test -p boxlite-vmm --lib --no-run

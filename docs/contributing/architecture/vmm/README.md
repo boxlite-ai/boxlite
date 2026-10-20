@@ -201,7 +201,8 @@ successfully completed access is not completed again.
 | `Reset` | The guest reset | PSCI `SYSTEM_RESET`, decoded by the HVF backend | a `KVM_EXIT_SYSTEM_EVENT` reset on arm64; an x86 triple fault (`KVM_EXIT_SHUTDOWN`) | the i8042 reset below |
 
 On x86_64 the guest resets through the i8042 port. That reset arrives as an
-`IoOut`, and the VMM's i8042 device turns it into the end of the VM.
+`IoOut`, and the VMM's i8042 device sends `GuestReset` to the `run()` thread's
+event loop, which ends the VM.
 
 KVM handles PSCI `CPU_ON` for secondary vCPUs in the kernel. M1 extends the
 current M0 `VcpuExit` enum with an HVF CPU-start request alongside the boot
@@ -351,7 +352,10 @@ today.
 
 - **M1:**
   - arm64: PL011, PL031 and PSCI;
-  - x86_64: 8250 serial, CMOS RTC, and the i8042 reset. The CMOS RTC models
+  - x86_64: 8250 serial, CMOS RTC, and the i8042 reset. The 8250 and the
+    i8042 are vm-superio's, 0.8.2 or later: that release raises THRE on every
+    IER write, so Linux sends tty output on IRQ 4 rather than through its
+    `UART_BUG_TXEN` workaround. The CMOS RTC models
     24-hour mode, holds its time while SET or a divider reset stops it, as
     QEMU does, and keeps a guest-set time as an offset. Every release resumes
     half a second into the written second, as Linux expects; QEMU does that
@@ -390,7 +394,8 @@ today.
   - The worker processes the queue and raises the device's interrupt itself.
 - **The `run()` thread.**
   - It waits on one poller for stop requests, vCPU outcomes and device
-    failures.
+    failures: `events::EventLoop`, to which devices and vCPU threads send
+    `GuestReset` and `DeviceFailed` through an `EventSender`.
   - The poller is `mio`, which uses epoll on Linux and kqueue on macOS and is
     already in `Cargo.lock` through tokio. rust-vmm's event-manager and crosvm's
     `WaitContext` are epoll-only.

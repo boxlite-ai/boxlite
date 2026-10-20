@@ -785,7 +785,9 @@ version = "0.10.7"
 dependencies = [
  "boxlite-hypervisor",
  "linux-loader",
+ "mio 1.2.0",
  "vm-memory 0.18.0",
+ "vm-superio",
 ]
 
 [[package]]
@@ -6979,6 +6981,12 @@ dependencies = [
  "thiserror 2.0.18",
  "winapi",
 ]
+
+[[package]]
+name = "vm-superio"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "503041e3dca68fbd5425c04e4c2ad63c57a31da5b6eb13aaafbcaaf2b9cdc74f"
 
 [[package]]
 name = "vmm-sys-util"
