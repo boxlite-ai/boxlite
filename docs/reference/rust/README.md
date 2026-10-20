@@ -77,6 +77,7 @@ let options = BoxliteOptions {
         ImageRegistry::https("ghcr.io/myorg").with_search(true),
         ImageRegistry::https("registry.example.com").with_basic_auth("user", "password"),
     ],
+    ..Default::default()
 };
 let runtime = BoxliteRuntime::new(options)?;
 
@@ -101,7 +102,6 @@ let runtime = BoxliteRuntime::default_runtime();
 | `metrics` | `async fn metrics(&self) -> RuntimeMetrics` | Get runtime-wide metrics |
 | `remove` | `async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()>` | Remove box completely |
 | `images` | `fn images(&self) -> BoxliteResult<ImageHandle>` | The images this runtime can boot from; never fails |
-| `registries` | `fn registries(&self) -> BoxliteResult<RegistryHandle>` | The server's registry logins; `Unsupported` on an embedded runtime |
 
 #### Example
 
@@ -133,37 +133,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### ImageHandle
 
 The images a runtime can boot from: the local cache on an embedded runtime,
-the server's catalog on a REST one. Obtained with `runtime.images()?`.
+the server catalog on a REST runtime. Registry credentials are accessed through
+`runtime.images()?.registries()?`.
 
-| Method | Signature | Embedded runtime | REST runtime |
-|--------|-----------|------------------|--------------|
-| `pull` | `async fn pull(&self, image_ref: &str) -> BoxliteResult<ImageObject>` | Pulls into the cache | `Unsupported`: a box's create pulls |
-| `list` | `async fn list(&self) -> BoxliteResult<Vec<ImageInfo>>` | One row per cached reference | One row per catalog tag |
-| `get` | `async fn get(&self, name: &str) -> BoxliteResult<ImageDetail>` | The cache entries under the name | The catalog entry, with its versions |
-| `remove` | `async fn remove(&self, name: &str) -> BoxliteResult<()>` | Forgets the name; layers stay | Removes the catalog entry; refused while a box can boot from it |
-| `usage` | `async fn usage(&self) -> BoxliteResult<ImageUsage>` | `Unsupported`: a cache has no limit | Images held, the limit, and their declared bytes |
+| Operation | Embedded runtime | REST runtime |
+|-----------|------------------|--------------|
+| `pull` | Pulls into the cache | Unsupported; creating a box pulls |
+| `list` | One row per cached reference | Catalog alias and digest references |
+| `get` | Cached versions under the name | Catalog versions, aliases and history |
+| `remove` | Forgets the name; layers stay | Removes the entry; refused while a box can boot from it |
+| `usage` | Unsupported | Image count, allowance and known bytes |
+| `create_alias` | Unsupported | Creates a new alias for a ready digest; existing names conflict |
+| `delete_alias` | Unsupported | Removes only the named alias; absent names return NotFound |
 
-`get` and `remove` take an image name such as `docker.io/library/alpine`; a
-reference with a tag or digest is refused with `InvalidArgument`, since a
-remove takes every tag of the name. Locally, `remove` deletes no layers and
-refuses nothing, but a box built from the image reads its configuration from
-the cache whenever it starts: after the remove that start fetches it from the
-registry again, and fails while the registry is unreachable.
+`get` and `remove` take an image name, without a tag or digest, such as
+`quay.io/acme/app`. Alias names use OCI tag syntax; creation takes the
+`sha256:` digest of a ready version recorded for that image.
+
+A registry tag belongs to the upstream registry. A BoxLite alias belongs to
+the runtime catalog and selects a recorded digest independently. A successful
+pull seeds an alias from the registry tag; it never overwrites an existing
+binding. Creating an alias never pushes a registry tag or pulls image bytes.
+
+Alias creation refuses every existing name, even for the same digest, with
+`AlreadyExists`. Delete the alias explicitly before creating it again. Deletion
+removes only the binding: versions and existing boxes keep their digests.
+Creation history remains available; deletion is recorded by the server audit log.
+
+Image details and versions expose `aliases`. Their `history` contains
+`ImageAliasEvent` records with `alias`, optional `from_digest`, `to_digest`,
+optional `actor` and `recorded_at`. A local cache mirrors its cached registry
+tags in `aliases`, leaves history empty and refuses alias writes.
 
 ```rust
 let images = runtime.images()?;
-for image in images.list().await? {
-    println!("{} {}", image.reference, image.id);
-}
-let detail = images.get("docker.io/library/alpine").await?;
-println!("{:?}", detail.tags);
-images.remove("docker.io/library/alpine").await?;
+let detail = images.get("quay.io/acme/app").await?;
+images.create_alias(&detail.name, "verified", &detail.versions[0].digest).await?;
+images.delete_alias(&detail.name, "verified").await?;
+let logins = images.registries()?.list().await?;
 ```
 
 ### RegistryHandle
 
 The logins a REST server presents when it pulls a private image for a box.
-Obtained with `runtime.registries()?`, which an embedded runtime refuses with
+Obtained with `runtime.images()?.registries()?`, which an embedded runtime refuses with
 `Unsupported`: it pulls with the logins in `BoxliteOptions::image_registries`.
 
 | Method | Signature | Description |
@@ -182,7 +195,7 @@ id that is not a UUID with `InvalidArgument` before sending a request.
 ```rust
 use boxlite::runtime::NewRegistryCredential;
 
-let registries = runtime.registries()?;
+let registries = runtime.images()?.registries()?;
 let login = registries
     .create(&NewRegistryCredential {
         registry_host: "ghcr.io".into(),
@@ -208,6 +221,18 @@ pub struct BoxliteOptions {
 
     /// Registry transport, TLS, search, and auth configuration
     pub image_registries: Vec<ImageRegistry>,
+
+    /// Proxy for image pulls; `None` reads the proxy environment variables
+    pub image_registry_proxy: Option<ImageRegistryProxy>,
+}
+
+pub struct ImageRegistryProxy {
+    /// Proxy URL for `RegistryTransport::Http` registries.
+    pub http_proxy: Option<String>,
+    /// Proxy URL for `RegistryTransport::Https` registries.
+    pub https_proxy: Option<String>,
+    /// Comma-separated hosts, domains, IPs, or CIDRs that bypass the proxy.
+    pub no_proxy: Option<String>,
 }
 
 pub struct ImageRegistry {
@@ -227,7 +252,7 @@ pub struct ImageRegistry {
 #### Example
 
 ```rust
-use boxlite::{BoxliteOptions, ImageRegistry};
+use boxlite::{BoxliteOptions, ImageRegistry, ImageRegistryProxy};
 use std::path::PathBuf;
 
 let options = BoxliteOptions {
@@ -240,6 +265,10 @@ let options = BoxliteOptions {
             .with_skip_verify(true)
             .with_basic_auth("user", "password"),
     ],
+    image_registry_proxy: Some(ImageRegistryProxy {
+        https_proxy: Some("http://proxy.corp.example:3128".into()),
+        ..Default::default()
+    }),
 };
 // "alpine" tries ghcr.io/myorg/alpine, then docker.io/alpine,
 // then registry.local:5000/library/alpine.
@@ -412,8 +441,11 @@ pub struct PublishedPort {
 ```
 
 `network: None` means network information is unavailable, such as metadata from
-an older or remote producer. Within `NetworkInfo`, `published_ports: None`
-means the current handle does not know the lifecycle's publications.
+a REST server that predates the `network` field. A current server reports both
+directions for a remote box, so `info().network` carries the cloud box's
+outbound and inbound policy. Within `NetworkInfo`, `published_ports: None`
+means the current handle does not know the lifecycle's publications, which is
+always the case over REST: host bindings never travel on the wire.
 `Some(vec![])` means there are no active publications, and a populated vector
 contains concrete active local bindings. `PortSpec` remains the request type;
 resolved output uses `PublishedPort` so every reported host port is concrete.
@@ -939,7 +971,7 @@ pub enum NetworkSpec {
 
 The inbound direction — whether services the box exposes are reachable from
 outside it — is the sibling field `BoxOptions::inbound_network`, which reuses
-this same type: `Enabled` = reachable, `Disabled` = private (the default,
+this same type: `Enabled` = reachable, `Disabled` = unreachable (the default,
 `NetworkSpec::disabled()`). The two directions are independent, so a
 box may refuse egress while the services it exposes stay reachable, or the
 reverse.

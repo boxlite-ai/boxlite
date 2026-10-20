@@ -2,10 +2,12 @@ mod archive;
 mod blob_source;
 mod config;
 mod image_disk;
+pub(crate) mod image_registry_proxy;
 mod manager;
 mod object;
 mod storage;
 mod store;
+mod system_trust;
 
 pub(crate) use archive::whiteout;
 pub use archive::{LayerExtractor, OverrideFileType, OverrideStat, SafeRoot};

@@ -27,7 +27,13 @@ function makeHarness() {
   const boxService = {
     findOneByIdOrName: jest
       .fn()
-      .mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true, state: 'started', public: true }),
+      .mockResolvedValue({
+        id: 'box-uuid',
+        runnerId: 'runner-1',
+        autoResume: true,
+        state: 'started',
+        inboundEnabled: true,
+      }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
     getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://3000-box.proxy.test'),
   }
@@ -158,14 +164,14 @@ describe('BoxliteProxyController', () => {
     expect(tunnelService.declarePublic).not.toHaveBeenCalled()
   })
 
-  it('rejects a tunnel request for a private box with 409', async () => {
+  it('rejects a tunnel request for a box with inbound access disabled with 409', async () => {
     const { controller, boxService } = makeHarness()
     boxService.findOneByIdOrName.mockResolvedValue({
       id: 'box-uuid',
       runnerId: 'runner-1',
       autoResume: true,
       state: 'started',
-      public: false,
+      inboundEnabled: false,
     })
 
     await expect(
@@ -183,14 +189,14 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: false,
       state: 'stopped',
-      public: true,
+      inboundEnabled: true,
     })
 
     await expect(
       controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000),
     ).rejects.toMatchObject({
       status: 409,
-      // Pin the reason: without public: true this 409s at the visibility
+      // Pin the reason: without inboundEnabled: true this 409s at the visibility
       // gate instead, and the state policy under test never runs.
       message: expect.stringContaining('is not running'),
     })
@@ -207,7 +213,7 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: true,
       state: 'stopped',
-      public: true,
+      inboundEnabled: true,
     })
 
     const result = await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)
@@ -234,7 +240,7 @@ describe('BoxliteProxyController', () => {
       runnerId: 'runner-1',
       autoResume: true,
       state: 'started',
-      public: false,
+      inboundEnabled: false,
     })
 
     await expect(
@@ -254,7 +260,7 @@ describe('BoxliteProxyController', () => {
         runnerId: 'runner-1',
         autoResume: true,
         state,
-        public: true,
+        inboundEnabled: true,
       })
 
       await expect(
@@ -274,7 +280,7 @@ describe('BoxliteProxyController', () => {
         runnerId: 'runner-1',
         autoResume: true,
         state,
-        public: true,
+        inboundEnabled: true,
       })
 
       await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)
@@ -293,7 +299,7 @@ describe('BoxliteProxyController', () => {
         runnerId: 'runner-1',
         autoResume: false,
         state,
-        public: true,
+        inboundEnabled: true,
       })
 
       await expect(

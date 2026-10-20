@@ -39,19 +39,20 @@ typedef struct Response {
 
 /* Served in this order, one connection each. */
 static const Response ROUTES[] = {
-    {"GET /v1/registries HTTP/1.1", NULL, "200 OK",
+    {"GET /v1/images/registries HTTP/1.1", NULL, "200 OK",
      "{\"registries\":[" LOGIN_JSON "]}"},
-    {"POST /v1/registries HTTP/1.1",
+    {"POST /v1/images/registries HTTP/1.1",
      "\"registry_host\":\"ghcr.io\",\"repository_prefix\":\"acme/\","
      "\"username\":\"acme-bot\",\"password\":\"" PASSWORD "\"",
      "201 Created", LOGIN_JSON},
-    {"POST /v1/registries HTTP/1.1", NULL, "409 Conflict",
+    {"POST /v1/images/registries HTTP/1.1", NULL, "409 Conflict",
      "{\"statusCode\":409,\"message\":\"A credential for ghcr.io/acme/ "
      "already exists\",\"code\":\"already_exists\"}"},
-    {"DELETE /v1/registries/" LOGIN_ID " HTTP/1.1", NULL, "409 Conflict",
+    {"DELETE /v1/images/registries/" LOGIN_ID " HTTP/1.1", NULL, "409 Conflict",
      "{\"statusCode\":409,\"message\":\"cannot be removed while 1 box(es) "
      "pull through it: box-1\"}"},
-    {"DELETE /v1/registries/" LOGIN_ID " HTTP/1.1", NULL, "204 No Content", ""},
+    {"DELETE /v1/images/registries/" LOGIN_ID " HTTP/1.1", NULL,
+     "204 No Content", ""},
 };
 static const size_t ROUTE_COUNT = sizeof(ROUTES) / sizeof(ROUTES[0]);
 
@@ -286,8 +287,12 @@ static void test_rest_runtime(void) {
   assert(boxlite_rest_runtime_new_with_options(options, &runtime, &error) ==
          Ok);
   boxlite_rest_options_free(options);
+  CBoxliteImageHandle *images = NULL;
+  assert(boxlite_runtime_images(runtime, &images, &error) == Ok);
   CBoxliteRegistryHandle *registries = NULL;
-  assert(boxlite_runtime_registries(runtime, &registries, &error) == Ok);
+  assert(boxlite_image_registries(images, &registries, &error) == Ok);
+  /* The child owns its backend and runtime state independently. */
+  boxlite_image_free(images);
 
   assert(list_logins(runtime, registries).code == Ok);
   printf("  ok: list reads each login\n");
@@ -345,15 +350,17 @@ static void test_local_runtime(void) {
   CBoxliteRuntime *runtime = NULL;
   assert(boxlite_runtime_new(home, NULL, 0, &runtime, &error) == Ok);
 
+  CBoxliteImageHandle *images = NULL;
+  assert(boxlite_runtime_images(runtime, &images, &error) == Ok);
   CBoxliteRegistryHandle *registries = NULL;
-  assert(boxlite_runtime_registries(runtime, &registries, &error) ==
-         Unsupported);
+  assert(boxlite_image_registries(images, &registries, &error) == Unsupported);
   assert(registries == NULL);
   assert(error.message != NULL &&
          strstr(error.message, "image_registries") != NULL);
   boxlite_error_free(&error);
   printf("  ok: the handle is Unsupported and names the local option\n");
 
+  boxlite_image_free(images);
   boxlite_runtime_free(runtime);
   assert(nftw(home, remove_entry, 32, FTW_DEPTH | FTW_PHYS) == 0);
 }

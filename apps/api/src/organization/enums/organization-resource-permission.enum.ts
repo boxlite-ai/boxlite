@@ -39,8 +39,6 @@ export enum OrganizationResourcePermission {
 
   // images — appended rather than grouped with boxes so this order matches the
   // Postgres enums', which `ALTER TYPE ... ADD VALUE` can only append to.
-  // There is no `write:images`: using an image is what records it, so nothing
-  // writes the catalog over HTTP.
   READ_IMAGES = 'read:images',
   DELETE_IMAGES = 'delete:images',
 
@@ -48,4 +46,8 @@ export enum OrganizationResourcePermission {
   // the baseline; this one joins them with the routes that enforce all three,
   // and what it reads carries no password.
   READ_REGISTRIES = 'read:registries',
+
+  // Appended for the same reason, apart from the other image scopes. Using an
+  // image still records it without this; what it guards is alias creation and deletion.
+  WRITE_IMAGES = 'write:images',
 }

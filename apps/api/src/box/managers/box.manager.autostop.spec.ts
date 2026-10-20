@@ -72,6 +72,7 @@ function makeHarness(lastActivityAt: Date) {
     {} as never,
     {} as never,
     {} as never,
+    {} as never,
   )
   jest.spyOn(manager, 'syncInstanceState').mockResolvedValue(undefined)
 

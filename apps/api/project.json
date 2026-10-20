@@ -87,6 +87,7 @@
       }
     },
     "test": {
+      "inputs": ["default", "^default", { "runtime": "git hash-object ../openapi/box.openapi.yaml" }],
       "options": {
         "passWithNoTests": true
       }

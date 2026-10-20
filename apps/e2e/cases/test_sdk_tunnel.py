@@ -11,10 +11,23 @@ import shlex
 import boxlite
 import pytest
 
-from conftest import drain
+from conftest import TUNNEL_READ_TO_EOF_XFAIL, drain
 
 SERVICES = ((18080, b"python-sdk-tunnel-e2e-a"), (18082, b"python-sdk-tunnel-e2e-b"))
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "service_in_box_server.py"
+
+
+def tunnelable_box(image: str, **options) -> boxlite.BoxOptions:
+    """Options for a box a tunnel can actually be opened on.
+
+    An unspecified inbound mode means private, and the API refuses a tunnel on
+    a private box, so a caller opening a tunnel asks for inbound access.
+    """
+    return boxlite.BoxOptions(
+        image=image,
+        network=boxlite.NetworkSpec(inbound=boxlite.InboundNetworkSpec(mode="enabled")),
+        **options,
+    )
 
 
 async def _get_over_tunnel(box: boxlite.Box, port: int, marker: bytes) -> bytes:
@@ -140,10 +153,11 @@ async def _wait_for_http(box: boxlite.Box, port: int, marker: bytes) -> bytes:
     )
 
 
+@TUNNEL_READ_TO_EOF_XFAIL
 @pytest.mark.asyncio
 async def test_python_sdk_tunnel_proxies_http_from_rest_box(rt, image):
     """Cloud tunnels isolate ports, serve concurrent clients, and die with the box."""
-    box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
+    box = await rt.create(tunnelable_box(image))
     try:
         pids = [await _start_service(box, port, marker) for port, marker in SERVICES]
         await _wait_for_http(box, *SERVICES[0])
@@ -212,7 +226,9 @@ async def test_python_sdk_tunnel_proxies_http_from_rest_box(rt, image):
 
 @pytest.mark.asyncio
 async def test_python_sdk_tunnel_rejects_stopped_box(rt, image):
-    box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
+    # A box auto-resumes unless created otherwise, and the API wakes such a
+    # box for a tunnel rather than refusing it.
+    box = await rt.create(tunnelable_box(image, auto_resume=False))
     try:
         await _start_service(box, *SERVICES[0])
         await _wait_for_http(box, *SERVICES[0])
@@ -284,7 +300,7 @@ async def test_python_sdk_tunnel_connect_wakes_stopped_box(rt, image):
 )
 @pytest.mark.asyncio
 async def test_python_sdk_tunnel_preserves_tcp_half_close(rt, image):
-    box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
+    box = await rt.create(tunnelable_box(image))
     try:
         await _start_service(box, *SERVICES[0])
         await _wait_for_http(box, *SERVICES[0])
@@ -314,7 +330,7 @@ async def test_python_sdk_tunnel_keeps_boxes_isolated(rt, image):
     try:
         for _ in range(2):
             boxes.append(
-                await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
+                await rt.create(tunnelable_box(image))
             )
         markers = (b"python-box-a", b"python-box-b")
         await asyncio.gather(

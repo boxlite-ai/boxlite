@@ -58,8 +58,14 @@ normal host address.
 For SDK code that must work with local and remote runtimes, use
 `box.network.tunnel(port)` and open byte streams with `connect()`. A tunnel
 can be consumed by `connect()` or by `forward()` to bind a local listener.
-Remote CLI users can run `boxlite network tunnel BOX PORT` to obtain the public
-service URL.
+Remote CLI users can run `boxlite network tunnel BOX PORT` to obtain the
+service URL. Inbound access is disabled by default; enable it with
+`--inbound enabled` at create time, or later through
+`PUT /{prefix}/boxes/{box_id}/network/inbound` or the **Inbound access** switch
+in the dashboard's box network section. `boxlite inspect BOX`,
+`box.info().network`, and the dashboard's `outbound` and `inbound` rows report
+both directions of a remote box's policy. With inbound access enabled, the
+dashboard's **get url** returns the same URL as `boxlite network tunnel`.
 
 Image `EXPOSE` declarations are metadata only and never create host listeners.
 

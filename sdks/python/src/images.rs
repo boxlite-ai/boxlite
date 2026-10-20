@@ -1,7 +1,8 @@
+use crate::registries::PyRegistryHandle;
 use std::sync::Arc;
 
 use boxlite::ImageHandle;
-use boxlite::runtime::types::{ImageDetail, ImageInfo, ImageUsage, ImageVersion};
+use boxlite::runtime::types::{ImageAliasEvent, ImageDetail, ImageInfo, ImageUsage, ImageVersion};
 use pyo3::prelude::*;
 
 use crate::util::map_err;
@@ -79,6 +80,12 @@ pub(crate) struct PyImageVersion {
     pub(crate) source_ref: String,
     #[pyo3(get)]
     pub(crate) recorded_at: String,
+    #[pyo3(get)]
+    pub(crate) aliases: Vec<String>,
+    #[pyo3(get)]
+    pub(crate) last_used_at: Option<String>,
+    #[pyo3(get)]
+    pub(crate) upstream_missing_at: Option<String>,
 }
 
 #[pymethods]
@@ -98,6 +105,47 @@ impl From<ImageVersion> for PyImageVersion {
             size_bytes: version.size_bytes,
             source_ref: version.source_ref,
             recorded_at: version.recorded_at.to_rfc3339(),
+            aliases: version.aliases,
+            last_used_at: version.last_used_at.map(|time| time.to_rfc3339()),
+            upstream_missing_at: version.upstream_missing_at.map(|time| time.to_rfc3339()),
+        }
+    }
+}
+
+/// An alias registration or historical binding change; versions named by digest.
+#[pyclass(name = "ImageAliasEvent")]
+#[derive(Clone)]
+pub(crate) struct PyImageAliasEvent {
+    #[pyo3(get)]
+    pub(crate) alias: String,
+    #[pyo3(get)]
+    pub(crate) from_digest: Option<String>,
+    #[pyo3(get)]
+    pub(crate) to_digest: String,
+    #[pyo3(get)]
+    pub(crate) actor: Option<String>,
+    #[pyo3(get)]
+    pub(crate) recorded_at: String,
+}
+
+#[pymethods]
+impl PyImageAliasEvent {
+    fn __repr__(&self) -> String {
+        format!(
+            "ImageAliasEvent(alias={:?}, from_digest={:?}, to_digest={:?})",
+            self.alias, self.from_digest, self.to_digest
+        )
+    }
+}
+
+impl From<ImageAliasEvent> for PyImageAliasEvent {
+    fn from(event: ImageAliasEvent) -> Self {
+        Self {
+            alias: event.alias,
+            from_digest: event.from_digest,
+            to_digest: event.to_digest,
+            actor: event.actor,
+            recorded_at: event.recorded_at.to_rfc3339(),
         }
     }
 }
@@ -109,20 +157,22 @@ pub(crate) struct PyImageDetail {
     #[pyo3(get)]
     pub(crate) name: String,
     #[pyo3(get)]
-    pub(crate) tags: Vec<String>,
+    pub(crate) aliases: Vec<String>,
     #[pyo3(get)]
     pub(crate) curated: bool,
     #[pyo3(get)]
     pub(crate) versions: Vec<PyImageVersion>,
+    #[pyo3(get)]
+    pub(crate) history: Vec<PyImageAliasEvent>,
 }
 
 #[pymethods]
 impl PyImageDetail {
     fn __repr__(&self) -> String {
         format!(
-            "ImageDetail(name={:?}, tags={:?}, versions={})",
+            "ImageDetail(name={:?}, aliases={:?}, versions={})",
             self.name,
-            self.tags,
+            self.aliases,
             self.versions.len()
         )
     }
@@ -132,12 +182,17 @@ impl From<ImageDetail> for PyImageDetail {
     fn from(detail: ImageDetail) -> Self {
         Self {
             name: detail.name,
-            tags: detail.tags,
+            aliases: detail.aliases,
             curated: detail.curated,
             versions: detail
                 .versions
                 .into_iter()
                 .map(PyImageVersion::from)
+                .collect(),
+            history: detail
+                .history
+                .into_iter()
+                .map(PyImageAliasEvent::from)
                 .collect(),
         }
     }
@@ -194,6 +249,18 @@ impl PyImageHandle {
         })
     }
 
+    /// The server's registry logins (list, create, remove).
+    ///
+    /// Raises UnsupportedError on a local runtime, which pulls with the
+    /// logins in `Options(image_registries=...)` instead.
+    #[getter]
+    fn registries(&self) -> PyResult<PyRegistryHandle> {
+        let handle = self.handle.registries().map_err(map_err)?;
+        Ok(PyRegistryHandle {
+            handle: Arc::new(handle),
+        })
+    }
+
     fn list<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
@@ -229,6 +296,38 @@ impl PyImageHandle {
         })
     }
 
+    /// Create a catalog alias for a ready version, refusing an existing alias; REST
+    /// runtimes only.
+    fn create_alias<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        alias: String,
+        digest: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let detail = handle
+                .create_alias(&name, &alias, &digest)
+                .await
+                .map_err(map_err)?;
+            Ok(PyImageDetail::from(detail))
+        })
+    }
+
+    /// Delete only a catalog alias; REST runtimes only.
+    fn delete_alias<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        alias: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle.delete_alias(&name, &alias).await.map_err(map_err)
+        })
+    }
+
     fn __repr__(&self) -> String {
         "ImageHandle()".to_string()
     }
@@ -253,15 +352,19 @@ mod tests {
             size_bytes,
             source_ref: format!("quay.io/acme/app@{digest}"),
             recorded_at: (SystemTime::UNIX_EPOCH + Duration::from_secs(recorded_secs)).into(),
+            aliases: Vec::new(),
+            last_used_at: None,
+            upstream_missing_at: None,
         }
     }
 
     fn detail(versions: Vec<ImageVersion>) -> ImageDetail {
         ImageDetail {
             name: "quay.io/acme/app".to_string(),
-            tags: vec!["v2".to_string(), "v1".to_string()],
+            aliases: vec!["v2".to_string(), "v1".to_string()],
             curated: true,
             versions,
+            history: Vec::new(),
         }
     }
 
@@ -273,7 +376,7 @@ mod tests {
         ]));
 
         assert_eq!(detail.name, "quay.io/acme/app");
-        assert_eq!(detail.tags, ["v2", "v1"]);
+        assert_eq!(detail.aliases, ["v2", "v1"]);
         assert!(detail.curated);
         let [newest, oldest] = detail.versions.as_slice() else {
             panic!("expected two versions, got {}", detail.versions.len());
@@ -322,7 +425,7 @@ mod tests {
             let repr = |object: Bound<'_, PyAny>| object.repr().unwrap().to_string();
             assert_eq!(
                 repr(Bound::new(py, detail).unwrap().into_any()),
-                r#"ImageDetail(name="quay.io/acme/app", tags=["v2", "v1"], versions=2)"#
+                r#"ImageDetail(name="quay.io/acme/app", aliases=["v2", "v1"], versions=2)"#
             );
             assert_eq!(
                 repr(Bound::new(py, newest).unwrap().into_any()),
@@ -391,7 +494,7 @@ mod tests {
     fn get_reads_the_name_and_its_versions_from_a_rest_server() {
         let (url, server) = http_server(vec![(
             200,
-            r#"{"name":"quay.io/acme/app","tags":["v1"],"curated":false,"versions":[{"digest":"sha256:aa","size_bytes":42,"source_ref":"quay.io/acme/app:v1","recorded_at":"2026-01-02T03:04:05Z"}]}"#,
+            r#"{"name":"quay.io/acme/app","aliases":["v1"],"curated":false,"versions":[{"digest":"sha256:aa","size_bytes":42,"source_ref":"quay.io/acme/app:v1","recorded_at":"2026-01-02T03:04:05Z"}]}"#,
         )]);
 
         Python::attach(|py| {
@@ -401,13 +504,13 @@ mod tests {
                 server.join().unwrap(),
                 ["GET /v1/images/quay.io%2Facme%2Fapp HTTP/1.1"]
             );
-            let (name, tags, curated): (String, Vec<String>, bool) = (
+            let (name, aliases, curated): (String, Vec<String>, bool) = (
                 detail.getattr("name").unwrap().extract().unwrap(),
-                detail.getattr("tags").unwrap().extract().unwrap(),
+                detail.getattr("aliases").unwrap().extract().unwrap(),
                 detail.getattr("curated").unwrap().extract().unwrap(),
             );
             assert_eq!(
-                (name.as_str(), tags, curated),
+                (name.as_str(), aliases, curated),
                 ("quay.io/acme/app", vec!["v1".to_string()], false)
             );
             let version = detail.getattr("versions").unwrap().get_item(0).unwrap();

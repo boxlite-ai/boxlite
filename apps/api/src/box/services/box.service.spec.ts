@@ -22,6 +22,9 @@ import { CreateBoxDto as RestCreateBoxDto } from '../../boxlite-rest/dto/create-
 import { createBoxToCreateBox } from '../../boxlite-rest/mappers/box-to-box.mapper'
 import { Context } from '../../common/context/context'
 
+/** Records every reason as it came, which is what a failure it cannot explain gets. */
+const passThroughPullFailures = () => ({ reasonFor: jest.fn(async (_box: unknown, reason: string) => reason) }) as any
+
 // ensureStartedForProxy only touches boxRepository + eventEmitter +
 // organizationService; every other injected dependency is irrelevant.
 function makeService() {
@@ -61,6 +64,7 @@ function makeService() {
     noop, // imageResolverService
     noop, // imageRegistrarService
     noop, // imagePreparationService
+    passThroughPullFailures(), // imagePullFailureService
   )
   return { service, boxRepository, eventEmitter, organizationService }
 }
@@ -107,6 +111,7 @@ function makePreviewUrlService() {
     noop, // imageResolverService
     noop, // imageRegistrarService
     noop, // imagePreparationService
+    passThroughPullFailures(), // imagePullFailureService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -316,6 +321,7 @@ function makeNetworkTunnelService() {
     noop, // imageResolverService
     noop, // imageRegistrarService
     noop, // imagePreparationService
+    passThroughPullFailures(), // imagePullFailureService
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -351,8 +357,13 @@ describe('BoxService image reporting', () => {
       boxRepository: { findOne: jest.fn().mockResolvedValue(box), updateWhere: jest.fn() },
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
       imageRegistrarService: { onBoxStarted: jest.fn().mockResolvedValue(undefined) },
+      imagePullFailureService: passThroughPullFailures(),
     })
-    return { service, registrar: (service as any).imageRegistrarService }
+    return {
+      service,
+      registrar: (service as any).imageRegistrarService,
+      pullFailures: (service as any).imagePullFailureService,
+    }
   }
 
   const reported = { digest: `sha256:${'a'.repeat(64)}`, sizeBytes: 4096 }
@@ -432,6 +443,31 @@ describe('BoxService image reporting', () => {
   })
 
   /**
+   * A runner that reports a failed pull as a state, rather than through a job,
+   * gets its reason explained the same way, after the proxy's address is out
+   * of it. A state that is not an error carries no failure to explain.
+   */
+  it('explains the reason of an error report, and only of an error report', async () => {
+    const { service, pullFailures } = makeService(BoxState.STARTED)
+    pullFailures.reasonFor.mockResolvedValue('explained')
+
+    await service.updateState('box-1', BoxState.ERROR, false, 'failed to pull manifest [MANIFEST_UNKNOWN]: x')
+
+    expect(pullFailures.reasonFor).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'box-1' }),
+      'failed to pull manifest [MANIFEST_UNKNOWN]: x',
+    )
+    expect((service as any).boxRepository.updateWhere).toHaveBeenCalledWith(
+      'box-1',
+      expect.objectContaining({ updateData: expect.objectContaining({ errorReason: 'explained' }) }),
+    )
+
+    pullFailures.reasonFor.mockClear()
+    await service.updateState('box-1', BoxState.STOPPED, false, 'stopped by the user')
+    expect(pullFailures.reasonFor).not.toHaveBeenCalled()
+  })
+
+  /**
    * The state update is what the control plane acts on; a lost registration
    * only costs the next create one re-resolution.
    */
@@ -443,7 +479,7 @@ describe('BoxService image reporting', () => {
   })
 })
 
-describe('BoxService public defaults', () => {
+describe('BoxService inbound defaults', () => {
   function makeCreateService(overrides: Record<string, unknown> = {}) {
     const boxRepository = { insert: jest.fn(async (box: any) => box) } as any
     const warmPoolService = { fetchWarmPoolBox: jest.fn().mockResolvedValue(undefined) }
@@ -731,7 +767,7 @@ describe('BoxService public defaults', () => {
 
     it.each([
       ['a negative auto-stop interval', { autoStop: -5 }],
-      ['a network allow list that is not one', { networkAllowList: 'bad host!' }],
+      ['a network allow list that is not one', { outboundAllowNet: ['bad host!'] }],
     ])('spends none on a create refused for %s', async (_reason, input) => {
       const { service, redis } = withRealAdmission({ ref: 'quay.io/acme/app:v1', isOrgOwned: true })
 
@@ -793,9 +829,10 @@ describe('BoxService public defaults', () => {
   })
 
   it.each([
-    [{ networkBlockAll: true }, { boxLimitedNetworkEgress: false }, { networkBlockAll: true }],
-    [{ networkAllowList: '10.0.0.0/8' }, { boxLimitedNetworkEgress: false }, { networkAllowList: '10.0.0.0/8' }],
-    [{}, { boxLimitedNetworkEgress: true }, { networkBlockAll: true }],
+    [{ outboundEnabled: false }, { boxLimitedNetworkEgress: false }, { outboundEnabled: false }],
+    [{ outboundAllowNet: ['10.0.0.0/8'] }, { boxLimitedNetworkEgress: false }, { outboundAllowNet: ['10.0.0.0/8'] }],
+    [{ outboundEnabled: true }, { boxLimitedNetworkEgress: true }, { outboundEnabled: true }],
+    [{}, { boxLimitedNetworkEgress: true }, { outboundEnabled: false }],
   ])(
     'creates a fresh box instead of claiming a warm box when network policy is required',
     async (request, org, expected) => {
@@ -816,12 +853,15 @@ describe('BoxService public defaults', () => {
   it.each([
     [undefined, false],
     [true, true],
-  ])('defaults a fresh box to public=%s', async (requestedPublic, expectedPublic) => {
+  ])('persists inbound access %s as %s on a fresh box', async (requested, expected) => {
     const { service, boxRepository } = makeCreateService()
 
-    await service.create({ name: 'fresh-box', public: requestedPublic } as any, { id: 'org-1' } as any, Context.user())
+    await service.create({ name: 'fresh-box', inboundEnabled: requested } as any, { id: 'org-1' } as any, Context.user())
 
-    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ public: expectedPublic }), undefined)
+    expect(boxRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ inboundEnabled: expected, outboundEnabled: true }),
+      undefined,
+    )
   })
 
   it.each([
@@ -830,13 +870,31 @@ describe('BoxService public defaults', () => {
     ['nested outbound only', { outbound: { mode: 'enabled' } }, false],
     ['inbound enabled', { inbound: { mode: 'enabled' } }, true],
     ['inbound disabled', { inbound: { mode: 'disabled' } }, false],
-  ])('persists REST %s with the expected public value', async (_label, network, expectedPublic) => {
+  ])('persists REST %s with inbound enabled %s', async (_label, network, expected) => {
     const { service, boxRepository } = makeCreateService()
     const restDto = plainToInstance(RestCreateBoxDto, { name: 'rest-box', image: 'base', network })
 
     await service.create(createBoxToCreateBox(restDto), { id: 'org-1' } as any, Context.user())
 
-    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ public: expectedPublic }), undefined)
+    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ inboundEnabled: expected }), undefined)
+  })
+
+  // The whole outbound policy crosses the REST mapper and the service: the
+  // mode flips polarity and the allowlist is split into entries.
+  it('persists a REST outbound allowlist as policy columns', async () => {
+    const { service, boxRepository } = makeCreateService()
+    const restDto = plainToInstance(RestCreateBoxDto, {
+      name: 'rest-box',
+      image: 'base',
+      network: { outbound: { mode: 'enabled', allow_net: ['api.openai.com', ' 10.0.0.0/8 '] } },
+    })
+
+    await service.create(createBoxToCreateBox(restDto), { id: 'org-1' } as any, Context.user())
+
+    expect(boxRepository.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ outboundEnabled: true, outboundAllowNet: ['api.openai.com', '10.0.0.0/8'] }),
+      undefined,
+    )
   })
 
   it('persists secrets on a freshly created box', async () => {
@@ -873,7 +931,7 @@ describe('BoxService public defaults', () => {
   it.each([
     [undefined, false],
     [true, true],
-  ])('defaults an assigned warm-pool box to public=%s', async (requestedPublic, expectedPublic) => {
+  ])('persists inbound access %s as %s on an assigned warm-pool box', async (requested, expected) => {
     const warmPoolBox = { id: 'warm-box', runnerId: 'runner-1', name: 'warm-box' } as any
     const update = jest.fn().mockResolvedValue(warmPoolBox)
     const service = Object.create(BoxService.prototype) as BoxService
@@ -886,14 +944,14 @@ describe('BoxService public defaults', () => {
 
     await (service as any).assignWarmPoolBox(
       warmPoolBox,
-      { name: 'assigned-box', public: requestedPublic },
+      { name: 'assigned-box', inboundEnabled: requested },
       { id: 'org-1' },
       {},
     )
 
     expect(update).toHaveBeenCalledWith(
       'warm-box',
-      expect.objectContaining({ updateData: expect.objectContaining({ public: expectedPublic }) }),
+      expect.objectContaining({ updateData: expect.objectContaining({ inboundEnabled: expected }) }),
     )
   })
 })

@@ -29,6 +29,12 @@ type ImageVersion struct {
 	SizeBytes float32 `json:"sizeBytes"`
 	// The reference the caller asked for, kept verbatim as provenance
 	SourceRef string `json:"sourceRef"`
+	// Aliases that point at this version now, so a reference with one of them boots it
+	Aliases []string `json:"aliases"`
+	// When a box last started from this version. Null when none has since this was recorded
+	LastUsedAt NullableString `json:"lastUsedAt"`
+	// When a pull of this version first failed because its registry no longer has it. Runners that cached it still start it; elsewhere, create a new alias for a version the registry still has. Null while no pull has found it gone
+	UpstreamMissingAt NullableString `json:"upstreamMissingAt"`
 	// When this version was first recorded
 	CreatedAt string `json:"createdAt"`
 	AdditionalProperties map[string]interface{}
@@ -40,12 +46,15 @@ type _ImageVersion ImageVersion
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewImageVersion(id string, digest string, sizeBytes float32, sourceRef string, createdAt string) *ImageVersion {
+func NewImageVersion(id string, digest string, sizeBytes float32, sourceRef string, aliases []string, lastUsedAt NullableString, upstreamMissingAt NullableString, createdAt string) *ImageVersion {
 	this := ImageVersion{}
 	this.Id = id
 	this.Digest = digest
 	this.SizeBytes = sizeBytes
 	this.SourceRef = sourceRef
+	this.Aliases = aliases
+	this.LastUsedAt = lastUsedAt
+	this.UpstreamMissingAt = upstreamMissingAt
 	this.CreatedAt = createdAt
 	return &this
 }
@@ -154,6 +163,82 @@ func (o *ImageVersion) SetSourceRef(v string) {
 	o.SourceRef = v
 }
 
+// GetAliases returns the Aliases field value
+func (o *ImageVersion) GetAliases() []string {
+	if o == nil {
+		var ret []string
+		return ret
+	}
+
+	return o.Aliases
+}
+
+// GetAliasesOk returns a tuple with the Aliases field value
+// and a boolean to check if the value has been set.
+func (o *ImageVersion) GetAliasesOk() ([]string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.Aliases, true
+}
+
+// SetAliases sets field value
+func (o *ImageVersion) SetAliases(v []string) {
+	o.Aliases = v
+}
+
+// GetLastUsedAt returns the LastUsedAt field value
+// If the value is explicit nil, the zero value for string will be returned
+func (o *ImageVersion) GetLastUsedAt() string {
+	if o == nil || o.LastUsedAt.Get() == nil {
+		var ret string
+		return ret
+	}
+
+	return *o.LastUsedAt.Get()
+}
+
+// GetLastUsedAtOk returns a tuple with the LastUsedAt field value
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *ImageVersion) GetLastUsedAtOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.LastUsedAt.Get(), o.LastUsedAt.IsSet()
+}
+
+// SetLastUsedAt sets field value
+func (o *ImageVersion) SetLastUsedAt(v string) {
+	o.LastUsedAt.Set(&v)
+}
+
+// GetUpstreamMissingAt returns the UpstreamMissingAt field value
+// If the value is explicit nil, the zero value for string will be returned
+func (o *ImageVersion) GetUpstreamMissingAt() string {
+	if o == nil || o.UpstreamMissingAt.Get() == nil {
+		var ret string
+		return ret
+	}
+
+	return *o.UpstreamMissingAt.Get()
+}
+
+// GetUpstreamMissingAtOk returns a tuple with the UpstreamMissingAt field value
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *ImageVersion) GetUpstreamMissingAtOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.UpstreamMissingAt.Get(), o.UpstreamMissingAt.IsSet()
+}
+
+// SetUpstreamMissingAt sets field value
+func (o *ImageVersion) SetUpstreamMissingAt(v string) {
+	o.UpstreamMissingAt.Set(&v)
+}
+
 // GetCreatedAt returns the CreatedAt field value
 func (o *ImageVersion) GetCreatedAt() string {
 	if o == nil {
@@ -192,6 +277,9 @@ func (o ImageVersion) ToMap() (map[string]interface{}, error) {
 	toSerialize["digest"] = o.Digest
 	toSerialize["sizeBytes"] = o.SizeBytes
 	toSerialize["sourceRef"] = o.SourceRef
+	toSerialize["aliases"] = o.Aliases
+	toSerialize["lastUsedAt"] = o.LastUsedAt.Get()
+	toSerialize["upstreamMissingAt"] = o.UpstreamMissingAt.Get()
 	toSerialize["createdAt"] = o.CreatedAt
 
 	for key, value := range o.AdditionalProperties {
@@ -210,6 +298,9 @@ func (o *ImageVersion) UnmarshalJSON(data []byte) (err error) {
 		"digest",
 		"sizeBytes",
 		"sourceRef",
+		"aliases",
+		"lastUsedAt",
+		"upstreamMissingAt",
 		"createdAt",
 	}
 
@@ -244,6 +335,9 @@ func (o *ImageVersion) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "digest")
 		delete(additionalProperties, "sizeBytes")
 		delete(additionalProperties, "sourceRef")
+		delete(additionalProperties, "aliases")
+		delete(additionalProperties, "lastUsedAt")
+		delete(additionalProperties, "upstreamMissingAt")
 		delete(additionalProperties, "createdAt")
 		o.AdditionalProperties = additionalProperties
 	}

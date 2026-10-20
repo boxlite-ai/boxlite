@@ -40,7 +40,7 @@ async def local_runtime(tmp_path):
 class TestOnALocalRuntime:
     def test_the_handle_is_unsupported_and_names_the_local_option(self, local_runtime):
         with pytest.raises(boxlite.UnsupportedError) as caught:
-            _ = local_runtime.registries
+            _ = local_runtime.images.registries
 
         assert "image_registries" in str(caught.value)
 
@@ -84,14 +84,14 @@ def server():
 
 
 def registries_on(url):
-    return boxlite.Boxlite.rest(boxlite.BoxliteRestOptions(url=url)).registries
+    return boxlite.Boxlite.rest(boxlite.BoxliteRestOptions(url=url)).images.registries
 
 
 class TestOnARestRuntime:
     @pytest.mark.asyncio
     async def test_list_reads_each_login(self, server):
         url, replies, _ = server
-        replies[("GET", "/v1/registries")] = (200, {"registries": [LOGIN]})
+        replies[("GET", "/v1/images/registries")] = (200, {"registries": [LOGIN]})
 
         [login] = await registries_on(url).list()
 
@@ -108,7 +108,10 @@ class TestOnARestRuntime:
     async def test_create_sends_the_login_and_hands_back_no_password(self, server):
         url, replies, requests = server
         # A broken server that echoed the password back.
-        replies[("POST", "/v1/registries")] = (201, {**LOGIN, "password": PASSWORD})
+        replies[("POST", "/v1/images/registries")] = (
+            201,
+            {**LOGIN, "password": PASSWORD},
+        )
 
         created = await registries_on(url).create(
             registry_host="ghcr.io",
@@ -140,7 +143,7 @@ class TestOnARestRuntime:
     @pytest.mark.asyncio
     async def test_a_second_login_for_a_held_prefix_is_already_exists(self, server):
         url, replies, _ = server
-        replies[("POST", "/v1/registries")] = (
+        replies[("POST", "/v1/images/registries")] = (
             409,
             {
                 "message": "A credential for ghcr.io/acme/ already exists",
@@ -156,12 +159,12 @@ class TestOnARestRuntime:
     @pytest.mark.asyncio
     async def test_remove_deletes_the_login_by_id(self, server):
         url, replies, requests = server
-        replies[("DELETE", f"/v1/registries/{LOGIN_ID}")] = (204, None)
+        replies[("DELETE", f"/v1/images/registries/{LOGIN_ID}")] = (204, None)
 
         await registries_on(url).remove(LOGIN_ID)
 
         assert [(method, path) for method, path, _ in requests] == [
-            ("DELETE", f"/v1/registries/{LOGIN_ID}")
+            ("DELETE", f"/v1/images/registries/{LOGIN_ID}")
         ]
 
     @pytest.mark.asyncio
@@ -169,7 +172,7 @@ class TestOnARestRuntime:
         self, server
     ):
         url, replies, _ = server
-        replies[("DELETE", f"/v1/registries/{LOGIN_ID}")] = (
+        replies[("DELETE", f"/v1/images/registries/{LOGIN_ID}")] = (
             409,
             {"message": "cannot be removed while 1 box(es) pull through it: box-1"},
         )
@@ -196,23 +199,23 @@ class TestTheSyncFace:
         if sync is None:
             pytest.skip("SyncBoxlite not available (greenlet not installed)")
         url, replies, requests = server
-        replies[("POST", "/v1/registries")] = (201, LOGIN)
-        replies[("GET", "/v1/registries")] = (200, {"registries": [LOGIN]})
-        replies[("DELETE", f"/v1/registries/{LOGIN_ID}")] = (204, None)
+        replies[("POST", "/v1/images/registries")] = (201, LOGIN)
+        replies[("GET", "/v1/images/registries")] = (200, {"registries": [LOGIN]})
+        replies[("DELETE", f"/v1/images/registries/{LOGIN_ID}")] = (204, None)
 
         with sync.rest(boxlite.BoxliteRestOptions(url=url)) as runtime:
-            created = runtime.registries.create(
+            created = runtime.images.registries.create(
                 registry_host="ghcr.io", username="acme-bot", password=PASSWORD
             )
-            listed = runtime.registries.list()
-            runtime.registries.remove(created.id)
+            listed = runtime.images.registries.list()
+            runtime.images.registries.remove(created.id)
 
         assert created.id == LOGIN_ID
         assert [login.id for login in listed] == [LOGIN_ID]
         assert [(method, path) for method, path, _ in requests] == [
-            ("POST", "/v1/registries"),
-            ("GET", "/v1/registries"),
-            ("DELETE", f"/v1/registries/{LOGIN_ID}"),
+            ("POST", "/v1/images/registries"),
+            ("GET", "/v1/images/registries"),
+            ("DELETE", f"/v1/images/registries/{LOGIN_ID}"),
         ]
         # Without a prefix, none is sent: the server covers the whole registry.
         assert "repository_prefix" not in json.loads(requests[0][2])

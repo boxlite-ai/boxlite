@@ -7,11 +7,11 @@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { getBoxDisplayName, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { BoxCube } from '@/components/BoxCube'
-import { boxCubeState } from '@/lib/box-shape'
+import { boxCubeState, isInboundEnabled } from '@/lib/box-shape'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn, getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
-import { OrganizationRolePermissionsEnum, Box, BoxState } from '@boxlite-ai/api-client'
+import { OrganizationRolePermissionsEnum, Box, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
 import {
   Check,
   ChevronLeft,
@@ -51,6 +51,12 @@ function statusOf(box: Box): { label: string; color: string } {
     case BoxState.ERROR:
       return { label: 'ERROR', color: STATUS.error }
     case BoxState.CREATING:
+      // A first pull is the one slow step the API reports; name it, so a box
+      // that sits in CREATING for a minute is not mistaken for a stuck one.
+      if (box.progress?.phase === BoxProgressPhase.PREPARING_IMAGE) {
+        return { label: 'PULLING IMAGE', color: STATUS.idle }
+      }
+      return { label: 'STARTING', color: STATUS.idle }
     case BoxState.STARTING:
     case BoxState.RESTORING:
       return { label: 'STARTING', color: STATUS.idle }
@@ -311,7 +317,7 @@ export function BoxTable({
                   <BoxCube
                     state={boxCubeState(box)}
                     size={28}
-                    className={cn(box.public ? 'text-foreground' : 'text-muted-foreground')}
+                    className={cn(isInboundEnabled(box) ? 'text-foreground' : 'text-muted-foreground')}
                   />
                   <span className="truncate text-em">{name}</span>
                   <CopyNameButton name={name} className="opacity-0 group-hover:opacity-100" />

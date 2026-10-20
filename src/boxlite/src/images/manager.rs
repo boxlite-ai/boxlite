@@ -20,7 +20,7 @@ use super::blob_source::{BlobSource, LocalBundleBlobSource, StoreBlobSource};
 use super::object::ImageObject;
 use crate::db::{CachedImage, Database};
 use crate::images::store::{ImageStore, SharedImageStore};
-use crate::runtime::options::ImageRegistry;
+use crate::runtime::options::{ImageRegistry, ImageRegistryProxy};
 use crate::runtime::types::{ImageDetail, ImageInfo, ImageVersion};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use oci_client::Reference;
@@ -71,7 +71,7 @@ pub(super) struct LayerInfo {
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let db = Database::open(&PathBuf::from("/tmp/boxlite.db"))?;
-/// let manager = ImageManager::new(PathBuf::from("/tmp/images"), db, vec![])?;
+/// let manager = ImageManager::new(PathBuf::from("/tmp/images"), db, vec![], None)?;
 ///
 /// // Pull an image
 /// let image = manager.pull("python:alpine").await?;
@@ -100,12 +100,19 @@ impl ImageManager {
     /// * `images_dir` - Directory for image cache
     /// * `db` - Database for image index
     /// * `image_registries` - Registry transport, TLS, auth, and search settings
+    /// * `image_registry_proxy` - Proxy for registry requests, already validated
     pub fn new(
         images_dir: PathBuf,
         db: Database,
         image_registries: Vec<ImageRegistry>,
+        image_registry_proxy: Option<ImageRegistryProxy>,
     ) -> BoxliteResult<Self> {
-        let store = Arc::new(ImageStore::new(images_dir, db, image_registries)?);
+        let store = Arc::new(ImageStore::new(
+            images_dir,
+            db,
+            image_registries,
+            image_registry_proxy,
+        )?);
         Ok(Self { store })
     }
 
@@ -210,19 +217,21 @@ impl ImageManager {
             return Err(BoxliteError::NotFound(format!("image {name}")));
         }
 
-        let mut tags: Vec<String> = held
+        let mut aliases: Vec<String> = held
             .iter()
             .filter(|entry| !entry.is_alias())
             .filter_map(|entry| entry.parsed.tag().map(str::to_string))
             .collect();
-        tags.sort();
-        tags.dedup();
+        aliases.sort();
+        aliases.dedup();
 
         Ok(ImageDetail {
             name,
-            tags,
+            aliases,
             curated: false,
             versions: versions_of(&held),
+            // A cache keeps no record of where a tag pointed before.
+            history: Vec::new(),
         })
     }
 
@@ -326,32 +335,45 @@ impl HeldReference {
     }
 }
 
-/// One version per build, newest first. A build's tag names it ahead of the
-/// digest alias a pull also keeps for it.
+/// One version per build, newest first, each with the aliases that name it. A
+/// build's tag names it ahead of the digest alias a pull also keeps for it.
 fn versions_of(held: &[HeldReference]) -> Vec<ImageVersion> {
     let mut by_build: HashMap<&str, ImageVersion> = HashMap::new();
     for entry in held {
         let recorded_at = cached_time(&entry.cached.cached_at);
-        match by_build.entry(entry.cached.manifest_digest.as_str()) {
-            Entry::Vacant(slot) => {
-                slot.insert(ImageVersion {
-                    digest: entry.cached.manifest_digest.clone(),
-                    // The cache keeps layer digests, not their sizes.
-                    size_bytes: None,
-                    source_ref: entry.reference.clone(),
-                    recorded_at,
-                });
-            }
+        let version = match by_build.entry(entry.cached.manifest_digest.as_str()) {
+            Entry::Vacant(slot) => slot.insert(ImageVersion {
+                digest: entry.cached.manifest_digest.clone(),
+                // The cache keeps layer digests, not their sizes.
+                size_bytes: None,
+                source_ref: entry.reference.clone(),
+                recorded_at,
+                aliases: Vec::new(),
+                // A cache records neither a build's last use nor its registry
+                // losing it; only a catalog does.
+                last_used_at: None,
+                upstream_missing_at: None,
+            }),
             Entry::Occupied(slot) => {
                 let version = slot.into_mut();
                 if !entry.is_alias() {
                     version.source_ref = entry.reference.clone();
                 }
                 version.recorded_at = version.recorded_at.min(recorded_at);
+                version
             }
+        };
+        if !entry.is_alias()
+            && let Some(tag) = entry.parsed.tag()
+        {
+            version.aliases.push(tag.to_string());
         }
     }
     let mut versions: Vec<ImageVersion> = by_build.into_values().collect();
+    for version in &mut versions {
+        version.aliases.sort();
+        version.aliases.dedup();
+    }
     versions.sort_by_key(|version| std::cmp::Reverse(version.recorded_at));
     versions
 }
@@ -390,7 +412,7 @@ mod tests {
     async fn a_pulled_tag_is_listed_once() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("test.db")).unwrap();
-        let images = ImageManager::new(dir.path().join("images"), db, vec![]).unwrap();
+        let images = ImageManager::new(dir.path().join("images"), db, vec![], None).unwrap();
         seed_cached_build(images.store(), "quay.io/acme/app:v1", FIRST).await;
         seed_cached_build(images.store(), &format!("quay.io/acme/app@{FIRST}"), FIRST).await;
         seed_cached_build(images.store(), &format!("quay.io/acme/app@{NEWER}"), NEWER).await;
@@ -413,7 +435,7 @@ mod tests {
     async fn an_image_pulled_by_its_index_digest_is_listed_once() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("test.db")).unwrap();
-        let images = ImageManager::new(dir.path().join("images"), db, vec![]).unwrap();
+        let images = ImageManager::new(dir.path().join("images"), db, vec![], None).unwrap();
         let index = format!("sha256:{}", "a".repeat(64));
         let pulled = format!("quay.io/acme/app@{index}");
         seed_cached_build(images.store(), &pulled, FIRST).await;
@@ -431,7 +453,7 @@ mod tests {
     async fn listed(seeds: &[(&str, &str)]) -> Vec<String> {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("test.db")).unwrap();
-        let images = ImageManager::new(dir.path().join("images"), db, vec![]).unwrap();
+        let images = ImageManager::new(dir.path().join("images"), db, vec![], None).unwrap();
         for (reference, build) in seeds {
             seed_cached_build(images.store(), reference, build).await;
         }
@@ -496,7 +518,7 @@ mod tests {
     async fn seeded(seeds: &[(&str, &str)]) -> (tempfile::TempDir, ImageManager) {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("test.db")).unwrap();
-        let images = ImageManager::new(dir.path().join("images"), db, vec![]).unwrap();
+        let images = ImageManager::new(dir.path().join("images"), db, vec![], None).unwrap();
         for (reference, build) in seeds {
             seed_cached_build(images.store(), reference, build).await;
         }
@@ -521,7 +543,7 @@ mod tests {
         );
     }
 
-    /// Everything a pull of `app` left behind is one image: both tags, the
+    /// Everything a pull of `app` left behind is one image: both aliases, the
     /// digest alias of the first, and nothing from another repository.
     #[tokio::test]
     async fn get_gathers_every_build_held_under_a_name() {
@@ -537,7 +559,7 @@ mod tests {
         let detail = images.get("quay.io/acme/app").await.unwrap();
 
         assert_eq!(detail.name, "quay.io/acme/app");
-        assert_eq!(detail.tags, ["v1", "v2"]);
+        assert_eq!(detail.aliases, ["v1", "v2"]);
         assert!(!detail.curated);
         let mut versions: Vec<(&str, &str)> = detail
             .versions
@@ -554,6 +576,38 @@ mod tests {
         );
     }
 
+    /// Each build names the aliases the cache holds for it, and none of its
+    /// digest alias.
+    #[tokio::test]
+    async fn get_names_the_tags_on_each_build() {
+        let alias = format!("quay.io/acme/app@{FIRST}");
+        let (_dir, images) = seeded(&[
+            ("quay.io/acme/app:v1", FIRST),
+            ("quay.io/acme/app:stable", FIRST),
+            (alias.as_str(), FIRST),
+            ("quay.io/acme/app:v2", NEWER),
+        ])
+        .await;
+
+        let detail = images.get("quay.io/acme/app").await.unwrap();
+
+        let mut aliases: Vec<(&str, Vec<String>)> = detail
+            .versions
+            .iter()
+            .map(|v| (v.digest.as_str(), v.aliases.clone()))
+            .collect();
+        aliases.sort();
+        assert_eq!(
+            aliases,
+            [
+                (FIRST, vec!["stable".to_string(), "v1".to_string()]),
+                (NEWER, vec!["v2".to_string()]),
+            ]
+        );
+        assert!(detail.versions.iter().all(|v| v.last_used_at.is_none()));
+        assert!(detail.history.is_empty());
+    }
+
     /// The cache keys `alpine` as it was pulled; asking by its full name finds it.
     #[tokio::test]
     async fn get_finds_a_short_name_by_its_full_one() {
@@ -562,7 +616,7 @@ mod tests {
         let detail = images.get("docker.io/library/alpine").await.unwrap();
 
         assert_eq!(detail.name, "docker.io/library/alpine");
-        assert_eq!(detail.tags, ["3.20"]);
+        assert_eq!(detail.aliases, ["3.20"]);
     }
 
     #[tokio::test]
@@ -627,7 +681,8 @@ mod tests {
     async fn a_build_whose_stored_time_does_not_parse_reads_as_the_oldest() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("test.db")).unwrap();
-        let images = ImageManager::new(dir.path().join("images"), db.clone(), vec![]).unwrap();
+        let images =
+            ImageManager::new(dir.path().join("images"), db.clone(), vec![], None).unwrap();
         seed_cached_build(images.store(), "quay.io/acme/app:v2", NEWER).await;
         let unreadable_time = CachedImage {
             manifest_digest: FIRST.to_string(),

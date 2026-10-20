@@ -1,28 +1,58 @@
-# E2E suite against the dev cloud stack — SDK → dev API → dev Runner → VM.
+# E2E suite against a deployed cloud stack — SDK → API → Runner → VM.
 #
 # Builds Python SDK, Node SDK, and the CLI from source using
 # BOXLITE_DEPS_STUB=1 (skips vendor submodule builds — those only
 # matter inside the runner, not the SDK client), then runs the REST
-# e2e pytest suite against the dev environment.
+# e2e pytest suite against the stage selected by `stage`.
 #
 # C and Go SDK tests are excluded — those SDKs wrap libboxlite.a over
 # REST purely to test FFI bindings, not a real user path. Python,
 # Node, and CLI cover the actual user-facing REST surface.
 #
-# Does NOT build or deploy the API or runner — the dev stack is
-# assumed to be already running the version you want to test against.
+# Does NOT build or deploy the API or runner — the stage is assumed to
+# be already running the version you want to test against.
 #
-# Authentication: one boxlite API key, in the repo secret
-# `BOXLITE_DEV_API_KEY`. That is the whole of it — the suite reads
-# [profiles.p1] from ~/.boxlite/credentials.toml and every request is
+# ── Stages ───────────────────────────────────────────────────────────
+#
+#   dev    api.dev.boxlite.ai, the whole suite. Creates and deletes
+#          boxes freely, probes quotas, and sweeps boxes earlier runs
+#          stranded (see the sweep step).
+#   prod   api.boxlite.ai, `-m smoke` only: the handful of cases marked
+#          in apps/e2e/pytest.ini as safe against a paying stage — one
+#          box at a time, no quota probing, no deliberate error storms.
+#          Nothing is swept there; prod holds customers' boxes.
+#
+# Both legs really create boxes on the stage they target, so a prod run
+# costs prod capacity. That is the point — a smoke that mocks the thing
+# it is meant to verify verifies nothing — but it is why prod is a
+# deliberate, narrow subset rather than the full suite.
+#
+# ── Authentication ───────────────────────────────────────────────────
+#
+# One boxlite API key per stage, in repo secrets:
+#
+#   dev    BOXLITE_DEV_API_KEY
+#   prod   BOXLITE_PROD_API_KEY
+#
+# Both are named, not inherited, so a run can only ever hold the key for
+# the stage it targets. The repo also carries an older, unreferenced
+# BOXLITE_API_KEY — that one is a *dev* key, so it is no substitute for
+# BOXLITE_PROD_API_KEY: pointing the prod leg at it would authenticate
+# against the wrong organization. BOXLITE_PROD_API_KEY has to be issued and
+# added before the prod leg can run at all; until then it resolves to empty
+# and the credential step says so by name.
+#
+# That is the whole of it — the suite reads [profiles.p1] from
+# ~/.boxlite/credentials.toml and every request is
 # `Authorization: Bearer <token>` (apps/e2e/lib/e2e_auth.py).
 # `path_prefix` is derived from the same key via /v1/me, not a second
 # credential. No AWS, no OIDC.
 #
-# Optional repo variable (Settings → Variables → Actions):
-#   - BOXLITE_DEV_API_URL   target stack; defaults to api.dev.boxlite.ai
+# Optional repo variables (Settings → Variables → Actions):
+#   - BOXLITE_DEV_API_URL    dev target;  defaults to api.dev.boxlite.ai
+#   - BOXLITE_PROD_API_URL   prod target; defaults to api.boxlite.ai
 #
-# The key is issued to a maintainer, deliberately. It is therefore
+# A key is issued to a maintainer, deliberately. It is therefore
 # mortal: API keys are primary-keyed on (organizationId, userId, name)
 # and ApiKeyStrategy re-reads the user on every request, throwing
 # UnauthorizedException('User not found') once that account is deleted.
@@ -42,16 +72,18 @@
 # service account with a scoped key (CreateApiKeyDto takes `permissions`
 # and `expiresAt`). Both were weighed and declined: a maintainer key is
 # less privileged than boxlite-admin's SystemRole.ADMIN, and a service
-# account needs provisioning work on the dev stack that nothing else
+# account needs provisioning work on the stage that nothing else
 # currently needs.
 #
 # Triggers: exactly two, and both require write access to the repo.
 #
 #   workflow_call      deploy-infra.yml, after it applies a stack, on the
-#                      commit it just deployed (the `ref` input).
-#   workflow_dispatch  a human, against whatever is deployed right now.
+#                      commit it just deployed (the `ref` input). Always
+#                      the dev stage.
+#   workflow_dispatch  a human, against whatever is deployed right now,
+#                      on either stage.
 #
-# Nothing fires on its own any more. Push-on-main and the label-gated
+# Nothing fires on its own. Push-on-main and the label-gated
 # pull_request_target trigger both ran the suite against a dev stack
 # whose deployed commit was unrelated to the commit under test, so a red
 # run said as much about how stale the stack was as about the change.
@@ -68,9 +100,11 @@
 # test code does get this key, same as a same-repo PR's; that is accepted, not overlooked —
 # scoping it down to a short-lived, narrowly-permissioned key (CreateApiKeyDto takes
 # `permissions` and `expiresAt`) instead of the standing one remains the available follow-up
-# if that trade-off ever needs revisiting.
+# if that trade-off ever needs revisiting. The prod key is held to the same bargain, with a
+# smaller blast radius: only `-m smoke` ever runs with it.
 
 name: E2E cloud
+run-name: E2E cloud against ${{ inputs.stage || 'dev' }}
 
 on:
   workflow_call:
@@ -84,6 +118,16 @@ on:
         description: 'Full commit SHA to build the SDKs and CLI from.'
         required: true
         type: string
+      stage:
+        description: 'Stage to test. Only dev is deployed this way.'
+        required: false
+        type: string
+        default: dev
+      sweep:
+        description: 'Reclaim boxes earlier runs stranded (dev only).'
+        required: false
+        type: boolean
+        default: true
     secrets:
       BOXLITE_DEV_API_KEY:
         # Named rather than inherited. `inherit` passes every secret the
@@ -94,19 +138,41 @@ on:
         # it.
         description: 'Dev-stack boxlite API key for profile p1.'
         required: true
+      BOXLITE_PROD_API_KEY:
+        # Declared, not required: the call path only ever targets dev. It is
+        # here so the same expression resolves on both triggers.
+        description: 'Prod-stack boxlite API key for profile p1.'
+        required: false
   workflow_dispatch:
     inputs:
+      stage:
+        description: 'Stage to test'
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - prod
       api_url:
-        description: 'Dev API base URL (blank = repo variable BOXLITE_DEV_API_URL)'
+        description: 'API base URL (blank = the stage default)'
         type: string
         required: false
         # Deliberately no default. A default would make inputs.api_url
-        # always non-empty on a dispatch run, so BOXLITE_DEV_API_URL
-        # would be silently ignored exactly when someone is trying to
-        # dispatch against the configured stack.
+        # always non-empty on a dispatch run, so the repo variable would
+        # be silently ignored exactly when someone is trying to dispatch
+        # against the configured stack.
         #
         # No `ref` here either: a dispatch already chooses its own ref in
         # the UI, and github.sha follows it.
+      image:
+        description: 'Box image to run cases against (blank = apps/box-images/VERSION)'
+        type: string
+        required: false
+      sweep:
+        description: 'Reclaim boxes earlier runs stranded (ignored for prod)'
+        type: boolean
+        required: true
+        default: true
 
 # A called workflow inherits the caller's token, and per GitHub's reuse
 # docs permissions "can only be maintained or reduced — not elevated".
@@ -116,18 +182,19 @@ on:
 permissions:
   contents: read
 
-# Single global group: every run targets the same dev stack, so two in
-# flight would race over shared boxes.
+# One group per stage: runs against the same stage would race over shared
+# boxes, while dev and prod share nothing.
 #
-# A later run queues behind the in-progress one instead of cancelling it.
-# The `box` fixture's teardown is the only thing that deletes the boxes a
-# run creates: auto_remove is a no-op over REST (see
-# deprecated_auto_remove_does_not_change_rest_lifecycle_defaults) and the
-# API defaults autoDelete to disabled, so a run killed mid-suite strands
-# every box it had open — they auto-stop after 15 min but are never
-# deleted. Note this bounds the damage rather than eliminating it:
-# GitHub retains only the newest *pending* run per group, so intermediate
-# queued runs are still superseded before they ever start.
+# A later run queues behind the in-progress one instead of cancelling it,
+# because a run killed mid-suite strands every box it had open. Two things
+# now bound that damage rather than one: every box the pytest cases create
+# carries auto_stop/auto_delete (apps/e2e/cases/conftest.py), so the stage
+# reclaims it within minutes; and the sweep step below clears what an older
+# run left behind. Boxes from the polyglot drivers and the CLI have neither —
+# they rely on their own teardown, and apps/e2e/README.md says what that
+# leaves open. Note this still bounds rather than eliminates: GitHub retains
+# only the newest *pending* run per group, so intermediate queued runs are
+# superseded before they ever start.
 #
 # Unverified for the call path: GitHub's reuse-workflows doc says nothing
 # either way about workflow-level concurrency inside a called workflow,
@@ -135,24 +202,34 @@ permissions:
 # deploy turns out not to queue behind a suite already running against
 # the stack it just replaced, this is why.
 concurrency:
-  group: e2e-cloud
+  group: e2e-cloud-${{ inputs.stage || 'dev' }}
   cancel-in-progress: false
 
 env:
   BOXLITE_DEPS_STUB: "1"
-  # Precedence: a dispatch input overrides for one run; otherwise the
-  # repo variable is the configured stack; otherwise the built-in
-  # default, so the workflow still runs with nothing configured.
-  API_URL: ${{ inputs.api_url || vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai/api' }}
+  STAGE: ${{ inputs.stage || 'dev' }}
 
 jobs:
   # No trigger gate: workflow_dispatch needs write access and
   # workflow_call only reaches here from deploy-infra, which is itself
   # dispatch-only. There is no untrusted event left to filter.
   e2e:
-    name: E2E suite (cloud)
+    name: E2E suite (${{ inputs.stage || 'dev' }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # Precedence: a dispatch input overrides for one run; otherwise the
+      # repo variable is the configured stack; otherwise the built-in
+      # default, so the workflow still runs with nothing configured.
+      API_URL: >-
+        ${{ inputs.api_url
+            || ((inputs.stage || 'dev') == 'prod'
+                && (vars.BOXLITE_PROD_API_URL || 'https://api.boxlite.ai/api')
+                || (vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai/api')) }}
+      # Blank keeps apps/e2e/lib/images.py deriving the ref from
+      # apps/box-images/VERSION, which is right whenever the stage runs the
+      # commit under test. A stage pinned to an older box image needs this.
+      BOXLITE_E2E_IMAGE: ${{ inputs.image || '' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -180,34 +257,62 @@ jobs:
       # this runs on a GitHub runner against a remote API, so there is no
       # localhost Postgres and fixture_setup would exit on the quota patch.
       #
-      # The consequence is deliberate: this workflow only READS from the
-      # dev control plane. It registers no snapshots and rewrites no
-      # quotas — a deployed dev stack is expected to already have both,
-      # and silently UPDATE-ing a shared environment's rows from CI would
-      # be worse than failing. The only writes to dev are the boxes the
-      # suite itself creates and deletes.
+      # The consequence is deliberate: this workflow never touches the
+      # control plane's rows. It registers no snapshots and rewrites no
+      # quotas — a deployed stage is expected to already have both, and
+      # silently UPDATE-ing a shared environment's rows from CI would be
+      # worse than failing. Its only writes go through the public API: the
+      # boxes the suite creates and deletes, and the stale ones the sweep
+      # step reclaims.
       - name: Configure pytest profile p1
         env:
-          BOXLITE_DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}
+          DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}
+          PROD_API_KEY: ${{ secrets.BOXLITE_PROD_API_KEY }}
         run: |
           set -euo pipefail
 
-          if [ -z "${BOXLITE_DEV_API_KEY:-}" ]; then
-            echo "::error::Secret BOXLITE_DEV_API_KEY is not set. Add it in Settings → Secrets → Actions."
+          # `stage` is a choice on dispatch but a free string over
+          # workflow_call, and every branch below treats anything that is not
+          # `prod` as dev — so an unrecognised value would quietly run the full
+          # dev suite under a concurrency group of its own, racing the real dev
+          # run over the same boxes. Refuse it instead.
+          case "$STAGE" in
+            dev|prod) ;;
+            *) echo "::error::stage must be dev or prod, got '${STAGE}'"; exit 1 ;;
+          esac
+
+          # The URL can come from a dispatch input or a repo variable, and the
+          # very next thing this step does is send a bearer token to it. Over
+          # plain HTTP that hands the stage's API key to anyone on the path.
+          case "$API_URL" in
+            https://*) ;;
+            *) echo "::error::API_URL must be https, got '${API_URL}'"; exit 1 ;;
+          esac
+
+          if [ "$STAGE" = prod ]; then
+            API_KEY="${PROD_API_KEY:-}"
+            KEY_SECRET_NAME="BOXLITE_PROD_API_KEY"
+          else
+            API_KEY="${DEV_API_KEY:-}"
+            KEY_SECRET_NAME="BOXLITE_DEV_API_KEY"
+          fi
+
+          if [ -z "$API_KEY" ]; then
+            echo "::error::Secret ${KEY_SECRET_NAME} is not set. Add it in Settings → Secrets → Actions."
             exit 1
           fi
-          echo "::add-mask::$BOXLITE_DEV_API_KEY"
+          echo "::add-mask::$API_KEY"
 
           # /v1/me is the auth smoke test — it exercises auth + DB + Redis
           # in one call, the same way bootstrap.sh probes a fresh stack.
           # Report the status code so a failure names itself instead of
           # surfacing later as an empty path_prefix.
           ME_HTTP=$(curl -sS -o /tmp/me.json -w '%{http_code}' \
-            -H "Authorization: Bearer $BOXLITE_DEV_API_KEY" "${API_URL}/v1/me" || echo 000)
+            -H "Authorization: Bearer $API_KEY" "${API_URL}/v1/me" || echo 000)
           if [ "$ME_HTTP" != "200" ]; then
-            echo "::error::/v1/me returned HTTP ${ME_HTTP}."
+            echo "::error::/v1/me on ${STAGE} returned HTTP ${ME_HTTP}."
             if [ "$ME_HTTP" = "401" ]; then
-              echo "::error::401 means the key is no longer valid. This key belongs to a person: if that account was deleted, ApiKeyStrategy now throws 'User not found' and the key is dead for good. Issue a new one and update the secret."
+              echo "::error::401 means the key is no longer valid for this stage. Check it belongs to ${STAGE} at all, then that the account still exists: these keys belong to a person, and ApiKeyStrategy throws 'User not found' once that account is deleted, killing the key for good."
             fi
             exit 1
           fi
@@ -222,10 +327,32 @@ jobs:
           {
               printf '[profiles.p1]\n'
               printf 'url = "%s"\n'         "$API_URL"
-              printf 'api_key = "%s"\n'     "$BOXLITE_DEV_API_KEY"
+              printf 'api_key = "%s"\n'     "$API_KEY"
               printf 'path_prefix = "%s"\n' "$PATH_PREFIX"
           } > ~/.boxlite/credentials.toml
           chmod 600 ~/.boxlite/credentials.toml
+
+      # ── Reclaim what earlier runs stranded (dev only) ─────────────
+      # The org's disk quota is a shared, finite resource, and a box whose
+      # run died before teardown used to sit in it for good: that is what
+      # made run 30787280531 fail 53 tests with "disk limit exceeded".
+      # Candidates are boxes idle for a day AND named with this suite's
+      # `e2e-` prefix. The day is far longer than this job's own 45-minute
+      # ceiling, so a run in flight can never be its own victim; the prefix
+      # is what keeps it off everything else in a shared org — a report
+      # against dev listed five of a colleague's debugging boxes, idle for a
+      # day and identical to a stranded one by age alone. Never on prod
+      # either way, where the boxes belong to customers.
+      #
+      # continue-on-error: housekeeping must not decide the job's result. A
+      # sweep that cannot delete leaves the suite to fail on the quota it was
+      # meant to free, and that failure is the more informative one.
+      - name: Sweep stranded boxes
+        if: ${{ (inputs.stage || 'dev') == 'dev' && inputs.sweep }}
+        continue-on-error: true
+        env:
+          BOXLITE_E2E_PROFILE: p1
+        run: python3 apps/e2e/sweep.py --apply
 
       # ── System deps ──────────────────────────────────────────────
       - name: Install system dependencies
@@ -238,7 +365,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       # ── CLI (cargo build, warms the shared boxlite core) ─────────
+      # Only the CLI cases need the binary, and `-m smoke` selects none of
+      # them, so the prod leg skips the build rather than paying for it.
       - name: Build CLI
+        if: ${{ (inputs.stage || 'dev') != 'prod' }}
         run: |
           cargo build --release -p boxlite-cli
           sudo install -m 0755 target/release/boxlite /usr/local/bin/boxlite
@@ -246,11 +376,13 @@ jobs:
 
       # ── Node SDK (napi-rs) ───────────────────────────────────────
       - name: Setup Node.js
+        if: ${{ (inputs.stage || 'dev') != 'prod' }}
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Build Node SDK (napi + tsc)
+        if: ${{ (inputs.stage || 'dev') != 'prod' }}
         run: |
           cd sdks/node
           npm install --ignore-scripts
@@ -271,7 +403,7 @@ jobs:
       # --ignore rationale:
       #  - C/Go entry+coverage: FFI-binding tests whose SDKs aren't built here.
       #  - node-entry: needs runner journal access (unreachable from GHA
-      #    against remote dev); node-coverage already covers the Node REST
+      #    against a remote stage); node-coverage already covers the Node REST
       #    surface without journal checks.
       #  - exec-timeout: the timeout fires and kills the process on time, but
       #    the guest kills only the direct child — an orphaned grandchild
@@ -282,12 +414,21 @@ jobs:
       # test_path_verification is NOT ignored — despite the name it never
       # touches the journal; it proves the API→Runner chain via the
       # X-BoxLite-Api-Version response header + an exec marker.
+      #
+      # The two legs differ in one thing only: prod narrows to `-m smoke`.
+      # An array rather than a string so the empty dev case adds no argument
+      # at all and the prod case cannot be re-split by the shell.
       - name: Run E2E suite
         env:
           BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
           BOXLITE_E2E_PROFILE: p1
         run: |
-          timeout 35m python3 -m pytest apps/e2e/cases/ \
+          set -euo pipefail
+          selection=()
+          if [ "$STAGE" = prod ]; then
+            selection+=(-m smoke)
+          fi
+          timeout 35m python3 -m pytest apps/e2e/cases/ "${selection[@]}" \
               --ignore=apps/e2e/cases/test_c_entry.py \
               --ignore=apps/e2e/cases/test_c_coverage.py \
               --ignore=apps/e2e/cases/test_go_entry.py \
@@ -302,6 +443,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-junit
+          name: pytest-junit-${{ inputs.stage || 'dev' }}
           path: pytest-junit.xml
           if-no-files-found: ignore

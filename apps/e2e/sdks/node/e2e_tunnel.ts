@@ -117,9 +117,27 @@ async function main(): Promise<void> {
       pathPrefix: env('BOXLITE_E2E_PREFIX', ''),
     }),
   )
+  // An unspecified inbound mode means private, and the API refuses a tunnel on
+  // a private box, so every box in this driver asks for inbound access.
+  // Every other Node driver removes its box; this one only stopped its four,
+  // and a stopped box is never reclaimed: `autoRemove` never reaches the wire
+  // over REST, the server's auto_delete default is 0, and apps/e2e/sweep.py
+  // only touches `e2e-`-named boxes. Each run therefore used to leave four
+  // boxes holding disk against the org quota — the exhaustion this suite's
+  // lifetime bound exists to prevent. SimpleBox has no remove of its own, so
+  // the removal goes through the runtime, by id.
+  const discard = async (target: SimpleBox): Promise<void> => {
+    try {
+      await runtime.remove(target.id, true)
+    } catch {
+      /* best-effort: the run is finishing either way */
+    }
+  }
+
   const box = new SimpleBox({
     image: env('BOXLITE_E2E_IMAGE', DEFAULT_BOX_IMAGE),
     autoRemove: true,
+    network: { inbound: { mode: 'enabled' } },
     runtime,
   })
 
@@ -224,6 +242,7 @@ async function main(): Promise<void> {
         new SimpleBox({
           image: env('BOXLITE_E2E_IMAGE', DEFAULT_BOX_IMAGE),
           autoRemove: true,
+          network: { inbound: { mode: 'enabled' } },
           runtime,
         }),
     )
@@ -239,13 +258,14 @@ async function main(): Promise<void> {
         throw new Error('cross-box tunnel routing leaked')
       }
     } finally {
-      await Promise.all(isolatedBoxes.map((isolatedBox) => isolatedBox.stop().catch(() => undefined)))
+      await Promise.all(isolatedBoxes.map((isolatedBox) => discard(isolatedBox)))
     }
 
     if (process.env.BOXLITE_E2E_SKIP_HALF_CLOSE !== '1') {
       const halfCloseBox = new SimpleBox({
         image: env('BOXLITE_E2E_IMAGE', DEFAULT_BOX_IMAGE),
         autoRemove: true,
+        network: { inbound: { mode: 'enabled' } },
         runtime,
       })
       try {
@@ -266,7 +286,7 @@ async function main(): Promise<void> {
           failures.push('half-closed tunnel dropped the guest response')
         }
       } finally {
-        await halfCloseBox.stop().catch(() => undefined)
+        await discard(halfCloseBox)
       }
     }
     console.log(
@@ -276,7 +296,7 @@ async function main(): Promise<void> {
     console.log(failures.length ? `TUNNEL_FAILURES=${failures.join('; ')}` : 'TUNNEL_LIFECYCLE=ok')
     if (failures.length) throw new Error(failures.join('; '))
   } finally {
-    await box.stop().catch(() => undefined)
+    await discard(box)
     runtime.close()
   }
 }

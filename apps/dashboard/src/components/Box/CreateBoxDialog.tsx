@@ -558,6 +558,7 @@ export const CreateBoxDialog = ({
   onOpenChange,
   onCreated,
   prefillVolume,
+  prefillImage,
 }: {
   className?: string
   /**
@@ -576,6 +577,8 @@ export const CreateBoxDialog = ({
    * selector to hand it — see MountRow above.
    */
   prefillVolume?: string
+  /** Image reference to start from, as the Images page hands it over from a row. */
+  prefillImage?: string
 }) => {
   const navigate = useNavigate()
   const [internalOpen, setInternalOpen] = useState(false)
@@ -629,7 +632,7 @@ export const CreateBoxDialog = ({
     if (!open || wasOpen) return
 
     setName('')
-    setImageRef('')
+    setImageRef(prefillImage ?? '')
     setCpu(initialCpu)
     setMemory(initialMemory)
     setDisk(initialDisk)
@@ -642,7 +645,7 @@ export const CreateBoxDialog = ({
     setSizePreset('small')
     setSubmitting(false)
     setCapped({ cpu: false, memory: false, disk: false })
-  }, [open, initialCpu, initialMemory, initialDisk, prefillVolume])
+  }, [open, initialCpu, initialMemory, initialDisk, prefillVolume, prefillImage])
 
   useEffect(() => {
     if (!open) return
@@ -665,13 +668,13 @@ export const CreateBoxDialog = ({
   // What the catalog already holds, as references that can be typed back in.
   // A curated image goes in under its short name — that is what the API
   // accepts and what the docs use. An organization's own image goes in with
-  // its tag when exactly one is recorded, because that is the build it last
+  // its alias when exactly one is recorded, because that is the build it last
   // booted; with none or several, the bare name is offered and the user
-  // finishes it, since guessing which tag they meant would silently pick one.
+  // finishes it, since guessing which alias they meant would silently pick one.
   const imageSuggestions = useMemo(
     () =>
       catalogImages.map((image) => ({
-        ref: image.curated || image.tags.length !== 1 ? image.name : `${image.name}:${image.tags[0]}`,
+        ref: image.curated || image.aliases.length !== 1 ? image.name : `${image.name}:${image.aliases[0]}`,
       })),
     [catalogImages],
   )

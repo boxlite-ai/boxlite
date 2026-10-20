@@ -3,7 +3,7 @@
 //! Provides [`RegistryHandle`] for the logins a server presents when it pulls
 //! a private image for a box. Mirrors [`AuthHandle`](crate::AuthHandle): only a
 //! REST runtime implements [`RegistryBackend`], so
-//! `BoxliteRuntime::registries()` refuses a local runtime with `Unsupported`.
+//! `ImageHandle::registries()` refuses a local runtime with `Unsupported`.
 //! A local runtime takes its registry logins from `BoxliteOptions` instead.
 //!
 //! A password goes up once, inside a create, and never comes back: the type a

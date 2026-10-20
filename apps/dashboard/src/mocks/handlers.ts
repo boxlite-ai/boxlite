@@ -17,13 +17,25 @@ import {
 import { Invoice, PaginatedInvoices } from '@/billing-api/types/Invoice'
 import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
 import { Plan } from '@/billing-api/types/Plan'
-import type { UsageConcurrencySeriesDto } from '@boxlite-ai/api-client'
+import {
+  BoxProgressPhase,
+  BoxState,
+  NetworkMode,
+  RegistryCredentialKind,
+  type UsageConcurrencySeriesDto,
+} from '@boxlite-ai/api-client'
+import { catalogNameOf } from '@/lib/image-ref'
 import { http, HttpResponse } from 'msw'
 import {
   MOCK_BOXES,
+  MOCK_IMAGE_DETAILS,
+  MOCK_IMAGE_LIMIT,
   MOCK_ORGANIZATION,
   MOCK_ORGANIZATION_MEMBER,
   MOCK_PAGINATED_BOXES,
+  MOCK_REGISTRY_CREDENTIALS,
+  buildBox,
+  registerImageFromBox,
   MOCK_VOLUMES,
   MOCK_VOLUME_USAGE,
   buildInvoiceHistory,
@@ -36,7 +48,7 @@ const BILLING_API_URL = 'http://localhost:3000/api/billing'
 const API_URL = import.meta.env.VITE_API_URL
 
 // Quickstart's agent handoff waits for a box created after it handed the key
-// over, then for that box turning public. Static fixtures can reach neither
+// over, then for that box enabling inbound access. Static fixtures can reach neither
 // stage, so both are exposed behind a switch that is off by default:
 //   localStorage['qs-publish-demo'] = 'created' | 'published'
 function quickstartHandoffDemoBox() {
@@ -47,8 +59,28 @@ function quickstartHandoffDemoBox() {
     id: 'mock-box-agent',
     name: 'agile-otter',
     createdAt: new Date().toISOString(),
-    public: stage === 'published',
+    network: {
+      outbound: { mode: NetworkMode.ENABLED, allow_net: [] },
+      inbound: { mode: stage === 'published' ? NetworkMode.ENABLED : NetworkMode.DISABLED, allow_net: [] },
+    },
   }
+}
+
+/** Boxes that block an image's removal: every one not destroyed, as the API counts them. */
+function boxesReferencing(imageName: string) {
+  return MOCK_BOXES.filter(
+    (box) => box.desiredState !== 'destroyed' && box.image != null && catalogNameOf(box.image) === imageName,
+  )
+}
+
+/** Boxes whose image a credential covers, which block the credential's removal. */
+function boxesPullingThrough(credential: { registryHost: string; repositoryPrefix: string }) {
+  return MOCK_BOXES.filter((box) => {
+    if (box.desiredState === 'destroyed' || !box.image) return false
+    const name = catalogNameOf(box.image)
+    const [host, ...rest] = name.split('/')
+    return host === credential.registryHost && `${rest.join('/')}/`.startsWith(credential.repositoryPrefix)
+  })
 }
 
 export const handlers = [
@@ -103,6 +135,48 @@ export const handlers = [
     if (isRunningCount) return HttpResponse.json({ items: items.slice(0, 1), total: 62, page: 1, totalPages: 62 })
     return HttpResponse.json({ items, total: items.length, page: 1, totalPages: 1 })
   }),
+  // The Box API's create, which the New Box dialog calls on the page's own
+  // origin. The box pulls for a moment, then starts; reaching STARTED is what
+  // puts its image in the catalog, as the API's registrar does.
+  http.post('*/v1/:organizationId/boxes', async ({ request }) => {
+    const body = (await request.json()) as { name?: string; image?: string; cpus?: number; memory_mib?: number }
+    const image = body.image || 'ghcr.io/boxlite-ai/boxlite-agent-base:mock'
+    const id = `mock-box-${Math.abs(Date.now() % 100000000)}`
+    const box = buildBox({
+      id,
+      name: body.name || `box-${id.slice(-5)}`,
+      state: BoxState.CREATING,
+      image,
+      cpu: body.cpus ?? 1,
+      memory: body.memory_mib ? body.memory_mib / 1024 : 1,
+      progress: { phase: BoxProgressPhase.PREPARING_IMAGE, retryAfterMs: 5000 },
+    })
+    MOCK_BOXES.unshift(box)
+    MOCK_PAGINATED_BOXES.items = MOCK_BOXES
+    MOCK_PAGINATED_BOXES.total = MOCK_BOXES.length
+    setTimeout(() => {
+      box.state = BoxState.STARTED
+      box.progress = undefined
+      registerImageFromBox(image)
+    }, 4000)
+    return HttpResponse.json(
+      {
+        box_id: id,
+        name: box.name,
+        status: 'creating',
+        created_at: box.createdAt,
+        updated_at: box.updatedAt,
+        image,
+        cpus: box.cpu,
+        memory_mib: (box.memory ?? 1) * 1024,
+        labels: {},
+        auto_stop: 0,
+        auto_delete: 0,
+      },
+      { status: 201 },
+    )
+  }),
+  http.post('*/v1/:organizationId/boxes/:boxId/start', () => new HttpResponse(null, { status: 204 })),
   http.get(`${API_URL}/box/:boxIdOrName`, ({ params }) => {
     const demo = quickstartHandoffDemoBox()
     const box =
@@ -112,25 +186,26 @@ export const handlers = [
     return box ? HttpResponse.json(box) : new HttpResponse(null, { status: 404 })
   }),
 
-  // Network / preview surface. `public` is mutated in place so the detail page
-  // reflects the toggle after its query is invalidated, the way it does against
-  // a real API.
-  http.post(`${API_URL}/box/:boxIdOrName/public/:isPublic`, ({ params }) => {
-    const box = MOCK_BOXES.find((b) => b.id === params.boxIdOrName)
-    if (!box) return new HttpResponse(null, { status: 404 })
-    box.public = params.isPublic === 'true'
-    return HttpResponse.json(box)
+  // Network / preview surface. `network.inbound` is mutated in place so the
+  // detail page reflects the toggle after its query is invalidated, the way it
+  // does against a real API.
+  http.put(`${API_URL}/v1/:prefix/boxes/:boxId/network/inbound`, async ({ params, request }) => {
+    const box = MOCK_BOXES.find((b) => b.id === params.boxId)
+    if (!box?.network) return new HttpResponse(null, { status: 404 })
+    const { mode } = (await request.json()) as { mode: NetworkMode }
+    box.network.inbound = { mode, allow_net: [] }
+    return HttpResponse.json(box.network.inbound)
   }),
-  http.get(`${API_URL}/box/:boxIdOrName/ports/:port/preview-url`, ({ params }) => {
-    const boxId = String(params.boxIdOrName)
+  // Refuses without inbound access, like the real route.
+  http.post(`${API_URL}/v1/:prefix/boxes/:boxId/network/tunnel`, ({ params, request }) => {
+    const boxId = String(params.boxId)
+    const box = MOCK_BOXES.find((b) => b.id === boxId)
+    if (box?.network?.inbound.mode !== NetworkMode.ENABLED) return new HttpResponse(null, { status: 409 })
+    const port = new URL(request.url).searchParams.get('port')
     // Mirrors the real hex-encoded direct-preview host shape. Hand-rolled
     // rather than via Buffer, which does not exist in the browser.
     const encodedBoxId = [...boxId].map((char) => char.charCodeAt(0).toString(16).padStart(2, '0')).join('')
-    return HttpResponse.json({
-      boxId,
-      url: `https://${params.port}-d-${encodedBoxId}.proxy.mock.boxlite.ai`,
-      token: 'mock0boxauthtoken0000000000000000',
-    })
+    return HttpResponse.json({ uri: `https://${port}-d-${encodedBoxId}.proxy.mock.boxlite.ai` })
   }),
   http.get(`${API_URL}/box/:boxIdOrName/ports/:port/signed-preview-url`, ({ params, request }) => {
     const port = Number(params.port)
@@ -188,6 +263,191 @@ export const handlers = [
     const row = MOCK_VOLUMES.find((v) => v.id === id)
     if (!row) return new HttpResponse(null, { status: 404 })
     row.state = 'pending_delete' as (typeof row)['state']
+    return new HttpResponse(null, { status: 204 })
+  }),
+
+  // Image catalog and registry logins. Static registry routes are declared
+  // before `/images/:idOrRef`, as the real API orders them. Deleting a catalog
+  // image is soft and answers 409 while a box can still boot from it; curated
+  // images cannot be deleted at all.
+  // `localStorage['registries-unsupported'] = '1'` answers as a deploy with
+  // no secret store does (registries.service.ts), for that state of the panel.
+  http.get(`${API_URL}/images/registries`, () =>
+    globalThis.localStorage?.getItem('registries-unsupported') === '1'
+      ? HttpResponse.json(
+          {
+            statusCode: 501,
+            message: 'Registry credentials are not configured for this deployment',
+            code: 'unsupported',
+          },
+          { status: 501 },
+        )
+      : HttpResponse.json(MOCK_REGISTRY_CREDENTIALS),
+  ),
+  http.post(`${API_URL}/images/registries`, async ({ request }) => {
+    const body = (await request.json()) as {
+      registryHost: string
+      repositoryPrefix?: string
+      username: string
+      password: string
+    }
+    const repositoryPrefix = body.repositoryPrefix ?? ''
+    const taken = MOCK_REGISTRY_CREDENTIALS.some(
+      (c) => c.registryHost === body.registryHost && c.repositoryPrefix === repositoryPrefix,
+    )
+    if (taken) {
+      return HttpResponse.json(
+        {
+          statusCode: 409,
+          message: `A credential for ${body.registryHost}/${repositoryPrefix} already exists; remove it before adding another`,
+          error: 'Conflict',
+        },
+        { status: 409 },
+      )
+    }
+    const created = {
+      id: `reg-${Math.abs(Date.now() % 100000000)}`,
+      kind: RegistryCredentialKind.BASIC,
+      registryHost: body.registryHost,
+      repositoryPrefix,
+      username: body.username,
+      createdBy: 'mock-user',
+      createdAt: new Date().toISOString(),
+    }
+    MOCK_REGISTRY_CREDENTIALS.unshift(created)
+    return HttpResponse.json(created, { status: 201 })
+  }),
+  http.delete(`${API_URL}/images/registries/:id`, ({ params }) => {
+    const index = MOCK_REGISTRY_CREDENTIALS.findIndex((c) => c.id === params.id)
+    if (index < 0) return new HttpResponse(null, { status: 404 })
+    const holders = boxesPullingThrough(MOCK_REGISTRY_CREDENTIALS[index])
+    if (holders.length > 0) {
+      return HttpResponse.json(
+        {
+          statusCode: 409,
+          message: `Registry credential ${params.id} cannot be removed while ${holders.length} box(es) pull through it: ${holders.map((b) => b.id).join(', ')}`,
+          error: 'Conflict',
+        },
+        { status: 409 },
+      )
+    }
+    MOCK_REGISTRY_CREDENTIALS.splice(index, 1)
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.get(`${API_URL}/images/usage`, () => {
+    const owned = MOCK_IMAGE_DETAILS.filter((i) => !i.curated)
+    return HttpResponse.json({
+      count: owned.length,
+      limit: MOCK_IMAGE_LIMIT,
+      knownBytes: owned.reduce((sum, i) => sum + (i.sizeBytes ?? 0), 0),
+    })
+  }),
+  http.get(`${API_URL}/images`, () =>
+    HttpResponse.json(
+      MOCK_IMAGE_DETAILS.map((detail) => {
+        const image: Partial<typeof detail> = { ...detail }
+        delete image.versions
+        delete image.history
+        return image
+      }),
+    ),
+  ),
+  http.get(`${API_URL}/images/:idOrRef`, ({ params }) => {
+    const key = decodeURIComponent(String(params.idOrRef))
+    const image = MOCK_IMAGE_DETAILS.find((i) => i.id === key || i.name === key)
+    return image ? HttpResponse.json(image) : new HttpResponse(null, { status: 404 })
+  }),
+  http.delete(`${API_URL}/images/:idOrRef`, ({ params }) => {
+    const key = decodeURIComponent(String(params.idOrRef))
+    const index = MOCK_IMAGE_DETAILS.findIndex((i) => i.id === key || i.name === key)
+    if (index < 0) return new HttpResponse(null, { status: 404 })
+    const image = MOCK_IMAGE_DETAILS[index]
+    if (image.curated) {
+      return HttpResponse.json(
+        { statusCode: 403, message: 'Curated images belong to the operator', error: 'Forbidden' },
+        { status: 403 },
+      )
+    }
+    const holders = boxesReferencing(image.name)
+    if (holders.length > 0) {
+      return HttpResponse.json(
+        {
+          statusCode: 409,
+          message: `Image '${image.name}' cannot be removed while ${holders.length} box(es) can still boot from it: ${holders.map((b) => b.id).join(', ')}`,
+          error: 'Conflict',
+        },
+        { status: 409 },
+      )
+    }
+    MOCK_IMAGE_DETAILS.splice(index, 1)
+    return new HttpResponse(null, { status: 204 })
+  }),
+  // Pinning answers as the API does: OCI tag syntax, a READY version of this
+  // image, and 409 for any existing name, the same version included.
+  http.post(`${API_URL}/images/:idOrRef/aliases`, async ({ params, request }) => {
+    const key = decodeURIComponent(String(params.idOrRef))
+    const image = MOCK_IMAGE_DETAILS.find((i) => i.id === key || i.name === key)
+    if (!image) return new HttpResponse(null, { status: 404 })
+    const body = (await request.json()) as { alias: string; versionId: string }
+    if (image.curated) {
+      return HttpResponse.json(
+        {
+          statusCode: 400,
+          message: `Image '${image.name}' is provided by the operator, so its aliases cannot be changed`,
+        },
+        { status: 400 },
+      )
+    }
+    if (!/^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/.test(body.alias)) {
+      return HttpResponse.json(
+        { statusCode: 400, message: `Image alias '${body.alias}' must use OCI tag syntax` },
+        { status: 400 },
+      )
+    }
+    const version = image.versions.find((v) => v.id === body.versionId)
+    if (!version) {
+      return HttpResponse.json(
+        { statusCode: 400, message: `Version '${body.versionId}' is not a version of image '${image.name}'` },
+        { status: 400 },
+      )
+    }
+    if (image.aliases.includes(body.alias)) {
+      return HttpResponse.json(
+        {
+          statusCode: 409,
+          message: `Alias '${body.alias}' already exists for image '${image.name}'; delete it explicitly before creating it again`,
+          code: 'already_exists',
+        },
+        { status: 409 },
+      )
+    }
+    image.aliases.push(body.alias)
+    version.aliases.push(body.alias)
+    image.history.unshift({
+      aliasName: body.alias,
+      fromVersionId: null,
+      fromDigest: null,
+      toVersionId: version.id,
+      toDigest: version.digest,
+      actorId: MOCK_ORGANIZATION_MEMBER.userId,
+      createdAt: new Date().toISOString(),
+    })
+    return new HttpResponse(null, { status: 201 })
+  }),
+  // Unpinning writes no history event, as the API does not.
+  http.delete(`${API_URL}/images/:idOrRef/aliases/:alias`, ({ params }) => {
+    const key = decodeURIComponent(String(params.idOrRef))
+    const alias = decodeURIComponent(String(params.alias))
+    const image = MOCK_IMAGE_DETAILS.find((i) => i.id === key || i.name === key)
+    if (!image) return new HttpResponse(null, { status: 404 })
+    if (!image.aliases.includes(alias)) {
+      return HttpResponse.json(
+        { statusCode: 404, message: `Alias '${alias}' not found for image '${image.name}'` },
+        { status: 404 },
+      )
+    }
+    image.aliases = image.aliases.filter((a) => a !== alias)
+    for (const version of image.versions) version.aliases = version.aliases.filter((a) => a !== alias)
     return new HttpResponse(null, { status: 204 })
   }),
 

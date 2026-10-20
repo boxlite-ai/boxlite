@@ -164,6 +164,13 @@ crash handling live in the runtime, not the runner.
 | `POST` | `/boxes/:id/backup` | `CreateBackup` | Kick off async backup; updates `BackupInfoCache` |
 | `GET` | `/boxes/:id` | `Info` | Combined state + backup state + runtime version |
 
+`Create` and `Recover` take the outbound network policy as
+`outboundEnabled` and an `outboundAllowNet` entry list. `outboundEnabled` is
+required: a body without it, such as a job queued by an API that predates it,
+is rejected as an invalid argument before the runner mounts volumes, creates
+a box, or (for `Recover`) destroys the old one
+(`networkSpec` in [`pkg/boxlite/client.go`](pkg/boxlite/client.go)).
+
 `Info` is the only endpoint that fans out: it pulls live state from the
 runtime _and_ backup state from `BackupInfoCache`, then fetches the
 runtime version only when the box is `STARTED`. See

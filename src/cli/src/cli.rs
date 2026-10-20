@@ -1159,9 +1159,9 @@ pub struct NetworkFlags {
     #[arg(long = "allow-net", value_name = "HOST")]
     pub allow_net: Vec<String>,
 
-    /// Inbound mode: "enabled" (services the box exposes are publicly
-    /// reachable) or "disabled" (default — private, unreachable from outside
-    /// the box).
+    /// Inbound mode: "enabled" (services the box exposes are reachable
+    /// through the remote proxy without sign-in) or "disabled" (default —
+    /// unreachable from outside the box).
     #[arg(long = "inbound", value_name = "MODE")]
     pub inbound: Option<String>,
 
@@ -2314,7 +2314,7 @@ mod tests {
             .expect("disabled is valid");
 
         assert!(matches!(opts.network, NetworkSpec::Disabled));
-        // Without --inbound, inbound stays private.
+        // Without --inbound, inbound stays disabled.
         assert!(matches!(opts.inbound_network, NetworkSpec::Disabled));
     }
 
@@ -2360,7 +2360,7 @@ mod tests {
     }
 
     #[test]
-    fn test_network_flags_inbound_disabled_sets_private() {
+    fn test_network_flags_inbound_disabled_sets_disabled() {
         // --inbound disabled alone (no --network/--allow-net) still applies,
         // and leaves outbound at its Enabled/full-access default.
         let mut opts = BoxOptions::default();

@@ -58,10 +58,15 @@ class TestOnALocalCache:
         with pytest.raises(boxlite.UnsupportedError):
             await local_runtime.images.usage()
 
+    @pytest.mark.asyncio
+    async def test_create_alias_is_unsupported(self, local_runtime):
+        with pytest.raises(boxlite.UnsupportedError):
+            await local_runtime.images.create_alias("quay.io/acme/app", "stable", NEW)
+
 
 DETAIL = {
     "name": "quay.io/acme/app",
-    "tags": ["v1"],
+    "aliases": ["v1"],
     "curated": False,
     "versions": [
         {
@@ -77,17 +82,55 @@ ROUTES = {
     "/v1/images/quay.io%2Facme%2Fapp": DETAIL,
     "/v1/images/usage": USAGE,
 }
+OLD = "sha256:" + "a" * 64
+NEW = "sha256:" + "b" * 64
+CREATED = {
+    "name": "quay.io/acme/app",
+    "aliases": ["stable"],
+    "curated": False,
+    "versions": [
+        {
+            "digest": NEW,
+            "size_bytes": None,
+            "source_ref": "quay.io/acme/app:v2",
+            "recorded_at": "2026-09-02T00:00:00Z",
+            "aliases": ["stable"],
+            "last_used_at": "2026-09-03T00:00:00Z",
+            "upstream_missing_at": None,
+        }
+    ],
+    "history": [
+        {
+            "alias": "stable",
+            "from_digest": OLD,
+            "to_digest": NEW,
+            "actor": "user-1",
+            "recorded_at": "2026-09-04T00:00:00Z",
+        }
+    ],
+}
 
 
 @pytest.fixture
 def catalog():
     """A server answering the box API's image routes with fixed bodies.
 
-    Yields its URL and the (method, path) of every request it received.
+    Yields its URL and the (method, path) of every request it received, with
+    the JSON body of a PUT.
     """
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            requests.append(("POST", self.path, body))
+            payload = json.dumps(CREATED).encode()
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
         def do_DELETE(self):
             requests.append(("DELETE", self.path))
             self.send_response(204)
@@ -125,7 +168,7 @@ class TestOnARestRuntime:
         detail = await runtime.images.get("quay.io/acme/app")
 
         assert isinstance(detail, boxlite.ImageDetail)
-        assert (detail.name, detail.tags, detail.curated) == (
+        assert (detail.name, detail.aliases, detail.curated) == (
             "quay.io/acme/app",
             ["v1"],
             False,
@@ -158,6 +201,42 @@ class TestOnARestRuntime:
 
         assert requests == [("DELETE", "/v1/images/quay.io%2Facme%2Fapp")]
 
+    @pytest.mark.asyncio
+    async def test_create_alias_posts_the_alias_and_reads_the_image(self, catalog):
+        url, requests = catalog
+        runtime = boxlite.Boxlite.rest(boxlite.BoxliteRestOptions(url=url))
+
+        detail = await runtime.images.create_alias("quay.io/acme/app", "stable", NEW)
+
+        assert requests == [
+            (
+                "POST",
+                "/v1/images/quay.io%2Facme%2Fapp/aliases",
+                {"alias": "stable", "digest": NEW},
+            )
+        ]
+        [version] = detail.versions
+        assert (version.aliases, version.upstream_missing_at) == (["stable"], None)
+        assert version.last_used_at.startswith("2026-09-03T00:00:00")
+        [event] = detail.history
+        assert isinstance(event, boxlite.ImageAliasEvent)
+        assert (event.alias, event.from_digest, event.to_digest, event.actor) == (
+            "stable",
+            OLD,
+            NEW,
+            "user-1",
+        )
+        assert event.recorded_at.startswith("2026-09-04T00:00:00")
+
+    @pytest.mark.asyncio
+    async def test_delete_alias_removes_only_the_named_binding(self, catalog):
+        url, requests = catalog
+        runtime = boxlite.Boxlite.rest(boxlite.BoxliteRestOptions(url=url))
+        await runtime.images.delete_alias("quay.io/acme/app", "stable")
+        assert requests == [
+            ("DELETE", "/v1/images/quay.io%2Facme%2Fapp/aliases/stable")
+        ]
+
 
 class TestTheSyncFace:
     def test_a_sync_runtime_reaches_a_rest_server(self, catalog):
@@ -169,6 +248,8 @@ class TestTheSyncFace:
         with sync.rest(boxlite.BoxliteRestOptions(url=url)) as runtime:
             usage = runtime.images.usage()
             detail = runtime.images.get("quay.io/acme/app")
+            moved = runtime.images.create_alias("quay.io/acme/app", "stable", NEW)
 
         assert (usage.count, usage.limit) == (3, 20)
-        assert detail.tags == ["v1"]
+        assert detail.aliases == ["v1"]
+        assert [event.to_digest for event in moved.history] == [NEW]

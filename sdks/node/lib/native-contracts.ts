@@ -32,17 +32,40 @@ export interface ImageVersion {
   sourceRef: string;
   /** When this build was recorded, as an RFC 3339 string. */
   recordedAt: string;
+  /** The image's aliases that point at this build. */
+  aliases: string[];
+  /** When a box last started from this build; absent when unknown. */
+  lastUsedAt?: string;
+  /**
+   * When a pull found this build gone from its registry; absent while it is
+   * not known to be gone.
+   */
+  upstreamMissingAt?: string;
+}
+
+/** An alias registration or historical binding change; versions named by digest. */
+export interface ImageAliasEvent {
+  alias: string;
+  /** The build the alias pointed at before; absent when the alias was new. */
+  fromDigest?: string;
+  toDigest: string;
+  /** Who recorded the alias; absent when a pull recorded it. */
+  actor?: string;
+  /** As an RFC 3339 string. */
+  recordedAt: string;
 }
 
 /** An image name and every build the runtime holds under it. */
 export interface ImageDetail {
   /** Registry and repository without a tag, such as `docker.io/library/alpine`. */
   name: string;
-  tags: string[];
+  aliases: string[];
   /** Provided by the server's operator rather than pulled by a box. */
   curated: boolean;
   /** Newest first. */
   versions: ImageVersion[];
+  /** The latest alias history entries, newest first; empty on a local cache. */
+  history: ImageAliasEvent[];
 }
 
 /** Images held against the allowance, on a REST runtime. */
@@ -61,6 +84,7 @@ export interface ImageUsage {
  * the server's catalog on a REST runtime.
  */
 export interface ImageHandle {
+  readonly registries: RegistryHandle;
   /** Pull into the local cache. A REST runtime refuses: creating a box pulls. */
   pull(reference: string): Promise<ImagePullResult>;
   list(): Promise<ImageInfo[]>;
@@ -80,6 +104,19 @@ export interface ImageHandle {
   remove(name: string): Promise<void>;
   /** Images held against the allowance. @throws `unsupported` locally. */
   usage(): Promise<ImageUsage>;
+  /**
+   * Point a tag of an image name at the version with that digest; boxes
+   * already created keep theirs.
+   *
+   * @throws `unsupported` locally, and `invalid_argument` for a malformed
+   * name, tag or `sha256:` digest.
+   */
+  createAlias(
+    name: string,
+    alias: string,
+    digest: string,
+  ): Promise<ImageDetail>;
+  deleteAlias(name: string, alias: string): Promise<void>;
 }
 
 /** Metadata for a managed volume returned by the native runtime. */
@@ -222,7 +259,7 @@ export interface JsOutboundNetworkSpec {
 }
 
 export interface JsInboundNetworkSpec {
-  /** Inbound mode: "enabled" (publicly reachable) or "disabled" (private). */
+  /** Inbound mode: "enabled" (reachable without sign-in) or "disabled" (unreachable from outside). */
   mode: "enabled" | "disabled";
   /**
    * Not supported yet: a non-empty value is rejected. Exists for shape
@@ -596,7 +633,6 @@ export interface JsBoxlite {
    * @throws `unsupported` on a local runtime, which pulls with the logins in
    * `imageRegistries` instead.
    */
-  readonly registries: RegistryHandle;
   remove(idOrName: string, force?: boolean | null): Promise<void>;
   close(): void;
   shutdown(timeout?: number | null): Promise<void>;

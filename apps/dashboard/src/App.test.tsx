@@ -38,7 +38,11 @@ vi.mock('./pages/Boxes', () => ({
     return <p>boxes page at {useLocation().pathname}</p>
   },
 }))
-vi.mock('./pages/Images', () => ({ default: () => <p>images page</p> }))
+vi.mock('./pages/ImagesPage', () => ({
+  default: function ImagesMarker({ tab }: { tab: string }) {
+    return <p>images page, {tab} tab</p>
+  },
+}))
 vi.mock('./pages/ImageDetails', () => ({
   default: function ImageDetailsMarker() {
     return <p>image details page for {useParams().idOrRef}</p>
@@ -82,7 +86,17 @@ describe('App routes', () => {
   // not-found (unknown); the catalog is reachable only if both of its paths
   // mount their pages.
   it('opens the image catalog', async () => {
-    expect(await renderAt('/dashboard/images')).toBe('images page')
+    expect(await renderAt('/dashboard/images')).toBe('images page, images tab')
+  })
+
+  // `registries` is a static segment under the same prefix as `:idOrRef`; it
+  // must reach its tab rather than read as an image named "registries".
+  it('opens private registries as the second tab of Images', async () => {
+    expect(await renderAt('/dashboard/images/registries')).toBe('images page, registries tab')
+  })
+
+  it('sends the old registries path to its tab', async () => {
+    expect(await renderAt('/dashboard/registries')).toBe('images page, registries tab')
   })
 
   it('opens one image by the id in its path', async () => {

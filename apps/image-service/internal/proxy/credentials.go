@@ -141,7 +141,7 @@ func (f *credentialFinder) ask(ctx context.Context, apiKey string, org, host, re
 	if err != nil {
 		return foundCredential{}, fmt.Errorf("%w: %w", ErrCredentialUnavailable, err)
 	}
-	endpoint = endpoint.JoinPath("runners/me/registry-credentials")
+	endpoint = endpoint.JoinPath("runners/me/images/registry-credentials")
 	query := endpoint.Query()
 	query.Set("organizationId", org)
 	query.Set("host", host)

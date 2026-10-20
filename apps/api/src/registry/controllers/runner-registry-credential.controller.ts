@@ -28,7 +28,7 @@ import { RegistryCredentialService } from '../services/registry-credential.servi
  */
 @ApiExcludeController()
 @ApiTags('runners')
-@Controller('runners/me/registry-credentials')
+@Controller('runners/me/images/registry-credentials')
 @UseGuards(CombinedAuthGuard, RunnerAuthGuard)
 @ApiBearerAuth()
 export class RunnerRegistryCredentialController {

@@ -22,6 +22,7 @@ import (
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/models"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
+	"github.com/containerd/errdefs"
 	"go.opentelemetry.io/otel/propagation"
 )
 
@@ -77,23 +78,31 @@ type ClientConfig struct {
 	VolumeCleanupExclusionPeriod time.Duration
 }
 
-func networkSpec(blockAll *bool, allowList *string) boxlite.NetworkSpec {
-	if blockAll != nil && *blockAll {
-		return boxlite.NetworkSpec{Mode: boxlite.NetworkModeDisabled}
-	}
+// errMissingOutboundPolicy rejects a create or recover request that carries no
+// outbound policy. Guessing one would either open egress the caller meant to
+// block or cut egress it meant to allow, and the box would start silently wrong.
+var errMissingOutboundPolicy = errdefs.ErrInvalidArgument.WithMessage("outboundEnabled is required")
 
-	spec := boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled}
-	if allowList == nil {
-		return spec
+// networkSpec maps the create request's outbound policy onto the SDK spec.
+func networkSpec(boxDto dto.CreateBoxDTO) (boxlite.NetworkSpec, error) {
+	if boxDto.OutboundEnabled == nil {
+		return boxlite.NetworkSpec{}, errMissingOutboundPolicy
 	}
+	if !*boxDto.OutboundEnabled {
+		return boxlite.NetworkSpec{Mode: boxlite.NetworkModeDisabled}, nil
+	}
+	return boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled, AllowNet: allowNetEntries(boxDto.OutboundAllowNet)}, nil
+}
 
-	for _, entry := range strings.Split(*allowList, ",") {
-		entry = strings.TrimSpace(entry)
-		if entry != "" {
-			spec.AllowNet = append(spec.AllowNet, entry)
+// allowNetEntries trims entries and drops blanks; nil when nothing is left.
+func allowNetEntries(entries []string) []string {
+	var allowNet []string
+	for _, entry := range entries {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			allowNet = append(allowNet, entry)
 		}
 	}
-	return spec
+	return allowNet
 }
 
 func boxRuntimeEnv(ctx context.Context, boxDto dto.CreateBoxDTO) map[string]string {
@@ -383,6 +392,13 @@ func (c *Client) Close() error {
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
+	// Before any side effect: a request without a policy must not leave
+	// volume mounts or a box behind.
+	network, err := networkSpec(boxDto)
+	if err != nil {
+		return "", "", err
+	}
+
 	// API sends cores / GB / GB as small integers (see apps/api Box entity).
 	cpus := int(boxDto.CpuQuota)
 	if cpus < 1 {
@@ -449,7 +465,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		}
 	}
 
-	opts = append(opts, boxlite.WithNetwork(networkSpec(boxDto.NetworkBlockAll, boxDto.NetworkAllowList)))
+	opts = append(opts, boxlite.WithNetwork(network))
 
 	// GetOrCreate (not Create) so a CREATE_BOX replay is idempotent. The local
 	// box name is boxDto.Id — the control plane's globally-unique box id — so if

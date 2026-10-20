@@ -557,6 +557,7 @@ mod tests {
             dir.path().join("images"),
             db,
             vec![ImageRegistry::http(&host)],
+            None,
         )
         .unwrap();
         (dir, images, host)
@@ -634,6 +635,7 @@ mod tests {
             dir.path().join("images"),
             db,
             vec![ImageRegistry::http(&host).with_search(true)],
+            None,
         )
         .unwrap();
         let latest = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee2";

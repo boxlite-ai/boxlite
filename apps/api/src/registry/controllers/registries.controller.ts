@@ -20,7 +20,7 @@ import { CreateRegistryCredentialDto, RegistryCredentialDto } from '../dto/regis
 import { RegistriesService } from '../services/registries.service'
 
 @ApiTags('registries')
-@Controller('registries')
+@Controller('images/registries')
 @ApiHeader(CustomHeaders.ORGANIZATION_ID)
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard, AuthenticatedRateLimitGuard)
 @ApiOAuth2(['openid', 'profile', 'email'])

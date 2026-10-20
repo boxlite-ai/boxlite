@@ -76,7 +76,7 @@ curl -s -X DELETE http://localhost:8080/v1/demo/boxes/$BOX_ID \
   -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n"
 ```
 
-## Implemented Endpoints
+## Implemented endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -98,7 +98,7 @@ curl -s -X DELETE http://localhost:8080/v1/demo/boxes/$BOX_ID \
 | `/{prefix}/boxes/{id}/metrics` | GET | Box metrics |
 | `/{prefix}/metrics` | GET | Runtime metrics |
 
-**Not implemented:** the `/{prefix}/images…` and `/{prefix}/registries…` routes, WebSocket TTY.
+**Not implemented:** the `/{prefix}/images…` and `/{prefix}/images/registries…` routes, WebSocket TTY.
 
 ## CLI Options
 

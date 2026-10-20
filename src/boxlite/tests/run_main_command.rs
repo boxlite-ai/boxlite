@@ -32,6 +32,7 @@ async fn attached_stdout(opts: BoxOptions) -> String {
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 
@@ -151,6 +152,7 @@ async fn assert_main_argv_on_start_and_restart(options: BoxOptions, expected: &[
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
     let handle = runtime.create(options, None).await.expect("create box");
@@ -203,6 +205,7 @@ async fn main_command_exits_after_large_output_without_attach() {
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 
@@ -242,6 +245,7 @@ async fn late_attach_reports_output_gap() {
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 
@@ -350,6 +354,7 @@ async fn a_stopped_box_without_a_main_command_still_restarts_on_exec() {
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 
@@ -403,6 +408,7 @@ async fn a_stopped_no_command_box_refuses_to_serve_its_dead_vm() {
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 
@@ -494,6 +500,7 @@ async fn a_failed_attach_does_not_poison_the_next_start() {
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 
@@ -569,6 +576,7 @@ async fn an_adopted_running_box_is_followed_to_its_exit() {
     let opts = || boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     };
 
     // A first runtime starts a detached box, then goes away without stopping it.
@@ -654,6 +662,7 @@ async fn a_self_stopped_box_refuses_to_restart_on_the_spent_handle() {
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 
@@ -733,6 +742,7 @@ async fn attach_refuses_a_stopped_box() {
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 
@@ -804,6 +814,7 @@ async fn attach_by_exec_id_is_unsupported_on_the_local_backend() {
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 
@@ -840,6 +851,7 @@ async fn a_main_command_missing_from_the_image_is_an_invalid_argument() {
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 

@@ -253,6 +253,10 @@ impl RuntimeImpl {
                 options.home_dir.display()
             )));
         }
+        // Before the home exists, so a bad proxy leaves nothing behind.
+        if let Some(proxy) = &options.image_registry_proxy {
+            crate::images::image_registry_proxy::validate(proxy)?;
+        }
 
         // Configure bind mount support based on platform
         #[cfg(target_os = "linux")]
@@ -302,16 +306,19 @@ impl RuntimeImpl {
             ))
         })?;
 
-        let image_manager =
-            ImageManager::new(layout.images_dir(), db.clone(), options.image_registries).map_err(
-                |e| {
-                    BoxliteError::Storage(format!(
-                        "Failed to initialize image manager at {}: {}",
-                        layout.images_dir().display(),
-                        e
-                    ))
-                },
-            )?;
+        let image_manager = ImageManager::new(
+            layout.images_dir(),
+            db.clone(),
+            options.image_registries,
+            options.image_registry_proxy,
+        )
+        .map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to initialize image manager at {}: {}",
+                layout.images_dir().display(),
+                e
+            ))
+        })?;
 
         let base_disk_store = crate::db::BaseDiskStore::new(db.clone());
         let base_disk_mgr =
@@ -1903,6 +1910,24 @@ impl super::images::ImageBackend for LocalRuntime {
                 .into(),
         ))
     }
+
+    async fn create_alias(
+        &self,
+        _name: &str,
+        _alias: &str,
+        _digest: &str,
+    ) -> BoxliteResult<crate::runtime::types::ImageDetail> {
+        Err(BoxliteError::Unsupported(
+            "creating an alias requires a server's catalog; an embedded runtime has a \
+             local cache, which resolves a tag afresh for each new box"
+                .into(),
+        ))
+    }
+    async fn delete_alias(&self, _name: &str, _alias: &str) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "alias deletion requires a server catalog".into(),
+        ))
+    }
 }
 
 // Named-volume operations (separate from RuntimeBackend). The concrete backend
@@ -2212,6 +2237,7 @@ mod tests {
         let options = BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
+            ..Default::default()
         };
         let runtime = RuntimeImpl::new_for_test(options).expect("Failed to create runtime");
         (runtime, temp_dir)

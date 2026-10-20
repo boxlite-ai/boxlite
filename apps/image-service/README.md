@@ -101,7 +101,7 @@ whose organization is not an organization id is pulled anonymously without
 asking.
 
 The credential finder calls the internal control-plane route
-`GET /api/runners/me/registry-credentials` directly with the runner's bearer
+`GET /api/runners/me/images/registry-credentials` directly with the runner's bearer
 token. This operation and its secret-version response model are excluded from
 the customer OpenAPI document and generated SDKs. The proxy reuses its configured
 control-plane HTTP client and base URL; 404 means anonymous access, while 403

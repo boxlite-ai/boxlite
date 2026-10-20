@@ -25,8 +25,8 @@ describe('RunnerAdapterV2 createBox', () => {
       secrets: [
         { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
       ],
-      networkBlockAll: false,
-      networkAllowList: undefined,
+      outboundEnabled: true,
+      outboundAllowNet: undefined,
       authToken: undefined,
       organizationId: undefined,
       region: undefined,
@@ -65,5 +65,32 @@ describe('RunnerAdapterV2 createBox', () => {
       'box-1',
       expect.objectContaining({ image: pinned }),
     )
+  })
+
+  it('puts the outbound policy in the CREATE_BOX job payload as the enabled flag and entries', async () => {
+    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    await adapter.init({ id: 'runner-1' } as any)
+
+    await adapter.createBox(
+      {
+        id: 'box-1',
+        image: 'base',
+        volumes: [],
+        outboundEnabled: true,
+        outboundAllowNet: ['api.openai.com'],
+      } as any,
+      'base',
+    )
+
+    expect(jobService.createJob).toHaveBeenCalledWith(
+      null,
+      JobType.CREATE_BOX,
+      'runner-1',
+      ResourceType.BOX,
+      'box-1',
+      expect.objectContaining({ outboundEnabled: true, outboundAllowNet: ['api.openai.com'] }),
+    )
+    expect(jobService.createJob.mock.calls[0][5]).not.toHaveProperty('networkBlockAll')
   })
 })

@@ -78,3 +78,20 @@ With nothing cached, a rate limit is reported as a resource-exhausted error that
 retry later. A registry that answers, for example that the image does not exist, is
 reported as an error. `images().pull()` answers from the cache first and does not re-check
 a cached tag.
+
+## Registry tags and catalog aliases
+
+A registry tag is an upstream name for a manifest digest. A BoxLite alias is
+an organization-scoped catalog binding to a recorded version. A successful
+registry pull seeds an alias using the tag it resolved; later pulls never
+silently replace that binding.
+
+REST image handles expose `create_alias(name, alias, digest)` and
+`delete_alias(name, alias)`. Creation rejects every existing name with
+`AlreadyExists`, including requests for the same digest. Changing a binding
+requires explicit deletion followed by creation. Deletion leaves versions and
+existing boxes unchanged; neither operation updates the upstream registry.
+
+Registry credentials are managed through `runtime.images.registries` in Python
+and Node, `runtime.images()?.registries()?` in Rust and `images.Registries()` in
+Go. Embedded runtimes use their configured image registry logins instead.

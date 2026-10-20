@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Controller, Delete, Get, HttpCode, Param, UseGuards } from '@nestjs/common'
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiHeader, ApiOAuth2, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger'
-import { Audit } from '../../audit/decorators/audit.decorator'
+import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
@@ -16,15 +16,14 @@ import { OrganizationAuthContext } from '../../common/interfaces/auth-context.in
 import { RequiredOrganizationResourcePermissions } from '../../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
-import { ImageDetailDto, ImageDto, ImageUsageDto } from '../dto/image.dto'
+import { ImageDetailDto, ImageDto, ImageUsageDto, CreateImageAliasDto } from '../dto/image.dto'
 import { ImageCatalogService } from '../services/image-catalog.service'
 
 /**
  * The image catalog.
  *
- * There is no create: an image enters the catalog by being used. That is why
- * there is no `write:images` scope either — the write happens when a box
- * reaches STARTED, on the credentials that created the box.
+ * There is no create: an image enters the catalog by being used, when a box
+ * reaches STARTED, on the credentials that created the box. Alias creation and deletion require `write:images`; neither overwrites a binding.
  *
  * Every route is organization-scoped inside the service, by filtering on the
  * organization the credentials carry rather than by a guard on the way in: the
@@ -91,12 +90,73 @@ export class ImageController {
     return this.imageCatalogService.get(authContext.organization, idOrRef)
   }
 
+  @Post(':idOrRef/aliases')
+  @ApiOperation({
+    summary: 'Create an image alias',
+    description:
+      'Creates a catalog alias for a ready version. Existing aliases are refused, including the same binding. The upstream registry and existing boxes are unchanged.',
+    operationId: 'createImageAlias',
+  })
+  @ApiParam({ name: 'idOrRef', description: 'Catalog ID or URL-encoded image name', type: 'string' })
+  @ApiResponse({ status: 201, description: 'Image details including the new alias', type: ImageDetailDto })
+  @ApiResponse({ status: 400, description: 'Invalid alias, target version or curated image' })
+  @ApiResponse({ status: 404, description: 'No such image in this organization' })
+  @ApiResponse({ status: 409, description: 'The alias already exists' })
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_IMAGES])
+  @Audit({
+    action: AuditAction.CREATE,
+    targetType: AuditTarget.IMAGE,
+    targetIdFromRequest: (req) => req.params.idOrRef,
+    requestMetadata: {
+      body: (req: TypedRequest<CreateImageAliasDto>) => ({ alias: req.body?.alias, versionId: req.body?.versionId }),
+    },
+  })
+  async createImageAlias(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('idOrRef') idOrRef: string,
+    @Body() request: CreateImageAliasDto,
+  ): Promise<ImageDetailDto> {
+    return this.imageCatalogService.createAlias(
+      authContext.organization,
+      idOrRef,
+      request.alias,
+      { versionId: request.versionId },
+      authContext.userId,
+    )
+  }
+
+  @Delete(':idOrRef/aliases/:alias')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: 'Delete an image alias',
+    description: 'Removes only the catalog binding. Versions, existing boxes and alias history remain.',
+    operationId: 'deleteImageAlias',
+  })
+  @ApiParam({ name: 'idOrRef', description: 'Catalog ID or URL-encoded image name', type: 'string' })
+  @ApiParam({ name: 'alias', description: 'Catalog alias to delete', type: 'string' })
+  @ApiResponse({ status: 204, description: 'The alias was deleted' })
+  @ApiResponse({ status: 404, description: 'The image or alias does not exist' })
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_IMAGES])
+  @Audit({
+    action: AuditAction.DELETE,
+    targetType: AuditTarget.IMAGE,
+    targetIdFromRequest: (req) => req.params.idOrRef,
+    requestMetadata: { query: (req) => ({ alias: req.params.alias }) },
+  })
+  async deleteImageAlias(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('idOrRef') idOrRef: string,
+    @Param('alias') alias: string,
+  ): Promise<void> {
+    await this.imageCatalogService.deleteAlias(authContext.organization, idOrRef, alias)
+  }
+
   @Delete(':idOrRef')
   @HttpCode(204)
   @ApiOperation({
     summary: 'Remove an image from the catalog',
     description:
-      'Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. That is also how to pick up a tag that has moved upstream, since a recorded tag keeps the digest it first resolved to.',
+      'Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; aliases for recorded versions are created and deleted explicitly.',
     operationId: 'deleteImage',
   })
   @ApiParam({

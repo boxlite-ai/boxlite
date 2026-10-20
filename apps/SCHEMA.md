@@ -59,6 +59,7 @@ flowchart LR
         t_image["image"]
         t_imgver["image_version"]
         t_imgtag["image_tag"]
+        t_imgevent["image_tag_event"]
         t_regcred["registry_credential"]
     end
 
@@ -81,6 +82,8 @@ flowchart LR
     t_imgver ==>|"imageId"| t_image
     t_imgtag ==>|"imageId"| t_image
     t_imgtag ==>|"versionId"| t_imgver
+    t_imgevent ==>|"imageId"| t_image
+    t_imgevent ==>|"fromVersionId, toVersionId"| t_imgver
 
     t_orguser -.->|"userId"| t_user
     t_apikey -.->|"organizationId, userId"| t_org
@@ -133,6 +136,9 @@ that no longer resolves.
 | `image_version`                          | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
 | `image_tag`                              | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
 | `image_tag`                              | `versionId`                  | `image_version.id`             | foreign key | `RESTRICT` |
+| `image_tag_event`                        | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
+| `image_tag_event`                        | `fromVersionId`              | `image_version.id`             | foreign key | `RESTRICT` |
+| `image_tag_event`                        | `toVersionId`                | `image_version.id`             | foreign key | `RESTRICT` |
 | `organization_user`                      | `userId`                     | `user.id`                      | application | — |
 | `api_key`                                | `organizationId`, `userId`   | `organization.id`, `user.id`   | application | — |
 | `webhook_initialization`                 | `organizationId`             | `organization.id`              | application | — |
@@ -382,12 +388,23 @@ or `archived`.
 | `env` | `jsonb` | default `{}` |
 | `labels` | `jsonb` | nullable |
 | `volumes` | `jsonb` | array of `{ volumeId, mountPath }` |
-| `public` | `boolean` | default `false` |
-| `networkBlockAll` | `boolean` | default `false` |
-| `networkAllowList` | `character varying` | nullable |
+| `inboundEnabled` | `boolean` | default `false`; `true` lets the proxy serve exposed services without sign-in |
+| `outboundEnabled` | `boolean` | default `true`; `false` blocks all egress |
+| `outboundAllowNet` | `text[]` | nullable egress allowlist (hosts, wildcards, IPv4, CIDRs); null = full egress |
 | `authToken` | `character varying` | `nanoid(32)`, lowercased |
 | `daemonVersion` | `character varying` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |
+
+The network policy columns store the `/v1` NetworkSpec's `enabled` / `disabled`
+modes as booleans (`true` = `enabled`); the API converts `mode` strings at its
+edges, and its internal create input and the runner create and recover bodies
+carry the same `outboundEnabled` / `outboundAllowNet`. The control-plane `Box`
+DTO reports them as `network.outbound {mode, allow_net}` and
+`network.inbound {mode, allow_net}`, the same `NetworkInfo` schema the `/v1` box
+read returns. It also still serves the deprecated `public`,
+`networkBlockAll` and comma-joined `networkAllowList`
+(`box/utils/network-policy.util.ts`) until the dashboard and Go clients move
+off them (POL-827).
 
 **Unique:** `(organizationId, name)`.
 
@@ -506,14 +523,15 @@ Uniqueness is a partial index rather than a table constraint, so a soft-deleted
 name can be used again; `image_org_lastused_index` serves the count the
 admission gate takes when a create names an image the organization does not
 hold yet, and the per-org listing the catalog API serves. A soft delete leaves
-the versions and tags behind — the cascade only fires on a real delete — so
+the versions and aliases behind — the cascade only fires on a real delete — so
 every catalog read joins back to `image` and filters `deletedAt IS NULL`.
 
 ### `image_version`
 
 One row per distinct manifest digest of an image. Rows appear only after a pull
 succeeds, so there is no pending state to go stale — a failed pull is recorded
-on the box that attempted it.
+on the box that attempted it. The one thing a failed pull writes here is
+`upstreamMissingAt`, on a build the registry no longer has.
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
@@ -525,16 +543,26 @@ on the box that attempted it.
 | `sourceKind` | `enum` | `pull` |
 | `sourceSpec` | `jsonb` | `{ sourceRef }` — what the user typed |
 | `storageRef` | `text` | where to fetch the bytes from |
+| `lastUsedAt` | `timestamptz` | nullable; when a box last started from this build |
+| `upstreamMissingAt` | `timestamptz` | nullable; when a pull first failed with the registry's `MANIFEST_UNKNOWN` or `NAME_UNKNOWN`. A mark, not a state: never cleared, and the version stays usable on runners that cached it |
 | `createdAt` | `timestamptz` | |
 
 The digest is unique per image, not per organization: the same public image
 reached through two upstream paths is normal usage.
 
+Catalog bindings are called **aliases** in the API, SDKs and entity classes.
+`ImageAlias` and `ImageAliasEvent` map to the existing `image_tag` and
+`image_tag_event` storage names; `aliasName` maps to column `tagName`.
+These explicit mappings preserve existing data and rolling-deployment compatibility.
+Alias creation uses the unique image/name constraint and refuses conflicts;
+deletion removes only the binding. Registry tags remain upstream reference metadata.
+
 ### `image_tag`
 
-The digest a tag resolved to the first time it was pulled. Tags do not move:
-once recorded, a tag keeps pointing at that version, and the escape hatch is
-`DELETE /images/:idOrRef` followed by using the reference again, which brings
+The version a catalog alias selects. Pulls seed aliases from registry tags.
+Explicit creation refuses every existing name; replacing a binding requires
+deleting the alias and creating it again. Picking up where a tag points upstream
+is `DELETE /images/:idOrRef` followed by using the reference again, which brings
 the name back as a fresh entry.
 
 | Column | Type | Notes |
@@ -545,10 +573,31 @@ the name back as a fresh entry.
 | `versionId` | `uuid` | → `image_version.id`, **restrict** delete |
 | `updatedAt` | `timestamptz` | |
 
-`versionId` restricts rather than cascades: a version a tag still names must not
+`versionId` restricts rather than cascades: a version an alias still names must not
 disappear underneath it. Postgres does not index a foreign key on its own, and
 this one is walked whenever a version is deleted, so `image_tag_version_index`
 covers it.
+
+### `image_tag_event`
+
+Alias registration history. A row is written when a pull seeds an alias or
+an explicit creation succeeds, and is never updated. The history of an image is
+this table read newest first.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `imageId` | `uuid` | → `image.id`, cascade delete |
+| `tagName` | `character varying(128)` | |
+| `fromVersionId` | `uuid` | nullable; → `image_version.id`, **restrict** delete. Null for alias creation |
+| `toVersionId` | `uuid` | → `image_version.id`, **restrict** delete |
+| `actorId` | `character varying` | nullable; the identity provider subject of whoever created it. Null when a pull seeded the alias |
+| `createdAt` | `timestamptz` | default `clock_timestamp()` |
+
+`createdAt` is the moment the row is written, not the start of its transaction:
+registration writes use the time the row is inserted, so concurrent creations
+sort by their observed write time. `image_tag_event_image_created_index` on
+`("imageId","createdAt")` serves the newest-first read backwards.
 
 ### `registry_credential`
 

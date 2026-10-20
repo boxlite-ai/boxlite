@@ -16,11 +16,11 @@ Name | Type | Description | Notes
 **image** | **string** |  | [default to undefined]
 **memoryQuota** | **number** |  | [optional] [default to undefined]
 **metadata** | **{ [key: string]: string; }** |  | [optional] [default to undefined]
-**networkAllowList** | **string** |  | [optional] [default to undefined]
-**networkBlockAll** | **boolean** |  | [optional] [default to undefined]
 **organizationId** | **string** | Nullable for backward compatibility | [optional] [default to undefined]
 **osUser** | **string** |  | [default to undefined]
 **otelEndpoint** | **string** |  | [optional] [default to undefined]
+**outboundAllowNet** | **Array&lt;string&gt;** |  | [optional] [default to undefined]
+**outboundEnabled** | **boolean** | Outbound network policy. outboundEnabled is required: a request without it is rejected rather than started with a guessed policy. | [default to undefined]
 **regionId** | **string** |  | [optional] [default to undefined]
 **registry** | [**RegistryDTO**](RegistryDTO.md) |  | [optional] [default to undefined]
 **runAsUser** | **string** |  | [optional] [default to undefined]
@@ -47,11 +47,11 @@ const instance: CreateBoxDTO = {
     image,
     memoryQuota,
     metadata,
-    networkAllowList,
-    networkBlockAll,
     organizationId,
     osUser,
     otelEndpoint,
+    outboundAllowNet,
+    outboundEnabled,
     regionId,
     registry,
     runAsUser,

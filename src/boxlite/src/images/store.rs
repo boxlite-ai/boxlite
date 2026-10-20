@@ -14,9 +14,13 @@
 //! - `layer_extracted()` - Get extracted layer path (extracts if needed)
 
 use crate::db::{CachedImage, Database, ImageIndexStore};
+use crate::images::image_registry_proxy;
 use crate::images::manager::{ImageManifest, LayerInfo};
 use crate::images::storage::ImageStorage;
-use crate::runtime::options::{ImageRegistry, ImageRegistryAuth, RegistryTransport};
+use crate::images::system_trust;
+use crate::runtime::options::{
+    ImageRegistry, ImageRegistryAuth, ImageRegistryProxy, RegistryTransport,
+};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use oci_client::Reference;
 use oci_client::client::{ClientConfig, ClientProtocol};
@@ -68,7 +72,7 @@ impl ImageStoreInner {
 /// # Example
 ///
 /// ```ignore
-/// let store = Arc::new(ImageStore::new(images_dir, db, vec![])?);
+/// let store = Arc::new(ImageStore::new(images_dir, db, vec![], None)?);
 ///
 /// // Pull image (thread-safe, releases lock during download)
 /// let manifest = store.pull("python:alpine").await?;
@@ -84,6 +88,8 @@ pub struct ImageStore {
     registries: Vec<String>,
     /// Registry transport, TLS, auth, and search settings.
     image_registries: Vec<ImageRegistry>,
+    /// Proxy for every registry request; `None` leaves it to the environment.
+    image_registry_proxy: Option<ImageRegistryProxy>,
 }
 
 impl std::fmt::Debug for ImageStore {
@@ -99,10 +105,13 @@ impl ImageStore {
     /// * `images_dir` - Directory for image cache
     /// * `db` - Database for image index
     /// * `image_registries` - Registry transport, TLS, auth, and search settings
+    /// * `image_registry_proxy` - Proxy for registry requests, already validated;
+    ///   `None` leaves proxying to the environment
     pub fn new(
         images_dir: PathBuf,
         db: Database,
         image_registries: Vec<ImageRegistry>,
+        image_registry_proxy: Option<ImageRegistryProxy>,
     ) -> BoxliteResult<Self> {
         validate_image_registries(&image_registries)?;
 
@@ -112,6 +121,7 @@ impl ImageStore {
             inner: RwLock::new(inner),
             registries,
             image_registries,
+            image_registry_proxy,
         })
     }
 
@@ -636,9 +646,7 @@ impl ImageStore {
         &self,
         reference: &Reference,
     ) -> Result<ImageManifest, RegistryPullError> {
-        assert_registry_is_public(reference.registry(), &self.image_registries).await?;
-
-        let client = self.client_for(reference);
+        let client = self.client_for(reference).await?;
         let auth = registry_auth_for(reference.registry(), &self.image_registries);
 
         // Step 0: Fetch the token first. Left to the manifest request, the
@@ -1133,11 +1141,29 @@ impl ImageStore {
         Ok(())
     }
 
-    fn client_for(&self, reference: &Reference) -> oci_client::Client {
-        oci_client::Client::new(client_config_for_registry(
-            reference.registry(),
-            &self.image_registries,
-        ))
+    /// Build the client for one pull: through the proxy when one is set, and
+    /// trusting the system certificate store on top of the bundled roots. It
+    /// fails where `Client::new` would log the error and fall back to a default
+    /// client without the proxy and TLS settings.
+    async fn client_for(&self, reference: &Reference) -> BoxliteResult<oci_client::Client> {
+        let host = reference.registry();
+        let mut config = client_config_for_registry(host, &self.image_registries);
+        image_registry_proxy::apply(self.image_registry_proxy.as_ref(), &mut config);
+        // With verification off no root is consulted, so the store is not read.
+        if !config.accept_invalid_certificates {
+            config.extra_root_certificates = system_trust::root_certificates().await;
+        }
+        oci_client::Client::try_from(config).map_err(|e| {
+            let mut message = e.to_string();
+            let mut source = std::error::Error::source(&e);
+            while let Some(cause) = source {
+                message.push_str(&format!(": {cause}"));
+                source = cause.source();
+            }
+            BoxliteError::Config(format!(
+                "failed to create registry client for '{host}': {message}"
+            ))
+        })
     }
 
     /// Parse OCI image manifest from file path.
@@ -1206,184 +1232,6 @@ fn client_config_for_registry(host: &str, image_registries: &[ImageRegistry]) ->
     }
 }
 
-/// Refuse a registry that is not out on the public internet.
-///
-/// The allowlist a tenant's reference passed is by name, and a name can point
-/// anywhere: whoever controls DNS for an allowed host can aim the pull at the
-/// instance metadata endpoint or at a neighbour's service, and the request
-/// leaves from the runner, with the runner's network position.
-///
-/// A host the operator configured explicitly is exempt. A local registry is
-/// loopback by definition, and which addresses this deployment may reach is the
-/// operator's decision rather than DNS's — the same stance the control plane
-/// takes when it allows an internal address that was put on its list by hand.
-///
-/// **Two gaps are accepted rather than closed, and both are the same shape.**
-///
-/// This resolves the name; `oci-client` resolves it again, per connection,
-/// through its own stack. A resolver that answers differently the second time
-/// — the very attacker named above — is not caught. Refusing a host whose DNS
-/// answers consistently private is what this buys, not a guarantee.
-///
-/// And it covers the initial host only. `oci-client` 0.15 builds its own
-/// reqwest client and exposes no hook for a redirect policy, a connector or a
-/// DNS resolver, so a registry that answers a blob request with a 302 to
-/// anywhere is followed unchecked — reqwest's default is up to ten hops.
-///
-/// Closing either one means vendoring the client, a hook upstream, or routing
-/// pulls through a gateway that is the only address a runner may reach.
-async fn assert_registry_is_public(
-    host: &str,
-    image_registries: &[ImageRegistry],
-) -> Result<(), RegistryPullError> {
-    if image_registries
-        .iter()
-        .any(|registry| registry.host == host)
-    {
-        return Ok(());
-    }
-
-    let hostname = registry_hostname(host);
-
-    // A literal is already the answer. Handing it to a resolver would only
-    // invite a different one than the address that gets connected to.
-    if let Ok(address) = hostname.parse::<std::net::IpAddr>() {
-        return refuse_non_public(host, &address).map_err(RegistryPullError::Unanswered);
-    }
-
-    // Every failure here is one the registry never answered: nothing has been
-    // sent to it yet. So a refresh may still start from the cache — offline,
-    // or behind a resolver that answers with a proxy's fake address — and that
-    // is safe, because falling back contacts nothing.
-    //
-    // The port is required by `lookup_host` and does not reach the result: only
-    // the addresses are read, and they are the same whichever port is asked
-    // for.
-    let resolved = tokio::net::lookup_host((hostname, 443))
-        .await
-        .map_err(|e| {
-            RegistryPullError::Unanswered(BoxliteError::Image(format!(
-                "failed to resolve registry host '{host}': {e}"
-            )))
-        })?;
-
-    for address in resolved {
-        refuse_non_public(host, &address.ip()).map_err(RegistryPullError::Unanswered)?;
-    }
-
-    Ok(())
-}
-
-fn refuse_non_public(host: &str, address: &std::net::IpAddr) -> BoxliteResult<()> {
-    if is_non_public_address(address) {
-        return Err(BoxliteError::Image(format!(
-            "registry host '{host}' is at {address}, which is not a public registry address"
-        )));
-    }
-    Ok(())
-}
-
-/// The host part of `host[:port]`, with an IPv6 literal's brackets removed.
-///
-/// Written out rather than reached for through `SocketAddr`, which needs a port
-/// this caller does not have and rejects the bare literals a registry list may
-/// perfectly well hold.
-fn registry_hostname(host: &str) -> &str {
-    if let Some(rest) = host.strip_prefix('[') {
-        // `[::1]` and `[::1]:5000` alike: the literal ends at the bracket.
-        return rest.split_once(']').map_or(rest, |(literal, _)| literal);
-    }
-    match host.split_once(':') {
-        // A single unbracketed colon separates a port. More than one means a
-        // bare IPv6 literal, which has no port to strip.
-        Some((name, rest)) if !rest.contains(':') => name,
-        _ => host,
-    }
-}
-
-/// Addresses a public registry cannot be at: inside a deployment, or not
-/// routable on the internet at all.
-///
-/// The second half is not pedantry — a resolver that answers with benchmarking
-/// or reserved space is either broken or redirecting, and either way the
-/// connection is not going to the registry the reference named.
-fn is_non_public_address(address: &std::net::IpAddr) -> bool {
-    match address {
-        std::net::IpAddr::V4(v4) => {
-            let [a, b, c, _] = v4.octets();
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.is_multicast()
-                || v4.is_documentation()
-                // No stable predicate for these (they exist behind the
-                // unstable `ip` feature): this host's own /8, carrier-grade
-                // NAT that cloud providers hand out internally, benchmarking
-                // space that some local DNS proxies answer with, IETF protocol
-                // assignments, and reserved space.
-                || a == 0
-                || (a == 100 && (64..128).contains(&b))
-                || (a == 198 && (18..20).contains(&b))
-                || (a == 192 && b == 0 && c == 0)
-                || a >= 240
-        }
-        std::net::IpAddr::V6(v6) => {
-            // The v6-native answers come first. `to_ipv4` below maps anything
-            // whose top 96 bits are zero, which includes `::1` — it would hand
-            // back `0.0.0.1` and call loopback public.
-            if v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_unique_local()
-                || v6.is_unicast_link_local()
-                || v6.is_multicast()
-                // Site-local, deprecated but still answered by some resolvers.
-                || (v6.segments()[0] & 0xffc0) == 0xfec0
-            {
-                return true;
-            }
-
-            // An IPv4 address in IPv6 clothing is the same address, in each of
-            // the shapes it arrives in: mapped, compatible, the NAT64 prefix a
-            // DNS64 resolver synthesizes from an A record — `64:ff9b::a9fe:a9fe`
-            // is the metadata endpoint — and 6to4.
-            if let Some(v4) = v6.to_ipv4() {
-                return is_non_public_address(&std::net::IpAddr::V4(v4));
-            }
-            let segments = v6.segments();
-            // The well-known prefix and RFC 8215's local-use one both carry an
-            // IPv4 address in the last two groups.
-            if segments[0] == 0x0064
-                && segments[1] == 0xff9b
-                && (segments[2..6] == [0; 4] || segments[2] == 0x0001)
-            {
-                return is_non_public_address(&std::net::IpAddr::V4(embedded_ipv4(
-                    segments[6],
-                    segments[7],
-                )));
-            }
-            if segments[0] == 0x2002 {
-                // 6to4 carries its IPv4 in the next two groups.
-                return is_non_public_address(&std::net::IpAddr::V4(embedded_ipv4(
-                    segments[1],
-                    segments[2],
-                )));
-            }
-            false
-        }
-    }
-}
-
-fn embedded_ipv4(high: u16, low: u16) -> std::net::Ipv4Addr {
-    std::net::Ipv4Addr::new(
-        (high >> 8) as u8,
-        (high & 0xff) as u8,
-        (low >> 8) as u8,
-        (low & 0xff) as u8,
-    )
-}
-
 /// The index key a build is found by wherever it was pulled from: its
 /// repository pinned to the manifest digest it resolved to.
 fn digest_key(reference: &Reference, manifest: &ImageManifest) -> String {
@@ -1449,7 +1297,17 @@ impl RegistryPullError {
             OciDistributionError::ServerError { code, .. } => *code >= 500,
             _ => false,
         };
-        let error = BoxliteError::Storage(format!("failed to pull {what}: {error}"));
+        let codes = match &error {
+            OciDistributionError::RegistryError { envelope, .. } => {
+                registry_codes(envelope.errors.iter().map(|e| &e.code))
+            }
+            // The client keeps no body for a 401, so its status is the code.
+            OciDistributionError::UnauthorizedError { .. } => {
+                registry_codes([&OciErrorCode::Unauthorized])
+            }
+            _ => String::new(),
+        };
+        let error = BoxliteError::Storage(format!("failed to pull {what}{codes}: {error}"));
         if throttled {
             Self::Throttled(error)
         } else if unanswered {
@@ -1483,7 +1341,10 @@ impl RegistryPullError {
         let refused = codes
             .iter()
             .any(|code| matches!(code, OciErrorCode::Unauthorized | OciErrorCode::Denied));
-        let error = BoxliteError::Storage(format!("failed to pull a registry token: {error}"));
+        let error = BoxliteError::Storage(format!(
+            "failed to pull a registry token{}: {error}",
+            registry_codes(&codes)
+        ));
         if throttled {
             Self::Throttled(error)
         } else if refused || !matches!(auth, OciRegistryAuth::Anonymous) {
@@ -1497,6 +1358,29 @@ impl RegistryPullError {
         match self {
             Self::Unanswered(error) | Self::Throttled(error) | Self::Failed(error) => error,
         }
+    }
+}
+
+/// The error codes a registry answered with, as ` [MANIFEST_UNKNOWN]`, or
+/// nothing when it sent none.
+///
+/// The client renders an error by its free-text message alone, which every
+/// registry words its own way; the code is what tells an image that is gone
+/// from one this caller may not read. It goes into the message because the
+/// message is all a runner reports of a failed pull, and the control plane
+/// reads the code back from there.
+fn registry_codes<'a>(
+    codes: impl IntoIterator<Item = &'a oci_client::errors::OciErrorCode>,
+) -> String {
+    let names: Vec<String> = codes
+        .into_iter()
+        .filter_map(|code| serde_json::to_value(code).ok())
+        .filter_map(|value| value.as_str().map(str::to_owned))
+        .collect();
+    if names.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", names.join(", "))
     }
 }
 
@@ -1694,148 +1578,196 @@ pub(super) mod tests {
         }
     }
 
-    /// The class this check exists for: the allowlist upstream is by name, and
-    /// a name can be pointed at the metadata endpoint or at a neighbour.
-    #[test]
-    fn addresses_a_public_registry_cannot_be_at() {
-        for address in [
-            "127.0.0.1",
-            "10.1.2.3",
-            "172.16.0.1",
-            "172.31.255.255",
-            "192.168.1.1",
-            "169.254.169.254",
-            "0.0.0.0",
-            "100.64.0.1",
-            "198.18.0.1",
-            "192.0.0.1",
-            "192.0.2.1",
-            "203.0.113.1",
-            "0.1.2.3",
-            "224.0.0.1",
-            "240.0.0.1",
-            "::1",
-            "::",
-            "fd00::1",
-            "fe80::1",
-            "fec0::1",
-            "ff02::1",
-            // The same IPv4 address in each of the shapes IPv6 carries it.
-            "::ffff:169.254.169.254",
-            "::169.254.169.254",
-            "64:ff9b::a9fe:a9fe",
-            "64:ff9b:1::a9fe:a9fe",
-            "2002:a9fe:a9fe::",
-        ] {
-            assert!(
-                is_non_public_address(&address.parse().unwrap()),
-                "{address} must be refused"
-            );
-        }
-    }
-
-    /// The other half: a check that refuses everything protects nothing, it
-    /// just stops the product working.
-    #[test]
-    fn public_addresses_stay_reachable() {
-        for address in [
-            "1.1.1.1",
-            "8.8.8.8",
-            "172.32.0.1",
-            "100.128.0.1",
-            "99.255.255.255",
-            "198.20.0.1",
-            "192.0.1.1",
-            "64:ff9b:2::0101:0101",
-            "2606:4700:4700::1111",
-            "2002:0101:0101::",
-        ] {
-            assert!(
-                !is_non_public_address(&address.parse().unwrap()),
-                "{address} must stay reachable"
-            );
-        }
-    }
-
-    /// A registry host may be a bare name, a name with a port, or an IPv6
-    /// literal with or without one. Getting the literal wrong resolves a
-    /// different string than the one that gets connected to — which on a
-    /// resolver that answers everything is a check that silently passes.
-    #[test]
-    fn registry_hostname_survives_every_shape_a_host_arrives_in() {
-        for (host, expected) in [
-            ("ghcr.io", "ghcr.io"),
-            ("registry.local:5000", "registry.local"),
-            ("[::1]", "::1"),
-            ("[::1]:5000", "::1"),
-            ("[2606:4700:4700::1111]:443", "2606:4700:4700::1111"),
-            ("::1", "::1"),
-            ("fd00::1", "fd00::1"),
-        ] {
-            assert_eq!(registry_hostname(host), expected, "host={host}");
-        }
-    }
-
-    /// A local registry is loopback by definition. Which addresses this
-    /// deployment may reach is the operator's decision, and configuring the
-    /// registry is how that decision is expressed.
+    /// The HTTP client must get to make the connection even when the registry
+    /// is on loopback and has no explicit runtime configuration.
     #[tokio::test]
-    async fn a_configured_registry_is_reachable_even_on_loopback() {
-        let registries = [ImageRegistry::http("127.0.0.1:25000")];
+    async fn pull_reaches_an_unconfigured_loopback_registry() {
+        use std::time::Duration;
+        use tokio::io::AsyncReadExt;
+        use tokio::time::timeout;
 
-        assert_registry_is_public("127.0.0.1:25000", &registries)
-            .await
-            .expect("an operator-configured registry is not DNS's call");
-    }
-
-    /// Literals, so the check answers without a resolver — these must not
-    /// depend on what this machine's DNS happens to say.
-    #[tokio::test]
-    async fn an_unconfigured_internal_address_is_refused() {
-        for host in [
-            "169.254.169.254",
-            "127.0.0.1:5000",
-            "[::1]:5000",
-            "[fd00::1]",
-        ] {
-            let error = assert_registry_is_public(host, &[])
+        const CHILD_ENV: &str = "BOXLITE_TEST_LOOPBACK_PULL_CHILD";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            // Isolate proxy settings without changing another test's environment.
+            let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "images::store::tests::pull_reaches_an_unconfigured_loopback_registry",
+                    "--nocapture",
+                ])
+                .env(CHILD_ENV, "1")
+                .kill_on_drop(true);
+            for name in [
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "NO_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+                "no_proxy",
+            ] {
+                command.env_remove(name);
+            }
+            let output = timeout(Duration::from_secs(10), command.output())
                 .await
-                .expect_err("an address inside the deployment must not be pulled from");
-
+                .expect("isolated pull test must finish")
+                .unwrap();
             assert!(
-                error.to_string().contains("not a public registry address"),
-                "host={host}, unexpected error: {error}"
+                output.status.success(),
+                "isolated pull test failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
             );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return;
         }
-    }
 
-    /// The check has to be on the pull path, not merely available: a reference
-    /// naming an address inside the deployment must not reach the registry
-    /// client at all. A literal, so this needs no resolver, and a port nothing
-    /// listens on, so removing the guard fails here in milliseconds rather
-    /// than hanging on a handshake with whatever answered.
-    #[tokio::test]
-    async fn pull_refuses_an_address_inside_the_deployment() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let image_ref = format!("{}/acme/app:v1", listener.local_addr().unwrap());
         let temp_dir = tempfile::tempdir().unwrap();
         let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
-        let store = ImageStore::new(temp_dir.path().join("images"), db, vec![]).unwrap();
+        let store = ImageStore::new(temp_dir.path().join("images"), db, vec![], None).unwrap();
 
-        let error = store
-            .pull("127.0.0.1:1/acme/app:v1")
-            .await
-            .expect_err("an address inside the deployment must not be pulled from");
-
+        let (pull, received) = timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                store.pull(&image_ref),
+                timeout(Duration::from_secs(3), async {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut byte = [0u8; 1];
+                    assert_eq!(socket.read(&mut byte).await.unwrap(), 1);
+                    // Close during TLS: reaching the server, not a successful
+                    // image download, is the behavior this fixture observes.
+                }),
+            )
+        })
+        .await
+        .expect("pull and listener must finish");
         assert!(
-            error.to_string().contains("not a public registry address"),
-            "unexpected error: {error}"
+            received.is_ok(),
+            "pull must reach the loopback registry; pull result: {pull:?}",
         );
+        pull.expect_err("the fixture closes the connection during TLS");
+    }
+
+    /// A CA's PEM, and a TLS acceptor presenting a `localhost` certificate it issued.
+    fn tls_issued_by_a_private_ca() -> (String, tokio_rustls::TlsAcceptor) {
+        use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+
+        let ca_key = KeyPair::generate().unwrap();
+        let mut ca_params = CertificateParams::default();
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca = ca_params.self_signed(&ca_key).unwrap();
+        let leaf_key = KeyPair::generate().unwrap();
+        let leaf = CertificateParams::new(vec!["localhost".to_string()])
+            .unwrap()
+            .signed_by(&leaf_key, &ca, &ca_key)
+            .unwrap();
+        let key = rustls::pki_types::PrivatePkcs8KeyDer::from(leaf_key.serialize_der());
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![leaf.der().clone()], key.into())
+        .unwrap();
+        (ca.pem(), tokio_rustls::TlsAcceptor::from(Arc::new(config)))
     }
 
     #[tokio::test]
-    async fn an_unconfigured_public_address_is_allowed() {
-        assert_registry_is_public("1.1.1.1", &[])
+    async fn pull_trusts_a_registry_ca_from_the_system_store() {
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::time::timeout;
+
+        const CHILD_IMAGE_ENV: &str = "BOXLITE_TEST_SYSTEM_TRUST_PULL_IMAGE";
+        if let Some(image_ref) = std::env::var_os(CHILD_IMAGE_ENV) {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
+            let store = ImageStore::new(temp_dir.path().join("images"), db, vec![], None).unwrap();
+            let pulled = timeout(
+                Duration::from_secs(5),
+                store.pull(image_ref.to_str().unwrap()),
+            )
             .await
-            .expect("a public address is what this check exists to let through");
+            .expect("pull must finish");
+            pulled.expect_err("the fixture serves no image");
+            return;
+        }
+
+        let (registry_ca, tls) = tls_issued_by_a_private_ca();
+        let (other_ca, _) = tls_issued_by_a_private_ca();
+        let ca_dir = tempfile::tempdir().unwrap();
+        for (store_holds_registry_ca, ca_pem) in [(true, registry_ca), (false, other_ca)] {
+            let ca_file = ca_dir.path().join(format!("{store_holds_registry_ca}.pem"));
+            std::fs::write(&ca_file, ca_pem).unwrap();
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let tls = tls.clone();
+            // The first request line, which only a completed TLS handshake can carry.
+            let server = tokio::spawn(async move {
+                let (tcp, _) = listener.accept().await.ok()?;
+                let mut stream = tls.accept(tcp).await.ok()?;
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n") && stream.read(&mut byte).await.ok()? == 1 {
+                    head.push(byte[0]);
+                }
+                let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n").await;
+                Some(String::from_utf8_lossy(&head).trim_end().to_string())
+            });
+
+            // A child process owns the trust store, so no other test sees SSL_CERT_FILE.
+            let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "images::store::tests::pull_trusts_a_registry_ca_from_the_system_store",
+                    "--nocapture",
+                ])
+                .env(CHILD_IMAGE_ENV, format!("localhost:{port}/acme/app:v1"))
+                .env("SSL_CERT_FILE", &ca_file)
+                .env_remove("SSL_CERT_DIR")
+                .kill_on_drop(true);
+            for name in [
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "NO_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+                "no_proxy",
+            ] {
+                command.env_remove(name);
+            }
+            let output = timeout(Duration::from_secs(10), command.output())
+                .await
+                .expect("isolated pull test must finish")
+                .unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "isolated pull test failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+
+            let request = timeout(Duration::from_secs(1), server)
+                .await
+                .ok()
+                .and_then(|joined| joined.unwrap());
+            let reached = request
+                .as_deref()
+                .is_some_and(|line| line.starts_with("GET /v2/"));
+            assert_eq!(
+                reached, store_holds_registry_ca,
+                "store holds the registry CA: {store_holds_registry_ca}; request: {request:?}",
+            );
+        }
     }
 
     #[test]
@@ -2004,7 +1936,7 @@ pub(super) mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], None).unwrap();
 
         // Load from local
         let manifest = store.load_from_local(bundle_dir.clone()).await.unwrap();
@@ -2023,7 +1955,8 @@ pub(super) mod tests {
     async fn forget_matching_keeps_every_reference_when_one_cannot_be_removed() {
         let temp_dir = tempfile::tempdir().unwrap();
         let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
-        let store = ImageStore::new(temp_dir.path().join("images"), db.clone(), vec![]).unwrap();
+        let store =
+            ImageStore::new(temp_dir.path().join("images"), db.clone(), vec![], None).unwrap();
         let tag = "quay.io/acme/app:v1".to_string();
         let manifest = seed_cached_image(&store, &tag).await;
         let alias = format!("quay.io/acme/app@{}", manifest.manifest_digest);
@@ -2066,7 +1999,8 @@ pub(super) mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
         let images =
-            crate::images::ImageManager::new(temp_dir.path().join("images"), db, vec![]).unwrap();
+            crate::images::ImageManager::new(temp_dir.path().join("images"), db, vec![], None)
+                .unwrap();
         let store = images.store();
         let manifest = seed_cached_image(store, "quay.io/acme/app:v1").await;
 
@@ -2337,6 +2271,7 @@ pub(super) mod tests {
             temp_dir.path().join("images"),
             db,
             vec![ImageRegistry::http(host)],
+            None,
         )
         .unwrap();
         let image_ref = format!("{host}/acme/app:v1");
@@ -2466,6 +2401,7 @@ pub(super) mod tests {
             temp_dir.path().join("images"),
             db,
             vec![ImageRegistry::http(&host)],
+            None,
         )
         .unwrap();
 
@@ -2504,7 +2440,8 @@ pub(super) mod tests {
 
     /// A token service that refuses the pull outright — the repository is
     /// private now — has answered, and the cached copy must not stand in for
-    /// a build this caller may no longer read.
+    /// a build this caller may no longer read. The message names the code, as
+    /// a manifest refusal does: it is what tells a refusal from a missing image.
     #[tokio::test]
     async fn refresh_reports_a_refused_token() {
         for (status, code) in [(401, "UNAUTHORIZED"), (403, "DENIED")] {
@@ -2526,7 +2463,9 @@ pub(super) mod tests {
                 .expect_err("a refused token is the registry's answer, not a gap");
             assert!(
                 !matches!(error, BoxliteError::ResourceExhausted(_))
-                    && error.to_string().contains("registry token"),
+                    && error
+                        .to_string()
+                        .contains(&format!("failed to pull a registry token [{code}]: ")),
                 "{code}: {error}"
             );
         }
@@ -2581,6 +2520,7 @@ pub(super) mod tests {
             temp_dir.path().join("images"),
             db,
             vec![ImageRegistry::http(&host)],
+            None,
         )
         .unwrap();
 
@@ -2616,6 +2556,7 @@ pub(super) mod tests {
             temp_dir.path().join("images"),
             db,
             vec![ImageRegistry::http(&host)],
+            None,
         )
         .unwrap();
 
@@ -2627,6 +2568,87 @@ pub(super) mod tests {
             matches!(error, BoxliteError::ResourceExhausted(_)),
             "a rate limit must be reported as one, got {error:?}"
         );
+    }
+
+    /// The registry's error code survives into the pull's message, where the
+    /// control plane reads it. The free-text message beside it is each
+    /// registry's own wording; the code is what says the image is gone, or that
+    /// this caller may not read it.
+    #[tokio::test]
+    async fn a_failed_pull_names_the_code_the_registry_answered_with() {
+        for (status, body, code) in [
+            (
+                404,
+                r#"{"errors":[{"code":"MANIFEST_UNKNOWN","message":"manifest unknown"}]}"#,
+                "[MANIFEST_UNKNOWN]",
+            ),
+            (
+                404,
+                r#"{"errors":[{"code":"NAME_UNKNOWN","message":"repository name not known to registry"}]}"#,
+                "[NAME_UNKNOWN]",
+            ),
+            (
+                403,
+                r#"{"errors":[{"code":"DENIED","message":"requested access to the resource is denied"}]}"#,
+                "[DENIED]",
+            ),
+            // The client keeps no body for a 401, so the status stands for it.
+            (401, "", "[UNAUTHORIZED]"),
+        ] {
+            let message = manifest_refusal(status, body).await;
+            assert!(
+                message.contains(&format!("failed to pull manifest {code}: ")),
+                "a {status} must name {code}, got {message}"
+            );
+        }
+    }
+
+    /// No envelope, no code. A web server's error page is not the registry
+    /// saying the image is unknown, and a code read into a bare status would
+    /// report it as gone.
+    #[tokio::test]
+    async fn a_failed_pull_without_an_error_envelope_names_no_code() {
+        let message = manifest_refusal(404, "not found").await;
+
+        assert!(
+            message.contains("failed to pull manifest: "),
+            "a bare 404 must carry no code, got {message}"
+        );
+    }
+
+    /// The message a refresh fails with when the registry answers the version
+    /// probe and then refuses the manifest with `status` and `body`.
+    async fn manifest_refusal(status: u16, body: &'static str) -> String {
+        let content_type = if body.starts_with('{') {
+            "application/json"
+        } else {
+            "text/plain"
+        };
+        let host = registry_serving(vec![
+            ("/v2/".into(), 200, "application/json", b"{}".to_vec()),
+            (
+                "/v2/acme/app/manifests/v1".into(),
+                status,
+                content_type,
+                body.as_bytes().to_vec(),
+            ),
+        ])
+        .await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
+        let store = ImageStore::new(
+            temp_dir.path().join("images"),
+            db,
+            vec![ImageRegistry::http(&host)],
+            None,
+        )
+        .unwrap();
+
+        store
+            .refresh(&format!("{host}/acme/app:v1"))
+            .await
+            .expect_err("the registry refused the manifest and nothing is cached")
+            .to_string()
     }
 
     /// A tag that moved to a new build is fetched layer by layer. A registry
@@ -2685,7 +2707,7 @@ pub(super) mod tests {
     async fn refresh_uses_the_cache_when_the_registry_address_is_refused() {
         let temp_dir = tempfile::tempdir().unwrap();
         let db = Database::open(&temp_dir.path().join("test.db")).unwrap();
-        let store = ImageStore::new(temp_dir.path().join("images"), db, vec![]).unwrap();
+        let store = ImageStore::new(temp_dir.path().join("images"), db, vec![], None).unwrap();
         let image_ref = "127.0.0.1:1/acme/app:v1";
         let seeded = seed_cached_image(&store, image_ref).await;
 
@@ -2745,6 +2767,7 @@ pub(super) mod tests {
             temp_dir.path().join("images"),
             db,
             vec![ImageRegistry::http(&host)],
+            None,
         )
         .unwrap();
         let image_ref = format!("{host}/acme/app:v1");
@@ -2798,7 +2821,7 @@ pub(super) mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], None).unwrap();
 
         // Load from local
         let _manifest = store.load_from_local(bundle_dir.clone()).await.unwrap();
@@ -2833,7 +2856,7 @@ pub(super) mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], None).unwrap();
 
         // Load should fail
         let result = store.load_from_local(bundle_dir).await;
@@ -2859,7 +2882,7 @@ pub(super) mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], None).unwrap();
 
         // Load should fail
         let result = store.load_from_local(bundle_dir).await;
@@ -3058,7 +3081,7 @@ pub(super) mod tests {
 
     fn store_with_tmp(temp_dir: &Path) -> ImageStore {
         let db = Database::open(&temp_dir.join("test.db")).unwrap();
-        ImageStore::new(temp_dir.join("images"), db, vec![]).unwrap()
+        ImageStore::new(temp_dir.join("images"), db, vec![], None).unwrap()
     }
 
     /// Store `bytes` as a content-addressed config blob and return the digest

@@ -25,6 +25,9 @@ import type { BoxState } from './box-state';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { BoxVolume } from './box-volume';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { NetworkInfo } from './network-info';
 
 export interface Box {
     /**
@@ -52,17 +55,24 @@ export interface Box {
      */
     'labels': { [key: string]: string; };
     /**
-     * Whether the box http preview is public
+     * Whether inbound access is enabled. Deprecated: read `network.inbound.mode`
+     * @deprecated
      */
     'public': boolean;
     /**
-     * Whether to block all network access for the box
+     * Whether outbound access is disabled. Deprecated: read `network.outbound.mode`
+     * @deprecated
      */
     'networkBlockAll': boolean;
     /**
-     * Comma-separated list of allowed CIDR network addresses for the box
+     * Comma-separated outbound allowlist. Deprecated: read `network.outbound.allow_net`
+     * @deprecated
      */
     'networkAllowList'?: string;
+    /**
+     * The network policy in both directions
+     */
+    'network'?: NetworkInfo;
     /**
      * The target environment for the box
      */

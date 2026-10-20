@@ -56,7 +56,6 @@ interface NavItem {
 const PRIMARY_NAV_ITEMS: NavItem[] = [
   { label: 'Boxes', path: RoutePath.BOXES },
   { label: 'Images', path: RoutePath.IMAGES },
-  { label: 'Registries', path: RoutePath.REGISTRIES },
   { label: 'Volumes', path: RoutePath.VOLUMES },
   { label: 'Billing', path: RoutePath.BILLING },
 ]
@@ -165,7 +164,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
         className="flex shrink-0 items-center border-r border-border px-[30px] text-foreground"
         aria-label="BoxLite home"
       >
-        <LogoText className="h-[26px] w-auto" />
+        <LogoText className="h-[40px] w-auto" />
       </Link>
 
       {/* primary nav */}

@@ -13,6 +13,7 @@ import BoxDetails from './BoxDetails'
 const mocks = vi.hoisted(() => ({
   box: undefined as unknown,
   volumes: [] as { id: string; name: string }[],
+  images: [] as { id: string | null; name: string; curated: boolean; curatedRef: string | null }[],
   boxRefetch: vi.fn(),
   terminalRefetch: vi.fn(),
   terminalReset: vi.fn(),
@@ -22,6 +23,13 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('react-router-dom', () => ({
+  Link: ({ to, children, className }: { to: string; children: unknown; className?: string }) => (
+    <a href={to} className={className}>
+      {children as never}
+    </a>
+  ),
+  generatePath: (path: string, params: Record<string, string>) =>
+    path.replace(/:(\w+)/g, (_match, key: string) => params[key] ?? ''),
   useNavigate: () => mocks.navigate,
   useParams: () => ({ boxId: 'box-1' }),
   useSearchParams: () => [new URLSearchParams(), mocks.setSearchParams],
@@ -90,6 +98,10 @@ vi.mock('@/hooks/queries/useVolumesQuery', () => ({
   useVolumesQuery: () => ({ data: mocks.volumes }),
 }))
 
+vi.mock('@/hooks/queries/useImagesQuery', () => ({
+  useImagesQuery: () => ({ data: mocks.images }),
+}))
+
 vi.mock('@/hooks/queries/useTerminalSessionQuery', () => ({
   useTerminalSessionQuery: () => ({
     data: { url: 'https://terminal.example/session-1', expiresAt: Date.now() + 300000 },
@@ -152,6 +164,7 @@ describe('BoxDetails refresh', () => {
   beforeEach(() => {
     mocks.box = makeRunningBox()
     mocks.volumes = []
+    mocks.images = []
     vi.clearAllMocks()
   })
 
@@ -226,5 +239,41 @@ describe('BoxDetails refresh', () => {
     // Unresolvable handle degrades to the handle itself, not a blank label.
     expect(text).toContain('vol-deleted')
     expect(text).toContain('/data (acme)')
+  })
+  // A box stores the reference it was created with. Once a start has put that
+  // image in the catalog, the reference is how a reader gets to its versions.
+  it('links the image to its catalog entry once the catalog has it', async () => {
+    mocks.images = [{ id: 'img-agent', name: 'ghcr.io/acme/agent', curated: false, curatedRef: null }]
+    mocks.box = { ...(makeRunningBox() as object), image: 'ghcr.io/acme/agent:1.0' }
+
+    await renderBoxDetails()
+
+    const link = [...document.querySelectorAll('a')].find((a) => a.textContent === 'ghcr.io/acme/agent:1.0')
+    expect(link?.getAttribute('href')).toBe('/dashboard/images/img-agent')
+  })
+
+  // The API's reason for a private pull no credential covers names the fix;
+  // the page carries the way to it, with the registry already chosen.
+  it('offers to connect the registry a private pull was refused by', async () => {
+    mocks.box = {
+      ...(makeRunningBox() as object),
+      state: BoxState.ERROR,
+      image: 'quay.io/acme/tools:2',
+      errorReason:
+        "Failed to pull image 'quay.io/acme/tools:2': quay.io refused the pull (UNAUTHORIZED). The image is private or does not exist, and no registry login of the organization covers it.",
+    }
+
+    await renderBoxDetails()
+
+    const link = [...document.querySelectorAll('a')].find((a) => a.textContent?.includes('Connect a registry'))
+    expect(link?.getAttribute('href')).toBe('/dashboard/images/registries?connect=quay.io')
+  })
+
+  it('offers no registry for an error that is not a refused private pull', async () => {
+    mocks.box = { ...(makeRunningBox() as object), state: BoxState.ERROR, errorReason: 'Out of capacity' }
+
+    await renderBoxDetails()
+
+    expect(document.body.textContent).not.toContain('Connect a registry')
   })
 })

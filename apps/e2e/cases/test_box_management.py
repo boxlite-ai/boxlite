@@ -27,6 +27,7 @@ async def _preview_public_status(e2e_auth, box_id: str) -> int:
         return exc.code
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_create_named_box(rt, image):
     """Box created with an explicit name carries it through to

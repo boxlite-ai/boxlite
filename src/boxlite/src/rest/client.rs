@@ -880,9 +880,9 @@ mod tests {
     /// Our proxy answers this handshake with a verdict of its own and states
     /// it in plain text. Each refusal must keep the class its status names and
     /// the sentence the proxy wrote: a bad target is the caller's error, a
-    /// private box is an auth failure the CLI keys on, and a runner the proxy
-    /// could not reach is an upstream failure — never an intermediary's, since
-    /// the proxy plainly answered.
+    /// box with inbound access disabled is an auth failure the CLI keys on, and
+    /// a runner the proxy could not reach is an upstream failure — never an
+    /// intermediary's, since the proxy plainly answered.
     #[tokio::test]
     #[allow(clippy::result_large_err)]
     async fn connect_box_network_tunnel_keeps_the_proxys_own_verdict() {
@@ -895,7 +895,7 @@ mod tests {
             }),
             (
                 "403 Forbidden",
-                "box is not public",
+                "box inbound access is disabled",
                 |e| matches!(e, BoxliteError::Config(msg) if msg.starts_with("auth:")),
             ),
             ("502 Bad Gateway", "runner unavailable", |e| {

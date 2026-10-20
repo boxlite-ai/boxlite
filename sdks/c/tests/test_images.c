@@ -1,5 +1,6 @@
 /**
- * BoxLite C SDK - image get, remove and usage through the image handle.
+ * BoxLite C SDK - image get, remove, usage and alias creation/deletion through
+ * the image handle.
  *
  * Unit-level (no VM): a local runtime on an empty home answers from its
  * empty cache, and a REST runtime is pointed at a loopback server forked
@@ -23,17 +24,27 @@
 #define NEWER_RECORDED_AT 1788220800LL
 #define OLDER_RECORDED_AT 1786797000LL
 
+/* "sha256:" and 64 hex digits, as a digest must be. */
+#define HEX16_A "aaaaaaaaaaaaaaaa"
+#define HEX16_B "bbbbbbbbbbbbbbbb"
+#define OLD_DIGEST "sha256:" HEX16_A HEX16_A HEX16_A HEX16_A
+#define NEW_DIGEST "sha256:" HEX16_B HEX16_B HEX16_B HEX16_B
+
 typedef struct Response {
   const char *request_line;
   const char *status;
   const char *body;
+  /* Text the request, head or body, must contain; NULL for none. */
+  const char *request_contains;
 } Response;
 
 /* The server answers only these exact request lines, so a name sent as
  * three path segments instead of one would get a 404. */
 static const Response ROUTES[] = {
+    {"DELETE /v1/images/quay.io%2Facme%2Fapp/aliases/stable HTTP/1.1",
+     "204 No Content", ""},
     {"GET /v1/images/quay.io%2Facme%2Fapp HTTP/1.1", "200 OK",
-     "{\"name\":\"quay.io/acme/app\",\"tags\":[\"v1\",\"v2\"],"
+     "{\"name\":\"quay.io/acme/app\",\"aliases\":[\"v1\",\"v2\"],"
      "\"curated\":true,\"versions\":["
      "{\"digest\":\"sha256:bb\",\"size_bytes\":4096,"
      "\"source_ref\":\"quay.io/acme/app:v2\","
@@ -44,6 +55,22 @@ static const Response ROUTES[] = {
     {"GET /v1/images/usage HTTP/1.1", "200 OK",
      "{\"count\":3,\"limit\":20,\"known_bytes\":8192}"},
     {"DELETE /v1/images/quay.io%2Facme%2Fapp HTTP/1.1", "204 No Content", ""},
+    {"POST /v1/images/quay.io%2Facme%2Fapp/aliases HTTP/1.1", "201 Created",
+     "{\"name\":\"quay.io/acme/app\",\"aliases\":[\"stable\"],"
+     "\"curated\":false,\"versions\":["
+     "{\"digest\":\"" NEW_DIGEST "\",\"size_bytes\":null,"
+     "\"source_ref\":\"quay.io/acme/app:v2\","
+     "\"recorded_at\":\"2026-09-01T00:00:00Z\",\"aliases\":[\"stable\"],"
+     "\"last_used_at\":\"2026-08-15T12:30:00Z\","
+     "\"upstream_missing_at\":null}],"
+     "\"history\":["
+     "{\"alias\":\"stable\",\"from_digest\":\"" OLD_DIGEST "\","
+     "\"to_digest\":\"" NEW_DIGEST "\",\"actor\":\"user-1\","
+     "\"recorded_at\":\"2026-09-01T00:00:00Z\"},"
+     "{\"alias\":\"stable\",\"from_digest\":null,"
+     "\"to_digest\":\"" OLD_DIGEST "\",\"actor\":null,"
+     "\"recorded_at\":\"2026-08-15T12:30:00Z\"}]}",
+     "{\"alias\":\"stable\",\"digest\":\"" NEW_DIGEST "\"}"},
 };
 static const size_t ROUTE_COUNT = sizeof(ROUTES) / sizeof(ROUTES[0]);
 
@@ -70,7 +97,7 @@ static void write_all(int fd, const char *data, size_t len) {
   }
 }
 
-/* Reads one request's head and answers it; returns 1 if it matched a route. */
+/* Answers one request; returns 1 if it matched a route, body included. */
 static int serve_one(int listener) {
   int client = accept(listener, NULL, NULL);
   if (client < 0) {
@@ -115,8 +142,19 @@ static int serve_one(int listener) {
   }
   write_all(client, header, (size_t)header_len);
   write_all(client, body, strlen(body));
+  /* Read the rest, such as a PUT's body, until the client closes: closing
+   * with unread data resets the connection and can drop the response. */
+  shutdown(client, SHUT_WR);
+  while (used < sizeof(request) - 1) {
+    ssize_t got = read(client, request + used, sizeof(request) - 1 - used);
+    if (got <= 0) {
+      break;
+    }
+    used += (size_t)got;
+  }
   close(client);
-  return route != NULL;
+  return route != NULL && (route->request_contains == NULL ||
+                           strstr(request, route->request_contains) != NULL);
 }
 
 /* Serves one request per route, then exits 0 only if each matched. */
@@ -181,9 +219,9 @@ static void on_detail(CImageDetail *detail, CBoxliteError *error,
   }
 
   assert(strcmp(detail->name, "quay.io/acme/app") == 0);
-  assert(detail->tags_count == 2);
-  assert(strcmp(detail->tags[0], "v1") == 0);
-  assert(strcmp(detail->tags[1], "v2") == 0);
+  assert(detail->aliases_count == 2);
+  assert(strcmp(detail->aliases[0], "v1") == 0);
+  assert(strcmp(detail->aliases[1], "v2") == 0);
   assert(detail->curated == 1);
   assert(detail->versions_count == 2);
 
@@ -197,6 +235,43 @@ static void on_detail(CImageDetail *detail, CBoxliteError *error,
   assert(strcmp(older->digest, "sha256:aa") == 0);
   assert(older->has_size == 0 && older->size_bytes == 0);
   assert(older->recorded_at == OLDER_RECORDED_AT);
+
+  /* A server that names no version aliases, times or history reads them empty.
+   */
+  assert(newer->aliases == NULL && newer->aliases_count == 0);
+  assert(newer->has_last_used_at == 0 && newer->has_upstream_missing_at == 0);
+  assert(detail->history == NULL && detail->history_count == 0);
+
+  boxlite_free_image_detail(detail);
+}
+
+static void on_created(CImageDetail *detail, CBoxliteError *error,
+                       void *user_data) {
+  Request *request = user_data;
+  record(request, error);
+  if (detail == NULL) {
+    return;
+  }
+
+  assert(detail->versions_count == 1);
+  const CImageVersion *version = &detail->versions[0];
+  assert(version->aliases_count == 1);
+  assert(strcmp(version->aliases[0], "stable") == 0);
+  assert(version->has_last_used_at == 1);
+  assert(version->last_used_at == OLDER_RECORDED_AT);
+  assert(version->has_upstream_missing_at == 0);
+
+  assert(detail->history_count == 2);
+  const CImageAliasEvent *moved = &detail->history[0];
+  assert(strcmp(moved->alias, "stable") == 0);
+  assert(strcmp(moved->from_digest, OLD_DIGEST) == 0);
+  assert(strcmp(moved->to_digest, NEW_DIGEST) == 0);
+  assert(strcmp(moved->actor, "user-1") == 0);
+  assert(moved->recorded_at == NEWER_RECORDED_AT);
+  const CImageAliasEvent *recorded = &detail->history[1];
+  assert(recorded->from_digest == NULL && recorded->actor == NULL);
+  assert(strcmp(recorded->to_digest, OLD_DIGEST) == 0);
+  assert(recorded->recorded_at == OLDER_RECORDED_AT);
 
   boxlite_free_image_detail(detail);
 }
@@ -246,6 +321,17 @@ static Request read_usage(CBoxliteRuntime *runtime,
   return request;
 }
 
+static Request create_alias(CBoxliteRuntime *runtime,
+                            CBoxliteImageHandle *images) {
+  Request request = {0};
+  CBoxliteError error = {0};
+  assert(boxlite_image_create_alias(images, "quay.io/acme/app", "stable",
+                                    NEW_DIGEST, on_created, &request,
+                                    &error) == Ok);
+  drain_until_done(runtime, &request.done);
+  return request;
+}
+
 static CBoxliteImageHandle *images_of(CBoxliteRuntime *runtime) {
   CBoxliteImageHandle *images = NULL;
   CBoxliteError error = {0};
@@ -277,11 +363,19 @@ static void test_rest_catalog(void) {
   CBoxliteImageHandle *images = images_of(runtime);
 
   assert(get_image(runtime, images, "quay.io/acme/app", NULL).code == Ok);
-  printf("  ok: get reads the name, tags, and versions newest first\n");
+  printf("  ok: get reads the name, aliases, and versions newest first\n");
   assert(read_usage(runtime, images).code == Ok);
   printf("  ok: usage reads count, limit, and known bytes\n");
   assert(remove_image(runtime, images, "quay.io/acme/app", NULL).code == Ok);
   printf("  ok: remove sends DELETE with the name as one segment\n");
+  assert(create_alias(runtime, images).code == Ok);
+  printf("  ok: create_alias posts the alias and digest and reads the image\n");
+
+  Request deleted = {0};
+  assert(boxlite_image_delete_alias(images, "quay.io/acme/app", "stable",
+                                    on_removed, &deleted, &error) == Ok);
+  drain_until_done(runtime, &deleted.done);
+  assert(deleted.code == Ok);
 
   boxlite_image_free(images);
   boxlite_runtime_free(runtime);
@@ -333,13 +427,20 @@ static void test_local_cache(void) {
   assert(read_usage(runtime, images).code == Unsupported);
   printf("  ok: usage is Unsupported\n");
 
+  assert(create_alias(runtime, images).code == Unsupported);
+  printf("  ok: create_alias is Unsupported\n");
+
   assert(boxlite_image_get(images, NULL, on_detail, NULL, &error) ==
          InvalidArgument);
   boxlite_error_free(&error);
   assert(boxlite_image_remove(images, "quay.io/acme/app", NULL, NULL, &error) ==
          InvalidArgument);
   boxlite_error_free(&error);
-  printf("  ok: a NULL name or callback is refused before queueing\n");
+  assert(boxlite_image_create_alias(images, "quay.io/acme/app", NULL,
+                                    NEW_DIGEST, on_created, NULL,
+                                    &error) == InvalidArgument);
+  boxlite_error_free(&error);
+  printf("  ok: a NULL name, tag or callback is refused before queueing\n");
 
   boxlite_image_free(images);
   boxlite_runtime_free(runtime);

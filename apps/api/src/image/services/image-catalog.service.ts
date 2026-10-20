@@ -11,14 +11,29 @@ import { Box } from '../../box/entities/box.entity'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Organization } from '../../organization/entities/organization.entity'
-import { ImageDetailDto, ImageDto, ImageUsageDto, ImageVersionDto } from '../dto/image.dto'
+import {
+  IMAGE_HISTORY_LIMIT,
+  ImageDetailDto,
+  ImageDto,
+  ImageAliasEventDto,
+  ImageUsageDto,
+  ImageVersionDto,
+} from '../dto/image.dto'
 import { Image } from '../entities/image.entity'
-import { ImageTag } from '../entities/image-tag.entity'
+import { ImageAlias } from '../entities/image-alias.entity'
+import { ImageAliasEvent } from '../entities/image-alias-event.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { ImageVersionState } from '../enums/image-version-state.enum'
-import { catalogNameOf, isCuratedSelector } from '../utils/image-ref.util'
+import { assertAliasName, catalogNameOf, isCuratedSelector } from '../utils/image-ref.util'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * The version a tag moves to. The console names it by its catalog id; the box
+ * API, whose versions carry no id, by its digest, which is unique within an
+ * image.
+ */
+export type VersionSelector = { versionId: string } | { digest: string }
 
 /** One reference the catalog holds: a tag, or a version no tag points at. */
 export interface ImageReference {
@@ -37,7 +52,7 @@ function curatedEntries(): ImageDto[] {
     id: null,
     curated: true,
     curatedRef: ref,
-    tags: [],
+    aliases: [],
     versionCount: 0,
     // Not zero: nothing here ever measured a curated image. Zero would read as
     // "it is empty" in a size column, which is a different claim.
@@ -48,10 +63,10 @@ function curatedEntries(): ImageDto[] {
 }
 
 /**
- * Reads and removes catalog entries.
+ * Reads catalog entries, creates and deletes aliases, and removes images.
  *
  * Two things share every query here. The first is that an image is soft
- * deleted: `deletedAt` is set and its versions and tags stay behind, because
+ * deleted: `deletedAt` is set and its versions and aliases stay behind, because
  * the cascade only fires on a real delete. So every read joins back to `image`
  * and filters `deletedAt IS NULL` — miss it and a deleted image still counts
  * against usage and still answers by name. The second is that curated images
@@ -65,8 +80,10 @@ export class ImageCatalogService {
     private readonly imageRepository: Repository<Image>,
     @InjectRepository(ImageVersion)
     private readonly versionRepository: Repository<ImageVersion>,
-    @InjectRepository(ImageTag)
-    private readonly tagRepository: Repository<ImageTag>,
+    @InjectRepository(ImageAlias)
+    private readonly aliasRepository: Repository<ImageAlias>,
+    @InjectRepository(ImageAliasEvent)
+    private readonly aliasEventRepository: Repository<ImageAliasEvent>,
     @InjectRepository(Box)
     private readonly boxRepository: Repository<Box>,
   ) {}
@@ -78,13 +95,13 @@ export class ImageCatalogService {
     })
 
     const ids = images.map((image) => image.id)
-    const [versions, tags] = await Promise.all([this.versionsByImage(ids), this.tagsByImage(ids)])
+    const [versions, aliases] = await Promise.all([this.versionsByImage(ids), this.aliasesByImage(ids)])
 
     // Curated first: they are what a new organization boots from, and the
     // default image is the first of them.
     return [
       ...curatedEntries(),
-      ...images.map((image) => toDto(image, versions.get(image.id) ?? [], tags.get(image.id) ?? [])),
+      ...images.map((image) => toDto(image, versions.get(image.id) ?? [], aliases.get(image.id) ?? [])),
     ]
   }
 
@@ -104,9 +121,9 @@ export class ImageCatalogService {
       return []
     }
     const ids = images.map((image) => image.id)
-    const [versions, tags] = await Promise.all([
+    const [versions, aliases] = await Promise.all([
       this.versionsByImage(ids),
-      this.tagRepository.find({ where: { imageId: In(ids) }, order: { name: 'ASC' } }),
+      this.aliasRepository.find({ where: { imageId: In(ids) }, order: { name: 'ASC' } }),
     ])
 
     const references: ImageReference[] = []
@@ -122,7 +139,7 @@ export class ImageCatalogService {
         sizeBytes: version.sizeBytes,
         recordedAt: version.createdAt,
       })
-      for (const tag of tags.filter((candidate) => candidate.imageId === image.id)) {
+      for (const tag of aliases.filter((candidate) => candidate.imageId === image.id)) {
         // Only ready versions are read, so a tag can point at one not listed.
         const version = byId.get(tag.versionId)
         if (version) {
@@ -149,15 +166,106 @@ export class ImageCatalogService {
       throw new NotFoundException(`Image '${idOrRef}' not found`)
     }
 
-    const [versions, tags] = await Promise.all([this.versionsByImage([image.id]), this.tagsByImage([image.id])])
-    const rows = versions.get(image.id) ?? []
+    const [versions, aliases, history] = await Promise.all([
+      this.versionsByImage([image.id]),
+      this.aliasesByImage([image.id]),
+      this.historyOf(image.id),
+    ])
+    const versionRows = versions.get(image.id) ?? []
+    const aliasRows = aliases.get(image.id) ?? []
     return {
-      ...toDto(image, rows, tags.get(image.id) ?? []),
-      versions: rows.map(toVersionDto),
-      // S1 records no tag movement: a tag keeps the digest it first resolved
-      // to, so there is no history to report. The field is here because its
-      // absence and its emptiness mean different things to a caller.
-      history: [],
+      ...toDto(image, versionRows, aliasRows),
+      versions: versionRows.map((version) =>
+        toVersionDto(
+          version,
+          aliasRows.filter((tag) => tag.versionId === version.id),
+        ),
+      ),
+      history: history.map(toAliasEventDto),
+    }
+  }
+
+  /**
+   * Create a catalog alias for a ready version without replacing a binding.
+   * The registry and existing boxes are unchanged; no image is pulled.
+   */
+  async createAlias(
+    organization: Organization,
+    idOrRef: string,
+    aliasName: string,
+    target: VersionSelector,
+    actorId: string | null,
+  ): Promise<ImageDetailDto> {
+    if (isCuratedSelector(idOrRef)) {
+      throw new BadRequestError(`Image '${idOrRef}' is provided by the operator, so its aliases cannot be changed`)
+    }
+    assertAliasName(aliasName)
+    // TypeORM drops a where key whose value is undefined, so a selector that
+    // names nothing would match whichever version of the image comes first.
+    if (!('versionId' in target ? target.versionId : target.digest)) {
+      throw new BadRequestError('An alias requires a version named by its id or its digest')
+    }
+
+    const image = await this.findRow(organization, idOrRef)
+    if (!image) {
+      throw new NotFoundException(`Image '${idOrRef}' not found`)
+    }
+
+    await this.aliasRepository.manager.transaction(async (manager) => {
+      const where = 'versionId' in target ? { id: target.versionId } : { digest: target.digest }
+      const named = 'versionId' in target ? `Version '${target.versionId}'` : `Digest '${target.digest}'`
+      const version = await manager.findOne(ImageVersion, { where: { ...where, imageId: image.id } })
+      if (!version) {
+        throw new BadRequestError(`${named} is not a version of image '${image.name}'`)
+      }
+      if (version.state !== ImageVersionState.READY) {
+        throw new BadRequestError(
+          `${named} of image '${image.name}' is ${version.state}; an alias requires a ready version`,
+        )
+      }
+      const versionId = version.id
+
+      // The unique constraint also settles concurrent creates. A conflict
+      // never becomes an update, even when both requests name the same digest.
+      const created = await manager
+        .createQueryBuilder()
+        .insert()
+        .into(ImageAlias)
+        .values({ imageId: image.id, name: aliasName, versionId })
+        .orIgnore()
+        .returning(['id'])
+        .execute()
+      if (created.raw.length === 0) {
+        throw new ConflictException({
+          message: `Alias '${aliasName}' already exists for image '${image.name}'; delete it explicitly before creating it again`,
+          code: 'already_exists',
+        })
+      }
+      await manager.insert(ImageAliasEvent, {
+        imageId: image.id,
+        aliasName,
+        fromVersionId: null,
+        toVersionId: versionId,
+        actorId,
+      })
+    })
+
+    return this.get(organization, image.id)
+  }
+
+  /** Remove only the alias; versions, history and existing boxes remain. */
+  async deleteAlias(organization: Organization, idOrRef: string, aliasName: string): Promise<void> {
+    if (isCuratedSelector(idOrRef)) {
+      throw new BadRequestError(`Image '${idOrRef}' is provided by the operator, so its aliases cannot be changed`)
+    }
+    assertAliasName(aliasName)
+    const image = await this.findRow(organization, idOrRef)
+    if (!image) {
+      throw new NotFoundException(`Image '${idOrRef}' not found`)
+    }
+    const deleted = await this.aliasRepository.delete({ imageId: image.id, name: aliasName })
+    if (deleted.affected === 0) {
+      throw new NotFoundException(`Alias '${aliasName}' not found for image '${image.name}'`)
     }
   }
 
@@ -166,8 +274,8 @@ export class ImageCatalogService {
    *
    * It removes the entry, not the bytes: whatever runners already cached stays
    * cached, and using the same reference again pulls it back as a new entry.
-   * That is also what makes this the way to pick up a tag that moved upstream,
-   * since a recorded tag keeps pointing at the digest it first resolved to.
+   * A pull never replaces a catalog alias. Removing the entry lets a later
+   * registry pull record fresh bindings.
    */
   async delete(organization: Organization, idOrRef: string): Promise<void> {
     if (isCuratedSelector(idOrRef)) {
@@ -284,34 +392,51 @@ export class ImageCatalogService {
     return grouped
   }
 
-  private async tagsByImage(imageIds: string[]): Promise<Map<string, string[]>> {
-    const grouped = new Map<string, string[]>()
+  private async aliasesByImage(imageIds: string[]): Promise<Map<string, ImageAlias[]>> {
+    const grouped = new Map<string, ImageAlias[]>()
     if (imageIds.length === 0) {
       return grouped
     }
-    const tags = await this.tagRepository.find({
-      where: { imageId: In(imageIds) },
-      order: { name: 'ASC' },
-    })
-    for (const tag of tags) {
+    const aliases = await this.aliasRepository
+      .createQueryBuilder('tag')
+      .innerJoin('image_version', 'version', 'version.id = tag."versionId"')
+      .where('tag."imageId" IN (:...imageIds)', { imageIds })
+      .andWhere('version.state = :state', { state: ImageVersionState.READY })
+      .orderBy('tag.name', 'ASC')
+      .getMany()
+    for (const tag of aliases) {
       const bucket = grouped.get(tag.imageId)
       if (bucket) {
-        bucket.push(tag.name)
+        bucket.push(tag)
       } else {
-        grouped.set(tag.imageId, [tag.name])
+        grouped.set(tag.imageId, [tag])
       }
     }
     return grouped
   }
+
+  /**
+   * The most recent tag events, newest first — the index serves this read
+   * backwards — with the versions they name, so each event carries their
+   * digests and reads without the image's version list.
+   */
+  private historyOf(imageId: string): Promise<ImageAliasEvent[]> {
+    return this.aliasEventRepository.find({
+      where: { imageId },
+      relations: { fromVersion: true, toVersion: true },
+      order: { createdAt: 'DESC' },
+      take: IMAGE_HISTORY_LIMIT,
+    })
+  }
 }
 
-function toDto(image: Image, versions: ImageVersion[], tags: string[]): ImageDto {
+function toDto(image: Image, versions: ImageVersion[], aliases: ImageAlias[]): ImageDto {
   return {
     name: image.name,
     id: image.id,
     curated: false,
     curatedRef: null,
-    tags,
+    aliases: aliases.map((tag) => tag.name),
     versionCount: versions.length,
     // Per version, so layers two versions share are counted twice. Deliberate:
     // nothing here knows which layers overlap, and a number that pretended to
@@ -322,12 +447,27 @@ function toDto(image: Image, versions: ImageVersion[], tags: string[]): ImageDto
   }
 }
 
-function toVersionDto(version: ImageVersion): ImageVersionDto {
+function toVersionDto(version: ImageVersion, aliases: ImageAlias[]): ImageVersionDto {
   return {
     id: version.id,
     digest: version.digest,
     sizeBytes: version.sizeBytes,
     sourceRef: version.sourceSpec.sourceRef,
+    aliases: aliases.map((tag) => tag.name),
+    lastUsedAt: version.lastUsedAt?.toISOString() ?? null,
+    upstreamMissingAt: version.upstreamMissingAt?.toISOString() ?? null,
     createdAt: version.createdAt.toISOString(),
+  }
+}
+
+function toAliasEventDto(event: ImageAliasEvent): ImageAliasEventDto {
+  return {
+    aliasName: event.aliasName,
+    fromVersionId: event.fromVersionId,
+    fromDigest: event.fromVersion?.digest ?? null,
+    toVersionId: event.toVersionId,
+    toDigest: event.toVersion.digest,
+    actorId: event.actorId,
+    createdAt: event.createdAt.toISOString(),
   }
 }

@@ -95,29 +95,29 @@ export class CreateBoxDto {
   labels?: { [key: string]: string }
 
   @ApiPropertyOptional({
-    description: 'Whether the box http preview is publicly accessible',
-    default: true,
-    example: true,
+    description: 'Whether inbound access is enabled: the proxy serves exposed services without sign-in',
+    default: false,
   })
   @IsOptional()
   @IsBoolean()
-  public?: boolean
+  inboundEnabled?: boolean
 
   @ApiPropertyOptional({
-    description: 'Whether to block all network access for the box',
-    example: false,
+    description: "Whether outbound access is enabled; unset follows the organization's limited-egress default",
   })
   @IsOptional()
   @IsBoolean()
-  networkBlockAll?: boolean
+  outboundEnabled?: boolean
 
   @ApiPropertyOptional({
-    description: 'Comma-separated list of allowed CIDR network addresses for the box',
-    example: '192.168.1.0/16,10.0.0.0/24',
+    description: 'Hosts and CIDRs outbound traffic may reach; unset allows every destination',
+    type: [String],
+    example: ['api.openai.com', '10.0.0.0/8'],
   })
   @IsOptional()
-  @IsString()
-  networkAllowList?: string
+  @IsArray()
+  @IsString({ each: true })
+  outboundAllowNet?: string[]
 
   @ApiPropertyOptional({
     description: 'The box class type',

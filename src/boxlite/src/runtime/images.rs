@@ -18,6 +18,9 @@ use crate::runtime::types::{ImageDetail, ImageInfo, ImageUsage};
 /// repository path, both bounded well below this.
 const MAX_NAME_CHARS: usize = 512;
 
+/// Longest tag the OCI distribution spec allows.
+const MAX_ALIAS_CHARS: usize = 128;
+
 /// Internal trait for image management, implemented by both backends.
 ///
 /// `name` arguments have passed [`checked_name`].
@@ -41,15 +44,27 @@ pub(crate) trait ImageBackend: Send + Sync {
 
     /// How many images are held against the caller's allowance.
     async fn image_usage(&self) -> BoxliteResult<ImageUsage>;
+
+    /// Create an alias, refusing every existing binding.
+    /// `alias` and `digest` have passed [`checked_alias`] and [`checked_digest`].
+    async fn create_alias(
+        &self,
+        name: &str,
+        alias: &str,
+        digest: &str,
+    ) -> BoxliteResult<ImageDetail>;
+
+    /// Delete only the named catalog alias.
+    async fn delete_alias(&self, name: &str, alias: &str) -> BoxliteResult<()>;
 }
 
 /// `name` if it names an image without a tag or digest, refused otherwise.
 ///
 /// Refused before either backend sees it, so both refuse the same names. A
 /// tag or digest is refused rather than ignored: on a REST runtime the name
-/// is what a remove deletes, every tag of it, and a caller passing `app:v1`
+/// is what a remove deletes, every alias of it, and a caller passing `app:v1`
 /// should not find `app:v2` gone. The rest would never be a name and, sent to
-/// a server, could be read as another route: `usage` is one, and `.` or `..`
+/// a server, could be read as another route: `usage` and `registries` are reserved, and `.` or `..`
 /// would be normalised out of the URL.
 pub(crate) fn checked_name(name: &str) -> BoxliteResult<&str> {
     let refuse = |why: String| Err(BoxliteError::InvalidArgument(why));
@@ -69,7 +84,7 @@ pub(crate) fn checked_name(name: &str) -> BoxliteResult<&str> {
             .replace('\\', "/")
             .split('/')
             .any(|part| part == "." || part == "..");
-    if is_traversal || name == "usage" {
+    if is_traversal || matches!(name, "usage" | "registries") {
         return refuse(format!("'{name}' is not an image name"));
     }
     let untagged = untagged(name);
@@ -79,6 +94,39 @@ pub(crate) fn checked_name(name: &str) -> BoxliteResult<&str> {
         ));
     }
     Ok(name)
+}
+
+/// `tag` if the OCI distribution spec accepts it: a letter, digit or
+/// underscore, then up to 127 of those, `.` or `-`. A server refuses the same
+/// tags; refusing them here keeps a typo from becoming a round trip.
+pub(crate) fn checked_alias(tag: &str) -> BoxliteResult<&str> {
+    let mut chars = tag.chars();
+    let starts_well = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+    let continues_well = chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
+    if starts_well && continues_well && tag.len() <= MAX_ALIAS_CHARS {
+        Ok(tag)
+    } else {
+        Err(BoxliteError::InvalidArgument(format!(
+            "'{tag}' is not a tag the OCI distribution spec accepts"
+        )))
+    }
+}
+
+/// `digest` if it is a sha256 manifest digest, the only kind a catalog records
+/// and the form `ImageVersion::digest` takes.
+pub(crate) fn checked_digest(digest: &str) -> BoxliteResult<&str> {
+    match digest.strip_prefix("sha256:") {
+        Some(hex)
+            if hex.len() == 64 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) =>
+        {
+            Ok(digest)
+        }
+        _ => Err(BoxliteError::InvalidArgument(format!(
+            "'{digest}' is not a sha256 digest; pass the digest of one of the image's versions"
+        ))),
+    }
 }
 
 /// `reference` without a trailing `:tag` or `@digest`.
@@ -122,14 +170,31 @@ fn untagged(reference: &str) -> &str {
 #[derive(Clone)]
 pub struct ImageHandle {
     manager: Arc<dyn ImageBackend>,
+    registry_backend: Option<Arc<dyn super::registries::RegistryBackend>>,
 }
 
 impl ImageHandle {
     /// Create a new ImageHandle with the given manager.
     ///
     /// This is an internal constructor used by `BoxliteRuntime`.
-    pub(crate) fn new(manager: Arc<dyn ImageBackend>) -> Self {
-        Self { manager }
+    pub(crate) fn new(
+        manager: Arc<dyn ImageBackend>,
+        registry_backend: Option<Arc<dyn super::registries::RegistryBackend>>,
+    ) -> Self {
+        Self {
+            manager,
+            registry_backend,
+        }
+    }
+
+    /// Registry logins used by this REST catalog. Local image handles return `Unsupported`.
+    pub fn registries(&self) -> BoxliteResult<super::RegistryHandle> {
+        match &self.registry_backend {
+            Some(backend) => Ok(super::RegistryHandle::new(Arc::clone(backend))),
+            None => Err(BoxliteError::Unsupported(
+                "registry logins require a REST image catalog; local runtimes use image_registries in their options".into(),
+            )),
+        }
     }
 
     /// Pull an image from a registry.
@@ -201,11 +266,77 @@ impl ImageHandle {
     pub async fn usage(&self) -> BoxliteResult<ImageUsage> {
         self.manager.image_usage().await
     }
+
+    /// Create a catalog alias for a recorded ready build.
+    ///
+    /// Every existing name returns `AlreadyExists`, including the same digest.
+    /// Delete an alias explicitly before recreating it. Existing boxes and
+    /// upstream registry tags are unchanged; no image bytes are pulled.
+    /// REST runtimes only. Inputs are validated before sending a request.
+    pub async fn create_alias(
+        &self,
+        name: &str,
+        alias: &str,
+        digest: &str,
+    ) -> BoxliteResult<ImageDetail> {
+        self.manager
+            .create_alias(
+                checked_name(name)?,
+                checked_alias(alias)?,
+                checked_digest(digest)?,
+            )
+            .await
+    }
+    /// Delete a catalog alias without removing versions or changing existing boxes.
+    /// REST runtimes only; an absent alias returns `NotFound`.
+    pub async fn delete_alias(&self, name: &str, alias: &str) -> BoxliteResult<()> {
+        self.manager
+            .delete_alias(checked_name(name)?, checked_alias(alias)?)
+            .await
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::checked_name;
+    use super::{checked_alias, checked_digest, checked_name};
+
+    #[test]
+    fn accepts_a_tag_oci_accepts() {
+        for tag in ["v1", "stable", "_private", "3.20-alpine", &"a".repeat(128)] {
+            assert_eq!(checked_alias(tag).unwrap(), tag);
+        }
+    }
+
+    #[test]
+    fn refuses_a_tag_oci_refuses() {
+        for tag in [
+            "",
+            "-v1",
+            ".hidden",
+            "v1/x",
+            "v 1",
+            "v1:x",
+            &"a".repeat(129),
+        ] {
+            assert!(checked_alias(tag).is_err(), "{tag:?} was accepted");
+        }
+    }
+
+    #[test]
+    fn accepts_only_a_sha256_digest() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        assert_eq!(checked_digest(&digest).unwrap(), digest);
+        for digest in [
+            String::new(),
+            "latest".into(),
+            "sha256:aa".into(),
+            format!("sha256:{}", "A".repeat(64)),
+            format!("sha512:{}", "a".repeat(64)),
+            format!("sha256:{}", "a".repeat(65)),
+        ] {
+            assert!(checked_digest(&digest).is_err(), "{digest:?} was accepted");
+        }
+    }
 
     #[test]
     fn accepts_an_image_name() {
@@ -254,6 +385,7 @@ mod tests {
             ".",
             "acme/./app",
             "usage",
+            "registries",
             too_long.as_str(),
         ] {
             let message = checked_name(name).unwrap_err().to_string();

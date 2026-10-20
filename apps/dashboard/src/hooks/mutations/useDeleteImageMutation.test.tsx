@@ -29,7 +29,7 @@ const DELETED_IMAGE = {
   name: 'quay.io/acme/app',
   curated: false,
   curatedRef: null,
-  tags: ['v1'],
+  aliases: ['v1'],
   versionCount: 1,
   sizeBytes: 4096,
   lastUsedAt: null,

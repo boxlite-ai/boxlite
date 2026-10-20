@@ -381,10 +381,10 @@ describe('REST create inbound default contract', () => {
     ['nested outbound only', { outbound: { mode: 'enabled' } }, false],
     ['inbound enabled', { inbound: { mode: 'enabled' } }, true],
     ['inbound disabled', { inbound: { mode: 'disabled' } }, false],
-  ])('maps %s to the expected public value', async (_label, network, expectedPublic) => {
+  ])('maps %s to the expected inbound access', async (_label, network, expected) => {
     const dto: CreateBoxDto = await pipe.transform({ image: 'alpine:latest', network }, meta)
 
-    expect(createBoxToCreateBox(dto).public).toBe(expectedPublic)
+    expect(createBoxToCreateBox(dto).inboundEnabled).toBe(expected)
   })
 
   it('keeps the OpenAPI omission defaults aligned with the REST create behavior', () => {

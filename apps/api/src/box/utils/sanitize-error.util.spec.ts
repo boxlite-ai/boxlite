@@ -13,7 +13,7 @@ describe('sanitizeBoxError', () => {
   // in: the ref it was handed, and the request URL its registry client adds.
   const failedPull = (proxied: string, url: string) =>
     `Failed to pull image '${proxied}' after trying 1 registry:\n` +
-    `  - ${proxied}: failed to pull manifest: Registry error: url ${url}, ` +
+    `  - ${proxied}: failed to pull manifest [DENIED]: Registry error: url ${url}, ` +
     `envelope: upstream ghcr.io refused the organization's registry credential`
 
   afterEach(() => {

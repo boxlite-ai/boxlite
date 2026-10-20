@@ -68,7 +68,12 @@ func TestRegistriesPendingOperationsReturnOnCancellationOrRuntimeClose(t *testin
 					t.Fatal(err)
 				}
 				defer rt.Close()
-				handle, err := rt.Registries()
+				images, err := rt.Images()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer images.Close()
+				handle, err := images.Registries()
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -107,12 +112,12 @@ func TestRegistriesPendingOperationsReturnOnCancellationOrRuntimeClose(t *testin
 func TestRegistriesEmptyListAndServerFailure(t *testing.T) {
 	server := newRegistryServer(t)
 	handle := server.registries(t)
-	server.reply("GET /v1/registries", http.StatusOK, `{"registries":[]}`)
+	server.reply("GET /v1/images/registries", http.StatusOK, `{"registries":[]}`)
 	logins, err := handle.List(registryTestContext(t))
 	if err != nil || len(logins) != 0 {
 		t.Fatalf("empty list: %v, %v", logins, err)
 	}
-	server.reply("GET /v1/registries", http.StatusForbidden, `{"message":"denied"}`)
+	server.reply("GET /v1/images/registries", http.StatusForbidden, `{"message":"denied"}`)
 	_, err = handle.List(registryTestContext(t))
 	requireErrorCode(t, err, ErrConfig, "denied")
 }

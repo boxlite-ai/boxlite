@@ -32,9 +32,9 @@ export interface Image {
      */
     'curatedRef': string | null;
     /**
-     * Tags recorded for this image. Empty for curated images, whose reference the operator pins
+     * Aliases recorded for this image. Empty for curated images, whose reference the operator pins
      */
-    'tags': Array<string>;
+    'aliases': Array<string>;
     /**
      * How many pulled manifest digests this image holds
      */

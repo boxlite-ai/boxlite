@@ -16,11 +16,13 @@ import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Organization } from '../../organization/entities/organization.entity'
 import { Image } from '../entities/image.entity'
-import { ImageTag } from '../entities/image-tag.entity'
+import { ImageAlias } from '../entities/image-alias.entity'
+import { ImageAliasEvent } from '../entities/image-alias-event.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { ImageVersionState } from '../enums/image-version-state.enum'
+import { IMAGE_HISTORY_LIMIT } from '../dto/image.dto'
 import { CuratedImagePinService } from './curated-image-pin.service'
-import { ImageCatalogService } from './image-catalog.service'
+import { ImageCatalogService, VersionSelector } from './image-catalog.service'
 import { ImageRegistrarService } from './image-registrar.service'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
@@ -48,7 +50,7 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema: schemaName,
-      entities: [Image, ImageVersion, ImageTag, Box, BoxLastActivity, BoxMigration],
+      entities: [Image, ImageVersion, ImageAlias, ImageAliasEvent, Box, BoxLastActivity, BoxMigration],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       synchronize: false,
@@ -71,7 +73,8 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
     catalog = new ImageCatalogService(
       dataSource.getRepository(Image),
       dataSource.getRepository(ImageVersion),
-      dataSource.getRepository(ImageTag),
+      dataSource.getRepository(ImageAlias),
+      dataSource.getRepository(ImageAliasEvent),
       dataSource.getRepository(Box),
     )
   })
@@ -90,6 +93,7 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
   })
 
   beforeEach(async () => {
+    await dataSource.query(`DELETE FROM "${schemaName}"."image_tag_event"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image_tag"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image_version"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image"`)
@@ -167,7 +171,7 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
     expect(references.map(({ reference }) => reference)).toEqual(['quay.io/acme/app:v1'])
   })
 
-  it('lists an image with the tags, version count and size recorded for it', async () => {
+  it('lists an image with the aliases, version count and size recorded for it', async () => {
     await use('quay.io/acme/app:v1')
     await use('quay.io/acme/app:v2', { digest: OTHER_DIGEST, sizeBytes: 1024 })
 
@@ -177,7 +181,7 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
       name: 'quay.io/acme/app',
       curated: false,
       curatedRef: null,
-      tags: ['v1', 'v2'],
+      aliases: ['v1', 'v2'],
       versionCount: 2,
       sizeBytes: 5120,
     })
@@ -237,14 +241,14 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
 
   /**
    * A digest-pinned reference names no tag, so the registrar records none. The
-   * image still lists and answers, with no tags rather than a missing field.
+   * image still lists and answers, with no aliases rather than a missing field.
    */
-  it('lists and details an image used only by digest with no tags', async () => {
+  it('lists and details an image used only by digest with no aliases', async () => {
     await use(`quay.io/acme/app@${DIGEST}`)
 
     const [listed] = await ownImages()
-    expect(listed).toMatchObject({ name: 'quay.io/acme/app', tags: [], versionCount: 1 })
-    expect((await catalog.get(ORG, 'quay.io/acme/app')).tags).toEqual([])
+    expect(listed).toMatchObject({ name: 'quay.io/acme/app', aliases: [], versionCount: 1 })
+    expect((await catalog.get(ORG, 'quay.io/acme/app')).aliases).toEqual([])
   })
 
   /**
@@ -262,9 +266,26 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
     expect(await catalog.usage(ORG)).toEqual({ count: 1, limit: 20, knownBytes: 0 })
   })
 
+  it('lists only aliases of ready versions, in order, in both list and detail', async () => {
+    await use('quay.io/acme/app:z-ready')
+    await use('quay.io/acme/app:a-ready')
+    await use('quay.io/acme/app:removed', { digest: OTHER_DIGEST })
+    await dataSource.getRepository(ImageVersion).update({ digest: OTHER_DIGEST }, { state: ImageVersionState.DELETED })
+
+    const [listed] = await ownImages()
+    expect(listed).toMatchObject({ aliases: ['a-ready', 'z-ready'], versionCount: 1 })
+    expect((await catalog.get(ORG, 'quay.io/acme/app')).aliases).toEqual(['a-ready', 'z-ready'])
+    expect((await catalog.listReferences(ORG)).map((ref) => ref.tag)).toEqual(['a-ready', 'z-ready'])
+
+    await dataSource.getRepository(ImageVersion).update({ digest: DIGEST }, { state: ImageVersionState.DELETED })
+    expect((await ownImages())[0].aliases).toEqual([])
+    expect((await catalog.get(ORG, 'quay.io/acme/app')).aliases).toEqual([])
+    expect(await catalog.listReferences(ORG)).toEqual([])
+  })
+
   /**
    * The cascade only fires on a real delete, so a soft-deleted image keeps its
-   * versions and tags. Every read has to join back and filter them out — miss
+   * versions and aliases. Every read has to join back and filter them out — miss
    * it and a deleted image still answers by name and still fills the quota.
    */
   it('leaves a soft-deleted image out of the list, the detail and the usage', async () => {
@@ -295,12 +316,58 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
       const detail = await catalog.get(ORG, idOrRef)
       expect(detail.id).toBe(listed.id)
       expect(detail.versions).toHaveLength(1)
-      expect(detail.versions[0]).toMatchObject({ digest: DIGEST, sizeBytes: 4096, sourceRef: 'quay.io/acme/app:v1' })
-      // Nothing moves a tag today, so there is nothing to report — and an
-      // absent field would mean something different to a caller than an empty
-      // one.
-      expect(detail.history).toEqual([])
+      expect(detail.versions[0]).toMatchObject({
+        digest: DIGEST,
+        sizeBytes: 4096,
+        sourceRef: 'quay.io/acme/app:v1',
+        aliases: ['v1'],
+      })
+      // The pull that recorded the tag is its first event.
+      expect(detail.history).toEqual([
+        expect.objectContaining({ aliasName: 'v1', fromVersionId: null, toVersionId: detail.versions[0].id }),
+      ])
     }
+  })
+
+  it('reports when each version was last used, and when its registry no longer had it', async () => {
+    await use('quay.io/acme/app:v1')
+    const before = await catalog.get(ORG, 'quay.io/acme/app')
+    expect(before.versions[0].lastUsedAt).not.toBeNull()
+    expect(before.versions[0].upstreamMissingAt).toBeNull()
+    const foundGone = new Date('2026-09-29T00:00:00.000Z')
+    await dataSource.getRepository(ImageVersion).update({ id: before.versions[0].id }, { upstreamMissingAt: foundGone })
+
+    const after = await catalog.get(ORG, 'quay.io/acme/app')
+
+    expect(after.versions[0].upstreamMissingAt).toBe(foundGone.toISOString())
+  })
+
+  it('answers a curated image with no history, since the operator pins its reference', async () => {
+    const [curated] = (await catalog.list(ORG)).filter((image) => image.curated)
+
+    const detail = await catalog.get(ORG, curated.name)
+
+    expect(detail.versions).toEqual([])
+    expect(detail.history).toEqual([])
+  })
+
+  it('keeps the most recent events when the history outgrows the detail', async () => {
+    await use('quay.io/acme/app:v1')
+    const { id: imageId, versions } = await catalog.get(ORG, 'quay.io/acme/app')
+    // As many events again as the detail carries, each a second after the one
+    // before and all after the pull's own, so the newest is the last of these.
+    await dataSource.query(
+      `INSERT INTO "${schemaName}"."image_tag_event" ("imageId", "tagName", "toVersionId", "createdAt")
+       SELECT $1, 't' || n, $2, clock_timestamp() + n * interval '1 second' FROM generate_series(1, $3) AS n`,
+      [imageId, versions[0].id, IMAGE_HISTORY_LIMIT],
+    )
+
+    const detail = await catalog.get(ORG, 'quay.io/acme/app')
+
+    expect(detail.history).toHaveLength(IMAGE_HISTORY_LIMIT)
+    expect(detail.history[0].aliasName).toBe(`t${IMAGE_HISTORY_LIMIT}`)
+    // The pull that recorded v1 is the oldest event, and fell off.
+    expect(detail.history.map((event) => event.aliasName)).not.toContain('v1')
   })
 
   it('counts held images against the limit and sums what the manifests declared', async () => {
@@ -378,5 +445,118 @@ describeIfDatabase('ImageCatalogService (integration, real Postgres)', () => {
     await catalog.delete(ORG, 'quay.io/acme/app')
 
     await expect(catalog.delete(ORG, 'quay.io/acme/app')).rejects.toThrow(NotFoundException)
+  })
+
+  describe('alias creation refuses overwrite', () => {
+    const createAlias = (alias: string, digest: string) =>
+      catalog.createAlias(ORG, 'quay.io/acme/app', alias, { digest }, 'auth0|alice')
+
+    it.each([DIGEST, OTHER_DIGEST])('rejects an existing alias for target %s without changing it', async (digest) => {
+      await use('quay.io/acme/app:v1')
+      await use('quay.io/acme/app:v2', { digest: OTHER_DIGEST })
+      const before = await catalog.get(ORG, 'quay.io/acme/app')
+
+      await expect(createAlias('v1', digest)).rejects.toBeInstanceOf(ConflictException)
+
+      const after = await catalog.get(ORG, 'quay.io/acme/app')
+      expect(after.versions).toEqual(before.versions)
+      expect(after.history).toEqual(before.history)
+    })
+
+    it('allows exactly one concurrent creation of an alias', async () => {
+      await use('quay.io/acme/app:v1')
+      await use('quay.io/acme/app:v2', { digest: OTHER_DIGEST })
+
+      const results = await Promise.allSettled([createAlias('stable', DIGEST), createAlias('stable', OTHER_DIGEST)])
+
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+      const rejected = results.filter((result) => result.status === 'rejected')
+      expect(rejected).toHaveLength(1)
+      expect(rejected[0].reason).toBeInstanceOf(ConflictException)
+      const detail = await catalog.get(ORG, 'quay.io/acme/app')
+      expect(detail.history.filter((event) => event.aliasName === 'stable')).toHaveLength(1)
+    })
+  })
+
+  describe('catalog aliases', () => {
+    const ACTOR = 'auth0|alice'
+    const create = (alias: string, digest = DIGEST) =>
+      catalog.createAlias(ORG, 'quay.io/acme/app', alias, { digest }, ACTOR)
+
+    it('creates an alias and records its actor without pulling another version', async () => {
+      await use('quay.io/acme/app:v1')
+      const before = await catalog.get(ORG, 'quay.io/acme/app')
+
+      const detail = await create('stable')
+
+      expect(detail.versions).toHaveLength(before.versions.length)
+      expect(detail.versions[0].aliases).toEqual(['stable', 'v1'])
+      expect(detail.history[0]).toMatchObject({
+        aliasName: 'stable',
+        fromDigest: null,
+        toDigest: DIGEST,
+        actorId: ACTOR,
+      })
+    })
+
+    it('refuses targets that are missing, belong to another image or are not ready', async () => {
+      await use('quay.io/acme/app:v1')
+      await use('quay.io/acme/other:v1', { digest: OTHER_DIGEST })
+      const other = await catalog.get(ORG, 'quay.io/acme/other')
+      for (const target of [
+        { digest: undefined },
+        { digest: '' },
+        { digest: OTHER_DIGEST },
+        { versionId: other.versions[0].id },
+      ]) {
+        await expect(
+          catalog.createAlias(ORG, 'quay.io/acme/app', 'stable', target as unknown as VersionSelector, ACTOR),
+        ).rejects.toBeInstanceOf(BadRequestError)
+      }
+      const detail = await catalog.get(ORG, 'quay.io/acme/app')
+      await dataSource
+        .getRepository(ImageVersion)
+        .update({ id: detail.versions[0].id }, { state: ImageVersionState.DELETED })
+      await expect(create('stable')).rejects.toBeInstanceOf(BadRequestError)
+    })
+
+    it('refuses malformed names, curated images and another organization', async () => {
+      await use('quay.io/acme/app:v1')
+      await expect(create('-stable')).rejects.toBeInstanceOf(BadRequestError)
+      const [curated] = (await catalog.list(ORG)).filter((image) => image.curated)
+      await expect(catalog.createAlias(ORG, curated.name, 'stable', { digest: DIGEST }, ACTOR)).rejects.toBeInstanceOf(
+        BadRequestError,
+      )
+      await expect(
+        catalog.createAlias(OTHER_ORG, 'quay.io/acme/app', 'stable', { digest: DIGEST }, ACTOR),
+      ).rejects.toBeInstanceOf(NotFoundException)
+    })
+
+    it('deletes only the alias and requires explicit deletion before a replacement', async () => {
+      await use('quay.io/acme/app:v1')
+      await use('quay.io/acme/app:v2', { digest: OTHER_DIGEST })
+      const pinned = `quay.io/acme/app@${DIGEST}`
+      const boxId = await addBox(pinned)
+      const before = await create('stable')
+
+      await catalog.deleteAlias(ORG, 'quay.io/acme/app', 'stable')
+
+      const deleted = await catalog.get(ORG, 'quay.io/acme/app')
+      expect(deleted.aliases).not.toContain('stable')
+      expect(deleted.versions.map((version) => version.digest)).toEqual(
+        before.versions.map((version) => version.digest),
+      )
+      expect(deleted.history).toEqual(before.history)
+      await expect(catalog.deleteAlias(ORG, 'quay.io/acme/app', 'stable')).rejects.toBeInstanceOf(NotFoundException)
+      const recreated = await create('stable', OTHER_DIGEST)
+      expect(recreated.versions.find((version) => version.aliases.includes('stable'))?.digest).toBe(OTHER_DIGEST)
+      expect((await dataSource.getRepository(Box).findOneByOrFail({ id: boxId })).image).toBe(pinned)
+    })
+
+    it('scopes alias deletion to the image owner', async () => {
+      await use('quay.io/acme/app:v1')
+      await expect(catalog.deleteAlias(OTHER_ORG, 'quay.io/acme/app', 'v1')).rejects.toBeInstanceOf(NotFoundException)
+      expect((await catalog.get(ORG, 'quay.io/acme/app')).aliases).toContain('v1')
+    })
   })
 })

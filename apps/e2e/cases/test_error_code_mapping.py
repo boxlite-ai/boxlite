@@ -31,7 +31,7 @@ from typing import Any
 import boxlite
 import pytest
 
-from conftest import DEFAULT_IMAGE
+from conftest import DEFAULT_IMAGE, with_bounded_lifetime
 from e2e_auth import auth_context, request_json
 
 
@@ -88,7 +88,9 @@ async def test_invalid_argument_zero_cpu_returns_400(rt):
     status, body = _api_call(
         "POST",
         ctx.v1("boxes"),
-        {"image": DEFAULT_IMAGE, "cpus": 0, "memory_mib": 256, "disk_size_gb": 4},
+        with_bounded_lifetime(
+            {"image": DEFAULT_IMAGE, "cpus": 0, "memory_mib": 256, "disk_size_gb": 4}
+        ),
     )
     _assert_http_code(
         status,
@@ -116,7 +118,9 @@ async def test_invalid_argument_negative_memory_returns_400(rt):
     status, body = _api_call(
         "POST",
         ctx.v1("boxes"),
-        {"image": DEFAULT_IMAGE, "cpus": 1, "memory_mib": -1, "disk_size_gb": 4},
+        with_bounded_lifetime(
+            {"image": DEFAULT_IMAGE, "cpus": 1, "memory_mib": -1, "disk_size_gb": 4}
+        ),
     )
     _assert_http_code(
         status,
@@ -166,7 +170,9 @@ async def test_image_pull_failed_returns_422(rt):
     status, body = _api_call(
         "POST",
         ctx.v1("boxes"),
-        {"image": bogus_image, "cpus": 1, "memory_mib": 256, "disk_size_gb": 4},
+        with_bounded_lifetime(
+            {"image": bogus_image, "cpus": 1, "memory_mib": 256, "disk_size_gb": 4}
+        ),
     )
     # Some implementations return 404 (snapshot lookup miss) instead of 422
     # (image pull failed at runner). Both are 4xx and "image" or "not found"
@@ -217,7 +223,9 @@ async def test_resource_exhausted_over_cpu_quota_returns_429(rt):
     status, body = _api_call(
         "POST",
         ctx.v1("boxes"),
-        {"image": DEFAULT_IMAGE, "cpus": 999, "memory_mib": 256, "disk_size_gb": 4},
+        with_bounded_lifetime(
+            {"image": DEFAULT_IMAGE, "cpus": 999, "memory_mib": 256, "disk_size_gb": 4}
+        ),
     )
     # The mapping says 429 ResourceExhausted; some implementations may also
     # 400 InvalidArgument (treating it as a parse-time validation failure).

@@ -167,6 +167,7 @@ async fn fixture_with_container(started: bool) -> Fixture {
     let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
         home_dir: home.path().into(),
         image_registries: vec![],
+        ..Default::default()
     })
     .unwrap();
     let id = BoxIDMint::mint();

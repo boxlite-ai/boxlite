@@ -3,11 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-export type HandoffBox = {
-  id: string
-  name?: string
-  public?: boolean
-}
+import type { Box } from '@boxlite-ai/api-client'
+
+export type HandoffBox = Pick<Box, 'id' | 'network'> & { name?: string }
 
 export type Handoff = {
   keyValue: string

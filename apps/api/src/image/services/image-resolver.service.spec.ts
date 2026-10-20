@@ -79,7 +79,7 @@ describe('ImageResolverService', () => {
   })
 
   describe('catalog hits', () => {
-    it('pins a tag to the digest it first resolved to', async () => {
+    it('pins a tag to the digest the catalog has it pointing at', async () => {
       const { repository } = makeRepository({ digest: DIGEST, imageId: 'img-1' })
 
       const resolved = await new ImageResolverService(repository, noLogins).resolve(organization, 'quay.io/acme/app:v1')

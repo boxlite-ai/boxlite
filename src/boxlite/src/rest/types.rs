@@ -396,6 +396,10 @@ pub(crate) struct BoxResponse {
     pub auto_delete: u32,
     #[serde(default = "default_auto_resume")]
     pub auto_resume: bool,
+    /// The policy in both directions. A server that predates the field
+    /// omits it, which reads as "unknown", not as any particular policy.
+    #[serde(default)]
+    pub network: Option<crate::NetworkInfo>,
 }
 
 impl BoxResponse {
@@ -440,10 +444,10 @@ impl BoxResponse {
             image: self.image.clone(),
             cpus: self.cpus,
             memory_mib: self.memory_mib,
-            // The remote REST surface intentionally does not publish local
-            // host bindings. Missing network metadata is therefore distinct
-            // from a locally verified, resolved-empty publication list.
-            network: None,
+            // Local host bindings never travel over REST, so a published
+            // policy arrives with `published_ports: None`; a server that
+            // predates the field leaves the whole thing unknown.
+            network: self.network.clone(),
             labels: self.labels.clone(),
             auto_stop: self.auto_stop,
             auto_delete: self.auto_delete,
@@ -538,12 +542,12 @@ pub(crate) struct ListVolumesResponse {
 // Images
 // ============================================================================
 
-/// When the server recorded something; now when the time does not parse,
-/// matching how a volume's creation time is read.
+/// When the server recorded something; epoch when the time does not parse,
+/// matching the local image cache's deterministic fallback.
 fn recorded_time(raw: &str) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::parse_from_rfc3339(raw)
         .map(|time| time.with_timezone(&chrono::Utc))
-        .unwrap_or_else(|_| chrono::Utc::now())
+        .unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH)
 }
 
 /// One reference, as `GET /v1/{prefix}/images` lists it.
@@ -579,7 +583,16 @@ pub(crate) struct ListImagesResponse {
     pub images: Vec<ImageInfoResponse>,
 }
 
-/// One build, as `GET /v1/{prefix}/images/{name}` lists it.
+/// A time the server may leave out; `None` when it does, or when it does not
+/// parse, rather than a time nobody observed.
+fn optional_time(raw: Option<&str>) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(raw?)
+        .ok()
+        .map(|time| time.with_timezone(&chrono::Utc))
+}
+
+/// One build, as `GET /v1/{prefix}/images/{name}` lists it. The fields after
+/// `recorded_at` default, so a server that predates them still reads.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ImageVersionResponse {
     pub digest: String,
@@ -587,34 +600,75 @@ pub(crate) struct ImageVersionResponse {
     pub size_bytes: Option<u64>,
     pub source_ref: String,
     pub recorded_at: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub last_used_at: Option<String>,
+    #[serde(default)]
+    pub upstream_missing_at: Option<String>,
 }
 
-/// Response for `GET /v1/{prefix}/images/{name}`.
+/// One alias history entry, including bindings recorded by pulls.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ImageAliasEventResponse {
+    pub alias: String,
+    #[serde(default)]
+    pub from_digest: Option<String>,
+    pub to_digest: String,
+    #[serde(default)]
+    pub actor: Option<String>,
+    pub recorded_at: String,
+}
+
+/// Response for `GET /v1/{prefix}/images/{name}` and for alias creation.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ImageDetailResponse {
     pub name: String,
     #[serde(default)]
-    pub tags: Vec<String>,
+    pub aliases: Vec<String>,
     #[serde(default)]
     pub curated: bool,
     #[serde(default)]
     pub versions: Vec<ImageVersionResponse>,
+    #[serde(default)]
+    pub history: Vec<ImageAliasEventResponse>,
+}
+
+/// Body for `POST /v1/{prefix}/images/{name}/aliases`.
+#[derive(Debug, Serialize)]
+pub(crate) struct CreateAliasRequest<'a> {
+    pub alias: &'a str,
+    pub digest: &'a str,
 }
 
 impl ImageDetailResponse {
     pub fn into_image_detail(self) -> crate::runtime::types::ImageDetail {
         crate::runtime::types::ImageDetail {
             name: self.name,
-            tags: self.tags,
+            aliases: self.aliases,
             curated: self.curated,
             versions: self
                 .versions
                 .into_iter()
                 .map(|version| crate::runtime::types::ImageVersion {
                     recorded_at: recorded_time(&version.recorded_at),
+                    last_used_at: optional_time(version.last_used_at.as_deref()),
+                    upstream_missing_at: optional_time(version.upstream_missing_at.as_deref()),
                     digest: version.digest,
                     size_bytes: version.size_bytes,
                     source_ref: version.source_ref,
+                    aliases: version.aliases,
+                })
+                .collect(),
+            history: self
+                .history
+                .into_iter()
+                .map(|event| crate::runtime::types::ImageAliasEvent {
+                    recorded_at: recorded_time(&event.recorded_at),
+                    alias: event.alias,
+                    from_digest: event.from_digest,
+                    to_digest: event.to_digest,
+                    actor: event.actor,
                 })
                 .collect(),
         }
@@ -633,7 +687,7 @@ pub(crate) struct ImageUsageResponse {
 // Registries
 // ============================================================================
 
-/// Body for `POST /v1/{prefix}/registries`. No `Debug`: it holds the password.
+/// Body for `POST /v1/{prefix}/images/registries`. No `Debug`: it holds the password.
 #[derive(Serialize)]
 pub(crate) struct CreateRegistryRequest<'a> {
     pub registry_host: &'a str,
@@ -654,7 +708,7 @@ impl<'a> CreateRegistryRequest<'a> {
     }
 }
 
-/// One login, as `/v1/{prefix}/registries` answers it. There is no password
+/// One login, as `/v1/{prefix}/images/registries` answers it. There is no password
 /// field, so one a server sent back is dropped here.
 #[derive(Debug, Deserialize)]
 pub(crate) struct RegistryCredentialResponse {
@@ -681,7 +735,7 @@ impl RegistryCredentialResponse {
     }
 }
 
-/// Response for `GET /v1/{prefix}/registries`.
+/// Response for `GET /v1/{prefix}/images/registries`.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ListRegistriesResponse {
     pub registries: Vec<RegistryCredentialResponse>,
@@ -891,6 +945,48 @@ fn parse_box_status(status: &str) -> BoxStatus {
 mod tests {
     use super::*;
     use crate::runtime::options::BoxOptions;
+
+    #[test]
+    fn rest_recorded_timestamps_are_stable_across_conversions() {
+        for (raw, seconds) in [
+            ("invalid", 0),
+            ("", 0),
+            ("1970-01-02T02:00:00+02:00", 86_400),
+        ] {
+            let info: ImageInfoResponse = serde_json::from_value(serde_json::json!({
+                "reference": "quay.io/acme/app:latest",
+                "repository": "quay.io/acme/app", "tag": "latest",
+                "id": "sha256:abc", "cached_at": raw
+            }))
+            .unwrap();
+            let detail: ImageDetailResponse = serde_json::from_value(serde_json::json!({
+                "name": "quay.io/acme/app",
+                "versions": [{
+                    "digest": "sha256:abc", "source_ref": "quay.io/acme/app:latest",
+                    "recorded_at": raw
+                }],
+                "history": [{"alias": "latest", "to_digest": "sha256:abc", "recorded_at": raw}]
+            }))
+            .unwrap();
+            let registry: RegistryCredentialResponse = serde_json::from_value(serde_json::json!({
+                "id": "registry-1", "registry_host": "quay.io",
+                "username": "reader", "created_at": raw
+            }))
+            .unwrap();
+            let detail = detail.into_image_detail();
+            let expected = chrono::DateTime::from_timestamp(seconds, 0).unwrap();
+            assert_eq!(
+                [
+                    info.into_image_info().cached_at,
+                    detail.versions[0].recorded_at,
+                    detail.history[0].recorded_at,
+                    registry.into_registry_credential().created_at,
+                ],
+                [expected; 4],
+                "wire timestamp: {raw:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_create_box_request_serialization() {
@@ -1152,8 +1248,8 @@ mod tests {
         assert!(json["network"]["outbound"].is_null());
     }
 
-    /// Servers read an omitted inbound as private, so the flat shape is only
-    /// safe to send for a private box; an enabled inbound must travel nested.
+    /// Servers read an omitted inbound as disabled, so the flat shape is only
+    /// safe to send with inbound disabled; an enabled inbound must travel nested.
     #[test]
     fn test_create_box_request_network_shape_follows_inbound_mode() {
         use crate::runtime::options::{BoxOptions, NetworkSpec, RootfsSpec};
@@ -1164,18 +1260,18 @@ mod tests {
             ..Default::default()
         };
 
-        let private = CreateBoxRequest::from_options(&with_inbound(NetworkSpec::Disabled), None);
-        let json = serde_json::to_value(&private).unwrap();
+        let disabled = CreateBoxRequest::from_options(&with_inbound(NetworkSpec::Disabled), None);
+        let json = serde_json::to_value(&disabled).unwrap();
         assert_eq!(json["network"]["mode"], "enabled");
         assert!(json["network"]["inbound"].is_null());
 
-        let public = CreateBoxRequest::from_options(
+        let enabled = CreateBoxRequest::from_options(
             &with_inbound(NetworkSpec::Enabled {
                 allow_net: Vec::new(),
             }),
             None,
         );
-        let json = serde_json::to_value(&public).unwrap();
+        let json = serde_json::to_value(&enabled).unwrap();
         assert_eq!(json["network"]["outbound"]["mode"], "enabled");
         assert_eq!(json["network"]["inbound"]["mode"], "enabled");
         assert!(json["network"]["mode"].is_null());
@@ -1258,6 +1354,42 @@ mod tests {
         assert_eq!(resp.cpus, 2);
         assert_eq!(resp.auto_stop, 900);
         assert_eq!(resp.auto_delete, 0);
+        assert!(
+            resp.network.is_none(),
+            "a server that predates the field leaves the policy unknown"
+        );
+    }
+
+    #[test]
+    fn test_box_response_network_maps_to_network_info() {
+        use crate::runtime::options::NetworkMode;
+
+        let json = r#"{
+            "box_id": "01J0000000000000000000000A",
+            "status": "running",
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:01:00Z",
+            "pid": null,
+            "image": "python:3.11",
+            "cpus": 2,
+            "memory_mib": 512,
+            "network": {
+                "outbound": { "mode": "enabled", "allow_net": ["api.openai.com"] },
+                "inbound": { "mode": "enabled" }
+            }
+        }"#;
+        let resp: BoxResponse = serde_json::from_str(json).unwrap();
+        let info = resp.to_box_info().expect("valid box_id should parse");
+
+        let network = info.network.expect("the server published the policy");
+        assert_eq!(network.outbound.mode, NetworkMode::Enabled);
+        assert_eq!(network.outbound.allow_net, vec!["api.openai.com"]);
+        assert_eq!(network.inbound.mode, NetworkMode::Enabled);
+        assert!(network.inbound.allow_net.is_empty());
+        assert!(
+            network.published_ports.is_none(),
+            "host bindings never travel over REST"
+        );
     }
 
     #[test]
@@ -1278,6 +1410,7 @@ mod tests {
             auto_stop: 1800,
             auto_delete: 604800,
             auto_resume: true,
+            network: None,
         };
         let info = resp.to_box_info().expect("valid ULID box_id should parse");
         assert_eq!(info.name.as_deref(), Some("mybox"));
@@ -1307,6 +1440,7 @@ mod tests {
             auto_stop: 1800,
             auto_delete: 0,
             auto_resume: true,
+            network: None,
         };
 
         let info = resp.to_box_info().expect("valid box_id should parse");
@@ -1343,6 +1477,7 @@ mod tests {
             auto_stop: 900,
             auto_delete: 0,
             auto_resume: true,
+            network: None,
         };
         let info = resp.to_box_info().expect("UUID box_id should parse");
         assert_eq!(info.id.as_str(), "d406c59d-eb09-4bc3-9b3a-62455c7e8f32");
@@ -1372,6 +1507,7 @@ mod tests {
             auto_stop: 900,
             auto_delete: 0,
             auto_resume: true,
+            network: None,
         };
         assert!(mk("").to_box_info().is_err(), "empty");
         assert!(mk("a/b").to_box_info().is_err(), "slash");
@@ -1445,6 +1581,7 @@ mod tests {
             auto_stop: 900,
             auto_delete: 0,
             auto_resume: true,
+            network: None,
         };
 
         // Legacy transient statuses map to Unknown (no longer valid)

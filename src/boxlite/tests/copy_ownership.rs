@@ -42,6 +42,7 @@ async fn copy_in_hands_files_to_the_box_user() {
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 
@@ -166,6 +167,7 @@ async fn streaming_copy_in_hands_files_to_the_box_user() {
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 

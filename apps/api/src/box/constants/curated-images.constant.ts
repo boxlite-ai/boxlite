@@ -21,7 +21,7 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
  * additions, both configured via env so refs rotate and images are added without a code deploy:
  *   BOXLITE_SYSTEM_{BASE,PYTHON,NODE}_IMAGE  -- rotate a built-in's ref
  *   BOXLITE_SYSTEM_IMAGES                     -- add images, comma-separated `name=ref`
- *                                                e.g. "hermes=ghcr.io/acme/hermes-agent:v3"
+ *                                                e.g. "tools=ghcr.io/acme/tools:v3"
  *
  * A curated image must be public, because a runner holds no registry credential, and should
  * not live on docker.io: each runner asks the registry once per curated ref before its boxes

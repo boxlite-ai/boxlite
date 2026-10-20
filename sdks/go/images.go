@@ -35,13 +35,16 @@ type ImageDetail struct {
 	// Name is the registry and repository without a tag, such as
 	// "docker.io/library/alpine".
 	Name string
-	// Tags are the tags held for Name.
-	Tags []string
+	// Aliases are the aliases held for Name.
+	Aliases []string
 	// Curated reports that the operator provides the image rather than a box
 	// having pulled it. Only a REST runtime's catalog has these.
 	Curated bool
 	// Versions are the builds held under Name, newest first.
 	Versions []ImageVersion
+	// History holds the latest alias history entries, newest first; a local cache keeps
+	// none.
+	History []ImageAliasEvent
 }
 
 // ImageVersion is one build of an image.
@@ -54,6 +57,26 @@ type ImageVersion struct {
 	// SourceRef is the reference that was pulled to get this build.
 	SourceRef string
 	// RecordedAt is when this build was recorded, to the second.
+	RecordedAt time.Time
+	// Aliases are the image's aliases that point at this build.
+	Aliases []string
+	// LastUsedAt is when a box last started from this build; nil when unknown.
+	LastUsedAt *time.Time
+	// UpstreamMissingAt is when a pull found this build gone from its
+	// registry; nil while it is not known to be gone.
+	UpstreamMissingAt *time.Time
+}
+
+// ImageAliasEvent is an alias registration or historical binding change,
+// naming versions by digest.
+type ImageAliasEvent struct {
+	Alias string
+	// FromDigest is the build the alias pointed at before; empty when the alias
+	// was new.
+	FromDigest string
+	ToDigest   string
+	// Actor is who recorded the alias; empty when a pull recorded it.
+	Actor      string
 	RecordedAt time.Time
 }
 
@@ -72,7 +95,7 @@ type ImageUsage struct {
 // Images is a runtime-scoped handle for the images a runtime can boot from:
 // the local cache on a runtime from NewRuntime, the server's catalog on one
 // from NewRest. Pull is local only (a REST runtime pulls when a box is
-// created) and Usage is REST only.
+// created); Usage, CreateAlias and DeleteAlias are REST only.
 type Images struct {
 	runtime *Runtime
 	handle  *C.CBoxliteImageHandle
@@ -85,7 +108,7 @@ func closedImagesError() error {
 // Images returns a runtime-scoped handle for image operations.
 //
 // The C-side image handle is created synchronously; async operations
-// (Pull, List, Get, Remove, Usage) post events into the parent runtime's
+// (Pull, List, Get, Remove, Usage, CreateAlias, DeleteAlias) post events into the parent runtime's
 // event queue and are dispatched by the runtime drain goroutine.
 func (r *Runtime) Images() (*Images, error) {
 	var handle *C.CBoxliteImageHandle
@@ -263,6 +286,83 @@ func (i *Images) Usage(ctx context.Context) (*ImageUsage, error) {
 	}
 }
 
+// CreateAlias points a tag of an image name at the version with that digest and
+// returns the image as it now is. Boxes already created keep the version they
+// have. REST runtimes only: a local runtime, which resolves a tag afresh for
+// each new box, fails with ErrUnsupported.
+//
+// A tag the OCI distribution spec refuses or a digest other than "sha256:"
+// and 64 lowercase hex digits fails with ErrInvalidArgument before anything
+// is sent.
+func (i *Images) CreateAlias(ctx context.Context, name, alias, digest string) (*ImageDetail, error) {
+	if i == nil || i.handle == nil {
+		return nil, closedImagesError()
+	}
+	i.runtime.ensureDrainRunning()
+
+	cName := toCString(name)
+	defer C.free(unsafe.Pointer(cName))
+	cAlias := toCString(alias)
+	defer C.free(unsafe.Pointer(cAlias))
+	cDigest := toCString(digest)
+	defer C.free(unsafe.Pointer(cDigest))
+
+	ch := make(chan imageDetailResult, 1)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
+
+	var cerr C.CBoxliteError
+	code := C.boxlite_image_create_alias(i.handle, cName, cAlias, cDigest, C.cbImageGet(), handleToPtr(h), &cerr)
+	if code != C.Ok {
+		deleteHandleForDispatch(h)
+		return nil, freeError(&cerr)
+	}
+
+	select {
+	case res := <-ch:
+		return res.value, res.err
+	case <-ctx.Done():
+		drainAndDelete(ch, h, i.runtime.closing)
+		return nil, ctx.Err()
+	case <-i.runtime.closing:
+		drainAndDelete(ch, h, i.runtime.closing)
+		return nil, ErrRuntimeClosed
+	}
+}
+
+// DeleteAlias removes only the named catalog binding. REST runtimes only.
+func (i *Images) DeleteAlias(ctx context.Context, name, alias string) error {
+	if i == nil || i.handle == nil {
+		return closedImagesError()
+	}
+	i.runtime.ensureDrainRunning()
+
+	cName := toCString(name)
+	defer C.free(unsafe.Pointer(cName))
+	cAlias := toCString(alias)
+	defer C.free(unsafe.Pointer(cAlias))
+
+	ch := make(chan error, 1)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
+
+	var cerr C.CBoxliteError
+	code := C.boxlite_image_delete_alias(i.handle, cName, cAlias, C.cbImageRemove(), handleToPtr(h), &cerr)
+	if code != C.Ok {
+		deleteHandleForDispatch(h)
+		return freeError(&cerr)
+	}
+
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		abandonAsyncErr(ch, h, i.runtime.closing)
+		return ctx.Err()
+	case <-i.runtime.closing:
+		abandonAsyncErr(ch, h, i.runtime.closing)
+		return ErrRuntimeClosed
+	}
+}
+
 // Close releases the image handle.
 func (i *Images) Close() error {
 	if i != nil && i.handle != nil {
@@ -305,11 +405,7 @@ func cImageDetailToGo(detail *C.CImageDetail) ImageDetail {
 		Name:    cString(detail.name),
 		Curated: detail.curated != 0,
 	}
-	if detail.tags != nil && detail.tags_count > 0 {
-		for _, tag := range unsafe.Slice(detail.tags, int(detail.tags_count)) {
-			out.Tags = append(out.Tags, cString(tag))
-		}
-	}
+	out.Aliases = cStrings(detail.aliases, detail.aliases_count)
 	if detail.versions != nil && detail.versions_count > 0 {
 		for _, version := range unsafe.Slice(detail.versions, int(detail.versions_count)) {
 			var size *uint64
@@ -318,12 +414,46 @@ func cImageDetailToGo(detail *C.CImageDetail) ImageDetail {
 				size = &v
 			}
 			out.Versions = append(out.Versions, ImageVersion{
-				Digest:     cString(version.digest),
-				SizeBytes:  size,
-				SourceRef:  cString(version.source_ref),
-				RecordedAt: time.Unix(int64(version.recorded_at), 0),
+				Digest:            cString(version.digest),
+				SizeBytes:         size,
+				SourceRef:         cString(version.source_ref),
+				RecordedAt:        time.Unix(int64(version.recorded_at), 0),
+				Aliases:           cStrings(version.aliases, version.aliases_count),
+				LastUsedAt:        cTime(version.last_used_at, version.has_last_used_at),
+				UpstreamMissingAt: cTime(version.upstream_missing_at, version.has_upstream_missing_at),
+			})
+		}
+	}
+	if detail.history != nil && detail.history_count > 0 {
+		for _, event := range unsafe.Slice(detail.history, int(detail.history_count)) {
+			out.History = append(out.History, ImageAliasEvent{
+				Alias:      cString(event.alias),
+				FromDigest: cString(event.from_digest),
+				ToDigest:   cString(event.to_digest),
+				Actor:      cString(event.actor),
+				RecordedAt: time.Unix(int64(event.recorded_at), 0),
 			})
 		}
 	}
 	return out
+}
+
+func cStrings(items **C.char, count C.int) []string {
+	if items == nil || count <= 0 {
+		return nil
+	}
+	var out []string
+	for _, item := range unsafe.Slice(items, int(count)) {
+		out = append(out, cString(item))
+	}
+	return out
+}
+
+// cTime is the time a C field holds, or nil when its has_ flag is zero.
+func cTime(seconds C.int64_t, isSet C.int) *time.Time {
+	if isSet == 0 {
+		return nil
+	}
+	t := time.Unix(int64(seconds), 0)
+	return &t
 }

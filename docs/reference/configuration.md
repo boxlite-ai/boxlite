@@ -364,6 +364,14 @@ Base directory for BoxLite runtime data.
 runtime = boxlite.Boxlite(boxlite.Options(home_dir="/custom/path"))
 ```
 
+### `image_registry_proxy`
+
+Proxy for image pulls, with `http_proxy`, `https_proxy`, and `no_proxy` fields. Unset, pulls read the proxy environment variables. Set, it replaces all of them for pulls. Invalid settings fail runtime creation. Available in Rust `BoxliteOptions` and the CLI `--config` file.
+
+**Default:** unset
+
+See [Pull proxy](../guides/image-registry-configuration.md#pull-proxy) for the full behavior.
+
 ## Environment variables
 
 ### `BOXLITE_HOME`

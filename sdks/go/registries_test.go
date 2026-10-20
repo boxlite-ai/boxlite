@@ -92,9 +92,18 @@ func (s *registryServer) registries(t *testing.T) *Registries {
 			t.Errorf("Close runtime: %v", err)
 		}
 	})
-	registries, err := rt.Registries()
+	images, err := rt.Images()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = images.Close() })
+	registries, err := images.Registries()
 	if err != nil {
 		t.Fatalf("Registries: %v", err)
+	}
+	// A registry handle remains usable after its parent image handle closes.
+	if err := images.Close(); err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = registries.Close() })
 	return registries
@@ -118,7 +127,7 @@ func testNewLogin() NewRegistryCredential {
 
 func TestRestRegistriesListReadsEachLogin(t *testing.T) {
 	server := newRegistryServer(t)
-	server.reply("GET /v1/registries", http.StatusOK, `{"registries":[`+testLogin+`]}`)
+	server.reply("GET /v1/images/registries", http.StatusOK, `{"registries":[`+testLogin+`]}`)
 
 	logins, err := server.registries(t).List(registryTestContext(t))
 	if err != nil {
@@ -142,7 +151,7 @@ func TestRestRegistriesListReadsEachLogin(t *testing.T) {
 func TestRestRegistriesCreateSendsTheLoginAndHandsBackNoPassword(t *testing.T) {
 	server := newRegistryServer(t)
 	echoed := strings.Replace(testLogin, "{", `{"password":"`+testPassword+`",`, 1)
-	server.reply("POST /v1/registries", http.StatusCreated, echoed)
+	server.reply("POST /v1/images/registries", http.StatusCreated, echoed)
 
 	created, err := server.registries(t).Create(registryTestContext(t), testNewLogin())
 	if err != nil {
@@ -171,7 +180,7 @@ func TestRestRegistriesCreateSendsTheLoginAndHandsBackNoPassword(t *testing.T) {
 
 func TestRestRegistriesCreateWithoutAPrefixSendsNone(t *testing.T) {
 	server := newRegistryServer(t)
-	server.reply("POST /v1/registries", http.StatusCreated, testLogin)
+	server.reply("POST /v1/images/registries", http.StatusCreated, testLogin)
 	login := testNewLogin()
 	login.RepositoryPrefix = ""
 
@@ -186,7 +195,7 @@ func TestRestRegistriesCreateWithoutAPrefixSendsNone(t *testing.T) {
 
 func TestRestRegistriesCreateForAHeldPrefixIsAlreadyExists(t *testing.T) {
 	server := newRegistryServer(t)
-	server.reply("POST /v1/registries", http.StatusConflict,
+	server.reply("POST /v1/images/registries", http.StatusConflict,
 		`{"statusCode":409,"message":"A credential for ghcr.io/acme/ already exists","code":"already_exists"}`)
 
 	_, err := server.registries(t).Create(registryTestContext(t), testNewLogin())
@@ -196,20 +205,20 @@ func TestRestRegistriesCreateForAHeldPrefixIsAlreadyExists(t *testing.T) {
 
 func TestRestRegistriesRemoveDeletesTheLoginByID(t *testing.T) {
 	server := newRegistryServer(t)
-	server.reply("DELETE /v1/registries/"+testLoginID, http.StatusNoContent, "")
+	server.reply("DELETE /v1/images/registries/"+testLoginID, http.StatusNoContent, "")
 
 	if err := server.registries(t).Remove(registryTestContext(t), testLoginID); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 
-	if got := server.received(); len(got) != 1 || got[0].route != "DELETE /v1/registries/"+testLoginID {
+	if got := server.received(); len(got) != 1 || got[0].route != "DELETE /v1/images/registries/"+testLoginID {
 		t.Fatalf("requests: %+v", got)
 	}
 }
 
 func TestRestRegistriesRemoveOfALoginInUseIsInvalidState(t *testing.T) {
 	server := newRegistryServer(t)
-	server.reply("DELETE /v1/registries/"+testLoginID, http.StatusConflict,
+	server.reply("DELETE /v1/images/registries/"+testLoginID, http.StatusConflict,
 		`{"statusCode":409,"message":"cannot be removed while 1 box(es) pull through it: box-1"}`)
 
 	err := server.registries(t).Remove(registryTestContext(t), testLoginID)
@@ -229,7 +238,8 @@ func TestRestRegistriesRemoveRefusesAnIDThatIsNotAUUIDWithoutARequest(t *testing
 }
 
 func TestRegistriesAreUnsupportedOnALocalRuntime(t *testing.T) {
-	_, err := newImageTestRuntime(t).Registries()
+	images := localImages(t)
+	_, err := images.Registries()
 
 	requireErrorCode(t, err, ErrUnsupported, "image_registries")
 }

@@ -67,14 +67,17 @@ func closedRegistriesError() error {
 //
 // A local runtime returns ErrUnsupported: it pulls with the logins in its
 // options' image registries instead.
-func (r *Runtime) Registries() (*Registries, error) {
+func (i *Images) Registries() (*Registries, error) {
+	if i == nil || i.handle == nil {
+		return nil, closedImagesError()
+	}
 	var handle *C.CBoxliteRegistryHandle
 	var cerr C.CBoxliteError
-	code := C.boxlite_runtime_registries(r.handle, &handle, &cerr)
+	code := C.boxlite_image_registries(i.handle, &handle, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
-	return &Registries{runtime: r, handle: handle}, nil
+	return &Registries{runtime: i.runtime, handle: handle}, nil
 }
 
 // List returns every login the organization holds, oldest first.

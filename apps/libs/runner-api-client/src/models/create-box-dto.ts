@@ -35,14 +35,17 @@ export interface CreateBoxDTO {
     'image': string;
     'memoryQuota'?: number;
     'metadata'?: { [key: string]: string; };
-    'networkAllowList'?: string;
-    'networkBlockAll'?: boolean;
     /**
      * Nullable for backward compatibility
      */
     'organizationId'?: string;
     'osUser': string;
     'otelEndpoint'?: string;
+    'outboundAllowNet'?: Array<string>;
+    /**
+     * Outbound network policy. outboundEnabled is required: a request without it is rejected rather than started with a guessed policy.
+     */
+    'outboundEnabled': boolean;
     'regionId'?: string;
     'registry'?: RegistryDTO;
     'runAsUser'?: string;

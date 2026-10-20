@@ -145,14 +145,19 @@ export class Box {
   })
   env: { [key: string]: string } = {}
 
-  @Column({ default: false, type: 'boolean' })
-  public = false
+  // Network policy, one flag per direction; true is the `/v1` NetworkSpec's
+  // `enabled`. Inbound enabled lets the proxy serve the box's exposed services
+  // without sign-in; it never affects the terminal or the API.
+  @Column({ type: 'boolean', default: false })
+  inboundEnabled = false
 
-  @Column({ default: false, type: 'boolean' })
-  networkBlockAll = false
+  @Column({ type: 'boolean', default: true })
+  outboundEnabled = true
 
-  @Column({ nullable: true })
-  networkAllowList?: string
+  // Egress allowlist entries (hosts, wildcards, IPs, CIDRs). Null means full
+  // egress while outbound is enabled; it is irrelevant otherwise.
+  @Column({ type: 'text', array: true, nullable: true })
+  outboundAllowNet?: string[] | null
 
   @Column('jsonb', { nullable: true })
   labels: { [key: string]: string }

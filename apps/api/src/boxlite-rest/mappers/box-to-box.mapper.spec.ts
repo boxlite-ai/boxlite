@@ -4,22 +4,48 @@
  */
 
 import { BoxState } from '../../box/enums/box-state.enum'
+import { Box } from '../../box/entities/box.entity'
+import { BoxDto } from '../../box/dto/box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
 
 describe('BoxLite lifecycle policy mapper', () => {
   it.each([
     ['enabled', true],
     ['disabled', false],
-  ])('maps inbound.mode=%s to control-plane public=%s', (mode, expected) => {
+  ] as const)('maps inbound.mode=%s to inbound enabled %s', (mode, expected) => {
     const mapped = createBoxToCreateBox({
       network: {
         outbound: { mode: 'enabled' },
-        inbound: { mode: mode as 'enabled' | 'disabled' },
+        inbound: { mode },
       },
     })
 
-    expect(mapped.public).toBe(expected)
+    expect(mapped.inboundEnabled).toBe(expected)
   })
+
+  it('leaves inbound disabled and outbound to the organization default without a network spec', () => {
+    const mapped = createBoxToCreateBox({})
+
+    expect([mapped.inboundEnabled, mapped.outboundEnabled, mapped.outboundAllowNet]).toEqual([
+      false,
+      undefined,
+      undefined,
+    ])
+  })
+
+  it.each([
+    ['enabled', [' api.openai.com ', '', '10.0.0.0/8'], true, ['api.openai.com', '10.0.0.0/8']],
+    ['enabled', [], true, undefined],
+    ['disabled', ['api.openai.com'], false, undefined],
+  ] as const)(
+    'maps outbound %s with allow_net %j to enabled %s and entries %j',
+    (mode, allowNet, expectedEnabled, expected) => {
+      const mapped = createBoxToCreateBox({ network: { outbound: { mode, allow_net: [...allowNet] } } })
+
+      expect(mapped.outboundEnabled).toBe(expectedEnabled)
+      expect(mapped.outboundAllowNet).toEqual(expected)
+    },
+  )
 
   it('maps second-based create fields into the control-plane DTO', () => {
     const mapped = createBoxToCreateBox({
@@ -153,6 +179,23 @@ describe('BoxLite container process options mapper', () => {
     } as any)
 
     expect(response.exit_code).toBe(expected)
+  })
+
+  // The `/v1` read carries the control-plane policy unchanged, from the box
+  // row through `BoxDto` to the response.
+  it('reports the network policy of the box row', () => {
+    const row = new Box('us', 'net')
+    row.id = 'box-1'
+    row.inboundEnabled = true
+    row.outboundEnabled = true
+    row.outboundAllowNet = ['api.openai.com']
+
+    const response = boxToBoxResponse(BoxDto.fromBox(row, 'https://proxy.invalid'))
+
+    expect(response.network).toEqual({
+      outbound: { mode: 'enabled', allow_net: ['api.openai.com'] },
+      inbound: { mode: 'enabled', allow_net: [] },
+    })
   })
 
   it('omits exit_code when the box has none', () => {

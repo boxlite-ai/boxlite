@@ -264,9 +264,9 @@ export class BoxliteBoxController {
     return boxToBoxResponse(dto)
   }
 
-  // The dashboard flips the same `public` flag through
-  // `POST /api/box/:id/public/:isPublic`, which requires WRITE_BOXES. Requiring
-  // it here too keeps this from being a weaker route to that operation.
+  // The dashboard, CLI and SDKs all change inbound mode here. The deprecated
+  // `POST /api/box/:id/public/:isPublic` changes the same mode and requires
+  // WRITE_BOXES, so requiring it here too keeps neither route weaker.
   @Put(':boxId/network/inbound')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @ApiResponse({
@@ -275,7 +275,7 @@ export class BoxliteBoxController {
     type: InboundNetworkSpecDto,
   })
   @Audit({
-    action: AuditAction.UPDATE_PUBLIC_STATUS,
+    action: AuditAction.UPDATE_INBOUND_ACCESS,
     targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxId,
     requestMetadata: {
@@ -287,8 +287,8 @@ export class BoxliteBoxController {
     @Param('boxId') boxId: string,
     @Body() dto: InboundNetworkSpecDto,
   ): Promise<InboundNetworkSpecDto> {
-    const box = await this.boxService.updatePublicStatus(boxId, dto.mode === 'enabled', authContext.organizationId)
-    return { mode: box.public ? 'enabled' : 'disabled' }
+    const box = await this.boxService.updateInboundEnabled(boxId, dto.mode === 'enabled', authContext.organizationId)
+    return { mode: box.inboundEnabled ? 'enabled' : 'disabled' }
   }
 
   private isStartAlreadyInProgress(box: Box): boolean {

@@ -18,9 +18,11 @@ import type { AxiosPromise, AxiosInstance, RawAxiosRequestConfig } from 'axios';
 import globalAxios from 'axios';
 // Some imports not used depending on template conditions
 // @ts-ignore
-import { DUMMY_BASE_URL, assertParamExists, setBearerAuthToObject, setSearchParams, toPathString, createRequestFunction } from '../common';
+import { DUMMY_BASE_URL, assertParamExists, setBearerAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction } from '../common';
 // @ts-ignore
 import { BASE_PATH, type RequestArgs, BaseAPI, operationServerMap } from '../base';
+// @ts-ignore
+import type { CreateImageAlias } from '../models';
 // @ts-ignore
 import type { Image } from '../models';
 // @ts-ignore
@@ -33,7 +35,56 @@ import type { ImageUsage } from '../models';
 export const ImagesApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. That is also how to pick up a tag that has moved upstream, since a recorded tag keeps the digest it first resolved to.
+         * Creates a catalog alias for a ready version. Existing aliases are refused, including the same binding. The upstream registry and existing boxes are unchanged.
+         * @summary Create an image alias
+         * @param {string} idOrRef Catalog ID or URL-encoded image name
+         * @param {CreateImageAlias} createImageAlias 
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        createImageAlias: async (idOrRef: string, createImageAlias: CreateImageAlias, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'idOrRef' is not null or undefined
+            assertParamExists('createImageAlias', 'idOrRef', idOrRef)
+            // verify required parameter 'createImageAlias' is not null or undefined
+            assertParamExists('createImageAlias', 'createImageAlias', createImageAlias)
+            const localVarPath = `/images/{idOrRef}/aliases`
+                .replace('{idOrRef}', encodeURIComponent(String(idOrRef)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xBoxLiteOrganizationID != null) {
+                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(createImageAlias, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; aliases for recorded versions are created and deleted explicitly.
          * @summary Remove an image from the catalog
          * @param {string} idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -45,6 +96,53 @@ export const ImagesApiAxiosParamCreator = function (configuration?: Configuratio
             assertParamExists('deleteImage', 'idOrRef', idOrRef)
             const localVarPath = `/images/{idOrRef}`
                 .replace('{idOrRef}', encodeURIComponent(String(idOrRef)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'DELETE', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+
+            if (xBoxLiteOrganizationID != null) {
+                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * Removes only the catalog binding. Versions, existing boxes and alias history remain.
+         * @summary Delete an image alias
+         * @param {string} idOrRef Catalog ID or URL-encoded image name
+         * @param {string} alias Catalog alias to delete
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        deleteImageAlias: async (idOrRef: string, alias: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'idOrRef' is not null or undefined
+            assertParamExists('deleteImageAlias', 'idOrRef', idOrRef)
+            // verify required parameter 'alias' is not null or undefined
+            assertParamExists('deleteImageAlias', 'alias', alias)
+            const localVarPath = `/images/{idOrRef}/aliases/{alias}`
+                .replace('{idOrRef}', encodeURIComponent(String(idOrRef)))
+                .replace('{alias}', encodeURIComponent(String(alias)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -209,7 +307,22 @@ export const ImagesApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = ImagesApiAxiosParamCreator(configuration)
     return {
         /**
-         * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. That is also how to pick up a tag that has moved upstream, since a recorded tag keeps the digest it first resolved to.
+         * Creates a catalog alias for a ready version. Existing aliases are refused, including the same binding. The upstream registry and existing boxes are unchanged.
+         * @summary Create an image alias
+         * @param {string} idOrRef Catalog ID or URL-encoded image name
+         * @param {CreateImageAlias} createImageAlias 
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async createImageAlias(idOrRef: string, createImageAlias: CreateImageAlias, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ImageDetail>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.createImageAlias(idOrRef, createImageAlias, xBoxLiteOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['ImagesApi.createImageAlias']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; aliases for recorded versions are created and deleted explicitly.
          * @summary Remove an image from the catalog
          * @param {string} idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -220,6 +333,21 @@ export const ImagesApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.deleteImage(idOrRef, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['ImagesApi.deleteImage']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * Removes only the catalog binding. Versions, existing boxes and alias history remain.
+         * @summary Delete an image alias
+         * @param {string} idOrRef Catalog ID or URL-encoded image name
+         * @param {string} alias Catalog alias to delete
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async deleteImageAlias(idOrRef: string, alias: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.deleteImageAlias(idOrRef, alias, xBoxLiteOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['ImagesApi.deleteImageAlias']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -272,7 +400,19 @@ export const ImagesApiFactory = function (configuration?: Configuration, basePat
     const localVarFp = ImagesApiFp(configuration)
     return {
         /**
-         * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. That is also how to pick up a tag that has moved upstream, since a recorded tag keeps the digest it first resolved to.
+         * Creates a catalog alias for a ready version. Existing aliases are refused, including the same binding. The upstream registry and existing boxes are unchanged.
+         * @summary Create an image alias
+         * @param {string} idOrRef Catalog ID or URL-encoded image name
+         * @param {CreateImageAlias} createImageAlias 
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        createImageAlias(idOrRef: string, createImageAlias: CreateImageAlias, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ImageDetail> {
+            return localVarFp.createImageAlias(idOrRef, createImageAlias, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; aliases for recorded versions are created and deleted explicitly.
          * @summary Remove an image from the catalog
          * @param {string} idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -281,6 +421,18 @@ export const ImagesApiFactory = function (configuration?: Configuration, basePat
          */
         deleteImage(idOrRef: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
             return localVarFp.deleteImage(idOrRef, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * Removes only the catalog binding. Versions, existing boxes and alias history remain.
+         * @summary Delete an image alias
+         * @param {string} idOrRef Catalog ID or URL-encoded image name
+         * @param {string} alias Catalog alias to delete
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        deleteImageAlias(idOrRef: string, alias: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.deleteImageAlias(idOrRef, alias, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -321,7 +473,20 @@ export const ImagesApiFactory = function (configuration?: Configuration, basePat
  */
 export class ImagesApi extends BaseAPI {
     /**
-     * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. That is also how to pick up a tag that has moved upstream, since a recorded tag keeps the digest it first resolved to.
+     * Creates a catalog alias for a ready version. Existing aliases are refused, including the same binding. The upstream registry and existing boxes are unchanged.
+     * @summary Create an image alias
+     * @param {string} idOrRef Catalog ID or URL-encoded image name
+     * @param {CreateImageAlias} createImageAlias 
+     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public createImageAlias(idOrRef: string, createImageAlias: CreateImageAlias, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ImagesApiFp(this.configuration).createImageAlias(idOrRef, createImageAlias, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * Removes the catalog entry, not the bytes: runners keep whatever they cached, and using the same reference again pulls it back as a new entry. A pull never moves a recorded tag, so this is how to pick up where a tag points upstream now; aliases for recorded versions are created and deleted explicitly.
      * @summary Remove an image from the catalog
      * @param {string} idOrRef Catalog ID, or any reference that names the image — URL-encode a reference
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -330,6 +495,19 @@ export class ImagesApi extends BaseAPI {
      */
     public deleteImage(idOrRef: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return ImagesApiFp(this.configuration).deleteImage(idOrRef, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * Removes only the catalog binding. Versions, existing boxes and alias history remain.
+     * @summary Delete an image alias
+     * @param {string} idOrRef Catalog ID or URL-encoded image name
+     * @param {string} alias Catalog alias to delete
+     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public deleteImageAlias(idOrRef: string, alias: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return ImagesApiFp(this.configuration).deleteImageAlias(idOrRef, alias, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

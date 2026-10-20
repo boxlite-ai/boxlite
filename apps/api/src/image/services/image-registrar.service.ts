@@ -7,7 +7,8 @@ import { Injectable } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, EntityManager, IsNull } from 'typeorm'
 import { Image } from '../entities/image.entity'
-import { ImageTag } from '../entities/image-tag.entity'
+import { ImageAlias } from '../entities/image-alias.entity'
+import { ImageAliasEvent } from '../entities/image-alias-event.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { ImageSourceKind } from '../enums/image-source-kind.enum'
 import { CuratedImagePinService } from './curated-image-pin.service'
@@ -127,6 +128,8 @@ export class ImageRegistrarService {
         throw new Error(`Image upsert for '${name}' returned no row`)
       }
 
+      // The same upsert shape as the image's: a build already recorded keeps
+      // everything it was recorded with, and only when it was last used moves.
       await manager
         .createQueryBuilder()
         .insert()
@@ -138,8 +141,9 @@ export class ImageRegistrarService {
           sourceKind: ImageSourceKind.PULL,
           sourceSpec: { sourceRef: imageRef },
           storageRef: `${name}@${reported.digest}`,
+          lastUsedAt: new Date(),
         })
-        .orIgnore()
+        .orUpdate(['lastUsedAt'], ['imageId', 'digest'])
         .execute()
 
       // A ref the caller already pinned names no tag to record — it is the
@@ -162,17 +166,28 @@ export class ImageRegistrarService {
         return
       }
 
-      // `DO NOTHING`, not an update: a tag that already points somewhere stays
-      // there. Following a moved tag would change what a box boots from with
-      // nobody asking, and `DELETE /images/:idOrRef` is the intended way to
-      // pick up a move.
-      await manager
+      // A registry pull seeds a catalog alias only while that name is absent.
+      // Existing bindings remain pinned even if the upstream tag changes.
+      // Replacing an alias requires explicit deletion and creation.
+      const recorded = await manager
         .createQueryBuilder()
         .insert()
-        .into(ImageTag)
+        .into(ImageAlias)
         .values({ imageId, name: recordedTag, versionId: version.id })
         .orIgnore()
+        .returning(['id'])
         .execute()
+      if (recorded.raw.length === 0) {
+        return
+      }
+      // The alias's first event. No actor: a registry pull recorded it.
+      await manager.insert(ImageAliasEvent, {
+        imageId,
+        aliasName: recordedTag,
+        fromVersionId: null,
+        toVersionId: version.id,
+        actorId: null,
+      })
     })
   }
 

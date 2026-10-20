@@ -7,7 +7,8 @@ import { randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { Image } from '../entities/image.entity'
-import { ImageTag } from '../entities/image-tag.entity'
+import { ImageAlias } from '../entities/image-alias.entity'
+import { ImageAliasEvent } from '../entities/image-alias-event.entity'
 import { ImageVersion } from '../entities/image-version.entity'
 import { isCuratedSelector } from '../utils/image-ref.util'
 import { CuratedImagePinService } from './curated-image-pin.service'
@@ -36,7 +37,7 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema: schemaName,
-      entities: [Image, ImageVersion, ImageTag],
+      entities: [Image, ImageVersion, ImageAlias, ImageAliasEvent],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       synchronize: false,
@@ -68,6 +69,7 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
   })
 
   beforeEach(async () => {
+    await dataSource.query(`DELETE FROM "${schemaName}"."image_tag_event"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image_tag"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image_version"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."image"`)
@@ -124,7 +126,7 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
       storageRef: `quay.io/acme/app@${DIGEST}`,
     })
 
-    const [tag] = await dataSource.getRepository(ImageTag).find()
+    const [tag] = await dataSource.getRepository(ImageAlias).find()
     expect(tag).toMatchObject({ imageId: image.id, name: 'v1', versionId: version.id })
   })
 
@@ -169,21 +171,62 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
   })
 
   /**
-   * Nothing moves tags today. A tag that resolved once keeps naming that
-   * build, and deleting the image is what picks up a move — without this, an
-   * upstream tag move would silently change what a box boots from.
+   * A pull never moves a tag. A tag that resolved once keeps naming that build
+   * until someone moves it on purpose — without this, an upstream tag move
+   * would silently change what a box boots from. The history agrees: the one
+   * event is the tag being recorded, and the second pull adds none.
    */
   it('leaves a tag pointing at the build it first resolved to', async () => {
     await report('quay.io/acme/app:v1', DIGEST)
     await report('quay.io/acme/app:v1', OTHER_DIGEST)
 
     const versions = await dataSource.getRepository(ImageVersion).find()
-    const tags = await dataSource.getRepository(ImageTag).find()
+    const aliases = await dataSource.getRepository(ImageAlias).find()
+    const events = await dataSource.getRepository(ImageAliasEvent).find()
     const first = versions.find((version) => version.digest === DIGEST)
 
     expect(versions).toHaveLength(2)
-    expect(tags).toHaveLength(1)
-    expect(tags[0].versionId).toBe(first?.id)
+    expect(aliases).toHaveLength(1)
+    expect(aliases[0].versionId).toBe(first?.id)
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ aliasName: 'v1', toVersionId: first?.id })
+  })
+
+  /**
+   * Where a tag's history starts. No one moved it — a box pulling the image is
+   * what recorded it — so it came from no version and was moved by no one.
+   */
+  it('starts the history of a tag a pull records', async () => {
+    await report('quay.io/acme/app:v1')
+
+    const [tag] = await dataSource.getRepository(ImageAlias).find()
+    const events = await dataSource.getRepository(ImageAliasEvent).find()
+
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      imageId: tag.imageId,
+      aliasName: 'v1',
+      fromVersionId: null,
+      toVersionId: tag.versionId,
+      actorId: null,
+    })
+  })
+
+  /**
+   * Each start moves it, including the digest-pinned start every box after
+   * the first gets from the catalog — the one path that records no tag.
+   */
+  it('moves when a version was last used each time a box starts from it', async () => {
+    await report('quay.io/acme/app:v1')
+    const [first] = await dataSource.getRepository(ImageVersion).find()
+    const longAgo = new Date('2026-01-01T00:00:00.000Z')
+    await dataSource.getRepository(ImageVersion).update({ id: first.id }, { lastUsedAt: longAgo })
+
+    await report(`quay.io/acme/app@${DIGEST}`)
+
+    const versions = await dataSource.getRepository(ImageVersion).find()
+    expect(versions).toHaveLength(1)
+    expect(versions[0].lastUsedAt?.getTime()).toBeGreaterThan(longAgo.getTime())
   })
 
   it('records no tag for a reference the caller already pinned', async () => {
@@ -191,6 +234,7 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
 
     expect(await countOf('image_version')).toBe(1)
     expect(await countOf('image_tag')).toBe(0)
+    expect(await countOf('image_tag_event')).toBe(0)
   })
 
   /**
@@ -203,7 +247,7 @@ describeIfDatabase('ImageRegistrarService (integration, real Postgres)', () => {
   it('records a bare repository under the tag the registry served it as', async () => {
     await report('quay.io/acme/app')
 
-    const [tag] = await dataSource.getRepository(ImageTag).find()
+    const [tag] = await dataSource.getRepository(ImageAlias).find()
     expect(tag?.name).toBe('latest')
     expect(await countOf('image_version')).toBe(1)
   })

@@ -121,12 +121,48 @@ describe("image catalog on a local cache", () => {
 
     expect(errorCode(err)).toBe("unsupported");
   });
+
+  test("createAlias is unsupported", async () => {
+    const err = await failureOf(
+      runtime.images.createAlias("quay.io/acme/app", "stable", NEW),
+    );
+
+    expect(errorCode(err)).toBe("unsupported");
+  });
 });
+
+const OLD = `sha256:${"a".repeat(64)}`;
+const NEW = `sha256:${"b".repeat(64)}`;
+const CREATED = {
+  name: "quay.io/acme/app",
+  aliases: ["stable"],
+  curated: false,
+  versions: [
+    {
+      digest: NEW,
+      size_bytes: null,
+      source_ref: "quay.io/acme/app:v2",
+      recorded_at: "2026-09-02T00:00:00Z",
+      aliases: ["stable"],
+      last_used_at: "2026-09-03T00:00:00Z",
+      upstream_missing_at: null,
+    },
+  ],
+  history: [
+    {
+      alias: "stable",
+      from_digest: OLD,
+      to_digest: NEW,
+      actor: "user-1",
+      recorded_at: "2026-09-04T00:00:00Z",
+    },
+  ],
+};
 
 const CATALOG_ROUTES: Record<string, unknown> = {
   "/v1/images/quay.io%2Facme%2Fapp": {
     name: "quay.io/acme/app",
-    tags: ["v2", "v1"],
+    aliases: ["v2", "v1"],
     curated: false,
     versions: [
       {
@@ -161,6 +197,16 @@ describe("image catalog on a REST runtime", () => {
         res.writeHead(204).end();
         return;
       }
+      if (req.method === "POST") {
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", () => {
+          requests.push(body);
+          res.writeHead(201, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(CREATED));
+        });
+        return;
+      }
       const body = CATALOG_ROUTES[req.url ?? ""];
       res.writeHead(body ? 200 : 404, { "Content-Type": "application/json" });
       res.end(JSON.stringify(body ?? { error: { message: req.url } }));
@@ -185,21 +231,24 @@ describe("image catalog on a REST runtime", () => {
 
     expect(detail).toEqual({
       name: "quay.io/acme/app",
-      tags: ["v2", "v1"],
+      aliases: ["v2", "v1"],
       curated: false,
       versions: [
         {
           digest: "sha256:bb",
           sourceRef: "quay.io/acme/app:v2",
           recordedAt: "2026-09-02T00:00:00+00:00",
+          aliases: [],
         },
         {
           digest: "sha256:aa",
           sizeBytes: 4096,
           sourceRef: "quay.io/acme/app:v1",
           recordedAt: "2026-09-01T00:00:00+00:00",
+          aliases: [],
         },
       ],
+      history: [],
     });
     expect(detail.versions[0]).not.toHaveProperty("sizeBytes");
   });
@@ -214,5 +263,47 @@ describe("image catalog on a REST runtime", () => {
     await runtime.images.remove("quay.io/acme/app");
 
     expect(requests).toEqual(["DELETE /v1/images/quay.io%2Facme%2Fapp"]);
+  });
+
+  test("createAlias posts the alias and digest and reads the image", async () => {
+    const detail = await runtime.images.createAlias(
+      "quay.io/acme/app",
+      "stable",
+      NEW,
+    );
+
+    expect(requests).toEqual([
+      "POST /v1/images/quay.io%2Facme%2Fapp/aliases",
+      JSON.stringify({ alias: "stable", digest: NEW }),
+    ]);
+    expect(detail).toEqual({
+      name: "quay.io/acme/app",
+      aliases: ["stable"],
+      curated: false,
+      versions: [
+        {
+          digest: NEW,
+          sourceRef: "quay.io/acme/app:v2",
+          recordedAt: "2026-09-02T00:00:00+00:00",
+          aliases: ["stable"],
+          lastUsedAt: "2026-09-03T00:00:00+00:00",
+        },
+      ],
+      history: [
+        {
+          alias: "stable",
+          fromDigest: OLD,
+          toDigest: NEW,
+          actor: "user-1",
+          recordedAt: "2026-09-04T00:00:00+00:00",
+        },
+      ],
+    });
+  });
+  test("deleteAlias removes only the named binding", async () => {
+    await runtime.images.deleteAlias("quay.io/acme/app", "stable");
+    expect(requests).toEqual([
+      "DELETE /v1/images/quay.io%2Facme%2Fapp/aliases/stable",
+    ]);
   });
 });

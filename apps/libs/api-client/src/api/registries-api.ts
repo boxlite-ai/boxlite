@@ -41,7 +41,7 @@ export const RegistriesApiAxiosParamCreator = function (configuration?: Configur
         createRegistryCredential: async (createRegistryCredential: CreateRegistryCredential, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'createRegistryCredential' is not null or undefined
             assertParamExists('createRegistryCredential', 'createRegistryCredential', createRegistryCredential)
-            const localVarPath = `/registries`;
+            const localVarPath = `/images/registries`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -86,7 +86,7 @@ export const RegistriesApiAxiosParamCreator = function (configuration?: Configur
         deleteRegistryCredential: async (id: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'id' is not null or undefined
             assertParamExists('deleteRegistryCredential', 'id', id)
-            const localVarPath = `/registries/{id}`
+            const localVarPath = `/images/registries/{id}`
                 .replace('{id}', encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -126,7 +126,7 @@ export const RegistriesApiAxiosParamCreator = function (configuration?: Configur
          * @throws {RequiredError}
          */
         listRegistryCredentials: async (xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            const localVarPath = `/registries`;
+            const localVarPath = `/images/registries`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;

@@ -21,17 +21,21 @@ describe('network allow list validation', () => {
     },
   )
 
-  it('accepts comma-separated allow_net lists with hostnames, wildcards, IPs, and CIDRs', () => {
-    expect(() => validateNetworkAllowList('api.openai.com, *.anthropic.com, 192.168.1.1, 10.0.0.0/8')).not.toThrow()
+  it('accepts allow_net lists with hostnames, wildcards, IPs, and CIDRs', () => {
+    expect(() =>
+      validateNetworkAllowList(['api.openai.com', ' *.anthropic.com', '192.168.1.1', '10.0.0.0/8', '']),
+    ).not.toThrow()
   })
 
   it('rejects more than ten allow_net entries', () => {
-    const entries = Array.from({ length: 11 }, (_, index) => `api-${index}.example.com`).join(',')
+    const entries = Array.from({ length: 11 }, (_, index) => `api-${index}.example.com`)
 
     expect(() => validateNetworkAllowList(entries)).toThrow('more than 10 networks')
   })
 
-  it('rejects invalid comma-separated allow_net entries', () => {
-    expect(() => validateNetworkAllowList('api.openai.com,10.0.0.0/33')).toThrow('Invalid network allow list entry')
+  it('rejects invalid allow_net entries', () => {
+    expect(() => validateNetworkAllowList(['api.openai.com', '10.0.0.0/33'])).toThrow(
+      'Invalid network allow list entry',
+    )
   })
 })

@@ -19,6 +19,7 @@ import {
   type HandoffBox,
 } from '@/lib/quickstart-handoff'
 import { cn } from '@/lib/utils'
+import { isInboundEnabled } from '@/lib/box-shape'
 import { RoutePath } from '@/enums/RoutePath'
 import { ArrowUpRight } from '@/components/ui/icon'
 import type { OnboardingProgress } from '@/lib/onboarding-progress'
@@ -245,7 +246,7 @@ export function QuickstartAgentHandoff({
 
   const agentBox = useMemo(() => findAgentBox(boxes, baselineIds), [boxes, baselineIds])
   // Publishing is only done once the box is actually reachable.
-  const stageDone = agentBox?.public === true
+  const stageDone = agentBox ? isInboundEnabled(agentBox) : false
 
   useEffect(() => {
     if (!stageDone || !agentBox) return

@@ -28,8 +28,8 @@ describe('requiresFreshBox', () => {
 
   // Pre-existing behaviour, pinned here because the rule now lives in one place.
   it.each([
-    ['networkBlockAll', { networkBlockAll: true }],
-    ['networkAllowList', { networkAllowList: 'api.openai.com' }],
+    ['outboundEnabled', { outboundEnabled: false }],
+    ['outboundAllowNet', { outboundAllowNet: ['api.openai.com'] }],
   ])('forces a fresh box when %s is requested', (_label, dto) => {
     expect(requiresFreshBox(dto, NO_ORG_EGRESS_LIMIT, CURATED)).toBe(true)
   })
@@ -56,9 +56,9 @@ describe('requiresFreshBox', () => {
     expect(requiresFreshBox({}, NO_ORG_EGRESS_LIMIT, { isOrgOwned: true })).toBe(true)
   })
 
-  // `false` is a value the caller supplied, not an absence — it still pins the
+  // `true` is a value the caller supplied, not an absence — it still pins the
   // box to a network policy the pool was not provisioned for.
-  it('treats an explicit networkBlockAll: false as a policy override', () => {
-    expect(requiresFreshBox({ networkBlockAll: false }, NO_ORG_EGRESS_LIMIT, CURATED)).toBe(true)
+  it('treats an explicit outboundEnabled: true as a policy override', () => {
+    expect(requiresFreshBox({ outboundEnabled: true }, NO_ORG_EGRESS_LIMIT, CURATED)).toBe(true)
   })
 })
