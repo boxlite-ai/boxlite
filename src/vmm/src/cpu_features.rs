@@ -25,6 +25,9 @@ const HYPERVISOR: u32 = 1 << 31;
 const TSC_DEADLINE: u32 = 1 << 24;
 /// Leaf 1 EDX: more than one logical processor per package.
 const HTT: u32 = 1 << 28;
+/// Leaf 1 EBX[15:8]: the CLFLUSH line in 8-byte units, 64 bytes, the same on
+/// every host.
+const CLFLUSH_LINE: u32 = 8;
 /// Topology level types in ECX[15:8] of leaves 0xB and 0x1F.
 const LEVEL_SMT: u32 = 1;
 const LEVEL_CORE: u32 = 2;
@@ -55,9 +58,10 @@ pub(crate) const BOOT_MSRS: [X86Msr; 2] = [
 ];
 
 /// The CPUID of vCPU `index` of `count`: `supported` with APIC ID `index`, one
-/// package of `count` single-thread cores, and the hypervisor and TSC-deadline
-/// bits. Every other entry is kept, so all vCPUs differ only in the APIC ID.
-pub(crate) fn guest_cpuid(supported: &[X86CpuidEntry], index: u8, count: u8) -> Vec<X86CpuidEntry> {
+/// package of `count` single-thread cores, a 64-byte CLFLUSH line, and the
+/// hypervisor and TSC-deadline bits. Every other entry is kept, so all vCPUs
+/// differ only in the APIC ID.
+pub(crate) fn vcpu_cpuid(supported: &[X86CpuidEntry], index: u8, count: u8) -> Vec<X86CpuidEntry> {
     debug_assert!(index < count && count <= MAX_VCPUS);
     let apic_id = u32::from(index);
     let amd = is_amd(supported);
@@ -70,9 +74,10 @@ pub(crate) fn guest_cpuid(supported: &[X86CpuidEntry], index: u8, count: u8) -> 
     for entry in &mut cpuid {
         match entry.leaf {
             LEAF_FEATURES => {
-                // Keep the brand index and CLFLUSH line size in EBX[15:0].
+                // Keep the brand index in EBX[7:0].
                 let logical = u32::from(count.next_power_of_two());
-                entry.ebx = (entry.ebx & 0xffff) | (logical << 16) | (apic_id << 24);
+                entry.ebx =
+                    (entry.ebx & 0xff) | (CLFLUSH_LINE << 8) | (logical << 16) | (apic_id << 24);
                 entry.ecx |= HYPERVISOR | TSC_DEADLINE;
                 entry.edx = if count > 1 {
                     entry.edx | HTT

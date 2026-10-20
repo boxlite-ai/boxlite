@@ -7,7 +7,7 @@
 
 use boxlite_hypervisor::X86CpuidEntry;
 
-use super::guest_cpuid;
+use super::vcpu_cpuid;
 
 fn entry(leaf: u32, [eax, ebx, ecx, edx]: [u32; 4]) -> X86CpuidEntry {
     X86CpuidEntry {
@@ -26,8 +26,9 @@ fn vendor(name: &[u8; 12]) -> X86CpuidEntry {
     entry(0, [0x20, word(0), word(8), word(4)])
 }
 
-/// Host APIC ID 0x2a, 128 logical CPUs, CLFLUSH 8, no hypervisor bit.
-const HOST_LEAF_1: [u32; 4] = [0x000a_06a4, 0x2a80_0800, 0x76da_3203, 0x078b_fbff];
+/// Host APIC ID 0x2a, 128 logical CPUs, a 128-byte CLFLUSH line, brand index
+/// 5, no hypervisor bit.
+const HOST_LEAF_1: [u32; 4] = [0x000a_06a4, 0x2a80_1005, 0x76da_3203, 0x078b_fbff];
 
 fn intel() -> Vec<X86CpuidEntry> {
     vec![
@@ -80,13 +81,14 @@ fn topology(leaf: u32, apic_id: u32, count: u32) -> Vec<X86CpuidEntry> {
 #[test]
 fn places_each_vcpu_by_apic_id_in_one_package_of_cores() {
     let supported = intel();
-    let cpuid = guest_cpuid(&supported, 3, 5);
+    let cpuid = vcpu_cpuid(&supported, 3, 5);
 
     let [leaf_1] = subleaves(&cpuid, 1)[..] else {
         panic!("one leaf 1")
     };
-    // APIC ID 3, five CPUs rounded up to 8, CLFLUSH and brand index kept.
-    assert_eq!(leaf_1.ebx, 0x0308_0800);
+    // APIC ID 3, five CPUs rounded up to 8, a 64-byte CLFLUSH line, brand
+    // index kept.
+    assert_eq!(leaf_1.ebx, 0x0308_0805);
     assert_eq!(leaf_1.ecx, HOST_LEAF_1[2] | (1 << 31) | (1 << 24));
     assert_eq!(leaf_1.edx, HOST_LEAF_1[3] | (1 << 28));
     assert_eq!(subleaves(&cpuid, 0xb), topology(0xb, 3, 5));
@@ -106,7 +108,7 @@ fn places_each_vcpu_by_apic_id_in_one_package_of_cores() {
 
 #[test]
 fn amd_reports_the_apic_id_in_its_extended_topology_leaves() {
-    let cpuid = guest_cpuid(&amd(), 3, 5);
+    let cpuid = vcpu_cpuid(&amd(), 3, 5);
 
     let [sizes] = subleaves(&cpuid, 0x8000_0008)[..] else {
         panic!("one 0x8000_0008")
@@ -129,12 +131,12 @@ fn a_single_vcpu_is_one_core_without_htt() {
     let mut supported = intel();
     supported[1].edx |= 1 << 28;
 
-    let cpuid = guest_cpuid(&supported, 0, 1);
+    let cpuid = vcpu_cpuid(&supported, 0, 1);
 
     let [leaf_1] = subleaves(&cpuid, 1)[..] else {
         panic!("one leaf 1")
     };
-    assert_eq!(leaf_1.ebx, 0x0001_0800);
+    assert_eq!(leaf_1.ebx, 0x0001_0805);
     assert_eq!(leaf_1.edx & (1 << 28), 0);
     assert_eq!(subleaves(&cpuid, 0xb), topology(0xb, 0, 1));
 }

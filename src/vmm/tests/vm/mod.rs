@@ -210,7 +210,7 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
 
     use crate::{
         boot::entry::long_mode_entry,
-        cpu_features::{BOOT_MSRS, guest_cpuid},
+        cpu_features::{BOOT_MSRS, vcpu_cpuid},
         memory::MMIO_HOLE_START,
     };
 
@@ -283,7 +283,7 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
         .unwrap();
     memory.write_obj(TOP_MARKER, GuestAddress(top)).unwrap();
     let regs = long_mode_entry(&*memory, ENTRY, BOOT_PARAMS).unwrap();
-    let cpuid = guest_cpuid(vm.backend.supported_cpuid(), 0, 2);
+    let cpuid = vcpu_cpuid(vm.backend.supported_cpuid(), 0, 2);
 
     let mut vcpu = vm.backend.create_vcpu(0).unwrap();
     vcpu.set_cpu_features(&cpuid, &BOOT_MSRS).unwrap();

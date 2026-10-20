@@ -116,12 +116,13 @@ MSRs; nothing calls it from `Vm` yet.
 
 ## CPU features
 
-`cpu_features::guest_cpuid(supported, index, count)` turns KVM's supported
+`cpu_features::vcpu_cpuid(supported, index, count)` turns KVM's supported
 CPUID into vCPU `index`'s. KVM passes the host's APIC ID through and reports
 no topology, so it sets:
 
-- leaf 1: APIC ID `index`, `count` rounded up to a power of two, HTT when
-  `count > 1`, and the hypervisor and TSC-deadline bits;
+- leaf 1: APIC ID `index`, `count` rounded up to a power of two, a 64-byte
+  CLFLUSH line whatever the host reports, HTT when `count > 1`, and the
+  hypervisor and TSC-deadline bits;
 - leaf 0xB, and 0x1F when KVM lists it: an SMT level of one thread and a
   core level of `count` cores whose shift of 6 covers every APIC ID up to 64;
 - on AMD and Hygon, 0x8000_001E (APIC and core ID `index`, node 0) and
@@ -152,7 +153,7 @@ On Linux x86_64 with read/write access to `/dev/kvm`,
 `make test:integration:vmm:kvm` also runs this crate's hardware tests on VMs
 with the largest layout. A flat 32-bit guest reads the last RAM byte and
 reports it on port `0x3f8`. A 64-bit guest entered through
-`long_mode_entry`, with `guest_cpuid` and `BOOT_MSRS` applied, reloads its
+`long_mode_entry`, with `vcpu_cpuid` and `BOOT_MSRS` applied, reloads its
 segments from the GDT in RAM, reads markers at RSI and at the top of RAM, and
 stores RFLAGS, CR0, CR3, CR4, EFER, CPUID leaves 1 and 0xB, MISC_ENABLE and
 MTRRdefType for the test to compare. The 3 GiB allocation is `MAP_NORESERVE`, so only the touched
