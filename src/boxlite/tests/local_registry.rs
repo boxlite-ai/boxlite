@@ -39,20 +39,31 @@ const REGISTRIES_MODE: &str = "BOXLITE_TEST_REGISTRIES";
 
 /// `upstream` mode lists the public mirrors again, so a run can still exercise
 /// the registries the suites pulled from before the local one.
-#[test]
-fn upstream_mode_lists_the_public_mirrors() {
-    let previous = std::env::var_os(REGISTRIES_MODE);
-    // SAFETY: nextest runs each test in its own process, and the cargo test
-    // fallback runs them one at a time; the old value comes back below.
-    unsafe { std::env::set_var(REGISTRIES_MODE, "upstream") };
+#[tokio::test]
+async fn upstream_mode_lists_the_public_mirrors() {
+    if std::env::var(REGISTRIES_MODE).as_deref() != Ok("upstream") {
+        // Only the child sees upstream mode, even with parallel libtest tests.
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "upstream_mode_lists_the_public_mirrors"])
+            .env(REGISTRIES_MODE, "upstream")
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(Duration::from_secs(10), command.output())
+            .await
+            .expect("isolated registry test must finish")
+            .unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "isolated registry test failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
     let hosts: Vec<_> = common::test_registries()
         .into_iter()
         .map(|registry| registry.host)
         .collect();
-    match previous {
-        Some(value) => unsafe { std::env::set_var(REGISTRIES_MODE, value) },
-        None => unsafe { std::env::remove_var(REGISTRIES_MODE) },
-    }
     assert_eq!(hosts, common::UPSTREAM_REGISTRIES);
 }
 
@@ -268,6 +279,7 @@ async fn try_pull(registry: &LocalRegistry, image: &str) -> boxlite::BoxliteResu
     let runtime = common::non_vm_runtime(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: vec![registry.search_registry()],
+        ..Default::default()
     })
     .unwrap();
     let pulled = runtime.images().unwrap().pull(image).await;

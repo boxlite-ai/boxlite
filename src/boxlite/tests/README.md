@@ -139,6 +139,10 @@ registry (`registry::local_registry()`, plain HTTP on `127.0.0.1`), as designed 
   `test_registries()` returns `UPSTREAM_REGISTRIES` and make runs the SDK suites without the
   wrapper. The contract tests then check for the mirrors instead. The default is `local`; any
   other value makes `test_registries()` panic.
+- The Rust upstream-mode contract test sets `BOXLITE_TEST_REGISTRIES` only for a child
+  process. It checks the actual `test_registries()` result without changing the parent
+  environment, so parallel `cargo test` runs cannot switch another test's registry mode.
+  Rust recommends [`Command::env` for this isolation](https://doc.rust-lang.org/std/env/fn.set_var.html#safety).
 - Behind an HTTP proxy, set `no_proxy=127.0.0.1,localhost`; otherwise requests to the local
   registry go through the proxy.
 
