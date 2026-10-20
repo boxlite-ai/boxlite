@@ -38,13 +38,24 @@ These tests require:
 - **boxlite-guest** binary (built during maturin develop)
 - **libkrun** and **libkrunfw** installed on the system
 
+Run the integration suite with `make test:integration:python FILTER=<pattern>`. It starts the
+[local test registry](../../../src/boxlite/tests/README.md#test_registries--the-local-registry),
+so boxes resolve images without the internet. Under a plain `pytest` run, images come from public
+mirrors and `test_harness_registry.py` fails, since it checks that the harness stays on this
+machine. To pass your own pytest options, run pytest through the registry wrapper that make
+builds: `../../target/debug/with-local-registry pytest <options>` from `sdks/python`. The examples
+below do that whenever they collect integration tests.
+
 ## Running Tests
 
 ### Run all tests (API + integration):
 
 ```bash
-pytest
+make test:unit:python test:integration:python
 ```
+
+A bare `pytest` also runs the integration tests, but without the local registry, so
+`test_harness_registry.py` fails.
 
 ### Run only API tests (fast):
 
@@ -55,7 +66,7 @@ pytest tests/test_box_management_mock.py -v
 ### Run with verbose output:
 
 ```bash
-pytest -v
+../../target/debug/with-local-registry pytest -v
 ```
 
 ### Run specific test:
@@ -67,7 +78,7 @@ pytest tests/test_box_management_mock.py::TestBoxManagementAPI::test_list_boxes_
 ### Run with coverage:
 
 ```bash
-pytest --cov=boxlite --cov-report=html
+../../target/debug/with-local-registry pytest --cov=boxlite --cov-report=html
 ```
 
 ## Test Structure
@@ -103,13 +114,13 @@ Full lifecycle integration tests:
 To see detailed output from the Rust runtime:
 
 ```bash
-RUST_LOG=debug pytest -v -s
+RUST_LOG=debug ../../target/debug/with-local-registry pytest -v -s
 ```
 
 To run tests one at a time (useful for debugging):
 
 ```bash
-pytest -v --maxfail=1
+../../target/debug/with-local-registry pytest -v --maxfail=1
 ```
 
 ## Coverage

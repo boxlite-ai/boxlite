@@ -1,11 +1,14 @@
-use boxlite_test_utils::TEST_REGISTRIES;
+//! `--registry` takes HTTPS hosts only, so these flag tests reach a public
+//! mirror rather than the local registry the rest of the suite uses.
+
+use boxlite_test_utils::UPSTREAM_REGISTRIES;
 
 mod common;
 
 #[test]
 fn test_run_with_custom_registry() {
     let mut ctx = common::boxlite_bare();
-    let mirror = TEST_REGISTRIES[0];
+    let mirror = UPSTREAM_REGISTRIES[0];
     ctx.cmd.arg("--registry").arg(mirror).args([
         "run",
         "--rm",
@@ -23,7 +26,7 @@ fn test_run_with_multiple_registries_fallback() {
         .arg("--registry")
         .arg("invalid.registry.that.does.not.exist")
         .arg("--registry")
-        .arg(TEST_REGISTRIES[0])
+        .arg(UPSTREAM_REGISTRIES[0])
         .args([
             "run",
             "--rm",
@@ -37,7 +40,7 @@ fn test_run_with_multiple_registries_fallback() {
 #[test]
 fn test_create_with_custom_registry() {
     let mut ctx = common::boxlite_bare();
-    let mirror = TEST_REGISTRIES[0];
+    let mirror = UPSTREAM_REGISTRIES[0];
     ctx.cmd
         .arg("--registry")
         .arg(mirror)
@@ -53,12 +56,12 @@ fn test_create_with_custom_registry() {
 #[test]
 fn test_run_fully_qualified_image_bypasses_registry() {
     let mut ctx = common::boxlite_bare();
-    let qualified = format!("{}/library/alpine:latest", TEST_REGISTRIES[0]);
+    let qualified = format!("{}/library/alpine:latest", UPSTREAM_REGISTRIES[0]);
     ctx.cmd
         .arg("--registry")
         .arg("invalid.registry.that.does.not.exist")
         .arg("--registry")
-        .arg(TEST_REGISTRIES[0]) // mirror for pulling the alpine container image
+        .arg(UPSTREAM_REGISTRIES[0]) // mirror for pulling the alpine container image
         .args(["run", "--rm", &qualified, "echo", "fully qualified"]);
     ctx.cmd.assert().success().stdout("fully qualified\n");
 }

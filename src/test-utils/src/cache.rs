@@ -12,6 +12,7 @@
 //! ├── rootfs/         ← built guest rootfs (shared read-only)
 //! ├── bases/          ← shared guest base disks (shared read-only)
 //! ├── tmp/            ← transient files (per-test subdirs)
+//! ├── registry/       ← manifests and blobs the local registry recorded
 //! └── db/boxlite.db   ← DB snapshot (copied per-test)
 //! ```
 
@@ -260,7 +261,7 @@ impl SharedResources {
 // ============================================================================
 
 /// Persistent cache directory in `target/boxlite-test/`.
-fn cache_dir() -> PathBuf {
+pub(crate) fn cache_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)

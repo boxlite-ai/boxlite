@@ -57,11 +57,8 @@ fn gvproxy_port_conflict_fails_fast_with_named_error() {
     let output = Command::new(env!("CARGO_BIN_EXE_boxlite"))
         .arg("--home")
         .arg(&ctx.home)
-        .args(
-            boxlite_test_utils::TEST_REGISTRIES
-                .iter()
-                .flat_map(|r| ["--registry", r]),
-        )
+        .arg("--config")
+        .arg(common::write_registry_config(&ctx.home))
         .args([
             "run",
             "--rm",
@@ -160,11 +157,8 @@ fn gvproxy_privileged_port_fails_fast_with_named_error() {
     let output = Command::new(env!("CARGO_BIN_EXE_boxlite"))
         .arg("--home")
         .arg(&ctx.home)
-        .args(
-            boxlite_test_utils::TEST_REGISTRIES
-                .iter()
-                .flat_map(|r| ["--registry", r]),
-        )
+        .arg("--config")
+        .arg(common::write_registry_config(&ctx.home))
         .args(["run", "--rm", "-p", "80:80", "alpine:latest", "true"])
         .output()
         .expect("spawn boxlite");

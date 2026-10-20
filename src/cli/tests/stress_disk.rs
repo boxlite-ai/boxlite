@@ -7,7 +7,10 @@
 //! image size, and the host blast radius is bounded by that, not the host's
 //! free space.
 //!
-//! Requires a VM-capable host with network to pull `alpine`.
+//! Requires a VM-capable host; `alpine` comes through the harness's local
+//! registry, which needs the network only to record it the first time.
+
+mod common;
 
 use assert_cmd::Command;
 use boxlite_test_utils::home::PerTestBoxHome;
@@ -19,6 +22,8 @@ fn boxlite(home: &Path, args: &[&str], timeout: Duration) -> std::process::Outpu
     Command::new(env!("CARGO_BIN_EXE_boxlite"))
         .arg("--home")
         .arg(home)
+        .arg("--config")
+        .arg(common::write_registry_config(home))
         .args(args)
         .timeout(timeout)
         .output()
@@ -46,8 +51,6 @@ fn start_box(home: &Path) -> String {
     let out = boxlite(
         home,
         &[
-            "--registry",
-            "docker.m.daocloud.io",
             "run",
             "-d",
             "--memory",
@@ -118,8 +121,6 @@ fn box_rootfs_is_bounded_isolated_and_survives_fill() {
     let out = boxlite(
         home.path.as_path(),
         &[
-            "--registry",
-            "docker.m.daocloud.io",
             "run",
             "-d",
             "--memory",

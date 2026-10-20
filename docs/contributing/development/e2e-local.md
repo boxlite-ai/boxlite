@@ -42,7 +42,11 @@ flowchart LR
   fork PR runs only the head commit that was labeled — after new pushes, remove and re-add
   the label to approve the new code.
 - Manual `workflow_dispatch`, with an optional `debug` input that opens an SSH session if the
-  tests fail.
+  tests fail, and a `registries` input: `local` (the default, and what every push and labeled
+  PR uses) replays images from the
+  [local registry](../../../src/boxlite/tests/README.md#test_registries--the-local-registry);
+  `upstream` pulls from the public mirrors, as the suites did before it, e.g.
+  `gh workflow run e2e-local.yml -f registries=upstream`.
 
 ## Instance & auth
 
@@ -111,6 +115,7 @@ gh workflow run e2e-local.yml
 | `start-runner` times out waiting for the runner to come online | the instance booted but the runner service did not register | inspect the instance's runner logs; re-run the workflow to retry registration |
 | Launch fails with `InsufficientInstanceCapacity` | the AZ is out of `c8i.4xlarge` capacity | none needed — the launch loop already retries every subnet/AZ; re-run if all were exhausted |
 | `e2e-tests` fails on low disk | `target/` build artifacts filled the volume | the job evicts caches at 80% use and refuses below 20 GB free; if it still fails, free space on the instance manually |
+| `e2e-tests` hits its 50-minute timeout with every suite slower | box starts wait on a public registry: `boot_timing_profile` shows `stage_image_prepare` in seconds | Rust, CLI, Python and Node suites pull through a [local registry](../../../src/boxlite/tests/README.md#test_registries--the-local-registry); the C suite's `boxlite_simple_new` test still pulls from docker.io |
 | A run can't find the instance, or targets the wrong one | `EC2_E2E_INSTANCE_ID` is stale | it self-heals via the `Name=boxlite-e2e` tag; clear the variable to force rediscovery |
 | A pull request doesn't trigger the workflow | the `e2e-local` label is missing | a maintainer adds the label (it is the cost gate) |
 | A labeled fork PR doesn't re-run after a push | fork approval is per-commit | remove and re-add the `e2e-local` label to approve the new head |
