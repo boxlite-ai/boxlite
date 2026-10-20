@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
+import { ApiProperty, ApiSchema } from '@nestjs/swagger'
 
 @ApiSchema({ name: 'AdminOrganizationCreator' })
 class AdminOrganizationCreatorDto {
@@ -19,18 +19,18 @@ class AdminOrganizationCreatorDto {
 
 @ApiSchema({ name: 'AdminOrganizationRegistration' })
 export class AdminOrganizationRegistrationDto {
-  @ApiPropertyOptional({ format: 'date-time', description: 'Organization creation time; present with view=metadata.' })
-  createdAt?: string
+  @ApiProperty({ format: 'date-time', description: 'Organization creation time.' })
+  createdAt: string
 
-  @ApiPropertyOptional({
-    description: 'Stored creator ID with view=metadata; account linking replaces it with the primary user ID.',
+  @ApiProperty({
+    description: 'Stored creator ID; account linking replaces it with the primary user ID.',
   })
-  createdBy?: string
+  createdBy: string
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     type: AdminOrganizationCreatorDto,
     nullable: true,
-    description: 'Current creator identity with view=metadata.',
+    description: 'Current creator identity.',
   })
-  creator?: AdminOrganizationCreatorDto | null
+  creator: AdminOrganizationCreatorDto | null
 }

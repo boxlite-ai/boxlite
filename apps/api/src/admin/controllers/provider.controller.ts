@@ -39,17 +39,12 @@ import {
 } from '../dto/provider-overview.dto'
 import { AdminOrganizationOverviewService } from '../services/organization-overview.service'
 import { AdminPlatformOverviewService } from '../services/platform-overview.service'
-import { metadataQueryError, parseMetadataSections, parseRegistrationQuery } from '../utils/organization-metadata'
+import { organizationQueryError, parseOrganizationSections, parseRegistrationQuery } from '../utils/organization-query'
 
 const bounded = (value: string | undefined, fallback: number): number => {
   const parsed = value === undefined ? fallback : Number(value)
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 200) throw new BadRequestException('Invalid pagination')
   return parsed
-}
-
-const metadataView = (view: unknown): boolean => {
-  if (view !== undefined && view !== 'metadata') throw metadataQueryError()
-  return view === 'metadata'
 }
 
 const ApiCursorQueries = () =>
@@ -170,24 +165,27 @@ export class AdminProviderController {
 
   @Get('component-identities')
   @ApiOperation({ summary: 'Get API and runner version identities', operationId: 'adminGetComponentIdentities' })
-  @ApiOkResponse({
-    type: AdminComponentIdentitiesDto,
-    headers: {
-      'X-BoxLite-Admin-Capabilities': {
-        description:
-          'Supported opt-in admin views. Probe this before requesting metadata from a possibly older server.',
-        schema: { type: 'string', example: 'organization-metadata-v1' },
-      },
-    },
-  })
+  @ApiOkResponse({ type: AdminComponentIdentitiesDto })
   componentIdentities(@Res({ passthrough: true }) response: Response): Promise<AdminComponentIdentitiesDto> {
     response.setHeader('Cache-Control', 'private, no-store')
-    response.setHeader('X-BoxLite-Admin-Capabilities', 'organization-metadata-v1')
     return this.platform.componentIdentities()
   }
 
   @Get('organizations')
   @ApiOperation({ summary: 'List organization operational summaries', operationId: 'adminListOrganizationsOverview' })
+  @ApiQuery({
+    name: 'createdFrom',
+    type: String,
+    required: false,
+    description: 'Inclusive RFC 3339 instant, at most milliseconds.',
+  })
+  @ApiQuery({
+    name: 'createdTo',
+    type: String,
+    required: false,
+    description: 'Exclusive RFC 3339 instant, at most milliseconds.',
+  })
+  @ApiCursorQueries()
   @ApiQuery({
     name: 'q',
     type: String,
@@ -196,102 +194,42 @@ export class AdminProviderController {
     maxLength: 200,
     description: 'Organization ID or name',
   })
-  @ApiQuery({
-    name: 'view',
-    enum: ['metadata'],
-    required: false,
-    description: 'Adds registration fields and creation-time pagination; omit for the existing operational view.',
-  })
-  @ApiQuery({
-    name: 'createdFrom',
-    type: String,
-    required: false,
-    description: 'With view=metadata: inclusive RFC 3339 instant, at most milliseconds.',
-  })
-  @ApiQuery({
-    name: 'createdTo',
-    type: String,
-    required: false,
-    description: 'With view=metadata: exclusive RFC 3339 instant, at most milliseconds.',
-  })
-  @ApiCursorQueries()
   @ApiOkResponse({ type: AdminOrganizationOverviewPageDto })
   organizations(
-    @Query('q') search: string | undefined,
-    @Query('cursor') cursor: string | undefined,
-    @Query('limit') limit: string | undefined,
-    @Query() raw: Record<string, unknown>,
+    @Query() query: Record<string, unknown>,
     @Res({ passthrough: true }) response: Response,
   ): Promise<AdminOrganizationOverviewPageDto> {
-    const { view, ...query } = raw
     response.setHeader('Cache-Control', 'private, no-store')
-    if (metadataView(view)) {
-      response.setHeader('X-BoxLite-Admin-Capabilities', 'organization-metadata-v1')
-      return this.organizationsService.list({ ...parseRegistrationQuery(query), metadata: true })
-    }
-    if (
-      search !== undefined &&
-      (typeof search !== 'string' || search.trim().length < 2 || search.trim().length > 200)
-    ) {
-      throw new BadRequestException('Invalid organization query')
-    }
-    return this.organizationsService.list({
-      ...(typeof search === 'string' && search ? { query: search.trim() } : {}),
-      ...(cursor ? { cursor } : {}),
-      limit: bounded(limit, 50),
-    })
+    return this.organizationsService.list(parseRegistrationQuery(query))
   }
 
   @Get('organizations/:organizationId')
   @ApiOperation({ summary: 'Get organization operational detail', operationId: 'adminGetOrganizationOverview' })
   @ApiParam({ name: 'organizationId', description: 'Organization ID' })
-  @ApiQuery({ name: 'memberCursor', required: false, type: String, description: 'Opaque member page cursor' })
-  @ApiQuery({ name: 'boxCursor', required: false, type: String, description: 'Opaque box page cursor' })
-  @ApiQuery({ name: 'sectionLimit', required: false, type: Number, minimum: 1, maximum: 200, example: 50 })
-  @ApiQuery({
-    name: 'view',
-    enum: ['metadata'],
-    required: false,
-    description: 'Adds registration fields and makes usage opt-in; omit for the existing operational view.',
-  })
   @ApiQuery({
     name: 'include',
     type: String,
     required: false,
-    description: 'With view=metadata: comma-separated usage,activation. Omit to read neither section.',
+    description: 'Comma-separated usage,activation. Omit to read neither section.',
   })
+  @ApiQuery({ name: 'sectionLimit', required: false, type: Number, minimum: 1, maximum: 200, example: 50 })
+  @ApiQuery({ name: 'boxCursor', required: false, type: String, description: 'Opaque box page cursor' })
+  @ApiQuery({ name: 'memberCursor', required: false, type: String, description: 'Opaque member page cursor' })
   @ApiOkResponse({ type: AdminOrganizationDetailDto })
   @ApiBadRequestResponse({ description: 'Invalid cursor or section limit' })
   @ApiNotFoundResponse({ description: 'Organization not found' })
   async organization(
     @Param('organizationId') organizationId: string,
-    @Query('memberCursor') memberCursor: string | undefined,
-    @Query('boxCursor') boxCursor: string | undefined,
-    @Query('sectionLimit') sectionLimit: string | undefined,
-    @Query() raw: Record<string, unknown>,
+    @Query() query: Record<string, unknown>,
     @Res({ passthrough: true }) response: Response,
   ): Promise<AdminOrganizationDetailDto> {
     response.setHeader('Cache-Control', 'private, no-store')
-    const { view, ...query } = raw
-    const metadata = metadataView(view)
-    if (metadata) response.setHeader('X-BoxLite-Admin-Capabilities', 'organization-metadata-v1')
-    await new ParseUUIDPipe(metadata ? { exceptionFactory: metadataQueryError } : {}).transform(organizationId, {
+    await new ParseUUIDPipe({ exceptionFactory: organizationQueryError }).transform(organizationId, {
       type: 'param',
       data: 'organizationId',
       metatype: String,
     })
-    const limit = metadata ? undefined : bounded(sectionLimit, 50)
-    const organization = await this.organizationsService.detail(
-      organizationId,
-      metadata
-        ? parseMetadataSections(query)
-        : {
-            ...(memberCursor ? { memberCursor } : {}),
-            ...(boxCursor ? { boxCursor } : {}),
-            memberLimit: limit!,
-            boxLimit: limit!,
-          },
-    )
+    const organization = await this.organizationsService.detail(organizationId, parseOrganizationSections(query))
     if (!organization) throw new NotFoundException('Organization not found')
     return organization
   }

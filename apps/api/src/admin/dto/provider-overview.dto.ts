@@ -329,7 +329,7 @@ export class AdminOrganizationDetailDto extends AdminOrganizationRegistrationDto
   @ApiPropertyOptional({
     type: AdminOrganizationActivationDto,
     nullable: true,
-    description: 'Only with view=metadata&include=activation.',
+    description: 'Only with include=activation.',
   })
   activation?: AdminOrganizationActivationDto | null
 

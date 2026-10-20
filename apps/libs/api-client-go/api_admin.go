@@ -749,7 +749,6 @@ type AdminAPIAdminGetOrganizationOverviewRequest struct {
 	boxCursor *string
 	sectionLimit *float32
 	include *string
-	view *string
 }
 
 // Opaque member page cursor
@@ -769,15 +768,9 @@ func (r AdminAPIAdminGetOrganizationOverviewRequest) SectionLimit(sectionLimit f
 	return r
 }
 
-// With view&#x3D;metadata: comma-separated usage,activation. Omit to read neither section.
+// Comma-separated usage,activation. Omit to read neither section.
 func (r AdminAPIAdminGetOrganizationOverviewRequest) Include(include string) AdminAPIAdminGetOrganizationOverviewRequest {
 	r.include = &include
-	return r
-}
-
-// Adds registration fields and makes usage opt-in; omit for the existing operational view.
-func (r AdminAPIAdminGetOrganizationOverviewRequest) View(view string) AdminAPIAdminGetOrganizationOverviewRequest {
-	r.view = &view
 	return r
 }
 
@@ -833,9 +826,6 @@ func (a *AdminAPIService) AdminGetOrganizationOverviewExecute(r AdminAPIAdminGet
 	}
 	if r.include != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "include", r.include, "form", "")
-	}
-	if r.view != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "view", r.view, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
@@ -1333,7 +1323,6 @@ type AdminAPIAdminListOrganizationsOverviewRequest struct {
 	limit *float32
 	createdTo *string
 	createdFrom *string
-	view *string
 }
 
 // Organization ID or name
@@ -1353,21 +1342,15 @@ func (r AdminAPIAdminListOrganizationsOverviewRequest) Limit(limit float32) Admi
 	return r
 }
 
-// With view&#x3D;metadata: exclusive RFC 3339 instant, at most milliseconds.
+// Exclusive RFC 3339 instant, at most milliseconds.
 func (r AdminAPIAdminListOrganizationsOverviewRequest) CreatedTo(createdTo string) AdminAPIAdminListOrganizationsOverviewRequest {
 	r.createdTo = &createdTo
 	return r
 }
 
-// With view&#x3D;metadata: inclusive RFC 3339 instant, at most milliseconds.
+// Inclusive RFC 3339 instant, at most milliseconds.
 func (r AdminAPIAdminListOrganizationsOverviewRequest) CreatedFrom(createdFrom string) AdminAPIAdminListOrganizationsOverviewRequest {
 	r.createdFrom = &createdFrom
-	return r
-}
-
-// Adds registration fields and creation-time pagination; omit for the existing operational view.
-func (r AdminAPIAdminListOrganizationsOverviewRequest) View(view string) AdminAPIAdminListOrganizationsOverviewRequest {
-	r.view = &view
 	return r
 }
 
@@ -1423,9 +1406,6 @@ func (a *AdminAPIService) AdminListOrganizationsOverviewExecute(r AdminAPIAdminL
 	}
 	if r.createdFrom != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "createdFrom", r.createdFrom, "form", "")
-	}
-	if r.view != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "view", r.view, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}

@@ -44,30 +44,21 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
 
 ## Admin organization metadata
 
-System administrators select registration metadata on the existing organization routes
-with `view=metadata`. Authenticate with `Authorization: Bearer <admin-api-key>` or an
-administrator JWT; an ordinary organization's API key does not grant system-wide access.
-Omitting `view` keeps the existing operational response and default detail usage query.
+System administrators read registration fields on the existing organization routes.
+Authenticate with `Authorization: Bearer <admin-api-key>` or an administrator JWT;
+an ordinary organization's API key does not grant system-wide access. These internal
+routes use one contract: no view selector, capability probe, or capability response header.
 
-Before requesting this view from a possibly older server, call the existing
-`GET /api/admin/component-identities` and require the response header
-`X-BoxLite-Admin-Capabilities: organization-metadata-v1`. The identity body is unchanged.
-An older server ignores `view` and its detail reads usage automatically, so absence of
-the header must stop the metadata request. No discovery route or duplicate organization
-route is needed.
+Upgrade every producer instance before enabling the updated consumer. Old list cursors
+must be discarded because the default ordering now uses creation time and ID. Existing
+callers needing current-month usage must explicitly select `include=usage`. Roll back
+consumers before producers; mixed-version traffic is not supported during activation.
 
-A capability probe covers only the instance that answered. Upgrade every producer
-instance and prevent older revisions from receiving traffic before deploying or enabling
-metadata-view consumers. Do not enable them during a mixed-version rollout. Metadata
-responses repeat the capability header so consumers can reject incompatible responses;
-that final check cannot undo an old instance's implicit usage read. Roll back consumers
-before producers. A single probe is not a deployment-wide version guarantee.
-
-- `GET /api/admin/organizations?view=metadata` returns a bounded page with `createdAt`,
+- `GET /api/admin/organizations` returns a bounded page with `createdAt`,
   stored `createdBy`, nullable current `creator`, member/Box counts and impact.
   `q` searches name or exact ID. `createdFrom` is inclusive and `createdTo` exclusive;
   timestamps require an offset and at most millisecond precision. `limit` is 1–200 (default 50).
-- `GET /api/admin/organizations/{organizationId}?view=metadata` returns flat organization
+- `GET /api/admin/organizations/{organizationId}` returns flat organization
   details with registration, member/Box pages and impact. A missing organization returns 404.
   `memberCursor`, `boxCursor` and `sectionLimit` page each section. Explicit `include=usage`
   adds existing UTC month-to-date usage; `include=activation` adds retained activation
@@ -81,32 +72,31 @@ When a creator no longer exists and the organization survives, `creator` is null
 user without an email has `creator.email:null`. Names and email describe current identity.
 Pages read live data and exclude deleted organizations.
 
-Metadata list order and cursor seek both use creation time truncated to milliseconds plus
-UUID, ascending. Cursors bind `q` and date filters; changing them returns 400. Operational
-and metadata cursors are not interchangeable. Unknown metadata parameters, invalid dates,
-UUIDs, and incompatible cursors return `400 invalid_organization_metadata_query`. Legacy
-UUID errors keep their old response. Invalid credentials return 401; non-admin access returns 403.
+List order and cursor seek both use creation time truncated to milliseconds plus
+UUID, ascending. Cursors bind `q` and date filters; changing them returns 400. Unknown
+parameters (including the removed view selector), invalid dates, UUIDs, and incompatible
+cursors return `400 invalid_organization_query`. Invalid credentials return 401;
+non-admin access returns 403. Consumers may ignore additive fields but must validate
+required fields and project their own allowed response fields.
 
-For organizations created on October 20 in UTC+08:00, use this half-open UTC interval,
-after the capability check:
+For organizations created on October 20 in UTC+08:00, use this half-open UTC interval:
 
 ```bash
 curl --get "$BOXLITE_API_URL/api/admin/organizations" \
   --header "Authorization: Bearer $BOXLITE_API_KEY" \
-  --data-urlencode "view=metadata" \
   --data-urlencode "createdFrom=2026-10-19T16:00:00Z" \
   --data-urlencode "createdTo=2026-10-20T16:00:00Z" \
   --data-urlencode "limit=50"
 ```
 
-Keep the same view and filters while following `nextCursor` until null. Continue member
+Keep the same filters while following `nextCursor` until null. Continue member
 and Box cursors independently on detail. Responses use `Cache-Control: private, no-store`.
 
 ### Generated clients
 
-Existing organization operation IDs and response models are retained. Registration and
-activation fields are optional, present only when selected. Metadata query parameters have
-explicit Swagger string types; runtime validation still applies. Regenerate the committed
+Existing organization operation IDs and response models are retained. Registration fields
+are required; usage and activation remain optional, present only when selected. Query
+parameters have explicit Swagger string types; runtime validation still applies. Regenerate the committed
 clients from `apps/` with the pinned generator in `openapitools.json`:
 
 ```bash
@@ -212,7 +202,7 @@ load capacity or historical completeness.
 
 ## Organization activation evidence
 
-`GET /api/admin/organizations/{organizationId}?view=metadata&include=activation`
+`GET /api/admin/organizations/{organizationId}?include=activation`
 adds an optional `activation` section to the existing flat detail. A missing organization
 returns 404. Omitting this selection avoids the facts query and field.
 

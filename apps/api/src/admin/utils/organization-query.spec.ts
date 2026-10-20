@@ -1,18 +1,18 @@
 import { BadRequestException } from '@nestjs/common'
 import {
-  parseMetadataSections,
+  parseOrganizationSections,
   parseRegistrationQuery,
   registrationAfter,
   registrationCursor,
-} from './organization-metadata'
+} from './organization-query'
 
-describe('organization metadata queries', () => {
+describe('organization queries', () => {
   it.each([
     () => parseRegistrationQuery({ unknown: 'value' }),
     () => registrationAfter({ limit: 50, cursor: 'not-a-cursor!' }),
-    () => parseMetadataSections({ memberCursor: 'not-a-cursor!' }),
-    () => parseMetadataSections({ boxCursor: 'not-a-cursor!' }),
-  ])('identifies metadata validation failures separately from unsupported legacy routes (%#)', (read) => {
+    () => parseOrganizationSections({ memberCursor: 'not-a-cursor!' }),
+    () => parseOrganizationSections({ boxCursor: 'not-a-cursor!' }),
+  ])('identifies invalid organization queries (%#)', (read) => {
     let response: unknown
     try {
       read()
@@ -21,8 +21,8 @@ describe('organization metadata queries', () => {
     }
     expect(response).toEqual({
       statusCode: 400,
-      code: 'invalid_organization_metadata_query',
-      message: 'Invalid organization metadata query',
+      code: 'invalid_organization_query',
+      message: 'Invalid organization query',
     })
   })
 
@@ -59,21 +59,20 @@ describe('organization metadata queries', () => {
   })
 
   it('requires explicit usage selection and rejects unrelated partitions', () => {
-    expect(parseMetadataSections({})).toMatchObject({
-      metadata: true,
+    expect(parseOrganizationSections({})).toMatchObject({
       includeUsage: false,
       includeActivation: false,
       memberLimit: 50,
       boxLimit: 50,
     })
-    expect(parseMetadataSections({ include: 'usage', sectionLimit: '2' })).toMatchObject({
+    expect(parseOrganizationSections({ include: 'usage', sectionLimit: '2' })).toMatchObject({
       includeUsage: true,
       includeActivation: false,
       memberLimit: 2,
     })
     for (const include of ['usage,activation', 'activation,usage'])
-      expect(parseMetadataSections({ include })).toMatchObject({ includeUsage: true, includeActivation: true })
-    expect(parseMetadataSections({ include: 'activation' })).toMatchObject({
+      expect(parseOrganizationSections({ include })).toMatchObject({ includeUsage: true, includeActivation: true })
+    expect(parseOrganizationSections({ include: 'activation' })).toMatchObject({
       includeUsage: false,
       includeActivation: true,
     })
@@ -85,6 +84,6 @@ describe('organization metadata queries', () => {
       { unknown: 'value' },
       { memberCursor: '' },
     ])
-      expect(() => parseMetadataSections(query)).toThrow(BadRequestException)
+      expect(() => parseOrganizationSections(query)).toThrow(BadRequestException)
   })
 })

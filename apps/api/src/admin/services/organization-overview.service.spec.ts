@@ -28,7 +28,7 @@ const queryBuilder = () => {
 const repository = () => {
   const builder = queryBuilder()
   return {
-    find: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
     findOne: jest.fn(),
     createQueryBuilder: jest.fn(() => builder),
     builder,
@@ -65,7 +65,7 @@ const serviceWith = () => {
 describe('AdminOrganizationOverviewService', () => {
   afterEach(() => jest.useRealTimers())
 
-  it('omits usage reads for a metadata partition and reads the stored creator independently of membership', async () => {
+  it('omits usage reads by default and reads the stored creator independently of membership', async () => {
     const { service, organizations, memberships, users, boxes, usagePeriods, activation } = serviceWith()
     organizations.findOne.mockResolvedValue({
       id: 'org-1',
@@ -77,7 +77,7 @@ describe('AdminOrganizationOverviewService', () => {
     memberships.find.mockResolvedValue([])
     boxes.find.mockResolvedValue([])
     users.find.mockResolvedValue([{ id: 'original-creator', email: 'creator@example.invalid', name: 'Creator' }])
-    const query = { memberLimit: 50, boxLimit: 50, metadata: true, includeUsage: false }
+    const query = { memberLimit: 50, boxLimit: 50 }
     const result = await service.detail('org-1', query)
     expect(usagePeriods.manager.transaction).not.toHaveBeenCalled()
     expect(result).toMatchObject({
@@ -97,7 +97,15 @@ describe('AdminOrganizationOverviewService', () => {
 
   it('returns the organization projection and treats wildcard characters literally', async () => {
     const { service, organizations, memberships, boxes } = serviceWith()
-    organizations.find.mockResolvedValue([{ id: 'org-1', name: 'Acme', updatedAt: new Date('2026-08-30T01:00:00Z') }])
+    organizations.builder.getMany.mockResolvedValue([
+      {
+        id: 'org-1',
+        name: 'Acme',
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+        createdBy: 'usr-1',
+        updatedAt: new Date('2026-08-30T01:00:00Z'),
+      },
+    ])
     memberships.builder.getRawMany.mockResolvedValue([{ organizationId: 'org-1', memberCount: '2' }])
     boxes.builder.getRawMany.mockResolvedValue([
       {
@@ -114,6 +122,9 @@ describe('AdminOrganizationOverviewService', () => {
         {
           organizationId: 'org-1',
           name: 'Acme',
+          createdAt: '2026-08-01T00:00:00.000Z',
+          createdBy: 'usr-1',
+          creator: null,
           memberCount: 2,
           boxCount: 1,
           impactState: 'not_impacted',
@@ -124,9 +135,9 @@ describe('AdminOrganizationOverviewService', () => {
       limit: 50,
       observedAt: '2026-08-30T01:00:00.000Z',
     })
-    expect(organizations.find.mock.calls[0][0].where[0].name).toMatchObject({
-      _type: 'ilike',
-      _value: '%Acme\\_\\%%',
+    expect(organizations.builder.andWhere).toHaveBeenCalledWith('organization.name ILIKE :search', {
+      searchId: 'Acme_%',
+      search: '%Acme\\_\\%%',
     })
     expect(boxes.find).not.toHaveBeenCalled()
   })
@@ -143,7 +154,7 @@ describe('AdminOrganizationOverviewService', () => {
       },
     ])
     users.find.mockResolvedValue([{ id: 'creator', email: '', name: 'Creator' }])
-    const page = await service.list({ metadata: true, limit: 2 })
+    const page = await service.list({ limit: 2 })
     expect(page.items[0]).toMatchObject({ createdBy: 'creator', creator: { userId: 'creator', email: null } })
     expect(users.find).toHaveBeenCalledTimes(1)
     expect(usagePeriods.manager.transaction).not.toHaveBeenCalled()
@@ -153,7 +164,13 @@ describe('AdminOrganizationOverviewService', () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-08-31T00:00:00Z'))
     const { service, organizations, memberships, users, boxes, usagePeriods } = serviceWith()
     const observedAt = new Date('2026-08-30T01:00:00Z')
-    organizations.findOne.mockResolvedValue({ id: 'org-1', name: 'Acme', updatedAt: observedAt })
+    organizations.findOne.mockResolvedValue({
+      id: 'org-1',
+      name: 'Acme',
+      createdAt: new Date('2026-08-01T00:00:00Z'),
+      createdBy: 'usr-1',
+      updatedAt: observedAt,
+    })
     memberships.find.mockResolvedValue([{ userId: 'usr-1', role: 'owner', createdAt: observedAt }])
     users.find.mockResolvedValue([{ id: 'usr-1', email: 'ops@example.com', name: 'Ops' }])
     boxes.find.mockResolvedValue([
@@ -179,7 +196,7 @@ describe('AdminOrganizationOverviewService', () => {
       run(snapshot),
     )
 
-    const dossier = await service.detail('org-1', { memberLimit: 50, boxLimit: 50 })
+    const dossier = await service.detail('org-1', { memberLimit: 50, boxLimit: 50, includeUsage: true })
     expect(dossier).toMatchObject({
       organizationId: 'org-1',
       name: 'Acme',
@@ -196,7 +213,13 @@ describe('AdminOrganizationOverviewService', () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-08-31T00:00:00Z'))
     const { service, organizations, memberships, boxes, usagePeriods } = serviceWith()
     const observedAt = new Date('2026-08-30T01:00:00Z')
-    organizations.findOne.mockResolvedValue({ id: 'org-1', name: 'Acme', updatedAt: observedAt })
+    organizations.findOne.mockResolvedValue({
+      id: 'org-1',
+      name: 'Acme',
+      createdAt: new Date('2026-08-01T00:00:00Z'),
+      createdBy: 'usr-1',
+      updatedAt: observedAt,
+    })
     memberships.find.mockResolvedValue([])
     boxes.find.mockResolvedValue([
       {
@@ -251,12 +274,20 @@ describe('AdminOrganizationOverviewService', () => {
     await expect(
       service.list({ cursor: Buffer.from('not-a-uuid').toString('base64url'), limit: 50 }),
     ).rejects.toMatchObject({ status: 400 })
-    expect(organizations.find).not.toHaveBeenCalled()
+    expect(organizations.createQueryBuilder).not.toHaveBeenCalled()
   })
 
   it('aggregates member and box counts in the database instead of loading their rows', async () => {
     const { service, organizations, memberships, boxes } = serviceWith()
-    organizations.find.mockResolvedValue([{ id: 'org-1', name: 'Acme', updatedAt: new Date('2026-08-30T01:00:00Z') }])
+    organizations.builder.getMany.mockResolvedValue([
+      {
+        id: 'org-1',
+        name: 'Acme',
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+        createdBy: 'usr-1',
+        updatedAt: new Date('2026-08-30T01:00:00Z'),
+      },
+    ])
 
     await service.list({ limit: 200 })
 
@@ -268,7 +299,13 @@ describe('AdminOrganizationOverviewService', () => {
 
   it('bounds the organization detail box query to the requested page', async () => {
     const { service, organizations, memberships, boxes } = serviceWith()
-    organizations.findOne.mockResolvedValue({ id: 'org-1', name: 'Acme', updatedAt: new Date('2026-08-30T01:00:00Z') })
+    organizations.findOne.mockResolvedValue({
+      id: 'org-1',
+      name: 'Acme',
+      createdAt: new Date('2026-08-01T00:00:00Z'),
+      createdBy: 'usr-1',
+      updatedAt: new Date('2026-08-30T01:00:00Z'),
+    })
     memberships.find.mockResolvedValue([])
     boxes.find.mockResolvedValue([])
     await service.detail('org-1', { memberLimit: 25, boxLimit: 25 })
@@ -281,7 +318,13 @@ describe('AdminOrganizationOverviewService', () => {
   // below renders neither — so neither belongs in the API process.
   it('reads only the box columns the impact evidence renders', async () => {
     const { service, organizations, memberships, boxes } = serviceWith()
-    organizations.findOne.mockResolvedValue({ id: 'org-1', name: 'Acme', updatedAt: new Date('2026-08-30T01:00:00Z') })
+    organizations.findOne.mockResolvedValue({
+      id: 'org-1',
+      name: 'Acme',
+      createdAt: new Date('2026-08-01T00:00:00Z'),
+      createdBy: 'usr-1',
+      updatedAt: new Date('2026-08-30T01:00:00Z'),
+    })
     memberships.find.mockResolvedValue([])
     boxes.find.mockResolvedValue([])
 
@@ -310,7 +353,13 @@ describe('AdminOrganizationOverviewService', () => {
   // is counted twice or lost, and the archive id is new so it cannot be de-duplicated.
   it('reads live and archived usage from one snapshot', async () => {
     const { service, organizations, memberships, boxes, usagePeriods } = serviceWith()
-    organizations.findOne.mockResolvedValue({ id: 'org-1', name: 'Acme', updatedAt: new Date('2026-08-30T01:00:00Z') })
+    organizations.findOne.mockResolvedValue({
+      id: 'org-1',
+      name: 'Acme',
+      createdAt: new Date('2026-08-01T00:00:00Z'),
+      createdBy: 'usr-1',
+      updatedAt: new Date('2026-08-30T01:00:00Z'),
+    })
     memberships.find.mockResolvedValue([])
     boxes.find.mockResolvedValue([])
     const manager = { find: jest.fn().mockResolvedValue([]) }
@@ -318,7 +367,7 @@ describe('AdminOrganizationOverviewService', () => {
       run(manager),
     )
 
-    await service.detail('org-1', { memberLimit: 25, boxLimit: 25 })
+    await service.detail('org-1', { memberLimit: 25, boxLimit: 25, includeUsage: true })
 
     expect(usagePeriods.manager.transaction).toHaveBeenCalledWith('REPEATABLE READ', expect.any(Function))
     expect(usagePeriods.find).not.toHaveBeenCalled()

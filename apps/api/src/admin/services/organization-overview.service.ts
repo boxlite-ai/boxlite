@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { And, Equal, ILike, In, IsNull, LessThan, MoreThan, Not, Repository } from 'typeorm'
+import { In, IsNull, LessThan, MoreThan, Not, Repository } from 'typeorm'
 import { validate as isUuid } from 'uuid'
 import { Box } from '../../box/entities/box.entity'
 import { BoxState } from '../../box/enums/box-state.enum'
@@ -9,18 +9,16 @@ import { Organization } from '../../organization/entities/organization.entity'
 import { BoxUsagePeriodArchive } from '../../usage/entities/box-usage-period-archive.entity'
 import { BoxUsagePeriod } from '../../usage/entities/box-usage-period.entity'
 import { User } from '../../user/user.entity'
-import { cursorFor, cursorValue, uuidCursorValue } from '../utils/pagination'
+import { cursorFor, cursorValue } from '../utils/pagination'
 import { GIB, INACTIVE_BOX_STATES, latestDate } from '../utils/projection'
-import { registrationAfter, registrationCursor, type RegistrationQuery } from '../utils/organization-metadata'
+import { registrationAfter, registrationCursor, type RegistrationQuery } from '../utils/organization-query'
 import { AdminOrganizationActivationService } from './organization-activation.service'
 
-type ListQuery = RegistrationQuery & { metadata?: boolean }
 type DetailQuery = {
   memberCursor?: string
   boxCursor?: string
   memberLimit: number
   boxLimit: number
-  metadata?: boolean
   includeUsage?: boolean
   includeActivation?: boolean
 }
@@ -98,41 +96,24 @@ export class AdminOrganizationOverviewService {
     private readonly activation: AdminOrganizationActivationService,
   ) {}
 
-  async list(input: ListQuery) {
-    const after = input.metadata ? null : uuidCursorValue(input.cursor)
-    const search = input.query
-      ? [
-          ...(isUuid(input.query)
-            ? [{ id: after ? And(Equal(input.query), MoreThan(after)) : Equal(input.query) }]
-            : []),
-          { name: ILike(escapedLike(input.query)), ...(after ? { id: MoreThan(after) } : {}) },
-        ]
-      : undefined
-    const organizations = input.metadata
-      ? await this.registrationRows(input)
-      : await this.organizationRepository.find({
-          where: search ? search : after ? { id: MoreThan(after) } : {},
-          select: { id: true, name: true, updatedAt: true },
-          order: { id: 'ASC' },
-          take: input.limit + 1,
-        })
+  async list(input: RegistrationQuery) {
+    const organizations = await this.registrationRows(input)
     const page = organizations.slice(0, input.limit)
     const nextOrganization = organizations.length > input.limit ? page.at(-1) : undefined
     const stats = await this.organizationStats(page.map((organization) => organization.id))
-    const creators =
-      input.metadata && page.length
-        ? await this.userRepository.find({
-            where: { id: In([...new Set(page.map((row) => row.createdBy))]) },
-            select: { id: true, email: true, name: true },
-          })
-        : []
+    const creators = page.length
+      ? await this.userRepository.find({
+          where: { id: In([...new Set(page.map((row) => row.createdBy))]) },
+          select: { id: true, email: true, name: true },
+        })
+      : []
     const creatorsById = new Map(creators.map((user) => [user.id, user]))
     const summaries = page.map((organization) => {
       const organizationStats = stats.get(organization.id) ?? emptyStats()
       return {
         organizationId: organization.id,
         name: organization.name,
-        ...(input.metadata ? this.registration(organization, creatorsById) : {}),
+        ...this.registration(organization, creatorsById),
         memberCount: organizationStats.memberCount,
         boxCount: organizationStats.boxCount,
         impactState: impactState(organizationStats.impactedBoxCount > 0),
@@ -143,11 +124,7 @@ export class AdminOrganizationOverviewService {
     })
     return {
       items: summaries,
-      nextCursor: nextOrganization
-        ? input.metadata
-          ? registrationCursor(input, nextOrganization)
-          : cursorFor(nextOrganization.id)
-        : null,
+      nextCursor: nextOrganization ? registrationCursor(input, nextOrganization) : null,
       limit: input.limit,
       observedAt: latestDate(summaries.map((summary) => new Date(summary.observedAt)))?.toISOString() ?? null,
     }
@@ -253,7 +230,8 @@ export class AdminOrganizationOverviewService {
         id: true,
         name: true,
         updatedAt: true,
-        ...(input.metadata ? { createdAt: true, createdBy: true } : {}),
+        createdAt: true,
+        createdBy: true,
       },
     })
     if (!organization) return null
@@ -284,7 +262,7 @@ export class AdminOrganizationOverviewService {
         order: { id: 'ASC' },
         take: input.boxLimit + 1,
       }),
-      input.includeUsage === false ? undefined : this.currentMonthUsage(organizationId),
+      input.includeUsage ? this.currentMonthUsage(organizationId) : undefined,
       // Impact is a property of the whole organization, not of the requested page, so it
       // gets its own bounded query instead of a scan the page happens to have loaded.
       // The row count is bounded by `take`, and the row width by this projection: an
@@ -302,12 +280,7 @@ export class AdminOrganizationOverviewService {
         .getMany(),
       input.includeActivation ? this.activation.get(organizationId) : undefined,
     ])
-    const userIds = [
-      ...new Set([
-        ...memberships.map((membership) => membership.userId),
-        ...(input.metadata ? [organization.createdBy] : []),
-      ]),
-    ]
+    const userIds = [...new Set([...memberships.map((membership) => membership.userId), organization.createdBy])]
     const users = userIds.length
       ? await this.userRepository.find({
           where: { id: In(userIds) },
@@ -323,7 +296,7 @@ export class AdminOrganizationOverviewService {
     return {
       organizationId,
       name: organization.name,
-      ...(input.metadata ? this.registration(organization, usersById) : {}),
+      ...this.registration(organization, usersById),
       members: {
         items: memberPage.flatMap((membership) => {
           const user = usersById.get(membership.userId)

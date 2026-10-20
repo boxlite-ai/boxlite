@@ -4,32 +4,60 @@ Persist organization activation evidence when Boxes and usage periods are writte
 
 ## Details
 
+### Organization contract simplification
+
+Before this change, inspection found two branches in the existing organization routes: the original
+UUID-paginated projection and the `view=metadata` registration projection.
+The latter also introduced a component-identities capability probe and response
+headers. The internal administrator clients can upgrade together, so these
+compatibility branches add maintenance without an independent consumer requirement.
+
+- [x] Make the existing list accept `q`, `cursor`, `limit`, `createdFrom` and
+  `createdTo` directly. Always return registration fields, ordered by creation
+  time and ID with filter-bound cursors.
+- [x] Make registration fields required on the existing detail. Retain
+  `include=usage,activation` to control additional queries; neither section is
+  loaded by default.
+- [x] Remove `view`, metadata-only branching, capability headers and consumer
+  preflight requests. Use `invalid_organization_query` for invalid organization
+  queries. Keep operation IDs; regenerate clients.
+- [x] Let the consumer accept additive upstream fields while exposing only its
+  documented projection. Reject missing required fields and unrequested usage
+  or activation sections.
+- [x] Check other related routes: historical resource and billing aggregates
+  have distinct query semantics and need no view consolidation.
+- [x] Test the direct HTTP contract, default query isolation, date boundaries,
+  pagination and consumer projection; update API docs and the shared guide.
+
+This intentionally changes the internal default detail and cursor contract.
+Finish upgrading every producer before enabling the consumer, discard old list
+cursors, and roll back the consumer before the producer. There is no mixed-version
+fallback. No schema migration is needed for this contract simplification.
+
+[AIP-180, Guidance and Adding new components](https://google.aip.dev/180) permits
+teams controlling limited clients to choose their compatibility needs; we adopt
+additive fields but explicitly replace the unreleased dual-mode contract.
+[AIP-160, Guidance](https://google.aip.dev/160) supports filtering on an existing
+list; the existing typed date parameters suffice without a filter language.
+Keeping both modes or adding another metadata endpoint would retain the problem.
+
 ### Scope and contract
 
-`GET /api/admin/organizations/{organizationId}?view=metadata&include=activation`
-adds creation evidence and the earliest recorded positive-CPU usage period to the
-existing detail. Omit `view` to preserve the old response and default usage behavior.
-`view=metadata` makes usage opt-in; `include=usage,activation` selects both sections.
-Box deletion preserves evidence; organization deletion removes it.
-Administrator authentication is required.
+`GET /api/admin/organizations/{organizationId}?include=activation` adds creation
+evidence and the earliest recorded positive-CPU usage period to the existing detail.
+Registration fields are always included. `include=usage,activation` selects both
+optional sections; omitting include reads neither. Box deletion preserves evidence;
+organization deletion removes it. Administrator authentication is required.
 
-The existing list also accepts `view=metadata`, creation dates and registration
-cursors. The previously proposed `/metadata` routes are removed before release.
-The existing operation IDs and response models remain; registration and activation
-fields are optional additions. Detail remains flat and missing organizations return
-404. Invalid metadata queries retain `invalid_organization_metadata_query`.
+The existing list directly accepts creation dates, search and filter-bound cursors.
+The existing operation IDs and response models remain; registration fields are required,
+activation is optional. Detail remains flat and missing organizations return 404.
+Invalid organization queries return `invalid_organization_query`.
+There are no duplicate metadata paths, view branches, or capability headers/probes.
 
-An old producer ignores `view`, so a consumer must first read the existing
-`GET /api/admin/component-identities` and require its
-`X-BoxLite-Admin-Capabilities: organization-metadata-v1` response header. The body is
-unchanged. Without the capability, do not request metadata: old detail would read
-usage implicitly. No new discovery endpoint is introduced.
-
-This probe identifies one instance, not an entire deployment. All producers must be
-upgraded, with older revisions unable to receive traffic, before metadata-view consumers
-are enabled. Mixed-version producer traffic is not supported during consumer activation.
-Metadata responses repeat the header for final consumer validation; it cannot prevent
-an old instance's usage read. Rollback order is consumer first, then producer.
+All producers must be upgraded before updated consumers are enabled. Mixed-version
+traffic is not supported; old UUID-only list cursors must be discarded. Callers needing
+current-month usage must explicitly request it. Rollback order is consumer then producer.
 
 | Field | Meaning |
 | --- | --- |
@@ -102,11 +130,19 @@ warm-pool claims, Box and organization deletion, old-organization uncertainty,
 cross-organization transfer, positive CPU versus storage-only periods, and migration
 down/up. HTTP tests cover validation, administrator guards, and response shape.
 The PostgreSQL suite covers a writer blocked by migration installation that
-receives complete tracking after commit. HTTP tests must cover unchanged legacy
-response/usage behavior, explicit metadata/activation selection, missing capability
-protection and removal of the duplicate paths. Production migration duration and
+receives complete tracking after commit. HTTP tests cover direct date filters, required
+registration fields, explicit usage/activation selection, default omission of both
+sections, invalid parameters and removal of duplicate paths. Production migration duration and
 large-organization contention have not been measured.
 
-The combined metadata, provider and activation suite passed 48 tests, including real
-PostgreSQL migration/concurrency tests. The command was
-`make test:apps:api FILTER='AdminOrganization|AdminProvider|organization metadata|Admin overview'`.
+The organization query, provider and overview suite passes 40 tests, including real
+PostgreSQL date-window and shared-millisecond pagination checks. Run it with
+`make test:apps:api FILTER='AdminOrganizationOverviewService|AdminProviderController|organization queries|Admin overview'`
+and a disposable database configured through `DB_*`. This verifies the revised query
+contract; it does not establish production rollout or migration capacity.
+
+The API production build and focused source lint pass. Repository-wide format checks
+report generated-client formatting, lint reports infra module-boundary errors, and the
+full test target cannot build missing vendored runtime dependencies. The full apps build
+also requires runner version configuration and an unavailable dashboard dependency.
+These checks remain incomplete; the focused query tests are not a full-repository pass.

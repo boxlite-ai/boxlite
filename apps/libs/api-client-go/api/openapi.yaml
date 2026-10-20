@@ -3737,15 +3737,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/AdminComponentIdentities"
           description: ""
-          headers:
-            X-BoxLite-Admin-Capabilities:
-              description: Supported opt-in admin views. Probe this before requesting
-                metadata from a possibly older server.
-              explode: false
-              schema:
-                example: organization-metadata-v1
-                type: string
-              style: simple
       security:
       - bearer: []
       - oauth2:
@@ -3787,7 +3778,7 @@ paths:
           minimum: 1
           type: number
         style: form
-      - description: "With view=metadata: exclusive RFC 3339 instant, at most milliseconds."
+      - description: "Exclusive RFC 3339 instant, at most milliseconds."
         explode: true
         in: query
         name: createdTo
@@ -3795,23 +3786,12 @@ paths:
         schema:
           type: string
         style: form
-      - description: "With view=metadata: inclusive RFC 3339 instant, at most milliseconds."
+      - description: "Inclusive RFC 3339 instant, at most milliseconds."
         explode: true
         in: query
         name: createdFrom
         required: false
         schema:
-          type: string
-        style: form
-      - description: Adds registration fields and creation-time pagination; omit for
-          the existing operational view.
-        explode: true
-        in: query
-        name: view
-        required: false
-        schema:
-          enum:
-          - metadata
           type: string
         style: form
       responses:
@@ -3870,24 +3850,12 @@ paths:
           minimum: 1
           type: number
         style: form
-      - description: "With view=metadata: comma-separated usage,activation. Omit to\
-          \ read neither section."
+      - description: "Comma-separated usage,activation. Omit to read neither section."
         explode: true
         in: query
         name: include
         required: false
         schema:
-          type: string
-        style: form
-      - description: Adds registration fields and makes usage opt-in; omit for the
-          existing operational view.
-        explode: true
-        in: query
-        name: view
-        required: false
-        schema:
-          enum:
-          - metadata
           type: string
         style: form
       responses:
@@ -8467,17 +8435,17 @@ components:
         observedAt: 2000-01-23T04:56:07.000+00:00
       properties:
         createdAt:
-          description: Organization creation time; present with view=metadata.
+          description: Organization creation time.
           format: date-time
           type: string
         createdBy:
-          description: Stored creator ID with view=metadata; account linking replaces
-            it with the primary user ID.
+          description: Stored creator ID; account linking replaces it with the primary
+            user ID.
           type: string
         creator:
           allOf:
           - $ref: "#/components/schemas/AdminOrganizationCreator"
-          description: Current creator identity with view=metadata.
+          description: Current creator identity.
           nullable: true
           type: object
         organizationId:
@@ -8498,6 +8466,9 @@ components:
           type: string
       required:
       - boxCount
+      - createdAt
+      - createdBy
+      - creator
       - impactState
       - memberCount
       - name
@@ -8836,17 +8807,17 @@ components:
         observedAt: 2000-01-23T04:56:07.000+00:00
       properties:
         createdAt:
-          description: Organization creation time; present with view=metadata.
+          description: Organization creation time.
           format: date-time
           type: string
         createdBy:
-          description: Stored creator ID with view=metadata; account linking replaces
-            it with the primary user ID.
+          description: Stored creator ID; account linking replaces it with the primary
+            user ID.
           type: string
         creator:
           allOf:
           - $ref: "#/components/schemas/AdminOrganizationCreator"
-          description: Current creator identity with view=metadata.
+          description: Current creator identity.
           nullable: true
           type: object
         organizationId:
@@ -8864,7 +8835,7 @@ components:
         activation:
           allOf:
           - $ref: "#/components/schemas/AdminOrganizationActivation"
-          description: Only with view=metadata&include=activation.
+          description: Only with include=activation.
           nullable: true
           type: object
         observedAt:
@@ -8872,6 +8843,9 @@ components:
           type: string
       required:
       - boxes
+      - createdAt
+      - createdBy
+      - creator
       - impact
       - members
       - name

@@ -5,9 +5,9 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**createdAt** | **Date** | Organization creation time; present with view&#x3D;metadata. | [optional] [default to undefined]
-**createdBy** | **string** | Stored creator ID with view&#x3D;metadata; account linking replaces it with the primary user ID. | [optional] [default to undefined]
-**creator** | [**AdminOrganizationCreator**](AdminOrganizationCreator.md) | Current creator identity with view&#x3D;metadata. | [optional] [default to undefined]
+**createdAt** | **Date** | Organization creation time. | [default to undefined]
+**createdBy** | **string** | Stored creator ID; account linking replaces it with the primary user ID. | [default to undefined]
+**creator** | [**AdminOrganizationCreator**](AdminOrganizationCreator.md) | Current creator identity. | [default to undefined]
 **organizationId** | **string** |  | [default to undefined]
 **name** | **string** |  | [default to undefined]
 **memberCount** | **number** |  | [default to undefined]

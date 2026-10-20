@@ -34,17 +34,17 @@ import type { AdminOrganizationUsage } from './admin-organization-usage';
 
 export interface AdminOrganizationDetail {
     /**
-     * Organization creation time; present with view=metadata.
+     * Organization creation time.
      */
-    'createdAt'?: Date;
+    'createdAt': Date;
     /**
-     * Stored creator ID with view=metadata; account linking replaces it with the primary user ID.
+     * Stored creator ID; account linking replaces it with the primary user ID.
      */
-    'createdBy'?: string;
+    'createdBy': string;
     /**
-     * Current creator identity with view=metadata.
+     * Current creator identity.
      */
-    'creator'?: AdminOrganizationCreator | null;
+    'creator': AdminOrganizationCreator | null;
     'organizationId': string;
     'name': string;
     'members': AdminOrganizationMemberPage;
@@ -52,7 +52,7 @@ export interface AdminOrganizationDetail {
     'impact': AdminOrganizationImpact;
     'usage'?: AdminOrganizationUsage;
     /**
-     * Only with view=metadata&include=activation.
+     * Only with include=activation.
      */
     'activation'?: AdminOrganizationActivation | null;
     'observedAt': Date;

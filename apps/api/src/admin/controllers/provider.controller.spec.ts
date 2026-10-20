@@ -15,14 +15,7 @@ describe('AdminProviderController', () => {
     const response = { setHeader: jest.fn() }
 
     await expect(
-      controller.organization(
-        '00000000-0000-4000-8000-000000000001',
-        undefined,
-        undefined,
-        undefined,
-        {},
-        response as never,
-      ),
+      controller.organization('00000000-0000-4000-8000-000000000001', {}, response as never),
     ).rejects.toBeInstanceOf(NotFoundException)
     expect(response.setHeader).toHaveBeenCalledWith('Cache-Control', 'private, no-store')
   })
@@ -62,7 +55,7 @@ describe('AdminProviderController', () => {
     }
   })
 
-  it('reuses organization routes for metadata and activation while retaining legacy defaults', async () => {
+  it('extends organization routes directly and reads optional sections only when requested', async () => {
     const list = jest.fn().mockResolvedValue({ items: [], nextCursor: null, limit: 50, observedAt: null })
     const detail = jest.fn().mockResolvedValue(null)
     const identities = { api: { version: 'test' }, runners: [], observedAt: '2026-10-20T01:00:00.000Z' }
@@ -85,9 +78,9 @@ describe('AdminProviderController', () => {
     try {
       const address = app.getHttpServer().address() as AddressInfo
       const base = `http://127.0.0.1:${address.port}/api/admin/organizations`
-      const page = await fetch(`${base}?view=metadata&createdFrom=2026-10-01T00:00:00Z`)
+      const page = await fetch(`${base}?createdFrom=2026-10-01T00:00:00Z`)
       expect(page.status).toBe(200)
-      expect(page.headers.get('x-boxlite-admin-capabilities')).toBe('organization-metadata-v1')
+      expect(page.headers.get('x-boxlite-admin-capabilities')).toBeNull()
       const spec = SwaggerModule.createDocument(app, new DocumentBuilder().addBearerAuth().build())
       expect(spec.paths['/api/admin/organizations'].get?.operationId).toBe('adminListOrganizationsOverview')
       expect(spec.paths['/api/admin/organizations/{organizationId}'].get?.operationId).toBe(
@@ -114,67 +107,71 @@ describe('AdminProviderController', () => {
         required: expect.arrayContaining(['members', 'boxes']),
         properties: { createdAt: { type: 'string' }, activation: { nullable: true } },
       })
-      expect((schemas?.AdminOrganizationDetail as { required: string[] }).required).not.toContain('createdAt')
+      expect((schemas?.AdminOrganizationDetail as { required: string[] }).required).toContain('createdAt')
       expect((schemas?.AdminOrganizationDetail as { required: string[] }).required).not.toContain('activation')
+      for (const path of ['/api/admin/organizations', '/api/admin/organizations/{organizationId}'])
+        expect(spec.paths[path].get?.parameters).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ name: 'view' })]),
+        )
       expect(
-        spec.paths['/api/admin/organizations'].get?.parameters
-          ?.slice(0, 3)
-          .map((parameter) => 'name' in parameter && parameter.name),
-      ).toEqual(['q', 'cursor', 'limit'])
+        spec.paths['/api/admin/organizations'].get?.parameters?.map(
+          (parameter) => 'name' in parameter && parameter.name,
+        ),
+      ).toEqual(['q', 'cursor', 'limit', 'createdTo', 'createdFrom'])
       expect(
-        spec.paths['/api/admin/organizations/{organizationId}'].get?.parameters
-          ?.slice(0, 4)
-          .map((parameter) => 'name' in parameter && parameter.name),
-      ).toEqual(['organizationId', 'memberCursor', 'boxCursor', 'sectionLimit'])
-      expect(list).toHaveBeenCalledWith(
-        expect.objectContaining({ metadata: true, createdFrom: '2026-10-01T00:00:00.000Z' }),
-      )
+        spec.paths['/api/admin/organizations/{organizationId}'].get?.parameters?.map(
+          (parameter) => 'name' in parameter && parameter.name,
+        ),
+      ).toEqual(['organizationId', 'memberCursor', 'boxCursor', 'sectionLimit', 'include'])
+      expect(list).toHaveBeenCalledWith(expect.objectContaining({ createdFrom: '2026-10-01T00:00:00.000Z' }))
       const id = '00000000-0000-4000-8000-000000000001'
-      const missing = await fetch(`${base}/${id}?view=metadata`)
+      const missing = await fetch(`${base}/${id}`)
       expect(missing.status).toBe(404)
       expect(missing.headers.get('cache-control')).toBe('private, no-store')
-      expect(detail).toHaveBeenLastCalledWith(id, expect.objectContaining({ metadata: true, includeUsage: false }))
+      expect(detail).toHaveBeenLastCalledWith(id, expect.objectContaining({ includeUsage: false }))
       detail.mockResolvedValue({ organizationId: id })
-      const selected = await fetch(`${base}/${id}?view=metadata&include=usage,activation`)
+      const selected = await fetch(`${base}/${id}?include=usage,activation`)
       expect(selected.status).toBe(200)
-      expect(selected.headers.get('x-boxlite-admin-capabilities')).toBe('organization-metadata-v1')
+      expect(selected.headers.get('x-boxlite-admin-capabilities')).toBeNull()
       expect(await selected.json()).toEqual({ organizationId: id })
       expect(detail).toHaveBeenLastCalledWith(
         id,
         expect.objectContaining({ includeUsage: true, includeActivation: true }),
       )
-      expect((await fetch(`${base}/${id}?view=metadata&include=activation`)).status).toBe(200)
+      expect((await fetch(`${base}/${id}?include=activation`)).status).toBe(200)
       expect(detail).toHaveBeenLastCalledWith(
         id,
         expect.objectContaining({ includeUsage: false, includeActivation: true }),
       )
       expect((await fetch(`${base}/${id}`)).status).toBe(200)
-      expect(detail).toHaveBeenLastCalledWith(id, { memberLimit: 50, boxLimit: 50 })
+      expect(detail).toHaveBeenLastCalledWith(
+        id,
+        expect.objectContaining({ memberLimit: 50, boxLimit: 50, includeUsage: false, includeActivation: false }),
+      )
       expect((await fetch(`${base}/${id}/metadata`)).status).toBe(404)
       expect((await fetch(`${base}/${id}/activation`)).status).toBe(404)
       const capability = await fetch(`http://127.0.0.1:${address.port}/api/admin/component-identities`)
-      expect(capability.headers.get('x-boxlite-admin-capabilities')).toBe('organization-metadata-v1')
+      expect(capability.headers.get('x-boxlite-admin-capabilities')).toBeNull()
       expect(await capability.json()).toEqual(identities)
       for (const path of [
-        '?view=metadata&unknown=value',
-        '?view=unsupported',
-        '/not-uuid?view=metadata',
-        `/${id}?view=metadata&include=billing`,
-        `/${id}?view=metadata&include=activation,activation`,
-        `/${id}?view=metadata&memberCursor=invalid!`,
-        `/${id}?view=metadata&boxCursor=invalid!`,
+        '?unknown=value',
+        '?view=metadata',
+        '?limit=0',
+        '?createdFrom=2026-10-02T00:00:00Z&createdTo=2026-10-01T00:00:00Z',
+        '/not-uuid',
+        `/${id}?include=billing`,
+        `/${id}?include=activation,activation`,
+        `/${id}?memberCursor=invalid!`,
+        `/${id}?boxCursor=invalid!`,
       ]) {
         const invalid = await fetch(`${base}${path}`)
         expect(invalid.status).toBe(400)
         expect(await invalid.json()).toMatchObject({
           statusCode: 400,
-          code: 'invalid_organization_metadata_query',
-          message: 'Invalid organization metadata query',
+          code: 'invalid_organization_query',
+          message: 'Invalid organization query',
         })
       }
-      const legacyInvalid = await fetch(`${base}/not-uuid`)
-      expect(legacyInvalid.status).toBe(400)
-      expect(await legacyInvalid.json()).not.toHaveProperty('code')
     } finally {
       await app.close()
     }

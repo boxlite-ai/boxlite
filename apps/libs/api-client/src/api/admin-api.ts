@@ -269,12 +269,11 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
          * @param {string} [memberCursor] Opaque member page cursor
          * @param {string} [boxCursor] Opaque box page cursor
          * @param {number} [sectionLimit] 
-         * @param {string} [include] With view&#x3D;metadata: comma-separated usage,activation. Omit to read neither section.
-         * @param {AdminGetOrganizationOverviewViewEnum} [view] Adds registration fields and makes usage opt-in; omit for the existing operational view.
+         * @param {string} [include] Comma-separated usage,activation. Omit to read neither section.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminGetOrganizationOverview: async (organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, include?: string, view?: AdminGetOrganizationOverviewViewEnum, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        adminGetOrganizationOverview: async (organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, include?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'organizationId' is not null or undefined
             assertParamExists('adminGetOrganizationOverview', 'organizationId', organizationId)
             const localVarPath = `/admin/organizations/{organizationId}`
@@ -310,10 +309,6 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
 
             if (include !== undefined) {
                 localVarQueryParameter['include'] = include;
-            }
-
-            if (view !== undefined) {
-                localVarQueryParameter['view'] = view;
             }
 
             localVarHeaderParameter['Accept'] = 'application/json';
@@ -505,13 +500,12 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
          * @param {string} [q] Organization ID or name
          * @param {string} [cursor] Opaque cursor returned by the previous page
          * @param {number} [limit] 
-         * @param {string} [createdTo] With view&#x3D;metadata: exclusive RFC 3339 instant, at most milliseconds.
-         * @param {string} [createdFrom] With view&#x3D;metadata: inclusive RFC 3339 instant, at most milliseconds.
-         * @param {AdminListOrganizationsOverviewViewEnum} [view] Adds registration fields and creation-time pagination; omit for the existing operational view.
+         * @param {string} [createdTo] Exclusive RFC 3339 instant, at most milliseconds.
+         * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminListOrganizationsOverview: async (q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, view?: AdminListOrganizationsOverviewViewEnum, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        adminListOrganizationsOverview: async (q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             const localVarPath = `/admin/organizations`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -548,10 +542,6 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
 
             if (createdFrom !== undefined) {
                 localVarQueryParameter['createdFrom'] = createdFrom;
-            }
-
-            if (view !== undefined) {
-                localVarQueryParameter['view'] = view;
             }
 
             localVarHeaderParameter['Accept'] = 'application/json';
@@ -907,13 +897,12 @@ export const AdminApiFp = function(configuration?: Configuration) {
          * @param {string} [memberCursor] Opaque member page cursor
          * @param {string} [boxCursor] Opaque box page cursor
          * @param {number} [sectionLimit] 
-         * @param {string} [include] With view&#x3D;metadata: comma-separated usage,activation. Omit to read neither section.
-         * @param {AdminGetOrganizationOverviewViewEnum} [view] Adds registration fields and makes usage opt-in; omit for the existing operational view.
+         * @param {string} [include] Comma-separated usage,activation. Omit to read neither section.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, include?: string, view?: AdminGetOrganizationOverviewViewEnum, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationDetail>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, include, view, options);
+        async adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, include?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationDetail>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, include, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetOrganizationOverview']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -978,14 +967,13 @@ export const AdminApiFp = function(configuration?: Configuration) {
          * @param {string} [q] Organization ID or name
          * @param {string} [cursor] Opaque cursor returned by the previous page
          * @param {number} [limit] 
-         * @param {string} [createdTo] With view&#x3D;metadata: exclusive RFC 3339 instant, at most milliseconds.
-         * @param {string} [createdFrom] With view&#x3D;metadata: inclusive RFC 3339 instant, at most milliseconds.
-         * @param {AdminListOrganizationsOverviewViewEnum} [view] Adds registration fields and creation-time pagination; omit for the existing operational view.
+         * @param {string} [createdTo] Exclusive RFC 3339 instant, at most milliseconds.
+         * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, view?: AdminListOrganizationsOverviewViewEnum, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationOverviewPage>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, view, options);
+        async adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationOverviewPage>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListOrganizationsOverview']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -1133,13 +1121,12 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          * @param {string} [memberCursor] Opaque member page cursor
          * @param {string} [boxCursor] Opaque box page cursor
          * @param {number} [sectionLimit] 
-         * @param {string} [include] With view&#x3D;metadata: comma-separated usage,activation. Omit to read neither section.
-         * @param {AdminGetOrganizationOverviewViewEnum} [view] Adds registration fields and makes usage opt-in; omit for the existing operational view.
+         * @param {string} [include] Comma-separated usage,activation. Omit to read neither section.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, include?: string, view?: AdminGetOrganizationOverviewViewEnum, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationDetail> {
-            return localVarFp.adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, include, view, options).then((request) => request(axios, basePath));
+        adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, include?: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationDetail> {
+            return localVarFp.adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, include, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1189,14 +1176,13 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          * @param {string} [q] Organization ID or name
          * @param {string} [cursor] Opaque cursor returned by the previous page
          * @param {number} [limit] 
-         * @param {string} [createdTo] With view&#x3D;metadata: exclusive RFC 3339 instant, at most milliseconds.
-         * @param {string} [createdFrom] With view&#x3D;metadata: inclusive RFC 3339 instant, at most milliseconds.
-         * @param {AdminListOrganizationsOverviewViewEnum} [view] Adds registration fields and creation-time pagination; omit for the existing operational view.
+         * @param {string} [createdTo] Exclusive RFC 3339 instant, at most milliseconds.
+         * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, view?: AdminListOrganizationsOverviewViewEnum, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationOverviewPage> {
-            return localVarFp.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, view, options).then((request) => request(axios, basePath));
+        adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationOverviewPage> {
+            return localVarFp.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1329,13 +1315,12 @@ export class AdminApi extends BaseAPI {
      * @param {string} [memberCursor] Opaque member page cursor
      * @param {string} [boxCursor] Opaque box page cursor
      * @param {number} [sectionLimit] 
-     * @param {string} [include] With view&#x3D;metadata: comma-separated usage,activation. Omit to read neither section.
-     * @param {AdminGetOrganizationOverviewViewEnum} [view] Adds registration fields and makes usage opt-in; omit for the existing operational view.
+     * @param {string} [include] Comma-separated usage,activation. Omit to read neither section.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, include?: string, view?: AdminGetOrganizationOverviewViewEnum, options?: RawAxiosRequestConfig) {
-        return AdminApiFp(this.configuration).adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, include, view, options).then((request) => request(this.axios, this.basePath));
+    public adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, include?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, include, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1390,14 +1375,13 @@ export class AdminApi extends BaseAPI {
      * @param {string} [q] Organization ID or name
      * @param {string} [cursor] Opaque cursor returned by the previous page
      * @param {number} [limit] 
-     * @param {string} [createdTo] With view&#x3D;metadata: exclusive RFC 3339 instant, at most milliseconds.
-     * @param {string} [createdFrom] With view&#x3D;metadata: inclusive RFC 3339 instant, at most milliseconds.
-     * @param {AdminListOrganizationsOverviewViewEnum} [view] Adds registration fields and creation-time pagination; omit for the existing operational view.
+     * @param {string} [createdTo] Exclusive RFC 3339 instant, at most milliseconds.
+     * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, view?: AdminListOrganizationsOverviewViewEnum, options?: RawAxiosRequestConfig) {
-        return AdminApiFp(this.configuration).adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, view, options).then((request) => request(this.axios, this.basePath));
+    public adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1467,16 +1451,6 @@ export class AdminApi extends BaseAPI {
     }
 }
 
-export const AdminGetOrganizationOverviewViewEnum = {
-    METADATA: 'metadata',
-    UNKNOWN_DEFAULT_OPEN_API: '11184809',
-} as const;
-export type AdminGetOrganizationOverviewViewEnum = typeof AdminGetOrganizationOverviewViewEnum[keyof typeof AdminGetOrganizationOverviewViewEnum];
-export const AdminListOrganizationsOverviewViewEnum = {
-    METADATA: 'metadata',
-    UNKNOWN_DEFAULT_OPEN_API: '11184809',
-} as const;
-export type AdminListOrganizationsOverviewViewEnum = typeof AdminListOrganizationsOverviewViewEnum[keyof typeof AdminListOrganizationsOverviewViewEnum];
 export const AdminQueryUsageGranularityEnum = {
     WINDOW: 'window',
     HOUR: 'hour',

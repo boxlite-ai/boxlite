@@ -264,10 +264,12 @@ describeIfDatabase('Admin overview projections (integration, real Postgres)', ()
       state: 'impacted',
       evidence: [expect.objectContaining({ boxId: 'box-broken01', summary: 'broken: error (desired started)' })],
     })
-    expect(detail?.usage).toEqual(expect.objectContaining({ computeSeconds: '0', storageByteSeconds: '0' }))
+    expect(detail).not.toHaveProperty('usage')
+    const expanded = await organizations.detail(organizationId, { memberLimit: 50, boxLimit: 50, includeUsage: true })
+    expect(expanded?.usage).toEqual(expect.objectContaining({ computeSeconds: '0', storageByteSeconds: '0' }))
   })
 
-  it('paginates registration metadata without losing shared-millisecond rows and filters a half-open window', async () => {
+  it('paginates organizations without losing shared-millisecond rows and filters a half-open window', async () => {
     const ids = [
       '00000000-0000-4000-8000-000000000011',
       '00000000-0000-4000-8000-000000000012',
@@ -286,7 +288,6 @@ describeIfDatabase('Admin overview projections (integration, real Postgres)', ()
         [ids[index], `Registration ${ids[1]}`, '00000000-0000-4000-8000-0000000000ff', times[index]],
       )
     const query = {
-      metadata: true,
       query: ids[1],
       limit: 1,
       createdFrom: '2026-03-01T00:00:00.000Z',
@@ -303,11 +304,10 @@ describeIfDatabase('Admin overview projections (integration, real Postgres)', ()
     })
     await expect(
       organizations.list({ ...query, createdTo: undefined, cursor: first.nextCursor as string }),
-    ).rejects.toThrow('Invalid organization metadata query')
+    ).rejects.toThrow('Invalid organization query')
     const inclusive = await organizations.list({ ...query, createdFrom: query.createdTo, createdTo: undefined })
     expect(inclusive.items.map((row) => row.organizationId)).toEqual([ids[2]])
     const detail = await organizations.detail(ids[0], {
-      metadata: true,
       includeUsage: false,
       memberLimit: 1,
       boxLimit: 1,

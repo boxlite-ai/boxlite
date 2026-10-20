@@ -11,14 +11,14 @@ export type RegistrationQuery = {
   limit: number
 }
 
-export const metadataQueryError = () =>
+export const organizationQueryError = () =>
   new BadRequestException({
     statusCode: 400,
-    code: 'invalid_organization_metadata_query',
-    message: 'Invalid organization metadata query',
+    code: 'invalid_organization_query',
+    message: 'Invalid organization query',
   })
 const invalid = (): never => {
-  throw metadataQueryError()
+  throw organizationQueryError()
 }
 const text = (value: unknown, max: number): string | undefined => {
   if (value === undefined) return undefined
@@ -56,7 +56,7 @@ export const parseRegistrationQuery = (query: Record<string, unknown>): Registra
   return { query: search, cursor: text(query.cursor, 2048), limit: limit(query.limit), createdFrom, createdTo }
 }
 
-export const parseMetadataSections = (query: Record<string, unknown>) => {
+export const parseOrganizationSections = (query: Record<string, unknown>) => {
   allow(query, ['memberCursor', 'boxCursor', 'sectionLimit', 'include'])
   const include = text(query.include, 32)?.split(',') ?? []
   if (include.some((section) => !['usage', 'activation'].includes(section)) || new Set(include).size !== include.length)
@@ -75,7 +75,6 @@ export const parseMetadataSections = (query: Record<string, unknown>) => {
     boxCursor,
     memberLimit: sectionLimit,
     boxLimit: sectionLimit,
-    metadata: true,
     includeUsage: include.includes('usage'),
     includeActivation: include.includes('activation'),
   }

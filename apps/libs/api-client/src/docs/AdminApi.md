@@ -219,7 +219,7 @@ This endpoint does not have any parameters.
 ### HTTP response details
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
-|**200** |  |  * X-BoxLite-Admin-Capabilities - Supported opt-in admin views. Probe this before requesting metadata from a possibly older server. <br>  |
+|**200** |  |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
@@ -293,16 +293,14 @@ let organizationId: string; //Organization ID
 let memberCursor: string; //Opaque member page cursor (optional) (default to undefined)
 let boxCursor: string; //Opaque box page cursor (optional) (default to undefined)
 let sectionLimit: number; // (optional) (default to undefined)
-let include: string; //With view=metadata: comma-separated usage,activation. Omit to read neither section. (optional) (default to undefined)
-let view: 'metadata'; //Adds registration fields and makes usage opt-in; omit for the existing operational view. (optional) (default to undefined)
+let include: string; //Comma-separated usage,activation. Omit to read neither section. (optional) (default to undefined)
 
 const { status, data } = await apiInstance.adminGetOrganizationOverview(
     organizationId,
     memberCursor,
     boxCursor,
     sectionLimit,
-    include,
-    view
+    include
 );
 ```
 
@@ -314,8 +312,7 @@ const { status, data } = await apiInstance.adminGetOrganizationOverview(
 | **memberCursor** | [**string**] | Opaque member page cursor | (optional) defaults to undefined|
 | **boxCursor** | [**string**] | Opaque box page cursor | (optional) defaults to undefined|
 | **sectionLimit** | [**number**] |  | (optional) defaults to undefined|
-| **include** | [**string**] | With view&#x3D;metadata: comma-separated usage,activation. Omit to read neither section. | (optional) defaults to undefined|
-| **view** | [**&#39;metadata&#39;**] | Adds registration fields and makes usage opt-in; omit for the existing operational view. | (optional) defaults to undefined|
+| **include** | [**string**] | Comma-separated usage,activation. Omit to read neither section. | (optional) defaults to undefined|
 
 
 ### Return type
@@ -568,17 +565,15 @@ const apiInstance = new AdminApi(configuration);
 let q: string; //Organization ID or name (optional) (default to undefined)
 let cursor: string; //Opaque cursor returned by the previous page (optional) (default to undefined)
 let limit: number; // (optional) (default to undefined)
-let createdTo: string; //With view=metadata: exclusive RFC 3339 instant, at most milliseconds. (optional) (default to undefined)
-let createdFrom: string; //With view=metadata: inclusive RFC 3339 instant, at most milliseconds. (optional) (default to undefined)
-let view: 'metadata'; //Adds registration fields and creation-time pagination; omit for the existing operational view. (optional) (default to undefined)
+let createdTo: string; //Exclusive RFC 3339 instant, at most milliseconds. (optional) (default to undefined)
+let createdFrom: string; //Inclusive RFC 3339 instant, at most milliseconds. (optional) (default to undefined)
 
 const { status, data } = await apiInstance.adminListOrganizationsOverview(
     q,
     cursor,
     limit,
     createdTo,
-    createdFrom,
-    view
+    createdFrom
 );
 ```
 
@@ -589,9 +584,8 @@ const { status, data } = await apiInstance.adminListOrganizationsOverview(
 | **q** | [**string**] | Organization ID or name | (optional) defaults to undefined|
 | **cursor** | [**string**] | Opaque cursor returned by the previous page | (optional) defaults to undefined|
 | **limit** | [**number**] |  | (optional) defaults to undefined|
-| **createdTo** | [**string**] | With view&#x3D;metadata: exclusive RFC 3339 instant, at most milliseconds. | (optional) defaults to undefined|
-| **createdFrom** | [**string**] | With view&#x3D;metadata: inclusive RFC 3339 instant, at most milliseconds. | (optional) defaults to undefined|
-| **view** | [**&#39;metadata&#39;**] | Adds registration fields and creation-time pagination; omit for the existing operational view. | (optional) defaults to undefined|
+| **createdTo** | [**string**] | Exclusive RFC 3339 instant, at most milliseconds. | (optional) defaults to undefined|
+| **createdFrom** | [**string**] | Inclusive RFC 3339 instant, at most milliseconds. | (optional) defaults to undefined|
 
 
 ### Return type
