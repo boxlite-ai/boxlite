@@ -44,75 +44,70 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
 
 ## Admin organization metadata
 
-System administrators can read organization creation metadata without querying usage.
-Authenticate with `Authorization: Bearer <admin-api-key>` or an administrator JWT;
-an ordinary organization's API key does not grant system-wide access.
+System administrators select registration metadata on the existing organization routes
+with `view=metadata`. Authenticate with `Authorization: Bearer <admin-api-key>` or an
+administrator JWT; an ordinary organization's API key does not grant system-wide access.
+Omitting `view` keeps the existing operational response and default detail usage query.
 
-Existing interfaces expose some of these fields, with different access and query boundaries:
+Before requesting this view from a possibly older server, call the existing
+`GET /api/admin/component-identities` and require the response header
+`X-BoxLite-Admin-Capabilities: organization-metadata-v1`. The identity body is unchanged.
+An older server ignores `view` and its detail reads usage automatically, so absence of
+the header must stop the metadata request. No discovery route or duplicate organization
+route is needed.
 
-| Existing route | Access and reuse boundary |
-| --- | --- |
-| `GET /api/organizations` and `/{organizationId}` | JWT only; return `createdAt/createdBy`, but list only the caller's organizations. |
-| `GET /api/organizations/by-box-id/{boxId}` | Accepts an Admin API key and returns `createdAt/createdBy`; requires a Box, so it cannot enumerate new organizations that have no Boxes. |
-| `GET /api/admin/organizations` and `/{organizationId}` | Accept Admin API keys; list has no creation fields/date filter, and detail always reads current-month usage. |
+A capability probe covers only the instance that answered. Upgrade every producer
+instance and prevent older revisions from receiving traffic before deploying or enabling
+metadata-view consumers. Do not enable them during a mixed-version rollout. Metadata
+responses repeat the capability header so consumers can reject incompatible responses;
+that final check cannot undo an old instance's implicit usage read. Roll back consumers
+before producers. A single probe is not a deployment-wide version guarantee.
 
-The metadata routes reuse the admin overview service and stored organization rows.
-Separate routes preserve the old response contracts and make usage opt-in:
-
-- `GET /api/admin/organizations/metadata` returns a bounded page of organizations with
-  `createdAt`, stored `createdBy`, nullable current `creator`, member/Box counts and impact.
+- `GET /api/admin/organizations?view=metadata` returns a bounded page with `createdAt`,
+  stored `createdBy`, nullable current `creator`, member/Box counts and impact.
   `q` searches name or exact ID. `createdFrom` is inclusive and `createdTo` exclusive;
   timestamps require an offset and at most millisecond precision. `limit` is 1–200 (default 50).
-- `GET /api/admin/organizations/{organizationId}/metadata` returns `{item: ...}` with the same
-  registration fields, member/Box pages and impact. `{item:null}` means the organization is missing;
-  an HTTP 404 means the route is unavailable. `memberCursor`, `boxCursor` and `sectionLimit`
-  page each section. Only explicit `include=usage` queries and returns UTC month-to-date usage.
+- `GET /api/admin/organizations/{organizationId}?view=metadata` returns flat organization
+  details with registration, member/Box pages and impact. A missing organization returns 404.
+  `memberCursor`, `boxCursor` and `sectionLimit` page each section. Explicit `include=usage`
+  adds existing UTC month-to-date usage; `include=activation` adds retained activation
+  evidence. Comma-separated `include=usage,activation` selects both. Omitting `include`
+  reads neither section.
 
 `createdAt` is organization creation time, not user signup or first Box creation. `createdBy`
-is the organization's stored creator association, independent of current membership. Account
-linking rewrites it to the primary user ID, so it is not an immutable historical identity.
+is the stored creator association, independent of current membership. Account linking
+rewrites it to the primary user ID, so it is not an immutable historical identity.
 When a creator no longer exists and the organization survives, `creator` is null; an existing
 user without an email has `creator.email:null`. Names and email describe current identity.
-Pages read live data and exclude deleted organizations; this is not a retained historical
-census or an activation timeline.
+Pages read live data and exclude deleted organizations.
 
-List order and cursor seek both use creation time truncated to milliseconds plus UUID, ascending,
-so database microseconds cannot cause a repeated or skipped row. Cursors bind `q` and date filters;
-changing those filters returns 400. They follow the existing base64 cursor convention, carry no
-authorization, and require the normal admin guards on every request. Unknown parameters return 400.
-Legacy `/api/admin/organizations` and `/{organizationId}` keep their original response contracts
-and default usage behavior. Deploy these new routes before consumers that depend on them.
-On an older server, `/organizations/metadata` can match the legacy UUID detail route and return
-400; do not treat that response as an empty list or retry through the usage-reading legacy detail.
-Metadata validation errors therefore include the stable code `invalid_organization_metadata_query`
-in their 400 response, covering query parameters, cursors and the detail organization UUID.
-Consumers can classify this code as a caller error; a 400 without it may mean an unsupported
-route and should be treated as an upstream compatibility failure. The legacy routes do not add
-this code. HTTP regression checks cover each metadata failure category and the legacy UUID error.
+Metadata list order and cursor seek both use creation time truncated to milliseconds plus
+UUID, ascending. Cursors bind `q` and date filters; changing them returns 400. Operational
+and metadata cursors are not interchangeable. Unknown metadata parameters, invalid dates,
+UUIDs, and incompatible cursors return `400 invalid_organization_metadata_query`. Legacy
+UUID errors keep their old response. Invalid credentials return 401; non-admin access returns 403.
 
-For organizations created on October 20 in UTC+08:00, use the equivalent half-open UTC interval:
+For organizations created on October 20 in UTC+08:00, use this half-open UTC interval,
+after the capability check:
 
 ```bash
-curl --get "$BOXLITE_API_URL/api/admin/organizations/metadata" \
+curl --get "$BOXLITE_API_URL/api/admin/organizations" \
   --header "Authorization: Bearer $BOXLITE_API_KEY" \
+  --data-urlencode "view=metadata" \
   --data-urlencode "createdFrom=2026-10-19T16:00:00Z" \
   --data-urlencode "createdTo=2026-10-20T16:00:00Z" \
   --data-urlencode "limit=50"
 ```
 
-Keep the same filters when following `nextCursor` until it is null. To inspect one organization
-without usage, call `/api/admin/organizations/{organizationId}/metadata?sectionLimit=50`;
-continue `members.nextCursor` and `boxes.nextCursor` independently using `memberCursor` and
-`boxCursor`. Unknown parameters, invalid dates/UUIDs, and incompatible cursors return 400.
-Invalid credentials return 401; an authenticated non-admin caller is denied with 403.
+Keep the same view and filters while following `nextCursor` until null. Continue member
+and Box cursors independently on detail. Responses use `Cache-Control: private, no-store`.
 
 ### Generated clients
 
-Metadata query parameters have explicit Swagger string types because the controller validates
-the complete query object at runtime; reflection cannot infer its individual fields. The
-nullable `creator` and `item` references generate typed nullable models in TypeScript and Go.
-After changing these contracts, regenerate the committed clients from `apps/` with the pinned
-generator in `openapitools.json`:
+Existing organization operation IDs and response models are retained. Registration and
+activation fields are optional, present only when selected. Metadata query parameters have
+explicit Swagger string types; runtime validation still applies. Regenerate the committed
+clients from `apps/` with the pinned generator in `openapitools.json`:
 
 ```bash
 yarn nx run api-client:generate:api-client
@@ -121,5 +116,133 @@ yarn nx run analytics-api-client:generate:api-client
 ```
 
 Use the example API environment and a local Redis for offline export, as in the API client
-drift workflow. Commit the generated methods, models, OpenAPI document, and generator indexes
-together; a second generation must leave those files unchanged.
+drift workflow. Commit generated methods, models, OpenAPI and generator indexes together;
+a second uncached generation must leave them unchanged.
+
+## Admin recorded resource usage
+
+### Design and reuse
+
+`GET /api/admin/usage` integrates recorded allocation periods over a half-open time window.
+It uses the existing administrator guards, ledger tables, and Redis connection. Historical
+organization, region and Box dimensions come from each period, without joining current Boxes;
+deleted Boxes and reassigned resources therefore retain their recorded attribution.
+The period writer records CPU in vCPU and memory/disk in GiB (`usage/usage-event.ts`).
+Stopped Boxes can have storage-only periods.
+
+The archive worker moves closed periods in one transaction and assigns new archive row IDs.
+One SQL statement reads live and archive with `UNION ALL`, under PostgreSQL's statement snapshot,
+so the move cannot duplicate or lose a period between reads. Allocations are cast to `numeric`
+before integration; decimal strings avoid further JavaScript floating-point loss. This cannot
+recover precision already lost in the ledger's floating-point columns.
+See [PostgreSQL statement snapshots](https://www.postgresql.org/docs/18/transaction-iso.html#XACT-READ-COMMITTED)
+and [exact numeric types](https://www.postgresql.org/docs/18/datatype-numeric.html#DATATYPE-NUMERIC-DECIMAL).
+
+Event handling can fail, and reconciliation starts a correction at the current time rather
+than backfilling the gap (`usage/services/usage.service.ts`). Every response therefore reports
+`coverage: {status: "unknown", reason: "usage_events_not_backfilled"}`. Empty items mean no
+recorded periods, not zero actual usage. Even a recorded value of `"0"` cannot establish a
+complete zero total. `sourcePeriodCount` counts participating periods, not completeness.
+No historical retention watermark is inferred from the oldest remaining row.
+
+### Query and response
+
+Authenticate with an Admin API key or administrator JWT. All pages reapply the normal guards.
+Required `from` and `to` are RFC 3339 instants with an explicit timezone and at most milliseconds;
+`to` cannot be in the future. `granularity` defaults to `window`; `hour` permits up to 7 days,
+and `day`/`window` up to 90 days. Fixed hour/day buckets start at `from`, with the final bucket
+clipped at `to`; they are not calendar/DST buckets.
+
+`metrics` is a unique comma-separated selection of `computeVcpuSeconds,storageByteSeconds,
+memoryGibSeconds`, defaulting to the first two. Values integrate allocation times overlap
+seconds; storage converts GiB to bytes. They describe allocated resources, not utilization
+or money. `groupBy` selects one or two of `organizationId,regionId,boxId`, defaulting to
+`organizationId`. Optional filters use these same names. Organization IDs are UUIDs; Region
+and Box filters allow 1–128 ASCII letters, digits, `.`, `_`, `:`, `-`, starting with a letter
+or digit. The ledger stores string IDs, including historical IDs. Warm-pool unassigned
+organization periods are excluded. Lists are normalized in the order shown above.
+
+`limit` is 1–200 (default 50). Repeat all query conditions with `cursor` (maximum 2048 characters)
+for subsequent pages. The response contains `queryId`, `generatedAt`, `expiresAt`,
+`definitionVersion: "resource-usage-v1"`, normalized `query`, `coverage`, `items`, and
+nullable `nextCursor`. Query excludes pagination and identity. Each item contains bucket
+`from/to`, only selected `dimensions` and decimal-string `values`, and `sourcePeriodCount`
+(1–200000). Only groups with recorded periods are returned.
+
+```bash
+curl --get "$BOXLITE_API_URL/api/admin/usage" \
+  --header "Authorization: Bearer $BOXLITE_API_KEY" \
+  --data-urlencode "from=2026-10-18T16:00:00Z" \
+  --data-urlencode "to=2026-10-19T16:00:00Z" \
+  --data-urlencode "groupBy=organizationId,regionId" \
+  --data-urlencode "metrics=computeVcpuSeconds,memoryGibSeconds"
+```
+
+### Limits, pagination and verification
+
+A first page calculates a fixed result, limited to 200000 candidate periods, 5000 result
+rows, 2 MiB serialized cache data, and a 5-second database statement timeout. Limits fail
+the whole query; there is no successful truncation. General ledger time-window indexes
+support storage-only periods that the existing CPU-positive concurrency indexes omit.
+The indexes use the repository's transactional migration runner; their creation takes a
+write lock, so deployment planning must account for ledger size and the index build time.
+These are protective bounds; production capacity requires workload testing before deployment.
+
+Redis stores the result for 15 minutes without renewing expiration, using
+[SET with expiration](https://redis.io/docs/latest/commands/set/). All pages share the same
+query identity, timestamps and data; no database transaction spans requests. The cache binds
+the normalized query, definition version, authenticated user and API key hash (or JWT user).
+Optional `X-Usage-Snapshot-Owner` is exactly 64 lowercase hex characters and adds a caller
+partition to that binding. It is not authentication and grants no access. Do not expose
+that partition or use it as a substitute for authorization. API key rotation invalidates
+continuation. Cursors are opaque and have no independent authority.
+
+Known errors are `400 invalid_usage_query`, `410 usage_query_expired`,
+`422 usage_query_too_large`, and `503 usage_source_unavailable`. Expiration requires restarting
+the complete query; oversize requires a narrower window or filters. Database/Redis failures
+and malformed source data must not become empty success. Responses use `Cache-Control:
+private, no-store`.
+
+Verification covers real PostgreSQL integration/clipping, historic dimensions, sparse zeros,
+open/archive rows, precision and budget limits; real Redis checks cover stable pagination,
+identity/query binding, expiration and failure. HTTP checks cover validation, guards and
+exported DTO schemas. Regenerate the clients together with other API DTO changes and require
+a second uncached generation to produce no changes. These checks do not establish production
+load capacity or historical completeness.
+
+## Organization activation evidence
+
+`GET /api/admin/organizations/{organizationId}?view=metadata&include=activation`
+adds an optional `activation` section to the existing flat detail. A missing organization
+returns 404. Omitting this selection avoids the facts query and field.
+
+```json
+{
+  "activation": {
+    "organizationId": "de80ad96-daa5-48a6-ad18-fb58aff3bbbf",
+    "firstObservedBoxCreatedAt": "2026-10-20T01:00:00.000Z",
+    "boxHistoryComplete": false,
+    "firstRecordedComputeAt": "2026-10-20T01:00:01.000Z",
+    "computeHistoryComplete": false,
+    "observedAt": "2026-10-20T02:00:00.000Z"
+  }
+}
+```
+
+`firstObservedBoxCreatedAt` is the earliest retained Box creation or warm-pool claim.
+It is a true first creation only when `boxHistoryComplete` is true. Organizations
+predating tracking retain `false`, even after backfill; null then means unknown.
+For a new organization with complete tracking, null means no committed creation or
+claim. Moving a Box between real organizations makes the destination incomplete.
+
+`firstRecordedComputeAt` is the earliest recorded positive-CPU allocation period,
+not the first executed command or measured CPU activity. Usage events can be missed,
+so `computeHistoryComplete` is always false and null never proves no execution.
+Facts survive Box deletion and are removed with the organization.
+
+The pre-deploy migration installs transactional triggers and backfills retained
+Box/current/archive evidence. It requires a transaction, limits lock waits to five
+seconds and individual statements to sixty seconds, and rolls back if either limit
+is exceeded. Production migration duration is unmeasured. Metadata validation rules
+and administrator authorization apply to this selection. See the [activation design](../../docs/contributing/investigations/organization-activation-facts.md)
+for the source evidence, concurrency model and verification boundaries.

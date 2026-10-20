@@ -12,6 +12,7 @@ import { User } from '../../user/user.entity'
 import { cursorFor, cursorValue, uuidCursorValue } from '../utils/pagination'
 import { GIB, INACTIVE_BOX_STATES, latestDate } from '../utils/projection'
 import { registrationAfter, registrationCursor, type RegistrationQuery } from '../utils/organization-metadata'
+import { AdminOrganizationActivationService } from './organization-activation.service'
 
 type ListQuery = RegistrationQuery & { metadata?: boolean }
 type DetailQuery = {
@@ -21,6 +22,7 @@ type DetailQuery = {
   boxLimit: number
   metadata?: boolean
   includeUsage?: boolean
+  includeActivation?: boolean
 }
 type ImpactState = 'impacted' | 'not_impacted'
 type UsagePeriod = Pick<BoxUsagePeriod, 'startAt' | 'endAt' | 'cpu' | 'disk'>
@@ -93,6 +95,7 @@ export class AdminOrganizationOverviewService {
     @InjectRepository(Box) private readonly boxRepository: Repository<Box>,
     @InjectRepository(BoxUsagePeriod)
     private readonly usagePeriodRepository: Repository<BoxUsagePeriod>,
+    private readonly activation: AdminOrganizationActivationService,
   ) {}
 
   async list(input: ListQuery) {
@@ -255,7 +258,7 @@ export class AdminOrganizationOverviewService {
     })
     if (!organization) return null
 
-    const [memberships, organizationBoxes, usage, impactedBoxes] = await Promise.all([
+    const [memberships, organizationBoxes, usage, impactedBoxes, activation] = await Promise.all([
       this.organizationUserRepository.find({
         where: { organizationId, ...(memberAfter ? { userId: MoreThan(memberAfter) } : {}) },
         select: { userId: true, role: true, createdAt: true },
@@ -297,6 +300,7 @@ export class AdminOrganizationOverviewService {
         .orderBy('box.id', 'ASC')
         .take(input.boxLimit)
         .getMany(),
+      input.includeActivation ? this.activation.get(organizationId) : undefined,
     ])
     const userIds = [
       ...new Set([
@@ -360,6 +364,7 @@ export class AdminOrganizationOverviewService {
         })),
       },
       ...(usage ? { usage } : {}),
+      ...(input.includeActivation ? { activation } : {}),
       observedAt: timestamp(organization.updatedAt),
     }
   }

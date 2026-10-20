@@ -1,5 +1,4 @@
-import { ApiProperty, ApiSchema, IntersectionType } from '@nestjs/swagger'
-import { AdminCursorPageDto, AdminOrganizationDetailDto, AdminOrganizationOverviewDto } from './provider-overview.dto'
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 
 @ApiSchema({ name: 'AdminOrganizationCreator' })
 class AdminOrganizationCreatorDto {
@@ -19,44 +18,19 @@ class AdminOrganizationCreatorDto {
 }
 
 @ApiSchema({ name: 'AdminOrganizationRegistration' })
-class AdminOrganizationRegistrationDto {
-  @ApiProperty({ format: 'date-time', description: 'Organization creation time, at millisecond precision.' })
-  createdAt: string
+export class AdminOrganizationRegistrationDto {
+  @ApiPropertyOptional({ format: 'date-time', description: 'Organization creation time; present with view=metadata.' })
+  createdAt?: string
 
-  @ApiProperty({ description: 'Stored creator ID; account linking replaces it with the primary user ID.' })
-  createdBy: string
-
-  @ApiProperty({ type: AdminOrganizationCreatorDto, nullable: true })
-  creator: AdminOrganizationCreatorDto | null
-}
-
-@ApiSchema({ name: 'AdminOrganizationMetadataSummary' })
-class AdminOrganizationMetadataSummaryDto extends IntersectionType(
-  AdminOrganizationOverviewDto,
-  AdminOrganizationRegistrationDto,
-) {}
-
-@ApiSchema({ name: 'AdminOrganizationMetadataPage' })
-export class AdminOrganizationMetadataPageDto extends AdminCursorPageDto {
-  @ApiProperty({ type: [AdminOrganizationMetadataSummaryDto] })
-  items: AdminOrganizationMetadataSummaryDto[]
-
-  @ApiProperty({ type: String, nullable: true, format: 'date-time' })
-  observedAt: string | null
-}
-
-@ApiSchema({ name: 'AdminOrganizationMetadata' })
-class AdminOrganizationMetadataDto extends IntersectionType(
-  AdminOrganizationDetailDto,
-  AdminOrganizationRegistrationDto,
-) {}
-
-@ApiSchema({ name: 'AdminOrganizationMetadataResult' })
-export class AdminOrganizationMetadataResultDto {
-  @ApiProperty({
-    type: AdminOrganizationMetadataDto,
-    nullable: true,
-    description: 'Null means the organization does not exist. Usage is included only when explicitly requested.',
+  @ApiPropertyOptional({
+    description: 'Stored creator ID with view=metadata; account linking replaces it with the primary user ID.',
   })
-  item: AdminOrganizationMetadataDto | null
+  createdBy?: string
+
+  @ApiPropertyOptional({
+    type: AdminOrganizationCreatorDto,
+    nullable: true,
+    description: 'Current creator identity with view=metadata.',
+  })
+  creator?: AdminOrganizationCreatorDto | null
 }

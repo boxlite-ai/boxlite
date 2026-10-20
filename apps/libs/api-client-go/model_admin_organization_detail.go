@@ -22,12 +22,20 @@ var _ MappedNullable = &AdminOrganizationDetail{}
 
 // AdminOrganizationDetail struct for AdminOrganizationDetail
 type AdminOrganizationDetail struct {
+	// Organization creation time; present with view=metadata.
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+	// Stored creator ID with view=metadata; account linking replaces it with the primary user ID.
+	CreatedBy *string `json:"createdBy,omitempty"`
+	// Current creator identity with view=metadata.
+	Creator NullableAdminOrganizationCreator `json:"creator,omitempty"`
 	OrganizationId string `json:"organizationId"`
 	Name string `json:"name"`
 	Members AdminOrganizationMemberPage `json:"members"`
 	Boxes AdminOrganizationBoxPage `json:"boxes"`
 	Impact AdminOrganizationImpact `json:"impact"`
 	Usage *AdminOrganizationUsage `json:"usage,omitempty"`
+	// Only with view=metadata&include=activation.
+	Activation NullableAdminOrganizationActivation `json:"activation,omitempty"`
 	ObservedAt time.Time `json:"observedAt"`
 	AdditionalProperties map[string]interface{}
 }
@@ -55,6 +63,112 @@ func NewAdminOrganizationDetail(organizationId string, name string, members Admi
 func NewAdminOrganizationDetailWithDefaults() *AdminOrganizationDetail {
 	this := AdminOrganizationDetail{}
 	return &this
+}
+
+// GetCreatedAt returns the CreatedAt field value if set, zero value otherwise.
+func (o *AdminOrganizationDetail) GetCreatedAt() time.Time {
+	if o == nil || IsNil(o.CreatedAt) {
+		var ret time.Time
+		return ret
+	}
+	return *o.CreatedAt
+}
+
+// GetCreatedAtOk returns a tuple with the CreatedAt field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *AdminOrganizationDetail) GetCreatedAtOk() (*time.Time, bool) {
+	if o == nil || IsNil(o.CreatedAt) {
+		return nil, false
+	}
+	return o.CreatedAt, true
+}
+
+// HasCreatedAt returns a boolean if a field has been set.
+func (o *AdminOrganizationDetail) HasCreatedAt() bool {
+	if o != nil && !IsNil(o.CreatedAt) {
+		return true
+	}
+
+	return false
+}
+
+// SetCreatedAt gets a reference to the given time.Time and assigns it to the CreatedAt field.
+func (o *AdminOrganizationDetail) SetCreatedAt(v time.Time) {
+	o.CreatedAt = &v
+}
+
+// GetCreatedBy returns the CreatedBy field value if set, zero value otherwise.
+func (o *AdminOrganizationDetail) GetCreatedBy() string {
+	if o == nil || IsNil(o.CreatedBy) {
+		var ret string
+		return ret
+	}
+	return *o.CreatedBy
+}
+
+// GetCreatedByOk returns a tuple with the CreatedBy field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *AdminOrganizationDetail) GetCreatedByOk() (*string, bool) {
+	if o == nil || IsNil(o.CreatedBy) {
+		return nil, false
+	}
+	return o.CreatedBy, true
+}
+
+// HasCreatedBy returns a boolean if a field has been set.
+func (o *AdminOrganizationDetail) HasCreatedBy() bool {
+	if o != nil && !IsNil(o.CreatedBy) {
+		return true
+	}
+
+	return false
+}
+
+// SetCreatedBy gets a reference to the given string and assigns it to the CreatedBy field.
+func (o *AdminOrganizationDetail) SetCreatedBy(v string) {
+	o.CreatedBy = &v
+}
+
+// GetCreator returns the Creator field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *AdminOrganizationDetail) GetCreator() AdminOrganizationCreator {
+	if o == nil || IsNil(o.Creator.Get()) {
+		var ret AdminOrganizationCreator
+		return ret
+	}
+	return *o.Creator.Get()
+}
+
+// GetCreatorOk returns a tuple with the Creator field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *AdminOrganizationDetail) GetCreatorOk() (*AdminOrganizationCreator, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.Creator.Get(), o.Creator.IsSet()
+}
+
+// HasCreator returns a boolean if a field has been set.
+func (o *AdminOrganizationDetail) HasCreator() bool {
+	if o != nil && o.Creator.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetCreator gets a reference to the given NullableAdminOrganizationCreator and assigns it to the Creator field.
+func (o *AdminOrganizationDetail) SetCreator(v AdminOrganizationCreator) {
+	o.Creator.Set(&v)
+}
+// SetCreatorNil sets the value for Creator to be an explicit nil
+func (o *AdminOrganizationDetail) SetCreatorNil() {
+	o.Creator.Set(nil)
+}
+
+// UnsetCreator ensures that no value is present for Creator, not even an explicit nil
+func (o *AdminOrganizationDetail) UnsetCreator() {
+	o.Creator.Unset()
 }
 
 // GetOrganizationId returns the OrganizationId field value
@@ -209,6 +323,48 @@ func (o *AdminOrganizationDetail) SetUsage(v AdminOrganizationUsage) {
 	o.Usage = &v
 }
 
+// GetActivation returns the Activation field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *AdminOrganizationDetail) GetActivation() AdminOrganizationActivation {
+	if o == nil || IsNil(o.Activation.Get()) {
+		var ret AdminOrganizationActivation
+		return ret
+	}
+	return *o.Activation.Get()
+}
+
+// GetActivationOk returns a tuple with the Activation field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *AdminOrganizationDetail) GetActivationOk() (*AdminOrganizationActivation, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.Activation.Get(), o.Activation.IsSet()
+}
+
+// HasActivation returns a boolean if a field has been set.
+func (o *AdminOrganizationDetail) HasActivation() bool {
+	if o != nil && o.Activation.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetActivation gets a reference to the given NullableAdminOrganizationActivation and assigns it to the Activation field.
+func (o *AdminOrganizationDetail) SetActivation(v AdminOrganizationActivation) {
+	o.Activation.Set(&v)
+}
+// SetActivationNil sets the value for Activation to be an explicit nil
+func (o *AdminOrganizationDetail) SetActivationNil() {
+	o.Activation.Set(nil)
+}
+
+// UnsetActivation ensures that no value is present for Activation, not even an explicit nil
+func (o *AdminOrganizationDetail) UnsetActivation() {
+	o.Activation.Unset()
+}
+
 // GetObservedAt returns the ObservedAt field value
 func (o *AdminOrganizationDetail) GetObservedAt() time.Time {
 	if o == nil {
@@ -243,6 +399,15 @@ func (o AdminOrganizationDetail) MarshalJSON() ([]byte, error) {
 
 func (o AdminOrganizationDetail) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.CreatedAt) {
+		toSerialize["createdAt"] = o.CreatedAt
+	}
+	if !IsNil(o.CreatedBy) {
+		toSerialize["createdBy"] = o.CreatedBy
+	}
+	if o.Creator.IsSet() {
+		toSerialize["creator"] = o.Creator.Get()
+	}
 	toSerialize["organizationId"] = o.OrganizationId
 	toSerialize["name"] = o.Name
 	toSerialize["members"] = o.Members
@@ -250,6 +415,9 @@ func (o AdminOrganizationDetail) ToMap() (map[string]interface{}, error) {
 	toSerialize["impact"] = o.Impact
 	if !IsNil(o.Usage) {
 		toSerialize["usage"] = o.Usage
+	}
+	if o.Activation.IsSet() {
+		toSerialize["activation"] = o.Activation.Get()
 	}
 	toSerialize["observedAt"] = o.ObservedAt
 
@@ -300,12 +468,16 @@ func (o *AdminOrganizationDetail) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "createdAt")
+		delete(additionalProperties, "createdBy")
+		delete(additionalProperties, "creator")
 		delete(additionalProperties, "organizationId")
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "members")
 		delete(additionalProperties, "boxes")
 		delete(additionalProperties, "impact")
 		delete(additionalProperties, "usage")
+		delete(additionalProperties, "activation")
 		delete(additionalProperties, "observedAt")
 		o.AdditionalProperties = additionalProperties
 	}

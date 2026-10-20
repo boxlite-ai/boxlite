@@ -15,12 +15,16 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
-import type { AdminOrganizationMetadata } from './admin-organization-metadata';
+import type { AdminUsageDimensions } from './admin-usage-dimensions';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { AdminUsageValues } from './admin-usage-values';
 
-export interface AdminOrganizationMetadataResult {
-    /**
-     * Null means the organization does not exist. Usage is included only when explicitly requested.
-     */
-    'item': AdminOrganizationMetadata | null;
+export interface AdminUsageItem {
+    'from': Date;
+    'to': Date;
+    'dimensions': AdminUsageDimensions;
+    'values': AdminUsageValues;
+    'sourcePeriodCount': number;
 }
 

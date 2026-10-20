@@ -58,7 +58,9 @@ export const parseRegistrationQuery = (query: Record<string, unknown>): Registra
 
 export const parseMetadataSections = (query: Record<string, unknown>) => {
   allow(query, ['memberCursor', 'boxCursor', 'sectionLimit', 'include'])
-  if (query.include !== undefined && query.include !== 'usage') return invalid()
+  const include = text(query.include, 32)?.split(',') ?? []
+  if (include.some((section) => !['usage', 'activation'].includes(section)) || new Set(include).size !== include.length)
+    return invalid()
   const sectionLimit = limit(query.sectionLimit)
   const memberCursor = text(query.memberCursor, 2048)
   const boxCursor = text(query.boxCursor, 2048)
@@ -74,7 +76,8 @@ export const parseMetadataSections = (query: Record<string, unknown>) => {
     memberLimit: sectionLimit,
     boxLimit: sectionLimit,
     metadata: true,
-    includeUsage: query.include === 'usage',
+    includeUsage: include.includes('usage'),
+    includeActivation: include.includes('activation'),
   }
 }
 

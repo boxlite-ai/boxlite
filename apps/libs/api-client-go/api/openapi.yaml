@@ -3737,6 +3737,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/AdminComponentIdentities"
           description: ""
+          headers:
+            X-BoxLite-Admin-Capabilities:
+              description: Supported opt-in admin views. Probe this before requesting
+                metadata from a possibly older server.
+              explode: false
+              schema:
+                example: organization-metadata-v1
+                type: string
+              style: simple
       security:
       - bearer: []
       - oauth2:
@@ -3778,6 +3787,33 @@ paths:
           minimum: 1
           type: number
         style: form
+      - description: "With view=metadata: exclusive RFC 3339 instant, at most milliseconds."
+        explode: true
+        in: query
+        name: createdTo
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: "With view=metadata: inclusive RFC 3339 instant, at most milliseconds."
+        explode: true
+        in: query
+        name: createdFrom
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Adds registration fields and creation-time pagination; omit for
+          the existing operational view.
+        explode: true
+        in: query
+        name: view
+        required: false
+        schema:
+          enum:
+          - metadata
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -3794,134 +3830,6 @@ paths:
         - profile
         - email
       summary: List organization operational summaries
-      tags:
-      - admin
-  /admin/organizations/metadata:
-    get:
-      operationId: adminListOrganizationMetadata
-      parameters:
-      - explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          example: 50
-          maximum: 200
-          minimum: 1
-          type: number
-        style: form
-      - description: Opaque cursor returned by the previous page
-        explode: true
-        in: query
-        name: cursor
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: "Exclusive RFC 3339 instant, at most millisecond precision."
-        explode: true
-        in: query
-        name: createdTo
-        required: false
-        schema:
-          type: string
-        style: form
-      - description: "Inclusive RFC 3339 instant, at most millisecond precision."
-        explode: true
-        in: query
-        name: createdFrom
-        required: false
-        schema:
-          type: string
-        style: form
-      - explode: true
-        in: query
-        name: q
-        required: false
-        schema:
-          maxLength: 200
-          minLength: 2
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminOrganizationMetadataPage"
-          description: ""
-        "400":
-          description: Invalid metadata query
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: List organization registration metadata
-      tags:
-      - admin
-  /admin/organizations/{organizationId}/metadata:
-    get:
-      operationId: adminGetOrganizationMetadata
-      parameters:
-      - description: Organization ID
-        explode: false
-        in: path
-        name: organizationId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Omit to avoid reading usage.
-        explode: true
-        in: query
-        name: include
-        required: false
-        schema:
-          enum:
-          - usage
-          type: string
-        style: form
-      - explode: true
-        in: query
-        name: sectionLimit
-        required: false
-        schema:
-          maximum: 200
-          minimum: 1
-          type: number
-        style: form
-      - explode: true
-        in: query
-        name: boxCursor
-        required: false
-        schema:
-          type: string
-        style: form
-      - explode: true
-        in: query
-        name: memberCursor
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminOrganizationMetadataResult"
-          description: ""
-        "400":
-          description: Invalid metadata query
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get organization metadata with optional usage
       tags:
       - admin
   /admin/organizations/{organizationId}:
@@ -3962,6 +3870,26 @@ paths:
           minimum: 1
           type: number
         style: form
+      - description: "With view=metadata: comma-separated usage,activation. Omit to\
+          \ read neither section."
+        explode: true
+        in: query
+        name: include
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Adds registration fields and makes usage opt-in; omit for the
+          existing operational view.
+        explode: true
+        in: query
+        name: view
+        required: false
+        schema:
+          enum:
+          - metadata
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -3980,6 +3908,142 @@ paths:
         - profile
         - email
       summary: Get organization operational detail
+      tags:
+      - admin
+  /admin/usage:
+    get:
+      operationId: adminQueryUsage
+      parameters:
+      - description: Optional 64 lowercase hex caller partition; never authentication.
+        explode: false
+        in: header
+        name: X-Usage-Snapshot-Owner
+        required: false
+        schema:
+          type: string
+        style: simple
+      - explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          maxLength: 2048
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      - explode: true
+        in: query
+        name: boxId
+        required: false
+        schema:
+          maxLength: 128
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: regionId
+        required: false
+        schema:
+          maxLength: 128
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: organizationId
+        required: false
+        schema:
+          format: uuid
+          type: string
+        style: form
+      - description: "One or two of organizationId,regionId,boxId, comma-separated."
+        explode: true
+        in: query
+        name: groupBy
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: "Comma-separated computeVcpuSeconds,storageByteSeconds,memoryGibSeconds."
+        explode: true
+        in: query
+        name: metrics
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: granularity
+        required: false
+        schema:
+          enum:
+          - window
+          - hour
+          - day
+          type: string
+        style: form
+      - description: "Exclusive RFC 3339 instant, no later than now."
+        explode: true
+        in: query
+        name: to
+        required: true
+        schema:
+          type: string
+        style: form
+      - description: "Inclusive RFC 3339 instant, at most milliseconds."
+        explode: true
+        in: query
+        name: from
+        required: true
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUsagePage"
+          description: ""
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUsageError"
+          description: Invalid query or cursor binding
+        "410":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUsageError"
+          description: Snapshot expired; restart the complete query
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUsageError"
+          description: Query exceeds a resource limit
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUsageError"
+          description: Database or snapshot cache unavailable
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Query recorded resource usage with fixed snapshot pagination
       tags:
       - admin
   /webhooks/organizations/{organizationId}/app-portal-access:
@@ -8374,8 +8438,27 @@ components:
       - observedAt
       - runners
       type: object
+    AdminOrganizationCreator:
+      properties:
+        userId:
+          type: string
+        email:
+          description: "Current email, not necessarily the email at registration."
+          format: email
+          nullable: true
+          type: string
+        displayName:
+          type: string
+      required:
+      - displayName
+      - email
+      - userId
+      type: object
     AdminOrganizationOverview:
       example:
+        createdAt: 2000-01-23T04:56:07.000+00:00
+        createdBy: createdBy
+        creator: "{}"
         organizationId: organizationId
         name: name
         memberCount: 6.027456183070403
@@ -8383,6 +8466,20 @@ components:
         impactState: impacted
         observedAt: 2000-01-23T04:56:07.000+00:00
       properties:
+        createdAt:
+          description: Organization creation time; present with view=metadata.
+          format: date-time
+          type: string
+        createdBy:
+          description: Stored creator ID with view=metadata; account linking replaces
+            it with the primary user ID.
+          type: string
+        creator:
+          allOf:
+          - $ref: "#/components/schemas/AdminOrganizationCreator"
+          description: Current creator identity with view=metadata.
+          nullable: true
+          type: object
         organizationId:
           type: string
         name:
@@ -8412,13 +8509,19 @@ components:
         nextCursor: nextCursor
         limit: 16.93648099017413
         items:
-        - organizationId: organizationId
+        - createdAt: 2000-01-23T04:56:07.000+00:00
+          createdBy: createdBy
+          creator: "{}"
+          organizationId: organizationId
           name: name
           memberCount: 6.027456183070403
           boxCount: 1.4658129805029452
           impactState: impacted
           observedAt: 2000-01-23T04:56:07.000+00:00
-        - organizationId: organizationId
+        - createdAt: 2000-01-23T04:56:07.000+00:00
+          createdBy: createdBy
+          creator: "{}"
+          organizationId: organizationId
           name: name
           memberCount: 6.027456183070403
           boxCount: 1.4658129805029452
@@ -8445,120 +8548,6 @@ components:
       required:
       - items
       - limit
-      type: object
-    AdminOrganizationCreator:
-      properties:
-        userId:
-          type: string
-        email:
-          description: "Current email, not necessarily the email at registration."
-          format: email
-          nullable: true
-          type: string
-        displayName:
-          type: string
-      required:
-      - displayName
-      - email
-      - userId
-      type: object
-    AdminOrganizationMetadataSummary:
-      example:
-        organizationId: organizationId
-        name: name
-        memberCount: 6.027456183070403
-        boxCount: 1.4658129805029452
-        impactState: impacted
-        observedAt: 2000-01-23T04:56:07.000+00:00
-        createdAt: 2000-01-23T04:56:07.000+00:00
-        createdBy: createdBy
-        creator: "{}"
-      properties:
-        organizationId:
-          type: string
-        name:
-          type: string
-        memberCount:
-          type: number
-        boxCount:
-          type: number
-        impactState:
-          enum:
-          - impacted
-          - not_impacted
-          type: string
-        observedAt:
-          format: date-time
-          type: string
-        createdAt:
-          description: "Organization creation time, at millisecond precision."
-          format: date-time
-          type: string
-        createdBy:
-          description: Stored creator ID; account linking replaces it with the primary
-            user ID.
-          type: string
-        creator:
-          allOf:
-          - $ref: "#/components/schemas/AdminOrganizationCreator"
-          nullable: true
-          type: object
-      required:
-      - boxCount
-      - createdAt
-      - createdBy
-      - creator
-      - impactState
-      - memberCount
-      - name
-      - observedAt
-      - organizationId
-      type: object
-    AdminOrganizationMetadataPage:
-      example:
-        nextCursor: nextCursor
-        limit: 16.93648099017413
-        items:
-        - organizationId: organizationId
-          name: name
-          memberCount: 6.027456183070403
-          boxCount: 1.4658129805029452
-          impactState: impacted
-          observedAt: 2000-01-23T04:56:07.000+00:00
-          createdAt: 2000-01-23T04:56:07.000+00:00
-          createdBy: createdBy
-          creator: "{}"
-        - organizationId: organizationId
-          name: name
-          memberCount: 6.027456183070403
-          boxCount: 1.4658129805029452
-          impactState: impacted
-          observedAt: 2000-01-23T04:56:07.000+00:00
-          createdAt: 2000-01-23T04:56:07.000+00:00
-          createdBy: createdBy
-          creator: "{}"
-        observedAt: 2000-01-23T04:56:07.000+00:00
-      properties:
-        nextCursor:
-          description: Opaque cursor for the next page
-          nullable: true
-          type: string
-        limit:
-          maximum: 200
-          minimum: 1
-          type: number
-        items:
-          items:
-            $ref: "#/components/schemas/AdminOrganizationMetadataSummary"
-          type: array
-        observedAt:
-          format: date-time
-          nullable: true
-          type: string
-      required:
-      - items
-      - limit
-      - observedAt
       type: object
     AdminOrganizationMember:
       example:
@@ -8755,63 +8744,46 @@ components:
       - periodStart
       - storageByteSeconds
       type: object
-    AdminOrganizationMetadata:
+    AdminOrganizationActivation:
       properties:
         organizationId:
+          format: uuid
           type: string
-        name:
+        firstObservedBoxCreatedAt:
+          description: Earliest retained creation or warm-pool claim; a true first
+            only when boxHistoryComplete is true.
+          format: date-time
+          nullable: true
           type: string
-        members:
-          $ref: "#/components/schemas/AdminOrganizationMemberPage"
-        boxes:
-          $ref: "#/components/schemas/AdminOrganizationBoxPage"
-        impact:
-          $ref: "#/components/schemas/AdminOrganizationImpact"
-        usage:
-          $ref: "#/components/schemas/AdminOrganizationUsage"
+        boxHistoryComplete:
+          description: False for older organizations and organizations receiving transferred
+            Boxes.
+          type: boolean
+        firstRecordedComputeAt:
+          description: Earliest recorded positive-CPU allocation period. Null does
+            not prove no execution.
+          format: date-time
+          nullable: true
+          type: string
+        computeHistoryComplete:
+          description: "Always false: usage events can have historical gaps."
+          type: boolean
         observedAt:
           format: date-time
           type: string
-        createdAt:
-          description: "Organization creation time, at millisecond precision."
-          format: date-time
-          type: string
-        createdBy:
-          description: Stored creator ID; account linking replaces it with the primary
-            user ID.
-          type: string
-        creator:
-          allOf:
-          - $ref: "#/components/schemas/AdminOrganizationCreator"
-          nullable: true
-          type: object
       required:
-      - boxes
-      - createdAt
-      - createdBy
-      - creator
-      - impact
-      - members
-      - name
+      - boxHistoryComplete
+      - computeHistoryComplete
+      - firstObservedBoxCreatedAt
+      - firstRecordedComputeAt
       - observedAt
       - organizationId
       type: object
-    AdminOrganizationMetadataResult:
-      example:
-        item: "{}"
-      properties:
-        item:
-          allOf:
-          - $ref: "#/components/schemas/AdminOrganizationMetadata"
-          description: Null means the organization does not exist. Usage is included
-            only when explicitly requested.
-          nullable: true
-          type: object
-      required:
-      - item
-      type: object
     AdminOrganizationDetail:
       example:
+        createdAt: 2000-01-23T04:56:07.000+00:00
+        createdBy: createdBy
+        creator: "{}"
         organizationId: organizationId
         name: name
         members:
@@ -8860,8 +8832,23 @@ components:
           periodEnd: 2000-01-23T04:56:07.000+00:00
           computeSeconds: computeSeconds
           storageByteSeconds: storageByteSeconds
+        activation: "{}"
         observedAt: 2000-01-23T04:56:07.000+00:00
       properties:
+        createdAt:
+          description: Organization creation time; present with view=metadata.
+          format: date-time
+          type: string
+        createdBy:
+          description: Stored creator ID with view=metadata; account linking replaces
+            it with the primary user ID.
+          type: string
+        creator:
+          allOf:
+          - $ref: "#/components/schemas/AdminOrganizationCreator"
+          description: Current creator identity with view=metadata.
+          nullable: true
+          type: object
         organizationId:
           type: string
         name:
@@ -8874,6 +8861,12 @@ components:
           $ref: "#/components/schemas/AdminOrganizationImpact"
         usage:
           $ref: "#/components/schemas/AdminOrganizationUsage"
+        activation:
+          allOf:
+          - $ref: "#/components/schemas/AdminOrganizationActivation"
+          description: Only with view=metadata&include=activation.
+          nullable: true
+          type: object
         observedAt:
           format: date-time
           type: string
@@ -8884,6 +8877,256 @@ components:
       - name
       - observedAt
       - organizationId
+      type: object
+    AdminUsageQuery:
+      example:
+        from: 2000-01-23T04:56:07.000+00:00
+        to: 2000-01-23T04:56:07.000+00:00
+        granularity: window
+        metrics:
+        - computeVcpuSeconds
+        - computeVcpuSeconds
+        groupBy:
+        - organizationId
+        - organizationId
+        organizationId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        regionId: regionId
+        boxId: boxId
+      properties:
+        from:
+          format: date-time
+          type: string
+        to:
+          format: date-time
+          type: string
+        granularity:
+          enum:
+          - window
+          - hour
+          - day
+          type: string
+        metrics:
+          items:
+            enum:
+            - computeVcpuSeconds
+            - storageByteSeconds
+            - memoryGibSeconds
+            type: string
+          type: array
+        groupBy:
+          items:
+            enum:
+            - organizationId
+            - regionId
+            - boxId
+            type: string
+          maxItems: 2
+          minItems: 1
+          type: array
+        organizationId:
+          format: uuid
+          type: string
+        regionId:
+          maxLength: 128
+          type: string
+        boxId:
+          maxLength: 128
+          type: string
+      required:
+      - from
+      - granularity
+      - groupBy
+      - metrics
+      - to
+      type: object
+    AdminUsageCoverage:
+      example:
+        status: unknown
+        reason: usage_events_not_backfilled
+      properties:
+        status:
+          enum:
+          - unknown
+          type: string
+        reason:
+          enum:
+          - usage_events_not_backfilled
+          type: string
+      required:
+      - reason
+      - status
+      type: object
+    AdminUsageDimensions:
+      example:
+        organizationId: organizationId
+        regionId: regionId
+        boxId: boxId
+      properties:
+        organizationId:
+          type: string
+        regionId:
+          type: string
+        boxId:
+          type: string
+      type: object
+    AdminUsageValues:
+      example:
+        computeVcpuSeconds: computeVcpuSeconds
+        storageByteSeconds: storageByteSeconds
+        memoryGibSeconds: memoryGibSeconds
+      properties:
+        computeVcpuSeconds:
+          description: Recorded allocated vCPU-seconds as an exact decimal string.
+          type: string
+        storageByteSeconds:
+          description: Recorded allocated byte-seconds as an exact decimal string.
+          type: string
+        memoryGibSeconds:
+          description: Recorded allocated GiB-seconds as an exact decimal string.
+          type: string
+      type: object
+    AdminUsageItem:
+      example:
+        from: 2000-01-23T04:56:07.000+00:00
+        to: 2000-01-23T04:56:07.000+00:00
+        dimensions:
+          organizationId: organizationId
+          regionId: regionId
+          boxId: boxId
+        values:
+          computeVcpuSeconds: computeVcpuSeconds
+          storageByteSeconds: storageByteSeconds
+          memoryGibSeconds: memoryGibSeconds
+        sourcePeriodCount: 16017
+      properties:
+        from:
+          format: date-time
+          type: string
+        to:
+          format: date-time
+          type: string
+        dimensions:
+          $ref: "#/components/schemas/AdminUsageDimensions"
+        values:
+          $ref: "#/components/schemas/AdminUsageValues"
+        sourcePeriodCount:
+          maximum: 200000
+          minimum: 1
+          type: integer
+      required:
+      - dimensions
+      - from
+      - sourcePeriodCount
+      - to
+      - values
+      type: object
+    AdminUsagePage:
+      example:
+        queryId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        generatedAt: 2000-01-23T04:56:07.000+00:00
+        expiresAt: 2000-01-23T04:56:07.000+00:00
+        definitionVersion: resource-usage-v1
+        query:
+          from: 2000-01-23T04:56:07.000+00:00
+          to: 2000-01-23T04:56:07.000+00:00
+          granularity: window
+          metrics:
+          - computeVcpuSeconds
+          - computeVcpuSeconds
+          groupBy:
+          - organizationId
+          - organizationId
+          organizationId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          regionId: regionId
+          boxId: boxId
+        coverage:
+          status: unknown
+          reason: usage_events_not_backfilled
+        items:
+        - from: 2000-01-23T04:56:07.000+00:00
+          to: 2000-01-23T04:56:07.000+00:00
+          dimensions:
+            organizationId: organizationId
+            regionId: regionId
+            boxId: boxId
+          values:
+            computeVcpuSeconds: computeVcpuSeconds
+            storageByteSeconds: storageByteSeconds
+            memoryGibSeconds: memoryGibSeconds
+          sourcePeriodCount: 16017
+        - from: 2000-01-23T04:56:07.000+00:00
+          to: 2000-01-23T04:56:07.000+00:00
+          dimensions:
+            organizationId: organizationId
+            regionId: regionId
+            boxId: boxId
+          values:
+            computeVcpuSeconds: computeVcpuSeconds
+            storageByteSeconds: storageByteSeconds
+            memoryGibSeconds: memoryGibSeconds
+          sourcePeriodCount: 16017
+        nextCursor: nextCursor
+      properties:
+        queryId:
+          format: uuid
+          type: string
+        generatedAt:
+          format: date-time
+          type: string
+        expiresAt:
+          format: date-time
+          type: string
+        definitionVersion:
+          enum:
+          - resource-usage-v1
+          type: string
+        query:
+          $ref: "#/components/schemas/AdminUsageQuery"
+        coverage:
+          $ref: "#/components/schemas/AdminUsageCoverage"
+        items:
+          items:
+            $ref: "#/components/schemas/AdminUsageItem"
+          type: array
+        nextCursor:
+          nullable: true
+          type: string
+      required:
+      - coverage
+      - definitionVersion
+      - expiresAt
+      - generatedAt
+      - items
+      - nextCursor
+      - query
+      - queryId
+      type: object
+    AdminUsageError:
+      example:
+        statusCode: 6
+        code: invalid_usage_query
+        message: message
+      properties:
+        statusCode:
+          enum:
+          - 400
+          - 410
+          - 422
+          - 503
+          type: integer
+        code:
+          enum:
+          - invalid_usage_query
+          - usage_query_expired
+          - usage_query_too_large
+          - usage_source_unavailable
+          type: string
+        message:
+          type: string
+      required:
+      - code
+      - message
+      - statusCode
       type: object
     WebhookAppPortalAccess:
       example:

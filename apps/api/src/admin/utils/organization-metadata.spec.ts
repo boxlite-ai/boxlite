@@ -62,14 +62,29 @@ describe('organization metadata queries', () => {
     expect(parseMetadataSections({})).toMatchObject({
       metadata: true,
       includeUsage: false,
+      includeActivation: false,
       memberLimit: 50,
       boxLimit: 50,
     })
     expect(parseMetadataSections({ include: 'usage', sectionLimit: '2' })).toMatchObject({
       includeUsage: true,
+      includeActivation: false,
       memberLimit: 2,
     })
-    for (const query of [{ include: 'billing' }, { include: ['usage'] }, { unknown: 'value' }, { memberCursor: '' }])
+    for (const include of ['usage,activation', 'activation,usage'])
+      expect(parseMetadataSections({ include })).toMatchObject({ includeUsage: true, includeActivation: true })
+    expect(parseMetadataSections({ include: 'activation' })).toMatchObject({
+      includeUsage: false,
+      includeActivation: true,
+    })
+    for (const query of [
+      { include: 'billing' },
+      { include: ['usage'] },
+      { include: 'usage,usage' },
+      { include: 'activation,' },
+      { unknown: 'value' },
+      { memberCursor: '' },
+    ])
       expect(() => parseMetadataSections(query)).toThrow(BadRequestException)
   })
 })

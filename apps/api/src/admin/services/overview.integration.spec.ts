@@ -165,6 +165,11 @@ describeIfDatabase('Admin overview projections (integration, real Postgres)', ()
       dataSource.getRepository(User),
       dataSource.getRepository(Box),
       dataSource.getRepository(BoxUsagePeriod),
+      {
+        get: () => {
+          throw new Error('Activation was not selected')
+        },
+      } as never,
     )
   }, 60_000)
 

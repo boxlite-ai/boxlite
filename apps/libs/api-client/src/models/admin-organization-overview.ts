@@ -13,8 +13,23 @@
  */
 
 
+// May contain unused imports in some cases
+// @ts-ignore
+import type { AdminOrganizationCreator } from './admin-organization-creator';
 
 export interface AdminOrganizationOverview {
+    /**
+     * Organization creation time; present with view=metadata.
+     */
+    'createdAt'?: Date;
+    /**
+     * Stored creator ID with view=metadata; account linking replaces it with the primary user ID.
+     */
+    'createdBy'?: string;
+    /**
+     * Current creator identity with view=metadata.
+     */
+    'creator'?: AdminOrganizationCreator | null;
     'organizationId': string;
     'name': string;
     'memberCount': number;

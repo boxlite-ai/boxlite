@@ -206,6 +206,22 @@ state inline.
 | `experimentalConfig` | `jsonb` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |
 
+### `organization_activation_facts`
+
+Transactional triggers maintain this table independently of Box retention. Organization
+deletion cascades to its facts; Box deletion does not. The API reads it only when activation
+is selected on the metadata detail view.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `organizationId` | `uuid` | primary key; FK to organization with `ON DELETE CASCADE` |
+| `firstObservedBoxCreatedAt` | `timestamptz` | nullable; minimum retained creation or warm-pool claim |
+| `boxHistoryComplete` | `boolean` | false for preexisting organizations and real-organization transfers |
+| `firstRecordedComputeAt` | `timestamptz` | nullable; minimum recorded positive-CPU period, not complete execution history |
+
+The [activation design](../docs/contributing/investigations/organization-activation-facts.md)
+describes migration locking, backfill, uncertainty and transaction tests.
+
 ### `user`
 
 Identity, keyed by the subject the IdP issues rather than a generated uuid.

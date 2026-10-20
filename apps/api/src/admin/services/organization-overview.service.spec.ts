@@ -50,21 +50,23 @@ const serviceWith = () => {
   const users = repository()
   const boxes = repository()
   const usagePeriods = repository()
+  const activation = { get: jest.fn().mockResolvedValue(null) }
   const service = new AdminOrganizationOverviewService(
     organizations as never,
     memberships as never,
     users as never,
     boxes as never,
     usagePeriods as never,
+    activation as never,
   )
-  return { service, organizations, memberships, users, boxes, usagePeriods }
+  return { service, organizations, memberships, users, boxes, usagePeriods, activation }
 }
 
 describe('AdminOrganizationOverviewService', () => {
   afterEach(() => jest.useRealTimers())
 
   it('omits usage reads for a metadata partition and reads the stored creator independently of membership', async () => {
-    const { service, organizations, memberships, users, boxes, usagePeriods } = serviceWith()
+    const { service, organizations, memberships, users, boxes, usagePeriods, activation } = serviceWith()
     organizations.findOne.mockResolvedValue({
       id: 'org-1',
       name: 'Example',
@@ -84,6 +86,13 @@ describe('AdminOrganizationOverviewService', () => {
       creator: { userId: 'original-creator', email: 'creator@example.invalid' },
     })
     expect(result).not.toHaveProperty('usage')
+    expect(result).not.toHaveProperty('activation')
+    expect(activation.get).not.toHaveBeenCalled()
+    activation.get.mockResolvedValue({ organizationId: 'org-1', boxHistoryComplete: false } as never)
+    const expanded = await service.detail('org-1', { ...query, includeActivation: true })
+    expect(expanded?.activation).toEqual({ organizationId: 'org-1', boxHistoryComplete: false })
+    expect(activation.get).toHaveBeenCalledWith('org-1')
+    expect(usagePeriods.manager.transaction).not.toHaveBeenCalled()
   })
 
   it('returns the organization projection and treats wildcard characters literally', async () => {

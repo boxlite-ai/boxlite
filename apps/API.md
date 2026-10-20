@@ -63,16 +63,18 @@ in-code default differs, the section notes it.
 
 ## Admin organization metadata
 
-These read-only routes require system administrator authorization. Registration filters,
+These read-only views require system administrator authorization. Registration filters,
 creator semantics and live pagination are documented in [the API README](api/README.md#admin-organization-metadata).
 Existing JWT organization reads and the Admin-key `by-box-id` lookup already return creation
-fields; these routes add cross-organization date filtering, coverage of organizations without
-Boxes, and details that skip usage unless requested.
+fields; the existing admin routes now add cross-organization date filtering, coverage of
+organizations without Boxes, and opt-in sections. Probe the existing component identities
+header `X-BoxLite-Admin-Capabilities: organization-metadata-v1` before using this view;
+older servers ignore `view` and read usage by default.
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| `GET` | `/api/admin/organizations/metadata` | Lists registration metadata, counts and impact without usage reads. |
-| `GET` | `/api/admin/organizations/{organizationId}/metadata` | Reads registration, members, Boxes and impact; usage is opt-in. |
+| `GET` | `/api/admin/organizations?view=metadata` | Lists registration metadata, counts and impact without usage reads. |
+| `GET` | `/api/admin/organizations/{organizationId}?view=metadata` | Flat registration, member, Box and impact detail; `include=usage,activation` selects optional sections. |
 
 ## Control-plane API
 
