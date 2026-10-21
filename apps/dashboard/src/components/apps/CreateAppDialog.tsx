@@ -43,7 +43,6 @@ export function CreateAppDialog({
 
   const problem = name ? nameProblem(name, session?.reservedNames) : null
   const valid = !!name && !problem
-  const cp = session?.controlPlane ?? window.location.origin
 
   const close = (next: boolean) => {
     if (next) return onOpenChange(true)
@@ -110,15 +109,12 @@ export function CreateAppDialog({
             {problem ? (
               <div className="text-meta text-destructive">{problem}</div>
             ) : (
-              // The URL is shown for the name actually typed, never for the placeholder.
+              // Each environment gets its own origin from the control plane when it is created, so there
+              // is no URL to preview yet; the app's URL is shown once it exists.
               <div className="text-meta text-muted-foreground">
-                {name ? (
-                  <>
-                    Opens at <span className="text-foreground">{`${cp}/${name}/`}</span>
-                  </>
-                ) : (
-                  'Lowercase letters, digits and dashes, starting with a letter.'
-                )}
+                {name
+                  ? 'Gets its own URL, assigned when created.'
+                  : 'Lowercase letters, digits and dashes, starting with a letter.'}
               </div>
             )}
             <p className="mt-2 text-meta text-muted-foreground">

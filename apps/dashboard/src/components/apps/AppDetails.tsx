@@ -55,7 +55,7 @@ import { VariablesTab } from './tabs/VariablesTab'
 import { VolumesTab } from './tabs/VolumesTab'
 
 // Each tab carries the console's pixel glyph for what it holds, so the strip can be scanned by shape.
-// Domains is not offered: the control plane serves <cp>/<app>/ only.
+// Domains is not offered: each environment is served at the one origin the control plane assigns it.
 const TABS: { id: AppTab; label: string; icon: LucideIcon }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'deployments', label: 'Deployments', icon: CloudUpload },

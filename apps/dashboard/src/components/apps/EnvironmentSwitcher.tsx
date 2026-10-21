@@ -131,7 +131,6 @@ function NewEnvironmentDialog({
   const taken = envs.some((e) => e.name === name)
   const error = !name ? null : taken ? `${name} already exists.` : nameProblem(name, session?.reservedNames)
   const blocked = !name || !!error || mutation.isPending
-  const cp = session?.controlPlane ?? window.location.origin
 
   const create = async () => {
     if (blocked) return
@@ -170,7 +169,7 @@ function NewEnvironmentDialog({
             className="font-mono"
           />
           <span className={cn('text-[12px]', error ? 'text-destructive' : 'text-muted-foreground')}>
-            {error ?? `URL ${cp}/${appName}--${name || 'staging'}/ · its own Box`}
+            {error ?? 'Its own URL, assigned when created · its own Box'}
           </span>
         </label>
         <div className="flex flex-col gap-2" role="radiogroup">
