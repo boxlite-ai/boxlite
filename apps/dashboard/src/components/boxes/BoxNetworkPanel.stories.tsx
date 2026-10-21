@@ -73,7 +73,7 @@ function network(
   return { outbound: { mode: outbound, allow_net: allowNet }, inbound: { mode: inbound, allow_net: [] } }
 }
 
-/** The default: preview URLs require an organization sign-in. */
+/** The default: tunnel URLs require an organization sign-in. */
 export const InboundDisabled: Story = {
   name: '1 · Inbound disabled',
   args: { network: network(NetworkMode.DISABLED), canManage: true, onToggleInbound: noop, onGetUrl: noop },

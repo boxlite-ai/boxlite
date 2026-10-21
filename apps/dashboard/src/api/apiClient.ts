@@ -242,14 +242,6 @@ export class ApiClient {
     return response.data.uri
   }
 
-  /** Withdraws public access to one port; connections already open stay open. */
-  public async revokeTunnel(organizationId: string, boxId: string, port: number): Promise<void> {
-    await this.http.delete(this.v1BoxPath(organizationId, boxId, '/network/tunnel'), {
-      ...this.v1Config(),
-      params: { port },
-    })
-  }
-
   /** Starts a login shell on a pseudo-terminal; returns its execution id. */
   public async startTerminalExec(organizationId: string, boxId: string): Promise<string> {
     const response = await this.http.post<{ execution_id: string }>(

@@ -166,26 +166,6 @@ describe('ApiClient.getTunnelUrl', () => {
   })
 })
 
-describe('ApiClient.revokeTunnel', () => {
-  it('deletes the /v1 tunnel declaration for a port, as the SDK does', async () => {
-    vi.resetModules()
-    const axios = (await import('axios')).default
-    const requests: Array<{ method?: string; url?: string; params?: unknown }> = []
-    axios.defaults.adapter = (async (cfg: never) => {
-      requests.push(cfg)
-      return { data: '', status: 204, statusText: '', headers: {}, config: cfg }
-    }) as never
-    const { ApiClient } = await import('./apiClient')
-
-    await new ApiClient(config, 'tok').revokeTunnel('org-1', 'box-1', 3000)
-
-    expect(requests).toHaveLength(1)
-    expect(requests[0].method).toBe('delete')
-    expect(requests[0].url).toBe('/v1/org-1/boxes/box-1/network/tunnel')
-    expect(requests[0].params).toEqual({ port: 3000 })
-  })
-})
-
 describe('ApiClient terminal session', () => {
   async function clientRecording(responses: Record<string, unknown>) {
     vi.resetModules()

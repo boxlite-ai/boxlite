@@ -207,8 +207,6 @@ export const handlers = [
     const encodedBoxId = [...boxId].map((char) => char.charCodeAt(0).toString(16).padStart(2, '0')).join('')
     return HttpResponse.json({ uri: `https://${port}-d-${encodedBoxId}.proxy.mock.boxlite.ai` })
   }),
-  // Idempotent, and indifferent to inbound mode, like the real route.
-  http.delete(`${API_URL}/v1/:prefix/boxes/:boxId/network/tunnel`, () => new HttpResponse(null, { status: 204 })),
   // Volumes. Deletion mirrors the real service (volume.service.ts:74-113):
   // a volume still mounted by a live box is refused with 409, and a successful
   // delete only moves the row to `pending_delete` — the reconciler finishes it
