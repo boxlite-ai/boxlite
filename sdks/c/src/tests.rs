@@ -198,8 +198,11 @@ fn test_box_network_null_pointer_validation() {
         assert!(!error.message.is_null());
         boxlite_error_free(&mut error as *mut _);
 
-        for setter in [boxlite_network_set_inbound, boxlite_network_set_outbound] {
-            let code = setter(ptr::null_mut(), ptr::null(), &mut error);
+        for updater in [
+            boxlite_network_update_inbound,
+            boxlite_network_update_outbound,
+        ] {
+            let code = updater(ptr::null_mut(), ptr::null(), &mut error);
             assert_eq!(code, BoxliteErrorCode::InvalidArgument);
             assert!(!error.message.is_null());
             boxlite_error_free(&mut error);

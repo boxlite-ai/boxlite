@@ -179,13 +179,13 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 )]
 #[async_trait]
 pub(crate) trait BoxNetworkBackend: Send + Sync {
-    async fn set_inbound(&self, _config: InboundNetworkConfig) -> BoxliteResult<()> {
+    async fn update_inbound(&self, _config: InboundNetworkConfig) -> BoxliteResult<()> {
         Err(BoxliteError::Unsupported(
             "this backend does not support inbound policy updates".into(),
         ))
     }
 
-    async fn set_outbound(&self, _config: OutboundNetworkConfig) -> BoxliteResult<()> {
+    async fn update_outbound(&self, _config: OutboundNetworkConfig) -> BoxliteResult<()> {
         Err(BoxliteError::Unsupported(
             "this backend does not support outbound policy updates".into(),
         ))

@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestNetworkPolicySettersCrossFFI(t *testing.T) {
+func TestNetworkPolicyUpdatesCrossFFI(t *testing.T) {
 	type request struct {
 		path  string
 		mode  NetworkMode
@@ -61,20 +61,20 @@ func TestNetworkPolicySettersCrossFFI(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer network.Close()
-	if err := network.SetInbound(context.Background(), InboundNetworkSpec{Mode: NetworkModeEnabled}); err != nil {
+	if err := network.UpdateInbound(context.Background(), InboundNetworkSpec{Mode: NetworkModeEnabled}); err != nil {
 		t.Fatal(err)
 	}
-	if err := network.SetOutbound(context.Background(), OutboundNetworkSpec{Mode: NetworkModeEnabled}); err != nil {
+	if err := network.UpdateOutbound(context.Background(), OutboundNetworkSpec{Mode: NetworkModeEnabled}); err != nil {
 		t.Fatal(err)
 	}
-	if err := network.SetOutbound(context.Background(), OutboundNetworkSpec{Mode: NetworkModeDisabled}); !networkErrorCode(err, ErrUnsupported) {
+	if err := network.UpdateOutbound(context.Background(), OutboundNetworkSpec{Mode: NetworkModeDisabled}); !networkErrorCode(err, ErrUnsupported) {
 		t.Fatalf("want unsupported, got %v", err)
 	}
 	first, second := <-requests, <-requests
 	if first.path != "/v1/boxes/box1/network/inbound" || second.path != "/v1/boxes/box1/network/outbound" || second.rules == nil {
 		t.Fatalf("wrong wire requests: %+v %+v", first, second)
 	}
-	if err := network.SetOutbound(context.Background(), OutboundNetworkSpec{Mode: NetworkModeDisabled, AllowNet: []string{"example.com"}}); !networkErrorCode(err, ErrInvalidArgument) {
+	if err := network.UpdateOutbound(context.Background(), OutboundNetworkSpec{Mode: NetworkModeDisabled, AllowNet: []string{"example.com"}}); !networkErrorCode(err, ErrInvalidArgument) {
 		t.Fatalf("want invalid argument, got %v", err)
 	}
 }

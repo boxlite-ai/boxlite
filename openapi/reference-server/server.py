@@ -703,7 +703,7 @@ async def set_inbound_network(
     prefix: str, box_id: str, req: NetworkSpec, _auth: dict = Depends(require_auth)
 ):
     box_handle = await get_box_or_404(box_id)
-    await box_handle.network.set_inbound(
+    await box_handle.network.update_inbound(
         boxlite.InboundNetworkSpec(mode=req.mode, allow_net=req.allow_net)
     )
     return req.model_dump()
@@ -714,7 +714,7 @@ async def set_outbound_network(
     prefix: str, box_id: str, req: NetworkSpec, _auth: dict = Depends(require_auth)
 ):
     box_handle = await get_box_or_404(box_id)
-    await box_handle.network.set_outbound(
+    await box_handle.network.update_outbound(
         boxlite.OutboundNetworkSpec(mode=req.mode, allow_net=req.allow_net)
     )
     return req.model_dump()

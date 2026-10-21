@@ -78,7 +78,7 @@ fn policy_result(
 /// Replace inbound policy from {"mode":"enabled","allow_net":[]}.
 /// Blocks until applied or rejected. Strings are borrowed for the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_network_set_inbound(
+pub unsafe extern "C" fn boxlite_network_update_inbound(
     network: *mut CBoxNetworkHandle,
     policy_json: *const c_char,
     out_error: *mut CBoxliteError,
@@ -88,7 +88,7 @@ pub unsafe extern "C" fn boxlite_network_set_inbound(
         let policy: InboundNetworkConfig = unsafe { parse_policy(policy_json) }?;
         network
             .tokio_rt
-            .block_on(network.handle.set_inbound(policy))
+            .block_on(network.handle.update_inbound(policy))
     })();
     policy_result(result, out_error)
 }
@@ -96,7 +96,7 @@ pub unsafe extern "C" fn boxlite_network_set_inbound(
 /// Replace outbound policy from {"mode":"enabled","allow_net":["example.com"]}.
 /// An empty enabled allowlist clears restrictions. Blocks until applied or rejected.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_network_set_outbound(
+pub unsafe extern "C" fn boxlite_network_update_outbound(
     network: *mut CBoxNetworkHandle,
     policy_json: *const c_char,
     out_error: *mut CBoxliteError,
@@ -106,7 +106,7 @@ pub unsafe extern "C" fn boxlite_network_set_outbound(
         let policy: OutboundNetworkConfig = unsafe { parse_policy(policy_json) }?;
         network
             .tokio_rt
-            .block_on(network.handle.set_outbound(policy))
+            .block_on(network.handle.update_outbound(policy))
     })();
     policy_result(result, out_error)
 }

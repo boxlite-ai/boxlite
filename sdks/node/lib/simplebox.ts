@@ -28,8 +28,8 @@ export type { SocketAddress } from "./native-contracts.js";
 
 type BoxLike = Omit<JsBox, "network"> & {
   readonly network: {
-    setInbound(spec: InboundNetworkSpec): Promise<void>;
-    setOutbound(spec: OutboundNetworkSpec): Promise<void>;
+    updateInbound(spec: InboundNetworkSpec): Promise<void>;
+    updateOutbound(spec: OutboundNetworkSpec): Promise<void>;
     tunnel(port: number): Promise<NativeBoxTunnel>;
     revokeTunnel(port: number): Promise<void>;
   };
@@ -380,17 +380,17 @@ export class NetworkHandle {
   ) {}
 
   /** Replace inbound policy; a non-empty allowlist is unsupported. */
-  async setInbound(spec: InboundNetworkSpec): Promise<void> {
+  async updateInbound(spec: InboundNetworkSpec): Promise<void> {
     validateNetworkReplacement(spec, "inbound");
     const box = this.existingBox();
-    await box.network.setInbound(spec);
+    await box.network.updateInbound(spec);
   }
 
   /** Replace outbound policy. Enabled with an empty list clears restrictions. */
-  async setOutbound(spec: OutboundNetworkSpec): Promise<void> {
+  async updateOutbound(spec: OutboundNetworkSpec): Promise<void> {
     validateNetworkReplacement(spec, "outbound");
     const box = this.existingBox();
-    await box.network.setOutbound(spec);
+    await box.network.updateOutbound(spec);
   }
 
   /** Prepare a one-shot tunnel for a port inside this box. */

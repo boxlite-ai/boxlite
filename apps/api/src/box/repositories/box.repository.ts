@@ -104,7 +104,7 @@ export class BoxRepository extends BaseRepository<Box> {
           await apply(box, previous)
         } catch {
           throw new ConflictException(
-            'Outbound persistence and rollback failed; live policy is uncertain, retry the setter',
+            'Outbound persistence and rollback failed; live policy is uncertain, retry the complete update',
           )
         }
         throw error

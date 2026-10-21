@@ -584,7 +584,7 @@ impl BoxBackend for RestBox {
 
 #[async_trait]
 impl BoxNetworkBackend for RestBox {
-    async fn set_inbound(&self, config: InboundNetworkConfig) -> BoxliteResult<()> {
+    async fn update_inbound(&self, config: InboundNetworkConfig) -> BoxliteResult<()> {
         self.client
             .put_no_content(
                 &format!("/boxes/{}/network/inbound", self.box_id_str()),
@@ -593,7 +593,7 @@ impl BoxNetworkBackend for RestBox {
             .await
     }
 
-    async fn set_outbound(&self, config: OutboundNetworkConfig) -> BoxliteResult<()> {
+    async fn update_outbound(&self, config: OutboundNetworkConfig) -> BoxliteResult<()> {
         self.client
             .put_no_content(
                 &format!("/boxes/{}/network/outbound", self.box_id_str()),
@@ -1447,7 +1447,7 @@ mod tests {
     type SharedState = Arc<Mutex<ServerState>>;
 
     #[tokio::test]
-    async fn network_policy_setters_send_directional_puts_and_preserve_errors() {
+    async fn network_policy_updates_send_directional_puts_and_preserve_errors() {
         use crate::{InboundNetworkConfig, NetworkMode, OutboundNetworkConfig};
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1486,21 +1486,21 @@ mod tests {
         });
         let handle = crate::litebox::NetworkHandle::new(Arc::new(rest_box_for(port, "policy-box")));
         handle
-            .set_inbound(InboundNetworkConfig {
+            .update_inbound(InboundNetworkConfig {
                 mode: NetworkMode::Enabled,
                 allow_net: vec![],
             })
             .await
             .unwrap();
         handle
-            .set_outbound(OutboundNetworkConfig {
+            .update_outbound(OutboundNetworkConfig {
                 mode: NetworkMode::Enabled,
                 allow_net: vec!["example.com".into()],
             })
             .await
             .unwrap();
         let error = handle
-            .set_outbound(OutboundNetworkConfig::default())
+            .update_outbound(OutboundNetworkConfig::default())
             .await
             .unwrap_err();
         assert!(matches!(error, BoxliteError::Unsupported(_)));

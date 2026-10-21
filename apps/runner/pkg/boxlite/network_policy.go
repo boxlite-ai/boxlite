@@ -24,5 +24,5 @@ func (c *Client) SetOutboundNetwork(ctx context.Context, boxID string, policy bo
 		return err
 	}
 	defer network.Close()
-	return network.SetOutbound(ctx, policy)
+	return network.UpdateOutbound(ctx, policy)
 }

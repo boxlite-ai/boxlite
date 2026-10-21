@@ -1119,15 +1119,15 @@ enum BoxliteErrorCode boxlite_runtime_metrics(CBoxliteRuntime *runtime,
 
 // Replace inbound policy from {"mode":"enabled","allow_net":[]}.
 // Blocks until applied or rejected. Strings are borrowed for the call.
-enum BoxliteErrorCode boxlite_network_set_inbound(CBoxNetworkHandle *network,
-                                                  const char *policy_json,
-                                                  CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_network_update_inbound(CBoxNetworkHandle *network,
+                                                     const char *policy_json,
+                                                     CBoxliteError *out_error);
 
 // Replace outbound policy from {"mode":"enabled","allow_net":["example.com"]}.
 // An empty enabled allowlist clears restrictions. Blocks until applied or rejected.
-enum BoxliteErrorCode boxlite_network_set_outbound(CBoxNetworkHandle *network,
-                                                   const char *policy_json,
-                                                   CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_network_update_outbound(CBoxNetworkHandle *network,
+                                                      const char *policy_json,
+                                                      CBoxliteError *out_error);
 
 // Borrow the box's network capability into a new owned handle.
 //

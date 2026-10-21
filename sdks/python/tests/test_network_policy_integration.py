@@ -47,7 +47,7 @@ async def test_network_policy_live_traffic_and_restart(shared_runtime):
         return result.exit_code == 0 and stdout == marker
 
     async def replace(mode="enabled", rules=None):
-        await box.network.set_outbound(
+        await box.network.update_outbound(
             boxlite.OutboundNetworkSpec(mode=mode, allow_net=rules or [])
         )
 
@@ -113,7 +113,9 @@ async def test_network_policy_does_not_hotplug_a_missing_nic(shared_runtime):
         pid = (await box.info()).state.pid
         assert pid is not None
         with pytest.raises(Exception, match="networking is disabled"):
-            await box.network.set_outbound(boxlite.OutboundNetworkSpec(mode="enabled"))
+            await box.network.update_outbound(
+                boxlite.OutboundNetworkSpec(mode="enabled")
+            )
         assert (await box.info()).state.pid == pid
     finally:
         await shared_runtime.remove(box.id, force=True)

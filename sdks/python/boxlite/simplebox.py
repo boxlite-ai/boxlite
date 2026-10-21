@@ -55,17 +55,17 @@ class NetworkHandle:
     def __init__(self, box: "SimpleBox") -> None:
         self._owner = box
 
-    async def set_inbound(self, spec: "InboundNetworkSpec") -> None:
+    async def update_inbound(self, spec: "InboundNetworkSpec") -> None:
         """Replace inbound policy on a started box."""
         if not self._owner._started:
             raise RuntimeError("Box not started; call await box.start() first.")
-        await self._owner._box.network.set_inbound(spec)
+        await self._owner._box.network.update_inbound(spec)
 
-    async def set_outbound(self, spec: "OutboundNetworkSpec") -> None:
+    async def update_outbound(self, spec: "OutboundNetworkSpec") -> None:
         """Replace outbound policy, including the entire allowlist."""
         if not self._owner._started:
             raise RuntimeError("Box not started; call await box.start() first.")
-        await self._owner._box.network.set_outbound(spec)
+        await self._owner._box.network.update_outbound(spec)
 
     async def tunnel(self, port: int) -> BoxTunnel:
         """Prepare a one-shot tunnel for a port inside the box."""

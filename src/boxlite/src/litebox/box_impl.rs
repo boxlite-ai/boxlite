@@ -1646,7 +1646,7 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
 #[async_trait::async_trait]
 impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
-    async fn set_outbound(
+    async fn update_outbound(
         &self,
         policy: crate::runtime::options::OutboundNetworkConfig,
     ) -> BoxliteResult<()> {
@@ -1684,7 +1684,7 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
         {
             if let Err(rollback) = backend.set_outbound(&previous).await {
                 return Err(BoxliteError::InvalidState(format!(
-                    "outbound policy persistence failed ({error}); rollback failed ({rollback}); live policy is uncertain, retry the setter"
+                    "outbound policy persistence failed ({error}); rollback failed ({rollback}); live policy is uncertain, retry the complete update"
                 )));
             }
             return Err(error);

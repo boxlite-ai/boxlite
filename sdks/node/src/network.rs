@@ -128,10 +128,10 @@ pub struct JsBoxConnection {
 #[napi]
 impl JsNetworkHandle {
     #[napi]
-    pub async fn set_inbound(&self, spec: JsInboundNetworkSpec) -> Result<()> {
+    pub async fn update_inbound(&self, spec: JsInboundNetworkSpec) -> Result<()> {
         self.handle
             .network()
-            .set_inbound(InboundNetworkConfig {
+            .update_inbound(InboundNetworkConfig {
                 mode: spec.mode.parse().map_err(map_err)?,
                 allow_net: spec.allow_net.unwrap_or_default(),
             })
@@ -140,10 +140,10 @@ impl JsNetworkHandle {
     }
 
     #[napi]
-    pub async fn set_outbound(&self, spec: JsOutboundNetworkSpec) -> Result<()> {
+    pub async fn update_outbound(&self, spec: JsOutboundNetworkSpec) -> Result<()> {
         self.handle
             .network()
-            .set_outbound(OutboundNetworkConfig {
+            .update_outbound(OutboundNetworkConfig {
                 mode: spec.mode.parse().map_err(map_err)?,
                 allow_net: spec.allow_net.unwrap_or_default(),
             })

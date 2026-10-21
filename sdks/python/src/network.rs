@@ -114,7 +114,7 @@ pub(crate) struct PyBoxConnection {
 
 #[pymethods]
 impl PyNetworkHandle {
-    fn set_inbound<'py>(
+    fn update_inbound<'py>(
         &self,
         py: Python<'py>,
         spec: PyRef<'_, PyInboundNetworkSpec>,
@@ -125,11 +125,15 @@ impl PyNetworkHandle {
         };
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            handle.network().set_inbound(config).await.map_err(map_err)
+            handle
+                .network()
+                .update_inbound(config)
+                .await
+                .map_err(map_err)
         })
     }
 
-    fn set_outbound<'py>(
+    fn update_outbound<'py>(
         &self,
         py: Python<'py>,
         spec: PyRef<'_, PyOutboundNetworkSpec>,
@@ -140,7 +144,11 @@ impl PyNetworkHandle {
         };
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            handle.network().set_outbound(config).await.map_err(map_err)
+            handle
+                .network()
+                .update_outbound(config)
+                .await
+                .map_err(map_err)
         })
     }
 

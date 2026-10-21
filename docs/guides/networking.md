@@ -6,23 +6,23 @@ Create boxes with a network policy, then replace either direction through `box.n
 
 ### Updating a running box
 
-Each setter replaces one complete direction. The other direction is unchanged.
+Each `update_*` method replaces one complete direction; it never patches. The other direction is unchanged.
 Enabled outbound with an empty allowlist removes restrictions; disabled stops
 network traffic and replaces the list with an empty list. Omitted outbound rules
-use the default empty list; setters do not merge or restore earlier rules.
+use the default empty list; update methods do not merge or restore earlier rules.
 An inbound allowlist is unsupported.
 
 ```python
-await box.network.set_inbound(boxlite.InboundNetworkSpec(mode="enabled"))
-await box.network.set_outbound(
+await box.network.update_inbound(boxlite.InboundNetworkSpec(mode="enabled"))
+await box.network.update_outbound(
     boxlite.OutboundNetworkSpec(mode="enabled", allow_net=["*.example.com"])
 )
-await box.network.set_outbound(boxlite.OutboundNetworkSpec(mode="enabled"))  # default empty list
+await box.network.update_outbound(boxlite.OutboundNetworkSpec(mode="enabled"))  # default empty list
 ```
 
 Python's synchronous API uses the same methods without `await`. Node uses
-`box.network.setInbound(spec)` and `setOutbound(spec)`, with `allowNet`.
-Rust uses `box.network().set_outbound(OutboundNetworkConfig { ... }).await`.
+`box.network.updateInbound(spec)` and `updateOutbound(spec)`, with `allowNet`.
+Rust uses `box.network().update_outbound(OutboundNetworkConfig { ... }).await`.
 
 | SDK | Inbound parameter | Outbound parameter | Empty outbound list |
 | --- | --- | --- | --- |
@@ -32,11 +32,11 @@ Rust uses `box.network().set_outbound(OutboundNetworkConfig { ... }).await`.
 | Go | `InboundNetworkSpec` | `OutboundNetworkSpec` | `AllowNet: nil` or `[]string{}` |
 | C/REST | JSON direction object | JSON direction object | Omit `allow_net` or pass `[]` |
 
-Rust retains `allow_net: Vec<String>` and the existing setter signature.
+Rust keeps `allow_net: Vec<String>` in `OutboundNetworkConfig`.
 To re-enable with restrictions, supply the complete desired list again:
 
 ```rust
-box_handle.network().set_outbound(OutboundNetworkConfig {
+box_handle.network().update_outbound(OutboundNetworkConfig {
     mode: NetworkMode::Enabled,
     allow_net: vec!["example.com".into()],
 }).await?;
@@ -46,13 +46,13 @@ box_handle.network().set_outbound(OutboundNetworkConfig {
 network, err := box.Network()
 if err != nil { return err }
 defer network.Close()
-err = network.SetOutbound(ctx, boxlite.OutboundNetworkSpec{
+err = network.UpdateOutbound(ctx, boxlite.OutboundNetworkSpec{
     Mode: boxlite.NetworkModeEnabled, AllowNet: []string{"example.com"},
 })
 ```
 
-The C SDK exposes blocking `boxlite_network_set_inbound` and
-`boxlite_network_set_outbound` on `CBoxNetworkHandle`. Pass a JSON direction
+The C SDK exposes blocking `boxlite_network_update_inbound` and
+`boxlite_network_update_outbound` on `CBoxNetworkHandle`. Pass a JSON direction
 object such as `{"mode":"enabled","allow_net":["example.com"]}`.
 
 ```bash
@@ -80,7 +80,7 @@ boxlite inspect mybox
 | Clone/export | Copies inherit the latest persisted outbound policy. |
 | Inbound timing | Cloud proxy cache expiry governs new connections; existing connections stay open. |
 
-The setter returns after application and persistence. On persistence failure,
+An update returns after application and persistence. On persistence failure,
 BoxLite attempts to restore the previous policy. A timeout, lost response, or
 failed rollback can leave live and stored state different: retry the complete
 policy. `inspect` reports the last persisted policy, not an independent traffic probe.

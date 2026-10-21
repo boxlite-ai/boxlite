@@ -541,11 +541,11 @@ export interface JsSnapshotHandle {
 }
 
 export interface JsNetworkHandle {
-  setInbound(spec: {
+  updateInbound(spec: {
     mode: "enabled" | "disabled";
     allowNet?: string[];
   }): Promise<void>;
-  setOutbound(spec: {
+  updateOutbound(spec: {
     mode: "enabled" | "disabled";
     allowNet?: string[];
   }): Promise<void>;

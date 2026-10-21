@@ -48,7 +48,7 @@ pub async fn set_inbound(args: InboundArgs, global: &GlobalFlags) -> Result<()> 
         .get(&args.target)
         .await?
         .ok_or_else(|| anyhow!("No such box: {}", args.target))?;
-    handle.network().set_inbound(config).await?;
+    handle.network().update_inbound(config).await?;
     Ok(())
 }
 
@@ -59,7 +59,7 @@ pub async fn set_outbound(args: OutboundArgs, global: &GlobalFlags) -> Result<()
         .get(&args.access.target)
         .await?
         .ok_or_else(|| anyhow!("No such box: {}", args.access.target))?;
-    handle.network().set_outbound(config).await?;
+    handle.network().update_outbound(config).await?;
     Ok(())
 }
 

@@ -547,8 +547,8 @@ pub struct BoxState {
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
 | Get handle | `LiteBox::network(&self) -> NetworkHandle` | Get box-scoped network operations |
-| Set inbound | `NetworkHandle::set_inbound(InboundNetworkConfig).await -> BoxliteResult<()>` | Replace inbound mode; cloud only |
-| Set outbound | `NetworkHandle::set_outbound(OutboundNetworkConfig).await -> BoxliteResult<()>` | Replace outbound mode and allowlist |
+| Update inbound | `NetworkHandle::update_inbound(InboundNetworkConfig).await -> BoxliteResult<()>` | Replace inbound mode; cloud only |
+| Update outbound | `NetworkHandle::update_outbound(OutboundNetworkConfig).await -> BoxliteResult<()>` | Replace outbound mode and allowlist |
 | Tunnel | `async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>` | Prepare a one-shot tunnel to one guest TCP service |
 | Revoke | `async fn revoke_tunnel(&self, port: u16) -> BoxliteResult<()>` | Withdraw the port's public URL; a no-op on a local box |
 | Forward | `async fn BoxTunnel::forward(self, listen: SocketAddress) -> BoxliteResult<TunnelForwarder>` | Consume the tunnel into a TCP or Unix listener |

@@ -26,7 +26,7 @@ pub(in crate::commands::serve) async fn set_inbound(
         Ok(handle) => handle,
         Err(error) => return error,
     };
-    match handle.network().set_inbound(config.clone()).await {
+    match handle.network().update_inbound(config.clone()).await {
         Ok(()) => Json(config).into_response(),
         Err(error) => error_from_boxlite(&error),
     }
@@ -45,7 +45,7 @@ pub(in crate::commands::serve) async fn set_outbound(
         Ok(handle) => handle,
         Err(error) => return error,
     };
-    match handle.network().set_outbound(config.clone()).await {
+    match handle.network().update_outbound(config.clone()).await {
         Ok(()) => Json(config).into_response(),
         Err(error) => error_from_boxlite(&error),
     }
