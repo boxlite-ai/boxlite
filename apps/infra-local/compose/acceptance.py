@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import signal
 import socket
 import subprocess
 import time
@@ -24,26 +25,31 @@ ROOT = InfraConfig.load().repo_root
 STATE = ROOT / ".apps-local" / "runner-acceptance"
 API_PORT = 13001
 RUNNER_PORT = 13003
+RUNNER_B_PORT = 13004
+PROXY_PORT = 14000
 ADMIN_KEY = "local-acceptance-admin-only"
 RUNNER_KEY = "local-acceptance-runner-only"
+RUNNER_B_KEY = "local-acceptance-runner-b-only"
 API = f"http://127.0.0.1:{API_PORT}/api"
 IMAGE = "docker:27.5.1-dind"
 
 
-def request(path, body=None):
+def request(path, body=None, method=None):
     req = urllib.request.Request(
         API + path,
         data=None if body is None else json.dumps(body).encode(),
+        method=method,
         headers={
             "Authorization": f"Bearer {ADMIN_KEY}",
             "Content-Type": "application/json",
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
-        return json.load(response)
+        data = response.read()
+        return json.loads(data) if data else None
 
 
-def start(name, argv, env, port, health):
+def start(name, argv, env, port, health, cwd=None):
     """Never kill an unrelated listener or adopt a process from another checkout."""
     pidfile = STATE / f"{name}.pid"
     if pidfile.exists():
@@ -51,11 +57,14 @@ def start(name, argv, env, port, health):
             f"{pidfile} exists; inspect retained process before restarting"
         )
     with socket.socket() as probe:
+        # A stopped listener can leave TCP TIME_WAIT sockets. Match server bind
+        # semantics while still refusing a port owned by a live listener.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         probe.bind(("127.0.0.1", port))
     with (STATE / f"{name}.log").open("ab") as log:
         proc = subprocess.Popen(
             argv,
-            cwd=ROOT / "apps",
+            cwd=cwd or ROOT / "apps",
             env={**os.environ, **env},
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -95,10 +104,11 @@ async def dependencies():
     await orchestrator.up(cfg, specs)
 
 
-def up():
+def up(services_only=False):
     STATE.mkdir(parents=True, exist_ok=True)
     # SDK's local runtime is used for infrastructure only. Acceptance uses REST.
-    asyncio.run(dependencies())
+    if not services_only:
+        asyncio.run(dependencies())
     env = native._parse_dotenv(ROOT / "apps/infra-local/api.env")
     env.update(
         {
@@ -115,6 +125,9 @@ def up():
             "DEFAULT_RUNNER_API_KEY": RUNNER_KEY,
             "DEFAULT_RUNNER_API_URL": f"http://127.0.0.1:{RUNNER_PORT}",
             "DEFAULT_RUNNER_PROXY_URL": f"http://127.0.0.1:{RUNNER_PORT}",
+            "PROXY_DOMAIN": f"localhost:{PROXY_PORT}",
+            "PROXY_PROTOCOL": "http",
+            "PROXY_API_KEY": "local-acceptance-proxy-only",
             "RUNNER_AVAILABILITY_SCORE_THRESHOLD": "5",
             "RUNNER_MEMORY_PENALTY_THRESHOLD": "99",
             "RUNNER_DISK_PENALTY_THRESHOLD": "99",
@@ -154,12 +167,153 @@ def up():
         RUNNER_PORT,
         f"http://127.0.0.1:{RUNNER_PORT}/",
     )
+    start_proxy()
     verify()
+    if (STATE / "two-runners.json").exists():
+        two_runners()
+
+
+def start_proxy():
+    start(
+        "proxy",
+        [str(ROOT / ".apps-local/bin/boxlite-proxy")],
+        {
+            "PROXY_PORT": str(PROXY_PORT),
+            "PROXY_PROTOCOL": "http",
+            "PROXY_API_KEY": "local-acceptance-proxy-only",
+            "BOXLITE_API_URL": API,
+            "OIDC_CLIENT_ID": "boxlite",
+            "OIDC_AUDIENCE": "boxlite",
+            "OIDC_DOMAIN": "https://accounts.google.com",
+            "SHUTDOWN_TIMEOUT_SEC": "10",
+            "OTEL_TRACING_ENABLED": "false",
+            "OTEL_LOGGING_ENABLED": "false",
+        },
+        PROXY_PORT,
+        f"http://127.0.0.1:{PROXY_PORT}/health",
+        # The Go proxy overloads .env from cwd, overriding supplied keys.
+        # Keep this isolated process out of the ordinary local stack's cwd.
+        cwd=STATE,
+    )
+
+
+def two_runners():
+    runners = request("/admin/runners")
+    a = next(r for r in runners if r["name"] == "acceptance-a")
+    b = next((r for r in runners if r["name"] == "acceptance-b"), None)
+    if b is None:
+        b = request(
+            "/admin/runners",
+            {
+                "regionId": a["region"],
+                "name": "acceptance-b",
+                "apiKey": RUNNER_B_KEY,
+                "apiVersion": "2",
+                "apiUrl": f"http://127.0.0.1:{RUNNER_B_PORT}",
+                "proxyUrl": f"http://127.0.0.1:{RUNNER_B_PORT}",
+                "cpu": 4,
+                "memoryGiB": 8,
+                "diskGiB": 30,
+            },
+        )
+    record = {
+        "physical_host": socket.gethostname(),
+        "a": {
+            "id": a["id"],
+            "port": RUNNER_PORT,
+            "home": str(worktree_home(ROOT, "qa")),
+        },
+        "b": {
+            "id": b["id"],
+            "port": RUNNER_B_PORT,
+            "home": str(worktree_home(ROOT, "qb")),
+        },
+    }
+    (STATE / "two-runners.json").write_text(json.dumps(record, indent=2))
+    if not (STATE / "runner-b.pid").exists():
+        start(
+            "runner-b",
+            [str(ROOT / ".apps-local/bin/boxlite-runner")],
+            {
+                "BOXLITE_API_URL": API,
+                "BOXLITE_RUNNER_TOKEN": RUNNER_B_KEY,
+                "API_VERSION": "2",
+                "API_PORT": str(RUNNER_B_PORT),
+                "RUNNER_DOMAIN": "127.0.0.1",
+                "BOXLITE_HOME_DIR": record["b"]["home"],
+                "AWS_REGION": "us-east-1",
+                "OTEL_TRACING_ENABLED": "false",
+            },
+            RUNNER_B_PORT,
+            f"http://127.0.0.1:{RUNNER_B_PORT}/",
+        )
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        found = {r["id"]: r for r in request("/admin/runners")}
+        if all(found[record[k]["id"]]["state"] == "ready" for k in ["a", "b"]):
+            print(json.dumps(record), flush=True)
+            return record
+        time.sleep(0.5)
+    raise TimeoutError("both local runners did not become ready; processes retained")
+
+
+def restart():
+    """Restart only the isolated processes whose pidfiles this harness owns."""
+    for name, port in [
+        ("api", API_PORT),
+        ("runner-a", RUNNER_PORT),
+        ("runner-b", RUNNER_B_PORT),
+        ("proxy", PROXY_PORT),
+    ]:
+        pidfile = STATE / f"{name}.pid"
+        if not pidfile.exists():
+            continue  # a prior partial restart already stopped this service
+        pid = int(pidfile.read_text())
+        try:
+            command = subprocess.check_output(
+                ["ps", "-p", str(pid), "-o", "command="], text=True
+            )
+        except subprocess.CalledProcessError:
+            # A deliberately crashed process may already have been reaped.
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pidfile.unlink()
+                continue
+            raise
+        expected = (
+            "ts-node"
+            if name == "api"
+            else str(
+                ROOT
+                / ".apps-local/bin"
+                / ("boxlite-proxy" if name == "proxy" else "boxlite-runner")
+            )
+        )
+        if expected not in command or os.getpgid(pid) != pid:
+            raise RuntimeError(f"refuse to signal unrecognized {name} pid={pid}")
+        os.killpg(pid, signal.SIGTERM)
+        deadline = time.monotonic() + 60
+        while True:
+            with socket.socket() as probe:
+                closed = probe.connect_ex(("127.0.0.1", port)) != 0
+            if closed:
+                break
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"{name} did not release port {port}")
+            time.sleep(0.2)
+        pidfile.unlink()
+    up(services_only=True)
 
 
 def verify():
     assert orchestrator._http_probe(API + "/health"), "API is not ready"
-    assert orchestrator._http_probe(f"http://127.0.0.1:{RUNNER_PORT}/"), "Runner is not ready"
+    assert orchestrator._http_probe(f"http://127.0.0.1:{RUNNER_PORT}/"), (
+        "Runner is not ready"
+    )
+    assert orchestrator._http_probe(f"http://127.0.0.1:{PROXY_PORT}/health"), (
+        "Port proxy is not ready"
+    )
     print(
         json.dumps(
             {
@@ -175,9 +329,13 @@ def verify():
 def runner_home_for_box(box_id):
     owner = request(f"/box/{box_id}")["runnerId"]
     runner = next(r for r in request("/admin/runners") if r["id"] == owner)
-    if runner["name"] == "acceptance-a" and runner["apiUrl"] == f"http://127.0.0.1:{RUNNER_PORT}":
-        return worktree_home(ROOT, "qa")
-    raise RuntimeError("Box was not placed on this harness's local runner")
+    for name, port, suffix in [
+        ("acceptance-a", RUNNER_PORT, "qa"),
+        ("acceptance-b", RUNNER_B_PORT, "qb"),
+    ]:
+        if runner["name"] == name and runner["apiUrl"] == f"http://127.0.0.1:{port}":
+            return worktree_home(ROOT, suffix)
+    raise RuntimeError("Box was not placed on one of this harness's local runners")
 
 
 async def dind():
@@ -340,16 +498,34 @@ async def diagnose_dind():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["build", "up", "verify", "dind", "diagnose-dind"])
+    parser.add_argument(
+        "action",
+        choices=[
+            "build",
+            "build-proxy",
+            "up",
+            "restart",
+            "verify",
+            "dind",
+            "diagnose-dind",
+            "two-runners",
+        ],
+    )
     action = parser.parse_args().action
     if action == "build":
         native._go_build(native._Paths(ROOT), "runner")
+    elif action == "build-proxy":
+        native._go_build(native._Paths(ROOT), "proxy")
     elif action == "up":
         up()
     elif action == "verify":
         verify()
     elif action == "diagnose-dind":
         asyncio.run(diagnose_dind())
+    elif action == "restart":
+        restart()
+    elif action == "two-runners":
+        two_runners()
     else:
         asyncio.run(dind())
 

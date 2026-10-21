@@ -72,7 +72,8 @@ Deleting the Box deletes that writable disk. Cache reuse belongs to the separate
 Keep Docker bridge networking, DNS, IP forwarding and firewall rules enabled.
 Do not use `--iptables=false` to work around missing kernel support. The
 Docker host is the guest, so Docker's host networking also refers to the guest.
-This guide does not qualify Swarm or cross-Box overlay networks.
+For Swarm kernel requirements and cross-Box overlay setup, use the separate
+[Swarm guide](docker-swarm.md).
 
 ## Real acceptance
 

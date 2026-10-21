@@ -69,6 +69,31 @@ fixed** as the `ServiceSpec.ports` literals in `services.py`.
 
 ## Validating it works
 
+### Isolated runner qualification
+
+The `make test:runner-ci:*` targets at the repository root use an isolated API on
+13001, the BoxLite port proxy on 14000, and two runners on 13003/13004, with separate runtime/cache roots on one
+physical Mac. They retain failed scenes under `.apps-local/runner-acceptance/`.
+Use the [DinD firmware build](../../docs/guides/docker-in-docker.md); keep
+`BOXLITE_LIBKRUNFW_SOURCE` set during native rebuilds.
+
+| Target | Current scope |
+| --- | --- |
+| `dev:runner-ci:proxy` | Build the existing port proxy for the isolated stack; also part of `dev:runner-ci` |
+| `test:runner-ci:swarm TOPOLOGY=single` | D3–D10: VIP, DNSRR, ingress, host publish/network and actual kernel evidence |
+| `test:runner-ci:swarm TOPOLOGY=same-runner` | Two guest Engines; directed VIP/DNSRR and ingress via the node without a backend |
+| `test:runner-ci:swarm TOPOLOGY=different-runners` | The same checks on two local runner processes with distinct runtime homes |
+| `test:runner-ci:swarm-diagnose` | Inspect the latest retained Swarm guest |
+| `test:runner-ci:swarm-transport` | Compare guest ingress HTTP, published URI, DNS and SDK CONNECT |
+
+Run the probes sequentially: they temporarily control scheduling and restore it
+afterward. Swarm's guest VPN carries the required IP protocols through a live SDK
+forwarder; it does not provide automatic multi-host mesh networking. See
+[Swarm results](../../docs/contributing/investigations/2026-10-22-f2-swarm-qualification.md)
+for the current status. `make fmt:swarm` and `make lint:swarm` check this fixture.
+
+### Full stack smoke test
+
 There is no infra-local test suite — the stack is its own smoke test:
 
 ```bash

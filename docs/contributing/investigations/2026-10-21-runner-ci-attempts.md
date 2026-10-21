@@ -57,4 +57,5 @@ exit codes, hypotheses, versions, retained patch and guest evidence.
 
 ## Remaining features
 
-F2–F6: zero implementation/verification rounds. No acceptance claim yet.
+F2: zero rounds, BLOCKED by F1; see [Swarm report](2026-10-22-f2-swarm-blocked.md).
+F3–F6: zero implementation/verification rounds. No acceptance claim yet.
