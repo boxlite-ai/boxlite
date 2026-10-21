@@ -187,14 +187,16 @@ use. Executing invocations reject unsupported options; Clap's `--help` and
 ```bash
 boxlite network inbound mybox enabled
 boxlite network outbound mybox enabled --allow-net '*.example.com'
-boxlite network outbound mybox enabled  # replace with an unrestricted policy
+boxlite network outbound mybox enabled  # default empty list: unrestricted
+boxlite network outbound mybox enabled --allow-net ''  # explicit empty list
 boxlite network outbound mybox disabled
 boxlite inspect mybox
 ```
 
-The box and mode are required. Repeat `--allow-net` for multiple outbound rules;
-it is invalid with inbound or disabled outbound. Each command replaces one
-direction. See [networking](../../docs/guides/networking.md#updating-a-running-box)
+The box and mode are required. Repeat `--allow-net` for multiple outbound rules.
+Omission and a single `--allow-net ''` both use the default empty list. Inbound
+accepts no list; disabled outbound rejects nonempty rules. Each command replaces
+one direction without retaining earlier rules. See [networking](../../docs/guides/networking.md#updating-a-running-box)
 for runtime support, connection lifetime and persistence.
 
 ### `boxlite auth login`

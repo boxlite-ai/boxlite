@@ -663,14 +663,17 @@ Each invocation replaces the selected direction. `inbound` accepts no allowlist.
 ```bash
 boxlite network inbound mybox enabled
 boxlite network outbound mybox enabled --allow-net '*.example.com' --allow-net 10.0.0.0/8
-boxlite network outbound mybox enabled  # clear restrictions
+boxlite network outbound mybox enabled  # default empty list: unrestricted
+boxlite network outbound mybox enabled --allow-net ''  # explicit empty list
 boxlite network outbound mybox disabled
 boxlite inspect mybox
 ```
 
 `--allow-net` takes one hostname, wildcard hostname, IPv4 address or CIDR.
-Repeat it for multiple rules; comma-separated values and empty rules are invalid.
-Disabled mode cannot include rules.
+Repeat it for multiple rules; comma-separated values are invalid. Omission or a
+single `--allow-net ''` uses the default empty list, removing restrictions when
+enabled. An empty argument cannot be combined with other rules. Disabled mode
+cannot include nonempty rules. No previous allowlist is retained or restored.
 
 Outbound updates require a running box with an existing NIC. Local inbound
 updates are unsupported; cloud inbound uses the proxy's existing visibility
