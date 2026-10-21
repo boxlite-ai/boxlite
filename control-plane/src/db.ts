@@ -237,6 +237,17 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (env_id, name)
   );
   `,
+  // Security review F5: the password of the Neon-managed read-only role (boxlite_reader) per branch.
+  // A secret: read only by dbreader.ts, never put in a spec, a log, the agent context or the console.
+  `
+  CREATE TABLE IF NOT EXISTS db_readers (
+    project_id TEXT NOT NULL,
+    branch_id TEXT NOT NULL,
+    password TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, branch_id)
+  );
+  `,
 ];
 
 export const LOG_RING_SIZE = 20_000;

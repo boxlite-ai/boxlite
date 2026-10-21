@@ -2,7 +2,8 @@ import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { Hono } from 'hono';
-import { PgAppDatabase } from './appdb.js';
+import { PgAppDatabase, pgConnect } from './appdb.js';
+import { bindDbReaders } from './dbreader.js';
 import { requireAdmin, requireAppKey, type Vars } from './auth.js';
 import { BlobStore, migrateLegacyBlobs } from './blobs.js';
 import { apiRateLimit } from './limits.js';
@@ -52,6 +53,7 @@ export function buildCtx(config: Config, deps: Deps, timing: Timing = DEFAULT_TI
   const store = new Store(join(config.dataDir, 'cp.sqlite'));
   const ctx = { config, store, bus: new EventBus(), blobs: new BlobStore(config.dataDir), timing, ...deps } as Ctx;
   migrateLegacyBlobs(ctx);
+  bindDbReaders(ctx, pgConnect); // F5: reads log in as boxlite_reader (no-op with a fake appdb)
   ctx.origins = new Origins(ctx);
   ctx.resources = new Resources(ctx);
   ctx.orchestrator = new Orchestrator(ctx);

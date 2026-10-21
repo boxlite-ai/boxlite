@@ -2,7 +2,7 @@ import pg from 'pg';
 import Cursor from 'pg-cursor';
 import { fail } from './errors.js';
 import type { MigrationFile } from './db.js';
-import { READER_ROLE } from './sqlguard.js';
+import { authFailure, type ReaderSource } from './dbreader.js';
 
 export interface AppliedRow {
   file: string;
@@ -28,8 +28,10 @@ export interface AppDatabase {
   listApplied(url: string): Promise<AppliedRow[]>;
   applyMigration(url: string, m: MigrationFile, deployment: number): Promise<void>;
   query(url: string, statements: string[], opts: { write: boolean; params?: unknown[] }): Promise<QueryResult>;
-  /** Creates the read-only role reads run as (idempotent). Also done lazily by `query`. */
+  /** Provisions the read-only login reads use (idempotent). Also done lazily by `query`. */
   ensureReader(url: string): Promise<void>;
+  /** Before a Neon branch is created from this project (see dbreader.ts). */
+  prepareBranching?(projectId: string): Promise<void>;
 }
 
 export const MAX_ROWS = 1000;
@@ -51,37 +53,6 @@ const MIGRATIONS_DDL = `CREATE TABLE IF NOT EXISTS public.boxlite_migrations (
   deployment int,
   applied_at timestamptz NOT NULL DEFAULT now()
 )`;
-
-/**
- * The role every read from the SQL endpoint, the table browser and the schema views runs as
- * (`SET LOCAL ROLE` inside a READ ONLY transaction). It reads everything (pg_read_all_data,
- * BYPASSRLS so RLS tables look the same as they do to the owner) and can do nothing else: no
- * pg_signal_backend, no CREATE, cannot log in. Neon's owner may grant BYPASSRLS (it has it); a
- * Postgres where it may not still gets the role, without it.
- *
- * Postgres 16+ gives the role's creator ADMIN but not SET on it, so the owner grants itself
- * SET (not INHERIT) explicitly; that is what lets `SET ROLE boxlite_reader` work.
- * TEMP: the database grants it to PUBLIC, and revoking that would change the app's own roles,
- * but a READ ONLY transaction refuses CREATE TEMP TABLE anyway.
- */
-export const READER_SETUP_SQL = `DO $boxlite$
-BEGIN
-  PERFORM pg_advisory_xact_lock(hashtext('${READER_ROLE}'));
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${READER_ROLE}') THEN
-    BEGIN
-      CREATE ROLE ${READER_ROLE} NOLOGIN INHERIT BYPASSRLS;
-    EXCEPTION WHEN insufficient_privilege THEN
-      CREATE ROLE ${READER_ROLE} NOLOGIN INHERIT;
-    END;
-  END IF;
-  GRANT pg_read_all_data TO ${READER_ROLE};
-  IF current_setting('server_version_num')::int >= 160000 THEN
-    EXECUTE format('GRANT ${READER_ROLE} TO %I WITH INHERIT FALSE, SET TRUE', current_user);
-  ELSE
-    EXECUTE format('GRANT ${READER_ROLE} TO %I', current_user);
-  END IF;
-END
-$boxlite$`;
 
 /** The few things the CP needs from a connection; real pg below, a fake in tests. */
 export interface DbCursor {
@@ -159,14 +130,6 @@ function sqlError(err: unknown): never {
   throw fail('sql_error', e.message ?? String(err), undefined, { sqlstate: e.code, position: e.position ? Number(e.position) : undefined });
 }
 
-/** `SET ROLE boxlite_reader` failed because the role is missing or the owner may not SET it yet. */
-function readerMissing(err: unknown): boolean {
-  const e = err as { code?: string; message?: string };
-  // Postgres answers a missing role in SET ROLE with 22023 (invalid_parameter_value).
-  if ((e.code === '22023' || e.code === '42704') && /role .* does not exist/i.test(e.message ?? '')) return true;
-  return e.code === '42501' && /set role/i.test(e.message ?? '');
-}
-
 function rowBytes(row: unknown): number {
   try {
     return Buffer.byteLength(JSON.stringify(row) ?? '') + 1;
@@ -176,13 +139,37 @@ function rowBytes(row: unknown): number {
 }
 
 export class PgAppDatabase implements AppDatabase {
+  private readers: ReaderSource | null = null;
+
   constructor(private readonly connect: (url: string) => Promise<DbConn> = pgConnect) {}
 
-  private async withConn<T>(url: string, fn: (c: DbConn) => Promise<T>): Promise<T> {
+  /** The read-only login (dbreader.ts). Without it reads are refused rather than run as the owner. */
+  bindReaders(readers: ReaderSource): void {
+    this.readers = readers;
+  }
+
+  private source(): ReaderSource {
+    if (!this.readers) throw fail('unavailable', 'the read-only database login is not configured on this control plane');
+    return this.readers;
+  }
+
+  /** Reads connect as boxlite_reader; a refused login re-provisions it once. */
+  private async connectReader(ownerUrl: string): Promise<DbConn> {
+    const readers = this.source();
+    try {
+      return await this.connect(await readers.urlFor(ownerUrl));
+    } catch (err) {
+      if (!authFailure(err)) throw err;
+      return this.connect(await readers.refresh(ownerUrl));
+    }
+  }
+
+  private async withConn<T>(url: string, fn: (c: DbConn) => Promise<T>, as: 'owner' | 'reader' = 'owner'): Promise<T> {
     let c: DbConn;
     try {
-      c = await this.connect(url);
+      c = as === 'reader' ? await this.connectReader(url) : await this.connect(url);
     } catch (err) {
+      if ((err as { name?: string }).name === 'HttpError') throw err;
       throw fail('unavailable', `cannot reach the app database: ${(err as Error).message}`, 'retry in a few seconds; Neon computes start on first connection');
     }
     try {
@@ -232,34 +219,16 @@ export class PgAppDatabase implements AppDatabase {
   }
 
   async ensureReader(url: string): Promise<void> {
-    await this.withConn(url, (c) => this.setupReader(c));
+    await this.source().refresh(url);
   }
 
-  private async setupReader(c: DbConn): Promise<void> {
-    await c.query('BEGIN');
-    try {
-      await c.query(READER_SETUP_SQL);
-      await c.query('COMMIT');
-    } catch (err) {
-      await c.query('ROLLBACK').catch(() => undefined);
-      throw fail('unavailable', `cannot prepare the read-only database role: ${(err as Error).message}`, 'retry; if it persists the database owner lacks CREATEROLE');
-    }
+  async prepareBranching(projectId: string): Promise<void> {
+    await this.source().prepareBranching(projectId);
   }
 
-  /** BEGIN, drop to the reader role on reads, timeouts. Creates the reader on first use. */
+  /** BEGIN (READ ONLY for reads) and the timeouts. */
   private async begin(c: DbConn, write: boolean): Promise<void> {
     await c.query(write ? 'BEGIN' : 'BEGIN TRANSACTION READ ONLY');
-    if (!write) {
-      try {
-        await c.query(`SET LOCAL ROLE ${READER_ROLE}`);
-      } catch (err) {
-        if (!readerMissing(err)) throw err;
-        await c.query('ROLLBACK');
-        await this.setupReader(c);
-        await c.query('BEGIN TRANSACTION READ ONLY');
-        await c.query(`SET LOCAL ROLE ${READER_ROLE}`);
-      }
-    }
     // A SELECT, so the transaction takes its snapshot now: from here on a READ ONLY transaction
     // can no longer be switched to read-write, whatever the statements try.
     await c.query(`SELECT set_config('statement_timeout', $1, true), set_config('idle_in_transaction_session_timeout', $2, true)`, [STATEMENT_TIMEOUT, IDLE_IN_TRANSACTION_TIMEOUT]);
@@ -268,10 +237,9 @@ export class PgAppDatabase implements AppDatabase {
   /**
    * Runs statements inside one transaction and returns the last one's result.
    *
-   * Reads: `BEGIN TRANSACTION READ ONLY` + `SET LOCAL ROLE boxlite_reader`, rolled back. Postgres
-   * itself refuses writes, and the role has no rights beyond reading. Afterwards `current_user`
-   * must still be the reader; if a statement found a way back to the owner the result is
-   * discarded. Writes (`write: true`) run as the owner and commit.
+   * Reads: connected as boxlite_reader (dbreader.ts), `BEGIN TRANSACTION READ ONLY`, rolled back.
+   * Postgres itself refuses writes; the session is the reader, so no SET/RESET ROLE reaches the
+   * owner. Writes (`write: true`) connect as the owner and commit.
    *
    * Results are streamed with a cursor in batches, so neither a huge row count nor huge rows are
    * ever held beyond MAX_ROWS rows / MAX_RESULT_BYTES. On reads the CP stops reading at the cap;
@@ -288,17 +256,13 @@ export class PgAppDatabase implements AppDatabase {
         for (let i = 0; i < statements.length; i++) {
           out = await this.run(c, statements[i]!, opts.params ?? [], opts.write, i === statements.length - 1);
         }
-        if (!opts.write) {
-          const who = await c.query('SELECT current_user AS u');
-          if (who.rows[0]?.u !== READER_ROLE) throw fail('forbidden', 'the query changed the role it runs as', 'read queries run as a read-only role; do not change roles or session settings');
-        }
         await c.query(opts.write ? 'COMMIT' : 'ROLLBACK');
         return { ...out, elapsed_ms: Date.now() - started };
       } catch (err) {
         await c.query('ROLLBACK').catch(() => undefined);
         sqlError(err);
       }
-    });
+    }, opts.write ? 'owner' : 'reader');
   }
 
   private async run(c: DbConn, text: string, params: unknown[], write: boolean, last: boolean): Promise<Omit<QueryResult, 'elapsed_ms'>> {

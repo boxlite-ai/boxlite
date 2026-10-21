@@ -118,13 +118,14 @@ export const MATRIX: [string, Want, { n?: number; match?: RegExp }?][] = [
   ['VACUUM t', 'ddl'],
   ['REFRESH MATERIALIZED VIEW v', 'ddl'],
   ['CREATE RULE r AS ON INSERT TO t DO INSTEAD NOTHING', 'ddl'],
+  ['LOCK t', 'ddl'], // allowed by Postgres in READ ONLY transactions; verified live
+  ['LOCK TABLE t IN ACCESS SHARE MODE', 'ddl'],
   // -- writes
   ['INSERT INTO t VALUES (1)', 'write'],
   ['UPDATE t SET a = 1', 'write'],
   ['DELETE FROM t', 'write'],
   ['MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN DELETE', 'write'],
   ['WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x', 'write'],
-  ['LOCK t', 'write'],
   // -- reads
   ['SELECT * FROM users', 'read'],
   ['TABLE t', 'read'],

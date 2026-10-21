@@ -19,6 +19,7 @@ const CLI = join(ROOT, 'cli/dist/boxlite-app.cjs')
 const KEEP = process.argv.includes('--keep')
 const APP = `e2e-${Date.now().toString(36)}`
 const results = []
+const warnings = []
 let KEY = ''
 let DIR = ''
 let cookie = ''
@@ -47,7 +48,18 @@ async function app(path, init = {}) {
   const headers = { ...(rest.headers ?? {}) }
   if (!anonymous) headers.authorization = `Bearer ${KEY}`
   if (cookie) headers.cookie = headers.cookie ? `${cookie}; ${headers.cookie}` : cookie
-  return fetch(`${APP_URL}${path}`, { redirect: 'manual', ...rest, headers })
+  const req = () => fetch(`${APP_URL}${path}`, { redirect: 'manual', ...rest, headers })
+  try {
+    return await req()
+  } catch (e) {
+    // A network-level failure is recorded with its cause and retried once. Real downtime shows up
+    // as the retry failing too; a one-off connection reset still lands in the report's warnings.
+    const cause = e.cause?.code ?? e.cause?.message ?? e.message
+    await sleep(1000)
+    const r = await req()
+    warnings.push(`${rest.method ?? 'GET'} ${path}: network error (${cause}), succeeded on retry`)
+    return r
+  }
 }
 
 async function check(name, fn) {
@@ -340,8 +352,10 @@ try { await main() } finally {
   await cleanup()
   const ok = results.filter((r) => r.ok).length
   const md = [`# Live e2e — ${new Date().toISOString()}`, '', `CP ${CP} · app ${APP} · ${ok}/${results.length} passed`, '', '| | check | time | detail |', '|---|---|---|---|',
-    ...results.map((r) => `| ${r.ok ? '✔' : '✖'} | ${r.name} | ${(r.ms / 1000).toFixed(1)}s | ${String(r.detail).replace(/\|/g, '\\|').slice(0, 160)} |`)].join('\n')
+    ...results.map((r) => `| ${r.ok ? '✔' : '✖'} | ${r.name} | ${(r.ms / 1000).toFixed(1)}s | ${String(r.detail).replace(/\|/g, '\\|').slice(0, 160)} |`),
+    ...(warnings.length ? ['', '## Warnings', '', ...warnings.map((w) => `- ${w}`)] : [])].join('\n')
   writeFileSync(join(ROOT, 'e2e/report.md'), md + '\n')
-  console.log(`\n${ok}/${results.length} passed · e2e/report.md`)
+  for (const w of warnings) console.log(`  ⚠ ${w}`)
+  console.log(`\n${ok}/${results.length} passed${warnings.length ? ` · ${warnings.length} warning(s)` : ''} · e2e/report.md`)
   process.exitCode = ok === results.length ? 0 : 1
 }

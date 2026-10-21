@@ -88,6 +88,36 @@ export class FakeNeon implements NeonClient {
   async restoreBranch(_p: string, b: string, ts: string, preserve: string): Promise<void> {
     this.calls.push(`restore ${b} ${ts} ${preserve}`);
   }
+  /** branch → role name → {authMethod, password}. `no_login` = created by SQL. */
+  roles = new Map<string, Map<string, { authMethod: string; password: string }>>();
+  branches = ['br-main'];
+  private rolesOf(b: string) {
+    let m = this.roles.get(b);
+    if (!m) this.roles.set(b, (m = new Map()));
+    return m;
+  }
+  async listBranches(): Promise<{ id: string; name: string }[]> {
+    return this.branches.map((id) => ({ id, name: id }));
+  }
+  async getRole(_p: string, b: string, name: string): Promise<{ name: string; authMethod: string } | null> {
+    const r = this.rolesOf(b).get(name);
+    return r ? { name, authMethod: r.authMethod } : null;
+  }
+  async createRole(_p: string, b: string, name: string): Promise<'created' | 'exists'> {
+    this.calls.push(`create-role ${b} ${name}`);
+    if (this.rolesOf(b).has(name)) return 'exists';
+    this.rolesOf(b).set(name, { authMethod: 'password', password: `pw-${b}` });
+    return 'created';
+  }
+  async deleteRole(_p: string, b: string, name: string): Promise<void> {
+    this.calls.push(`delete-role ${b} ${name}`);
+    this.rolesOf(b).delete(name);
+  }
+  async revealRolePassword(_p: string, b: string, name: string): Promise<string> {
+    const r = this.rolesOf(b).get(name);
+    if (!r) throw new UpstreamError('neon', 404, 'role not found');
+    return r.password;
+  }
 }
 
 /**
@@ -167,6 +197,10 @@ export class FakeAppDb implements AppDatabase {
   readers: string[] = [];
   async ensureReader(url: string): Promise<void> {
     this.readers.push(url);
+  }
+  branchingChecks: string[] = [];
+  async prepareBranching(projectId: string): Promise<void> {
+    this.branchingChecks.push(projectId);
   }
   async listApplied(): Promise<AppliedRow[]> {
     return [...this.applied];

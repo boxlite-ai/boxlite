@@ -100,6 +100,10 @@ export class Resources {
         const main = store.envByName(app.id, 'main');
         if (main) store.updateEnv(main.id, { neon_branch_id: p.mainBranchId, db_url: withSslmode(p.connectionUri) });
         app = store.appById(appId)!;
+        // The read-only login reads use (F5), created through the Neon API; reads also do it lazily.
+        if (main) {
+          await this.ctx.appdb.ensureReader(withSslmode(p.connectionUri)).catch((err: Error) => log(`warning: read-only database login not ready yet: ${err.message}`));
+        }
       }
       let env = store.envById(envId)!;
       if (!env.neon_branch_id) {
@@ -111,6 +115,8 @@ export class Resources {
           const parentBranch = parent?.neon_branch_id ?? app.neon_main_branch_id;
           const init = env.with_data ? 'parent-data' : 'schema-only';
           log(`creating Neon branch ${env.name} from ${parent?.name ?? 'main'} (${init})`);
+          // A SQL-created role anywhere in the project makes Neon refuse schema-only branches (412).
+          await this.ctx.appdb.prepareBranching?.(app.neon_project_id!).catch((err: Error) => log(`warning: could not check the project's database roles: ${err.message}`));
           branchId = (await neon.createBranch(app.neon_project_id!, env.name, parentBranch, init)).branchId;
         }
         store.updateEnv(env.id, { neon_branch_id: branchId });

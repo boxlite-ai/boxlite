@@ -10,3 +10,4 @@ console-dist/
 .cp-session-secret
 e2e/report.md
 e2e/node_modules/
+e2e/acceptance/

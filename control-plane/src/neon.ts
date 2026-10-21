@@ -24,6 +24,14 @@ export interface NeonClient {
   connectionUri(projectId: string, branchId: string): Promise<string>;
   /** Point-in-time restore of a branch onto its own history; the pre-restore state is kept as `preserveUnderName`. */
   restoreBranch(projectId: string, branchId: string, timestamp: string, preserveUnderName: string): Promise<void>;
+  listBranches(projectId: string): Promise<{ id: string; name: string }[]>;
+  /** A Postgres role managed by Neon (console/API). `authMethod` is `no_login` for roles created by SQL. */
+  getRole(projectId: string, branchId: string, name: string): Promise<{ name: string; authMethod: string } | null>;
+  /** Creates the role through the API and waits until it is applied; `exists` when it already was. */
+  createRole(projectId: string, branchId: string, name: string): Promise<'created' | 'exists'>;
+  deleteRole(projectId: string, branchId: string, name: string): Promise<void>;
+  /** The role's password. A secret: callers must never log or return it. */
+  revealRolePassword(projectId: string, branchId: string, name: string): Promise<string>;
 }
 
 const DATABASE = 'neondb';
@@ -132,6 +140,60 @@ export class HttpNeonClient implements NeonClient {
     const q = new URLSearchParams({ branch_id: branchId, database_name: DATABASE, role_name: ROLE });
     const out = await this.call<{ uri: string }>('GET', `/projects/${projectId}/connection_uri?${q}`);
     return out.uri;
+  }
+
+  async listBranches(projectId: string): Promise<{ id: string; name: string }[]> {
+    const out = await this.call<{ branches: { id: string; name: string }[] }>('GET', `/projects/${projectId}/branches`);
+    return out.branches.map((b) => ({ id: b.id, name: b.name }));
+  }
+
+  async getRole(projectId: string, branchId: string, name: string): Promise<{ name: string; authMethod: string } | null> {
+    try {
+      const out = await this.call<{ role: { name: string; authentication_method?: string } }>('GET', `/projects/${projectId}/branches/${branchId}/roles/${encodeURIComponent(name)}`);
+      return { name: out.role.name, authMethod: out.role.authentication_method ?? 'password' };
+    } catch (err) {
+      if (err instanceof UpstreamError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  async createRole(projectId: string, branchId: string, name: string): Promise<'created' | 'exists'> {
+    try {
+      const out = await this.call<{ operations?: { id: string }[] }>('POST', `/projects/${projectId}/branches/${branchId}/roles`, { role: { name } });
+      await this.waitOperations(projectId, out.operations ?? []);
+      return 'created';
+    } catch (err) {
+      if (err instanceof UpstreamError && err.status === 409) return 'exists';
+      throw err;
+    }
+  }
+
+  async deleteRole(projectId: string, branchId: string, name: string): Promise<void> {
+    try {
+      const out = await this.call<{ operations?: { id: string }[] }>('DELETE', `/projects/${projectId}/branches/${branchId}/roles/${encodeURIComponent(name)}`);
+      await this.waitOperations(projectId, out.operations ?? []);
+    } catch (err) {
+      if (err instanceof UpstreamError && err.status === 404) return;
+      throw err;
+    }
+  }
+
+  async revealRolePassword(projectId: string, branchId: string, name: string): Promise<string> {
+    const out = await this.call<{ password: string }>('GET', `/projects/${projectId}/branches/${branchId}/roles/${encodeURIComponent(name)}/reveal_password`);
+    return out.password;
+  }
+
+  /** Role changes are applied to the compute asynchronously; SQL that depends on them must wait. */
+  private async waitOperations(projectId: string, ops: { id: string }[]): Promise<void> {
+    for (const op of ops) {
+      for (let i = 0; ; i++) {
+        const { operation } = await this.call<{ operation: { status: string; error?: string } }>('GET', `/projects/${projectId}/operations/${op.id}`);
+        if (operation.status === 'finished' || operation.status === 'skipped') break;
+        if (['failed', 'error', 'cancelled'].includes(operation.status)) throw new UpstreamError('neon', 500, `operation ${op.id} ${operation.status}: ${operation.error ?? ''}`);
+        if (i > 120) throw new UpstreamError('neon', 504, `operation ${op.id} still ${operation.status} after 60 s`);
+        await sleep(500);
+      }
+    }
   }
 
   async restoreBranch(projectId: string, branchId: string, timestamp: string, preserveUnderName: string): Promise<void> {

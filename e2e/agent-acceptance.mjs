@@ -1,0 +1,79 @@
+#!/usr/bin/env node
+// Acceptance with real coding agents (the user's journey, PRD 第五节):
+//   1. create an App through the console API — the same backend call as clicking New App —
+//      and take the prompt exactly as the console shows it;
+//   2. append one sentence and hand it to a fresh, headless Claude Code session in an empty
+//      directory; nobody intervenes;
+//   3. record what the agent did (time, turns, cost, tool calls, final report).
+// Independent verification of the result is done afterwards (verify-acceptance.mjs).
+//
+//   node e2e/agent-acceptance.mjs <case-id>...      cases: m1 m2 m3 (default: all, in parallel)
+import { spawn } from 'node:child_process'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const CP = process.env.CP_URL ?? 'https://8080-d-76416e6f374b4352547a7a68.proxy.dev.boxlite.ai'
+const CONSOLE = process.env.CONSOLE_URL ?? CP.replace(/^https:\/\/8080-/, 'https://8081-')
+const ADMIN = readFileSync(join(ROOT, '.cp-admin-token'), 'utf8').trim()
+const OUT = join(ROOT, 'e2e/acceptance')
+const STAMP = Date.now().toString(36).slice(-4)
+
+export const CASES = {
+  m1: { app: `site-${STAMP}`, ask: '做一个公司官网落地页，带联系表单，提交的内容要保存下来，我能在一个后台页面看到所有提交' },
+  m2: { app: `photos-${STAMP}`, ask: '做一个图片墙，可以上传照片，刷新后照片还在' },
+  m3: { app: `todo-${STAMP}`, ask: '做一个带 GitHub 登录的待办应用，每个人只看到自己的待办' },
+}
+
+async function consoleSession() {
+  const r = await fetch(`${CONSOLE}/console/login`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: ADMIN, next: '/console/' }) })
+  const cookie = (r.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0]).join('; ')
+  if (!cookie) throw new Error(`console login failed: ${r.status}`)
+  return cookie
+}
+
+async function createApp(cookie, name) {
+  const r = await fetch(`${CONSOLE}/console/api/apps`, { method: 'POST', headers: { cookie, 'content-type': 'application/json', 'x-boxlite-console': '1', origin: CONSOLE }, body: JSON.stringify({ name }) })
+  const b = await r.json()
+  if (r.status !== 201) throw new Error(`create ${name}: ${r.status} ${JSON.stringify(b).slice(0, 300)}`)
+  return b
+}
+
+function runAgent(id, prompt, dir) {
+  return new Promise((resolve) => {
+    const t0 = Date.now()
+    const log = join(OUT, `${id}.jsonl`)
+    const child = spawn('claude', ['-p', prompt, '--dangerously-skip-permissions', '--output-format', 'stream-json', '--verbose'], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] })
+    const chunks = []
+    child.stdout.on('data', (d) => chunks.push(d))
+    const timer = setTimeout(() => child.kill('SIGTERM'), 45 * 60_000)
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      writeFileSync(log, Buffer.concat(chunks))
+      const lines = Buffer.concat(chunks).toString('utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
+      const result = lines.find((l) => l.type === 'result') ?? {}
+      const tools = lines.filter((l) => l.type === 'assistant').flatMap((l) => l.message.content.filter((c) => c.type === 'tool_use').map((c) => (c.input.command ?? c.input.file_path ?? c.name ?? '').slice(0, 160)))
+      resolve({ id, exit: code, seconds: Math.round((Date.now() - t0) / 1000), turns: result.num_turns, cost: result.total_cost_usd, tools, report: result.result ?? '' })
+    })
+  })
+}
+
+const ids = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(CASES)
+mkdirSync(OUT, { recursive: true })
+const cookie = await consoleSession()
+const runs = await Promise.all(ids.map(async (id) => {
+  const c = CASES[id]
+  const created = await createApp(cookie, c.app)
+  // The console's prompt ends with a placeholder line for the request; replace it like a user would.
+  const prompt = created.prompt.replace(/What I want:.*$/m, `What I want: ${c.ask}`)
+  const dir = join(OUT, `${id}-work`)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(OUT, `${id}.app.json`), JSON.stringify({ id, app: c.app, ask: c.ask, key: created.key, url: created.app?.url }, null, 2), { mode: 0o600 })
+  console.log(`[${id}] ${c.app} → agent started`)
+  const r = await runAgent(id, prompt, dir)
+  console.log(`[${id}] done in ${r.seconds}s, ${r.turns} turns, $${r.cost?.toFixed?.(2)}`)
+  return { ...r, app: c.app, ask: c.ask }
+}))
+writeFileSync(join(OUT, 'runs.json'), JSON.stringify(runs, null, 2))
+for (const r of runs) console.log(`\n===== ${r.id} · ${r.app} · ${r.seconds}s · ${r.turns} turns · $${r.cost?.toFixed?.(2)} · exit ${r.exit}\n${r.report.slice(0, 2500)}`)

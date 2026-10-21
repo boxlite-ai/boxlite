@@ -14,8 +14,11 @@
  *     (any CREATE/ALTER/DROP…, DO, CALL, COPY, GRANT…; SECURITY DEFINER functions) so the route
  *     can refuse them on main and require write:true elsewhere. Unknown statement types are
  *     DDL-class: it fails closed.
- *  2. appdb.ts runs reads as the `boxlite_reader` role inside `BEGIN TRANSACTION READ ONLY`, with
- *     statement and idle-in-transaction timeouts, and checks `current_user` afterwards.
+ *  2. appdb.ts runs reads logged in as `boxlite_reader` (dbreader.ts) inside `BEGIN TRANSACTION
+ *     READ ONLY`, with statement and idle-in-transaction timeouts. On Neon that role is a member of
+ *     neon_superuser (API-created roles always are), so this guard is what keeps a read from
+ *     signalling other sessions or reaching files and the network; role SQL is refused here as
+ *     defence in depth (the session is the reader, so it cannot reach the owner anyway).
  *  3. pg's extended protocol accepts one command per message, so nothing can be smuggled past
  *     this split.
  */
@@ -126,7 +129,9 @@ const REFUSED_STATEMENTS: Record<string, string> = {
 
 /** Statement types that only read (their trees are still walked for denied functions). */
 const READ_STATEMENTS = new Set(['SelectStmt', 'VariableShowStmt', 'VariableSetStmt', 'DeclareCursorStmt', 'FetchStmt', 'ClosePortalStmt']);
-const WRITE_STATEMENTS = new Set(['InsertStmt', 'UpdateStmt', 'DeleteStmt', 'MergeStmt', 'LockStmt']);
+// LOCK is not here on purpose: Postgres allows LOCK TABLE (any mode) in a READ ONLY transaction,
+// and the reader can take ACCESS EXCLUSIVE on Neon, so a "read" could stall the app. It is DDL-class.
+const WRITE_STATEMENTS = new Set(['InsertStmt', 'UpdateStmt', 'DeleteStmt', 'MergeStmt']);
 const DML_NODES = new Set(['InsertStmt', 'UpdateStmt', 'DeleteStmt', 'MergeStmt']);
 
 /** Inside DO bodies and function bodies (opaque strings to the SQL parser): the same escapes, by text. */
