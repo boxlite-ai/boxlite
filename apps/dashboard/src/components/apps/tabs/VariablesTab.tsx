@@ -38,7 +38,9 @@ import { Tag } from '../viz'
 // BoxLite sets on its own is listed read-only underneath.
 
 const ENV_GRID = 'grid-cols-[240px_minmax(0,1fr)_minmax(0,1.1fr)_120px_120px] gap-x-4'
-const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+// The control plane checks names with the same rules as boxlite.toml (VARIABLE_NAME_RE and the
+// platform names of @microcloud/shared); these mirror them so the form can say so before saving.
+const NAME_RE = /^[A-Z_][A-Z0-9_]*$/
 const PLATFORM_RE = /^(BOXLITE_.*|DATABASE_URL|PORT)$/
 
 interface Row {
@@ -63,7 +65,7 @@ function parseDotenv(text: string): { values: Record<string, string>; invalid: n
   for (const [i, line] of text.split('\n').entries()) {
     if (!line.trim() || line.trim().startsWith('#')) continue
     const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/)
-    if (!m || PLATFORM_RE.test(m[1])) {
+    if (!m || !NAME_RE.test(m[1]) || PLATFORM_RE.test(m[1])) {
       invalid.push(i + 1)
       continue
     }
@@ -94,7 +96,11 @@ function InlineEditor({
   const [name, setName] = useState(initialName ?? '')
   const [value, setValue] = useState(initialValue ?? '')
   const nameError =
-    name && !NAME_RE.test(name) ? 'Use letters, digits and _' : name && PLATFORM_RE.test(name) ? 'Set by BoxLite' : null
+    name && !NAME_RE.test(name)
+      ? 'Use upper-case letters, digits and _ (like LOG_LEVEL)'
+      : name && PLATFORM_RE.test(name)
+        ? 'Set by BoxLite'
+        : null
   const blocked = !name || !!nameError || busy || (lockName && value === initialValue)
   const keys = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !blocked) onSave(name, value)
