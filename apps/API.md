@@ -46,6 +46,7 @@ import, and runtime-wide metrics. They are intentionally absent below;
 | ------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------ | ------------------------ |
 | [Control-plane API](#control-plane-api)                                   | `apps/api`                   | `/api`                                                                               | `3000`                   |
 | [Hosted BoxLite-compatible API](#hosted-boxlite-compatible-api)           | `apps/api`                   | `/api/v1`                                                                            | `3000`                   |
+| [MCP endpoint](#mcp-endpoint)                                             | `apps/api`                   | `/api/mcp`                                                                           | `3000`                   |
 | [Runner API](#runner-api)                                                 | `apps/runner`                | `/`                                                                                  | `3003`                   |
 | [Preview proxy API](#preview-proxy-api)                                   | `apps/proxy`                 | `proxy.<domain>`, `<port>-<box>.proxy.<domain>`                                      | `4000`                   |
 | [Registry proxy API](#registry-proxy-api)                                 | `apps/image-service`         | `/v2`                                                                                | `4100`                   |
@@ -506,6 +507,52 @@ whose resolved proxy reference has lost its credential is also rejected before
 it is saved. Once a dependent box commits, deletion returns 409 with its ID.
 The dependency check reads candidate credentials once for the organization and
 registry host, then matches each box in memory using the longest repository prefix.
+
+</details>
+
+## MCP endpoint
+
+**Service:** `apps/api` · **Path:** `/api/mcp` · **Port:** `3000` in
+deployments (shared with the control-plane API)
+
+A Model Context Protocol server for protocol revision `2026-07-28` only, over
+the Streamable HTTP transport, served from [`mcp`](./api/src/mcp/) and excluded
+from the product OpenAPI document. The revision is stateless: each POST carries
+its protocol version and client capabilities in `params._meta`, mirrored in the
+`MCP-Protocol-Version`, `Mcp-Method`, and (for `tools/call`) `Mcp-Name`
+headers, and is answered with one JSON body. A header that disagrees with the
+body is refused with `400` (`-32020`). A request naming any other revision —
+including a legacy `initialize` handshake — is refused with `400` and
+`UnsupportedProtocolVersionError` (`-32022`) listing `2026-07-28`, so clients on
+an earlier revision cannot connect.
+
+Only OAuth bearer tokens are accepted (the `jwt` strategy, so the API's own
+issuer and audience); API keys are not. A request carrying an `Origin` header is
+refused with `403`, because MCP hosts call from servers and CLIs, not browsers.
+No OAuth discovery metadata is published, so a host must already hold a token.
+
+<details>
+<summary><b>Transport</b> · 3 routes</summary>
+
+| Method   | Path       | What it does                                                                    |
+| -------- | ---------- | ------------------------------------------------------------------------------- |
+| `POST`   | `/api/mcp` | Answers one JSON-RPC request: `server/discover`, `tools/list`, or `tools/call`. |
+| `GET`    | `/api/mcp` | Returns `405`; protocol 2026-07-28 has no GET stream.                           |
+| `DELETE` | `/api/mcp` | Returns `405`; there is no session to end.                                      |
+
+</details>
+
+<details>
+<summary><b>Tools</b> · 1 tool</summary>
+
+| Tool         | Arguments                | What it does                                                             |
+| ------------ | ------------------------ | ------------------------------------------------------------------------ |
+| `list_boxes` | `organization_id` (UUID) | Lists the organization's boxes, mapped as `GET /api/v1/boxes` maps them. |
+
+The tool checks that the caller belongs to the organization — the membership
+check the box list route applies, without its system-admin bypass. An
+organization the caller is not in, or one that does not exist, gets the same
+`isError` reply.
 
 </details>
 
