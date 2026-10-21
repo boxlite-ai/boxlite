@@ -113,6 +113,24 @@ pub unsafe extern "C" fn boxlite_advanced_options_set_capabilities_drop(
 
 const INVALID_CAPABILITY_INPUT: &str = "<invalid C capability input>";
 
+/// Enable full capabilities and writable kernel mounts inside the guest only.
+/// Runner sandbox security is unchanged. Returns InvalidArgument for a null
+/// handle or a conflicting explicit capability policy.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_advanced_options_set_privileged(
+    opts: *mut CAdvancedBoxOptions,
+    enabled: c_int,
+) -> BoxliteErrorCode {
+    let Some(handle) = (unsafe { opts.as_mut() }) else {
+        return BoxliteErrorCode::InvalidArgument;
+    };
+    if enabled != 0 && handle.options.capabilities().is_some() {
+        return BoxliteErrorCode::InvalidArgument;
+    }
+    handle.options.set_privileged(enabled != 0);
+    BoxliteErrorCode::Ok
+}
+
 fn set_capability_list(
     handle: *mut CAdvancedBoxOptions,
     capabilities: *const *const c_char,

@@ -966,6 +966,11 @@ void boxlite_agent_turn_free(struct CAgentTurn *handle);
 // Release only the local handle. Does not close an agent or interrupt a turn.
 // handle must be null or a live, uniquely owned pointer returned by this SDK.
 void boxlite_agent_events_free(struct CAgentEvents *handle);
+// Enable full capabilities and writable kernel mounts inside the guest only.
+// Runner sandbox security is unchanged. Returns InvalidArgument for a null
+// handle or a conflicting explicit capability policy.
+enum BoxliteErrorCode boxlite_advanced_options_set_privileged(CAdvancedBoxOptions *opts,
+                                                              int enabled);
 
 // Submit a box export.
 //

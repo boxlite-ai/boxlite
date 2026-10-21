@@ -167,6 +167,20 @@ fn libkrunfw_cache_key() -> String {
 /// Returns the path to the extracted source directory containing kernel.c.
 #[cfg(target_os = "macos")]
 fn download_libkrunfw_prebuilt(out_dir: &Path) -> PathBuf {
+    println!("cargo:rerun-if-env-changed=BOXLITE_LIBKRUNFW_SOURCE");
+    if let Some(source) = env::var_os("BOXLITE_LIBKRUNFW_SOURCE") {
+        let source = fs::canonicalize(source).expect("BOXLITE_LIBKRUNFW_SOURCE must exist");
+        for file in ["kernel.c", "Makefile", "kernel.config"] {
+            let path = source.join(file);
+            assert!(path.is_file(), "missing firmware input: {}", path.display());
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+        println!(
+            "cargo:warning=Using explicitly built kernel: {}",
+            source.display()
+        );
+        return source;
+    }
     let cache_key = libkrunfw_cache_key();
     let versioned_dir = format!("libkrunfw-src-{cache_key}");
     let tarball_path = out_dir.join(format!("libkrunfw-prebuilt-{cache_key}.tar.gz"));

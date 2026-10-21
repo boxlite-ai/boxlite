@@ -322,6 +322,7 @@ export class BoxService {
       // a default here would hand every box a USER override its image may not
       // define — which is exactly what 16d9248bb removed.
       box.runAsUser = createBoxDto.runAsUser
+      box.privileged = createBoxDto.privileged ?? false
       box.workingDir = createBoxDto.workingDir
       box.entrypoint = createBoxDto.entrypoint
       box.cmd = createBoxDto.cmd

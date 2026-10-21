@@ -24,6 +24,7 @@ Name | Type | Description | Notes
 **regionId** | **string** |  | [optional] [default to undefined]
 **registry** | [**RegistryDTO**](RegistryDTO.md) |  | [optional] [default to undefined]
 **runAsUser** | **string** |  | [optional] [default to undefined]
+**privileged** | **boolean** | Guest privilege only; host isolation remains enabled | [optional] [default to false]
 **secrets** | [**Array&lt;DtoSecretDTO&gt;**](DtoSecretDTO.md) |  | [optional] [default to undefined]
 **skipStart** | **boolean** |  | [optional] [default to undefined]
 **storageQuota** | **number** |  | [optional] [default to undefined]

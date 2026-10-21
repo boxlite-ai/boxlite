@@ -132,6 +132,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       storageQuota: box.disk,
       env: box.env,
       runAsUser: box.runAsUser,
+      privileged: box.privileged,
       workingDir: box.workingDir,
       entrypoint: box.entrypoint,
       cmd: box.cmd,

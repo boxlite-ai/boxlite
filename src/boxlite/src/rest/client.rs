@@ -603,6 +603,15 @@ impl ApiClient {
         ensure_capability("per-exec user", capabilities.exec_user_enabled)
     }
 
+    pub async fn require_privileged_enabled(&self) -> BoxliteResult<()> {
+        // Recheck before every create: cached support may outlive a rollback.
+        let config = self.fetch_config().await?;
+        ensure_capability(
+            "guest privileged",
+            config.capabilities.and_then(|caps| caps.privileged_enabled),
+        )
+    }
+
     pub async fn require_clone_enabled(&self) -> BoxliteResult<()> {
         let config = self.get_config().await?;
         let capabilities = config.capabilities.ok_or_else(|| {

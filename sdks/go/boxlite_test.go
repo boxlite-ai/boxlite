@@ -354,6 +354,30 @@ func TestAdvancedOptionsSetCapabilitiesDeepCopies(t *testing.T) {
 	}
 }
 
+func TestGuestPrivilegedRejectsConflictingCapabilitiesAndClosedHandle(t *testing.T) {
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer advanced.Close()
+	if err := advanced.SetPrivileged(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := advanced.SetPrivileged(false); err != nil {
+		t.Fatal(err)
+	}
+	if err := advanced.SetCapabilities(ContainerCapabilities{Drop: []string{"NET_RAW"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := advanced.SetPrivileged(true); err == nil {
+		t.Fatal("privileged must reject an explicit capability override")
+	}
+	advanced.Close()
+	if err := advanced.SetPrivileged(true); err == nil {
+		t.Fatal("closed handle must be rejected")
+	}
+}
+
 func TestSetCapabilitiesRejectsEmbeddedNUL(t *testing.T) {
 	advanced, err := NewAdvancedBoxOptions()
 	if err != nil {

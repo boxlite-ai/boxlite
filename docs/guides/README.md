@@ -6,6 +6,7 @@ Each guide walks through one task. How the underlying pieces work is in
 
 ## Running boxes
 
+- [Docker-in-Docker](docker-in-docker.md): build the guest firmware and run Docker through a runner.
 - [Running examples](running-examples.md): nine of the Python examples and what each one shows.
 - [Mounting volumes](volumes.md): share host directories with a box for input and output.
 - [Configuring networking](networking.md): internet access and port forwarding through gvproxy.

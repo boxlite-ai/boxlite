@@ -1881,6 +1881,10 @@ components:
               type: boolean
               description: Whether Docker-style Linux capability add/drop policy is supported
               example: true
+            privileged_enabled:
+              type: boolean
+              description: Whether privileged containers inside the guest are supported; host sandbox policy is unchanged
+              example: true
             max_cpus:
               type: integer
               description: Maximum allowed vCPUs per box
@@ -2394,6 +2398,10 @@ components:
       description: Expert-only container options.
       additionalProperties: false
       properties:
+        privileged:
+          type: boolean
+          default: false
+          description: Full guest capabilities and writable guest kernel mounts. Does not relax the host sandbox. Conflicts with explicit capabilities; requires privileged_enabled.
         capabilities:
           $ref: "#/components/schemas/CreateContainerCapabilities"
 

@@ -24,6 +24,7 @@ type CreateBoxDTO struct {
 	Cmd          []string          `json:"cmd,omitempty"`
 	WorkingDir   string            `json:"workingDir,omitempty"`
 	RunAsUser    string            `json:"runAsUser,omitempty"`
+	Privileged   bool              `json:"privileged,omitempty"`
 	Volumes      []VolumeDTO       `json:"volumes,omitempty"`
 	Secrets      []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
 	// Outbound network policy. outboundEnabled is required: a request without

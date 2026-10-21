@@ -8,6 +8,7 @@ include make/plugins.mk
 include make/dev.mk
 include make/changes.mk
 include make/test.mk
+include make/acceptance.mk
 include make/coverage.mk
 include make/quality.mk
 

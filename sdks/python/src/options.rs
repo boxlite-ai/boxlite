@@ -734,6 +734,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
         }
 
         if let Some(advanced) = py_opts.advanced {
+            opts.advanced.set_privileged(advanced.privileged);
             if let Some(security) = advanced.security {
                 opts.advanced.security = SecurityOptions::from(security);
             }
@@ -1260,6 +1261,7 @@ mod tests {
     fn security_only_advanced_options_leaves_capabilities_unspecified() {
         let advanced = PyAdvancedBoxOptions {
             security: Some(default_py_security()),
+            privileged: false,
             health_check: None,
             capabilities: None,
         };
@@ -1280,6 +1282,7 @@ mod tests {
     fn explicit_capabilities_still_convert() {
         let advanced = PyAdvancedBoxOptions {
             security: None,
+            privileged: false,
             health_check: None,
             capabilities: Some(PyContainerCapabilities {
                 add: vec!["SYS_ADMIN".to_string()],
@@ -1295,6 +1298,20 @@ mod tests {
             .capabilities()
             .expect("capabilities should be set");
         assert_eq!(capabilities.add, ["SYS_ADMIN"]);
+    }
+
+    #[test]
+    fn privileged_conversion_preserves_host_sandbox() {
+        let advanced = PyAdvancedBoxOptions {
+            security: None,
+            privileged: true,
+            health_check: None,
+            capabilities: None,
+        };
+        let opts = BoxOptions::try_from(py_box_options_with_advanced(advanced)).unwrap();
+        assert!(opts.advanced.privileged);
+        assert!(opts.advanced.capabilities().is_none());
+        assert_eq!(opts.advanced.security, SecurityOptions::default());
     }
 
     /// A managed volume is taken verbatim — by id or by name alike. The server

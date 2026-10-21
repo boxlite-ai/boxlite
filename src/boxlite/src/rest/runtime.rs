@@ -202,6 +202,7 @@ impl BoxOptions {
     /// types (`CreateBoxRequest::from_options`), in `boxlite serve`
     /// (`src/cli/src/commands/serve/types.rs`), and in the spec.
     fn sanitize_remote(&self) -> BoxliteResult<()> {
+        self.advanced.validate_privileged_capability_conflict()?;
         if !self.ports.is_empty() {
             return Err(BoxliteError::Unsupported(
                 "Host port publication (-p/ports) is local-only for remote runtimes. \
@@ -224,12 +225,6 @@ impl BoxOptions {
                 "sandbox security (advanced.security) is the remote server's own policy \
                  and is only configurable by the local runtime"
                     .to_string(),
-            ));
-        }
-
-        if self.advanced.privileged {
-            return Err(BoxliteError::Unsupported(
-                "privileged mode is only supported by the local runtime".to_string(),
             ));
         }
 
@@ -335,6 +330,9 @@ impl RuntimeBackend for RestRuntime {
         // concept at all can't be trusted to preserve that from a no-op value.
         if options.advanced.capabilities().is_some() {
             self.client.require_linux_capabilities_enabled().await?;
+        }
+        if options.advanced.privileged {
+            self.client.require_privileged_enabled().await?;
         }
 
         let req = CreateBoxRequest::from_options(&options, name);
@@ -1062,8 +1060,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_rejects_privileged_mode_in_rest_mode() {
-        let options = BoxliteRestOptions::new("http://localhost:1");
+    async fn privileged_requires_server_advertisement() {
+        let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+        let options = BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"));
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
         let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
         advanced.privileged = true;
@@ -1075,10 +1074,54 @@ mod tests {
         let error = RuntimeBackend::create(&runtime, box_options, None)
             .await
             .err()
-            .expect("REST privileged mode must be rejected before network I/O");
+            .expect("unadvertised guest privilege must be rejected");
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
-        assert!(error.to_string().contains("local runtime"));
+        assert!(error.to_string().contains("guest privileged"));
+        assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn advertised_privileged_creates_guest_box_and_rechecks_support() {
+        let (port, server) = json_server(vec![
+            r#"{"capabilities":{"privileged_enabled":true}}"#,
+            BOX_RESPONSE,
+            r#"{"capabilities":{"privileged_enabled":false}}"#,
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let mut opts = BoxOptions::default();
+        opts.advanced.set_privileged(true);
+        let body = serde_json::to_value(CreateBoxRequest::from_options(&opts, None)).unwrap();
+        assert_eq!(body["advanced"]["privileged"], true);
+        assert!(body["advanced"].get("capabilities").is_none());
+        RuntimeBackend::create(&runtime, opts.clone(), None)
+            .await
+            .unwrap();
+        let error = RuntimeBackend::create(&runtime, opts, None)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert_eq!(
+            server.await.unwrap(),
+            [
+                "GET /v1/config HTTP/1.1",
+                "POST /v1/boxes HTTP/1.1",
+                "GET /v1/config HTTP/1.1",
+            ]
+        );
+    }
+
+    #[test]
+    fn privileged_rejects_conflicting_remote_capabilities() {
+        let mut options = capability_options();
+        options.advanced.set_privileged(true);
+        assert!(matches!(
+            options.sanitize_remote(),
+            Err(BoxliteError::InvalidArgument(_))
+        ));
     }
 
     #[tokio::test]

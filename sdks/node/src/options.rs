@@ -537,6 +537,11 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .unwrap_or_default();
 
         let health_check = js_opts.health_check.map(HealthCheckOptions::from);
+        let privileged = js_opts
+            .advanced
+            .as_ref()
+            .and_then(|a| a.privileged)
+            .unwrap_or(false);
         let capabilities: Option<ContainerCapabilities> = js_opts
             .advanced
             .and_then(|advanced| advanced.capabilities)
@@ -556,6 +561,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .collect();
 
         let mut advanced = AdvancedBoxOptions::default();
+        advanced.set_privileged(privileged);
         advanced.set_capabilities(capabilities)?;
         advanced.security = security;
         advanced.health_check = health_check;
@@ -943,6 +949,7 @@ mod tests {
 
         let mut with_capabilities = js.clone();
         with_capabilities.advanced = Some(JsAdvancedBoxOptions {
+            privileged: None,
             capabilities: Some(JsContainerCapabilities {
                 add: Some(vec!["NET_ADMIN".into(), "SYS_PTRACE".into()]),
                 drop: Some(vec!["MKNOD".into(), "NET_RAW".into()]),
@@ -955,6 +962,16 @@ mod tests {
             .expect("capabilities set");
         assert_eq!(capabilities.add, ["NET_ADMIN", "SYS_PTRACE"]);
         assert_eq!(capabilities.drop, ["MKNOD", "NET_RAW"]);
+
+        let mut privileged = js.clone();
+        privileged.advanced = Some(JsAdvancedBoxOptions {
+            privileged: Some(true),
+            capabilities: None,
+        });
+        let privileged = BoxOptions::try_from(privileged).unwrap();
+        assert!(privileged.advanced.privileged);
+        assert_eq!(privileged.advanced.security, SecurityOptions::default());
+        assert!(privileged.advanced.capabilities().is_none());
 
         let opts = BoxOptions::try_from(js).unwrap();
         assert!(!opts.auto_remove);

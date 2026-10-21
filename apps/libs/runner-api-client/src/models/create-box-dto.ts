@@ -49,6 +49,8 @@ export interface CreateBoxDTO {
     'regionId'?: string;
     'registry'?: RegistryDTO;
     'runAsUser'?: string;
+    /** Run a privileged container inside the guest, preserving the host sandbox. */
+    'privileged'?: boolean;
     'secrets'?: Array<DtoSecretDTO>;
     'skipStart'?: boolean;
     'storageQuota'?: number;

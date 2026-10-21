@@ -1263,6 +1263,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                 }
             });
             advanced.set_capabilities(capabilities)?;
+            advanced.set_privileged(req.advanced.privileged);
             advanced
         },
         // Neither deadline is forwarded; `serve` holds both and sweeps them.

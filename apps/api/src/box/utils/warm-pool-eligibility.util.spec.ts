@@ -19,6 +19,7 @@ describe('requiresFreshBox', () => {
   // the same silent drop this change closes at the mapper.
   it.each([
     ['runAsUser', { runAsUser: '1000:1000' }],
+    ['privileged', { privileged: true }],
     ['workingDir', { workingDir: '/app' }],
     ['entrypoint', { entrypoint: ['python'] }],
     ['cmd', { cmd: ['-c', 'print(1)'] }],

@@ -215,7 +215,7 @@ Configuration options for creating a box.
 | `network` | `NetworkSpec \| None` | `None` | Structured network configuration. Omit for default enabled networking. |
 | `ports` | `List[Tuple \| Dict]` | `[]` | Local TCP forwarding; omit `host_port` in a dict for automatic allocation |
 | `secrets` | `List[Secret]` | `[]` | Outbound HTTPS secret substitution rules |
-| `advanced` | `AdvancedBoxOptions \| None` | `None` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
+| `advanced` | `AdvancedBoxOptions \| None` | `None` | Expert-only options: guest `privileged`, or `capabilities.add` and `capabilities.drop`; host sandbox policy is separate |
 | `auto_delete` | `int \| None` | `None` | `0` keeps the box after stop; above `0`, a REST runtime deletes it that many seconds after stop and a local runtime at stop. `None` keeps the runtime's default (`auto_remove` locally) |
 | `auto_remove` | `bool` | `True` | Deprecated: use `auto_delete`. Auto cleanup when stopped |
 | `detach` | `bool` | `False` | Survive parent process exit |
@@ -235,6 +235,11 @@ options = BoxOptions(
     ),
 )
 ```
+
+For guest Docker, use `AdvancedBoxOptions(privileged=True)`. This leaves the
+runner's sandbox policy unchanged and requires `privileged_enabled` on REST.
+See [Docker-in-Docker](../../guides/docker-in-docker.md) for the required firmware
+build and real acceptance procedure.
 
 #### `NetworkSpec`
 

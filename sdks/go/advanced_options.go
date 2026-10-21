@@ -96,6 +96,18 @@ func (a *AdvancedBoxOptions) SetCapabilities(capabilities ContainerCapabilities)
 	return nil
 }
 
+// SetPrivileged enables privileged operation inside the guest. It does not
+// disable the runner's VM sandbox. Explicit capability policies conflict with it.
+func (a *AdvancedBoxOptions) SetPrivileged(enabled bool) error {
+	if a == nil || a.handle == nil {
+		return fmt.Errorf("boxlite: advanced options handle is closed")
+	}
+	if C.boxlite_advanced_options_set_privileged(a.handle, boolToCInt(enabled)) != C.Ok {
+		return fmt.Errorf("boxlite: privileged conflicts with explicit capabilities")
+	}
+	return nil
+}
+
 // Close releases the underlying CAdvancedBoxOptions. Idempotent.
 func (a *AdvancedBoxOptions) Close() {
 	if a == nil || a.handle == nil {

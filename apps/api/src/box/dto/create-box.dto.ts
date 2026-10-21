@@ -46,6 +46,10 @@ export class CreateBoxDto {
   @IsString()
   runAsUser?: string
 
+  @IsOptional()
+  @IsBoolean()
+  privileged?: boolean
+
   @ApiPropertyOptional({
     description: 'Working directory inside the container',
     example: '/workspace',
