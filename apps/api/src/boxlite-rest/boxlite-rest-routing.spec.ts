@@ -5,6 +5,7 @@
  */
 
 import { PATH_METADATA } from '@nestjs/common/constants'
+import { Reflector } from '@nestjs/core'
 import { Test } from '@nestjs/testing'
 import { ValidationPipe, type INestApplication } from '@nestjs/common'
 import type { AddressInfo } from 'net'
@@ -23,6 +24,7 @@ import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { BoxliteRegistryController } from './boxlite-registry.controller'
 import { RegistriesService } from '../registry/services/registries.service'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
+import { AUDIT_CONTEXT_KEY, AuditContext } from '../audit/decorators/audit.decorator'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -158,6 +160,24 @@ describe('BoxLite REST routing', () => {
       expect(await response.json()).toEqual({ mode: 'enabled', allow_net: [] })
       expect(setOutboundNetwork).toHaveBeenLastCalledWith('box-1', { mode: 'enabled', allow_net: [] }, 'org-123')
     }
+  })
+
+  it('reports a stored empty outbound allowlist as an empty list', async () => {
+    await startRoutingTestApp()
+    setOutboundNetwork.mockResolvedValueOnce({ outboundEnabled: false, outboundAllowNet: null })
+    const response = await put('/api/v1/boxes/box-1/network/outbound', { mode: 'disabled' })
+    expect(await response.json()).toEqual({ mode: 'disabled', allow_net: [] })
+  })
+
+  it('audits only the outbound policy fields', () => {
+    const audit = new Reflector().get<AuditContext>(
+      AUDIT_CONTEXT_KEY,
+      BoxliteBoxController.prototype.updateOutboundNetwork,
+    )
+    const recorded = audit.requestMetadata?.body?.({
+      body: { mode: 'enabled', allow_net: ['a.com'], extra: 'x' },
+    } as never)
+    expect(recorded).toEqual({ mode: 'enabled', allow_net: ['a.com'] })
   })
 
   it.each([

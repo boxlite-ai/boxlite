@@ -68,6 +68,51 @@ describe('outbound policy persistence', () => {
     expect(apply).toHaveBeenLastCalledWith(expect.anything(), { mode: 'enabled', allow_net: ['old.example'] })
   })
 
+  it('persists a non-empty list and restores a default previous policy', async () => {
+    const { repository, manager, box } = fixture()
+    box.outboundEnabled = false
+    box.outboundAllowNet = null as any
+    manager.update.mockRejectedValueOnce(new Error('database failed'))
+    const apply = jest.fn().mockResolvedValue(undefined)
+    const policy = { mode: 'enabled' as const, allow_net: ['*.example.com'] }
+    await expect(repository.replaceOutbound('box1', 'org1', policy, apply)).rejects.toThrow('database failed')
+    expect(manager.update).toHaveBeenCalledWith(expect.anything(), 'box1', {
+      outboundEnabled: true,
+      outboundAllowNet: ['*.example.com'],
+    })
+    expect(apply).toHaveBeenLastCalledWith(expect.anything(), { mode: 'disabled', allow_net: [] })
+  })
+
+  it('reports an uncertain live policy when rollback also fails', async () => {
+    const { repository, manager } = fixture()
+    manager.update.mockRejectedValue(new Error('database failed'))
+    const apply = jest.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('runner gone'))
+    await expect(repository.replaceOutbound('box1', 'org1', { mode: 'enabled', allow_net: [] }, apply)).rejects.toThrow(
+      'live policy is uncertain',
+    )
+  })
+
+  it('reports a missing box', async () => {
+    const { repository, manager } = fixture()
+    manager.findOne.mockResolvedValue(null)
+    await expect(
+      repository.replaceOutbound('box1', 'org1', { mode: 'enabled', allow_net: [] }, jest.fn()),
+    ).rejects.toThrow('Box not found')
+  })
+
+  it.each([
+    ['stopping', { desiredState: BoxDesiredState.STOPPED }],
+    ['unassigned', { runnerId: null }],
+  ])('refuses a %s box before contacting the runner', async (_name, patch) => {
+    const { repository, box } = fixture()
+    Object.assign(box, patch)
+    const apply = jest.fn()
+    await expect(repository.replaceOutbound('box1', 'org1', { mode: 'enabled', allow_net: [] }, apply)).rejects.toThrow(
+      'running box',
+    )
+    expect(apply).not.toHaveBeenCalled()
+  })
+
   it('refuses a stopped box before contacting the runner', async () => {
     const { repository, box } = fixture()
     box.state = BoxState.STOPPED
