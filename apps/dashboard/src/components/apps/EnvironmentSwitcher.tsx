@@ -14,8 +14,8 @@ import {
 import { Check, ChevronDown, Plus } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
 import { useAppMutation } from '@/hooks/mutations/useAppMutations'
-import { useAppEnvironments } from '@/hooks/queries/useAppsQuery'
-import { appStatusOf } from '@/lib/apps/format'
+import { useAppEnvironments, useConsoleSession } from '@/hooks/queries/useAppsQuery'
+import { appStatusOf, nameProblem } from '@/lib/apps/format'
 import type { EnvironmentSummary } from '@/lib/apps/types'
 import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
@@ -25,11 +25,9 @@ import { FlatButton, DIALOG_FRAME } from './spec'
 
 // An app has one or more environments; everything on the app page below the
 // header belongs to the one picked here. It sits beside the app name, at
-// reading size, because it is the scope of the whole page: crm / production.
+// reading size, because it is the scope of the whole page: crm / main.
 // It carries no health colour: which environment it is and how it is doing
 // are separate facts, and the header states the second one next to it.
-
-const NAME_RE = /^[a-z0-9][a-z0-9-]*$/
 
 export function EnvironmentSwitcher({
   appId,
@@ -78,7 +76,7 @@ export function EnvironmentSwitcher({
                     </span>
                   </span>
                   <span className="truncate text-[12px] text-muted-foreground">
-                    {env.url ? env.url.replace(/^https:\/\//, '') : 'Not published'} · box {env.box}
+                    {env.url.replace(/^https?:\/\//, '')} · {env.box ? `box ${env.box}` : 'no Box yet'}
                   </span>
                 </span>
               </DropdownMenuItem>
@@ -126,22 +124,19 @@ function NewEnvironmentDialog({
   onCreated: (name: string) => void
 }) {
   const mutation = useAppMutation()
+  const { data: session } = useConsoleSession()
   const [name, setName] = useState('')
-  const [from, setFrom] = useState<string | null>(current)
+  const [from, setFrom] = useState<string>(current)
+  const [withData, setWithData] = useState(false)
   const taken = envs.some((e) => e.name === name)
-  const error = !name
-    ? null
-    : !NAME_RE.test(name)
-      ? 'Use lowercase letters, digits and dashes.'
-      : taken
-        ? `${name} already exists.`
-        : null
+  const error = !name ? null : taken ? `${name} already exists.` : nameProblem(name, session?.reservedNames)
   const blocked = !name || !!error || mutation.isPending
+  const cp = session?.controlPlane ?? window.location.origin
 
   const create = async () => {
     if (blocked) return
     try {
-      await mutation.mutateAsync({ kind: 'createEnvironment', appId, name, from })
+      await mutation.mutateAsync({ kind: 'createEnvironment', appId, name, from, withData })
       toast.success(`${name} created`)
       onCreated(name)
     } catch (err) {
@@ -149,14 +144,11 @@ function NewEnvironmentDialog({
     }
   }
 
-  const sources: { id: string | null; label: string; hint: string }[] = [
-    ...envs.map((e) => ({
-      id: e.name,
-      label: `Copy from ${e.name}`,
-      hint: 'variables, secrets, sign-in methods, database schema, volume names',
-    })),
-    { id: null, label: 'Start empty', hint: 'Google and GitHub sign-in, nothing else' },
-  ]
+  // The control plane branches the new environment's database from another environment's.
+  const sources: { id: string; withData: boolean; label: string; hint: string }[] = envs.flatMap((e) => [
+    { id: e.name, withData: false, label: `Branch from ${e.name}`, hint: 'database schema only, no rows' },
+    { id: e.name, withData: true, label: `Branch from ${e.name} with its data`, hint: 'database schema and rows' },
+  ])
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -178,20 +170,25 @@ function NewEnvironmentDialog({
             className="font-mono"
           />
           <span className={cn('text-[12px]', error ? 'text-destructive' : 'text-muted-foreground')}>
-            {error ?? `URL ${appName}-${name || 'staging'}-acme.boxlite.app · its own box`}
+            {error ?? `URL ${cp}/${appName}--${name || 'staging'}/ · its own Box`}
           </span>
         </label>
         <div className="flex flex-col gap-2" role="radiogroup">
           {sources.map((source) => (
             <button
-              key={source.id ?? 'empty'}
+              key={`${source.id}:${source.withData}`}
               type="button"
               role="radio"
-              aria-checked={from === source.id}
-              onClick={() => setFrom(source.id)}
+              aria-checked={from === source.id && withData === source.withData}
+              onClick={() => {
+                setFrom(source.id)
+                setWithData(source.withData)
+              }}
               className={cn(
                 'flex flex-col items-start gap-0.5 border px-3 py-2 text-left transition-colors',
-                from === source.id ? 'border-foreground/50 bg-card' : 'border-border hover:border-brand',
+                from === source.id && withData === source.withData
+                  ? 'border-foreground/50 bg-card'
+                  : 'border-border hover:border-brand',
               )}
             >
               <span className="text-foreground">{source.label}</span>
@@ -199,9 +196,9 @@ function NewEnvironmentDialog({
             </button>
           ))}
         </div>
-        {/* The one thing people get wrong about environments: data never travels with the copy. */}
         <span className="text-[12px] text-muted-foreground">
-          Rows, users and files are never copied. The new environment starts with nothing deployed.
+          Variables come from boxlite.toml ([env.{name || 'staging'}]) and files are never copied. The new environment
+          starts with nothing deployed; your agent deploys to it with --env {name || 'staging'}.
         </span>
         <DialogFooter className="gap-2">
           <FlatButton onClick={onClose}>Cancel</FlatButton>

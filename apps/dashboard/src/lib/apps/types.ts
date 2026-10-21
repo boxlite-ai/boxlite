@@ -3,25 +3,30 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-// Shapes for the App resource as the console mock understands it. The real
-// contract is still being designed (product_design/PRD/AgentCloud/FullStack);
-// these types track the 02 design note and exist so the mock pages have one
-// source of truth to render from.
+// Shapes of the Micro-cloud control plane's console API (/console/api, see
+// boxlite-microcloud control-plane/src/console-views.ts). Everything here is
+// built from real control-plane state; where the control plane has no data a
+// field is null or empty and the screens hide it.
 
-export type AppVisibility = 'private' | 'org' | 'users' | 'public'
+export type AppVisibility = 'private' | 'org' | 'public'
 
-export type AppStatus = 'draft' | 'building' | 'live' | 'degraded' | 'sleeping' | 'failed' | 'rebuilding'
+export type AppStatus = 'draft' | 'building' | 'live' | 'degraded' | 'sleeping' | 'failed'
 
-export type ServiceState = 'running' | 'starting' | 'restarting' | 'stopped' | 'failed'
+/** The supervisor's words: running | starting | restarting | stopped | failed. */
+export type ServiceState = string
 
-export type ServiceHealth = 'healthy' | 'unhealthy' | 'starting' | 'none'
+/** healthy | unhealthy | starting | none */
+export type ServiceHealth = string
 
 export interface AppService {
   name: string
   command: string[]
+  /** The one service end users reach (first with a port, or static). */
+  exposed: boolean
+  /** The PORT the supervisor gave it on this start. */
   port?: number
   healthPath?: string
-  restart: 'no' | 'on-failure' | 'always'
+  staticDir?: string
   state: ServiceState
   pid?: number
   restarts: number
@@ -29,22 +34,57 @@ export interface AppService {
   health: ServiceHealth
 }
 
-export type ReleaseStatus = 'uploading' | 'preparing' | 'activating' | 'active' | 'previous' | 'failed'
+/** Deployment statuses as the control plane reports them. */
+export type ReleaseStatus =
+  | 'queued'
+  | 'uploading'
+  | 'building'
+  | 'migrating'
+  | 'starting'
+  | 'live'
+  | 'failed'
+  | 'cancelled'
+  | 'superseded'
+  | 'rolled_back'
+
+export const RELEASE_IN_PROGRESS: ReleaseStatus[] = ['queued', 'uploading', 'building', 'migrating', 'starting']
+
+export interface ReleaseStep {
+  name: string
+  status: 'running' | 'done' | 'failed' | 'skipped'
+  ms?: number
+  detail?: string
+}
 
 export interface AppRelease {
   id: string
-  /** What changed, in a line, as the agent described it when it deployed. */
-  summary?: string
+  number: number
+  /** The agent's message, or what changed when it gave none. */
+  summary: string
   createdAt: string
+  finishedAt: string | null
   by: string
-  files: number
-  bytes: number
-  prepareSeconds?: number
   status: ReleaseStatus
+  /** The deployment serving now. */
+  current: boolean
   error?: string
+  steps: ReleaseStep[]
+  /** The control plane's diff, one line each: "+ variables.LOG_LEVEL = info". */
+  changes: string[]
+  files: number | null
+  bytes: number | null
+  buildSeconds: number | null
+  hasSource: boolean
+  rollback: { possible: boolean; reason?: string }
+  /** Set when this deployment ran migrations: the database state just before them. */
+  restorePoint: string | null
+}
+
+export interface ReleaseLog {
+  id: string
+  status: ReleaseStatus
+  steps: ReleaseStep[]
   log: string[]
-  /** For a deployment that only applied variable changes: what it changed, so it can be reverted. */
-  envChanges?: PendingChange[]
 }
 
 export interface AppActivity {
@@ -58,234 +98,169 @@ export interface AppActivity {
 export interface AppTable {
   schema: string
   name: string
-  rows: number
+  /** Live-row estimate from Postgres statistics; null when unknown. */
+  rows: number | null
 }
 
+/** What the app page needs to name the database; the Database tab loads the rest. */
 export interface AppDatabase {
-  status: 'ready' | 'provisioning' | 'error'
+  status: 'ready'
   engine: string
-  region: string
-  sizeBytes: number
   host: string
   name: string
   user: string
+  branch: string | null
   injectedAs: string
   injectedInto: string[]
-  tables: AppTable[]
-  migrations: { file: string; appliedIn: string; at: string }[]
-  backups: { at: string; bytes: number; manual?: boolean }[]
+}
+
+export interface AppMigration {
+  file: string
+  status: 'applied' | 'pending' | 'changed'
+  deployment?: number | null
+  applied_at?: string
+}
+
+export interface AppBackup {
+  id: string
+  message: string | null
+  ts: string
+  by: string
+}
+
+/** GET /apps/:id/database: connection (never the password), tables, migrations, backups. */
+export interface AppDatabaseDetail {
+  status: 'ready' | 'unknown' | 'none'
+  engine?: string
+  host?: string
+  name?: string
+  user?: string
+  branch?: string
+  sizeBytes?: number | null
+  tables?: AppTable[] | null
+  migrations?: AppMigration[] | null
+  backups?: AppBackup[] | null
+  errors?: string[]
+}
+
+export interface QueryResult {
+  columns: string[]
+  rows: (string | number | boolean | null)[][]
+  row_count?: number
+  elapsed_ms?: number
+  truncated?: boolean
+  total?: number
 }
 
 export interface AppStorage {
   name: string
-  public: boolean
-  sizeBytes: number
-  objects: number
-  envPrefix: string
-  mountPath?: string
-  publicUrlBase?: string
-  keys: { id: string; createdAt: string; lastUsedAt?: string }[]
-}
-
-export interface AppUser {
-  email: string
-  provider: string
-  firstSeen: string
-  lastSeen: string
-  sessions: number
-  blocked?: boolean
-}
-
-/**
- * Small operations behind the App screens' buttons, one endpoint in the mock
- * (POST /apps/:id/actions?env=…). Each is scoped to one environment.
- */
-export type AppActionInput =
-  | { type: 'setVariable'; name: string; value: string }
-  | { type: 'removeVariable'; name: string }
-  | { type: 'importVariables'; values: Record<string, string> }
-  | { type: 'referenceSecret'; name: string; from: string; inject: 'env' | 'placeholder'; hosts?: string[] }
-  | { type: 'createBackup' }
-  | { type: 'attachDatabase' }
-  | { type: 'rotateDatabasePassword' }
-  | { type: 'signOutUser'; email: string }
-  | { type: 'blockUser'; email: string; blocked: boolean }
-  | { type: 'rotateVolumeKey'; bucket: string }
-  | { type: 'setVolumePublic'; bucket: string; public: boolean }
-  | { type: 'deployChanges' }
-
-export type AuthProvider = 'google' | 'github' | 'microsoft' | 'apple' | 'email'
-
-export interface AuthEvent {
-  at: string
-  kind: 'login' | 'callback_mismatch' | 'blocked' | 'signup'
-  provider: AuthProvider
-  email?: string
-  detail: string
-}
-
-/**
- * One way to sign in. OAuth providers run on BoxLite's shared OAuth app
- * ("shared": visitors see BoxLite on the consent screen) or the customer's own
- * ("own"). A custom provider is any OIDC issuer, found by its discovery URL.
- */
-export interface AuthMethod {
-  provider: AuthProvider | 'custom'
-  keys: 'shared' | 'own'
-  clientId?: string
-  /** custom only */
-  key?: string
-  name?: string
-  discoveryUrl?: string
-}
-
-export interface AppSmtp {
-  senderEmail: string
-  senderName: string
-  host: string
-  port: number
-  username: string
-}
-
-export interface AppAuth {
-  methods: AuthMethod[]
-  sessionTtl: string
-  loginUrl: string
-  /** Base callback URL; each provider appends /<provider> (custom: /custom/<key>). */
-  callbackUrl: string
-  allowedEmails: string[]
-  allowSignups: boolean
-  requireVerifiedEmail: boolean
-  /** null = codes are sent from noreply@boxlite.app */
-  smtp: AppSmtp | null
-  users: AppUser[]
-  events: AuthEvent[]
-}
-
-export interface UpdateAuthInput {
-  upsertMethod?: AuthMethod
-  /** methodId() of the method to remove */
-  removeMethod?: string
-  allowedEmails?: string[]
-  sessionTtl?: string
-  allowSignups?: boolean
-  requireVerifiedEmail?: boolean
-  smtp?: AppSmtp | null
-}
-
-export function methodId(method: Pick<AuthMethod, 'provider' | 'key'>): string {
-  return method.provider === 'custom' ? `custom:${method.key}` : method.provider
+  mountPath: string
+  mode: string
+  /** The BoxLite managed volume behind it. */
+  volumeName: string
+  volumeId: string | null
+  sizeBytes: number | null
+  state: string | null
 }
 
 export interface AppSecretRef {
   name: string
   from: string
-  version: number
-  inject: 'env' | 'placeholder'
-  hosts?: string[]
+  inject: 'env'
   usedBy: string[]
+  /** false when the org secret it names no longer exists. */
+  present: boolean
 }
 
-export interface AppCustomDomain {
-  domain: string
-  status: 'verified' | 'pending' | 'invalid'
-  tls: 'issued' | 'pending' | 'none'
-  cname: string
-  addedAt: string
-  lastCheckedAt?: string
-  lastCheck?: string
-}
-
-export interface AppDomains {
-  slug: string
-  /** The built-in <slug>.boxlite.app address every app has from creation. */
-  defaultDomain: string
-  /** Domains the customer brings; optional. */
-  custom: AppCustomDomain[]
-  /** The custom domain the app is presented under (Visit, Overview, the Apps list); null = the built-in one. */
-  primary: string | null
-}
-
-export interface AppPort {
-  port: number
-  visibility: AppVisibility
-  url: string
-  service?: string
-}
-
-export interface AppWorkspace {
-  boxId: string
-  boxName: string
-  boxState: 'running' | 'stopped' | 'starting' | 'error'
-  image: string
-  cpu: number
-  memory: number
-  disk: number
-  region: string
-  ports: AppPort[]
-  env: Record<string, string>
-}
-
-export interface ReachabilityCheck {
-  ok: boolean
+export interface AppProblem {
   summary: string
   detail: string
-  /** A prompt the user can hand to their agent to fix a failing check. */
+  /** A prompt the user can hand to their agent. */
   fixPrompt?: string
 }
 
-export interface AppReachability {
-  published: ReachabilityCheck
-  listening: ReachabilityCheck
-  routed: ReachabilityCheck
+export type AppTab = 'overview' | 'deployments' | 'logs' | 'auth' | 'database' | 'volumes' | 'variables'
+
+/** End-user sign-in of an environment, as the control plane reports it. */
+export interface AppAuthStatus {
+  /** [auth] is in the environment's configuration. */
+  declared: boolean
+  providers: string[]
+  protect: string[]
+  /** The control plane actually signs visitors in. */
+  enforced: boolean
+  note: string | null
 }
 
-export type AppTab = 'overview' | 'deployments' | 'logs' | 'domains' | 'auth' | 'database' | 'volumes' | 'variables'
+export interface AppEndUser {
+  id: string
+  email: string | null
+  name: string | null
+  provider: string
+  firstSeen: string | null
+  lastSeen: string | null
+  sessions: number
+  blocked: boolean
+}
 
-/** 24 hourly buckets, oldest first. Empty arrays mean no traffic yet. */
+export interface AppAuthDetail {
+  status: AppAuthStatus
+  users: AppEndUser[]
+}
+
+/** 24 hourly buckets, oldest first, from the app proxy's access log. */
 export interface AppMetrics {
   requests: number[]
   errors: number[]
   p95Ms: number[]
-  activeUsers: number[]
   /** Requests in the 24 hours before these, for a like-for-like comparison. */
   previousRequests?: number
 }
 
-export type AppLogSource = 'web' | 'worker' | 'deploy' | 'auth' | 'db' | 'system'
+export interface AppLogLine {
+  id: string
+  ts: string
+  /** A service name, or build, schedule, auth, db, access, system. */
+  source: string
+  level: 'info' | 'warn' | 'error'
+  line: string
+  deployment: number | null
+}
 
 export interface AppSummary {
   id: string
   name: string
   slug: string
-  url: string | null
+  /** <control plane>/<app>/, from creation on. */
+  url: string
+  /** Opens the app through the console, which signs the visitor in to a private app first. */
+  openUrl: string
   visibility: AppVisibility
   status: AppStatus
   lastDeploy: { releaseId: string; at: string; by: string } | null
   resources: { database: boolean; storage: number; users: number | null }
   createdAt: string
-  /** How many environments the app has; the row itself shows production. */
+  /** How many environments the app has; the row itself shows main. */
   environments: number
-  /** When production is failing: what is wrong, in a line, so the list can say it. */
+  /** When main is failing: what is wrong, in a line, so the list can say it. */
   attention?: string
 }
 
 /**
- * One environment of an app: its own box, database, user pool, volumes,
- * domains and variables. Deployments are made to an environment; data stays
- * in it across deployments. Every app starts with "production".
+ * One environment of an app: its own Box, database branch, volumes and
+ * variables. Every app starts with "main".
  */
 export interface EnvironmentSummary {
   name: string
   status: AppStatus
-  url: string | null
-  box: string
+  url: string
+  box: string | null
   lastDeploy: { releaseId: string; at: string; by: string } | null
-  /** The environment this one was created from, if any. */
+  /** The environment this one was branched from, if any. */
   from: string | null
 }
 
-/** What the live URL showed when the proxy last captured it, after a release went live. */
+/** Kept for the preview component; the control plane does not capture screenshots yet. */
 export interface AppPreview {
   src: string
   capturedAt: string
@@ -295,43 +270,60 @@ export interface AppPreview {
 export interface AppDetail extends Omit<AppSummary, 'environments'> {
   /** Which environment this record describes. Everything below is scoped to it. */
   environment: string
-  /** The environment this one was created from; production has none. */
-  createdFrom?: string | null
-  image: string
-  region: string
+  createdFrom: string | null
+  runtime: { image: string; size: string; cpus: number | null; memoryMib: number | null } | null
+  box: { id: string; state: string } | null
   services: AppService[]
   activeRelease: string | null
-  preview: AppPreview | null
   releases: AppRelease[]
   activity: AppActivity[]
   database: AppDatabase | null
   storages: AppStorage[]
-  auth: AppAuth
   secrets: AppSecretRef[]
-  domains: AppDomains
-  workspace: AppWorkspace
-  reachability: AppReachability
-  metrics: AppMetrics
-  logs: Partial<Record<AppLogSource, string[]>>
+  /** [variables] of the latest configuration; null before the first apply or deploy. */
+  variables: Record<string, string> | null
+  /** Set by BoxLite at runtime; DATABASE_URL is shown without its password. */
+  platformVariables: { name: string; value: string; kind: string }[]
+  problems: AppProblem[]
+  /** Why the environment is quiet or busy, in a line (asleep, deploying #4 · build). */
+  statusDetail: string | null
+  /** null: no traffic recorded in the last 48 hours. */
+  metrics: AppMetrics | null
+  /** The handoff prompt with the App key masked; the full key is shown only once. */
   handoffPrompt: string
-  /**
-   * How the saved variables differ from the ones the running deployment uses. Net: setting a value back to its
-   * live one removes the entry. They reach the app on the next deployment.
-   */
-  pendingChanges?: PendingChange[]
+  key: { last4: string; createdAt: string } | null
+  /** online: set in the console, wins over boxlite.toml. */
+  accessSource: 'manifest' | 'online'
+  specVersion: number | null
+  auth: AppAuthStatus
 }
 
-export interface PendingChange {
-  name: string
-  change: 'added' | 'changed' | 'removed'
-  /** The value the running deployment uses; secrets are described, never shown. */
-  live?: string
-  secret?: boolean
-}
-
-export const describeChange = (c: PendingChange) => `${c.name} ${c.change}`
+/**
+ * Small operations behind the App screens' buttons (POST /apps/:id/actions?env=…).
+ * Variable and secret changes each create one deployment.
+ */
+export type AppActionInput =
+  | { type: 'setVariable'; name: string; value: string }
+  | { type: 'removeVariable'; name: string }
+  | { type: 'importVariables'; values: Record<string, string> }
+  | { type: 'referenceSecret'; name: string; from: string }
+  | { type: 'removeSecret'; name: string }
+  | { type: 'createBackup'; message?: string }
 
 /** Only a name: runtime, services and resources are the agent's to declare in boxlite.toml. */
 export interface CreateAppInput {
   name: string
+}
+
+/** POST /apps: the key exists in clear text only in this response. */
+export interface CreatedApp {
+  app: AppDetail
+  key: string
+  prompt: string
+}
+
+export interface ConsoleSession {
+  user: string
+  controlPlane: string
+  reservedNames: string[]
 }

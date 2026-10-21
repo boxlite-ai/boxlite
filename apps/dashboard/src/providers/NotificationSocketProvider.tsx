@@ -9,6 +9,7 @@ import { ReactNode, useEffect, useState } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { NotificationSocketContext } from '@/contexts/NotificationSocketContext'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { isAppsConsole } from '@/lib/apps/feature'
 
 type Props = {
   children: ReactNode
@@ -31,7 +32,8 @@ export function NotificationSocketProvider(props: Props) {
 
     setNotificationSocket(socket)
 
-    if (user) {
+    // The Apps console is served by the Micro-cloud control plane, which has no notification socket.
+    if (user && !isAppsConsole()) {
       const token = user.access_token
       socket.auth = { token }
       socket.connect()

@@ -4,7 +4,7 @@
  */
 
 import { getRelativeTimeString } from '@/lib/utils'
-import type { AppStatus, AppVisibility } from './types'
+import type { AppStatus, AppVisibility, ReleaseStatus } from './types'
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -40,11 +40,9 @@ export function appStatusOf(status: AppStatus): { label: string; color: string }
     case 'live':
       return { label: 'Running', color: STATUS.running }
     case 'building':
-      return { label: 'Building', color: STATUS.idle }
+      return { label: 'Deploying', color: STATUS.idle }
     case 'degraded':
       return { label: 'Degraded', color: STATUS.idle }
-    case 'rebuilding':
-      return { label: 'Rebuilding', color: STATUS.idle }
     case 'sleeping':
       return { label: 'Sleeping', color: STATUS.stopped }
     case 'failed':
@@ -55,20 +53,46 @@ export function appStatusOf(status: AppStatus): { label: string; color: string }
   }
 }
 
+/** A deployment's status as the control plane reports it. */
+export function releaseStatusOf(status: ReleaseStatus): { label: string; color: string } {
+  switch (status) {
+    case 'live':
+      return { label: 'Live', color: STATUS.running }
+    case 'failed':
+      return { label: 'Failed', color: STATUS.error }
+    case 'superseded':
+      return { label: 'Superseded', color: STATUS.dim }
+    case 'rolled_back':
+      return { label: 'Rolled back', color: STATUS.dim }
+    case 'cancelled':
+      return { label: 'Cancelled', color: STATUS.dim }
+    default:
+      return { label: capitalize(status), color: STATUS.idle }
+  }
+}
+
 export const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1)
 
 export const VISIBILITY_LABEL: Record<AppVisibility, string> = {
   private: 'private',
   org: 'org members',
-  users: 'signed-in users',
   public: 'public',
 }
 
 export const VISIBILITY_GLYPH: Record<AppVisibility, string> = {
   private: '○',
   org: '◐',
-  users: '◉',
   public: '◎',
 }
 
-export const VISIBILITY_ORDER: AppVisibility[] = ['private', 'org', 'users', 'public']
+export const VISIBILITY_ORDER: AppVisibility[] = ['private', 'org', 'public']
+
+/** Control-plane rule for App and environment names (contracts §0 plus the proxy's limits). */
+export function nameProblem(name: string, reserved: string[] = []): string | null {
+  if (!/^[a-z][a-z0-9-]{1,30}$/.test(name))
+    return 'Use 2–31 lowercase letters, digits and dashes, starting with a letter.'
+  if (name.includes('--')) return 'Two dashes in a row separate app and environment in URLs.'
+  if (name.endsWith('-')) return 'It cannot end with a dash.'
+  if (reserved.includes(name)) return `${name} is reserved by the control plane.`
+  return null
+}

@@ -17,13 +17,13 @@ export function AppTable({
   loading,
   onRowClick,
   onDelete,
-  onOpenQuickstart,
+  onCreate,
 }: {
   apps: AppSummary[]
   loading: boolean
   onRowClick: (app: AppSummary) => void
   onDelete: (app: AppSummary) => void
-  onOpenQuickstart?: () => void
+  onCreate?: () => void
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -39,16 +39,15 @@ export function AppTable({
           <BoxCube state="empty" size={56} className="mb-4 text-muted-foreground" />
           <div className="font-mono text-body font-semibold text-foreground">No apps yet</div>
           <div className="mt-2 max-w-sm font-mono text-meta text-muted-foreground">
-            Your agent creates one with <span className="font-mono">boxlite app create</span>, or hand it the prompt in
-            Quickstart.
+            Create one with a name, then paste its prompt into your coding agent. The agent builds and deploys it.
           </div>
-          {onOpenQuickstart && (
+          {onCreate && (
             <button
               type="button"
-              onClick={onOpenQuickstart}
+              onClick={onCreate}
               className="mt-4 border border-border px-[13px] py-[6px] font-mono text-[11px] transition-colors hover:border-brand"
             >
-              Open Quickstart →
+              New App →
             </button>
           )}
         </div>
@@ -79,25 +78,16 @@ export function AppTable({
                 />
                 <span className="truncate font-mono font-medium text-foreground">{app.name}</span>
                 {app.environments > 1 && (
-                  <span
-                    className="shrink-0 font-mono text-[11px] text-muted-foreground"
-                    title="The row shows production"
-                  >
+                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground" title="The row shows main">
                     {app.environments} environments
                   </span>
                 )}
               </span>
               <span className="flex min-w-0 flex-col font-mono text-[12px]">
-                {app.url ? (
-                  <>
-                    <span className="truncate text-foreground">{app.url.replace(/^https:\/\//, '')}</span>
-                    <span className="text-[11px] text-muted-foreground">
-                      {capitalize(VISIBILITY_LABEL[app.visibility])}
-                    </span>
-                  </>
-                ) : (
-                  <span className="text-muted-foreground">Not published</span>
-                )}
+                <span className="truncate text-foreground">{app.url.replace(/^https?:\/\//, '')}</span>
+                <span className="text-[11px] text-muted-foreground">
+                  {capitalize(VISIBILITY_LABEL[app.visibility])}
+                </span>
               </span>
               <span className="flex min-w-0 flex-col gap-0.5">
                 <StatusBadge label={status.label} color={status.color} caps />
@@ -119,9 +109,9 @@ export function AppTable({
               </span>
               <span onClick={(e) => e.stopPropagation()}>
                 <HoverActions>
-                  {app.url && (
+                  {app.status !== 'draft' && (
                     <a
-                      href={app.url}
+                      href={app.openUrl}
                       target="_blank"
                       rel="noreferrer"
                       title="Open app"

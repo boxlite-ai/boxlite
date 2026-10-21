@@ -20,7 +20,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { markJustLoggedOut } from '@/lib/auth-session'
 import { ONBOARDING_OPEN_EVENT } from '@/lib/onboarding-progress'
-import { isAppsPreviewEnabled } from '@/lib/apps/feature'
+import { consoleLogoutUrl, isAppsConsole, isAppsPreviewEnabled } from '@/lib/apps/feature'
 import { cn } from '@/lib/utils'
 import {
   BookOpen,
@@ -113,9 +113,14 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
 
   // Apps leads the nav once the surface exists: the default call to action is
   // "put the app online", and Boxes stays for the sandbox users next to it.
-  const primaryItems: NavItem[] = isAppsPreviewEnabled()
-    ? [{ label: 'Apps', path: RoutePath.APPS }, ...PRIMARY_NAV_ITEMS]
-    : PRIMARY_NAV_ITEMS
+  // The standalone Apps console (served by the Micro-cloud control plane) is
+  // Apps only: the rest of the dashboard has no backend there.
+  const consoleMode = isAppsConsole()
+  const primaryItems: NavItem[] = consoleMode
+    ? [{ label: 'Apps', path: RoutePath.APPS }]
+    : isAppsPreviewEnabled()
+      ? [{ label: 'Apps', path: RoutePath.APPS }, ...PRIMARY_NAV_ITEMS]
+      : PRIMARY_NAV_ITEMS
 
   const openOnboardingGuide = useCallback(() => {
     const event = new Event(ONBOARDING_OPEN_EVENT, { cancelable: true })
@@ -127,12 +132,17 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   }, [navigate])
 
   const handleSignOut = () => {
+    if (consoleMode) {
+      window.location.assign(consoleLogoutUrl())
+      return
+    }
     posthog?.reset()
     markJustLoggedOut()
     signoutRedirect()
   }
 
-  const userName = user?.profile.name || user?.profile.email || 'Profile'
+  // The console's prototype login has one identity, the control plane's admin.
+  const userName = consoleMode ? 'admin' : user?.profile.name || user?.profile.email || 'Profile'
   const initials =
     userName
       .split(/\s+/)
@@ -165,7 +175,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
     >
       {/* brand */}
       <Link
-        to={RoutePath.BOXES}
+        to={consoleMode ? RoutePath.APPS : RoutePath.BOXES}
         className="flex shrink-0 items-center border-r border-border px-[30px] text-foreground"
         aria-label="BoxLite home"
       >
@@ -185,24 +195,28 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
       <div className="flex-1" />
 
       {/* api keys */}
-      <Link
-        to={RoutePath.KEYS}
-        className={navCellClass(pathname.startsWith(RoutePath.KEYS), 'hidden border-l border-border lg:inline-flex')}
-      >
-        <KeyRound className="size-3.5" />
-        API Keys
-      </Link>
+      {!consoleMode && (
+        <Link
+          to={RoutePath.KEYS}
+          className={navCellClass(pathname.startsWith(RoutePath.KEYS), 'hidden border-l border-border lg:inline-flex')}
+        >
+          <KeyRound className="size-3.5" />
+          API Keys
+        </Link>
+      )}
 
       {/* onboarding guide */}
-      <button
-        type="button"
-        onClick={openOnboardingGuide}
-        aria-label="Open onboarding guide"
-        className="hidden h-full items-center gap-2 border-l border-border px-[18px] text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground lg:inline-flex"
-      >
-        <BookOpen className="size-3.5" />
-        <span className="hidden sm:inline">Quickstart</span>
-      </button>
+      {!consoleMode && (
+        <button
+          type="button"
+          onClick={openOnboardingGuide}
+          aria-label="Open onboarding guide"
+          className="hidden h-full items-center gap-2 border-l border-border px-[18px] text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground lg:inline-flex"
+        >
+          <BookOpen className="size-3.5" />
+          <span className="hidden sm:inline">Quickstart</span>
+        </button>
+      )}
 
       {/* profile menu (organization switcher tucked inside) */}
       <DropdownMenu>
@@ -211,7 +225,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
           className="inline-flex h-full items-center gap-2 border-l border-border px-4 text-[13px] font-medium text-foreground outline-none transition-colors hover:bg-card data-[state=open]:bg-card sm:px-5"
         >
           <span className="flex size-[23px] shrink-0 items-center justify-center overflow-hidden bg-brand text-[9px] font-extrabold text-white">
-            {user?.profile.picture ? (
+            {!consoleMode && user?.profile.picture ? (
               <img src={user.profile.picture} alt={userName} className="h-full w-full object-cover" />
             ) : (
               initials
@@ -223,7 +237,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
         <DropdownMenuContent align="end" className="min-w-[18rem]">
           <DropdownMenuLabel className="flex flex-col gap-0.5">
             <span className="truncate text-[13px] font-semibold text-foreground">{userName}</span>
-            {user?.profile.email && user.profile.email !== userName && (
+            {!consoleMode && user?.profile.email && user.profile.email !== userName && (
               <span className="truncate font-mono text-[11px] font-normal text-muted-foreground">
                 {user.profile.email}
               </span>
@@ -232,7 +246,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
           <DropdownMenuSeparator />
           <ThemeMenuItems theme={theme} setTheme={setTheme} />
           <DropdownMenuSeparator />
-          {selectedOrganization && (
+          {selectedOrganization && !consoleMode && (
             <DropdownMenuItem asChild className="cursor-pointer">
               <Link to={RoutePath.SETTINGS}>
                 <Building2 className="size-4" />
@@ -274,16 +288,20 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
               <Link to={item.path}>{item.label}</Link>
             </DropdownMenuItem>
           ))}
-          <DropdownMenuItem asChild className="cursor-pointer">
-            <Link to={RoutePath.KEYS}>
-              <KeyRound className="size-4" />
-              API Keys
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem className="cursor-pointer" onClick={openOnboardingGuide}>
-            <BookOpen className="size-4" />
-            Quickstart
-          </DropdownMenuItem>
+          {!consoleMode && (
+            <>
+              <DropdownMenuItem asChild className="cursor-pointer">
+                <Link to={RoutePath.KEYS}>
+                  <KeyRound className="size-4" />
+                  API Keys
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem className="cursor-pointer" onClick={openOnboardingGuide}>
+                <BookOpen className="size-4" />
+                Quickstart
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </header>

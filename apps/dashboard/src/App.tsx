@@ -25,7 +25,7 @@ import {
 } from './components/ui/dialog'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from './constants/ExternalLinks'
 import { RoutePath, getRouteSubPath } from './enums/RoutePath'
-import { isAppsPreviewEnabled } from './lib/apps/feature'
+import { isAppsConsole, isAppsPreviewEnabled } from './lib/apps/feature'
 import { useConfig } from './hooks/useConfig'
 import Dashboard from './pages/Dashboard'
 import LandingPage from './pages/LandingPage'
@@ -94,7 +94,8 @@ function App() {
   const location = useLocation()
   const posthog = usePostHog()
   const { error: authError, isAuthenticated, user, removeUser } = useAuth()
-  const boxesRedirect = `${RoutePath.BOXES}${location.search}`
+  // The standalone Apps console lands on Apps; the dashboard lands on Boxes.
+  const boxesRedirect = isAppsConsole() ? RoutePath.APPS : `${RoutePath.BOXES}${location.search}`
 
   useEffect(() => {
     if (isAuthenticated && user && posthog?.get_distinct_id() !== user.profile.sub) {

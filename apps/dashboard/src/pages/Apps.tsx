@@ -23,7 +23,6 @@ import { useAppMutation } from '@/hooks/mutations/useAppMutations'
 import { useAppsQuery } from '@/hooks/queries/useAppsQuery'
 import type { AppSummary } from '@/lib/apps/types'
 import { handleApiError } from '@/lib/error-handling'
-import { ONBOARDING_OPEN_EVENT } from '@/lib/onboarding-progress'
 import { useMemo, useState } from 'react'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -48,12 +47,6 @@ const Apps: React.FC = () => {
   const live = apps.filter((app) => app.status === 'live' || app.status === 'degraded').length
   const sleeping = apps.filter((app) => app.status === 'sleeping').length
   const attention = apps.filter((app) => app.status === 'failed').length
-
-  const openQuickstart = () => {
-    const event = new Event(ONBOARDING_OPEN_EVENT, { cancelable: true })
-    window.dispatchEvent(event)
-    if (!event.defaultPrevented) navigate(`${RoutePath.BOXES}?onboarding=1`)
-  }
 
   return (
     <div className="flex min-h-[calc(100svh-60px)] flex-col gap-[22px] px-4 pb-[22px] pt-7 sm:px-6 lg:px-[40px]">
@@ -87,16 +80,13 @@ const Apps: React.FC = () => {
         loading={isLoading}
         onRowClick={(app) => navigate(generatePath(RoutePath.APP_DETAILS, { appId: app.id }))}
         onDelete={setToDelete}
-        onOpenQuickstart={openQuickstart}
+        onCreate={() => setCreateOpen(true)}
       />
 
       <CreateAppDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={(app) => {
-          toast.success(`${app.name} is ready for your agent`)
-          navigate(`${generatePath(RoutePath.APP_DETAILS, { appId: app.id })}?tab=overview`)
-        }}
+        onOpen={(app) => navigate(`${generatePath(RoutePath.APP_DETAILS, { appId: app.id })}?tab=overview`)}
       />
 
       <AlertDialog open={!!toDelete} onOpenChange={(open) => !open && setToDelete(null)}>
@@ -104,7 +94,8 @@ const Apps: React.FC = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {toDelete?.name}?</AlertDialogTitle>
             <AlertDialogDescription className="text-[12px]">
-              The box and the URL go away now. Database and volumes are kept.
+              Every environment goes now: its Box, URL, database, volumes, deployments and logs. The App key stops
+              working. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -26,7 +26,13 @@ async function enableMocking() {
   }
 
   const { worker } = await import('./mocks/browser')
-  return worker.start()
+  // Served under a base path (the Apps console lives at /console/), the worker
+  // script sits there too. Requests MSW has no handler for (the console API)
+  // go to the network untouched.
+  return worker.start({
+    serviceWorker: { url: `${import.meta.env.BASE_URL}mockServiceWorker.js` },
+    onUnhandledRequest: 'bypass',
+  })
 }
 
 enableMocking().then(() =>
@@ -37,7 +43,7 @@ enableMocking().then(() =>
           <ThemeProvider>
             <Suspense fallback={<LoadingFallback />}>
               <ConfigProvider>
-                <BrowserRouter>
+                <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '')}>
                   <PostHogProviderWrapper>
                     <NuqsAdapter>
                       <App />

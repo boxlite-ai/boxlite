@@ -13,6 +13,8 @@ declare module '*.png' {
 
 interface ImportMetaEnv {
   readonly VITE_API_URL: string
+  /** The Micro-cloud console API, e.g. /console/api; set only in the Apps console build. */
+  readonly VITE_APPS_API_URL?: string
 }
 
 interface ImportMeta {

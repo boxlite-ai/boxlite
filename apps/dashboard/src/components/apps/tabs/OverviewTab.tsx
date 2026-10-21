@@ -4,12 +4,10 @@
  */
 
 import { ChevronRight } from '@/components/ui/icon'
-import { RoutePath } from '@/enums/RoutePath'
 import { appStatusOf, relTime, STATUS } from '@/lib/apps/format'
-import type { AppDetail, AppRelease, AppService, AppTab } from '@/lib/apps/types'
+import type { AppDetail, AppProblem, AppRelease, AppService, AppTab } from '@/lib/apps/types'
 import { cn } from '@/lib/utils'
 import { useState } from 'react'
-import { Link, generatePath } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AgentHandoffPanel } from '../AgentHandoffPanel'
 import { HandoffToAgent } from '../HandoffToAgent'
@@ -26,7 +24,7 @@ import {
   StatusBadge,
 } from '../spec'
 import { ToolButton } from '../SubNav'
-import { LivePreview, MetricStrip } from '../viz'
+import { MetricStrip } from '../viz'
 
 // Overview answers three things, in this order: does anything need you, what
 // is live right now, and how it is doing. Identity (app id, image, created) is
@@ -52,21 +50,20 @@ function FailurePanel({
   onOpenLogs,
 }: {
   app: AppDetail
-  failing: ('published' | 'listening' | 'routed')[]
+  failing: AppProblem[]
   previous: AppRelease | null
   onRollback: (release: AppRelease) => void
   onOpenLogs: () => void
 }) {
   const prompt = failing
-    .map((key) => app.reachability[key].fixPrompt)
+    .map((problem) => problem.fixPrompt)
     .filter(Boolean)
     .join('\n\n')
   return (
     <section className="border border-destructive/40 bg-destructive/[0.04] px-5 py-4">
-      {failing.map((key) => {
-        const check = app.reachability[key]
+      {failing.map((check) => {
         return (
-          <div key={key} className="flex flex-col gap-1 font-mono">
+          <div key={check.summary} className="flex flex-col gap-1 font-mono">
             <StatusBadge label={check.summary} color={STATUS.error} className="text-body font-semibold" />
             <span className="pl-[15px] text-[13px] text-muted-foreground">{check.detail}</span>
           </div>
@@ -97,47 +94,35 @@ function FailurePanel({
 
 /** A new environment is not a broken one: nothing red, one task, one action. */
 
-/** What is live: the picture, the address, the deployment and what it changed. */
+/** What is live: the address, the deployment and what it changed. */
 function LiveDeployment({
   app,
   active,
-  failing,
   onGoTo,
 }: {
   app: AppDetail
   active: AppRelease | null
-  failing: boolean
   onGoTo: (tab: AppTab, section?: string) => void
 }) {
   const runtime = appStatusOf(app.status)
-  const boxPath = generatePath(RoutePath.BOX_DETAILS, { boxId: app.workspace.boxId })
-  // A failed app gets no screenshot: the last good picture would say all is well.
-  const showPreview = !!app.preview && !failing
   return (
-    <section className={cn('grid gap-x-10 gap-y-6', showPreview && 'lg:grid-cols-[340px_minmax(0,1fr)]')}>
-      {showPreview && app.preview && (
-        <LivePreview preview={app.preview} liveRelease={app.activeRelease} href={app.url} name={app.name} />
-      )}
+    <section className="grid gap-x-10 gap-y-6">
       <div className="flex min-w-0 flex-col gap-5 py-1">
         <div className="flex flex-col gap-2">
-          {app.url ? (
-            <span className="inline-flex max-w-full items-center gap-2">
-              <a
-                href={app.url}
-                target="_blank"
-                rel="noreferrer"
-                className="truncate font-mono text-em font-semibold text-foreground hover:underline"
-              >
-                {app.url.replace(/^https:\/\//, '')}
-              </a>
-              <CopyIconButton text={app.url} />
-            </span>
-          ) : (
-            <span className="font-mono text-em font-semibold text-muted-foreground">Not published</span>
-          )}
-          {/* The header already states the runtime; only a quiet state (asleep, building) gets a line of why. */}
-          {!failing && app.status !== 'live' && (
-            <StatusBadge label={app.reachability.listening.detail} color={runtime.color} className="font-normal" />
+          <span className="inline-flex max-w-full items-center gap-2">
+            <a
+              href={app.openUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="truncate font-mono text-em font-semibold text-foreground hover:underline"
+            >
+              {app.url.replace(/^https?:\/\//, '')}
+            </a>
+            <CopyIconButton text={app.url} />
+          </span>
+          {/* The header already states the runtime; only a quiet state (asleep, deploying) gets a line of why. */}
+          {app.status !== 'live' && app.statusDetail && (
+            <StatusBadge label={app.statusDetail} color={runtime.color} className="font-normal" />
           )}
         </div>
 
@@ -149,27 +134,36 @@ function LiveDeployment({
               className="flex min-w-0 items-baseline gap-2 text-left text-body hover:underline"
             >
               <span className="font-semibold text-foreground">{active.id}</span>
-              <span className="truncate text-foreground">{active.summary ?? 'Deployment'}</span>
+              <span className="truncate text-foreground">{active.summary}</span>
             </button>
             <span className="text-[12px] text-muted-foreground">
-              {relTime(active.createdAt)} by {active.by} ·{' '}
-              <Link to={boxPath} className="hover:text-foreground hover:underline">
-                box {app.workspace.boxName}
-              </Link>
+              {relTime(active.createdAt)} by {active.by}
+              {app.box ? ` · box ${app.box.id}` : ''}
             </span>
           </div>
         )}
 
         <Disclosure label="Details">
           <div className="max-w-[560px]">
-            <SpecRow label="App id">
+            <SpecRow label="App">
               <span className="inline-flex items-center gap-2">
-                {app.id} <CopyIconButton text={app.id} title="Copy app id" />
+                {app.name} <CopyIconButton text={app.name} title="Copy app name" />
               </span>
             </SpecRow>
-            <SpecRow label="Runtime">
-              {app.image} · {app.region}
-            </SpecRow>
+            {app.runtime && (
+              <SpecRow label="Runtime">
+                {app.runtime.image} · {app.runtime.size}
+                {app.runtime.cpus !== null && app.runtime.memoryMib !== null
+                  ? ` (${app.runtime.cpus} CPU, ${app.runtime.memoryMib / 1024} GB)`
+                  : ''}
+              </SpecRow>
+            )}
+            {app.box && (
+              <SpecRow label="Box">
+                {app.box.id} · {app.box.state}
+              </SpecRow>
+            )}
+            {app.specVersion !== null && <SpecRow label="Configuration">version {app.specVersion}</SpecRow>}
             <SpecRow label="Created">
               <span title={new Date(app.createdAt).toLocaleString()}>{relTime(app.createdAt)}</span>
             </SpecRow>
@@ -224,6 +218,7 @@ function ServiceRow({
           />
           <span className="font-semibold text-foreground">{service.name}</span>
           {service.port && <span className="text-muted-foreground">:{service.port}</span>}
+          {service.exposed && <span className="text-[11px] text-muted-foreground">serves the URL</span>}
         </span>
         <StatusBadge label={state.label} color={state.color} caps />
         <span className={cn('truncate', health.bad ? 'text-destructive' : 'text-muted-foreground')}>{health.text}</span>
@@ -237,7 +232,7 @@ function ServiceRow({
       </div>
       {open && (
         <div className="max-w-[640px] px-3 pb-3 pl-9">
-          <SpecRow label="Command">{service.command.join(' ')}</SpecRow>
+          <SpecRow label={service.staticDir ? 'Serves' : 'Command'}>{service.command.join(' ') || '—'}</SpecRow>
           <SpecRow label="Process">
             pid {service.pid ?? '—'} · {service.restarts} restart{service.restarts === 1 ? '' : 's'}
           </SpecRow>
@@ -264,15 +259,16 @@ export function OverviewTab({
   restarting: string | null
 }) {
   const active = app.releases.find((r) => r.id === app.activeRelease) ?? null
-  const previous = app.releases.find((r) => r.status === 'previous') ?? null
-  const failing = (['published', 'listening', 'routed'] as const).filter((k) => !app.reachability[k].ok)
+  // The newest earlier deployment that can still go live again.
+  const previous = app.releases.find((r) => !r.current && r.rollback.possible) ?? null
+  const failing = app.problems
   const m = app.metrics
-  const total = sum(m.requests)
+  const total = m ? sum(m.requests) : 0
   const delta =
-    m.previousRequests && m.previousRequests > 0
+    m?.previousRequests && m.previousRequests > 0
       ? Math.round(((total - m.previousRequests) / m.previousRequests) * 100)
       : null
-  const errTotal = sum(m.errors)
+  const errTotal = m ? sum(m.errors) : 0
   const errRate = total ? (errTotal / total) * 100 : 0
 
   if (app.status === 'draft') {
@@ -291,7 +287,7 @@ export function OverviewTab({
         />
       )}
 
-      <LiveDeployment app={app} active={active} failing={failing.length > 0} onGoTo={onGoTo} />
+      <LiveDeployment app={app} active={active} onGoTo={onGoTo} />
 
       <section>
         <SectionTitle
@@ -304,8 +300,8 @@ export function OverviewTab({
         />
         {app.services.length === 0 ? (
           <p className="font-mono text-[13px] text-muted-foreground">
-            Nothing declared. A [service.web] section in boxlite.toml names the command, port and health path; the next
-            deployment starts it.
+            Nothing declared. A [[service]] in boxlite.toml names the command, port and health path; the next deployment
+            starts it.
           </p>
         ) : (
           <div>
@@ -322,7 +318,8 @@ export function OverviewTab({
         )}
       </section>
 
-      {m.requests.length > 0 && (
+      {/* From the app proxy's access log; hidden until the URL has had traffic. */}
+      {m && (
         <section>
           <SectionTitle title="Last 24 hours" />
           <MetricStrip
@@ -344,14 +341,9 @@ export function OverviewTab({
                 label: 'p95 latency',
                 value: String(last(m.p95Ms)),
                 unit: 'ms',
+                caption: 'this hour, to first byte',
                 tone: last(m.p95Ms) > 500 ? 'bad' : 'neutral',
                 data: m.p95Ms,
-              },
-              {
-                label: 'Signed-in users',
-                value: String(last(m.activeUsers)),
-                // Sessions are always measured (login is always on), so no data means zero, not unknown.
-                data: m.activeUsers.length ? m.activeUsers : Array.from({ length: 24 }, () => 0),
               },
             ]}
           />

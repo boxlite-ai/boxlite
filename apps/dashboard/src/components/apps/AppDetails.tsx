@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,7 +10,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import {
   ArrowUpRight,
@@ -23,7 +21,6 @@ import {
   Database,
   FileText,
   Folder,
-  Globe,
   LayoutDashboard,
   MoreVertical,
   RefreshCw,
@@ -33,35 +30,33 @@ import {
 import { RoutePath } from '@/enums/RoutePath'
 import { useAppMutation } from '@/hooks/mutations/useAppMutations'
 import { useAppEnv, useAppQuery } from '@/hooks/queries/useAppsQuery'
+import { httpStatusOf } from '@/lib/apps/client'
 import { appStatusOf, capitalize, VISIBILITY_LABEL, VISIBILITY_ORDER } from '@/lib/apps/format'
 import type { AppDetail, AppRelease, AppTab, AppVisibility } from '@/lib/apps/types'
 import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
-import { isAxiosError } from 'axios'
 import { useState, type ReactNode } from 'react'
-import { Link, generatePath, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { EnvironmentSwitcher } from './EnvironmentSwitcher'
 import { useConfirm } from './confirm'
-import { FlatButton, StatusBadge, DIALOG_FRAME } from './spec'
+import { StatusBadge } from './spec'
 import { Tag } from './viz'
 import { DatabaseTab } from './tabs/DatabaseTab'
-import { DomainsTab } from './tabs/DomainsTab'
+import { AuthTab } from './tabs/AuthTab'
 import { DeploymentsTab } from './tabs/DeploymentsTab'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { PendingChanges } from './PendingChanges'
 import { LogsTab } from './tabs/LogsTab'
 import { OverviewTab } from './tabs/OverviewTab'
-import { UsersTab } from './tabs/UsersTab'
 import { VariablesTab } from './tabs/VariablesTab'
 import { VolumesTab } from './tabs/VolumesTab'
 
 // Each tab carries the console's pixel glyph for what it holds, so the strip can be scanned by shape.
+// Domains is not offered: the control plane serves <cp>/<app>/ only.
 const TABS: { id: AppTab; label: string; icon: LucideIcon }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'deployments', label: 'Deployments', icon: CloudUpload },
   { id: 'logs', label: 'Logs', icon: FileText },
-  { id: 'domains', label: 'Domains', icon: Globe },
   { id: 'auth', label: 'Auth', icon: ShieldCheck },
   { id: 'database', label: 'Database', icon: Database },
   { id: 'volumes', label: 'Volumes', icon: Folder },
@@ -86,21 +81,17 @@ export default function AppDetails() {
 
   const { data: app, isLoading, isError, error, refetch, isFetching } = useAppQuery(appId)
   const mutation = useAppMutation()
-  const [renameOpen, setRenameOpen] = useState(false)
   const [confirm, confirmElement] = useConfirm()
-  // What the environment is doing right now, said in the header while it happens.
+  // What the console asked for right now (restart, access), said in the header while it happens.
   const [inFlight, setInFlight] = useState<string | null>(null)
   const [restarting, setRestarting] = useState<string | null>(null)
   const [rollingBack, setRollingBack] = useState<string | null>(null)
-  const [deploying, setDeploying] = useState(false)
-  // The deployment being created right now, listed on Deployments before it finishes.
-  const [building, setBuilding] = useState<{ id: string; stage: string; summary: string } | null>(null)
 
   const env = useAppEnv()
   // Switching environment keeps the tab; the screen inside it starts fresh.
   const switchEnv = (next: string) => {
     const params = new URLSearchParams(searchParams)
-    if (next === 'production') params.delete('env')
+    if (next === 'main') params.delete('env')
     else params.set('env', next)
     params.delete('section')
     setSearchParams(params)
@@ -138,17 +129,13 @@ export default function AppDetails() {
   const publish = async (visibility: AppVisibility) => {
     if (!app) return
     if (visibility === 'public') {
-      const ports =
-        app.services
-          .filter((s) => s.port)
-          .map((s) => `${s.name} :${s.port}`)
-          .join(', ') || 'none yet'
+      const exposed = app.services.find((s) => s.exposed)
       const ok = await confirm({
         title: `Open ${app.name} · ${app.environment} to anyone?`,
         body: (
           <>
-            Only the published service port goes public ({ports}). The workspace, terminal and private ports stay
-            private, and visitors no longer have to sign in.
+            Anyone with {app.url} can open it without signing in{exposed ? ` (it serves ${exposed.name})` : ''}. The
+            setting wins over access in boxlite.toml until you change it here again.
           </>
         ),
         confirmLabel: 'Make public',
@@ -165,27 +152,20 @@ export default function AppDetails() {
 
   const rollback = async (target: AppRelease) => {
     if (!app) return
-    // Migrations that ran after the deployment being rolled back to: its code predates them.
-    const later = (app.database?.migrations ?? []).filter((m) => new Date(m.at) > new Date(target.createdAt))
+    // Deployments after the target that ran migrations: its code predates their schema.
+    const later = app.releases.filter((r) => r.number > target.number && r.restorePoint)
     const ok = await confirm({
       title: `Roll back ${app.environment} to ${target.id}?`,
       body: (
         <span className="flex flex-col gap-2">
           <span>
-            {target.id} &ldquo;{target.summary ?? 'deployment'}&rdquo; goes live again and{' '}
-            {app.services.map((s) => s.name).join(', ') || 'the services'} restart. Only the code changes: variables
-            keep their live values, and database rows and files stay as they are (to restore data, use a backup in
-            Database).
+            A new deployment puts {target.id} &ldquo;{target.summary}&rdquo; back live: its code and its configuration
+            (variables, services). The database and volumes stay as they are.
           </span>
-          {(app.pendingChanges?.length ?? 0) > 0 && (
-            <span>
-              Your {app.pendingChanges?.length} saved variable{' '}
-              {app.pendingChanges?.length === 1 ? 'change stays' : 'changes stay'} pending.
-            </span>
-          )}
           {later.length > 0 && (
             <span className="text-warning">
-              {later.map((m) => m.file).join(', ')} ran after {target.id}. Its code may not match the current schema.
+              {later.map((r) => r.id).join(', ')} ran migrations after {target.id}. Its code may not match the current
+              schema.
             </span>
           )}
         </span>
@@ -196,87 +176,11 @@ export default function AppDetails() {
     setRollingBack(target.id)
     await run(
       { kind: 'activate', appId: app.id, releaseId: target.id },
-      `${app.environment} is back on ${target.id}`,
+      `Rolling back ${app.environment} to ${target.id}`,
       'Rollback failed',
-      `Rolling back to ${target.id}…`,
+      `Starting a rollback to ${target.id}…`,
     )
     setRollingBack(null)
-  }
-
-  const deployChanges = async () => {
-    if (!app?.pendingChanges?.length || deploying) return
-    const next = `#${Math.max(0, ...app.releases.map((r) => Number(r.id.slice(1)) || 0)) + 1}`
-    // Say which step the deployment is on, so a slow one is diagnosable while it runs.
-    const stages = ['building', 'starting services', 'waiting for health check']
-    const count = app.pendingChanges.length
-    const summary = `Apply ${count} variable ${count === 1 ? 'change' : 'changes'}`
-    const started = Date.now()
-    const tick = () => {
-      const ms = Date.now() - started
-      const index = Math.min(stages.length - 1, Math.floor(ms / 600))
-      const stage = `${index + 1}/${stages.length} ${stages[index]}`
-      setInFlight(`Deploying ${next} · ${stage} · ${Math.floor(ms / 1000)}s`)
-      setBuilding({ id: next, stage, summary })
-    }
-    // The edit toasts' Undo would now be ambiguous (this deployment or the next?), so they go.
-    toast.dismiss()
-    setDeploying(true)
-    tick()
-    const timer = window.setInterval(tick, 300)
-    try {
-      await mutation.mutateAsync({ kind: 'action', appId: app.id, action: { type: 'deployChanges' } })
-      toast.success(`${next} is live in ${app.environment}`, {
-        action: { label: 'View', onClick: () => goTo('deployments') },
-      })
-    } catch (err) {
-      // The changes stay pending, so Deploy changes is the retry.
-      handleApiError(err, `${next} did not go live; your changes are still pending`)
-    } finally {
-      window.clearInterval(timer)
-      setInFlight(null)
-      setBuilding(null)
-      setDeploying(false)
-    }
-  }
-
-  // Rollback swaps code only; a deployment that changed variables is undone by staging the inverse.
-  const revertVariables = async (release: AppRelease) => {
-    if (!app || !release.envChanges) return
-    const inverse = release.envChanges.filter((c) => !c.secret)
-    const skipped = release.envChanges.length - inverse.length
-    const ok = await confirm({
-      title: `Revert the variable changes of ${release.id}?`,
-      body: (
-        <span className="flex flex-col gap-2">
-          <span>These are saved as pending changes; nothing reaches the app until you deploy them.</span>
-          <span className="flex flex-col text-foreground">
-            {inverse.map((c) => (
-              <span key={c.name}>
-                {c.change === 'added' ? `remove ${c.name}` : `set ${c.name} back to ${c.live ?? '(empty)'}`}
-              </span>
-            ))}
-          </span>
-          {skipped > 0 && <span>Secret references are left as they are; change them in Variables.</span>}
-        </span>
-      ),
-      confirmLabel: `Stage ${inverse.length} ${inverse.length === 1 ? 'change' : 'changes'}`,
-    })
-    if (!ok) return
-    try {
-      for (const c of inverse) {
-        await mutation.mutateAsync({
-          kind: 'action',
-          appId: app.id,
-          action:
-            c.change === 'added'
-              ? { type: 'removeVariable', name: c.name }
-              : { type: 'setVariable', name: c.name, value: c.live ?? '' },
-        })
-      }
-      toast.success(`Staged the reverse of ${release.id}; deploy to apply`)
-    } catch (err) {
-      handleApiError(err, 'Could not stage the revert')
-    }
   }
 
   const restartService = async (service: string) => {
@@ -292,8 +196,8 @@ export default function AppDetails() {
       title: `Delete ${app.name}?`,
       body: (
         <>
-          Every environment goes now: their boxes, URLs, users and domains. Databases and volumes are kept; delete them
-          from their own pages if you want them gone.
+          Every environment goes now: its Box, URL, database, volumes, deployments and logs. The App key stops working.
+          This cannot be undone.
         </>
       ),
       confirmLabel: 'Delete app',
@@ -309,7 +213,7 @@ export default function AppDetails() {
     if (!app) return
     const ok = await confirm({
       title: `Delete ${app.environment}?`,
-      body: <>Its box, database, users, files and domains go now. Other environments are not touched.</>,
+      body: <>Its Box, database branch, volumes and URL go now. Other environments are not touched.</>,
       confirmLabel: `Delete ${app.environment}`,
       danger: true,
       typeToConfirm: app.environment,
@@ -322,10 +226,10 @@ export default function AppDetails() {
         'Failed to delete the environment',
       )
     )
-      switchEnv('production')
+      switchEnv('main')
   }
 
-  const isNotFound = isError && isAxiosError(error) && error.response?.status === 404
+  const isNotFound = isError && httpStatusOf(error) === 404
 
   return (
     <div className="flex min-h-[calc(100svh-60px)] w-full flex-col px-4 pb-10 pt-4 sm:px-6 lg:px-[40px]">
@@ -340,9 +244,7 @@ export default function AppDetails() {
       {isNotFound ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center font-mono text-muted-foreground">
           <Container className="size-8" strokeWidth={1.3} />
-          <div className="text-foreground">
-            {env === 'production' ? 'App not found' : `No environment named ${env}`}
-          </div>
+          <div className="text-foreground">{env === 'main' ? 'App not found' : `No environment named ${env}`}</div>
           <button
             type="button"
             onClick={() => navigate(RoutePath.APPS)}
@@ -362,7 +264,7 @@ export default function AppDetails() {
             busy={mutation.isPending || isFetching}
             onPublish={publish}
             onRestart={() =>
-              run({ kind: 'restart', appId: app.id }, 'Services restarted', 'Failed to restart', 'Restarting services…')
+              run({ kind: 'restart', appId: app.id }, 'Restart requested', 'Failed to restart', 'Restarting services…')
             }
             onSleep={() =>
               run(
@@ -372,29 +274,14 @@ export default function AppDetails() {
                 'Going to sleep…',
               )
             }
-            onRebuild={() =>
-              run(
-                { kind: 'rebuild', appId: app.id },
-                'Rebuilding from the current deployment',
-                'Failed to rebuild',
-                'Rebuilding…',
-              )
-            }
             onDelete={deleteApp}
             onDeleteEnvironment={deleteEnvironment}
-            inFlight={inFlight}
-            onRename={() => setRenameOpen(true)}
+            // A deployment in progress (any author: agent, console) is said here with its step.
+            inFlight={inFlight ?? (app.status === 'building' ? app.statusDetail : null)}
             onRefresh={() => refetch()}
             environment={<EnvironmentSwitcher appId={app.id} appName={app.name} current={env} onSwitch={switchEnv} />}
             // Each tab has its own primary action; Open app leads only on Overview.
             primaryOpen={tab === 'overview'}
-          />
-
-          <PendingChanges
-            app={app}
-            deploying={building}
-            onReview={tab === 'variables' ? undefined : () => goTo('variables')}
-            onDeploy={() => void deployChanges()}
           />
 
           {/* The console's segmented tabs (as on Billing and Images). */}
@@ -418,15 +305,7 @@ export default function AppDetails() {
               restarting={restarting}
             />
           )}
-          {tab === 'deployments' && (
-            <DeploymentsTab
-              app={app}
-              onRollback={rollback}
-              onRevertVariables={revertVariables}
-              rollingBack={rollingBack}
-              building={building}
-            />
-          )}
+          {tab === 'deployments' && <DeploymentsTab app={app} onRollback={rollback} rollingBack={rollingBack} />}
           {tab === 'logs' && (
             <LogsTab
               app={app}
@@ -435,15 +314,7 @@ export default function AppDetails() {
               onSection={(next) => goTo('logs', next)}
             />
           )}
-          {tab === 'domains' && <DomainsTab app={app} />}
-          {tab === 'auth' && (
-            <UsersTab
-              app={app}
-              section={section}
-              onSection={(next) => goTo('auth', next)}
-              onOpenLogs={() => goTo('logs', 'runtime', { source: 'auth' })}
-            />
-          )}
+          {tab === 'auth' && <AuthTab app={app} />}
           {tab === 'database' && (
             <DatabaseTab app={app} section={section} onSection={(next) => goTo('database', next)} />
           )}
@@ -451,18 +322,6 @@ export default function AppDetails() {
           {tab === 'variables' && <VariablesTab app={app} />}
 
           {confirmElement}
-
-          {renameOpen && (
-            <RenameDialog
-              current={app.name}
-              busy={mutation.isPending}
-              onClose={() => setRenameOpen(false)}
-              onSave={async (name) => {
-                await run({ kind: 'rename', appId: app.id, name }, `Renamed to ${name}`, 'Failed to rename')
-                setRenameOpen(false)
-              }}
-            />
-          )}
         </>
       )}
     </div>
@@ -479,10 +338,8 @@ function Header({
   onPublish,
   onRestart,
   onSleep,
-  onRebuild,
   onDelete,
   onDeleteEnvironment,
-  onRename,
   onRefresh,
   environment,
   primaryOpen,
@@ -493,10 +350,8 @@ function Header({
   onPublish: (visibility: AppVisibility) => void
   onRestart: () => void
   onSleep: () => void
-  onRebuild: () => void
   onDelete: () => void
   onDeleteEnvironment: () => void
-  onRename: () => void
   onRefresh: () => void
   environment: ReactNode
   primaryOpen: boolean
@@ -507,7 +362,7 @@ function Header({
   // The header says which deployment runs and how the runtime is doing, as two facts.
   // A newer deployment that failed is said separately: the old one is still serving.
   const latest = app.releases[0]
-  const failedNewer = latest && latest.status === 'failed' && latest.id !== app.activeRelease ? latest : null
+  const failedNewer = latest && latest.status === 'failed' && app.activeRelease ? latest : null
   return (
     // Laid out like box details: name, status, then bordered controls on the right, a dashed rule under it all.
     <div className="mb-5 mt-4 flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-dashed border-border pb-4">
@@ -527,7 +382,7 @@ function Header({
             {inFlight}
           </span>
         )}
-        {failedNewer && <Tag tone="bad">{failedNewer.id} failed to build</Tag>}
+        {failedNewer && <Tag tone="bad">{failedNewer.id} failed</Tag>}
       </div>
 
       <div className="ml-auto flex items-center gap-2">
@@ -539,7 +394,10 @@ function Header({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-[16rem] font-mono">
-            <div className="px-2 py-1.5 text-[12px] text-muted-foreground">Who can open the app</div>
+            <div className="px-2 py-1.5 text-[12px] text-muted-foreground">
+              Who can open the app
+              {app.accessSource === 'online' ? ' · set here, wins over boxlite.toml' : ' · from boxlite.toml'}
+            </div>
             {VISIBILITY_ORDER.map((visibility) => (
               <DropdownMenuItem
                 key={visibility}
@@ -566,23 +424,24 @@ function Header({
                 <DropdownMenuItem className="cursor-pointer" onClick={onRestart} disabled={app.services.length === 0}>
                   Restart services
                 </DropdownMenuItem>
-                <DropdownMenuItem className="cursor-pointer" onClick={onSleep} disabled={app.status === 'sleeping'}>
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onClick={onSleep}
+                  disabled={app.status === 'sleeping' || !app.box}
+                >
                   Sleep now
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild className="cursor-pointer">
-                  <Link to={generatePath(RoutePath.BOX_DETAILS, { boxId: app.workspace.boxId })}>
-                    Open box {app.workspace.boxName}
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem className="cursor-pointer" onClick={onRebuild}>
-                  Rebuild box from current deployment
-                </DropdownMenuItem>
+                {app.box && (
+                  <div className="px-2 py-1.5 text-[12px] text-muted-foreground">
+                    Box {app.box.id} · {app.box.state}
+                  </div>
+                )}
               </>
             )}
             <DropdownMenuItem className="cursor-pointer" onClick={onRefresh}>
               Refresh
             </DropdownMenuItem>
-            {app.environment !== 'production' && (
+            {app.environment !== 'main' && (
               <DropdownMenuItem
                 className="cursor-pointer text-destructive focus:text-destructive"
                 onClick={onDeleteEnvironment}
@@ -592,17 +451,14 @@ function Header({
             )}
             <DropdownMenuSeparator />
             <div className="px-2 py-1.5 text-[12px] text-muted-foreground">App · {app.name}</div>
-            <DropdownMenuItem className="cursor-pointer" onClick={onRename}>
-              Rename app
-            </DropdownMenuItem>
             <DropdownMenuItem className="cursor-pointer text-destructive focus:text-destructive" onClick={onDelete}>
               Delete app
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        {app.url ? (
+        {app.status !== 'draft' ? (
           <a
-            href={app.url}
+            href={app.openUrl}
             target="_blank"
             rel="noreferrer"
             className={cn(
@@ -617,55 +473,5 @@ function Header({
         ) : null}
       </div>
     </div>
-  )
-}
-
-const NAME_RE = /^[a-z0-9][a-z0-9-]*$/
-
-/** Rename keeps the app id and the URL; the URL's slug is changed in Domains. */
-function RenameDialog({
-  current,
-  busy,
-  onClose,
-  onSave,
-}: {
-  current: string
-  busy: boolean
-  onClose: () => void
-  onSave: (name: string) => Promise<void>
-}) {
-  const [name, setName] = useState(current)
-  const error = name && !NAME_RE.test(name) ? 'Use lowercase letters, digits and dashes.' : null
-  const blocked = busy || !name || !!error || name === current
-  const save = () => {
-    if (!blocked) void onSave(name)
-  }
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className={cn(DIALOG_FRAME, 'max-w-[460px] font-mono text-body')}>
-        <DialogHeader>
-          <DialogTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">Rename {current}</DialogTitle>
-        </DialogHeader>
-        <div className="flex flex-col gap-1.5">
-          <Input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value.toLowerCase())}
-            onKeyDown={(e) => e.key === 'Enter' && save()}
-            aria-invalid={!!error}
-            className="font-mono"
-          />
-          <span className={cn('text-[12px]', error ? 'text-destructive' : 'text-muted-foreground')}>
-            {error ?? 'The URL stays the same; its slug is set in Domains.'}
-          </span>
-        </div>
-        <DialogFooter className="gap-2">
-          <FlatButton onClick={onClose}>Cancel</FlatButton>
-          <FlatButton variant="primary" disabled={blocked} onClick={save}>
-            Rename
-          </FlatButton>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }

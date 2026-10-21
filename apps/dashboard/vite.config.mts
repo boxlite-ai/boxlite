@@ -12,6 +12,8 @@ const outDir = '../dist/apps/dashboard'
 
 export default defineConfig((mode) => ({
   root: __dirname,
+  // The Apps console build is served by the control plane under /console/.
+  base: process.env.DASHBOARD_BASE_PATH || '/',
   cacheDir: '../../node_modules/.vite/apps/dashboard',
   server: {
     port: 3000,

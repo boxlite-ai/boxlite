@@ -4,23 +4,18 @@
  */
 
 import { BRAND } from '@/components/ascii'
+import { Spinner } from '@/components/ui/spinner'
 import { X } from '@/components/ui/icon'
+import { useAppLogs } from '@/hooks/queries/useAppsQuery'
 import { relTime } from '@/lib/apps/format'
-import type { AppDetail, AppLogSource } from '@/lib/apps/types'
+import type { AppDetail } from '@/lib/apps/types'
 import { cn } from '@/lib/utils'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { CopyIconButton, EmptyNote, Panel, SearchField } from '../spec'
 import { FilterChip, FilterGroup, Screen, ToolButton, Workbench } from '../SubNav'
 
-const SOURCES: AppLogSource[] = ['web', 'worker', 'deploy', 'auth', 'db', 'system']
-const STREAM_SAMPLES: { source: AppLogSource; message: string }[] = [
-  { source: 'web', message: 'GET /api/deals 200 38ms user=a.lin@acme.com' },
-  { source: 'web', message: 'GET /api/contacts?page=2 200 61ms user=c.wu@acme.com' },
-  { source: 'web', message: 'POST /api/deals/318/move 200 44ms user=b.ortiz@acme.com' },
-  { source: 'worker', message: 'sync: 3 deals updated' },
-  { source: 'auth', message: 'login ok provider=google email=d.kaur@acme.com' },
-  { source: 'web', message: 'GET /healthz 200 2ms' },
-]
+// Sources the control plane writes besides the app's own services (which log under their names).
+const PLATFORM_SOURCES = ['build', 'schedule', 'auth', 'db', 'access', 'system']
 const RANGES = ['30m', '1h', '24h', '3d'] as const
 const RANGE_MS: Record<(typeof RANGES)[number], number> = {
   '30m': 30 * 60_000,
@@ -29,7 +24,7 @@ const RANGE_MS: Record<(typeof RANGES)[number], number> = {
   '3d': 3 * 86_400_000,
 }
 const ROW_GRID = 'grid-cols-[76px_64px_minmax(0,1fr)] gap-x-4'
-const ACTIVITY_GRID = 'grid-cols-[100px_130px_110px_minmax(0,1fr)] gap-x-3'
+const ACTIVITY_GRID = 'grid-cols-[100px_170px_220px_minmax(0,1fr)] gap-x-3'
 
 type Level = 'info' | 'warn' | 'error'
 type Section = 'runtime' | 'activity'
@@ -37,10 +32,11 @@ type Section = 'runtime' | 'activity'
 interface Line {
   id: string
   at: Date
-  source: AppLogSource
+  source: string
   level: Level
   message: string
   raw: string
+  deployment: number | null
 }
 
 function dayLabel(at: Date): string {
@@ -51,88 +47,55 @@ function dayLabel(at: Date): string {
   return same(at, today) ? `today · ${date}` : same(at, yesterday) ? `yesterday · ${date}` : date
 }
 
-function levelOf(message: string): Level {
-  if (/fail|exit 1|exited 1|mismatch|refused|error|giving up/i.test(message)) return 'error'
-  if (/warn|restart|retry|stopped|SIGTERM/i.test(message)) return 'warn'
-  return 'info'
-}
-
 function RuntimeLogs({ app, source }: { app: AppDetail; source?: string }) {
   // No source picked means every source; picking narrows to the picked ones.
-  const [sources, setSources] = useState<Set<AppLogSource>>(() =>
-    SOURCES.includes(source as AppLogSource) ? new Set([source as AppLogSource]) : new Set(),
-  )
+  const [sources, setSources] = useState<Set<string>>(() => (source ? new Set([source]) : new Set()))
   const [level, setLevel] = useState<'all' | 'warn' | 'error'>('all')
   const [search, setSearch] = useState('')
   const [range, setRange] = useState<(typeof RANGES)[number]>('24h')
   const [live, setLive] = useState(true)
   const [selected, setSelected] = useState<string | null>(null)
 
-  const lines = useMemo<Line[]>(() => {
-    const all: Line[] = []
-    for (const source of SOURCES) {
-      for (const [i, raw] of (app.logs[source] ?? []).entries()) {
-        const [stamp, ...rest] = raw.split(' ')
-        all.push({
-          id: `${source}-${i}`,
-          at: new Date(stamp),
-          source,
-          level: levelOf(raw),
-          message: rest.join(' '),
-          raw,
-        })
-      }
-    }
-    return all.sort((a, b) => b.at.getTime() - a.at.getTime())
-  }, [app.logs])
-
-  // A running app keeps talking: while Live is on, new lines arrive at the top. When the
-  // reader has paused, scrolled away or opened a line, they wait behind a "new lines" chip
-  // instead of moving what is being read.
-  const [streamed, setStreamed] = useState<Line[]>([])
-  const [held, setHeld] = useState<Line[]>([])
-  const [fresh, setFresh] = useState<Set<string>>(new Set())
+  // While Live is on the control plane is polled; lines arrive at the top. When the
+  // reader has paused, scrolled away or opened a line, the list stops moving.
   const following = useRef(live)
   following.current = live && selected === null
+  const { data: fetched = [], isLoading } = useAppLogs(app.id, range, live && selected === null)
+  const [fresh, setFresh] = useState<Set<string>>(new Set())
+  const seen = useRef<Set<string> | null>(null)
+  const allLines = useMemo<Line[]>(
+    () =>
+      fetched.map((l) => ({
+        id: l.id,
+        at: new Date(l.ts),
+        source: l.source,
+        level: l.level,
+        message: l.line,
+        raw: `${l.ts} [${l.source}] ${l.line}`,
+        deployment: l.deployment,
+      })),
+    [fetched],
+  )
+  // The app's services, the platform's sources, and anything else that logged.
+  const sourceList = useMemo(
+    () => [...new Set([...app.services.map((s) => s.name), ...PLATFORM_SOURCES, ...allLines.map((l) => l.source)])],
+    [app.services, allLines],
+  )
+  // Mark lines that arrived since the last poll, briefly.
   useEffect(() => {
-    if (app.status !== 'live') return
-    const timer = window.setInterval(() => {
-      const sample = STREAM_SAMPLES[Math.floor(Math.random() * STREAM_SAMPLES.length)]
-      const at = new Date()
-      const line: Line = {
-        id: `live-${at.getTime()}`,
-        at,
-        source: sample.source,
-        level: levelOf(sample.message),
-        message: sample.message,
-        raw: `${at.toISOString()} ${sample.message}`,
+    if (isLoading) return
+    const ids = new Set(allLines.map((l) => l.id))
+    if (seen.current) {
+      const added = allLines.filter((l) => !seen.current?.has(l.id)).map((l) => l.id)
+      if (added.length && following.current) {
+        setFresh(new Set(added))
+        const timer = window.setTimeout(() => setFresh(new Set()), 1600)
+        seen.current = ids
+        return () => window.clearTimeout(timer)
       }
-      if (!following.current || window.scrollY > 160) {
-        setHeld((h) => [line, ...h])
-      } else {
-        setStreamed((list) => [line, ...list].slice(0, 200))
-        setFresh((f) => new Set(f).add(line.id))
-        window.setTimeout(
-          () =>
-            setFresh((f) => {
-              const next = new Set(f)
-              next.delete(line.id)
-              return next
-            }),
-          1600,
-        )
-      }
-    }, 2800)
-    return () => window.clearInterval(timer)
-  }, [app.status])
-  const showHeld = () => {
-    setLive(true)
-    setSelected(null)
-    setStreamed((list) => [...held, ...list].slice(0, 200))
-    setHeld([])
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-  const allLines = useMemo(() => [...streamed, ...lines], [streamed, lines])
+    }
+    seen.current = ids
+  }, [allLines, isLoading])
 
   const since = Date.now() - RANGE_MS[range]
   const visible = allLines.filter((line) => {
@@ -145,7 +108,7 @@ function RuntimeLogs({ app, source }: { app: AppDetail; source?: string }) {
   })
   const detail = visible.find((line) => line.id === selected) ?? null
 
-  const toggleSource = (source: AppLogSource) =>
+  const toggleSource = (source: string) =>
     setSources((prev) => {
       const next = new Set(prev)
       if (next.has(source)) next.delete(source)
@@ -158,8 +121,11 @@ function RuntimeLogs({ app, source }: { app: AppDetail; source?: string }) {
       title="Runtime logs"
       actions={
         <ToolButton
-          onClick={() => (live ? setLive(false) : showHeld())}
-          title={live ? 'Stop new lines from moving the page' : 'Show held lines and keep following'}
+          onClick={() => {
+            setLive(!live)
+            if (!live) setSelected(null)
+          }}
+          title={live ? 'Stop new lines from moving the page' : 'Load new lines and keep following'}
         >
           <span
             className="size-[6px] rounded-full"
@@ -191,7 +157,7 @@ function RuntimeLogs({ app, source }: { app: AppDetail; source?: string }) {
           ))}
         </FilterGroup>
         <FilterGroup className="ml-auto">
-          {SOURCES.map((source) => {
+          {sourceList.map((source) => {
             const count = allLines.filter((line) => line.source === source && line.at.getTime() >= since).length
             if (count === 0 && !sources.has(source)) return null
             return (
@@ -203,21 +169,14 @@ function RuntimeLogs({ app, source }: { app: AppDetail; source?: string }) {
         </FilterGroup>
       </div>
 
-      {held.length > 0 && (
-        <div className="sticky top-2 z-10 flex justify-center">
-          <button
-            type="button"
-            onClick={showHeld}
-            className="mt-2 bg-foreground px-3 py-1.5 font-mono text-[13px] font-semibold text-background shadow-lg"
-          >
-            {held.length} new line{held.length === 1 ? '' : 's'} · Show
-          </button>
-        </div>
-      )}
       <div className={cn('grid', detail && 'lg:grid-cols-[minmax(0,1fr)_320px]')}>
         <div className="min-w-0">
-          {visible.length === 0 ? (
-            <EmptyNote title="No log lines match" />
+          {isLoading ? (
+            <div className="flex items-center gap-2 py-8 text-[13px] text-muted-foreground">
+              <Spinner className="size-4" /> Loading logs…
+            </div>
+          ) : visible.length === 0 ? (
+            <EmptyNote title={allLines.length === 0 ? `No log lines in the last ${range}` : 'No log lines match'} />
           ) : (
             <>
               {visible.map((line, i) => {
@@ -282,9 +241,9 @@ function RuntimeLogs({ app, source }: { app: AppDetail; source?: string }) {
                 ['Time', detail.at.toISOString()],
                 ['Source', detail.source],
                 ['Level', detail.level],
-                ['Deployment', app.activeRelease ?? '—'],
+                ['Deployment', detail.deployment !== null ? `#${detail.deployment}` : '—'],
                 ['Environment', app.environment],
-                ['Box', app.workspace.boxName],
+                ['Box', app.box?.id ?? '—'],
               ].map(([label, value]) => (
                 <div key={label} className="flex items-baseline gap-2">
                   <span className="w-[96px] shrink-0 text-muted-foreground">{label}</span>

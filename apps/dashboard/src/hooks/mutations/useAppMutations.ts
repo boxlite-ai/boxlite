@@ -3,116 +3,170 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { useApi } from '@/hooks/useApi'
-import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import type { AppActionInput, AppDetail, AppVisibility, CreateAppInput, UpdateAuthInput } from '@/lib/apps/types'
+import { appsClient } from '@/lib/apps/client'
+import type {
+  AppActionInput,
+  AppAuthDetail,
+  AppDetail,
+  AppVisibility,
+  CreateAppInput,
+  CreatedApp,
+  QueryResult,
+} from '@/lib/apps/types'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../queries/queryKeys'
-import { useAppEnv } from '../queries/useAppsQuery'
+import { APPS_SCOPE, useAppEnv } from '../queries/useAppsQuery'
 
 type AppAction =
-  | { kind: 'create'; input: CreateAppInput }
   | { kind: 'publish'; appId: string; visibility: AppVisibility }
-  | { kind: 'auth'; appId: string; input: UpdateAuthInput }
-  | {
-      kind: 'domains'
-      appId: string
-      input: {
-        slug?: string
-        addDomain?: string
-        removeDomain?: string
-        verifyDomain?: string
-        makePrimary?: string | null
-      }
-    }
   | { kind: 'restart'; appId: string; service?: string }
   | { kind: 'activate'; appId: string; releaseId: string }
   | { kind: 'sleep'; appId: string }
-  | { kind: 'rebuild'; appId: string }
-  | { kind: 'rename'; appId: string; name: string }
   | { kind: 'delete'; appId: string }
-  | { kind: 'createEnvironment'; appId: string; name: string; from: string | null }
+  | { kind: 'createEnvironment'; appId: string; name: string; from: string | null; withData: boolean }
   | { kind: 'deleteEnvironment'; appId: string; name: string }
   | { kind: 'copyVariables'; appId: string; from: string }
   | { kind: 'action'; appId: string; action: AppActionInput }
 
 // Everything below Overview is scoped to the environment in ?env=; the app
-// itself (create, rename, delete, its environments) is not.
+// itself (create, delete, its environments, its key) is not. Every change goes
+// to the control plane; the ones that change configuration start a deployment.
 export function useAppMutation() {
-  const api = useApi()
   const queryClient = useQueryClient()
-  const { selectedOrganization } = useSelectedOrganization()
-  const orgId = selectedOrganization?.id ?? ''
   const env = useAppEnv()
 
   return useMutation({
     mutationFn: async (action: AppAction): Promise<AppDetail | null> => {
-      const client = api.axiosInstance
       const scoped = { params: { env } }
-      const base = 'appId' in action ? `/apps/${encodeURIComponent(action.appId)}` : '/apps'
+      const base = `/apps/${encodeURIComponent(action.appId)}`
       switch (action.kind) {
-        case 'create':
-          return (await client.post<AppDetail>('/apps', action.input)).data
         case 'publish':
-          return (await client.post<AppDetail>(`${base}/publish`, { visibility: action.visibility }, scoped)).data
-        case 'auth':
-          return (await client.post<AppDetail>(`${base}/auth`, action.input, scoped)).data
-        case 'domains':
-          return (await client.post<AppDetail>(`${base}/domains`, action.input, scoped)).data
+          return (await appsClient.post<AppDetail>(`${base}/publish`, { visibility: action.visibility }, scoped)).data
         case 'restart':
-          return (await client.post<AppDetail>(`${base}/restart`, { service: action.service }, scoped)).data
+          return (await appsClient.post<AppDetail>(`${base}/restart`, { service: action.service }, scoped)).data
         case 'activate':
           return (
-            await client.post<AppDetail>(
+            await appsClient.post<AppDetail>(
               `${base}/releases/${encodeURIComponent(action.releaseId)}/activate`,
               undefined,
               scoped,
             )
           ).data
         case 'sleep':
-          return (await client.post<AppDetail>(`${base}/sleep`, undefined, scoped)).data
-        case 'rebuild':
-          return (await client.post<AppDetail>(`${base}/rebuild`, undefined, scoped)).data
+          return (await appsClient.post<AppDetail>(`${base}/sleep`, undefined, scoped)).data
         case 'action':
-          return (await client.post<AppDetail>(`${base}/actions`, action.action, scoped)).data
+          return (await appsClient.post<AppDetail>(`${base}/actions`, action.action, scoped)).data
         case 'copyVariables':
-          return (await client.post<AppDetail>(`${base}/variables/copy`, { from: action.from }, scoped)).data
-        case 'rename':
-          return (await client.post<AppDetail>(`${base}/rename`, { name: action.name })).data
+          return (await appsClient.post<AppDetail>(`${base}/variables/copy`, { from: action.from }, scoped)).data
         case 'createEnvironment':
-          return (await client.post<AppDetail>(`${base}/environments`, { name: action.name, from: action.from })).data
+          await appsClient.post(`${base}/environments`, {
+            name: action.name,
+            from: action.from,
+            withData: action.withData,
+          })
+          return null
         case 'deleteEnvironment':
-          await client.delete(`${base}/environments/${encodeURIComponent(action.name)}`)
+          await appsClient.delete(`${base}/environments/${encodeURIComponent(action.name)}`)
           return null
         case 'delete':
-          await client.delete(base)
+          await appsClient.delete(base)
           return null
       }
     },
     onSuccess: (app, action) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.apps.list(orgId) })
-      if (app) {
-        queryClient.setQueryData(queryKeys.apps.detail(orgId, app.id, app.environment), app)
-      }
-      if ('appId' in action) {
-        // Every environment of the app, and its environment list.
-        queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(orgId, action.appId) })
-      }
+      queryClient.invalidateQueries({ queryKey: queryKeys.apps.list(APPS_SCOPE) })
+      if (app) queryClient.setQueryData(queryKeys.apps.detail(APPS_SCOPE, app.id, app.environment), app)
+      // Every environment of the app, its environment list, its database and logs.
+      queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, action.appId) })
     },
   })
 }
 
+/** Creating an App returns its key once; it lives only in the dialog that shows it. */
+export function useCreateApp() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: CreateAppInput) => (await appsClient.post<CreatedApp>('/apps', input)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.apps.list(APPS_SCOPE) }),
+  })
+}
+
+/** A new App key and prompt; the old key stops working at once. */
+export function useRotateKey() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (appId: string) =>
+      (
+        await appsClient.post<{ key: string; prompt: string; last4: string }>(
+          `/apps/${encodeURIComponent(appId)}/key/rotate`,
+        )
+      ).data,
+    onSuccess: (_data, appId) => queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, appId) }),
+  })
+}
+
 export function useAppSql() {
-  const api = useApi()
   const env = useAppEnv()
   return useMutation({
-    mutationFn: async ({ appId, query }: { appId: string; query: string }) => {
-      const response = await api.axiosInstance.post<{ columns: string[]; rows: (string | number)[][]; total?: number }>(
-        `/apps/${appId}/sql`,
-        { query },
-        { params: { env } },
-      )
-      return response.data
-    },
+    mutationFn: async ({
+      appId,
+      query,
+      write,
+      explain,
+    }: {
+      appId: string
+      query: string
+      write?: boolean
+      explain?: boolean
+    }) =>
+      (
+        await appsClient.post<QueryResult>(
+          `/apps/${encodeURIComponent(appId)}/sql`,
+          { query, write, explain },
+          { params: { env } },
+        )
+      ).data,
+  })
+}
+
+export function useRestoreDatabase() {
+  const queryClient = useQueryClient()
+  const env = useAppEnv()
+  return useMutation({
+    mutationFn: async ({ appId, snapshot }: { appId: string; snapshot: string }) =>
+      (
+        await appsClient.post<{ restored_to: string; preserved_as: string }>(
+          `/apps/${encodeURIComponent(appId)}/database/restore`,
+          { snapshot },
+          { params: { env } },
+        )
+      ).data,
+    onSuccess: (_d, { appId }) => queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, appId) }),
+  })
+}
+
+/** Sign a user out of, block or unblock them in this environment. */
+export function useEndUserAction() {
+  const queryClient = useQueryClient()
+  const env = useAppEnv()
+  return useMutation({
+    mutationFn: async ({
+      appId,
+      userId,
+      op,
+    }: {
+      appId: string
+      userId: string
+      op: 'sign-out' | 'block' | 'unblock'
+    }) =>
+      (
+        await appsClient.post<AppAuthDetail>(
+          `/apps/${encodeURIComponent(appId)}/users/${encodeURIComponent(userId)}/${op}`,
+          undefined,
+          { params: { env } },
+        )
+      ).data,
+    onSuccess: (data, { appId }) =>
+      queryClient.setQueryData([...queryKeys.apps.detail(APPS_SCOPE, appId, env), 'auth'], data),
   })
 }
