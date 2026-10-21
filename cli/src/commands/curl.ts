@@ -85,9 +85,8 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
   }
   const method = (opts.request ?? (body !== undefined ? 'POST' : 'GET')).toUpperCase();
   const started = Date.now();
-  let res;
-  try {
-    res = await fetch(url, {
+  const send = () =>
+    fetch(url, {
       method,
       headers: { ...headers, authorization: `Bearer ${ctx.apiKey}` },
       body,
@@ -95,9 +94,25 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
       signal: AbortSignal.timeout(30_000),
       ...(ctx.dispatcher ? { dispatcher: ctx.dispatcher } : {}),
     });
+  let res;
+  try {
+    res = await send();
   } catch (e) {
-    const cause = (e as Error & { cause?: Error }).cause;
-    throw new MicrocloudError('unavailable', `${method} ${url.href} failed: ${cause?.message ?? (e as Error).message}`, '`boxlite-app app services` and `boxlite-app doctor` show whether the app is up');
+    // The platform proxy closes idle keep-alive connections; a request can race that close and
+    // die with ECONNRESET / "other side closed". Browsers retry those silently; do the same once
+    // for requests that are safe to repeat.
+    const code = ((e as Error & { cause?: { code?: string } }).cause?.code ?? '') as string;
+    const reset = /ECONNRESET|UND_ERR_SOCKET|EPIPE/.test(code);
+    if (!reset || (method !== 'GET' && method !== 'HEAD')) {
+      const cause = (e as Error & { cause?: Error }).cause;
+      throw new MicrocloudError('unavailable', `${method} ${url.href} failed: ${cause?.message ?? (e as Error).message}`, '`boxlite-app app services` and `boxlite-app doctor` show whether the app is up');
+    }
+    try {
+      res = await send();
+    } catch (e2) {
+      const cause = (e2 as Error & { cause?: Error }).cause;
+      throw new MicrocloudError('unavailable', `${method} ${url.href} failed twice: ${cause?.message ?? (e2 as Error).message}`, '`boxlite-app app services` and `boxlite-app doctor` show whether the app is up');
+    }
   }
   const ms = Date.now() - started;
   const text = await res.text();
