@@ -442,7 +442,9 @@ listener and disconnects clients; operations are never retried. A configure
 that fails validation leaves the running listener untouched; a listener bind
 failure disables SSH. Disable preserves the last generation and clears the
 address and host identity fields; a never-enabled box reports `0n`. Status and
-errors carry no credential material.
+errors carry no credential material. A configuration the binding cannot
+convert is refused before any SSH request with the fixed message
+`invalid SSH configuration`; the rejected value is never echoed.
 
 ---
 

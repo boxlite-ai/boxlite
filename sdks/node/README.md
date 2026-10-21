@@ -254,6 +254,10 @@ leaves the running listener untouched (a listener bind failure disables SSH).
 Credentials flow one way: status carries only the public host identity, and
 errors never echo key material.
 
+A configuration the binding cannot convert is refused before any SSH request
+with the fixed message `invalid SSH configuration`; the rejected value is never
+echoed.
+
 ```typescript
 import { readFile } from 'node:fs/promises';
 

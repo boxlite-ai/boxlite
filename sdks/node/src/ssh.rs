@@ -5,7 +5,7 @@
 //! material cannot reach logs through this crate.
 
 use boxlite::{LiteBox, SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
-use napi::bindgen_prelude::*;
+use napi::{bindgen_prelude::sys, bindgen_prelude::*};
 use napi_derive::napi;
 
 use crate::util::map_err;
@@ -62,6 +62,23 @@ impl From<JsSshConfig> for SshConfig {
     }
 }
 
+/// `configure`'s argument: the generated `JsSshConfig` conversion with every
+/// failure replaced by one fixed message.
+///
+/// napi's conversion errors quote the rejected JavaScript value — for this
+/// credential-bearing type that would echo key material into the thrown
+/// error — so any conversion failure, top-level or nested, becomes a single
+/// sanitized `InvalidArg` before the handle, or any request, is touched.
+pub struct SshConfigArg(JsSshConfig);
+
+impl FromNapiValue for SshConfigArg {
+    unsafe fn from_napi_value(env: sys::napi_env, napi_val: sys::napi_value) -> Result<Self> {
+        unsafe { JsSshConfig::from_napi_value(env, napi_val) }
+            .map(SshConfigArg)
+            .map_err(|_| Error::new(Status::InvalidArg, "invalid SSH configuration"))
+    }
+}
+
 /// Guest listener state and public host identity; contains no credentials.
 #[napi(object)]
 pub struct JsSshStatus {
@@ -99,10 +116,12 @@ pub struct JsSshHandle {
 #[napi]
 impl JsSshHandle {
     /// Validate and replace the SSH configuration, disconnecting clients.
-    #[napi]
-    pub async fn configure(&self, config: JsSshConfig) -> Result<JsSshStatus> {
+    /// A configuration the binding cannot convert is refused with one fixed
+    /// message, before the handle runs.
+    #[napi(ts_args_type = "config: JsSshConfig")]
+    pub async fn configure(&self, config: SshConfigArg) -> Result<JsSshStatus> {
         self.handle
-            .configure(config.into())
+            .configure(config.0.into())
             .await
             .map_err(map_err)
             .map(JsSshStatus::from)
