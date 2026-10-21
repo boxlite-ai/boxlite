@@ -55,7 +55,7 @@ function Field({ label, value, title }: { label: string; value: React.ReactNode;
 
 function HeaderRow({ grid, children }: { grid: string; children: React.ReactNode }) {
   return (
-    <div className={cn(grid, 'border-b border-border pb-2 font-mono text-label uppercase text-muted-foreground')}>
+    <div className={cn(grid, 'border-b border-border py-2 font-mono text-label uppercase text-muted-foreground')}>
       {children}
     </div>
   )

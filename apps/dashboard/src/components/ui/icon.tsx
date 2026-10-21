@@ -7,6 +7,22 @@
  */
 import React from 'react'
 import { Icon as IconifyIcon, addCollection } from '@iconify/react'
+import {
+  ArrowUpRight as LucideArrowUpRight,
+  Check as LucideCheck,
+  ChevronDown as LucideChevronDown,
+  ChevronRight as LucideChevronRight,
+  Copy as LucideCopy,
+  ExternalLink as LucideExternalLink,
+  MoreHorizontal as LucideMoreHorizontal,
+  MoreVertical as LucideMoreVertical,
+  Plus as LucidePlus,
+  RefreshCw as LucideRefreshCw,
+  Search as LucideSearch,
+  Settings as LucideSettings,
+  Trash2 as LucideTrash2,
+  X as LucideX,
+} from 'lucide-react'
 import pixelarticons from '@iconify-json/pixelarticons/icons.json'
 
 // Register the collection once (offline — no network fetch) so "pixelarticons:*" resolves.
@@ -17,6 +33,15 @@ export type LucideProps = React.SVGProps<SVGSVGElement> & {
   absoluteStrokeWidth?: boolean
 }
 export type LucideIcon = React.FC<LucideProps>
+
+// Utility actions (copy, open, settings, overflow, chevrons, search, add,
+// delete, close) use one thin line family so a control reads as a control.
+// Pixel glyphs stay for brand and resource identity.
+function utility(Line: React.ComponentType<LucideProps>): LucideIcon {
+  const Cmp: LucideIcon = ({ strokeWidth = 1.6, ...rest }) => <Line strokeWidth={strokeWidth} {...rest} />
+  Cmp.displayName = `Line${Line.displayName ?? ''}`
+  return Cmp
+}
 
 function makeIcon(pixelName: string): LucideIcon {
   const Cmp: LucideIcon = ({ size = 24, width, height, strokeWidth, absoluteStrokeWidth, mode, ...rest }) => {
@@ -51,7 +76,7 @@ export const ArrowRightIcon = makeIcon('arrow-right')
 export const ArrowUp = makeIcon('arrow-up')
 export const ArrowUpIcon = makeIcon('arrow-up')
 export const ArrowUpDownIcon = makeIcon('arrows-vertical')
-export const ArrowUpRight = makeIcon('external-link')
+export const ArrowUpRight = utility(LucideArrowUpRight)
 export const BarChart3 = makeIcon('chart-bar')
 export const BoldIcon = makeIcon('heading')
 export const BookOpen = makeIcon('book-open')
@@ -60,18 +85,18 @@ export const Bot = makeIcon('robot')
 export const Building2 = makeIcon('building')
 export const Calendar = makeIcon('calendar')
 export const CalendarIcon = makeIcon('calendar')
-export const Check = makeIcon('check')
+export const Check = utility(LucideCheck)
 export const CheckIcon = makeIcon('check')
 export const CheckCircle = makeIcon('check')
 export const CheckCircle2 = makeIcon('check')
 export const CheckCircle2Icon = makeIcon('check')
 export const CheckCircleIcon = makeIcon('check')
 export const CheckSquare2Icon = makeIcon('checkbox-on')
-export const ChevronDown = makeIcon('chevron-down')
+export const ChevronDown = utility(LucideChevronDown)
 export const ChevronDownIcon = makeIcon('chevron-down')
 export const ChevronLeft = makeIcon('chevron-left')
 export const ChevronLeftIcon = makeIcon('chevron-left')
-export const ChevronRight = makeIcon('chevron-right')
+export const ChevronRight = utility(LucideChevronRight)
 export const ChevronRightIcon = makeIcon('chevron-right')
 export const ChevronUp = makeIcon('chevron-up')
 export const ChevronsDownUp = makeIcon('chevrons-vertical')
@@ -87,14 +112,19 @@ export const Code2 = makeIcon('braces')
 export const CommandIcon = makeIcon('command')
 export const Container = makeIcon('package')
 export const Cookie = makeIcon('info-box')
-export const Copy = makeIcon('copy')
+export const Copy = utility(LucideCopy)
 export const CopyIcon = makeIcon('copy')
 export const Cpu = makeIcon('cpu')
 export const CpuIcon = makeIcon('cpu')
 export const CreditCardIcon = makeIcon('credit-card')
 export const Database = makeIcon('database')
+export const Braces = makeIcon('braces')
+export const CloudUpload = makeIcon('cloud-upload')
+export const Folder = makeIcon('folder')
+export const Globe = makeIcon('globe')
+export const LayoutDashboard = makeIcon('dashboard')
 export const DollarSign = makeIcon('dollar')
-export const ExternalLink = makeIcon('external-link')
+export const ExternalLink = utility(LucideExternalLink)
 export const ExternalLinkIcon = makeIcon('external-link')
 export const Eye = makeIcon('eye')
 export const EyeIcon = makeIcon('eye')
@@ -127,24 +157,24 @@ export const MinusIcon = makeIcon('minus')
 export const MinusSquareIcon = makeIcon('minus-box')
 export const Monitor = makeIcon('monitor')
 export const MoonIcon = makeIcon('moon')
-export const MoreHorizontal = makeIcon('more-horizontal')
+export const MoreHorizontal = utility(LucideMoreHorizontal)
 export const MoreHorizontalIcon = makeIcon('more-horizontal')
-export const MoreVertical = makeIcon('more-vertical')
+export const MoreVertical = utility(LucideMoreVertical)
 export const PanelLeft = makeIcon('layout-sidebar-left')
 export const Pause = makeIcon('pause')
 export const Pencil = makeIcon('edit')
 export const Play = makeIcon('play')
 export const PlayIcon = makeIcon('play')
-export const Plus = makeIcon('plus')
+export const Plus = utility(LucidePlus)
 export const PlusIcon = makeIcon('plus')
 export const PlusCircle = makeIcon('plus-box')
 export const RefreshCcw = makeIcon('reload')
-export const RefreshCw = makeIcon('reload')
+export const RefreshCw = utility(LucideRefreshCw)
 export const RotateCcw = makeIcon('reload')
-export const Search = makeIcon('search')
+export const Search = utility(LucideSearch)
 export const SearchIcon = makeIcon('search')
 export const Server = makeIcon('server')
-export const Settings = makeIcon('settings-cog')
+export const Settings = utility(LucideSettings)
 export const SettingsIcon = makeIcon('settings-cog')
 export const ShieldCheck = makeIcon('shield')
 export const SparklesIcon = makeIcon('sparkles')
@@ -159,13 +189,13 @@ export const TerminalSquare = makeIcon('terminal')
 export const TextSearch = makeIcon('text-search')
 export const Timer = makeIcon('hourglass')
 export const Trash = makeIcon('trash')
-export const Trash2 = makeIcon('trash')
+export const Trash2 = utility(LucideTrash2)
 export const TrashIcon = makeIcon('trash')
 export const Users = makeIcon('users')
 export const UsersIcon = makeIcon('users')
 export const UsersRound = makeIcon('users')
 export const Wrench = makeIcon('tool-case')
-export const X = makeIcon('close')
+export const X = utility(LucideX)
 export const XIcon = makeIcon('close')
 export const XCircle = makeIcon('close-box')
 export const XCircleIcon = makeIcon('close-box')

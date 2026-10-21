@@ -20,6 +20,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { markJustLoggedOut } from '@/lib/auth-session'
 import { ONBOARDING_OPEN_EVENT } from '@/lib/onboarding-progress'
+import { isAppsPreviewEnabled } from '@/lib/apps/feature'
 import { cn } from '@/lib/utils'
 import {
   BookOpen,
@@ -110,7 +111,11 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   const navigate = useNavigate()
   const { selectedOrganization } = useSelectedOrganization()
 
-  const primaryItems: NavItem[] = PRIMARY_NAV_ITEMS
+  // Apps leads the nav once the surface exists: the default call to action is
+  // "put the app online", and Boxes stays for the sandbox users next to it.
+  const primaryItems: NavItem[] = isAppsPreviewEnabled()
+    ? [{ label: 'Apps', path: RoutePath.APPS }, ...PRIMARY_NAV_ITEMS]
+    : PRIMARY_NAV_ITEMS
 
   const openOnboardingGuide = useCallback(() => {
     const event = new Event(ONBOARDING_OPEN_EVENT, { cancelable: true })

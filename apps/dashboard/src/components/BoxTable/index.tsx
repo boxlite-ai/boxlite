@@ -255,7 +255,7 @@ export function BoxTable({
     <div className="flex min-h-0 flex-1 flex-col">
       {/* header */}
       <div
-        className={`hidden ${GRID} flex-none items-center border-b border-border px-[18px] pb-[11px] font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground md:grid`}
+        className={`hidden ${GRID} flex-none items-center border-b border-border px-[18px] py-[11px] font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground md:grid`}
       >
         <span>Name</span>
         <span>Box ID</span>

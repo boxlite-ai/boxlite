@@ -272,7 +272,7 @@ export function RegistriesPanel() {
             <div
               className={cn(
                 ROW_GRID,
-                'border-b border-border pb-2 font-mono text-label uppercase text-muted-foreground',
+                'border-b border-border py-2 font-mono text-label uppercase text-muted-foreground',
               )}
             >
               <span>Registry</span>

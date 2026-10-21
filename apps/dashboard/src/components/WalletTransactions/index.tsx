@@ -71,7 +71,7 @@ export function WalletTransactionsTable({ data, loading }: WalletTransactionsTab
     // drift out of alignment by the scrollbar's width.
     <div className="scrollbar-elevated max-h-[420px] overflow-y-auto">
       <div
-        className={`${ROW} sticky top-0 z-10 border-b border-border bg-background pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
+        className={`${ROW} sticky top-0 z-10 border-b border-border bg-background py-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
       >
         <span data-transaction-header>Date</span>
         <span data-transaction-header>Type</span>

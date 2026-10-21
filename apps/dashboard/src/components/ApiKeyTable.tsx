@@ -39,7 +39,7 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTable
     <div className="flex min-h-0 flex-1 flex-col">
       {/* header */}
       <div
-        className={`grid ${GRID} flex-none items-center border-b border-border px-[18px] pb-[11px] font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground`}
+        className={`grid ${GRID} flex-none items-center border-b border-border px-[18px] py-[11px] font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground`}
       >
         <span>Name</span>
         <span>Key</span>

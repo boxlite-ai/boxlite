@@ -25,6 +25,7 @@ import {
 } from './components/ui/dialog'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from './constants/ExternalLinks'
 import { RoutePath, getRouteSubPath } from './enums/RoutePath'
+import { isAppsPreviewEnabled } from './lib/apps/feature'
 import { useConfig } from './hooks/useConfig'
 import Dashboard from './pages/Dashboard'
 import LandingPage from './pages/LandingPage'
@@ -52,6 +53,9 @@ const BoxDetails = React.lazy(() => import('./components/boxes').then((m) => ({ 
 const BoxTerminalFullscreen = React.lazy(() =>
   import('./components/boxes').then((m) => ({ default: m.BoxTerminalFullscreen })),
 )
+// The Apps surface is a design mock served by MSW; see lib/apps/feature.ts.
+const Apps = React.lazy(() => import('./pages/Apps'))
+const AppDetails = React.lazy(() => import('./components/apps/AppDetails'))
 
 const HIDDEN_DASHBOARD_ROUTES = [
   RoutePath.MEMBERS,
@@ -182,6 +186,8 @@ function App() {
         <Route index element={<Navigate to={boxesRedirect} replace />} />
         <Route path={getRouteSubPath(RoutePath.KEYS)} element={<Keys />} />
         <Route path={getRouteSubPath(RoutePath.BOXES)} element={<Boxes />} />
+        {isAppsPreviewEnabled() && <Route path={getRouteSubPath(RoutePath.APPS)} element={<Apps />} />}
+        {isAppsPreviewEnabled() && <Route path={getRouteSubPath(RoutePath.APP_DETAILS)} element={<AppDetails />} />}
         <Route path={getRouteSubPath(RoutePath.VOLUMES)} element={<Volumes />} />
         <Route path={getRouteSubPath(RoutePath.IMAGES)} element={<Images tab="images" />} />
         {/* The static segment is declared before `:idOrRef`, as the API orders its routes. */}

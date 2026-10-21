@@ -208,7 +208,7 @@ const Volumes: React.FC = () => {
             <div
               className={cn(
                 ROW_GRID,
-                'border-b border-border pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground',
+                'border-b border-border py-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground',
               )}
             >
               <span>Name</span>

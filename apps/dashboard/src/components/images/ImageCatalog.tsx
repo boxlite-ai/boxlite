@@ -197,7 +197,7 @@ export function ImageCatalog() {
 
       <div className="mt-[14px] flex min-h-0 flex-1 flex-col overflow-y-auto">
         <div
-          className={cn(ROW_GRID, 'border-b border-border pb-2 font-mono text-label uppercase text-muted-foreground')}
+          className={cn(ROW_GRID, 'border-b border-border py-2 font-mono text-label uppercase text-muted-foreground')}
         >
           <span>Image</span>
           <span>Tags</span>

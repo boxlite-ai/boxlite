@@ -19,6 +19,9 @@ export enum RoutePath {
   // Dashboard sub-routes
   KEYS = '/dashboard/keys',
   BOXES = '/dashboard/boxes',
+  /** Apps: the design mock for the agent-cloud surface (hidden outside mock mode). */
+  APPS = '/dashboard/apps',
+  APP_DETAILS = '/dashboard/apps/:appId',
   BILLING = '/dashboard/billing',
   PRICING = '/dashboard/pricing',
   IMAGES = '/dashboard/images',

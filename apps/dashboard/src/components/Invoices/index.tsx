@@ -89,7 +89,7 @@ export function InvoicesTable({ data, loading }: InvoicesTableProps) {
     // account with three invoices does not get a box of empty rows.
     <div className="scrollbar-elevated max-h-[420px] overflow-y-auto">
       <div
-        className={`${ROW} sticky top-0 z-10 border-b border-border bg-background pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
+        className={`${ROW} sticky top-0 z-10 border-b border-border bg-background py-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
       >
         <span data-invoice-header>Date</span>
         <span data-invoice-header>Type</span>

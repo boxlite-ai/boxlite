@@ -214,7 +214,7 @@ export function CostOverTime() {
         ) : (
           <div className="max-h-[240px] overflow-y-auto px-[22px] py-4">
             <div
-              className={`${ROW} border-b border-border pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
+              className={`${ROW} border-b border-border py-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
             >
               <span>Hour</span>
               <span className="text-right">Quota</span>

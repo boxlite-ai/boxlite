@@ -24,7 +24,7 @@ import {
   type UsageConcurrencySeriesDto,
 } from '@boxlite-ai/api-client'
 import { catalogNameOf } from '@/lib/image-ref'
-import { http, HttpResponse } from 'msw'
+import { delay, http, HttpResponse } from 'msw'
 import {
   MOCK_BOXES,
   MOCK_IMAGE_DETAILS,
@@ -42,6 +42,27 @@ import {
   buildWalletHistory,
   newestFirst,
 } from './fixtures'
+import {
+  activateRelease,
+  copyVariables,
+  createApp,
+  createEnvironment,
+  deleteApp,
+  deleteEnvironment,
+  envKey,
+  findApp,
+  listEnvironments,
+  listAppSummaries,
+  publishApp,
+  renameApp,
+  runAction,
+  restartApp,
+  runSql,
+  setAppStatus,
+  updateAuth,
+  updateDomains,
+} from './apps.fixtures'
+import type { AppActionInput, AppVisibility, CreateAppInput, UpdateAuthInput } from '@/lib/apps/types'
 
 const BILLING_API_URL = 'http://localhost:3000/api/billing'
 const API_URL = import.meta.env.VITE_API_URL
@@ -79,7 +100,110 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
   })
 }
 
+// App routes are scoped to one environment by ?env= (production when absent).
+const keyOf = (params: Record<string, unknown>, request: Request) =>
+  envKey(String(params.appId), new URL(request.url).searchParams.get('env'))
+
 export const handlers = [
+  // Apps — a design mock (product_design/PRD/AgentCloud/FullStack/02). The
+  // fixtures mutate in place so publish/rollback/delete hold for the session.
+  http.get(`${API_URL}/apps`, () => HttpResponse.json(listAppSummaries())),
+  http.post(`${API_URL}/apps`, async ({ request }) => {
+    const input = (await request.json()) as CreateAppInput
+    if (!input.name || !/^[a-z0-9][a-z0-9-]*$/.test(input.name)) {
+      return HttpResponse.json({ message: 'name must be lowercase letters, digits and dashes' }, { status: 400 })
+    }
+    if (findApp(input.name)) {
+      return HttpResponse.json({ message: `an app named "${input.name}" already exists` }, { status: 409 })
+    }
+    return HttpResponse.json(createApp(input), { status: 201 })
+  }),
+  http.get(`${API_URL}/apps/:appId`, ({ params, request }) => {
+    const app = findApp(keyOf(params, request))
+    return app ? HttpResponse.json(app) : HttpResponse.json({ message: 'App not found' }, { status: 404 })
+  }),
+  http.post(`${API_URL}/apps/:appId/publish`, async ({ params, request }) => {
+    await delay(700)
+    const body = (await request.json()) as { visibility: AppVisibility }
+    const app = publishApp(keyOf(params, request), body.visibility)
+    return app ? HttpResponse.json(app) : new HttpResponse(null, { status: 404 })
+  }),
+  http.post(`${API_URL}/apps/:appId/auth`, async ({ params, request }) => {
+    await delay(500)
+    const body = (await request.json()) as UpdateAuthInput
+    const app = updateAuth(keyOf(params, request), body)
+    return app ? HttpResponse.json(app) : new HttpResponse(null, { status: 404 })
+  }),
+  http.post(`${API_URL}/apps/:appId/domains`, async ({ params, request }) => {
+    await delay(600)
+    const body = (await request.json()) as Parameters<typeof updateDomains>[1]
+    const app = updateDomains(keyOf(params, request), body)
+    return app ? HttpResponse.json(app) : new HttpResponse(null, { status: 404 })
+  }),
+  http.post(`${API_URL}/apps/:appId/restart`, async ({ params, request }) => {
+    await delay(1200)
+    const body = (await request.json().catch(() => ({}))) as { service?: string }
+    const app = restartApp(keyOf(params, request), body.service)
+    return app ? HttpResponse.json(app) : new HttpResponse(null, { status: 404 })
+  }),
+  http.post(`${API_URL}/apps/:appId/releases/:releaseId/activate`, async ({ params, request }) => {
+    await delay(1500)
+    const app = activateRelease(keyOf(params, request), decodeURIComponent(String(params.releaseId)))
+    return app ? HttpResponse.json(app) : new HttpResponse(null, { status: 404 })
+  }),
+  http.post(`${API_URL}/apps/:appId/sleep`, async ({ params, request }) => {
+    await delay(900)
+    const app = setAppStatus(keyOf(params, request), 'sleeping')
+    return app ? HttpResponse.json(app) : new HttpResponse(null, { status: 404 })
+  }),
+  http.post(`${API_URL}/apps/:appId/rebuild`, ({ params, request }) => {
+    const key = keyOf(params, request)
+    const app = setAppStatus(key, 'rebuilding')
+    // The rebuild settles on its own so the page shows the transition.
+    setTimeout(() => setAppStatus(key, 'live', 'system'), 6000)
+    return app ? HttpResponse.json(app) : new HttpResponse(null, { status: 404 })
+  }),
+  http.post(`${API_URL}/apps/:appId/rename`, async ({ params, request }) => {
+    const { name } = (await request.json()) as { name: string }
+    const app = renameApp(String(params.appId), name)
+    return app ? HttpResponse.json(app) : new HttpResponse(null, { status: 404 })
+  }),
+  http.delete(`${API_URL}/apps/:appId`, ({ params }) =>
+    deleteApp(String(params.appId)) ? new HttpResponse(null, { status: 204 }) : new HttpResponse(null, { status: 404 }),
+  ),
+  http.post(`${API_URL}/apps/:appId/sql`, async ({ params, request }) => {
+    const body = (await request.json()) as { query: string }
+    return HttpResponse.json(runSql(keyOf(params, request), body.query))
+  }),
+
+  http.post(`${API_URL}/apps/:appId/actions`, async ({ params, request }) => {
+    const body = (await request.json()) as AppActionInput
+    await delay(body.type === 'deployChanges' ? 1800 : 600)
+    const result = runAction(keyOf(params, request), body)
+    return 'error' in result ? HttpResponse.json({ message: result.error }, { status: 400 }) : HttpResponse.json(result)
+  }),
+  http.get(`${API_URL}/apps/:appId/environments`, ({ params }) => {
+    const envs = listEnvironments(String(params.appId))
+    return envs ? HttpResponse.json(envs) : new HttpResponse(null, { status: 404 })
+  }),
+  http.post(`${API_URL}/apps/:appId/environments`, async ({ params, request }) => {
+    const body = (await request.json()) as { name: string; from: string | null }
+    const result = createEnvironment(String(params.appId), body)
+    return 'error' in result
+      ? HttpResponse.json({ message: result.error }, { status: 400 })
+      : HttpResponse.json(result, { status: 201 })
+  }),
+  http.delete(`${API_URL}/apps/:appId/environments/:env`, ({ params }) =>
+    deleteEnvironment(String(params.appId), String(params.env))
+      ? new HttpResponse(null, { status: 204 })
+      : new HttpResponse(null, { status: 404 }),
+  ),
+  http.post(`${API_URL}/apps/:appId/variables/copy`, async ({ params, request }) => {
+    const body = (await request.json()) as { from: string }
+    const app = copyVariables(keyOf(params, request), body.from)
+    return app ? HttpResponse.json(app) : new HttpResponse(null, { status: 404 })
+  }),
+
   // Core dashboard surface — fully self-contained so `start:mock` needs no
   // backend and no login (see MockAuthProvider for the fake session).
   http.get(`${API_URL}/config`, () => HttpResponse.json(buildMockConfig(BILLING_API_URL))),

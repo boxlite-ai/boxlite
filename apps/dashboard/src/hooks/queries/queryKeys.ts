@@ -10,6 +10,17 @@ export const queryKeys = {
   config: {
     all: ['config'] as const,
   },
+  apps: {
+    all: ['apps'] as const,
+    list: (organizationId: string) => [...queryKeys.apps.all, organizationId, 'list'] as const,
+    /** Without env: every environment of the app (use to invalidate). */
+    detail: (organizationId: string, appId: string, env?: string) =>
+      env
+        ? ([...queryKeys.apps.all, organizationId, 'detail', appId, env] as const)
+        : ([...queryKeys.apps.all, organizationId, 'detail', appId] as const),
+    environments: (organizationId: string, appId: string) =>
+      [...queryKeys.apps.all, organizationId, 'detail', appId, '@environments'] as const,
+  },
   apiKeys: {
     all: ['api-keys'] as const,
     list: (organizationId: string) => [...queryKeys.apiKeys.all, organizationId, 'list'] as const,
