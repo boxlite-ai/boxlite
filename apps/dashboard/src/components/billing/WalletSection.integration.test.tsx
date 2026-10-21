@@ -29,12 +29,17 @@ const mocks = vi.hoisted(() => ({
   totalsUnknown: false,
   // The query itself has not answered at all.
   historiesPending: false,
+  // The wallet query has not answered yet.
+  walletPending: false,
+  // A top-up request is in flight.
+  topUpPending: false,
   wallet: {
     automaticTopUp: undefined as AutomaticTopUp | undefined,
     balanceCents: 0,
     ongoingBalanceCents: 0,
     name: 'Wallet',
     creditCardConnected: false,
+    usageChargeMultiplier: undefined as string | undefined,
   },
 }))
 
@@ -102,7 +107,7 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
   },
   useOwnerPaymentMethodsQuery: () => ({ data: mocks.paymentMethods, isLoading: false, isError: false }),
   useOwnerPlanQuery: () => ({ data: { quotaRemainingCents: 0 } }),
-  useOwnerWalletQuery: () => ({ data: mocks.wallet, isLoading: false }),
+  useOwnerWalletQuery: () => ({ data: mocks.walletPending ? undefined : mocks.wallet, isLoading: mocks.walletPending }),
 }))
 
 vi.mock('@/hooks/mutations/useRedeemCouponMutation', () => ({
@@ -114,7 +119,7 @@ vi.mock('@/hooks/mutations/useSetAutomaticTopUpMutation', () => ({
 }))
 
 vi.mock('@/hooks/mutations/useTopUpWalletMutation', () => ({
-  useTopUpWalletMutation: () => ({ mutateAsync: mocks.topUpWallet, isPending: false }),
+  useTopUpWalletMutation: () => ({ mutateAsync: mocks.topUpWallet, isPending: mocks.topUpPending }),
 }))
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
@@ -141,12 +146,15 @@ describe('WalletSection top-up checkout', () => {
     mocks.wallet.automaticTopUp = undefined
     mocks.wallet.ongoingBalanceCents = 0
     mocks.wallet.creditCardConnected = false
+    mocks.wallet.usageChargeMultiplier = undefined
     mocks.topUpWallet.mockClear()
     mocks.invoicesQuery.mockClear()
     mocks.walletTransactionsQuery.mockClear()
     mocks.topUpWallet.mockResolvedValue({ url: 'https://checkout.stripe.com/pay/cs_top_up' })
     mocks.totalsUnknown = false
     mocks.historiesPending = false
+    mocks.walletPending = false
+    mocks.topUpPending = false
   })
 
   afterEach(() => {
@@ -442,5 +450,66 @@ describe('WalletSection top-up checkout', () => {
     expect(autoReload?.compareDocumentPosition(banner as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(banner?.classList.contains('w-full')).toBe(true)
     expect(banner?.classList.contains('min-w-0')).toBe(true)
+  })
+
+  async function renderTopUpRow() {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection />)
+    })
+    await flush()
+    const topUpButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'Top up →',
+    )
+    const discountRibbon = document.querySelector<HTMLElement>('[role="img"][aria-label$=" off"]')
+    return { topUpButton, discountRibbon }
+  }
+
+  it('lays the top-up discount over Top up as a ribbon the click passes through', async () => {
+    mocks.wallet.usageChargeMultiplier = '0.7000'
+
+    const { topUpButton, discountRibbon } = await renderTopUpRow()
+
+    expect(discountRibbon?.getAttribute('aria-label')).toBe('30% off')
+    expect(discountRibbon?.textContent).toBe('30% OFF')
+    // The ribbon's own clip box sits beside the button and lets clicks through.
+    const clipBox = discountRibbon?.parentElement
+    expect(clipBox?.previousElementSibling).toBe(topUpButton)
+    expect(clipBox?.classList.contains('pointer-events-none')).toBe(true)
+    // Clipping on the button's wrapper would cut off its focus outline.
+    expect(topUpButton?.parentElement?.classList.contains('overflow-hidden')).toBe(false)
+    // The ribbon must not rename the button for assistive technology.
+    expect(topUpButton?.textContent?.trim()).toBe('Top up →')
+  })
+
+  it('shows no discount ribbon without a top-up discount', async () => {
+    mocks.wallet.usageChargeMultiplier = '1.0000'
+
+    const { topUpButton, discountRibbon } = await renderTopUpRow()
+
+    expect(topUpButton).toBeDefined()
+    expect(discountRibbon).toBeNull()
+  })
+
+  it('offers neither Top up nor a ribbon before the wallet answers', async () => {
+    mocks.walletPending = true
+
+    const { topUpButton, discountRibbon } = await renderTopUpRow()
+
+    expect(topUpButton).toBeUndefined()
+    expect(discountRibbon).toBeNull()
+  })
+
+  it('keeps the ribbon beside a Top up that is busy with a request', async () => {
+    mocks.wallet.usageChargeMultiplier = '0.7000'
+    mocks.topUpPending = true
+
+    const { topUpButton, discountRibbon } = await renderTopUpRow()
+
+    expect(topUpButton?.disabled).toBe(true)
+    expect(topUpButton?.querySelector('[role="status"]')).not.toBeNull()
+    expect(discountRibbon?.parentElement?.previousElementSibling).toBe(topUpButton)
   })
 })
