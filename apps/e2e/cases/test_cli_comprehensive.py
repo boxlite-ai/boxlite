@@ -15,7 +15,6 @@ CLI binary (subprocess), covering behaviour that is CLI-specific:
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -23,13 +22,14 @@ from pathlib import Path
 
 import pytest
 
+from conftest import detached_cli_box, e2e_box_name
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from images import default_image
 
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
 IMAGE = default_image()
 CLI_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
-BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")
 
 
 @pytest.fixture(scope="module")
@@ -54,12 +54,8 @@ def run(cli, *args, timeout: int = 60, check: bool = True) -> subprocess.Complet
 @pytest.fixture(scope="module")
 def detached_box(cli):
     """Create a long-lived detached box for multi-test reuse."""
-    r = run(cli, "run", "-d", IMAGE, "--", "sleep", "600", timeout=120)
-    m = BOX_ID_RE.search(r.stdout)
-    assert m, f"run -d did not print box id: {r.stdout!r}"
-    box_id = m.group(0)
-    yield box_id
-    run(cli, "rm", "-f", box_id, check=False)
+    with detached_cli_box(cli, run, IMAGE) as box_id:
+        yield box_id
 
 
 # ── stderr capture ─────────────────────────────────────────────────
@@ -171,18 +167,9 @@ def test_cli_ls_shows_box(cli, detached_box):
 
 def test_cli_run_with_name(cli):
     """Create a box with --name and verify it appears in ls."""
-    name = "cli-e2e-named-box"
-    r = run(cli, "run", "-d", "--name", name, IMAGE, "--",
-            "sleep", "300", timeout=120, check=False)
-    if r.returncode != 0:
-        pytest.skip(f"--name not supported or failed: {r.stderr}")
-    m = BOX_ID_RE.search(r.stdout)
-    assert m, f"run -d --name did not print id: {r.stdout!r}"
-    box_id = m.group(0)
-    try:
+    name = e2e_box_name()
+    with detached_cli_box(cli, run, IMAGE, name=name) as box_id:
         r_ls = run(cli, "ls")
         assert name in r_ls.stdout or box_id in r_ls.stdout, (
             f"named box not in ls: {r_ls.stdout!r}"
         )
-    finally:
-        run(cli, "rm", "-f", box_id, check=False)

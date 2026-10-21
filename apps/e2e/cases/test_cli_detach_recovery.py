@@ -22,7 +22,6 @@ handle — that defeats the point of testing detach survival.
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -30,12 +29,13 @@ from pathlib import Path
 
 import pytest
 
+from conftest import detached_cli_box
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from images import default_image
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
 IMAGE = default_image()
 CLI_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
-BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")
 
 
 @pytest.fixture(scope="module")
@@ -66,12 +66,7 @@ def test_detached_box_survives_cli_exit_and_is_reusable(cli):
     subsequent `exec` proves it's still usable. Add a per-box info
     command and we'll extend the contract."""
     # 1) detach run in one CLI process
-    r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
-    m = BOX_ID_RE.search(r_run.stdout)
-    assert m, f"`boxlite run -d` did not print a uuid: {r_run.stdout!r}"
-    box_id = m.group(0)
-
-    try:
+    with detached_cli_box(cli, run, IMAGE) as box_id:
         # The CLI process from step 1 has already exited by the time
         # subprocess.run returned, so steps 2/3 each start fresh.
 
@@ -99,24 +94,15 @@ def test_detached_box_survives_cli_exit_and_is_reusable(cli):
             f"exec into detached box failed: {r_exec.stdout!r}"
         )
 
-    finally:
-        run(cli, "rm", "-f", box_id, check=False)
 
 
 def test_detached_box_exec_propagates_exit_code_on_fresh_cli(cli):
     """A non-zero exit from a command exec'd into a detached box must
     still propagate when the exec is launched from a fresh CLI process
     (i.e. no in-memory SDK state to lean on)."""
-    r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
-    m = BOX_ID_RE.search(r_run.stdout)
-    assert m
-    box_id = m.group(0)
-
-    try:
+    with detached_cli_box(cli, run, IMAGE) as box_id:
         r = run(cli, "exec", box_id, "--", "sh", "-c", "exit 5", check=False)
         assert r.returncode == 5, (
             f"CLI did not propagate exec exit code through detach: "
             f"got {r.returncode}, stdout={r.stdout!r} stderr={r.stderr!r}"
         )
-    finally:
-        run(cli, "rm", "-f", box_id, check=False)

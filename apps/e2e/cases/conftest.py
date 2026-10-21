@@ -12,7 +12,9 @@ that fixture fails the test with a path-bypass error.
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 import os
+import re
 import sys
 import time
 import uuid
@@ -93,6 +95,43 @@ def e2e_box_name() -> str:
     return f"{E2E_BOX_NAME_PREFIX}{uuid.uuid4().hex[:10]}"
 
 
+@contextmanager
+def detached_cli_box(cli, run, image, *, name=None):
+    """Own CLI setup and cleanup, including a create that fails after allocation."""
+    name = name or e2e_box_name()
+    try:
+        result = run(
+            cli, "run", "-d", "--name", name,
+            "--auto-stop", str(E2E_AUTO_STOP_SECONDS),
+            image, "sleep", "600", timeout=120, check=False,
+        )
+        assert result.returncode == 0, (
+            f"CLI create exited {result.returncode}: "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        box_id = result.stdout.strip()
+        assert re.fullmatch(r"[A-Za-z0-9]{12}", box_id), (
+            f"CLI create did not print a box id: {result.stdout!r}"
+        )
+        yield box_id
+    finally:
+        run(cli, "rm", "-f", name, check=False)
+
+
+async def wait_for_box_status(rt, box_id, expected):
+    """Wait for a reported state; accepting stop is not completing stop."""
+    deadline = asyncio.get_running_loop().time() + 60
+    while True:
+        info = await rt.get_info(box_id)
+        assert info is not None, f"box {box_id} disappeared waiting for {expected}"
+        if info.state.status == expected:
+            return
+        assert asyncio.get_running_loop().time() < deadline, (
+            f"box {box_id} never reached {expected}: {info.state.status}"
+        )
+        await asyncio.sleep(1)
+
+
 def bound_box_lifetime(options) -> None:
     """Fill in this suite's auto_stop/auto_delete on BoxOptions, in place.
 
@@ -103,16 +142,12 @@ def bound_box_lifetime(options) -> None:
 
     A case that sets either window owns both: see the module comment above.
 
-    Boxes created by the polyglot drivers (`apps/e2e/sdks/`) and the CLI pass
-    through neither, and `apps/e2e/sweep.py` will not reclaim them either: it
-    only touches this prefix, and CI never passes its `--any-name` opt-out.
-    The exception is a CLI case that opts in by hand, passing `--name` from
-    `e2e_box_name()` and the two windows as flags —
-    `test_cli_entry.py::test_cli_run_foreground_streams_command_output` does,
-    because its box outlives the command that created it.
-    The drivers the cloud legs run — Node and the CLI — remove their own box,
-    so there the gap is a run killed mid-driver. The Go and C drivers have
-    `os.Exit`/`DIE` paths that skip their cleanup entirely; both legs
+    Detached CLI cases use `detached_cli_box` for names, idle-stop bounds,
+    and manual cleanup: detach currently requires auto_delete=0. Foreground
+    CLI cases pass both bounds explicitly. Polyglot drivers (`apps/e2e/sdks/`)
+    pass through neither and remain outside the prefix-based sweep. The Node
+    drivers remove their own boxes, leaving a gap if killed mid-driver.
+    The Go and C drivers have `os.Exit`/`DIE` paths that skip their cleanup entirely; both legs
     `--ignore` those cases, so they never create a cloud box.
     """
     if getattr(options, "auto_stop", None) is None and getattr(options, "auto_delete", None) is None:

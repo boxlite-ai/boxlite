@@ -35,6 +35,31 @@ received the corresponding HTTP requests by tailing `/var/log/boxlite-api.log`
 and `journalctl -u boxlite-runner`. If that meta-test passes, every other
 case in this suite is using the same fixtures and the same path.
 
+## Test call contracts
+
+CLI `run` takes the guest command directly after the image, for example
+`boxlite run -d IMAGE sleep 600`. A `--` placed after the image becomes part
+of that command; `exec` still requires its own separator. Detached CLI cases
+use `conftest.detached_cli_box` for unique `e2e-` names, idle-stop deadlines,
+failure diagnostics, and cleanup even when creation fails. A failed supported
+command is a test failure, not a reason to skip. Detached boxes keep
+`auto_delete=0`, as required by SDK validation; cleanup removes them by name,
+and the dev sweep can reclaim a named box left by an interrupted run.
+
+Python named-volume access is through the `rt.volumes` property:
+`await rt.volumes.list()` and `await rt.volumes.get(id)`.
+
+REST stop and deletion acknowledge requests before the runner finishes them.
+Wait for the reported state or list removal with a bounded deadline instead
+of assuming a fixed sleep is sufficient. A test expecting stopped-box exec
+to be refused must set `auto_resume=False`; automatic wake-up is the default.
+
+`test_harness_contracts.py` checks the E2E callers with real CLI/Python bindings
+against a loopback HTTP endpoint, without cloud credentials. These checks
+cover argument construction and SDK access. A separate injected-success check
+proves the stopped-exec case cannot swallow its own assertion. The cloud run
+still verifies the deployed API, runner, and guest behavior.
+
 ## Prereqs
 
 `BOXLITE_E2E_CATALOG_IMAGE` accepts tagged, digest-pinned, and untagged
@@ -265,10 +290,10 @@ Two things keep that from recurring:
   indistinguishable from a stranded box by age alone.
 
   What that leaves uncovered, deliberately: the polyglot drivers
-  (`apps/e2e/sdks/`) and the CLI cases create boxes with neither the prefix
-  nor a lifetime, so no sweep that CI runs can reclaim one. The ones the
-  cloud legs run — Node and the CLI — remove their box in a `finally`, so
-  there this only bites when a run is killed mid-driver; the Go and C drivers
+  (`apps/e2e/sdks/`) create boxes with neither the prefix nor a lifetime,
+  so no sweep that CI runs can reclaim one. The Node drivers remove their
+  boxes in a `finally`, so there this only bites when a run is killed
+  mid-driver; the Go and C drivers
   exit past their own cleanup, and both legs `--ignore` those cases.
   Clearing anything left behind means `--any-name`, by a human who has read
   the report first — which is why CI never passes it.

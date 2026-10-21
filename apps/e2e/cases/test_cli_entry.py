@@ -17,10 +17,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -30,6 +30,7 @@ from conftest import (
     E2E_AUTO_DELETE_SECONDS,
     E2E_AUTO_STOP_SECONDS,
     STAGE_IS_REMOTE,
+    detached_cli_box,
     e2e_box_name,
 )
 
@@ -38,7 +39,6 @@ from images import default_image
 
 BOXLITE_BIN = os.environ.get("BOXLITE_E2E_CLI", shutil.which("boxlite"))
 IMAGE = default_image()
-BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")
 
 
 CLI_PROFILE = os.environ.get("BOXLITE_E2E_PROFILE", "p1")
@@ -90,17 +90,12 @@ def test_cli_ls_returns_table(cli):
 
 
 def test_cli_run_exec_chain(cli):
-    """End-to-end CLI flow: `boxlite run -d <image> -- sleep 300`
+    """End-to-end CLI flow: `boxlite run -d <image> sleep 600`
     (detach mode), then `boxlite exec <id> -- echo HELLO`, then
     `boxlite rm -f <id>`. Asserts the exec captured stdout and the
     cleanup removed the box."""
     # 1. detach run prints the box id on stdout
-    r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
-    m = BOX_ID_RE.search(r_run.stdout)
-    assert m, f"`boxlite run -d` did not print a uuid: {r_run.stdout!r}"
-    box_id = m.group(0)
-
-    try:
+    with detached_cli_box(cli, run, IMAGE) as box_id:
         # 2. exec a quick command and check stdout
         r_exec = run(cli, "exec", box_id, "--", "echo", "HELLO-FROM-CLI")
         assert "HELLO-FROM-CLI" in r_exec.stdout, (
@@ -113,14 +108,17 @@ def test_cli_run_exec_chain(cli):
         assert box_id in r_ls.stdout, (
             f"`boxlite ls` did not show the new box {box_id}: {r_ls.stdout}"
         )
-    finally:
-        run(cli, "rm", "-f", box_id, check=False)
 
     # 4. after rm, ls should NOT contain it
-    r_ls2 = run(cli, "ls")
-    assert box_id not in r_ls2.stdout, (
-        f"`boxlite rm -f` did not remove the box from listing: {r_ls2.stdout}"
-    )
+    deadline = time.monotonic() + 60
+    while True:
+        r_ls2 = run(cli, "ls")
+        if box_id not in r_ls2.stdout:
+            break
+        assert time.monotonic() < deadline, (
+            f"`boxlite rm -f` did not remove the box from listing: {r_ls2.stdout}"
+        )
+        time.sleep(1)
 
 
 # `run` without `-d` is a different code path, not a nicer spelling of the
@@ -189,16 +187,9 @@ def test_cli_exec_exit_code_propagates(cli):
     """A non-zero exit inside the box must propagate back through the
     CLI's own exit code. This is the CLI behaviour layer, not just the
     SDK — argv parsing + exit-code mapping is CLI-specific."""
-    r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
-    m = BOX_ID_RE.search(r_run.stdout)
-    assert m
-    box_id = m.group(0)
-
-    try:
+    with detached_cli_box(cli, run, IMAGE) as box_id:
         r = run(cli, "exec", box_id, "--", "sh", "-c", "exit 7", check=False)
         assert r.returncode == 7, (
             f"CLI did not propagate the box exit code; got {r.returncode}, "
             f"stdout={r.stdout!r} stderr={r.stderr!r}"
         )
-    finally:
-        run(cli, "rm", "-f", box_id, check=False)

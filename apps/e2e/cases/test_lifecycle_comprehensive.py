@@ -17,7 +17,7 @@ import asyncio
 import boxlite
 import pytest
 
-from conftest import drain
+from conftest import drain, wait_for_box_status
 
 
 # ── stop / start preserves data ────────────────────────────────────
@@ -36,13 +36,11 @@ async def test_stop_start_preserves_rootfs(rt, image):
 
         # Stop
         await b.stop()
-        # Give it a moment to fully stop
-        await asyncio.sleep(1)
+        await wait_for_box_status(rt, b.id, "stopped")
 
         # Start
         await b.start()
-        # Wait for it to be ready
-        await asyncio.sleep(2)
+        await wait_for_box_status(rt, b.id, "running")
 
         # Read back
         ex = await b.exec("cat", ["/workspace/marker.txt"])
@@ -64,21 +62,24 @@ async def test_stop_start_preserves_rootfs(rt, image):
 async def test_exec_on_stopped_box_fails(rt, image):
     """Exec on a stopped box must fail — either by raising an exception
     or by returning a non-zero exit code. Must not succeed silently."""
-    b = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
+    b = await rt.create(boxlite.BoxOptions(
+        image=image, auto_remove=True, auto_resume=False,
+    ))
     try:
         await b.stop()
-        await asyncio.sleep(1)
+        await wait_for_box_status(rt, b.id, "stopped")
         try:
             ex = await b.exec("echo", ["should-fail"])
             out, _ = await drain(ex)
             rc = await asyncio.wait_for(ex.wait(), timeout=30)
+        except Exception:
+            pass  # raising is the expected behaviour
+        else:
             # If it didn't raise, at least the output should not contain
             # "should-fail" (i.e. the command didn't actually run)
             assert rc.exit_code != 0 or "should-fail" not in out, (
                 "exec on stopped box succeeded silently"
             )
-        except Exception:
-            pass  # raising is the expected behaviour
     finally:
         try:
             await rt.remove(b.id, force=True)
@@ -95,17 +96,19 @@ async def test_box_info_reflects_state(rt, image):
     b = await rt.create(boxlite.BoxOptions(image=image, auto_remove=False))
     try:
         # After create, should be running
-        info = await rt.get(b.id)
+        info = await rt.get_info(b.id)
         assert info is not None, "box info returned None right after create"
         assert info.id == b.id
+        assert info.state.status == "running"
 
         # Stop
         await b.stop()
-        await asyncio.sleep(1)
+        await wait_for_box_status(rt, b.id, "stopped")
 
-        info = await rt.get(b.id)
+        info = await rt.get_info(b.id)
         assert info is not None, "box info returned None after stop"
         assert info.id == b.id
+        assert info.state.status == "stopped"
     finally:
         try:
             await rt.remove(b.id, force=True)
@@ -127,10 +130,17 @@ async def test_rapid_create_remove_no_leak(rt, image):
         await rt.remove(b.id, force=True)
 
     # None of the created boxes should appear in the list
-    boxes = await rt.list_info()
-    live_ids = {b.id for b in boxes}
-    leaked = [bid for bid in created_ids if bid in live_ids]
-    assert not leaked, f"rapid create-remove leaked boxes: {leaked}"
+    deadline = asyncio.get_running_loop().time() + 60
+    while True:
+        boxes = await rt.list_info()
+        live_ids = {b.id for b in boxes}
+        leaked = [bid for bid in created_ids if bid in live_ids]
+        if not leaked:
+            break
+        assert asyncio.get_running_loop().time() < deadline, (
+            f"rapid create-remove leaked boxes: {leaked}"
+        )
+        await asyncio.sleep(1)
 
 
 # ── custom resource options ────────────────────────────────────────

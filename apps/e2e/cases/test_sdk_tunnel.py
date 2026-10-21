@@ -11,7 +11,7 @@ import shlex
 import boxlite
 import pytest
 
-from conftest import TUNNEL_READ_TO_EOF_XFAIL, drain
+from conftest import TUNNEL_READ_TO_EOF_XFAIL, drain, wait_for_box_status
 
 SERVICES = ((18080, b"python-sdk-tunnel-e2e-a"), (18082, b"python-sdk-tunnel-e2e-b"))
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "service_in_box_server.py"
@@ -236,7 +236,7 @@ async def test_python_sdk_tunnel_rejects_stopped_box(rt, image):
         # stop(), not remove(): this test is about tunnelling into a box
         # that's merely stopped, not one that's gone.
         await box.stop()
-        await asyncio.sleep(1)
+        await wait_for_box_status(rt, box.id, "stopped")
 
         # A stopped, non-auto-resumable box must reject the tunnel request
         # up front (POL-214) rather than handing back a URI that CONNECTs
