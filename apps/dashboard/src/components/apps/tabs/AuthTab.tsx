@@ -6,7 +6,8 @@
 import { Spinner } from '@/components/ui/spinner'
 import { useEndUserAction } from '@/hooks/mutations/useAppMutations'
 import { useAppAuth } from '@/hooks/queries/useAppsQuery'
-import { relTime, STATUS } from '@/lib/apps/format'
+import { downloadUrl } from '@/lib/apps/client'
+import { capitalize, relTime, STATUS } from '@/lib/apps/format'
 import type { AppDetail, AppEndUser } from '@/lib/apps/types'
 import { handleApiError } from '@/lib/error-handling'
 import { useState } from 'react'
@@ -26,11 +27,14 @@ import {
 import { Screen, ToolButton } from '../SubNav'
 import { Tag } from '../viz'
 
-// Sign-in of this environment: what boxlite.toml declares in [auth], whether the
-// control plane enforces it, and the people who have signed in. The control
-// plane reports all of it; until it signs visitors in, the user list is empty.
+// Sign-in of this environment: what boxlite.toml declares in [auth], which
+// sign-in methods the control plane can run (BoxLite's own OAuth apps), and the
+// people who have signed in. Bringing your own OAuth app and adding providers
+// come later, so they are not offered here.
 
 const GRID = 'grid-cols-[minmax(0,1.4fr)_110px_140px_90px_200px] gap-x-4'
+const PROVIDER_LABEL: Record<string, string> = { github: 'GitHub', google: 'Google' }
+const METHOD_GRID = 'grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_80px] gap-x-4'
 
 function UserRow({ app, user }: { app: AppDetail; user: AppEndUser }) {
   const action = useEndUserAction()
@@ -96,12 +100,13 @@ export function AuthTab({ app }: { app: AppDetail }) {
           <Panel>
             <div className="mb-4">
               <StatusBadge
-                label={status.enforced ? 'Enforced' : 'Declared, not enforced yet'}
+                label={status.enforced ? 'Signing visitors in' : 'Declared, no ready provider'}
                 color={status.enforced ? STATUS.running : STATUS.idle}
               />
             </div>
             <SpecRow label="Providers">{status.providers.join(', ') || '—'}</SpecRow>
             <SpecRow label="Protected paths">{status.protect.join(', ') || 'none'}</SpecRow>
+            <SpecRow label="Sign-in page">{status.loginUrl}</SpecRow>
             {status.note && <SpecRow label="Note">{status.note}</SpecRow>}
           </Panel>
         ) : (
@@ -121,7 +126,38 @@ export function AuthTab({ app }: { app: AppDetail }) {
         )}
       </Screen>
 
-      <Screen title="Users" padded={false}>
+      <Screen title="Sign-in methods" padded={false}>
+        <GridHeader grid={METHOD_GRID} columns={['Method', 'Keys', 'In this environment', '']} />
+        {status.methods.map((method) => (
+          <GridRow key={method.provider} grid={METHOD_GRID}>
+            <span className="text-foreground">{PROVIDER_LABEL[method.provider] ?? capitalize(method.provider)}</span>
+            <StatusBadge
+              label={method.status === 'ready' ? 'BoxLite-managed · ready' : 'Not configured'}
+              color={method.status === 'ready' ? STATUS.running : STATUS.dim}
+            />
+            <span className="text-muted-foreground">{method.declared ? 'Listed in [auth]' : 'Not in [auth]'}</span>
+            <span />
+          </GridRow>
+        ))}
+      </Screen>
+
+      <Screen
+        title="Users"
+        actions={
+          (data?.users.length ?? 0) > 0 ? (
+            <a
+              href={downloadUrl(
+                `/apps/${encodeURIComponent(app.id)}/users.csv?env=${encodeURIComponent(app.environment)}`,
+              )}
+              download
+              className="inline-flex h-[28px] items-center border border-border px-[10px] font-mono text-[12px] text-muted-foreground transition-colors hover:border-brand hover:text-foreground"
+            >
+              Export CSV
+            </a>
+          ) : undefined
+        }
+        padded={false}
+      >
         <div className="pb-3">
           <SearchField value={search} onChange={setSearch} placeholder="Filter users…" />
         </div>

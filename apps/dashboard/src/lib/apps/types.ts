@@ -181,14 +181,25 @@ export interface AppProblem {
 
 export type AppTab = 'overview' | 'deployments' | 'logs' | 'auth' | 'database' | 'volumes' | 'variables'
 
+export interface AppSignInMethod {
+  provider: string
+  /** ready: BoxLite's own OAuth app is set up on the control plane; not_configured: it is not. */
+  status: 'ready' | 'not_configured'
+  /** This environment's [auth] lists it. */
+  declared: boolean
+}
+
 /** End-user sign-in of an environment, as the control plane reports it. */
 export interface AppAuthStatus {
-  /** [auth] is in the environment's configuration. */
+  /** [auth] is in the environment's configuration, so the app proxy signs visitors in. */
   declared: boolean
   providers: string[]
   protect: string[]
-  /** The control plane actually signs visitors in. */
+  /** Sign-in works: declared, and at least one of its providers is ready. */
   enforced: boolean
+  methods: AppSignInMethod[]
+  loginUrl: string
+  users: number
   note: string | null
 }
 
