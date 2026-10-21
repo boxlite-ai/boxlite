@@ -124,8 +124,8 @@ async function main() {
     const r = cli(['check'])
     setToml((s) => s.replace('healthcheck = "/healthz"', 'health = "/healthz"'))
     assert(r.code === 7, `exit ${r.code}`)
-    const e = r.json?.errors?.[0]
-    assert(e?.line && e?.rule, `no line/rule: ${JSON.stringify(r.json).slice(0, 200)}`)
+    const e = (r.json?.errors ?? r.json?.error?.errors)?.[0]
+    assert(e?.line && e?.rule, `no line/rule: ${JSON.stringify(r.json).slice(0, 300)}`)
     return `${e.rule} at line ${e.line}`
   })
   await check('plan lists database, volume, auth, schedule, variables, secrets', async () => {
@@ -213,7 +213,7 @@ async function main() {
     assert(r.status === 302 && r.headers.get('location')?.includes('/.boxlite/auth/login'), `${r.status} ${r.headers.get('location')}`)
     const j = await app('/api/me')
     assert(j.status === 401, `api ${j.status}`)
-    const start = await fetch(new URL(r.headers.get('location'), APP_URL), { redirect: 'manual' })
+    const start = await app(new URL(r.headers.get('location'), APP_URL).pathname + new URL(r.headers.get('location'), APP_URL).search)
     const gh = await fetch(new URL(start.headers.get('location'), APP_URL), { redirect: 'manual' })
     assert(/github\.com\/login\/oauth\/authorize/.test(gh.headers.get('location') ?? start.headers.get('location') ?? ''), `login does not reach GitHub: ${start.status} ${start.headers.get('location')}`)
   })
@@ -300,7 +300,7 @@ async function main() {
   // ---- sleep and wake --------------------------------------------------------------
   await check('stopped Box wakes on the next request with a starting page, not a 502', async () => {
     const st = cli(['app', 'status']).json
-    const boxId = st?.envs?.find((e) => e.name === 'main')?.box_id ?? JSON.stringify(st).match(/"box(?:_id)?":"([A-Za-z0-9]{12})"/)?.[1]
+    const boxId = st?.envs?.find((e) => e.name === 'main')?.box?.id ?? JSON.stringify(st).match(/"box(?:_id)?":"([A-Za-z0-9]{12})"/)?.[1]
     assert(boxId, `no box id in status: ${JSON.stringify(st).slice(0, 300)}`)
     const env = Object.fromEntries(readFileSync(join(ROOT, '.env.local'), 'utf8').split('\n').filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]))
     await fetch(`https://api.dev.boxlite.ai/v1/boxes/${boxId}/stop`, { method: 'POST', headers: { authorization: `Bearer ${env.BOXLITE_API_KEY}`, 'content-length': '0' } })

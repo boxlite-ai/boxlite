@@ -283,7 +283,7 @@ function consoleApi(root: Hono, ctx: Ctx, access: AccessLog) {
     const app = appOf(c);
     const env = envOf(c, app);
     if (!env.box_id) throw fail('conflict', 'nothing is running yet', 'deploy first');
-    await ctx.boxlite.stopBox(env.box_id);
+    await ctx.resources.sleep(env.box_id);
     store.recordActivity(app.id, env.name, ACTOR, 'box.sleep');
     return c.json(await detail(app, env));
   });

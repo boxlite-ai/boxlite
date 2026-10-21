@@ -76,7 +76,7 @@ export function deploymentRoutes(ctx: Ctx) {
       changes = [{ kind: '~', path: 'release', from: live?.release ?? null, to: store.deployment(env.id, b.to)!.release }];
       if (b.with_database) changes.push({ kind: '~', path: 'database', to: `restore to the state before the first migration after #${b.to}` });
       message = message ?? `Roll back to #${b.to}`;
-      baseVersion = store.latestSpecVersion(env.id);
+      baseVersion = store.effectiveSpecVersion(env.id);
     } else {
       let uploadBytes: number | undefined;
       if (b.snapshot_id) {

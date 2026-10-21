@@ -31,7 +31,7 @@ export async function deleteApp(ctx: Ctx, app: AppRow, actor: string): Promise<{
     ctx.store.run('UPDATE apps SET deleted_at = ?, purge_after = ? WHERE id = ?', at, purgeAfter, app.id);
   });
   for (const env of ctx.store.envs(app.id)) {
-    if (env.box_id) await ctx.boxlite.stopBox(env.box_id).catch((err) => console.error(`[lifecycle] stop ${env.box_id}: ${(err as Error).message}`));
+    if (env.box_id) await ctx.resources.sleep(env.box_id).catch((err) => console.error(`[lifecycle] stop ${env.box_id}: ${(err as Error).message}`));
   }
   ctx.store.recordActivity(app.id, null, actor, 'app.delete', { purge_after: purgeAfter });
   return { deleted_at: at, purge_after: purgeAfter };

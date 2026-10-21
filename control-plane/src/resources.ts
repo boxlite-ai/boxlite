@@ -377,6 +377,16 @@ export class Resources {
     return status;
   }
 
+  /**
+   * Stops a Box and remembers it as stopped. Observation (health probes, the console's polling)
+   * only talks to running Boxes, and a request to a stopped Box wakes it, so without this the
+   * very next page refresh would wake the Box it just put to sleep.
+   */
+  async sleep(boxId: string): Promise<void> {
+    await this.ctx.boxlite.stopBox(boxId);
+    this.boxStatusCache.set(boxId, { status: 'stopped', at: Date.now() });
+  }
+
   private noteWake(boxId: string): void {
     this.boxStatusCache.delete(boxId);
     this.wakes.set(boxId, { at: Date.now(), done: Promise.resolve() });

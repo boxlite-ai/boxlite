@@ -72,7 +72,8 @@ export function envSummary(ctx: Pick<Ctx, 'store' | 'resources'>, app: AppRow, e
     status: envStatus(ctx, env),
     url: ctx.resources.appUrl(app.name, env.name),
     access: ctx.resources.effectiveAccess(env),
-    spec_version: ctx.store.latestSpecVersion(env.id),
+    // The version an agent must plan against: failed deployments do not count (see effectiveSpecVersion).
+    spec_version: ctx.store.effectiveSpecVersion(env.id),
     latest_deployment: latest ? { number: latest.number, kind: latest.kind, status: latest.status, message: latest.message, created_at: latest.created_at } : null,
     live_deployment: live ? { number: live.number, kind: live.kind, release: live.release, live_at: live.live_at } : null,
     box: env.box_id ? { id: env.box_id, image: env.box_image, size: env.box_size } : null,

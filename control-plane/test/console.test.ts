@@ -355,9 +355,14 @@ test('open-ticket opens a private app on its own origin; requests there feed acc
 test('sleep stops the Box and is recorded; delete is soft, restorable, then purged with its Box', async () => {
   const { key } = await createViaConsole();
   await deploy(key, TOML);
+  await api('/apps/crm'); // warms the Box status cache with "running"
+  const probesBefore = h.supervisor.calls.filter((c) => c === 'health').length;
   const slept = await api('/apps/crm/sleep', { method: 'POST' });
   assert.equal(slept.status, 200);
   assert.ok(h.boxlite.calls.includes('stop box1'));
+  // Observing a sleeping app must not wake it: no health probe after the stop.
+  await api('/apps/crm');
+  assert.equal(h.supervisor.calls.filter((c) => c === 'health').length, probesBefore, 'the console woke the Box it just put to sleep');
   assert.equal(slept.body.activity[0].action, 'put the Box to sleep');
   const del = await api('/apps/crm', { method: 'DELETE' });
   assert.equal(del.status, 204);
