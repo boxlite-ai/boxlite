@@ -76,7 +76,10 @@ fn repr_redacts_every_credential() {
         assert!(!repr.contains("secret"));
         assert!(!repr.contains("AAAAalice"));
         assert!(!repr.contains("AAAAca"));
-        assert!(repr.contains("[REDACTED]"), "{repr}");
+        assert!(
+            repr.contains("[REDACTED]"),
+            "repr must mark credentials as redacted"
+        );
     }
     // Diagnostics stay useful: the non-secret fields survive redaction.
     assert!(cfg.__repr__().contains("0.0.0.0:2222"));
