@@ -12,6 +12,7 @@ mod registries;
 mod runtime;
 mod snapshot_options;
 mod snapshots;
+mod ssh;
 mod util;
 mod volumes;
 
@@ -41,6 +42,7 @@ use crate::registries::{PyRegistryCredential, PyRegistryHandle};
 use crate::runtime::PyBoxlite;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions, PySnapshotOptions};
 use crate::snapshots::{PySnapshotHandle, PySnapshotInfo};
+use crate::ssh::{PySshAccount, PySshCaConfig, PySshConfig, PySshHandle, PySshStatus};
 use crate::volumes::{PyVolumeHandle, PyVolumeInfo};
 use pyo3::prelude::*;
 
@@ -99,6 +101,11 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyApiKeyCredential>()?;
     m.add_class::<PyAccessToken>()?;
     m.add_class::<PySecret>()?;
+    m.add_class::<PySshAccount>()?;
+    m.add_class::<PySshCaConfig>()?;
+    m.add_class::<PySshConfig>()?;
+    m.add_class::<PySshHandle>()?;
+    m.add_class::<PySshStatus>()?;
 
     Ok(())
 }
