@@ -39,6 +39,7 @@ function cli(args, { json = true, env = {} } = {}) {
 }
 
 let APP_URL = ''
+let CURRENT = ''
 /**
  * Fetches the app the way an agent verifies it: the App key as a Bearer header opens a private
  * app (the platform strips it before the app sees the request). `anonymous` drops it.
@@ -57,12 +58,13 @@ async function app(path, init = {}) {
     const cause = e.cause?.code ?? e.cause?.message ?? e.message
     await sleep(1000)
     const r = await req()
-    warnings.push(`${rest.method ?? 'GET'} ${path}: network error (${cause}), succeeded on retry`)
+    warnings.push(`[${CURRENT}] ${rest.method ?? 'GET'} ${path}: network error (${cause}), succeeded on retry`)
     return r
   }
 }
 
 async function check(name, fn) {
+  CURRENT = name
   const t0 = Date.now()
   try {
     const detail = (await fn()) ?? ''

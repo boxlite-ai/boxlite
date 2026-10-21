@@ -631,6 +631,12 @@ func update(root *os.Root, cfg Config) error {
 			return nil
 		}
 	}
+	if ReleasePublicKey != "" {
+		if err := verifyDownload(client, url, h.Sum(nil)); err != nil {
+			root.Remove(tmp)
+			return err
+		}
+	}
 	if err := checkBinary(root, tmp, n); err != nil {
 		root.Remove(tmp)
 		return err
@@ -639,6 +645,23 @@ func update(root *os.Root, cfg Config) error {
 		return err
 	}
 	return root.Rename(tmp, binaryName)
+}
+
+// verifyDownload fetches <url>.sig and checks it against the downloaded binary's digest.
+func verifyDownload(client *http.Client, url string, digest []byte) error {
+	resp, err := client.Get(url + ".sig")
+	if err != nil {
+		return fmt.Errorf("fetch signature: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s.sig: HTTP %d: %w", url, resp.StatusCode, ErrBadSignature)
+	}
+	sig, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return fmt.Errorf("read signature: %w", err)
+	}
+	return VerifyRelease(ReleasePublicKey, digest, string(sig))
 }
 
 func checkBinary(root *os.Root, name string, size int64) error {

@@ -66,6 +66,17 @@ test('deploy happy path: box, build, start, live', async () => {
   assert.equal((first as { status: string }).status, 'superseded');
 });
 
+test('a fresh Box whose supervisor never answers is replaced once, and the deploy goes live', async () => {
+  h.supervisor.deadBox = 'box1';
+  const d = await deploy({ message: 'first' });
+  assert.equal(d.status, 'live', JSON.stringify(d.error));
+  assert.ok(h.boxlite.calls.includes('delete box1'), 'the dead Box is removed');
+  const env = h.ctx.store.envByName(h.ctx.store.appByName('crm')!.id, 'main')!;
+  assert.notEqual(env.box_id, 'box1');
+  const lines = h.ctx.store.logs(env.id, { limit: 200 }).map((l: { line: string }) => l.line).join('\n');
+  assert.match(lines, /never started its supervisor.*replacing it/);
+});
+
 test('build failure: deployment fails at build, nothing goes live', async () => {
   h.supervisor.failBuild = true;
   const d = await deploy();

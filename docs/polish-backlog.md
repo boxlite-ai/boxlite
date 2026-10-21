@@ -19,6 +19,7 @@ Findings from real runs, newest last. Each line: finding → owner area → stat
 - Proxy forwarded `__Host-bxl_*` platform cookies to apps (strip rule only matched `bxl_*`) → proxy appCookies → fixed
 - Platform cookies on sibling origins could be shadowed by a `Domain=` cookie from another app (cookie tossing) → `__Host-` prefix on https → fixed for app origins; console cookie in progress
 - Supervisor volume files handler checked symlinks then opened by path (TOCTOU as root) → all I/O through os.Root → fixed
+- Box launcher accepted any supervisor binary the CP served (no signature) → ed25519 release signing, key off the CP → fixed
 - Console "Sleep now" was undone by the next page refresh: the 5 s status cache still said running, so the detail view probed health through the tunnel and woke the Box (apps never sleep while someone watches the console → cost) → resources.sleep() records the stop → fixed, regression test proven to fail without the fix
 - A port briefly held during a CP restart left that app on 502 until a manual restart → listeners retry EADDRINUSE for 3 min → fixed
 - The SQL reader role (created by SQL) made Neon refuse schema-only branches, so `env create --from main` broke → reader becomes a Neon-managed role used by direct connection → in progress

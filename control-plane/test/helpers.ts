@@ -135,6 +135,8 @@ export class FakeSupervisor implements SupervisorClient {
   forbiddenHealth = 0;
   /** The wire protocol health reports (SUPERVISOR_PROTOCOL is 2). */
   version = 2;
+  /** A Box id whose supervisor never answers (a Box without outbound network never boots it). */
+  deadBox: string | null = null;
   /** The secret each control call carried, in order. */
   secrets: string[] = [];
   ctx!: Ctx;
@@ -150,6 +152,9 @@ export class FakeSupervisor implements SupervisorClient {
   async health(_u?: string, secret?: string): Promise<SupervisorHealth> {
     this.calls.push('health');
     if (secret !== undefined) this.secrets.push(secret);
+    if (this.deadBox && this.ctx.store.all<{ box_id: string }>('SELECT box_id FROM envs WHERE box_id = ?', this.deadBox).length) {
+      throw new Error('fetch failed: connect ETIMEDOUT');
+    }
     if (this.forbiddenHealth > 0) {
       this.forbiddenHealth--;
       throw new UpstreamError('supervisor', 403, 'GET /.boxlite/sv/health → 403', '{"error":"gateway"}');

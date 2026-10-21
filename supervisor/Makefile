@@ -10,16 +10,31 @@
 #                  read from control-plane/src/platform.ts. SYS_PTRACE only lets the
 #                  root test inspect the (non-dumpable) supervisor process.
 #   make run     → run locally against a control plane on :8787
+#   make release-key → create the release signing key (once, on the build machine)
+#
+# When RELEASE_KEY exists, build compiles its public key into the supervisor and
+# writes <binary>.sig next to each binary; the launcher in a Box then refuses
+# any update that the key did not sign (internal/privilege/releasesig.go).
 
 GO        ?= go
 BIN       ?= bin
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS   := -s -w -X main.version=$(VERSION)
+RELEASE_KEY ?= $(HOME)/.config/microcloud/release-ed25519
+RELEASE_PUB := $(shell [ -f $(RELEASE_KEY) ] && $(GO) run ./cmd/releasesign -key $(RELEASE_KEY) -pub)
+LDFLAGS   := -s -w -X main.version=$(VERSION) $(if $(RELEASE_PUB),-X github.com/boxlite-ai/microcloud/supervisor/internal/privilege.ReleasePublicKey=$(RELEASE_PUB))
 GOFLAGS   := -trimpath
 
-.PHONY: build test test-linux check run clean
+.PHONY: build test test-linux check run clean release-key
 
 build: $(BIN)/supervisor-linux-amd64 $(BIN)/supervisor-linux-arm64
+ifneq ($(RELEASE_PUB),)
+	$(GO) run ./cmd/releasesign -key $(RELEASE_KEY) $(BIN)/supervisor-linux-amd64 $(BIN)/supervisor-linux-arm64
+	ln -sf supervisor-linux-amd64.sig $(BIN)/supervisor-linux-x86_64.sig
+	ln -sf supervisor-linux-arm64.sig $(BIN)/supervisor-linux-aarch64.sig
+endif
+
+release-key:
+	$(GO) run ./cmd/releasesign -key $(RELEASE_KEY) -gen
 
 $(BIN)/supervisor-linux-amd64: $(shell find . -name '*.go') go.mod
 	@mkdir -p $(BIN)

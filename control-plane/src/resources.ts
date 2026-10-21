@@ -19,6 +19,9 @@ export const volumeName = (app: string, env: string, volume: string) => `mc-${ap
 const WAKE_RETRY_MS = 30_000;
 
 /** Platform resources of an env: its Neon branch, its Box, its URLs and runtime env. */
+const SUPERVISOR_TIMEOUT = 'supervisor_timeout';
+const isSupervisorTimeout = (err: unknown) => (err as { details?: { reason?: string } })?.details?.reason === SUPERVISOR_TIMEOUT;
+
 export class Resources {
   private readonly dbLocks = new Map<string, Promise<unknown>>();
   private readonly boxStatusCache = new Map<string, { status: string; at: number }>();
@@ -150,6 +153,23 @@ export class Resources {
    * stopped and a new one is created (its releases do not carry over; rollback stays per Box).
    */
   async ensureBox(app: AppRow, envId: string, want: { image: string; size: string; volumes: VolumeSpec[] }, deployment: number, log: Logger): Promise<EnvRow> {
+    try {
+      return await this.ensureBoxOnce(app, envId, want, deployment, log, false);
+    } catch (err) {
+      const env = this.ctx.store.envById(envId)!;
+      // Self-heal a Box that never came up. BoxLite occasionally hands out a Box without working
+      // outbound network (measured 2026-10-22: no DNS, no route), so its boot cannot download the
+      // supervisor and it never answers. A Box that never served a release holds nothing worth
+      // keeping, so replace it once instead of letting the agent retry the same dead Box.
+      if (!isSupervisorTimeout(err) || env.live_deployment || !env.box_id) throw err;
+      log(`Box ${env.box_id} never started its supervisor (it usually means the Box has no outbound network); replacing it with a new Box`);
+      await this.ctx.boxlite.deleteBox(env.box_id).catch((e) => log(`deleting Box ${env.box_id} failed (ignored): ${(e as Error).message}`));
+      this.ctx.store.updateEnv(env.id, { box_id: null, box_url: null, services: null });
+      return this.ensureBoxOnce(app, envId, want, deployment, log, true);
+    }
+  }
+
+  private async ensureBoxOnce(app: AppRow, envId: string, want: { image: string; size: string; volumes: VolumeSpec[] }, deployment: number, log: Logger, retrying: boolean): Promise<EnvRow> {
     const { store, boxlite } = this.ctx;
     let env = store.envById(envId)!;
     const volumes = this.volumeKey(want.volumes);
@@ -207,7 +227,7 @@ export class Resources {
         }
       }
       // A replaced Box may still exist (stopped), so the new one needs a distinct name.
-      const name = replacing ? `app-${app.name}-${env.name}-${deployment}` : `app-${app.name}-${env.name}`;
+      const name = retrying ? `app-${app.name}-${env.name}-${deployment}-r` : replacing ? `app-${app.name}-${env.name}-${deployment}` : `app-${app.name}-${env.name}`;
       log(`creating Box ${name} (${want.image}, ${size.cpus} CPU / ${size.memory_mib} MiB)`);
       box = await boxlite.createBox({
         name,
@@ -270,7 +290,7 @@ export class Resources {
       }
       await sleep(timing.pollMs);
     }
-    throw fail('deploy_failed', `the supervisor in Box ${env.box_id} did not answer within ${Math.round(timing.supervisorReadyMs / 1000)} s (${lastErr})`, 'read the Box boot with `boxlite-app app logs --source system --since 30m`, then `boxlite-app deploy` again');
+    throw fail('deploy_failed', `the supervisor in Box ${env.box_id} did not answer within ${Math.round(timing.supervisorReadyMs / 1000)} s (${lastErr})`, 'read the Box boot with `boxlite-app app logs --source system --since 30m`, then `boxlite-app deploy` again', { reason: SUPERVISOR_TIMEOUT });
   }
 
   /** For apply/rollback: the existing Box must be up (no recreation), started if it auto-stopped. */

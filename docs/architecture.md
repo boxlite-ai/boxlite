@@ -59,6 +59,7 @@ Rules that keep it safe:
 - Reads never run as the database owner. Writes need `--write`; DDL on `main` only through migrations.
 - A failed or cancelled deployment never changes "the env's state" (`effectiveSpecVersion`).
 - Observing an app must not wake it: probes only talk to Boxes the status cache says are running.
+- Supervisor updates are signed with a key that never leaves the build machine; a compromised CP cannot push a supervisor (`make release-key`, `cmd/releasesign`).
 
 ## Supervisor (`supervisor/`)
 
