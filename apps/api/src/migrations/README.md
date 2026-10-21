@@ -198,11 +198,31 @@ Runs only migrations in the `post-deploy/` folder. Use this:
 
 ## Reverting Migrations
 
+CLI and application startup run pending migrations in `each` mode: each ordinary
+migration has its own transaction, while an explicit `transaction = false` allows
+operations such as concurrent index builds. A later failure leaves earlier completed
+migrations recorded; fix the failure and rerun to resume. The activation facts migration
+still creates its triggers and backfill atomically.
+
 ```bash
 npm run migration:revert
 ```
 
 This reverts the **last executed migration** from either folder (based on the combined migration history in the database).
+
+When that last migration is `AddAdminUsageWindowIndexes1792470000000`, use:
+
+```bash
+npm run migration:revert -- --transaction none
+```
+
+TypeORM 0.3.31 starts a transaction for `undoLastMigration` in `each` mode despite
+the migration's `transaction = false`; concurrent index drops require `none`.
+Use the default transactional command for other migrations. If a concurrent index
+build or drop is interrupted, rerun it: valid completed indexes are retained,
+invalid build leftovers are removed and rebuilt, and missing indexes are skipped on drop.
+Serialize migration runners; concurrent DDL still waits for older transactions and
+is not a production capacity guarantee.
 
 **Important behaviors:**
 

@@ -174,8 +174,12 @@ A first page calculates a fixed result, limited to 200000 candidate periods, 500
 rows, 2 MiB serialized cache data, and a 5-second database statement timeout. Limits fail
 the whole query; there is no successful truncation. General ledger time-window indexes
 support storage-only periods that the existing CPU-positive concurrency indexes omit.
-The indexes use the repository's transactional migration runner; their creation takes a
-write lock, so deployment planning must account for ledger size and the index build time.
+The indexes build concurrently outside a transaction so ledger writes can continue.
+CLI and application migration runners use `each`; other migrations remain transactional.
+Retries preserve valid indexes and rebuild invalid leftovers from interrupted builds.
+See [migration rollback](src/migrations/README.md#reverting-migrations) for the explicit
+nontransactional revert required by these indexes. Builds still consume I/O and wait for
+older transactions, so deployment planning must account for ledger size and transaction age.
 These are protective bounds; production capacity requires workload testing before deployment.
 
 Redis stores the result for 15 minutes without renewing expiration, using

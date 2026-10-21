@@ -67,6 +67,7 @@ describeIfServices('AdminUsageService (real PostgreSQL and Redis)', () => {
       schema,
       logging: ['error'],
       extra: { options: `-c search_path=${schema},public` },
+      migrationsTransactionMode: 'each',
       migrations: [AddBoxUsagePeriods1785250000000, AddAdminUsageWindowIndexes1792470000000],
     }).initialize()
     await db.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`)

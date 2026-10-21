@@ -4,6 +4,67 @@ Keep the latest Box creation and start/delete times after Box cleanup.
 
 ## Details
 
+### Review follow-up: migration availability
+
+At `47a83edb1`, the usage-window migration builds two ordinary indexes. The
+[review](https://github.com/boxlite-ai/boxlite/pull/2039#discussion_r4332833874)
+correctly identifies a deployment write-blocking risk: neither the CLI nor
+application data source sets a transaction mode, so TypeORM defaults to one
+transaction for all pending migrations. The usage integration setup also uses
+that default.
+
+[PostgreSQL concurrent index builds](https://www.postgresql.org/docs/18/sql-createindex.html#SQL-CREATEINDEX-CONCURRENTLY)
+allow writes but cannot run inside a transaction. A failed build can leave an
+invalid index; `IF NOT EXISTS` alone would skip that unusable artifact on retry.
+[TypeORM transaction modes](https://typeorm.io/docs/advanced-topics/migrations/#transaction-modes)
+allow one migration to opt out under `each`, while ordinary migrations keep
+their own transactions. Inspection of installed TypeORM 0.3.31
+`MigrationExecutor.undoLastMigration` shows that rollback ignores the migration's
+`transaction=false`: unlike the review suggestion, `each` still opens a transaction.
+Use `--transaction none` only when reverting this concurrent-index migration;
+keep the ordinary transactional revert default for all other migrations.
+
+Use `each` for CLI, application startup and the integration data source. Only
+the usage-index migration opts out; create/drop both indexes concurrently,
+preserve valid completed indexes on retry, and remove invalid leftovers before
+rebuilding. The activation migration retains its atomic triggers and backfill.
+Reject ordinary index builds because they block writes; reject globally disabling
+transactions because the activation migration requires one. No API changes.
+
+- [x] Reproduce the old migration blocking a real PostgreSQL writer; keep every
+  production file at its pre-fix version for that run.
+- [x] Cover both tables, interrupted-build retry, rollback/reapply and migration history.
+- [x] Update transaction modes and deployment/revert documentation; rerun checks.
+- [x] Measure same-organization trigger contention with synthetic transactions;
+  report the local result and retain production load validation as a rollout requirement.
+
+The production-reverted regression failed at both live/archive writer assertions
+with a 250 ms lock timeout; the partial-build retry failed on an existing index.
+Restoring the complete fix passed all three cases. The related resource and
+activation suites also passed with real PostgreSQL and Redis.
+
+API tests and the production API build passed. Changed-source format and lint
+checks passed; repository-wide format still reports generated clients, lint
+reports infrastructure module-boundary errors, and `make test` stops at missing
+vendored runtime sources. These checks do not establish a clean full-repository run.
+
+On PostgreSQL 17.11 in a local Docker container, eight connections each inserted
+50 Boxes using `clock_timestamp()` creation times. A single synthetic run measured:
+
+| Trigger and organization distribution | Inserts/second | p95 statement time |
+| --- | ---: | ---: |
+| Disabled, same organization | 5,482 | 2.42 ms |
+| Enabled, same organization | 5,134 | 2.73 ms |
+| Enabled, eight organizations | 8,873 | 1.77 ms |
+
+A separate controlled test held a facts-row update transaction for an extra
+250 ms: another Box start in the same organization waited 261 ms, while a start
+in another organization completed in 2.55 ms before the first transaction committed.
+These are observations from synthetic local data, not production throughput targets.
+Before rollout, measure p95/p99 write latency and lock waits at expected burst
+concurrency and transaction duration on a representative database. Keep transactions
+short; no trigger SQL or lifecycle semantics changed for this measurement.
+
 ### Latest Box lifecycle times
 
 Replace first-activation milestones with `lastBoxCreatedAt = max(createdAt)` and
