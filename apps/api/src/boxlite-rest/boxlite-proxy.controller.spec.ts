@@ -44,13 +44,20 @@ function makeHarness() {
     prepare: jest.fn().mockResolvedValue({ isPublic: true, token: null }),
     revoke: jest.fn().mockResolvedValue(undefined),
   }
+  const snapshots = {
+    capture: jest.fn().mockResolvedValue({ id: 'snapshot-id', snapshot_type: 'memory', is_mock: true }),
+    byName: jest.fn().mockResolvedValue({ id: 'snapshot-id' }),
+    get: jest.fn().mockResolvedValue({ id: 'snapshot-id' }),
+    createBox: jest.fn().mockResolvedValue({ id: 'child-id' }),
+  }
   const controller = new (BoxliteProxyController as any)(
     boxService,
     runnerService,
     autoResume,
     tunnelService,
+    snapshots,
   ) as BoxliteProxyController
-  return { controller, boxService, autoResume, tunnelService }
+  return { controller, boxService, autoResume, tunnelService, snapshots }
 }
 
 describe('BoxliteProxyController', () => {
@@ -65,29 +72,31 @@ describe('BoxliteProxyController', () => {
   beforeEach(() => jest.clearAllMocks())
   afterEach(() => jest.useRealTimers())
 
-  it('routes memory snapshot operations to the owning runner without starting the source', async () => {
-    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
-    const { controller, boxService, autoResume } = makeHarness()
+  it('routes snapshot operations through the owned catalog without starting the source', async () => {
+    const { controller, snapshots, autoResume } = makeHarness()
     const request = { body: { name: 'checkpoint', snapshot_type: 'memory' } }
-    await controller.createSnapshot(activeAuth as never, 'source', request as never, {} as never, jest.fn())
-    await controller.getSnapshot(activeAuth as never, 'source', 'checkpoint', request as never, {} as never, jest.fn())
+    const response = { status: jest.fn().mockReturnThis(), json: jest.fn() }
+    await controller.createSnapshot(activeAuth as never, 'source', request as never, response as never, jest.fn())
+    await controller.getSnapshot(
+      activeAuth as never,
+      'source',
+      'checkpoint',
+      request as never,
+      response as never,
+      jest.fn(),
+    )
     await controller.createBoxFromSnapshot(
       activeAuth as never,
       'source',
       'checkpoint',
       request as never,
-      {} as never,
+      response as never,
       jest.fn(),
     )
-    const paths = jest
-      .mocked(createProxyMiddleware)
-      .mock.calls.map(([options]) => (options.pathRewrite as (path: string, req: unknown) => string)('', request))
-    expect(paths).toEqual([
-      '/v1/boxes/box-uuid/snapshots',
-      '/v1/boxes/box-uuid/snapshots/checkpoint',
-      '/v1/boxes/box-uuid/snapshots/checkpoint/boxes',
-    ])
-    expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('source', 'org-1')
+    expect(snapshots.capture).toHaveBeenCalledWith(activeAuth, 'source', request.body)
+    expect(snapshots.byName).toHaveBeenCalledWith(activeAuth, 'source', 'checkpoint')
+    expect(snapshots.get).toHaveBeenCalledWith(activeAuth, 'snapshot-id')
+    expect(snapshots.createBox).toHaveBeenCalledWith(activeAuth, 'snapshot-id', 'checkpoint')
     expect(autoResume.ensureReady).not.toHaveBeenCalled()
     const reflector = new Reflector()
     expect(

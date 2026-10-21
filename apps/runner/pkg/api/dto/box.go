@@ -10,6 +10,7 @@ package dto
 // RunAsUser is the OCI process.user override (docker `-u`), empty when the
 // caller did not ask for one so the image's own USER directive stands.
 type CreateBoxDTO struct {
+	SnapshotID   string            `json:"snapshotId,omitempty"`
 	Id           string            `json:"id" validate:"required"`
 	FromVolumeId string            `json:"fromVolumeId,omitempty"`
 	Image        string            `json:"image" validate:"required"`

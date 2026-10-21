@@ -24,6 +24,62 @@ pub struct JsBoxlite {
 
 #[napi]
 impl JsBoxlite {
+    #[napi(js_name = "snapshotCopy")]
+    pub async fn snapshot_copy(
+        &self,
+        snapshot_id: String,
+        runner_id: String,
+        name: Option<String>,
+    ) -> Result<crate::snapshots::JsSnapshotInfo> {
+        Ok(self
+            .runtime
+            .snapshot_copy(&snapshot_id, &runner_id, name)
+            .await
+            .map_err(map_err)?
+            .into())
+    }
+    #[napi(js_name = "createFromSnapshot")]
+    pub async fn create_from_snapshot(
+        &self,
+        snapshot_id: String,
+        name: Option<String>,
+        options: Option<JsBoxOptions>,
+    ) -> Result<JsBox> {
+        let options = options
+            .map(BoxOptions::try_from)
+            .transpose()
+            .map_err(map_err)?;
+        let handle = self
+            .runtime
+            .create_from_snapshot(&snapshot_id, name, options)
+            .await
+            .map_err(map_err)?;
+        Ok(JsBox {
+            handle: Arc::new(handle),
+        })
+    }
+
+    #[napi(js_name = "snapshotGet")]
+    pub async fn snapshot_get(
+        &self,
+        snapshot_id: String,
+    ) -> Result<crate::snapshots::JsSnapshotInfo> {
+        Ok(self
+            .runtime
+            .snapshot_get(&snapshot_id)
+            .await
+            .map_err(map_err)?
+            .into())
+    }
+
+    #[napi(js_name = "snapshotRemove")]
+    pub async fn snapshot_remove(&self, snapshot_id: String) -> Result<()> {
+        self.runtime
+            .snapshot_remove(&snapshot_id)
+            .await
+            .map_err(map_err)
+    }
+
     /// Create a new runtime with custom options.
     ///
     /// # Arguments

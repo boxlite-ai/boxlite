@@ -689,6 +689,10 @@ export interface JsGetOrCreateResult {
 }
 
 export interface JsBoxlite {
+  createFromSnapshot(snapshotId: string, name?: string | null, options?: JsBoxOptions | null): Promise<JsBox>;
+  snapshotGet(snapshotId: string): Promise<JsSnapshotInfo>;
+  snapshotRemove(snapshotId: string): Promise<void>;
+  snapshotCopy(snapshotId: string, runnerId: string, name?: string | null): Promise<JsSnapshotInfo>;
   importBox(archivePath: string, name?: string | null): Promise<JsBox>;
   create(options: JsBoxOptions, name?: string | null): Promise<JsBox>;
   getOrCreate(

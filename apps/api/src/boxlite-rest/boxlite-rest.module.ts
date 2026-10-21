@@ -5,6 +5,10 @@
  */
 
 import { Module } from '@nestjs/common'
+import { TypeOrmModule } from '@nestjs/typeorm'
+import { FilesystemSnapshot } from './snapshot.entity'
+import { SnapshotService } from './snapshot.service'
+import { BoxliteSnapshotController } from './boxlite-snapshot.controller'
 import { BoxModule } from '../box/box.module'
 import { AuthModule } from '../auth/auth.module'
 import { ApiKeyModule } from '../api-key/api-key.module'
@@ -25,9 +29,19 @@ import { BoxliteInvitationController } from './boxlite-invitation.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 
 @Module({
-  imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule, UserModule, ImageModule, RegistryModule],
+  imports: [
+    BoxModule,
+    AuthModule,
+    ApiKeyModule,
+    OrganizationModule,
+    UserModule,
+    ImageModule,
+    RegistryModule,
+    TypeOrmModule.forFeature([FilesystemSnapshot]),
+  ],
   controllers: [
     BoxliteMeController,
+    BoxliteSnapshotController,
     BoxliteConfigController,
     BoxliteBoxController,
     BoxliteProxyController,
@@ -37,7 +51,7 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
     BoxliteMemberController,
     BoxliteInvitationController,
   ],
-  providers: [BoxliteWsProxyService, CommerceBoxLimitService],
+  providers: [BoxliteWsProxyService, CommerceBoxLimitService, SnapshotService],
   exports: [BoxliteWsProxyService],
 })
 export class BoxliteRestModule {}

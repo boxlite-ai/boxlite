@@ -35,6 +35,37 @@ use super::id::BoxID;
 )]
 #[async_trait]
 pub(crate) trait RuntimeBackend: Send + Sync {
+    async fn snapshot_copy(
+        &self,
+        _id: &str,
+        _runner_id: &str,
+        _name: Option<String>,
+    ) -> BoxliteResult<SnapshotInfo> {
+        Err(BoxliteError::Unsupported(
+            "snapshot copy requires a runner-backed cloud API".into(),
+        ))
+    }
+    async fn snapshot_get(&self, _id: &str) -> BoxliteResult<SnapshotInfo> {
+        Err(BoxliteError::Unsupported(
+            "runtime snapshot lookup is not implemented".into(),
+        ))
+    }
+    async fn snapshot_remove(&self, _id: &str) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "runtime snapshot deletion is not implemented".into(),
+        ))
+    }
+    async fn create_from_snapshot(
+        &self,
+        _id: &str,
+        _name: Option<String>,
+        _options: Option<BoxOptions>,
+    ) -> BoxliteResult<LiteBox> {
+        Err(BoxliteError::Unsupported(
+            "create from snapshot is not implemented".into(),
+        ))
+    }
+
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox>;
 
     async fn get_or_create(

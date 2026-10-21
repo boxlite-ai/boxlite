@@ -584,6 +584,8 @@ async def get_config():
             "tty_enabled": True,
             "streaming_enabled": True,
             "snapshots_enabled": True,
+            "create_from_snapshot_enabled": False,
+            "snapshot_copy_enabled": False,
             "memory_snapshots_enabled": False,
             "clone_enabled": True,
             "export_enabled": True,

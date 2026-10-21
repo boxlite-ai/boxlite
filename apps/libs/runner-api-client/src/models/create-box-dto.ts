@@ -24,6 +24,7 @@ import type { DtoVolumeDTO } from './dto-volume-dto';
 import type { RegistryDTO } from './registry-dto';
 
 export interface CreateBoxDTO {
+    snapshotId?: string;
     'authToken'?: string;
     'cmd'?: Array<string>;
     'cpuQuota'?: number;

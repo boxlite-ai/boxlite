@@ -58,6 +58,28 @@ func BoxliteSnapshotOperation(ctx *gin.Context) {
 	snapshotUnsupported(ctx)
 }
 
+func BoxliteRuntimeSnapshot(ctx *gin.Context) {
+	r, err := runner.GetInstance(nil)
+	if err != nil {
+		snapshotError(ctx, err)
+		return
+	}
+	if ctx.Request.Method == http.MethodDelete {
+		if err := r.Boxlite.SnapshotRemove(ctx.Request.Context(), ctx.Param("snapshot")); err != nil {
+			snapshotError(ctx, err)
+			return
+		}
+		ctx.Status(204)
+		return
+	}
+	info, err := r.Boxlite.SnapshotGet(ctx.Request.Context(), ctx.Param("snapshot"))
+	if err != nil {
+		snapshotError(ctx, err)
+		return
+	}
+	ctx.JSON(200, info)
+}
+
 func snapshotBox(ctx *gin.Context) *sdk.Box {
 	r, err := runner.GetInstance(nil)
 	if err != nil {
@@ -104,7 +126,9 @@ func BoxliteListSnapshots(ctx *gin.Context) {
 		snapshotError(ctx, err)
 		return
 	}
-	for i := range infos { infos[i].BoxID = ctx.Param("boxId") }
+	for i := range infos {
+		infos[i].BoxID = ctx.Param("boxId")
+	}
 	ctx.JSON(200, gin.H{"snapshots": infos})
 }
 

@@ -192,3 +192,22 @@ Keep memory explicitly unsupported. Verify metadata persistence, deletion and
 invalid requests through Python REST → API → runner → native runtime → guest.
 Current PostgreSQL integration failures need environment diagnosis before that
 chain can qualify. Local-only VM tests count as defect evidence, not S acceptance.
+
+## F5 implementation decision (before edits)
+
+Move newly captured snapshots to runtime-owned `snapshots/<opaque id>/`, keeping
+the existing SQLite snapshot catalog. Store a versioned, architecture-bound
+manifest with sanitized source options, excluding mounts and host paths. Legacy
+per-Box snapshots remain readable but cannot silently acquire missing manifests.
+Create a separate writable disk for each child and provision a fresh identity;
+children do not depend on the snapshot file after creation. Serialize capture,
+delete and child materialization to prevent unlink races. Keep failed staging
+directories out of the catalog and remove them on ordinary errors.
+
+Expose runtime-level lookup, delete and create-from by immutable snapshot ID so
+source deletion does not invalidate the handle. API metadata belongs to the
+organization and records the owning runner independently of the source Box.
+Child creation uses normal Box admission/quotas with an explicit owner placement
+constraint; no inaccessible-runner fallback. New external volumes are explicit
+inputs. Verify S2/S3/S4 with actual children and a runner restart; exercise typed
+missing/type/version/permission failures before accepting F5.

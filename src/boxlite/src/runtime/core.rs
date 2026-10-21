@@ -622,3 +622,39 @@ mod tests {
         assert!(err.to_string().contains("image_registries"), "{err}");
     }
 }
+impl BoxliteRuntime {
+    /// Look up a runner-local snapshot independently of its source Box.
+    pub async fn snapshot_get(&self, id: &str) -> BoxliteResult<crate::SnapshotInfo> {
+        self.backend.snapshot_get(id).await
+    }
+
+    /// Copy an immutable snapshot to another runner, returning a new snapshot ID.
+    /// Only runner-backed REST runtimes support this operation; mounts are excluded.
+    pub async fn snapshot_copy(
+        &self,
+        id: &str,
+        runner_id: &str,
+        name: Option<String>,
+    ) -> BoxliteResult<crate::SnapshotInfo> {
+        self.backend.snapshot_copy(id, runner_id, name).await
+    }
+
+    /// Remove an unreferenced snapshot. Independent children remain usable.
+    pub async fn snapshot_remove(&self, id: &str) -> BoxliteResult<()> {
+        self.backend.snapshot_remove(id).await
+    }
+
+    /// Cold-create a Box with a separate writable disk. None inherits the boot
+    /// manifest without external mounts; Some supplies a complete new config.
+    pub async fn create_from_snapshot(
+        &self,
+        id: &str,
+        name: Option<String>,
+        options: Option<BoxOptions>,
+    ) -> BoxliteResult<LiteBox> {
+        if let Some(options) = &options {
+            options.sanitize_common()?;
+        }
+        self.backend.create_from_snapshot(id, name, options).await
+    }
+}

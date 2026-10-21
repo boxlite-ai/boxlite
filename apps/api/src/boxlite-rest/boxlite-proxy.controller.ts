@@ -45,6 +45,7 @@ import { reportedBoxState } from '../box/utils/box-state.util'
 import { Box } from '../box/entities/box.entity'
 import { TunnelService } from '../box/services/tunnel.service'
 import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
+import { SnapshotService } from './snapshot.service'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -95,6 +96,7 @@ export class BoxliteProxyController {
     private readonly runnerService: RunnerService,
     private readonly autoResume: BoxAutoResumeService,
     private readonly tunnelService: TunnelService,
+    private readonly snapshots?: SnapshotService,
   ) {}
 
   @All(':boxId/exec')
@@ -118,7 +120,7 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(auth, id, (box) => `/v1/boxes/${box}/snapshots`, req, res, next, OBSERVATION_ONLY)
+    res.status(201).json(await this.snapshots.capture(auth, id, req.body))
   }
 
   @Get(':boxId/snapshots')
@@ -129,7 +131,7 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(auth, id, (box) => `/v1/boxes/${box}/snapshots`, req, res, next, OBSERVATION_ONLY)
+    res.json(await this.snapshots.list(auth, id))
   }
 
   @Get(':boxId/snapshots/:snapshot')
@@ -141,15 +143,8 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(
-      auth,
-      id,
-      (box) => `/v1/boxes/${box}/snapshots/${encodeURIComponent(snapshot)}`,
-      req,
-      res,
-      next,
-      OBSERVATION_ONLY,
-    )
+    const record = await this.snapshots.byName(auth, id, snapshot)
+    res.json(await this.snapshots.get(auth, record.id))
   }
 
   @Delete(':boxId/snapshots/:snapshot')
@@ -162,15 +157,9 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(
-      auth,
-      id,
-      (box) => `/v1/boxes/${box}/snapshots/${encodeURIComponent(snapshot)}`,
-      req,
-      res,
-      next,
-      OBSERVATION_ONLY,
-    )
+    const record = await this.snapshots.byName(auth, id, snapshot)
+    await this.snapshots.remove(auth, record.id)
+    res.status(204).end()
   }
 
   @Post(':boxId/snapshots/:snapshot/boxes')
@@ -183,15 +172,8 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(
-      authContext,
-      boxId,
-      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/snapshots/${encodeURIComponent(snapshot)}/boxes`,
-      req,
-      res,
-      next,
-      OBSERVATION_ONLY,
-    )
+    const record = await this.snapshots.byName(authContext, boxId, snapshot)
+    res.status(201).json(await this.snapshots.createBox(authContext, record.id, req.body?.name))
   }
 
   @Post(':boxId/snapshots/:snapshot/restore')

@@ -237,7 +237,7 @@ async def test_memory_snapshot_production_local_is_unsupported(tmp_path):
                 name="checkpoint", options=boxlite.SnapshotOptions("memory")
             )
         assert await source.snapshot.list() == []
-        with pytest.raises(UnsupportedError, match="memory"):
+        with pytest.raises(NotFoundError):
             await source.snapshot.create_box("checkpoint", name="child")
         assert len(await runtime.list_info()) == 1
     finally:

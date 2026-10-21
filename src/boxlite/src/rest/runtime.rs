@@ -309,6 +309,76 @@ impl BoxOptions {
 
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
+    async fn snapshot_copy(
+        &self,
+        id: &str,
+        runner_id: &str,
+        name: Option<String>,
+    ) -> BoxliteResult<crate::SnapshotInfo> {
+        let config = self.client.get_config().await?;
+        if !config
+            .capabilities
+            .and_then(|c| c.snapshot_copy_enabled)
+            .unwrap_or(false)
+        {
+            return Err(BoxliteError::Unsupported(
+                "server does not support snapshot copy".into(),
+            ));
+        }
+        let response: super::types::SnapshotResponse = self
+            .client
+            .post(
+                &format!("/snapshots/{}/copies", urlencoding::encode(id)),
+                &serde_json::json!({"runner_id": runner_id, "name": name}),
+            )
+            .await?;
+        Ok(response.to_snapshot_info())
+    }
+    async fn snapshot_get(&self, id: &str) -> BoxliteResult<crate::SnapshotInfo> {
+        let response: super::types::SnapshotResponse = self
+            .client
+            .get(&format!("/snapshots/{}", urlencoding::encode(id)))
+            .await?;
+        Ok(response.to_snapshot_info())
+    }
+
+    async fn snapshot_remove(&self, id: &str) -> BoxliteResult<()> {
+        self.client
+            .delete(&format!("/snapshots/{}", urlencoding::encode(id)))
+            .await
+    }
+
+    async fn create_from_snapshot(
+        &self,
+        id: &str,
+        name: Option<String>,
+        options: Option<BoxOptions>,
+    ) -> BoxliteResult<LiteBox> {
+        let options = if let Some(options) = options {
+            options.sanitize_remote()?;
+            if options.advanced.privileged {
+                self.client.require_privileged_enabled().await?;
+            }
+            if options.advanced.capabilities().is_some() {
+                self.client.require_linux_capabilities_enabled().await?;
+            }
+            Some(CreateBoxRequest::from_options(&options, None))
+        } else {
+            None
+        };
+        let response: BoxResponse = self
+            .client
+            .post(
+                &format!("/snapshots/{}/boxes", urlencoding::encode(id)),
+                &serde_json::json!({"name": name, "options": options}),
+            )
+            .await?;
+        Ok(litebox_from_rest(Arc::new(RestBox::new(
+            self.client.clone(),
+            response.to_box_info()?,
+        ))))
+    }
+
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
         options.sanitize_remote()?;
 

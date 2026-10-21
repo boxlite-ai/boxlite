@@ -291,6 +291,10 @@ export class RunnerService {
     if (excludedRunnerIds?.length) {
       runnerFilter.id = Not(In(excludedRunnerIds))
     }
+    if (params.requiredRunnerId) {
+      if (excludedRunnerIds?.includes(params.requiredRunnerId)) return []
+      runnerFilter.id = params.requiredRunnerId
+    }
 
     if (params.regions?.length) {
       runnerFilter.region = In(params.regions)
@@ -977,6 +981,7 @@ export class RunnerService {
 export const NO_AVAILABLE_RUNNERS = 'No available runners'
 
 export class GetRunnerParams {
+  requiredRunnerId?: string
   regions?: string[]
   boxClass?: BoxClass
   excludedRunnerIds?: string[]

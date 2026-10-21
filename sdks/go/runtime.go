@@ -8,6 +8,7 @@ package boxlite
 import "C"
 import (
 	"context"
+	"fmt"
 	"runtime/cgo"
 	"sync"
 	"time"
@@ -135,6 +136,18 @@ func (r *Runtime) Shutdown(ctx context.Context, timeout time.Duration) error {
 
 // Create creates and returns a new box.
 func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (*Box, error) {
+	return r.create(ctx, "", image, opts...)
+}
+
+// CreateFromSnapshot cold-creates a separate writable disk from a local snapshot.
+// image and opts are the complete new configuration, including explicit mounts.
+func (r *Runtime) CreateFromSnapshot(ctx context.Context, snapshotID, image string, opts ...BoxOption) (*Box, error) {
+	if snapshotID == "" { return nil, fmt.Errorf("snapshot ID is required") }
+	return r.create(ctx, snapshotID, image, opts...)
+}
+
+func (r *Runtime) create(ctx context.Context, snapshotID, image string, opts ...BoxOption) (*Box, error) {
+	if err := ctx.Err(); err != nil { return nil, err }
 	r.ensureDrainRunning()
 
 	cfg := &boxConfig{}
@@ -151,7 +164,14 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_create_box(r.handle, cOpts, C.cbCreateBox(), handleToPtr(h), &cerr)
+	var code uint32
+	if snapshotID == "" {
+		code = C.boxlite_create_box(r.handle, cOpts, C.cbCreateBox(), handleToPtr(h), &cerr)
+	} else {
+		id := C.CString(snapshotID)
+		defer C.free(unsafe.Pointer(id))
+		code = C.boxlite_create_from_snapshot(r.handle, id, cOpts, C.cbCreateBox(), handleToPtr(h), &cerr)
+	}
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		// boxlite_create_box consumes opts on success but not on synchronous failure.

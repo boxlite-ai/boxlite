@@ -541,6 +541,106 @@ paths:
   # -------------------------------------------------------------------------
   # Snapshot / Portability
   # -------------------------------------------------------------------------
+  /{prefix}/snapshots/{snapshot_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - name: snapshot_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getRuntimeSnapshot
+      summary: Query an owned snapshot independently of its source Box
+      responses:
+        "200":
+          description: Immutable filesystem snapshot metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      operationId: deleteRuntimeSnapshot
+      summary: Delete an unreferenced snapshot; independent children remain usable
+      responses:
+        "204": { description: Deleted }
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409": { description: A writable disk still references the snapshot }
+
+  /{prefix}/snapshots/{snapshot_id}/copies:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - name: snapshot_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: copyRuntimeSnapshot
+      summary: Copy an immutable filesystem snapshot to another runner
+      description: Requires snapshot_copy_enabled and WRITE_BOXES. Returns a new independent snapshot ID on an available runner in the source region/class. No external mounts, caches, RAM or process state are transferred. Memory and incompatible architectures are unsupported. Creates have no automatic retry after an ambiguous response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [runner_id]
+              additionalProperties: false
+              properties:
+                runner_id: { type: string, format: uuid }
+                name: { type: string, nullable: true, maxLength: 255, pattern: '^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*$' }
+      responses:
+        "201":
+          description: Independent snapshot copy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+        "400": { description: Invalid request or unavailable destination }
+        "403": { description: Missing write permission }
+        "404": { description: Snapshot not found in this organization }
+        "409": { description: Snapshot name already exists }
+        "413": { description: Archive exceeds 8 GiB }
+        "501": { description: Unsupported snapshot type, architecture or server capability }
+
+  /{prefix}/snapshots/{snapshot_id}/boxes:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - name: snapshot_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: createBoxFromRuntimeSnapshot
+      summary: Cold-create an independent Box on the snapshot's owning runner
+      description: Requires create_from_snapshot_enabled. No RAM or process state is restored. Omitting options inherits the sanitized source configuration without external volumes; supplying options replaces it, with mounts explicitly requested. Memory snapshots remain unsupported in production.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string, nullable: true }
+                options:
+                  allOf:
+                    - $ref: "#/components/schemas/CreateBoxRequest"
+                  nullable: true
+      responses:
+        "201":
+          description: Independent cold-started Box
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409": { description: Snapshot runner unavailable or creation failed }
+        "501": { description: Incompatible snapshot format or unsupported type }
+
   /{prefix}/boxes/{box_id}/snapshots:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -629,7 +729,7 @@ paths:
     post:
       operationId: createBoxFromSnapshot
       summary: Create an independent Box from a snapshot
-      description: Reserved contract. Memory restore is only simulated by explicit test backends; production returns Unsupported. Never falls back to image or filesystem cloning.
+      description: Cold-create from a filesystem snapshot while its source is addressable. Memory restore is only simulated by explicit test backends. Use the runtime snapshot-ID routes after source deletion; availability is declared by create_from_snapshot_enabled.
       tags: [Boxes]
       requestBody:
         content:
@@ -1956,6 +2056,14 @@ components:
               type: boolean
               description: Whether filesystem snapshot operations are supported; does not imply memory support
               example: true
+            create_from_snapshot_enabled:
+              type: boolean
+              description: Whether runtime-level snapshot lookup, deletion and cold creation by ID are supported independently of the source Box. Does not imply memory restore support.
+              example: true
+            snapshot_copy_enabled:
+              type: boolean
+              default: false
+              description: Supports explicit filesystem snapshot copies between available runners.
             memory_snapshots_enabled:
               type: boolean
               description: Real memory snapshot support. False in production; test mocks never imply real memory support.

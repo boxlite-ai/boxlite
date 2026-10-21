@@ -39,9 +39,9 @@ fn disks_dir(home: &Path, box_id: &str) -> PathBuf {
     box_dir(home, box_id).join(DISKS_DIR)
 }
 
-/// Return the snapshot directory path: `{home}/boxes/{box_id}/snapshots/{name}`.
-fn snapshot_dir(home: &Path, box_id: &str, name: &str) -> PathBuf {
-    box_dir(home, box_id).join(SNAPSHOTS_DIR).join(name)
+/// Runtime-owned snapshots outlive their source Box.
+fn snapshot_dir(home: &Path, id: &str) -> PathBuf {
+    home.join(SNAPSHOTS_DIR).join(id)
 }
 
 /// Exec a command, collect stdout, assert exit code 0.
@@ -119,7 +119,7 @@ async fn test_live_disks_exist_after_snapshot_create() {
     // Snapshot copies must exist in the snapshot directory.
     // Note: only the container disk is copied into the snapshot; guest rootfs is
     // recreated from cache on start, so it is not part of the snapshot.
-    let sdir = snapshot_dir(&home.path, &box_id, "ckpt1");
+    let sdir = snapshot_dir(&home.path, &info.id);
     assert!(
         sdir.join(CONTAINER_DISK).exists(),
         "snapshot container disk missing"

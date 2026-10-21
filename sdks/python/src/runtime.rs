@@ -18,6 +18,71 @@ pub(crate) struct PyBoxlite {
 
 #[pymethods]
 impl PyBoxlite {
+    #[pyo3(signature = (snapshot_id, runner_id, name=None))]
+    fn snapshot_copy<'py>(
+        &self,
+        py: Python<'py>,
+        snapshot_id: String,
+        runner_id: String,
+        name: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            Ok(crate::snapshots::PySnapshotInfo::from(
+                runtime
+                    .snapshot_copy(&snapshot_id, &runner_id, name)
+                    .await
+                    .map_err(map_err)?,
+            ))
+        })
+    }
+    #[pyo3(signature = (snapshot_id, name=None, options=None))]
+    fn create_from_snapshot<'py>(
+        &self,
+        py: Python<'py>,
+        snapshot_id: String,
+        name: Option<String>,
+        options: Option<PyBoxOptions>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        let options = options
+            .map(BoxOptions::try_from)
+            .transpose()
+            .map_err(map_err)?;
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let handle = runtime
+                .create_from_snapshot(&snapshot_id, name, options)
+                .await
+                .map_err(map_err)?;
+            Ok(PyBox {
+                handle: Arc::new(handle),
+            })
+        })
+    }
+
+    fn snapshot_get<'py>(
+        &self,
+        py: Python<'py>,
+        snapshot_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            Ok(crate::snapshots::PySnapshotInfo::from(
+                runtime.snapshot_get(&snapshot_id).await.map_err(map_err)?,
+            ))
+        })
+    }
+
+    fn snapshot_remove<'py>(
+        &self,
+        py: Python<'py>,
+        snapshot_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            runtime.snapshot_remove(&snapshot_id).await.map_err(map_err)
+        })
+    }
     #[new]
     fn new(options: PyOptions) -> PyResult<Self> {
         let core_opts = options.into_core()?;

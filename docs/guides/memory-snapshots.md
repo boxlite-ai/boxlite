@@ -31,7 +31,8 @@ records. No durable storage or scheduling claim follows from the mock.
 
 The REST calls are `POST /boxes/{id}/snapshots`, `GET` on that collection or a
 named snapshot, and `POST /boxes/{id}/snapshots/{name}/boxes` with `{"name": ...}`.
-Production create-from is reserved and returns Unsupported. The API checks Box
+Production memory create-from returns Unsupported; no memory snapshot can be
+created in production. Missing snapshot IDs return NotFound. The API checks Box
 organization ownership and mutation permission, routes to its owning runner,
 and does not auto-start the source. The runner returns 501 with
 `error.code="unsupported"`; local SDK errors are `UnsupportedError`.
@@ -46,3 +47,7 @@ Additional production-boundary checks are `make test:apps:api FILTER=memory`
 and `make test:apps:runner FILTER=MemorySnapshot`. S6 may be recorded as
 **MOCK_PASS** only. This feature does not implement FS create-from, source
 deletion survival, snapshot placement or live memory recovery.
+
+Real filesystem child creation is documented separately in
+[Create a Box from a snapshot](create-from-snapshot.md); its success is not
+evidence of RAM restore.

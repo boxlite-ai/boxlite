@@ -9,8 +9,8 @@ BoxLite keeps boxes, images, and its database under its home directory, `~/.boxl
 ├── boxes/                     # Per-Box runtime data
 │   └── {box-id}/
 │       ├── disks/             # disk.qcow2 (container disk), guest-rootfs.qcow2
-│       ├── snapshots/         # {name}/disk.qcow2 for each snapshot
-│       ├── .snapshot_pending  # Crash-recovery marker while a snapshot runs
+│       ├── snapshots/         # Legacy source-owned snapshots only
+│       ├── .snapshot_pending  # Legacy rename-capture recovery marker only
 │       ├── sockets/           # Unix sockets: control, guest ready, network
 │       ├── shared/            # Files shared with the guest over virtio-fs
 │       ├── mounts/            # Host side of shared/ (isolate_mounts, Linux)
@@ -24,6 +24,10 @@ BoxLite keeps boxes, images, and its database under its home directory, `~/.boxl
 │       ├── exit               # Shim exit record: exit code and error details
 │       └── exit.previous      # Exit record from the previous run
 ├── bases/                     # Immutable clone bases and guest rootfs cache
+├── snapshots/                 # Independent captures, survive source deletion
+│   └── {snapshot-id}/
+│       ├── disk.qcow2          # Immutable standalone container disk
+│       └── manifest.json       # Version/architecture and sanitized boot options
 ├── images/                    # OCI image cache
 │   ├── layers/                # Layer blobs
 │   ├── manifests/             # Image manifests
@@ -52,8 +56,8 @@ BoxLite uses QCOW2 (QEMU Copy-On-Write version 2) for box disks.
 **Locations:**
 - `~/.boxlite/boxes/{box-id}/disks/disk.qcow2`: the container disk
 - `~/.boxlite/boxes/{box-id}/disks/guest-rootfs.qcow2`: the guest root filesystem
-- `~/.boxlite/boxes/{box-id}/snapshots/{name}/disk.qcow2`: a snapshot of the container disk,
-  recorded in the snapshot table
+- `~/.boxlite/snapshots/{snapshot-id}/disk.qcow2`: an independent snapshot of the container
+  disk, recorded in the snapshot table; older snapshots remain under the source Box
 - `~/.boxlite/bases/{id}.qcow2`: an immutable clone base, tracked in the `base_disk` table
 
 **Format:** QCOW2, a copy-on-write image format with thin provisioning

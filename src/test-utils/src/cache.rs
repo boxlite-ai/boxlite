@@ -36,6 +36,12 @@ pub struct LinkedCache {
     _per_test_tmp: TempDir,
 }
 
+impl LinkedCache {
+    pub(crate) fn preserve(&mut self) {
+        self._per_test_tmp.disable_cleanup(true);
+    }
+}
+
 static SHARED_RESOURCES: OnceLock<SharedResources> = OnceLock::new();
 
 /// Shared test cache containing pre-pulled images, built rootfs, and DB snapshot.

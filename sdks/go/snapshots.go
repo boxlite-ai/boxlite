@@ -27,6 +27,30 @@ type SnapshotInfo struct {
 
 type SnapshotHandle struct{ box *Box }
 
+func (r *Runtime) SnapshotGet(ctx context.Context, id string) (*SnapshotInfo, error) {
+	var info SnapshotInfo
+	err := r.snapshotOperation(ctx, id, false, &info)
+	if err != nil { return nil, err }
+	return &info, nil
+}
+
+func (r *Runtime) SnapshotRemove(ctx context.Context, id string) error {
+	return r.snapshotOperation(ctx, id, true, nil)
+}
+
+func (r *Runtime) snapshotOperation(ctx context.Context, id string, remove bool, output any) error {
+	if err := ctx.Err(); err != nil { return err }
+	r.ensureDrainRunning()
+	key := C.CString(id)
+	defer C.free(unsafe.Pointer(key))
+	result := make(chan handleResult[*C.char], 1)
+	handle := registerHandleForDispatch(cgo.NewHandle(result))
+	var ffiError C.CBoxliteError
+	code := C.boxlite_runtime_snapshot(r.handle, key, C.bool(remove), C.cbSnapshot(), handleToPtr(handle), &ffiError)
+	if code != C.Ok { deleteHandleForDispatch(handle); return freeError(&ffiError) }
+	return r.awaitSnapshot(ctx, result, handle, output)
+}
+
 func (b *Box) Snapshots() *SnapshotHandle { return &SnapshotHandle{box: b} }
 
 func (s *SnapshotHandle) Create(ctx context.Context, name, snapshotType string) (*SnapshotInfo, error) {
@@ -77,6 +101,10 @@ func (s *SnapshotHandle) request(ctx context.Context, operation, name, snapshotT
 		deleteHandleForDispatch(handle)
 		return freeError(&ffiError)
 	}
+	return s.box.runtime.awaitSnapshot(ctx, result, handle, output)
+}
+
+func (r *Runtime) awaitSnapshot(ctx context.Context, result chan handleResult[*C.char], handle cgo.Handle, output any) error {
 	dispose := func(value *C.char) {
 		if value != nil {
 			freeBoxliteString(value)
@@ -95,7 +123,7 @@ func (s *SnapshotHandle) request(ctx context.Context, operation, name, snapshotT
 	case <-ctx.Done():
 		abandonOwnedResult(result, handle, dispose)
 		return ctx.Err()
-	case <-s.box.runtime.closing:
+	case <-r.closing:
 		abandonOwnedResult(result, handle, dispose)
 		return ErrRuntimeClosed
 	}

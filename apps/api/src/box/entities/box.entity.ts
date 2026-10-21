@@ -41,6 +41,8 @@ import {
 @Index('box_labels_gin_full_idx', { synchronize: false })
 @Index('idx_box_volumes_gin', { synchronize: false })
 export class Box {
+  @Column({ nullable: true })
+  snapshotId?: string
   @PrimaryColumn({ type: 'character varying', length: BOX_ID_LENGTH })
   id: string
 

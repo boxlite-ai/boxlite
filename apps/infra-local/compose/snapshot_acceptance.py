@@ -51,7 +51,7 @@ async def local_probe():
         "printf before > /root/state; chmod 640 /root/state; printf modified > /etc/motd; rm /etc/issue; sync"
     )
     info = await asyncio.wait_for(box.snapshot.create(name="live"), 60)
-    disk = Path(home) / "boxes" / box.id / "snapshots" / "live" / "disk.qcow2"
+    disk = Path(home) / "snapshots" / info.id / "disk.qcow2"
     before = digest(disk)
     await run(
         "printf after > /root/state; dd if=/dev/zero of=/root/new bs=4096 count=512; sync"
@@ -71,6 +71,7 @@ async def local_probe():
         )
     ).splitlines() == ["before640"]
     await runtime.remove(box.id, force=True)
+    await runtime.snapshot_remove(info.id)
     print("LOCAL_PROBE_PASS (not runner acceptance)", flush=True)
 
 
@@ -133,13 +134,14 @@ async def runner_probe():
     await run(
         "printf before > /root/state; chmod 640 /root/state; printf modified > /etc/motd; rm /etc/issue; sync"
     )
+    existing_disks = set(worktree_home(ROOT, "qa").glob("snapshots/*/disk.qcow2"))
     info = await asyncio.wait_for(box.snapshot.create(name=marker), 90)
     assert info.snapshot_type == "filesystem" and not info.is_mock
     assert info.box_id == box.id
     assert (await box.snapshot.get(marker)).id == info.id
     assert info.id in [s.id for s in await box.snapshot.list()]
     disks = list(
-        worktree_home(ROOT, "qa").glob(f"boxes/*/snapshots/{marker}/disk.qcow2")
+        set(worktree_home(ROOT, "qa").glob("snapshots/*/disk.qcow2")) - existing_disks
     )
     assert len(disks) == 1, "snapshot absent from this checkout's actual runner home"
     before = digest(disks[0])
@@ -168,6 +170,7 @@ async def runner_probe():
     # Force a real host storage failure inside the freeze/copy/thaw bracket.
     # Always repair permissions before another operation, even if assertions fail.
     snapshot_root = disks[0].parent.parent
+    before_failure = set(snapshot_root.iterdir())
     snapshot_root.chmod(0o500)
     try:
         try:
@@ -181,7 +184,7 @@ async def runner_probe():
     finally:
         snapshot_root.chmod(0o700)
     assert await box.snapshot.get(marker + "-failure") is None
-    assert not (snapshot_root / (marker + "-failure")).exists()
+    assert set(snapshot_root.iterdir()) == before_failure
     assert (
         await run("printf thawed > /root/thaw-check; sync; cat /root/thaw-check")
         == "thawed"
@@ -220,6 +223,13 @@ async def runner_probe():
         raise AssertionError("referenced snapshot was deleted")
     print("S4 PASS: service restart, metadata, restore, delete and errors", flush=True)
     await runtime.remove(box.id, force=True)
+    async with asyncio.timeout(90):
+        while True:
+            try:
+                await runtime.snapshot_remove(info.id)
+                break
+            except InvalidStateError:
+                await asyncio.sleep(0.2)
     print(
         "RUNNER_FS_PASS; F5 child creation and cache-volume boundary are separate",
         flush=True,

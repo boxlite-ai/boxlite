@@ -58,7 +58,7 @@ exit codes, hypotheses, versions, retained patch and guest evidence.
 ## Remaining features
 
 F2: zero rounds, BLOCKED by F1; see [Swarm report](2026-10-22-f2-swarm-blocked.md).
-F5–F6: zero implementation/verification rounds. No acceptance claim yet.
+F6: zero implementation/verification rounds. No acceptance claim yet.
 
 ## F3
 
@@ -110,3 +110,47 @@ F5–F6: zero implementation/verification rounds. No acceptance claim yet.
    runner responses. `make test:runner-ci:fs` exits 0 twice, including the failure
    injection (`f4-r4-runner-fs-errors.log`). `make test:integration:snapshots`
    exits 0 (41 actual VM tests); native Go snapshot facade tests also pass.
+
+## F5
+
+1. Source-owned storage prevents deletion survival. Add independent snapshot
+   storage, versioned boot manifests, runtime lookup/delete/create-from contracts
+   and Python/C facades. `make dev:python SETUP_DONE=1` exits 2: three new methods
+   were placed outside `impl BoxliteRuntime` by an incorrect patch anchor.
+   `f5-r1-python-build.log`; no VM acceptance reached.
+2. Place the methods inside an impl; extend authenticated API catalog and runner
+   owner placement. Python build passes; `make dev:runner-ci SETUP_DONE=1`
+   exits 2 because cgo returns uint32 rather than the named C enum type.
+   `f5-r2-build.log`.
+3. Match the actual cgo return type and handle native NotFound during idempotent
+   child creation. Build passes. `make test:runner-ci:children-local` passes real
+   S2/S3 behavior locally (not runner acceptance). Targeted API tests fail on an
+   obsolete proxy fixture (`res.status is not a function`), because snapshot
+   ownership now crosses the catalog service. Logs `f5-r3-{build,local,api}.log`.
+4. Adapt the routing test to the catalog boundary and include new runtime-level
+   routes in the permission audit. Relevant API tests pass; API webpack build
+   passes (whole apps build fails its existing runner version environment gate).
+   Real runner child boots original image: V2 job payload omitted snapshotId.
+   `f5-r4-children.log`, exit 2. Source/child disks and snapshot remain on runner;
+   identifiers and guest evidence saved in `f5-r4-scene/` before service cleanup.
+5. Forward snapshotId in the actual V2 job path. With ALL F5 production changes
+   reverted, new adapter test reaches the missing-field assertion and fails:
+   `make test:apps:api FILTER='forwards the snapshot identity'`, exit 2,
+   `f5-r5-v2-before.log`. Production restored from `f5-repro-backup/`; no test-only
+   compatibility adapter needed. Real runner S2/S3, restart and snapshot deletion
+   pass (`f5-r5-children.log`). Native version/permission failures leave no children
+   (`f5-r5-native-errors.log`). F4 regression finds duplicate-name errors have
+   lost their code in Nest's filter: AlreadyExists becomes InvalidState.
+   `f5-r5-fs-regression.log`, exit 2; scene retained in `f5-r5-scene/`.
+6. Hypothesis: nesting the runner error in HttpException hides its code from the
+   existing flat Nest error filter. Before this round's production fix, a service
+   regression fails at the missing top-level code/message (`f5-r6-errors-before.log`,
+   exit 2); the complete preceding implementation is retained as
+   `f5-r5-before-error-fix.patch` plus the new-file backup. Flatten message/code
+   at the API boundary, leaving status unchanged. API regression, Rust unit,
+   runner, native build and apps build pass. Real `make test:runner-ci:fs` and
+   `make test:runner-ci:children` exit 0 (`f5-r6-fs.log`,
+   `f5-r6-children.log`): typed errors survive, failed capture recovers the guest,
+   children have distinct boot IDs and independent disks, and source/snapshot
+   deletion and process restart preserve the documented lifecycle. Six rounds
+   used; no further implementation round is available for F5.

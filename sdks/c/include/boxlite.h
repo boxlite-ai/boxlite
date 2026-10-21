@@ -1897,6 +1897,22 @@ enum BoxliteErrorCode boxlite_box_snapshot(CBoxHandle *handle,
                                            void *user_data,
                                            CBoxliteError *out_error);
 
+// Runtime snapshot get/remove by opaque ID, surviving source deletion.
+enum BoxliteErrorCode boxlite_runtime_snapshot(CBoxliteRuntime *runtime,
+                                               const char *id,
+                                               bool remove,
+                                               CBoxSnapshotCb cb,
+                                               void *user_data,
+                                               CBoxliteError *out_error);
+
+// Cold-create from snapshot. Consumes opts just like boxlite_create_box.
+enum BoxliteErrorCode boxlite_create_from_snapshot(CBoxliteRuntime *runtime,
+                                                   const char *id,
+                                                   CBoxliteOptions *opts,
+                                                   CBoxCreateBoxCb cb,
+                                                   void *user_data,
+                                                   CBoxliteError *out_error);
+
 void boxlite_free_string(char *s);
 
 // Queue asynchronous volume creation.

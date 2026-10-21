@@ -324,7 +324,10 @@ impl RuntimeImpl {
         let base_disk_mgr =
             crate::disk::BaseDiskManager::new(layout.bases_dir(), base_disk_store.clone());
         let snapshot_store = crate::db::SnapshotStore::new(db.clone());
-        let snapshot_mgr = crate::litebox::snapshot_mgr::SnapshotManager::new(snapshot_store);
+        let snapshot_mgr = crate::litebox::snapshot_mgr::SnapshotManager::new(
+            snapshot_store,
+            layout.home_dir().join("snapshots"),
+        );
         let box_store = BoxStore::new(db);
 
         // Initialize lock manager for per-entity multiprocess-safe locking
@@ -1793,7 +1796,7 @@ fn reject_local_unsupported_options(options: &BoxOptions) -> BoxliteResult<()> {
     Ok(())
 }
 
-async fn sanitize_local_options(
+pub(crate) async fn sanitize_local_options(
     features: &ExperimentalFeatures,
     options: BoxOptions,
 ) -> BoxliteResult<BoxOptions> {
@@ -1814,6 +1817,26 @@ async fn sanitize_local_options(
 
 #[async_trait::async_trait]
 impl super::backend::RuntimeBackend for LocalRuntime {
+    async fn snapshot_get(&self, id: &str) -> BoxliteResult<crate::SnapshotInfo> {
+        self.0.snapshot_mgr.get_id(id)
+    }
+
+    async fn snapshot_remove(&self, id: &str) -> BoxliteResult<()> {
+        let _lock = self.0.snapshot_mgr.operations.lock().await;
+        self.0
+            .snapshot_mgr
+            .remove_id(id, &self.0.layout.boxes_dir(), &self.0.layout.bases_dir())
+    }
+
+    async fn create_from_snapshot(
+        &self,
+        id: &str,
+        name: Option<String>,
+        options: Option<BoxOptions>,
+    ) -> BoxliteResult<LiteBox> {
+        self.0.create_from_snapshot(id, name, options).await
+    }
+
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
         let options = sanitize_local_options(&self.0.experimental_features, options).await?;
         self.0.create(options, name).await

@@ -8,6 +8,20 @@ import { ResourceType } from '../enums/resource-type.enum'
 import { RunnerAdapterV2 } from './runnerAdapter.v2'
 
 describe('RunnerAdapterV2 createBox', () => {
+  it('forwards the snapshot identity into the actual CREATE_BOX job', async () => {
+    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    await adapter.init({ id: 'runner-owner' } as any)
+    await adapter.createBox({ id: 'child', snapshotId: 'snapshot-native-id' } as any, 'alpine:3.23')
+    expect(jobService.createJob).toHaveBeenCalledWith(
+      null,
+      JobType.CREATE_BOX,
+      'runner-owner',
+      ResourceType.BOX,
+      'child',
+      expect.objectContaining({ snapshotId: 'snapshot-native-id' }),
+    )
+  })
   it('passes secrets through to the CREATE_BOX job payload', async () => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)

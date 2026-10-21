@@ -20,6 +20,16 @@ pub(crate) struct SnapshotStore {
 }
 
 impl SnapshotStore {
+    pub(crate) fn find_id(&self, id: &str) -> BoxliteResult<Option<SnapshotInfo>> {
+        let conn = self.db.conn();
+        let json = db_err!(
+            conn.query_row("SELECT json FROM snapshot WHERE id = ?1", [id], |row| row
+                .get(0))
+                .optional()
+        )?;
+        deserialize_optional(json)
+    }
+
     pub(crate) fn new(db: Database) -> Self {
         Self { db }
     }
@@ -78,16 +88,6 @@ impl SnapshotStore {
         let conn = self.db.conn();
         db_err!(conn.execute("DELETE FROM snapshot WHERE id = ?1", rusqlite::params![id],))?;
         Ok(())
-    }
-
-    /// Delete all snapshot records for a box.
-    pub(crate) fn delete_all_for_box(&self, box_id: &str) -> BoxliteResult<u64> {
-        let conn = self.db.conn();
-        let rows = db_err!(conn.execute(
-            "DELETE FROM snapshot WHERE box_id = ?1",
-            rusqlite::params![box_id],
-        ))?;
-        Ok(rows as u64)
     }
 }
 
@@ -239,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_all_for_box() {
+    fn test_find_id_is_independent_of_source_box_lookup() {
         let db = test_db();
         let store = SnapshotStore::new(db);
 
@@ -247,10 +247,9 @@ mod tests {
         store.save(&make_snapshot("s2", "box-1", "snap-b")).unwrap();
         store.save(&make_snapshot("s3", "box-2", "snap-c")).unwrap();
 
-        let removed = store.delete_all_for_box("box-1").unwrap();
-        assert_eq!(removed, 2);
-
-        assert!(store.list("box-1").unwrap().is_empty());
+        assert_eq!(store.find_id("s1").unwrap().unwrap().box_id, "box-1");
+        assert!(store.find_id("missing").unwrap().is_none());
+        assert_eq!(store.list("box-1").unwrap().len(), 2);
         assert_eq!(store.list("box-2").unwrap().len(), 1);
     }
 

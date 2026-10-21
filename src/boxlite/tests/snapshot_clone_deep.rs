@@ -406,9 +406,8 @@ async fn test_snapshot_remove_success() {
     .expect("create runtime");
 
     let litebox = create_stopped_box(&runtime, "rm-test").await;
-    let box_id = litebox.id().to_string();
 
-    // Create two snapshots. Chain: disk → s2 → s1
+    // Create two independent captures.
     litebox
         .snapshots()
         .create(SnapshotOptions::default(), "s1")
@@ -425,12 +424,8 @@ async fn test_snapshot_remove_success() {
     litebox.snapshots().restore("s1").await.unwrap();
 
     // Snapshot directory should exist on disk
-    let snap_dir = home
-        .path
-        .join("boxes")
-        .join(&box_id)
-        .join("snapshots")
-        .join("s2");
+    let snap = litebox.snapshots().get("s2").await.unwrap().unwrap();
+    let snap_dir = home.path.join("snapshots").join(&snap.id);
     assert!(
         snap_dir.exists(),
         "snapshot dir should exist before removal"
@@ -2701,7 +2696,7 @@ async fn test_remove_all_clones_cascades_gc() {
 }
 
 #[tokio::test]
-async fn test_box_removal_cleans_all_snapshots() {
+async fn test_box_removal_preserves_independent_snapshots() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -2729,15 +2724,25 @@ async fn test_box_removal_cleans_all_snapshots() {
         .await
         .unwrap();
 
-    let snapshots_dir = home.path.join("boxes").join(&box_id).join("snapshots");
+    let snapshots = litebox.snapshots().list().await.unwrap();
+    let snapshots_dir = home.path.join("snapshots");
     assert!(snapshots_dir.exists());
 
     // Remove box
     runtime.remove("clean-snaps", true).await.unwrap();
 
-    // Box home should be gone (including snapshots)
+    // Box home is gone; the independent catalog and disks remain.
     let box_home = home.path.join("boxes").join(&box_id);
     assert!(!box_home.exists());
+
+    for snapshot in snapshots {
+        assert_eq!(
+            runtime.snapshot_get(&snapshot.id).await.unwrap().id,
+            snapshot.id
+        );
+        assert!(snapshot.disk_info.to_path_buf().exists());
+        runtime.snapshot_remove(&snapshot.id).await.unwrap();
+    }
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }

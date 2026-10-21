@@ -354,6 +354,8 @@ pub(super) struct ServerCapabilities {
     pub linux_capabilities_enabled: bool,
     pub privileged_enabled: bool,
     pub snapshots_enabled: bool,
+    pub create_from_snapshot_enabled: bool,
+    pub snapshot_copy_enabled: bool,
     pub memory_snapshots_enabled: bool,
     pub clone_enabled: bool,
     pub export_enabled: bool,

@@ -112,6 +112,7 @@ const DEFAULT_BOX_GPU = 0
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
+  snapshot?: { nativeId: string; runnerId: string }
 }
 
 export type ProxyAdmission = (box: Box, boxId: string) => void
@@ -285,7 +286,7 @@ export class BoxService {
           }
           return { ...volume, volumeId: canonicalId }
         })
-      } else if (image && !needsFreshBox) {
+      } else if (image && !needsFreshBox && !options.snapshot) {
         //  No volumes requested — try to claim a pre-warmed box matching this image/spec
         //  before creating a fresh one.
         const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${image}`)) === 1
@@ -313,6 +314,7 @@ export class BoxService {
       const box = new Box(region.id, createBoxDto.name)
 
       box.organizationId = organization.id
+      box.snapshotId = options.snapshot?.nativeId
 
       //  TODO: make configurable
       box.class = boxClass
@@ -374,15 +376,19 @@ export class BoxService {
       // before the insert: it has no way to give a slot back, so a create its
       // own input or placement refuses must not spend one. Only the box limit
       // and a name collision, which the insert itself settles, come after it.
-      const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
-        await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
-        return createBoxDto.name
-          ? this.boxRepository.insert(box, options.maxCreatedBoxes)
-          : persistWithGeneratedBoxName(box.id, (name) => {
-              box.name = name
-              return this.boxRepository.insert(box, options.maxCreatedBoxes)
-            })
-      })
+      const insertedBox = await this.persistOnAvailableRunner(
+        box,
+        { regions: [region.id], boxClass, requiredRunnerId: options.snapshot?.runnerId },
+        async () => {
+          await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
+          return createBoxDto.name
+            ? this.boxRepository.insert(box, options.maxCreatedBoxes)
+            : persistWithGeneratedBoxName(box.id, (name) => {
+                box.name = name
+                return this.boxRepository.insert(box, options.maxCreatedBoxes)
+              })
+        },
+      )
 
       recordBoxRequested('box.create', insertedBox.id, ctx)
 

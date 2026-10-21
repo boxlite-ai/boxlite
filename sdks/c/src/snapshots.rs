@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use crate::error::{BoxliteErrorCode, error_to_code, null_pointer_error, write_error};
 use crate::event_queue::{CBoxSnapshotCb, RuntimeEvent, push_event};
-use crate::{CBoxHandle, CBoxliteError};
+use crate::{CBoxHandle, CBoxliteError, CBoxliteOptions, CBoxliteRuntime};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -122,6 +122,99 @@ pub unsafe extern "C" fn boxlite_box_snapshot(
         push_event(
             &queue,
             RuntimeEvent::Snapshot {
+                cb,
+                user_data,
+                result,
+            },
+        )
+        .await;
+    });
+    BoxliteErrorCode::Ok
+}
+
+/// Runtime snapshot get/remove by opaque ID, surviving source deletion.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_runtime_snapshot(
+    runtime: *mut CBoxliteRuntime,
+    id: *const c_char,
+    remove: bool,
+    cb: CBoxSnapshotCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    if runtime.is_null() || id.is_null() {
+        write_error(out_error, null_pointer_error("runtime or id"));
+        return BoxliteErrorCode::InvalidArgument;
+    }
+    let cb = crate::unwrap_cb_or_return!(cb, out_error);
+    let id = CStr::from_ptr(id).to_string_lossy().into_owned();
+    let runtime = &*runtime;
+    let core = runtime.runtime.clone();
+    let queue = runtime.queue.clone();
+    let user_data = user_data as usize;
+    runtime.tokio_rt.spawn(async move {
+        let result = async {
+            let value = if remove {
+                core.snapshot_remove(&id).await?;
+                serde_json::Value::Null
+            } else {
+                metadata(core.snapshot_get(&id).await?)
+            };
+            CString::new(value.to_string()).map_err(|e| BoxliteError::Internal(e.to_string()))
+        }
+        .await;
+        push_event(
+            &queue,
+            RuntimeEvent::Snapshot {
+                cb,
+                user_data,
+                result,
+            },
+        )
+        .await;
+    });
+    BoxliteErrorCode::Ok
+}
+
+/// Cold-create from snapshot. Consumes opts just like boxlite_create_box.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_create_from_snapshot(
+    runtime: *mut CBoxliteRuntime,
+    id: *const c_char,
+    opts: *mut CBoxliteOptions,
+    cb: crate::event_queue::CBoxCreateBoxCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    if runtime.is_null() || id.is_null() || opts.is_null() {
+        write_error(out_error, null_pointer_error("runtime, id or opts"));
+        return BoxliteErrorCode::InvalidArgument;
+    }
+    let cb = crate::unwrap_cb_or_return!(cb, out_error);
+    let id = CStr::from_ptr(id).to_string_lossy().into_owned();
+    let opts = Box::from_raw(opts);
+    let runtime = &*runtime;
+    let core = runtime.runtime.clone();
+    let queue = runtime.queue.clone();
+    let task_queue = queue.clone();
+    let tokio_rt = runtime.tokio_rt.clone();
+    let user_data = user_data as usize;
+    runtime.tokio_rt.spawn(async move {
+        let result = core
+            .create_from_snapshot(&id, opts.name, Some(opts.options))
+            .await
+            .map(|handle| {
+                let box_id = handle.id().clone();
+                crate::event_queue::OwnedFfiPtr::new(Box::new(crate::box_handle::BoxHandle {
+                    handle: std::sync::Arc::new(handle),
+                    box_id,
+                    tokio_rt,
+                    queue: task_queue,
+                }))
+            });
+        push_event(
+            &queue,
+            RuntimeEvent::CreateBox {
                 cb,
                 user_data,
                 result,

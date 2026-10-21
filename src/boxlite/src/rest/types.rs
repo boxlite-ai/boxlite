@@ -93,6 +93,8 @@ pub(crate) struct ServerCapabilities {
     pub memory_snapshots_enabled: Option<bool>,
     pub linux_capabilities_enabled: Option<bool>,
     pub snapshots_enabled: Option<bool>,
+    pub create_from_snapshot_enabled: Option<bool>,
+    pub snapshot_copy_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
     pub import_enabled: Option<bool>,

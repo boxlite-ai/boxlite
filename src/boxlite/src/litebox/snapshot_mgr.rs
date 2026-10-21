@@ -2,31 +2,28 @@
 //!
 //! `SnapshotInfo` is the public-facing snapshot metadata type (like `BoxConfig`
 //! for boxes). `SnapshotManager` orchestrates snapshot creation, removal, and
-//! restore operations using per-box snapshot directories.
+//! restore operations using runtime-owned snapshot directories.
 //!
 //! # Storage Layout
 //!
 //! ```text
-//! ~/.boxlite/boxes/{box_id}/
-//! ├── disks/
-//! │   ├── disk.qcow2              # Live container disk (COW child)
-//! │   └── guest-rootfs.qcow2
-//! └── snapshots/
-//!     ├── snap-1/
-//!     │   └── disk.qcow2          # Snapshot container disk (immutable)
-//!     └── snap-2/
-//!         └── disk.qcow2
+//! ~/.boxlite/
+//! ├── boxes/{box_id}/disks/disk.qcow2
+//! └── snapshots/{snapshot_id}/
+//!     ├── disk.qcow2              # Immutable, standalone container disk
+//!     └── manifest.json           # Versioned boot options, no external mounts
 //! ```
 //!
 //! # Relationship to `BaseDiskManager`
 //!
 //! Clone bases remain in flat `bases/` dir, managed by `BaseDiskManager`.
-//! Snapshots have their own per-box directories and dedicated `snapshot` table.
+//! Snapshots have runtime-owned directories and a dedicated `snapshot` table.
 //! New captures are flattened standalone disks. Older snapshot files can still
 //! reference clone bases, so deletion continues checking their backing chains.
 
 use std::os::unix::fs::MetadataExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -110,16 +107,28 @@ pub(crate) fn validate_snapshot_name(name: &str) -> BoxliteResult<()> {
 /// VM-agnostic — no quiescing, no locking. `LocalSnapshotBackend` orchestrates
 /// those concerns and delegates the disk + DB operations here.
 ///
-/// Snapshots are stored in per-box directories:
-///   `boxes/{box_id}/snapshots/{name}/disk.qcow2`
+/// New snapshots are stored in runtime-owned directories:
+///   `snapshots/{id}/disk.qcow2`
 #[derive(Clone)]
 pub(crate) struct SnapshotManager {
     store: SnapshotStore,
+    root: PathBuf,
+    pub(crate) operations: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl SnapshotManager {
-    pub(crate) fn new(store: SnapshotStore) -> Self {
-        Self { store }
+    pub(crate) fn new(store: SnapshotStore, root: PathBuf) -> Self {
+        Self {
+            store,
+            root,
+            operations: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
+    pub(crate) fn get_id(&self, id: &str) -> BoxliteResult<SnapshotInfo> {
+        self.store
+            .find_id(id)?
+            .ok_or_else(|| BoxliteError::NotFound("snapshot not found".into()))
     }
 
     /// Expose the underlying store for direct queries.
@@ -145,7 +154,7 @@ impl SnapshotManager {
 
     /// Create a snapshot from a box's live container disk.
     ///
-    /// 1. Create `box_home/snapshots/{name}/` directory
+    /// 1. Create runtime-owned `snapshots/{id}/` directory
     /// 2. Read virtual size from container disk
     /// 3. Flatten into an independent disk without replacing the live inode
     /// 4. Persist the completed disk before publishing metadata
@@ -155,6 +164,7 @@ impl SnapshotManager {
         box_home: &Path,
         name: &str,
         box_id: &str,
+        options: crate::BoxOptions,
     ) -> BoxliteResult<SnapshotInfo> {
         let disks_dir = box_home.join("disks");
         let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
@@ -167,9 +177,9 @@ impl SnapshotManager {
         }
 
         // 1. Create snapshot directory
-        let snapshot_dir = box_home.join("snapshots").join(name);
-        std::fs::create_dir_all(box_home.join("snapshots"))
-            .map_err(|e| BoxliteError::Storage(e.to_string()))?;
+        let snapshot_id = nanoid::nanoid!(16);
+        let snapshot_dir = self.root.join(&snapshot_id);
+        std::fs::create_dir_all(&self.root).map_err(|e| BoxliteError::Storage(e.to_string()))?;
         std::fs::create_dir(&snapshot_dir).map_err(|e| {
             BoxliteError::Storage(format!(
                 "Failed to create snapshot directory {}: {}",
@@ -182,6 +192,13 @@ impl SnapshotManager {
         // instead: subsequent source writes must never reach the snapshot inode.
         let snap_disk = snapshot_dir.join(disk_filenames::CONTAINER_DISK);
         let capture = (|| {
+            let manifest = SnapshotManifest::new(options)?;
+            let manifest_path = snapshot_dir.join("manifest.json");
+            std::fs::write(
+                &manifest_path,
+                serde_json::to_vec(&manifest).map_err(|e| BoxliteError::Storage(e.to_string()))?,
+            )?;
+            std::fs::File::open(&manifest_path)?.sync_all()?;
             Qcow2Helper::flatten(&container_disk, &snap_disk)?;
             let disk = std::fs::OpenOptions::new()
                 .read(true)
@@ -215,7 +232,6 @@ impl SnapshotManager {
         };
 
         // 5. Insert DB record
-        let snapshot_id = nanoid::nanoid!(8);
         let now = chrono::Utc::now().timestamp();
         let info = SnapshotInfo {
             snapshot_type: crate::SnapshotType::Filesystem,
@@ -372,7 +388,7 @@ impl SnapshotManager {
         Ok(())
     }
 
-    /// Remove all snapshots for a box (files + DB records).
+    /// Remove legacy source-owned snapshots. Independent captures survive.
     ///
     /// Best-effort: logs errors but doesn't fail. Used during box deletion.
     pub(crate) fn remove_all_for_box(&self, box_id: &str, box_home: &Path) {
@@ -389,13 +405,86 @@ impl SnapshotManager {
         }
 
         // Delete all DB records for this box.
-        if let Err(e) = self.store.delete_all_for_box(box_id) {
-            tracing::warn!(
-                box_id = %box_id,
-                error = %e,
-                "Failed to delete snapshot DB records"
-            );
+        if let Ok(infos) = self.store.list(box_id) {
+            for info in infos {
+                if !info.disk_info.to_path_buf().starts_with(&self.root) {
+                    let _ = self.store.delete(&info.id);
+                }
+            }
         }
+    }
+
+    pub(crate) fn remove_id(&self, id: &str, boxes: &Path, bases: &Path) -> BoxliteResult<()> {
+        let info = self.get_id(id)?;
+        let disk = info.disk_info.to_path_buf();
+        // Restored sources and old clone bases can still reference this disk.
+        for entry in std::fs::read_dir(boxes)? {
+            let current = entry?
+                .path()
+                .join("disks")
+                .join(disk_filenames::CONTAINER_DISK);
+            if current.exists() && crate::disk::is_backing_dependency(&disk, &current) {
+                return Err(BoxliteError::InvalidState(
+                    "snapshot is referenced by a Box".into(),
+                ));
+            }
+        }
+        self.remove(
+            &info.box_id,
+            &info.name,
+            Path::new("/nonexistent-boxlite-disk"),
+            bases,
+        )
+    }
+}
+
+/// Private, runner-local boot contract. No external mount or host path survives.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct SnapshotManifest {
+    pub(crate) version: u32,
+    pub(crate) architecture: String,
+    pub(crate) options: crate::BoxOptions,
+}
+
+impl SnapshotManifest {
+    fn new(mut options: crate::BoxOptions) -> BoxliteResult<Self> {
+        if matches!(options.rootfs, crate::RootfsSpec::RootfsPath(_))
+            || options.advanced.kernel.is_some()
+        {
+            return Err(BoxliteError::Unsupported(
+                "snapshot boot manifest requires an image and the bundled kernel".into(),
+            ));
+        }
+        options.volumes.clear();
+        options.mounts.clear();
+        options.ports.clear();
+        options.advanced.security = Default::default();
+        options.secrets.clear();
+        Ok(Self {
+            version: 1,
+            architecture: std::env::consts::ARCH.into(),
+            options,
+        })
+    }
+
+    pub(crate) fn read(disk: &Path) -> BoxliteResult<Self> {
+        let path = disk
+            .parent()
+            .ok_or_else(|| BoxliteError::Storage("invalid snapshot location".into()))?
+            .join("manifest.json");
+        if !path.exists() {
+            return Err(BoxliteError::Unsupported(
+                "legacy snapshot has no boot manifest".into(),
+            ));
+        }
+        let manifest: Self = serde_json::from_slice(&std::fs::read(path)?)
+            .map_err(|e| BoxliteError::Storage(format!("invalid snapshot manifest: {e}")))?;
+        if manifest.version != 1 || manifest.architecture != std::env::consts::ARCH {
+            return Err(BoxliteError::Unsupported(
+                "snapshot version or architecture is incompatible".into(),
+            ));
+        }
+        Ok(manifest)
     }
 }
 

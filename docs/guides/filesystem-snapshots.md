@@ -38,9 +38,10 @@ sequence still requires operator recovery. This is not a machine-state checkpoin
 Names are unique per source Box, up to 255 bytes, and cannot start with `.` or
 contain slash, backslash or NUL. Query/list/delete use persisted SQLite metadata.
 Delete with `await box.snapshot.remove("checkpoint")`. Deletion rejects a disk
-still referenced by a restored Box or a legacy backing chain. Current storage is
-runner-local and source-owned: deleting the source removes these snapshots.
-Independent child creation and source-deletion survival are separate contracts.
+still referenced by a restored Box or a legacy backing chain. New snapshots use
+independent runner-local storage and survive source deletion; older per-Box
+snapshots remain source-owned. See [creating children](create-from-snapshot.md)
+for runtime lookup by ID, boot manifests and runner placement.
 
 The API authenticates organization ownership, routes to the Box's assigned
 runner and never auto-starts a stopped source for capture. It advertises

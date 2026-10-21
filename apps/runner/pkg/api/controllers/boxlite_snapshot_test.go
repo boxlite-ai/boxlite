@@ -38,3 +38,18 @@ func TestMemorySnapshotProductionRefusesAndValidates(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotImportRejectsForeignArchitectureBeforeRuntimeAccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/imports/:name", BoxliteImportSnapshot)
+	for _, architecture := range []string{"", "unknown", "../arm64"} {
+		req := httptest.NewRequest("POST", "/imports/copy", strings.NewReader("not an archive"))
+		req.Header.Set("X-Boxlite-Architecture", architecture)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		if response.Code != 501 || !strings.Contains(response.Body.String(), `"code":"unsupported"`) {
+			t.Fatalf("%d: %s", response.Code, response.Body.String())
+		}
+	}
+}
