@@ -11,9 +11,148 @@ import (
 	"sync/atomic"
 	"testing"
 
+	sdkboxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/gin-gonic/gin"
 )
+
+func TestExecStartErrorClass(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantOK     bool
+		wantStatus int
+		wantType   string
+		wantCode   string
+	}{
+		{
+			name:       "missing binary classifies as ExecutionError 422",
+			err:        &sdkboxlite.Error{Code: sdkboxlite.ErrExecution, Message: "exec process failed with error executable '/nonexistent/binary' not found in $PATH"},
+			wantOK:     true,
+			wantStatus: http.StatusUnprocessableEntity,
+			wantType:   "ExecutionError",
+			wantCode:   "execution_failed",
+		},
+		{
+			name:   "internal stays a server fault",
+			err:    &sdkboxlite.Error{Code: sdkboxlite.ErrInternal, Message: "boom"},
+			wantOK: false,
+		},
+		{
+			name:   "engine-unavailable (503 class) stays a server fault",
+			err:    &sdkboxlite.Error{Code: sdkboxlite.ErrEngine, Message: "engine down"},
+			wantOK: false,
+		},
+		{
+			name:   "non-boxlite error falls through",
+			err:    context.Canceled,
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			class, message, ok := execStartErrorClass(tt.err)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if class.status != tt.wantStatus || class.errorType != tt.wantType || class.code != tt.wantCode {
+				t.Fatalf("class = %+v, want status=%d type=%s code=%s", class, tt.wantStatus, tt.wantType, tt.wantCode)
+			}
+			if !strings.Contains(message, "nonexistent") {
+				t.Fatalf("message = %q, want runtime detail preserved", message)
+			}
+		})
+	}
+}
+
+func TestWriteExecStartError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const detail = "exec process failed with error executable '/nonexistent/binary' not found in $PATH"
+
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantType   string
+		wantCode   string
+	}{
+		{
+			name:       "execution error keeps the typed envelope",
+			err:        &sdkboxlite.Error{Code: sdkboxlite.ErrExecution, Message: detail},
+			wantStatus: http.StatusUnprocessableEntity,
+			wantType:   "ExecutionError",
+			wantCode:   "execution_failed",
+		},
+		{
+			name:       "invalid argument is a 400 envelope",
+			err:        &sdkboxlite.Error{Code: sdkboxlite.ErrInvalidArgument, Message: detail},
+			wantStatus: http.StatusBadRequest,
+			wantType:   "InvalidArgumentError",
+			wantCode:   "invalid_argument",
+		},
+		{
+			name:       "stopped box is a 409",
+			err:        &sdkboxlite.Error{Code: sdkboxlite.ErrStopped, Message: detail},
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name:       "engine fault stays a 500",
+			err:        &sdkboxlite.Error{Code: sdkboxlite.ErrEngine, Message: detail},
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name:       "non-boxlite error stays a 500",
+			err:        context.Canceled,
+			wantStatus: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(w)
+
+			writeExecStartError(ctx, tt.err)
+
+			if w.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d body=%s", w.Code, tt.wantStatus, w.Body.String())
+			}
+			if tt.wantType == "" {
+				var body struct {
+					Error string `json:"error"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+					t.Fatalf("unmarshal failed: %v body=%s", err, w.Body.String())
+				}
+				if !strings.Contains(body.Error, tt.err.Error()) {
+					t.Fatalf("body = %s, want the original error preserved", w.Body.String())
+				}
+				return
+			}
+			var body struct {
+				Error struct {
+					Message string `json:"message"`
+					Type    string `json:"type"`
+					Code    string `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("unmarshal failed: %v body=%s", err, w.Body.String())
+			}
+			if body.Error.Type != tt.wantType || body.Error.Code != tt.wantCode {
+				t.Fatalf("envelope = %+v, want type=%s code=%s", body.Error, tt.wantType, tt.wantCode)
+			}
+			if want := tt.err.(*sdkboxlite.Error).Message; body.Error.Message != want {
+				t.Fatalf("message = %q, want %q", body.Error.Message, want)
+			}
+		})
+	}
+}
 
 // signalCapturingExec is a minimal boxlite.ExecHandle stub that records
 // every Signal call so tests can assert the controller plumbed the
