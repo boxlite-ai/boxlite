@@ -564,6 +564,16 @@ impl ApiClient {
         ensure_capability("import", capabilities.import_enabled)
     }
 
+    pub async fn require_exec_detach_enabled(&self) -> BoxliteResult<()> {
+        let config = self.get_config().await?;
+        let capabilities = config.capabilities.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "Remote server did not advertise exec detach capability".to_string(),
+            )
+        })?;
+        ensure_capability("exec detach", capabilities.exec_detach_enabled)
+    }
+
     /// POST binary data with query params, parse JSON response.
     pub async fn post_bytes_for_json<T: DeserializeOwned>(
         &self,

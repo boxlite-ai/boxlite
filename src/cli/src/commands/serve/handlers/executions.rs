@@ -50,7 +50,11 @@ pub(in crate::commands::serve) async fn start_execution(
     };
 
     let exec_id = execution.id().clone();
-    let active = ActiveExecution::new(box_id, SessionKind::Exec, execution, stdin);
+    let active = if req.detach {
+        ActiveExecution::new_detached(box_id, execution, stdin)
+    } else {
+        ActiveExecution::new(box_id, SessionKind::Exec, execution, stdin)
+    };
 
     state
         .executions

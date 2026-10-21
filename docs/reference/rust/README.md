@@ -598,6 +598,7 @@ let cmd = BoxCommand::new("python3")
 | `working_dir` | `fn working_dir(self, dir: impl Into<String>) -> Self` | Set working directory |
 | `user` | `fn user(self, user: impl Into<String>) -> Self` | Set execution user (e.g., `"nobody"`, `"1000:1000"`) |
 | `tty` | `fn tty(self, enable: bool) -> Self` | Enable pseudo-terminal |
+| `detach` | `fn detach(self, enable: bool) -> Self` | Keep running after every client disconnects; the box must have `detach: true`, or `exec` fails with `InvalidState` |
 
 ### Execution
 

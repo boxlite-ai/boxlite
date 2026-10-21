@@ -277,6 +277,7 @@ Box is in wrong state for requested operation.
 - Executing command on stopped box
 - Stopping already stopped box
 - Restarting box that never started
+- Executing a command with `detach` on a box created without `detach`
 
 **Example:**
 ```text
@@ -287,6 +288,7 @@ Error: invalid state: cannot execute on stopped box
 - Check box status: `info = await box.info(); print(info.state.status)`
 - Restart box if stopped: `await runtime.get(box_id)` (may auto-restart)
 - Create new box if needed
+- For a detached exec, create the box with `detach: true`; a box bounds its execs
 
 ### `InvalidArgument(String)`
 

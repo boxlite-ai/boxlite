@@ -1834,6 +1834,10 @@ components:
               type: boolean
               description: Whether box export is supported
               example: true
+            exec_detach_enabled:
+              type: boolean
+              description: Whether `ExecRequest.detach` is honored
+              example: true
             inbound_update_enabled:
               type: boolean
               description: Whether `PUT /{prefix}/boxes/{box_id}/network/inbound` is supported
@@ -2655,6 +2659,15 @@ components:
           type: boolean
           default: false
           description: Enable pseudo-terminal allocation
+        detach:
+          type: boolean
+          default: false
+          description: |
+            Keep the execution running after every client disconnects. A detached
+            execution is exempt from reconnect reaping and the session lifetime
+            cap, and ends with its box. The box must have been created with
+            `detach: true`, otherwise the request fails with 409. Send it only to
+            a server that advertises `capabilities.exec_detach_enabled`.
 
     ExecResponse:
       type: object

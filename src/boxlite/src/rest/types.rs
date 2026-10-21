@@ -94,6 +94,7 @@ pub(crate) struct ServerCapabilities {
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
     pub import_enabled: Option<bool>,
+    pub exec_detach_enabled: Option<bool>,
 }
 
 // ============================================================================
@@ -829,6 +830,9 @@ pub(crate) struct ExecRequest {
     pub working_dir: Option<String>,
     #[serde(default)]
     pub tty: bool,
+    /// Sent only when set, so a plain exec keeps the body older servers know.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub detach: bool,
 }
 
 impl ExecRequest {
@@ -846,6 +850,7 @@ impl ExecRequest {
             timeout_seconds,
             working_dir: cmd.working_dir.clone(),
             tty: cmd.tty,
+            detach: cmd.detach,
         }
     }
 }
@@ -1524,11 +1529,31 @@ mod tests {
             timeout_seconds: Some(30.0),
             working_dir: Some("/app".to_string()),
             tty: false,
+            detach: false,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"command\":\"python3\""));
         assert!(json.contains("\"timeout_seconds\":30.0"));
         assert!(json.contains("\"working_dir\":\"/app\""));
+    }
+
+    /// `detach` reaches the wire only when set, so a plain exec keeps the
+    /// body it always sent and an older server sees nothing new.
+    #[test]
+    fn exec_request_carries_detach_only_when_set() {
+        let detached = serde_json::to_value(ExecRequest::from_command(
+            &crate::BoxCommand::new("sleep").detach(true),
+        ))
+        .unwrap();
+        assert_eq!(detached["detach"], serde_json::json!(true));
+
+        let plain =
+            serde_json::to_value(ExecRequest::from_command(&crate::BoxCommand::new("sleep")))
+                .unwrap();
+        assert!(
+            plain.get("detach").is_none(),
+            "a plain exec must not send detach: {plain}"
+        );
     }
 
     #[test]

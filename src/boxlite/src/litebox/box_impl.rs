@@ -452,6 +452,7 @@ impl BoxImpl {
             ));
         }
         self.ensure_usable_without_rerunning_main("exec")?;
+        command.ensure_detach_allowed(&self.config.id, self.config.options.detach)?;
 
         let live = self.live_state().await?;
 

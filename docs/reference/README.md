@@ -44,7 +44,7 @@ implementation currently serves all 32 paths:
 Read each server's routes rather than either README — both under-report.
 `GET /config` does not close this gap: its feature flags (`tty_enabled`,
 `streaming_enabled`, `snapshots_enabled`, `clone_enabled`, `export_enabled`,
-`import_enabled`, `inbound_update_enabled`) cover only some routes, there is no
+`import_enabled`, `inbound_update_enabled`, `exec_detach_enabled`) cover only some routes, there is no
 flag at all for volumes, images or tunnel, and a flag can disagree with the
 routes — the reference server advertises `streaming_enabled: true` while
 serving no attach route.

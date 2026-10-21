@@ -12,6 +12,7 @@ pub(in crate::commands::serve) async fn get_config() -> Json<ServerConfig> {
             clone_enabled: true,
             export_enabled: true,
             import_enabled: true,
+            exec_detach_enabled: true,
         },
     })
 }

@@ -36,6 +36,7 @@ pub struct BoxCommand {
     pub(crate) working_dir: Option<String>,
     pub(crate) tty: bool,
     pub(crate) user: Option<String>,
+    pub(crate) detach: bool,
 }
 
 impl BoxCommand {
@@ -49,6 +50,7 @@ impl BoxCommand {
             working_dir: None,
             tty: false,
             user: None,
+            detach: false,
         }
     }
 
@@ -114,6 +116,30 @@ impl BoxCommand {
         let s = spec.into();
         self.user = if s.trim().is_empty() { None } else { Some(s) };
         self
+    }
+
+    /// Keep the command running after every client disconnects.
+    ///
+    /// A detached exec is exempt from the server's disconnect reaping and
+    /// session lifetime cap, but never outlives its box: the box must be
+    /// created with `detach = true`, or `exec` fails with `InvalidState`.
+    pub fn detach(mut self, enable: bool) -> Self {
+        self.detach = enable;
+        self
+    }
+
+    /// Refuse `detach` on a box that is not detached; the box bounds the exec.
+    pub(crate) fn ensure_detach_allowed(
+        &self,
+        box_id: impl std::fmt::Display,
+        box_detached: bool,
+    ) -> BoxliteResult<()> {
+        if self.detach && !box_detached {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot detach exec in box {box_id}: the box is not detached; create it with detach=true"
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -495,6 +521,32 @@ mod tests {
             .expect("positive finite timeout should be accepted");
 
         assert_eq!(cmd.timeout, Some(Duration::from_millis(1500)));
+    }
+
+    /// The box bounds a detached exec, so a box that is not detached must
+    /// refuse one instead of quietly running a plain exec.
+    #[test]
+    fn detach_is_refused_on_a_box_that_is_not_detached() {
+        let err = BoxCommand::new("sleep")
+            .detach(true)
+            .ensure_detach_allowed("box1", false)
+            .expect_err("a box that is not detached must refuse a detached exec");
+
+        assert!(
+            matches!(err, BoxliteError::InvalidState(ref msg) if msg.contains("box1") && msg.contains("not detached")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn a_plain_exec_runs_on_any_box_and_a_detached_one_on_a_detached_box() {
+        BoxCommand::new("sleep")
+            .ensure_detach_allowed("box1", false)
+            .expect("a plain exec must run on a box that is not detached");
+        BoxCommand::new("sleep")
+            .detach(true)
+            .ensure_detach_allowed("box1", true)
+            .expect("a detached exec must run on a detached box");
     }
 
     // ─── wait must not block kill ─────────────────────────────────────

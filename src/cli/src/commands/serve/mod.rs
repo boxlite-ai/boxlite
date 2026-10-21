@@ -255,6 +255,8 @@ pub(in crate::commands::serve) const MAIN_SESSION_ID_HEADER: &str = "x-boxlite-e
 pub(in crate::commands::serve) struct ActiveExecution {
     box_id: String,
     kind: SessionKind,
+    /// Started with `detach`: no client's absence may end it (see `outlives_clients`).
+    detached: bool,
     execution: Execution,
     /// Stdin sink owned by the WS `/attach` session.
     stdin: tokio::sync::Mutex<Option<ExecStdin>>,
@@ -404,6 +406,21 @@ impl ActiveExecution {
     fn new(
         box_id: String,
         kind: SessionKind,
+        execution: Execution,
+        stdin: Option<ExecStdin>,
+    ) -> Arc<Self> {
+        Self::create(box_id, kind, false, execution, stdin)
+    }
+
+    /// A tenant exec started with `detach`.
+    fn new_detached(box_id: String, execution: Execution, stdin: Option<ExecStdin>) -> Arc<Self> {
+        Self::create(box_id, SessionKind::Exec, true, execution, stdin)
+    }
+
+    fn create(
+        box_id: String,
+        kind: SessionKind,
+        detached: bool,
         mut execution: Execution,
         stdin: Option<ExecStdin>,
     ) -> Arc<Self> {
@@ -424,6 +441,7 @@ impl ActiveExecution {
         let active = Arc::new(Self {
             box_id,
             kind,
+            detached,
             execution,
             stdin: tokio::sync::Mutex::new(stdin),
             stdout_bus: stdout_bus.clone(),
@@ -499,6 +517,12 @@ impl ActiveExecution {
 
     pub(in crate::commands::serve) fn kind(&self) -> SessionKind {
         self.kind
+    }
+
+    /// Whether this session lives as long as its box rather than its
+    /// clients: the box's main session, or an exec started with `detach`.
+    pub(in crate::commands::serve) fn outlives_clients(&self) -> bool {
+        self.kind == SessionKind::Main || self.detached
     }
 
     pub(in crate::commands::serve) fn stdout_bus(&self) -> &BacklogBroadcast {
@@ -1009,29 +1033,33 @@ async fn run_reap_once(
             continue;
         }
 
+        // Retry kill for entries already marked doomed by a prior tick
+        // or a failed DELETE handler. This runs before the guard below: a
+        // DELETE is a client's explicit kill, which even a session that
+        // outlives clients must honor once the handler has given up.
+        if active.is_reaping_kill().await {
+            try_kill_and_evict(state, &id, &active).await;
+            continue;
+        }
+
         // A main session is never an orphan and never stale: it is the box's
         // init, so killing it powers the VM off and destroys the box. A client
         // walking away from `docker attach` does not stop the container, and
         // neither may this; nor may the lifetime cap, which exists to bound
-        // *exec* sessions, not the workload they run beside.
+        // *exec* sessions, not the workload they run beside. A detached exec
+        // asked for the same: it outlives every client, bounded by its box.
         //
-        // Every branch below signals or kills, so Main stops here. The
-        // done-eviction above still applies to it — a main session whose init
-        // has exited really is finished, and evicting a dead entry kills
-        // nothing.
-        if active.kind() == SessionKind::Main {
+        // Every branch below signals or kills on the reaper's own initiative,
+        // so both stop here. The done-eviction above still applies — a session
+        // whose process has exited really is finished, and evicting a dead
+        // entry kills nothing.
+        if active.outlives_clients() {
             continue;
         }
 
         if now.duration_since(active.created_at()) > max_lifetime {
             active.mark_reaping_kill().await;
             tracing::warn!(exec_id = %id, "session lifetime cap reached, killing");
-            try_kill_and_evict(state, &id, &active).await;
-            continue;
-        }
-        // Retry kill for entries already marked doomed by a prior tick
-        // or a failed DELETE handler.
-        if active.is_reaping_kill().await {
             try_kill_and_evict(state, &id, &active).await;
             continue;
         }
@@ -1298,6 +1326,9 @@ fn build_box_command(req: &ExecRequest) -> Result<BoxCommand, boxlite::BoxliteEr
     }
     if req.tty {
         cmd = cmd.tty(true);
+    }
+    if req.detach {
+        cmd = cmd.detach(true);
     }
     if let Some(secs) = req.timeout_seconds {
         cmd = cmd.timeout_seconds(secs)?;
@@ -2095,6 +2126,7 @@ mod tests {
                 timeout_seconds: Some(seconds),
                 working_dir: None,
                 tty: false,
+                detach: false,
             };
 
             let err = build_box_command(&req).expect_err("invalid timeout should fail");
@@ -4538,6 +4570,118 @@ mod tests {
         assert!(
             !surviving.contains_key("exec-1"),
             "an orphaned exec past the lifetime cap must still be killed and evicted"
+        );
+    }
+
+    /// A detached exec outlives every client (spec R1): like the main
+    /// session, the reaper must neither escalate it nor kill it at the
+    /// lifetime cap, while a plain exec in the same tick is still reaped.
+    #[tokio::test]
+    async fn reaper_spares_a_detached_exec_and_still_reaps_a_plain_one() {
+        let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+            "http://127.0.0.1:1".to_string(),
+        ))
+        .expect("rest runtime");
+        let state = AppState {
+            runtime,
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        };
+
+        let (agent_exec, _agent_channels) = stub_execution("exec-detached");
+        let agent = Arc::new(ActiveExecution::new_detached(
+            "box1".to_string(),
+            agent_exec,
+            None,
+        ));
+        let (plain_exec, _plain_channels) = stub_execution("exec-plain");
+        let plain = Arc::new(ActiveExecution::new(
+            "box1".to_string(),
+            SessionKind::Exec,
+            plain_exec,
+            None,
+        ));
+        {
+            let mut map = state.executions.write().await;
+            map.insert("exec-detached".to_string(), Arc::clone(&agent));
+            map.insert("exec-plain".to_string(), Arc::clone(&plain));
+        }
+
+        // Neither was ever attached, and the tick runs past the lifetime cap.
+        let doomsday = Instant::now() + Duration::from_secs(48 * 60 * 60);
+        run_reap_once(
+            &state,
+            doomsday,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(60),
+        )
+        .await;
+
+        let surviving = state.executions.read().await;
+        assert!(
+            surviving.contains_key("exec-detached"),
+            "a detached exec must survive the reaper past every cap"
+        );
+        assert!(
+            !agent.is_reaping_kill().await,
+            "a detached exec must never be marked for kill"
+        );
+        assert!(
+            !surviving.contains_key("exec-plain"),
+            "a plain exec past the caps must still be killed and evicted"
+        );
+    }
+
+    /// A DELETE whose kill times out marks the session and answers "the
+    /// reaper will retry". Sparing a detached exec from client-absence
+    /// reaping must not also skip that retry, or the doomed exec keeps
+    /// running, unattachable, until its box stops.
+    #[tokio::test]
+    async fn reaper_retries_a_failed_delete_of_a_detached_exec() {
+        let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+            "http://127.0.0.1:1".to_string(),
+        ))
+        .expect("rest runtime");
+        let state = AppState {
+            runtime,
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        };
+
+        let (agent_exec, _agent_channels) = stub_execution("exec-detached");
+        let agent = Arc::new(ActiveExecution::new_detached(
+            "box1".to_string(),
+            agent_exec,
+            None,
+        ));
+        state
+            .executions
+            .write()
+            .await
+            .insert("exec-detached".to_string(), Arc::clone(&agent));
+
+        // What `kill_execution` leaves behind when its kill times out.
+        agent.mark_reaping_kill().await;
+
+        run_reap_once(
+            &state,
+            Instant::now(),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(60),
+        )
+        .await;
+
+        assert!(
+            !state.executions.read().await.contains_key("exec-detached"),
+            "the reaper must retry the kill a failed DELETE handed it"
         );
     }
 }

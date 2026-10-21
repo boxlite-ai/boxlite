@@ -183,6 +183,11 @@ impl BoxBackend for RestBox {
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
         let box_id = self.box_id_str();
 
+        // An older server ignores `detach` and would reap the exec, so ask first.
+        if command.detach {
+            self.client.require_exec_detach_enabled().await?;
+        }
+
         // 1. Create execution on remote server
         let path = format!("/boxes/{}/exec", box_id);
         let req = ExecRequest::from_command(&command);
@@ -2689,5 +2694,32 @@ mod tests {
         connection.read_exact(&mut echoed).await.unwrap();
         assert_eq!(&echoed, b"ping");
         assert_eq!(posts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// An older server ignores an exec field it does not know, so it would
+    /// run a detached exec as a plain one and reap it. The client must refuse
+    /// `detach` until the server advertises it, before any exec is created.
+    #[tokio::test]
+    async fn a_detached_exec_needs_the_server_to_advertise_it() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let head = String::from_utf8(read_request_head(&mut socket).await).unwrap();
+            write_status_response(&mut socket, r#"{"capabilities":{}}"#).await;
+            request_path(&head)
+        });
+
+        let rest_box = rest_box_for(port, "detach-box");
+        let err = match rest_box.exec(BoxCommand::new("sleep").detach(true)).await {
+            Err(err) => err,
+            Ok(_) => panic!("an exec the server cannot keep detached must not start"),
+        };
+
+        assert!(
+            matches!(err, BoxliteError::Unsupported(_)),
+            "unexpected error: {err:?}"
+        );
+        assert_eq!(server.await.unwrap().as_deref(), Some("/v1/config"));
     }
 }
