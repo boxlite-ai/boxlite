@@ -96,8 +96,7 @@ fn loads_the_initramfs_at_the_top_of_ram_and_records_it() {
 
     let memory = ram.memory();
     let params: boot_params = memory.read_obj(GuestAddress(regs.rsi)).unwrap();
-    // 2 MiB of RAM minus 3000 bytes, rounded down to a page, above the
-    // fixture kernel that ends just past 1 MiB.
+    // 2 MiB of RAM minus 3000 bytes, rounded down to a page.
     let hdr = params.hdr;
     assert_eq!((hdr.ramdisk_image, hdr.ramdisk_size), (0x1f_f000, 3000));
     let mut loaded = vec![0; archive.len()];

@@ -68,10 +68,8 @@ coverage denominator; `config` and `error` keep inline test modules.
 ## Kernel loading
 
 On Linux x86_64, `boot::elf::load_elf(ram, kernel)` delegates ELF parsing and
-segment loading to rust-vmm's linux-loader and returns the entry and end
-addresses as `io::Result<LoadedKernel>`. The end covers the segments
-linux-loader copies, BSS tails included; it skips segments without file
-bytes, which the pinned kernel does not have. It reads `kernel` through a seekable reader, usually the
+segment loading to rust-vmm's linux-loader and returns the entry address as
+`io::Result<u64>`. It reads `kernel` through a seekable reader, usually the
 kernel file, so segments go straight into guest RAM without buffering the
 whole image. It uses vm-memory 0.18 and linux-loader 0.14 with only the ELF
 feature. The function stays crate-visible until the lifecycle slice wires
@@ -129,11 +127,17 @@ the IOAPIC; a later slice adds the table.
 
 ## Initramfs
 
-`boot::initramfs::load_initramfs(ram, image, size, kernel_end)` reads the
-archive into the highest 4 KiB-aligned slot of the RAM region at 0, as
-Firecracker and cloud-hypervisor do, and returns its start. An empty archive,
-or one whose slot would begin below the page-aligned kernel end, fails with
-`InvalidInput` before anything is written. Linux ignores `initrd_addr_max`, so
+`boot::initramfs::load_initramfs(ram, image, size)` reads the archive into the
+highest 4 KiB-aligned slot of the RAM region at 0, as Firecracker and
+cloud-hypervisor do, and returns its start. An empty archive, or one larger
+than that region, fails with `InvalidInput` before anything is written.
+
+Like those VMMs, it does not check that the slot stays clear of the kernel.
+Only tests boot an initramfs; production boots from a disk. Their inputs are
+fixed, and the KVM boot test below fails if the archive overwrites the kernel.
+Accepting an initramfs from production configuration would need that check.
+
+Linux ignores `initrd_addr_max`, so
 the archive may sit anywhere in RAM; it must be uncompressed newc, since the
 pinned kernel has no decompressors. With 256 MiB of RAM, a 372-byte archive
 starts at `0x0FFF_F000` and Linux prints `RAMDISK: [mem 0x0ffff000-0x0fffffff]`.

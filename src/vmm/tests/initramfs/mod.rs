@@ -12,10 +12,6 @@ use super::load_initramfs;
 use crate::memory::GuestMemoryMmap;
 
 const RAM_SIZE: usize = 4 << 20;
-/// A kernel loaded from 1 MiB that ends mid-page; the archive may start at
-/// the next page, `FLOOR`.
-const KERNEL_END: u64 = 0x10_3080;
-const FLOOR: u64 = 0x10_4000;
 
 fn ram() -> GuestMemoryMmap {
     let ram = GuestMemoryMmap::from_ranges(&[(GuestAddress(0), RAM_SIZE)]).unwrap();
@@ -40,7 +36,7 @@ fn places_the_archive_in_the_top_page_aligned_slot() {
     let ram = ram();
     let archive = archive(5000);
 
-    let start = load_initramfs(&ram, &mut &archive[..], archive.len(), KERNEL_END).unwrap();
+    let start = load_initramfs(&ram, &mut &archive[..], archive.len()).unwrap();
 
     // 4 MiB minus 5000 bytes, rounded down to a page.
     assert_eq!(start, GuestAddress(0x3f_e000));
@@ -53,29 +49,23 @@ fn places_the_archive_in_the_top_page_aligned_slot() {
 }
 
 #[test]
-fn fits_an_archive_that_starts_at_the_page_after_the_kernel() {
+fn fits_an_archive_that_fills_the_ram_region() {
     let ram = ram();
-    let size = RAM_SIZE - FLOOR as usize;
 
-    let start = load_initramfs(&ram, &mut &archive(size)[..], size, KERNEL_END).unwrap();
-    assert_eq!(start, GuestAddress(FLOOR));
+    let start = load_initramfs(&ram, &mut &archive(RAM_SIZE)[..], RAM_SIZE).unwrap();
+    assert_eq!(start, GuestAddress(0));
 }
 
 #[test]
 fn refuses_an_empty_or_oversized_archive_before_writing() {
     let ram = ram();
-    // Empty, one byte too large, and a kernel end with no next page.
-    for (size, kernel_end) in [
-        (0, KERNEL_END),
-        (RAM_SIZE - FLOOR as usize + 1, KERNEL_END),
-        (1, u64::MAX),
-    ] {
-        let error = load_initramfs(&ram, &mut &archive(size)[..], size, kernel_end).unwrap_err();
+    // Empty, and one byte larger than the region.
+    for size in [0, RAM_SIZE + 1] {
+        let error = load_initramfs(&ram, &mut &archive(size)[..], size).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{size} bytes");
     }
-    let above_kernel = read(&ram, FLOOR, RAM_SIZE - FLOOR as usize);
     assert!(
-        above_kernel.iter().all(|&byte| byte == 0xff),
+        read(&ram, 0, RAM_SIZE).iter().all(|&byte| byte == 0xff),
         "RAM untouched"
     );
 }

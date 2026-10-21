@@ -7,7 +7,7 @@ use std::io::{self, Cursor};
 
 use vm_memory::{Bytes, GuestAddress};
 
-use super::{LoadedKernel, load_elf};
+use super::load_elf;
 use crate::memory::{GuestMemoryMmap, GuestRam};
 
 /// Physical start, file offset, file size, memory size and flags of each
@@ -78,29 +78,17 @@ fn read(ram: &GuestMemoryMmap, address: u64, len: usize) -> Vec<u8> {
 }
 
 /// Loads an in-memory image through the reader a kernel file also goes through.
-fn load(ram: &GuestMemoryMmap, image: &[u8]) -> io::Result<LoadedKernel> {
+fn load(ram: &GuestMemoryMmap, image: &[u8]) -> io::Result<u64> {
     load_elf(ram, &mut Cursor::new(image))
 }
 
 #[test]
-fn loads_physical_bytes_and_returns_the_kernel_entry_and_end() {
+fn loads_physical_bytes_and_returns_the_kernel_entry() {
     let ram = ram(RAM_SIZE);
     let memory = ram.memory().as_ref();
     let image = fixture();
 
-    // linux-loader skips the BSS-only segment, so the end comes from the
-    // segments with file bytes.
-    let end = SEGMENTS
-        .iter()
-        .filter(|&&(_, _, filesz, _, _)| filesz > 0)
-        .map(|&(paddr, _, _, memsz, _)| paddr + memsz)
-        .max()
-        .unwrap();
-    assert_eq!(end, 0x10_2010);
-    assert_eq!(
-        load(memory, &image).unwrap(),
-        LoadedKernel { entry: ENTRY, end }
-    );
+    assert_eq!(load(memory, &image).unwrap(), ENTRY);
     for (paddr, offset, filesz, memsz, _) in SEGMENTS {
         let loaded = read(memory, paddr, memsz as usize);
         assert_eq!(
@@ -194,18 +182,7 @@ fn native_vmlinux_bytes_are_visible_to_a_kvm_vcpu() {
     let ram = ram(RAM_SIZE);
     let memory = ram.memory().as_ref();
     let mut kernel = std::fs::File::open(&path).expect("open VMM_KERNEL");
-    assert_eq!(
-        load_elf(memory, &mut kernel).unwrap(),
-        LoadedKernel {
-            entry: expected_entry,
-            end: oracle
-                .iter()
-                .filter(|segment| segment.2 > 0)
-                .map(|segment| segment.1 + segment.3 as u64)
-                .max()
-                .unwrap()
-        }
-    );
+    assert_eq!(load_elf(memory, &mut kernel).unwrap(), expected_entry);
     let mut checksum = 0u32;
     for &(offset, paddr, filesz, memsz) in &oracle {
         let loaded = read(memory, paddr, memsz);

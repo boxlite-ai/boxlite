@@ -42,13 +42,13 @@ pub(crate) fn prepare(ram: &GuestRam, config: &VmConfig) -> Result<BootSetup> {
         path: config.kernel.clone(),
         source,
     };
-    let mut kernel_file = File::open(&config.kernel).map_err(load_kernel)?;
-    let kernel = elf::load_elf(memory, &mut kernel_file).map_err(load_kernel)?;
+    let mut kernel = File::open(&config.kernel).map_err(load_kernel)?;
+    let entry = elf::load_elf(memory, &mut kernel).map_err(load_kernel)?;
     let initramfs = config
         .initramfs
         .as_ref()
         .map(|path| {
-            load_initramfs_file(memory, path, kernel.end).map_err(|source| Error::LoadInitramfs {
+            load_initramfs_file(memory, path).map_err(|source| Error::LoadInitramfs {
                 path: path.clone(),
                 source,
             })
@@ -64,7 +64,7 @@ pub(crate) fn prepare(ram: &GuestRam, config: &VmConfig) -> Result<BootSetup> {
         what: "boot parameters",
         source,
     })?;
-    let boot_regs = entry::long_mode_entry(memory, kernel.entry, zero_page).map_err(|source| {
+    let boot_regs = entry::long_mode_entry(memory, entry, zero_page).map_err(|source| {
         Error::WriteBootData {
             what: "boot GDT and page tables",
             source,
@@ -75,14 +75,10 @@ pub(crate) fn prepare(ram: &GuestRam, config: &VmConfig) -> Result<BootSetup> {
 
 /// Loads the whole file at `path` as the initramfs and returns its start and
 /// size.
-fn load_initramfs_file(
-    memory: &GuestMemoryMmap,
-    path: &Path,
-    kernel_end: u64,
-) -> io::Result<(GuestAddress, usize)> {
+fn load_initramfs_file(memory: &GuestMemoryMmap, path: &Path) -> io::Result<(GuestAddress, usize)> {
     let mut file = File::open(path)?;
     let size = usize::try_from(file.metadata()?.len()).map_err(io::Error::other)?;
-    let start = initramfs::load_initramfs(memory, &mut file, size, kernel_end)?;
+    let start = initramfs::load_initramfs(memory, &mut file, size)?;
     Ok((start, size))
 }
 
