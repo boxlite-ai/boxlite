@@ -547,6 +547,69 @@ export interface JsNetworkHandle {
   revokeTunnel(port: number): Promise<void>;
 }
 
+/** One changed path; status codes are porcelain v2 XY letters. */
+export interface JsGitFileStatus {
+  path: string;
+  origPath?: string | null;
+  indexStatus: string;
+  worktreeStatus: string;
+  staged: boolean;
+  untracked: boolean;
+}
+
+/** Structured `git status` result. */
+export interface JsGitStatus {
+  currentBranch?: string | null;
+  upstream?: string | null;
+  ahead: number;
+  behind: number;
+  branchPublished: boolean;
+  headCommit?: string | null;
+  fileStatus: JsGitFileStatus[];
+}
+
+/** Local branches of a repository. */
+export interface JsGitBranches {
+  current?: string | null;
+  names: string[];
+}
+
+/** Box-scoped git operations on the native `JsBox`. */
+export interface JsGitHandle {
+  /**
+   * Set `user.name` and `user.email` for commits in this box.
+   *
+   * `scope` is `"global"` (default), `"local"`, or `"system"`; `"local"`
+   * requires `path`.
+   */
+  configureUser(
+    name: string,
+    email: string,
+    scope?: string | null,
+    path?: string | null,
+  ): Promise<void>;
+  /**
+   * Write a git config value. Same `scope` / `path` rules as
+   * `configureUser`.
+   */
+  setConfig(
+    key: string,
+    value: string,
+    scope?: string | null,
+    path?: string | null,
+  ): Promise<void>;
+  /**
+   * Read a git config value. Same `scope` / `path` rules as `setConfig`.
+   */
+  getConfig(
+    key: string,
+    scope?: string | null,
+    path?: string | null,
+  ): Promise<string>;
+  status(path: string): Promise<JsGitStatus>;
+  branches(path: string): Promise<JsGitBranches>;
+}
+
 export type SocketAddress =
   { type: "tcp"; host?: string; port: number } | { type: "unix"; path: string };
 
@@ -591,6 +654,7 @@ export interface JsBox {
   ): Promise<JsExecution>;
   readonly snapshot: JsSnapshotHandle;
   readonly network: JsNetworkHandle;
+  readonly git: JsGitHandle;
   cloneBox(
     options?: JsCloneOptions | null,
     name?: string | null,

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::exec::PyExecution;
+use crate::git::PyGitHandle;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyBoxMetrics;
 use crate::network::PyNetworkHandle;
@@ -49,6 +50,16 @@ impl PyBox {
     #[getter]
     fn network(&self) -> PyNetworkHandle {
         PyNetworkHandle {
+            handle: Arc::clone(&self.handle),
+        }
+    }
+
+    /// Get the git handle for this box.
+    ///
+    /// Usage: `box.git.configure_user(...)`, `box.git.set_config(...)`, etc.
+    #[getter]
+    fn git(&self) -> PyGitHandle {
+        PyGitHandle {
             handle: Arc::clone(&self.handle),
         }
     }

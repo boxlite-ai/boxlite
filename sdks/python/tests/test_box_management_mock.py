@@ -65,6 +65,11 @@ class TestExports:
         assert NetworkInfo is not None
         assert PublishedPort is not None
 
+    def test_git_handle_importable(self):
+        from boxlite import GitHandle
+
+        assert GitHandle is not None
+
     def test_all_contains_key_types(self):
         """Key management types are listed in __all__."""
         assert hasattr(boxlite, "__all__")
@@ -78,6 +83,7 @@ class TestExports:
             "ImageHandle",
             "ImageInfo",
             "ImagePullResult",
+            "GitHandle",
         ):
             assert name in boxlite.__all__, f"{name} missing from __all__"
 
