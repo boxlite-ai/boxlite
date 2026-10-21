@@ -302,7 +302,7 @@ Handle to a running or stopped box.
 | `id` | `string` | Unique box identifier (ULID) |
 | `name` | `string \| null` | User-defined name |
 | `network` | `JsNetworkHandle` | Box-scoped tunnel operations |
-| `ssh` | `JsSshHandle` | Guest SSH control; never starts the VM |
+| `ssh` | `JsSshHandle` | Configure, query, or disable guest SSH |
 
 #### Methods
 
@@ -398,14 +398,13 @@ connections from ordinary host applications.
 
 ## Guest SSH control
 
-`JsBox` and `SimpleBox` expose the same `box.ssh` workflow. SSH starts
-disabled; configuration lives in guest memory only.
+`JsBox` and `SimpleBox` expose `box.ssh`.
 
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
-| Configure | `await box.ssh.configure(config)` | Replace the configuration; the only operation that may start the box |
-| Observe | `await box.ssh.status()` | Read `SshStatus`; never starts the VM |
-| Disable | `await box.ssh.disable()` | Stop SSH idempotently; never starts the VM |
+| Configure | `await box.ssh.configure(config)` | Apply `SshConfig` and return `SshStatus` |
+| Observe | `await box.ssh.status()` | Return `SshStatus` |
+| Disable | `await box.ssh.disable()` | Disable SSH and return `SshStatus` |
 
 ```typescript
 interface SshConfig {
@@ -427,24 +426,16 @@ interface SshCaConfig {
 
 interface SshStatus {
   enabled: boolean;
-  generation: bigint;         // increments per listener start; full u64
+  generation: bigint;         // full u64 precision
   listenAddress: string;
   hostPublicKey: string;      // comment-free public host key
   hostKeyFingerprint: string; // SHA-256 fingerprint
 }
 ```
 
-Only `configure()` may start the box; implicit startup follows the exec policy
-and is refused for a Configured or Stopped box with an explicit
-`cmd`/`entrypoint` — start it with the native `JsBox.start()` first
-(`SimpleBox` has no public start). Every accepted configure fully restarts the
-listener and disconnects clients; operations are never retried. A configure
-that fails validation leaves the running listener untouched; a listener bind
-failure disables SSH. Disable preserves the last generation and clears the
-address and host identity fields; a never-enabled box reports `0n`. Status and
-errors carry no credential material. A configuration the binding cannot
-convert is refused before any SSH request with the fixed message
-`invalid SSH configuration`; the rejected value is never echoed.
+Invalid configuration field types report `InvalidArg` with the message
+`invalid SSH configuration`, without echoing rejected values. Other errors
+use the SDK's existing [error types](#error-types).
 
 ---
 
