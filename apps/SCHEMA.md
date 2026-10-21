@@ -210,14 +210,14 @@ state inline.
 
 Transactional triggers maintain this table independently of Box retention. Organization
 deletion cascades to its facts; Box deletion does not. The API reads it only when activation
-is selected on the metadata detail view.
+is selected with include=activation on the existing organization detail.
 
 | Column | Type | Notes |
 | --- | --- | --- |
 | `organizationId` | `uuid` | primary key; FK to organization with `ON DELETE CASCADE` |
-| `firstObservedBoxCreatedAt` | `timestamptz` | nullable; minimum retained creation or warm-pool claim |
+| `lastBoxCreatedAt` | `timestamptz` | nullable; maximum retained creation or warm-pool claim |
 | `boxHistoryComplete` | `boolean` | false for preexisting organizations and real-organization transfers |
-| `firstRecordedComputeAt` | `timestamptz` | nullable; minimum recorded positive-CPU period, not complete execution history |
+| `lastBoxModifiedAt` | `timestamptz` | nullable; maximum successful-start or accepted-deletion time |
 
 The [activation design](../docs/contributing/investigations/organization-activation-facts.md)
 describes migration locking, backfill, uncertainty and transaction tests.

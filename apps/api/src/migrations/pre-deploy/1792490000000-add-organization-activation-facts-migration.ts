@@ -10,9 +10,9 @@ export class AddOrganizationActivationFacts1792490000000 implements MigrationInt
     await queryRunner.query(`
       CREATE TABLE organization_activation_facts (
         "organizationId" uuid PRIMARY KEY REFERENCES organization(id) ON DELETE CASCADE,
-        "firstObservedBoxCreatedAt" timestamptz,
-        "boxHistoryComplete" boolean NOT NULL,
-        "firstRecordedComputeAt" timestamptz
+        "lastBoxCreatedAt" timestamptz,
+        "lastBoxModifiedAt" timestamptz,
+        "boxHistoryComplete" boolean NOT NULL
       )
     `)
     await queryRunner.query(`
@@ -36,95 +36,80 @@ export class AddOrganizationActivationFacts1792490000000 implements MigrationInt
       SELECT id, false FROM organization WHERE id <> '00000000-0000-0000-0000-000000000000'::uuid
     `)
     await queryRunner.query(`
-      CREATE FUNCTION record_organization_box_creation() RETURNS trigger LANGUAGE plpgsql AS $$
+      CREATE FUNCTION record_organization_box_activity() RETURNS trigger LANGUAGE plpgsql AS $$
       DECLARE
-        created_at timestamptz := NEW."createdAt";
+        organization_id uuid;
+        created_at timestamptz;
+        modified_at timestamptz;
       BEGIN
-        IF NEW."organizationId" = '00000000-0000-0000-0000-000000000000'::uuid THEN
-          RETURN NULL;
-        END IF;
-        IF TG_OP = 'UPDATE' THEN
-          IF OLD."organizationId" = NEW."organizationId" THEN
+        IF TG_OP = 'DELETE' THEN
+          organization_id := OLD."organizationId";
+          -- Cleanup must not turn an earlier deletion into new activity.
+          IF OLD."desiredState" = 'destroyed' OR OLD.state = 'destroyed' THEN
             RETURN NULL;
           END IF;
-          IF OLD."organizationId" <> '00000000-0000-0000-0000-000000000000'::uuid THEN
-            UPDATE organization_activation_facts SET "boxHistoryComplete" = false
-            WHERE "organizationId" = NEW."organizationId" AND "boxHistoryComplete";
+          modified_at := statement_timestamp();
+        ELSE
+          organization_id := NEW."organizationId";
+          IF organization_id = '00000000-0000-0000-0000-000000000000'::uuid THEN
             RETURN NULL;
           END IF;
-          IF OLD."createdAt" = NEW."createdAt" THEN
-            created_at := statement_timestamp();
+          IF TG_OP = 'INSERT' THEN
+            created_at := NEW."createdAt";
+            IF NEW.state IN ('started', 'destroyed') OR NEW."desiredState" = 'destroyed' THEN
+              modified_at := statement_timestamp();
+            END IF;
+          ELSIF OLD."organizationId" <> organization_id THEN
+            IF OLD."organizationId" <> '00000000-0000-0000-0000-000000000000'::uuid THEN
+              UPDATE organization_activation_facts SET "boxHistoryComplete" = false
+              WHERE "organizationId" = organization_id AND "boxHistoryComplete";
+              RETURN NULL;
+            END IF;
+            created_at := CASE WHEN OLD."createdAt" = NEW."createdAt"
+              THEN statement_timestamp() ELSE NEW."createdAt" END;
+            IF NEW.state IN ('started', 'destroyed') OR NEW."desiredState" = 'destroyed' THEN
+              modified_at := statement_timestamp();
+            END IF;
+          ELSIF (NEW.state = 'started' AND OLD.state <> 'started')
+             OR (NEW."desiredState" = 'destroyed' AND OLD."desiredState" <> 'destroyed')
+             OR (NEW.state = 'destroyed' AND OLD.state <> 'destroyed' AND OLD."desiredState" <> 'destroyed') THEN
+            modified_at := statement_timestamp();
+          ELSE
+            RETURN NULL;
           END IF;
         END IF;
         UPDATE organization_activation_facts
-        SET "firstObservedBoxCreatedAt" = created_at
-        WHERE "organizationId" = NEW."organizationId"
-          AND ("firstObservedBoxCreatedAt" IS NULL OR "firstObservedBoxCreatedAt" > created_at);
+        SET "lastBoxCreatedAt" = GREATEST("lastBoxCreatedAt", created_at),
+            "lastBoxModifiedAt" = GREATEST("lastBoxModifiedAt", modified_at)
+        WHERE "organizationId" = organization_id AND (
+          (created_at IS NOT NULL AND ("lastBoxCreatedAt" IS NULL OR "lastBoxCreatedAt" < created_at)) OR
+          (modified_at IS NOT NULL AND ("lastBoxModifiedAt" IS NULL OR "lastBoxModifiedAt" < modified_at))
+        );
         RETURN NULL;
       END
       $$
     `)
     await queryRunner.query(`
-      CREATE TRIGGER organization_activation_box_insert AFTER INSERT ON box
-      FOR EACH ROW EXECUTE FUNCTION record_organization_box_creation()
-    `)
-    await queryRunner.query(`
-      CREATE TRIGGER organization_activation_box_claim AFTER UPDATE OF "organizationId" ON box
-      FOR EACH ROW EXECUTE FUNCTION record_organization_box_creation()
-    `)
-    await queryRunner.query(`
-      CREATE FUNCTION record_organization_compute() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN
-        IF NEW."organizationId" !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
-          RETURN NULL;
-        END IF;
-        UPDATE organization_activation_facts
-        SET "firstRecordedComputeAt" = NEW."startAt"
-        WHERE "organizationId" = NEW."organizationId"::uuid
-          AND ("firstRecordedComputeAt" IS NULL OR "firstRecordedComputeAt" > NEW."startAt");
-        RETURN NULL;
-      END
-      $$
-    `)
-    await queryRunner.query(`
-      CREATE TRIGGER organization_activation_compute AFTER INSERT ON box_usage_periods
-      FOR EACH ROW WHEN (NEW.cpu > 0 AND NEW.cpu < 'Infinity'::double precision)
-      EXECUTE FUNCTION record_organization_compute()
+      CREATE TRIGGER organization_activation_box_write
+      AFTER INSERT OR UPDATE OF "organizationId", state, "desiredState" OR DELETE ON box
+      FOR EACH ROW EXECUTE FUNCTION record_organization_box_activity()
     `)
     await queryRunner.query(`
       UPDATE organization_activation_facts facts
-      SET "firstObservedBoxCreatedAt" = retained.first_created
+      SET "lastBoxCreatedAt" = retained.last_created
       FROM (
-        SELECT "organizationId", min("createdAt") AS first_created FROM box GROUP BY "organizationId"
+        SELECT "organizationId", max("createdAt") AS last_created FROM box GROUP BY "organizationId"
       ) retained
       WHERE facts."organizationId" = retained."organizationId"
-    `)
-    await queryRunner.query(`
-      UPDATE organization_activation_facts facts
-      SET "firstRecordedComputeAt" = retained.first_compute
-      FROM (
-        SELECT "organizationId", min("startAt") AS first_compute
-        FROM (
-          SELECT "organizationId", "startAt" FROM box_usage_periods
-          WHERE cpu > 0 AND cpu < 'Infinity'::double precision
-          UNION ALL
-          SELECT "organizationId", "startAt" FROM box_usage_periods_archive
-          WHERE cpu > 0 AND cpu < 'Infinity'::double precision
-        ) periods GROUP BY "organizationId"
-      ) retained
-      WHERE facts."organizationId"::text = retained."organizationId"
     `)
     await queryRunner.query(`SET LOCAL lock_timeout = DEFAULT`)
     await queryRunner.query(`SET LOCAL statement_timeout = DEFAULT`)
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`DROP TRIGGER organization_activation_compute ON box_usage_periods`)
-    await queryRunner.query(`DROP TRIGGER organization_activation_box_claim ON box`)
-    await queryRunner.query(`DROP TRIGGER organization_activation_box_insert ON box`)
+    await queryRunner.query(`DROP TRIGGER organization_activation_box_write ON box`)
     await queryRunner.query(`DROP TRIGGER organization_activation_insert ON organization`)
-    await queryRunner.query(`DROP FUNCTION record_organization_compute()`)
-    await queryRunner.query(`DROP FUNCTION record_organization_box_creation()`)
+    await queryRunner.query(`DROP FUNCTION record_organization_box_activity()`)
     await queryRunner.query(`DROP FUNCTION initialize_organization_activation()`)
     await queryRunner.query(`DROP TABLE organization_activation_facts`)
   }

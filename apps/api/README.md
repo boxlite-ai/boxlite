@@ -210,28 +210,31 @@ returns 404. Omitting this selection avoids the facts query and field.
 {
   "activation": {
     "organizationId": "de80ad96-daa5-48a6-ad18-fb58aff3bbbf",
-    "firstObservedBoxCreatedAt": "2026-10-20T01:00:00.000Z",
+    "lastBoxCreatedAt": "2026-10-20T01:00:00.000Z",
     "boxHistoryComplete": false,
-    "firstRecordedComputeAt": "2026-10-20T01:00:01.000Z",
-    "computeHistoryComplete": false,
+    "lastBoxModifiedAt": "2026-10-20T01:00:01.000Z",
     "observedAt": "2026-10-20T02:00:00.000Z"
   }
 }
 ```
 
-`firstObservedBoxCreatedAt` is the earliest retained Box creation or warm-pool claim.
-It is a true first creation only when `boxHistoryComplete` is true. Organizations
-predating tracking retain `false`, even after backfill; null then means unknown.
-For a new organization with complete tracking, null means no committed creation or
-claim. Moving a Box between real organizations makes the destination incomplete.
+`lastBoxCreatedAt` is the maximum retained Box creation or warm-pool claim time.
+`lastBoxModifiedAt` is the maximum observed successful-start or accepted-deletion
+time. Start means entering `started`; delete means the first request setting
+`desiredState=destroyed`, or direct destruction/removal without prior intent.
+Times are recorded in the source database transaction. Stops, label changes,
+retries, deletion completion and delayed physical cleanup do not advance them.
+Use current Box state to identify running Boxes; timestamps do not measure ongoing
+execution or user interaction. Automatic lifecycle actions also count.
 
-`firstRecordedComputeAt` is the earliest recorded positive-CPU allocation period,
-not the first executed command or measured CPU activity. Usage events can be missed,
-so `computeHistoryComplete` is always false and null never proves no execution.
-Facts survive Box deletion and are removed with the organization.
+Facts survive Box deletion and are removed with the organization. Preexisting
+organizations only backfill maximum retained creation time; past start/delete
+history is unavailable and remains null. `boxHistoryComplete` is false for them
+and for organizations receiving transferred Boxes. Null with incomplete history
+means unknown. New organizations track all subsequent creation/start/delete writes.
 
 The pre-deploy migration installs transactional triggers and backfills retained
-Box/current/archive evidence. It requires a transaction, limits lock waits to five
+Box creation evidence. It requires a transaction, limits lock waits to five
 seconds and individual statements to sixty seconds, and rolls back if either limit
 is exceeded. Production migration duration is unmeasured. Metadata validation rules
 and administrator authorization apply to this selection. See the [activation design](../../docs/contributing/investigations/organization-activation-facts.md)

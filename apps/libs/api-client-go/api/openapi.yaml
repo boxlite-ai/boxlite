@@ -8720,33 +8720,29 @@ components:
         organizationId:
           format: uuid
           type: string
-        firstObservedBoxCreatedAt:
-          description: Earliest retained creation or warm-pool claim; a true first
-            only when boxHistoryComplete is true.
+        lastBoxCreatedAt:
+          description: Maximum retained Box creation or warm-pool claim time; survives
+            Box deletion.
           format: date-time
           nullable: true
           type: string
         boxHistoryComplete:
-          description: False for older organizations and organizations receiving transferred
-            Boxes.
+          description: "Whether creation, successful start and accepted deletion tracking\
+            \ covers the organization lifetime."
           type: boolean
-        firstRecordedComputeAt:
-          description: Earliest recorded positive-CPU allocation period. Null does
-            not prove no execution.
+        lastBoxModifiedAt:
+          description: "Maximum observed successful-start or accepted-deletion time;\
+            \ cleanup, stops and label edits do not advance it."
           format: date-time
           nullable: true
           type: string
-        computeHistoryComplete:
-          description: "Always false: usage events can have historical gaps."
-          type: boolean
         observedAt:
           format: date-time
           type: string
       required:
       - boxHistoryComplete
-      - computeHistoryComplete
-      - firstObservedBoxCreatedAt
-      - firstRecordedComputeAt
+      - lastBoxCreatedAt
+      - lastBoxModifiedAt
       - observedAt
       - organizationId
       type: object

@@ -17,21 +17,17 @@
 export interface AdminOrganizationActivation {
     'organizationId': string;
     /**
-     * Earliest retained creation or warm-pool claim; a true first only when boxHistoryComplete is true.
+     * Maximum retained Box creation or warm-pool claim time; survives Box deletion.
      */
-    'firstObservedBoxCreatedAt': Date | null;
+    'lastBoxCreatedAt': Date | null;
     /**
-     * False for older organizations and organizations receiving transferred Boxes.
+     * Whether creation, successful start and accepted deletion tracking covers the organization lifetime.
      */
     'boxHistoryComplete': boolean;
     /**
-     * Earliest recorded positive-CPU allocation period. Null does not prove no execution.
+     * Maximum observed successful-start or accepted-deletion time; cleanup, stops and label edits do not advance it.
      */
-    'firstRecordedComputeAt': Date | null;
-    /**
-     * Always false: usage events can have historical gaps.
-     */
-    'computeHistoryComplete': boolean;
+    'lastBoxModifiedAt': Date | null;
     'observedAt': Date;
 }
 

@@ -9,23 +9,23 @@ export class AdminOrganizationActivationDto {
     type: String,
     nullable: true,
     format: 'date-time',
-    description: 'Earliest retained creation or warm-pool claim; a true first only when boxHistoryComplete is true.',
+    description: 'Maximum retained Box creation or warm-pool claim time; survives Box deletion.',
   })
-  firstObservedBoxCreatedAt: string | null
+  lastBoxCreatedAt: string | null
 
-  @ApiProperty({ description: 'False for older organizations and organizations receiving transferred Boxes.' })
+  @ApiProperty({
+    description: 'Whether creation, successful start and accepted deletion tracking covers the organization lifetime.',
+  })
   boxHistoryComplete: boolean
 
   @ApiProperty({
     type: String,
     nullable: true,
     format: 'date-time',
-    description: 'Earliest recorded positive-CPU allocation period. Null does not prove no execution.',
+    description:
+      'Maximum observed successful-start or accepted-deletion time; cleanup, stops and label edits do not advance it.',
   })
-  firstRecordedComputeAt: string | null
-
-  @ApiProperty({ type: Boolean, enum: [false], description: 'Always false: usage events can have historical gaps.' })
-  computeHistoryComplete: false
+  lastBoxModifiedAt: string | null
 
   @ApiProperty({ format: 'date-time' })
   observedAt: string

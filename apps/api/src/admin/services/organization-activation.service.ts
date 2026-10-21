@@ -4,9 +4,9 @@ import { AdminOrganizationActivationDto } from '../dto/organization-activation.d
 
 type ActivationRow = {
   organizationId: string
-  firstObservedBoxCreatedAt: Date | null
+  lastBoxCreatedAt: Date | null
   boxHistoryComplete: boolean | null
-  firstRecordedComputeAt: Date | null
+  lastBoxModifiedAt: Date | null
   observedAt: Date
 }
 
@@ -16,8 +16,8 @@ export class AdminOrganizationActivationService {
 
   async get(organizationId: string): Promise<AdminOrganizationActivationDto | null> {
     const [row]: ActivationRow[] = await this.dataSource.query(
-      `SELECT organization.id AS "organizationId", facts."firstObservedBoxCreatedAt",
-        facts."boxHistoryComplete", facts."firstRecordedComputeAt", statement_timestamp() AS "observedAt"
+      `SELECT organization.id AS "organizationId", facts."lastBoxCreatedAt",
+        facts."boxHistoryComplete", facts."lastBoxModifiedAt", statement_timestamp() AS "observedAt"
        FROM organization LEFT JOIN organization_activation_facts facts ON facts."organizationId" = organization.id
        WHERE organization.id = $1::uuid`,
       [organizationId],
@@ -25,10 +25,9 @@ export class AdminOrganizationActivationService {
     return row
       ? {
           organizationId: row.organizationId,
-          firstObservedBoxCreatedAt: row.firstObservedBoxCreatedAt?.toISOString() ?? null,
+          lastBoxCreatedAt: row.lastBoxCreatedAt?.toISOString() ?? null,
           boxHistoryComplete: row.boxHistoryComplete === true,
-          firstRecordedComputeAt: row.firstRecordedComputeAt?.toISOString() ?? null,
-          computeHistoryComplete: false,
+          lastBoxModifiedAt: row.lastBoxModifiedAt?.toISOString() ?? null,
           observedAt: row.observedAt.toISOString(),
         }
       : null

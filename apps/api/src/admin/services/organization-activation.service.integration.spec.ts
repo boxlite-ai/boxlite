@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { DataSource, EntityManager } from 'typeorm'
+import { DataSource } from 'typeorm'
 import { Migration1741087887225 } from '../../migrations/1741087887225-migration'
-import { AddBoxUsagePeriods1785250000000 } from '../../migrations/pre-deploy/1785250000000-add-box-usage-periods-migration'
 import { AddOrganizationActivationFacts1792490000000 } from '../../migrations/pre-deploy/1792490000000-add-organization-activation-facts-migration'
 import { AdminOrganizationActivationService } from './organization-activation.service'
 
@@ -40,7 +39,7 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL triggers
   }
   const organization = async (manager = dataSource.manager) => {
     const [{ id }] = await manager.query(
-      `INSERT INTO organization (name, "createdBy") VALUES ('Activation fixture', 'fixture') RETURNING id`,
+      `INSERT INTO organization (name, "createdBy") VALUES ('Lifecycle fixture', 'fixture') RETURNING id`,
     )
     return id as string
   }
@@ -53,20 +52,16 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL triggers
     )
     return id
   }
-  const period = async (
-    organizationId: string,
-    startAt: string,
-    cpu: number | string,
-    manager: EntityManager = dataSource.manager,
-    archived = false,
-  ) => {
-    const table = archived ? 'box_usage_periods_archive' : 'box_usage_periods'
-    await manager.query(
-      `INSERT INTO ${table} ("boxId", "organizationId", "startAt", "endAt", cpu, gpu, mem, disk, region)
-       VALUES ($1, $2, $3, $4, $5, 0, 2, 4, 'test-region')`,
-      [randomUUID().slice(0, 12), organizationId, startAt, archived ? later : null, cpu],
+  const update = async (id: string, state: string | null, desiredState: string | null = null) => {
+    const [[{ at }]] = await dataSource.query(
+      `UPDATE box SET state = COALESCE($2::box_state_enum, state),
+       "desiredState" = COALESCE($3::box_desiredstate_enum, "desiredState")
+       WHERE id = $1 RETURNING statement_timestamp() AS at`,
+      [id, state, desiredState],
     )
+    return (at as Date).toISOString()
   }
+  const read = async (id: string): Promise<Record<string, unknown>> => ({ ...(await service.get(id)) })
   const expectBlocked = async (pid: number) => {
     const deadline = Date.now() + 5000
     while (Date.now() < deadline) {
@@ -88,7 +83,7 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL triggers
     dataSource = await new DataSource({
       ...connection,
       database: databaseName,
-      migrations: [Migration1741087887225, AddBoxUsagePeriods1785250000000],
+      migrations: [Migration1741087887225],
     }).initialize()
     await dataSource.runMigrations()
     await migrate('up')
@@ -105,27 +100,23 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL triggers
       await admin.destroy()
     }
   })
-
   beforeEach(async () => {
-    await dataSource.query('DELETE FROM box_usage_periods')
-    await dataSource.query('DELETE FROM box_usage_periods_archive')
     await dataSource.query('DELETE FROM box')
     await dataSource.query('DELETE FROM organization')
   })
 
-  it('tracks new organizations and preserves facts after all Boxes are deleted', async () => {
+  it('keeps creation maxima after Box deletion and removes facts only with the organization', async () => {
     const id = await organization()
     expect(await service.get(id)).toMatchObject({
-      firstObservedBoxCreatedAt: null,
-      firstRecordedComputeAt: null,
+      lastBoxCreatedAt: null,
+      lastBoxModifiedAt: null,
       boxHistoryComplete: true,
-      computeHistoryComplete: false,
     })
-    const boxId = await box(id)
+    await box(id, later)
     await box(id, earlier)
     await dataSource.query('DELETE FROM box WHERE "organizationId" = $1', [id])
-    expect((await service.get(id))?.firstObservedBoxCreatedAt).toBe(earlier)
-    expect(await dataSource.query('SELECT id FROM box WHERE id = $1', [boxId])).toEqual([])
+    expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: later, lastBoxModifiedAt: expect.any(String) })
+    expect(await dataSource.query('SELECT id FROM box')).toEqual([])
     await dataSource.query('DELETE FROM organization WHERE id = $1', [id])
     expect(await service.get(id)).toBeNull()
     expect(
@@ -133,55 +124,105 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL triggers
     ).toEqual([])
   })
 
-  it('records warm-pool claim time without attributing prewarming to a customer', async () => {
+  it('records successful starts and restarts, not requests, stops, labels or repeated state writes', async () => {
+    const id = await organization()
+    const boxId = await box(id)
+    await update(boxId, 'starting')
+    expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: null })
+    const startedAt = await update(boxId, 'started')
+    expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: startedAt })
+    await dataSource.query(`UPDATE box SET name = 'renamed', "updatedAt" = now() WHERE id = $1`, [boxId])
+    await update(boxId, 'started')
+    await update(boxId, 'stopped', 'stopped')
+    expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: startedAt })
+    const restartedAt = await update(boxId, 'started', 'started')
+    expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: restartedAt, lastBoxCreatedAt: later })
+  })
+
+  it('records deletion acceptance without advancing on completion or delayed cleanup', async () => {
+    const id = await organization()
+    const boxId = await box(id)
+    await update(boxId, 'started')
+    const deletedAt = await update(boxId, null, 'destroyed')
+    expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: deletedAt })
+    await update(boxId, 'destroying', 'destroyed')
+    await update(boxId, 'destroyed', 'destroyed')
+    await dataSource.query('DELETE FROM box WHERE id = $1', [boxId])
+    expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: deletedAt, lastBoxCreatedAt: later })
+  })
+
+  it('covers direct destruction and physical deletion without prior intent', async () => {
+    const id = await organization()
+    const boxId = await box(id)
+    const destroyedAt = await update(boxId, 'destroyed')
+    await dataSource.query('DELETE FROM box WHERE id = $1', [boxId])
+    expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: destroyedAt })
+    const next = await box(id)
+    const [[{ at }]] = await dataSource.query('DELETE FROM box WHERE id = $1 RETURNING statement_timestamp() AS at', [
+      next,
+    ])
+    expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: at.toISOString() })
+  })
+
+  it('keeps a failed-delete request time when stale error rows are cleaned up', async () => {
+    const id = await organization()
+    const boxId = await box(id)
+    const deletedAt = await update(boxId, 'error', 'destroyed')
+    await dataSource.query('DELETE FROM box WHERE id = $1', [boxId])
+    expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: deletedAt })
+  })
+
+  it('records warm claims but never attributes prewarming or transfers as new customer activity', async () => {
     const id = await organization()
     const boxId = await box(poolOrganization, earlier)
-    expect((await service.get(id))?.firstObservedBoxCreatedAt).toBeNull()
-    await dataSource.query('UPDATE box SET "organizationId" = $1, "createdAt" = $2 WHERE id = $3', [id, later, boxId])
+    await update(boxId, 'started')
+    expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: null, lastBoxModifiedAt: null })
+    const [[{ at }]] = await dataSource.query(
+      'UPDATE box SET "organizationId" = $1, "createdAt" = $2 WHERE id = $3 RETURNING statement_timestamp() AS at',
+      [id, later, boxId],
+    )
     expect(await service.get(id)).toMatchObject({
-      firstObservedBoxCreatedAt: later,
+      lastBoxCreatedAt: later,
+      lastBoxModifiedAt: at.toISOString(),
       boxHistoryComplete: true,
     })
     const destination = await organization()
     await dataSource.query('UPDATE box SET "organizationId" = $1 WHERE id = $2', [destination, boxId])
     expect(await service.get(destination)).toMatchObject({
-      firstObservedBoxCreatedAt: null,
+      lastBoxCreatedAt: null,
+      lastBoxModifiedAt: null,
       boxHistoryComplete: false,
     })
-    expect((await service.get(id))?.firstObservedBoxCreatedAt).toBe(later)
+    expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: later })
   })
 
-  it('uses observation time for a warm claim that does not replace the old creation timestamp', async () => {
+  it('uses claim time when a warm claim retains the pool creation timestamp', async () => {
     const id = await organization()
     const boxId = await box(poolOrganization, earlier)
-    const [{ at: before }] = await dataSource.query('SELECT statement_timestamp() AS at')
-    await dataSource.query('UPDATE box SET "organizationId" = $1 WHERE id = $2', [id, boxId])
-    const result = (await service.get(id))!
-    expect(Date.parse(result.firstObservedBoxCreatedAt!)).toBeGreaterThanOrEqual(before.getTime())
-    expect(Date.parse(result.firstObservedBoxCreatedAt!)).toBeLessThanOrEqual(Date.parse(result.observedAt))
+    const [[{ at }]] = await dataSource.query(
+      'UPDATE box SET "organizationId" = $1 WHERE id = $2 RETURNING statement_timestamp() AS at',
+      [id, boxId],
+    )
+    expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: at.toISOString(), lastBoxModifiedAt: null })
   })
 
-  it('rolls creation and compute facts back with the source transaction', async () => {
+  it('rolls creation, start and deletion facts back with their source writes', async () => {
     const id = await organization()
-    const runner = dataSource.createQueryRunner()
-    await runner.connect()
-    await runner.startTransaction()
-    try {
-      await box(id, earlier, runner.manager)
-      await period(id, earlier, 2, runner.manager)
-      await runner.rollbackTransaction()
-    } finally {
-      await runner.release()
-    }
-    expect(await service.get(id)).toMatchObject({
-      firstObservedBoxCreatedAt: null,
-      firstRecordedComputeAt: null,
-      boxHistoryComplete: true,
-    })
-    expect(await dataSource.query('SELECT id FROM box')).toEqual([])
+    await expect(
+      dataSource.transaction(async (manager) => {
+        const boxId = await box(id, later, manager)
+        await manager.query("UPDATE box SET state = 'started' WHERE id = $1", [boxId])
+        await manager.query('DELETE FROM box WHERE id = $1', [boxId])
+        throw new Error('rollback fixture')
+      }),
+    ).rejects.toThrow('rollback fixture')
+    expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: null, lastBoxModifiedAt: null })
   })
 
-  it('serializes concurrent minima without losing an earlier committed creation', async () => {
+  it.each([
+    [earlier, later],
+    [later, earlier],
+  ])('serializes concurrent maxima %s then %s', async (a, b) => {
     const id = await organization()
     const first = dataSource.createQueryRunner()
     const second = dataSource.createQueryRunner()
@@ -191,15 +232,14 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL triggers
     await second.startTransaction()
     let pending: Promise<string> | undefined
     try {
-      await box(id, later, first.manager)
+      await box(id, a, first.manager)
       const [{ pid }] = await second.query('SELECT pg_backend_pid() AS pid')
-      pending = box(id, earlier, second.manager)
-      // Observe the real row-lock dependency before releasing the first writer.
+      pending = box(id, b, second.manager)
       await expectBlocked(pid)
       await first.commitTransaction()
       await pending
       await second.commitTransaction()
-      expect((await service.get(id))?.firstObservedBoxCreatedAt).toBe(earlier)
+      expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: later })
     } finally {
       if (first.isTransactionActive) await first.rollbackTransaction()
       if (pending) await pending.catch(() => undefined)
@@ -209,52 +249,32 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL triggers
     }
   })
 
-  it('records only finite positive CPU periods and retains the minimum through archive/rollover', async () => {
-    const id = await organization()
-    for (const cpu of [0, -1, 'NaN', 'Infinity']) await period(id, earlier, cpu)
-    await period('legacy-non-uuid', earlier, 2)
-    await period(poolOrganization, earlier, 2)
-    expect((await service.get(id))?.firstRecordedComputeAt).toBeNull()
-    await period(id, later, 2)
-    await period(id, earlier, 4)
-    await dataSource.transaction(async (manager) => {
-      await manager.query(`
-        INSERT INTO box_usage_periods_archive
-          ("boxId", "organizationId", "startAt", "endAt", cpu, gpu, mem, disk, region)
-        SELECT "boxId", "organizationId", "startAt", now(), cpu, gpu, mem, disk, region FROM box_usage_periods
-      `)
-      await manager.query('DELETE FROM box_usage_periods')
-    })
-    await period(id, later, 2)
-    expect(await service.get(id)).toMatchObject({
-      firstRecordedComputeAt: earlier,
-      computeHistoryComplete: false,
-    })
-  })
-
-  it('backfills retained evidence without making preexisting organizations complete', async () => {
+  it('backfills creation maxima only and marks preexisting or missing history incomplete', async () => {
     await migrate('down')
     const older = await organization()
     const unknown = await organization()
-    await box(older, later)
-    await period(older, later, 2)
-    await period(older, earlier, 2, dataSource.manager, true)
+    await box(older, earlier)
+    const retained = await box(older, later)
+    await update(retained, 'started')
     await migrate('up')
     expect(await service.get(older)).toMatchObject({
-      firstObservedBoxCreatedAt: later,
-      firstRecordedComputeAt: earlier,
+      lastBoxCreatedAt: later,
+      lastBoxModifiedAt: null,
       boxHistoryComplete: false,
-      computeHistoryComplete: false,
     })
     expect(await service.get(unknown)).toMatchObject({
-      firstObservedBoxCreatedAt: null,
-      firstRecordedComputeAt: null,
+      lastBoxCreatedAt: null,
+      lastBoxModifiedAt: null,
       boxHistoryComplete: false,
     })
     const fresh = await organization()
-    expect((await service.get(fresh))?.boxHistoryComplete).toBe(true)
+    expect((await read(fresh)).boxHistoryComplete).toBe(true)
     await dataSource.query('DELETE FROM organization_activation_facts WHERE "organizationId" = $1', [fresh])
-    expect((await service.get(fresh))?.boxHistoryComplete).toBe(false)
+    expect(await service.get(fresh)).toMatchObject({
+      lastBoxCreatedAt: null,
+      lastBoxModifiedAt: null,
+      boxHistoryComplete: false,
+    })
   })
 
   it('covers an old application insert waiting for migration installation to commit', async () => {
@@ -273,10 +293,7 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL triggers
       await installer.commitTransaction()
       const id = await pending
       await box(id, earlier)
-      expect(await service.get(id)).toMatchObject({
-        boxHistoryComplete: true,
-        firstObservedBoxCreatedAt: earlier,
-      })
+      expect(await service.get(id)).toMatchObject({ boxHistoryComplete: true, lastBoxCreatedAt: earlier })
     } finally {
       if (installer.isTransactionActive) await installer.rollbackTransaction()
       if (pending) await pending.catch(() => undefined)

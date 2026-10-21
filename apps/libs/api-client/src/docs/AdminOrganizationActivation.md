@@ -6,10 +6,9 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **organizationId** | **string** |  | [default to undefined]
-**firstObservedBoxCreatedAt** | **Date** | Earliest retained creation or warm-pool claim; a true first only when boxHistoryComplete is true. | [default to undefined]
-**boxHistoryComplete** | **boolean** | False for older organizations and organizations receiving transferred Boxes. | [default to undefined]
-**firstRecordedComputeAt** | **Date** | Earliest recorded positive-CPU allocation period. Null does not prove no execution. | [default to undefined]
-**computeHistoryComplete** | **boolean** | Always false: usage events can have historical gaps. | [default to undefined]
+**lastBoxCreatedAt** | **Date** | Maximum retained Box creation or warm-pool claim time; survives Box deletion. | [default to undefined]
+**boxHistoryComplete** | **boolean** | Whether creation, successful start and accepted deletion tracking covers the organization lifetime. | [default to undefined]
+**lastBoxModifiedAt** | **Date** | Maximum observed successful-start or accepted-deletion time; cleanup, stops and label edits do not advance it. | [default to undefined]
 **observedAt** | **Date** |  | [default to undefined]
 
 ## Example
@@ -19,10 +18,9 @@ import { AdminOrganizationActivation } from './api';
 
 const instance: AdminOrganizationActivation = {
     organizationId,
-    firstObservedBoxCreatedAt,
+    lastBoxCreatedAt,
     boxHistoryComplete,
-    firstRecordedComputeAt,
-    computeHistoryComplete,
+    lastBoxModifiedAt,
     observedAt,
 };
 ```

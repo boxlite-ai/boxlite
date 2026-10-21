@@ -23,14 +23,12 @@ var _ MappedNullable = &AdminOrganizationActivation{}
 // AdminOrganizationActivation struct for AdminOrganizationActivation
 type AdminOrganizationActivation struct {
 	OrganizationId string `json:"organizationId"`
-	// Earliest retained creation or warm-pool claim; a true first only when boxHistoryComplete is true.
-	FirstObservedBoxCreatedAt NullableTime `json:"firstObservedBoxCreatedAt"`
-	// False for older organizations and organizations receiving transferred Boxes.
+	// Maximum retained Box creation or warm-pool claim time; survives Box deletion.
+	LastBoxCreatedAt NullableTime `json:"lastBoxCreatedAt"`
+	// Whether creation, successful start and accepted deletion tracking covers the organization lifetime.
 	BoxHistoryComplete bool `json:"boxHistoryComplete"`
-	// Earliest recorded positive-CPU allocation period. Null does not prove no execution.
-	FirstRecordedComputeAt NullableTime `json:"firstRecordedComputeAt"`
-	// Always false: usage events can have historical gaps.
-	ComputeHistoryComplete bool `json:"computeHistoryComplete"`
+	// Maximum observed successful-start or accepted-deletion time; cleanup, stops and label edits do not advance it.
+	LastBoxModifiedAt NullableTime `json:"lastBoxModifiedAt"`
 	ObservedAt time.Time `json:"observedAt"`
 	AdditionalProperties map[string]interface{}
 }
@@ -41,13 +39,12 @@ type _AdminOrganizationActivation AdminOrganizationActivation
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewAdminOrganizationActivation(organizationId string, firstObservedBoxCreatedAt NullableTime, boxHistoryComplete bool, firstRecordedComputeAt NullableTime, computeHistoryComplete bool, observedAt time.Time) *AdminOrganizationActivation {
+func NewAdminOrganizationActivation(organizationId string, lastBoxCreatedAt NullableTime, boxHistoryComplete bool, lastBoxModifiedAt NullableTime, observedAt time.Time) *AdminOrganizationActivation {
 	this := AdminOrganizationActivation{}
 	this.OrganizationId = organizationId
-	this.FirstObservedBoxCreatedAt = firstObservedBoxCreatedAt
+	this.LastBoxCreatedAt = lastBoxCreatedAt
 	this.BoxHistoryComplete = boxHistoryComplete
-	this.FirstRecordedComputeAt = firstRecordedComputeAt
-	this.ComputeHistoryComplete = computeHistoryComplete
+	this.LastBoxModifiedAt = lastBoxModifiedAt
 	this.ObservedAt = observedAt
 	return &this
 }
@@ -84,30 +81,30 @@ func (o *AdminOrganizationActivation) SetOrganizationId(v string) {
 	o.OrganizationId = v
 }
 
-// GetFirstObservedBoxCreatedAt returns the FirstObservedBoxCreatedAt field value
+// GetLastBoxCreatedAt returns the LastBoxCreatedAt field value
 // If the value is explicit nil, the zero value for time.Time will be returned
-func (o *AdminOrganizationActivation) GetFirstObservedBoxCreatedAt() time.Time {
-	if o == nil || o.FirstObservedBoxCreatedAt.Get() == nil {
+func (o *AdminOrganizationActivation) GetLastBoxCreatedAt() time.Time {
+	if o == nil || o.LastBoxCreatedAt.Get() == nil {
 		var ret time.Time
 		return ret
 	}
 
-	return *o.FirstObservedBoxCreatedAt.Get()
+	return *o.LastBoxCreatedAt.Get()
 }
 
-// GetFirstObservedBoxCreatedAtOk returns a tuple with the FirstObservedBoxCreatedAt field value
+// GetLastBoxCreatedAtOk returns a tuple with the LastBoxCreatedAt field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *AdminOrganizationActivation) GetFirstObservedBoxCreatedAtOk() (*time.Time, bool) {
+func (o *AdminOrganizationActivation) GetLastBoxCreatedAtOk() (*time.Time, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.FirstObservedBoxCreatedAt.Get(), o.FirstObservedBoxCreatedAt.IsSet()
+	return o.LastBoxCreatedAt.Get(), o.LastBoxCreatedAt.IsSet()
 }
 
-// SetFirstObservedBoxCreatedAt sets field value
-func (o *AdminOrganizationActivation) SetFirstObservedBoxCreatedAt(v time.Time) {
-	o.FirstObservedBoxCreatedAt.Set(&v)
+// SetLastBoxCreatedAt sets field value
+func (o *AdminOrganizationActivation) SetLastBoxCreatedAt(v time.Time) {
+	o.LastBoxCreatedAt.Set(&v)
 }
 
 // GetBoxHistoryComplete returns the BoxHistoryComplete field value
@@ -134,54 +131,30 @@ func (o *AdminOrganizationActivation) SetBoxHistoryComplete(v bool) {
 	o.BoxHistoryComplete = v
 }
 
-// GetFirstRecordedComputeAt returns the FirstRecordedComputeAt field value
+// GetLastBoxModifiedAt returns the LastBoxModifiedAt field value
 // If the value is explicit nil, the zero value for time.Time will be returned
-func (o *AdminOrganizationActivation) GetFirstRecordedComputeAt() time.Time {
-	if o == nil || o.FirstRecordedComputeAt.Get() == nil {
+func (o *AdminOrganizationActivation) GetLastBoxModifiedAt() time.Time {
+	if o == nil || o.LastBoxModifiedAt.Get() == nil {
 		var ret time.Time
 		return ret
 	}
 
-	return *o.FirstRecordedComputeAt.Get()
+	return *o.LastBoxModifiedAt.Get()
 }
 
-// GetFirstRecordedComputeAtOk returns a tuple with the FirstRecordedComputeAt field value
+// GetLastBoxModifiedAtOk returns a tuple with the LastBoxModifiedAt field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *AdminOrganizationActivation) GetFirstRecordedComputeAtOk() (*time.Time, bool) {
+func (o *AdminOrganizationActivation) GetLastBoxModifiedAtOk() (*time.Time, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.FirstRecordedComputeAt.Get(), o.FirstRecordedComputeAt.IsSet()
+	return o.LastBoxModifiedAt.Get(), o.LastBoxModifiedAt.IsSet()
 }
 
-// SetFirstRecordedComputeAt sets field value
-func (o *AdminOrganizationActivation) SetFirstRecordedComputeAt(v time.Time) {
-	o.FirstRecordedComputeAt.Set(&v)
-}
-
-// GetComputeHistoryComplete returns the ComputeHistoryComplete field value
-func (o *AdminOrganizationActivation) GetComputeHistoryComplete() bool {
-	if o == nil {
-		var ret bool
-		return ret
-	}
-
-	return o.ComputeHistoryComplete
-}
-
-// GetComputeHistoryCompleteOk returns a tuple with the ComputeHistoryComplete field value
-// and a boolean to check if the value has been set.
-func (o *AdminOrganizationActivation) GetComputeHistoryCompleteOk() (*bool, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.ComputeHistoryComplete, true
-}
-
-// SetComputeHistoryComplete sets field value
-func (o *AdminOrganizationActivation) SetComputeHistoryComplete(v bool) {
-	o.ComputeHistoryComplete = v
+// SetLastBoxModifiedAt sets field value
+func (o *AdminOrganizationActivation) SetLastBoxModifiedAt(v time.Time) {
+	o.LastBoxModifiedAt.Set(&v)
 }
 
 // GetObservedAt returns the ObservedAt field value
@@ -219,10 +192,9 @@ func (o AdminOrganizationActivation) MarshalJSON() ([]byte, error) {
 func (o AdminOrganizationActivation) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["organizationId"] = o.OrganizationId
-	toSerialize["firstObservedBoxCreatedAt"] = o.FirstObservedBoxCreatedAt.Get()
+	toSerialize["lastBoxCreatedAt"] = o.LastBoxCreatedAt.Get()
 	toSerialize["boxHistoryComplete"] = o.BoxHistoryComplete
-	toSerialize["firstRecordedComputeAt"] = o.FirstRecordedComputeAt.Get()
-	toSerialize["computeHistoryComplete"] = o.ComputeHistoryComplete
+	toSerialize["lastBoxModifiedAt"] = o.LastBoxModifiedAt.Get()
 	toSerialize["observedAt"] = o.ObservedAt
 
 	for key, value := range o.AdditionalProperties {
@@ -238,10 +210,9 @@ func (o *AdminOrganizationActivation) UnmarshalJSON(data []byte) (err error) {
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
 		"organizationId",
-		"firstObservedBoxCreatedAt",
+		"lastBoxCreatedAt",
 		"boxHistoryComplete",
-		"firstRecordedComputeAt",
-		"computeHistoryComplete",
+		"lastBoxModifiedAt",
 		"observedAt",
 	}
 
@@ -273,10 +244,9 @@ func (o *AdminOrganizationActivation) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "organizationId")
-		delete(additionalProperties, "firstObservedBoxCreatedAt")
+		delete(additionalProperties, "lastBoxCreatedAt")
 		delete(additionalProperties, "boxHistoryComplete")
-		delete(additionalProperties, "firstRecordedComputeAt")
-		delete(additionalProperties, "computeHistoryComplete")
+		delete(additionalProperties, "lastBoxModifiedAt")
 		delete(additionalProperties, "observedAt")
 		o.AdditionalProperties = additionalProperties
 	}

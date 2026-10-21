@@ -1,8 +1,51 @@
 ## TL;DR
 
-Persist organization activation evidence when Boxes and usage periods are written, preserving uncertainty about earlier history.
+Keep the latest Box creation and start/delete times after Box cleanup.
 
 ## Details
+
+### Latest Box lifecycle times
+
+Replace first-activation milestones with `lastBoxCreatedAt = max(createdAt)` and
+`lastBoxModifiedAt = max(startAt, deleteAt)` in the existing `include=activation`
+section. Keep `boxHistoryComplete` and `observedAt`; remove compute milestones
+and their coverage flag. Current Box state answers whether a Box is running.
+
+Inspection at `13ed02038` found no `startAt` or `deleteAt` on `Box`
+(`apps/api/src/box/entities/box.entity.ts`). Start means a committed transition
+into `started`; delete means the first accepted `desiredState=destroyed`, or a
+direct transition into `destroyed` without an earlier request. Record their
+database statement timestamps. Neither generic `updatedAt` nor usage-period
+starts represent these events. Label edits, stop, retries, deletion completion
+after acceptance, and delayed physical cleanup must not advance the maximum.
+A direct physical delete without prior deletion intent counts at deletion time.
+
+Reuse the pending facts-table migration and transactional Box triggers. Store
+only organization maxima, independent of Box retention; no per-Box event ledger,
+new route, usage query, or continuous-activity inference. Warm-pool claims count
+as creation, and as start if already running; transfers between real organizations
+are not creation/start and make destination history incomplete. Backfill only
+the maximum retained `createdAt`; old start/delete history is unknown, so leave
+modification null and history incomplete. Missing facts also report incomplete.
+
+[PostgreSQL trigger behavior §37.1](https://www.postgresql.org/docs/current/trigger-definition.html)
+puts AFTER triggers in the source transaction, covering raw/old application
+writes and rollback. [Conditional expressions §9.18.4](https://www.postgresql.org/docs/current/functions-conditional.html#FUNCTIONS-GREATEST-LEAST)
+defines null-aware `GREATEST`, suitable for monotonic maxima under row locking.
+Application events can miss writes; querying current Boxes loses deletions;
+keeping first-use/compute facts adds analysis outside this requested contract.
+
+Implementation checklist:
+
+- [x] Replace pending migration, DTO and reader; retain the existing endpoint and include selector.
+- [x] Test maxima, start/restart, deletion acceptance and cleanup, irrelevant updates,
+  rollback, concurrency, pool claims/transfers, backfill and missing facts on PostgreSQL.
+- [x] Regenerate clients; update Backoffice validation, OpenAPI, daily report and guides.
+- [x] Run required checks and update this design and the shared contract document.
+
+Acceptance: deleting every Box leaves both maxima readable; cleanup cannot look
+like renewed activity. This is an unmerged migration revision, not an upgrade of
+an already deployed schema. Producer rollout still precedes consumer rollout.
 
 ### Organization contract simplification
 
@@ -44,7 +87,7 @@ Keeping both modes or adding another metadata endpoint would retain the problem.
 ### Scope and contract
 
 `GET /api/admin/organizations/{organizationId}?include=activation` adds creation
-evidence and the earliest recorded positive-CPU usage period to the existing detail.
+and start/delete timestamps to the existing detail.
 Registration fields are always included. `include=usage,activation` selects both
 optional sections; omitting include reads neither. Box deletion preserves evidence;
 organization deletion removes it. Administrator authentication is required.
@@ -61,16 +104,15 @@ current-month usage must explicitly request it. Rollback order is consumer then 
 
 | Field | Meaning |
 | --- | --- |
-| `firstObservedBoxCreatedAt` | Earliest retained Box creation or warm-pool claim recorded for this organization. |
-| `boxHistoryComplete` | Creation tracking covered the organization's entire lifetime. False for organizations predating this migration or receiving a Box from another real organization. |
-| `firstRecordedComputeAt` | Earliest positive-CPU allocation period in the retained ledger, including later periods recorded by reconciliation. |
-| `computeHistoryComplete` | Always false: the ledger does not prove complete execution history. |
+| `lastBoxCreatedAt` | Maximum retained Box creation or warm-pool claim time. |
+| `lastBoxModifiedAt` | Maximum observed successful-start or accepted-deletion time; see the event definition above. |
+| `boxHistoryComplete` | Creation/start/delete tracking covers the organization lifetime; false for preexisting or transferred history. |
 | `observedAt` | Database observation time for this response. |
 
-For a new organization, complete creation history and a null creation timestamp
-mean no Box creation or claim has committed. For an older organization, a null
-timestamp means unknown. A null compute timestamp never proves no execution.
-These facts describe organizations, independently of changing user identities.
+Null with incomplete history is unknown. Current Box state, available through the
+existing Box/detail queries, answers whether a Box is running. Recent start/delete
+time is not proof of user interaction, CPU utilization, or retention. Automatic
+starts/deletions also count. Facts survive Box deletion and disappear with the organization.
 
 ### Related work and lessons
 
@@ -81,11 +123,6 @@ The source at `72f56d099` provides the following boundaries:
 - Warm-pool claims replace organization and creation time
   (`apps/api/src/box/services/box.service.ts:397–449`). Destroyed Boxes are later
   physically removed (`1351–1382`), so counting current Boxes loses history.
-- Usage writers share `createUsagePeriod` (`usage.service.ts:192–209`), but their
-  events are not durable and reconciliation never reconstructs missed time
-  (`423–431,542–545`). A recorded period is evidence, not complete execution history.
-- Archiving moves periods in one transaction (`usage.service.ts:509–534`).
-
 PostgreSQL executes a trigger in the originating statement's transaction:
 failure rolls both changes back. `AFTER` triggers see the final row and are
 suited to propagating changes to another table.
@@ -99,50 +136,51 @@ A separate table avoids altering existing responses that serialize organizations
 ### How it works
 
 An additive, transactional migration creates `organization_activation_facts`,
-installs triggers, and backfills retained Box and current/archive usage evidence.
-Organizations already present have incomplete creation history; an organization
-insert trigger initializes future organizations with complete creation history.
+installs triggers, and backfills the maximum retained Box creation time.
+Organizations already present have incomplete lifecycle history; an organization
+insert trigger initializes future organizations with complete lifecycle history.
 The table references organizations with cascade deletion, but never references Boxes.
 
 Trigger installation locks source tables against concurrent writers until commit.
-Backfill reads both usage tables in one statement, preserving the archive boundary.
-No API instance can commit an unobserved organization/Box/period write between
+No API instance can commit an unobserved organization/Box write between
 installation and backfill. Migration lock acquisition is limited to five seconds
 and individual statements to sixty seconds; contention or excessive data causes
 rollback, not partial installation. Production data volume has not been measured.
 
-Box inserts and claims update an existing facts row only when the recorded minimum
-changes. Pool-only activity is ignored. Moving a Box between real organizations
-makes the destination's creation history incomplete without assigning its original
-creation time to that destination. Usage inserts update the minimum only for
-finite positive CPU allocation. Archive writes need no new trigger.
+Box inserts and claims advance the creation maximum. Successful starts and first
+delete acceptance advance the modification maximum, including direct destruction
+or physical deletion without prior intent. Repeated writes, stops, label changes,
+delete completion and cleanup leave it unchanged. Pool-only activity is ignored.
+Transfers between real organizations mark the destination incomplete and do not
+attribute the source's lifecycle times to it. There is no usage-table trigger.
 
 Writes lock source rows before their organization's facts row. Facts updates never
-read or lock Boxes, usage rows, or organizations. Organization creation owns its row
+read or lock Boxes or organizations. Organization creation owns its row
 before inserting facts; deletion cascades only into facts. The read uses one SQL
-statement. Concurrent minimum updates therefore serialize on one facts row without
+statement. Concurrent maximum updates therefore serialize on one facts row without
 introducing a reverse facts-to-source lock path.
 
 ### Validation
 
-Real PostgreSQL tests run the migration and exercise rollback, concurrent creates,
-warm-pool claims, Box and organization deletion, old-organization uncertainty,
-cross-organization transfer, positive CPU versus storage-only periods, and migration
-down/up. HTTP tests cover validation, administrator guards, and response shape.
-The PostgreSQL suite covers a writer blocked by migration installation that
-receives complete tracking after commit. HTTP tests cover direct date filters, required
-registration fields, explicit usage/activation selection, default omission of both
-sections, invalid parameters and removal of duplicate paths. Production migration duration and
-large-organization contention have not been measured.
+Real PostgreSQL tests exercise maxima, successful start/restart, deletion acceptance,
+delayed cleanup, direct removal, unrelated changes, rollback, concurrent creates,
+pool claims/transfers, backfill and migration installation. HTTP tests retain
+administrator guards, date filters and optional-section isolation. The consumer
+checks timestamp types, missing fields, organization identity and scoped access.
+Generated clients and the daily-report example use the same two timestamps.
+Production migration duration and large-organization contention remain unmeasured.
 
-The organization query, provider and overview suite passes 40 tests, including real
-PostgreSQL date-window and shared-millisecond pagination checks. Run it with
-`make test:apps:api FILTER='AdminOrganizationOverviewService|AdminProviderController|organization queries|Admin overview'`
-and a disposable database configured through `DB_*`. This verifies the revised query
-contract; it does not establish production rollout or migration capacity.
+The focused lifecycle, organization-query, provider and overview suite passes 52
+checks with real PostgreSQL, including 12 lifecycle scenarios. Before production
+edits, the new contract check failed because the old reader omitted both latest
+fields. The final lifecycle suite creates no usage tables, checking that this
+contract depends only on organization and Box writes.
+Run with `make test:apps:api FILTER='AdminOrganizationActivationService|AdminOrganizationOverviewService|AdminProviderController|organization queries|Admin overview'`
+and disposable PostgreSQL configured through `DB_*`.
 
-The API production build and focused source lint pass. Repository-wide format checks
-report generated-client formatting, lint reports infra module-boundary errors, and the
-full test target cannot build missing vendored runtime dependencies. The full apps build
-also requires runner version configuration and an unavailable dashboard dependency.
-These checks remain incomplete; the focused query tests are not a full-repository pass.
+Focused source lint passes. Three generated clients were regenerated twice without
+Nx cache; all 532 generated files matched on the second run. Repository-wide
+format still reports 201 generated-client files, lint reports three infra
+module-boundary errors, and the full test target cannot build missing vendored
+runtime dependencies. API production and all three client builds pass. These are local
+checks, not production rollout or migration-capacity evidence.
