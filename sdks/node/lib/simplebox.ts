@@ -29,6 +29,7 @@ export type { SocketAddress } from "./native-contracts.js";
 type BoxLike = Omit<JsBox, "network"> & {
   readonly network: {
     tunnel(port: number): Promise<NativeBoxTunnel>;
+    revokeTunnel(port: number): Promise<void>;
   };
 };
 
@@ -380,6 +381,15 @@ export class NetworkHandle {
     }
     const box = await this.ensureBox();
     return new BoxTunnel(await box.network.tunnel(port));
+  }
+
+  /** Withdraw public access to a port; open connections are not closed. */
+  async revokeTunnel(port: number): Promise<void> {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new RangeError("port must be an integer between 1 and 65535");
+    }
+    const box = await this.ensureBox();
+    await box.network.revokeTunnel(port);
   }
 }
 

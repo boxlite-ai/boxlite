@@ -59,6 +59,11 @@ For a remote box with inbound access enabled, preparing the tunnel registers
 that guest port as public. It does not wake a stopped box with auto-resume on;
 the `CONNECT` does. A box whose auto-resume is off, or whose state cannot
 resume, is refused at once.
+`revoke_tunnel(port)` withdraws that declaration, for one port: new requests
+and `CONNECT`s to its URI get `404` within 3 seconds, while connections already
+open run until they close. It is safe to repeat, needs neither inbound access
+nor a running box, and preparing the port again reopens it at the same URI.
+On a local runtime nothing is published, so it does nothing.
 The proxy accepts HTTP/WebSocket previews, including signed URLs, and raw CONNECT
 only when the box has inbound access enabled and the port has an active
 declaration. Getting a preview URL alone does not declare the port. A box with

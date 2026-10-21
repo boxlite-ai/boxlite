@@ -543,6 +543,8 @@ export interface JsSnapshotHandle {
 export interface JsNetworkHandle {
   /** Prepare a one-shot tunnel to a service port inside the box. */
   tunnel(port: number): Promise<NativeBoxTunnel>;
+  /** Withdraw public access to a service port; open connections stay open. */
+  revokeTunnel(port: number): Promise<void>;
 }
 
 export type SocketAddress =

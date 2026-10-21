@@ -129,6 +129,13 @@ impl PyNetworkHandle {
             })
         })
     }
+
+    fn revoke_tunnel<'py>(&self, py: Python<'py>, port: u16) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle.network().revoke_tunnel(port).await.map_err(map_err)
+        })
+    }
 }
 
 impl PyBoxTunnel {

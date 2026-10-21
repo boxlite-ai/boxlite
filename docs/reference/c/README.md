@@ -711,6 +711,11 @@ BoxliteErrorCode boxlite_network_tunnel(
     CBoxTunnelHandle** out_tunnel,
     CBoxliteError* out_error
 );
+BoxliteErrorCode boxlite_network_revoke_tunnel(
+    CBoxNetworkHandle* network,
+    uint16_t port,
+    CBoxliteError* out_error
+);
 BoxliteErrorCode boxlite_tunnel_uri(
     CBoxTunnelHandle* tunnel,
     char** out_uri,
@@ -754,6 +759,10 @@ Each `CBoxTunnelHandle` is one-shot. Choose `boxlite_tunnel_connect()` or
 `boxlite_tunnel_uri()` reports where a remotely served tunnel can be reached, as
 an allocated string the caller frees with `boxlite_free_string()`. It writes NULL
 for a local tunnel.
+
+`boxlite_network_revoke_tunnel()` withdraws the public URL of `port`. It is
+safe to repeat, leaves open connections running, and does nothing for a local
+box.
 
 `boxlite_tunnel_forward()` creates a TCP or Unix listener from the tunnel. Its
 wait and close callbacks are posted exactly once through the parent runtime's

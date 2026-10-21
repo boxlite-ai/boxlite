@@ -651,7 +651,7 @@ Display resource usage statistics for a box.
 
 ### `boxlite network tunnel`
 
-**Synopsis:** `boxlite network tunnel BOX GUEST_PORT [--listen ADDRESS]`
+**Synopsis:** `boxlite network tunnel BOX GUEST_PORT [--listen ADDRESS | --revoke]`
 
 Without `--listen`, print the public URL supplied by a remote REST service;
 local boxes have no public URL. With `--listen`, bind a local listener and
@@ -673,6 +673,14 @@ addresses, and Unix socket paths must be absolute.
 
 A remote box needs inbound access enabled before it can be tunneled: create it
 with `--inbound enabled`.
+
+`--revoke` withdraws the port's public URL instead. New requests to it get
+`404` within 3 seconds; connections already open are not closed. It is safe to
+repeat, and running the command again without `--revoke` reopens the same URL:
+
+```bash
+boxlite network tunnel mybox 3000 --revoke
+```
 
 ---
 

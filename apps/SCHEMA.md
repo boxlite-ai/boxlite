@@ -694,7 +694,8 @@ mode and `token_hash` are reserved for later.
 | `revoked_at` | `timestamptz` | null while active |
 
 **Unique:** `(box_id, port)`. Repeating an authorized tunnel request keeps the
-declaration active.
+declaration active. `DELETE …/network/tunnel?port={port}` sets `revoked_at`;
+declaring the port again clears it.
 
 The migration creates no declarations for existing boxes. Existing preview and
 tunnel hostnames become reachable only after the owner prepares that port with

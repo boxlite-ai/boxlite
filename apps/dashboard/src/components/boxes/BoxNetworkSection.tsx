@@ -4,6 +4,7 @@
  */
 
 import { useBoxPreviewUrlMutation } from '@/hooks/mutations/useBoxPreviewUrlMutation'
+import { useRevokeBoxTunnelMutation } from '@/hooks/mutations/useRevokeBoxTunnelMutation'
 import { useUpdateBoxInboundMutation } from '@/hooks/mutations/useUpdateBoxInboundMutation'
 import { Box, NetworkMode } from '@boxlite-ai/api-client'
 import { useCallback, useState } from 'react'
@@ -21,6 +22,7 @@ import { BoxPreviewUrlDialog } from './BoxPreviewUrlDialog'
 export function BoxNetworkSection({ box, canManage }: { box: Box; canManage: boolean }) {
   const toggleInbound = useUpdateBoxInboundMutation()
   const previewUrl = useBoxPreviewUrlMutation()
+  const revokeTunnel = useRevokeBoxTunnelMutation()
 
   const [dialogOpen, setDialogOpen] = useState(false)
 
@@ -56,6 +58,23 @@ export function BoxNetworkSection({ box, canManage }: { box: Box; canManage: boo
     [box.id, previewUrl],
   )
 
+  const revoke = useCallback(
+    (port: number) => {
+      revokeTunnel.mutate(
+        { boxId: box.id, port },
+        {
+          onSuccess: () => {
+            // The URL on screen no longer opens; leaving it up would read as live.
+            previewUrl.reset()
+            toast.success(`Port ${port} is no longer public`)
+          },
+          onError: () => toast.error('Could not revoke that port'),
+        },
+      )
+    },
+    [box.id, previewUrl, revokeTunnel],
+  )
+
   return (
     <>
       <BoxNetworkPanel
@@ -72,6 +91,8 @@ export function BoxNetworkSection({ box, canManage }: { box: Box; canManage: boo
         isFetching={previewUrl.isPending}
         error={previewUrl.isError ? 'Could not get a URL for that port.' : undefined}
         onFetchUrl={fetchUrl}
+        isRevoking={revokeTunnel.isPending}
+        onRevoke={revoke}
       />
     </>
   )

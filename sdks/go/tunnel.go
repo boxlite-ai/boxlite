@@ -259,6 +259,25 @@ func (n *Network) Tunnel(ctx context.Context, port uint16) (*BoxTunnel, error) {
 	return tunnel, nil
 }
 
+// RevokeTunnel withdraws public access to a service port inside the box.
+// It is safe to repeat; connections already open are not closed.
+func (n *Network) RevokeTunnel(ctx context.Context, port uint16) error {
+	if n == nil || n.handle == nil {
+		return ErrRuntimeClosed
+	}
+	if port == 0 {
+		return fmt.Errorf("invalid tunnel port %d", port)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var cerr C.CBoxliteError
+	if code := C.boxlite_network_revoke_tunnel(n.handle, C.uint16_t(port), &cerr); code != C.Ok {
+		return freeError(&cerr)
+	}
+	return nil
+}
+
 func (t *BoxTunnel) take() (*C.CBoxTunnelHandle, error) {
 	if t == nil {
 		return nil, ErrRuntimeClosed

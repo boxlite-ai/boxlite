@@ -143,6 +143,15 @@ impl JsNetworkHandle {
             handle: Mutex::new(Some(tunnel)),
         })
     }
+
+    #[napi]
+    pub async fn revoke_tunnel(&self, port: u16) -> Result<()> {
+        self.handle
+            .network()
+            .revoke_tunnel(port)
+            .await
+            .map_err(map_err)
+    }
 }
 
 impl JsBoxTunnel {

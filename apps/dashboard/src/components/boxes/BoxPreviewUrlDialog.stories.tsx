@@ -22,18 +22,18 @@ const noop = () => {}
 /** Opened, nothing asked for yet. */
 export const Empty: Story = {
   name: '1 · Asking for a port',
-  args: { open: true, onOpenChange: noop, onFetchUrl: noop },
+  args: { open: true, onOpenChange: noop, onFetchUrl: noop, onRevoke: noop },
 }
 
 export const Fetching: Story = {
   name: '2 · Fetching',
-  args: { open: true, onOpenChange: noop, isFetching: true, onFetchUrl: noop },
+  args: { open: true, onOpenChange: noop, isFetching: true, onFetchUrl: noop, onRevoke: noop },
 }
 
 /** The URL opens for anyone: the wording has to make that reach unmissable. */
 export const Result: Story = {
   name: '3 · URL',
-  args: { open: true, onOpenChange: noop, url: TUNNEL_URL, onFetchUrl: noop },
+  args: { open: true, onOpenChange: noop, url: TUNNEL_URL, onFetchUrl: noop, onRevoke: noop },
 }
 
 export const Failed: Story = {
@@ -43,6 +43,7 @@ export const Failed: Story = {
     onOpenChange: noop,
     error: 'Could not get a URL for that port.',
     onFetchUrl: noop,
+    onRevoke: noop,
   },
 }
 
@@ -59,6 +60,7 @@ export const Interactive: Story = {
         onOpenChange={noop}
         url={url}
         isFetching={isFetching}
+        onRevoke={() => setUrl(undefined)}
         onFetchUrl={(port) => {
           setIsFetching(true)
           setUrl(undefined)

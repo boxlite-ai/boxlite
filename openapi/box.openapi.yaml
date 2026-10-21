@@ -1157,6 +1157,35 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+    delete:
+      operationId: revokeTunnel
+      summary: Revoke a box service tunnel
+      description: |
+        Withdraws public access to one box port that `prepareTunnel`
+        opened. New requests and `CONNECT`s to its URI get `404` within
+        3 seconds; connections already open run until they close. Other
+        ports of the box are unaffected.
+
+        Safe to repeat, and succeeds for a port that was never opened.
+        Calling `prepareTunnel` again reopens the port at the same URI.
+      tags: [Network]
+      parameters:
+        - name: port
+          in: query
+          required: true
+          description: TCP port the service listens on inside the box
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 65535
+          example: 3000
+      responses:
+        "204":
+          description: The port is no longer public
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 
   /{prefix}/boxes/{box_id}/network/inbound:
     parameters:

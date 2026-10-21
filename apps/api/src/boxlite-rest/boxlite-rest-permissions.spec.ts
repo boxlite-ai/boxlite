@@ -45,6 +45,7 @@ const EXPECTED: Record<string, OrganizationResourcePermission[] | null> = {
   proxyExecKill: [WRITE_BOXES],
   proxyFiles: [WRITE_BOXES],
   proxyNetworkTunnel: [WRITE_BOXES],
+  revokeNetworkTunnel: [WRITE_BOXES],
   proxyExecStatus: null,
   proxyMetrics: null,
 }

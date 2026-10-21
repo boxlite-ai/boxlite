@@ -1157,6 +1157,14 @@ enum BoxliteErrorCode boxlite_network_tunnel(CBoxNetworkHandle *network,
                                              CBoxTunnelHandle **out_tunnel,
                                              CBoxliteError *out_error);
 
+// Withdraw public access to `port` in the box.
+//
+// Safe to repeat. Connections already open are not closed. Returns
+// `InvalidArgument` for a null network pointer or port zero.
+enum BoxliteErrorCode boxlite_network_revoke_tunnel(CBoxNetworkHandle *network,
+                                                    uint16_t port,
+                                                    CBoxliteError *out_error);
+
 // Release an unconsumed tunnel. Existing connections and forwarders remain alive.
 void boxlite_tunnel_free(CBoxTunnelHandle *tunnel);
 

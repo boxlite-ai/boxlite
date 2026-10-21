@@ -24,6 +24,9 @@ export type BoxPreviewUrlDialogProps = {
   isFetching?: boolean
   error?: string
   onFetchUrl: (port: number) => void
+  isRevoking?: boolean
+  /** Withdraws public access to the port typed; open connections stay open. */
+  onRevoke: (port: number) => void
 }
 
 /**
@@ -44,6 +47,8 @@ export function BoxPreviewUrlDialog({
   isFetching = false,
   error,
   onFetchUrl,
+  isRevoking = false,
+  onRevoke,
 }: BoxPreviewUrlDialogProps) {
   const [value, setValue] = useState('')
 
@@ -79,6 +84,15 @@ export function BoxPreviewUrlDialog({
           />
           <Button type="submit" size="sm" disabled={!valid || isFetching}>
             {isFetching ? 'Getting…' : 'Get URL'}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!valid || isRevoking}
+            onClick={() => onRevoke(port)}
+          >
+            {isRevoking ? 'Revoking…' : 'Revoke'}
           </Button>
         </form>
 

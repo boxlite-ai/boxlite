@@ -382,6 +382,19 @@ impl NetworkHandle {
             .await
             .map(|tunnel| tunnel.with_opener(opener))
     }
+
+    /// Withdraw the public access `tunnel()` granted to `port`.
+    ///
+    /// Safe to repeat. Connections already open are not closed, and
+    /// `tunnel()` on the same port reopens it at the same URI.
+    pub async fn revoke_tunnel(&self, port: u16) -> BoxliteResult<()> {
+        if port == 0 {
+            return Err(BoxliteError::InvalidArgument(
+                "tunnel port must be non-zero".into(),
+            ));
+        }
+        self.network_backend.revoke_tunnel(port).await
+    }
 }
 
 /// A running local listener that opens one box tunnel per client.

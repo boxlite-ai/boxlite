@@ -590,6 +590,12 @@ impl BoxNetworkBackend for RestBox {
             Ok(BoxConnection::new(connection))
         }))
     }
+
+    async fn revoke_tunnel(&self, port: u16) -> BoxliteResult<()> {
+        self.client
+            .revoke_box_tunnel(&self.box_id_str(), port)
+            .await
+    }
 }
 
 impl RestBox {
@@ -2689,5 +2695,60 @@ mod tests {
         connection.read_exact(&mut echoed).await.unwrap();
         assert_eq!(&echoed, b"ping");
         assert_eq!(posts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// Serve one request with `reply`, handing back its request head.
+    fn serve_once(listener: TcpListener, reply: &'static str) -> tokio::task::JoinHandle<String> {
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let head = String::from_utf8(read_request_head(&mut socket).await).unwrap();
+            socket.write_all(reply.as_bytes()).await.unwrap();
+            head
+        })
+    }
+
+    /// `revoke_tunnel()` withdraws exactly the port `tunnel()` would open:
+    /// one `DELETE /network/tunnel` naming it, and a 204 is success.
+    #[tokio::test]
+    async fn revoke_tunnel_deletes_the_port_declaration() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = serve_once(
+            listener,
+            "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n",
+        );
+
+        let network = crate::litebox::NetworkHandle::new(Arc::new(rest_box_for(port, "tun-box")));
+        network.revoke_tunnel(3000).await.unwrap();
+
+        let head = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("revoke_tunnel sent no request")
+            .unwrap()
+            .to_lowercase();
+        assert!(
+            head.starts_with("delete /v1/boxes/tun-box/network/tunnel?port=3000 http/1.1"),
+            "unexpected request line: {head}"
+        );
+    }
+
+    /// A box the server does not know is an error, not a silent success.
+    #[tokio::test]
+    async fn revoke_tunnel_reports_a_missing_box() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = serve_once(
+            listener,
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+
+        let network = crate::litebox::NetworkHandle::new(Arc::new(rest_box_for(port, "gone-box")));
+        let err = network
+            .revoke_tunnel(3000)
+            .await
+            .expect_err("a 404 must not read as a revoked port");
+
+        assert!(matches!(err, BoxliteError::NotFound(_)), "{err:?}");
+        server.await.unwrap();
     }
 }

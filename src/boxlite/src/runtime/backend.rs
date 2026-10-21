@@ -184,6 +184,14 @@ pub(crate) trait BoxNetworkBackend: Send + Sync {
     /// but open no connection: return a [`BoxTunnel::new`] whose future opens
     /// it on `connect()`, so a port nothing listens on fails there.
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
+
+    /// Withdraw any public access `tunnel()` granted to `port`.
+    ///
+    /// A backend that publishes nothing, like the local one, has nothing to
+    /// withdraw. Connections already open are not closed.
+    async fn revoke_tunnel(&self, _port: u16) -> BoxliteResult<()> {
+        Ok(())
+    }
 }
 
 /// Backend abstraction for snapshot lifecycle operations on a box.

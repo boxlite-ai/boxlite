@@ -469,6 +469,17 @@ impl ApiClient {
         Ok(descriptor.uri)
     }
 
+    /// Withdraw public access to a box service port.
+    pub(crate) async fn revoke_box_tunnel(
+        &self,
+        box_id: impl AsRef<str>,
+        port: u16,
+    ) -> BoxliteResult<()> {
+        let path = format!("/boxes/{}/network/tunnel", box_id.as_ref());
+        self.delete_with_query(&path, &[("port", &port.to_string())])
+            .await
+    }
+
     /// Build an authorized file request bounded by the box lifetime.
     pub async fn authorized_request(
         &self,

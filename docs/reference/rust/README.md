@@ -548,6 +548,7 @@ pub struct BoxState {
 |-----------|-----------|-------------|
 | Get handle | `LiteBox::network(&self) -> NetworkHandle` | Get box-scoped network operations |
 | Tunnel | `async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>` | Prepare a one-shot tunnel to one guest TCP service |
+| Revoke | `async fn revoke_tunnel(&self, port: u16) -> BoxliteResult<()>` | Withdraw the port's public URL; a no-op on a local box |
 | Forward | `async fn BoxTunnel::forward(self, listen: SocketAddress) -> BoxliteResult<TunnelForwarder>` | Consume the tunnel into a TCP or Unix listener |
 | Inspect | `BoxTunnel::uri(&self) -> Option<&str>` | Read the prepared public URL; `None` for a local box |
 | Descriptor | `BoxConnection::raw_fd(&self) -> Option<RawFd>` | Borrowed fd; `None` for a remotely served connection |
