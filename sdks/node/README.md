@@ -241,6 +241,47 @@ console.log(refreshed?.network?.publishedPorts);
 await box.stop();
 ```
 
+### Guest SSH Control
+
+`box.ssh` configures, observes, and disables the guest's SSH listener. SSH
+starts disabled; configuration lives only in guest memory, so a VM restart
+clears it. Only `configure()` may start the box, and implicit startup follows
+the exec policy — refused for a Configured or Stopped box with an explicit
+`cmd`/`entrypoint`; start it with the native `JsBox.start()` first (`SimpleBox`
+has no public start). `status()` and `disable()` never start the VM or its
+main command. Operations are never retried; a configure that fails validation
+leaves the running listener untouched (a listener bind failure disables SSH).
+Credentials flow one way: status carries only the public host identity, and
+errors never echo key material.
+
+```typescript
+import { readFile } from 'node:fs/promises';
+
+const status = await box.ssh.configure({
+  listenAddress: '0.0.0.0:2222',
+  hostPrivateKey: await readFile('host_key', 'utf8'), // OpenSSH private key
+  accounts: [
+    {
+      login: 'alice',
+      authorizedKeys: [await readFile('alice.pub', 'utf8')],
+      // Certificate auth instead of authorizedKeys:
+      // ca: { publicKey: caPublicKey, principal: 'alice' },
+    },
+  ],
+});
+// { enabled: true, generation: 1n, listenAddress, hostPublicKey,
+//   hostKeyFingerprint } — generation is a bigint (full u64).
+
+await box.ssh.status(); // Observe; never starts the VM
+await box.ssh.disable(); // Idempotent; disconnects clients
+```
+
+Every accepted `configure` fully restarts the listener (generation increments,
+clients disconnect). Disable preserves the last generation and clears the
+address and host identity fields; a never-enabled box reports generation `0n`.
+See [the Node.js reference](../../docs/reference/nodejs/README.md#guest-ssh-control)
+for the full contracts.
+
 ### Runtime Image Management
 
 `runtime.images` holds the images a runtime can boot from: the local cache on

@@ -10,6 +10,7 @@ Complete API reference for the BoxLite Node.js/TypeScript SDK.
 - [Runtime Management](#runtime-management)
 - [Box Handle](#box-handle)
 - [Network Tunnels](#network-tunnels)
+- [Guest SSH Control](#guest-ssh-control)
 - [Command Execution](#command-execution)
 - [Box Types](#box-types)
 - [Error Types](#error-types)
@@ -301,6 +302,7 @@ Handle to a running or stopped box.
 | `id` | `string` | Unique box identifier (ULID) |
 | `name` | `string \| null` | User-defined name |
 | `network` | `JsNetworkHandle` | Box-scoped tunnel operations |
+| `ssh` | `JsSshHandle` | Guest SSH control; never starts the VM |
 
 #### Methods
 
@@ -391,6 +393,56 @@ Each tunnel is one-shot. Choose `connect()` or `forward()`; a forwarder opens
 fresh tunnels for additional clients. This differs from `ports`, which
 creates a persistent, local-only host listener that accepts repeated
 connections from ordinary host applications.
+
+---
+
+## Guest SSH control
+
+`JsBox` and `SimpleBox` expose the same `box.ssh` workflow. SSH starts
+disabled; configuration lives in guest memory only.
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Configure | `await box.ssh.configure(config)` | Replace the configuration; the only operation that may start the box |
+| Observe | `await box.ssh.status()` | Read `SshStatus`; never starts the VM |
+| Disable | `await box.ssh.disable()` | Stop SSH idempotently; never starts the VM |
+
+```typescript
+interface SshConfig {
+  listenAddress: string;      // e.g. "0.0.0.0:2222"
+  hostPrivateKey: string;     // unencrypted OpenSSH host private key
+  accounts: SshAccount[];     // non-empty; each has a key or a CA
+}
+
+interface SshAccount {
+  login: string;              // 1-128 chars: [A-Za-z0-9._-]
+  authorizedKeys?: string[];  // OpenSSH public keys
+  ca?: SshCaConfig;           // certificate authority alternative
+}
+
+interface SshCaConfig {
+  publicKey: string;
+  principal: string;          // required certificate principal
+}
+
+interface SshStatus {
+  enabled: boolean;
+  generation: bigint;         // increments per listener start; full u64
+  listenAddress: string;
+  hostPublicKey: string;      // comment-free public host key
+  hostKeyFingerprint: string; // SHA-256 fingerprint
+}
+```
+
+Only `configure()` may start the box; implicit startup follows the exec policy
+and is refused for a Configured or Stopped box with an explicit
+`cmd`/`entrypoint` — start it with the native `JsBox.start()` first
+(`SimpleBox` has no public start). Every accepted configure fully restarts the
+listener and disconnects clients; operations are never retried. A configure
+that fails validation leaves the running listener untouched; a listener bind
+failure disables SSH. Disable preserves the last generation and clears the
+address and host identity fields; a never-enabled box reports `0n`. Status and
+errors carry no credential material.
 
 ---
 

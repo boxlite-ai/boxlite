@@ -11,6 +11,7 @@ use crate::metrics::JsBoxMetrics;
 use crate::network::JsNetworkHandle;
 use crate::snapshot_options::{JsCloneOptions, JsExportOptions};
 use crate::snapshots::JsSnapshotHandle;
+use crate::ssh::JsSshHandle;
 use crate::util::map_err;
 
 /// Box handle for interacting with a running container.
@@ -110,6 +111,14 @@ impl JsBox {
         JsSnapshotHandle {
             handle: Arc::clone(&self.handle),
         }
+    }
+
+    /// Get the SSH control handle for this box.
+    ///
+    /// Creating the handle never starts the VM; only `configure` may start it.
+    #[napi(getter)]
+    pub fn ssh(&self) -> JsSshHandle {
+        JsSshHandle::from(self.handle.as_ref())
     }
 
     /// Get the network handle for this box.
