@@ -22,12 +22,12 @@ export function envRoutes(ctx: Ctx) {
     const b = await body(c, z.object({ name: z.string(), from: z.string().optional(), with_data: z.boolean().optional() }));
     const problem = nameProblem(b.name);
     if (problem) throw fail('invalid_request', `env name "${b.name}" ${problem}`);
-    if (store.envByName(app.id, b.name)) throw fail('conflict', `env "${b.name}" already exists`);
+    if (store.envByName(app.id, b.name)) throw fail('conflict', `env "${b.name}" already exists`, `use it with \`--env ${b.name}\`, or pick another name`);
     const from = b.from ?? 'main';
     if (!store.envByName(app.id, from)) throw fail('not_found_env', `no environment "${from}" to branch from`);
     const id = newId('env');
     store.run(
-      'INSERT INTO envs (id, app_id, name, created_at, from_env, with_data, gateway_secret) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO envs (id, app_id, name, created_at, from_env, with_data, forward_secret) VALUES (?, ?, ?, ?, ?, ?, ?)',
       id,
       app.id,
       b.name,
@@ -79,7 +79,7 @@ export function envRoutes(ctx: Ctx) {
     const env = envOf(ctx, c);
     const v = c.req.query('version');
     const spec = store.spec(env.id, v ? Number(v) : undefined);
-    if (!spec) throw fail('not_found', v ? `no spec version ${v}` : 'no spec yet', 'run `boxlite-app apply` or `deploy` first');
+    if (!spec) throw fail('not_found', v ? `no spec version ${v}` : 'no spec yet', 'run `boxlite-app apply --yes` or `boxlite-app deploy` first');
     return c.json(spec);
   });
 

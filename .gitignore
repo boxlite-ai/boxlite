@@ -11,3 +11,4 @@ console-dist/
 e2e/report.md
 e2e/node_modules/
 e2e/acceptance*/
+cli/boxlite-app.tgz

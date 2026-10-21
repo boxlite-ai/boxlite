@@ -3,7 +3,6 @@ import type { Command } from 'commander';
 import type { PlanResponse } from '../api.js';
 import type { MakeCtx } from '../cli.js';
 import type { Ctx } from '../context.js';
-import { fixCommandReferences } from '../guidance.js';
 import { describe } from '../meta.js';
 import { formatChange, pad } from '../output.js';
 import { invalidManifestError, planRequest, requireCheck, uploadSummary, type CheckedProject } from './common.js';
@@ -14,7 +13,7 @@ export interface PlanOutcome {
 }
 
 export function staleError(plan: PlanResponse, baseVersion: number): MicrocloudError {
-  return new MicrocloudError('stale_base', `boxlite.toml is based on spec v${baseVersion} but the environment is at v${plan.latest_version}`, 'run `boxlite-app app pull` (keeps boxlite.toml.bak), re-apply your edits, then plan again; or pass --force to overwrite the online changes', {
+  return new MicrocloudError('stale_base', `boxlite.toml is based on spec v${baseVersion} but the environment is at v${plan.latest_version}`, 'run `boxlite-app app pull` (your file is kept as boxlite.toml.bak), review `diff boxlite.toml.bak boxlite.toml`, re-apply your edits, then rerun; do not pass --force unless the user asked to discard the online changes', {
     base_version: baseVersion,
     latest_version: plan.latest_version,
     changes: plan.changes,
@@ -27,14 +26,14 @@ export async function runPlan(ctx: Ctx, force: boolean): Promise<PlanOutcome> {
   const api = await ctx.appApi();
   const plan = await api.plan(planRequest(ctx, checked, force));
   const app = await ctx.appName();
-  const warnings = [...checked.result.warnings, ...(plan.warnings ?? [])].map((w) => ({ ...w, message: fixCommandReferences(w.message) }));
+  const warnings = [...checked.result.warnings, ...(plan.warnings ?? [])];
 
   ctx.out.data({ app, environment: ctx.envName, base_version: ctx.baseVersion, ...plan, upload: { files: checked.upload.files.length, bytes: checked.upload.bytes }, warnings });
   ctx.out.line(`App ${app} · environment ${ctx.envName} · based on v${ctx.baseVersion} (latest v${plan.latest_version})${plan.stale ? ' · stale' : ''}`);
   for (const c of plan.changes ?? []) ctx.out.line(formatChange(c));
   if ((plan.changes ?? []).length === 0) ctx.out.line('  (no changes)');
   ctx.out.line(`  ${pad('files to upload', 18)}${uploadSummary(checked)}`);
-  for (const w of plan.warnings ?? []) ctx.out.line(`  warning  ${w.rule}  ${fixCommandReferences(w.message)}`);
+  for (const w of plan.warnings ?? []) ctx.out.line(`  warning  ${w.rule}  ${w.message}`);
   if (plan.errors?.length) {
     const result = { ok: false, errors: plan.errors, warnings: plan.warnings ?? [] };
     if (!ctx.json) for (const e of plan.errors) ctx.out.line(`${e.file}${e.line !== undefined ? `:${e.line}` : ''}  ${e.rule}  ${e.message}`);
@@ -49,7 +48,7 @@ export function registerPlan(program: Command, make: MakeCtx): void {
     program
       .command('plan')
       .description('show what apply/deploy would change in this environment (exit 9 when boxlite.toml is stale)')
-      .option('--force', 'plan even when the local base version is behind the environment')
+      .option('--force', 'plan even when the local base version is behind the environment (the online changes would be overwritten)')
       .action(async (opts: { force?: boolean }, cmd: Command) => {
         const ctx = await make(cmd);
         const { plan } = await runPlan(ctx, opts.force === true);

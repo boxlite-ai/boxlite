@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -5,7 +6,7 @@ import { Hono } from 'hono';
 import { PgAppDatabase, pgConnect } from './appdb.js';
 import { bindDbReaders } from './dbreader.js';
 import { requireAdmin, requireAppKey, type Vars } from './auth.js';
-import { BlobStore, migrateLegacyBlobs } from './blobs.js';
+import { BlobStore } from './blobs.js';
 import { apiRateLimit } from './limits.js';
 import { HttpBoxliteClient } from './boxlite.js';
 import type { Config } from './config.js';
@@ -52,7 +53,7 @@ export function realDeps(config: Config): Deps {
 export function buildCtx(config: Config, deps: Deps, timing: Timing = DEFAULT_TIMING): Ctx {
   const store = new Store(join(config.dataDir, 'cp.sqlite'));
   const ctx = { config, store, bus: new EventBus(), blobs: new BlobStore(config.dataDir), timing, ...deps } as Ctx;
-  migrateLegacyBlobs(ctx);
+  ctx.accessLog = new AccessLog(ctx);
   bindDbReaders(ctx, pgConnect); // F5: reads log in as boxlite_reader (no-op with a fake appdb)
   ctx.origins = new Origins(ctx);
   ctx.resources = new Resources(ctx);
@@ -60,6 +61,9 @@ export function buildCtx(config: Config, deps: Deps, timing: Timing = DEFAULT_TI
   ctx.scheduler = new Scheduler(ctx);
   return ctx;
 }
+
+/** Correlates an error response with its cp.log entry. */
+const newRequestId = () => `req_${randomBytes(8).toString('hex')}`;
 
 /** Writes by a key, plus reads of status/context, land in the app's activity log. */
 function activityAction(method: string, rest: string): string | null {
@@ -74,21 +78,32 @@ export function createServer(ctx: Ctx): Hono {
 
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json(err.toBody(), err.status as 400);
+    // Anything else is the platform's fault, never the caller's. The details (upstream URLs and
+    // bodies, SQLite text, stacks) stay in cp.log under an id; the caller gets a fixed message and
+    // the id to report. An upstream 403 is the platform's key, not the caller's scope: unavailable.
+    const id = newRequestId();
+    const where = `${c.req.method} ${new URL(c.req.url).pathname}`;
     if (err instanceof UpstreamError) {
-      console.error(`[upstream] ${err.message}`);
-      const code = err.status === 403 ? 'forbidden' : 'unavailable';
-      return c.json({ error: { code, message: err.message, next: code === 'unavailable' ? 'retry in a minute' : undefined } }, code === 'forbidden' ? 403 : 503);
+      console.error(`[upstream] ${id} ${where}: ${err.message} (HTTP ${err.status})${err.body ? ` ${err.body.slice(0, 2000)}` : ''}`);
+      return c.json(
+        { error: { code: 'unavailable', message: `a platform service (${err.service}) did not complete the request`, next: `retry in a minute; if it keeps failing, report error id ${id} to the platform operator`, request_id: id } },
+        503,
+        { 'x-request-id': id },
+      );
     }
-    console.error('[cp] unhandled', err);
-    return c.json({ error: { code: 'internal', message: (err as Error).message ?? 'internal error' } }, 500);
+    console.error(`[cp] internal ${id} ${where}:`, err);
+    return c.json(
+      { error: { code: 'internal', message: 'the control plane hit an internal error', next: `retry once; if it fails again, report error id ${id} to the platform operator`, request_id: id } },
+      500,
+      { 'x-request-id': id },
+    );
   });
 
   // ---- origin roles (origins.ts): the local port decides, never the path or Host ----
-  const access = new AccessLog(ctx);
   app.use('*', async (c, next) => {
     const role = ctx.origins.roleOf(localPortOf(c));
     // An env's own origin: the app at `/`, plus /.boxlite/open and /.boxlite/auth/*. Nothing else of the CP.
-    if (role.kind === 'app') return withAccessLog(access, role.env, c, () => serveAppOrigin(ctx, c, role.env));
+    if (role.kind === 'app') return withAccessLog(ctx.accessLog, role.env, c, () => serveAppOrigin(ctx, c, role.env));
     if (role.kind === 'unassigned') return c.html('<!doctype html><title>Not found</title><h1>No app here</h1>', 404);
     const url = new URL(c.req.url);
     const isConsole = url.pathname === '/console' || url.pathname.startsWith('/console/');

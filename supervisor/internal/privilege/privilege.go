@@ -25,8 +25,9 @@
 package privilege
 
 import (
-	"encoding/json"
-	"strings"
+	"errors"
+
+	"github.com/boxlite-ai/microcloud/supervisor/internal/envfilter"
 )
 
 // Fixed locations. They are not configurable from the environment on purpose:
@@ -43,7 +44,7 @@ const (
 	lockName     = "lock"
 	launchedEnv  = "SV_LAUNCHED"
 	lockFDEnv    = "SV_LOCK_FD"
-	safePath     = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	safePath     = envfilter.DefaultPath
 )
 
 // Default app identity when /etc/passwd has no entry (the measured values).
@@ -64,36 +65,17 @@ type Config struct {
 	BaseEnv   []string `json:"base_env"` // the Box env minus platform secrets, for services
 }
 
-func (c Config) marshal() ([]byte, error) { return json.MarshalIndent(c, "", "  ") }
+// ErrAlreadyRunning means another root supervisor holds the lock. boxlite may
+// run the launcher at any time; a second instance must leave at once.
+var ErrAlreadyRunning = errors.New("another supervisor is already running in this Box")
 
-// ServiceEnv is environ minus everything that must never reach application
-// code (box token, control-plane coordinates, SV_* knobs, sudo bookkeeping,
-// PORT), with PATH replaced by boxPath when given: sudo's secure_path has
-// already overwritten the image's PATH by the time the supervisor runs.
-func ServiceEnv(environ []string, boxPath string) []string {
-	var out []string
-	hasPath := false
-	for _, kv := range environ {
-		k, _, _ := strings.Cut(kv, "=")
-		switch {
-		case k == "BOXLITE_CP_URL", k == "BOXLITE_BOX_TOKEN", k == "BOXLITE_ENV_ID", k == "PORT":
-			continue
-		case strings.HasPrefix(k, "SV_"), strings.HasPrefix(k, "SUDO_"):
-			continue
-		case k == "PATH":
-			if boxPath != "" {
-				kv = "PATH=" + boxPath
-			}
-			hasPath = true
-		}
-		out = append(out, kv)
-	}
-	if !hasPath {
-		p := boxPath
-		if p == "" {
-			p = safePath
-		}
-		out = append(out, "PATH="+p)
-	}
-	return out
+// Logf is how this package reports progress (the supervisor's log hub is not
+// up yet when most of it runs).
+type Logf func(format string, args ...any)
+
+// Result is what Bootstrap hands to main.
+type Result struct {
+	Config     Config
+	UID, GID   int
+	SudoLocked bool
 }

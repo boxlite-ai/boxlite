@@ -56,9 +56,11 @@ async function bodyOf(ctx: Ctx, data: string | undefined): Promise<string | unde
 }
 
 /**
- * Requests a path of the deployed app the way a browser would, authenticated with the App key
- * (the platform's proxy accepts `Authorization: Bearer <App key>` and strips it). `--as` adds a
- * signed-in test user. Redirects are not followed, so a login redirect is visible as a 302.
+ * Requests a path of the deployed app, authenticated with the App key (the platform's proxy
+ * accepts `Authorization: Bearer <App key>` and strips it). `--as` adds a signed-in test user.
+ * Its Accept header is the wildcard, so an anonymous request to an `[auth].protect` path gets the API answer,
+ * 401 JSON; with `-H 'Accept: text/html'` it gets what a browser gets, a 302 to
+ * `/.boxlite/auth/login`. Redirects are shown, never followed.
  */
 async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
   const api = await ctx.appApi();
@@ -149,7 +151,7 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
   if (text) ctx.out.line(text.length > BODY_MAX_HUMAN ? `${text.slice(0, BODY_MAX_HUMAN)}\n… (${text.length - BODY_MAX_HUMAN} more bytes; use --json)` : text);
   if (res.status >= 300 && res.status < 400 && res.headers.get('location')) ctx.out.next(`follow it: \`boxlite-app app curl ${res.headers.get('location')}\`${opts.as ? '' : ', or add --as qa@example.com to act as a signed-in user'}`);
   else if (res.status >= 500) ctx.out.next('`boxlite-app app logs --since 5m --level error`');
-  else if (res.status === 401 || res.status === 403) ctx.out.next('add `--as qa@example.com` to act as a signed-in user');
+  else if (res.status === 401 || res.status === 403) ctx.out.next(`add \`--as qa@example.com\` to act as a signed-in user${opts.as ? '' : `; \`boxlite-app app curl ${path} -H 'Accept: text/html'\` shows the login redirect a browser gets`}`);
 }
 
 function opener(): { cmd: string; args: (url: string) => string[] } {
@@ -158,7 +160,7 @@ function opener(): { cmd: string; args: (url: string) => string[] } {
   return { cmd: 'xdg-open', args: (u) => [u] };
 }
 
-/** A one-time sign-in link for a person (never the App key in a URL); opens it on a terminal. */
+/** A one-time link that opens the app in a browser (never the App key in a URL); opens it on a terminal. */
 async function open(ctx: Ctx, opts: { printUrl?: boolean }): Promise<void> {
   const api = await ctx.appApi();
   let ticket: { url: string; expires_at?: string };
@@ -177,7 +179,8 @@ async function open(ctx: Ctx, opts: { printUrl?: boolean }): Promise<void> {
   }
   ctx.out.data({ url: ticket.url, expires_at: ticket.expires_at ?? null, opened: launch });
   ctx.out.line(launch ? `opened ${ticket.url}` : ticket.url);
-  if (!launch) ctx.out.next('give this one-time link to the user; it signs them in once and expires');
+  // The link works once and expires a minute after it is made: never hand it to a person in a message.
+  if (!launch) ctx.out.next('open it yourself now if you need a browser session; for the user, report `url` from `boxlite-app app status --json` and tell them to use Open app in the BoxLite console');
 }
 
 export function registerCurl(app: Command, make: MakeCtx): void {
@@ -201,7 +204,7 @@ export function registerCurl(app: Command, make: MakeCtx): void {
   describe(
     app
       .command('open')
-      .description('a one-time sign-in link to the app for a person: opens the browser on a terminal, else prints it')
+      .description('open the app in a browser through a one-time link (works once, expires after 60 s; never hand it to the user): opens the browser on a terminal, else prints it')
       .option('--print-url', 'print the link instead of opening a browser')
       .action(async (opts: { printUrl?: boolean }, cmd: Command) => open(await make(cmd), opts)),
     { json: '{ url: string, expires_at: string | null, opened: boolean }', exits: [2, 3], online: true },

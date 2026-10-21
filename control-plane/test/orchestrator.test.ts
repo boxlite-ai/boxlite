@@ -191,7 +191,7 @@ test('spec for a brand-new env names no deployment but carries the gateway secre
   await h.ctx.orchestrator.idle(env.id);
   assert.equal(seen?.deployment, 1);
   assert.equal(seen?.spec.deployment, 1);
-  assert.equal(seen?.gateway_secret, env.gateway_secret);
+  assert.equal(seen?.forward_secret, env.forward_secret);
 });
 
 test('403 from a fresh gateway means "not ready yet" while waiting for the supervisor', async () => {

@@ -10,6 +10,11 @@
 // The split exists so the control plane can run database migrations between
 // the two. At most one build or activation runs at a time; a second request
 // gets api.ErrBusy, which the gateway turns into 409.
+//
+// Every background task runs under the manager's context. Shutdown (SIGTERM)
+// and the context given to Boot cancel it: a running build step's process
+// group is killed, an activation stops its candidate release, and the boot
+// reconcile loop ends.
 package deploy
 
 import (
@@ -27,6 +32,7 @@ import (
 
 	"github.com/boxlite-ai/microcloud/supervisor/internal/api"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/cp"
+	"github.com/boxlite-ai/microcloud/supervisor/internal/envfilter"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/health"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/logs"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/proc"
@@ -51,10 +57,10 @@ type Options struct {
 	HealthBudget   time.Duration // 60 s
 	HealthInterval time.Duration // 500 ms
 	StopGrace      time.Duration // 10 s between SIGTERM and SIGKILL
-	BuildTimeout   time.Duration // 30 min ceiling for all build steps together
+	BuildTimeout   time.Duration // 30 min ceiling for download, extraction and every build step together
 	SpecRetry      time.Duration // 5 s between boot-time spec fetches
 	Keep           int           // releases kept on disk (3)
-	BaseEnv        []string      // inherited environment for services; nil = FilteredEnviron()
+	BaseEnv        []string      // inherited environment for services; nil = envfilter.App(os.Environ())
 
 	// RunAs is the identity of every service and build step. The supervisor is
 	// root in a Box and app code must not be (contracts.md 2.1); nil runs them
@@ -68,8 +74,13 @@ type Options struct {
 type Manager struct {
 	o Options
 
+	// ctx is the parent of every background task; cancel ends them all.
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	mu      sync.Mutex
 	busy    bool
+	closed  bool // Shutdown has begun: nothing new is started
 	live    *proc.Group
 	current *state.Release
 
@@ -97,39 +108,15 @@ func New(o Options) *Manager {
 		o.Keep = 3
 	}
 	if o.BaseEnv == nil {
-		o.BaseEnv = FilteredEnviron()
+		o.BaseEnv = envfilter.App(os.Environ(), "")
 	}
-	return &Manager{o: o}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Manager{o: o, ctx: ctx, cancel: cancel}
 }
 
 // SetGate installs the gateway after construction: the gateway needs the
 // manager as its Ops and the manager needs the gateway as its Switcher.
 func (m *Manager) SetGate(g Switcher) { m.o.Gate = g }
-
-// FilteredEnviron is the supervisor's own environment minus everything that
-// must never reach application code: the box token and control-plane
-// coordinates, the SV_* knobs, and any PORT the runner happened to set.
-func FilteredEnviron() []string {
-	var out []string
-	hasPath := false
-	for _, kv := range os.Environ() {
-		k, _, _ := strings.Cut(kv, "=")
-		switch {
-		case k == "BOXLITE_CP_URL", k == "BOXLITE_BOX_TOKEN", k == "BOXLITE_ENV_ID", k == "PORT":
-			continue
-		case strings.HasPrefix(k, "SV_"):
-			continue
-		}
-		if k == "PATH" {
-			hasPath = true
-		}
-		out = append(out, kv)
-	}
-	if !hasPath {
-		out = append(out, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
-	}
-	return out
-}
 
 // ---- gateway.Ops -----------------------------------------------------------
 
@@ -228,7 +215,10 @@ func (m *Manager) Restart(name string) error {
 // Boot implements step 6 of 2.4: bring the current release back from
 // state.json without needing the control plane, then reconcile with
 // /sv/v1/spec in the background, retrying until the control plane answers.
+// Cancelling ctx cancels every background task, as Shutdown does; Shutdown
+// is still what stops the live release.
 func (m *Manager) Boot(ctx context.Context) {
+	context.AfterFunc(ctx, m.cancel)
 	st := m.o.Store.Get()
 	m.o.Gate.SetSecrets(st.ForwardSecret, st.ControlSecret)
 	onDisk, _ := m.o.Store.ListReleases()
@@ -275,14 +265,21 @@ func (m *Manager) reconcile(ctx context.Context) {
 			}
 			return
 		}
+		if ctx.Err() != nil {
+			return
+		}
+		// Keep polling whatever the answer: the secrets only ever arrive
+		// through this call (before the first deploy the control plane answers
+		// 200 with spec null, which ends the loop above), so until it succeeds
+		// the control plane cannot reach /.boxlite/sv/* at all.
 		if attempt == 0 || attempt%12 == 0 {
-			// Keep polling even on 404 (box created ahead of its first deploy):
-			// the gateway secret only ever arrives through this call, so until it
-			// does the control plane cannot reach /.boxlite/sv/deploy at all.
 			var he *cp.HTTPError
-			if errors.As(err, &he) && he.Status == http.StatusNotFound {
-				m.o.Hub.Systemf(m.currentDeployment(), api.LevelInfo, "boot: control plane has no spec for this box yet; retrying every %s", m.o.SpecRetry)
-			} else {
+			switch {
+			case errors.As(err, &he) && (he.Status == http.StatusUnauthorized || he.Status == http.StatusForbidden):
+				m.o.Hub.Systemf(m.currentDeployment(), api.LevelError, "boot: the control plane refused this Box's token (HTTP %d); the Box may have been replaced or its env deleted; retrying every %s", he.Status, m.o.SpecRetry)
+			case errors.As(err, &he):
+				m.o.Hub.Systemf(m.currentDeployment(), api.LevelError, "boot: the control plane answered HTTP %d (%s); retrying every %s", he.Status, he.Body, m.o.SpecRetry)
+			default:
 				m.o.Hub.Systemf(m.currentDeployment(), api.LevelError, "boot: control plane unreachable (%v); retrying every %s", err, m.o.SpecRetry)
 			}
 		}
@@ -294,8 +291,17 @@ func (m *Manager) reconcile(ctx context.Context) {
 	}
 }
 
-// Shutdown stops the live release (SIGTERM, grace, SIGKILL).
+// Shutdown cancels every background task (a build's process group is
+// killed, an activation stops its candidate), waits for them to finish, and
+// then stops the live release (SIGTERM, grace, SIGKILL). Nothing is started
+// afterwards; deploy calls get api.ErrShuttingDown.
 func (m *Manager) Shutdown() {
+	m.mu.Lock()
+	m.closed = true
+	m.mu.Unlock()
+	m.cancel()
+	m.wg.Wait()
+
 	m.mu.Lock()
 	g := m.live
 	m.live = nil
@@ -306,8 +312,9 @@ func (m *Manager) Shutdown() {
 	}
 }
 
-// Wait blocks until background builds/activations and the boot reconcile have
-// finished. Tests use it; main does not need to.
+// Wait blocks until the background builds, activations and the boot
+// reconcile that are running now have finished. Tests use it; Shutdown waits
+// the same way.
 func (m *Manager) Wait() { m.wg.Wait() }
 
 // ---- the procedure -----------------------------------------------------------
@@ -335,6 +342,11 @@ func (m *Manager) build(ctx context.Context, n int) bool {
 	}
 	m.adoptSecrets(resp)
 
+	// One deadline for download, extraction and every build step: a stalled
+	// download must not hold the deploy slot (and so 409 every later deploy)
+	// any longer than a hung build step may.
+	bctx, cancel := context.WithTimeout(ctx, m.o.BuildTimeout)
+	defer cancel()
 	dir := m.o.Store.ReleaseDir(n)
 	if err := m.o.Store.ResetRelease(n); err != nil {
 		m.fail(ctx, n, "extract", err, nil)
@@ -350,30 +362,34 @@ func (m *Manager) build(ctx context.Context, n int) bool {
 	}()
 	m.report(ctx, api.Status{Deployment: n, Phase: api.PhaseBuilding})
 
-	body, err := m.o.CP.Snapshot(ctx, resp.Snapshot)
+	body, err := m.o.CP.Snapshot(bctx, resp.Snapshot)
 	if err != nil {
-		m.fail(ctx, n, "download", err, nil)
+		m.fail(ctx, n, "download", m.why(ctx, bctx, err), nil)
 		return false
 	}
 	err = m.o.Store.ExtractRelease(n, body)
 	body.Close()
 	if err != nil {
-		m.fail(ctx, n, "extract", err, nil)
+		// The snapshot streams straight into the extractor, so a stall or
+		// the deadline shows up here; it is still the download that failed.
+		step := "extract"
+		if errors.Is(err, cp.ErrSnapshotStalled) || bctx.Err() != nil {
+			step = "download"
+		}
+		m.fail(ctx, n, step, m.why(ctx, bctx, err), nil)
 		return false
 	}
 	hub.Systemf(n, api.LevelInfo, "deploy #%d: snapshot %s extracted to %s", n, resp.Snapshot.ID, dir)
 
 	rel := state.Release{Deployment: n, SpecVersion: resp.Spec.Version, Spec: resp.Spec, Env: resp.Env, BuiltAt: time.Now().UTC()}
 	env := m.serviceEnv(rel, "", 0)
-	bctx, cancel := context.WithTimeout(ctx, m.o.BuildTimeout)
-	defer cancel()
 	steps := resp.Spec.Runtime.Build
 	for i, cmd := range steps {
 		hub.Systemf(n, api.LevelInfo, "deploy #%d: build step %d/%d: %s", n, i+1, len(steps), cmd)
 		started := time.Now()
 		code, err := proc.RunAs(bctx, m.o.Reaper, hub, api.SourceBuild, n, dir, cmd, env, m.o.RunAs)
 		if err != nil {
-			m.fail(ctx, n, "build", fmt.Errorf("build step %d (%s): %w", i+1, cmd, err), m.tailFor(api.SourceBuild, n))
+			m.fail(ctx, n, "build", fmt.Errorf("build step %d (%s): %w", i+1, cmd, m.why(ctx, bctx, err)), m.tailFor(api.SourceBuild, n))
 			return false
 		}
 		if code != 0 {
@@ -426,11 +442,19 @@ func (m *Manager) activate(ctx context.Context, n int, kind string) bool {
 		rel.SpecVersion = resp.Spec.Version
 	}
 	rel.Env = resp.Env
-	_ = m.o.Store.Update(func(st *state.State) {
+	if err := m.o.Store.Update(func(st *state.State) {
 		st.ForwardSecret, st.ControlSecret = forward, control
 		st.Upsert(rel)
-	})
+	}); err != nil {
+		// Not fatal: the release still starts with the fresh env, but a Box
+		// woken without the control plane would come back with the old one.
+		hub.Systemf(n, api.LevelError, "%s #%d: could not save the new env and secrets to state.json: %v", kind, n, err)
+	}
 
+	if ctx.Err() != nil {
+		m.fail(ctx, n, "start", m.why(ctx, ctx, ctx.Err()), nil)
+		return false
+	}
 	m.report(ctx, api.Status{Deployment: n, Phase: api.PhaseStarting})
 	group, err := m.startGroup(rel, m.livePort())
 	if err != nil {
@@ -445,9 +469,19 @@ func (m *Manager) activate(ctx context.Context, n int, kind string) bool {
 			tail := m.tailFor(exp.Name(), n)
 			// Kill the candidate; the old release never stopped serving.
 			group.Stop(2 * time.Second)
-			m.fail(ctx, n, "start", fmt.Errorf("service %s failed its health check within %s", exp.Name(), m.o.HealthBudget), tail)
+			if ctx.Err() != nil {
+				m.fail(ctx, n, "start", m.why(ctx, ctx, ctx.Err()), tail)
+			} else {
+				m.fail(ctx, n, "start", fmt.Errorf("service %s failed its health check within %s", exp.Name(), m.o.HealthBudget), tail)
+			}
 			return false
 		}
+	}
+	if ctx.Err() != nil {
+		// Cancelled while the candidate came up: it never takes traffic.
+		group.Stop(2 * time.Second)
+		m.fail(ctx, n, "start", m.why(ctx, ctx, ctx.Err()), nil)
+		return false
 	}
 
 	// Flip. The gateway target is swapped atomically before the old release is
@@ -468,7 +502,9 @@ func (m *Manager) activate(ctx context.Context, n int, kind string) bool {
 	if removed, err := m.o.Store.Prune(m.o.Keep, n); err != nil {
 		hub.Systemf(n, api.LevelError, "%s #%d: prune: %v", kind, n, err)
 	} else if len(removed) > 0 {
-		_ = m.o.Store.Update(func(st *state.State) { st.Forget(removed) })
+		if err := m.o.Store.Update(func(st *state.State) { st.Forget(removed) }); err != nil {
+			hub.Systemf(n, api.LevelError, "%s #%d: could not drop pruned release(s) %v from state.json: %v", kind, n, removed, err)
+		}
 		hub.Systemf(n, api.LevelInfo, "%s #%d: pruned old release(s) %v", kind, n, removed)
 	}
 	hub.Systemf(n, api.LevelInfo, "%s #%d: live", kind, n)
@@ -581,6 +617,9 @@ func (m *Manager) targetFor(group *proc.Group, rel state.Release) (int, string) 
 func (m *Manager) acquire() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return api.ErrShuttingDown
+	}
 	if m.busy {
 		return api.ErrBusy
 	}
@@ -594,23 +633,55 @@ func (m *Manager) release() {
 	m.mu.Unlock()
 }
 
-// spawn runs fn in the background and releases the busy flag afterwards.
+// spawn runs fn in the background under the manager's context and releases
+// the busy flag afterwards. The caller holds the flag (acquire).
 func (m *Manager) spawn(fn func(context.Context)) {
-	m.wg.Add(1)
+	if !m.track() {
+		m.release()
+		return
+	}
 	go func() {
 		defer m.wg.Done()
 		defer m.release()
-		fn(context.Background())
+		fn(m.ctx)
 	}()
 }
 
 // spawnNoLock runs fn in the background without touching the busy flag.
 func (m *Manager) spawnNoLock(fn func(context.Context)) {
-	m.wg.Add(1)
+	if !m.track() {
+		return
+	}
 	go func() {
 		defer m.wg.Done()
-		fn(context.Background())
+		fn(m.ctx)
 	}()
+}
+
+// track counts one more background task unless Shutdown has begun. Checking
+// closed and adding to wg under one lock means Shutdown's wg.Wait never races
+// with an Add.
+func (m *Manager) track() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return false
+	}
+	m.wg.Add(1)
+	return true
+}
+
+// why explains a failure caused by a context: the supervisor shutting down
+// (ctx, the task's own context, ended) or the step's deadline (stepCtx).
+// Other errors pass through.
+func (m *Manager) why(ctx, stepCtx context.Context, err error) error {
+	switch {
+	case ctx.Err() != nil:
+		return fmt.Errorf("cancelled because the supervisor is shutting down: %w", err)
+	case errors.Is(stepCtx.Err(), context.DeadlineExceeded):
+		return fmt.Errorf("timed out after %s (download, extraction and build share one deadline): %w", m.o.BuildTimeout, err)
+	}
+	return err
 }
 
 func (m *Manager) isBuilt(n int) bool {
@@ -624,7 +695,9 @@ func (m *Manager) isBuilt(n int) bool {
 func (m *Manager) adoptSecrets(resp *api.SpecResponse) {
 	forward, control := resp.Secrets()
 	m.o.Gate.SetSecrets(forward, control)
-	_ = m.o.Store.Update(func(st *state.State) { st.ForwardSecret, st.ControlSecret = forward, control })
+	if err := m.o.Store.Update(func(st *state.State) { st.ForwardSecret, st.ControlSecret = forward, control }); err != nil {
+		m.o.Hub.Systemf(m.currentDeployment(), api.LevelError, "could not save the gateway secrets to state.json (a Box woken without the control plane would refuse it): %v", err)
+	}
 }
 
 // staticExists checks a static directory through the store, so the check sees
@@ -691,10 +764,20 @@ func (m *Manager) fail(ctx context.Context, n int, step string, err error, tail 
 
 // report posts a status with a short retry; the control plane also learns the
 // outcome from the log stream and from /.boxlite/sv/health, so a lost status
-// is not fatal.
+// is not fatal. When ctx has already ended (shutdown), one attempt is still
+// made under a short deadline so the control plane hears why the deployment
+// stopped.
 func (m *Manager) report(ctx context.Context, st api.Status) {
 	if st.Services == nil {
 		st.Services = m.liveStatuses()
+	}
+	if ctx.Err() != nil {
+		lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		if err := m.o.CP.PostStatus(lctx, st); err != nil {
+			m.o.Hub.Systemf(st.Deployment, api.LevelError, "could not report phase %q for #%d to the control plane: %v", st.Phase, st.Deployment, err)
+		}
+		return
 	}
 	var err error
 	for _, delay := range []time.Duration{time.Second, 2 * time.Second, 0} {

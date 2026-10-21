@@ -3,13 +3,16 @@ package gateway
 // files serves GET and PUT /.boxlite/sv/files?path=<absolute path> for the
 // control plane (contracts.md 4.1 "Volume files"). Only paths under the mount
 // point of a volume the environment declares are reachable: the request path
-// is cleaned, `..` is refused outright, and every file operation goes through
-// an os.Root on the mount, so a symlink inside a volume cannot lead out of it. The gateway secret check in
-// ServeHTTP runs before any of this.
+// is cleaned, `..` is refused outright, the mount itself is opened without
+// following a symlink anywhere in its path, and every file operation goes
+// through that os.Root, so a symlink inside a volume cannot lead out of it.
+// The control secret check in ServeHTTP runs before any of this.
+//
+// Without a mount source (WithMounts) nothing is reachable: the endpoint
+// answers 503 mounts_unknown rather than guessing.
 
 import (
-	"crypto/tls"
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -19,9 +22,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
+
+	"github.com/boxlite-ai/microcloud/supervisor/internal/nofollow"
 )
 
 // maxUpload caps one PUT body; the control plane enforces the same limit.
@@ -30,9 +34,12 @@ var maxUpload int64 = 50 << 20
 // maxEntries caps a directory listing.
 const maxEntries = 1000
 
-// declaredMounts returns the mount paths of the environment's volumes. Tests
-// replace it; in a Box it asks the control plane for the current spec.
-var declaredMounts = mountsFromControlPlane
+// errOutsideVolume is every refusal that means "this leads out of the volume".
+var errOutsideVolume = errors.New("path leads outside the volume")
+
+// MountSource returns the mount points of the environment's declared volumes.
+// In a Box it is cp.Client.VolumeMounts.
+type MountSource func(ctx context.Context) ([]string, error)
 
 type fileEntry struct {
 	Name       string `json:"name"`
@@ -60,7 +67,7 @@ func (g *Server) files(w http.ResponseWriter, r *http.Request) {
 
 // confine checks raw against the declared mounts and returns the cleaned path
 // and the mount it belongs to. The caller still resolves symlinks.
-func confine(raw string) (clean, mount string, status int, code, message string) {
+func (g *Server) confine(ctx context.Context, raw string) (clean, mount string, status int, code, message string) {
 	if raw == "" || !strings.HasPrefix(raw, "/") || strings.ContainsRune(raw, 0) {
 		return "", "", http.StatusBadRequest, "bad_request", "path must be an absolute path"
 	}
@@ -70,7 +77,10 @@ func confine(raw string) (clean, mount string, status int, code, message string)
 		}
 	}
 	clean = filepath.Clean(raw)
-	mounts, err := declaredMounts()
+	if g.mounts == nil {
+		return "", "", http.StatusServiceUnavailable, "mounts_unknown", "this supervisor has no source for the declared volume mounts"
+	}
+	mounts, err := g.mounts(ctx)
 	if err != nil {
 		return "", "", http.StatusServiceUnavailable, "mounts_unknown", err.Error()
 	}
@@ -88,10 +98,16 @@ func confine(raw string) (clean, mount string, status int, code, message string)
 
 // openMount opens the volume as an os.Root. Every later operation goes through
 // it, so the kernel-level lookup itself refuses `..` and symlinks that leave
-// the volume. Checking a path first and then opening it by name would race
-// with app code (which can write the volume) swapping in a symlink between the
-// two, and the supervisor runs as root.
-func openMount(mount string) (*os.Root, error) { return os.OpenRoot(mount) }
+// the volume. The mount path itself is walked without following symlinks: if
+// app code could replace the mount point or a parent of it with a link, the
+// root gateway would otherwise read and write wherever the link points.
+func openMount(mount string) (*os.Root, error) {
+	r, err := nofollow.OpenRoot(mount)
+	if errors.Is(err, nofollow.ErrSymlink) {
+		return nil, fmt.Errorf("volume %s: %w (%w)", mount, errOutsideVolume, err)
+	}
+	return r, err
+}
 
 // rel turns a cleaned absolute path under mount into the root-relative name.
 func rel(clean, mount string) string {
@@ -104,17 +120,25 @@ func rel(clean, mount string) string {
 
 func rootError(w http.ResponseWriter, clean string, err error) {
 	switch {
+	case errors.Is(err, errOutsideVolume) || isRootEscape(err):
+		fileError(w, http.StatusForbidden, "outside_volume", errOutsideVolume.Error())
 	case errors.Is(err, fs.ErrNotExist):
 		fileError(w, http.StatusNotFound, "no_such_file", clean+" does not exist")
-	case strings.Contains(err.Error(), "escapes from parent") || strings.Contains(err.Error(), "path escapes"):
-		fileError(w, http.StatusForbidden, "outside_volume", "path leads outside the volume")
 	default:
 		fileError(w, http.StatusInternalServerError, "internal", err.Error())
 	}
 }
 
+// isRootEscape recognises os.Root refusing a path that leaves the root (`..`
+// or a symlink out of it). The os package keeps that error unexported, so its
+// text is matched here, in this one place only.
+func isRootEscape(err error) bool {
+	var pe *fs.PathError
+	return errors.As(err, &pe) && pe.Err != nil && pe.Err.Error() == "path escapes from parent"
+}
+
 func (g *Server) readFile(w http.ResponseWriter, r *http.Request) {
-	clean, mount, status, code, msg := confine(r.URL.Query().Get("path"))
+	clean, mount, status, code, msg := g.confine(r.Context(), r.URL.Query().Get("path"))
 	if status != 0 {
 		fileError(w, status, code, msg)
 		return
@@ -126,7 +150,9 @@ func (g *Server) readFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer root.Close()
 	name := rel(clean, mount)
-	f, err := root.Open(name)
+	// O_NONBLOCK: a fifo planted in the volume must not hang the request (and
+	// its OS thread); it is refused below as not a regular file.
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		rootError(w, clean, err)
 		return
@@ -180,7 +206,7 @@ func listDir(w http.ResponseWriter, dir string, f *os.File) {
 }
 
 func (g *Server) writeFile(w http.ResponseWriter, r *http.Request) {
-	clean, mount, status, code, msg := confine(r.URL.Query().Get("path"))
+	clean, mount, status, code, msg := g.confine(r.Context(), r.URL.Query().Get("path"))
 	if status != 0 {
 		fileError(w, status, code, msg)
 		return
@@ -190,6 +216,10 @@ func (g *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	root, err := openMount(mount)
+	if errors.Is(err, errOutsideVolume) {
+		rootError(w, clean, err)
+		return
+	}
 	if err != nil {
 		fileError(w, http.StatusNotFound, "no_such_file", "volume "+mount+" is not mounted")
 		return
@@ -218,7 +248,7 @@ func (g *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 		fileError(w, http.StatusRequestEntityTooLarge, "too_large", fmt.Sprintf("file is larger than %d bytes", maxUpload))
 		return
 	}
-	owner := ownerOf(mount)
+	owner := ownerOf(root)
 	dir := filepath.Dir(name)
 	if err := mkdirAllOwned(root, dir, owner); err != nil {
 		rootError(w, clean, err)
@@ -267,7 +297,7 @@ func mkdirAllOwned(root *os.Root, dir string, owner fileOwner) error {
 			owner.apply(root, cur)
 		case errors.Is(err, fs.ErrExist):
 			if info, serr := root.Lstat(cur); serr != nil || !info.IsDir() {
-				return fmt.Errorf("%s is not a directory: path escapes from parent", cur)
+				return fmt.Errorf("%s is not a directory: %w", cur, errOutsideVolume)
 			}
 		default:
 			return err
@@ -284,8 +314,10 @@ type fileOwner struct {
 	ok       bool
 }
 
-func ownerOf(p string) fileOwner {
-	info, err := os.Stat(p)
+// ownerOf reads the owner of the opened mount directory itself, never of
+// whatever its path names by now.
+func ownerOf(root *os.Root) fileOwner {
+	info, err := root.Stat(".")
 	if err != nil {
 		return fileOwner{}
 	}
@@ -302,74 +334,4 @@ func (o fileOwner) apply(root *os.Root, name string) {
 	if o.ok && os.Geteuid() == 0 {
 		_ = root.Lchown(name, o.uid, o.gid)
 	}
-}
-
-// ---- declared mounts from the control plane --------------------------------
-
-const mountsTTL = 15 * time.Second
-
-var mountsCache struct {
-	sync.Mutex
-	at     time.Time
-	mounts []string
-}
-
-// mountsFromControlPlane reads `spec.volumes[].mount` from GET /sv/v1/spec,
-// the same document the deploy manager acts on, using the Box's own
-// credentials. Cached briefly: a volume change replaces the Box anyway.
-func mountsFromControlPlane() ([]string, error) {
-	mountsCache.Lock()
-	defer mountsCache.Unlock()
-	if mountsCache.mounts != nil && time.Since(mountsCache.at) < mountsTTL {
-		return mountsCache.mounts, nil
-	}
-	base, token := strings.TrimRight(os.Getenv("BOXLITE_CP_URL"), "/"), os.Getenv("BOXLITE_BOX_TOKEN")
-	if base == "" || token == "" {
-		return nil, errors.New("BOXLITE_CP_URL / BOXLITE_BOX_TOKEN not set")
-	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	if isOn(os.Getenv("SV_CP_INSECURE")) {
-		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // local tests only, as for the cp client
-	}
-	req, err := http.NewRequest(http.MethodGet, base+"/sv/v1/spec", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	res, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("control plane: %w", err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("control plane: GET /sv/v1/spec → %d", res.StatusCode)
-	}
-	var body struct {
-		Spec *struct {
-			Volumes []struct {
-				Mount string `json:"mount"`
-			} `json:"volumes"`
-		} `json:"spec"`
-	}
-	if err := json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(&body); err != nil {
-		return nil, fmt.Errorf("control plane spec: %w", err)
-	}
-	mounts := []string{}
-	if body.Spec != nil {
-		for _, v := range body.Spec.Volumes {
-			if v.Mount != "" {
-				mounts = append(mounts, v.Mount)
-			}
-		}
-	}
-	mountsCache.at, mountsCache.mounts = time.Now(), mounts
-	return mounts, nil
-}
-
-func isOn(v string) bool {
-	switch v {
-	case "1", "true", "TRUE", "yes", "on":
-		return true
-	}
-	return false
 }

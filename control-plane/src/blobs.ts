@@ -1,12 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { constants, copyFileSync, createReadStream, createWriteStream, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createGzip } from 'node:zlib';
 import tarStream from 'tar-stream';
 import { fail } from './errors.js';
-import type { SnapshotFile, Store } from './db.js';
+import type { SnapshotFile } from './db.js';
 
 export const SHA256_RE = /^[a-f0-9]{64}$/;
 
@@ -84,51 +84,6 @@ export class BlobStore {
   read(appId: string, sha: string): Readable {
     return createReadStream(this.path(appId, sha));
   }
-
-  /**
-   * One-time move from the old global layout (DATA_DIR/blobs/<sha>): every blob an App's
-   * snapshots or uploads reference is copied into that App's directory. Idempotent: existing
-   * per-App copies are kept, and a marker records that the pass completed. Legacy files are left
-   * in place (nothing reads them any more).
-   */
-  migrateLegacy(refs: Iterable<{ appId: string; sha256: string }>): { copied: number } {
-    const marker = join(this.dir, '.per-app-v1');
-    if (existsSync(marker)) return { copied: 0 };
-    let copied = 0;
-    for (const { appId, sha256 } of refs) {
-      if (!SHA256_RE.test(sha256) || !APP_ID_RE.test(appId)) continue;
-      const legacy = join(this.dir, sha256);
-      if (!existsSync(legacy) || this.has(appId, sha256)) continue;
-      mkdirSync(this.appDir(appId), { recursive: true });
-      const tmpPath = join(this.tmp, `${sha256}.${randomBytes(6).toString('hex')}`);
-      copyFileSync(legacy, tmpPath, constants.COPYFILE_FICLONE);
-      renameSync(tmpPath, this.path(appId, sha256));
-      copied++;
-    }
-    writeFileSync(marker, new Date().toISOString() + '\n');
-    return { copied };
-  }
-}
-
-/** Every (app, blob) the CP's state references: snapshot manifests and unfinished uploads. */
-export function* blobRefs(store: Pick<Store, 'all'>): Generator<{ appId: string; sha256: string }> {
-  for (const table of ['snapshots', 'uploads']) {
-    for (const row of store.all<{ app_id: string; manifest: string }>(`SELECT app_id, manifest FROM ${table}`)) {
-      let files: SnapshotFile[];
-      try {
-        files = JSON.parse(row.manifest) as SnapshotFile[];
-      } catch {
-        continue;
-      }
-      for (const f of files) yield { appId: row.app_id, sha256: f.sha256 };
-    }
-  }
-}
-
-/** Run once at start-up (buildCtx). */
-export function migrateLegacyBlobs(ctx: { store: Pick<Store, 'all'>; blobs: BlobStore }): void {
-  const { copied } = ctx.blobs.migrateLegacy(blobRefs(ctx.store));
-  if (copied) console.log(`[blobs] copied ${copied} blob(s) into per-app directories`);
 }
 
 /** snap_<sha256 of the canonical manifest>: same files, same modes → same snapshot id. */

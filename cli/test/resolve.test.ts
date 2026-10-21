@@ -27,13 +27,13 @@ test('an unlinked directory with a valid key works: the App comes from GET /v1/a
 test('an unlinked directory with a bad key fails as unauthenticated (exit 2) with a next step, not not_linked', async () => {
   const dir = await project(root, {});
   const { agent, pool } = mockApi();
-  pool.intercept({ path: '/v1/apps/me', method: 'GET' }).reply(401, { error: { code: 'unauthenticated', message: 'App key not recognised', next: 'check BOXLITE_APP_KEY; keys are shown once when the App is created' } }, { headers: JSON_HEADERS });
+  pool.intercept({ path: '/v1/apps/me', method: 'GET' }).reply(401, { error: { code: 'unauthenticated', message: 'App key not recognised', next: 'check BOXLITE_API_KEY against the App prompt (the key is shown once, when the App is created); `boxlite-app whoami` tests it' } }, { headers: JSON_HEADERS });
   const res = await cli(['app', 'status', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_API_KEY: 'bxl_app_wrongwrongwrongwrongwrong2345', BOXLITE_API_URL: API } });
   assert.equal(res.code, 2);
   assert.equal(res.stdout, '');
   const err = JSON.parse(res.stderr).error;
   assert.equal(err.code, 'unauthenticated');
-  assert.equal(err.next, 'check BOXLITE_API_KEY; keys are shown once when the App is created');
+  assert.equal(err.next, 'check BOXLITE_API_KEY against the App prompt (the key is shown once, when the App is created); `boxlite-app whoami` tests it');
   assert.doesNotMatch(res.stderr, /wrongwrong/);
 
   const noKey = await cli(['app', 'status'], { cwd: dir, dispatcher: agent, env: { BOXLITE_API_URL: API } });

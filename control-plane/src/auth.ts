@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 import type { AppRow, EnvRow, Store } from './db.js';
 import { fail } from './errors.js';
@@ -82,7 +82,7 @@ export function requireAppKey(store: Store, adminToken: string): MiddlewareHandl
       return next();
     }
     const found = appForKey(store, token);
-    if (!found) throw fail('unauthenticated', 'App key not recognised', 'check BOXLITE_APP_KEY; keys are shown once when the App is created');
+    if (!found) throw fail('unauthenticated', 'App key not recognised', 'check BOXLITE_API_KEY against the App prompt (the key is shown once, when the App is created); `boxlite-app whoami` tests it');
     // `me` lets a CLI that only knows its key discover the app name.
     if (found.app.name !== name && name !== 'me') throw fail('forbidden', `this App key belongs to "${found.app.name}", not "${name}"`);
     c.set('app', found.app);
@@ -105,27 +105,4 @@ export function requireBoxToken(store: Store): MiddlewareHandler<{ Variables: Va
     c.set('actor', 'supervisor');
     await next();
   };
-}
-
-// ---- app-proxy access cookie --------------------------------------------
-
-export const SESSION_COOKIE = 'bxl_cp_session';
-
-/** `<app>.<env>.<expiry>.<hmac>`; scoped by Path to one app prefix, so it is useless elsewhere. */
-export function signSession(secret: string, app: string, env: string, ttlSeconds = 7 * 24 * 3600): string {
-  const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
-  const body = `${app}.${env}.${exp}`;
-  const mac = createHmac('sha256', secret).update(body).digest('base64url');
-  return `${body}.${mac}`;
-}
-
-export function verifySession(secret: string, value: string | undefined, app: string, env: string): boolean {
-  if (!value) return false;
-  const parts = value.split('.');
-  if (parts.length !== 4) return false;
-  const [a, e, exp, mac] = parts as [string, string, string, string];
-  if (a !== app || e !== env) return false;
-  if (Number(exp) < Date.now() / 1000) return false;
-  const want = createHmac('sha256', secret).update(`${a}.${e}.${exp}`).digest('base64url');
-  return safeEqual(mac, want);
 }

@@ -71,7 +71,8 @@ type Server struct {
 	ops     Ops
 	secrets atomic.Pointer[secrets]
 	target  atomic.Pointer[Target]
-	static  atomic.Pointer[StaticOpener]
+	static  StaticOpener
+	mounts  MountSource // nil: the files endpoint refuses everything
 	// trustIdentity lets X-BoxLite-User-* set by the control plane reach the app.
 	// Such headers are only ever honoured on requests that carry the forward
 	// secret; without trust they are stripped even then.
@@ -79,9 +80,29 @@ type Server struct {
 	proxy         *httputil.ReverseProxy
 }
 
+// Option configures a Server at construction.
+type Option func(*Server)
+
+// WithStaticOpener replaces how static directories are opened (default
+// os.OpenRoot). The supervisor confines it to the app directory.
+func WithStaticOpener(fn StaticOpener) Option { return func(g *Server) { g.static = fn } }
+
+// WithMounts gives the files endpoint its list of declared volume mounts.
+// The supervisor passes its control-plane client's VolumeMounts, so the box
+// token never has to stay in the process environment. Without it the files
+// endpoint answers 503 mounts_unknown.
+func WithMounts(fn MountSource) Option { return func(g *Server) { g.mounts = fn } }
+
+// targetKey carries the Target that ServeHTTP checked to rewrite, so a flip
+// in between cannot send the request to a different (or zero) port.
+type targetKey struct{}
+
 // New builds a gateway. SetSecrets and SetTarget are expected to follow.
-func New(ops Ops, trustIdentity bool) *Server {
-	g := &Server{ops: ops, trustIdentity: trustIdentity}
+func New(ops Ops, trustIdentity bool, opts ...Option) *Server {
+	g := &Server{ops: ops, trustIdentity: trustIdentity, static: os.OpenRoot}
+	for _, o := range opts {
+		o(g)
+	}
 	g.target.Store(&Target{})
 	g.secrets.Store(&secrets{})
 	g.proxy = &httputil.ReverseProxy{
@@ -109,14 +130,6 @@ func New(ops Ops, trustIdentity bool) *Server {
 func (g *Server) SetSecrets(forward, control string) {
 	g.secrets.Store(&secrets{forward: forward, control: control})
 }
-
-// SetStaticOpener replaces how static directories are opened.
-func (g *Server) SetStaticOpener(fn StaticOpener) { g.static.Store(&fn) }
-
-// SetMounts replaces how the files endpoint learns the declared volume mounts.
-// The supervisor wires it to its control-plane client so the box token never
-// has to stay in the process environment.
-func SetMounts(fn func() ([]string, error)) { declaredMounts = fn }
 
 // SetTarget switches end-user traffic to a new port or static directory.
 // It is atomic: in-flight requests finish against the old target.
@@ -158,7 +171,7 @@ func (g *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case t.StaticDir != "":
 		g.serveStatic(w, r, t.StaticDir)
 	case t.Port > 0:
-		g.proxy.ServeHTTP(w, r)
+		g.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), targetKey{}, t)))
 	default:
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no_release"})
 	}
@@ -181,7 +194,10 @@ func matches(got, want string) bool {
 
 // rewrite prepares the outbound request for the exposed service.
 func (g *Server) rewrite(pr *httputil.ProxyRequest) {
-	t := g.target.Load()
+	t, ok := pr.In.Context().Value(targetKey{}).(*Target)
+	if !ok {
+		t = g.target.Load()
+	}
 	pr.SetURL(&url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(t.Port))})
 	// SetURL rewrote Host to 127.0.0.1:port; the app should see the public host.
 	pr.Out.Host = pr.In.Host
@@ -282,8 +298,10 @@ func (g *Server) control(w http.ResponseWriter, r *http.Request) {
 		tail := 200
 		if v := r.URL.Query().Get("tail"); v != "" {
 			n, err := strconv.Atoi(v)
-			if err != nil || n < 0 {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request", "message": "tail must be a non-negative integer"})
+			if err != nil || n <= 0 {
+				// The ring treats 0 as "everything", which a caller asking for
+				// zero lines does not mean.
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request", "message": "tail must be a positive integer"})
 				return
 			}
 			tail = min(n, logs.RingSize)
@@ -317,6 +335,9 @@ func (g *Server) deploymentCall(w http.ResponseWriter, r *http.Request, fn func(
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "not_built"})
 	case errors.Is(err, api.ErrNoRelease):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found_release"})
+	case errors.Is(err, api.ErrShuttingDown):
+		w.Header().Set("Retry-After", "5")
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "shutting_down", "message": err.Error()})
 	case err != nil:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal", "message": err.Error()})
 	default:

@@ -124,7 +124,7 @@ test('context covers services, schedules, volumes, variables, deployments and ne
   assert.equal(c.deployments[0].status, 'live');
   assert.deepEqual(c.recent_errors.map((e: any) => e.line), ['TypeError: boom']);
   assert.deepEqual(c.next_actions.map((f: any) => f.id), ['secret_missing', 'recent_errors']);
-  assert.ok(!JSON.stringify(c).includes(env().gateway_secret));
+  assert.ok(!JSON.stringify(c).includes(env().forward_secret));
 });
 
 test('a failed deployment shows up as a classified next action', async () => {
@@ -195,7 +195,7 @@ test('vars and schedules list the live spec', async () => {
 
 test('volume files go through the Box gateway with the secret, confined to the volume', async () => {
   await deploy(`${TOML}\n[[volume]]\nname = "uploads"\nmount = "/data/uploads"\n`);
-  const gw = await fakeGateway(env().gateway_secret, env().control_secret);
+  const gw = await fakeGateway(env().forward_secret, env().control_secret);
   try {
     h.ctx.store.updateEnv(env().id, { box_url: gw.url });
     assert.deepEqual(await (await get('/envs/main/volumes')).json(), [{ name: 'uploads', mount: '/data/uploads', mode: 'rw' }]);
@@ -248,7 +248,7 @@ test('probe GETs the health path through the proxy path and reports not_deployed
   const before = (await (await get('/envs/main/probe')).json()) as Record<string, unknown>;
   assert.deepEqual([before.reason, before.ok], ['not_deployed', false]);
   await deploy(TOML);
-  const gw = await fakeGateway(env().gateway_secret, env().control_secret);
+  const gw = await fakeGateway(env().forward_secret, env().control_secret);
   try {
     h.ctx.store.updateEnv(env().id, { box_url: gw.url });
     const p = (await (await get('/envs/main/probe')).json()) as Record<string, unknown>;
@@ -262,6 +262,6 @@ test('probe GETs the health path through the proxy path and reports not_deployed
 
 test('volume calls carry exactly one secret: the control secret', () => {
   const e = env();
-  assert.ok(e.control_secret && e.control_secret !== e.gateway_secret);
+  assert.ok(e.control_secret && e.control_secret !== e.forward_secret);
   assert.deepEqual(controlHeaders(e), { 'x-boxlite-control': e.control_secret });
 });

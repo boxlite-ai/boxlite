@@ -6,6 +6,8 @@ import { cliPackage } from '../cli-version.js';
 import type { Ctx } from '../ctx.js';
 import { now, type LogLine } from '../db.js';
 import { fail } from '../errors.js';
+import { TABLES_QUERY } from '../services/db.js';
+import { deploymentLogs, storedLevelsAtLeast } from '../services/logs.js';
 import { deploymentView, envStatus } from '../views.js';
 import { readVolume, VOLUME_FILE_MAX, volumePath, writeVolume } from '../volume-files.js';
 import { parseSince } from './logs.js';
@@ -18,7 +20,6 @@ import { envOf, intParam, type C } from './util.js';
  * reset) and runtime views (variables, schedules, volume files).
  */
 
-const LEVELS: Record<string, string[]> = { error: ['error'], warn: ['warn', 'warning', 'error'] };
 const MAX_LOG_LINES = 5000;
 
 const latestCli = async (ctx: Ctx): Promise<string | null> => (await cliPackage(ctx.config.cliTgzPath).catch(() => null))?.version ?? null;
@@ -69,6 +70,14 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
   });
 
   r.get('/envs/:env/context', async (c) => c.json(await buildAgentContext(ctx, c.get('app'), envOf(ctx, c), await latestCli(ctx))));
+  // The app-level context is the main env's: one AgentContext shape, rendered as markdown by the
+  // CLI only (`boxlite-app app context`). Its old markdown renderer here still described path prefixes.
+  r.get('/context', async (c) => {
+    const a = c.get('app');
+    const main = ctx.store.envByName(a.id, 'main');
+    if (!main) throw fail('not_found_env', `app "${a.name}" has no main environment`, '`boxlite-app app status` lists the environments');
+    return c.json(await buildAgentContext(ctx, a, main, await latestCli(ctx)));
+  });
 
   /** GET the health path (or `?path=`) through the same proxy path visitors use; wakes a sleeping Box. */
   r.get('/envs/:env/probe', async (c) => {
@@ -100,9 +109,9 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
     if (source) (where.push('source = ?'), params.push(source));
     const level = c.req.query('level');
     if (level && level !== 'info') {
-      const levels = LEVELS[level];
+      const levels = level === 'error' || level === 'warn' ? storedLevelsAtLeast(level) : null;
       if (!levels) throw fail('invalid_request', 'level must be error, warn or info', 'use --level error');
-      where.push(`level IN (${levels.map(() => '?').join(', ')})`);
+      where.push(`lower(level) IN (${levels.map(() => '?').join(', ')})`);
       params.push(...levels);
     }
     const since = parseSince(c.req.query('since'));
@@ -125,17 +134,12 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
     if (!d) throw fail('not_found', `no deployment #${n} in env "${env.name}"`, '`boxlite-app app deployments` lists them');
     const times = stepTimes(ctx, env.id, n);
     const steps = d.steps.map((s) => ({ ...s, started_at: times.get(s.name)?.started_at ?? null, finished_at: times.get(s.name)?.finished_at ?? null }));
-    const own = ctx.store.logs(env.id, { deployment: n, limit: MAX_LOG_LINES });
-    const rel =
-      d.release && d.release !== n
-        ? ctx.store.logs(env.id, { deployment: d.release, since: d.started_at ?? d.created_at, limit: MAX_LOG_LINES }).filter((l) => !d.finished_at || l.ts <= d.finished_at)
-        : [];
-    const logs = [...own, ...rel].sort((x, y) => (x.id ?? 0) - (y.id ?? 0)).slice(-MAX_LOG_LINES);
+    const logs = deploymentLogs(ctx.store, env.id, d, MAX_LOG_LINES);
     return c.json({
       deployment: deploymentView(ctx, a, env, d, true),
       steps,
       logs: logs.map((l) => ({ id: l.id, ts: l.ts, source: l.source, level: l.level, line: l.line, deployment: l.deployment ?? null })),
-      truncated: own.length >= MAX_LOG_LINES,
+      truncated: logs.length >= MAX_LOG_LINES,
     });
   });
 
@@ -147,7 +151,7 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
     const env = envOf(ctx, c);
     if (env.name === 'main') throw fail('forbidden', 'db reset is not available on main', 'on main use `boxlite-app app db restore --to <iso8601> --yes`');
     const url = dbUrl(c, ctx);
-    const tables = await ctx.appdb.query(url, [`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name`], { write: false });
+    const tables = await ctx.appdb.query(url, [TABLES_QUERY], { write: false });
     const snapshot = newId('dbs');
     ctx.store.run('INSERT INTO db_snapshots (id, env_id, message, ts, by) VALUES (?, ?, ?, ?, ?)', snapshot, env.id, 'before db reset', now(), c.get('actor'));
     await ctx.appdb.query(url, ['DROP SCHEMA IF EXISTS public CASCADE', 'CREATE SCHEMA public'], { write: true });

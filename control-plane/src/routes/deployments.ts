@@ -56,7 +56,7 @@ export function deploymentRoutes(ctx: Ctx) {
     const max = limitsOf(ctx).limits.queuedDeploymentsPerEnv;
     if (waiting.length >= max) {
       const first = store.deploymentsWhere(`env_id = ? AND status IN (${ACTIVE_STATUSES.map(() => '?').join(',')}) ORDER BY number LIMIT 1`, env.id, ...ACTIVE_STATUSES)[0] ?? waiting[0]!;
-      throw fail('conflict', `${waiting.length} deployments are already queued in "${env.name}" (at most ${max})`, `wait for #${first.number} to finish (\`boxlite-app deployments ${first.number} --follow\`), then retry`, {
+      throw fail('conflict', `${waiting.length} deployments are already queued in "${env.name}" (at most ${max})`, `wait for #${first.number} to finish (\`boxlite-app app deployment ${first.number} --follow\`), then rerun`, {
         queued: waiting.map((w) => w.number),
         wait_for: first.number,
       });
@@ -70,7 +70,7 @@ export function deploymentRoutes(ctx: Ctx) {
 
     if (b.kind === 'rollback') {
       const problem = ctx.orchestrator.rollbackProblem(env, b.to);
-      if (problem) throw fail('not_found', problem, 'pick a release listed by `boxlite-app deployments` that is still on the Box');
+      if (problem) throw fail('not_found', problem, 'pick a release listed by `boxlite-app app deployments` that is still on the Box');
       const live = env.live_deployment ? store.deployment(env.id, env.live_deployment) : undefined;
       request = { kind: 'rollback', to: b.to, with_database: b.with_database ?? false };
       changes = [{ kind: '~', path: 'release', from: live?.release ?? null, to: store.deployment(env.id, b.to)!.release }];
@@ -91,7 +91,7 @@ export function deploymentRoutes(ctx: Ctx) {
       }
       if (uploadBytes !== undefined && uploadBytes > MAX_SNAPSHOT_BYTES) throw fail('invalid_manifest', 'snapshot too large');
       if (p.stale && !b.force) {
-        throw fail('stale_base', `environment "${env.name}" is at spec v${p.latest}, you planned against v${b.base_version ?? 0}`, 'run `boxlite-app plan` again, or pass --force', { latest_version: p.latest });
+        throw fail('stale_base', `environment "${env.name}" is at spec v${p.latest}, you planned against v${b.base_version ?? 0}`, '`boxlite-app app pull` writes the online state into boxlite.toml (your file is kept as boxlite.toml.bak); review the diff, re-apply your edits, then rerun. Do not pass --force: it overwrites the changes made online', { latest_version: p.latest });
       }
       request = { kind: b.kind, manifest: p.manifest, migrations: p.migrations, force: b.force ?? false };
       changes = p.changes;
@@ -217,7 +217,7 @@ export function deploymentRoutes(ctx: Ctx) {
 
   r.get('/envs/:env/deployments/:n/source', (c) => {
     const d = depOf(c);
-    if (!d.snapshot_id) throw fail('not_found', `deployment #${d.number} has no source snapshot`);
+    if (!d.snapshot_id) throw fail('not_found', `deployment #${d.number} has no source snapshot`, 'applies and rollbacks upload no source: pick a deploy from `boxlite-app app deployments`, or clone without --deployment to get the live code');
     const snap = store.snapshot(c.get('app').id, d.snapshot_id);
     if (!snap) throw fail('not_found', `snapshot ${d.snapshot_id} is gone`);
     const stream = Readable.toWeb(snapshotTarGz(ctx.blobs, c.get('app').id, snap.manifest)) as ReadableStream;

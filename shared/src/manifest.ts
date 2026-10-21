@@ -349,6 +349,11 @@ export function parseManifest(toml: string, env = 'main'): ParseResult {
   for (const k of Object.keys(secrets)) {
     if (k in variables) v.error(['secrets', k], 'duplicate_variable', `"${k}" is both a variable and a secret`);
   }
+  for (const [key, names] of [['variables', variables], ['secrets', secrets]] as const) {
+    for (const k of Object.keys(names)) {
+      if (isPlatformVariable(k)) v.error([key, k], 'reserved_variable', `${k} is set by BoxLite for every service and cannot be overridden; rename it`);
+    }
+  }
 
   const manifest: Manifest = {
     app: name,
@@ -405,6 +410,15 @@ function stringMap(v: Validator, raw: unknown, key: string, check: (k: string, v
     else out[k] = s;
   }
   return out;
+}
+
+/**
+ * Names the platform puts into every service's environment (DATABASE_URL, PORT, BOXLITE_*).
+ * The runtime env merges [variables] and [secrets] last, so one of these in boxlite.toml (or set
+ * from the console) would silently replace the platform's value.
+ */
+function isPlatformVariable(name: string): boolean {
+  return name === 'DATABASE_URL' || name === 'PORT' || name.startsWith('BOXLITE_');
 }
 
 /** The `[[service]]` that receives end-user traffic (first with `port` or `static`). */

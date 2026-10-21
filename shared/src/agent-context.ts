@@ -167,7 +167,7 @@ export function contextFindings(c: Omit<AgentContext, 'next_actions'>): Finding[
 
   const unresolved = c.variables.filter((v) => v.secret && !v.resolved);
   if (unresolved.length) {
-    out.push({ id: 'secret_missing', severity: 'error', title: `secret(s) not set on the platform: ${unresolved.map((v) => `${v.name} (${v.source})`).join(', ')}`, fix: 'ask the user to add them in the console (Secrets); never put the value in boxlite.toml or the code' });
+    out.push({ id: 'secret_missing', severity: 'error', title: `secret(s) not set on the platform: ${unresolved.map((v) => `${v.name} (${v.source})`).join(', ')}`, fix: 'ask the user to have a platform admin create the org secret each one references (in parentheses; the console can list secrets but not set them), then `boxlite-app deploy`; never put the value in boxlite.toml or the code' });
   }
 
   const recent = c.recent_errors.filter((e) => Date.parse(c.generated_at) - Date.parse(e.ts) < 3_600_000);

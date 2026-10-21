@@ -1,5 +1,5 @@
 import { recordLogs } from './logsink.js';
-import { createHash, createHmac, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, randomUUID, sign, type JsonWebKey, type KeyObject } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, randomUUID, sign, type JsonWebKey, type KeyObject } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -10,6 +10,7 @@ import type { Ctx } from './ctx.js';
 import { fail } from './errors.js';
 import { OAUTH_PROVIDERS, type OAuthProfile } from './oauth-providers.js';
 import { escapeHtml } from './routes/util.js';
+import { hostCookieName, isSecureUrl, readCookie, setCookieValue, signedMac } from './cookies.js';
 
 /**
  * End-user sign-in for apps that declare `[auth]` (PRD 3.8, case 1): platform-hosted OAuth, a user
@@ -38,19 +39,20 @@ export const TEST_SESSION_TTL_S = 15 * 60;
 export const IDENTITY_TTL_S = 5 * 60;
 /** The callback → app origin handoff code: single use, stored hashed. */
 export const HANDOFF_TTL_S = 60;
+/** Per call to a sign-in provider (token exchange, profile): a stalled provider must not hold the callback. */
+const OAUTH_TIMEOUT_MS = 10_000;
+
+/** `f` with a deadline on every call (the caller's own signal, if any, still applies). */
+function withTimeout(f: typeof fetch, ms: number): typeof fetch {
+  return ((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const signal = init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms);
+    return f(input, { ...init, signal });
+  }) as typeof fetch;
+}
 const SLIDE_EVERY_MS = 60_000;
 
 /** Each app env has its own origin, so one plain, host-only name is enough. */
 export const SESSION_COOKIE_NAME = 'bxl_session';
-/**
- * On https origins platform cookies carry the `__Host-` prefix. Every app origin shares the
- * proxy's parent domain, so without it a sibling app could plant a `Domain=` cookie with the
- * same name (cookie tossing) and sign a visitor in as someone else; browsers refuse to set a
- * `__Host-` cookie that has a Domain, lacks Secure or has a Path other than /.
- */
-export const hostCookieName = (base: string, secure: boolean) => (secure ? `__Host-${base}` : base);
-/** Kept for callers that pass the app and env; the name no longer depends on them. */
-export const sessionCookieName = (_app?: string, _env?: string) => SESSION_COOKIE_NAME;
 /** On the API origin; one per env so two sign-ins in one browser do not clobber each other. */
 const verifierCookieName = (envId: string) => `bxl_pkce_${envId}`;
 /**
@@ -91,7 +93,7 @@ export interface OAuthState {
   exp: number;
 }
 
-const stateMac = (secret: string, body: string) => createHmac('sha256', secret).update(`oauth-state:${body}`).digest('base64url');
+const stateMac = (secret: string, body: string) => signedMac(secret, 'oauth-state', body);
 
 export function signState(secret: string, payload: Omit<OAuthState, 'exp'>, ttlSeconds = STATE_TTL_S, nowMs = Date.now()): string {
   const body = Buffer.from(JSON.stringify({ ...payload, exp: Math.floor(nowMs / 1000) + ttlSeconds })).toString('base64url');
@@ -376,28 +378,15 @@ function htmlPage(title: string, body: string, status: number, headers: Headers 
   return new Response(doc, { status, headers });
 }
 
-/** Host-only (no Domain), HttpOnly, SameSite=Lax; Secure when the origin that sets it is https. */
-function cookie(secure: boolean, name: string, value: string, path: string, maxAge: number): string {
-  const parts = [`${name}=${value}`, `Path=${path}`, 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAge}`];
-  if (secure) parts.push('Secure');
-  return parts.join('; ');
-}
-
-const apiSecure = (ctx: Pick<Ctx, 'config'>) => ctx.config.publicUrl.startsWith('https:');
-const appSecure = (ctx: Ctx, app: AppRow, env: EnvRow) => ctx.resources.appUrl(app.name, env.name).startsWith('https:');
-
-export function readCookie(headers: Headers, name: string): string | undefined {
-  for (const part of (headers.get('cookie') ?? '').split(';')) {
-    const eq = part.indexOf('=');
-    if (eq > 0 && part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
-  }
-  return undefined;
-}
+const cookie = setCookieValue;
+const apiSecure = (ctx: Pick<Ctx, 'config'>) => isSecureUrl(ctx.config.publicUrl);
+const appSecure = (ctx: Ctx, app: AppRow, env: EnvRow) => isSecureUrl(ctx.resources.appUrl(app.name, env.name));
 
 const wantsHtml = (method: string, headers: Headers) => (method === 'GET' || method === 'HEAD') && (headers.get('accept') ?? '').includes('text/html');
 
 function unauthenticated(): Response {
-  return new Response(JSON.stringify({ error: { code: 'unauthenticated', message: 'sign in required' } }), { status: 401, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+  const next = 'send users to /.boxlite/auth/login?next=<path>; agents verify a protected path with `boxlite-app app curl <path> --as <email>`';
+  return new Response(JSON.stringify({ error: { code: 'unauthenticated', message: 'sign in required', next } }), { status: 401, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 }
 
 const noAccessPage = (app: string, headers?: Headers) =>
@@ -584,7 +573,7 @@ async function callback(ctx: Ctx, providerName: string, req: Request): Promise<R
 
   let profile: OAuthProfile;
   try {
-    profile = await provider.signIn({ creds, redirectUri: redirectUri(ctx, providerName), code, codeVerifier: verifier, fetch: ctx.oauthFetch ?? fetch });
+    profile = await provider.signIn({ creds, redirectUri: redirectUri(ctx, providerName), code, codeVerifier: verifier, fetch: withTimeout(ctx.oauthFetch ?? fetch, OAUTH_TIMEOUT_MS) });
   } catch (err) {
     console.error(`[auth] ${providerName} sign-in for ${app.name}/${env.name}: ${(err as Error).message}`);
     authLog(ctx, env, 'error', `${providerName} sign-in failed: ${(err as Error).message}`);
@@ -693,7 +682,7 @@ export function exportUsersCsv(ctx: Ctx, app: AppRow, env: EnvRow): string {
 
 /** A signed-in session for a `test` user, so an agent can exercise login-only pages with curl. */
 export async function createTestSession(ctx: Ctx, app: AppRow, env: EnvRow, email: string, actor: string): Promise<{ cookie: string; cookie_name: string; expires_in: string; expires_at: string; user: UserView }> {
-  if (!ctx.resources.currentSpec(env)?.auth) throw fail('conflict', `sign-in is not enabled for ${app.name}/${env.name}`, 'add [auth] to boxlite.toml, then `boxlite-app apply` or `deploy`');
+  if (!ctx.resources.currentSpec(env)?.auth) throw fail('conflict', `sign-in is not enabled for ${app.name}/${env.name}`, 'add [auth] to boxlite.toml, then `boxlite-app apply --yes`');
   const normal = email.trim().toLowerCase();
   const user = upsertUser(ctx, app, env, 'test', { id: normal, email: normal, name: normal.split('@')[0] ?? normal, avatarUrl: null });
   if (user.blocked) throw fail('forbidden', `${normal} is blocked in ${env.name}`, 'unblock it with `boxlite-app app auth users unblock <email>`');

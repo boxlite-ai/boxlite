@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -18,20 +19,30 @@ import (
 // process manager called cmd.Wait() for each child while a generic wait(-1)
 // loop ran alongside to collect orphans, the two would race for the same child:
 // whichever lost would get ECHILD and the exit status would be gone. So exactly
-// one goroutine reaps everything, and managed children subscribe to their exit
-// status by pid. Statuses of pids nobody has subscribed to yet are parked in
-// `unclaimed` to cover the gap between Start() returning and Subscribe() being
-// called; statuses of unrelated orphans are discarded.
+// one goroutine reaps everything, and managed children are started through
+// Start, which registers for the child's exit status.
+//
+// An exit status must only ever reach the process it belongs to. A pid is
+// freed (and may be handed to the next fork) the moment wait4 collects it, so
+// two things happen under r.mu as one step each:
+//
+//   - reaping: wait4 plus delivering the status, and
+//   - starting: fork/exec plus registering the waiter for the new pid.
+//
+// A status is therefore either delivered to a waiter registered before it was
+// reaped (whose child still held the pid, so it is that child's status) or it
+// belongs to an orphan nobody started through Start, and is dropped at once.
+// Nothing is ever parked for later, so a later process that reuses the pid
+// cannot be handed a stale status.
 type Reaper struct {
-	mu        sync.Mutex
-	waiters   map[int]chan syscall.WaitStatus
-	unclaimed map[int]syscall.WaitStatus
-	reaped    int64 // total children reaped; for tests and the boot log
+	mu      sync.Mutex
+	waiters map[int]chan syscall.WaitStatus
+	reaped  int64 // total children reaped; tests use it
 }
 
 // NewReaper creates a reaper. Run must be started before any child is spawned.
 func NewReaper() *Reaper {
-	return &Reaper{waiters: map[int]chan syscall.WaitStatus{}, unclaimed: map[int]syscall.WaitStatus{}}
+	return &Reaper{waiters: map[int]chan syscall.WaitStatus{}}
 }
 
 // Run reaps on every SIGCHLD and, as a safety net against coalesced signals,
@@ -55,6 +66,15 @@ func (r *Reaper) Run(ctx context.Context) {
 
 // reap collects every exited child without blocking.
 func (r *Reaper) reap() {
+	for r.reapOne() {
+	}
+}
+
+// reapOne collects one exited child and delivers its status. It reports
+// whether there may be more to collect.
+func (r *Reaper) reapOne() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for {
 		var ws syscall.WaitStatus
 		pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
@@ -62,46 +82,48 @@ func (r *Reaper) reap() {
 			continue
 		}
 		if err != nil || pid <= 0 {
-			return // ECHILD (no children) or nothing exited yet
+			return false // ECHILD (no children) or nothing exited yet
 		}
-		r.deliver(pid, ws)
+		r.deliverLocked(pid, ws)
+		return true
 	}
 }
 
-func (r *Reaper) deliver(pid int, ws syscall.WaitStatus) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// deliverLocked hands ws to the waiter registered for pid, or drops it: a
+// status nobody registered for belongs to an orphan. Caller holds r.mu.
+func (r *Reaper) deliverLocked(pid int, ws syscall.WaitStatus) {
 	r.reaped++
 	if ch, ok := r.waiters[pid]; ok {
 		delete(r.waiters, pid)
-		ch <- ws
-		return
-	}
-	// Parked for a Subscribe that may be racing with us. Entries for true
-	// orphans are dropped on the next sweep so the map cannot grow unbounded.
-	r.unclaimed[pid] = ws
-	if len(r.unclaimed) > 1024 {
-		for p := range r.unclaimed {
-			if p != pid {
-				delete(r.unclaimed, p)
-			}
-		}
+		ch <- ws // buffered, never blocks
 	}
 }
 
-// Subscribe returns a channel that receives pid's exit status exactly once.
-// It must be called right after the child is started.
-func (r *Reaper) Subscribe(pid int) <-chan syscall.WaitStatus {
-	ch := make(chan syscall.WaitStatus, 1)
+// Start starts cmd and returns a channel that receives its exit status
+// exactly once. Every child the supervisor waits for must be started here,
+// never with cmd.Start followed by a separate registration, and never waited
+// for with cmd.Wait.
+func (r *Reaper) Start(cmd *exec.Cmd) (<-chan syscall.WaitStatus, error) {
+	return r.start(func() (int, error) {
+		if err := cmd.Start(); err != nil {
+			return 0, err
+		}
+		return cmd.Process.Pid, nil
+	})
+}
+
+// start runs spawn (which forks and returns the new pid) and registers the
+// waiter without letting the reap loop run in between.
+func (r *Reaper) start(spawn func() (int, error)) (<-chan syscall.WaitStatus, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if ws, ok := r.unclaimed[pid]; ok {
-		delete(r.unclaimed, pid)
-		ch <- ws
-		return ch
+	pid, err := spawn()
+	if err != nil {
+		return nil, err
 	}
+	ch := make(chan syscall.WaitStatus, 1)
 	r.waiters[pid] = ch
-	return ch
+	return ch, nil
 }
 
 // Reaped reports how many children have been collected so far.

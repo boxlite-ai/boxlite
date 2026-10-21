@@ -26,11 +26,13 @@ const EXIT_MEANING: Record<string, string> = {
   not_found_env: 'the environment does not exist',
   not_found: 'a deployment, table, file, schedule… does not exist',
   forbidden: 'outside the key’s scope, or not allowed here (e.g. DDL on main)',
+  write_requires_flag: 'the SQL changes data and ran without --write; nothing ran: rerun with `--write`',
   unavailable: 'control plane or platform unreachable; wait 30 s and rerun (max 3 times)',
+  rate_limited: 'too many requests; the CLI already waited Retry-After and retried 3 times: wait 30 s and rerun',
   invalid_manifest: 'boxlite.toml / project check failed; the body carries errors[]',
   deploy_failed: 'the deployment failed; the body carries deployment, step, cause, fix, log_tail',
   stale_base: 'someone changed the environment online since your last sync; `boxlite-app app pull`',
-  confirmation_required: 'a destructive command ran without --yes; the body carries destroys[] and the exact command to rerun',
+  confirmation_required: 'a command that asks first ran without --yes and without a terminal. Destructive ones (the body carries destroys[]): ask the user, then rerun with --yes; `apply`: just rerun with --yes',
 };
 
 function usageOf(cmd: Command): string {

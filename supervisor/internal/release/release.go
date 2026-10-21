@@ -16,33 +16,19 @@ import (
 	"strings"
 )
 
-// Extract unpacks a tar.gz stream into dir (created if missing). Entries that
-// would land outside dir are rejected rather than skipped: a snapshot is a
-// single unit, and a partially extracted tree with a hole where the escaping
-// entry was would only produce a confusing build failure later.
+// ExtractIn unpacks a tar.gz stream into dir relative to root (created if
+// missing). Entries that would land outside dir are rejected rather than
+// skipped: a snapshot is a single unit, and a partially extracted tree with a
+// hole where the escaping entry was would only produce a confusing build
+// failure later.
 //
 // Rejected: absolute names, any `..` component that escapes dir, symlinks or
 // hard links whose target resolves outside dir, and device/fifo entries.
-func Extract(r io.Reader, dir string) error {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(abs, 0o755); err != nil {
-		return err
-	}
-	root, err := os.OpenRoot(abs)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	return ExtractIn(r, root, ".", nil)
-}
-
-// ExtractIn is Extract into dir relative to root. Every filesystem operation
-// goes through root, so nothing can be written outside it even when another
-// process swaps a directory for a symlink mid-extraction: the supervisor runs
-// as root and the release tree belongs to app code (contracts.md 2.1).
+//
+// Every filesystem operation goes through root, so nothing can be written
+// outside it even when another process swaps a directory for a symlink
+// mid-extraction: the supervisor runs as root and the release tree belongs to
+// app code (contracts.md 2.1).
 // chown, when set, is called for every entry created (directories included);
 // the root supervisor uses it to hand the tree to the app user.
 func ExtractIn(r io.Reader, root *os.Root, dir string, chown func(name string) error) error {
@@ -74,8 +60,11 @@ func ExtractIn(r io.Reader, root *os.Root, dir string, chown func(name string) e
 		return err
 	}
 	gz, err := gzip.NewReader(r)
-	if err != nil {
+	if errors.Is(err, gzip.ErrHeader) || errors.Is(err, io.EOF) {
 		return fmt.Errorf("snapshot is not gzip: %w", err)
+	}
+	if err != nil {
+		return fmt.Errorf("read snapshot: %w", err)
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
@@ -199,21 +188,9 @@ func dirMode(m int64) os.FileMode {
 	return mode | 0o700
 }
 
-// List returns the deployment numbers of the release directories, ascending.
-// Entries that are not plain positive integers are ignored.
-func List(releasesDir string) ([]int, error) {
-	root, err := os.OpenRoot(releasesDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer root.Close()
-	return ListIn(root, ".")
-}
-
-// ListIn is List for the directory dir relative to root.
+// ListIn returns the deployment numbers of the release directories in dir
+// (relative to root), ascending. Entries that are not plain positive integers
+// are ignored.
 func ListIn(root *os.Root, dir string) ([]int, error) {
 	f, err := root.Open(dir)
 	if err != nil {
@@ -242,21 +219,9 @@ func ListIn(root *os.Root, dir string) ([]int, error) {
 	return out, nil
 }
 
-// Prune removes release directories beyond the newest keep, never the current
-// one. It returns the deployment numbers it removed.
-func Prune(releasesDir string, keep, current int) ([]int, error) {
-	root, err := os.OpenRoot(releasesDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer root.Close()
-	return PruneIn(root, ".", keep, current)
-}
-
-// PruneIn is Prune for the directory dir relative to root.
+// PruneIn removes the release directories in dir (relative to root) beyond
+// the newest keep, never the current one. It returns the deployment numbers
+// it removed.
 func PruneIn(root *os.Root, dir string, keep, current int) ([]int, error) {
 	all, err := ListIn(root, dir)
 	if err != nil {

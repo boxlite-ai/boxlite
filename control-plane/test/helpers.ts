@@ -97,6 +97,7 @@ export class FakeNeon implements NeonClient {
     return m;
   }
   async listBranches(): Promise<{ id: string; name: string }[]> {
+    this.calls.push('list-branches');
     return this.branches.map((id) => ({ id, name: id }));
   }
   async getRole(_p: string, b: string, name: string): Promise<{ name: string; authMethod: string } | null> {
@@ -132,8 +133,8 @@ export class FakeSupervisor implements SupervisorClient {
   busy = 0;
   /** Answer this many health probes with 403 (no gateway secret yet). */
   forbiddenHealth = 0;
-  /** Play a protocol-1 supervisor: refuses the control secret, answers the forwarding one without `version`. */
-  legacy = false;
+  /** The wire protocol health reports (SUPERVISOR_PROTOCOL is 2). */
+  version = 2;
   /** The secret each control call carried, in order. */
   secrets: string[] = [];
   ctx!: Ctx;
@@ -149,17 +150,11 @@ export class FakeSupervisor implements SupervisorClient {
   async health(_u?: string, secret?: string): Promise<SupervisorHealth> {
     this.calls.push('health');
     if (secret !== undefined) this.secrets.push(secret);
-    if (this.legacy) throw new UpstreamError('supervisor', 403, 'GET /.boxlite/sv/health → 403', '{"error":"gateway"}');
     if (this.forbiddenHealth > 0) {
       this.forbiddenHealth--;
       throw new UpstreamError('supervisor', 403, 'GET /.boxlite/sv/health → 403', '{"error":"gateway"}');
     }
-    return { version: 2, root: true, sudo_locked: true, ok: true, deployment: null, services: [] };
-  }
-  async legacyHealth(): Promise<SupervisorHealth> {
-    this.calls.push('legacy-health');
-    if (!this.legacy) throw new UpstreamError('supervisor', 403, 'GET /.boxlite/sv/health → 403', '{"error":"gateway"}');
-    return { ok: true, deployment: null, services: [] };
+    return { version: this.version, root: true, sudo_locked: true, ok: true, deployment: null, services: [] };
   }
   async deploy(_u: string, s: string, n: number): Promise<void> {
     this.calls.push(`deploy ${n}`);
@@ -197,10 +192,6 @@ export class FakeAppDb implements AppDatabase {
   readers: string[] = [];
   async ensureReader(url: string): Promise<void> {
     this.readers.push(url);
-  }
-  branchingChecks: string[] = [];
-  async prepareBranching(projectId: string): Promise<void> {
-    this.branchingChecks.push(projectId);
   }
   async listApplied(): Promise<AppliedRow[]> {
     return [...this.applied];

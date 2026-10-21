@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/boxlite-ai/microcloud/supervisor/internal/api"
+	"github.com/boxlite-ai/microcloud/supervisor/internal/nofollow"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/release"
 )
 
@@ -153,16 +154,20 @@ func OpenSplit(stateDir, appDir string, owner *Owner) (*Store, error) {
 	}
 	if owner != nil {
 		// Root mode: the opened state dir itself (not the path) must be ours
-		// and closed, and the app dir must not be a symlink app code planted.
+		// and closed.
 		fi, err := s.root.Stat(".")
 		if err != nil || fi.Mode().Perm() != 0o700 || !ownedBy(fi, os.Geteuid()) {
 			return nil, fmt.Errorf("state dir %s must be a 0700 directory owned by uid %d", absState, os.Geteuid())
 		}
-		if fi, err := os.Lstat(absApp); err != nil || fi.Mode()&os.ModeSymlink != 0 {
-			return nil, fmt.Errorf("app dir %s is missing or a symlink", absApp)
+		// The app dir and its parent belong to the app user, who could swap
+		// either for a symlink between a check and an open. Opening it
+		// without following any link, and then working only through that
+		// handle, leaves no such window: everything below (chown included)
+		// acts on the directory that was checked.
+		if s.app, err = nofollow.OpenRoot(absApp); err != nil {
+			return nil, fmt.Errorf("app dir %s: %w", absApp, err)
 		}
-	}
-	if s.app, err = os.OpenRoot(absApp); err != nil {
+	} else if s.app, err = os.OpenRoot(absApp); err != nil {
 		return nil, fmt.Errorf("app dir: %w", err)
 	}
 	if err := s.chown("."); err != nil {
@@ -181,7 +186,6 @@ func OpenSplit(stateDir, appDir string, owner *Owner) (*Store, error) {
 	if err := s.chown("releases"); err != nil {
 		return nil, fmt.Errorf("app dir: %w", err)
 	}
-	_ = s.root.MkdirAll("logs", 0o700)
 
 	data, err := s.root.ReadFile("state.json")
 	if errors.Is(err, os.ErrNotExist) && absState != absApp {
@@ -241,9 +245,6 @@ func (s *Store) chown(name string) error {
 
 // Dir is the state directory.
 func (s *Store) Dir() string { return s.dir }
-
-// AppDir is the directory holding releases/ and current.
-func (s *Store) AppDir() string { return s.appDir }
 
 // ReleasesDir is <app dir>/releases.
 func (s *Store) ReleasesDir() string { return filepath.Join(s.appDir, "releases") }

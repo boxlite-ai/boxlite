@@ -1,5 +1,6 @@
-import type { AppRow, Deployment, EnvRow } from './db.js';
+import { ACTIVE_STATUSES, type AppRow, type Deployment, type EnvRow } from './db.js';
 import type { Ctx } from './ctx.js';
+import { deploymentLogs, formatLogLine } from './services/logs.js';
 
 /** Deployment object of contracts §1. `detail` adds the log tail. */
 export function deploymentView(ctx: Pick<Ctx, 'store' | 'resources'>, app: AppRow, env: EnvRow, d: Deployment, detail = false): Record<string, unknown> {
@@ -29,23 +30,15 @@ export function deploymentView(ctx: Pick<Ctx, 'store' | 'resources'>, app: AppRo
   return out;
 }
 
-/**
- * CP lines are tagged with the deployment number, supervisor lines with the release it was told to
- * run; for apply/rollback those differ, so merge both.
- */
+/** The last `n` lines of a deployment (its own and its release's), formatted. */
 export function logTail(ctx: Pick<Ctx, 'store'>, env: EnvRow, d: Deployment, n: number): string[] {
-  const own = ctx.store.logs(env.id, { deployment: d.number, limit: n });
-  const rel = d.release && d.release !== d.number ? ctx.store.logs(env.id, { deployment: d.release, since: d.started_at ?? d.created_at, limit: n }) : [];
-  return [...own, ...rel]
-    .sort((a, b) => (a.id ?? 0) - (b.id ?? 0))
-    .slice(-n)
-    .map((l) => `${l.ts} [${l.source}] ${l.line}`);
+  return deploymentLogs(ctx.store, env.id, d, n).map(formatLogLine);
 }
 
 export function envStatus(ctx: Pick<Ctx, 'store'>, env: EnvRow): string {
   const latest = ctx.store.deployments(env.id, 1)[0];
   if (!latest) return 'new';
-  if (['queued', 'uploading', 'building', 'migrating', 'starting'].includes(latest.status)) return 'deploying';
+  if (ACTIVE_STATUSES.includes(latest.status)) return 'deploying';
   if (env.live_deployment) return latest.status === 'failed' ? 'live (last deployment failed)' : 'live';
   return latest.status === 'failed' ? 'failed' : 'new';
 }

@@ -51,7 +51,8 @@ const env = (app = 'crm', name = 'main') => h.ctx.store.envByName(h.ctx.store.ap
 /** A second app `ledger`, live on the same upstream. */
 async function secondApp(): Promise<string> {
   const k = await createApp(h, 'ledger');
-  h.ctx.store.updateEnv(env('ledger').id, { box_id: 'box-ledger', box_url: upstreamUrl, live_deployment: 1, access_override: 'private' });
+  const box = await h.boxlite.createBox({ name: 'app-ledger-main' } as never);
+  h.ctx.store.updateEnv(env('ledger').id, { box_id: box.id, box_url: upstreamUrl, live_deployment: 1, access_override: 'private' });
   return k;
 }
 
@@ -124,7 +125,7 @@ test('the app lives at / of its origin: path as-is, gateway and forwarding heade
   assert.equal(res.status, 200);
   assert.equal(await res.text(), 'path=/api/items?q=1');
   const got = seen[0]!.headers;
-  assert.equal(got['x-boxlite-gateway'], env().gateway_secret);
+  assert.equal(got['x-boxlite-gateway'], env().forward_secret);
   assert.equal(got['x-forwarded-prefix'], undefined);
   assert.equal(got['x-forwarded-host'], '10001-cp.test');
   assert.equal(got['x-forwarded-proto'], 'https');
@@ -261,7 +262,7 @@ test('old path-prefix URLs on the API origin answer 301 to the env origin, dropp
   assert.equal(res.status, 301);
   assert.equal(res.headers.get('location'), 'https://10001-cp.test/page?x=1');
   assert.equal((await h.request('/crm')).headers.get('location'), 'https://10001-cp.test/');
-  h.ctx.store.run("INSERT INTO envs (id, app_id, name, created_at, gateway_secret) SELECT 'env_dev', app_id, 'dev', created_at, 'g2' FROM envs WHERE name = 'main'");
+  h.ctx.store.run("INSERT INTO envs (id, app_id, name, created_at, forward_secret) SELECT 'env_dev', app_id, 'dev', created_at, 'g2' FROM envs WHERE name = 'main'");
   assert.equal((await h.request('/crm--dev/a/b')).headers.get('location'), 'https://10002-cp.test/a/b');
   assert.equal((await h.request('/nope/')).status, 404);
   assert.equal((await h.request('/v1/unknown')).status, 404);
@@ -302,7 +303,7 @@ test('a due schedule is sent as POST to the app and logged', async () => {
   const hit = seen.find((s) => s.url === '/jobs/nightly');
   assert.ok(hit, JSON.stringify(seen.map((s) => s.url)));
   assert.equal(hit.headers['x-boxlite-schedule'], 'nightly');
-  assert.equal(hit.headers['x-boxlite-gateway'], e.gateway_secret);
+  assert.equal(hit.headers['x-boxlite-gateway'], e.forward_secret);
   assert.equal(hit.headers['x-forwarded-host'], '10001-cp.test');
   const logs = h.ctx.store.logs(e.id, { source: 'schedule' });
   assert.match(logs[0]!.line, /nightly: POST \/jobs\/nightly → 200/);

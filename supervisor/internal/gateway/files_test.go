@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,15 +9,34 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/boxlite-ai/microcloud/supervisor/internal/cp"
 )
 
+func staticMounts(mounts ...string) MountSource {
+	return func(context.Context) ([]string, error) { return mounts, nil }
+}
+
+// realTemp is t.TempDir with its own symlinks resolved: mounts are opened
+// without following any link, and macOS keeps temp dirs under /var, itself a
+// link to /private/var.
+func realTemp(t *testing.T) string {
+	t.Helper()
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
 // volume makes a mount dir with one file and a subdirectory, and declares it
-// as the only volume for the duration of the test.
+// as the only volume.
 func volume(t *testing.T) (g *Server, mount, outside string) {
 	t.Helper()
-	root := t.TempDir()
+	root := realTemp(t)
 	mount = filepath.Join(root, "data", "uploads")
 	outside = filepath.Join(root, "secret")
 	for _, d := range []string{filepath.Join(mount, "avatars"), outside} {
@@ -30,10 +50,7 @@ func volume(t *testing.T) (g *Server, mount, outside string) {
 	if err := os.WriteFile(filepath.Join(outside, "state.json"), []byte(`{"gateway_secret":"x"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	prev := declaredMounts
-	declaredMounts = func() ([]string, error) { return []string{mount}, nil }
-	t.Cleanup(func() { declaredMounts = prev })
-	g = New(&fakeOps{}, false)
+	g = New(&fakeOps{}, false, WithMounts(staticMounts(mount)))
 	g.SetSecrets(secret, ctlSecret)
 	return g, mount, outside
 }
@@ -173,61 +190,148 @@ func TestFilesRejectOversizedUploads(t *testing.T) {
 	}
 }
 
-func TestMountsComeFromTheControlPlaneSpec(t *testing.T) {
-	calls := 0
-	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if r.URL.Path != "/sv/v1/spec" || r.Header.Get("Authorization") != "Bearer bxt_test" {
+// TestFilesUseTheControlPlaneSpecForMounts wires the gateway exactly as
+// main does, to the control-plane client's VolumeMounts, so the confinement
+// that runs in a Box is the one under test.
+func TestFilesUseTheControlPlaneSpecForMounts(t *testing.T) {
+	base := realTemp(t)
+	mount := filepath.Join(base, "data", "uploads")
+	if err := os.MkdirAll(mount, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mount, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "secret.txt"), []byte("no"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	refuse := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if refuse || r.URL.Path != "/sv/v1/spec" || r.Header.Get("Authorization") != "Bearer bxt_test" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"volumes": []map[string]string{{"name": "uploads", "mount": "/data/uploads"}}}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"spec": map[string]any{"volumes": []map[string]string{{"name": "uploads", "mount": mount}}}, "deployment": 1})
 	}))
-	defer cp.Close()
-	t.Setenv("BOXLITE_CP_URL", cp.URL)
-	t.Setenv("BOXLITE_BOX_TOKEN", "bxt_test")
-	mountsCache.Lock()
-	mountsCache.mounts, mountsCache.at = nil, time.Time{}
-	mountsCache.Unlock()
-
-	for i := 0; i < 2; i++ {
-		mounts, err := mountsFromControlPlane()
-		if err != nil || len(mounts) != 1 || mounts[0] != "/data/uploads" {
-			t.Fatalf("mounts: %v %v", mounts, err)
-		}
+	defer srv.Close()
+	client, err := cp.New(srv.URL, "bxt_test", false)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if calls != 1 {
-		t.Fatalf("expected one cached call, got %d", calls)
+	g := New(&fakeOps{}, false, WithMounts(client.VolumeMounts))
+	g.SetSecrets(secret, ctlSecret)
+
+	if rec, _ := do(t, g, http.MethodGet, filesURL(mount+"/a.txt"), "", ctl()); rec.Code != http.StatusOK || rec.Body.String() != "hello" {
+		t.Fatalf("inside the declared mount: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec, body := do(t, g, http.MethodGet, filesURL(filepath.Join(base, "secret.txt")), "", ctl()); rec.Code != http.StatusForbidden || body["error"] != "outside_volume" {
+		t.Fatalf("outside the declared mount: %d %s", rec.Code, rec.Body.String())
 	}
 
-	mountsCache.Lock()
-	mountsCache.mounts = nil
-	mountsCache.Unlock()
-	t.Setenv("BOXLITE_BOX_TOKEN", "wrong")
-	if _, err := mountsFromControlPlane(); err == nil {
-		t.Fatal("expected an error for a refused spec request")
+	// A control plane that refuses the spec leaves the mounts unknown: refuse.
+	refuse = true
+	fresh, _ := cp.New(srv.URL, "bxt_test", false)
+	g = New(&fakeOps{}, false, WithMounts(fresh.VolumeMounts))
+	g.SetSecrets(secret, ctlSecret)
+	if rec, body := do(t, g, http.MethodGet, filesURL(mount+"/a.txt"), "", ctl()); rec.Code != http.StatusServiceUnavailable || body["error"] != "mounts_unknown" {
+		t.Fatalf("refused spec: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
 func TestFilesReportUnknownMounts(t *testing.T) {
-	prev := declaredMounts
-	declaredMounts = func() ([]string, error) { return nil, os.ErrDeadlineExceeded }
-	t.Cleanup(func() { declaredMounts = prev })
-	g := New(&fakeOps{}, false)
-	g.SetSecrets(secret, ctlSecret)
-	rec, body := do(t, g, http.MethodGet, filesURL("/data/uploads"), "", ctl())
-	if rec.Code != http.StatusServiceUnavailable || body["error"] != "mounts_unknown" {
-		t.Fatalf("unknown mounts: %d %s", rec.Code, rec.Body.String())
+	failing := func(context.Context) ([]string, error) { return nil, os.ErrDeadlineExceeded }
+	for name, g := range map[string]*Server{
+		"lookup fails":    New(&fakeOps{}, false, WithMounts(failing)),
+		"no mount source": New(&fakeOps{}, false),
+	} {
+		g.SetSecrets(secret, ctlSecret)
+		rec, body := do(t, g, http.MethodGet, filesURL("/data/uploads"), "", ctl())
+		if rec.Code != http.StatusServiceUnavailable || body["error"] != "mounts_unknown" {
+			t.Fatalf("%s: %d %s", name, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestFilesRefuseASymlinkedMount: if the mount point or one of its parents
+// is a symlink, the root gateway must not follow it, for reads or writes.
+func TestFilesRefuseASymlinkedMount(t *testing.T) {
+	base := realTemp(t)
+	outside := filepath.Join(base, "secret")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "state.json"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(base, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	leaf := filepath.Join(base, "data", "uploads")
+	if err := os.Symlink(outside, leaf); err != nil {
+		t.Fatal(err)
+	}
+	// A real directory named like a mount, reached through a symlinked parent.
+	if err := os.MkdirAll(filepath.Join(outside, "uploads"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "uploads", "state.json"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(base, "linkparent")); err != nil {
+		t.Fatal(err)
+	}
+	parent := filepath.Join(base, "linkparent", "uploads")
+	for name, mount := range map[string]string{"symlinked mount point": leaf, "symlinked parent": parent} {
+		g := New(&fakeOps{}, false, WithMounts(staticMounts(mount)))
+		g.SetSecrets(secret, ctlSecret)
+		rec, body := do(t, g, http.MethodGet, filesURL(mount+"/state.json"), "", ctl())
+		if rec.Code != http.StatusForbidden || body["error"] != "outside_volume" {
+			t.Errorf("%s read: %d %s", name, rec.Code, rec.Body.String())
+		}
+		rec, body = do(t, g, http.MethodPut, filesURL(mount+"/new.txt"), "x", ctl())
+		if rec.Code != http.StatusForbidden || body["error"] != "outside_volume" {
+			t.Errorf("%s write: %d %s", name, rec.Code, rec.Body.String())
+		}
+	}
+	for _, p := range []string{filepath.Join(outside, "new.txt"), filepath.Join(outside, "uploads", "new.txt")} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("a write went through a symlinked mount: %s", p)
+		}
+	}
+}
+
+// TestFilesDoNotHangOnAFifo: a fifo app code planted in a volume must be
+// refused, not block the request waiting for a writer.
+func TestFilesDoNotHangOnAFifo(t *testing.T) {
+	g, mount, _ := volume(t)
+	if err := syscall.Mkfifo(filepath.Join(mount, "pipe"), 0o644); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	done := make(chan struct{})
+	var code int
+	go func() {
+		defer close(done)
+		rec, _ := do(t, g, http.MethodGet, filesURL(mount+"/pipe"), "", ctl())
+		code = rec.Code
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("GET of a fifo hung")
+	}
+	if code != http.StatusBadRequest {
+		t.Fatalf("fifo: %d", code)
 	}
 }
 
 func TestUploadsTakeTheMountOwner(t *testing.T) {
 	_, mount, _ := volume(t)
-	o := ownerOf(mount)
-	if !o.ok || o.uid != os.Getuid() {
-		t.Fatalf("owner of %s: %+v", mount, o)
+	root, err := openMount(mount)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if ownerOf(filepath.Join(mount, "missing")).ok {
-		t.Fatal("a missing path has no owner")
+	defer root.Close()
+	if o := ownerOf(root); !o.ok || o.uid != os.Getuid() {
+		t.Fatalf("owner of %s: %+v", mount, o)
 	}
 }

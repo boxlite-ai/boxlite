@@ -184,6 +184,9 @@ func TestStaticSPAFallback(t *testing.T) {
 	write("styles/main.css", "body{}")
 	write(".env", "SECRET=1")
 	write("docs/index.html", "<h1>docs</h1>")
+	write(".well-known/security.txt", "Contact: mailto:sec@example.com")
+	write(".well-known/.secret", "no")
+	write("docs/.well-known/x.txt", "no")
 	write("outside.txt", "outside")
 	if err := os.Symlink(filepath.Join(root, "..", "nope"), filepath.Join(root, "escape.txt")); err != nil {
 		t.Fatal(err)
@@ -205,8 +208,11 @@ func TestStaticSPAFallback(t *testing.T) {
 		{"/users/42/profile", 200, "<h1>spa</h1>", "text/html"}, // deep SPA route
 		{"/app.js", 200, "console.log(1)", "javascript"},
 		{"/styles/main.css", 200, "body{}", "text/css"},
-		{"/missing.js", 404, "", ""}, // assets with an extension never fall back
-		{"/.env", 404, "", ""},       // dotfiles are never served
+		{"/missing.js", 404, "", ""},                                                        // assets with an extension never fall back
+		{"/.env", 404, "", ""},                                                              // dotfiles are never served
+		{"/.well-known/security.txt", 200, "Contact: mailto:sec@example.com", "text/plain"}, // RFC 8615
+		{"/.well-known/.secret", 404, "", ""},                                               // still no dotfiles inside it
+		{"/docs/.well-known/x.txt", 404, "", ""},                                            // only at the top level
 		{"/docs", 200, "<h1>docs</h1>", "text/html"},
 		{"/docs/", 200, "<h1>docs</h1>", "text/html"},
 		{"/../outside.txt", 200, "outside", "text/plain"}, // ".." is cleaned away, never walks above root
@@ -285,9 +291,16 @@ func TestControlEndpoints(t *testing.T) {
 	if rec.Code != http.StatusOK || len(lines) != 1 || lines[0].(map[string]any)["line"] != "tail=5" {
 		t.Fatalf("logs: %d %s", rec.Code, rec.Body.String())
 	}
-	rec, _ = do(t, g, http.MethodGet, "/.boxlite/sv/logs?tail=x", "", ctl())
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("bad tail: %d", rec.Code)
+	for _, tail := range []string{"x", "0", "-3"} {
+		rec, _ = do(t, g, http.MethodGet, "/.boxlite/sv/logs?tail="+tail, "", ctl())
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("tail=%s: %d", tail, rec.Code)
+		}
+	}
+	ops.deployErr = api.ErrShuttingDown
+	rec, body = do(t, g, http.MethodPost, "/.boxlite/sv/deploy", `{"deployment":5}`, ctl())
+	if rec.Code != http.StatusServiceUnavailable || body["error"] != "shutting_down" {
+		t.Fatalf("deploy while shutting down: %d %s", rec.Code, rec.Body.String())
 	}
 	rec, _ = do(t, g, http.MethodGet, "/.boxlite/sv/unknown", "", ctl())
 	if rec.Code != http.StatusNotFound {

@@ -47,7 +47,9 @@ test('real listeners: one per origin, routed by the port the request arrived on 
   await createApp(h);
   const app = h.ctx.store.appByName('crm')!;
   const env = h.ctx.store.envByName(app.id, 'main')!;
-  h.ctx.store.updateEnv(env.id, { box_id: 'b', box_url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`, live_deployment: 1, access_override: 'public' });
+  // A Box that exists: the proxy answers "not running" for one BoxLite does not know.
+  const box = await h.boxlite.createBox({ name: 'app-crm-main' } as never);
+  h.ctx.store.updateEnv(env.id, { box_id: box.id, box_url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`, live_deployment: 1, access_override: 'public' });
   assert.equal(h.appUrl(), `http://localhost:${envPort}`, 'local dev: localhost URLs, no tunnels');
 
   listeners = new NodeListeners(h.app.fetch, (req, socket, head, port) => void handleUpgrade(h!.ctx, req, socket, head, port), '127.0.0.1');

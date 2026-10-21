@@ -15,7 +15,9 @@ import (
 // serveStatic serves files under dir for a `static` service.
 //
 //   - Paths are cleaned and any segment starting with "." is refused, so
-//     .env, .git/ and friends inside a build output are never served.
+//     .env, .git/ and friends inside a build output are never served. The one
+//     exception is /.well-known/ (RFC 8615: security.txt, assetlinks.json,
+//     apple-app-site-association), which exists to be served.
 //   - A directory serves its index.html.
 //   - A missing path without a file extension falls back to the root
 //     index.html so client-side routers work; a missing asset (has an
@@ -37,11 +39,7 @@ func (g *Server) serveStatic(w http.ResponseWriter, r *http.Request, dir string)
 		http.NotFound(w, r)
 		return
 	}
-	open := StaticOpener(os.OpenRoot)
-	if fn := g.static.Load(); fn != nil {
-		open = *fn
-	}
-	root, err := open(dir)
+	root, err := g.static(dir)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -71,7 +69,10 @@ func (g *Server) serveStatic(w http.ResponseWriter, r *http.Request, dir string)
 }
 
 func hasDotSegment(p string) bool {
-	for _, seg := range strings.Split(p, "/") {
+	for i, seg := range strings.Split(p, "/") {
+		if i == 1 && seg == ".well-known" {
+			continue // only as the first segment, and only that name
+		}
 		if strings.HasPrefix(seg, ".") {
 			return true
 		}

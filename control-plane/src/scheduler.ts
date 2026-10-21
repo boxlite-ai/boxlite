@@ -6,6 +6,9 @@ import { fail } from './errors.js';
 import { recordLogs } from './logsink.js';
 import { forward } from './routes/proxy.js';
 
+/** A run that has not answered by then is recorded as failed (504) and retried at its next time. */
+const SCHEDULE_TIMEOUT_MS = 30_000;
+
 export interface ScheduleRun {
   name: string;
   status: number;
@@ -39,6 +42,8 @@ export class Scheduler {
     this.running = true;
     try {
       const { store, resources } = this.ctx;
+      // Due runs go out together: one slow app must not hold back every other app's schedule.
+      const due: Promise<unknown>[] = [];
       for (const env of store.all<EnvRow>('SELECT * FROM envs WHERE live_deployment IS NOT NULL')) {
         const app = store.appById(env.app_id);
         const spec = resources.currentSpec(env);
@@ -54,10 +59,11 @@ export class Scheduler {
             continue;
           }
           if (next && next <= at) {
-            await this.run(app, env, s.name).catch((err) => console.error(`[scheduler] ${app.name}/${env.name}/${s.name}: ${(err as Error).message}`));
+            due.push(this.run(app, env, s.name).catch((err) => console.error(`[scheduler] ${app.name}/${env.name}/${s.name}: ${(err as Error).message}`)));
           }
         }
       }
+      await Promise.all(due);
     } finally {
       this.running = false;
     }
@@ -76,6 +82,7 @@ export class Scheduler {
       path: path.startsWith('/') ? path : '/' + path,
       headers: new Headers({ 'x-boxlite-schedule': name, 'user-agent': 'boxlite-scheduler' }),
       body: null,
+      timeoutMs: SCHEDULE_TIMEOUT_MS,
     });
     await res.body?.cancel().catch(() => undefined);
     const ms = Date.now() - started;

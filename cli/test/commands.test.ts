@@ -289,7 +289,7 @@ test('app logs --follow streams SSE log events; app logs lists', async () => {
 test('API errors map to exit codes and JSON envelopes; network failure is unavailable', async () => {
   const dir = await project(root, { '.boxlite/link.json': linkJson(1) });
   const { agent, pool } = mockApi();
-  pool.intercept({ path: '/v1/apps/crm', method: 'GET' }).reply(401, { error: { code: 'unauthenticated', message: 'bad key', next: 'check BOXLITE_APP_KEY' } }, { headers: JSON_HEADERS });
+  pool.intercept({ path: '/v1/apps/crm', method: 'GET' }).reply(401, { error: { code: 'unauthenticated', message: 'bad key', next: 'check BOXLITE_API_KEY' } }, { headers: JSON_HEADERS });
   const unauth = await cli(['app', 'status', '--json'], { cwd: dir, dispatcher: agent });
   assert.equal(unauth.code, 2);
   assert.equal(unauth.stdout, '');
@@ -435,4 +435,40 @@ test('app sql prints a table and usage errors are exit 1', async () => {
   assert.equal(JSON.parse(misplaced.stderr).error.next, '`logs` lives under app: `boxlite-app app logs`');
   const typo = await cli(['app', 'stat'], { cwd: dir, dispatcher: agent });
   assert.equal(typo.stderr, "error: unknown command 'stat'\n  next: did you mean `boxlite-app app status`?\n");
+});
+
+test('app env delete stops when the spec cannot be read, instead of hiding the volumes it would delete', async () => {
+  const dir = await project(root, { '.boxlite/link.json': linkJson(1) });
+  const { agent, pool } = mockApi();
+  pool.intercept({ path: '/v1/apps/crm/envs/staging', method: 'GET' }).reply(200, { name: 'staging', status: 'live', url: 'https://x.test' }, { headers: JSON_HEADERS });
+  pool.intercept({ path: '/v1/apps/crm/envs/staging/spec', method: 'GET' }).reply(403, { error: { code: 'forbidden', message: 'nope' } }, { headers: JSON_HEADERS });
+  const res = await cli(['app', 'env', 'delete', 'staging', '--yes', '--json'], { cwd: dir, dispatcher: agent });
+  assert.equal(res.code, 5, res.stderr);
+  assert.equal(JSON.parse(res.stderr).error.code, 'forbidden');
+});
+
+test('app clone defaults to the live code, not the newest deployment (applies carry no source)', async () => {
+  const { defaultCloneSource } = await import('../src/commands/app.js');
+  const deps = [
+    { number: 9, kind: 'apply', status: 'live', snapshot_id: 'snap_a' },
+    { number: 8, kind: 'deploy', status: 'failed', snapshot_id: 'snap_b' },
+    { number: 7, kind: 'deploy', status: 'superseded', snapshot_id: 'snap_a' },
+    { number: 6, kind: 'deploy', status: 'superseded', snapshot_id: 'snap_0' },
+  ];
+  assert.equal(defaultCloneSource({ name: 'main', live_deployment: { number: 9, release: 7 } }, deps)?.number, 7);
+  assert.equal(defaultCloneSource({ name: 'main', live_deployment: null }, deps)?.number, 7);
+  assert.equal(defaultCloneSource({ name: 'main' }, [deps[1]!])?.number, 8);
+  assert.equal(defaultCloneSource({ name: 'main' }, [deps[0]!]), undefined);
+});
+
+test('a control-plane 500 does not suggest BOXLITE_DEBUG, which only prints client-side stacks', async () => {
+  const dir = await project(root, { '.boxlite/link.json': linkJson(1) });
+  const { agent, pool } = mockApi();
+  pool.intercept({ path: '/v1/apps/crm', method: 'GET' }).reply(500, { error: { code: 'internal', message: 'boom' } }, { headers: JSON_HEADERS }).persist();
+  const res = await cli(['app', 'status', '--json'], { cwd: dir, dispatcher: agent });
+  assert.equal(res.code, 1);
+  const err = JSON.parse(res.stderr).error;
+  assert.equal(err.code, 'internal');
+  assert.doesNotMatch(err.next, /BOXLITE_DEBUG/);
+  assert.match(err.next, /boxlite-app doctor/);
 });

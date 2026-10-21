@@ -218,7 +218,7 @@ const MIGRATIONS: string[] = [
   );
   `,
   // Security review F3: the control secret (X-BoxLite-Control, CP → supervisor control calls only) is
-  // separate from the forwarding secret, which keeps the column name gateway_secret. Existing envs get
+  // separate from the forwarding secret, which keeps the column name gateway_secret (forward_secret since migration 7). Existing envs get
   // one now; the trigger gives every future env one, whichever code path inserts it.
   // Security review F10: the BoxLite volumes the CP created for an env, by id, so deletion never
   // matches by name.
@@ -248,6 +248,44 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (project_id, branch_id)
   );
   `,
+  // Code health 2026-10-22:
+  //  - envs.gateway_secret is renamed to what it is and what the wire calls it, forward_secret.
+  //  - apps.neon_host was written and never read.
+  //  - Apply deployments record the snapshot of the release they restart, so their source can be
+  //    downloaded (`app clone`); older applies get it from the release they ran.
+  //  - console_access (the proxy's request log) moves under the migrations, keyed to its env, so
+  //    deleting an env or purging an app removes its rows.
+  `
+  ALTER TABLE envs RENAME COLUMN gateway_secret TO forward_secret;
+  ALTER TABLE apps DROP COLUMN neon_host;
+  UPDATE deployments SET snapshot_id = (
+      SELECT r.snapshot_id FROM deployments r WHERE r.env_id = deployments.env_id AND r.number = deployments.release
+    )
+    WHERE kind = 'apply' AND snapshot_id IS NULL AND release IS NOT NULL;
+  CREATE TABLE IF NOT EXISTS console_access (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    env_id TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    method TEXT NOT NULL,
+    path TEXT NOT NULL,
+    status INTEGER NOT NULL,
+    ms INTEGER NOT NULL
+  );
+  CREATE TABLE console_access_v7 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    env_id TEXT NOT NULL REFERENCES envs(id) ON DELETE CASCADE,
+    ts TEXT NOT NULL,
+    method TEXT NOT NULL,
+    path TEXT NOT NULL,
+    status INTEGER NOT NULL,
+    ms INTEGER NOT NULL
+  );
+  INSERT INTO console_access_v7 (id, env_id, ts, method, path, status, ms)
+    SELECT id, env_id, ts, method, path, status, ms FROM console_access WHERE env_id IN (SELECT id FROM envs);
+  DROP TABLE console_access;
+  ALTER TABLE console_access_v7 RENAME TO console_access;
+  CREATE INDEX console_access_env ON console_access(env_id, id);
+  `,
 ];
 
 export const LOG_RING_SIZE = 20_000;
@@ -258,7 +296,6 @@ export interface AppRow {
   created_at: string;
   neon_project_id: string | null;
   neon_main_branch_id: string | null;
-  neon_host: string | null;
   deleted_at?: string | null;
   purge_after?: string | null;
 }
@@ -278,7 +315,7 @@ export interface EnvRow {
   box_size: string | null;
   box_volumes: string | null;
   /** The forwarding secret: X-BoxLite-Gateway on proxied end-user traffic only (supervisor.ts forwardHeaders). */
-  gateway_secret: string;
+  forward_secret: string;
   /** X-BoxLite-Control on the CP's own /.boxlite/sv/* calls only (supervisor.ts controlHeaders). */
   control_secret: string;
   access_override: string | null;
@@ -453,6 +490,16 @@ export class Store {
   /** Includes soft-deleted Apps; only lifecycle code and the proxy's "app deleted" page use it. */
   appByNameAnyState(name: string): AppRow | undefined {
     return this.get<AppRow>('SELECT * FROM apps WHERE name = ?', name);
+  }
+
+  /** Live Apps, newest first. */
+  apps(): AppRow[] {
+    return this.all<AppRow>('SELECT * FROM apps WHERE deleted_at IS NULL ORDER BY created_at DESC');
+  }
+
+  /** Soft-deleted Apps (PRD 3.13), most recently deleted first. */
+  deletedApps(): AppRow[] {
+    return this.all<AppRow>('SELECT * FROM apps WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC');
   }
 
   appById(id: string): AppRow | undefined {

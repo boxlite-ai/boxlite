@@ -243,7 +243,7 @@ func (s *Service) spawn() error {
 	// *os.File stdio makes exec.Cmd spawn no copy goroutines, and nothing in
 	// it ever waits on the child: the Reaper collects the exit status.
 	cmd.Stdout, cmd.Stderr = outW, errW
-	err = cmd.Start()
+	exitCh, err := s.reaper.Start(cmd)
 	outW.Close()
 	errW.Close()
 	if err != nil {
@@ -256,7 +256,7 @@ func (s *Service) spawn() error {
 	s.gen++
 	gen := s.gen
 	s.proc, s.pid = cmd.Process, pid
-	s.exitCh = s.reaper.Subscribe(pid)
+	s.exitCh = exitCh
 	s.startedAt = time.Now()
 	s.healthDone = make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())

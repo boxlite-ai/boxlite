@@ -34,7 +34,9 @@ test('WebSocket upgrades on an app origin are spliced through at the same path w
   await createApp(h);
   const app = h.ctx.store.appByName('crm')!;
   const env = h.ctx.store.envByName(app.id, 'main')!;
-  h.ctx.store.updateEnv(env.id, { box_id: 'b', box_url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`, live_deployment: 1, access_override: 'public' });
+  // A Box that exists: the proxy answers "not running" for one BoxLite does not know.
+  const box = await h.boxlite.createBox({ name: 'app-crm-main' } as never);
+  h.ctx.store.updateEnv(env.id, { box_id: box.id, box_url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`, live_deployment: 1, access_override: 'public' });
 
   cp = serve({ fetch: h.app.fetch, port: 0, hostname: '127.0.0.1' }) as Server;
   await new Promise((r) => setTimeout(r, 50));
@@ -58,7 +60,7 @@ test('WebSocket upgrades on an app origin are spliced through at the same path w
   });
   assert.equal(reply, 'echo:hi');
   assert.equal(seenUrl, '/ws?room=1');
-  assert.equal(seenHeaders['x-boxlite-gateway'], env.gateway_secret);
+  assert.equal(seenHeaders['x-boxlite-gateway'], env.forward_secret);
   assert.equal(seenHeaders['x-forwarded-prefix'], undefined);
   assert.equal(seenHeaders['x-forwarded-host'], `127.0.0.1:${port}`);
 });

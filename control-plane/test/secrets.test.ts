@@ -6,11 +6,11 @@ import { DatabaseSync } from 'node:sqlite';
 import { after, beforeEach, test } from 'node:test';
 import { parseManifest } from '@microcloud/shared';
 import { Store } from '../src/db.js';
-import { controlHeaders, forwardHeaders, supervisorOutdated } from '../src/supervisor.js';
+import { controlHeaders, forwardHeaders } from '../src/supervisor.js';
 import { BOX_CMD } from '../src/platform.js';
 import { TOML, createApp, harness, upload, type Harness } from './helpers.js';
 
-// Security review F3 (split secrets, CP side), the protocol-1 rollout, and F10 (volumes by id).
+// Security review F3 (split secrets, CP side), the supervisor protocol check, and F10 (volumes by id).
 
 let h: Harness;
 let key: string;
@@ -41,7 +41,7 @@ test('every env has a control secret distinct from its forwarding secret', async
   await h.request('/v1/apps/crm/envs', { method: 'POST', key, json: { name: 'dev' } });
   for (const e of [env('main'), env('dev')]) {
     assert.match(e.control_secret, /^[0-9a-f]{48}$/);
-    assert.notEqual(e.control_secret, e.gateway_secret);
+    assert.notEqual(e.control_secret, e.forward_secret);
   }
   assert.notEqual(env('main').control_secret, env('dev').control_secret);
 });
@@ -50,17 +50,21 @@ test('the migration gives envs created before it a control secret', () => {
   const path = join(h.dir, 'old.sqlite');
   const s = new Store(path);
   s.run("INSERT INTO apps (id, name, created_at) VALUES ('app_1', 'old', 'now')");
-  s.run("INSERT INTO envs (id, app_id, name, created_at, gateway_secret) VALUES ('env_1', 'app_1', 'main', 'now', 'fwd')");
+  s.run("INSERT INTO envs (id, app_id, name, created_at, forward_secret) VALUES ('env_1', 'app_1', 'main', 'now', 'fwd')");
   s.close();
   // Roll the file back to the schema before migration 5.
   const raw = new DatabaseSync(path);
-  raw.exec("DROP TRIGGER envs_control_secret; DROP TABLE env_volumes; ALTER TABLE envs DROP COLUMN control_secret; PRAGMA user_version = 4;");
+  raw.exec(
+    'DROP TRIGGER envs_control_secret; DROP TABLE env_volumes; ALTER TABLE envs DROP COLUMN control_secret; ' +
+      // and what migration 7 changed
+      'ALTER TABLE envs RENAME COLUMN forward_secret TO gateway_secret; ALTER TABLE apps ADD COLUMN neon_host TEXT; DROP TABLE console_access; PRAGMA user_version = 4;',
+  );
   raw.close();
   const migrated = new Store(path);
   const row = migrated.envById('env_1')!;
   migrated.close();
   assert.match(row.control_secret, /^[0-9a-f]{48}$/);
-  assert.equal(row.gateway_secret, 'fwd');
+  assert.equal(row.forward_secret, 'fwd');
 });
 
 test('the spec hands the supervisor both secrets; control calls carry only the control secret', async () => {
@@ -74,21 +78,18 @@ test('the spec hands the supervisor both secrets; control calls carry only the c
   const d = await deploy();
   assert.equal(d.status, 'live', JSON.stringify(d.error));
   const e = env();
-  assert.equal(seen?.forward_secret, e.gateway_secret);
+  assert.equal(seen?.forward_secret, e.forward_secret);
   assert.equal(seen?.control_secret, e.control_secret);
-  // Protocol-1 supervisors read gateway_secret; it is the forwarding secret, never the control one.
-  assert.equal(seen?.gateway_secret, e.gateway_secret);
+  // gateway_secret was the protocol-1 name of the forwarding secret; no supervisor reads it any more.
+  assert.equal('gateway_secret' in (seen ?? {}), false);
   assert.ok(h.supervisor.secrets.length >= 2);
   assert.ok(h.supervisor.secrets.every((s) => s === e.control_secret), `control calls used ${JSON.stringify(h.supervisor.secrets)}`);
 });
 
 test('header helpers: forwarding and control are separate names and values', () => {
   const e = env();
-  assert.deepEqual(forwardHeaders(e), { 'x-boxlite-gateway': e.gateway_secret });
+  assert.deepEqual(forwardHeaders(e), { 'x-boxlite-gateway': e.forward_secret });
   assert.deepEqual(controlHeaders(e), { 'x-boxlite-control': e.control_secret });
-  assert.equal(supervisorOutdated({}), true, 'no version on the legacy probe = protocol 1');
-  assert.equal(supervisorOutdated({}, true), false, 'a control-authenticated answer is at least protocol 2');
-  assert.equal(supervisorOutdated({ version: 1 }, true), true);
 });
 
 test('proxied end-user traffic carries the forwarding secret, never the control secret', async () => {
@@ -104,7 +105,7 @@ test('proxied end-user traffic carries the forwarding secret, never the control 
     const res = await h.appRequest('/anything', { headers: { 'x-boxlite-control': 'forged' } });
     assert.equal(res.status, 200, await res.text());
     assert.equal(got.length, 1);
-    assert.equal(got[0]!['x-boxlite-gateway'], env().gateway_secret);
+    assert.equal(got[0]!['x-boxlite-gateway'], env().forward_secret);
     assert.notEqual(got[0]!['x-boxlite-control'], env().control_secret);
   } finally {
     upstream.close();
@@ -121,42 +122,17 @@ test('the Box cmd runs the supervisor as root through the launcher and never as 
   assert.ok(!BOX_CMD.join(' ').includes("'"), 'scripts are read verbatim by the supervisor e2e test');
 });
 
-// ---- rollout: protocol-1 supervisors --------------------------------------------------------
+// ---- supervisor protocol ---------------------------------------------------------------------
 
-test('a Box running a protocol-1 supervisor is restarted once, then the deploy goes on', async () => {
+test('a supervisor reporting an older wire protocol fails the deploy clearly, and the Box is not restarted', async () => {
   const first = await deploy();
   assert.equal(first.status, 'live');
-  const boxId = env().box_id!;
-  h.supervisor.legacy = true;
-  const start = h.boxlite.startBox.bind(h.boxlite);
-  h.boxlite.startBox = async (id) => {
-    await start(id);
-    h.supervisor.legacy = false; // the old cmd fetched the current binary
-  };
+  h.supervisor.version = 1;
   h.boxlite.calls.length = 0;
   const d = await deploy();
-  assert.equal(d.status, 'live', JSON.stringify(d.error));
-  assert.deepEqual(h.boxlite.calls.filter((c) => c.startsWith('stop') || c.startsWith('start')), [`stop ${boxId}`, `start ${boxId}`]);
-  const box = d.steps.find((s: { name: string }) => s.name === 'box');
-  assert.ok(box, JSON.stringify(d.steps));
-  const logs = (await (await h.request(`/v1/apps/crm/envs/main/deployments/${d.number}`, { key })).json()) as { log_tail?: string[] };
-  assert.ok(JSON.stringify(logs).includes('supervisor protocol 1'), JSON.stringify(logs.log_tail));
-});
-
-test('a Box that stays on protocol 1 after the restart fails the deploy with a clear next step', async () => {
-  await deploy();
-  h.supervisor.legacy = true;
-  const d = await deploy();
   assert.equal(d.status, 'failed');
-  assert.match(d.error.message, /still runs supervisor protocol 1/);
-});
-
-test('at start the CP restarts running Boxes whose supervisor is protocol 1, and only those', async () => {
-  await deploy();
-  assert.deepEqual(await h.ctx.resources.upgradeOutdatedSupervisors(() => undefined), []);
-  h.supervisor.legacy = true;
-  assert.deepEqual(await h.ctx.resources.upgradeOutdatedSupervisors(() => undefined), [env().id]);
-  assert.ok(h.boxlite.calls.includes(`stop ${env().box_id}`));
+  assert.match(d.error.message, /runs supervisor protocol 1; this control plane needs 2/);
+  assert.deepEqual(h.boxlite.calls.filter((c) => c.startsWith('stop') || c.startsWith('start')), []);
 });
 
 // ---- F10: volumes by recorded id -------------------------------------------------------------

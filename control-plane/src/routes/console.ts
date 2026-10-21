@@ -5,42 +5,34 @@ import { buffer } from 'node:stream/consumers';
 import type { Manifest } from '@microcloud/shared';
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
-import { newAppKey, newId, sha256hex } from '../auth.js';
-import { AccessLog } from '../console-access.js';
 import { CONSOLE_USER, loginRoutes, requireConsoleApi, requireConsolePage } from '../console-auth.js';
 import { endUserAuth } from '../console-enduser.js';
-import { activityView, actorLabel } from '../console-activity.js';
+import { actorLabel } from '../console-activity.js';
 import { deploymentChanges, failureView, type Timeline } from '../console-deployment.js';
 import { detailView, environmentViews, handoffPrompt, releaseId, releaseViews, summaryView } from '../console-views.js';
 import type { AppRow, Deployment, EnvRow, MigrationFile } from '../db.js';
-import { ACTIVE_STATUSES, now } from '../db.js';
 import type { Ctx } from '../ctx.js';
 import { HttpError, fail } from '../errors.js';
 import { RESERVED_NAMES } from '../platform.js';
-import type { Spec } from '../spec.js';
-import { createApp } from './apps.js';
+import { quoteIdent, quoteLiteral, TABLES_QUERY } from '../services/db.js';
+import { logLevel } from '../services/logs.js';
+import { specToManifest, type Spec } from '../spec.js';
+import { createApp, rotateKey } from './apps.js';
 import { parseSince } from './logs.js';
 import { createOpenTicket } from './proxy.js';
-import { body, type C } from './util.js';
+import { body, readManifest, type C } from './util.js';
 
 /**
  * The console API (/console/api) and the console's static files (/console/). The API speaks the
  * shapes of the dashboard's Apps screens and is built from real CP state. Writes go through the
- * CP's own /v1 routes in-process (as `admin`), so validation, activity and the orchestrator are
- * exactly what the CLI gets.
+ * CP's own /v1 routes in-process (actor `console`), or through the same functions those routes and
+ * the admin API use (createApp, rotateKey, deleteApp/restoreApp, Resources.sleep), so validation,
+ * activity and the orchestrator are exactly what the CLI gets.
  */
 
-// The console owns /console on the CP host, and end-user sign-in will own /auth, so no app may be called that.
-RESERVED_NAMES.add('console');
-RESERVED_NAMES.add('auth');
 
-const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const PLATFORM_VARS = /^(BOXLITE_.*|DATABASE_URL|PORT)$/;
-const quoteIdent = (s: string) => `"${s.replace(/"/g, '""')}"`;
-
-const TABLES = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name";
 /** Exact row counts of the given tables in one statement (the SQL guard refuses dynamic SQL, so it is built here). */
-const countsQuery = (tables: string[]) => tables.map((t) => `SELECT ${`'${t.replace(/'/g, "''")}'`}, count(*) FROM public.${quoteIdent(t)}`).join(' UNION ALL ');
+const countsQuery = (tables: string[]) => tables.map((t) => `SELECT ${quoteLiteral(t)}, count(*) FROM public.${quoteIdent(t)}`).join(' UNION ALL ');
 
 /** Neon free plan: point-in-time restore reaches 6 hours back. */
 const RESTORE_WINDOW_HOURS = 6;
@@ -87,23 +79,13 @@ function cells(rows: unknown[][]): unknown[][] {
 }
 
 export function mountConsole(root: Hono, ctx: Ctx): void {
-  const access = new AccessLog(ctx);
   const login = loginRoutes(ctx.config);
   root.get('/console/login', login.page);
   root.post('/console/login', login.submit);
   root.on(['GET', 'POST'], '/console/logout', login.logout);
-  root.route('/console/api', consoleApi(root, ctx, access));
+  root.route('/console/api', consoleApi(root, ctx));
   root.get('/console', (c) => c.redirect('/console/', 308));
-  root.get('/console/*', requireConsolePage(ctx.config), staticHandler);
-}
-
-/**
- * Console "Delete app": deletes every env's Box and volumes and the Neon project, then the app's CP
- * rows. Refused while a deployment runs. (To be replaced by lifecycle.ts deleteApp, a soft delete.)
- */
-/** The console's Delete is the soft delete of PRD 3.13; the purger removes resources later. */
-export async function deleteAppNow(ctx: Ctx, _access: AccessLog, app: AppRow): Promise<void> {
-  await deleteApp(ctx, app, ACTOR);
+  root.get('/console/*', requireConsolePage(ctx.config), (c) => staticHandler(c, ctx.config.consoleDir));
 }
 
 // ---- static files -------------------------------------------------------------------
@@ -129,10 +111,8 @@ const TYPES: Record<string, string> = {
   '.webmanifest': 'application/manifest+json',
 };
 
-export const consoleDir = () => resolve(process.env.CONSOLE_DIR ?? '../console-dist');
-
-function staticHandler(c: Context): Response {
-  const dir = consoleDir();
+function staticHandler(c: Context, consoleDir: string | undefined): Response {
+  const dir = resolve(consoleDir ?? '../console-dist');
   const rel = decodeURIComponent(new URL(c.req.url).pathname.slice('/console/'.length));
   const file = resolve(dir, rel || 'index.html');
   if (file !== dir && !file.startsWith(dir + sep)) return c.text('not found', 404);
@@ -154,7 +134,8 @@ function staticHandler(c: Context): Response {
 
 // ---- API ------------------------------------------------------------------------------
 
-function consoleApi(root: Hono, ctx: Ctx, access: AccessLog) {
+function consoleApi(root: Hono, ctx: Ctx) {
+  const access = ctx.accessLog;
   const api = new Hono();
   const { store } = ctx;
   const { call: cp, raw } = cpClient(root, ctx);
@@ -181,8 +162,7 @@ function consoleApi(root: Hono, ctx: Ctx, access: AccessLog) {
   // ---- apps ----------------------------------------------------------------
 
   api.get('/apps', async (c) => {
-    const apps = store.all<AppRow>('SELECT * FROM apps WHERE deleted_at IS NULL ORDER BY created_at DESC');
-    return c.json(await Promise.all(apps.map((a) => summaryView(ctx, a))));
+    return c.json(await Promise.all(store.apps().map((a) => summaryView(ctx, a))));
   });
 
   /** The key exists in clear text only in this response; the CP keeps its sha256. */
@@ -195,8 +175,7 @@ function consoleApi(root: Hono, ctx: Ctx, access: AccessLog) {
 
   /** Soft-deleted apps (PRD 3.13): kept until purge_after, restorable until then. */
   api.get('/deleted-apps', (c) => {
-    const apps = store.all<AppRow>('SELECT * FROM apps WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC');
-    return c.json(apps.map((a) => ({ name: a.name, deletedAt: a.deleted_at, purgeAfter: a.purge_after, environments: store.envs(a.id).length })));
+    return c.json(store.deletedApps().map((a) => ({ name: a.name, deletedAt: a.deleted_at, purgeAfter: a.purge_after, environments: store.envs(a.id).length })));
   });
 
   api.post('/deleted-apps/:name/restore', async (c) => {
@@ -211,20 +190,16 @@ function consoleApi(root: Hono, ctx: Ctx, access: AccessLog) {
     return c.json(await detail(app, envOf(c, app)));
   });
 
+  /** Delete is the soft delete of PRD 3.13; the purger removes the resources later. */
   api.delete('/apps/:id', async (c) => {
-    await deleteAppNow(ctx, access, appOf(c));
+    await deleteApp(ctx, appOf(c), ACTOR);
     return c.body(null, 204);
   });
 
   /** New App key; the old one stops working now. Returns the new prompt once. */
   api.post('/apps/:id/key/rotate', (c) => {
     const app = appOf(c);
-    const key = newAppKey();
-    store.tx(() => {
-      store.run('UPDATE keys SET revoked_at = ? WHERE app_id = ? AND revoked_at IS NULL', now(), app.id);
-      store.run('INSERT INTO keys (id, app_id, hash, last4, created_at) VALUES (?, ?, ?, ?, ?)', newId('key'), app.id, sha256hex(key), key.slice(-4), now());
-    });
-    store.recordActivity(app.id, null, ACTOR, 'key.rotate');
+    const key = rotateKey(ctx, app, ACTOR);
     return c.json({ key, prompt: handoffPrompt(ctx, app.name, key), last4: key.slice(-4) });
   });
 
@@ -257,7 +232,6 @@ function consoleApi(root: Hono, ctx: Ctx, access: AccessLog) {
     const env = store.envByName(app.id, c.req.param('env'));
     if (!env) throw fail('not_found_env', `no environment "${c.req.param('env')}"`);
     await cp('DELETE', v1(app, env));
-    access.deleteEnv(env.id);
     return c.body(null, 204);
   });
 
@@ -316,7 +290,7 @@ function consoleApi(root: Hono, ctx: Ctx, access: AccessLog) {
       snapshotId: d.snapshot_id,
       rollbackTo: d.kind === 'rollback' ? (d.request.to ?? null) : null,
       timeline: timeline.steps.map((s) => ({ name: s.name, status: s.status, ms: s.ms ?? null, detail: s.detail ?? null, startedAt: s.started_at, finishedAt: s.finished_at })),
-      log: timeline.logs.map((l) => ({ id: `l${l.id}`, ts: l.ts, source: l.source, level: l.level === 'error' ? 'error' : l.level === 'warn' ? 'warn' : 'info', line: l.line })),
+      log: timeline.logs.map((l) => ({ id: `l${l.id}`, ts: l.ts, source: l.source, level: logLevel(l.level), line: l.line })),
       logTruncated: timeline.truncated,
       changeSet: deploymentChanges(ctx, app, env, d),
       failure: failure ? { step: failure.step, message: failure.message, ...failure.diagnosis, fixPrompt: failure.fixPrompt } : null,
@@ -374,22 +348,7 @@ function consoleApi(root: Hono, ctx: Ctx, access: AccessLog) {
   }
 
   function manifestFor(app: AppRow, env: EnvRow, spec: Spec, origin: Deployment | undefined): Manifest {
-    const base: Manifest = origin?.request.manifest
-      ? structuredClone(origin.request.manifest)
-      : {
-          app: spec.app,
-          environment: spec.environment,
-          runtime: spec.runtime,
-          services: spec.services,
-          schedules: spec.schedules,
-          database: spec.database ? { migrations: spec.database.migrations } : null,
-          volumes: spec.volumes,
-          auth: spec.auth,
-          domains: spec.domains,
-          access: spec.access,
-          variables: spec.variables,
-          secrets: spec.secrets,
-        };
+    const base: Manifest = origin?.request.manifest ? structuredClone(origin.request.manifest) : specToManifest(spec);
     return { ...base, app: app.name, environment: env.name, variables: { ...spec.variables }, secrets: { ...spec.secrets } };
   }
 
@@ -407,16 +366,24 @@ function consoleApi(root: Hono, ctx: Ctx, access: AccessLog) {
     return out;
   }
 
+  /**
+   * The spec the env is really at: a failed or cancelled deployment writes its spec before it
+   * fails, and an edit must neither re-apply that broken configuration nor plan against it.
+   */
+  const effectiveSpec = (env: EnvRow): Spec | undefined => {
+    const version = store.effectiveSpecVersion(env.id);
+    return version ? store.spec(env.id, version) : undefined;
+  };
+
   async function applyConfig(app: AppRow, env: EnvRow, message: string, edit: (m: Manifest) => void): Promise<void> {
-    const spec = store.spec(env.id);
+    const spec = effectiveSpec(env);
     if (!spec) throw fail('conflict', 'this environment has no configuration yet', 'variables come from boxlite.toml; your agent creates them with the first apply or deploy');
     const origin = originOf(env, spec);
     const manifest = manifestFor(app, env, spec, origin);
     edit(manifest);
-    for (const name of [...Object.keys(manifest.variables), ...Object.keys(manifest.secrets)]) {
-      if (!VAR_NAME.test(name)) throw fail('invalid_request', `"${name}" is not a valid variable name`, 'use letters, digits and _');
-      if (PLATFORM_VARS.test(name)) throw fail('invalid_request', `${name} is set by BoxLite and cannot be overridden`);
-    }
+    // The same rules as boxlite.toml (shared parser), so a console edit never lands something `check` rejects.
+    const problem = readManifest(manifest, env.name).errors[0];
+    if (problem) throw fail('invalid_request', problem.message, 'change the variable name or secret reference and save again');
     await cp('POST', `${v1(app, env)}/deployments`, { kind: 'apply', manifest, base_version: spec.version, message, migrations: await migrationsFor(app, spec, origin) });
   }
 
@@ -483,7 +450,7 @@ function consoleApi(root: Hono, ctx: Ctx, access: AccessLog) {
     const env = envOf(c, app);
     const b = await json(c, z.object({ from: z.string() }));
     const source = store.envByName(app.id, b.from);
-    const spec = source ? store.spec(source.id) : undefined;
+    const spec = source ? effectiveSpec(source) : undefined;
     if (!source || !spec) throw fail('not_found_env', `environment "${b.from}" has no variables to copy`);
     await applyConfig(app, env, `Copy variables from ${b.from}`, (m) => {
       m.variables = { ...spec.variables };
@@ -503,7 +470,7 @@ function consoleApi(root: Hono, ctx: Ctx, access: AccessLog) {
     events: store
       .logs(env.id, { source: 'auth', limit: 30 })
       .reverse()
-      .map((l) => ({ id: `l${l.id}`, ts: l.ts, level: l.level, line: l.line })),
+      .map((l) => ({ id: `l${l.id}`, ts: l.ts, level: logLevel(l.level), line: l.line })),
   });
 
   api.get('/apps/:id/auth', async (c) => {
@@ -544,7 +511,7 @@ function consoleApi(root: Hono, ctx: Ctx, access: AccessLog) {
       id: `l${l.id}`,
       ts: l.ts,
       source: l.source,
-      level: l.level === 'error' ? 'error' : 'info',
+      level: logLevel(l.level),
       line: l.line,
       deployment: l.deployment ?? null,
     }));
@@ -561,15 +528,10 @@ function consoleApi(root: Hono, ctx: Ctx, access: AccessLog) {
     return c.json(all);
   });
 
-  api.get('/apps/:id/activity', (c) => {
-    const app = appOf(c);
-    return c.json(activityView(ctx, app, envOf(c, app).name));
-  });
-
   // ---- database -------------------------------------------------------------------
 
   async function tableCounts(app: AppRow, env: EnvRow): Promise<{ schema: string; name: string; rows: number }[]> {
-    const names = (await cp<{ rows: unknown[][] }>('POST', `${v1(app, env)}/db/sql`, { query: TABLES })).rows.map(([name]) => String(name));
+    const names = (await cp<{ rows: unknown[][] }>('POST', `${v1(app, env)}/db/sql`, { query: TABLES_QUERY })).rows.map(([name]) => String(name));
     if (!names.length) return [];
     const counts = await cp<{ rows: unknown[][] }>('POST', `${v1(app, env)}/db/sql`, { query: countsQuery(names) });
     const byName = new Map(counts.rows.map(([name, n]) => [String(name), Number(n)]));
@@ -621,7 +583,7 @@ function consoleApi(root: Hono, ctx: Ctx, access: AccessLog) {
       cp<{ columns: string[]; rows: unknown[][] }>('GET', `${v1(app, env)}/db/rows/${encodeURIComponent(table)}?${q}`),
       cp<{ rows: unknown[][] }>('POST', `${v1(app, env)}/db/sql`, { query: `SELECT count(*) FROM public.${quoteIdent(table)}${where ? ` WHERE ${where}` : ''}` }),
       cp<{ rows: unknown[][] }>('POST', `${v1(app, env)}/db/sql`, {
-        query: `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '${table.replace(/'/g, "''")}'`,
+        query: `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = ${quoteLiteral(table)}`,
       }),
     ]);
     const typeOf = new Map(types.rows.map(([name, type]) => [String(name), String(type)]));

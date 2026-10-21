@@ -273,7 +273,7 @@ func (f *fakeCP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"spec": map[string]any{"app": "t", "environment": "main", "version": 1, "deployment": 1,
 				"runtime":  map[string]any{"image": "node", "size": "small", "build": []string{"echo BUILD UID=$(id -u) HOME=$HOME; touch built-by-$(id -un)"}},
 				"services": []map[string]any{{"name": "worker", "command": probe}}},
-			"deployment": 1, "forward_secret": fwdSecret, "control_secret": ctlSecret, "gateway_secret": fwdSecret,
+			"deployment": 1, "forward_secret": fwdSecret, "control_secret": ctlSecret,
 			"env": map[string]string{"DATABASE_URL": dbSecret}, "snapshot": map[string]string{"id": "snap_1"},
 		})
 	case "/sv/v1/snapshots/snap_1":

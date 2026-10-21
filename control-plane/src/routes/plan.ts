@@ -51,7 +51,7 @@ export function prepare(
     for (const f of pending) changes.push({ kind: '+', path: `migrations/${f}`, to: 'pending' });
     for (const f of changed) errors.push({ file: f, rule: 'migration_changed', message: `${f} was already applied with different contents; add a new migration instead` });
   }
-  if (stale) warnings.push({ rule: 'stale_base', message: `the environment is at spec v${latest} but you planned against v${input.base_version ?? 0}; re-read it with \`boxlite-app status\`` });
+  if (stale) warnings.push({ rule: 'stale_base', message: `the environment is at spec v${latest} but you planned against v${input.base_version ?? 0}; \`boxlite-app app pull\` brings boxlite.toml up to date before you apply or deploy` });
   return { manifest, errors, warnings, migrations, changes, latest, stale };
 }
 

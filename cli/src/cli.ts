@@ -84,7 +84,7 @@ export async function run(argv: string[], options: RunOptions): Promise<number> 
       return e.exitCode || 1;
     }
     const base = e instanceof MicrocloudError ? e : new MicrocloudError('internal', (e as Error)?.message ?? String(e));
-    const err = refineError(base, { command, commandLine: ['boxlite-app', ...argv].join(' '), env: envFromArgv(argv) });
+    const err = refineError(base, { command, commandLine: ['boxlite-app', ...argv].join(' '), env: envFromArgv(argv), clientSide: !(e instanceof MicrocloudError) });
     printError(opts, json, err);
     if (!(e instanceof MicrocloudError) && opts.env.BOXLITE_DEBUG) opts.io.stderr.write(`${(e as Error).stack ?? ''}\n`);
     return err.exit;

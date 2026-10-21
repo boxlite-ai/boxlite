@@ -52,55 +52,82 @@ export function hostOf(uri: string): string {
   return new URL(uri).hostname;
 }
 
-export class HttpNeonClient implements NeonClient {
-  private readonly base = 'https://console.neon.tech/api/v2';
+/** One Neon call, retries included, gives up after this: calls run inside request handlers and deploy steps. */
+const CALL_DEADLINE_MS = 90_000;
+const ATTEMPT_TIMEOUT_MS = 60_000;
 
+export class HttpNeonClient implements NeonClient {
   constructor(
     private readonly apiKey: string,
     private readonly orgId: string,
     private readonly region = 'aws-us-east-2',
+    private readonly base = 'https://console.neon.tech/api/v2',
   ) {}
 
   /**
    * Neon runs project/branch changes as async operations and answers 423 Locked while one is in
    * flight. Retrying the next call with backoff is simpler than polling /operations and has the
-   * same effect.
+   * same effect. A POST that failed in flight (timeout, 5xx) may still have happened, so only
+   * 423 and 429 (nothing ran) are retried for it; creates then look for what they made by name.
    */
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
-    if (!this.apiKey) throw fail('unavailable', 'NEON_API_KEY is not configured on the control plane', 'set NEON_API_KEY and restart the control plane');
+    if (!this.apiKey) throw fail('unavailable', 'NEON_API_KEY is not configured on the control plane', 'this platform has no database service configured, and nothing in the app can change that: remove [database] from boxlite.toml, or tell the user the platform operator must set NEON_API_KEY');
+    const idempotent = method === 'GET' || method === 'DELETE';
+    const deadline = Date.now() + CALL_DEADLINE_MS;
     let delay = 500;
-    for (let attempt = 0; ; attempt++) {
+    for (;;) {
       try {
         const { body: out } = await requestJson<T>('neon', {
           method,
           url: `${this.base}${path}`,
           headers: { authorization: `Bearer ${this.apiKey}` },
           body,
-          timeoutMs: 60_000,
+          timeoutMs: Math.max(1_000, Math.min(ATTEMPT_TIMEOUT_MS, deadline - Date.now())),
         });
         return out;
       } catch (err) {
-        const retryable = err instanceof UpstreamError && (err.status === 423 || err.status === 429 || err.status >= 500 || err.status === 0);
-        if (!retryable || attempt >= 12) throw err;
+        const status = err instanceof UpstreamError ? err.status : -1;
+        const retryable = status === 423 || status === 429 || (idempotent && (status >= 500 || status === 0));
+        if (!retryable || Date.now() + delay >= deadline) throw err;
         await sleep(delay);
         delay = Math.min(delay * 2, 10_000);
       }
     }
   }
 
+  /** A create whose answer was lost (timeout, 5xx) or that collides with such an earlier one (409). */
+  private static maybeCreated(err: unknown): boolean {
+    return err instanceof UpstreamError && (err.status === 0 || err.status >= 500 || err.status === 409);
+  }
+
   async createProject(name: string): Promise<NeonProject> {
-    if (!this.orgId) throw fail('unavailable', 'NEON_ORG_ID is not configured on the control plane', 'set NEON_ORG_ID and restart the control plane');
+    if (!this.orgId) throw fail('unavailable', 'NEON_ORG_ID is not configured on the control plane', 'this platform has no database service configured, and nothing in the app can change that: remove [database] from boxlite.toml, or tell the user the platform operator must set NEON_ORG_ID');
     // The create response carries the default branch as `branch` (singular).
-    const out = await this.call<{
-      project: { id: string };
-      branch?: { id: string };
-      branches?: { id: string }[];
-      connection_uris: { connection_uri: string }[];
-    }>('POST', '/projects', { project: { name, org_id: this.orgId, region_id: this.region, pg_version: 17 } });
+    let out: { project: { id: string }; branch?: { id: string }; branches?: { id: string }[]; connection_uris: { connection_uri: string }[] };
+    try {
+      out = await this.call('POST', '/projects', { project: { name, org_id: this.orgId, region_id: this.region, pg_version: 17 } });
+    } catch (err) {
+      const existing = HttpNeonClient.maybeCreated(err) ? await this.findProject(name) : null;
+      if (!existing) throw err;
+      return existing;
+    }
     const main = out.branch ?? out.branches?.[0];
     const uri = out.connection_uris[0]?.connection_uri;
     if (!main || !uri) throw new UpstreamError('neon', 201, 'project create returned no branch or connection URI');
     return { projectId: out.project.id, mainBranchId: main.id, host: hostOf(uri), connectionUri: uri };
+  }
+
+  /** The org's project of that name, as createProject returns it; null when there is none. */
+  private async findProject(name: string): Promise<NeonProject | null> {
+    const q = new URLSearchParams({ org_id: this.orgId, search: name });
+    const { projects } = await this.call<{ projects: { id: string; name: string }[] }>('GET', `/projects?${q}`);
+    const project = projects.find((p) => p.name === name);
+    if (!project) return null;
+    const { branches } = await this.call<{ branches: { id: string; default?: boolean }[] }>('GET', `/projects/${project.id}/branches`);
+    const main = branches.find((b) => b.default) ?? branches[0];
+    if (!main) return null;
+    const uri = await this.connectionUri(project.id, main.id);
+    return { projectId: project.id, mainBranchId: main.id, host: hostOf(uri), connectionUri: uri };
   }
 
   async deleteProject(projectId: string): Promise<void> {
@@ -115,11 +142,17 @@ export class HttpNeonClient implements NeonClient {
   async createBranch(projectId: string, name: string, parentId: string | null, initSource: 'schema-only' | 'parent-data'): Promise<NeonBranch> {
     const branch: Record<string, string> = { name, init_source: initSource };
     if (parentId) branch.parent_id = parentId;
-    const out = await this.call<{ branch: { id: string; logical_size?: number } }>('POST', `/projects/${projectId}/branches`, {
-      branch,
-      endpoints: [{ type: 'read_write' }],
-    });
-    return { branchId: out.branch.id, logicalSizeBytes: out.branch.logical_size ?? null };
+    try {
+      const out = await this.call<{ branch: { id: string; logical_size?: number } }>('POST', `/projects/${projectId}/branches`, {
+        branch,
+        endpoints: [{ type: 'read_write' }],
+      });
+      return { branchId: out.branch.id, logicalSizeBytes: out.branch.logical_size ?? null };
+    } catch (err) {
+      const existing = HttpNeonClient.maybeCreated(err) ? (await this.listBranches(projectId)).find((b) => b.name === name) : undefined;
+      if (!existing) throw err;
+      return { branchId: existing.id, logicalSizeBytes: null };
+    }
   }
 
   async deleteBranch(projectId: string, branchId: string): Promise<void> {

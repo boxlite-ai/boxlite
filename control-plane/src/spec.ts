@@ -56,8 +56,11 @@ export function buildSpec(args: {
   };
 }
 
-/** The part of a Spec that came from boxlite.toml, for comparing with a fresh manifest. */
-function manifestOf(spec: Spec): Manifest {
+/**
+ * The part of a Spec that came from boxlite.toml: for comparing with a fresh manifest, and as the
+ * base of an online edit (console variables) when the deployment's own manifest is unknown.
+ */
+export function specToManifest(spec: Spec): Manifest {
   return {
     app: spec.app,
     environment: spec.environment,
@@ -113,7 +116,7 @@ function diffMap(prefix: string, from: Record<string, string>, to: Record<string
  */
 export function diffSpecs(prev: Spec | undefined, next: Manifest, opts: { accessOverride?: string | null; envName?: string } = {}): Change[] {
   const out: Change[] = [];
-  const before: Manifest | null = prev ? manifestOf(prev) : null;
+  const before: Manifest | null = prev ? specToManifest(prev) : null;
   const envName = opts.envName ?? next.environment;
 
   if (!before) {

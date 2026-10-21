@@ -22,38 +22,31 @@ import (
 	"strings"
 	"syscall"
 	"time"
-)
 
-// ErrAlreadyRunning means another root supervisor holds the lock. boxlite may
-// run the launcher at any time; a second instance must leave at once.
-var ErrAlreadyRunning = errors.New("another supervisor is already running in this Box")
+	"github.com/boxlite-ai/microcloud/supervisor/internal/envfilter"
+)
 
 // Supported reports whether the privilege split is implemented here.
 func Supported() bool { return true }
 
-// Logf is how this package reports progress (the supervisor's log hub is not
-// up yet when most of it runs).
-type Logf func(format string, args ...any)
-
-// Result is what Bootstrap hands to main.
-type Result struct {
-	Config     Config
-	UID, GID   int
-	SudoLocked bool
-}
+func (c Config) marshal() ([]byte, error) { return json.MarshalIndent(c, "", "  ") }
 
 // IsLauncher reports whether argv0 names the launcher.
 func IsLauncher(argv0 string) bool { return filepath.Base(argv0) == filepath.Base(LauncherPath) }
 
 // AppIdentity returns boxlite's uid, gid and group names. ok is false when the
-// user does not exist (not a BoxLite image).
+// user does not exist (not a BoxLite image) or its ids do not parse: a
+// failed parse would otherwise read as uid 0 and run app code as root.
 func AppIdentity() (uid, gid int, groups []string, ok bool) {
 	u, err := user.Lookup(AppUser)
 	if err != nil {
 		return defaultUID, defaultGID, nil, false
 	}
-	uid, _ = strconv.Atoi(u.Uid)
-	gid, _ = strconv.Atoi(u.Gid)
+	uid, uerr := strconv.Atoi(u.Uid)
+	gid, gerr := strconv.Atoi(u.Gid)
+	if uerr != nil || gerr != nil {
+		return defaultUID, defaultGID, nil, false
+	}
 	if ids, err := u.GroupIds(); err == nil {
 		for _, id := range ids {
 			if g, err := user.LookupGroupId(id); err == nil {
@@ -220,9 +213,9 @@ func Bootstrap(boxPath string, logf Logf) (*Result, error) {
 			CPURL:     os.Getenv("BOXLITE_CP_URL"),
 			Token:     os.Getenv("BOXLITE_BOX_TOKEN"),
 			EnvID:     os.Getenv("BOXLITE_ENV_ID"),
-			TrustUser: isOn(os.Getenv("SV_TRUST_USER_HEADERS")),
-			Insecure:  isOn(os.Getenv("SV_CP_INSECURE")),
-			BaseEnv:   ServiceEnv(os.Environ(), boxPath),
+			TrustUser: envfilter.On(os.Getenv("SV_TRUST_USER_HEADERS")),
+			Insecure:  envfilter.On(os.Getenv("SV_CP_INSECURE")),
+			BaseEnv:   envfilter.App(os.Environ(), boxPath),
 		}
 		if cfg.CPURL == "" || cfg.EnvID == "" {
 			return nil, errors.New("BOXLITE_CP_URL and BOXLITE_ENV_ID are required")
@@ -250,10 +243,10 @@ func Bootstrap(boxPath string, logf Logf) (*Result, error) {
 	}
 	data, err := root.ReadFile(configName)
 	if err != nil {
-		return nil, fmt.Errorf("no Box config in %s (%v); the Box cmd must start the supervisor once with its environment", RootDir, err)
+		return nil, fmt.Errorf("no Box config in %s; the Box cmd must start the supervisor once with its environment: %w", RootDir, err)
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("Box config: %w", err)
+		return nil, fmt.Errorf("parse the Box config: %w", err)
 	}
 	for _, k := range []string{"BOXLITE_BOX_TOKEN", "BOXLITE_CP_URL", "BOXLITE_ENV_ID", launchedEnv} {
 		os.Unsetenv(k)
@@ -290,14 +283,6 @@ func Bootstrap(boxPath string, logf Logf) (*Result, error) {
 		logf("privilege: WARNING: %s still has sudo rights beyond the launcher", AppUser)
 	}
 	return &Result{Config: cfg, UID: uid, GID: gid, SudoLocked: locked}, nil
-}
-
-func isOn(v string) bool {
-	switch v {
-	case "1", "true", "TRUE", "yes", "on":
-		return true
-	}
-	return false
 }
 
 func reexecClean(root *os.Root) error {
@@ -490,6 +475,7 @@ func lockdown(p Principal, logf Logf) (bool, error) {
 	}
 	aliases := UserAliases(all...)
 	var changed []string
+	modes := map[string]os.FileMode{}
 	for _, f := range files {
 		b, ok := contents[f]
 		if !ok {
@@ -503,14 +489,21 @@ func lockdown(p Principal, logf Logf) (bool, error) {
 		if fi, err := os.Stat(f); err == nil {
 			mode = fi.Mode().Perm()
 		}
+		modes[f] = mode
 		if err := writeRootFile(f, []byte(next), mode); err != nil {
 			return false, fmt.Errorf("rewrite %s: %w", f, err)
 		}
 		changed = append(changed, f)
 	}
 	if out, err := exec.Command(visudo, "-c", "-q").CombinedOutput(); err != nil {
+		var failed []error
 		for _, f := range changed {
-			_ = writeRootFile(f, contents[f], 0o440)
+			if rerr := writeRootFile(f, contents[f], modes[f]); rerr != nil {
+				failed = append(failed, fmt.Errorf("restore %s: %w", f, rerr))
+			}
+		}
+		if len(failed) > 0 {
+			return false, fmt.Errorf("sudoers no longer parses after the edit (%s) and restoring the originals failed: %w", strings.TrimSpace(string(out)), errors.Join(failed...))
 		}
 		return false, fmt.Errorf("sudoers no longer parses after the edit, restored (%s)", strings.TrimSpace(string(out)))
 	}
@@ -560,7 +553,7 @@ func Launch(logf Logf) error {
 	}
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return fmt.Errorf("Box config: %w", err)
+		return fmt.Errorf("parse the Box config: %w", err)
 	}
 	for attempt := 0; ; attempt++ {
 		err := update(root, cfg)
@@ -663,8 +656,29 @@ func checkBinary(root *os.Root, name string, size int64) error {
 	cmd := exec.CommandContext(ctx, fmt.Sprintf("/proc/self/fd/%d", f.Fd()), "-version")
 	cmd.Env = []string{"PATH=" + safePath}
 	out, err := cmd.Output()
-	if err != nil || !strings.HasPrefix(string(out), "supervisor ") {
-		return fmt.Errorf("downloaded binary does not run: %v %q", err, strings.TrimSpace(string(out)))
+	if err != nil {
+		return fmt.Errorf("downloaded binary does not run: %w", err)
+	}
+	if !strings.HasPrefix(string(out), "supervisor ") {
+		return fmt.Errorf("downloaded binary is not a supervisor: -version printed %q", strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// sudoersRule is the whole of boxlite's sudo rights after the lockdown: one
+// program, as root, with no arguments (`""`), with the environment reset.
+// pam_session/pam_setcred/use_pty off let sudo exec the launcher directly, so
+// on later boots the supervisor is PID 1 again instead of a child of sudo.
+func sudoersRule(user, launcher string, withDefaults bool) string {
+	var b strings.Builder
+	b.WriteString("# Managed by the BoxLite Micro-cloud supervisor (contracts.md 2.1).\n")
+	b.WriteString("# " + user + " may run exactly one program as root: the supervisor launcher, without arguments.\n")
+	b.WriteString("# Every other sudo right of " + user + " was disabled at boot. Do not edit.\n")
+	if withDefaults {
+		b.WriteString("Defaults:" + user + " env_reset, !setenv, !use_pty, !log_output, !log_input, !pam_session, !pam_setcred\n")
+	} else {
+		b.WriteString("Defaults:" + user + " env_reset, !setenv\n")
+	}
+	b.WriteString(user + " ALL=(root) NOPASSWD: " + launcher + " \"\"\n")
+	return b.String()
 }

@@ -72,7 +72,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 
 /** Registers a branch as an env of the fake app, the way the CP's store knows it. */
 const addEnv = (name: string, branchId: string, url: string) =>
-  store.run('INSERT INTO envs (id, app_id, name, created_at, neon_branch_id, db_url, gateway_secret) VALUES (?, ?, ?, ?, ?, ?, ?)', `env_${name}`, 'app_smoke', name, now(), branchId, url, 'x');
+  store.run('INSERT INTO envs (id, app_id, name, created_at, neon_branch_id, db_url, forward_secret) VALUES (?, ?, ?, ?, ?, ?, ?)', `env_${name}`, 'app_smoke', name, now(), branchId, url, 'x');
 const branchUrl = async (branchId: string) => withSslmode(await neon.connectionUri(p.projectId, branchId));
 const neonBranch = async (name: string, init: 'schema-only' | 'parent-data') => {
   try {
@@ -84,7 +84,7 @@ const neonBranch = async (name: string, init: 'schema-only' | 'parent-data') => 
 
 try {
   const url = withSslmode(p.connectionUri);
-  store.run('INSERT INTO apps (id, name, created_at, neon_project_id, neon_main_branch_id, neon_host) VALUES (?, ?, ?, ?, ?, ?)', 'app_smoke', 'smoke', now(), p.projectId, p.mainBranchId, p.host);
+  store.run('INSERT INTO apps (id, name, created_at, neon_project_id, neon_main_branch_id) VALUES (?, ?, ?, ?, ?)', 'app_smoke', 'smoke', now(), p.projectId, p.mainBranchId);
   addEnv('main', p.mainBranchId, url);
   console.log(`postgres ${(await raw(url, 'SHOW server_version')).rows[0].server_version}`);
 
@@ -115,7 +115,7 @@ try {
   const blocked = await neonBranch('blocked', 'schema-only');
   ok(blocked.status === 412, `with a SQL-created ${READER_ROLE}, Neon refuses a schema-only branch: ${blocked.status} ${blocked.message ?? ''}`.trim());
   ok((await neon.getRole(p.projectId, p.mainBranchId, READER_ROLE))?.authMethod === 'no_login', 'Neon lists the SQL-created role as no_login');
-  await readers.prepareBranching(p.projectId); // what ensureDatabase runs before createBranch
+  await readers.prepareBranching(p.projectId); // what the start-up pass (migrateAll) runs once
   ok((await neon.getRole(p.projectId, p.mainBranchId, READER_ROLE)) === null, 'prepareBranching dropped it');
   await db.ensureReader(url); // what the migrate step runs
   ok((await neon.getRole(p.projectId, p.mainBranchId, READER_ROLE))?.authMethod === 'password', 'ensureReader re-created it through the Neon API (password login)');

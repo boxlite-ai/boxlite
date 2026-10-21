@@ -6,20 +6,23 @@ import (
 	"os/exec"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/boxlite-ai/microcloud/supervisor/internal/api"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/logs"
 )
 
-// Run executes command with /bin/sh -c in dir (build steps), streams its
-// stdout/stderr into hub under source, and returns the exit code. Cancelling
-// ctx kills the process group. Like Service it relies on the Reaper for the
-// exit status, so it must not be mixed with cmd.Wait().
-func Run(ctx context.Context, r *Reaper, hub *logs.Hub, source string, deployment int, dir, command string, env []string) (int, error) {
-	return RunAs(ctx, r, hub, source, deployment, dir, command, env, nil)
-}
+// pumpDrain bounds how long RunAs waits for the output pumps once the build
+// step's process group is dead. A daemonised grandchild (setsid, double fork)
+// escapes the group kill and can hold the pipes open forever; after this long
+// the pipes are closed under it so the step still returns.
+var pumpDrain = 5 * time.Second
 
-// RunAs is Run with the command executed as user (nil = as the supervisor).
+// RunAs executes command with /bin/sh -c in dir (build steps) as user (nil =
+// as the supervisor), streams its stdout/stderr into hub under source, and
+// returns the exit code. Cancelling ctx kills the process group and returns
+// ctx.Err(). It relies on the Reaper for the exit status, so it must not be
+// mixed with cmd.Wait().
 func RunAs(ctx context.Context, r *Reaper, hub *logs.Hub, source string, deployment int, dir, command string, env []string, user *Cred) (int, error) {
 	cmd := exec.Command("/bin/sh", "-c", command)
 	cmd.Dir = dir
@@ -36,7 +39,7 @@ func RunAs(ctx context.Context, r *Reaper, hub *logs.Hub, source string, deploym
 		return -1, err
 	}
 	cmd.Stdout, cmd.Stderr = outW, errW
-	err = cmd.Start()
+	exitCh, err := r.Start(cmd)
 	outW.Close()
 	errW.Close()
 	if err != nil {
@@ -45,7 +48,6 @@ func RunAs(ctx context.Context, r *Reaper, hub *logs.Hub, source string, deploym
 		return -1, err
 	}
 	pid := cmd.Process.Pid
-	exitCh := r.Subscribe(pid)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -63,10 +65,21 @@ func RunAs(ctx context.Context, r *Reaper, hub *logs.Hub, source string, deploym
 	}
 	// The leader is gone. Anything it left behind in its group (a watcher, a
 	// forgotten dev server) must not outlive the build step: it would hold the
-	// output pipes open forever and keep running under the next release.
+	// output pipes open and keep running under the next release.
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
 	_ = cmd.Process.Release()
-	wg.Wait()
+	pumped := make(chan struct{})
+	go func() { wg.Wait(); close(pumped) }()
+	select {
+	case <-pumped:
+	case <-time.After(pumpDrain):
+		// Closing the read ends makes the blocked reads return; pump's own
+		// Close afterwards is a harmless no-op.
+		outR.Close()
+		errR.Close()
+		<-pumped
+		hub.Systemf(deployment, api.LevelError, "build step left a process outside its group holding its output open; stopped reading it")
+	}
 	if cancelled {
 		return -1, ctx.Err()
 	}

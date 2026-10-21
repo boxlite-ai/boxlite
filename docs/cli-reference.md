@@ -22,12 +22,13 @@ Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.
 | 3 | `not_found_env` | the environment does not exist |
 | 4 | `not_found` | a deployment, table, file, schedule… does not exist |
 | 5 | `forbidden` | outside the key’s scope, or not allowed here (e.g. DDL on main) |
+| 5 | `write_requires_flag` | the SQL changes data and ran without --write; nothing ran: rerun with `--write` |
 | 6 | `unavailable` | control plane or platform unreachable; wait 30 s and rerun (max 3 times) |
-| 6 | `rate_limited` |  |
+| 6 | `rate_limited` | too many requests; the CLI already waited Retry-After and retried 3 times: wait 30 s and rerun |
 | 7 | `invalid_manifest` | boxlite.toml / project check failed; the body carries errors[] |
 | 8 | `deploy_failed` | the deployment failed; the body carries deployment, step, cause, fix, log_tail |
 | 9 | `stale_base` | someone changed the environment online since your last sync; `boxlite-app app pull` |
-| 10 | `confirmation_required` | a destructive command ran without --yes; the body carries destroys[] and the exact command to rerun |
+| 10 | `confirmation_required` | a command that asks first ran without --yes and without a terminal. Destructive ones (the body carries destroys[]): ask the user, then rerun with --yes; `apply`: just rerun with --yes |
 
 ## Types
 
@@ -79,7 +80,7 @@ Usage: `boxlite-app plan [options]`
 
 | option | description | default |
 |---|---|---|
-| `--force` | plan even when the local base version is behind the environment |  |
+| `--force` | plan even when the local base version is behind the environment (the online changes would be overwritten) |  |
 
 - Network: talks to the control plane
 - `--json`: `{ app, environment, base_version, latest_version, stale, changes: { kind: "+"|"~"|"-"|"online_only", path, from?, to? }[], errors: CheckError[], warnings: CheckWarning[], upload: { files, bytes } }`
@@ -94,12 +95,12 @@ Usage: `boxlite-app apply [options]`
 | option | description | default |
 |---|---|---|
 | `-y, --yes` | do not ask for confirmation |  |
-| `--force` | apply even when the local base version is behind the environment |  |
+| `--force` | apply even when the local base version is behind the environment: overwrites changes made online; only when the user asks |  |
 | `-m, --message <text>` | description shown in the deployment list |  |
 
 - Network: talks to the control plane
 - `--json`: `Deployment (kind "apply"); nothing to do: { applied: false, changes: [] }`
-- Exit codes: 0, 1, 2, 3, 6, 7, 8, 9
+- Exit codes: 0, 1, 2, 3, 6, 7, 8, 9, 10
 
 ### `boxlite-app deploy`
 
@@ -111,7 +112,7 @@ Usage: `boxlite-app deploy [options]`
 |---|---|---|
 | `-m, --message <text>` | deployment message |  |
 | `--detach` | return as soon as the deployment is queued |  |
-| `--force` | deploy even when the local base version is behind the environment |  |
+| `--force` | deploy even when the local base version is behind the environment: overwrites changes made online; only when the user asks |  |
 | `--dry-run` | check + plan + upload size; upload and deploy nothing |  |
 | `-v, --verbose` | stream build and start log lines as they arrive |  |
 | `-y, --yes` | accepted for symmetry with apply; deploy never prompts |  |
@@ -302,7 +303,7 @@ boxlite-app app curl /app --fail
 
 ### `boxlite-app app open`
 
-a one-time sign-in link to the app for a person: opens the browser on a terminal, else prints it
+open the app in a browser through a one-time link (works once, expires after 60 s; never hand it to the user): opens the browser on a terminal, else prints it
 
 Usage: `boxlite-app app open [options]`
 
@@ -382,7 +383,7 @@ Usage: `boxlite-app app clone <app> [options]`
 
 | option | description | default |
 |---|---|---|
-| `--deployment <n>` | deployment number (default: latest) |  |
+| `--deployment <n>` | deployment number (default: the deploy whose code is live, else the newest deploy with source) |  |
 
 - Network: talks to the control plane
 - `--json`: `{ app: string, env: string, deployment: number, dir: string }`

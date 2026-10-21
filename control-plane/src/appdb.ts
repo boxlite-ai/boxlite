@@ -30,8 +30,8 @@ export interface AppDatabase {
   query(url: string, statements: string[], opts: { write: boolean; params?: unknown[] }): Promise<QueryResult>;
   /** Provisions the read-only login reads use (idempotent). Also done lazily by `query`. */
   ensureReader(url: string): Promise<void>;
-  /** Before a Neon branch is created from this project (see dbreader.ts). */
-  prepareBranching?(projectId: string): Promise<void>;
+  /** Real Postgres only: where the read-only login comes from (dbreader.ts bindDbReaders). */
+  bindReaders?(readers: ReaderSource): void;
 }
 
 export const MAX_ROWS = 1000;
@@ -101,7 +101,7 @@ export async function pgConnect(url: string): Promise<DbConn> {
     new Promise<T>((resolve, reject) => {
       const t = setTimeout(() => {
         (client as unknown as { connection: { stream: { destroy(): void } } }).connection.stream.destroy();
-        reject(fail('unavailable', `the app database did not answer within ${WIRE_TIMEOUT_MS / 1000} s (${what})`, 'retry in a few seconds'));
+        reject(fail('unavailable', `the app database did not answer within ${WIRE_TIMEOUT_MS / 1000} s (${what})`, 'wait 30 s and rerun (at most 3 times); `boxlite-app doctor` checks the database'));
       }, WIRE_TIMEOUT_MS);
       p.then(
         (v) => (clearTimeout(t), resolve(v)),
@@ -124,9 +124,28 @@ export async function pgConnect(url: string): Promise<DbConn> {
   };
 }
 
+/** A Postgres SQLSTATE (5 characters), as opposed to a Node errno code (ECONNRESET, EPIPE, …). */
+function sqlstateOf(err: unknown): string | undefined {
+  const e = err as { code?: unknown; errno?: unknown; syscall?: unknown };
+  return typeof e.code === 'string' && /^[0-9A-Z]{5}$/.test(e.code) && e.errno === undefined && e.syscall === undefined ? e.code : undefined;
+}
+
+/**
+ * Not the statement's fault: the connection broke (no SQLSTATE: reset, timeout, terminated),
+ * class 08 (connection exception), 53 (insufficient resources, e.g. too many connections), or 57P
+ * (the server shut down or restarted). 57014, a statement cancelled by statement_timeout, is the
+ * query's own problem and stays a sql_error.
+ */
+function connectionFailure(sqlstate: string | undefined): boolean {
+  return sqlstate === undefined || sqlstate.startsWith('08') || sqlstate.startsWith('53') || sqlstate.startsWith('57P');
+}
+
 function sqlError(err: unknown): never {
   if ((err as { name?: string }).name === 'HttpError') throw err;
   const e = err as { message?: string; position?: string; code?: string };
+  if (connectionFailure(sqlstateOf(err))) {
+    throw fail('unavailable', `the connection to the app database failed: ${e.message ?? String(err)}`, 'wait 30 s and rerun (the database starts on first connection); `boxlite-app doctor` checks it');
+  }
   // 25006: read_only_sql_transaction. The guard catches plain DML first; this covers the rest
   // (functions that write, writable CTEs the parser classifies as reads).
   const next = e.code === '25006' ? 'this statement writes; rerun it with --write' : undefined;
@@ -152,7 +171,7 @@ export class PgAppDatabase implements AppDatabase {
   }
 
   private source(): ReaderSource {
-    if (!this.readers) throw fail('unavailable', 'the read-only database login is not configured on this control plane');
+    if (!this.readers) throw fail('unavailable', 'the read-only database login is not configured on this control plane', 'nothing in the app can fix this: tell the user the platform operator must configure the read-only database login');
     return this.readers;
   }
 
@@ -173,7 +192,7 @@ export class PgAppDatabase implements AppDatabase {
       c = as === 'reader' ? await this.connectReader(url) : await this.connect(url);
     } catch (err) {
       if ((err as { name?: string }).name === 'HttpError') throw err;
-      throw fail('unavailable', `cannot reach the app database: ${(err as Error).message}`, 'retry in a few seconds; Neon computes start on first connection');
+      throw fail('unavailable', `cannot reach the app database: ${(err as Error).message}`, 'wait 30 s and rerun (the database starts on first connection); `boxlite-app doctor` checks it');
     }
     try {
       return await fn(c);
@@ -223,10 +242,6 @@ export class PgAppDatabase implements AppDatabase {
 
   async ensureReader(url: string): Promise<void> {
     await this.source().refresh(url);
-  }
-
-  async prepareBranching(projectId: string): Promise<void> {
-    await this.source().prepareBranching(projectId);
   }
 
   /** BEGIN (READ ONLY for reads) and the timeouts. */

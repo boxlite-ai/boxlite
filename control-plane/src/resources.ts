@@ -4,28 +4,31 @@ import type { AppRow, EnvRow } from './db.js';
 import { now } from './db.js';
 import type { Ctx } from './ctx.js';
 import { UpstreamError, fail } from './errors.js';
-import { sleep } from './http.js';
+import { retry, sleep } from './http.js';
+import { recordLogs } from './logsink.js';
 import { hostOf, withSslmode } from './neon.js';
 import { BOX_AUTO_STOP_S, BOX_CMD, BOX_DISK_GB, BOX_SIZES, GATEWAY_PORT, IMAGE_REFS, SUPERVISOR_PROTOCOL } from './platform.js';
 import type { Spec } from './spec.js';
-import { supervisorOutdated, supervisorProtocol } from './supervisor.js';
 
 export type Logger = (line: string) => void;
+
+/** The BoxLite managed volume of an env's `[[volume]]` (contracts §4.1 "Volumes"). */
+export const volumeName = (app: string, env: string, volume: string) => `mc-${app}-${env}-${volume}`;
+
+/** A wake is not repeated within this window (concurrent requests share it). */
+const WAKE_RETRY_MS = 30_000;
 
 /** Platform resources of an env: its Neon branch, its Box, its URLs and runtime env. */
 export class Resources {
   private readonly dbLocks = new Map<string, Promise<unknown>>();
   private readonly boxStatusCache = new Map<string, { status: string; at: number }>();
   private readonly wakes = new Map<string, { at: number; done: Promise<void> }>();
+  /** The last failed wake per Box, kept for the 30 s a wake is not retried. */
+  private readonly wakeFailures = new Map<string, { at: number; message: string }>();
 
   constructor(private readonly ctx: Omit<Ctx, 'resources' | 'orchestrator' | 'scheduler'>) {}
 
   // ---- URLs ----------------------------------------------------------------
-
-  /** The pre-origins path prefix (`/<app>`, `/<app>--<env>`); the API origin now 301s it to the env origin. */
-  static prefix(app: string, env: string): string {
-    return env === 'main' ? `/${app}` : `/${app}--${env}`;
-  }
 
   /**
    * The env's own origin, e.g. `https://10001-d-<hex>.proxy.dev.boxlite.ai` (no trailing slash):
@@ -35,7 +38,8 @@ export class Resources {
   appUrl(app: string, env: string): string {
     const a = this.ctx.store.appByNameAnyState(app);
     const e = a ? this.ctx.store.envByName(a.id, env) : undefined;
-    return e ? this.ctx.origins.envUrl(e) : this.ctx.config.publicUrl + Resources.prefix(app, env);
+    // An env that no longer exists has no origin; the API origin is the only honest answer.
+    return e ? this.ctx.origins.envUrl(e) : this.ctx.config.publicUrl;
   }
 
   // ---- env lookups ---------------------------------------------------------
@@ -96,7 +100,7 @@ export class Resources {
       if (!app.neon_project_id) {
         log(`creating Neon project mc-${app.name}`);
         const p = await neon.createProject(`mc-${app.name}`);
-        store.updateApp(app.id, { neon_project_id: p.projectId, neon_main_branch_id: p.mainBranchId, neon_host: p.host });
+        store.updateApp(app.id, { neon_project_id: p.projectId, neon_main_branch_id: p.mainBranchId });
         const main = store.envByName(app.id, 'main');
         if (main) store.updateEnv(main.id, { neon_branch_id: p.mainBranchId, db_url: withSslmode(p.connectionUri) });
         app = store.appById(appId)!;
@@ -115,8 +119,8 @@ export class Resources {
           const parentBranch = parent?.neon_branch_id ?? app.neon_main_branch_id;
           const init = env.with_data ? 'parent-data' : 'schema-only';
           log(`creating Neon branch ${env.name} from ${parent?.name ?? 'main'} (${init})`);
-          // A SQL-created role anywhere in the project makes Neon refuse schema-only branches (412).
-          await this.ctx.appdb.prepareBranching?.(app.neon_project_id!).catch((err: Error) => log(`warning: could not check the project's database roles: ${err.message}`));
+          // A SQL-created reader role would make Neon refuse schema-only branches (412); the CP's
+          // start-up pass (DbReaders.migrateAll) removed those once, and nothing creates them now.
           branchId = (await neon.createBranch(app.neon_project_id!, env.name, parentBranch, init)).branchId;
         }
         store.updateEnv(env.id, { neon_branch_id: branchId });
@@ -180,7 +184,7 @@ export class Resources {
         // Pre-F10 envs: the CP's own record of what it mounted (`name:mount,…`).
         const legacy = new Set((env.box_volumes ?? '').split(',').filter(Boolean).map((e) => e.slice(0, e.indexOf(':'))));
         for (const v of want.volumes) {
-          const name = `mc-${app.name}-${env.name}-${v.name}`;
+          const name = volumeName(app.name, env.name, v.name);
           const id = recorded.get(name);
           const byId = id ? existing.find((x) => x.id === id) : undefined;
           if (!byId) {
@@ -229,7 +233,7 @@ export class Resources {
     }
 
     if (!env.box_url) {
-      const uri = await this.retry(() => boxlite.tunnel(env.box_id!, GATEWAY_PORT), 5, 3_000);
+      const uri = await retry(() => boxlite.tunnel(env.box_id!, GATEWAY_PORT), { attempts: 5, delayMs: 3_000, retryable: (err) => err instanceof UpstreamError });
       log(`tunnel ${uri}`);
       store.updateEnv(env.id, { box_url: uri });
       env = store.envById(envId)!;
@@ -238,97 +242,35 @@ export class Resources {
     return store.envById(envId)!;
   }
 
-  private async retry<T>(fn: () => Promise<T>, attempts: number, delayMs: number): Promise<T> {
-    for (let i = 1; ; i++) {
-      try {
-        return await fn();
-      } catch (err) {
-        if (i >= attempts || !(err instanceof UpstreamError)) throw err;
-        await sleep(delayMs);
-      }
-    }
-  }
-
   /**
-   * Waits until the env's supervisor answers health with the control secret. A Box still running a
-   * protocol-1 supervisor (one shared secret, runs as boxlite; contracts §2.1) refuses the control
-   * secret with 403 but answers the forwarding secret: it is restarted once, its cmd then fetches
-   * the current binary, which elevates itself and locks sudo down.
+   * Waits until the env's supervisor answers health with the control secret. 403 (no secrets until
+   * the supervisor's first /sv/v1/spec) and connection errors mean "not ready yet".
+   *
+   * Every Box runs wire protocol 2 since the 2026-10-21 rollout, and a Box downloads the current
+   * supervisor on every start, so the CP no longer restarts old ones. A supervisor that still
+   * reports an older protocol means the CP serves an old build: that is refused, not worked around.
    */
   async waitForSupervisor(env: EnvRow, log: Logger): Promise<void> {
     const { supervisor, timing } = this.ctx;
-    let deadline = Date.now() + timing.supervisorReadyMs;
+    const deadline = Date.now() + timing.supervisorReadyMs;
     let lastErr = '';
-    let restarted = false;
-    let lastLegacyProbe = 0;
     log('waiting for the supervisor to answer');
     while (Date.now() < deadline) {
-      let outdated: number | null = null;
+      let version: number | undefined;
       try {
         // Any 200 counts: `ok` only turns true once a release is live, which a fresh Box has not.
-        // 403 (no secrets until the supervisor's first /sv/v1/spec) and connection errors land in
-        // the catch and mean "not ready yet".
-        const h = await supervisor.health(env.box_url!, env.control_secret);
-        if (!supervisorOutdated(h, true)) return;
-        outdated = supervisorProtocol(h, true);
+        // An answer to the control secret without `version` is protocol 2 (protocol 1 refuses it).
+        version = (await supervisor.health(env.box_url!, env.control_secret)).version ?? SUPERVISOR_PROTOCOL;
       } catch (err) {
         lastErr = (err as Error).message;
-        if (err instanceof UpstreamError && err.status === 403 && Date.now() - lastLegacyProbe >= Math.min(5_000, timing.pollMs * 10)) {
-          lastLegacyProbe = Date.now();
-          const legacy = await supervisor.legacyHealth(env.box_url!, env.gateway_secret).catch(() => null);
-          if (legacy && supervisorOutdated(legacy)) outdated = supervisorProtocol(legacy);
-        }
       }
-      if (outdated !== null) {
-        if (restarted) {
-          throw fail('deploy_failed', `Box ${env.box_id} still runs supervisor protocol ${outdated} after a restart (this control plane needs ${SUPERVISOR_PROTOCOL})`, 'check that SV_BIN_DIR on the control plane holds the current supervisor build, then deploy again');
-        }
-        log(`Box ${env.box_id} runs supervisor protocol ${outdated}, older than ${SUPERVISOR_PROTOCOL}; restarting it to fetch the current supervisor`);
-        await this.restartBox(env.box_id!);
-        restarted = true;
-        deadline = Date.now() + timing.supervisorReadyMs;
+      if (version !== undefined) {
+        if (version >= SUPERVISOR_PROTOCOL) return;
+        throw fail('deploy_failed', `Box ${env.box_id} runs supervisor protocol ${version}; this control plane needs ${SUPERVISOR_PROTOCOL}`, 'check that SV_BIN_DIR on the control plane holds the current supervisor build, then deploy again');
       }
       await sleep(timing.pollMs);
     }
-    throw fail('deploy_failed', `the supervisor in Box ${env.box_id} did not answer within ${Math.round(timing.supervisorReadyMs / 1000)} s (${lastErr})`, 'check `boxlite-app logs --source system`, then deploy again');
-  }
-
-  /** Stop + start: the Box cmd re-runs, which is how a Box picks up a new supervisor. */
-  async restartBox(boxId: string): Promise<void> {
-    const { boxlite } = this.ctx;
-    await boxlite.stopBox(boxId).catch((err) => console.error(`[resources] stop ${boxId}: ${(err as Error).message}`));
-    await this.retry(() => boxlite.startBox(boxId), 5, 3_000);
-    this.noteWake(boxId);
-  }
-
-  /**
-   * Rollout of the F2/F3 supervisor (contracts §2.1): restarts every running Box whose supervisor
-   * still speaks protocol 1. Stopped Boxes upgrade by themselves on their next wake (their cmd
-   * fetches the current binary). Run once at CP start; failures are logged and left for the next
-   * deploy, which runs the same check in waitForSupervisor.
-   */
-  async upgradeOutdatedSupervisors(log: Logger): Promise<string[]> {
-    const { store, supervisor } = this.ctx;
-    const restarted: string[] = [];
-    const envs = store.all<EnvRow>('SELECT * FROM envs WHERE box_id IS NOT NULL AND box_url IS NOT NULL');
-    for (const env of envs) {
-      try {
-        if ((await this.boxStatus(env.box_id!)) !== 'running') continue;
-        const current = await supervisor.health(env.box_url!, env.control_secret).then(
-          (h) => !supervisorOutdated(h, true),
-          () => false,
-        );
-        if (current) continue;
-        const legacy = await supervisor.legacyHealth(env.box_url!, env.gateway_secret).catch(() => null);
-        if (!legacy || !supervisorOutdated(legacy)) continue;
-        log(`env ${env.id}: Box ${env.box_id} runs supervisor protocol ${supervisorProtocol(legacy)}; restarting it`);
-        await this.restartBox(env.box_id!);
-        restarted.push(env.id);
-      } catch (err) {
-        log(`env ${env.id}: upgrade check failed: ${(err as Error).message}`);
-      }
-    }
-    return restarted;
+    throw fail('deploy_failed', `the supervisor in Box ${env.box_id} did not answer within ${Math.round(timing.supervisorReadyMs / 1000)} s (${lastErr})`, 'read the Box boot with `boxlite-app app logs --source system --since 30m`, then `boxlite-app deploy` again');
   }
 
   /** For apply/rollback: the existing Box must be up (no recreation), started if it auto-stopped. */
@@ -366,7 +308,7 @@ export class Resources {
     const unrecorded = (env.box_volumes ?? '')
       .split(',')
       .filter(Boolean)
-      .map((e) => `mc-${app.name}-${env.name}-${e.slice(0, e.indexOf(':'))}`)
+      .map((e) => volumeName(app.name, env.name, e.slice(0, e.indexOf(':'))))
       .filter((name) => !store.envVolumes(env.id).some((r) => r.name === name));
     if (unrecorded.length) console.warn(`[resources] env ${env.id}: volumes without a recorded id were left in place: ${unrecorded.join(', ')}`);
     return unrecorded;
@@ -404,17 +346,37 @@ export class Resources {
     return !!w && Date.now() - w.at < 180_000;
   }
 
-  /** Starts a stopped Box once, however many requests ask at the same time. */
+  /**
+   * Starts a stopped Box once, however many requests ask at the same time. A failure (quota,
+   * a refused key) is written to the env's `system` log and kept for 30 s, so visitors get an
+   * error page instead of "Starting…" forever; after that the next request tries again.
+   */
   async wake(boxId: string): Promise<void> {
     const w = this.wakes.get(boxId);
-    if (w && Date.now() - w.at < 30_000) return w.done;
+    if (w && Date.now() - w.at < WAKE_RETRY_MS) return w.done;
+    this.wakeFailures.delete(boxId);
     const done = this.ctx.boxlite
       .startBox(boxId)
-      .catch((err) => console.error(`[wake] start ${boxId} failed: ${(err as Error).message}`))
+      .catch((err) => this.wakeFailed(boxId, err as Error))
       .then(() => {
         this.boxStatusCache.delete(boxId);
       });
     this.wakes.set(boxId, { at: Date.now(), done });
     return done;
+  }
+
+  /** Why the last wake of this Box failed, while it is not retried yet; null otherwise. */
+  wakeFailure(boxId: string): string | null {
+    const f = this.wakeFailures.get(boxId);
+    return f && Date.now() - f.at < WAKE_RETRY_MS ? f.message : null;
+  }
+
+  private wakeFailed(boxId: string, err: Error): void {
+    console.error(`[wake] start ${boxId} failed: ${err.message}`);
+    this.wakeFailures.set(boxId, { at: Date.now(), message: err.message });
+    const env = this.ctx.store.get<{ id: string }>('SELECT id FROM envs WHERE box_id = ?', boxId);
+    if (env) {
+      recordLogs(this.ctx, env.id, [{ ts: now(), source: 'system', level: 'error', line: `could not start Box ${boxId} for a request: ${err.message}; the next request after 30 s tries again`, deployment: null }]);
+    }
   }
 }

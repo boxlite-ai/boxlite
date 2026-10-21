@@ -119,7 +119,7 @@ async function setup(opts: { auth?: { providers: string[]; protect: string[] } |
 
 /** A second env `dev` of crm with the same [auth], on its own origin. */
 function addDevEnv() {
-  h.ctx.store.run("INSERT INTO envs (id, app_id, name, created_at, gateway_secret, box_id, box_url, live_deployment, access_override) SELECT 'env_dev', app_id, 'dev', created_at, 'g2', box_id, box_url, NULL, 'public' FROM envs WHERE name = 'main'");
+  h.ctx.store.run("INSERT INTO envs (id, app_id, name, created_at, forward_secret, box_id, box_url, live_deployment, access_override) SELECT 'env_dev', app_id, 'dev', created_at, 'g2', box_id, box_url, NULL, 'public' FROM envs WHERE name = 'main'");
   h.ctx.store.insertSpec('env_dev', specFor('dev', 'b', {}) as never);
 }
 
@@ -342,7 +342,9 @@ test('protected paths: browsers are sent to login, API calls get 401 JSON', asyn
   assert.equal(page.headers.get('location'), '/.boxlite/auth/login?next=%2Fapp%2Fdeals%3Ftab%3D2');
   const api = await h.appRequest('/app/deals', { headers: { accept: 'application/json' } });
   assert.equal(api.status, 401);
-  assert.deepEqual(await api.json(), { error: { code: 'unauthenticated', message: 'sign in required' } });
+  const body = (await api.json()) as { error: { code: string; message: string; next: string } };
+  assert.deepEqual([body.error.code, body.error.message], ['unauthenticated', 'sign in required']);
+  assert.match(body.error.next, /\/\.boxlite\/auth\/login\?next=/, 'the 401 says where users sign in');
   const post = await h.appRequest('/app/deals', { method: 'POST', headers: { accept: 'text/html' } });
   assert.equal(post.status, 401);
   assert.equal(seen.length, 0);

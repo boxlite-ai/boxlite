@@ -33,6 +33,11 @@ func testReaper(t *testing.T) *Reaper {
 	return sharedReaper
 }
 
+// run is RunAs as the test process itself.
+func run(ctx context.Context, r *Reaper, hub *logs.Hub, source string, deployment int, dir, command string, env []string) (int, error) {
+	return RunAs(ctx, r, hub, source, deployment, dir, command, env, nil)
+}
+
 func baseEnv() []string {
 	return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
 }
@@ -262,7 +267,7 @@ func TestStaticServiceHasNoProcess(t *testing.T) {
 
 func TestRunBuildStep(t *testing.T) {
 	hub := logs.NewHub()
-	code, err := Run(context.Background(), testReaper(t), hub, api.SourceBuild, 5, t.TempDir(), "echo out; echo err 1>&2; exit 4", baseEnv())
+	code, err := run(context.Background(), testReaper(t), hub, api.SourceBuild, 5, t.TempDir(), "echo out; echo err 1>&2; exit 4", baseEnv())
 	if err != nil || code != 4 {
 		t.Fatalf("code=%d err=%v", code, err)
 	}
@@ -285,7 +290,7 @@ func TestRunKillsStragglers(t *testing.T) {
 	// return promptly, and the straggler must be killed.
 	hub := logs.NewHub()
 	start := time.Now()
-	code, err := Run(context.Background(), testReaper(t), hub, api.SourceBuild, 1, t.TempDir(), "sleep 60 & echo straggler=$!; exit 0", baseEnv())
+	code, err := run(context.Background(), testReaper(t), hub, api.SourceBuild, 1, t.TempDir(), "sleep 60 & echo straggler=$!; exit 0", baseEnv())
 	if err != nil || code != 0 {
 		t.Fatalf("code=%d err=%v", code, err)
 	}
@@ -308,9 +313,56 @@ func TestRunCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, err := Run(ctx, testReaper(t), logs.NewHub(), api.SourceBuild, 1, t.TempDir(), "sleep 60", baseEnv())
+	_, err := run(ctx, testReaper(t), logs.NewHub(), api.SourceBuild, 1, t.TempDir(), "sleep 60", baseEnv())
 	if err == nil || time.Since(start) > 3*time.Second {
 		t.Fatalf("cancel should kill the build: err=%v after %s", err, time.Since(start))
+	}
+}
+
+// TestMain doubles as a helper process: with SV_PROC_HELPER=escape the test
+// binary moves itself into a process group of its own (as a daemonising
+// build tool would) and sleeps, holding whatever stdout it inherited.
+func TestMain(m *testing.M) {
+	if os.Getenv("SV_PROC_HELPER") == "escape" {
+		_ = syscall.Setpgid(0, 0)
+		_ = os.WriteFile("escaped.ready", nil, 0o644) // in the build step's dir
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+func TestRunReturnsWhenAnEscapedChildHoldsTheOutput(t *testing.T) {
+	// The background job leaves the build step's process group, so the group
+	// kill misses it and it keeps stdout open. RunAs must still return.
+	prev := pumpDrain
+	pumpDrain = 300 * time.Millisecond
+	t.Cleanup(func() { pumpDrain = prev })
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub := logs.NewHub()
+	start := time.Now()
+	script := "SV_PROC_HELPER=escape '" + exe + "' & echo escaped=$!; while [ ! -e escaped.ready ]; do sleep 0.05; done; exit 0"
+	code, err := run(context.Background(), testReaper(t), hub, api.SourceBuild, 1, t.TempDir(), script, baseEnv())
+	var pid int
+	for _, l := range hub.Tail(api.SourceBuild, 0) {
+		if strings.HasPrefix(l.Line, "escaped=") {
+			pid, _ = strconv.Atoi(strings.TrimPrefix(l.Line, "escaped="))
+		}
+	}
+	if pid > 0 {
+		t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	}
+	if err != nil || code != 0 {
+		t.Fatalf("code=%d err=%v", code, err)
+	}
+	if el := time.Since(start); el > 3*time.Second {
+		t.Fatalf("RunAs waited %s for a pipe held outside the group", el)
+	}
+	if pid == 0 || syscall.Kill(pid, 0) != nil {
+		t.Fatal("the background job did not outlive the group kill, so this test exercised nothing")
 	}
 }
 

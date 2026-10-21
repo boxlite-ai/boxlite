@@ -49,11 +49,11 @@ async function gatewayError(res: Response, volume: string, rel: string): Promise
     // non-JSON: fall through to the generic error
   }
   if (code === 'no_such_file') throw fail('not_found', `${volume}:${rel} does not exist`, `\`boxlite-app app volume ls ${volume}:${posix.dirname(rel)}\` lists what is there`);
-  if (code === 'exists') throw fail('conflict', `${volume}:${rel} already exists`, 'pass --force to replace it');
+  if (code === 'exists') throw fail('conflict', `${volume}:${rel} already exists`, 'pass --force to replace it: `boxlite-app app volume cp <file> <volume>:<path> --force`');
   if (code === 'outside_volume') throw fail('forbidden', `${volume}:${rel} is outside the volume`, `\`boxlite-app app volume ls ${volume}\``);
   if (code === 'too_large') throw fail('invalid_request', message || 'file too large', `files are limited to ${VOLUME_FILE_MAX / 1024 / 1024} MB`);
   if (code === 'is_directory') throw fail('invalid_request', `${volume}:${rel} is a directory`, `\`boxlite-app app volume ls ${volume}:${rel}\``);
-  if (code === 'not_found' || res.status === 404) throw fail('not_supported_yet', 'this Box runs a supervisor without file access', 'restart the app to fetch the current supervisor: `boxlite-app app restart`, or deploy again');
+  if (code === 'not_found' || res.status === 404) throw fail('not_supported_yet', 'this Box runs a supervisor without file access', 'the Box runs an older supervisor and updates it the next time the Box starts (it sleeps after 15 idle minutes and starts on the next request); retry after that');
   throw fail('unavailable', `the Box answered ${res.status}${message ? `: ${message}` : ''}`, 'rerun in 30 s; `boxlite-app doctor` checks the Box');
 }
 

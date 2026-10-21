@@ -4,21 +4,8 @@ package privilege
 
 import "errors"
 
-// ErrAlreadyRunning means another root supervisor holds the lock.
-var ErrAlreadyRunning = errors.New("another supervisor is already running in this Box")
-
 // Supported is false outside Linux: the supervisor runs as whoever started it.
 func Supported() bool { return false }
-
-// Logf is how this package reports progress.
-type Logf func(format string, args ...any)
-
-// Result is what Bootstrap hands to main.
-type Result struct {
-	Config     Config
-	UID, GID   int
-	SudoLocked bool
-}
 
 // IsLauncher is always false outside Linux.
 func IsLauncher(string) bool { return false }

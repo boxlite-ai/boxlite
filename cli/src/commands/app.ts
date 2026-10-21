@@ -6,6 +6,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import * as tar from 'tar';
 import type { MakeCtx } from '../cli.js';
+import type { Deployment, EnvSummary } from '../api.js';
 import { updateLink, writeLink, type Ctx } from '../context.js';
 import { describe } from '../meta.js';
 import { table } from '../output.js';
@@ -134,26 +135,45 @@ async function exportSpec(ctx: Ctx): Promise<void> {
   else ctx.out.raw(JSON.stringify(spec, null, 2));
 }
 
+/**
+ * The deployment whose source `clone` downloads by default: the deploy whose release is live (an
+ * apply or rollback only reuses a deploy's source, so its newer spec version would not match the
+ * boxlite.toml in that source), else the newest deploy that went live once, else the newest one
+ * with source at all.
+ */
+export function defaultCloneSource(env: EnvSummary, deployments: readonly Deployment[]): Deployment | undefined {
+  const withSource = deployments.filter((d) => d.snapshot_id && d.kind === 'deploy').sort((a, b) => b.number - a.number);
+  const live = env.live_deployment as { number?: number; release?: number | null } | null | undefined;
+  const liveRelease = live?.release ?? live?.number;
+  return (
+    withSource.find((d) => d.number === liveRelease) ??
+    withSource.find((d) => ['live', 'superseded', 'rolled_back'].includes(d.status)) ??
+    withSource[0]
+  );
+}
+
 async function clone(ctx: Ctx, appName: string, opts: { deployment?: string }): Promise<void> {
   const api = ctx.api().scoped(appName, ctx.envName);
   let number = opts.deployment !== undefined ? parseInteger(opts.deployment, '--deployment') : undefined;
-  let specVersion: number | undefined;
+  const env = await api.getEnv();
   if (number === undefined) {
-    const env = await api.getEnv();
-    number = env.latest_deployment?.number ?? undefined;
-    specVersion = env.spec_version ?? undefined;
-    if (number === undefined) throw new MicrocloudError('not_found', `${appName}/${ctx.envName} has no deployment to clone`, 'start a new project instead: `boxlite-app init`');
+    const picked = defaultCloneSource(env, await api.listDeployments(100));
+    if (!picked) throw new MicrocloudError('not_found', `${appName}/${ctx.envName} has no deployed source to clone`, 'start a new project instead: `boxlite-app init`');
+    number = picked.number;
   }
   const dest = resolve(ctx.cwd, appName);
   await mkdir(dest, { recursive: true });
   if ((await readdir(dest)).length > 0) throw new MicrocloudError('exists', `./${appName}/ already exists and is not empty`, `clone from another directory, or work in ./${appName}/ directly`);
   const source = await api.deploymentSource(number);
   await pipeline(Readable.from(source), tar.x({ cwd: dest }));
-  if (specVersion === undefined) specVersion = (await api.getDeployment(number)).spec_version;
+  // The link records the spec this boxlite.toml came from, so later online changes (applies,
+  // console edits) show up as a stale base instead of being overwritten by the next deploy.
+  const specVersion = (await api.getDeployment(number)).spec_version;
   await writeLink(dest, { app: appName, env: ctx.envName, base_version: specVersion ?? 0, api_url: api.baseUrl });
   ctx.out.data({ app: appName, env: ctx.envName, deployment: number, dir: dest });
   ctx.out.line(`cloned ${appName}/${ctx.envName} (deployment #${number}) into ./${appName}/`);
-  ctx.out.next(`cd ${appName} && boxlite-app check`);
+  const behind = specVersion !== undefined && env.spec_version !== undefined && env.spec_version > specVersion;
+  ctx.out.next(behind ? `\`cd ${appName}\`; the environment changed online after #${number}, so \`boxlite-app app pull\` first, then \`boxlite-app check\`` : `cd ${appName} && boxlite-app check`);
 }
 
 export function registerApp(program: Command, make: MakeCtx): Command {
@@ -209,7 +229,7 @@ export function registerApp(program: Command, make: MakeCtx): Command {
     app
       .command('clone <app>')
       .description('download the source of a deployment into ./<app>/ and link it')
-      .option('--deployment <n>', 'deployment number (default: latest)')
+      .option('--deployment <n>', 'deployment number (default: the deploy whose code is live, else the newest deploy with source)')
       .action(async (name: string, opts: { deployment?: string }, cmd: Command) => clone(await make(cmd), name, opts)),
     { json: '{ app: string, env: string, deployment: number, dir: string }', exits: [2, 3, 4, 5], online: true },
   );

@@ -16,7 +16,7 @@ export interface Config {
   envPorts?: { min: number; max: number };
   dataDir: string;
   adminToken: string;
-  /** HMAC key for the app-proxy access cookie. */
+  /** HMAC key for the app-proxy access cookie, the console session and the OAuth `state`. */
   sessionSecret: string;
   boxliteApiUrl: string;
   boxliteApiKey: string;
@@ -26,6 +26,10 @@ export interface Config {
   svBinDir: string;
   agentMdPath: string;
   cliTgzPath: string;
+  /** The built console (deploy/build-console.sh). Default ../console-dist. */
+  consoleDir?: string;
+  /** The App hand-off prompt; default prompt-template.md next to agentMdPath. */
+  promptTemplatePath?: string;
   /** End-user sign-in: OAuth client credentials per provider; a provider without them is skipped. */
   oauth?: Partial<Record<string, { clientId: string; clientSecret: string }>>;
 }
@@ -98,6 +102,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     svBinDir: resolve(env.SV_BIN_DIR ?? '../supervisor/bin'),
     agentMdPath: resolve(env.AGENT_MD_PATH ?? '../agent/SKILL.md'),
     cliTgzPath: resolve(env.CLI_TGZ_PATH ?? '../cli/boxlite-app.tgz'),
+    consoleDir: resolve(env.CONSOLE_DIR ?? '../console-dist'),
+    ...(env.PROMPT_TEMPLATE_PATH ? { promptTemplatePath: resolve(env.PROMPT_TEMPLATE_PATH) } : {}),
     oauth: oauthFromEnv(env),
   };
 }

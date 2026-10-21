@@ -1,3 +1,5 @@
+> **历史文档：2026-10-21 的一日交接简报，不再描述现状。** 已过时的内容：应用网址不再是 `<CP>/<app>/` 路径前缀，每个环境有自己的源（`BOXLITE_APP_URL`）；`?__key=` 已删除，私有 App 用控制台 **Open app** 的一次性票据，agent 用 `Authorization: Bearer`；终端用户登录已实现，平台 cookie 在 https 上是 `__Host-bxl_*`、`Path=/`，不按路径隔离。现状以 `agent/SKILL.md`、`docs/contracts.md`、`docs/architecture.md` 为准。
+
 你接手 BoxLite Micro-cloud 原型的研发和交付。目标：用户在 BoxLite 控制台建一个 App，复制提示词交给自己本地的 coding agent，之后 agent 独立把一个完整的应用（数据库、文件存储、登录、部署、回滚）搭在 BoxLite Cloud 上，用户在控制台里看到它在运行，能查看和操作它的数据库。这是真实可用的产品，不是 mock。
 
 ## 完成的定义（全部满足才算交付）
@@ -44,16 +46,16 @@ agent 在哪一步卡住或绕路，先改 `agent/SKILL.md`，改不了再改产
 - 镜像只能用 `ghcr.io/boxlite-ai/boxlite-agent-{base,python,node}:v0.1.0`，x86_64，Node 22，用户 `boxlite`。Box 每次启动都会以 PID 1 重新执行 `cmd`；`$HOME` 保留，`/tmp` 清空。最大可以开 4 核 / 8 GB / 10 GB 磁盘。
 - Box 的 tunnel 是公网可达的，所以进应用 Box 的每个请求都必须带 `X-BoxLite-Gateway`。
 - Neon 是 free 组织：按时间点恢复只覆盖 6 小时；一次 restore 约 5 分钟；建项目的响应里默认分支在 `branch`（单数）；连接串用 `sslmode=verify-full`。
-- 应用网址是 `<CP>/<app>/` 路径前缀（用户决定，不用独立域名），所以 agent.md 要求应用用相对链接。
+- ~~应用网址是 `<CP>/<app>/` 路径前缀（用户决定，不用独立域名），所以 agent.md 要求应用用相对链接。~~ 已过时：每个环境一个源，应用在源的 `/` 下（`decisions.md` 2026-10-21“One origin per app env”）。
 - GitHub OAuth App 的唯一回调地址是 `<CP>/auth/callback/github`，所有 App 共用，state 里带 app 和 env。Google 还没注册。
 - 一次完整部署约 15 秒；休眠后被访问时显示“Starting…”，约 6 秒恢复；回滚约 10 秒。以上都已实测通过。
 
 ## 剩下的工作
 
 1. **控制台接真实接口（做了一大半，未提交）**：worktree 里有未提交的前端改动，CP 侧有 `routes/console.ts`、`console-views.ts`、`console-auth.ts`、`console-access.ts`，截图在 `docs/console-shots/`。先读懂现状再续写，所有页签的数据都来自 CP，缺数据就隐藏，不许编数字。登录过控制台的人打开私有 App 不需要 `?__key=`。保持控制台现有设计语言（`components/ascii.tsx`、`ui/tabs` 分段样式、Volumes 表格样式），不许重新设计样式。
-2. **终端用户登录（未开始）**：按 PRD 3.8 “情况一”实现：
-   - `<prefix>/.boxlite/auth/login|logout|me|jwks.json`，GitHub OAuth 带 PKCE 和签名 state。
-   - 会话 cookie 按 App 路径隔离；用户池按环境区分；用户镜像写进应用库的 `boxlite.users`，提供 `boxlite.current_user_id()`。
+2. **终端用户登录（已完成，见 `contracts.md` §3 与 4.1 “End-user sign-in”）**：按 PRD 3.8 “情况一”实现：
+   - `/.boxlite/auth/login|logout|me|jwks.json`（当时写作 `<prefix>/…`，现在在每个环境自己的源上），GitHub OAuth 带 PKCE 和签名 state。
+   - 会话 cookie ~~按 App 路径隔离~~（已过时：每个源一个 host-only 的 `__Host-bxl_session`，`Path=/`）；用户池按环境区分；用户镜像写进应用库的 `boxlite.users`，提供 `boxlite.current_user_id()`。
    - 代理注入 `X-BoxLite-User-*` 和 RS256 的 `X-BoxLite-Identity`，并剥掉外部伪造的同名头。
    - `[auth].protect` 路径未登录时，浏览器请求 302 跳登录页，接口请求返回 401。
    - 支持封禁和踢下线；提供 `test-session` 让 agent 自验。

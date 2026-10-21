@@ -574,19 +574,24 @@ func TestDeployActivateRollbackLifecycle(t *testing.T) {
 	if len(lines) == 0 || len(lines) > 3 {
 		t.Fatalf("logs tail: %v", body)
 	}
+	// The system ring has the story of every deployment, each line tagged
+	// with the deployment it belongs to (what the text says is not the
+	// contract; the attribution is).
 	_, body, _ = h.call(http.MethodGet, "/.boxlite/sv/logs?source=system&tail=2000", "")
-	var sawDeployLine, sawHealthLine bool
+	perDeployment := map[float64]int{}
 	for _, l := range body["lines"].([]any) {
-		line := l.(map[string]any)["line"].(string)
-		if strings.Contains(line, "deploy #1: built") {
-			sawDeployLine = true
+		m := l.(map[string]any)
+		if m["source"] != api.SourceSystem {
+			t.Fatalf("source=system returned %v", m)
 		}
-		if strings.Contains(line, "health check for web") {
-			sawHealthLine = true
+		if d, ok := m["deployment"].(float64); ok {
+			perDeployment[d]++
 		}
 	}
-	if !sawDeployLine || !sawHealthLine {
-		t.Fatalf("system log lines missing: deploy=%v health=%v", sawDeployLine, sawHealthLine)
+	for _, n := range []float64{1, 2, 3, 4, 5, 6} {
+		if perDeployment[n] == 0 {
+			t.Fatalf("no system lines for deployment #%v: %v", n, perDeployment)
+		}
 	}
 
 	// --- shutdown stops everything ---
@@ -729,18 +734,169 @@ func TestServiceEnvComposition(t *testing.T) {
 	}
 }
 
-func TestFilteredEnvironStripsSecrets(t *testing.T) {
-	t.Setenv("BOXLITE_BOX_TOKEN", "bxt_secret")
-	t.Setenv("BOXLITE_CP_URL", "https://cp")
-	t.Setenv("SV_LISTEN", ":1")
-	t.Setenv("KEEP_ME", "1")
-	env := strings.Join(FilteredEnviron(), "\n")
-	for _, bad := range []string{"BOXLITE_BOX_TOKEN=", "BOXLITE_CP_URL=", "SV_LISTEN="} {
-		if strings.Contains(env, bad) {
-			t.Fatalf("%s leaked into service env", bad)
+// fakeCP.stallSnapshots makes every snapshot download send its headers and a
+// few bytes, then go silent until the test ends.
+func (f *fakeCP) stallSnapshots(t *testing.T) {
+	t.Helper()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	inner := f.srv.Config.Handler
+	f.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/sv/v1/snapshots/") {
+			inner.ServeHTTP(w, r)
+			return
 		}
+		w.Header().Set("Content-Type", "application/gzip")
+		w.Write([]byte{0x1f, 0x8b})
+		w.(http.Flusher).Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+}
+
+// A snapshot download that stops sending must fail the deploy quickly and
+// free the deploy slot, instead of answering 409 to every later deploy.
+func TestStalledSnapshotDownloadFreesTheDeploySlot(t *testing.T) {
+	fake := newFakeCP(t, nil)
+	h := newHarness(t, t.TempDir(), fake)
+	h.client.SnapshotStall = 300 * time.Millisecond
+	h.gw.SetSecrets(secret, ctlSecret)
+
+	fake.set(h.spec(1, "one", nil, helperServices()), map[string]string{"README.md": "one"})
+	fake.stallSnapshots(t)
+	start := time.Now()
+	if code, body := h.deploymentCall("deploy", 1); code != 202 {
+		t.Fatalf("deploy #1: %d %v", code, body)
 	}
-	if !strings.Contains(env, "KEEP_ME=1") || !strings.Contains(env, "PATH=") {
-		t.Fatal("ordinary variables and PATH must survive")
+	failed := fake.waitPhase(t, 1, api.PhaseFailed)
+	h.mgr.Wait()
+	if failed.Step != "download" || !strings.Contains(failed.Error, "stalled") || time.Since(start) > 5*time.Second {
+		t.Fatalf("stalled download: %+v after %s", failed, time.Since(start))
+	}
+	if _, err := os.Stat(h.store.ReleaseDir(1)); !os.IsNotExist(err) {
+		t.Fatal("a failed download must leave no release dir behind")
+	}
+	if code, body := h.deploymentCall("deploy", 1); code != 202 {
+		t.Fatalf("the next deploy must be accepted, not 409: %d %v", code, body)
+	}
+	h.mgr.Wait()
+}
+
+// The whole build (download included) shares BuildTimeout.
+func TestBuildTimeoutCoversTheDownload(t *testing.T) {
+	fake := newFakeCP(t, nil)
+	h := newHarness(t, t.TempDir(), fake)
+	h.mgr.o.BuildTimeout = 400 * time.Millisecond
+	h.client.SnapshotStall = time.Minute // the stall timer must not be what ends it
+	h.gw.SetSecrets(secret, ctlSecret)
+	fake.set(h.spec(1, "one", nil, helperServices()), map[string]string{"README.md": "one"})
+	fake.stallSnapshots(t)
+	h.deploymentCall("deploy", 1)
+	failed := fake.waitPhase(t, 1, api.PhaseFailed)
+	h.mgr.Wait()
+	if failed.Step != "download" || !strings.Contains(failed.Error, "timed out") {
+		t.Fatalf("download past the build deadline: %+v", failed)
+	}
+}
+
+// SIGTERM (Shutdown) during a build kills the build step's whole process
+// group, reports the deployment failed, and leaves the live release alone
+// until Shutdown stops it.
+func TestShutdownCancelsARunningBuild(t *testing.T) {
+	fake := newFakeCP(t, nil)
+	h := newHarness(t, t.TempDir(), fake)
+	fake.set(h.spec(1, "one", nil, helperServices()), map[string]string{"README.md": "one"})
+	h.mgr.Boot(context.Background())
+	fake.waitPhase(t, 1, api.PhaseLive)
+	h.mgr.Wait()
+	livePID := *h.service(h.health(), "web").PID
+
+	fake.set(h.spec(2, "two", []string{"sleep 60 & echo child=$! > child.pid; wait"}, helperServices()), map[string]string{"README.md": "two"})
+	if code, _ := h.deploymentCall("deploy", 2); code != 202 {
+		t.Fatal("deploy #2")
+	}
+	var child int
+	waitUntil(t, "build step running", func() bool {
+		b, err := os.ReadFile(filepath.Join(h.store.ReleaseDir(2), "child.pid"))
+		if err != nil {
+			return false
+		}
+		_, err = fmt.Sscanf(string(b), "child=%d", &child)
+		return err == nil && child > 0
+	})
+
+	start := time.Now()
+	h.mgr.Shutdown()
+	if el := time.Since(start); el > 8*time.Second {
+		t.Fatalf("Shutdown took %s with a build running", el)
+	}
+	failed := fake.waitPhase(t, 2, api.PhaseFailed)
+	if failed.Step != "build" || !strings.Contains(failed.Error, "shutting down") {
+		t.Fatalf("cancelled build: %+v", failed)
+	}
+	waitUntil(t, "build step's child killed", func() bool { return syscall.Kill(child, 0) == syscall.ESRCH })
+	waitUntil(t, "live release stopped by Shutdown", func() bool { return syscall.Kill(livePID, 0) == syscall.ESRCH })
+	if code, body := h.deploymentCall("deploy", 2); code != 503 || body["error"] != "shutting_down" {
+		t.Fatalf("deploy after shutdown: %d %v", code, body)
+	}
+}
+
+// SIGTERM during an activation stops the candidate and never flips to it.
+func TestShutdownCancelsAnActivation(t *testing.T) {
+	fake := newFakeCP(t, nil)
+	h := newHarness(t, t.TempDir(), fake)
+	h.mgr.o.HealthBudget = 30 * time.Second
+	h.gw.SetSecrets(secret, ctlSecret)
+	never := helperServices()
+	never[0].Command = "echo $$ > web.pid; exec sleep 60" // never becomes healthy
+	fake.set(h.spec(1, "one", nil, never), map[string]string{"README.md": "one"})
+	h.deploymentCall("deploy", 1)
+	fake.waitPhase(t, 1, api.PhaseBuilt)
+	h.mgr.Wait()
+	h.deploymentCall("activate", 1)
+	fake.waitPhase(t, 1, api.PhaseStarting)
+	var web int
+	waitUntil(t, "candidate started", func() bool {
+		b, err := os.ReadFile(filepath.Join(h.store.ReleaseDir(1), "web.pid"))
+		if err != nil {
+			return false
+		}
+		_, err = fmt.Sscanf(string(b), "%d", &web)
+		return err == nil && web > 0
+	})
+
+	start := time.Now()
+	h.mgr.Shutdown()
+	if el := time.Since(start); el > 8*time.Second {
+		t.Fatalf("Shutdown took %s during an activation", el)
+	}
+	failed := fake.waitPhase(t, 1, api.PhaseFailed)
+	if failed.Step != "start" || !strings.Contains(failed.Error, "shutting down") {
+		t.Fatalf("cancelled activation: %+v", failed)
+	}
+	if hr := h.mgr.Health(); hr.OK || hr.Deployment != 0 {
+		t.Fatalf("the cancelled candidate must never go live: %+v", hr)
+	}
+	waitUntil(t, "candidate stopped", func() bool { return syscall.Kill(web, 0) == syscall.ESRCH })
+}
+
+// Cancelling Boot's context ends the reconcile loop that would otherwise
+// poll an unreachable control plane forever.
+func TestBootContextEndsTheReconcileLoop(t *testing.T) {
+	fake := newFakeCP(t, nil)
+	h := newHarness(t, t.TempDir(), fake)
+	fake.srv.Close() // unreachable
+	ctx, cancel := context.WithCancel(context.Background())
+	h.mgr.Boot(ctx)
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	done := make(chan struct{})
+	go func() { h.mgr.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reconcile loop ignored the cancelled context")
 	}
 }

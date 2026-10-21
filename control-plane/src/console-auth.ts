@@ -1,16 +1,15 @@
-import { createHmac } from 'node:crypto';
 import type { Context, MiddlewareHandler } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { safeEqual } from './auth.js';
 import type { Config } from './config.js';
 import { fail } from './errors.js';
-import { hostCookieName } from './enduser-auth.js';
+import { hostCookieName, isSecureUrl, signedMac } from './cookies.js';
 import { escapeHtml } from './routes/util.js';
 
 /**
  * Console login, prototype edition: the operator pastes the CP's ADMIN_TOKEN once and gets an
- * HMAC-signed, host-only cookie on the console's own origin (origins.ts), scoped to /console.
- * Everything about "who is signed in" lives in this file,
+ * HMAC-signed, host-only cookie on the console's own origin (origins.ts), `Path=/` (`__Host-bxl_console`
+ * on https, which requires that path). Everything about "who is signed in" lives in this file,
  * so BoxLite Auth0 can replace it by swapping `consoleUser` and the two login handlers.
  */
 
@@ -19,7 +18,7 @@ const TTL_SECONDS = 7 * 24 * 3600;
 /** The only console identity until real login lands; Activity shows it as the actor. */
 export const CONSOLE_USER = 'admin';
 
-const mac = (secret: string, user: string, exp: number) => createHmac('sha256', secret).update(`console-session:${user}:${exp}`).digest('base64url');
+const mac = (secret: string, user: string, exp: number) => signedMac(secret, 'console-session', `${user}:${exp}`);
 
 export function signConsoleSession(secret: string, user = CONSOLE_USER, ttlSeconds = TTL_SECONDS): string {
   const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
@@ -41,7 +40,7 @@ export function verifyConsoleSession(secret: string, value: string | undefined):
  * `__Host-bxl_console` on https: every origin shares the parent domain, so an app could plant a
  * `Domain=` cookie of the plain name ("cookie tossing"); `__Host-` cookies cannot be set that way.
  */
-export const consoleCookieName = (config: Pick<Config, 'publicUrl'>) => hostCookieName(CONSOLE_COOKIE, config.publicUrl.startsWith('https:'));
+export const consoleCookieName = (config: Pick<Config, 'publicUrl'>) => hostCookieName(CONSOLE_COOKIE, isSecureUrl(config.publicUrl));
 
 export function consoleUser(config: Config, c: Context): string | null {
   return verifyConsoleSession(config.sessionSecret, getCookie(c, consoleCookieName(config)));
@@ -108,7 +107,7 @@ ${error ? `<p class="err">${escapeHtml(error)}</p>` : ''}
 }
 
 export function loginRoutes(config: Config) {
-  const secure = config.publicUrl.startsWith('https:');
+  const secure = isSecureUrl(config.publicUrl);
   return {
     page: (c: Context) => {
       if (consoleUser(config, c)) return c.redirect(safeNext(c.req.query('next')), 302);

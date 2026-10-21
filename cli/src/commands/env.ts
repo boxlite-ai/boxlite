@@ -16,7 +16,11 @@ async function envDelete(ctx: Ctx, name: string): Promise<void> {
   if (name === 'main') throw new MicrocloudError('forbidden', 'the main environment cannot be deleted', 'delete another environment, or roll main back with `boxlite-app app rollback <N>`');
   const api = (await ctx.appApi()).scoped(app, name);
   const env = await api.getEnv();
-  const spec = await api.getSpec().catch(() => null);
+  // No spec yet is fine (nothing deployed); any other failure must stop here, or the brief would omit the volumes.
+  const spec = await api.getSpec().catch((e: unknown) => {
+    if (e instanceof MicrocloudError && e.code === 'not_found') return null;
+    throw e;
+  });
   const volumes = ((spec?.volumes as { name: string; mount: string }[] | undefined) ?? []).map((v) => `volume ${v.name} (${v.mount}) and every file in it`);
   const box = env.box as { id?: string } | null | undefined;
   const db = env.database as { branch?: string } | null | undefined;

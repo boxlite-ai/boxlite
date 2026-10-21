@@ -102,7 +102,7 @@ function migrationDiagnosis(input: FailureInput, message: string): Diagnosis | n
   return {
     cause: 'migration_sql_error',
     summary: `${where}: ${pgMessage}`,
-    fix: `fix the SQL in ${where} (it did not apply, so editing it is safe), test it with \`boxlite-app app sql --file ${dir}${file}\` on a non-main env, then \`boxlite-app deploy\``,
+    fix: `fix the SQL in ${where} (it did not apply, so editing it is safe); to try it first, \`boxlite-app app env create try\` (once), then \`boxlite-app app sql --write --env try --file ${dir}${file}\`; then \`boxlite-app deploy\``,
     file: `${dir}${file}`,
     ...(line !== undefined ? { line } : {}),
     evidence: [message],

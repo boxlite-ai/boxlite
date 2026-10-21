@@ -12,8 +12,6 @@ const app = createServer(ctx);
 ctx.orchestrator.resume();
 ctx.scheduler.start();
 const stopPurger = startPurger(ctx);
-// Rollout of the root supervisor / split secrets: running Boxes on protocol 1 are restarted once.
-void ctx.resources.upgradeOutdatedSupervisors((line) => console.log(`[upgrade] ${line}`));
 
 // One Hono app, one listener per origin (origins.ts): API on PORT, the console on CONSOLE_PORT, and
 // one port per app env. Each listener tags its requests with its port, which decides their role.

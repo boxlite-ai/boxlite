@@ -45,9 +45,37 @@ export async function requestJson<T>(service: string, req: JsonRequest): Promise
 }
 
 /** Query strings never carry secrets here, but strip them from messages anyway. */
-export function redactUrl(url: string): string {
+function redactUrl(url: string): string {
   const q = url.indexOf('?');
   return q === -1 ? url : url.slice(0, q);
 }
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+export interface RetryPolicy {
+  /** Tries in total, the first included. */
+  attempts: number;
+  /** Wait before the second try. */
+  delayMs: number;
+  /** How the wait grows: the same each time, by delayMs per try, or doubling (capped at maxDelayMs). */
+  backoff?: 'fixed' | 'linear' | 'exponential';
+  maxDelayMs?: number;
+  /** Only these errors are retried; anything else is thrown at once. */
+  retryable: (err: unknown) => boolean;
+  /** Called before each wait (e.g. to log the first one). */
+  onRetry?: (err: unknown, attempt: number) => void;
+}
+
+/** The CP's one retry loop. Non-idempotent calls must pass a `retryable` that only matches "nothing happened". */
+export async function retry<T>(fn: () => Promise<T>, p: RetryPolicy): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= p.attempts || !p.retryable(err)) throw err;
+      p.onRetry?.(err, attempt);
+      const wait = p.backoff === 'linear' ? p.delayMs * attempt : p.backoff === 'exponential' ? p.delayMs * 2 ** (attempt - 1) : p.delayMs;
+      await sleep(Math.min(wait, p.maxDelayMs ?? Infinity));
+    }
+  }
+}

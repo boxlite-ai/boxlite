@@ -5,6 +5,9 @@ import type { Ctx } from './ctx.js';
 import { authStatus } from './enduser-auth.js';
 import type { Spec } from './spec.js';
 import { envStatus } from './views.js';
+import { storedLevelsAtLeast } from './services/logs.js';
+
+const ERROR_LEVELS = storedLevelsAtLeast('error');
 
 const RECENT_ERRORS = 20;
 const ERROR_WINDOW_MS = 24 * 3_600_000;
@@ -104,7 +107,13 @@ async function databaseOf(ctx: Ctx, env: EnvRow, spec: Spec | undefined): Promis
 function recentErrors(ctx: Ctx, env: EnvRow, at: number): AgentContext['recent_errors'] {
   const since = new Date(at - ERROR_WINDOW_MS).toISOString();
   return ctx.store
-    .all<{ ts: string; source: string; line: string; deployment: number | null }>("SELECT ts, source, line, deployment FROM logs WHERE env_id = ? AND level = 'error' AND ts >= ? ORDER BY id DESC LIMIT ?", env.id, since, RECENT_ERRORS)
+    .all<{ ts: string; source: string; line: string; deployment: number | null }>(
+      `SELECT ts, source, line, deployment FROM logs WHERE env_id = ? AND lower(level) IN (${ERROR_LEVELS.map(() => '?').join(', ')}) AND ts >= ? ORDER BY id DESC LIMIT ?`,
+      env.id,
+      ...ERROR_LEVELS,
+      since,
+      RECENT_ERRORS,
+    )
     .reverse();
 }
 

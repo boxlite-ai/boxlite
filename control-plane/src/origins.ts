@@ -6,7 +6,8 @@ import type { BoxliteClient } from './boxlite.js';
 import type { Config } from './config.js';
 import type { EnvRow, Store } from './db.js';
 import { UpstreamError } from './errors.js';
-import { sleep } from './http.js';
+import { isSecureUrl } from './cookies.js';
+import { retry } from './http.js';
 
 /**
  * One origin per app env (security review F1, decisions 2026-10-21). The CP runs in BoxLite Box
@@ -93,7 +94,7 @@ export class Origins {
   }
 
   get secure(): boolean {
-    return this.apiUrl.startsWith('https:');
+    return isSecureUrl(this.apiUrl);
   }
 
   // ---- settings ---------------------------------------------------------------
@@ -209,28 +210,20 @@ export class Origins {
    * process. Giving up would leave that app answering 502 until someone restarts the CP, so keep
    * trying for a few minutes and say so in the log.
    */
-  private async listenWithRetry(port: number): Promise<void> {
-    for (let attempt = 1; ; attempt++) {
-      try {
-        return await this.host!.listen(port);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'EADDRINUSE' || attempt >= LISTEN_ATTEMPTS) throw err;
+  private listenWithRetry(port: number): Promise<void> {
+    return retry(() => this.host!.listen(port), {
+      attempts: LISTEN_ATTEMPTS,
+      delayMs: LISTEN_RETRY_MS,
+      retryable: (err) => (err as NodeJS.ErrnoException).code === 'EADDRINUSE',
+      onRetry: (_err, attempt) => {
         if (attempt === 1) console.warn(`[origins] port ${port} is in use; retrying for up to ${(LISTEN_ATTEMPTS * LISTEN_RETRY_MS) / 1000}s`);
-        await sleep(LISTEN_RETRY_MS);
-      }
-    }
+      },
+    });
   }
 
-  private async register(port: number): Promise<string> {
+  private register(port: number): Promise<string> {
     const register = this.deps.registerTunnel ?? ((p: number) => this.deps.boxlite.tunnel(this.deps.config.cpBoxId ?? 'microcloud-cp', p));
-    for (let attempt = 1; ; attempt++) {
-      try {
-        return await register(port);
-      } catch (err) {
-        if (attempt >= 5 || !(err instanceof UpstreamError)) throw err;
-        await sleep(3_000 * attempt);
-      }
-    }
+    return retry(() => register(port), { attempts: 5, delayMs: 3_000, backoff: 'linear', retryable: (err) => err instanceof UpstreamError });
   }
 }
 

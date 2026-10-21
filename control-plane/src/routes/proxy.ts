@@ -1,5 +1,5 @@
 import { RETENTION_DAYS } from '../lifecycle.js';
-import { createHmac, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
@@ -10,7 +10,8 @@ import { appForKey, bearer, safeEqual, sha256hex, type Vars } from '../auth.js';
 import type { AppRow, EnvRow } from '../db.js';
 import { now } from '../db.js';
 import type { Ctx } from '../ctx.js';
-import { identityFor, jwks, normalisePath, readCookie, safeNext, hostCookieName } from '../enduser-auth.js';
+import { hostCookieName, isSecureUrl, readCookie, setCookieValue, signedMac, verifyMac } from '../cookies.js';
+import { identityFor, jwks, normalisePath, safeNext } from '../enduser-auth.js';
 import { fail } from '../errors.js';
 import { RESERVED_NAMES } from '../platform.js';
 import { forwardHeaders } from '../supervisor.js';
@@ -29,29 +30,28 @@ import { body, envOf, escapeHtml } from './util.js';
  *     app's key → 401 without forwarding. Other Authorization headers belong to the app.
  */
 
-export const ACCESS_COOKIE = 'bxl_access';
-const accessName = (ctx: Ctx, app: AppRow, env: EnvRow) => hostCookieName(ACCESS_COOKIE, ctx.resources.appUrl(app.name, env.name).startsWith('https:'));
-export const TICKET_TTL_S = 60;
+const ACCESS_COOKIE = 'bxl_access';
+const accessName = (ctx: Ctx, app: AppRow, env: EnvRow) => hostCookieName(ACCESS_COOKIE, isSecureUrl(ctx.resources.appUrl(app.name, env.name)));
+const TICKET_TTL_S = 60;
 const ACCESS_TTL_S = 7 * 24 * 3600;
 
 // ---- access cookie and tickets --------------------------------------------------
 
-const accessMac = (secret: string, envId: string, exp: number) => createHmac('sha256', secret).update(`app-access:${envId}.${exp}`).digest('base64url');
 
 /** `<env id>.<expiry>.<hmac>`: bound to the env id, so a recycled port's old cookies open nothing. */
 export function signAccess(secret: string, envId: string, ttlSeconds = ACCESS_TTL_S): string {
   const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
-  return `${envId}.${exp}.${accessMac(secret, envId, exp)}`;
+  return `${envId}.${exp}.${signedMac(secret, 'app-access', `${envId}.${exp}`)}`;
 }
 
-export function verifyAccess(secret: string, value: string | undefined, envId: string): boolean {
+function verifyAccess(secret: string, value: string | undefined, envId: string): boolean {
   if (!value) return false;
   const parts = value.split('.');
   if (parts.length !== 3) return false;
   const [id, expText, mac] = parts as [string, string, string];
   const exp = Number(expText);
   if (id !== envId || !Number.isInteger(exp) || exp < Date.now() / 1000) return false;
-  return safeEqual(mac, accessMac(secret, id, exp));
+  return verifyMac(secret, 'app-access', `${id}.${exp}`, mac);
 }
 
 /** A one-time link into the env's origin that sets its access cookie. Stored hashed, 60 s. */
@@ -109,6 +109,15 @@ export function filterSetCookie(cookie: string): string | null {
 const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length']);
 
 /**
+ * Incoming headers that only the CP may set towards the gateway: the two gateway secrets, the
+ * signed-in user's identity, and X-Forwarded-*. Dropped from every request (HTTP and WebSocket)
+ * before the CP adds its own.
+ */
+function isPlatformHeader(key: string): boolean {
+  return key === 'x-boxlite-gateway' || key === 'x-boxlite-control' || key === 'x-boxlite-identity' || key.startsWith('x-boxlite-user-') || key.startsWith('x-forwarded-');
+}
+
+/**
  * Platform cookies on an app origin are all `bxl_*`, `__Host-bxl_*` on https (apps cannot set such
  * names); none reaches the app.
  */
@@ -134,6 +143,11 @@ function startingPage(app: string): Response {
     'x-refresh': '3',
     'x-boxlite-starting': '1',
   });
+}
+
+/** 503 for a Box that will not come up by waiting; the reason is in the env's `system` log. */
+function notRunningPage(app: string, why: string): Response {
+  return page(`${app} is not running`, `<h1>${escapeHtml(app)} is not running</h1><p>${escapeHtml(why)}</p><p class="hint">The app's owner sees the details in the BoxLite console, under Logs (source system).</p>`, 503, { 'retry-after': '60' });
 }
 
 const wantsHtml = (headers: Headers) => (headers.get('accept') ?? '').includes('text/html');
@@ -173,7 +187,15 @@ export interface ForwardRequest {
   clientIp?: string;
   /** X-BoxLite-User-* / X-BoxLite-Identity for a signed-in end user (enduser-auth.ts). */
   identity?: Record<string, string>;
+  /** How long the app may take to start answering (response headers); default RESPONSE_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
+
+/**
+ * The app must start its response within this; the body may then stream for as long as it likes
+ * (downloads, SSE). Without it a hung app held the request for undici's 300 s.
+ */
+const RESPONSE_TIMEOUT_MS = 100_000;
 
 /**
  * Sends one request to the env's supervisor gateway through the Box tunnel. Also used by the
@@ -189,7 +211,10 @@ export async function forward(ctx: Ctx, app: AppRow, env: EnvRow, req: ForwardRe
   } catch (err) {
     console.error(`[proxy] box status ${env.box_id}: ${(err as Error).message}`);
   }
+  // Neither waits for anything: say so, instead of a "Starting…" page that never ends.
+  if (status === 'missing') return notRunningPage(app.name, 'Its Box no longer exists; the next deploy creates a new one.');
   if (status === 'stopped') {
+    if (ctx.resources.wakeFailure(env.box_id)) return notRunningPage(app.name, 'It was asleep and could not be started just now. Try again in a minute.');
     void ctx.resources.wake(env.box_id);
     return startingPage(app.name);
   }
@@ -199,7 +224,7 @@ export async function forward(ctx: Ctx, app: AppRow, env: EnvRow, req: ForwardRe
   const headers = new Headers();
   req.headers.forEach((v, k) => {
     const key = k.toLowerCase();
-    if (HOP_BY_HOP.has(key) || key === 'x-boxlite-gateway' || key === 'x-boxlite-identity' || key.startsWith('x-boxlite-user-') || key.startsWith('x-forwarded-')) return;
+    if (HOP_BY_HOP.has(key) || isPlatformHeader(key)) return;
     if (key === 'cookie') {
       const kept = appCookies(v);
       if (kept) headers.set('cookie', kept);
@@ -217,18 +242,27 @@ export async function forward(ctx: Ctx, app: AppRow, env: EnvRow, req: ForwardRe
 
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD' && req.body !== null;
   let res: Response;
+  const deadline = new AbortController();
+  const timeoutMs = req.timeoutMs ?? RESPONSE_TIMEOUT_MS;
+  const timer = setTimeout(() => deadline.abort(), timeoutMs);
   try {
     res = await fetch(env.box_url + req.path, {
       method: req.method,
       headers,
       body: hasBody ? req.body : undefined,
       redirect: 'manual',
+      signal: deadline.signal,
       // Node's fetch needs this to stream a request body.
       ...(hasBody ? { duplex: 'half' } : {}),
     } as RequestInit);
   } catch (err) {
+    if (deadline.signal.aborted) {
+      return page('Gateway timeout', `<h1>${escapeHtml(app.name)} did not answer in time</h1><p>The app did not start its response within ${Math.round(timeoutMs / 1000)} seconds.</p>`, 504);
+    }
     if (ctx.resources.recentlyWoken(env.box_id) || status !== 'running') return startingPage(app.name);
     return page('Bad gateway', `<h1>${escapeHtml(app.name)} is not answering</h1><p>${escapeHtml((err as Error).message)}</p>`, 502);
+  } finally {
+    clearTimeout(timer);
   }
 
   if (res.status === 502 || res.status === 503 || res.status === 504) {
@@ -266,7 +300,6 @@ function responseHeaders(res: Response, boxUrl: string, appUrl: string): Headers
 
 // ---- the app origin -------------------------------------------------------------------
 
-/** `Authorization` on an app origin: `none` (absent or the app's own scheme), `ok` (strip it), or a 401. */
 /**
  * `instanceof Response` is not reliable here: @hono/node-server swaps the global Response for its
  * own class at startup, but `Response.json()` (inherited static) still builds a native one. A
@@ -277,6 +310,7 @@ export function isResponse(x: unknown): x is Response {
   return typeof x === 'object' && x !== null && typeof (x as Response).status === 'number' && typeof (x as Response).arrayBuffer === 'function' && (x as Response).headers instanceof Headers;
 }
 
+/** `Authorization` on an app origin: `none` (absent or the app's own scheme), `ok` (strip it), or a 401. */
 function keyGate(ctx: Ctx, app: AppRow, headers: Headers): 'none' | 'ok' | Response {
   const token = bearer(headers.get('authorization') ?? undefined);
   if (!token) return 'none';
@@ -285,6 +319,21 @@ function keyGate(ctx: Ctx, app: AppRow, headers: Headers): 'none' | 'ok' | Respo
   if (!token.startsWith('bxl_app_')) return 'none';
   if (appForKey(ctx.store, token)?.app.id === app.id) return 'ok';
   return jsonError(401, 'unauthenticated', `that App key does not open ${app.name}`, `use the key of ${app.name}; each App key opens only its own app`);
+}
+
+type Gate = { ok: true; stripAuthorization: boolean } | { ok: false; refusal: Response | null; access: string };
+
+/**
+ * The access gate of an app origin (F7), for HTTP and WebSocket alike: this app's key (or the
+ * admin token) passes and is stripped; otherwise a public env, or the access cookie of a ticket.
+ */
+function accessGate(ctx: Ctx, app: AppRow, env: EnvRow, headers: Headers): Gate {
+  const key = keyGate(ctx, app, headers);
+  if (isResponse(key)) return { ok: false, refusal: key, access: 'private' };
+  if (key === 'ok') return { ok: true, stripAuthorization: true };
+  const access = ctx.resources.effectiveAccess(env);
+  if (access === 'public' || verifyAccess(ctx.config.sessionSecret, readCookie(headers, accessName(ctx, app, env)), env.id)) return { ok: true, stripAuthorization: false };
+  return { ok: false, refusal: null, access };
 }
 
 /** Every request that arrives on an env's own port (server.ts dispatches by local port). */
@@ -301,11 +350,9 @@ export async function serveAppOrigin(ctx: Ctx, c: Context, env: EnvRow): Promise
   if (path === '/.boxlite/open') return openWithTicket(ctx, app, env, url);
 
   const headers = new Headers(c.req.raw.headers);
-  const key = keyGate(ctx, app, headers);
-  if (isResponse(key)) return key;
-  if (key === 'ok') headers.delete('authorization');
-  const access = ctx.resources.effectiveAccess(env);
-  if (access !== 'public' && key !== 'ok' && !verifyAccess(ctx.config.sessionSecret, readCookie(headers, accessName(ctx, app, env)), env.id)) return gatePage(ctx, app, env, access, headers);
+  const gate = accessGate(ctx, app, env, headers);
+  if (!gate.ok) return gate.refusal ?? gatePage(ctx, app, env, gate.access, headers);
+  if (gate.stripAuthorization) headers.delete('authorization');
 
   const identity = await identityFor(ctx, { method: c.req.method, url, headers }, app, env);
   if (isResponse(identity)) return identity;
@@ -334,15 +381,17 @@ function openWithTicket(ctx: Ctx, app: AppRow, env: EnvRow, url: URL): Response 
       noRef,
     );
   }
-  const cookie = [`${accessName(ctx, app, env)}=${signAccess(ctx.config.sessionSecret, env.id)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${ACCESS_TTL_S}`];
-  if (ctx.resources.appUrl(app.name, env.name).startsWith('https:')) cookie.push('Secure');
-  return new Response(null, { status: 302, headers: { location: next, 'set-cookie': cookie.join('; '), 'cache-control': 'no-store', ...noRef } });
+  const cookie = setCookieValue(isSecureUrl(ctx.resources.appUrl(app.name, env.name)), accessName(ctx, app, env), signAccess(ctx.config.sessionSecret, env.id), '/', ACCESS_TTL_S);
+  return new Response(null, { status: 302, headers: { location: next, 'set-cookie': cookie, 'cache-control': 'no-store', ...noRef } });
 }
 
-// ---- legacy path prefixes on the API origin (one release) -------------------------------
+// ---- legacy path prefixes on the API origin -------------------------------------------
+// Kept on purpose: the live CP still serves apps created before per-env origins (2026-10-21,
+// `hello` and `ledger`), whose old `<cp>/<app>/` links may be shared. Remove this section (and its
+// mount, last in server.ts, which then needs a JSON not-found) once those apps are gone.
 
 /** `/<app>/…` → main, `/<app>--<env>/…` → env: the pre-origins URL scheme. */
-export function parsePrefix(pathname: string): { app: string; env: string; prefix: string; rest: string } | null {
+function parsePrefix(pathname: string): { app: string; env: string; prefix: string; rest: string } | null {
   const m = /^\/([a-z][a-z0-9-]*)(\/.*)?$/.exec(pathname);
   if (!m) return null;
   const seg = m[1]!;
@@ -385,18 +434,22 @@ export async function handleUpgrade(ctx: Ctx, req: IncomingMessage, socket: Dupl
   if (!app || app.deleted_at || !env.box_url) return reject(404, 'Not Found');
   const url = new URL(req.url ?? '/', 'http://app.local');
   const incoming = new Headers(Object.entries(req.headers).flatMap(([k, v]): [string, string][] => (v === undefined ? [] : [[k, Array.isArray(v) ? v.join(', ') : v]])));
-  const key = keyGate(ctx, app, incoming);
-  if (isResponse(key)) return reject(401, 'Unauthorized');
-  if (ctx.resources.effectiveAccess(env) !== 'public' && key !== 'ok' && !verifyAccess(ctx.config.sessionSecret, readCookie(incoming, accessName(ctx, app, env)), env.id)) return reject(401, 'Unauthorized');
+  const gate = accessGate(ctx, app, env, incoming);
+  if (!gate.ok) return reject(401, 'Unauthorized');
   if (normalisePath(url.pathname).toLowerCase().startsWith('/.boxlite')) return reject(404, 'Not Found');
   const identity = await identityFor(ctx, { method: req.method ?? 'GET', url, headers: incoming }, app, env);
   if (isResponse(identity)) return reject(identity.status, identity.status === 401 ? 'Unauthorized' : identity.status === 404 ? 'Not Found' : 'Forbidden');
+  // Like an HTTP request, a WebSocket to a sleeping app wakes it; the client reconnects once it runs.
+  if (env.box_id && (await ctx.resources.boxStatus(env.box_id).catch(() => 'unknown')) === 'stopped') {
+    if (!ctx.resources.wakeFailure(env.box_id)) void ctx.resources.wake(env.box_id);
+    return reject(503, 'Service Unavailable');
+  }
   const target = new URL(env.box_url + url.pathname + url.search);
   const origin = new URL(ctx.resources.appUrl(app.name, env.name));
   const headers: Record<string, string | string[]> = {};
   for (const [k, v] of Object.entries(req.headers)) {
-    if (v === undefined || k === 'host' || k === 'x-boxlite-gateway' || k === 'x-boxlite-identity' || k.startsWith('x-boxlite-user-') || k.startsWith('x-forwarded-')) continue;
-    if (k === 'authorization' && key === 'ok') continue;
+    if (v === undefined || k === 'host' || isPlatformHeader(k)) continue;
+    if (k === 'authorization' && gate.stripAuthorization) continue;
     if (k === 'cookie') {
       const kept = appCookies(Array.isArray(v) ? v.join('; ') : v);
       if (kept) headers.cookie = kept;

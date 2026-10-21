@@ -21,11 +21,11 @@
  * when a login fails. It never leaves this module: not in specs, logs, the agent context or the
  * console.
  */
-import type { DbConn } from './appdb.js';
+import type { AppDatabase, DbConn } from './appdb.js';
 import type { Store } from './db.js';
 import { now } from './db.js';
 import { UpstreamError, fail } from './errors.js';
-import { sleep } from './http.js';
+import { retry, sleep } from './http.js';
 import type { NeonClient } from './neon.js';
 import { READER_ROLE } from './sqlguard.js';
 
@@ -34,8 +34,6 @@ export interface ReaderSource {
   urlFor(ownerUrl: string): Promise<string>;
   /** Re-provisions the reader (role, grant, password) and returns a fresh URL. */
   refresh(ownerUrl: string): Promise<string>;
-  /** Before creating a branch: no branch of the project may hold a SQL-created reader. */
-  prepareBranching(projectId: string): Promise<void>;
 }
 
 export function readerUrl(ownerUrl: string, password: string): string {
@@ -74,7 +72,7 @@ export class DbReaders implements ReaderSource {
       'SELECT a.neon_project_id AS project_id, e.neon_branch_id AS branch_id FROM envs e JOIN apps a ON a.id = e.app_id WHERE e.db_url = ?',
       ownerUrl,
     );
-    if (!row?.project_id || !row.branch_id) throw fail('unavailable', 'this database has no Neon branch on record', 'run `boxlite-app apply` so the platform provisions it');
+    if (!row?.project_id || !row.branch_id) throw fail('unavailable', 'this database has no Neon branch on record', 'run `boxlite-app apply --yes` so the platform provisions it');
     return { projectId: row.project_id, branchId: row.branch_id };
   }
 
@@ -121,15 +119,12 @@ export class DbReaders implements ReaderSource {
   }
 
   /** A new branch answers 404 on reveal_password until it is ready (a few seconds). */
-  private async reveal(projectId: string, branchId: string): Promise<string> {
-    for (let i = 0; ; i++) {
-      try {
-        return await this.deps.neon.revealRolePassword(projectId, branchId, READER_ROLE);
-      } catch (err) {
-        if (!(err instanceof UpstreamError && err.status === 404) || i >= 15) throw err;
-        await sleep(this.deps.retryMs ?? 2000);
-      }
-    }
+  private reveal(projectId: string, branchId: string): Promise<string> {
+    return retry(() => this.deps.neon.revealRolePassword(projectId, branchId, READER_ROLE), {
+      attempts: 16,
+      delayMs: this.deps.retryMs ?? 2000,
+      retryable: (err) => err instanceof UpstreamError && err.status === 404,
+    });
   }
 
   /**
@@ -181,6 +176,7 @@ export class DbReaders implements ReaderSource {
     return true;
   }
 
+  /** No branch of the project may hold a SQL-created reader (start-up pass only, see migrateAll). */
   async prepareBranching(projectId: string): Promise<void> {
     for (const b of await this.deps.neon.listBranches(projectId)) await this.dropLegacy(projectId, b.id);
   }
@@ -207,11 +203,10 @@ export class DbReaders implements ReaderSource {
 }
 
 /** Wires the reader into the app database (real Postgres only) and runs the start-up pass. */
-export function bindDbReaders(ctx: { store: Store; neon: NeonClient; appdb: object }, connect: (url: string) => Promise<DbConn>): DbReaders | null {
-  const appdb = ctx.appdb as { bindReaders?: (r: ReaderSource) => void };
-  if (!appdb.bindReaders) return null;
+export function bindDbReaders(ctx: { store: Store; neon: NeonClient; appdb: AppDatabase }, connect: (url: string) => Promise<DbConn>): DbReaders | null {
+  if (!ctx.appdb.bindReaders) return null;
   const readers = new DbReaders({ store: ctx.store, neon: ctx.neon, connect });
-  appdb.bindReaders(readers);
+  ctx.appdb.bindReaders(readers);
   setTimeout(() => void readers.migrateAll().catch(() => undefined), 0).unref();
   return readers;
 }

@@ -1,6 +1,7 @@
 import type { AppDatabase } from './appdb.js';
 import type { BlobStore } from './blobs.js';
 import type { BoxliteClient } from './boxlite.js';
+import type { AccessLog } from './console-access.js';
 import type { Config } from './config.js';
 import type { Store } from './db.js';
 import type { EventBus } from './events.js';
@@ -45,6 +46,8 @@ export interface Ctx extends Deps {
   store: Store;
   bus: EventBus;
   blobs: BlobStore;
+  /** The app proxy's request log (console Logs `access`, Overview metrics); one per CP. */
+  accessLog: AccessLog;
   resources: Resources;
   orchestrator: Orchestrator;
   origins: Origins;

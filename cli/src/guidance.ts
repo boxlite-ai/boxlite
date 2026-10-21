@@ -2,8 +2,9 @@ import { MicrocloudError } from '@microcloud/shared';
 
 /**
  * Makes every error actionable: a `next` that is a runnable command or a file edit (never "try
- * again"), and a `docs` pointer to the offline guide. Control-plane messages are kept; their
- * `next` is kept too unless it is generic or names a command this CLI does not have.
+ * again"), and a `docs` pointer to the offline guide. Control-plane messages and their `next` are
+ * passed through unchanged unless the `next` is missing or generic. Hints are fixed where they are
+ * written, never rewritten here: `test/hints.test.ts` parses every boxlite-app command they name.
  */
 
 export interface ErrorContext {
@@ -12,22 +13,11 @@ export interface ErrorContext {
   /** The exact command line, for "rerun" hints. */
   commandLine: string;
   env: string;
+  /** The error was raised in this process (a CLI bug), not answered by the control plane. */
+  clientSide?: boolean;
 }
 
 const GENERIC_NEXT = /^(retry|try again)( in a (moment|minute))?\.?$/i;
-
-/** Commands the control plane names without the `app` group, as the PRD drafts did. */
-const COMMAND_FIXES: [RegExp, string][] = [
-  [/`boxlite-app env list`/g, '`boxlite-app app status`'],
-  [/boxlite-app (deployments|deployment|pull|status|logs|services|sql|db|rollback|restart|access|context|env|export|clone)\b/g, 'boxlite-app app $1'],
-  [/BOXLITE_APP_KEY/g, 'BOXLITE_API_KEY'],
-];
-
-export function fixCommandReferences(text: string): string {
-  let out = text;
-  for (const [re, replacement] of COMMAND_FIXES) out = out.replace(re, replacement);
-  return out.replace(/boxlite-app app app /g, 'boxlite-app app ');
-}
 
 const DOCS: Record<string, string> = {
   unauthenticated: 'boxlite-app docs setup',
@@ -65,7 +55,10 @@ function defaultNext(err: MicrocloudError, c: ErrorContext): string {
     case 'invalid_link':
       return 'delete .boxlite/link.json and run `boxlite-app init`';
     case 'internal':
-      return `rerun with BOXLITE_DEBUG=1 to get the stack trace: \`BOXLITE_DEBUG=1 ${c.commandLine}\``;
+      // BOXLITE_DEBUG prints the stack of a CLI error; a control-plane 500 has none to print.
+      return c.clientSide
+        ? `rerun with BOXLITE_DEBUG=1 to get the stack trace: \`BOXLITE_DEBUG=1 ${c.commandLine}\``
+        : `the platform failed internally; wait 30 s and rerun \`${c.commandLine}\` (at most 3 times), then \`boxlite-app doctor\` and report the message to the user`;
     default:
       return `see ${help}, or \`boxlite-app doctor\``;
   }
@@ -85,10 +78,10 @@ function notFoundNext(err: MicrocloudError, c: ErrorContext): string {
 }
 
 export function refineError(err: MicrocloudError, c: ErrorContext): MicrocloudError {
-  const next = err.next && !GENERIC_NEXT.test(err.next.trim()) ? fixCommandReferences(err.next) : defaultNext(err, c);
+  const next = err.next && !GENERIC_NEXT.test(err.next.trim()) ? err.next : defaultNext(err, c);
   const details = { ...err.details };
   if (!('docs' in details) && DOCS[err.code]) details.docs = DOCS[err.code];
-  return new MicrocloudError(err.code, fixCommandReferences(err.message), next, details);
+  return new MicrocloudError(err.code, err.message, next, details);
 }
 
 /** Commander's own errors (unknown command/option, missing argument) as `usage` errors with a concrete next. */

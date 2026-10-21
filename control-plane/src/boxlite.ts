@@ -24,7 +24,14 @@ export interface CreateBoxRequest {
 export interface VolumeInfo {
   id: string;
   name: string;
+  /** When the API reports them (the console shows them). */
+  sizeBytes?: number | null;
+  state?: string | null;
 }
+
+type RawVolume = { volume_id?: string; id?: string; name?: string; size_bytes?: unknown; used_bytes?: unknown; size_gb?: unknown; state?: unknown; status?: unknown };
+
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : null);
 
 /** The slice of the BoxLite /v1 REST API the CP uses. Injected so tests run against a fake. */
 export interface BoxliteClient {
@@ -56,7 +63,7 @@ export class HttpBoxliteClient implements BoxliteClient {
   ) {}
 
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
-    if (!this.apiKey) throw fail('unavailable', 'BOXLITE_API_KEY is not configured on the control plane', 'set BOXLITE_API_KEY and restart the control plane');
+    if (!this.apiKey) throw fail('unavailable', 'BOXLITE_API_KEY is not configured on the control plane', 'the platform cannot create Boxes right now, and nothing in the app can change that: tell the user the platform operator must configure its BoxLite API key');
     const { body: out } = await requestJson<T>('boxlite', {
       method,
       url: `${this.baseUrl}${path}`,
@@ -110,7 +117,7 @@ export class HttpBoxliteClient implements BoxliteClient {
       return await this.call<T>(method, path, body);
     } catch (err) {
       if (err instanceof UpstreamError && err.status === 403) {
-        throw fail('forbidden', 'the platform API key is not allowed to manage BoxLite volumes (403 from /v1/volumes)', 'give the control plane a key with volume permissions, or remove [[volume]] from boxlite.toml');
+        throw fail('forbidden', 'the platform API key is not allowed to manage BoxLite volumes (403 from /v1/volumes)', 'the platform cannot manage volumes yet: remove [[volume]] from boxlite.toml (keep files in the database), or tell the user the platform operator must grant its key volume permissions');
       }
       throw err;
     }
@@ -122,9 +129,18 @@ export class HttpBoxliteClient implements BoxliteClient {
   }
 
   async listVolumes(): Promise<VolumeInfo[]> {
-    const out = await this.volumeCall<{ volumes?: { volume_id?: string; id?: string; name?: string }[] } | { volume_id?: string; id?: string; name?: string }[]>('GET', '/volumes');
+    const out = await this.volumeCall<{ volumes?: RawVolume[] } | RawVolume[]>('GET', '/volumes');
     const list = Array.isArray(out) ? out : (out.volumes ?? []);
-    return list.map((v) => ({ id: String(v.volume_id ?? v.id ?? v.name), name: String(v.name ?? '') }));
+    return list.map((v) => {
+      const gb = num(v.size_gb);
+      const state = v.state ?? v.status;
+      return {
+        id: String(v.volume_id ?? v.id ?? v.name),
+        name: String(v.name ?? ''),
+        sizeBytes: num(v.size_bytes) ?? num(v.used_bytes) ?? (gb !== null ? gb * 1024 ** 3 : null),
+        state: typeof state === 'string' ? state : null,
+      };
+    });
   }
 
   async deleteVolume(id: string): Promise<void> {

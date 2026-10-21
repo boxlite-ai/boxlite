@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import { after, beforeEach, test } from 'node:test';
 import { newBoxToken, sha256hex } from '../src/auth.js';
-import { migrateLegacyBlobs } from '../src/blobs.js';
 import { now } from '../src/db.js';
 import { createApp, harness, sha, type Harness } from './helpers.js';
 
@@ -111,26 +110,6 @@ test('two Apps uploading identical content each keep their own copy', async () =
   await uploadAll('evil', keyB, { 'b.txt': 'same' });
   assert.equal(readFileSync(h.ctx.blobs.path(appId('crm'), sha('same')), 'utf8'), 'same');
   assert.equal(readFileSync(h.ctx.blobs.path(appId('evil'), sha('same')), 'utf8'), 'same');
-});
-
-test('start-up migration copies referenced legacy blobs into each App, idempotently', async () => {
-  const legacyDir = join(h.dir, 'blobs');
-  mkdirSync(legacyDir, { recursive: true });
-  // buildCtx already ran the (empty) migration for this fresh DATA_DIR; pretend it is an old one.
-  rmSync(join(legacyDir, '.per-app-v1'));
-  writeFileSync(join(legacyDir, sha(SECRET)), SECRET);
-  writeFileSync(join(legacyDir, sha('shared')), 'shared');
-  const files = (contents: string[]) => JSON.stringify(contents.map((c, i) => ({ path: `f${i}`, size: c.length, mode: 0o644, sha256: sha(c) })));
-  h.ctx.store.run('INSERT INTO snapshots (app_id, id, manifest, files, bytes, created_at) VALUES (?, ?, ?, ?, ?, ?)', appId('crm'), 'snap_a', files([SECRET, 'shared']), 2, 1, now());
-  h.ctx.store.run('INSERT INTO uploads (id, app_id, manifest, created_at) VALUES (?, ?, ?, ?)', 'upl_b', appId('evil'), files(['shared']), now());
-  migrateLegacyBlobs(h.ctx);
-  assert.equal(h.ctx.blobs.has(appId('crm'), sha(SECRET)), true);
-  assert.equal(h.ctx.blobs.has(appId('crm'), sha('shared')), true);
-  assert.equal(h.ctx.blobs.has(appId('evil'), sha('shared')), true);
-  assert.equal(h.ctx.blobs.has(appId('evil'), sha(SECRET)), false, 'only blobs an App references are copied to it');
-  // Second run is a no-op and keeps what is there.
-  migrateLegacyBlobs(h.ctx);
-  assert.equal(readFileSync(h.ctx.blobs.path(appId('crm'), sha(SECRET)), 'utf8'), SECRET);
 });
 
 test('blob paths reject traversal in the app id or hash', () => {

@@ -4,8 +4,8 @@ import type { EnvRow } from './db.js';
 
 /**
  * Per-request access log of the app proxy, for the console's Logs (`access`) and Overview metrics.
- * The CP core does not record end-user requests, so this module owns its own table in the CP's
- * sqlite file and hooks in as a middleware in front of the proxy catch-all.
+ * Table `console_access` (db.ts migration 7) is keyed to its env, so env deletion and app purge
+ * remove the rows. server.ts wraps every app-origin request in `withAccessLog`.
  */
 
 const RING = 20_000;
@@ -23,18 +23,7 @@ export interface AccessRow {
 export class AccessLog {
   private inserts = 0;
 
-  constructor(private readonly ctx: Pick<Ctx, 'store'>) {
-    ctx.store.db.exec(`CREATE TABLE IF NOT EXISTS console_access (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      env_id TEXT NOT NULL,
-      ts TEXT NOT NULL,
-      method TEXT NOT NULL,
-      path TEXT NOT NULL,
-      status INTEGER NOT NULL,
-      ms INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS console_access_env ON console_access(env_id, id);`);
-  }
+  constructor(private readonly ctx: Pick<Ctx, 'store'>) {}
 
   record(envId: string, row: Omit<AccessRow, 'id'>): void {
     this.ctx.store.run('INSERT INTO console_access (env_id, ts, method, path, status, ms) VALUES (?, ?, ?, ?, ?, ?)', envId, row.ts, row.method, row.path.slice(0, 500), row.status, row.ms);
@@ -48,10 +37,6 @@ export class AccessLog {
     return this.ctx.store
       .all<AccessRow>('SELECT id, ts, method, path, status, ms FROM console_access WHERE env_id = ? AND ts >= ? ORDER BY id DESC LIMIT ?', envId, sinceIso, limit)
       .reverse();
-  }
-
-  deleteEnv(envId: string): void {
-    this.ctx.store.run('DELETE FROM console_access WHERE env_id = ?', envId);
   }
 
   /**

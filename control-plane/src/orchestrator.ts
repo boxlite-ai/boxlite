@@ -298,6 +298,11 @@ export class Orchestrator {
   private async apply(job: Job): Promise<number | null> {
     const { store, resources, supervisor } = this.ctx;
     const manifest = job.manifest();
+    // An apply runs the live release's code with new configuration: record that code's snapshot, so
+    // `deployments/{n}/source` (and `app clone`) works for an apply like for the deploy it restarts.
+    const running = store.envById(job.envId)!.live_deployment;
+    const code = running ? store.deployment(job.envId, running) : undefined;
+    if (code?.snapshot_id && code.snapshot_id !== job.dep.snapshot_id) store.updateDeployment(job.envId, job.dep.number, { snapshot_id: code.snapshot_id });
     const migrations = job.dep.request.migrations ?? [];
     job.recordMigrations(migrations);
 

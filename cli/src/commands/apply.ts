@@ -68,9 +68,9 @@ export function registerApply(program: Command, make: MakeCtx): void {
       .command('apply')
       .description('provision the resources in boxlite.toml (database, migrations, volumes, auth, variables) without uploading code')
       .option('-y, --yes', 'do not ask for confirmation')
-      .option('--force', 'apply even when the local base version is behind the environment')
+      .option('--force', 'apply even when the local base version is behind the environment: overwrites changes made online; only when the user asks')
       .option('-m, --message <text>', 'description shown in the deployment list')
       .action(async (opts: { force?: boolean; message?: string }, cmd: Command) => apply(await make(cmd), opts)),
-    { json: 'Deployment (kind "apply"); nothing to do: { applied: false, changes: [] }', exits: [2, 3, 6, 7, 8, 9], online: true },
+    { json: 'Deployment (kind "apply"); nothing to do: { applied: false, changes: [] }', exits: [2, 3, 6, 7, 8, 9, 10], online: true },
   );
 }

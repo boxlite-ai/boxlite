@@ -449,7 +449,8 @@ test('activity names the console as actor and links a started deployment to it',
   await deploy(key, TOML);
   await api('/apps/crm/actions', { method: 'POST', json: { type: 'setVariable', name: 'A', value: '1' } });
   await h.ctx.orchestrator.idle(mainEnv().id);
-  const activity = (await api('/apps/crm/activity')).body;
+  // The Activity tab reads it from the app detail (the separate /activity route had no caller).
+  const activity = (await api('/apps/crm')).body.activity;
   const started = activity.filter((a: any) => a.action === 'started a deployment');
   assert.deepEqual(
     started.map((a: any) => [a.actorKind, a.link?.deployment, a.detail]),
@@ -497,7 +498,7 @@ let dir: string | undefined;
 afterEach(() => {
   if (dir) rmSync(dir, { recursive: true, force: true });
   dir = undefined;
-  delete process.env.CONSOLE_DIR;
+  delete h.ctx.config.consoleDir;
 });
 
 test('the built console is served under /console/ with an SPA fallback', async () => {
@@ -505,7 +506,7 @@ test('the built console is served under /console/ with an SPA fallback', async (
   mkdirSync(join(dir, 'assets'));
   writeFileSync(join(dir, 'index.html'), '<!doctype html><div id="root"></div>');
   writeFileSync(join(dir, 'assets', 'app-abc.js'), 'console.log(1)');
-  process.env.CONSOLE_DIR = dir;
+  h.ctx.config.consoleDir = dir;
   const get = (p: string) => h.request(p, { headers: { cookie } });
   assert.equal((await h.request('/console')).status, 308);
   const index = await get('/console/');

@@ -163,24 +163,6 @@ func isUserSpec(l string) bool {
 	return strings.Contains(l, "=")
 }
 
-// sudoersRule is the whole of boxlite's sudo rights after the lockdown: one
-// program, as root, with no arguments (`""`), with the environment reset.
-// pam_session/pam_setcred/use_pty off let sudo exec the launcher directly, so
-// on later boots the supervisor is PID 1 again instead of a child of sudo.
-func sudoersRule(user, launcher string, withDefaults bool) string {
-	var b strings.Builder
-	b.WriteString("# Managed by the BoxLite Micro-cloud supervisor (contracts.md 2.1).\n")
-	b.WriteString("# " + user + " may run exactly one program as root: the supervisor launcher, without arguments.\n")
-	b.WriteString("# Every other sudo right of " + user + " was disabled at boot. Do not edit.\n")
-	if withDefaults {
-		b.WriteString("Defaults:" + user + " env_reset, !setenv, !use_pty, !log_output, !log_input, !pam_session, !pam_setcred\n")
-	} else {
-		b.WriteString("Defaults:" + user + " env_reset, !setenv\n")
-	}
-	b.WriteString(user + " ALL=(root) NOPASSWD: " + launcher + " \"\"\n")
-	return b.String()
-}
-
 // OnlyLauncher checks the output of `sudo -l -U <user>`: every command line
 // listed must be the launcher. It returns false for "not allowed to run sudo"
 // too, because then the next Box start could not become root.

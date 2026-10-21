@@ -71,9 +71,7 @@ export function svRoutes(ctx: Ctx) {
     const env = c.get('env');
     const app = c.get('app');
     // forward_secret opens the app path only, control_secret the /.boxlite/sv/* API only (F3).
-    // gateway_secret repeats the forwarding secret for protocol-1 supervisors, so a Box that has not
-    // been restarted onto the current binary keeps serving its users until it is.
-    const secrets = { forward_secret: env.gateway_secret, control_secret: env.control_secret, gateway_secret: env.gateway_secret };
+    const secrets = { forward_secret: env.forward_secret, control_secret: env.control_secret };
     const n = env.requested_deployment ?? env.live_deployment;
     const dep = n ? store.deployment(env.id, n) : undefined;
     const spec = dep?.spec_version ? store.spec(env.id, dep.spec_version) : undefined;

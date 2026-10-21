@@ -8,11 +8,10 @@ import { fail } from '../errors.js';
 import { MAX_ROWS } from '../appdb.js';
 import { classify } from '../sqlguard.js';
 import { body, envOf } from './util.js';
-
-const quoteIdent = (s: string) => `"${s.replace(/"/g, '""')}"`;
+import { dbCoordinates, quoteIdent } from '../services/db.js';
 
 function dbUrl(env: EnvRow): string {
-  if (!env.db_url) throw fail('not_found', `env "${env.name}" has no database`, 'add [database] to boxlite.toml and run `boxlite-app apply`');
+  if (!env.db_url) throw fail('not_found', `env "${env.name}" has no database`, 'add [database] to boxlite.toml and run `boxlite-app apply --yes`');
   return env.db_url;
 }
 
@@ -24,7 +23,7 @@ export function dbRoutes(ctx: Ctx) {
     const app = c.get('app');
     const env = envOf(ctx, c);
     if (!env.db_url || !env.neon_branch_id) return c.json({ status: 'none' });
-    const u = new URL(env.db_url);
+    const { host, database, user } = dbCoordinates(env.db_url);
     let size: number | null = null;
     let status = 'ready';
     try {
@@ -32,7 +31,7 @@ export function dbRoutes(ctx: Ctx) {
     } catch {
       status = 'unknown';
     }
-    return c.json({ status, host: u.hostname, database: u.pathname.slice(1), user: decodeURIComponent(u.username), branch: env.neon_branch_id, size_bytes: size });
+    return c.json({ status, host, database, user, branch: env.neon_branch_id, size_bytes: size });
   });
 
   r.get('/envs/:env/db/schema', async (c) => {
@@ -114,7 +113,7 @@ export function dbRoutes(ctx: Ctx) {
     if (cls.ddl) {
       if (env.name === 'main') {
         const kw = [...new Set(cls.statements.filter((s) => s.ddl).map((s) => s.keyword))].join(', ');
-        throw fail('forbidden', `schema changes (DDL: ${kw}) are not allowed on main through SQL`, 'add a file under migrations/ and run `boxlite-app apply`');
+        throw fail('forbidden', `schema changes (DDL: ${kw}) are not allowed on main through SQL`, 'add a file under migrations/ (`boxlite-app app db migration new <name>`), then `boxlite-app apply --yes`');
       }
       if (!b.write) throw fail('forbidden', 'DDL (including DO, CALL and functions) needs write:true', 'pass --write (allowed on non-main environments only)');
     }

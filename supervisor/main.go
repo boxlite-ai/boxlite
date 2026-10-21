@@ -30,13 +30,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/boxlite-ai/microcloud/supervisor/internal/api"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/cp"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/deploy"
+	"github.com/boxlite-ai/microcloud/supervisor/internal/envfilter"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/gateway"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/logs"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/privilege"
@@ -92,49 +93,25 @@ func configure(boxPath string) (config, error) {
 		envID:     os.Getenv("BOXLITE_ENV_ID"),
 		stateDir:  envOr("SV_STATE_DIR", "/home/boxlite/app"),
 		listen:    envOr("SV_LISTEN", ":8080"),
-		insecure:  isTrue(os.Getenv("SV_CP_INSECURE")),
-		trustUser: isTrue(os.Getenv("SV_TRUST_USER_HEADERS")),
+		insecure:  envfilter.On(os.Getenv("SV_CP_INSECURE")),
+		trustUser: envfilter.On(os.Getenv("SV_TRUST_USER_HEADERS")),
 	}
-	for name, v := range map[string]string{"BOXLITE_CP_URL": c.cpURL, "BOXLITE_BOX_TOKEN": c.token, "BOXLITE_ENV_ID": c.envID} {
-		if v == "" {
-			return c, fmt.Errorf("%s is required", name)
+	var missing []string
+	for _, req := range []struct{ name, value string }{
+		{"BOXLITE_CP_URL", c.cpURL}, {"BOXLITE_BOX_TOKEN", c.token}, {"BOXLITE_ENV_ID", c.envID},
+	} {
+		if req.value == "" {
+			missing = append(missing, req.name)
 		}
 	}
+	if len(missing) > 0 {
+		return c, fmt.Errorf("%s required", strings.Join(missing, ", "))
+	}
 	c.appDir = c.stateDir
-	c.baseEnv = deploy.FilteredEnviron()
+	c.baseEnv = envfilter.App(os.Environ(), "")
 	// Defence in depth: nothing spawned later inherits the token.
 	os.Unsetenv("BOXLITE_BOX_TOKEN")
 	return c, nil
-}
-
-// mountsFrom serves the files endpoint's volume list from GET /sv/v1/spec
-// through the supervisor's own client, cached briefly (a volume change
-// replaces the Box anyway).
-func mountsFrom(client *cp.Client) func() ([]string, error) {
-	var mu sync.Mutex
-	var at time.Time
-	var cached []string
-	return func() ([]string, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if cached != nil && time.Since(at) < 15*time.Second {
-			return cached, nil
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		resp, err := client.Spec(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("control plane: %w", err)
-		}
-		mounts := []string{}
-		for _, v := range resp.Spec.Volumes {
-			if v.Mount != "" {
-				mounts = append(mounts, v.Mount)
-			}
-		}
-		cached, at = mounts, time.Now()
-		return mounts, nil
-	}
 }
 
 func envOr(key, def string) string {
@@ -142,14 +119,6 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
-}
-
-func isTrue(v string) bool {
-	switch v {
-	case "1", "true", "TRUE", "yes", "on":
-		return true
-	}
-	return false
 }
 
 func main() {
@@ -170,7 +139,7 @@ func main() {
 	// Started as the app user (a Box created with the protocol-1 cmd, or a
 	// manual run): become root through sudo. Returns only if that is not
 	// possible, and then the supervisor runs as it was started.
-	if privilege.Supported() && os.Geteuid() != 0 && !isTrue(os.Getenv("SV_NO_ELEVATE")) {
+	if privilege.Supported() && os.Geteuid() != 0 && !envfilter.On(os.Getenv("SV_NO_ELEVATE")) {
 		if err := privilege.Elevate(*boxPath); err != nil {
 			log.Printf("not root and cannot become root (%v); services will run as this user", err)
 		}
@@ -227,22 +196,28 @@ func main() {
 		Root:       cfg.root,
 		SudoLocked: cfg.sudoLocked,
 	})
-	gw := gateway.New(mgr, cfg.trustUser)
-	gw.SetStaticOpener(store.OpenStatic)
-	gateway.SetMounts(mountsFrom(client))
+	gw := gateway.New(mgr, cfg.trustUser,
+		gateway.WithStaticOpener(store.OpenStatic),
+		// The files endpoint reaches only the volumes the control plane's
+		// spec declares, looked up with this process's own client.
+		gateway.WithMounts(client.VolumeMounts),
+	)
 	mgr.SetGate(gw)
 
 	srv := &http.Server{
 		Addr:              cfg.listen,
 		Handler:           gw,
 		ReadHeaderTimeout: 15 * time.Second,
+		// The CP keeps connections to the tunnel alive; idle ones must not
+		// pile up. No Read/WriteTimeout: proxied apps may stream.
+		IdleTimeout: 2 * time.Minute,
 	}
 	ln, err := net.Listen("tcp", cfg.listen)
 	if err != nil {
 		log.Fatalf("gateway: %v", err)
 	}
 	go func() {
-		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("gateway: %v", err)
 		}
 	}()

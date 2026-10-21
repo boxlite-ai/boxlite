@@ -82,12 +82,12 @@ test('a SQL-created reader (no_login) is dropped and re-created through the API'
   assert.equal((await h.neon.getRole('proj-1', 'br-main', READER_ROLE))?.authMethod, 'password');
 });
 
-test('before branching, SQL-created readers are removed from every branch of the project', async () => {
+test('the start-up pass removes SQL-created readers from every branch of the project', async () => {
   h.neon.branches = ['br-main', 'br-dev', 'br-main-before-restore'];
   for (const b of ['br-main', 'br-main-before-restore']) h.neon.roles.set(b, new Map([[READER_ROLE, { authMethod: 'no_login', password: '' }]]));
   h.neon.roles.set('br-dev', new Map([[READER_ROLE, { authMethod: 'password', password: 'x' }]]));
   await readers.prepareBranching('proj-1');
-  assert.deepEqual(h.neon.calls.sort(), [`delete-role br-main ${READER_ROLE}`, `delete-role br-main-before-restore ${READER_ROLE}`]);
+  assert.deepEqual(h.neon.calls.filter((c) => c !== 'list-branches').sort(), [`delete-role br-main ${READER_ROLE}`, `delete-role br-main-before-restore ${READER_ROLE}`]);
   assert.ok(h.neon.roles.get('br-dev')!.has(READER_ROLE), 'API-created readers stay');
 });
 
@@ -125,11 +125,12 @@ test('the reader password stays out of the spec, the agent context and the conso
   }
 });
 
-test('env create clears SQL-created readers before Neon creates the schema-only branch', async () => {
+test('env create branches right away: the SQL-created-reader clean-up runs once at start-up, not per branch', async () => {
+  h.neon.calls.length = 0;
   const res = await h.request('/v1/apps/crm/envs', { method: 'POST', key: 'test-admin-token', json: { name: 'staging', from: 'main' } });
   assert.equal(res.status, 201, await res.clone().text());
-  assert.deepEqual(h.appdb.branchingChecks, ['proj-1']);
   assert.ok(h.neon.calls.some((c) => c === 'branch staging br-main schema-only'));
+  assert.deepEqual(h.neon.calls.filter((c) => c === 'list-branches' || c.startsWith('delete-role')), [], 'no per-branch role scan before branching');
 });
 
 test('a new database provisions the reader for main right away', async () => {

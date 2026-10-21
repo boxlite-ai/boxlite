@@ -157,7 +157,7 @@ export function registerDeploy(program: Command, make: MakeCtx): void {
       .description('upload the project, build and start it on the environment, and follow the deployment until it is live or failed')
       .option('-m, --message <text>', 'deployment message')
       .option('--detach', 'return as soon as the deployment is queued')
-      .option('--force', 'deploy even when the local base version is behind the environment')
+      .option('--force', 'deploy even when the local base version is behind the environment: overwrites changes made online; only when the user asks')
       .option('--dry-run', 'check + plan + upload size; upload and deploy nothing')
       .option('-v, --verbose', 'stream build and start log lines as they arrive')
       .option('-y, --yes', 'accepted for symmetry with apply; deploy never prompts')

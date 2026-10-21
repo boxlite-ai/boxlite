@@ -199,10 +199,10 @@ providers = ["twitter"]
 custom = ["not a host"]
 [variables]
 lower = "x"
-PORT = 8080
+LOG_LEVEL = 8080
 [secrets]
 KEY = "openai"
-PORT = "org/x"
+LOG_LEVEL = "org/x"
 `;
   const { errors } = parseManifest(src);
   assert.deepEqual(errors.map((e) => `${e.line}:${e.rule}`), [
@@ -268,4 +268,32 @@ test('every boxlite.toml example in agent/SKILL.md parses', async () => {
     const out = parseManifest(block);
     assert.deepEqual(out.errors, [], `SKILL.md example failed to parse:\n${block}`);
   }
+});
+
+test('variables and secrets may not take the names the platform sets (DATABASE_URL, PORT, BOXLITE_*)', () => {
+  const src = `name = "crm"
+[runtime]
+image = "node"
+[[service]]
+name = "web"
+command = "x"
+port = 3000
+[variables]
+PORT = "8080"
+BOXLITE_APP_URL = "https://elsewhere"
+PORTAL = "ok"
+[secrets]
+DATABASE_URL = "org/db"
+[env.staging.variables]
+BOXLITE_ENV = "prod"
+`;
+  const main = parseManifest(src);
+  assert.equal(main.manifest, null);
+  assert.deepEqual(main.errors.map((e) => `${e.line}:${e.rule}`), ['9:reserved_variable', '10:reserved_variable', '13:reserved_variable']);
+  assert.match(main.errors[0]!.message, /PORT is set by BoxLite/);
+  // [env.<name>] overrides are checked for the env they resolve to.
+  assert.deepEqual(parseManifest(src, 'staging').errors.map((e) => e.rule), ['reserved_variable', 'reserved_variable', 'reserved_variable', 'reserved_variable']);
+  const ok = parseManifest(src.replace(/^(PORT|BOXLITE_APP_URL) = .*\n/gm, '').replace(/\[secrets\]\nDATABASE_URL = .*\n/, '').replace(/\[env\.staging[\s\S]*/, ''));
+  assert.deepEqual(ok.errors, []);
+  assert.deepEqual(ok.manifest?.variables, { PORTAL: 'ok' });
 });

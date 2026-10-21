@@ -59,6 +59,8 @@ var (
 	ErrNoRelease = errors.New("no such release on this box")
 	ErrNotBuilt  = errors.New("release is not built")
 	ErrNoService = errors.New("no such service")
+	// ErrShuttingDown: the supervisor received SIGTERM and starts nothing new.
+	ErrShuttingDown = errors.New("the supervisor is shutting down")
 )
 
 // Spec is the subset of the Spec JSON (contracts.md section 0) the supervisor acts on.
@@ -191,26 +193,18 @@ func (s Spec) Validate() error {
 //
 // ForwardSecret authenticates proxied end-user traffic and nothing else;
 // ControlSecret authenticates the control plane's /.boxlite/sv/* calls.
-// GatewaySecret is the pre-split name of the forward secret, still sent so a
-// supervisor of protocol 1 keeps serving until it is restarted.
 type SpecResponse struct {
 	Spec          Spec              `json:"spec"`
 	Deployment    int               `json:"deployment"`
 	ForwardSecret string            `json:"forward_secret"`
 	ControlSecret string            `json:"control_secret"`
-	GatewaySecret string            `json:"gateway_secret"`
 	Env           map[string]string `json:"env"`
 	Snapshot      Snapshot          `json:"snapshot"`
 }
 
-// Secrets returns the forward and control secrets, falling back to the
-// pre-split gateway_secret for the forward one.
+// Secrets returns the forward and control secrets.
 func (r SpecResponse) Secrets() (forward, control string) {
-	forward = r.ForwardSecret
-	if forward == "" {
-		forward = r.GatewaySecret
-	}
-	return forward, r.ControlSecret
+	return r.ForwardSecret, r.ControlSecret
 }
 
 // Snapshot locates the source tar.gz of a deployment.
@@ -220,12 +214,15 @@ type Snapshot struct {
 }
 
 // LogLine is one element of the POST /sv/v1/logs batch and of the local ring buffer.
+// Deployment 0 means the line belongs to no deployment (supervisor boot,
+// gateway lines); it is left out of the JSON, which the control plane stores
+// as null rather than as a deployment numbered 0.
 type LogLine struct {
 	TS         time.Time `json:"ts"`
 	Source     string    `json:"source"`
 	Level      string    `json:"level"`
 	Line       string    `json:"line"`
-	Deployment int       `json:"deployment"`
+	Deployment int       `json:"deployment,omitempty"`
 }
 
 // Status is the body of POST /sv/v1/status.

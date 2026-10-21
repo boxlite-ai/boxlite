@@ -69,7 +69,6 @@ class FakeReaders implements ReaderSource {
     this.password = this.pg.readerPassword;
     return readerUrl(ownerUrl, this.password);
   }
-  async prepareBranching() {}
 }
 
 function db(pg: FakePg): { db: PgAppDatabase; readers: FakeReaders } {

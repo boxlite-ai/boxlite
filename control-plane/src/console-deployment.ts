@@ -1,6 +1,7 @@
 import { classifyFailure, exposedService, type Diagnosis } from '@microcloud/shared';
 import type { AppRow, Change, Deployment, EnvRow, SnapshotFile } from './db.js';
 import type { Ctx } from './ctx.js';
+import { deploymentLogs, formatLogLine } from './services/logs.js';
 
 /**
  * The console's deployment detail: a traceable timeline of one deployment (steps with start and
@@ -69,7 +70,8 @@ export function changeText(c: Change): string {
 }
 
 function codeChanges(ctx: Pick<Ctx, 'store'>, app: AppRow, env: EnvRow, d: Deployment): CodeChanges | null {
-  if (!d.snapshot_id) return null;
+  // An apply records the snapshot of the release it restarts; it never changes code.
+  if (!d.snapshot_id || d.kind === 'apply') return null;
   const snap = ctx.store.snapshot(app.id, d.snapshot_id);
   if (!snap) return null;
   const prev = ctx.store.deploymentsWhere('env_id = ? AND number < ? AND snapshot_id IS NOT NULL ORDER BY number DESC LIMIT 1', env.id, d.number)[0];
@@ -94,12 +96,7 @@ export function deploymentChanges(ctx: Pick<Ctx, 'store'>, app: AppRow, env: Env
 
 /** Log lines of a deployment in the form the classifier reads (`<ts> [<source>] <line>`). */
 function logLines(ctx: Pick<Ctx, 'store'>, env: EnvRow, d: Deployment): string[] {
-  const own = ctx.store.logs(env.id, { deployment: d.number, limit: 400 });
-  const rel = d.release && d.release !== d.number ? ctx.store.logs(env.id, { deployment: d.release, since: d.started_at ?? d.created_at, limit: 400 }) : [];
-  return [...own, ...rel]
-    .filter((l) => !d.finished_at || l.ts <= d.finished_at)
-    .sort((a, b) => (a.id ?? 0) - (b.id ?? 0))
-    .map((l) => `${l.ts} [${l.source}] ${l.line}`);
+  return deploymentLogs(ctx.store, env.id, d, 800).map(formatLogLine);
 }
 
 function fixPrompt(app: AppRow, env: EnvRow, d: Deployment, step: string, diagnosis: Diagnosis): string {

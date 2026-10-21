@@ -27,6 +27,7 @@ health = "/"              # must answer 2xx within 60 s after start
 
 # End-user sign-in, hosted by the platform: send users to .boxlite/auth/login and read
 # X-BoxLite-User-* headers. \`protect\` paths require login. Remove [auth] for an anonymous site.
+# Sign-in does not open a private app to others: that is the access level (\`boxlite-app app access\`).
 [auth]
 providers = ["github", "google"]
 # protect = ["/app/*"]
@@ -36,7 +37,8 @@ providers = ["github", "google"]
 # [database]
 # migrations = "migrations/"
 
-# Plain configuration (visible in the console). Secrets reference org secrets instead:
+# Plain configuration (visible in the console). Secrets reference org secrets, whose values a
+# platform admin sets (the console only lists them):
 # [variables]
 # LOG_LEVEL = "info"
 # [secrets]
@@ -57,7 +59,7 @@ export function agentsBlock(app: string): string {
     '',
     '- Start of a session: `boxlite-app whoami`, then `boxlite-app app context` (services, schema, variables, recent errors, next actions).',
     '- Something wrong: `boxlite-app doctor` lists the problems with a fix each.',
-    '- Loop: edit → `boxlite-app check` → `boxlite-app plan` → `boxlite-app deploy -m "…"` → verify the URL with curl.',
+    '- Loop: edit → `boxlite-app check` → `boxlite-app plan` → `boxlite-app deploy -m "…"` → verify with `boxlite-app app curl <path>`.',
     '- Runtime rules: listen on `$PORT` and `0.0.0.0`; never hardcode the app URL (use `BOXLITE_APP_URL`); data only in the database or a volume.',
     '- Verify like a browser: `boxlite-app app curl <path>` (works for private apps; `--as qa@example.com` for signed-in pages).',
     '- Schema changes: a new file from `boxlite-app app db migration new <name>`; never edit an applied migration.',

@@ -1,17 +1,20 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { AppRow, Deployment, EnvRow } from './db.js';
-import { ACTIVE_STATUSES } from './db.js';
+import { ACTIVE_STATUSES, now } from './db.js';
 import type { Ctx } from './ctx.js';
 import { schedulesOf } from './agent-context.js';
 import type { AccessLog } from './console-access.js';
 import { activityView, actorLabel, type ActivityView } from './console-activity.js';
 import { changeText, failureView, runningStepStartedAt } from './console-deployment.js';
 import { endUserAuth, type AuthStatusView } from './console-enduser.js';
-import { requestJson } from './http.js';
+import type { VolumeInfo } from './boxlite.js';
 import { BOX_SIZES } from './platform.js';
+import { volumeName } from './resources.js';
+import { dbCoordinates } from './services/db.js';
 import type { Spec } from './spec.js';
 import type { ServiceState } from './supervisor.js';
+import { logLevel } from './services/logs.js';
 
 /**
  * Builds the console's view objects (the shapes of the dashboard's lib/apps/types.ts) from real CP
@@ -229,7 +232,7 @@ What I want: {{REQUEST}}
 `;
 
 function promptTemplate(ctx: Pick<Ctx, 'config'>): string {
-  const path = process.env.PROMPT_TEMPLATE_PATH ? resolve(process.env.PROMPT_TEMPLATE_PATH) : join(dirname(ctx.config.agentMdPath), 'prompt-template.md');
+  const path = ctx.config.promptTemplatePath ?? join(dirname(ctx.config.agentMdPath), 'prompt-template.md');
   return existsSync(path) ? readFileSync(path, 'utf8') : FALLBACK_TEMPLATE;
 }
 
@@ -241,54 +244,38 @@ export function handoffPrompt(ctx: Pick<Ctx, 'config'>, app: string, key: string
   return text.trimEnd() + '\n';
 }
 
-export const maskKey = (last4: string) => `bxl_app_••••••••••••${last4}`;
+const maskKey = (last4: string) => `bxl_app_••••••••••••${last4}`;
 
-export function currentKey(ctx: Pick<Ctx, 'store'>, app: AppRow): { last4: string; createdAt: string } | null {
+function currentKey(ctx: Pick<Ctx, 'store'>, app: AppRow): { last4: string; createdAt: string } | null {
   const row = ctx.store.get<{ last4: string; created_at: string }>('SELECT last4, created_at FROM keys WHERE app_id = ? AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1', app.id);
   return row ? { last4: row.last4, createdAt: row.created_at } : null;
 }
 
 // ---- BoxLite volumes (size/state when the API reports them) ------------------
 
-let volumeCache: { at: number; list: Record<string, unknown>[] } | null = null;
+/** The org's volume list, per CP (tests get their own), for 15 s: every console poll would list them. */
+const volumeCache = new WeakMap<object, { at: number; list: VolumeInfo[] }>();
 
-async function boxliteVolumes(ctx: Pick<Ctx, 'config'>): Promise<Record<string, unknown>[] | null> {
-  if (volumeCache && Date.now() - volumeCache.at < 15_000) return volumeCache.list;
-  if (!ctx.config.boxliteApiKey) return null;
+async function boxliteVolumes(ctx: Pick<Ctx, 'boxlite'>): Promise<VolumeInfo[] | null> {
+  const hit = volumeCache.get(ctx.boxlite);
+  if (hit && Date.now() - hit.at < 15_000) return hit.list;
   try {
-    const { body } = await requestJson<{ volumes?: Record<string, unknown>[] } | Record<string, unknown>[]>('boxlite', {
-      method: 'GET',
-      url: `${ctx.config.boxliteApiUrl}/volumes`,
-      headers: { authorization: `Bearer ${ctx.config.boxliteApiKey}` },
-      timeoutMs: 8_000,
-    });
-    const list = Array.isArray(body) ? body : (body.volumes ?? []);
-    volumeCache = { at: Date.now(), list };
+    const list = await ctx.boxlite.listVolumes();
+    volumeCache.set(ctx.boxlite, { at: Date.now(), list });
     return list;
   } catch {
     return null;
   }
 }
 
-const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : null);
-
-export async function volumeViews(ctx: Pick<Ctx, 'config'>, app: AppRow, env: EnvRow, spec: Spec | undefined): Promise<VolumeView[]> {
+export async function volumeViews(ctx: Pick<Ctx, 'boxlite'>, app: AppRow, env: EnvRow, spec: Spec | undefined): Promise<VolumeView[]> {
   const declared = spec?.volumes ?? [];
   if (!declared.length) return [];
   const remote = await boxliteVolumes(ctx);
   return declared.map((v) => {
-    const volumeName = `mc-${app.name}-${env.name}-${v.name}`;
-    const r = remote?.find((x) => x.name === volumeName);
-    const sizeBytes = r ? (num(r.size_bytes) ?? num(r.used_bytes) ?? (num(r.size_gb) !== null ? num(r.size_gb)! * 1024 ** 3 : null)) : null;
-    return {
-      name: v.name,
-      mountPath: v.mount,
-      mode: v.mode,
-      volumeName,
-      volumeId: r ? String(r.volume_id ?? r.id ?? '') || null : null,
-      sizeBytes,
-      state: r && typeof (r.state ?? r.status) === 'string' ? String(r.state ?? r.status) : null,
-    };
+    const name = volumeName(app.name, env.name, v.name);
+    const r = remote?.find((x) => x.name === name);
+    return { name: v.name, mountPath: v.mount, mode: v.mode, volumeName: name, volumeId: r?.id ?? null, sizeBytes: r?.sizeBytes ?? null, state: r?.state ?? null };
   });
 }
 
@@ -340,7 +327,7 @@ export interface LiveState {
 }
 
 /** BoxLite status of the env's Box (cached by Resources) and the supervisor's last service report. */
-export async function liveState(ctx: Ctx, env: EnvRow, opts: { probe?: boolean } = {}): Promise<LiveState> {
+async function liveState(ctx: Ctx, env: EnvRow, opts: { probe?: boolean } = {}): Promise<LiveState> {
   let box: string | null = null;
   if (env.box_id) box = await ctx.resources.boxStatus(env.box_id).catch(() => 'unknown');
   let services = parseServices(env);
@@ -352,7 +339,7 @@ export async function liveState(ctx: Ctx, env: EnvRow, opts: { probe?: boolean }
     ]);
     if (h) {
       services = h.services;
-      ctx.store.updateEnv(env.id, { services: JSON.stringify(h.services) });
+      ctx.store.updateEnv(env.id, { services: JSON.stringify(h.services), services_at: now() });
     }
   }
   return { box, services };
@@ -409,7 +396,7 @@ const troubled = (r: ServiceState | undefined) =>
 function recentErrors(ctx: Pick<Ctx, 'store'>, env: EnvRow, service: string): string[] {
   return ctx.store
     .logs(env.id, { source: service, limit: 200 })
-    .filter((l) => l.level === 'error')
+    .filter((l) => logLevel(l.level) === 'error')
     .slice(-8)
     .map((l) => `${l.ts} ${l.line}`);
 }
@@ -479,13 +466,13 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
 
   let database: DatabaseSummaryView | null = null;
   if (fresh.db_url) {
-    const u = new URL(fresh.db_url);
+    const db = dbCoordinates(fresh.db_url);
     database = {
       status: 'ready',
       engine: 'Postgres (Neon)',
-      host: u.hostname,
-      name: u.pathname.slice(1),
-      user: decodeURIComponent(u.username),
+      host: db.host,
+      name: db.database,
+      user: db.user,
       branch: fresh.neon_branch_id,
       injectedAs: 'DATABASE_URL',
       injectedInto: spec?.database ? services.filter((s) => !s.staticDir).map((s) => s.name) : [],
