@@ -20,7 +20,12 @@ before `start()` and after runtime recovery. Other lifecycle states return
 
 Creating the handle alone does not start anything. Deployments without SSH
 control answer `404` or reject with `Unsupported`; there is no capability
-negotiation. The CLI and the other language SDKs expose no SSH control API.
+negotiation. The Python, Node.js, and C SDKs expose the same control through
+their SSH sections ([Python](../reference/python/README.md#ssh-control),
+[Node.js](../../sdks/node/README.md#guest-ssh-control),
+[C](../../sdks/c/README.md#guest-ssh-control)); the CLI and the Go SDK expose
+no SSH control API.
+
 SSH does not publish a host port; configure network forwarding separately when
 needed. For component diagrams and implementation details, see
 [Guest SSH architecture](../../src/guest/src/service/ssh/README.md).

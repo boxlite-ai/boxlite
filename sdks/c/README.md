@@ -357,6 +357,50 @@ if (boxlite_image_registries(runtime, &registries, &error) == Ok) {
 
 See [Registries in the C reference](../../docs/reference/c/README.md#registries).
 
+### Guest SSH Control
+
+`boxlite_box_ssh_configure()`, `boxlite_box_ssh_status()`, and
+`boxlite_box_ssh_disable()` control a box's guest SSH listener. Each takes the
+box handle, queues its work, and calls back from `boxlite_runtime_drain()` on
+the caller's thread. The callback owns a successful `CSshStatus` and releases
+it with `boxlite_free_ssh_status()`; a status never delivered before the
+runtime is freed is dropped and reclaimed, not handed to a stale callback.
+
+```c
+static void on_ssh(CSshStatus* status, CBoxliteError* error, void* done) {
+    if (error->code == Ok) {
+        printf("ssh %s at %s (generation %llu)\n",
+               status->enabled ? "enabled" : "disabled",
+               status->listen_address,
+               (unsigned long long)status->generation);
+        boxlite_free_ssh_status(status);
+    }
+    *(int*)done = 1;
+}
+
+const char* config =
+    "{\"listen_address\":\"0.0.0.0:2222\",\"host_private_key\":\"<PEM key>\","
+    "\"accounts\":[{\"login\":\"alice\",\"authorized_keys\":[\"<public key>\"]}]}";
+int done = 0;
+if (boxlite_box_ssh_configure(box, config, on_ssh, &done, &error) == Ok) {
+    while (!done && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
+    }
+}
+```
+
+Configure copies the UTF-8 JSON at entry and deserializes it into the
+runtime's `SshConfig` shape: `listen_address`, `host_private_key`, and
+`accounts` of `login`, `authorized_keys`, and an optional `ca` with
+`public_key` and `principal`. A malformed or non-UTF-8 body returns
+`InvalidArgument` with a constant message, so key material never reaches the
+error. Only configure may implicitly start the box (one with an explicit
+`cmd` or `entrypoint` fails with `InvalidState` while Configured or Stopped);
+status and disable never start it. Disable is repeatable, each accepted
+configure restarts the listener, and no operation is retried. The status
+carries no credentials: `enabled`, `generation`, the bound `listen_address`,
+`host_public_key`, and its fingerprint. See
+[Guest SSH control](../../docs/guides/ssh.md) for the full contract.
+
 ---
 
 ## API Overview

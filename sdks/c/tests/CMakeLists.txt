@@ -42,6 +42,8 @@ set(TEST_TARGETS
     test_info
     test_images
     test_registries
+    test_ssh
+    test_ssh_integration
 )
 
 foreach(TARGET ${TEST_TARGETS})
@@ -89,6 +91,11 @@ set_tests_properties(test_images PROPERTIES LABELS "unit")
 # test_registries is the same: a forked loopback server and a local runtime
 # that refuses the handle.
 set_tests_properties(test_registries PROPERTIES LABELS "unit")
+# test_ssh is the same: a forked loopback REST server carries configure,
+# status, disable, and the refusal path, so it needs no VM either.
+set_tests_properties(test_ssh PROPERTIES LABELS "unit")
+
+set_tests_properties(test_ssh_integration PROPERTIES LABELS "integration" TIMEOUT 900)
 
 message(STATUS "BoxLite C Tests Configuration:")
 message(STATUS "  Include dir: ${BOXLITE_INCLUDE_DIR}")
