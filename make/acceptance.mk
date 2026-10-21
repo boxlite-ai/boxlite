@@ -1,4 +1,8 @@
 PHONY_TARGETS += dev\:runner-ci test\:runner-ci\:infra test\:runner-ci\:dind
+PHONY_TARGETS += test\:runner-ci\:fs-local
+PHONY_TARGETS += test\:runner-ci\:fs
+PHONY_TARGETS += test\:integration\:snapshots
+PHONY_TARGETS += fmt\:runner-ci
 ACTION ?= up
 
 PHONY_TARGETS += kernel\:dind
@@ -42,6 +46,14 @@ PHONY_TARGETS += test\:runner-ci\:dind-diagnose
 test\:runner-ci\:dind-diagnose:
 	@PYTHONUNBUFFERED=1 PYTHONPATH=apps/infra-local .venv/bin/python -m compose.acceptance diagnose-dind
 
-PHONY_TARGETS += fmt\:runner-ci
+test\:runner-ci\:fs-local:
+	@PYTHONUNBUFFERED=1 PYTHONPATH=apps/infra-local .venv/bin/python -m compose.snapshot_acceptance
+
+test\:runner-ci\:fs:
+	@PYTHONUNBUFFERED=1 PYTHONPATH=apps/infra-local .venv/bin/python -m compose.snapshot_acceptance --runner
+
 fmt\:runner-ci:
-	@.venv/bin/ruff format apps/infra-local/compose/acceptance.py apps/infra-local/compose/kernel.py
+	@.venv/bin/ruff format apps/infra-local/compose/acceptance.py apps/infra-local/compose/kernel.py apps/infra-local/compose/snapshot_acceptance.py
+
+test\:integration\:snapshots:
+	@BOXLITE_TEST_IMAGE=alpine:3.23 cargo test -p boxlite --features krun,gvproxy --test snapshot --test snapshot_clone_deep -- --test-threads=1 --nocapture snapshot

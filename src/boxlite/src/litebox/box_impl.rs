@@ -1432,9 +1432,7 @@ impl BoxImpl {
         let ret = unsafe { libc::kill(pid, libc::SIGSTOP) };
         if ret != 0 {
             // If SIGSTOP fails, thaw before returning error
-            if frozen {
-                self.guest_thaw().await;
-            }
+            self.guest_thaw().await;
             return Err(BoxliteError::Internal(format!(
                 "Failed to SIGSTOP shim process (pid={}): {}",
                 pid,
@@ -1466,9 +1464,9 @@ impl BoxImpl {
 
         // Phase 5: Thaw guest I/O (always, best-effort)
         let t_thaw = Instant::now();
-        if frozen {
-            self.guest_thaw().await;
-        }
+        // A timed-out freeze RPC may still have frozen the guest. Always thaw,
+        // including when its response was lost or arrived after our deadline.
+        self.guest_thaw().await;
         let thaw_ms = t_thaw.elapsed().as_millis() as u64;
 
         tracing::info!(

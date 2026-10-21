@@ -158,9 +158,10 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		boxliteApi.GET("/:boxId/ssh", controllers.BoxliteSSHStatus)
 		boxliteApi.DELETE("/:boxId/ssh", controllers.BoxliteSSHDisable)
 		boxliteApi.POST("/:boxId/snapshots", controllers.BoxliteCreateSnapshot)
-		boxliteApi.GET("/:boxId/snapshots", controllers.BoxliteSnapshotOperation)
-		boxliteApi.GET("/:boxId/snapshots/:snapshot", controllers.BoxliteSnapshotOperation)
-		boxliteApi.DELETE("/:boxId/snapshots/:snapshot", controllers.BoxliteSnapshotOperation)
+		boxliteApi.GET("/:boxId/snapshots", controllers.BoxliteListSnapshots)
+		boxliteApi.GET("/:boxId/snapshots/:snapshot", controllers.BoxliteGetSnapshot)
+		boxliteApi.DELETE("/:boxId/snapshots/:snapshot", controllers.BoxliteRemoveSnapshot)
+		boxliteApi.POST("/:boxId/snapshots/:snapshot/restore", controllers.BoxliteRestoreSnapshot)
 		boxliteApi.POST("/:boxId/snapshots/:snapshot/boxes", controllers.BoxliteSnapshotOperation)
 		boxliteApi.Handle(http.MethodConnect, "/:boxId/network/tunnel", controllers.BoxliteNetworkTunnel(boxControllerLogger))
 	}

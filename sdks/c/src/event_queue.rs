@@ -95,6 +95,11 @@ pub(crate) type CBoxGetOrCreateBoxFn =
 pub type CBoxExportCb = Option<extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxExportFn = extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void);
 
+/// Snapshot JSON completion. Caller frees the owned result string.
+pub type CBoxSnapshotCb =
+    Option<extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxSnapshotFn = extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void);
+
 /// Runtime import completion.
 pub type CRuntimeImportCb =
     Option<extern "C" fn(*mut crate::CBoxHandle, *mut crate::CBoxliteError, *mut c_void)>;
@@ -402,6 +407,11 @@ pub enum RuntimeEvent {
     },
     BoxExport {
         cb: CBoxExportFn,
+        user_data: usize,
+        result: Result<CString, BoxliteError>,
+    },
+    Snapshot {
+        cb: CBoxSnapshotFn,
         user_data: usize,
         result: Result<CString, BoxliteError>,
     },

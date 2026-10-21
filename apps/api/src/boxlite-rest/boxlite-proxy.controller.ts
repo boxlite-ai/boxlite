@@ -194,6 +194,27 @@ export class BoxliteProxyController {
     )
   }
 
+  @Post(':boxId/snapshots/:snapshot/restore')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  async restoreSnapshot(
+    @AuthContext() auth: OrganizationAuthContext,
+    @Param('boxId') id: string,
+    @Param('snapshot') snapshot: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      auth,
+      id,
+      (box) => `/v1/boxes/${box}/snapshots/${encodeURIComponent(snapshot)}/restore`,
+      req,
+      res,
+      next,
+      OBSERVATION_ONLY,
+    )
+  }
+
   @All(':boxId/executions/:execId/signal')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   async proxyExecSignal(

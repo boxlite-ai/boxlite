@@ -22,9 +22,10 @@
 //!
 //! Clone bases remain in flat `bases/` dir, managed by `BaseDiskManager`.
 //! Snapshots have their own per-box directories and dedicated `snapshot` table.
-//! The only interaction is that snapshot files may reference clone bases in
-//! `bases/` via qcow2 backing chains, which index-find GC accounts for.
+//! New captures are flattened standalone disks. Older snapshot files can still
+//! reference clone bases, so deletion continues checking their backing chains.
 
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -146,8 +147,8 @@ impl SnapshotManager {
     ///
     /// 1. Create `box_home/snapshots/{name}/` directory
     /// 2. Read virtual size from container disk
-    /// 3. Rename container disk → `snapshots/{name}/disk.qcow2`
-    /// 4. Create COW child at original path (box keeps running)
+    /// 3. Flatten into an independent disk without replacing the live inode
+    /// 4. Persist the completed disk before publishing metadata
     /// 5. Insert DB record via `SnapshotStore`
     pub(crate) fn create(
         &self,
@@ -167,7 +168,9 @@ impl SnapshotManager {
 
         // 1. Create snapshot directory
         let snapshot_dir = box_home.join("snapshots").join(name);
-        std::fs::create_dir_all(&snapshot_dir).map_err(|e| {
+        std::fs::create_dir_all(box_home.join("snapshots"))
+            .map_err(|e| BoxliteError::Storage(e.to_string()))?;
+        std::fs::create_dir(&snapshot_dir).map_err(|e| {
             BoxliteError::Storage(format!(
                 "Failed to create snapshot directory {}: {}",
                 snapshot_dir.display(),
@@ -175,11 +178,41 @@ impl SnapshotManager {
             ))
         })?;
 
-        // 2-4. Fork: move container → snapshot dir, create COW child at original path
+        // A running VMM keeps its disk fd across rename. Copy the resolved chain
+        // instead: subsequent source writes must never reach the snapshot inode.
         let snap_disk = snapshot_dir.join(disk_filenames::CONTAINER_DISK);
-        let forked = crate::disk::fork_qcow2(&container_disk, &snap_disk)?;
-        let disk_info = crate::disk::DiskInfo::from(&forked);
-        // forked is persistent (won't be deleted on drop)
+        let capture = (|| {
+            Qcow2Helper::flatten(&container_disk, &snap_disk)?;
+            let disk = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&snap_disk)
+                .map_err(|e| BoxliteError::Storage(e.to_string()))?;
+            disk.sync_all()
+                .map_err(|e| BoxliteError::Storage(e.to_string()))?;
+            let mut permissions = disk
+                .metadata()
+                .map_err(|e| BoxliteError::Storage(e.to_string()))?
+                .permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(&snap_disk, permissions)
+                .map_err(|e| BoxliteError::Storage(e.to_string()))?;
+            Ok(crate::disk::DiskInfo {
+                base_path: snap_disk.to_string_lossy().into_owned(),
+                container_disk_bytes: Qcow2Helper::qcow2_virtual_size(&snap_disk)?,
+                size_bytes: std::fs::metadata(&snap_disk)
+                    .map_err(|e| BoxliteError::Storage(e.to_string()))?
+                    .blocks()
+                    * 512,
+            })
+        })();
+        let disk_info = match capture {
+            Ok(info) => info,
+            Err(error) => {
+                let _ = std::fs::remove_dir_all(&snapshot_dir);
+                return Err(error);
+            }
+        };
 
         // 5. Insert DB record
         let snapshot_id = nanoid::nanoid!(8);
@@ -193,7 +226,10 @@ impl SnapshotManager {
             created_at: now,
             disk_info,
         };
-        self.store.save(&info)?;
+        if let Err(error) = self.store.save(&info) {
+            let _ = std::fs::remove_dir_all(&snapshot_dir);
+            return Err(error);
+        }
 
         Ok(info)
     }

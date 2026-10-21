@@ -536,8 +536,9 @@ async fn test_snapshot_remove_current_backing_rejected() {
         .await
         .unwrap();
 
-    // Container disk now backs into "active" snapshot.
-    // Removing it should be rejected.
+    // Capture does not replace the live disk. Restore creates an actual
+    // writable child that references this snapshot, so deletion must refuse.
+    litebox.snapshots().restore("active").await.unwrap();
     let result = litebox.snapshots().remove("active").await;
     assert!(
         result.is_err(),
@@ -573,26 +574,16 @@ async fn test_snapshot_remove_after_restore_different() {
     // Restore v2 → container now backs into v2, not v1
     litebox.snapshots().restore("v2").await.unwrap();
 
-    // Removing v1 should succeed (container doesn't directly depend on v1)
-    // NOTE: This may fail if v2's disk chain goes through v1 (BUG 1).
-    // For now, test the current behavior.
-    let result = litebox.snapshots().remove("v1").await;
-    // Just verify it doesn't panic — the result depends on backing chain
-    if result.is_ok() {
-        let snaps = litebox.snapshots().list().await.unwrap();
-        assert_eq!(snaps.len(), 1);
-        assert_eq!(snaps[0].name, "v2");
-    }
+    // Each capture is independent, so v2 never inherits a dependency on v1.
+    litebox.snapshots().remove("v1").await.unwrap();
+    let snaps = litebox.snapshots().list().await.unwrap();
+    assert_eq!(snaps.len(), 1);
+    assert_eq!(snaps[0].name, "v2");
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
-/// BUG 1 DETECTOR: Snapshot chain dependency not tracked.
-///
-/// Snapshot "v1" is created, then "v2". v2's immutable disk file sits in the
-/// backing chain that may include v1's disk. Removing v1 should be rejected
-/// if v2 depends on it — but the current code only checks the container disk's
-/// immediate backing reference.
+/// Independent captures survive deletion of an earlier capture.
 #[tokio::test]
 async fn test_snapshot_chain_remove_oldest_with_newer_depending() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
@@ -619,33 +610,16 @@ async fn test_snapshot_chain_remove_oldest_with_newer_depending() {
     // Restore v2 so container backs into v2 (not v1 directly)
     litebox.snapshots().restore("v2").await.unwrap();
 
-    // BUG 1: Try to remove v1. If v2's disk depends on v1 in its backing chain,
-    // this should be rejected. Current code may allow it (only checks immediate backing).
-    let remove_result = litebox.snapshots().remove("v1").await;
-
-    if remove_result.is_ok() {
-        // BUG 1 confirmed: removal succeeded but v2 may now be broken.
-        // Try to restore v2 and start — this may fail with I/O error.
-        let litebox = runtime
-            .get("chain-bug1")
+    litebox.snapshots().remove("v1").await.unwrap();
+    litebox.snapshots().restore("v2").await.unwrap();
+    litebox.start().await.unwrap();
+    assert_eq!(
+        exec_stdout(&litebox, BoxCommand::new("echo").args(["alive"]))
             .await
-            .unwrap()
-            .expect("box should still exist");
-        litebox.snapshots().restore("v2").await.unwrap();
-        let start_result = litebox.start().await;
-        eprintln!(
-            "BUG 1 DETECTOR: remove v1 succeeded. start after restore v2: {:?}",
-            start_result.is_ok()
-        );
-        // If start fails, BUG 1 is proven. If it succeeds, the backing chain
-        // may not include v1 in this particular case.
-        if start_result.is_ok() {
-            litebox.stop().await.unwrap();
-        }
-    } else {
-        // Fixed behavior: removal correctly rejected.
-        eprintln!("BUG 1 FIXED: remove v1 correctly rejected");
-    }
+            .trim(),
+        "alive"
+    );
+    litebox.stop().await.unwrap();
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
@@ -681,17 +655,11 @@ async fn test_snapshot_remove_middle_of_three() {
     // Restore v3 so container backs into v3
     litebox.snapshots().restore("v3").await.unwrap();
 
-    // Try to remove v1 — v2 may depend on v1 in its backing chain
-    let result = litebox.snapshots().remove("v1").await;
-    // Document behavior regardless of outcome
-    eprintln!(
-        "Remove v1 (middle of 3): {}",
-        if result.is_ok() {
-            "allowed"
-        } else {
-            "rejected"
-        }
-    );
+    litebox.snapshots().remove("v1").await.unwrap();
+    litebox.snapshots().remove("v2").await.unwrap();
+    assert!(litebox.snapshots().remove("v3").await.is_err());
+    litebox.start().await.unwrap();
+    litebox.stop().await.unwrap();
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }

@@ -19,7 +19,7 @@ Image Layers          Rootfs Builder              Box Rootfs
 
 - Layer extraction and overlay mounting
 - DNS configuration injection
-- Copy-on-write snapshot creation
+- Immutable filesystem capture; copy-on-write disks when restoring
 
 ## Volume management
 
@@ -35,6 +35,10 @@ Image Layers          Rootfs Builder              Box Rootfs
 - Thin provisioning (allocate on write)
 - Snapshot support
 - Shared base images across Boxes
+
+[Filesystem snapshots](../guides/filesystem-snapshots.md) capture the container
+disk, including changes made since image startup. External volumes and guest
+memory are excluded.
 
 ## Home directory
 

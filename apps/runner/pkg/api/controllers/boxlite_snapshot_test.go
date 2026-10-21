@@ -20,7 +20,6 @@ func TestMemorySnapshotProductionRefusesAndValidates(t *testing.T) {
 		status             int
 	}{
 		{"POST", "/snapshots", `{"name":"s","snapshot_type":"memory"}`, 501},
-		{"POST", "/snapshots", `{"name":"s","snapshot_type":"filesystem"}`, 501},
 		{"POST", "/snapshots", `{"name":"s","snapshot_type":"ram"}`, 400},
 		{"POST", "/snapshots", `{"name":"s","snapshot_type":"memory","mock":true}`, 400},
 		{"POST", "/snapshots", `{"name":"s"} {}`, 400},

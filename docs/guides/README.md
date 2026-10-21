@@ -10,6 +10,8 @@ Each guide walks through one task. How the underlying pieces work is in
 - [Docker Swarm](docker-swarm.md): guest kernel, node IP transport, VIP/DNSRR and ingress qualification.
 - [Running examples](running-examples.md): nine of the Python examples and what each one shows.
 - [Mounting volumes](volumes.md): share host directories with a box for input and output.
+- [Filesystem snapshots](filesystem-snapshots.md): capture and restore a Box's writable disk.
+- [Memory snapshot contract](memory-snapshots.md): explicit mock testing and production rejection.
 - [Configuring networking](networking.md): internet access and port forwarding through gvproxy.
 - [Resource limits and tuning](resource-limits.md): size CPU, memory, and disk for a workload.
 - [Image registry configuration](image-registry-configuration.md): pull images from private or

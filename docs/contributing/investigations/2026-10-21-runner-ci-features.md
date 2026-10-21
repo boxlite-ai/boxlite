@@ -176,3 +176,19 @@ overstated SDK coverage), then reached a real Docker guest after extending
 the binding. The booted kernel lacked netfilter. The sixth round failed to
 start its kernel-builder Box; F1 stopped and its production changes were
 removed. See [the failure report](2026-10-21-f1-dind-incomplete.md).
+
+## F4 implementation decision (2026-10-22, before edits)
+
+First reproduce live-disk mutation with an actual guest and a checksum of the
+snapshot disk before/after a synced source write. If reproduced, reuse
+`Qcow2Helper::flatten` to produce an independent disk while quiesced, without
+renaming the live inode. Preserve the existing per-Box snapshot store for F4;
+independent ownership after source deletion belongs to F5. No external mount
+data or mount paths go into snapshot metadata. Creation remains crash-consistent,
+never application-consistent. Cancellation must not abandon thaw/resume.
+
+Expose the same snapshot facade through C/Go and authenticated API owner routing.
+Keep memory explicitly unsupported. Verify metadata persistence, deletion and
+invalid requests through Python REST → API → runner → native runtime → guest.
+Current PostgreSQL integration failures need environment diagnosis before that
+chain can qualify. Local-only VM tests count as defect evidence, not S acceptance.

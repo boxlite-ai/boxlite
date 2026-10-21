@@ -58,7 +58,7 @@ exit codes, hypotheses, versions, retained patch and guest evidence.
 ## Remaining features
 
 F2: zero rounds, BLOCKED by F1; see [Swarm report](2026-10-22-f2-swarm-blocked.md).
-F4–F6: zero implementation/verification rounds. No acceptance claim yet.
+F5–F6: zero implementation/verification rounds. No acceptance claim yet.
 
 ## F3
 
@@ -82,3 +82,31 @@ F4–F6: zero implementation/verification rounds. No acceptance claim yet.
    63, Python lint and Node typecheck pass. S6 = MOCK_PASS, 3/6 rounds used.
    Full API and reference regressions retain unrelated failures; see
    [F3 verification](2026-10-22-f3-memory-contract.md).
+
+## F4
+
+1. Hypothesis: the live VMM still writes its open fd after snapshot renames the
+   disk. Add actual Alpine 3.23 guest regression before production edits.
+   `make test:runner-ci:fs-local` exits 2 at the immutability assertion: snapshot
+   SHA-256 changes after a synced source write. Log `f4-r1-local-before.log`;
+   metadata/guest diagnostics in `f4-r1-scene/`; disks remain in
+   `~/.bl/142b9945/qf/boxes/dwLHKNpnzCGj/`. Runtime base `6fc9aec5`.
+2. Replace live rename with an independent flattened disk; keep capture task
+   alive through client cancellation, always attempt thaw after freeze timeout.
+   Add C/Go facade and API/runner routes. Native build and actual local regression
+   pass (`f4-r2-python-build.log`, `f4-r2-local-after.log`). Rust formatting fails
+   because serde was incorrectly inherited from workspace dependencies that do
+   not declare it (`f4-r2-fmt-rust.log`, exit 2); runner build not reached.
+3. Use the existing crates' serde version declarations directly; correct allocated
+   disk-size accounting and reject memory on every C facade operation. Verify
+   C/Go build and core/API regressions pass. The isolated service restart stops
+   listeners but the bind probe rejects TCP TIME_WAIT sockets (no listeners in
+   lsof). `make test:runner-ci:infra ACTION=restart` exits 2; `f4-r3-restart.log`.
+4. Make the bind probe use SO_REUSEADDR, preserving refusal of live listeners;
+   allow restart to resume after already-stopped services. Real SDK/API/runner
+   capture, immutability, runner restart, restore, metadata and deletion pass.
+   Force a real permission failure during capture: guest writes succeed afterward,
+   no snapshot metadata or partial directory remains. Preserve public Box IDs in
+   runner responses. `make test:runner-ci:fs` exits 0 twice, including the failure
+   injection (`f4-r4-runner-fs-errors.log`). `make test:integration:snapshots`
+   exits 0 (41 actual VM tests); native Go snapshot facade tests also pass.

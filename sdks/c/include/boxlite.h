@@ -725,6 +725,9 @@ typedef void (*CBoxSshStatusCb)(struct CSshStatus*, CBoxliteError*, void*);
 // SSH disable completion with the same ownership contract as SSH configure.
 typedef void (*CBoxSshDisableCb)(struct CSshStatus*, CBoxliteError*, void*);
 
+// Snapshot JSON completion. Caller frees the owned result string.
+typedef void (*CBoxSnapshotCb)(char*, CBoxliteError*, void*);
+
 // C ABI representation of volume metadata.
 //
 // `id` and `created_at` are non-null, heap-owned C strings. A standalone value
@@ -1883,6 +1886,16 @@ enum BoxliteErrorCode boxlite_box_ssh_disable(CBoxHandle *handle,
 // `status` must be null or a pointer from an SSH callback that has not
 // already been freed.
 void boxlite_free_ssh_status(struct CSshStatus *status);
+
+// Submit create/get/list/remove/restore using a JSON request with `operation`,
+// `name` (except list), and optional `snapshot_type` (default filesystem).
+// The callback owns the JSON result string; release with boxlite_free_string.
+// Inputs are copied before returning. Cancellation does not abort disk capture.
+enum BoxliteErrorCode boxlite_box_snapshot(CBoxHandle *handle,
+                                           const char *request_json,
+                                           CBoxSnapshotCb cb,
+                                           void *user_data,
+                                           CBoxliteError *out_error);
 
 void boxlite_free_string(char *s);
 

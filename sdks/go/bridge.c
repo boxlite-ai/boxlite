@@ -61,6 +61,9 @@ CBoxCreateBoxCb cbCreateBox(void) { return (CBoxCreateBoxCb)goBoxliteOnCreateBox
 CBoxExportCb cbBoxExport(void) {
     return (CBoxExportCb)goBoxliteOnBoxExport;
 }
+CBoxSnapshotCb cbSnapshot(void) {
+    return (CBoxSnapshotCb)goBoxliteOnBoxExport;
+}
 CRuntimeImportCb cbRuntimeImport(void) {
     return (CRuntimeImportCb)goBoxliteOnRuntimeImport;
 }

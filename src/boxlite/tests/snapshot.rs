@@ -86,7 +86,7 @@ async fn create_stopped_box(runtime: &BoxliteRuntime) -> LiteBox {
 // ============================================================================
 
 #[tokio::test]
-async fn test_cow_child_disks_exist_after_snapshot_create() {
+async fn test_live_disks_exist_after_snapshot_create() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -117,7 +117,7 @@ async fn test_cow_child_disks_exist_after_snapshot_create() {
     assert_eq!(info.name, "ckpt1");
 
     // Snapshot copies must exist in the snapshot directory.
-    // Note: only the container disk is forked into the snapshot; guest rootfs is
+    // Note: only the container disk is copied into the snapshot; guest rootfs is
     // recreated from cache on start, so it is not part of the snapshot.
     let sdir = snapshot_dir(&home.path, &box_id, "ckpt1");
     assert!(
@@ -125,12 +125,12 @@ async fn test_cow_child_disks_exist_after_snapshot_create() {
         "snapshot container disk missing"
     );
 
-    // COW child disks in the box directory must still exist.
+    // Capture must leave the live disks in place.
     // Bug: create_cow_child_disk() returns Disk(persistent=false); if the caller
     // does not call .leak(), Disk::Drop deletes the newly created file.
     assert!(
         ddir.join(CONTAINER_DISK).exists(),
-        "COW child disk.qcow2 deleted by Disk::Drop (missing .leak() in local_snapshot.rs)"
+        "live container disk was removed by snapshot capture"
     );
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
