@@ -14,6 +14,7 @@ mod copy;
 mod error;
 mod event_queue;
 mod exec;
+mod git;
 mod images;
 mod info;
 mod metrics;
@@ -46,6 +47,7 @@ pub(crate) static FREE_STR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(()
 
 pub type CBoxliteRuntime = runtime::RuntimeHandle;
 pub type CBoxHandle = box_handle::BoxHandle;
+pub type CBoxGitHandle = git::BoxGitHandle;
 pub type CBoxNetworkHandle = network::BoxNetworkHandle;
 pub type CBoxTunnelHandle = network::BoxTunnelHandle;
 pub type CTunnelForwarderHandle = network::TunnelForwarderHandle;
@@ -80,6 +82,7 @@ pub use copy::*;
 pub use error::*;
 pub use event_queue::*;
 pub use exec::*;
+pub use git::*;
 pub use images::*;
 pub use info::*;
 pub use metrics::*;

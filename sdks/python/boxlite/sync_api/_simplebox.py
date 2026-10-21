@@ -268,6 +268,15 @@ class SyncSimpleBox:
             )
         return self._box.network
 
+    @property
+    def git(self):
+        """Get the box-scoped git handle."""
+        if self._box is None:
+            raise RuntimeError(
+                "Box not started. Use 'with SyncSimpleBox(...) as box:' first."
+            )
+        return self._box.git
+
     def stop(self) -> None:
         """Stop the box (preserves state for restart)."""
         self._box.stop()

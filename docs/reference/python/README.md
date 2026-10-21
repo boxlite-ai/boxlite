@@ -10,6 +10,7 @@ Complete API reference for the BoxLite Python SDK.
 - [Runtime Management](#runtime-management)
 - [Box Handle](#box-handle)
 - [Network Tunnels](#network-tunnels)
+- [Git](#git)
 - [Command Execution](#command-execution)
 - [Box Types](#box-types)
 - [Sync API](#sync-api)
@@ -333,6 +334,7 @@ Handle to a running or stopped box.
 |----------|------|-------------|
 | `id` | `str` | Unique box identifier (ULID format) |
 | `network` | `NetworkHandle` | Box-scoped tunnel operations |
+| `git` | `GitHandle` | Box-scoped git operations |
 
 #### Methods
 
@@ -434,6 +436,44 @@ provide the same operations.
 Each `BoxTunnel` is one-shot: choose `connect()` or `forward()`. This differs
 from `BoxOptions.ports`, which creates a persistent, local-only host listener
 that accepts repeated connections from ordinary host applications.
+
+---
+
+## Git
+
+Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.git`. `scope` is
+`"global"` (default), `"local"`, or `"system"`; `"local"` requires `path`.
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Configure user | `await box.git.configure_user(name, email, scope=None, path=None)` | Set `user.name` and `user.email` |
+| Set config | `await box.git.set_config(key, value, scope=None, path=None)` | Write a git config value |
+| Get config | `await box.git.get_config(key, scope=None, path=None) -> str` | Read a git config value |
+| Status | `await box.git.status(path) -> GitStatus` | Structured working-tree status |
+| Branches | `await box.git.branches(path) -> GitBranches` | Local branches plus the current one |
+
+```python
+await box.git.configure_user("BoxLite Bot", "bot@boxlite.ai")
+await box.git.set_config(
+    "core.autocrlf", "input", scope="local", path="/workspace/repo"
+)
+email = await box.git.get_config("user.email")
+
+st = await box.git.status("/workspace/repo")
+print(st.current_branch, st.ahead, st.behind, [f.path for f in st.file_status])
+b = await box.git.branches("/workspace/repo")
+print(b.current, b.names)
+```
+
+Synchronous wrappers (`SyncBox.git`, `SyncSimpleBox.git`) expose the same
+operations without `await`.
+
+`GitStatus` fields: `current_branch` (`None` when detached), `upstream`,
+`ahead`, `behind`, `branch_published`, `head_commit` (`None` on an unborn
+branch), `file_status: list[GitFileStatus]` (empty when clean).
+`GitFileStatus` fields: `path`, `orig_path`, `index_status`,
+`worktree_status` (porcelain v2 XY codes), `staged`, `untracked`.
+`GitBranches` fields: `current`, `names`.
 
 ---
 
@@ -569,6 +609,7 @@ SimpleBox(
 | Property | Type | Description |
 |----------|------|-------------|
 | `id` | `str` | Box ID (raises if not started) |
+| `git` | `GitHandle` | Box-scoped git operations (raises if not started) |
 
 #### Methods
 
@@ -885,6 +926,7 @@ from boxlite import SyncBoxlite, SyncBox, SyncSimpleBox, SyncCodeBox
 |-----------|----------|-------|
 | `Boxlite` | `SyncBoxlite` | `get_info()` and `list_info()` are async-only |
 | `Box` | `SyncBox` | `Box.info()` is async-only and is not exposed by `SyncBox` |
+| `GitHandle` | `SyncGitHandle` | `box.git.configure_user` / `set_config` / `get_config` / `status` / `branches` |
 | `Execution` | `SyncExecution` | |
 | `ExecStdout` | `SyncExecStdout` | Regular iterator |
 | `ExecStderr` | `SyncExecStderr` | Regular iterator |

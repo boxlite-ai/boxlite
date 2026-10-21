@@ -108,6 +108,7 @@ export {
   BoxTunnel,
   TunnelForwarder,
   NetworkHandle,
+  GitHandle,
   type NetworkSpec,
   type SocketAddress,
   type AdvancedBoxOptions,

@@ -24,6 +24,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [BoxStatus](#boxstatus)
   - [BoxState](#boxstate)
 - [Network Tunnels](#network-tunnels)
+- [Git](#git)
 - [Command Execution](#command-execution)
   - [BoxCommand](#boxcommand)
   - [Execution](#execution)
@@ -363,6 +364,7 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
 | `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH (local or REST-backed); only configure may implicitly start the box |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped tunnel operations |
+| `git` | `fn git(&self) -> GitHandle` | Get box-scoped git operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
@@ -565,6 +567,55 @@ the lifetime of the box.
 `TunnelForwarder::local_addr()` reports the canonical bound address, while
 repeatable `wait()` and `close()` share the listener's cached terminal result.
 Dropping the final handle requests cancellation.
+
+---
+
+## Git
+
+`LiteBox::git()` returns a `GitHandle` that owns a backend clone and does not
+borrow the originating `LiteBox`. `scope` is `"global"` (default), `"local"`,
+or `"system"`; `"local"` requires `path`.
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Configure user | `async fn configure_user(&self, name, email, scope, path) -> BoxliteResult<()>` | Set `user.name` and `user.email` |
+| Set config | `async fn set_config(&self, key, value, scope, path) -> BoxliteResult<()>` | Write a git config value |
+| Get config | `async fn get_config(&self, key, scope, path) -> BoxliteResult<String>` | Read a git config value |
+| Status | `async fn status(&self, path: &str) -> BoxliteResult<GitStatus>` | Structured working-tree status |
+| Branches | `async fn branches(&self, path: &str) -> BoxliteResult<GitBranches>` | Local branches plus the current one |
+
+```rust
+let git = litebox.git();
+git.configure_user("BoxLite Bot", "bot@boxlite.ai", None, None)
+    .await?;
+git.set_config(
+    "core.autocrlf",
+    "input",
+    Some("local"),
+    Some("/workspace/repo"),
+)
+.await?;
+let email = git.get_config("user.email", None, None).await?;
+```
+
+The handle runs `git` through the box backend, so the same methods work
+on a local runtime and against a served REST runtime.
+
+`GitStatus` has `current_branch: Option<String>` (`None` when HEAD is
+detached), `upstream`, `ahead`, `behind`, `branch_published` (true when Git
+reports ahead/behind counts, i.e. the upstream ref exists; false when no
+upstream is set or it is gone), `head_commit` (`None` on an unborn branch), and
+`file_status: Vec<GitFileStatus>`, empty on a clean tree. Each
+`GitFileStatus` carries `path`, `orig_path` (rename/copy source),
+`index_status` and `worktree_status` (porcelain v2 XY codes), plus
+`is_staged()` and `is_untracked()`. Paths containing spaces or newlines are
+reported verbatim. `GitBranches` has `current` and `names`.
+
+```rust
+let st = litebox.git().status("/workspace/repo").await?;
+println!("{:?} +{} -{}", st.current_branch, st.ahead, st.behind);
+let branches = litebox.git().branches("/workspace/repo").await?;
+```
 
 ---
 
