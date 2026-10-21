@@ -118,6 +118,13 @@ export function dbRoutes(ctx: Ctx) {
       }
       if (!b.write) throw fail('forbidden', 'DDL (including DO, CALL and functions) needs write:true', 'pass --write (allowed on non-main environments only)');
     }
+    // Say so before Postgres does: "cannot execute DELETE in a read-only transaction" reads like a
+    // dead end, and agents gave up on cleaning their test rows when they saw it.
+    const writes = cls.statements.filter((s) => s.kind === 'write');
+    if (writes.length && !b.write && !b.explain) {
+      const kw = [...new Set(writes.map((s) => s.keyword))].join(', ');
+      throw fail('write_requires_flag', `${kw} changes data, and queries run read-only unless you ask to write`, `rerun the same SQL with --write: \`boxlite-app app sql --write "…"\` (the console asks for confirmation instead)`, { statements: writes.map((s) => s.keyword) });
+    }
     let statements = cls.statements.map((s) => s.text);
     if (b.explain) {
       if (statements.length !== 1) throw fail('invalid_request', 'explain takes exactly one statement');

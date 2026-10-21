@@ -410,6 +410,11 @@ test('test-session gives an agent a 15-minute cookie for a test user on the app 
   assert.ok(Math.abs(Date.parse(body.expires_at) - Date.now() - 15 * 60_000) < 5000);
   assert.deepEqual([body.user.email, body.user.provider], ['qa@example.com', 'test']);
 
+  // What an agent does to verify sign-in on a private app: the App key plus the test session.
+  const me = await h.appRequest('/.boxlite/auth/me', { headers: { cookie: body.cookie, authorization: `Bearer ${key}` } });
+  assert.equal(me.status, 200, 'the CP answers /.boxlite/auth/me; it never reaches the app');
+  assert.equal(((await me.json()) as { email: string }).email, 'qa@example.com');
+
   seen = [];
   assert.equal((await h.appRequest('/app/x', { headers: { cookie: body.cookie } })).status, 200);
   assert.equal(seen[0]!.headers['x-boxlite-user-email'], 'qa@example.com');

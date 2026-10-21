@@ -267,6 +267,16 @@ function responseHeaders(res: Response, boxUrl: string, appUrl: string): Headers
 // ---- the app origin -------------------------------------------------------------------
 
 /** `Authorization` on an app origin: `none` (absent or the app's own scheme), `ok` (strip it), or a 401. */
+/**
+ * `instanceof Response` is not reliable here: @hono/node-server swaps the global Response for its
+ * own class at startup, but `Response.json()` (inherited static) still builds a native one. A
+ * native Response failed the check and the request went on to the app, so /.boxlite/auth/me
+ * reached app code for signed-in users. Recognise a response by shape instead.
+ */
+export function isResponse(x: unknown): x is Response {
+  return typeof x === 'object' && x !== null && typeof (x as Response).status === 'number' && typeof (x as Response).arrayBuffer === 'function' && (x as Response).headers instanceof Headers;
+}
+
 function keyGate(ctx: Ctx, app: AppRow, headers: Headers): 'none' | 'ok' | Response {
   const token = bearer(headers.get('authorization') ?? undefined);
   if (!token) return 'none';
@@ -292,13 +302,13 @@ export async function serveAppOrigin(ctx: Ctx, c: Context, env: EnvRow): Promise
 
   const headers = new Headers(c.req.raw.headers);
   const key = keyGate(ctx, app, headers);
-  if (key instanceof Response) return key;
+  if (isResponse(key)) return key;
   if (key === 'ok') headers.delete('authorization');
   const access = ctx.resources.effectiveAccess(env);
   if (access !== 'public' && key !== 'ok' && !verifyAccess(ctx.config.sessionSecret, readCookie(headers, accessName(ctx, app, env)), env.id)) return gatePage(ctx, app, env, access, headers);
 
   const identity = await identityFor(ctx, { method: c.req.method, url, headers }, app, env);
-  if (identity instanceof Response) return identity;
+  if (isResponse(identity)) return identity;
 
   const incoming = (c.env as { incoming?: IncomingMessage } | undefined)?.incoming;
   return forward(ctx, app, env, {
@@ -376,11 +386,11 @@ export async function handleUpgrade(ctx: Ctx, req: IncomingMessage, socket: Dupl
   const url = new URL(req.url ?? '/', 'http://app.local');
   const incoming = new Headers(Object.entries(req.headers).flatMap(([k, v]): [string, string][] => (v === undefined ? [] : [[k, Array.isArray(v) ? v.join(', ') : v]])));
   const key = keyGate(ctx, app, incoming);
-  if (key instanceof Response) return reject(401, 'Unauthorized');
+  if (isResponse(key)) return reject(401, 'Unauthorized');
   if (ctx.resources.effectiveAccess(env) !== 'public' && key !== 'ok' && !verifyAccess(ctx.config.sessionSecret, readCookie(incoming, accessName(ctx, app, env)), env.id)) return reject(401, 'Unauthorized');
   if (normalisePath(url.pathname).toLowerCase().startsWith('/.boxlite')) return reject(404, 'Not Found');
   const identity = await identityFor(ctx, { method: req.method ?? 'GET', url, headers: incoming }, app, env);
-  if (identity instanceof Response) return reject(identity.status, identity.status === 401 ? 'Unauthorized' : identity.status === 404 ? 'Not Found' : 'Forbidden');
+  if (isResponse(identity)) return reject(identity.status, identity.status === 401 ? 'Unauthorized' : identity.status === 404 ? 'Not Found' : 'Forbidden');
   const target = new URL(env.box_url + url.pathname + url.search);
   const origin = new URL(ctx.resources.appUrl(app.name, env.name));
   const headers: Record<string, string | string[]> = {};

@@ -23,3 +23,8 @@ Findings from real runs, newest last. Each line: finding → owner area → stat
 - A port briefly held during a CP restart left that app on 502 until a manual restart → listeners retry EADDRINUSE for 3 min → fixed
 - The SQL reader role (created by SQL) made Neon refuse schema-only branches, so `env create --from main` broke → reader becomes a Neon-managed role used by direct connection → in progress
 - `status` reported the newest spec version even after a failed deploy, so agents re-based on a version that never took effect → effective version in status and rollback → fixed
+- Acceptance round 1 (3 real agents, 0 interventions, all live in 2:47–4:24): findings below
+- Signed-in `/.boxlite/auth/me` was forwarded to the app: @hono/node-server swaps the global Response, so `Response.json()` results failed `instanceof Response` in the proxy → `isResponse()` shape check → fixed; real-listener regression test proven to fail without the fix
+- Agents handed users one-time `app open` links that expire in 60 s → SKILL.md: report the permanent URL; owner opens private apps from the console → fixed
+- A DELETE without --write answered "cannot execute DELETE in a read-only transaction / fix the SQL", so an agent concluded it could not clean its test rows → refused before execution with `write_requires_flag` and the exact `--write` command; 25006 fallback hint → fixed
+- SKILL.md never told agents to remove their test data → section 5 cleanup rule → fixed

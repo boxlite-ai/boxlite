@@ -24,6 +24,17 @@ test('queries are read-only unless write:true', async () => {
   assert.equal(h.appdb.queries.at(-1)!.write, true);
 });
 
+test('a write without write:true is refused before it runs, with the exact fix', async () => {
+  const ran = h.appdb.queries.length;
+  const res = await sql('main', { query: "DELETE FROM contact_submissions WHERE name = 'test'" });
+  assert.equal(res.status, 403);
+  const body = (await res.json()) as any;
+  assert.equal(body.error.code, 'write_requires_flag');
+  assert.match(body.error.message, /DELETE changes data/);
+  assert.match(body.error.next, /--write/);
+  assert.equal(h.appdb.queries.length, ran, 'nothing reached the database');
+});
+
 test('DDL on main is forbidden and points at migrations', async () => {
   const res = await sql('main', { query: '-- add a column\nALTER TABLE deals ADD COLUMN x int', write: true });
   assert.equal(res.status, 403);

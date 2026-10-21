@@ -140,12 +140,13 @@ boxlite-app app sql "select count(*) from <table>" --json  # data actually writt
 - Exercise every feature the user named, through HTTP, the way a browser would (create, list, edit, delete; upload then fetch the file; a protected page returns the login redirect when anonymous).
 - Login-only flows: `--as qa@example.com` signs in a 15-minute test user, so your service gets that user's `X-BoxLite-User-*` headers. Without it, a protected page must answer 302 (HTML) or 401 (API).
 - If a check fails, fix and redeploy. Report only when all pass.
+- Clean up after yourself: delete the rows and files your checks created (`boxlite-app app sql --write "delete from <table> where …"`, or your app's own delete endpoint for uploaded files), so the user starts with an empty app unless they asked for sample data.
 
 ## 6. Report to the user
 
 One short message:
 
-- The URL. For a private app, `boxlite-app app open --print-url` gives a one-time sign-in link you can hand over; never put the App key in a link.
+- The app's permanent URL (`url` in `boxlite-app app status --json`). Never hand over a one-time link from `app open --print-url`: it expires a minute after you create it and works once, so it is dead by the time the user reads your message. A private app opens for its owner with **Open app** in the BoxLite console, and its URL shows a page that says so; tell the user that in one sentence. Never put the App key in a link.
 - What you built, in their words, and what you verified (list).
 - Anything only they can decide, phrased as a question: making the app public (`boxlite-app app access set public --yes` — only when they say "public"), adding a third-party key, a custom domain.
 

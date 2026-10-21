@@ -5,6 +5,7 @@ export const ERROR_EXIT_CODES: Readonly<Record<string, number>> = {
   not_found_env: 3,
   not_found: 4,
   forbidden: 5,
+  write_requires_flag: 5, // add --write; nothing ran
   unavailable: 6,
   rate_limited: 6, // retryable: the CLI already waited Retry-After three times
   invalid_manifest: 7,

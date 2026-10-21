@@ -24,6 +24,7 @@ const STATUS_BY_CODE: Record<string, number> = {
   not_found_env: 404,
   not_found: 404,
   forbidden: 403,
+  write_requires_flag: 403,
   unavailable: 503,
   invalid_manifest: 422,
   deploy_failed: 409,

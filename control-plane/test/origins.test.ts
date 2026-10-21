@@ -3,6 +3,8 @@ import { createServer, type Server } from 'node:http';
 import { createServer as netServer, type AddressInfo } from 'node:net';
 import { after, test } from 'node:test';
 import { NodeListeners, deriveOriginUrl, isLocalUrl } from '../src/origins.js';
+import { createTestSession } from '../src/enduser-auth.js';
+import { isResponse } from '../src/routes/proxy.js';
 import { handleUpgrade } from '../src/routes/proxy.js';
 import { createApp, harness, type Harness } from './helpers.js';
 
@@ -65,4 +67,13 @@ test('real listeners: one per origin, routed by the port the request arrived on 
   const legacy = await get(api!, '/crm/x');
   assert.equal(legacy.status, 301);
   assert.equal(legacy.headers.get('location'), `http://localhost:${envPort}/x`);
+
+  // Under @hono/node-server, Response.json() is not `instanceof Response` (the global is swapped).
+  // A signed-in /.boxlite/auth/me answered with Response.json and used to be forwarded to the app.
+  assert.ok(isResponse(Response.json({})));
+  h.ctx.store.run("INSERT INTO spec_versions (env_id, version, deployment, spec, created_at) VALUES (?, 1, 1, ?, '2026-01-01')", env.id, JSON.stringify({ app: 'crm', environment: 'main', version: 1, services: [], schedules: [], volumes: [], auth: { providers: ['github'], protect: [] } }));
+  const { cookie } = await createTestSession(h.ctx, app, h.ctx.store.envById(env.id)!, 'qa@example.com', 'test');
+  const me = await fetch(`http://127.0.0.1:${envPort}/.boxlite/auth/me`, { headers: { cookie } });
+  assert.equal(me.status, 200, 'the CP answers /.boxlite/auth/me itself');
+  assert.equal(((await me.json()) as { email: string }).email, 'qa@example.com');
 });

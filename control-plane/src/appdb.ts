@@ -127,7 +127,10 @@ export async function pgConnect(url: string): Promise<DbConn> {
 function sqlError(err: unknown): never {
   if ((err as { name?: string }).name === 'HttpError') throw err;
   const e = err as { message?: string; position?: string; code?: string };
-  throw fail('sql_error', e.message ?? String(err), undefined, { sqlstate: e.code, position: e.position ? Number(e.position) : undefined });
+  // 25006: read_only_sql_transaction. The guard catches plain DML first; this covers the rest
+  // (functions that write, writable CTEs the parser classifies as reads).
+  const next = e.code === '25006' ? 'this statement writes; rerun it with --write' : undefined;
+  throw fail('sql_error', e.message ?? String(err), next, { sqlstate: e.code, position: e.position ? Number(e.position) : undefined });
 }
 
 function rowBytes(row: unknown): number {
