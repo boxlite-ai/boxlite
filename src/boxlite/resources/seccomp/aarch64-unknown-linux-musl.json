@@ -508,6 +508,269 @@
             {
                 "syscall": "restart_syscall",
                 "comment": "automatically issued by the kernel when specific timing-related syscalls (e.g. nanosleep) get interrupted by SIGSTOP"
+            },
+            {
+                "syscall": "ioctl",
+                "args": [{"index": 1, "type": "dword", "op": "eq", "val": 3255348834, "comment": "KVM_GET_IRQCHIP"}]
+            },
+            {
+                "syscall": "ioctl",
+                "args": [{"index": 1, "type": "dword", "op": "eq", "val": 2150674044, "comment": "KVM_GET_CLOCK"}]
+            },
+            {
+                "syscall": "ioctl",
+                "args": [{"index": 1, "type": "dword", "op": "eq", "val": 2154868383, "comment": "KVM_GET_PIT2"}]
+            },
+            {
+                "syscall": "statx",
+                "comment": "libkrun: modern file stat (glibc 2.38+). Required at steady-state."
+            },
+            {
+                "syscall": "readlinkat",
+                "comment": "libkrun: modern readlink (glibc uses readlinkat). TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "unlinkat",
+                "comment": "libkrun: modern unlink (glibc uses unlinkat). TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "clone3",
+                "comment": "libkrun: vCPU thread creation (glibc 2.34+ uses clone3). Required at steady-state."
+            },
+            {
+                "syscall": "clone",
+                "comment": "libkrun: vCPU thread creation (legacy clone, fallback for older glibc). Required at steady-state."
+            },
+            {
+                "syscall": "close_range",
+                "comment": "libkrun: close range of file descriptors (glibc 2.34+). Required at steady-state."
+            },
+            {
+                "syscall": "epoll_create1",
+                "comment": "libkrun: create epoll instance for I/O multiplexing. Required at steady-state."
+            },
+            {
+                "syscall": "mprotect",
+                "comment": "libkrun: memory protection changes for guest RAM regions. Required at steady-state."
+            },
+            {
+                "syscall": "bind",
+                "comment": "libkrun: bind socket for tonic gRPC vsock server. Required at steady-state."
+            },
+            {
+                "syscall": "listen",
+                "comment": "libkrun: listen on socket for tonic gRPC vsock server. Required at steady-state."
+            },
+            {
+                "syscall": "getsockname",
+                "comment": "libkrun: get socket address for tonic gRPC vsock server. Required at steady-state."
+            },
+            {
+                "syscall": "setsockopt",
+                "comment": "libkrun: set socket options for tonic gRPC vsock server. Required at steady-state."
+            },
+            {
+                "syscall": "sendto",
+                "comment": "libkrun: send data on socket for networking. Required at steady-state."
+            },
+            {
+                "syscall": "ppoll",
+                "comment": "libkrun: I/O multiplexing for event loop. Required at steady-state."
+            },
+            {
+                "syscall": "pread64",
+                "comment": "libkrun: positioned read for block device I/O. Required at steady-state."
+            },
+            {
+                "syscall": "pwrite64",
+                "comment": "libkrun: positioned write for block device I/O. Required at steady-state."
+            },
+            {
+                "syscall": "preadv",
+                "comment": "libkrun: vectorized positioned read for block device I/O. Required at steady-state."
+            },
+            {
+                "syscall": "dup",
+                "comment": "libkrun: file descriptor duplication. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "dup3",
+                "comment": "libkrun: file descriptor duplication. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "kill",
+                "comment": "libkrun: signal delivery for VM lifecycle management. Required at steady-state."
+            },
+            {
+                "syscall": "capget",
+                "comment": "libkrun: query process capabilities during setup. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "prctl",
+                "comment": "libkrun: thread setup (PR_SET_NAME, etc.). Required at steady-state for vCPU thread naming."
+            },
+            {
+                "syscall": "pipe2",
+                "comment": "libkrun: pipe creation for internal IPC. Required at steady-state."
+            },
+            {
+                "syscall": "tgkill",
+                "comment": "libkrun: thread-group signal delivery for VM lifecycle. Required at steady-state."
+            },
+            {
+                "syscall": "nanosleep",
+                "comment": "libkrun: sleep operations for timing. Required at steady-state."
+            },
+            {
+                "syscall": "clock_nanosleep",
+                "comment": "libkrun: precise sleep (glibc maps nanosleep to clock_nanosleep). Required at steady-state."
+            },
+            {
+                "syscall": "getpid",
+                "comment": "libkrun: get process ID. Required at steady-state."
+            },
+            {
+                "syscall": "gettid",
+                "comment": "libkrun: get thread ID for vCPU thread init. Required at steady-state."
+            },
+            {
+                "syscall": "getuid",
+                "comment": "libkrun: get user ID. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "getgid",
+                "comment": "libkrun: get group ID. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "faccessat",
+                "comment": "libkrun: check file access permissions. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "set_robust_list",
+                "comment": "libkrun: pthread robust futex list (called by new threads). TODO(seccomp): needed per-thread, but only during thread init."
+            },
+            {
+                "syscall": "set_tid_address",
+                "comment": "libkrun: set thread ID pointer (called by new threads). TODO(seccomp): needed per-thread, but only during thread init."
+            },
+            {
+                "syscall": "rseq",
+                "comment": "libkrun: restartable sequences (glibc 2.35+). TODO(seccomp): needed per-thread, but only during thread init."
+            },
+            {
+                "syscall": "prlimit64",
+                "comment": "libkrun: get/set resource limits. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "sched_getaffinity",
+                "comment": "libkrun: CPU affinity query for vCPU scheduling. Required at steady-state."
+            },
+            {
+                "syscall": "umask",
+                "comment": "libkrun: set file creation mask (used by libcontainer). TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "accept",
+                "comment": "libkrun: accept connections (older variant without flags). Required at steady-state for tonic gRPC."
+            },
+            {
+                "syscall": "capset",
+                "comment": "libkrun: set process capabilities during setup. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "copy_file_range",
+                "comment": "libkrun: efficient file copy. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "fchmod",
+                "comment": "libkrun: change file permissions. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "flock",
+                "comment": "libkrun: file locking. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "getcwd",
+                "comment": "libkrun: get current working directory. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "getdents64",
+                "comment": "libkrun: read directory entries. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "geteuid",
+                "comment": "libkrun: get effective user ID. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "getsockopt",
+                "comment": "libkrun: get socket options for tonic gRPC vsock server. Required at steady-state."
+            },
+            {
+                "syscall": "mkdirat",
+                "comment": "libkrun: create directory relative to fd. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "pwritev",
+                "comment": "libkrun: vectorized positioned write for block device I/O. Required at steady-state."
+            },
+            {
+                "syscall": "shutdown",
+                "comment": "libkrun: shutdown socket for tonic gRPC. Required at steady-state."
+            },
+            {
+                "syscall": "signalfd4",
+                "comment": "libkrun: create signalfd for signal handling. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "socketpair",
+                "comment": "libkrun: create connected socket pair for internal IPC. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "uname",
+                "comment": "libkrun: get system info. TODO(seccomp): likely setup-only, may be removable after audit."
+            },
+            {
+                "syscall": "wait4",
+                "comment": "libkrun: wait for child process. Required at steady-state."
+            },
+            {
+                "syscall": "waitid",
+                "comment": "libkrun: wait for child process (extended). Required at steady-state."
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "TODO(seccomp): overly broad \u2014 replace with explicit KVM ioctl codes once libkrun's full set is audited. Firecracker enumerates each KVM_* code individually. Currently catch-all because libkrun uses 28+ distinct KVM ioctls during VM setup and runtime.",
+                "args": [{"index": 1, "type": "dword", "op": "ge", "val": 0, "comment": "any ioctl request code"}]
+            },
+            {
+                "syscall": "mmap",
+                "comment": "TODO(seccomp): overly broad \u2014 replace with explicit MAP_* flag combinations once libkrun's mmap usage is audited. Currently catch-all because libkrun uses MAP_SHARED, MAP_PRIVATE|MAP_ANONYMOUS, MAP_FIXED, and more for guest RAM, balloon, and I/O regions.",
+                "args": [{"index": 3, "type": "dword", "op": "ge", "val": 0, "comment": "any mmap flags"}]
+            },
+            {
+                "syscall": "socket",
+                "comment": "TODO(seccomp): overly broad \u2014 replace with explicit AF_UNIX/AF_INET/AF_INET6 rules once libkrun's socket usage is audited. Currently catch-all because libkrun uses various domain/type/protocol combinations for vsock and networking.",
+                "args": [{"index": 0, "type": "dword", "op": "ge", "val": 0, "comment": "any socket domain"}]
+            },
+            {
+                "syscall": "fcntl",
+                "comment": "TODO(seccomp): overly broad \u2014 replace with explicit F_GETFD/F_SETFD/F_GETFL/F_SETFL rules. Currently catch-all because libkrun uses multiple fcntl commands for FD management.",
+                "args": [{"index": 1, "type": "dword", "op": "ge", "val": 0, "comment": "any fcntl command"}]
+            },
+            {
+                "syscall": "futex",
+                "comment": "TODO(seccomp): overly broad \u2014 replace with explicit FUTEX_WAIT/WAKE/WAIT_PRIVATE/WAKE_PRIVATE/WAIT_BITSET_PRIVATE rules once libkrun's futex ops are audited. Currently catch-all because seccompiler silently drops unconditional entries when conditional entries exist for the same syscall.",
+                "args": [{"index": 1, "type": "dword", "op": "ge", "val": 0, "comment": "any futex op"}]
+            },
+            {
+                "syscall": "rt_sigaction",
+                "comment": "TODO(seccomp): overly broad \u2014 replace with explicit signal numbers (SIGABRT, SIGSEGV, SIGBUS, etc.) once libkrun's signal set is known. Currently catch-all because libkrun registers handlers for multiple signals during VM setup.",
+                "args": [{"index": 0, "type": "dword", "op": "ge", "val": 0, "comment": "any signal number"}]
+            },
+            {
+                "syscall": "accept4",
+                "comment": "TODO(seccomp): overly broad \u2014 replace with explicit SOCK_CLOEXEC rule once libkrun's accept4 flags are confirmed. Currently catch-all for compatibility.",
+                "args": [{"index": 3, "type": "dword", "op": "ge", "val": 0, "comment": "any accept4 flags"}]
             }
         ]
     },
