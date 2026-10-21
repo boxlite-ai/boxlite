@@ -16,6 +16,28 @@ For a new OIDC setup, follow the selected cloud’s [GCP](gcp/identity-and-mail.
 Other compatible OIDC providers need equivalent manual setup.
 Application invitation mail and the identity provider's verification/reset mail are separate systems.
 
+## MCP endpoint
+
+`/api/mcp` accepts only tokens issued for `MCP_RESOURCE_URL`
+([contract](../../API.md#mcp-endpoint)). Unset, it keeps the API's own audience and
+publishes no discovery metadata. Turn a stage on in this order, dev first:
+
+1. On the stage's Auth0 tenant (`auth0/targets.json`), create an API whose identifier is
+   the resource URL: `auth0 apis create --name boxlite-mcp --identifier https://dev.boxlite.ai/api/mcp --tenant <tenant>`.
+2. In Settings → Advanced, turn on Resource Parameter Compatibility Profile, because hosts
+   send `resource` rather than `audience`, and Include Issuer in Authorization Responses.
+3. Register the hosts' clients (Client ID Metadata Documents, Dynamic Client Registration, or
+   a client per host), and mark the connections they may use as domain-level:
+   `auth0 api patch connections/<id> --data '{"is_domain_connection": true}'`.
+4. Store the URL: `npm run mstage env set -- MCP_RESOURCE_URL=https://dev.boxlite.ai/api/mcp --stage dev --digest`,
+   then deploy through `mdeploy-all.yml`.
+5. Check that `https://dev.boxlite.ai/.well-known/oauth-protected-resource/api/mcp` returns
+   JSON naming that resource, and that an unauthenticated `POST /api/mcp` returns `401`
+   with `resource_metadata`.
+
+Keep the resource URL on the dashboard host: on GCP the `api.` host rewrites other paths
+under `/api/`. CloudFront caps a response through that host at 60 seconds.
+
 ## Auth0 email-first login policy
 
 Run this only for a dedicated BoxLite Auth0 tenant. Identifier First is a

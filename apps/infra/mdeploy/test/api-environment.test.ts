@@ -53,6 +53,16 @@ test('a stage may serve its dashboard off the stage domain, and only the dashboa
   assert.equal(pinned.environment.DASHBOARD_URL, 'https://console.example.com')
 })
 
+test('the MCP resource URL is set by the stage, never defaulted', () => {
+  // Setting it moves /api/mcp onto its own token audience, which works only once
+  // the stage's Auth0 tenant has an API with that identifier — a default would
+  // switch prod over first.
+  assert.equal('MCP_RESOURCE_URL' in assemble(base).environment, false)
+
+  const { environment } = assemble({ ...base, MCP_RESOURCE_URL: 'https://dev.boxlite.ai/api/mcp' })
+  assert.equal(environment.MCP_RESOURCE_URL, 'https://dev.boxlite.ai/api/mcp')
+})
+
 test('a dashboard host that is the control plane’s own is refused at the boundary', () => {
   /*
    * The two names become one Cloudflare record and one certificate each. Left
