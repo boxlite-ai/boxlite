@@ -98,18 +98,33 @@ static CBoxHandle *create_test_box(CBoxliteRuntime *runtime,
   return create_box_with_options(runtime, opts, error);
 }
 
+/**
+ * Process exit callback for test execution.
+ */
+static void test_on_exit(int exit_code, void *user_data) {
+  *(int *)user_data = exit_code;
+}
+
+/**
+ * Execute a command on the test box using modern boxlite_box_exec.
+ */
 static BoxliteErrorCode
 test_execute_cmd(CBoxHandle *box, const BoxliteCommand *cmd,
                  void (*callback)(const char *, int, void *), void *user_data,
                  int *out_exit_code, CBoxliteError *error) {
+  (void)callback;
+  (void)user_data;
   CExecutionHandle *execution = NULL;
-  BoxliteErrorCode code =
-      boxlite_execute(box, cmd, callback, user_data, &execution, error);
+  BoxliteErrorCode code = boxlite_box_exec(box, cmd, &execution, error);
   if (code != Ok) {
     return code;
   }
 
-  code = boxlite_execution_wait(execution, out_exit_code, error);
+  int exit_code = -1;
+  code = boxlite_execution_on_exit(execution, test_on_exit, &exit_code, error);
+  if (code == Ok && out_exit_code != NULL) {
+    *out_exit_code = exit_code;
+  }
   boxlite_execution_free(execution);
   return code;
 }

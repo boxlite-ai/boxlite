@@ -192,9 +192,13 @@ int main() {
 #include <stdio.h>
 #include "boxlite.h"
 
-void output_callback(const char* text, int is_stderr, void* user_data) {
-    FILE* stream = is_stderr ? stderr : stdout;
-    fprintf(stream, "%s", text);
+static void on_stdout(const uint8_t* data, size_t len, void* user_data) {
+    (void)user_data;
+    fwrite(data, 1, len, stdout);
+}
+
+static void on_exit(int exit_code, void* user_data) {
+    *(int*)user_data = exit_code;
 }
 
 int main() {
@@ -248,7 +252,7 @@ int main() {
     boxlite_options_free(opts);
 
     // Start command with streaming output, then wait for completion
-    int exit_code = 0;
+    int exit_code = -1;
     const char* args[] = {"-la", "/"};
     BoxliteCommand cmd = {
         .command = "/bin/ls",
@@ -257,10 +261,12 @@ int main() {
     };
     CExecutionHandle* execution = NULL;
 
-    if (boxlite_execute(box, &cmd, output_callback, NULL, &execution, &error) == Ok) {
-        if (boxlite_execution_wait(execution, &exit_code, &error) == Ok) {
-            printf("\nExit code: %d\n", exit_code);
+    if (boxlite_box_exec(box, &cmd, &execution, &error) == Ok) {
+        boxlite_execution_on_stdout(execution, on_stdout, NULL, &error);
+        boxlite_execution_on_exit(execution, on_exit, &exit_code, &error);
+        while (exit_code < 0 && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
         }
+        printf("\nExit code: %d\n", exit_code);
         boxlite_execution_free(execution);
     }
     if (error.code != Ok) {
@@ -517,19 +523,23 @@ typedef struct BoxliteCommand {
     int tty;                  // 0 = no TTY, non-zero = TTY
 } BoxliteCommand;
 
-BoxliteErrorCode boxlite_execute(
+BoxliteErrorCode boxlite_box_exec(
     CBoxHandle* handle,
     const BoxliteCommand* cmd,
-    void (*callback)(const char* text, int is_stderr, void* user_data),
-    void* user_data,
     CExecutionHandle** out_execution,
     CBoxliteError* out_error
 );
 
-BoxliteErrorCode boxlite_execution_write(CExecutionHandle* execution, const char* data, int len, CBoxliteError* out_error);
-BoxliteErrorCode boxlite_execution_wait(CExecutionHandle* execution, int* out_exit_code, CBoxliteError* out_error);
-BoxliteErrorCode boxlite_execution_kill(CExecutionHandle* execution, CBoxliteError* out_error);
-BoxliteErrorCode boxlite_execution_resize_tty(CExecutionHandle* execution, int rows, int cols, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_on_stdout(CExecutionHandle* execution, CBoxStdoutCb cb, void* user_data, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_on_stderr(CExecutionHandle* execution, CBoxStderrCb cb, void* user_data, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_on_exit(CExecutionHandle* execution, CBoxExitCb cb, void* user_data, CBoxliteError* out_error);
+
+BoxliteErrorCode boxlite_execution_stdin_write(CExecutionHandle* execution, const uint8_t* data, size_t len, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_stdin_close(CExecutionHandle* execution, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_wait(CExecutionHandle* execution, CExecutionWaitCb cb, void* user_data, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_kill(CExecutionHandle* execution, CExecutionKillCb cb, void* user_data, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_signal(CExecutionHandle* execution, int sig, CExecutionSignalCb cb, void* user_data, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_tty_resize(CExecutionHandle* execution, int rows, int cols, CExecutionResizeCb cb, void* user_data, CBoxliteError* out_error);
 void boxlite_execution_free(CExecutionHandle* execution);
 ```
 
@@ -548,9 +558,12 @@ BoxliteCommand cmd = {
     .timeout_secs = 30.0,
 };
 CExecutionHandle* execution = NULL;
-int exit_code;
-if (boxlite_execute(box, &cmd, my_callback, NULL, &execution, &error) == Ok) {
-    boxlite_execution_wait(execution, &exit_code, &error);
+int exit_code = -1;
+if (boxlite_box_exec(box, &cmd, &execution, &error) == Ok) {
+    boxlite_execution_on_stdout(execution, on_stdout, NULL, &error);
+    boxlite_execution_on_exit(execution, on_exit, &exit_code, &error);
+    while (exit_code < 0 && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
+    }
     boxlite_execution_free(execution);
 }
 ```
@@ -892,10 +905,10 @@ CBoxHandle* box = NULL;
 boxlite_create_box(runtime, opts, &box, &error);
 
 // Thread 1
-boxlite_execute(box, &cmd1, ...);  // UNSAFE
+boxlite_box_exec(box, &cmd1, ...);  // UNSAFE
 
 // Thread 2
-boxlite_execute(box, &cmd2, ...);  // UNSAFE
+boxlite_box_exec(box, &cmd2, ...);  // UNSAFE
 ```
 
 **Safe: Per-thread boxes**
@@ -908,12 +921,14 @@ void* thread_func(void* arg) {
     boxlite_options_new("alpine:3.19", &opts, &error);
     boxlite_create_box(runtime, opts, &box, &error);
     boxlite_options_free(opts);
-    int exit_code = 0;
+    int exit_code = -1;
     const char* args[] = {"hello"};
     BoxliteCommand cmd = {.command = "/bin/echo", .args = args, .argc = 1};
     CExecutionHandle* execution = NULL;
-    if (boxlite_execute(box, &cmd, NULL, NULL, &execution, &error) == Ok) {
-        boxlite_execution_wait(execution, &exit_code, &error);
+    if (boxlite_box_exec(box, &cmd, &execution, &error) == Ok) {
+        boxlite_execution_on_exit(execution, on_exit, &exit_code, &error);
+        while (exit_code < 0 && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
+        }
         boxlite_execution_free(execution);
     }
     boxlite_stop_box(box, &error);
