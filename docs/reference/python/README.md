@@ -416,17 +416,13 @@ Detailed state information for a box.
 
 ## SSH control
 
-Both `boxlite.Box` and `SyncBox` expose `box.ssh`. `status()` and `disable()`
-never start the VM or its main command; only `configure()` may implicitly
-start a box that uses its image's default command — with an explicit
-`BoxOptions.cmd` or `entrypoint`, `configure()` raises `InvalidStateError`
-while the box is Configured or Stopped until `start()` runs it.
+Both `boxlite.Box` and `SyncBox` expose `box.ssh`.
 
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
-| Configure | `await box.ssh.configure(config) -> SshStatus` | Validate and replace SSH configuration, disconnecting existing clients |
-| Query | `await box.ssh.status() -> SshStatus` | Observe listener state without starting the box |
-| Disable | `await box.ssh.disable() -> SshStatus` | Stop SSH and disconnect clients; repeatable |
+| Configure | `await box.ssh.configure(config) -> SshStatus` | Apply SSH configuration |
+| Query | `await box.ssh.status() -> SshStatus` | Return SSH status |
+| Disable | `await box.ssh.disable() -> SshStatus` | Disable SSH |
 
 ```python
 from boxlite import SshAccount, SshConfig
@@ -441,24 +437,14 @@ status = await box.ssh.configure(config)
 
 In the sync API the same calls drop `await`: `box.ssh.configure(config)`.
 
-`SshConfig` takes `listen_address`, `host_private_key`, and `accounts`;
-`SshAccount` takes `login`, `authorized_keys`, and an optional `ca`
-(`SshCaConfig(public_key, principal)`). Fields are explicit — the runtime
-generates no keys, persists no configuration, and publishes no ports. `repr()`
-redacts every credential; errors never echo submitted key material.
+`SshConfig(listen_address, host_private_key, accounts=[])` accepts
+`SshAccount(login, authorized_keys=[], ca=None)` entries; certificate
+authentication uses `SshCaConfig(public_key, principal)`. Credential-bearing
+objects redact keys in `repr()`.
 
-`SshStatus` carries `enabled: bool`, `generation: int`, `listen_address`,
-`host_public_key`, and `host_key_fingerprint` — no credentials. Each accepted
-`configure()` restarts the guest listener and advances `generation`; one
-rejected as invalid leaves the running listener untouched (other configure
-failures, such as timeouts, carry no such guarantee). `Configured` and
-`Stopped` boxes report disabled status with `generation` `0` and empty
-identity fields.
-
-Operations are not retried; a local backend gives each operation a 15-second
-budget after startup, while a REST runtime applies its request timeout (the
-[SSH guide](../../guides/ssh.md) and [Rust
-reference](../rust/README.md#ssh-control) own the deeper lifecycle details).
+`SshStatus` exposes `enabled: bool`, `generation: int`, `listen_address`,
+`host_public_key`, and `host_key_fingerprint`. `generation` is a Python `int`
+that preserves the full unsigned 64-bit value.
 
 ---
 
