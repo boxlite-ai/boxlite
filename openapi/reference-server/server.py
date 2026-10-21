@@ -215,6 +215,7 @@ class ResizeRequest(BaseModel):
 
 class CreateSnapshotRequest(BaseModel):
     name: str
+    snapshot_type: Literal["filesystem", "memory"] = "filesystem"
 
 
 class CloneBoxRequest(BaseModel):
@@ -431,11 +432,12 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
 
 def snapshot_info_to_dict(info) -> dict:
     return {
+        "snapshot_type": info.snapshot_type,
+        "is_mock": info.is_mock,
         "id": info.id,
         "box_id": info.box_id,
         "name": info.name,
         "created_at": info.created_at,
-        "guest_disk_bytes": info.guest_disk_bytes,
         "container_disk_bytes": info.container_disk_bytes,
         "size_bytes": info.size_bytes,
     }
@@ -582,6 +584,7 @@ async def get_config():
             "tty_enabled": True,
             "streaming_enabled": True,
             "snapshots_enabled": True,
+            "memory_snapshots_enabled": False,
             "clone_enabled": True,
             "export_enabled": True,
             "import_enabled": True,
@@ -731,8 +734,8 @@ async def create_snapshot(
     _auth: dict = Depends(require_auth),
 ):
     box_handle = await get_box_or_404(box_id)
-    opts = boxlite.SnapshotOptions()
-    info = await box_handle.snapshot.create(req.name, opts)
+    opts = boxlite.SnapshotOptions(snapshot_type=req.snapshot_type)
+    info = await box_handle.snapshot.create(name=req.name, options=opts)
     return JSONResponse(status_code=201, content=snapshot_info_to_dict(info))
 
 
@@ -788,6 +791,17 @@ async def restore_snapshot(
     box_handle = await get_box_or_404(box_id)
     await box_handle.snapshot.restore(snapshot_name)
     return Response(status_code=204)
+
+
+@app.post("/v1/{prefix}/boxes/{box_id}/snapshots/{snapshot_name}/boxes", status_code=201)
+async def create_box_from_snapshot(
+    prefix: str, box_id: str, snapshot_name: str, req: CloneBoxRequest,
+    _auth: dict = Depends(require_auth),
+):
+    source = await get_box_or_404(box_id)
+    child = await source.snapshot.create_box(snapshot_name, name=req.name)
+    await cache_box_handle(child)
+    return box_info_to_dict(await child.info())
 
 
 @app.post("/v1/{prefix}/boxes/{box_id}/clone", status_code=201)

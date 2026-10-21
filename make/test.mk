@@ -599,10 +599,19 @@ test\:apps\:api: _ensure-apps-deps
 
 test\:apps\:runner: dev\:go
 	@echo "🧪 Running runner Go tests..."
-	@cd apps/runner && go test -tags boxlite_dev ./... $(GOTEST_FILTER)
+	@cd apps/runner && go test -tags boxlite_dev -count=1 ./... $(GOTEST_FILTER)
 
 test\:apps\:proxy:
 	@cd apps/proxy && go test ./... $(GOTEST_FILTER)
+
+PHONY_TARGETS += test\:apps\:runner test\:snapshot-contract
+PHONY_TARGETS += test\:unit\:reference-server
+
+test\:unit\:reference-server:
+	@.venv/bin/python -m unittest discover -s openapi/reference-server/tests -p 'test_*.py' -v $(if $(FILTER),-k '$(FILTER)',)
+
+test\:snapshot-contract:
+	@.venv/bin/python -m pytest -v sdks/python/tests/test_memory_snapshot_contract.py
 
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."

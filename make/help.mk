@@ -84,6 +84,8 @@ help:
 	@echo "    make test:apps:api          - Run API unit tests (FILTER=<pattern>)"
 	@echo "    make test:apps:proxy        - Run proxy unit tests (FILTER=<pattern>)"
 	@echo "    make fmt:apps:proxy         - Format the proxy Go service"
+	@echo "    make test:apps:runner       - Run runner controller/runtime unit tests (FILTER=<pattern>)"
+	@echo "    make test:snapshot-contract - S6 explicit memory mock and production refusal contract"
 	@echo "    make dev:runner-ci         - Build SDK and runner for isolated local acceptance"
 	@echo "    make kernel:dind           - Build pinned arm64 DinD firmware in a Linux Box"
 	@echo "    make test:runner-ci:infra  - Start and verify isolated local API/runner infrastructure"

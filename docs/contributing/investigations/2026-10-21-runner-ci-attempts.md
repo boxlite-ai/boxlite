@@ -58,4 +58,27 @@ exit codes, hypotheses, versions, retained patch and guest evidence.
 ## Remaining features
 
 F2: zero rounds, BLOCKED by F1; see [Swarm report](2026-10-22-f2-swarm-blocked.md).
-F3–F6: zero implementation/verification rounds. No acceptance claim yet.
+F4–F6: zero implementation/verification rounds. No acceptance claim yet.
+
+## F3
+
+1. Missing memory type and create-from contract: add explicit type, mock marker,
+   SDK/wire contracts and production Unsupported handlers. Core snapshot tests
+   pass (25); `make dev:python SETUP_DONE=1` exits 2 on an unclosed method, and
+   `make test:apps:api FILTER=memory` exits 2 on nonexistent READ_BOXES enum.
+   Logs: `f3-r1-rust.log`, `f3-r1-python-build.log`, `f3-r1-api.log`.
+2. Hypothesis: binding syntax and permission naming prevent reaching contract
+   checks. Close the Python method and use the existing authenticated read
+   policy (there is no separate read-boxes permission); update Node contracts.
+   SDK mock/local-refusal 4 tests, API memory 6, runner, CLI 275 and Node binding
+   5 pass. Python lint fails import sorting. Full API exits 2: new routes were
+   missing from the permission audit; other failures require baseline comparison.
+   Logs `f3-r2-*.log`.
+3. Fix import order and enumerate the new routes in the permission audit. Add
+   missing-snapshot restore assertion and verify reference-server SDK adaptation
+   with all production changes reverted first. Reproduction reaches the old
+   positional SDK call (TypeError) and missing `guest_disk_bytes` (AttributeError).
+   With changes restored, the reference snapshot checks pass; SDK 4, API contract
+   63, Python lint and Node typecheck pass. S6 = MOCK_PASS, 3/6 rounds used.
+   Full API and reference regressions retain unrelated failures; see
+   [F3 verification](2026-10-22-f3-memory-contract.md).

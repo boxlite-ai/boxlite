@@ -45,6 +45,12 @@ use crate::disk::{BackingFormat, Qcow2Helper};
 /// as `BoxConfig` — domain type in `litebox/`, stored via `db/` layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotInfo {
+    /// Missing on old records means filesystem.
+    #[serde(default)]
+    pub snapshot_type: crate::SnapshotType,
+    /// Test backends must mark simulated results. Production never sets this.
+    #[serde(default)]
+    pub is_mock: bool,
     /// Unique snapshot ID (nanoid).
     pub id: String,
     /// ID of the box this snapshot belongs to.
@@ -179,6 +185,8 @@ impl SnapshotManager {
         let snapshot_id = nanoid::nanoid!(8);
         let now = chrono::Utc::now().timestamp();
         let info = SnapshotInfo {
+            snapshot_type: crate::SnapshotType::Filesystem,
+            is_mock: false,
             id: snapshot_id,
             box_id: box_id.to_string(),
             name: name.to_string(),

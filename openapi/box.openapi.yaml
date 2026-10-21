@@ -617,6 +617,37 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  /{prefix}/boxes/{box_id}/snapshots/{snapshot_name}/boxes:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - name: snapshot_name
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: createBoxFromSnapshot
+      summary: Create an independent Box from a snapshot
+      description: Reserved contract. Memory restore is only simulated by explicit test backends; production returns Unsupported. Never falls back to image or filesystem cloning.
+      tags: [Boxes]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloneBoxRequest"
+      responses:
+        "201":
+          description: Created Box (simulated for memory in test mode)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "501":
+          description: Snapshot type or creation is unsupported
+
   /{prefix}/boxes/{box_id}/snapshots/{snapshot_name}/restore:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -1923,8 +1954,12 @@ components:
               example: true
             snapshots_enabled:
               type: boolean
-              description: Whether snapshot create/list/get/remove/restore is supported
+              description: Whether filesystem snapshot operations are supported; does not imply memory support
               example: true
+            memory_snapshots_enabled:
+              type: boolean
+              description: Real memory snapshot support. False in production; test mocks never imply real memory support.
+              example: false
             clone_enabled:
               type: boolean
               description: Whether box clone is supported
@@ -2646,6 +2681,12 @@ components:
             Placeholder string visible inside the guest.
             Defaults to `<BOXLITE_SECRET:{name}>` when omitted.
 
+    SnapshotType:
+      type: string
+      enum: [filesystem, memory]
+      default: filesystem
+      description: Memory is reserved for explicit test mocks; production does not save RAM, CPU registers or device state.
+
     Snapshot:
       type: object
       required:
@@ -2653,10 +2694,15 @@ components:
         - box_id
         - name
         - created_at
-        - guest_disk_bytes
         - container_disk_bytes
         - size_bytes
       properties:
+        snapshot_type:
+          $ref: "#/components/schemas/SnapshotType"
+        is_mock:
+          type: boolean
+          default: false
+          description: True only for a result simulated by an explicitly assembled test backend
         id:
           type: string
           description: Snapshot ULID
@@ -2670,9 +2716,6 @@ components:
           type: integer
           format: int64
           description: Unix timestamp (seconds)
-        guest_disk_bytes:
-          type: integer
-          format: int64
         container_disk_bytes:
           type: integer
           format: int64
@@ -2684,6 +2727,8 @@ components:
       type: object
       required: [name]
       properties:
+        snapshot_type:
+          $ref: "#/components/schemas/SnapshotType"
         name:
           type: string
           minLength: 1

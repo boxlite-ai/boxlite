@@ -31,7 +31,7 @@ Complete API documentation for each SDK:
 
 | Surface | Documentation | Description |
 |---------|---------------|-------------|
-| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 32 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images, registries |
+| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images, registries |
 | **Agent REST design** | [Agents and turns](../contributing/investigations/2026-10-28-agent-rest-api-design.md) | Nine proposed HTTP operations covering the agent SDK API; no server routes or OpenAPI paths are added yet |
 | **Admin API** | [`openapi/admin.openapi.yaml`](../../openapi/admin.openapi.yaml) | Cloud-only contract for organization members and invitations, 4 paths, meant for the CLI and SDKs, which do not call it yet. Shares the Box API's host and credentials, but uses the hosted service's flat error response; local servers do not serve it |
 | **Reference server** | [`openapi/reference-server/`](../../openapi/reference-server/README.md) | A partial implementation used as a client test fixture, not a conformance target |
@@ -47,10 +47,17 @@ implementation currently serves all 32 paths:
 Read each server's routes rather than either README — both under-report.
 `GET /config` does not close this gap: its feature flags (`tty_enabled`,
 `streaming_enabled`, `snapshots_enabled`, `clone_enabled`, `export_enabled`,
-`import_enabled`, `inbound_update_enabled`, `exec_user_enabled`) cover only some routes, there is no
+`import_enabled`, `inbound_update_enabled`, `exec_user_enabled`, `memory_snapshots_enabled`) cover only some routes, there is no
 flag at all for volumes, images or tunnel, and a flag can disagree with the
 routes — the reference server advertises `streaming_enabled: true` while
 serving no attach route.
+
+`memory_snapshots_enabled` is false on all production servers. The reserved
+`memory` snapshot type and create-from-snapshot route support only the explicit
+[memory contract test](../guides/memory-snapshots.md); they do not save RAM,
+registers, devices or running processes. `snapshots_enabled` describes filesystem
+operations only. The cloud API forwards snapshot requests to the source Box's
+runner; the current runner explicitly returns Unsupported (HTTP 501).
 
 `{prefix}` is a deployment-defined routing slot, opaque to the client, published
 by a server as `Principal.path_prefix`. A single-tenant server may omit the

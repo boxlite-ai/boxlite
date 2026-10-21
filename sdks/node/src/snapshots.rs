@@ -13,6 +13,10 @@ use crate::util::map_err;
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsSnapshotInfo {
+    #[napi(js_name = "snapshotType")]
+    pub snapshot_type: String,
+    #[napi(js_name = "isMock")]
+    pub is_mock: bool,
     pub id: String,
     #[napi(js_name = "boxId")]
     pub box_id: String,
@@ -28,6 +32,8 @@ pub struct JsSnapshotInfo {
 impl From<SnapshotInfo> for JsSnapshotInfo {
     fn from(r: SnapshotInfo) -> Self {
         Self {
+            snapshot_type: r.snapshot_type.as_str().into(),
+            is_mock: r.is_mock,
             id: r.id,
             box_id: r.box_id,
             name: r.name,
@@ -48,6 +54,22 @@ pub struct JsSnapshotHandle {
 
 #[napi]
 impl JsSnapshotHandle {
+    #[napi(js_name = "createBox")]
+    pub async fn create_box(
+        &self,
+        snapshot: String,
+        name: Option<String>,
+    ) -> Result<crate::box_handle::JsBox> {
+        let child = self
+            .handle
+            .snapshots()
+            .create_box(&snapshot, name)
+            .await
+            .map_err(map_err)?;
+        Ok(crate::box_handle::JsBox {
+            handle: Arc::new(child),
+        })
+    }
     /// Create a snapshot of the box's current disk state.
     #[napi]
     pub async fn create(
@@ -56,7 +78,11 @@ impl JsSnapshotHandle {
         options: Option<JsSnapshotOptions>,
     ) -> Result<JsSnapshotInfo> {
         let handle = Arc::clone(&self.handle);
-        let options: SnapshotOptions = options.map(Into::into).unwrap_or_default();
+        let options: SnapshotOptions = options
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(map_err)?
+            .unwrap_or_default();
         let info = handle
             .snapshots()
             .create(options, &name)
@@ -103,6 +129,8 @@ mod tests {
     #[test]
     fn snapshot_info_from_core() {
         let core = SnapshotInfo {
+            snapshot_type: boxlite::SnapshotType::Filesystem,
+            is_mock: false,
             id: "snap-id".into(),
             box_id: "box-id".into(),
             name: "my-snap".into(),
@@ -125,6 +153,8 @@ mod tests {
     #[test]
     fn snapshot_info_large_u64_truncates_to_i64() {
         let core = SnapshotInfo {
+            snapshot_type: boxlite::SnapshotType::Filesystem,
+            is_mock: false,
             id: "id".into(),
             box_id: "bid".into(),
             name: "n".into(),

@@ -232,6 +232,12 @@ pub(crate) trait SnapshotBackend: Send + Sync {
     async fn remove(&self, name: &str) -> BoxliteResult<()>;
 
     async fn restore(&self, name: &str) -> BoxliteResult<()>;
+
+    /// Cold creation from filesystem, or reserved memory restore contract.
+    /// No backend may silently substitute clone or image creation.
+    async fn create_box(&self, _snapshot: &str, _name: Option<String>) -> BoxliteResult<LiteBox> {
+        Err(BoxliteError::Unsupported("creating a Box from a snapshot is not implemented by this backend; memory restore is not implemented".into()))
+    }
 }
 
 /// Backend abstraction for execution control (signal, kill, resize).

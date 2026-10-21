@@ -10,6 +10,7 @@ pub(in crate::commands::serve) async fn get_config() -> Json<ServerConfig> {
             linux_capabilities_enabled: true,
             privileged_enabled: true,
             snapshots_enabled: true,
+            memory_snapshots_enabled: false,
             clone_enabled: true,
             export_enabled: true,
             import_enabled: true,

@@ -90,6 +90,7 @@ pub(crate) struct ServerConfig {
 #[derive(Debug, Deserialize, Clone, Default)]
 pub(crate) struct ServerCapabilities {
     pub privileged_enabled: Option<bool>,
+    pub memory_snapshots_enabled: Option<bool>,
     pub linux_capabilities_enabled: Option<bool>,
     pub snapshots_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
@@ -754,29 +755,39 @@ pub(crate) struct ListRegistriesResponse {
 #[derive(Debug, Serialize)]
 pub(crate) struct CreateSnapshotRequest {
     pub name: String,
+    pub snapshot_type: crate::SnapshotType,
 }
 
 impl CreateSnapshotRequest {
-    pub fn from_options(_options: &SnapshotOptions, name: &str) -> Self {
+    pub fn from_options(options: &SnapshotOptions, name: &str) -> Self {
         Self {
             name: name.to_string(),
+            snapshot_type: options.snapshot_type,
         }
     }
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct SnapshotResponse {
+    #[serde(default)]
+    pub snapshot_type: crate::SnapshotType,
+    #[serde(default)]
+    pub is_mock: bool,
     pub id: String,
     pub box_id: String,
     pub name: String,
     pub created_at: i64,
+    #[serde(default)]
     pub container_disk_bytes: u64,
+    #[serde(default)]
     pub size_bytes: u64,
 }
 
 impl SnapshotResponse {
     pub fn to_snapshot_info(&self) -> SnapshotInfo {
         SnapshotInfo {
+            snapshot_type: self.snapshot_type,
+            is_mock: self.is_mock,
             id: self.id.clone(),
             box_id: self.box_id.clone(),
             name: self.name.clone(),
@@ -1622,6 +1633,8 @@ mod tests {
     #[test]
     fn test_snapshot_response_to_snapshot_info() {
         let resp = SnapshotResponse {
+            snapshot_type: crate::SnapshotType::Filesystem,
+            is_mock: false,
             id: "01JABCDEF0123456789XYZABCD".to_string(),
             box_id: "01J0000000000000000000000A".to_string(),
             name: "snap1".to_string(),

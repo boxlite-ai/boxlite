@@ -49,4 +49,14 @@ impl SnapshotHandle {
     pub async fn restore(&self, name: &str) -> BoxliteResult<()> {
         self.snapshot_backend.restore(name).await
     }
+
+    /// Create an independent Box from a named snapshot. Memory restore is a
+    /// reserved contract; only explicitly assembled test backends simulate it.
+    pub async fn create_box(
+        &self,
+        snapshot: &str,
+        name: Option<String>,
+    ) -> BoxliteResult<crate::LiteBox> {
+        self.snapshot_backend.create_box(snapshot, name).await
+    }
 }

@@ -121,6 +121,8 @@ mod tests {
 
     fn make_snapshot(id: &str, box_id: &str, name: &str) -> SnapshotInfo {
         SnapshotInfo {
+            snapshot_type: crate::SnapshotType::Filesystem,
+            is_mock: false,
             id: id.to_string(),
             box_id: box_id.to_string(),
             name: name.to_string(),
@@ -273,6 +275,8 @@ mod tests {
         let store = SnapshotStore::new(db);
 
         let snap = SnapshotInfo {
+            snapshot_type: crate::SnapshotType::Filesystem,
+            is_mock: false,
             id: "rt-1".to_string(),
             box_id: "box-99".to_string(),
             name: "roundtrip-test".to_string(),

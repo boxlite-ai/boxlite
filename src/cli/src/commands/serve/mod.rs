@@ -1913,6 +1913,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/v1/boxes/{box_id}/snapshots/{name}/restore",
             post(snapshots::restore_snapshot),
         )
+        .route(
+            "/v1/boxes/{box_id}/snapshots/{name}/boxes",
+            post(snapshots::create_box_from_snapshot),
+        )
         // Clone & export
         .route(
             "/v1/boxes/{box_id}/clone",

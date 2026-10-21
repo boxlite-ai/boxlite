@@ -106,14 +106,91 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
+    return this.proxyToRunner(authContext, boxId, (id) => `/v1/boxes/${id}/exec`, req, res, next, USER_OPERATION)
+  }
+
+  @Post(':boxId/snapshots')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  async createSnapshot(
+    @AuthContext() auth: OrganizationAuthContext,
+    @Param('boxId') id: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(auth, id, (box) => `/v1/boxes/${box}/snapshots`, req, res, next, OBSERVATION_ONLY)
+  }
+
+  @Get(':boxId/snapshots')
+  async listSnapshots(
+    @AuthContext() auth: OrganizationAuthContext,
+    @Param('boxId') id: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(auth, id, (box) => `/v1/boxes/${box}/snapshots`, req, res, next, OBSERVATION_ONLY)
+  }
+
+  @Get(':boxId/snapshots/:snapshot')
+  async getSnapshot(
+    @AuthContext() auth: OrganizationAuthContext,
+    @Param('boxId') id: string,
+    @Param('snapshot') snapshot: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
     return this.proxyToRunner(
-      authContext,
-      boxId,
-      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`,
+      auth,
+      id,
+      (box) => `/v1/boxes/${box}/snapshots/${encodeURIComponent(snapshot)}`,
       req,
       res,
       next,
-      USER_OPERATION,
+      OBSERVATION_ONLY,
+    )
+  }
+
+  @Delete(':boxId/snapshots/:snapshot')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  async deleteSnapshot(
+    @AuthContext() auth: OrganizationAuthContext,
+    @Param('boxId') id: string,
+    @Param('snapshot') snapshot: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      auth,
+      id,
+      (box) => `/v1/boxes/${box}/snapshots/${encodeURIComponent(snapshot)}`,
+      req,
+      res,
+      next,
+      OBSERVATION_ONLY,
+    )
+  }
+
+  @Post(':boxId/snapshots/:snapshot/boxes')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  async createBoxFromSnapshot(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Param('snapshot') snapshot: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/snapshots/${encodeURIComponent(snapshot)}/boxes`,
+      req,
+      res,
+      next,
+      OBSERVATION_ONLY,
     )
   }
 

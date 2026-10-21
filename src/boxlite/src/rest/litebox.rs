@@ -14,7 +14,6 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use futures::StreamExt;
 use std::io;
 
-use crate::BoxInfo;
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{
@@ -27,6 +26,7 @@ use crate::runtime::id::BoxID;
 use crate::runtime::options::{
     CloneOptions, ExportOptions, InboundNetworkConfig, OutboundNetworkConfig, SnapshotOptions,
 };
+use crate::{BoxInfo, LiteBox};
 
 use super::client::{ApiClient, WsStream, transport_error};
 use super::error::map_http_body;
@@ -648,13 +648,38 @@ impl RestBox {
 #[async_trait]
 impl SnapshotBackend for RestBox {
     async fn create(&self, options: SnapshotOptions, name: &str) -> BoxliteResult<SnapshotInfo> {
-        self.client.require_snapshots_enabled().await?;
+        if options.snapshot_type == crate::SnapshotType::Filesystem {
+            self.client.require_snapshots_enabled().await?;
+        }
 
         let box_id = self.box_id_str();
         let path = format!("/boxes/{}/snapshots", box_id);
         let req = CreateSnapshotRequest::from_options(&options, name);
         let resp: SnapshotResponse = self.client.post(&path, &req).await?;
+        if resp.snapshot_type != options.snapshot_type {
+            return Err(BoxliteError::InvalidState(
+                "server returned a different snapshot type; memory cannot downgrade to filesystem"
+                    .into(),
+            ));
+        }
+        if resp.snapshot_type == crate::SnapshotType::Memory && !resp.is_mock {
+            return Err(BoxliteError::Unsupported("real memory snapshots are not implemented; simulated results must be marked is_mock".into()));
+        }
         Ok(resp.to_snapshot_info())
+    }
+
+    async fn create_box(&self, snapshot: &str, name: Option<String>) -> BoxliteResult<LiteBox> {
+        let path = format!(
+            "/boxes/{}/snapshots/{}/boxes",
+            self.box_id_str(),
+            urlencoding::encode(snapshot)
+        );
+        let response: BoxResponse = self
+            .client
+            .post(&path, &serde_json::json!({"name": name}))
+            .await?;
+        let child = Arc::new(RestBox::new(self.client.clone(), response.to_box_info()?));
+        Ok(LiteBox::new(child.clone(), child.clone(), child))
     }
 
     async fn list(&self) -> BoxliteResult<Vec<SnapshotInfo>> {

@@ -26,8 +26,9 @@ impl LocalSnapshotBackend {
     async fn snapshot_create(
         &self,
         name: &str,
-        _opts: SnapshotOptions,
+        opts: SnapshotOptions,
     ) -> BoxliteResult<SnapshotInfo> {
+        opts.require_filesystem()?;
         validate_snapshot_name(name)?;
         let t0 = Instant::now();
         let _lock = self.inner.disk_ops.lock().await;

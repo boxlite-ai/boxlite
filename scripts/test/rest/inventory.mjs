@@ -35,10 +35,11 @@ const scanRoots = [
 
 const unsupportedOperations = {
   cloneBox: 'cloud REST controller does not expose clone; capability is false in /v1/config',
-  createSnapshot: 'cloud REST controller does not expose snapshots; capability is false in /v1/config',
-  listSnapshots: 'cloud REST controller does not expose snapshots; capability is false in /v1/config',
-  getSnapshot: 'cloud REST controller does not expose snapshots; capability is false in /v1/config',
-  removeSnapshot: 'cloud REST controller does not expose snapshots; capability is false in /v1/config',
+  createSnapshot: 'cloud routes to runner, which returns Unsupported; memory is test-mock-only',
+  listSnapshots: 'cloud routes to runner, which returns Unsupported',
+  getSnapshot: 'cloud routes to runner, which returns Unsupported',
+  removeSnapshot: 'cloud routes to runner, which returns Unsupported',
+  createBoxFromSnapshot: 'production Unsupported; memory create-from has an explicit mock contract only',
   restoreSnapshot: 'cloud REST controller does not expose snapshots; capability is false in /v1/config',
   exportBox: 'cloud REST controller does not expose export; capability is false in /v1/config',
   importBox: 'cloud REST controller does not expose import; capability is false in /v1/config',

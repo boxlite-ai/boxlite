@@ -2,7 +2,7 @@
 
 use crate::runtime::constants::envs as const_envs;
 use crate::runtime::layout::dirs as const_dirs;
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -1453,9 +1453,41 @@ impl BoxArchive {
     }
 }
 
-/// Forward-compatible options for creating a snapshot.
+/// Snapshot content. Memory is reserved; production backends reject it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotType {
+    #[default]
+    Filesystem,
+    Memory,
+}
+
+impl SnapshotType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Filesystem => "filesystem",
+            Self::Memory => "memory",
+        }
+    }
+}
+
+/// Options for creating a snapshot. Never downgrade memory to filesystem.
 #[derive(Debug, Clone, Default)]
-pub struct SnapshotOptions {}
+pub struct SnapshotOptions {
+    pub snapshot_type: SnapshotType,
+}
+
+impl SnapshotOptions {
+    pub(crate) fn require_filesystem(&self) -> BoxliteResult<()> {
+        if self.snapshot_type == SnapshotType::Memory {
+            return Err(BoxliteError::Unsupported(
+                "memory snapshots are not implemented (RAM, CPU and device state are not saved)"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+}
 
 /// Forward-compatible options for exporting a box archive.
 #[derive(Debug, Clone, Default)]

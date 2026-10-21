@@ -65,6 +65,36 @@ describe('BoxliteProxyController', () => {
   beforeEach(() => jest.clearAllMocks())
   afterEach(() => jest.useRealTimers())
 
+  it('routes memory snapshot operations to the owning runner without starting the source', async () => {
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller, boxService, autoResume } = makeHarness()
+    const request = { body: { name: 'checkpoint', snapshot_type: 'memory' } }
+    await controller.createSnapshot(activeAuth as never, 'source', request as never, {} as never, jest.fn())
+    await controller.getSnapshot(activeAuth as never, 'source', 'checkpoint', request as never, {} as never, jest.fn())
+    await controller.createBoxFromSnapshot(
+      activeAuth as never,
+      'source',
+      'checkpoint',
+      request as never,
+      {} as never,
+      jest.fn(),
+    )
+    const paths = jest
+      .mocked(createProxyMiddleware)
+      .mock.calls.map(([options]) => (options.pathRewrite as (path: string, req: unknown) => string)('', request))
+    expect(paths).toEqual([
+      '/v1/boxes/box-uuid/snapshots',
+      '/v1/boxes/box-uuid/snapshots/checkpoint',
+      '/v1/boxes/box-uuid/snapshots/checkpoint/boxes',
+    ])
+    expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('source', 'org-1')
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
+    const reflector = new Reflector()
+    expect(
+      reflector.get(RequiredOrganizationResourcePermissions, BoxliteProxyController.prototype.createBoxFromSnapshot),
+    ).toEqual([OrganizationResourcePermission.WRITE_BOXES])
+  })
+
   it('requires box write permission to declare a public port', () => {
     const reflector = new Reflector()
     expect(
