@@ -545,13 +545,6 @@ Linux looks for it in low memory, including the last KiB below 640 KiB
 `libkrun/src/arch/src/x86_64/mod.rs:266-268`). Firecracker's table lists each
 vCPU, an ISA bus, the IOAPIC and its interrupt sources
 ([Firecracker `src/vmm/src/arch/x86_64/mptable.rs:177–231`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/x86_64/mptable.rs#L177-L231)).
-That call site's comment says "the last 1k", but the table takes 284 bytes plus
-20 per vCPU, more than 1 KiB above 37 vCPUs, and Firecracker allocates it from
-a system-data region that reaches `0xe0000`
-([Firecracker `src/vmm/src/arch/x86_64/layout.rs:66–92`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/x86_64/layout.rs#L66-L92)).
-BoxLite writes it from `0x9_FC00` into the reserved `[0x9_FC00, 1 MiB)`, 1564
-bytes at 64 vCPUs; Linux reserves the table it finds
-(`arch/x86/kernel/mpparse.c:554`, `:583`).
 
 The kernel then boots itself (Linux v6.12):
 
