@@ -54,12 +54,18 @@ static void report_error(const char *context, const char *message) {
   fputc('\n', stderr);
 }
 
+/* Bounded copy: truncates long sources and always NUL-terminates. */
 static void copy_str(char *dst, size_t cap, const char *src) {
   if (src == NULL) {
     dst[0] = '\0';
     return;
   }
-  snprintf(dst, cap, "%s", src);
+  size_t used = 0;
+  while (used + 1 < cap && src[used] != '\0') {
+    dst[used] = src[used];
+    used++;
+  }
+  dst[used] = '\0';
 }
 
 static void on_ssh(CSshStatus *status, CBoxliteError *error, void *user_data) {
@@ -326,25 +332,36 @@ int main(void) {
   char home_dir[] = "/tmp/boxlite-c-ssh-home-XXXXXX";
   assert(mkdtemp(home_dir) != NULL);
   char host_key_path[128], user_key_path[128];
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  snprintf(host_key_path, sizeof(host_key_path), "%s/host", keys_dir);
-  snprintf(user_key_path, sizeof(user_key_path), "%s/user", keys_dir);
+  /* snprintf is bounded here and Annex K's snprintf_s is unavailable on
+   * glibc, so keep the explicit truncation checks below. */
+  int host_key_len =
+      snprintf( // NOLINT(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+          host_key_path, sizeof(host_key_path), "%s/host", keys_dir);
+  int user_key_len =
+      snprintf( // NOLINT(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+          user_key_path, sizeof(user_key_path), "%s/user", keys_dir);
+  assert(host_key_len > 0 && (size_t)host_key_len < sizeof(host_key_path));
+  assert(user_key_len > 0 && (size_t)user_key_len < sizeof(user_key_path));
   generate_key(host_key_path, "c-host");
   generate_key(user_key_path, "c-user");
   char host_key[4096] = {0}, user_pub[2048] = {0};
   read_file(host_key, sizeof(host_key), host_key_path);
   char user_pub_path[132];
-  snprintf(user_pub_path, sizeof(user_pub_path), "%s.pub", user_key_path);
+  int user_pub_len =
+      snprintf( // NOLINT(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+          user_pub_path, sizeof(user_pub_path), "%s.pub", user_key_path);
+  assert(user_pub_len > 0 && (size_t)user_pub_len < sizeof(user_pub_path));
   read_file(user_pub, sizeof(user_pub), user_pub_path);
   char host_json[8192], user_json[4096];
   json_escape(host_json, sizeof(host_json), host_key);
   json_escape(user_json, sizeof(user_json), user_pub);
   char config_json[13312];
-  int config_len = snprintf(
-      config_json, sizeof(config_json),
-      "{\"listen_address\":\"0.0.0.0:2222\",\"host_private_key\":\"%s\","
-      "\"accounts\":[{\"login\":\"root\",\"authorized_keys\":[\"%s\"]}]}",
-      host_json, user_json);
+  int config_len =
+      snprintf( // NOLINT(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+          config_json, sizeof(config_json),
+          "{\"listen_address\":\"0.0.0.0:2222\",\"host_private_key\":\"%s\","
+          "\"accounts\":[{\"login\":\"root\",\"authorized_keys\":[\"%s\"]}]}",
+          host_json, user_json);
   assert(config_len > 0 && (size_t)config_len < sizeof(config_json));
 
   /* Same mirrors the Python and Node integration suites use on this host. */

@@ -86,12 +86,18 @@ typedef struct BoxSeen {
   CBoxHandle *box;
 } BoxSeen;
 
+/* Bounded copy: truncates long sources and always NUL-terminates. */
 static void copy_str(char *dst, size_t cap, const char *src) {
   if (src == NULL) {
     dst[0] = '\0';
     return;
   }
-  snprintf(dst, cap, "%s", src);
+  size_t used = 0;
+  while (used + 1 < cap && src[used] != '\0') {
+    dst[used] = src[used];
+    used++;
+  }
+  dst[used] = '\0';
 }
 
 static void record(Seen *seen, const CBoxliteError *error) {
@@ -302,11 +308,11 @@ static void test_rest_ssh_lifecycle(void) {
   pid_t server = start_ssh_server(&port);
 
   char base_url[64];
-  // snprintf is bounded here and Annex K's snprintf_s is unavailable on
-  // glibc, so keep the explicit truncation check below.
-  // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-  int url_len = // NOLINT(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
-      snprintf(base_url, sizeof(base_url), "http://127.0.0.1:%u", port);
+  /* snprintf is bounded here and Annex K's snprintf_s is unavailable on
+   * glibc, so keep the explicit truncation check below. */
+  int url_len =
+      snprintf( // NOLINT(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
+          base_url, sizeof(base_url), "http://127.0.0.1:%u", port);
   assert(url_len > 0 && (size_t)url_len < sizeof(base_url));
 
   CBoxliteError error = {0};
