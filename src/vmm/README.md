@@ -24,7 +24,7 @@ boxlite-vmm
 | Module | Planned responsibility |
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, then allocate and register RAM on host backend `H`; `run` is a placeholder |
-| `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map and command line, and sets up the 64-bit entry state (GDT, identity page tables, registers); the MP table follows |
+| `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes |
 | `error` | VMM errors that keep the hypervisor's cause chain |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
@@ -118,12 +118,33 @@ linux-loader's `Cmdline` refuses the same lines, after trimming surrounding
 whitespace.
 
 `boot::prepare(ram, config)` opens `config.kernel` and runs `load_elf`, then
-`load_initramfs` when `config.initramfs` is set, then `write_boot_params` and
-`long_mode_entry`, in that order on fresh RAM, and returns a `BootSetup` with
-the boot vCPU registers. A failure names its step, `LoadKernel`,
-`LoadInitramfs` or `WriteBootData`, and keeps the I/O cause. Nothing calls
-`prepare` from `Vm` yet. There is no MP table yet, so Linux turns off SMP and
-the IOAPIC; a later slice adds the table.
+`load_initramfs` when `config.initramfs` is set, then `write_boot_params`,
+`write_mptable` and `long_mode_entry`, in that order on fresh RAM, and returns
+a `BootSetup` with the boot vCPU registers. A failure names its step,
+`LoadKernel`, `LoadInitramfs` or `WriteBootData`, and keeps the I/O cause.
+Nothing calls `prepare` from `Vm` yet.
+
+## MP table
+
+Without ACPI, Linux learns the vCPUs and the IOAPIC from the MP table, and
+turns off SMP and the IOAPIC without one. `boot::mptable::write_mptable(ram,
+vcpu_count)` writes the floating pointer at `0x9_FC00`, where Linux scans the
+last KiB below 640 KiB, and the configuration table right after it. It lists
+the same entries as Firecracker:
+
+- one processor per vCPU, with APIC ID equal to its index as `vcpu_cpuid`
+  assigns it, and vCPU 0 as the bootstrap processor;
+- an ISA bus and KVM's in-kernel IOAPIC at `0xFEC0_0000` with ID
+  `vcpu_count + 1`;
+- ISA IRQ k on IOAPIC pin k for 0 to 23, the GSI routing KVM sets up;
+- ExtINT on the boot vCPU's LINT0 and NMI on every LINT1.
+
+The table takes 284 bytes plus 20 per vCPU, 1564 at 64, all inside the
+reserved `[0x9_FC00, 1 MiB)`. With it Linux enables the IOAPIC even on one
+vCPU, so device interrupts such as the serial IRQ 4 arrive through IOAPIC pins
+instead of the PIC. The other vCPUs then start when Linux sends them INIT and
+SIPI; on KVM each waiting vCPU's `run` returns `Interrupted` once, for the
+`EAGAIN` that wake-up produces.
 
 ## Initramfs
 
@@ -155,21 +176,29 @@ make test:integration:vmm:linux
 ```
 
 Each runs `prepare` for 256 MiB of RAM and the command line
-`earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k`, then runs one KVM
-vCPU with the guest CPUID and boot MSRs. A test-local stub stands in for the
-devices: it keeps the earlycon bytes written to `0x3f8`, reports the UART as
-idle on `0x3fd`, reads every other port and MMIO address as zero, and ignores
-other writes. Each run ends when the guest writes `0xFE` to the i8042 port
-`0x64`, the reset `reboot=k` asks for after a panic; a watchdog kicks the vCPU
-after 30 seconds, so a hung boot fails with the log so far.
+`earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k`, then runs each
+KVM vCPU on its own thread with its guest CPUID and the boot MSRs. Every vCPU
+is created before any runs, and only vCPU 0 gets the entry registers. A
+test-local stub stands in for the devices: it keeps the earlycon bytes written
+to `0x3f8`, reports the UART as idle on `0x3fd`, reads every other port and
+MMIO address as zero, and ignores other writes. Each run ends when a vCPU
+writes `0xFE` to the i8042 port `0x64`, the reset `reboot=k` asks for after a
+panic, and every vCPU is then kicked; an unexpected exit or a watchdog after 30
+seconds also ends it, so a failed boot reports the log so far.
 
-- Without an initramfs, the log must show the kernel version, the exact
+- On one vCPU without an initramfs, the log must show the kernel version, the exact
   command line, the two E820 entries, the memory total and
   `VFS: Unable to mount root fs`.
-- With a generated archive whose `/init`, a 132-byte static ELF, calls
+- On one vCPU with a generated archive whose `/init`, a 132-byte static ELF, calls
   `exit_group(42)`, the log must show the `RAMDISK:` range from the zero page,
   `Unpacking initramfs...`, `Run /init as init process` and
   `Attempted to kill init! exitcode=0x00002a00`, in that order.
+- On four vCPUs without an initramfs, the log must show the MP table at
+  `0x9fc00`, `Processor #0` to `#3`, the IOAPIC with ID 5 and GSI 0-23,
+  `smp: Brought up 1 node, 4 CPUs`, and no unstable TSC.
+- On four vCPUs with an `/init` that pins itself to each CPU in turn with
+  `sched_setaffinity` and sets bit i when `getcpu` then reports CPU i, the log
+  must show `exitcode=0x00000f00`.
 
 ## Long-mode entry
 

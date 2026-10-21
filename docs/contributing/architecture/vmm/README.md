@@ -195,7 +195,7 @@ successfully completed access is not completed again.
 | --- | --- | --- | --- | --- |
 | `MmioRead`, `MmioWrite` | Access to an emulated device | HVF data abort: `HV_EXIT_REASON_EXCEPTION` with a data-abort syndrome | `KVM_EXIT_MMIO` | `WHvRunVpExitReasonMemoryAccess` |
 | `IoIn`, `IoOut` (x86_64 only) | One port access to the 8250 serial, CMOS RTC or i8042; string port I/O is `Error::UnhandledExit` | none | `KVM_EXIT_IO` | `WHvRunVpExitReasonX64IoPortAccess`, which also carries the ports of the userspace PIC and PIT (M10) |
-| `Interrupted` | A kick | `HV_EXIT_REASON_CANCELED`, after `hv_vcpus_exit` | `KVM_RUN` returning `EINTR` | `WHvRunVpExitReasonCanceled` |
+| `Interrupted` | A kick | `HV_EXIT_REASON_CANCELED`, after `hv_vcpus_exit` | `KVM_RUN` returning `EINTR`; also `EAGAIN`, which a waiting secondary vCPU returns once it accepts INIT or SIPI | `WHvRunVpExitReasonCanceled` |
 | `Halted` | The vCPU waits for an interrupt | HVF traps `WFI` | KVM with the in-kernel irqchip waits in the kernel, and the backend still maps `KVM_EXIT_HLT`, which only a VM without one returns (as the probe VM in `src/boxlite/src/system_check.rs` does) | with local APIC emulation, `HLT` waits inside `WHvRunVirtualProcessor`; QEMU handles `WHvRunVpExitReasonX64Halt` only without it (`target/i386/whpx/whpx-all.c:2337-2342`) |
 | `Shutdown` | The guest powered off | PSCI `SYSTEM_OFF`, decoded by the HVF backend | `KVM_EXIT_SYSTEM_EVENT` | the i8042 reset below |
 | `Reset` | The guest reset | PSCI `SYSTEM_RESET`, decoded by the HVF backend | a `KVM_EXIT_SYSTEM_EVENT` reset on arm64; an x86 triple fault (`KVM_EXIT_SHUTDOWN`) | the i8042 reset below |
@@ -289,7 +289,7 @@ On x86_64 the layout uses the values most surveyed VMMs share.
 | below `0x8FF0` | boot stack | Firecracker |
 | `0x9000`–`0xE000` | identity page tables: PML4, PDPT and one 2 MiB-page directory per GiB of RAM below the hole | Firecracker, which maps 1 GiB |
 | `0x2_0000` | kernel command line | five of six |
-| `0x9_FC00` | MP table, in the last KiB below 640 KiB | Firecracker, libkrun |
+| `0x9_FC00` | MP table, 284 bytes plus 20 per vCPU (1564 at 64), inside the reserved `[0x9_FC00, 1 MiB)` | Firecracker, libkrun |
 | `0x10_0000` | `bzImage` load address; an ELF `vmlinux` loads where its headers say | four of six |
 | below `0xC000_0000`, and above 4 GiB | RAM, split around the 32-bit MMIO hole | Firecracker, cloud-hypervisor, dragonball |
 | top of the RAM below `0xC000_0000` | initramfs, in the highest 4 KiB-aligned slot | Firecracker, cloud-hypervisor |
@@ -526,7 +526,7 @@ protocols require (`Documentation/arch/arm64/booting.rst`,
 | Describe the machine | a device tree in the last 2 MiB of RAM: memory, each CPU with the `psci` enable method, a `psci` node with the HVC conduit, the GIC, the timer, the `apb_pclk` clock the PL011 and PL031 name, the PL011, the PL031, each device as `virtio,mmio`, and the command line as `bootargs`; Firecracker writes the same nodes, with an `ns16550a` UART in place of the PL011 ([Firecracker `src/vmm/src/arch/aarch64/fdt.rs:351–397`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/aarch64/fdt.rs#L351-L397)) | `boot_params` at `0x7000`: the setup header, which a `bzImage` carries at offset `0x1f1` and the VMM fills in for a `vmlinux`, the e820 memory map, and `cmd_line_ptr` to the command line at `0x2_0000`, which names each `virtio_mmio.device=` (`boot.rst:1371-1376`); an MP table at `0x9_FC00` that lists each vCPU, the IOAPIC and its interrupt sources |
 | CPU state at entry | MMU off, interrupts masked in `PSTATE.DAIF`, at EL1 (`booting.rst:169-176`) | 64-bit mode with paging on: identity-mapped page tables and a GDT with flat `__BOOT_CS` and `__BOOT_DS`, interrupts off (`boot.rst:1394-1402`) |
 | Boot vCPU registers | PC at the `Image`'s first instruction, X0 at the device tree, X1 to X3 zero (`booting.rst:162-165`, `:423-424`) | RIP at the 64-bit entry, which for a `bzImage` is the load address plus `0x200`; RSI at `boot_params` (`boot.rst:1390-1392`, `:1401-1402`) |
-| Other vCPUs | powered off until the kernel calls PSCI `CPU_ON` (`booting.rst:447-453`) | waiting for the boot vCPU's INIT and SIPI to each one the MP table lists; KVM's in-kernel local APIC holds them in `KVM_MP_STATE_UNINITIALIZED` (`KVM_GET_MP_STATE` in the KVM API) |
+| Other vCPUs | powered off until the kernel calls PSCI `CPU_ON` (`booting.rst:447-453`) | waiting for the boot vCPU's INIT and SIPI to each one the MP table lists; KVM's in-kernel local APIC holds them in `KVM_MP_STATE_UNINITIALIZED` (`KVM_GET_MP_STATE` in the KVM API), where `KVM_RUN` blocks and returns `EAGAIN` once INIT or SIPI arrives (`arch/x86/kvm/x86.c:11487-11518`) |
 
 Firecracker sets the same state. On arm64 every vCPU gets PSTATE at EL1h with
 DAIF masked, and only vCPU 0 gets PC and X0
@@ -545,6 +545,13 @@ Linux looks for it in low memory, including the last KiB below 640 KiB
 `libkrun/src/arch/src/x86_64/mod.rs:266-268`). Firecracker's table lists each
 vCPU, an ISA bus, the IOAPIC and its interrupt sources
 ([Firecracker `src/vmm/src/arch/x86_64/mptable.rs:177–231`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/x86_64/mptable.rs#L177-L231)).
+That call site's comment says "the last 1k", but the table takes 284 bytes plus
+20 per vCPU, more than 1 KiB above 37 vCPUs, and Firecracker allocates it from
+a system-data region that reaches `0xe0000`
+([Firecracker `src/vmm/src/arch/x86_64/layout.rs:66–92`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/x86_64/layout.rs#L66-L92)).
+BoxLite writes it from `0x9_FC00` into the reserved `[0x9_FC00, 1 MiB)`, 1564
+bytes at 64 vCPUs; Linux reserves the table it finds
+(`arch/x86/kernel/mpparse.c:554`, `:583`).
 
 The kernel then boots itself (Linux v6.12):
 

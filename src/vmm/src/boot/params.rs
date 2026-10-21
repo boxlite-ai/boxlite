@@ -24,7 +24,7 @@ const ZERO_PAGE_START: u64 = 0x7000;
 const CMDLINE_START: u64 = 0x2_0000;
 /// Usable low RAM ends where the MP table and the legacy BIOS areas begin,
 /// and resumes at 1 MiB.
-const LOW_RAM_END: u64 = 0x9_fc00;
+pub(super) const LOW_RAM_END: u64 = 0x9_fc00;
 const HIGH_RAM_START: u64 = 0x10_0000;
 
 /// Setup header values, as Firecracker and libkrun write them: no assigned

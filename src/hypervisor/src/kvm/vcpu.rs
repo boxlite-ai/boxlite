@@ -49,6 +49,11 @@ impl KvmVcpu {
     pub fn run(&mut self) -> Result<VcpuExit<'_>> {
         match self.fd.run().map(|_| ()) {
             Ok(()) => {}
+            // A vCPU waiting for INIT or SIPI returns this once it accepts one.
+            Err(error) if error.errno() == libc::EAGAIN => {
+                self.pending_io.0 = false;
+                return Ok(VcpuExit::Interrupted);
+            }
             Err(error) if error.errno() == libc::EINTR => {
                 self.kick.drain().map_err(|source| Error::RunVcpu {
                     id: self.id,

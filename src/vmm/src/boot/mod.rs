@@ -4,8 +4,8 @@
 //! Guest boot loading. The VMM is the boot loader: it writes the boot data into
 //! guest RAM itself and starts the boot vCPU at the kernel entry. [`prepare`]
 //! loads the kernel with `elf` and the initramfs with `initramfs`, writes the
-//! zero page and command line with `params`, and sets up the x86_64 64-bit
-//! entry state with `entry`; the MP table follows in a later M1 slice.
+//! zero page and command line with `params`, describes the vCPUs and the IOAPIC
+//! with `mptable`, and sets up the x86_64 64-bit entry state with `entry`.
 
 use std::{fs::File, io, path::Path};
 
@@ -21,6 +21,7 @@ use crate::{
 pub(crate) mod elf;
 pub(crate) mod entry;
 pub(crate) mod initramfs;
+pub(crate) mod mptable;
 pub(crate) mod params;
 
 /// The boot data the vCPU workers apply once [`prepare`] has filled guest RAM.
@@ -31,8 +32,8 @@ pub(crate) struct BootSetup {
 }
 
 /// Loads `config.kernel` and, when set, `config.initramfs` into `ram`, writes
-/// the zero page, its E820 map and the command line, then sets up the
-/// long-mode entry.
+/// the zero page, its E820 map, the command line and the MP table for
+/// `config.vcpu_count` vCPUs, then sets up the long-mode entry.
 ///
 /// `ram` must be the fresh zero-filled layout for `config.memory_mib`. A
 /// failure may have written RAM; discard it.
@@ -62,6 +63,10 @@ pub(crate) fn prepare(ram: &GuestRam, config: &VmConfig) -> Result<BootSetup> {
     )
     .map_err(|source| Error::WriteBootData {
         what: "boot parameters",
+        source,
+    })?;
+    mptable::write_mptable(memory, config.vcpu_count).map_err(|source| Error::WriteBootData {
+        what: "MP table",
         source,
     })?;
     let boot_regs = entry::long_mode_entry(memory, entry, zero_page).map_err(|source| {
