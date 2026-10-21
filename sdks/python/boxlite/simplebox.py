@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING, Optional
 from .exec import ExecResult
 
 if TYPE_CHECKING:
-    from .boxlite import Boxlite, TunnelForwarder
+    from .boxlite import (
+        Boxlite,
+        InboundNetworkSpec,
+        OutboundNetworkSpec,
+        TunnelForwarder,
+    )
 
 logger = logging.getLogger("boxlite.simplebox")
 
@@ -49,6 +54,18 @@ class NetworkHandle:
 
     def __init__(self, box: "SimpleBox") -> None:
         self._owner = box
+
+    async def set_inbound(self, spec: "InboundNetworkSpec") -> None:
+        """Replace inbound policy on a started box."""
+        if not self._owner._started:
+            raise RuntimeError("Box not started; call await box.start() first.")
+        await self._owner._box.network.set_inbound(spec)
+
+    async def set_outbound(self, spec: "OutboundNetworkSpec") -> None:
+        """Replace outbound policy, including the entire allowlist."""
+        if not self._owner._started:
+            raise RuntimeError("Box not started; call await box.start() first.")
+        await self._owner._box.network.set_outbound(spec)
 
     async def tunnel(self, port: int) -> BoxTunnel:
         """Prepare a one-shot tunnel for a port inside the box."""

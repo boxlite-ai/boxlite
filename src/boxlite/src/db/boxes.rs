@@ -113,7 +113,9 @@ impl BoxStore {
             .map_err(|e| BoxliteError::Database(format!("Failed to serialize state: {}", e)))?;
 
         let rows_affected = db_err!(conn.execute(
-            "UPDATE box_state SET status = ?1, pid = ?2, json = ?3 WHERE id = ?4",
+            "UPDATE box_state SET status = ?1, pid = ?2, \
+             json = json_set(?3, '$.outbound_policy', json_extract(json, '$.outbound_policy')) \
+             WHERE id = ?4",
             params![state.status.as_str(), state.pid, json, box_id],
         ))?;
 
@@ -122,6 +124,24 @@ impl BoxStore {
             return Err(BoxliteError::NotFound(box_id.to_string()));
         }
 
+        Ok(())
+    }
+
+    /// Policy updates must survive lifecycle writes from older handles.
+    pub fn update_outbound(
+        &self,
+        box_id: &str,
+        policy: &crate::runtime::options::OutboundNetworkConfig,
+    ) -> BoxliteResult<()> {
+        let body = serde_json::to_string(policy)
+            .map_err(|error| BoxliteError::Database(error.to_string()))?;
+        let changed = db_err!(self.db.conn().execute(
+            "UPDATE box_state SET json = json_set(json, '$.outbound_policy', json(?1)) WHERE id = ?2",
+            params![body, box_id],
+        ))?;
+        if changed == 0 {
+            return Err(BoxliteError::NotFound(box_id.into()));
+        }
         Ok(())
     }
 
@@ -383,6 +403,31 @@ mod tests {
     const TEST_ID_1: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R1";
     const TEST_ID_2: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R2";
     const TEST_ID_3: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R3";
+
+    #[test]
+    fn network_policy_survives_stale_lifecycle_writes_and_reopen() {
+        use crate::runtime::options::{NetworkMode, OutboundNetworkConfig};
+        let (store, dir) = create_test_db();
+        let config = create_test_config(TEST_ID_1);
+        let mut stale = BoxState::new();
+        store.save(&config, &stale).unwrap();
+        let policy = OutboundNetworkConfig {
+            mode: NetworkMode::Enabled,
+            allow_net: vec!["example.com".into()],
+        };
+        store.update_outbound(TEST_ID_1, &policy).unwrap();
+        stale.status = BoxStatus::Stopped;
+        store.update_state(TEST_ID_1, &stale).unwrap();
+        let reopened = BoxStore::new(Database::open(&dir.path().join("test.db")).unwrap());
+        let (config, state) = reopened.load(TEST_ID_1).unwrap().unwrap();
+        assert_eq!(state.status, BoxStatus::Stopped);
+        assert_eq!(state.outbound_policy, Some(policy));
+        let info = crate::BoxInfo::new(&config, &state);
+        assert_eq!(info.network.unwrap().outbound.allow_net, ["example.com"]);
+        assert!(
+            matches!(config.options.network, crate::NetworkSpec::Enabled { allow_net } if allow_net.is_empty())
+        );
+    }
 
     #[test]
     fn test_save_and_load_config() {

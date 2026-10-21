@@ -23,6 +23,7 @@ import (
 
 // Network is a box-scoped handle for network operations.
 type Network struct {
+	mu      sync.Mutex
 	handle  *C.CBoxNetworkHandle
 	runtime *Runtime
 }
@@ -230,7 +231,12 @@ func (f *TunnelForwarder) free() {
 
 // Close releases the network handle.
 func (n *Network) Close() error {
-	if n != nil && n.handle != nil {
+	if n == nil {
+		return nil
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.handle != nil {
 		C.boxlite_network_free(n.handle)
 		n.handle = nil
 	}
@@ -239,7 +245,12 @@ func (n *Network) Close() error {
 
 // Tunnel prepares a one-shot tunnel to a service port inside the box.
 func (n *Network) Tunnel(ctx context.Context, port uint16) (*BoxTunnel, error) {
-	if n == nil || n.handle == nil {
+	if n == nil {
+		return nil, ErrRuntimeClosed
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.handle == nil {
 		return nil, ErrRuntimeClosed
 	}
 	if port == 0 {

@@ -86,6 +86,7 @@ import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
+import { OutboundPolicy, setRunnerOutbound } from '../runner-adapter/network-policy'
 import { isCuratedSelector, withoutRegistryProxy } from '../../image/utils/image-ref.util'
 import {
   AUTO_DELETE_DISABLED,
@@ -1337,6 +1338,19 @@ export class BoxService {
     }
 
     return updatedBox
+  }
+
+  async setOutboundNetwork(boxIdOrName: string, policy: OutboundPolicy, organizationId: string): Promise<Box> {
+    if (policy.mode === 'disabled' && policy.allow_net.length) {
+      throw new BadRequestError('disabled outbound cannot include allow_net')
+    }
+    this.resolveOutboundAllowNet(policy.allow_net)
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    return this.boxRepository.replaceOutbound(box.id, organizationId, policy, async (locked, next) => {
+      const runner = await this.runnerService.findOne(locked.runnerId)
+      if (!runner) throw new ConflictException('Box runner is unavailable')
+      await setRunnerOutbound(runner, locked.id, next)
+    })
   }
 
   // used by internal services to update the state of a box to resolve domain and runner state mismatch

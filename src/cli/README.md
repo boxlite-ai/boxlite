@@ -182,6 +182,21 @@ use. Executing invocations reject unsupported options; Clap's `--help` and
 | `--profile NAME` | REST-capable commands + `auth` | Named credential profile in `<BOXLITE_HOME>/credentials.toml`. Default `default`. Env: `BOXLITE_PROFILE`. |
 | `--path-prefix VALUE` | REST box/volume commands | Routing-slot value for `/v1/<prefix>/...`; overrides the selected profile. Env: `BOXLITE_REST_PATH_PREFIX`. |
 
+### Network policy updates
+
+```bash
+boxlite network inbound mybox enabled
+boxlite network outbound mybox enabled --allow-net '*.example.com'
+boxlite network outbound mybox enabled  # replace with an unrestricted policy
+boxlite network outbound mybox disabled
+boxlite inspect mybox
+```
+
+The box and mode are required. Repeat `--allow-net` for multiple outbound rules;
+it is invalid with inbound or disabled outbound. Each command replaces one
+direction. See [networking](../../docs/guides/networking.md#updating-a-running-box)
+for runtime support, connection lifetime and persistence.
+
 ### `boxlite auth login`
 
 Log in to a BoxLite REST server. Supports three flows that all save to

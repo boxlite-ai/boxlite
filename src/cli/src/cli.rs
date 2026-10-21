@@ -203,11 +203,23 @@ const AUTH_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
-const NETWORK_SCOPES: &[CommandScope] = &[CommandScope {
-    name: "tunnel",
-    globals: BOX_GLOBALS,
-    children: &[],
-}];
+const NETWORK_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "inbound",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "outbound",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "tunnel",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+];
 const VOLUME_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "create",
@@ -2640,7 +2652,9 @@ mod tests {
         let Commands::Network(network) = cli.command else {
             panic!("expected Commands::Network");
         };
-        let NetworkCommand::Tunnel(args) = network.command;
+        let NetworkCommand::Tunnel(args) = network.command else {
+            panic!("expected tunnel command");
+        };
         assert_eq!(args.target, "mybox");
         assert_eq!(args.port, 3000);
         assert!(args.listen.is_none());

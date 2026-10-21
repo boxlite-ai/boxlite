@@ -1078,6 +1078,46 @@ pub struct OutboundNetworkConfig {
     pub allow_net: Vec<String>,
 }
 
+impl OutboundNetworkConfig {
+    /// Validate a complete replacement before contacting the network backend.
+    pub fn validate(&self) -> boxlite_shared::errors::BoxliteResult<()> {
+        NetworkSpec::try_from(self.clone())?;
+        for rule in &self.allow_net {
+            let valid = if rule.parse::<std::net::Ipv4Addr>().is_ok() {
+                true
+            } else if let Some((address, prefix)) = rule.split_once('/') {
+                address.parse::<std::net::Ipv4Addr>().is_ok()
+                    && !prefix.is_empty()
+                    && prefix.bytes().all(|c| c.is_ascii_digit())
+                    && prefix.parse::<u8>().is_ok_and(|bits| bits <= 32)
+            } else {
+                let hostname = rule.strip_prefix("*.").unwrap_or(rule);
+                !hostname.is_empty()
+                    && hostname.len() <= 253
+                    && !(hostname.split('.').count() == 4
+                        && hostname.bytes().all(|c| c.is_ascii_digit() || c == b'.'))
+                    && hostname.split('.').all(|label| {
+                        !label.is_empty()
+                            && label.len() <= 63
+                            && !label.starts_with('-')
+                            && !label.ends_with('-')
+                            && label
+                                .bytes()
+                                .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                    })
+            };
+            if !valid {
+                return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                    format!(
+                        "invalid allow_net rule: {rule:?}; expected a hostname, wildcard hostname, IPv4 or IPv4 CIDR"
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Wire shape for the inbound direction, aligned field-for-field with
 /// [`OutboundNetworkConfig`]. `Enabled` means services the box exposes are
 /// reachable without sign-in; `Disabled` means they are unreachable from

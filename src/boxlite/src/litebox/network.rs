@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::runtime::backend::BoxNetworkBackend;
+use crate::runtime::options::{InboundNetworkConfig, NetworkSpec, OutboundNetworkConfig};
 
 const MAX_FORWARD_CONNECTIONS: usize = 64;
 
@@ -361,6 +362,21 @@ pub struct NetworkHandle {
 impl NetworkHandle {
     pub(crate) fn new(network_backend: Arc<dyn BoxNetworkBackend>) -> Self {
         Self { network_backend }
+    }
+
+    /// Replace inbound access policy. Non-empty inbound allowlists are unsupported.
+    pub async fn set_inbound(&self, config: InboundNetworkConfig) -> BoxliteResult<()> {
+        NetworkSpec::try_from(config.clone())?;
+        self.network_backend.set_inbound(config).await
+    }
+
+    /// Replace outbound policy, including the entire allowlist.
+    ///
+    /// Enabled with an empty list removes allowlist restrictions. Existing
+    /// connections retain their policy; disabled suspends network traffic.
+    pub async fn set_outbound(&self, config: OutboundNetworkConfig) -> BoxliteResult<()> {
+        config.validate()?;
+        self.network_backend.set_outbound(config).await
     }
 
     /// Prepare a one-shot tunnel to a service port inside the box.

@@ -36,9 +36,16 @@ jest.mock('uuid', () => ({
 describe('BoxLite REST routing', () => {
   let app: INestApplication
   let updateInboundEnabled: jest.Mock
+  let setOutboundNetwork: jest.Mock
 
   async function startRoutingTestApp() {
     updateInboundEnabled = jest.fn((_boxId: string, inboundEnabled: boolean) => Promise.resolve({ inboundEnabled }))
+    setOutboundNetwork = jest.fn((_id, policy) =>
+      Promise.resolve({
+        outboundEnabled: policy.mode === 'enabled',
+        outboundAllowNet: policy.allow_net,
+      }),
+    )
     await startApp(
       // The module's order, with the proxy controller's catch-all routes
       // present, so one that shadowed PUT network/inbound would fail below.
@@ -50,6 +57,7 @@ describe('BoxLite REST routing', () => {
             findAllDeprecated: jest.fn().mockResolvedValue([]),
             toBoxDtos: jest.fn().mockResolvedValue([]),
             updateInboundEnabled,
+            setOutboundNetwork,
           },
         },
         {
@@ -140,6 +148,29 @@ describe('BoxLite REST routing', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ mode })
     expect(updateInboundEnabled).toHaveBeenCalledWith('box-1', mode === 'enabled', 'org-123')
+  })
+
+  it('routes outbound replacements ahead of the proxy catch-all', async () => {
+    await startRoutingTestApp()
+    for (const path of ['/api/v1/boxes/box-1/network/outbound', '/api/v1/default/boxes/box-1/network/outbound']) {
+      const response = await put(path, { mode: 'enabled' })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ mode: 'enabled', allow_net: [] })
+      expect(setOutboundNetwork).toHaveBeenLastCalledWith('box-1', { mode: 'enabled', allow_net: [] }, 'org-123')
+    }
+  })
+
+  it.each([
+    {},
+    { mode: 'off' },
+    { mode: 'enabled', allow_net: [''] },
+    { mode: 'enabled', allow_net: ['a.com,b.com'] },
+    { mode: 'enabled', unknown: true },
+  ])('rejects invalid outbound request %j', async (body) => {
+    await startRoutingTestApp()
+    const response = await put('/api/v1/boxes/box-1/network/outbound', body)
+    expect(response.status).toBe(400)
+    expect(setOutboundNetwork).not.toHaveBeenCalled()
   })
 
   it.each([

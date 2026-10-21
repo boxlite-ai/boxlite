@@ -24,7 +24,9 @@ use crate::litebox::{
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
 use crate::runtime::id::BoxID;
-use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
+use crate::runtime::options::{
+    CloneOptions, ExportOptions, InboundNetworkConfig, OutboundNetworkConfig, SnapshotOptions,
+};
 
 use super::client::{ApiClient, WsStream, transport_error};
 use super::error::map_http_body;
@@ -582,6 +584,24 @@ impl BoxBackend for RestBox {
 
 #[async_trait]
 impl BoxNetworkBackend for RestBox {
+    async fn set_inbound(&self, config: InboundNetworkConfig) -> BoxliteResult<()> {
+        self.client
+            .put_no_content(
+                &format!("/boxes/{}/network/inbound", self.box_id_str()),
+                &config,
+            )
+            .await
+    }
+
+    async fn set_outbound(&self, config: OutboundNetworkConfig) -> BoxliteResult<()> {
+        self.client
+            .put_no_content(
+                &format!("/boxes/{}/network/outbound", self.box_id_str()),
+                &config,
+            )
+            .await
+    }
+
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
         let endpoint = self.tunnel_endpoint(target).await?;
         let client = self.client.clone();
@@ -1425,6 +1445,87 @@ mod tests {
 
     /// Shorthand for the `Arc<Mutex<...>>` shared between server and client.
     type SharedState = Arc<Mutex<ServerState>>;
+
+    #[tokio::test]
+    async fn network_policy_setters_send_directional_puts_and_preserve_errors() {
+        use crate::{InboundNetworkConfig, NetworkMode, OutboundNetworkConfig};
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for status in [200, 200, 400] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                // Read exactly through the header so no body bytes get discarded.
+                let mut header = Vec::new();
+                while !header.ends_with(b"\r\n\r\n") {
+                    header.push(stream.read_u8().await.unwrap());
+                }
+                let header = String::from_utf8(header).unwrap();
+                let length: usize = header
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|value| value.trim().parse().unwrap())
+                    })
+                    .unwrap();
+                let mut body = vec![0; length];
+                stream.read_exact(&mut body).await.unwrap();
+                requests.push((
+                    header.lines().next().unwrap().to_owned(),
+                    serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                ));
+                let response = if status == 200 {
+                    "{}"
+                } else {
+                    r#"{"error":{"message":"old backend","type":"UnsupportedError","code":"unsupported"}}"#
+                };
+                stream.write_all(format!("HTTP/1.1 {status} Result\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
+            }
+            requests
+        });
+        let handle = crate::litebox::NetworkHandle::new(Arc::new(rest_box_for(port, "policy-box")));
+        handle
+            .set_inbound(InboundNetworkConfig {
+                mode: NetworkMode::Enabled,
+                allow_net: vec![],
+            })
+            .await
+            .unwrap();
+        handle
+            .set_outbound(OutboundNetworkConfig {
+                mode: NetworkMode::Enabled,
+                allow_net: vec!["example.com".into()],
+            })
+            .await
+            .unwrap();
+        let error = handle
+            .set_outbound(OutboundNetworkConfig::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests[0].0,
+            "PUT /v1/boxes/policy-box/network/inbound HTTP/1.1"
+        );
+        assert_eq!(
+            requests[0].1,
+            serde_json::json!({"mode":"enabled","allow_net":[]})
+        );
+        assert_eq!(
+            requests[1].0,
+            "PUT /v1/boxes/policy-box/network/outbound HTTP/1.1"
+        );
+        assert_eq!(
+            requests[1].1,
+            serde_json::json!({"mode":"enabled","allow_net":["example.com"]})
+        );
+        assert_eq!(
+            requests[2].1,
+            serde_json::json!({"mode":"enabled","allow_net":[]})
+        );
+    }
 
     /// Read the first HTTP request line + headers off a freshly accepted TCP
     /// stream. Returns the raw bytes consumed (so the WS upgrade can resume

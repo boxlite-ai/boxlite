@@ -14,6 +14,7 @@ use boxlite::litebox::{
     BoxTunnel as CoreBoxTunnel, NetworkHandle as CoreNetworkHandle, SocketAddress,
     TunnelForwarder as CoreTunnelForwarder,
 };
+use boxlite::runtime::options::{InboundNetworkConfig, OutboundNetworkConfig};
 use boxlite::{BoxConnection, BoxliteError};
 
 use crate::error::{BoxliteErrorCode, error_to_code, null_pointer_error, write_error};
@@ -46,6 +47,68 @@ pub struct BoxNetworkHandle {
     handle: CoreNetworkHandle,
     tokio_rt: Arc<TokioRuntime>,
     queue: Arc<EventQueue>,
+}
+
+unsafe fn parse_policy<T: serde::de::DeserializeOwned>(
+    json: *const c_char,
+) -> Result<T, BoxliteError> {
+    if json.is_null() {
+        return Err(null_pointer_error("policy_json"));
+    }
+    serde_json::from_slice(unsafe { CStr::from_ptr(json) }.to_bytes())
+        .map_err(|error| BoxliteError::InvalidArgument(format!("invalid network policy: {error}")))
+}
+
+fn policy_result(
+    result: Result<(), BoxliteError>,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    match result {
+        Ok(()) => BoxliteErrorCode::Ok,
+        Err(error) => {
+            let code = error_to_code(&error);
+            unsafe {
+                write_error(out_error, error);
+            }
+            code
+        }
+    }
+}
+
+/// Replace inbound policy from {"mode":"enabled","allow_net":[]}.
+/// Blocks until applied or rejected. Strings are borrowed for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_network_set_inbound(
+    network: *mut CBoxNetworkHandle,
+    policy_json: *const c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    let result = (|| {
+        let network = unsafe { network.as_ref() }.ok_or_else(|| null_pointer_error("network"))?;
+        let policy: InboundNetworkConfig = unsafe { parse_policy(policy_json) }?;
+        network
+            .tokio_rt
+            .block_on(network.handle.set_inbound(policy))
+    })();
+    policy_result(result, out_error)
+}
+
+/// Replace outbound policy from {"mode":"enabled","allow_net":["example.com"]}.
+/// An empty enabled allowlist clears restrictions. Blocks until applied or rejected.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_network_set_outbound(
+    network: *mut CBoxNetworkHandle,
+    policy_json: *const c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    let result = (|| {
+        let network = unsafe { network.as_ref() }.ok_or_else(|| null_pointer_error("network"))?;
+        let policy: OutboundNetworkConfig = unsafe { parse_policy(policy_json) }?;
+        network
+            .tokio_rt
+            .block_on(network.handle.set_outbound(policy))
+    })();
+    policy_result(result, out_error)
 }
 
 /// Opaque long-lived listener handle.

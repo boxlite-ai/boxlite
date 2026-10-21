@@ -362,7 +362,7 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
 | `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH (local or REST-backed); only configure may implicitly start the box |
-| `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped tunnel operations |
+| `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped policy and tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
@@ -547,6 +547,8 @@ pub struct BoxState {
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
 | Get handle | `LiteBox::network(&self) -> NetworkHandle` | Get box-scoped network operations |
+| Set inbound | `NetworkHandle::set_inbound(InboundNetworkConfig).await -> BoxliteResult<()>` | Replace inbound mode; cloud only |
+| Set outbound | `NetworkHandle::set_outbound(OutboundNetworkConfig).await -> BoxliteResult<()>` | Replace outbound mode and allowlist |
 | Tunnel | `async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>` | Prepare a one-shot tunnel to one guest TCP service |
 | Revoke | `async fn revoke_tunnel(&self, port: u16) -> BoxliteResult<()>` | Withdraw the port's public URL; a no-op on a local box |
 | Forward | `async fn BoxTunnel::forward(self, listen: SocketAddress) -> BoxliteResult<TunnelForwarder>` | Consume the tunnel into a TCP or Unix listener |

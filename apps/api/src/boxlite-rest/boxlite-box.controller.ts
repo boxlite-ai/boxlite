@@ -39,7 +39,7 @@ import { Box } from '../box/entities/box.entity'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
-import { CreateBoxDto, InboundNetworkSpecDto } from './dto/create-box.dto'
+import { CreateBoxDto, InboundNetworkSpecDto, OutboundNetworkSpecDto } from './dto/create-box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.mapper'
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
@@ -287,6 +287,30 @@ export class BoxliteBoxController {
   ): Promise<InboundNetworkSpecDto> {
     const box = await this.boxService.updateInboundEnabled(boxId, dto.mode === 'enabled', authContext.organizationId)
     return { mode: box.inboundEnabled ? 'enabled' : 'disabled' }
+  }
+
+  @Put(':boxId/network/outbound')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @ApiResponse({ status: 200, type: OutboundNetworkSpecDto })
+  @Audit({
+    action: AuditAction.UPDATE_NETWORK_SETTINGS,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    requestMetadata: {
+      body: (req: TypedRequest<OutboundNetworkSpecDto>) => ({ mode: req.body?.mode, allow_net: req.body?.allow_net }),
+    },
+  })
+  async updateOutboundNetwork(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Body() dto: OutboundNetworkSpecDto,
+  ): Promise<OutboundNetworkSpecDto> {
+    const box = await this.boxService.setOutboundNetwork(
+      boxId,
+      { mode: dto.mode, allow_net: dto.allow_net ?? [] },
+      authContext.organizationId,
+    )
+    return { mode: box.outboundEnabled ? 'enabled' : 'disabled', allow_net: box.outboundAllowNet ?? [] }
   }
 
   private isStartAlreadyInProgress(box: Box): boolean {

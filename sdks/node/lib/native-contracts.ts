@@ -541,6 +541,14 @@ export interface JsSnapshotHandle {
 }
 
 export interface JsNetworkHandle {
+  setInbound(spec: {
+    mode: "enabled" | "disabled";
+    allowNet?: string[];
+  }): Promise<void>;
+  setOutbound(spec: {
+    mode: "enabled" | "disabled";
+    allowNet?: string[];
+  }): Promise<void>;
   /** Prepare a one-shot tunnel to a service port inside the box. */
   tunnel(port: number): Promise<NativeBoxTunnel>;
   /** Withdraw public access to a service port; open connections stay open. */

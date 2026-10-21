@@ -1225,6 +1225,53 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  /{prefix}/boxes/{box_id}/network/outbound:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    put:
+      operationId: updateOutboundNetwork
+      summary: Replace a running box's outbound policy
+      description: |
+        Replaces mode and the entire allow_net list without changing inbound.
+        Enabled with an omitted or empty list clears allowlist restrictions.
+        Disabled with a non-empty list is invalid. Requires a running box
+        created with a NIC; unsupported backends return an explicit error.
+
+        New TCP/UDP flows use the replacement allowlist. Existing flows retain
+        their policy. Disabled suspends NIC traffic, including DNS and inbound,
+        while preserving the control channel for re-enabling.
+
+        Success confirms application and persistence. Timeouts or failed
+        rollback can leave live and stored policy different; retry the full
+        replacement. GET box reports the last persisted policy.
+      tags: [Network]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OutboundNetworkSpec"
+      responses:
+        "200":
+          description: Applied outbound policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundNetworkSpec"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          description: Application or persistence failed; retry the complete policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   # -------------------------------------------------------------------------
   # Metrics
   # -------------------------------------------------------------------------

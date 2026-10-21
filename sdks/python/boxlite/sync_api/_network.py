@@ -3,6 +3,8 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from boxlite import InboundNetworkSpec, OutboundNetworkSpec
+
     from ._box import SyncBox
 
 __all__ = ["SyncBoxTunnel", "SyncNetworkHandle", "SyncTunnelForwarder"]
@@ -49,6 +51,14 @@ class SyncNetworkHandle:
 
     def __init__(self, box: "SyncBox") -> None:
         self._owner = box
+
+    def set_inbound(self, spec: "InboundNetworkSpec") -> None:
+        """Replace the inbound policy; non-empty allowlists are unsupported."""
+        self._owner._sync(self._owner._box.network.set_inbound(spec))
+
+    def set_outbound(self, spec: "OutboundNetworkSpec") -> None:
+        """Replace outbound policy. Enabled with an empty list clears restrictions."""
+        self._owner._sync(self._owner._box.network.set_outbound(spec))
 
     def tunnel(self, port: int) -> SyncBoxTunnel:
         """Prepare a one-shot tunnel for a port inside the box."""

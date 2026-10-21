@@ -14,7 +14,8 @@ use crate::litebox::{
 };
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
-    BoxArchive, BoxOptions, CloneOptions, ExportOptions, SnapshotOptions,
+    BoxArchive, BoxOptions, CloneOptions, ExportOptions, InboundNetworkConfig,
+    OutboundNetworkConfig, SnapshotOptions,
 };
 use crate::runtime::types::BoxInfo;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -178,6 +179,18 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 )]
 #[async_trait]
 pub(crate) trait BoxNetworkBackend: Send + Sync {
+    async fn set_inbound(&self, _config: InboundNetworkConfig) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support inbound policy updates".into(),
+        ))
+    }
+
+    async fn set_outbound(&self, _config: OutboundNetworkConfig) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support outbound policy updates".into(),
+        ))
+    }
+
     /// Prepare a one-shot tunnel to a service port inside the box.
     ///
     /// Check here that the box can carry the tunnel and mint any public URI,

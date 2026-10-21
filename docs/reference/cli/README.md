@@ -34,6 +34,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite logs`](#boxlite-logs)
   - [`boxlite stats`](#boxlite-stats)
   - [`boxlite network tunnel`](#boxlite-network-tunnel)
+  - [`boxlite network inbound / outbound`](#boxlite-network-inbound--outbound)
   - [`boxlite serve`](#boxlite-serve)
   - [`boxlite volume`](#boxlite-volume)
   - [`boxlite completion`](#boxlite-completion)
@@ -648,6 +649,32 @@ Display resource usage statistics for a box.
 | `--stream` | `-s` | `false` | Refresh every second until Ctrl-C |
 
 ---
+
+### `boxlite network inbound / outbound`
+
+```text
+boxlite network inbound BOX MODE
+boxlite network outbound BOX MODE [--allow-net RULE]...
+```
+
+`BOX` is an ID or name; `MODE` is required and accepts `enabled` or `disabled`.
+Each invocation replaces the selected direction. `inbound` accepts no allowlist.
+
+```bash
+boxlite network inbound mybox enabled
+boxlite network outbound mybox enabled --allow-net '*.example.com' --allow-net 10.0.0.0/8
+boxlite network outbound mybox enabled  # clear restrictions
+boxlite network outbound mybox disabled
+boxlite inspect mybox
+```
+
+`--allow-net` takes one hostname, wildcard hostname, IPv4 address or CIDR.
+Repeat it for multiple rules; comma-separated values and empty rules are invalid.
+Disabled mode cannot include rules.
+
+Outbound updates require a running box with an existing NIC. Local inbound
+updates are unsupported; cloud inbound uses the proxy's existing visibility
+contract. See [runtime behavior and persistence](../../guides/networking.md#updating-a-running-box).
 
 ### `boxlite network tunnel`
 
