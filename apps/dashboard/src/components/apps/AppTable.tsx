@@ -7,6 +7,7 @@ import { BoxCube } from '@/components/BoxCube'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { ArrowUpRight, Trash2 } from '@/components/ui/icon'
 import { appStatusOf, capitalize, relTime, VISIBILITY_LABEL } from '@/lib/apps/format'
+import { openApp } from '@/lib/apps/open'
 import type { AppSummary } from '@/lib/apps/types'
 import { GridHeader, HoverActions, MoreButton, StatusBadge } from './spec'
 
@@ -15,12 +16,17 @@ const GRID = 'grid-cols-[1.5fr_1.8fr_1.4fr_1.4fr_96px] gap-3'
 export function AppTable({
   apps,
   loading,
+  error,
+  onRetry,
   onRowClick,
   onDelete,
   onCreate,
 }: {
   apps: AppSummary[]
   loading: boolean
+  /** The control plane's message when the list could not be read. */
+  error: string | null
+  onRetry: () => void
   onRowClick: (app: AppSummary) => void
   onDelete: (app: AppSummary) => void
   onCreate?: () => void
@@ -34,6 +40,18 @@ export function AppTable({
             <div className="h-4 w-32 animate-pulse bg-card" />
           </div>
         ))
+      ) : error && apps.length === 0 ? (
+        <div className="flex flex-col items-center justify-center gap-3 px-6 py-20 text-center font-mono">
+          <div className="text-body font-semibold text-foreground">The apps could not be loaded</div>
+          <div className="max-w-md text-meta text-muted-foreground">{error}</div>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="mt-2 border border-border px-[13px] py-[6px] text-[11px] transition-colors hover:border-brand"
+          >
+            Retry
+          </button>
+        </div>
       ) : apps.length === 0 ? (
         <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
           <BoxCube state="empty" size={56} className="mb-4 text-muted-foreground" />
@@ -57,8 +75,12 @@ export function AppTable({
           return (
             <div
               key={app.id}
+              role="link"
+              tabIndex={0}
+              aria-label={`Open ${app.name}`}
               onClick={() => onRowClick(app)}
-              className={`group grid ${GRID} cursor-pointer items-center border-b border-border/60 px-2 py-[13px] text-body transition-colors hover:bg-card/50`}
+              onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && onRowClick(app)}
+              className={`group grid ${GRID} cursor-pointer items-center border-b border-border/60 px-2 py-[13px] text-body outline-none transition-colors hover:bg-card/50 focus-visible:bg-card/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/35`}
             >
               <span className="inline-flex min-w-0 items-center gap-3">
                 <BoxCube
@@ -91,7 +113,10 @@ export function AppTable({
               </span>
               <span className="flex min-w-0 flex-col gap-0.5">
                 <StatusBadge label={status.label} color={status.color} caps />
-                {app.attention && (
+                {app.progress && (
+                  <span className="truncate pl-[15px] font-mono text-[11px] text-warning">{app.progress}</span>
+                )}
+                {app.attention && !app.progress && (
                   <span className="truncate pl-[15px] font-mono text-[11px] text-destructive" title={app.attention}>
                     {app.attention}
                   </span>
@@ -109,17 +134,16 @@ export function AppTable({
               </span>
               <span onClick={(e) => e.stopPropagation()}>
                 <HoverActions>
-                  {app.status !== 'draft' && (
-                    <a
-                      href={app.openUrl}
-                      target="_blank"
-                      rel="noreferrer"
+                  {app.status !== 'draft' && app.lastDeploy && (
+                    <button
+                      type="button"
+                      onClick={() => void openApp(app.id, 'main')}
                       title="Open app"
-                      aria-label="Open app"
-                      className="inline-flex size-[28px] items-center justify-center border border-border text-muted-foreground transition-colors hover:border-brand hover:text-foreground"
+                      aria-label={`Open ${app.name} in a new tab`}
+                      className="inline-flex size-[28px] items-center justify-center border border-border text-muted-foreground outline-none transition-colors hover:border-brand hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/35"
                     >
                       <ArrowUpRight className="size-[13px]" />
-                    </a>
+                    </button>
                   )}
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>

@@ -6,6 +6,8 @@
 import { StatCard } from '@/components/ascii'
 import { AppTable } from '@/components/apps/AppTable'
 import { CreateAppDialog } from '@/components/apps/CreateAppDialog'
+import { RecentlyDeleted } from '@/components/apps/RecentlyDeleted'
+import { deleteAppBody } from '@/components/apps/deleteCopy'
 import { SearchField } from '@/components/apps/spec'
 import {
   AlertDialog,
@@ -22,6 +24,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import { useAppMutation } from '@/hooks/mutations/useAppMutations'
 import { useAppsQuery } from '@/hooks/queries/useAppsQuery'
 import type { AppSummary } from '@/lib/apps/types'
+import { errorText } from '@/lib/apps/client'
 import { handleApiError } from '@/lib/error-handling'
 import { useMemo, useState } from 'react'
 import { generatePath, useNavigate } from 'react-router-dom'
@@ -32,7 +35,7 @@ const FLEET_THRESHOLD = 10
 
 const Apps: React.FC = () => {
   const navigate = useNavigate()
-  const { data: apps = [], isLoading } = useAppsQuery()
+  const { data: apps = [], isLoading, error, refetch } = useAppsQuery()
   const mutation = useAppMutation()
   const [filter, setFilter] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
@@ -78,10 +81,14 @@ const Apps: React.FC = () => {
       <AppTable
         apps={visible}
         loading={isLoading}
+        error={error ? errorText(error) : null}
+        onRetry={() => refetch()}
         onRowClick={(app) => navigate(generatePath(RoutePath.APP_DETAILS, { appId: app.id }))}
         onDelete={setToDelete}
         onCreate={() => setCreateOpen(true)}
       />
+
+      <RecentlyDeleted />
 
       <CreateAppDialog
         open={createOpen}
@@ -93,9 +100,8 @@ const Apps: React.FC = () => {
         <AlertDialogContent className="font-mono">
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {toDelete?.name}?</AlertDialogTitle>
-            <AlertDialogDescription className="text-[12px]">
-              Every environment goes now: its Box, URL, database, volumes, deployments and logs. The App key stops
-              working. This cannot be undone.
+            <AlertDialogDescription asChild className="text-[12px]">
+              <div>{toDelete && deleteAppBody(toDelete.name)}</div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -108,7 +114,9 @@ const Apps: React.FC = () => {
                 if (!target) return
                 try {
                   await mutation.mutateAsync({ kind: 'delete', appId: target.id })
-                  toast.success('App deleted')
+                  toast.success(`${target.name} deleted`, {
+                    description: 'Restore it from Recently deleted within 7 days.',
+                  })
                 } catch (error) {
                   handleApiError(error, 'Failed to delete app')
                 }

@@ -32,6 +32,20 @@ export interface AppService {
   restarts: number
   lastExitCode?: number
   health: ServiceHealth
+  /** Its last error lines, when it is crashing, restarting or unhealthy. */
+  recentErrors: string[]
+}
+
+export interface AppSchedule {
+  name: string
+  cron: string
+  /** <service>:<path>, called as POST through the app proxy. */
+  target: string
+  /** null while nothing is live. */
+  nextRun: string | null
+  lastRun: string | null
+  /** HTTP status of the last run. */
+  lastStatus: number | null
 }
 
 /** Deployment statuses as the control plane reports them. */
@@ -78,21 +92,78 @@ export interface AppRelease {
   rollback: { possible: boolean; reason?: string }
   /** Set when this deployment ran migrations: the database state just before them. */
   restorePoint: string | null
+  startedAt: string | null
+  /** The step running now and since when, while the deployment is in progress. */
+  running: { name: string; detail?: string; since: string | null } | null
+  /** For a failed deployment: the classified cause, in a line. */
+  cause: string | null
 }
 
-export interface ReleaseLog {
+export interface TimelineStep {
+  name: string
+  status: ReleaseStep['status']
+  ms: number | null
+  detail: string | null
+  startedAt: string | null
+  finishedAt: string | null
+}
+
+export interface DeploymentLogLine {
   id: string
-  status: ReleaseStatus
-  steps: ReleaseStep[]
-  log: string[]
+  ts: string
+  source: string
+  level: 'info' | 'warn' | 'error'
+  line: string
+}
+
+/** shared/diagnose.ts: a failed deployment's classified cause and the fix. */
+export interface DeploymentFailure {
+  step: string
+  message: string
+  cause: string
+  summary: string
+  fix: string
+  file?: string
+  line?: number
+  evidence: string[]
+  /** Self-contained instructions for the agent. */
+  fixPrompt: string
+}
+
+/** GET /apps/:id/deployments/:n: one deployment as a traceable timeline. */
+export interface DeploymentDetail extends AppRelease {
+  message: string | null
+  specVersion: number | null
+  baseVersion: number | null
+  snapshotId: string | null
+  rollbackTo: number | null
+  timeline: TimelineStep[]
+  log: DeploymentLogLine[]
+  logTruncated: boolean
+  changeSet: {
+    infrastructure: string[]
+    configuration: string[]
+    code: { added: number; changed: number; removed: number; files: number; comparedWith: number | null } | null
+  }
+  failure: DeploymentFailure | null
+}
+
+/** Where an Activity row's object lives in the console. */
+export interface ActivityLink {
+  tab: AppTab
+  section?: string
+  deployment?: number
 }
 
 export interface AppActivity {
   id: string
   at: string
+  /** key …2pjx, console, admin or system. */
   actor: string
+  actorKind: 'agent' | 'console' | 'admin' | 'system'
   action: string
   detail?: string
+  link?: ActivityLink
 }
 
 export interface AppTable {
@@ -140,11 +211,15 @@ export interface AppDatabaseDetail {
   tables?: AppTable[] | null
   migrations?: AppMigration[] | null
   backups?: AppBackup[] | null
+  /** How far back a restore can reach (Neon's history window). */
+  restoreWindowHours?: number
   errors?: string[]
 }
 
 export interface QueryResult {
   columns: string[]
+  /** Postgres data type per column (table browsing only). */
+  types?: (string | null)[]
   rows: (string | number | boolean | null)[][]
   row_count?: number
   elapsed_ms?: number
@@ -177,6 +252,10 @@ export interface AppProblem {
   detail: string
   /** A prompt the user can hand to their agent. */
   fixPrompt?: string
+  /** The failed deployment this is about. */
+  deployment?: number
+  /** What still serves users, when something does (#2). */
+  serving?: string
 }
 
 export type AppTab = 'overview' | 'deployments' | 'logs' | 'auth' | 'database' | 'volumes' | 'variables'
@@ -187,6 +266,8 @@ export interface AppSignInMethod {
   status: 'ready' | 'not_configured'
   /** This environment's [auth] lists it. */
   declared: boolean
+  /** The platform-wide OAuth callback the provider's app lists. */
+  redirectUri: string
 }
 
 /** End-user sign-in of an environment, as the control plane reports it. */
@@ -217,6 +298,8 @@ export interface AppEndUser {
 export interface AppAuthDetail {
   status: AppAuthStatus
   users: AppEndUser[]
+  /** Recent lines of the env's `auth` log source (sign-ins, refusals), newest first. */
+  events: { id: string; ts: string; level: string; line: string }[]
 }
 
 /** 24 hourly buckets, oldest first, from the app proxy's access log. */
@@ -242,10 +325,8 @@ export interface AppSummary {
   id: string
   name: string
   slug: string
-  /** <control plane>/<app>/, from creation on. */
+  /** The environment's own origin, from creation on. */
   url: string
-  /** Opens the app through the console, which signs the visitor in to a private app first. */
-  openUrl: string
   visibility: AppVisibility
   status: AppStatus
   lastDeploy: { releaseId: string; at: string; by: string } | null
@@ -255,6 +336,8 @@ export interface AppSummary {
   environments: number
   /** When main is failing: what is wrong, in a line, so the list can say it. */
   attention?: string
+  /** While main deploys: "Deploying #4 · build". */
+  progress?: string
 }
 
 /**
@@ -298,6 +381,11 @@ export interface AppDetail extends Omit<AppSummary, 'environments'> {
   problems: AppProblem[]
   /** Why the environment is quiet or busy, in a line (asleep, deploying #4 · build). */
   statusDetail: string | null
+  /** The deployment in progress, for the header's live line. */
+  deploying: { id: string; number: number; step: string | null; detail: string | null; since: string } | null
+  schedules: AppSchedule[]
+  /** [variables] of the release serving now; differs from `variables` while a change deploys. */
+  liveVariables: Record<string, string> | null
   /** null: no traffic recorded in the last 48 hours. */
   metrics: AppMetrics | null
   /** The handoff prompt with the App key masked; the full key is shown only once. */
@@ -331,6 +419,29 @@ export interface CreatedApp {
   app: AppDetail
   key: string
   prompt: string
+}
+
+/** A soft-deleted app, kept (and restorable) until purgeAfter. */
+export interface DeletedApp {
+  name: string
+  deletedAt: string
+  purgeAfter: string
+  environments: number
+}
+
+export interface VolumeEntry {
+  name: string
+  type: 'file' | 'dir' | 'symlink' | 'other'
+  size: number
+  mode: string
+  modified_at: string
+}
+
+export interface VolumeListing {
+  volume: string
+  path: string
+  type: 'dir'
+  entries: VolumeEntry[]
 }
 
 export interface ConsoleSession {

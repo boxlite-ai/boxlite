@@ -8,12 +8,15 @@ import { useEndUserAction } from '@/hooks/mutations/useAppMutations'
 import { useAppAuth } from '@/hooks/queries/useAppsQuery'
 import { downloadUrl } from '@/lib/apps/client'
 import { capitalize, relTime, STATUS } from '@/lib/apps/format'
-import type { AppDetail, AppEndUser } from '@/lib/apps/types'
+import { errorText } from '@/lib/apps/client'
+import type { AppDetail, AppEndUser, AppSignInMethod } from '@/lib/apps/types'
 import { handleApiError } from '@/lib/error-handling'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useConfirm } from '../confirm'
+import { cn } from '@/lib/utils'
 import {
+  CopyIconButton,
   EmptyNote,
   GridHeader,
   GridRow,
@@ -34,7 +37,14 @@ import { Tag } from '../viz'
 
 const GRID = 'grid-cols-[minmax(0,1.4fr)_110px_140px_90px_200px] gap-x-4'
 const PROVIDER_LABEL: Record<string, string> = { github: 'GitHub', google: 'Google' }
-const METHOD_GRID = 'grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,1fr)_80px] gap-x-4'
+const METHOD_GRID = 'grid-cols-[120px_200px_140px_minmax(0,1fr)] gap-x-4'
+const EVENT_GRID = 'grid-cols-[150px_minmax(0,1fr)] gap-x-4'
+
+/** Why a method is or is not usable, in the console's words. */
+function methodNote(method: AppSignInMethod): string {
+  if (method.status === 'ready') return 'BoxLite runs the OAuth app; nothing to set up.'
+  return `BoxLite has not registered a ${PROVIDER_LABEL[method.provider] ?? method.provider} OAuth app on this control plane yet, so its button is hidden and only ready methods are offered.`
+}
 
 function UserRow({ app, user }: { app: AppDetail; user: AppEndUser }) {
   const action = useEndUserAction()
@@ -87,7 +97,7 @@ function UserRow({ app, user }: { app: AppDetail; user: AppEndUser }) {
 }
 
 export function AuthTab({ app }: { app: AppDetail }) {
-  const { data, isLoading } = useAppAuth(app.id)
+  const { data, isLoading, error } = useAppAuth(app.id)
   const [search, setSearch] = useState('')
   const status = data?.status ?? app.auth
   const users = (data?.users ?? []).filter(
@@ -115,29 +125,38 @@ export function AuthTab({ app }: { app: AppDetail }) {
             action={
               <div className="w-full max-w-[640px] text-left">
                 <PromptBlock
-                  text={`Add sign-in to the BoxLite app "${app.name}": declare [auth] with providers = ["google", "github"] and the paths to protect in boxlite.toml, then deploy.`}
+                  text={'[auth]\nproviders = ["github"]\nprotect = ["/app/*"]\n\n# then: boxlite-app deploy'}
                   compact
                 />
               </div>
             }
           >
-            Until then, access ({app.visibility}) is the only gate in front of the app.
+            Your agent adds this to boxlite.toml. Until then, access ({app.visibility}) is the only gate in front of the
+            app.
           </EmptyNote>
         )}
       </Screen>
 
       <Screen title="Sign-in methods" padded={false}>
-        <GridHeader grid={METHOD_GRID} columns={['Method', 'Keys', 'In this environment', '']} />
+        <GridHeader grid={METHOD_GRID} columns={['Method', 'Status', 'In this environment', 'Redirect URI']} />
         {status.methods.map((method) => (
-          <GridRow key={method.provider} grid={METHOD_GRID}>
-            <span className="text-foreground">{PROVIDER_LABEL[method.provider] ?? capitalize(method.provider)}</span>
-            <StatusBadge
-              label={method.status === 'ready' ? 'BoxLite-managed · ready' : 'Not configured'}
-              color={method.status === 'ready' ? STATUS.running : STATUS.dim}
-            />
-            <span className="text-muted-foreground">{method.declared ? 'Listed in [auth]' : 'Not in [auth]'}</span>
-            <span />
-          </GridRow>
+          <div key={method.provider} className="border-b border-border/60" data-testid={`method-${method.provider}`}>
+            <div className={`grid ${METHOD_GRID} min-h-[48px] items-center px-2 py-2 font-mono text-body`}>
+              <span className="text-foreground">{PROVIDER_LABEL[method.provider] ?? capitalize(method.provider)}</span>
+              <StatusBadge
+                label={method.status === 'ready' ? 'BoxLite-managed · ready' : 'Not configured'}
+                color={method.status === 'ready' ? STATUS.running : STATUS.dim}
+              />
+              <span className="text-muted-foreground">{method.declared ? 'Listed in [auth]' : 'Not in [auth]'}</span>
+              <span className="flex min-w-0 items-center gap-2 text-muted-foreground">
+                <span className="truncate" title={method.redirectUri}>
+                  {method.redirectUri}
+                </span>
+                <CopyIconButton text={method.redirectUri} title="Copy redirect URI" />
+              </span>
+            </div>
+            <div className="px-2 pb-2 text-[12px] text-muted-foreground">{methodNote(method)}</div>
+          </div>
         ))}
       </Screen>
 
@@ -161,7 +180,9 @@ export function AuthTab({ app }: { app: AppDetail }) {
         <div className="pb-3">
           <SearchField value={search} onChange={setSearch} placeholder="Filter users…" />
         </div>
-        {isLoading ? (
+        {error ? (
+          <EmptyNote title="Users could not be read">{errorText(error)}</EmptyNote>
+        ) : isLoading ? (
           <div className="flex items-center gap-2 py-8 text-[13px] text-muted-foreground">
             <Spinner className="size-4" /> Loading users…
           </div>
@@ -172,6 +193,37 @@ export function AuthTab({ app }: { app: AppDetail }) {
             <GridHeader grid={GRID} columns={['User', 'Provider', 'Last seen', 'Sessions', '']} />
             {users.map((user) => (
               <UserRow key={user.id} app={app} user={user} />
+            ))}
+          </>
+        )}
+      </Screen>
+
+      <Screen title="Recent sign-ins" padded={false}>
+        {(data?.events.length ?? 0) === 0 ? (
+          <EmptyNote title="No sign-in events yet">
+            Sign-ins, sign-outs and refusals are written to the auth log source and listed here.
+          </EmptyNote>
+        ) : (
+          <>
+            <GridHeader grid={EVENT_GRID} columns={['When', 'Event']} />
+            {(data?.events ?? []).map((event) => (
+              <GridRow key={event.id} grid={EVENT_GRID} className="min-h-[40px]">
+                <span className="text-muted-foreground" title={event.ts}>
+                  {new Date(event.ts).toLocaleString([], { dateStyle: 'short', timeStyle: 'medium' })}
+                </span>
+                <span
+                  className={cn(
+                    'truncate',
+                    event.level === 'error'
+                      ? 'text-destructive'
+                      : event.level === 'warn'
+                        ? 'text-warning'
+                        : 'text-foreground',
+                  )}
+                >
+                  {event.line}
+                </span>
+              </GridRow>
             ))}
           </>
         )}

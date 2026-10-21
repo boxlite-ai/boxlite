@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import { useConfirm } from '../confirm'
 import {
   EmptyNote,
+  PromptBlock,
   FlatButton,
   GridHeader,
   GridRow,
@@ -48,6 +49,8 @@ interface Row {
   secret: boolean
   missing?: boolean
   raw?: string
+  /** Saved, but the release serving now still has the old value. */
+  pending?: boolean
 }
 
 /** What the control plane answered with: the deployment the save started. */
@@ -322,6 +325,7 @@ export function VariablesTab({ app }: { app: AppDetail }) {
     secret: true,
     missing: !s.present,
   }))
+  const live = app.liveVariables
   const plain: Row[] = Object.entries(variables ?? {}).map(([name, value]) => ({
     name,
     value,
@@ -329,7 +333,10 @@ export function VariablesTab({ app }: { app: AppDetail }) {
     kind: 'Plain value',
     usedBy: 'All services',
     secret: false,
+    pending: !!app.activeRelease && live !== null && live[name] !== value,
   }))
+  // Removed in the saved configuration but still set in the release serving now.
+  const removed = Object.keys(live ?? {}).filter((name) => app.activeRelease && !(name in (variables ?? {})))
   const rows = [...secrets, ...plain]
 
   const save = async (name: string, value: string) => {
@@ -378,9 +385,21 @@ export function VariablesTab({ app }: { app: AppDetail }) {
       padded={false}
     >
       {!configured ? (
-        <EmptyNote title="Nothing configured yet">
-          Variables start in boxlite.toml ([variables] and [secrets]). Once your agent has applied or deployed it, they
-          are listed here and can be changed.
+        <EmptyNote
+          title="Nothing configured yet"
+          action={
+            <div className="w-full max-w-[560px] text-left">
+              <PromptBlock
+                text={
+                  '[variables]\nLOG_LEVEL = "info"\n\n[secrets]\nOPENAI_API_KEY = "org/openai"\n\n# then: boxlite-app apply'
+                }
+                compact
+              />
+            </div>
+          }
+        >
+          Variables start in boxlite.toml. Once your agent has applied or deployed it, they are listed here and can be
+          changed; each save is one deployment.
         </EmptyNote>
       ) : (
         <>
@@ -389,6 +408,12 @@ export function VariablesTab({ app }: { app: AppDetail }) {
             next deploy is told the app changed online and pulls it into boxlite.toml first. Secrets stay in the
             org&apos;s store and are never shown.
           </p>
+          {removed.length > 0 && (
+            <p className="pb-3 font-mono text-[12px] text-warning">
+              {removed.join(', ')} {removed.length === 1 ? 'is' : 'are'} removed; the release serving now still has{' '}
+              {removed.length === 1 ? 'it' : 'them'} until {app.deploying?.id ?? 'the next deployment'} is live.
+            </p>
+          )}
           <GridHeader grid={ENV_GRID} columns={['Name', 'Value', 'How it reaches the app', 'Used by', '']} />
           {adding && (
             <InlineEditor
@@ -423,6 +448,17 @@ export function VariablesTab({ app }: { app: AppDetail }) {
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="truncate font-semibold text-foreground">{row.name}</span>
                     {row.missing && <Tag tone="bad">Missing</Tag>}
+                    {row.pending && (
+                      <span
+                        title={
+                          app.deploying
+                            ? `Takes effect when ${app.deploying.id} is live`
+                            : 'Not in the live release yet'
+                        }
+                      >
+                        <Tag tone="warn">{app.deploying ? `Pending · ${app.deploying.id}` : 'Not live'}</Tag>
+                      </span>
+                    )}
                   </span>
                   <span className="truncate text-foreground" title={row.secret ? undefined : 'Click to edit'}>
                     {row.value}

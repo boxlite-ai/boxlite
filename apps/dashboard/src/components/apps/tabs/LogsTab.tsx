@@ -8,9 +8,12 @@ import { Spinner } from '@/components/ui/spinner'
 import { X } from '@/components/ui/icon'
 import { useAppLogs } from '@/hooks/queries/useAppsQuery'
 import { relTime } from '@/lib/apps/format'
-import type { AppDetail } from '@/lib/apps/types'
+import { errorText } from '@/lib/apps/client'
+import type { ActivityLink, AppDetail, AppTab } from '@/lib/apps/types'
 import { cn } from '@/lib/utils'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { ChevronDown } from '@/components/ui/icon'
 import { CopyIconButton, EmptyNote, Panel, SearchField } from '../spec'
 import { FilterChip, FilterGroup, Screen, ToolButton, Workbench } from '../SubNav'
 
@@ -24,7 +27,7 @@ const RANGE_MS: Record<(typeof RANGES)[number], number> = {
   '3d': 3 * 86_400_000,
 }
 const ROW_GRID = 'grid-cols-[76px_64px_minmax(0,1fr)] gap-x-4'
-const ACTIVITY_GRID = 'grid-cols-[100px_170px_220px_minmax(0,1fr)] gap-x-3'
+const ACTIVITY_GRID = 'grid-cols-[110px_130px_240px_minmax(0,1fr)_110px] gap-x-3'
 
 type Level = 'info' | 'warn' | 'error'
 type Section = 'runtime' | 'activity'
@@ -47,7 +50,54 @@ function dayLabel(at: Date): string {
   return same(at, today) ? `today · ${date}` : same(at, yesterday) ? `yesterday · ${date}` : date
 }
 
-function RuntimeLogs({ app, source }: { app: AppDetail; source?: string }) {
+function DeploymentFilter({
+  app,
+  value,
+  onChange,
+}: {
+  app: AppDetail
+  value: number | null
+  onChange: (n: number | null) => void
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex h-[30px] items-center gap-1.5 border border-border bg-card px-3 font-mono text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/35 data-[state=open]:text-foreground"
+        >
+          Deployment: <span className="text-foreground">{value ? `#${value}` : 'all'}</span>
+          <ChevronDown className="size-3.5" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-[320px] min-w-[18rem] overflow-y-auto font-mono">
+        <DropdownMenuItem className="cursor-pointer" onClick={() => onChange(null)}>
+          All deployments
+        </DropdownMenuItem>
+        {app.releases.map((r) => (
+          <DropdownMenuItem key={r.number} className="cursor-pointer gap-2" onClick={() => onChange(r.number)}>
+            <span className="w-8 shrink-0 font-semibold">{r.id}</span>
+            <span className="truncate text-muted-foreground">{r.summary}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+function RuntimeLogs({
+  app,
+  source,
+  deployment,
+  onDeployment,
+  onOpenDeployment,
+}: {
+  app: AppDetail
+  source?: string
+  deployment: number | null
+  onDeployment: (n: number | null) => void
+  onOpenDeployment: (n: number) => void
+}) {
   // No source picked means every source; picking narrows to the picked ones.
   const [sources, setSources] = useState<Set<string>>(() => (source ? new Set([source]) : new Set()))
   const [level, setLevel] = useState<'all' | 'warn' | 'error'>('all')
@@ -60,7 +110,7 @@ function RuntimeLogs({ app, source }: { app: AppDetail; source?: string }) {
   // reader has paused, scrolled away or opened a line, the list stops moving.
   const following = useRef(live)
   following.current = live && selected === null
-  const { data: fetched = [], isLoading } = useAppLogs(app.id, range, live && selected === null)
+  const { data: fetched = [], isLoading, error } = useAppLogs(app.id, range, live && selected === null, deployment)
   const [fresh, setFresh] = useState<Set<string>>(new Set())
   const seen = useRef<Set<string> | null>(null)
   const allLines = useMemo<Line[]>(
@@ -156,6 +206,7 @@ function RuntimeLogs({ app, source }: { app: AppDetail; source?: string }) {
             </FilterChip>
           ))}
         </FilterGroup>
+        <DeploymentFilter app={app} value={deployment} onChange={onDeployment} />
         <FilterGroup className="ml-auto">
           {sourceList.map((source) => {
             const count = allLines.filter((line) => line.source === source && line.at.getTime() >= since).length
@@ -171,12 +222,22 @@ function RuntimeLogs({ app, source }: { app: AppDetail; source?: string }) {
 
       <div className={cn('grid', detail && 'lg:grid-cols-[minmax(0,1fr)_320px]')}>
         <div className="min-w-0">
-          {isLoading ? (
+          {error ? (
+            <EmptyNote title="The logs could not be read">{errorText(error)}</EmptyNote>
+          ) : isLoading ? (
             <div className="flex items-center gap-2 py-8 text-[13px] text-muted-foreground">
               <Spinner className="size-4" /> Loading logs…
             </div>
           ) : visible.length === 0 ? (
-            <EmptyNote title={allLines.length === 0 ? `No log lines in the last ${range}` : 'No log lines match'} />
+            <EmptyNote
+              title={
+                allLines.length === 0
+                  ? `No log lines${deployment ? ` from #${deployment}` : ''} in the last ${range}`
+                  : 'No log lines match'
+              }
+            >
+              {allLines.length === 0 && !app.activeRelease && 'Logs start with the first `boxlite-app deploy`.'}
+            </EmptyNote>
           ) : (
             <>
               {visible.map((line, i) => {
@@ -241,7 +302,6 @@ function RuntimeLogs({ app, source }: { app: AppDetail; source?: string }) {
                 ['Time', detail.at.toISOString()],
                 ['Source', detail.source],
                 ['Level', detail.level],
-                ['Deployment', detail.deployment !== null ? `#${detail.deployment}` : '—'],
                 ['Environment', app.environment],
                 ['Box', app.box?.id ?? '—'],
               ].map(([label, value]) => (
@@ -250,6 +310,20 @@ function RuntimeLogs({ app, source }: { app: AppDetail; source?: string }) {
                   <span className="min-w-0 break-all text-foreground">{value}</span>
                 </div>
               ))}
+              <div className="flex items-baseline gap-2">
+                <span className="w-[96px] shrink-0 text-muted-foreground">Deployment</span>
+                {detail.deployment !== null ? (
+                  <button
+                    type="button"
+                    className="text-foreground underline-offset-2 hover:underline"
+                    onClick={() => detail.deployment !== null && onOpenDeployment(detail.deployment)}
+                  >
+                    #{detail.deployment} · timeline
+                  </button>
+                ) : (
+                  <span className="text-foreground">—</span>
+                )}
+              </div>
               <div className="flex flex-col gap-1">
                 <span className="flex items-center justify-between text-muted-foreground">
                   Message <CopyIconButton text={detail.raw} />
@@ -266,20 +340,54 @@ function RuntimeLogs({ app, source }: { app: AppDetail; source?: string }) {
   )
 }
 
-function Activity({ app }: { app: AppDetail }) {
+const ACTOR_TONE: Record<string, string> = {
+  agent: 'text-foreground',
+  console: 'text-foreground',
+  admin: 'text-warning',
+  system: 'text-muted-foreground',
+}
+
+function linkLabel(link: ActivityLink): string {
+  if (link.deployment) return `#${link.deployment} →`
+  return `${link.tab.charAt(0).toUpperCase() + link.tab.slice(1)} →`
+}
+
+function Activity({ app, onGoTo }: { app: AppDetail; onGoTo: (link: ActivityLink) => void }) {
   return (
     <Screen title="Activity · who changed what" padded={false}>
-      {app.activity.map((entry) => (
-        <div
-          key={entry.id}
-          className={`grid ${ACTIVITY_GRID} min-h-[44px] items-center px-2 border-b border-border/60`}
-        >
-          <span className="text-muted-foreground">{relTime(entry.at)}</span>
-          <span className="truncate text-foreground">{entry.actor}</span>
-          <span className="text-foreground">{entry.action}</span>
-          <span className="truncate text-muted-foreground">{entry.detail}</span>
-        </div>
-      ))}
+      {app.activity.length === 0 ? (
+        <EmptyNote title="Nothing has happened yet">
+          Every change by your agent, this console or an admin is listed here.
+        </EmptyNote>
+      ) : (
+        app.activity.map((entry) => (
+          <div
+            key={entry.id}
+            data-testid="activity-row"
+            className={`grid ${ACTIVITY_GRID} min-h-[44px] items-center border-b border-border/60 px-2`}
+          >
+            <span className="text-muted-foreground" title={new Date(entry.at).toLocaleString()}>
+              {relTime(entry.at)}
+            </span>
+            <span className={cn('truncate', ACTOR_TONE[entry.actorKind])} title={entry.actorKind}>
+              {entry.actor}
+            </span>
+            <span className="text-foreground">{entry.action}</span>
+            <span className="truncate text-muted-foreground">{entry.detail}</span>
+            <span className="text-right">
+              {entry.link && (
+                <button
+                  type="button"
+                  onClick={() => entry.link && onGoTo(entry.link)}
+                  className="text-[12px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/35"
+                >
+                  {linkLabel(entry.link)}
+                </button>
+              )}
+            </span>
+          </div>
+        ))
+      )}
     </Screen>
   )
 }
@@ -288,12 +396,21 @@ export function LogsTab({
   app,
   section,
   source,
+  deployment,
   onSection,
+  onDeployment,
+  onOpenDeployment,
+  onGoTo,
 }: {
   app: AppDetail
   section?: string
   source?: string
+  /** Only lines of this deployment (?deployment=N). */
+  deployment: number | null
   onSection: (next: Section) => void
+  onDeployment: (n: number | null) => void
+  onOpenDeployment: (n: number) => void
+  onGoTo: (tab: AppTab, section?: string, extra?: Record<string, string>) => void
 }) {
   const current: Section = section === 'activity' ? 'activity' : 'runtime'
   return (
@@ -306,7 +423,22 @@ export function LogsTab({
       value={current}
       onChange={onSection}
     >
-      {current === 'runtime' ? <RuntimeLogs app={app} source={source} /> : <Activity app={app} />}
+      {current === 'runtime' ? (
+        <RuntimeLogs
+          app={app}
+          source={source}
+          deployment={deployment}
+          onDeployment={onDeployment}
+          onOpenDeployment={onOpenDeployment}
+        />
+      ) : (
+        <Activity
+          app={app}
+          onGoTo={(link) =>
+            onGoTo(link.tab, link.section, link.deployment ? { deployment: String(link.deployment) } : undefined)
+          }
+        />
+      )}
     </Workbench>
   )
 }

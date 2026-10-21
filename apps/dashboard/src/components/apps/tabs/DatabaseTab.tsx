@@ -9,6 +9,16 @@ import { useAppSql, useRestoreDatabase } from '@/hooks/mutations/useAppMutations
 import { useAppDatabase, useTableRows } from '@/hooks/queries/useAppsQuery'
 import { formatBytes, relTime, STATUS } from '@/lib/apps/format'
 import type { AppDatabaseDetail, AppDetail, AppTable, QueryResult } from '@/lib/apps/types'
+import { errorBody, errorText } from '@/lib/apps/client'
+import {
+  isDdlKind,
+  isWriteKind,
+  lineAndColumn,
+  loadHistory,
+  nextMigrationFile,
+  saveHistory,
+  statementKinds,
+} from '@/lib/apps/sql'
 import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
 import { useEffect, useRef, useState } from 'react'
@@ -41,27 +51,58 @@ const SECTION_IDS: Section[] = ['tables', 'sql', 'migrations', 'backups', 'conne
 
 const asText = (rows: QueryResult['rows']) => rows.map((row) => row.map((cell) => (cell === null ? '' : String(cell))))
 
+const looksJson = (text: string) => /^[[{]/.test(text) && /[\]}]$/.test(text)
+
+/** NULL is shown as such; JSON is collapsed to one line and opens in full on click. */
 function Cell({ value }: { value: QueryResult['rows'][number][number] }) {
-  if (value === null) return <span className="text-muted-foreground/60">null</span>
-  return <>{String(value)}</>
+  const [open, setOpen] = useState(false)
+  if (value === null) return <span className="italic text-muted-foreground/60">NULL</span>
+  const text = String(value)
+  if (typeof value === 'string' && looksJson(text) && text.length > 40) {
+    return open ? (
+      <button type="button" onClick={() => setOpen(false)} className="text-left">
+        <pre className="max-w-[480px] whitespace-pre-wrap break-words text-[12px] text-foreground">
+          {(() => {
+            try {
+              return JSON.stringify(JSON.parse(text), null, 2)
+            } catch {
+              return text
+            }
+          })()}
+        </pre>
+      </button>
+    ) : (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="max-w-[320px] truncate text-left text-brand"
+        title="Show JSON"
+      >
+        {text}
+      </button>
+    )
+  }
+  return <>{text}</>
 }
 
 function NoDatabase({ app }: { app: AppDetail }) {
   return (
     <Screen title="Database">
       <EmptyNote
-        title="No database in this environment"
+        title="No database yet"
         action={
           <div className="w-full max-w-[640px] text-left">
             <PromptBlock
-              text={`Give the BoxLite app "${app.name}" a database: add [database] with migrations = "migrations/" to boxlite.toml, put the schema in migrations/0001_init.sql, then run boxlite-app apply and deploy.`}
+              text={
+                '[database]\nmigrations = "migrations/"\n\n# schema in migrations/0001_init.sql, then: boxlite-app apply'
+              }
               compact
             />
           </div>
         }
       >
-        Your agent declares it in boxlite.toml. The control plane creates a Postgres branch for {app.environment} and
-        gives the app its connection string as DATABASE_URL.
+        Add [database] to boxlite.toml and run boxlite-app apply. The control plane creates a Postgres branch for{' '}
+        {app.environment} and gives the app its connection string as DATABASE_URL.
       </EmptyNote>
     </Screen>
   )
@@ -98,9 +139,17 @@ function Connection({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
           <SpecRow label="Engine">{db.engine}</SpecRow>
           {db.branch && <SpecRow label="Branch">{db.branch}</SpecRow>}
         </Panel>
-        <p className="text-[12px] text-muted-foreground">
-          For local development your agent runs boxlite-app app dev, which writes a working DATABASE_URL to .env.local.
-        </p>
+        <div className="flex flex-col gap-2 text-[12px] text-muted-foreground">
+          <span>To work against this database from a laptop, your agent runs:</span>
+          <PromptBlock
+            text={`boxlite-app app dev${app.environment === 'main' ? '' : ` --env ${app.environment}`}`}
+            compact
+          />
+          <span>
+            It writes DATABASE_URL (with the password) to .env.local and runs the services locally. For one-off queries:
+            boxlite-app app sql &quot;select …&quot;.
+          </span>
+        </div>
       </div>
     </Screen>
   )
@@ -115,7 +164,21 @@ function Tables({ app, db, onQuery }: { app: AppDetail; db: AppDatabaseDetail; o
       {db.tables === null ? (
         <EmptyNote title="Tables could not be read">{db.errors?.join(' · ')}</EmptyNote>
       ) : tables.length === 0 ? (
-        <EmptyNote title="No tables yet">Migrations run on deploy, in file order, one transaction each.</EmptyNote>
+        <EmptyNote
+          title="No tables yet"
+          action={
+            <div className="w-full max-w-[560px] text-left">
+              <PromptBlock
+                text={
+                  '# migrations/0001_init.sql\ncreate table items (id serial primary key, title text not null);\n\n# then: boxlite-app deploy'
+                }
+                compact
+              />
+            </div>
+          }
+        >
+          Tables come from migrations, applied on deploy in file order, one transaction each.
+        </EmptyNote>
       ) : (
         <>
           <GridHeader
@@ -123,7 +186,7 @@ function Tables({ app, db, onQuery }: { app: AppDetail; db: AppDatabaseDetail; o
             columns={[
               'Table',
               <span key="rows" className="block text-right">
-                Rows (est.)
+                Rows
               </span>,
               'Schema',
               '',
@@ -163,45 +226,64 @@ const SNIPPETS: { label: string; sql: string }[] = [
   },
 ]
 
-/** First keyword: what the console treats as a write (it asks first, then runs it with write on). */
-const WRITE_RE = /^\s*(insert|update|delete|drop|alter|create|truncate|grant|revoke|comment|merge)\b/i
-
-function Sql({ app, initial }: { app: AppDetail; initial?: string | null }) {
+function Sql({ app, db, initial }: { app: AppDetail; db: AppDatabaseDetail; initial?: string | null }) {
   const sql = useAppSql()
   const [confirm, confirmElement] = useConfirm()
   const [query, setQuery] = useState(initial ?? SNIPPETS[0].sql)
-  const [history, setHistory] = useState<string[]>([])
+  const [history, setHistory] = useState<string[]>(() => loadHistory(app.id, app.environment))
   const [error, setError] = useState<string | null>(null)
   // The text that produced the results below; once the editor differs, they are marked as earlier.
   const [ran, setRan] = useState<string | null>(null)
   const ref = useRef<HTMLTextAreaElement>(null)
-  const isWrite = WRITE_RE.test(query)
+  const kinds = statementKinds(query)
+  const writes = kinds.filter(isWriteKind)
+  const ddl = kinds.filter(isDdlKind)
+  const isWrite = writes.length > 0
   const lines = Math.max(query.split('\n').length, 6)
+  const migration = nextMigrationFile((db.migrations ?? []).map((m) => m.file))
+
+  const remember = (q: string) => {
+    const next = [q, ...history.filter((h) => h !== q)].slice(0, 10)
+    setHistory(next)
+    saveHistory(app.id, app.environment, next)
+  }
 
   const execute = async (opts: { explain?: boolean; write?: boolean }) => {
     setError(null)
     try {
       await sql.mutateAsync({ appId: app.id, query, ...opts })
       setRan(query)
-      if (!opts.explain) setHistory((h) => [query, ...h.filter((q) => q !== query)].slice(0, 5))
+      if (!opts.explain) remember(query)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      const position = Number(errorBody(err)?.position)
+      const where = Number.isInteger(position) && position > 0 ? lineAndColumn(query, position) : null
+      setError(`${errorText(err)}${where ? ` (line ${where.line}, column ${where.column})` : ''}`)
       setRan(query)
     }
   }
 
   const run = async () => {
     if (!query.trim()) return
+    // The control plane refuses schema changes on main; say so, with the migration to write, before sending.
+    if (ddl.length > 0 && app.environment === 'main') {
+      setRan(query)
+      setError(
+        `${ddl.join(', ')} changes the schema, which main only takes through a migration. Next: put it in migrations/${migration} and run boxlite-app deploy (or try it on another environment first).`,
+      )
+      return
+    }
     if (isWrite) {
+      const named = [...new Set(writes)].join(', ')
       const ok = await confirm({
-        title: `Run a write on ${app.environment}?`,
+        title: `Run ${named} on ${app.environment}?`,
         body: (
           <>
-            This changes data in {app.environment}&apos;s database and commits. Schema changes on main go through a
-            migration instead. Take a backup first if you may want this undone.
+            {kinds.length > 1 ? `${kinds.length} statements run in one transaction and commit together. ` : ''}
+            This changes {app.environment}&apos;s data and commits. Take a backup first (Backups) if you may want it
+            undone.
           </>
         ),
-        confirmLabel: 'Run write',
+        confirmLabel: `Run ${named}`,
         danger: true,
       })
       if (!ok) return
@@ -235,7 +317,7 @@ function Sql({ app, initial }: { app: AppDetail; initial?: string | null }) {
             disabled={sql.isPending || !query.trim()}
             title="⌘⏎"
           >
-            {sql.isPending ? 'Running…' : isWrite ? 'Run write query ⌘⏎' : 'Run query ⌘⏎'}
+            {sql.isPending ? 'Running…' : isWrite ? `Run ${writes[0]} ⌘⏎` : 'Run query ⌘⏎'}
           </ToolButton>
         </>
       }
@@ -289,9 +371,7 @@ function Sql({ app, initial }: { app: AppDetail; initial?: string | null }) {
           <span className="text-brand">▸</span> Results
         </span>
         {error ? (
-          <span className="truncate text-destructive" title={error}>
-            {error}
-          </span>
+          <span className="text-destructive">Failed</span>
         ) : data ? (
           <>
             {ran && ran !== query && (
@@ -299,11 +379,19 @@ function Sql({ app, initial }: { app: AppDetail; initial?: string | null }) {
                 of an earlier query: {ran.replace(/\s+/g, ' ')}
               </span>
             )}
-            <span className="text-foreground">
-              {data.rows.length} rows{data.truncated ? ' (first 1000)' : ''}
-            </span>
+            {data.columns.length === 0 ? (
+              <span className="text-foreground" data-testid="sql-affected">
+                {data.row_count ?? 0} {data.row_count === 1 ? 'row' : 'rows'} affected · committed
+              </span>
+            ) : (
+              <>
+                <span className="text-foreground">
+                  {data.rows.length} rows{data.truncated ? ' (first 1000)' : ''}
+                </span>
+                <span>· {data.columns.length} columns</span>
+              </>
+            )}
             {data.elapsed_ms !== undefined && <span>· {data.elapsed_ms} ms</span>}
-            <span>· {data.columns.length} columns</span>
             <span className="ml-auto flex items-center gap-2">
               <ToolButton onClick={() => downloadCsv(`${app.name}-query.csv`, data.columns, asText(data.rows))}>
                 Export CSV
@@ -315,7 +403,15 @@ function Sql({ app, initial }: { app: AppDetail; initial?: string | null }) {
           <span>{sql.isPending ? 'Running…' : 'Read-only unless you run a write. Run a query to see results.'}</span>
         )}
       </div>
-      {data && !error && (
+      {error && (
+        <p
+          className="whitespace-pre-wrap border border-destructive/40 bg-destructive/[0.04] px-3 py-2 text-[13px] text-destructive"
+          data-testid="sql-error"
+        >
+          {error}
+        </p>
+      )}
+      {data && !error && data.columns.length > 0 && (
         <div className={cn('overflow-x-auto transition-opacity', ran && ran !== query && 'opacity-50')}>
           <table className="w-full text-left">
             <thead>
@@ -354,7 +450,7 @@ function Sql({ app, initial }: { app: AppDetail; initial?: string | null }) {
   )
 }
 
-function Migrations({ db }: { db: AppDatabaseDetail }) {
+function Migrations({ db, onOpenDeployment }: { db: AppDatabaseDetail; onOpenDeployment: (n: number) => void }) {
   const GRID = 'grid-cols-[minmax(0,1fr)_110px_120px_120px] gap-x-3'
   const migrations = db.migrations ?? []
   return (
@@ -362,8 +458,18 @@ function Migrations({ db }: { db: AppDatabaseDetail }) {
       {db.migrations === null ? (
         <EmptyNote title="Migrations could not be read">{db.errors?.join(' · ')}</EmptyNote>
       ) : migrations.length === 0 ? (
-        <EmptyNote title="No migrations applied">
-          Put SQL files under migrations/; the next deploy applies the new ones in file order.
+        <EmptyNote
+          title="No migrations applied"
+          action={
+            <div className="w-full max-w-[560px] text-left">
+              <PromptBlock
+                text={'boxlite-app app db migration new init   # writes migrations/0001_init.sql\nboxlite-app deploy'}
+                compact
+              />
+            </div>
+          }
+        >
+          Each file under migrations/ runs once, in file order, on the next deploy. Applied files never change.
         </EmptyNote>
       ) : (
         <>
@@ -372,7 +478,17 @@ function Migrations({ db }: { db: AppDatabaseDetail }) {
             <GridRow key={migration.file} grid={GRID}>
               <span className="truncate text-foreground">{migration.file}</span>
               <span className="text-muted-foreground">
-                {migration.deployment != null ? `#${migration.deployment}` : '—'}
+                {migration.deployment != null ? (
+                  <button
+                    type="button"
+                    className="underline-offset-2 hover:text-foreground hover:underline"
+                    onClick={() => migration.deployment != null && onOpenDeployment(migration.deployment)}
+                  >
+                    #{migration.deployment}
+                  </button>
+                ) : (
+                  '—'
+                )}
               </span>
               <span className="text-muted-foreground">
                 {migration.applied_at ? relTime(migration.applied_at) : '—'}
@@ -406,6 +522,9 @@ function Backups({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
   const [confirm, confirmElement] = useConfirm()
   const [restoring, setRestoring] = useState<string | null>(null)
   const backups = db.backups ?? []
+  const windowHours = db.restoreWindowHours ?? 6
+  // Restoring rewinds the Neon branch through its history, which only reaches this far back.
+  const restorable = (ts: string) => Date.now() - Date.parse(ts) < windowHours * 3_600_000
   const restore = async (id: string, at: string) => {
     const when = new Date(at).toLocaleString()
     const ok = await confirm({
@@ -446,9 +565,10 @@ function Backups({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
       }
       padded={false}
     >
-      <p className="pb-3 text-[12px] text-muted-foreground">
-        A backup names a point in the database&apos;s history; restoring rewinds the Neon branch to it (within
-        Neon&apos;s history retention).
+      <p className="pb-3 text-[12px] text-muted-foreground" data-testid="restore-window">
+        A backup names a point in the database&apos;s history; restoring rewinds {app.environment}&apos;s Neon branch to
+        it. Neon keeps {windowHours} hours of history on this plan, so a backup can be restored for {windowHours} hours
+        after it was taken. Every deployment that runs migrations records its own restore point too.
       </p>
       {db.backups === null ? (
         <EmptyNote title="Backups could not be read">{db.errors?.join(' · ')}</EmptyNote>
@@ -465,9 +585,18 @@ function Backups({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
               <span className="truncate text-muted-foreground">{backup.message ?? '—'}</span>
               <span className="text-muted-foreground">{backup.by}</span>
               <HoverActions className={restoring === backup.id ? 'opacity-100' : undefined}>
-                <ToolButton loading={restoring === backup.id} onClick={() => void restore(backup.id, backup.ts)}>
-                  Restore to {app.environment}
-                </ToolButton>
+                {restorable(backup.ts) ? (
+                  <ToolButton loading={restoring === backup.id} onClick={() => void restore(backup.id, backup.ts)}>
+                    Restore to {app.environment}
+                  </ToolButton>
+                ) : (
+                  <span
+                    className="text-[12px] text-muted-foreground"
+                    title={`Older than Neon's ${windowHours}-hour history`}
+                  >
+                    outside the {windowHours} h window
+                  </span>
+                )}
               </HoverActions>
             </GridRow>
           ))}
@@ -570,7 +699,10 @@ function TableSheet({
                 <tr className="border-b border-border text-[12px] text-muted-foreground">
                   {data.columns.map((column, i) => (
                     <th key={`${column}-${i}`} className="whitespace-nowrap px-3 py-2 font-normal">
-                      {column}
+                      <span className="block text-foreground">{column}</span>
+                      {data.types?.[i] && (
+                        <span className="block text-[10px] text-muted-foreground">{data.types[i]}</span>
+                      )}
                     </th>
                   ))}
                 </tr>
@@ -604,10 +736,12 @@ export function DatabaseTab({
   app,
   section,
   onSection,
+  onOpenDeployment,
 }: {
   app: AppDetail
   section?: string
   onSection: (next: Section) => void
+  onOpenDeployment: (n: number) => void
 }) {
   const { data: db, isLoading, error } = useAppDatabase(app.id, !!app.database)
   const current: Section = SECTION_IDS.includes(section as Section) ? (section as Section) : 'tables'
@@ -657,9 +791,9 @@ export function DatabaseTab({
           }}
         />
       ) : current === 'sql' ? (
-        <Sql key={draft ?? 'blank'} app={app} initial={draft} />
+        <Sql key={draft ?? 'blank'} app={app} db={db} initial={draft} />
       ) : current === 'migrations' ? (
-        <Migrations db={db} />
+        <Migrations db={db} onOpenDeployment={onOpenDeployment} />
       ) : current === 'backups' ? (
         <Backups app={app} db={db} />
       ) : (

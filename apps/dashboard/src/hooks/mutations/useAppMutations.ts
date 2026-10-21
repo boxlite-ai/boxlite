@@ -74,7 +74,10 @@ export function useAppMutation() {
       }
     },
     onSuccess: (app, action) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.apps.list(APPS_SCOPE) })
+      // A delete also changes Recently deleted.
+      queryClient.invalidateQueries({
+        queryKey: action.kind === 'delete' ? queryKeys.apps.all : queryKeys.apps.list(APPS_SCOPE),
+      })
       if (app) queryClient.setQueryData(queryKeys.apps.detail(APPS_SCOPE, app.id, app.environment), app)
       // Every environment of the app, its environment list, its database and logs.
       queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, action.appId) })
@@ -168,5 +171,65 @@ export function useEndUserAction() {
       ).data,
     onSuccess: (data, { appId }) =>
       queryClient.setQueryData([...queryKeys.apps.detail(APPS_SCOPE, appId, env), 'auth'], data),
+  })
+}
+
+/** Brings a soft-deleted app back (keys work again; Boxes wake on the next request). */
+export function useRestoreApp() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (name: string) =>
+      (await appsClient.post(`/deleted-apps/${encodeURIComponent(name)}/restore`)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.apps.all }),
+  })
+}
+
+/** Runs a schedule now, through the app proxy like the scheduler does. */
+export function useRunSchedule() {
+  const queryClient = useQueryClient()
+  const env = useAppEnv()
+  return useMutation({
+    mutationFn: async ({ appId, name }: { appId: string; name: string }) =>
+      (
+        await appsClient.post<{ name: string; status: number; ms: number; starting: boolean; app: AppDetail }>(
+          `/apps/${encodeURIComponent(appId)}/schedules/${encodeURIComponent(name)}/run`,
+          undefined,
+          { params: { env } },
+        )
+      ).data,
+    onSuccess: (out, { appId }) => queryClient.setQueryData(queryKeys.apps.detail(APPS_SCOPE, appId, env), out.app),
+  })
+}
+
+/** Writes one file into a volume (the CLI's `volume cp` route). */
+export function useUploadFile() {
+  const queryClient = useQueryClient()
+  const env = useAppEnv()
+  return useMutation({
+    mutationFn: async ({
+      appId,
+      volume,
+      path,
+      file,
+      overwrite,
+    }: {
+      appId: string
+      volume: string
+      path: string
+      file: File
+      overwrite: boolean
+    }) =>
+      (
+        await appsClient.put<{ volume: string; path: string; bytes: number; replaced: boolean }>(
+          `/apps/${encodeURIComponent(appId)}/volumes/${encodeURIComponent(volume)}/files`,
+          await file.arrayBuffer(),
+          {
+            params: { env, path, ...(overwrite ? { overwrite: 1 } : {}) },
+            headers: { 'content-type': 'application/octet-stream' },
+          },
+        )
+      ).data,
+    onSuccess: (_d, { appId, volume }) =>
+      queryClient.invalidateQueries({ queryKey: [...queryKeys.apps.detail(APPS_SCOPE, appId, env), 'volume', volume] }),
   })
 }

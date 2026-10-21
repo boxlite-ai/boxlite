@@ -7,12 +7,12 @@ import { formatBytes } from '@/lib/apps/format'
 import type { AppDetail } from '@/lib/apps/types'
 import { EmptyNote, PromptBlock, SpecRow } from '../spec'
 import { Screen } from '../SubNav'
+import { VolumeFiles } from '../VolumeFiles'
 
 // Volumes of this environment, as boxlite.toml declares them: a BoxLite managed
 // volume per [[volume]], mounted into the environment's Box as a plain
-// directory. Size and state are shown when BoxLite reports them. Browsing files
-// needs a file listing from the supervisor, which it does not offer yet, so
-// there is no file browser here.
+// directory. Size and state are shown when BoxLite reports them; the files are
+// browsed, downloaded and uploaded through the Box once something is deployed.
 
 export function VolumesTab({ app }: { app: AppDetail }) {
   return (
@@ -23,13 +23,13 @@ export function VolumesTab({ app }: { app: AppDetail }) {
           action={
             <div className="w-full max-w-[640px] text-left">
               <PromptBlock
-                text={`Give the BoxLite app "${app.name}" persistent file storage: add a [[volume]] with name = "uploads" and mount = "/data/uploads" to boxlite.toml, keep uploaded files under that path, then deploy.`}
+                text={'[[volume]]\nname = "uploads"\nmount = "/data/uploads"\n\n# then: boxlite-app deploy'}
                 compact
               />
             </div>
           }
         >
-          A volume is a directory that survives deploys and restarts. Your agent declares it in boxlite.toml.
+          A volume is a directory that survives deploys and restarts. Your agent adds this to boxlite.toml.
         </EmptyNote>
       ) : (
         <div className="flex flex-col gap-10">
@@ -68,8 +68,14 @@ export function VolumesTab({ app }: { app: AppDetail }) {
                 <SpecRow label="Volume id">
                   {volume.volumeId ?? 'created with the first deployment that mounts it'}
                 </SpecRow>
-                <SpecRow label="Files">not browsable here yet</SpecRow>
               </div>
+              {app.activeRelease ? (
+                <VolumeFiles app={app} volume={volume} />
+              ) : (
+                <p className="px-[22px] pb-[18px] font-mono text-[13px] text-muted-foreground">
+                  Its files can be browsed once something is deployed (`boxlite-app deploy` mounts it).
+                </p>
+              )}
             </section>
           ))}
         </div>

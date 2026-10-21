@@ -12,11 +12,14 @@ import {
   type AppLogLine,
   type AppSummary,
   type ConsoleSession,
+  type DeletedApp,
+  type DeploymentDetail,
   type EnvironmentSummary,
   type QueryResult,
-  type ReleaseLog,
+  type VolumeListing,
 } from '@/lib/apps/types'
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { queryKeys } from './queryKeys'
 
@@ -24,8 +27,11 @@ import { queryKeys } from './queryKeys'
 // organization-scoped: the console signs in to one control plane.
 export const APPS_SCOPE = 'console'
 
-const busy = (app: AppDetail | undefined) =>
+export const isBusy = (app: AppDetail | undefined) =>
   !!app && (app.status === 'building' || app.releases.some((r) => RELEASE_IN_PROGRESS.includes(r.status)))
+
+/** How often a busy environment is re-read: the header and Deployments row follow a deploy within this. */
+const LIVE_MS = 1500
 
 export function useConsoleSession() {
   return useQuery<ConsoleSession>({
@@ -39,8 +45,8 @@ export function useAppsQuery() {
   return useQuery<AppSummary[]>({
     queryKey: queryKeys.apps.list(APPS_SCOPE),
     queryFn: async () => (await appsClient.get<AppSummary[]>('/apps')).data,
-    // A deployment started by an agent shows up without a reload.
-    refetchInterval: 10_000,
+    // A deployment started by an agent shows up without a reload, and is followed while it runs.
+    refetchInterval: (query) => (query.state.data?.some((app) => app.progress) ? 2000 : 10_000),
   })
 }
 
@@ -59,7 +65,34 @@ export function useAppQuery(appId: string) {
     enabled: !!appId,
     retry: false,
     // A deployment in progress (or the agent's first one) is followed as it happens.
-    refetchInterval: (query) => (busy(query.state.data) ? 2500 : query.state.data?.status === 'draft' ? 5000 : 15_000),
+    refetchInterval: (query) =>
+      isBusy(query.state.data) ? LIVE_MS : query.state.data?.status === 'draft' ? 5000 : 15_000,
+  })
+}
+
+/**
+ * When a deployment of this environment finishes, everything it may have changed is read again:
+ * services, database tables (migrations), variables, volumes, logs, environments.
+ */
+export function useRefreshOnDeployDone(app: AppDetail | undefined) {
+  const queryClient = useQueryClient()
+  const wasBusy = useRef(false)
+  const busyNow = isBusy(app)
+  useEffect(() => {
+    if (wasBusy.current && !busyNow && app) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, app.id) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.apps.list(APPS_SCOPE) })
+    }
+    wasBusy.current = busyNow
+  }, [busyNow, app, queryClient])
+}
+
+/** Soft-deleted apps, restorable until their purge date. */
+export function useDeletedApps() {
+  return useQuery<DeletedApp[]>({
+    queryKey: [...queryKeys.apps.all, APPS_SCOPE, 'deleted'],
+    queryFn: async () => (await appsClient.get<DeletedApp[]>('/deleted-apps')).data,
+    refetchInterval: 30_000,
   })
 }
 
@@ -72,14 +105,14 @@ export function useAppEnvironments(appId: string) {
   })
 }
 
-export function useAppLogs(appId: string, since: string, live: boolean) {
+export function useAppLogs(appId: string, since: string, live: boolean, deployment: number | null = null) {
   const env = useAppEnv()
   return useQuery<AppLogLine[]>({
-    queryKey: [...queryKeys.apps.detail(APPS_SCOPE, appId, env), 'logs', since],
+    queryKey: [...queryKeys.apps.detail(APPS_SCOPE, appId, env), 'logs', since, deployment],
     queryFn: async () =>
       (
         await appsClient.get<AppLogLine[]>(`/apps/${encodeURIComponent(appId)}/logs`, {
-          params: { env, since, limit: 2000 },
+          params: { env, since, limit: 2000, ...(deployment ? { deployment } : {}) },
         })
       ).data,
     refetchInterval: live ? 3000 : false,
@@ -87,18 +120,36 @@ export function useAppLogs(appId: string, since: string, live: boolean) {
   })
 }
 
-export function useReleaseLog(appId: string, number: number, enabled: boolean, inProgress: boolean) {
+/** One deployment's timeline; followed while it runs. */
+export function useDeployment(appId: string, number: number) {
   const env = useAppEnv()
-  return useQuery<ReleaseLog>({
-    queryKey: [...queryKeys.apps.detail(APPS_SCOPE, appId, env), 'release', number],
+  return useQuery<DeploymentDetail>({
+    queryKey: [...queryKeys.apps.detail(APPS_SCOPE, appId, env), 'deployment', number],
     queryFn: async () =>
       (
-        await appsClient.get<ReleaseLog>(`/apps/${encodeURIComponent(appId)}/deployments/${number}`, {
+        await appsClient.get<DeploymentDetail>(`/apps/${encodeURIComponent(appId)}/deployments/${number}`, {
           params: { env },
         })
       ).data,
-    enabled,
-    refetchInterval: inProgress ? 2000 : false,
+    retry: false,
+    refetchInterval: (query) =>
+      query.state.data && RELEASE_IN_PROGRESS.includes(query.state.data.status) ? LIVE_MS : false,
+  })
+}
+
+/** A directory of a volume (files are downloaded, not read into the page). */
+export function useVolumeListing(appId: string, volume: string, path: string) {
+  const env = useAppEnv()
+  return useQuery<VolumeListing>({
+    queryKey: [...queryKeys.apps.detail(APPS_SCOPE, appId, env), 'volume', volume, path],
+    queryFn: async () =>
+      (
+        await appsClient.get<VolumeListing>(
+          `/apps/${encodeURIComponent(appId)}/volumes/${encodeURIComponent(volume)}/files`,
+          { params: { env, path } },
+        )
+      ).data,
+    retry: false,
   })
 }
 

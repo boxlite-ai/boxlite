@@ -29,17 +29,20 @@ import {
 } from '@/components/ui/icon'
 import { RoutePath } from '@/enums/RoutePath'
 import { useAppMutation } from '@/hooks/mutations/useAppMutations'
-import { useAppEnv, useAppQuery } from '@/hooks/queries/useAppsQuery'
-import { httpStatusOf } from '@/lib/apps/client'
+import { useAppEnv, useAppQuery, useRefreshOnDeployDone } from '@/hooks/queries/useAppsQuery'
+import { errorText, httpStatusOf } from '@/lib/apps/client'
 import { appStatusOf, capitalize, VISIBILITY_LABEL, VISIBILITY_ORDER } from '@/lib/apps/format'
+import { openApp } from '@/lib/apps/open'
 import type { AppDetail, AppRelease, AppTab, AppVisibility } from '@/lib/apps/types'
 import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
 import { useState, type ReactNode } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { DeployProgress } from './DeployProgress'
 import { EnvironmentSwitcher } from './EnvironmentSwitcher'
 import { useConfirm } from './confirm'
+import { deleteAppBody } from './deleteCopy'
 import { StatusBadge } from './spec'
 import { Tag } from './viz'
 import { DatabaseTab } from './tabs/DatabaseTab'
@@ -80,6 +83,7 @@ export default function AppDetails() {
   const section = sectionParam === 'database' ? 'connection' : sectionParam
 
   const { data: app, isLoading, isError, error, refetch, isFetching } = useAppQuery(appId)
+  useRefreshOnDeployDone(app)
   const mutation = useAppMutation()
   const [confirm, confirmElement] = useConfirm()
   // What the console asked for right now (restart, access), said in the header while it happens.
@@ -103,6 +107,7 @@ export default function AppDetails() {
     if (nextSection) params.set('section', nextSection)
     else params.delete('section')
     params.delete('source')
+    params.delete('deployment')
     for (const [key, value] of Object.entries(extra ?? {})) params.set(key, value)
     setSearchParams(params)
   }
@@ -194,12 +199,7 @@ export default function AppDetails() {
     if (!app) return
     const ok = await confirm({
       title: `Delete ${app.name}?`,
-      body: (
-        <>
-          Every environment goes now: its Box, URL, database, volumes, deployments and logs. The App key stops working.
-          This cannot be undone.
-        </>
-      ),
+      body: deleteAppBody(app.name),
       confirmLabel: 'Delete app',
       danger: true,
       typeToConfirm: app.name,
@@ -253,6 +253,18 @@ export default function AppDetails() {
             Back to Apps
           </button>
         </div>
+      ) : isError && !app ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center font-mono">
+          <div className="text-body font-semibold text-foreground">The app could not be loaded</div>
+          <div className="max-w-lg text-meta text-muted-foreground">{errorText(error)}</div>
+          <button
+            type="button"
+            onClick={() => refetch()}
+            className="mt-2 border border-border px-4 py-2 text-[13px] hover:bg-card focus-visible:ring-2 focus-visible:ring-brand/35"
+          >
+            Retry
+          </button>
+        </div>
       ) : isLoading || !app ? (
         <div className="flex flex-1 items-center justify-center gap-2 font-mono text-muted-foreground">
           <RefreshCw className="size-4 animate-spin" /> Loading app…
@@ -276,8 +288,7 @@ export default function AppDetails() {
             }
             onDelete={deleteApp}
             onDeleteEnvironment={deleteEnvironment}
-            // A deployment in progress (any author: agent, console) is said here with its step.
-            inFlight={inFlight ?? (app.status === 'building' ? app.statusDetail : null)}
+            inFlight={inFlight}
             onRefresh={() => refetch()}
             environment={<EnvironmentSwitcher appId={app.id} appName={app.name} current={env} onSwitch={switchEnv} />}
             // Each tab has its own primary action; Open app leads only on Overview.
@@ -303,20 +314,39 @@ export default function AppDetails() {
               onRollback={rollback}
               onRestartService={restartService}
               restarting={restarting}
+              onOpenDeployment={(n) => goTo('deployments', undefined, { deployment: String(n) })}
             />
           )}
-          {tab === 'deployments' && <DeploymentsTab app={app} onRollback={rollback} rollingBack={rollingBack} />}
+          {tab === 'deployments' && (
+            <DeploymentsTab
+              app={app}
+              onRollback={rollback}
+              rollingBack={rollingBack}
+              selected={Number(searchParams.get('deployment')) || null}
+              onSelect={(n) => goTo('deployments', undefined, n ? { deployment: String(n) } : {})}
+              onOpenLogs={(n) => goTo('logs', 'runtime', { deployment: String(n) })}
+            />
+          )}
           {tab === 'logs' && (
             <LogsTab
               app={app}
               section={section}
               source={searchParams.get('source') ?? undefined}
+              deployment={Number(searchParams.get('deployment')) || null}
               onSection={(next) => goTo('logs', next)}
+              onDeployment={(n) => goTo('logs', 'runtime', n ? { deployment: String(n) } : {})}
+              onOpenDeployment={(n) => goTo('deployments', undefined, { deployment: String(n) })}
+              onGoTo={goTo}
             />
           )}
           {tab === 'auth' && <AuthTab app={app} />}
           {tab === 'database' && (
-            <DatabaseTab app={app} section={section} onSection={(next) => goTo('database', next)} />
+            <DatabaseTab
+              app={app}
+              section={section}
+              onSection={(next) => goTo('database', next)}
+              onOpenDeployment={(n) => goTo('deployments', undefined, { deployment: String(n) })}
+            />
           )}
           {tab === 'volumes' && <VolumesTab app={app} />}
           {tab === 'variables' && <VariablesTab app={app} />}
@@ -355,12 +385,12 @@ function Header({
   onRefresh: () => void
   environment: ReactNode
   primaryOpen: boolean
-  /** What the environment is doing right now (restarting, rolling back…), shown in place of its status. */
+  /** What the console asked for right now (restarting, changing access…), shown next to the status. */
   inFlight: string | null
 }) {
-  const runtime = appStatusOf(app.status)
-  // The header says which deployment runs and how the runtime is doing, as two facts.
-  // A newer deployment that failed is said separately: the old one is still serving.
+  // While a new deployment runs, the live one keeps serving: the status names what serves users,
+  // and the progress line beside it names what is on its way.
+  const runtime = appStatusOf(app.status === 'building' && app.activeRelease ? 'live' : app.status)
   const latest = app.releases[0]
   const failedNewer = latest && latest.status === 'failed' && app.activeRelease ? latest : null
   return (
@@ -370,46 +400,26 @@ function Header({
         <h1 className="font-display text-section font-semibold text-foreground">{app.name}</h1>
         <span className="font-mono text-em text-border">/</span>
         {environment}
-        {/* What serves users stays visible while something is in progress next to it. */}
-        <StatusBadge
-          className="ml-1"
-          color={runtime.color}
-          label={app.activeRelease ? `${app.activeRelease} · ${runtime.label}` : runtime.label}
-        />
+        {/* Before the first release the progress line says it all. */}
+        {(app.activeRelease || !app.deploying) && (
+          <StatusBadge
+            className="ml-1"
+            color={runtime.color}
+            label={app.activeRelease ? `${app.activeRelease} · ${runtime.label}` : runtime.label}
+          />
+        )}
+        {app.deploying && <DeployProgress deploying={app.deploying} />}
         {inFlight && (
           <span className="inline-flex items-center gap-2 font-mono text-meta text-warning">
             <Spinner className="size-3.5" />
             {inFlight}
           </span>
         )}
-        {failedNewer && <Tag tone="bad">{failedNewer.id} failed</Tag>}
+        {failedNewer && !app.deploying && <Tag tone="bad">{failedNewer.id} failed</Tag>}
       </div>
 
       <div className="ml-auto flex items-center gap-2">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button type="button" disabled={busy} className={cn(HEADER_BUTTON, 'text-muted-foreground')}>
-              Access: <span className="text-foreground">{capitalize(VISIBILITY_LABEL[app.visibility])}</span>
-              <ChevronDown className="size-3.5" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-[16rem] font-mono">
-            <div className="px-2 py-1.5 text-[12px] text-muted-foreground">
-              Who can open the app
-              {app.accessSource === 'online' ? ' · set here, wins over boxlite.toml' : ' · from boxlite.toml'}
-            </div>
-            {VISIBILITY_ORDER.map((visibility) => (
-              <DropdownMenuItem
-                key={visibility}
-                className="cursor-pointer justify-between"
-                onClick={() => onPublish(visibility)}
-              >
-                <span>{capitalize(VISIBILITY_LABEL[visibility])}</span>
-                {visibility === app.visibility && <Check className="size-4" />}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <AccessMenu app={app} busy={busy} onPublish={onPublish} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button type="button" aria-label="More" className={cn(HEADER_BUTTON, 'w-[34px] justify-center px-0')}>
@@ -418,10 +428,14 @@ function Header({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-[15rem] font-mono">
             <div className="px-2 py-1.5 text-[12px] text-muted-foreground">Environment · {app.environment}</div>
-            {/* Nothing runs before the first deploy, so there is nothing to restart, sleep, open or rebuild. */}
-            {app.status !== 'draft' && (
+            {/* Nothing runs before the first release, so there is nothing to restart or sleep. */}
+            {app.activeRelease && (
               <>
-                <DropdownMenuItem className="cursor-pointer" onClick={onRestart} disabled={app.services.length === 0}>
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onClick={onRestart}
+                  disabled={app.services.length === 0 || app.status === 'sleeping'}
+                >
                   Restart services
                 </DropdownMenuItem>
                 <DropdownMenuItem
@@ -431,12 +445,12 @@ function Header({
                 >
                   Sleep now
                 </DropdownMenuItem>
-                {app.box && (
-                  <div className="px-2 py-1.5 text-[12px] text-muted-foreground">
-                    Box {app.box.id} · {app.box.state}
-                  </div>
-                )}
               </>
+            )}
+            {app.box && (
+              <div className="px-2 py-1.5 text-[12px] text-muted-foreground">
+                Box {app.box.id} · {app.box.state}
+              </div>
             )}
             <DropdownMenuItem className="cursor-pointer" onClick={onRefresh}>
               Refresh
@@ -456,22 +470,69 @@ function Header({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        {app.status !== 'draft' ? (
-          <a
-            href={app.openUrl}
-            target="_blank"
-            rel="noreferrer"
+        {/* Only a live release can be opened; before that the URL answers "nothing deployed". */}
+        {app.activeRelease && (
+          <button
+            type="button"
+            onClick={() => void openApp(app.id, app.environment)}
             className={cn(
-              // A failed app has nothing worth opening, and other tabs have their own primary action.
-              app.status === 'failed' || !primaryOpen
+              // Other tabs have their own primary action.
+              !primaryOpen
                 ? HEADER_BUTTON
-                : 'inline-flex h-[34px] items-center gap-2 bg-primary px-[15px] font-mono text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85',
+                : 'inline-flex h-[34px] items-center gap-2 bg-primary px-[15px] font-mono text-[13px] font-semibold text-primary-foreground outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-brand/35',
             )}
           >
             Open app <ArrowUpRight className="size-3.5" />
-          </a>
-        ) : null}
+          </button>
+        )}
       </div>
     </div>
+  )
+}
+
+/** Who can open the app, each level with what it means. */
+const ACCESS_REASON: Record<AppVisibility, string> = {
+  private: 'You and anyone signed in to this console',
+  org: 'Members of your BoxLite organization, signed in',
+  public: 'Anyone with the URL, no sign-in ([auth] still protects its paths)',
+}
+
+function AccessMenu({
+  app,
+  busy,
+  onPublish,
+}: {
+  app: AppDetail
+  busy: boolean
+  onPublish: (visibility: AppVisibility) => void
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" disabled={busy} className={cn(HEADER_BUTTON, 'text-muted-foreground')}>
+          Access: <span className="text-foreground">{capitalize(VISIBILITY_LABEL[app.visibility])}</span>
+          <ChevronDown className="size-3.5" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-[20rem] font-mono">
+        <div className="px-2 py-1.5 text-[12px] text-muted-foreground">
+          Who can open {app.environment}
+          {app.accessSource === 'online' ? ' · set here, wins over boxlite.toml' : ' · from boxlite.toml'}
+        </div>
+        {VISIBILITY_ORDER.map((visibility) => (
+          <DropdownMenuItem
+            key={visibility}
+            className="cursor-pointer items-start justify-between gap-3"
+            onClick={() => visibility !== app.visibility && onPublish(visibility)}
+          >
+            <span className="flex flex-col gap-0.5">
+              <span>{capitalize(VISIBILITY_LABEL[visibility])}</span>
+              <span className="text-[11px] text-muted-foreground">{ACCESS_REASON[visibility]}</span>
+            </span>
+            {visibility === app.visibility && <Check className="mt-0.5 size-4 shrink-0" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

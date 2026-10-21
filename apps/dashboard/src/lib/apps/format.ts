@@ -96,3 +96,25 @@ export function nameProblem(name: string, reserved: string[] = []): string | nul
   if (reserved.includes(name)) return `${name} is reserved by the control plane.`
   return null
 }
+
+/** 12.3 s, 1:05, 1:02:03 — durations of steps and deployments. */
+export function formatDuration(ms: number): string {
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`
+  const s = Math.floor(ms / 1000)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = String(s % 60).padStart(2, '0')
+  return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`
+}
+
+/** A timestamp as UTC and in the reader's time zone, e.g. "14:05 UTC · 22:05 local". */
+export function utcAndLocal(iso: string): string {
+  const d = new Date(iso)
+  const utc = d.toISOString().slice(11, 16)
+  const local = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+  const day =
+    d.toDateString() === new Date().toDateString()
+      ? ''
+      : `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} `
+  return `${day}${utc} UTC · ${local} local`
+}

@@ -12,7 +12,13 @@ import { appsApiUrl } from './feature'
 // back as {error: {code, message, next}}; they become BoxliteErrors so the usual
 // toasts show the control plane's own message.
 
-export const appsClient = axios.create({ baseURL: appsApiUrl(), withCredentials: true, timeout: 60_000 })
+// X-BoxLite-Console proves a write comes from the console itself (the control plane refuses writes without it).
+export const appsClient = axios.create({
+  baseURL: appsApiUrl(),
+  withCredentials: true,
+  timeout: 60_000,
+  headers: { 'X-BoxLite-Console': '1' },
+})
 
 appsClient.interceptors.response.use(
   (response) => response,
@@ -36,6 +42,11 @@ appsClient.interceptors.response.use(
   },
 )
 
+/** The control plane's words for a failed call (message, then what to do next), for inline errors. */
+export function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 /** A download through the console session (deployment source). */
 export function downloadUrl(path: string): string {
   return `${appsApiUrl()}${path}`
@@ -45,4 +56,11 @@ export function downloadUrl(path: string): string {
 export function httpStatusOf(error: unknown): number | undefined {
   const cause = error instanceof Error && error.cause instanceof AxiosError ? error.cause : error
   return cause instanceof AxiosError ? cause.response?.status : undefined
+}
+
+/** The control plane's error body behind a failed call (code, message, next and any details such as `position`). */
+export function errorBody(error: unknown): Record<string, unknown> | undefined {
+  const cause = error instanceof Error && error.cause instanceof AxiosError ? error.cause : error
+  if (!(cause instanceof AxiosError)) return undefined
+  return (cause.response?.data as { error?: Record<string, unknown> } | undefined)?.error
 }
