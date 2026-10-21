@@ -1,0 +1,34 @@
+name = "e2e"
+
+[runtime]
+image = "node"
+size = "small"
+build = ["npm ci", "npm run build"]
+
+[[service]]
+name = "web"
+command = "node server.js"
+port = 3000
+health = "/healthz"
+
+[database]
+migrations = "migrations/"
+
+[[volume]]
+name = "uploads"
+mount = "/data/uploads"
+
+[auth]
+providers = ["github"]
+protect = ["/api/me"]
+
+[[schedule]]
+name = "tick"
+cron = "* * * * *"
+target = "web:/jobs/tick"
+
+[variables]
+GREETING = "hello"
+
+[secrets]
+E2E_SECRET = "org/e2e-secret"

@@ -1,0 +1,29 @@
+{
+  "name": "@microcloud/cli",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "boxlite-app": "./dist/boxlite-app.cjs"
+  },
+  "scripts": {
+    "build": "tsx scripts/gen-reference.ts && esbuild src/bin.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/boxlite-app.cjs --banner:js='#!/usr/bin/env node' --log-level=warning && chmod +x dist/boxlite-app.cjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --import tsx \"test/**/*.test.ts\"",
+    "gen:reference": "tsx scripts/gen-reference.ts"
+  },
+  "dependencies": {
+    "@microcloud/shared": "workspace:*",
+    "commander": "^14.0.0",
+    "ignore": "^7.0.0",
+    "smol-toml": "^1.4.1",
+    "tar": "^7.4.0",
+    "undici": "^7.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0",
+    "typescript": "^5.9.0",
+    "tsx": "^4.20.0",
+    "@types/node": "^24.0.0"
+  }
+}

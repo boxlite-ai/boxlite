@@ -1,0 +1,36 @@
+{
+  "name": "@microcloud/control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit && node scripts/bundle.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsx src/main.ts",
+    "start": "node dist/server.mjs",
+    "test": "node --test --test-concurrency=1 --import tsx \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.0",
+    "@microcloud/shared": "workspace:*",
+    "croner": "^9.1.0",
+    "hono": "^4.10.0",
+    "libpg-query": "17.7.3",
+    "pg": "^8.16.0",
+    "pg-cursor": "^2.22.1",
+    "tar-stream": "^3.1.7",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "@types/pg-cursor": "^2.7.2",
+    "@types/tar-stream": "^3.1.4",
+    "esbuild": "^0.28.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

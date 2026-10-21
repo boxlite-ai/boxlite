@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "baseUrl": ".",
+    "paths": { "@microcloud/shared": ["../shared/src/index.ts"] }
+  },
+  "include": ["src", "test", "scripts"]
+}
