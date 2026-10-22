@@ -120,6 +120,8 @@ async function main() {
   console.log(`Console e2e · CP ${CP} · console ${CONSOLE} · app ${APP}`)
   const browser = await chromium.launch()
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
+  // "Copy prompt" is how the user takes the working key; the test reads what it put on the clipboard.
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(CONSOLE).origin })
   page = await context.newPage()
   const consoleErrors = []
   page.on('pageerror', (e) => consoleErrors.push(e.message))
@@ -135,17 +137,19 @@ async function main() {
       await page.getByRole('heading', { name: 'Apps' }).waitFor()
     })
 
-    await step('create the app; the prompt shows the full key once', async () => {
+    await step('create the app; the page masks the key and Copy prompt hands over the working one', async () => {
       await page.getByRole('button', { name: 'New App' }).first().click()
       await page.keyboard.type(APP)
       await page.getByRole('button', { name: 'Create app' }).click()
-      const prompt = await text(page.locator('pre').first())
-      KEY = /bxl_app_[a-z2-7]{32}/.exec(prompt)?.[0] ?? ''
-      assert(KEY, `no App key in the prompt: ${prompt.slice(0, 200)}`)
-      assert(prompt.includes(`${CP}/agent.md`) || prompt.includes('/agent.md'), 'prompt does not point at agent.md')
-      await shot('created-prompt')
-      await page.getByRole('button', { name: 'Open app page' }).click()
       await page.getByText('Hand off to your agent', { exact: false }).first().waitFor()
+      const shown = await text(page.locator('pre').first())
+      assert(!/bxl_app_[a-z2-7]{32}/.test(shown), 'the page shows the full App key')
+      await shot('created-prompt')
+      await page.getByRole('button', { name: 'Copy prompt' }).click()
+      const prompt = await page.evaluate(() => navigator.clipboard.readText())
+      KEY = /bxl_app_[a-z2-7]{32}/.exec(prompt)?.[0] ?? ''
+      assert(KEY, `no App key in the copied prompt: ${prompt.slice(0, 200)}`)
+      assert(prompt.includes(`${CP}/agent.md`), 'prompt does not point at agent.md')
       assert((await cpApi('')).name === APP, 'CP does not know the app')
       return `key …${KEY.slice(-4)}`
     })
@@ -214,12 +218,16 @@ async function main() {
       await tab('Overview')
       const services = await cpApi('/envs/main/services')
       for (const s of services) {
+        // The process details (pid, port, restarts) are in the row's expanded part.
+        const head = page.getByTestId(`service-${s.name}`).getByRole('button').first()
+        if ((await head.getAttribute('aria-expanded')) !== 'true') await head.click()
         const row = await text(page.getByTestId(`service-${s.name}`))
         assert(/RUNNING/i.test(row) === (s.state === 'running'), `service ${s.name}: screen "${row}" vs CP ${s.state}`)
         if (s.pid) assert(row.includes(String(s.pid)), `pid ${s.pid} missing`)
       }
       const schedules = await cpApi('/envs/main/schedules')
-      for (const s of schedules) await page.getByText(s.cron, { exact: true }).first().waitFor()
+      // The table says the schedule in words; the raw cron is on hover.
+      for (const s of schedules) await page.locator(`[title="${s.cron}"]`).first().waitFor()
       await page.getByText('every minute').first().waitFor()
       await shot('overview-live')
       return `${services.length} service(s), ${schedules.length} schedule(s)`
@@ -229,10 +237,17 @@ async function main() {
       await tab('Logs')
       const lines = await cpApi('/envs/main/logs?limit=50&source=system')
       const probe = lines.at(-1).line
+      // system lines are platform detail: out of the default stream, picked from the Platform menu.
+      await page.getByRole('button', { name: /^Platform/ }).click()
+      await page.getByRole('menuitem', { name: /system/ }).click()
+      await page.keyboard.press('Escape')
       await page.getByText(probe.slice(0, 50), { exact: false }).first().waitFor({ timeout: 15_000 })
-      await page.getByRole('button', { name: /Deployment: all/ }).click()
-      await page.getByRole('menuitem', { name: /#1/ }).click()
+      // A deployment's lines are reached from its timeline.
+      await tab('Deployments')
+      await page.getByTestId('deployment-row-1').click()
+      await page.getByRole('button', { name: 'View in Logs' }).click()
       await page.waitForURL(/deployment=1/)
+      await page.getByRole('button', { name: /Deployment #1/ }).waitFor()
       await shot('logs-deployment-1')
       return `found "${probe.slice(0, 40)}…"`
     })
@@ -255,8 +270,11 @@ async function main() {
       const truth = await cpApi('/envs/main/auth')
       const gh = await text(page.getByTestId('method-github'))
       assert(/ready/i.test(gh) === (truth.providers.find((p) => p.name === 'github')?.status === 'ready'), `github: ${gh}`)
-      assert(/\/auth\/callback\/github/.test(gh), 'no redirect URI')
-      assert(/not registered/i.test(await text(page.getByTestId('method-google'))), 'Google not explained')
+      await page.getByTestId('method-github').getByRole('button').last().click()
+      await page.getByRole('menuitem', { name: 'Copy redirect URI' }).click()
+      const uri = await page.evaluate(() => navigator.clipboard.readText())
+      assert(/\/auth\/callback\/github/.test(uri), `redirect URI copied: ${uri}`)
+      assert(/set up Google sign-in/i.test(await text(page.getByTestId('method-google'))), 'Google not explained')
       await shot('auth')
     })
 
@@ -370,7 +388,7 @@ async function main() {
     await step('delete is soft: the app moves to Recently deleted and can be restored', async () => {
       await page.getByRole('button', { name: 'More' }).first().click()
       await page.getByRole('menuitem', { name: 'Delete app' }).click()
-      await page.getByRole('textbox').last().fill(APP)
+      // Restorable for 7 days, so it asks once (no typing the name).
       await page.getByRole('button', { name: 'Delete app' }).click()
       await page.waitForURL(/\/dashboard\/apps$/)
       const section = page.getByRole('region', { name: 'Recently deleted' })
