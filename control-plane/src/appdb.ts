@@ -28,6 +28,12 @@ export interface QueryResult {
  */
 export interface AppDatabase {
   listApplied(url: string): Promise<AppliedRow[]>;
+  /**
+   * Copies the migrations ledger (public.boxlite_migrations) from one database to another. A
+   * schema-only branch has the parent's tables but not this table's rows, so without the copy its
+   * first deploy would run every migration again. Returns the rows copied.
+   */
+  copyMigrationLedger(from: string, to: string): Promise<number>;
   applyMigration(url: string, m: MigrationFile, deployment: number): Promise<void>;
   query(url: string, statements: string[], opts: { write: boolean; params?: unknown[] }): Promise<QueryResult>;
   /** Provisions the read-only login reads use (idempotent). Also done lazily by `query`. */
@@ -381,6 +387,18 @@ export class PgAppDatabase implements AppDatabase {
         await c.end().catch(() => undefined);
       }
     }
+  }
+
+  async copyMigrationLedger(from: string, to: string): Promise<number> {
+    const rows = await this.listApplied(from);
+    if (!rows.length) return 0;
+    return this.withConn(to, async (c) => {
+      await c.query(MIGRATIONS_DDL);
+      for (const r of rows) {
+        await c.query('INSERT INTO public.boxlite_migrations (file, sha256, deployment, applied_at) VALUES ($1, $2, $3, $4) ON CONFLICT (file) DO NOTHING', [r.file, r.sha256, r.deployment, r.applied_at]);
+      }
+      return rows.length;
+    }).catch(sqlError);
   }
 
   async listApplied(url: string): Promise<AppliedRow[]> {

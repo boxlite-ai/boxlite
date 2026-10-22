@@ -206,6 +206,12 @@ export class FakeAppDb implements AppDatabase {
   async listApplied(): Promise<AppliedRow[]> {
     return [...this.applied];
   }
+  /** Every migrations-ledger copy: [from url, to url]. */
+  ledgerCopies: [string, string][] = [];
+  async copyMigrationLedger(from: string, to: string): Promise<number> {
+    this.ledgerCopies.push([from, to]);
+    return this.applied.length;
+  }
   async applyMigration(_u: string, m: MigrationFile, deployment: number): Promise<void> {
     this.applied.push({ file: m.file, sha256: m.sha256, deployment, applied_at: new Date().toISOString() });
   }

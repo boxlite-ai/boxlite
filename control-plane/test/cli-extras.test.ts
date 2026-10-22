@@ -304,3 +304,17 @@ test("a deployment's log is the deployment's: its release's later runtime output
   assert.ok(t.logs.some((l: any) => /is live at/.test(l.line)), 'the deployment lines are there');
   assert.ok(!t.logs.some((l: any) => /an hour later/.test(l.line)), 'runtime output after the deployment is not');
 });
+
+test('a schema-only environment inherits the migrations ledger, so its first deploy does not re-run them', async () => {
+  // main has a database; its migrations are recorded in public.boxlite_migrations.
+  await deploy(TOML);
+  h.ctx.store.run("UPDATE apps SET neon_project_id = 'proj-1', neon_main_branch_id = 'br-main' WHERE name = 'crm'");
+  h.ctx.store.updateEnv(env().id, { db_url: 'postgresql://u:p@ep-main.neon.test/neondb', neon_branch_id: 'br-main' });
+  const created = await h.request('/v1/apps/crm/envs', { method: 'POST', key, json: { name: 'staging' } });
+  assert.equal(created.status, 201, await created.clone().text());
+  // The schema came with the branch; the ledger rows did not, so the CP copies them.
+  assert.deepEqual(h.appdb.ledgerCopies, [['postgresql://u:p@ep-main.neon.test/neondb', env('staging').db_url]]);
+  // A branch with the parent's data has the ledger already.
+  await h.request('/v1/apps/crm/envs', { method: 'POST', key, json: { name: 'copy', with_data: true } });
+  assert.equal(h.appdb.ledgerCopies.length, 1);
+});

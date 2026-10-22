@@ -39,6 +39,8 @@ export class DatabaseProvisioner {
         }
       }
       let env = store.envById(envId)!;
+      /** The parent's database, when this env just became a schema-only branch of it. */
+      let ledgerFrom: string | null = null;
       if (!env.neon_branch_id) {
         let branchId: string;
         if (env.name === 'main') {
@@ -51,6 +53,7 @@ export class DatabaseProvisioner {
           // A SQL-created reader role would make Neon refuse schema-only branches (412); the CP's
           // start-up pass (DbReaders.migrateAll) removed those once, and nothing creates them now.
           branchId = (await neon.createBranch(app.neon_project_id!, env.name, parentBranch, init)).branchId;
+          if (!env.with_data) ledgerFrom = parent?.db_url ?? null;
         }
         store.updateEnv(env.id, { neon_branch_id: branchId });
         env = store.envById(envId)!;
@@ -59,6 +62,12 @@ export class DatabaseProvisioner {
         const uri = await neon.connectionUri(app.neon_project_id!, env.neon_branch_id!);
         store.updateEnv(env.id, { db_url: withSslmode(uri) });
         env = store.envById(envId)!;
+      }
+      // The schema came with the branch but not the ledger of applied migrations: copy it, or the
+      // env's first deploy runs every migration again on tables that already exist.
+      if (ledgerFrom) {
+        const copied = await this.ctx.appdb.copyMigrationLedger(ledgerFrom, env.db_url!);
+        log(`migrations ledger copied from ${env.from_env ?? 'main'} (${copied} applied migration${copied === 1 ? '' : 's'})`);
       }
       return { url: env.db_url!, host: hostOf(env.db_url!), branchId: env.neon_branch_id! };
     });
