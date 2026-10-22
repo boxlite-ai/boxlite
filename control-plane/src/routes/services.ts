@@ -13,18 +13,9 @@ export function serviceRoutes(ctx: Ctx) {
   r.get('/envs/:env/services', async (c) => {
     const env = envOf(ctx, c);
     if (!env.box_url) return c.json([]);
-    const status = env.box_id ? await ctx.resources.boxStatus(env.box_id).catch(() => 'unknown') : 'missing';
-    if (status === 'running') {
-      try {
-        const h = await ctx.supervisor.health(env.box_url, env.control_secret);
-        ctx.store.updateEnv(env.id, { services: JSON.stringify(h.services) });
-        return c.json(h.services.map((s) => ({ name: s.name, state: s.state, restarts: s.restarts ?? 0, last_exit_code: s.last_exit_code ?? null, health: s.health ?? null, pid: s.pid ?? null })));
-      } catch {
-        // fall through to the last report
-      }
-    }
-    const last = (env.services ? JSON.parse(env.services) : []) as Record<string, unknown>[];
-    return c.json(last.map((s) => ({ ...s, state: status === 'stopped' ? 'stopped (Box asleep)' : s.state, reported_at: env.services_at })));
+    const { box, services, fresh } = await ctx.resources.liveServices(env, 10_000);
+    if (fresh) return c.json(services.map((s) => ({ name: s.name, state: s.state, restarts: s.restarts ?? 0, last_exit_code: s.last_exit_code ?? null, health: s.health ?? null, pid: s.pid ?? null })));
+    return c.json(services.map((s) => ({ ...s, state: box === 'stopped' ? 'stopped (Box asleep)' : s.state, reported_at: env.services_at })));
   });
 
   r.post('/envs/:env/services/:name/restart', async (c) => {

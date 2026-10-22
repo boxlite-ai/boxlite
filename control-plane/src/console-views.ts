@@ -13,6 +13,7 @@ import { lastDeploy, releaseId, releaseViews, runningOf } from './console-releas
 import type { AppDetailView, AppSummaryView, ConsoleStatus, DatabaseSummaryView, EnvironmentSummaryView, ProblemView, ServiceView, VolumeView } from './console-view-types.js';
 import type { VolumeInfo } from './boxlite.js';
 import { BOX_SIZES } from './platform.js';
+import { storedServices } from './resources.js';
 import { volumeName } from './resources/volumes.js';
 import { dbCoordinates } from './services/db.js';
 import type { Spec } from './spec.js';
@@ -30,14 +31,6 @@ import { previewMeta, refreshPreviewIfStale } from './preview.js';
  */
 
 // ---- small helpers -----------------------------------------------------------
-
-function parseServices(env: EnvRow): ServiceState[] {
-  try {
-    return env.services ? (JSON.parse(env.services) as ServiceState[]) : [];
-  } catch {
-    return [];
-  }
-}
 
 /** Runtime state of an env in the console's words. `box` is the BoxLite status, `services` the supervisor's report. */
 export function envStatus(ctx: Pick<Ctx, 'store'>, env: EnvRow, box: string | null, services: ServiceState[]): ConsoleStatus {
@@ -95,23 +88,14 @@ export interface LiveState {
   services: ServiceState[];
 }
 
-/** BoxLite status of the env's Box (cached by Resources) and the supervisor's last service report. */
+/** BoxLite status of the env's Box (cached by Resources) and its services: probed when asked, else the last report. */
 async function liveState(ctx: Ctx, env: EnvRow, opts: { probe?: boolean } = {}): Promise<LiveState> {
-  let box: string | null = null;
-  if (env.box_id) box = await ctx.resources.boxStatus(env.box_id).catch(() => 'unknown');
-  let services = parseServices(env);
-  // Ask the supervisor for fresh health when the Box is up; the stored report is the fallback.
-  if (opts.probe && box === 'running' && env.box_url) {
-    const h = await Promise.race([
-      ctx.supervisor.health(env.box_url, env.control_secret).catch(() => null),
-      new Promise<null>((r) => setTimeout(() => r(null), 3_000)),
-    ]);
-    if (h) {
-      services = h.services;
-      ctx.store.updateEnv(env.id, { services: JSON.stringify(h.services), services_at: now() });
-    }
+  if (opts.probe) {
+    const { box, services } = await ctx.resources.liveServices(env);
+    return { box, services };
   }
-  return { box, services };
+  const box = env.box_id ? await ctx.resources.boxStatus(env.box_id).catch(() => 'unknown') : null;
+  return { box, services: storedServices(env) };
 }
 
 export async function summaryView(ctx: Ctx, app: AppRow): Promise<AppSummaryView> {

@@ -1,8 +1,9 @@
 /** An env's platform resources behind one object (`ctx.resources`): URLs, current spec and runtime env here; Box, database, volumes and wake in resources/. */
 import type { VolumeSpec } from '@microcloud/shared';
-import type { AppRow, EnvRow } from './db.js';
+import { now, type AppRow, type EnvRow } from './db.js';
 import type { Ctx } from './ctx.js';
 import type { Spec } from './spec.js';
+import type { ServiceState } from './supervisor.js';
 import { BoxProvisioner, type Logger } from './resources/boxes.js';
 import { DatabaseProvisioner } from './resources/database.js';
 import { deleteVolumes } from './resources/volumes.js';
@@ -113,5 +114,36 @@ export class Resources {
 
   wakeFailure(boxId: string): string | null {
     return this.waker.wakeFailure(boxId);
+  }
+
+  /**
+   * The env's Box state and its services as they are now: asked from the supervisor when the Box
+   * is up (within `timeoutMs`; never wakes it), else the last report. A fresh answer is stored as
+   * the new last report. The console, `GET …/services` and the agent context all read this.
+   */
+  async liveServices(env: EnvRow, timeoutMs = 3_000): Promise<{ box: string | null; services: ServiceState[]; fresh: boolean }> {
+    const box = env.box_id ? await this.boxStatus(env.box_id).catch(() => 'unknown') : null;
+    if (box === 'running' && env.box_url) {
+      let timer: NodeJS.Timeout | undefined;
+      const h = await Promise.race([
+        this.ctx.supervisor.health(env.box_url, env.control_secret).catch(() => null),
+        new Promise<null>((r) => (timer = setTimeout(() => r(null), timeoutMs))),
+      ]);
+      clearTimeout(timer);
+      if (h) {
+        this.ctx.store.updateEnv(env.id, { services: JSON.stringify(h.services), services_at: now() });
+        return { box, services: h.services, fresh: true };
+      }
+    }
+    return { box, services: storedServices(env), fresh: false };
+  }
+}
+
+/** The supervisor's last service report, as stored on the env. */
+export function storedServices(env: EnvRow): ServiceState[] {
+  try {
+    return env.services ? (JSON.parse(env.services) as ServiceState[]) : [];
+  } catch {
+    return [];
   }
 }

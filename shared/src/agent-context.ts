@@ -1,4 +1,4 @@
-import { classifyFailure } from './diagnose.js';
+import { classifyFailure, errorFocus } from './diagnose.js';
 
 /**
  * Everything an agent needs about one environment, as returned by
@@ -132,12 +132,17 @@ export function contextFindings(c: Omit<AgentContext, 'next_actions'>): Finding[
   for (const s of c.services) {
     const errs = c.recent_errors.filter((e) => e.source === s.name).slice(-5).map((e) => e.line);
     if ((s.restarts ?? 0) > CRASH_LOOP_RESTARTS) {
+      // The same classifier as a failed deploy: a missing variable or module is named with its fix.
+      const own = c.recent_errors.filter((e) => e.source === s.name).map((e) => e.line);
+      const tail = c.recent_errors.filter((e) => e.source === s.name || e.source === 'system').map((e) => `[${e.source}] ${e.line}`);
+      const d = classifyFailure({ step: 'start', message: '', log_tail: tail, service: { name: s.name, command: s.command ?? undefined } });
+      const named = d.cause === 'missing_variable' || d.cause === 'module_not_found';
       out.push({
         id: 'crash_loop',
         severity: 'error',
-        title: `service ${s.name} restarted ${s.restarts} times${s.last_exit_code != null ? ` (last exit code ${s.last_exit_code})` : ''}`,
-        fix: `read its stderr: \`boxlite-app app logs --source ${s.name} --level error --since 1h\`, fix the crash, then \`boxlite-app deploy\``,
-        evidence: errs,
+        title: named ? `service ${s.name} keeps crashing: ${d.summary}` : `service ${s.name} restarted ${s.restarts} times${s.last_exit_code != null ? ` (last exit code ${s.last_exit_code})` : ''}`,
+        fix: named ? d.fix : `read its stderr: \`boxlite-app app logs --source ${s.name} --level error --since 1h\`, fix the crash, then \`boxlite-app deploy\``,
+        evidence: errorFocus(own, 5),
       });
     } else if (s.state === 'failed' || s.state === 'stopped') {
       out.push({ id: 'service_down', severity: 'error', title: `service ${s.name} is ${s.state}`, fix: `\`boxlite-app app restart ${s.name}\`; if it stops again, \`boxlite-app app logs --source ${s.name} --since 1h\``, evidence: errs });

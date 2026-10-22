@@ -140,8 +140,11 @@ export class FakeSupervisor implements SupervisorClient {
   /** The secret each control call carried, in order. */
   secrets: string[] = [];
   ctx!: Ctx;
+  /** What health answers for services: the last ones a status report carried, as a real supervisor would. */
+  private running: NonNullable<SupervisorStatus['services']> = [];
 
   private report(release: number, phase: SupervisorStatus['phase'], extra: Partial<SupervisorStatus> = {}) {
+    if (extra.services) this.running = extra.services;
     setTimeout(() => {
       const env = this.ctx.store.all<{ id: string }>('SELECT id FROM envs WHERE box_id IS NOT NULL').map((e) => this.ctx.store.envById(e.id)!)[0]!;
       this.ctx.orchestrator.onLogs(env, [{ ts: new Date().toISOString(), source: 'build', level: 'info', line: `${phase} ${release}`, deployment: release }]);
@@ -159,7 +162,7 @@ export class FakeSupervisor implements SupervisorClient {
       this.forbiddenHealth--;
       throw new UpstreamError('supervisor', 403, 'GET /.boxlite/sv/health → 403', '{"error":"gateway"}');
     }
-    return { version: this.version, root: true, sudo_locked: true, ok: true, deployment: null, services: [] };
+    return { version: this.version, root: true, sudo_locked: true, ok: true, deployment: null, services: this.running };
   }
   async deploy(_u: string, s: string, n: number): Promise<void> {
     this.calls.push(`deploy ${n}`);

@@ -199,7 +199,7 @@ function startDiagnosis(input: FailureInput, message: string, tail: readonly str
   if (mod) return mod;
 
   const exited = all.map((l) => /service ([\w-]+) (?:exited with code (\d+)|failed to start: (.*?);)/.exec(l)).find((m) => m !== null);
-  const stderr = tail.filter((l) => l.includes(`[${svcName}]`) || l.startsWith(`${svcName} `)).slice(-MAX_EVIDENCE);
+  const stderr = errorFocus(tail.filter((l) => l.includes(`[${svcName}]`) || l.startsWith(`${svcName} `)));
 
   const statusMatch = /HTTP (\d{3})/.exec(last);
   if (statusMatch?.[1] === '404') {
@@ -260,6 +260,23 @@ function startDiagnosis(input: FailureInput, message: string, tail: readonly str
     };
   }
   return unknownDiagnosis(input, message, tail);
+}
+
+/** A line that starts an error report: `Error: …`, `TypeError: …`, `npm ERR!`, `panic: …`, `fatal: …`. */
+const ERROR_LINE_RE = /^(?:Uncaught )?(?:[A-Z]\w*)?Error\b|^\w+(?:Error|Exception)\b:|\bERR!|^panic:|^fatal:/;
+
+/**
+ * Up to `max` lines starting at the last error line, so evidence leads with what broke instead of
+ * the end of a stack trace (`at …`, `}`, `Node.js v22`). Without an error line, the last `max`.
+ * Lines may carry a `<ts> [source] ` prefix.
+ */
+export function errorFocus(lines: readonly string[], max = MAX_EVIDENCE): string[] {
+  const text = (l: string) => l.replace(/^\S+Z /, '').replace(/^\[[\w-]+\] /, '').trim();
+  let at = -1;
+  lines.forEach((l, i) => {
+    if (ERROR_LINE_RE.test(text(l))) at = i;
+  });
+  return at < 0 ? lines.slice(-max) : lines.slice(at, at + max);
 }
 
 /** The environment variable a service says it lacks: `Error: SLACK_TOKEN is not set` → SLACK_TOKEN. */

@@ -182,7 +182,7 @@ async function main() {
       await shot('header-deploying')
       await tab('Deployments')
       const row = page.getByTestId('deployment-row-1')
-      await until(async () => /Building|Migrating|Starting|Queued|Uploading/i.test(await text(row)) || null, { timeoutMs: 60_000, everyMs: 500, what: 'the running row' })
+      await until(async () => /Deploying|Queued/i.test(await text(row)) || null, { timeoutMs: 60_000, everyMs: 500, what: 'the running row' })
       await shot('deployments-row-deploying')
       return line
     })

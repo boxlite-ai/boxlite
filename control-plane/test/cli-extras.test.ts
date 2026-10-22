@@ -265,3 +265,12 @@ test('volume calls carry exactly one secret: the control secret', () => {
   assert.ok(e.control_secret && e.control_secret !== e.forward_secret);
   assert.deepEqual(controlHeaders(e), { 'x-boxlite-control': e.control_secret });
 });
+
+test('context reads the services live, so a crash that starts after go-live is a next action', async () => {
+  await deploy(TOML);
+  // Live, web started crashing: the stored report from the deployment still says it was running.
+  h.supervisor.health = async () => ({ ok: true, deployment: 1, services: [{ name: 'web', state: 'restarting', health: 'none', port: 20001, pid: null, restarts: 12, last_exit_code: 1 }] });
+  const c = (await (await get('/envs/main/context')).json()) as Record<string, any>;
+  assert.deepEqual(c.services.map((s: any) => [s.name, s.state, s.restarts, s.last_exit_code]), [['web', 'restarting', 12, 1]]);
+  assert.equal(c.next_actions[0].id, 'crash_loop');
+});

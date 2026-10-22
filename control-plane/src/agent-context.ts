@@ -2,6 +2,7 @@ import { contextFindings, type AgentContext, type AgentDatabase, type AgentSched
 import { Cron } from 'croner';
 import type { AppRow, EnvRow } from './db.js';
 import type { Ctx } from './ctx.js';
+import type { ServiceState } from './supervisor.js';
 import { authStatus } from './enduser/management.js';
 import type { Spec } from './spec.js';
 import { envStatus } from './views.js';
@@ -12,19 +13,12 @@ const ERROR_LEVELS = storedLevelsAtLeast('error');
 const RECENT_ERRORS = 20;
 const ERROR_WINDOW_MS = 24 * 3_600_000;
 
-interface ReportedService {
-  name: string;
-  state?: string;
-  health?: string;
-  restarts?: number;
-  last_exit_code?: number | null;
-}
-
-export function servicesOf(env: EnvRow, spec: Spec | undefined, boxState: string | null): AgentService[] {
-  const reported = new Map(((env.services ? JSON.parse(env.services) : []) as ReportedService[]).map((s) => [s.name, s]));
+/** The declared services with their reported state (`reported`: live when the Box is up, else the last report). */
+function servicesOf(spec: Spec | undefined, reported: ServiceState[], boxState: string | null): AgentService[] {
+  const byName = new Map(reported.map((s) => [s.name, s]));
   const exposed = spec?.services.find((s) => s.port !== undefined || s.static !== undefined);
   return (spec?.services ?? []).map((s) => {
-    const r = reported.get(s.name);
+    const r = byName.get(s.name);
     return {
       name: s.name,
       exposed: s === exposed,
@@ -120,8 +114,9 @@ function recentErrors(ctx: Ctx, env: EnvRow, at: number): AgentContext['recent_e
 /** `GET /v1/apps/{app}/envs/{env}/context`: one round trip with everything an agent needs. */
 export async function buildAgentContext(ctx: Ctx, app: AppRow, env: EnvRow, latestCli: string | null, at = new Date()): Promise<AgentContext> {
   const spec = ctx.resources.currentSpec(env);
-  const boxState = env.box_id ? await ctx.resources.boxStatus(env.box_id).catch(() => 'unknown') : null;
-  const services = servicesOf(env, spec, boxState);
+  // Live, so a service that started crashing after go-live is in the context (and its next actions).
+  const { box: boxState, services: reported } = await ctx.resources.liveServices(env);
+  const services = servicesOf(spec, reported, boxState);
   const exposed = services.find((s) => s.exposed);
   const appUrl = ctx.resources.appUrl(app.name, env.name);
   const auth = authStatus(ctx, app, env);
