@@ -193,6 +193,15 @@ function serviceViews(ctx: Pick<Ctx, 'store'>, env: EnvRow, spec: Spec | undefin
   });
 }
 
+/** The environment variable a crash message says is missing: `Error: SLACK_TOKEN is not set` → SLACK_TOKEN. */
+export function missingVariable(said: string | undefined): string | undefined {
+  if (!said) return undefined;
+  const m =
+    /\b([A-Z][A-Z0-9_]{1,63}) (?:is not set|is not defined|is missing|is required|must be set|not set)\b/.exec(said) ??
+    /\b(?:missing|required) (?:environment )?(?:variable|env var|env)[: ]+([A-Z][A-Z0-9_]{1,63})\b/i.exec(said);
+  return m?.[1];
+}
+
 function problemsOf(ctx: Pick<Ctx, 'store'>, app: AppRow, env: EnvRow, latest: Deployment | undefined, services: ServiceView[], reportedAny: boolean): ProblemView[] {
   const out: ProblemView[] = [];
   const failure = latest ? failureView(ctx, app, env, latest) : null;
@@ -220,6 +229,7 @@ function problemsOf(ctx: Pick<Ctx, 'store'>, app: AppRow, env: EnvRow, latest: D
             ? `It answers ${s.healthPath ?? 'its health check'} with an error${said ? `: "${said}"` : ''}.`
             : `It ${exits}${said ? `: "${said}"` : ''}. Restarted ${s.restarts} time${s.restarts === 1 ? '' : 's'} so far.`,
         fixPrompt: `The service "${s.name}" of the BoxLite app "${app.name}" (environment ${env.name}) is ${s.state === 'failed' || looping ? 'crashing' : 'failing its health check'}.\nRead \`boxlite-app app logs --source ${s.name} --since 30m\` and \`boxlite-app app services\`, fix the cause, then deploy again.`,
+        ...(missingVariable(said) ? { missingVariable: missingVariable(said) } : {}),
       });
     }
   }

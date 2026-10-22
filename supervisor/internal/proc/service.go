@@ -319,7 +319,9 @@ func (s *Service) AwaitHealth(ctx context.Context) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.health == api.HealthHealthy || s.health == api.HealthNone
+	// HealthNone passes only for a running service without a health check: a process
+	// that exited before its first answer also ends with HealthNone, and must fail.
+	return s.health == api.HealthHealthy || (s.health == api.HealthNone && s.state == api.StateRunning)
 }
 
 // Stop ends supervision: SIGTERM to the process group, SIGKILL after grace.

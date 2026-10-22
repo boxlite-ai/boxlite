@@ -129,6 +129,8 @@ export interface ProblemView {
   deployment?: number;
   /** What still serves users, when something does. */
   serving?: string;
+  /** The variable the service says it is missing ("SLACK_TOKEN is not set"); the owner can set it in the console. */
+  missingVariable?: string;
 }
 
 export interface AppDetailView extends Omit<AppSummaryView, 'environments'> {

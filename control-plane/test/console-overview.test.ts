@@ -197,3 +197,13 @@ test('the console reads milestones for people and keeps platform detail behind i
   assert.equal(byId.get('l11')!.detail, true);
   assert.equal(byId.get('l11')!.level, 'error');
 });
+
+test('a crash message that names a missing variable gives the console the variable to set', async () => {
+  const { missingVariable } = await import('../src/console-views.js');
+  assert.equal(missingVariable('Error: SLACK_TOKEN is not set'), 'SLACK_TOKEN');
+  assert.equal(missingVariable('OPENAI_API_KEY is required'), 'OPENAI_API_KEY');
+  assert.equal(missingVariable('Missing environment variable: STRIPE_KEY'), 'STRIPE_KEY');
+  assert.equal(missingVariable('Error: connect ECONNREFUSED 127.0.0.1:5432'), undefined);
+  assert.equal(missingVariable('the value is not set yet'), undefined);
+  assert.equal(missingVariable(undefined), undefined);
+});

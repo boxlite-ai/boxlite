@@ -2,6 +2,7 @@ package proc
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -377,5 +378,25 @@ func TestFreePortAlternates(t *testing.T) {
 	}
 	if a == b || a < PortMin || a > PortMax || b < PortMin || b > PortMax {
 		t.Fatalf("ports %d %d", a, b)
+	}
+}
+
+// A service that exits before its first health answer must not pass the gate:
+// the exit cancels the probe, and "no health result" is not "healthy".
+func TestServiceThatExitsBeforeHealthFailsTheGate(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	free := l.Addr().(*net.TCPAddr).Port
+	l.Close() // nothing answers on this port
+	s := New(Config{Name: "web", Command: "exit 0", Dir: t.TempDir(), Env: baseEnv(), Port: free, Exposed: true, Health: "/healthz",
+		HealthBudget: 3 * time.Second, HealthInterval: 30 * time.Millisecond}, logs.NewHub(), testReaper(t))
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop(time.Second)
+	if s.AwaitHealth(context.Background()) {
+		t.Fatalf("a service that exited before answering passed the health gate: %+v", s.Status())
 	}
 }

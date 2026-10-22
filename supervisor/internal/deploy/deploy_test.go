@@ -928,3 +928,31 @@ func TestBootContextEndsTheReconcileLoop(t *testing.T) {
 		t.Fatal("the reconcile loop ignored the cancelled context")
 	}
 }
+
+// A web service that exits before it answers fails the start step with what
+// happened (it exited, and how), not with a health-check timeout.
+func TestWebThatExitsBeforeAnsweringFailsWithItsExit(t *testing.T) {
+	fake := newFakeCP(t, nil)
+	h := newHarness(t, t.TempDir(), fake)
+
+	fake.set(h.spec(1, "one", nil, helperServices()), map[string]string{"README.md": "one"})
+	h.mgr.Boot(context.Background())
+	fake.waitPhase(t, 1, api.PhaseLive)
+	h.mgr.Wait()
+
+	exiting := helperServices()
+	exiting[0].Command = "exit 0"
+	fake.set(h.spec(2, "two", nil, exiting), map[string]string{"README.md": "two"})
+	h.deploymentCall("deploy", 2)
+	fake.waitPhase(t, 2, api.PhaseBuilt)
+	h.mgr.Wait()
+	h.deploymentCall("activate", 2)
+	failed := fake.waitPhase(t, 2, api.PhaseFailed)
+	h.mgr.Wait()
+	if failed.Step != "start" || !strings.Contains(failed.Error, "web exited with code 0 before answering /healthz") {
+		t.Fatalf("an exiting web must fail the start step with its exit: %+v", failed)
+	}
+	if hr := h.health(); hr.Deployment != 1 {
+		t.Fatalf("#1 must stay live, got %+v", hr)
+	}
+}

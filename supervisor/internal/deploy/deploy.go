@@ -476,7 +476,7 @@ func (m *Manager) activate(ctx context.Context, n int, kind string) bool {
 			if ctx.Err() != nil {
 				m.fail(ctx, n, "start", m.why(ctx, ctx, ctx.Err()), tail)
 			} else {
-				m.fail(ctx, n, "start", fmt.Errorf("service %s failed its health check within %s", exp.Name(), m.o.HealthBudget), tail)
+				m.fail(ctx, n, "start", healthFailure(exp.Status(), exp.Name(), exp.Config().Health, m.o.HealthBudget), tail)
 			}
 			return false
 		}
@@ -531,6 +531,15 @@ func (m *Manager) activate(ctx context.Context, n int, kind string) bool {
 
 // settle waits SettleWindow and returns the first service that exited or
 // restarted meanwhile, with a short description; "" when all stayed up.
+// healthFailure says why the exposed service did not pass its health check: it
+// exited (and how), or it ran but never answered healthy in time.
+func healthFailure(st api.ServiceStatus, name, path string, budget time.Duration) error {
+	if st.State != api.StateRunning && st.State != api.StateStarting && st.LastExitCode != nil {
+		return fmt.Errorf("service %s exited with code %d before answering %s", name, *st.LastExitCode, path)
+	}
+	return fmt.Errorf("service %s failed its health check within %s", name, budget)
+}
+
 func (m *Manager) settle(ctx context.Context, group *proc.Group) (string, string) {
 	t := time.NewTimer(m.o.SettleWindow)
 	defer t.Stop()
