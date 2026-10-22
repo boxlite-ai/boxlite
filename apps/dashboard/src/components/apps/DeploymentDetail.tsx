@@ -6,7 +6,7 @@
 import { Spinner } from '@/components/ui/spinner'
 import { useDeployment } from '@/hooks/queries/useAppsQuery'
 import { downloadUrl, errorText } from '@/lib/apps/client'
-import { capitalize, formatBytes, formatDuration, releaseStatusOf, relTime, STATUS } from '@/lib/apps/format'
+import { actorName, capitalize, formatBytes, formatDuration, releaseStatusOf, relTime, STATUS } from '@/lib/apps/format'
 import {
   RELEASE_IN_PROGRESS,
   type AppDetail,
@@ -278,7 +278,7 @@ export function DeploymentDetail({
         </div>
         <div className="grid max-w-[980px] gap-x-10 md:grid-cols-2">
           <div>
-            <SpecRow label="Started by">{detail.by}</SpecRow>
+            <SpecRow label="Started by">{actorName(detail.by, { short: true })}</SpecRow>
             <SpecRow label="Created">
               <span title={detail.createdAt}>
                 {new Date(detail.createdAt).toLocaleString()} · {relTime(detail.createdAt)}

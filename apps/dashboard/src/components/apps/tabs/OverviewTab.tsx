@@ -4,7 +4,7 @@
  */
 
 import { downloadUrl } from '@/lib/apps/client'
-import { appStatusOf, relTime, STATUS } from '@/lib/apps/format'
+import { actorName, appStatusOf, relTime, STATUS } from '@/lib/apps/format'
 import { openApp } from '@/lib/apps/open'
 import type { AppDetail, AppProblem, AppRelease, AppTab } from '@/lib/apps/types'
 import { cn } from '@/lib/utils'
@@ -176,9 +176,8 @@ function LiveDeployment({
               <span className="truncate text-foreground">{active.summary}</span>
             </button>
             <span className="text-[12px] text-muted-foreground">
-              <span title={new Date(active.createdAt).toLocaleString()}>{relTime(active.createdAt)}</span> by{' '}
-              {active.by}
-              {app.box ? ` · box ${app.box.id}` : ''}
+              Deployed <span title={new Date(active.createdAt).toLocaleString()}>{relTime(active.createdAt)}</span> by{' '}
+              {actorName(active.by)}
             </span>
           </div>
         )}

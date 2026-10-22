@@ -18,6 +18,18 @@ export function formatBytes(bytes: number): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`
 }
 
+/**
+ * Who did something, in people's words. The control plane names actors by what they used: an App
+ * key (`key …pfvp`, which is the agent's), the console, or a GitHub login. `short` keeps the key's
+ * last characters, for lists where two agents' keys may need telling apart.
+ */
+export function actorName(by: string, { short = false }: { short?: boolean } = {}): string {
+  const key = /^key …(\w+)$/.exec(by)
+  if (key) return short ? `agent …${key[1]}` : 'your agent'
+  if (by === 'console' || by === 'admin') return 'the console'
+  return by
+}
+
 export function relTime(timestamp: string | undefined | null): string {
   return getRelativeTimeString(timestamp).relativeTimeString
 }

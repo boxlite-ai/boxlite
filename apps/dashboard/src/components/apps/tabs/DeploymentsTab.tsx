@@ -6,7 +6,7 @@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Spinner } from '@/components/ui/spinner'
 import { downloadUrl } from '@/lib/apps/client'
-import { releaseStatusOf, relTime } from '@/lib/apps/format'
+import { actorName, releaseStatusOf, relTime } from '@/lib/apps/format'
 import { RELEASE_IN_PROGRESS, type AppDetail, type AppRelease } from '@/lib/apps/types'
 import { cn } from '@/lib/utils'
 import { useState } from 'react'
@@ -90,7 +90,9 @@ function DeploymentRow({
         )}
         {inProgress && <Progress release={release} />}
       </span>
-      <span className="truncate text-muted-foreground">{release.by}</span>
+      <span className="truncate text-muted-foreground" title={release.by}>
+        {actorName(release.by, { short: true })}
+      </span>
       <span className="text-muted-foreground" title={new Date(release.createdAt).toLocaleString()}>
         {relTime(release.createdAt)}
       </span>

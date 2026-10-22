@@ -60,12 +60,13 @@ import { VolumesTab } from './tabs/VolumesTab'
 const TABS: { id: AppTab; label: string; icon: LucideIcon }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'deployments', label: 'Deployments', icon: CloudUpload },
-  { id: 'logs', label: 'Logs', icon: FileText },
   { id: 'domains', label: 'Domains', icon: Globe },
   { id: 'auth', label: 'Auth', icon: ShieldCheck },
   { id: 'database', label: 'Database', icon: Database },
   { id: 'volumes', label: 'Volumes', icon: Folder },
   { id: 'variables', label: 'Variables', icon: Braces },
+  // Logs last: what the app is made of comes first; logs are where you go when something is off.
+  { id: 'logs', label: 'Logs', icon: FileText },
 ]
 
 function isTab(value: string | null): value is AppTab {

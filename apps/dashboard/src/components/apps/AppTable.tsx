@@ -6,7 +6,7 @@
 import { BoxCube } from '@/components/BoxCube'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { ArrowUpRight, Trash2 } from '@/components/ui/icon'
-import { appStatusOf, capitalize, relTime, VISIBILITY_LABEL } from '@/lib/apps/format'
+import { actorName, appStatusOf, capitalize, relTime, VISIBILITY_LABEL } from '@/lib/apps/format'
 import { openApp } from '@/lib/apps/open'
 import type { AppSummary } from '@/lib/apps/types'
 import { GridHeader, HoverActions, MoreButton, StatusBadge } from './spec'
@@ -144,7 +144,7 @@ export function AppTable({
                 {app.lastDeploy ? (
                   <>
                     <span className="text-foreground">{app.lastDeploy.releaseId}</span> · {relTime(app.lastDeploy.at)} ·{' '}
-                    {app.lastDeploy.by}
+                    {actorName(app.lastDeploy.by, { short: true })}
                   </>
                 ) : (
                   '—'
