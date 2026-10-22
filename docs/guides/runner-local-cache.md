@@ -57,7 +57,7 @@ Docker 27.5.1 with classic overlay2 on a 2 GiB sparse ext4 image stored at
 `/cache/docker.ext4`. Mount an exclusive runner cache at `/cache`, use the
 [DinD firmware and privileged guest option](docker-in-docker.md), and install
 `e2fsprogs` and `util-linux` in the pinned guest image
-`docker:27.5.1-dind@sha256:ad9e28ccfdf76cf44248258090e07d8353b9628725d8a716bab176bd71200d7d`.
+`docker:27.5.1-dind@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce`.
 Copy the entrypoint into the guest and run it instead of starting a second daemon.
 The [acceptance harness](../../apps/infra-local/compose/docker_cache_acceptance.py)
 shows the complete SDK/API/runner setup.

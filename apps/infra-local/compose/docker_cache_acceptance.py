@@ -12,7 +12,7 @@ from pathlib import Path
 from .acceptance import ADMIN_KEY, API, ROOT, STATE, request, two_runners
 from .orchestrator import exec_collect
 
-IMAGE = "docker:27.5.1-dind@sha256:ad9e28ccfdf76cf44248258090e07d8353b9628725d8a716bab176bd71200d7d"
+IMAGE = "docker:27.5.1-dind@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
 BASE = "busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 
 

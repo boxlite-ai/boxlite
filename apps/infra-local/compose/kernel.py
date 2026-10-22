@@ -1,21 +1,81 @@
-"""Build the pinned DinD firmware inside a local Linux Box."""
+"""Prepare pinned DinD firmware for the local runtime."""
 
 import asyncio
+import hashlib
 import platform
+import subprocess
+import sys
+import urllib.request
 
 from .acceptance import ROOT, STATE
 from .config import worktree_home
 
 IMAGE = "ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55"
+LINUX_KERNEL = "libkrunfw-kernel-dind-x86_64.bin"
+LINUX_SHA256 = "d6686ee95c855e42fe0a1fd89442d3a6cefbc0c762b981a3b45aefd5b788fc75"
+
+
+def prepare_linux():
+    """Package the published ELF kernel using libkrunfw's own ABI generator."""
+    output = STATE / "firmware"
+    output.mkdir(parents=True, exist_ok=True)
+    kernel = output / LINUX_KERNEL
+    if not kernel.exists():
+        url = (
+            "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.4.0/"
+            + LINUX_KERNEL
+        )
+        partial = kernel.with_suffix(".part")
+        with urllib.request.urlopen(url, timeout=120) as response:
+            partial.write_bytes(response.read())
+        if hashlib.sha256(partial.read_bytes()).hexdigest() != LINUX_SHA256:
+            raise RuntimeError("DinD release kernel SHA256 mismatch")
+        partial.replace(kernel)
+    if hashlib.sha256(kernel.read_bytes()).hexdigest() != LINUX_SHA256:
+        raise RuntimeError("Cached DinD release kernel SHA256 mismatch")
+    generator = ROOT / "src/deps/libkrun-sys/vendor/libkrunfw/bin2cbundle.py"
+    subprocess.run(
+        [
+            sys.executable,
+            str(generator),
+            "--os",
+            "Linux",
+            "-t",
+            "vmlinux",
+            str(kernel),
+            str(output / "kernel.c"),
+        ],
+        check=True,
+        timeout=180,
+    )
+    # No kernel build prerequisites: the downloaded ELF is the exact boot input.
+    (output / "Makefile").write_text(
+        ".PHONY: all install\nall:\n"
+        "\t$(CC) -fPIC -shared -nostdlib -DABI_VERSION=5 "
+        "-Wl,-soname,libkrunfw.so.5 -o libkrunfw.so.5 kernel.c\n"
+        'install:\n\tmkdir -p "$(PREFIX)/lib64"\n'
+        '\tcp libkrunfw.so.5 "$(PREFIX)/lib64/"\n'
+    )
+    (output / "SHA256SUMS").write_text(
+        "".join(
+            f"{hashlib.sha256((output / name).read_bytes()).hexdigest()}  {name}\n"
+            for name in [LINUX_KERNEL, "kernel.c", "Makefile"]
+        )
+    )
+    print(f"Firmware source: {output}", flush=True)
 
 
 async def build():
-    import boxlite
+    if platform.system() == "Linux" and platform.machine() == "x86_64":
+        prepare_linux()
+        return
 
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise RuntimeError(
-            "This firmware builder currently supports Apple Silicon macOS"
+            "DinD firmware preparation supports Linux x86_64 and Apple Silicon macOS"
         )
+    import boxlite
+
     output = STATE / "firmware"
     output.mkdir(parents=True, exist_ok=True)
     runtime = boxlite.Boxlite(boxlite.Options(home_dir=str(worktree_home(ROOT, "qk"))))
