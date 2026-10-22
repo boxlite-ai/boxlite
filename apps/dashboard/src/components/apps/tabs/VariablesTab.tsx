@@ -410,9 +410,8 @@ export function VariablesTab({ app }: { app: AppDetail }) {
       ) : (
         <>
           <p className="pb-4 font-mono text-[13px] text-muted-foreground">
-            Each save is one deployment: the services restart with the new values, without a rebuild. Your agent&apos;s
-            next deploy is told the app changed online and pulls it into boxlite.toml first. Secrets stay in the
-            org&apos;s store and are never shown.
+            Secrets stay in your org&apos;s secret store and are never shown. Saving restarts the services with the
+            new values; no rebuild.
           </p>
           {removed.length > 0 && (
             <p className="pb-3 font-mono text-[12px] text-warning">
