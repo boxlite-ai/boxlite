@@ -4,13 +4,11 @@
  */
 
 import { cn } from '@/lib/utils'
-import { relTime } from '@/lib/apps/format'
-import type { AppPreview } from '@/lib/apps/types'
 import type { ReactNode } from 'react'
 
-// Visual pieces the App pages add, in the console's language: a small bordered
-// uppercase tag (as "CURRENT" on plans) and the production screenshot the proxy
-// captures after a deployment. The Overview's traffic chart is TrafficPanel.tsx.
+// A visual piece the App pages add, in the console's language: a small bordered
+// uppercase tag (as "CURRENT" on plans). The Overview's screenshot and stack are
+// OverviewHero.tsx, its traffic chart TrafficPanel.tsx.
 
 /** Small bordered uppercase tag, as "CURRENT" / "BY REQUEST" on the plan cards. */
 export function Tag({
@@ -33,49 +31,5 @@ export function Tag({
     >
       {children}
     </span>
-  )
-}
-
-/**
- * What the live URL showed at its last capture: the control plane renders the
- * app when a deployment goes live (and again when the picture is a day old).
- * Only a real capture is shown: no frame, no placeholder. Click opens the app.
- * The caption names the deployment and the time; it turns amber when the
- * picture is of an older deployment than the one serving now.
- */
-export function LivePreview({
-  preview,
-  liveRelease,
-  onOpen,
-  name,
-}: {
-  preview: AppPreview
-  liveRelease: string | null
-  onOpen: () => void
-  name: string
-}) {
-  const stale = preview.releaseId !== liveRelease
-  return (
-    <figure className="flex min-w-0 flex-col gap-2">
-      <button
-        type="button"
-        onClick={onOpen}
-        title={`Open ${name}`}
-        className="block border border-border outline-none transition-colors hover:border-brand focus-visible:ring-2 focus-visible:ring-brand/35"
-      >
-        <img
-          src={preview.src}
-          alt={`${name} at ${preview.releaseId}`}
-          className="aspect-[16/10] w-full object-cover object-top"
-          loading="lazy"
-        />
-      </button>
-      <figcaption
-        className={cn('font-mono text-meta', stale ? 'text-warning' : 'text-muted-foreground')}
-        title={new Date(preview.capturedAt).toLocaleString()}
-      >
-        {stale ? `Screenshot from ${preview.releaseId}` : preview.releaseId} · captured {relTime(preview.capturedAt)}
-      </figcaption>
-    </figure>
   )
 }

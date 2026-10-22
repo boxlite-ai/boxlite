@@ -3,22 +3,18 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { downloadUrl } from '@/lib/apps/client'
-import { actorName, appStatusOf, relTime, STATUS } from '@/lib/apps/format'
-import { openApp } from '@/lib/apps/open'
+import { STATUS } from '@/lib/apps/format'
 import type { AppDetail, AppProblem, AppRelease, AppTab } from '@/lib/apps/types'
-import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { AgentHandoffPanel } from '../AgentHandoffPanel'
-import { DeployProgress } from '../DeployProgress'
 import { HandoffToAgent } from '../HandoffToAgent'
-import { CopyIconButton, copyText, Disclosure, FlatButton, PromptBlock, SpecRow, StatusBadge } from '../spec'
+import { LiveCard, StackDiagram } from '../OverviewHero'
+import { copyText, Disclosure, FlatButton, PromptBlock, StatusBadge } from '../spec'
 import { TrafficPanel } from '../TrafficPanel'
-import { LivePreview } from '../viz'
 
 // Overview answers three things, in this order: does anything need you, what
-// is live right now, and how it is doing. Identity (app id, image, created) is
-// one click away under Details; process ids and exit codes live inside each
+// is live right now and what the agent built behind it (OverviewHero.tsx), and
+// how it is doing. Process ids and exit codes live inside each
 // service row. One primary action per state: open the app when healthy, copy
 // the fix when broken, hand the app to the agent when nothing is deployed.
 
@@ -101,101 +97,6 @@ function FailurePanel({
 
 /** A new environment is not a broken one: nothing red, one task, one action. */
 
-/** What is live: the picture, the address, the deployment and what it changed. */
-function LiveDeployment({
-  app,
-  active,
-  failing,
-  onGoTo,
-}: {
-  app: AppDetail
-  active: AppRelease | null
-  failing: boolean
-  onGoTo: (tab: AppTab, section?: string) => void
-}) {
-  const runtime = appStatusOf(app.status)
-  const open = () => void openApp(app.id, app.environment)
-  // A failing app gets no screenshot: the last good picture would say all is well.
-  const preview = app.preview && !failing ? { ...app.preview, src: downloadUrl(app.preview.src) } : null
-  return (
-    <section className={cn('grid gap-x-10 gap-y-6', preview && 'lg:grid-cols-[340px_minmax(0,1fr)]')}>
-      {preview && <LivePreview preview={preview} liveRelease={app.activeRelease} onOpen={open} name={app.name} />}
-      <div className="flex min-w-0 flex-col gap-5 py-1">
-        <div className="flex flex-col gap-2">
-          <span className="inline-flex max-w-full items-center gap-2">
-            {app.activeRelease ? (
-              <button
-                type="button"
-                onClick={open}
-                className="truncate font-mono text-em font-semibold text-foreground hover:underline"
-              >
-                {app.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
-              </button>
-            ) : (
-              <span className="truncate font-mono text-em font-semibold text-muted-foreground">
-                {app.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
-              </span>
-            )}
-            <CopyIconButton text={app.url} title="Copy URL" />
-          </span>
-          {/* The header already states the runtime; only a quiet state (asleep) gets a line of why. */}
-          {app.status === 'sleeping' && app.statusDetail && (
-            <StatusBadge label={app.statusDetail} color={runtime.color} className="font-normal" />
-          )}
-          {app.deploying && !app.activeRelease && (
-            <button type="button" className="text-left" onClick={() => onGoTo('deployments')}>
-              <DeployProgress deploying={app.deploying} />
-            </button>
-          )}
-        </div>
-
-        {active && (
-          <div className="flex flex-col gap-1 font-mono">
-            <button
-              type="button"
-              onClick={() => onGoTo('deployments')}
-              className="flex min-w-0 items-baseline gap-2 text-left text-body hover:underline"
-            >
-              <span className="font-semibold text-foreground">{active.id}</span>
-              <span className="truncate text-foreground">{active.summary}</span>
-            </button>
-            <span className="text-[12px] text-muted-foreground">
-              Deployed <span title={new Date(active.createdAt).toLocaleString()}>{relTime(active.createdAt)}</span> by{' '}
-              {actorName(active.by)}
-            </span>
-          </div>
-        )}
-
-        <Disclosure label="Details">
-          <div className="max-w-[560px]">
-            <SpecRow label="App id">
-              <span className="inline-flex items-center gap-2">
-                {app.appId} <CopyIconButton text={app.appId} title="Copy app id" />
-              </span>
-            </SpecRow>
-            {app.runtime && (
-              <SpecRow label="Runtime">
-                {app.runtime.image} · {app.runtime.size}
-                {app.runtime.cpus !== null && app.runtime.memoryMib !== null
-                  ? ` (${app.runtime.cpus} CPU, ${app.runtime.memoryMib / 1024} GB)`
-                  : ''}
-              </SpecRow>
-            )}
-            {app.box && (
-              <SpecRow label="Box">
-                {app.box.id} · {app.box.state}
-              </SpecRow>
-            )}
-            <SpecRow label="Created">
-              <span title={new Date(app.createdAt).toLocaleString()}>{relTime(app.createdAt)}</span>
-            </SpecRow>
-          </div>
-        </Disclosure>
-      </div>
-    </section>
-  )
-}
-
 export function OverviewTab({
   app,
   onGoTo,
@@ -231,48 +132,14 @@ export function OverviewTab({
         />
       )}
 
-      <LiveDeployment app={app} active={active} failing={failing.length > 0} onGoTo={onGoTo} />
+      <LiveCard app={app} active={active} failing={failing.length > 0} onGoTo={onGoTo} />
 
-      <RuntimeLine app={app} onOpen={() => onGoTo('deployments', 'services')} />
+      <StackDiagram app={app} onGoTo={onGoTo} />
 
       {/* From the app proxy's access log and the sign-in sessions; hidden until there is either. */}
       {m && <TrafficPanel metrics={m} />}
 
       <AgentHandoffPanel app={app} />
     </div>
-  )
-}
-
-/** One line on whether everything the app runs is up; the services themselves are under Deployments. */
-function RuntimeLine({ app, onOpen }: { app: AppDetail; onOpen: () => void }) {
-  // Asleep is said once, under the address.
-  if (app.services.length === 0 || app.status === 'sleeping') return null
-  const up = app.services.filter((s) => s.state === 'running' && s.health !== 'unhealthy').length
-  const asleep = app.services.every((s) => s.state === 'asleep')
-  const all = app.services.length
-  const text = asleep
-    ? 'Asleep: the next visit wakes it'
-    : up === all
-      ? `${all === 1 ? 'Its service is' : `All ${all} services are`} running`
-      : `${up} of ${all} services running`
-  const schedules = app.schedules.length
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="-mt-4 flex w-fit items-center gap-2 font-mono text-[13px] text-muted-foreground transition-colors hover:text-foreground"
-    >
-      <StatusBadge
-        label={text}
-        color={asleep ? STATUS.stopped : up === all ? STATUS.running : STATUS.idle}
-        className="font-normal"
-      />
-      {schedules > 0 && (
-        <span>
-          · {schedules} scheduled job{schedules === 1 ? '' : 's'}
-        </span>
-      )}
-      <span>· Services →</span>
-    </button>
   )
 }
