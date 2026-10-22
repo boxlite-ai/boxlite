@@ -37,7 +37,7 @@ pub enum VmExit {
 
 /// Stops a VM from any thread; [`Vm::run`] then returns
 /// [`VmExit::StopRequested`] unless the VM had already ended.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StopHandle(EventSender);
 
 impl StopHandle {
@@ -60,6 +60,16 @@ pub struct Vm<H: HostVm> {
     ran: bool,
     backend: Arc<H>,
     ram: GuestRam,
+}
+
+impl<H: HostVm> std::fmt::Debug for Vm<H> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (vcpus, ran) = (self.vcpu_count, self.ran);
+        f.debug_struct("Vm")
+            .field("vcpus", &vcpus)
+            .field("ran", &ran)
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

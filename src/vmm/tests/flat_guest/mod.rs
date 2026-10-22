@@ -14,7 +14,7 @@ use std::{
 use boxlite_hypervisor::{KvmVcpu, KvmVm, VcpuExit, VcpuHandle as _, X86BootRegisters, X86Segment};
 use vm_memory::{Bytes, GuestAddress};
 
-use crate::memory::{GuestRam, ram_ranges};
+use crate::memory::{GuestMemoryMmap, GuestRam, ram_ranges};
 
 /// Where the program starts.
 pub(crate) const CODE: u64 = 0x1000;
@@ -37,39 +37,9 @@ impl FlatGuest {
         let mut ram = GuestRam::new(&ram_ranges(2)).unwrap();
         let vm = Arc::new(KvmVm::new().expect("create KVM VM"));
         ram.map(&*vm).expect("map guest RAM");
-        let memory = ram.memory();
-        memory.write_slice(program, GuestAddress(CODE)).unwrap();
-        for (index, descriptor) in [0u64, 0x00cf_9b00_0000_ffff, 0x00cf_9300_0000_ffff]
-            .into_iter()
-            .enumerate()
-        {
-            memory
-                .write_obj(descriptor, GuestAddress(GDT + index as u64 * 8))
-                .unwrap();
-        }
+        let regs = load(ram.memory(), program);
         let mut vcpu = vm.create_vcpu(0).expect("create vCPU");
-        let code = X86Segment {
-            limit: u32::MAX,
-            selector: 8,
-            attributes: 0xc09b,
-            ..Default::default()
-        };
-        vcpu.set_boot_registers(&X86BootRegisters {
-            rip: CODE,
-            rsp: 0x8000,
-            rflags: 2,
-            cr0: 1,
-            code,
-            data: X86Segment {
-                selector: 16,
-                attributes: 0xc093,
-                ..code
-            },
-            gdt_base: GDT,
-            gdt_limit: 23,
-            ..Default::default()
-        })
-        .unwrap();
+        vcpu.set_boot_registers(&regs).unwrap();
         Self { vcpu, vm, ram }
     }
 
@@ -116,6 +86,41 @@ impl FlatGuest {
             .memory()
             .read_slice(data, GuestAddress(addr))
             .unwrap();
+    }
+}
+
+/// Writes `program` at [`CODE`] and the flat GDT into `memory`, and returns
+/// the registers that enter the program in 32-bit protected mode.
+pub(crate) fn load(memory: &GuestMemoryMmap, program: &[u8]) -> X86BootRegisters {
+    memory.write_slice(program, GuestAddress(CODE)).unwrap();
+    for (index, descriptor) in [0u64, 0x00cf_9b00_0000_ffff, 0x00cf_9300_0000_ffff]
+        .into_iter()
+        .enumerate()
+    {
+        memory
+            .write_obj(descriptor, GuestAddress(GDT + index as u64 * 8))
+            .unwrap();
+    }
+    let code = X86Segment {
+        limit: u32::MAX,
+        selector: 8,
+        attributes: 0xc09b,
+        ..Default::default()
+    };
+    X86BootRegisters {
+        rip: CODE,
+        rsp: 0x8000,
+        rflags: 2,
+        cr0: 1,
+        code,
+        data: X86Segment {
+            selector: 16,
+            attributes: 0xc093,
+            ..code
+        },
+        gdt_base: GDT,
+        gdt_limit: 23,
+        ..Default::default()
     }
 }
 

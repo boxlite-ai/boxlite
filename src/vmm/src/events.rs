@@ -52,7 +52,7 @@ const WAKE: Token = Token(0);
 const RECHECK: Duration = Duration::from_secs(1);
 
 /// Sends events to an [`EventLoop`] from any thread.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct EventSender {
     events: mpsc::Sender<Event>,
     waker: Arc<Waker>,

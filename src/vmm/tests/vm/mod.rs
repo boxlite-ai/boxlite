@@ -59,8 +59,7 @@ fn invalid_configuration_fails_before_the_host_vm_exists() {
             built.set(true);
             Ok(MockVm::new())
         })
-        .err()
-        .expect("invalid configuration");
+        .expect_err("invalid configuration");
 
         assert_eq!(error.to_string(), message);
         assert!(matches!(
@@ -103,9 +102,7 @@ fn a_rejected_mapping_returns_the_hypervisor_error_and_keeps_no_registration() {
     let backend = MockVm::failing_at(&[0]);
     let log = backend.log();
 
-    let error = bare(config(1, 16), || Ok(backend))
-        .err()
-        .expect("mapping fails");
+    let error = bare(config(1, 16), || Ok(backend)).expect_err("mapping fails");
 
     assert!(matches!(
         error,
@@ -128,8 +125,7 @@ fn a_failing_host_vm_keeps_its_cause() {
             io::ErrorKind::Unsupported,
         )))
     })
-    .err()
-    .expect("host failure");
+    .expect_err("host failure");
 
     let cause = error
         .source()
@@ -537,4 +533,98 @@ mod lifecycle {
             "{error:?}"
         );
     }
+}
+
+#[test]
+fn lifecycle_errors_describe_themselves() {
+    let io = || io::Error::from(io::ErrorKind::Other);
+    let cases = [
+        (Error::EventLoop(io()), "the VM event loop failed"),
+        (
+            Error::SpawnVcpu {
+                vcpu: 3,
+                source: io(),
+            },
+            "failed to start vCPU 3",
+        ),
+        (
+            Error::UnexpectedExit {
+                vcpu: 1,
+                exit: "Halted".into(),
+            },
+            "vCPU 1 exited unexpectedly: Halted",
+        ),
+        (Error::VcpuPanicked { vcpu: 2 }, "vCPU 2 panicked"),
+        (Error::AlreadyRan, "the VM has already run"),
+    ];
+    for (error, message) in cases {
+        assert_eq!(error.to_string(), message);
+        let has_io_cause = matches!(error, Error::EventLoop(_) | Error::SpawnVcpu { .. });
+        assert_eq!(error.source().is_some(), has_io_cause, "{error:?}");
+    }
+}
+
+#[test]
+fn debug_shows_the_vm_shape_without_its_internals() {
+    let vm = bare(config(2, 16), || Ok(MockVm::new())).unwrap();
+
+    assert_eq!(format!("{vm:?}"), "Vm { vcpus: 2, ran: false, .. }");
+    assert!(format!("{:?}", vm.stop_handle()).starts_with("StopHandle("));
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+fn new_names_a_kernel_it_cannot_load() {
+    let error = Vm::new(config(1, 16)).expect_err("no kernel file");
+
+    assert!(
+        matches!(&error, Error::LoadKernel { path, .. } if path.as_os_str() == "vmlinux"),
+        "{error:?}"
+    );
+}
+
+/// Two KVM vCPUs through `Vm::run`: vCPU 0 runs a flat guest that pulses the
+/// i8042 reset, while vCPU 1 waits for an INIT that never comes, so only the
+/// kick after the reset ends it.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+fn a_kvm_vm_runs_until_its_guest_resets() {
+    use std::sync::{Arc, Mutex};
+
+    use crate::{
+        VmExit,
+        bus::{BusDevice, BusRange},
+        events::{Event, EventSender},
+        flat_guest,
+    };
+
+    struct Reset(EventSender);
+
+    impl BusDevice for Reset {
+        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+
+        fn write(&mut self, _offset: u64, data: &[u8]) {
+            if data == [0xfe] {
+                self.0.send(Event::GuestReset);
+            }
+        }
+    }
+
+    // mov al, 0xfe; out 0x64, al; hlt
+    let program = [0xb0, 0xfe, 0xe6, 0x64, 0xf4];
+    let mut vm = Vm::with_backend(
+        config(2, 2),
+        boxlite_hypervisor::KvmVm::new,
+        |ram, _| Ok(flat_guest::load(ram.memory(), &program)),
+        |buses, events| {
+            let device: Arc<Mutex<dyn BusDevice>> = Arc::new(Mutex::new(Reset(events.clone())));
+            let range = BusRange::new(0x64, 1).unwrap();
+            buses.pio.insert(range, "i8042", Some((device, 0))).unwrap();
+        },
+    )
+    .unwrap();
+
+    assert_eq!(vm.run().unwrap(), VmExit::GuestReset);
 }
