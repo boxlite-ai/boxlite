@@ -42,6 +42,8 @@ export class FakeBoxlite implements BoxliteClient {
   async stopBox(id: string): Promise<void> {
     this.calls.push(`stop ${id}`);
     const b = this.boxes.get(id);
+    // As BoxLite answers: stopping a Box that is not running is a 400.
+    if (b && b.status !== 'running') throw new UpstreamError('boxlite', 400, `POST /boxes/${id}/stop → 400 Box is not started`, '{"statusCode":400,"message":"Box is not started"}');
     if (b) b.status = 'stopped';
   }
   async deleteBox(id: string): Promise<void> {

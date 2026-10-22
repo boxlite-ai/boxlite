@@ -131,6 +131,8 @@ async function main() {
     await step('login with the admin token', async () => {
       await page.goto(`${CONSOLE}/console/login`)
       await shot('login')
+      // With GitHub sign-in set up, the operator's token form sits behind its disclosure.
+      if (!(await page.locator('input[name=token]').isVisible())) await page.getByText(/Platform operator/).click()
       await page.fill('input[name=token]', ADMIN)
       await page.click('button[type=submit]')
       await page.waitForURL(/\/console\/dashboard\/apps/)

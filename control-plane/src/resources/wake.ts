@@ -1,4 +1,5 @@
 /** Box status as the app proxy sees it (cached 5 s), putting a Box to sleep, and waking a stopped Box once. */
+import { UpstreamError } from '../errors.js';
 import { now } from '../db.js';
 import type { Ctx } from '../ctx.js';
 import { recordLogs } from '../logsink.js';
@@ -29,7 +30,12 @@ export class BoxWaker {
    * very next page refresh would wake the Box it just put to sleep.
    */
   async sleep(boxId: string): Promise<void> {
-    await this.ctx.boxlite.stopBox(boxId);
+    try {
+      await this.ctx.boxlite.stopBox(boxId);
+    } catch (err) {
+      // Already stopped (BoxLite auto-stops idle Boxes): asleep is what was asked for.
+      if (!(err instanceof UpstreamError && err.status === 400 && /not started/i.test(err.message))) throw err;
+    }
     this.boxStatusCache.set(boxId, { status: 'stopped', at: Date.now() });
   }
 

@@ -536,3 +536,13 @@ test("a troubled service's errors are the serving deployment's, not ones from be
   const problem = (await api('/apps/crm')).body.problems.find((p: any) => /web/.test(p.summary));
   assert.equal(problem?.missingVariable, 'SLACK_TOKEN');
 });
+
+test('Sleep on a Box that already stopped by itself succeeds instead of failing', async () => {
+  const { key } = await createViaConsole();
+  await deploy(key, TOML);
+  // BoxLite auto-stopped it; the CP has not looked since.
+  h.boxlite.boxes.get('box1')!.status = 'stopped';
+  const slept = await api('/apps/crm/sleep', { method: 'POST' });
+  assert.equal(slept.status, 200, JSON.stringify(slept.body));
+  assert.equal(slept.body.status, 'sleeping');
+});
