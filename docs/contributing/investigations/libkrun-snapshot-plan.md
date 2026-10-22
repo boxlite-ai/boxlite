@@ -1,6 +1,6 @@
 # libkrun 分阶段快照计划
 
-2026-10-22 · 阶段 1 内部 RAM 保存/恢复已编写；未构建、未运行测试，完整运行态快照仍待后续阶段。
+2026-10-22 · 阶段 1 RAM 与阶段 2 最小 VM CPU/KVM/RAM 实现已编写，Linux x86_64 交叉检查与 krun-vmm rlib 构建通过；测试可执行文件链接受本机工具链限制，KVM 运行验收仍为 **UNVERIFIED**。设备及完整 box 闭环仍待后续阶段。
 
 ## 目标与范围
 
@@ -14,7 +14,7 @@
 
 ## 固定源码基线与取舍
 
-以下“现有实现”均指这些固定提交；阶段 1 本地实现见文末，其余阶段的改动和全部运行时验收仍为后续工作：
+以下阶段条目中的“现有实现”均描述这些固定研究基线；阶段 1–2 当前实现与验证见文末，其余阶段和全部 KVM 运行验收仍为后续工作：
 
 | 项目 | 固定版本 | 作用 |
 | --- | --- | --- |
@@ -49,12 +49,12 @@
 
 1. 阻止新的管理变更和外部输入；请求所有 vCPU 暂停并等待逐个确认，完成挂起的 KVM I/O/MMIO 退出语义。
 2. 各设备停止接收新工作，在完整请求边界处理已取出的描述符；等待 worker、event loop 和 muxer 确认不再修改 RAM、队列或中断状态。
-3. 刷新磁盘后端，处理 KVM 时钟/定时器及中断冻结边界；在共同切点保存 RAM、CPU、设备和磁盘。只暂停 vCPU 不足以建立该切点。
-4. 文件完整写入并原子发布后，源 VM 可继续运行。失败时撤销冻结；不能可靠恢复运行则保留明确的暂停/失败状态，不报告成功。
+3. 刷新磁盘后端，先 drain/save 设备，再保存 CPU、KVM 和 RAM，并处理计时器及 pending interrupt 的运行时迁移语义。只暂停 vCPU 不足以冻结用户态设备。
+4. 文件内容写入并同步后，先恢复全部源 vCPU 并确认，再写有效标记。任何保存或恢复失败均不发布有效快照；尽可能恢复全部源 CPU，不能可靠恢复则保留明确失败状态，不报告成功。
 5. 导入先校验文件及兼容性，再创建暂停的 VM。重建内存映射、磁盘、设备拓扑及宿主资源，恢复状态后统一放行设备和 vCPU。
 
 恢复路径不得执行覆盖 RAM 的冷启动初始化，不得再次运行 guest/container 初始化来替代恢复。
-guest 内可见时间采用冻结期间不倒退的暂停语义；阶段 2 明确 TSC、kvmclock、PIT/LAPIC 计时与外部时间同步的处理。
+阶段 2 使用 `clock_realtime=false`，不向恢复的时钟添加快照存储期间的墙钟时间；按运行时迁移语义处理 PIT/LAPIC/deadline，不逐 tick 重放。暂停源 vCPU 不代表硬件时钟停止。TSC 频率需匹配或成功缩放，多核 offset 同步必须成功。
 外部服务可已超时，恢复后由连接重建处理。
 
 ### 通用 virtio 状态
@@ -232,10 +232,75 @@ guest 内可见时间采用冻结期间不倒退的暂停语义；阶段 2 明�
 - 阶段 1 的设备冻结契约是拒绝：任意实际 virtio、DAX/GPU shared ranges、file/shared/任意未知 raw mappings、后台 RAM 写入者均不支持。最小构造器没有这些 writer；正常 Vmm 在实际拓扑边界拒绝，不让配置开关宣称冻结。
 - 恢复仅产生新 VM 和 RAM，不创建/运行 CPU，不调用 payload loader、cmdline 或 boot parameter 初始化；CPU/中断/时钟与设备状态仍属后续阶段。
 
-### 验证计划与当前证据
+### 阶段 1 验证历史记录
 
-只写、不得运行测试，也不构建。测试覆盖最终内存/kernel region/空洞、销毁源后保留旧地址占位从而强制新地址、比较内容、新 KVM 注册及 guest 实际写入、畸形 metadata、全 CPU 暂停/重复暂停/超时/退出/通信失败、创建/中途复制写入失败后恢复、恢复失败时无有效 magic、共享/DAX/virtio/后台 writer 拒绝，以及 pending IO/MMIO 的真实 KVM 完成边界和排队控制命令。
+阶段 1 当时的授权是只写、不运行测试或构建；阶段 2 已明确授权本地构建和测试，以下保留历史证据。阶段 1 测试覆盖最终内存/kernel region/空洞、销毁源后保留旧地址占位从而强制新地址、比较内容、新 KVM 注册及 guest 实际写入、畸形 metadata、全 CPU 暂停/重复暂停/超时/退出/通信失败、创建/中途复制写入失败后恢复、恢复失败时无有效 magic、共享/DAX/virtio/后台 writer 拒绝，以及 pending IO/MMIO 的真实 KVM 完成边界和排队控制命令。
 中途写入失败注入只存在于测试编译的 payload File 写入处，使用线程局部限额，不改变进程全局资源限制。测试源码位于 `src/vmm/src/ram_snapshot/tests.rs`，KVM run-loop 和实际 virtio 注册回归分别在 `linux/vstate.rs`、`device_manager/kvm/mmio.rs`。
 源码/API 静态核对、指定 Rust 文件的 rustfmt 检查，以及父仓库和 libkrun 子模块的 `git diff --check` 已通过；Linux KVM 执行、条件编译和所有测试验收均未验证。
 
 [kvm-run]: https://docs.kernel.org/virt/kvm/api.html#the-kvm-run-structure
+
+## 阶段 2 实施前设计（2026-10-22）
+
+### TL;DR
+
+在阶段 1 `943cea58e02354c9da091f6d60ff7c2b35c6ff42` 的私有最小 VM owner 上增加完整 CPU/KVM/RAM 保存、暂停恢复和显式继续运行；RAM-only 文件及入口保持不变。普通 Vmm、C ABI、SDK、CLI 和用户态设备不接入。
+
+### 原始依据与取舍
+
+已下载并阅读 Firecracker 固定提交 [`6ec271414300fb8f0ff1ff79ad321bb7467d072f` 的 vcpu.rs](https://github.com/firecracker-microvm/firecracker/blob/6ec271414300fb8f0ff1ff79ad321bb7467d072f/src/vmm/src/arch/x86_64/vcpu.rs#L325-L805) 和 [builder.rs](https://github.com/firecracker-microvm/firecracker/blob/6ec271414300fb8f0ff1ff79ad321bb7467d072f/src/vmm/src/builder.rs#L428-L532) 原文。
+
+| 问题 | 原文机制、现有代码核对与决定 |
+| --- | --- |
+| CPU 读取副作用 | vcpu.rs:648–703 先 MP state、events 最后；现有 libkrun dormant save_state 仅 legacy XSAVE、单批 MSR、缓存 CPUID，不能直接调用。用暂停线程独立请求替换；所有 Paused 确认前不请求状态。 |
+| XSAVE | vcpu.rs:338–394 用 KVM_CAP_XSAVE2 动态字节数分配 Xsave；现有 kvm-bindings 0.12.1 / kvm-ioctls 0.22.1 已提供 Xsave、get_xsave2/set_xsave2，无须升级。恢复验证目标大小、CPUID 叶 0xD 布局、XSTATE/XCOMP 位与 XCR0；拒绝未覆盖扩展状态。 |
+| MSR 与计时器 | vcpu.rs:474–621 对零 deadline 仅修改镜像，分批读取并全局延后 deadline，检查部分 ioctl。采用相同运行时迁移语义，不重放每个 tick；源暂停期间硬件时钟可能前进。 |
+| TSC | vcpu.rs:723–737 使用 250 ppm 阈值；builder.rs:428–532 在 CPU restore 后同步 offset，再 restore clock。采用该顺序，但多核缺少 offset 属性或失败直接拒绝，区别于上游 best-effort。 |
+| ioctl 边界 | [KVM API](https://docs.kernel.org/virt/kvm/api.html) 的 GET/SET_XSAVE2、GET/SET_MSRS、KVMCLOCK_CTRL、GET/SET_CLOCK 和 vCPU device attributes 规定缓冲区、部分完成和 clock 标志。KVMCLOCK_CTRL 失败仅警告，其余失败传回。时钟清除 realtime/host-TSC 标志，不补偿离线墙钟时间。 |
+
+保留原 Amazon Apache-2.0 及 Chromium/BSD 说明；新适配模块标注固定源和本地差异。只启用现有 serde、serde_json 及 KVM/FAM serde feature。
+
+### 机制、边界与所有权
+
+- 独立 full 文件：version、最多 16 MiB JSON metadata（目标兼容信息、VM/CPU 状态、RAM region 表），随后按 region 顺序写 RAM；固定 64 KiB buffer。全部表项和精确文件长度先校验，再分配独立 anonymous mapping。
+- 保存顺序：实际 owner/映射/CPU 能力验证 → 所有 CPU Pause/确认 → 每个 CPU 独立有界 reply 请求 → VM 状态 → RAM → 恢复全部源 CPU → 写有效 magic。create_new/0600，任意失败恢复尽可能多的 CPU，失败不得返回成功或留下有效文件。
+- 状态请求只在 owning paused thread 执行，运行态收到请求则回错误；reply channel 容量为 1，每次独立创建，超时不污染 Pause/Resume 响应通道。过期接收者不得阻塞 owning thread。
+- 恢复：校验 metadata/兼容性 → 新 RAM/VM → 内核 irqchip/PIT → 创建所有初始暂停 CPU → 恢复确认 → vCPU0 offset 同步 → VM/PIT/PIC/IOAPIC/clock → 返回暂停 owner；显式 resume 才 KVM_RUN。任何中途失败由 owner Drop 停止并 join 所有已创建线程，再释放 VM/RAM，不调用 payload loader 或 boot 初始化。
+- 仅最小 owner 暴露 full 入口，私有 bus/memory/handles 杜绝后台 writer、用户态设备和 split irqchip。验证实际 CPUID 禁止 VMX/SVM 和未覆盖的扩展状态；保守要求同 vendor/支持集/XSAVE 布局及所有保存 MSR 均兼容。未来设备阶段必须在 CPU/KVM/RAM 前 drain/save 设备，并在继续运行前恢复。
+
+### 验证计划
+
+新增单元检查解析边界、deadline/MSR 分批/部分完成、动态 XSAVE 大小/位图、250 ppm 和 offset 同步失败策略，以及请求超时/断链；真实 KVM 检查销毁源后的多核寄存器/栈/SIMD 和计时器继续。现有 RAM 失败恢复测试继续适用；只将实际执行通过记为 verified。
+
+本机为 macOS，无 /dev/kvm；安装了 x86_64-unknown-linux-gnu/musl Rust target 和 x86_64-linux-musl C 工具链。增加最小 make fmt/check/test 工作流，先尝试 Linux target 编译；KVM 执行必须标记 UNVERIFIED，禁止新远程环境或远程测试。此阶段是新增功能；若修复已存在缺陷并增加回归，按 AGENTS 全量生产回退验证失败信号。
+
+### 阶段 2 最终契约与实施结果
+
+- 内部入口为 `RamSnapshotVm::{save_full,restore_full,resume}`。普通 `Vmm`、C ABI、SDK、CLI 均未接入。`KRUNRAM` 版本 1 与 RAM-only 保存/恢复仍保持内存语义；对有已恢复暂停 CPU 的 owner，RAM-only save 明确拒绝，避免悄悄运行 guest。
+- 最小源 VM 使用内核 irqchip/PIT、现有 CPUID topology filter 和显式 runnable MP state；支持 **1–128 vCPU**，还受宿主 KVM 容量限制。该上限来自现有 CPUID package count 的非零 u8 二次幂表达。导入校验实际 CPUID vendor、family/model、features、唯一叶、XSAVE 布局和 CPU ID/数量；不接受重排/不匹配的 CPU 拓扑。
+- 独立 full version 1：8-byte `KRUNVM\0\0`、little-endian u32 version、u32 JSON 长度、JSON、各 region RAM。JSON 最多 16 MiB，编码也有界；包含 compatibility、CPU 数组、VM state、region 表。分配 RAM 前校验精确文件长度、region 表、目标能力与 CPU 状态。
+- `linux/vstate/snapshot.rs` 替换原 dormant CPU 保存/恢复。全部 Paused 后，状态请求在 owning thread 执行，使用容量 1 的独立有界 reply；超时、退出、断链返回错误，过期 reply 不阻塞线程。控制队列在 Pause 后跟踪逻辑暂停状态，不会因确认与排队的竞态拒绝合法请求。
+- 先保存 MP state、实际 CPUID，再 regs/sregs、debug/LAPIC、动态 XSAVE/XCRS、MSR，events 最后。XSAVE 分配使用该 VM 的 `KVM_CAP_XSAVE2` 字节数，旧内核用 4096-byte legacy；恢复检查相同大小、标准非 compacted 位图、reserved header、组件边界与重叠、XCRS。KVM 固定记录严格要求字节长度：现有 kvm-bindings 0.12 serde visitor 会对短记录补零，故通过本地 strict adapter 拒绝截断，不升级依赖。
+- MSR 按 `KVM_MAX_MSR_ENTRIES` 分批，部分读写报告 vCPU 与失败 MSR；deadline 全局移到该 CPU 所有 chunk 最后。零 deadline 仅在镜像变为保存的 TSC；非零不变，保存不 SET 源 deadline。恢复按 CPUID、MP、regs、sregs、XSAVE/XCRS、debug、LAPIC、MSR、events 顺序执行。
+- 必需能力包含 irqchip、PIT2 创建与 PitState2 读写、MP/events/debug、XSAVE/XCRS、TSC kHz/deadline、clock。目标 supported CPUID/MSR/XSAVE/capability 指纹保守要求相同。未覆盖的 PMU、SGX/PT/CET/LBR/AMX、supervisor XSTATE、AMD perf/encryption、SMM/SMI、nested、TEE 明确拒绝或在最小源 CPUID 禁用。
+- 导入先创建 irqchip/PIT，再创建所有初始暂停线程；恢复确认后用 vCPU0 同步多核 TSC offset，再恢复 PIT/PIC/IOAPIC 和 clock。多核缺少 offset 属性或同步失败即失败；单核无需 offset 属性。`clock_realtime=false`，不加离线墙钟时间；频率差严格大于 250 ppm 才 SET_TSC_KHZ，失败发生在 guest entry 前。Pause/Resume 调用 KVMCLOCK_CTRL，失败警告；其他状态 ioctl 失败为错误。
+- full 保存校验实际私有 owner 的拓扑/映射和 RAM Arc 唯一性，拒绝外部 alias/writer。错误恢复尝试每个源 CPU，只有所有 Resume 确认后写有效 magic；中途写入或恢复失败不留下有效快照。部分导入通过 owner Drop 停止并 join 所有已创建线程，再释放 VM 和 RAM。
+- guest fixture 的 SIMD/寄存器/栈循环带启动次数标记；PIT、x2APIC periodic/one-shot 和 TSC deadline fixture 通过真实 guest counter 检查继续与单次完成。另检查真实 halted MP、PIC pending IRQ、TSC/clock 不包含离线墙钟时间、源 zero deadline 不被保存操作改变，以及部分 KVM restore 失败后的线程/FD 清理。
+- 后续设备阶段仍须先 drain/save 设备，再捕获 CPU/KVM/RAM；当前实现不支持用户态设备或任意运行中的 box。
+
+### 阶段 2 实际验证与剩余缺口
+
+以下命令在 libkrun 子模块目录执行；GNU 检查/构建公共环境为 `CC_x86_64_unknown_linux_gnu=/opt/homebrew/bin/x86_64-linux-musl-gcc CARGO_TARGET_DIR=/private/tmp/boxlite-stage2-target`。`CC_LINUX` 必须作为 make 命令行参数，macOS Makefile 会覆盖同名环境变量。
+
+| 实际 make 命令 | 结果 |
+| --- | --- |
+| `make snapshot-guest SNAPSHOT_AS=/opt/homebrew/bin/x86_64-linux-musl-as SNAPSHOT_OBJCOPY=/opt/homebrew/bin/x86_64-linux-musl-objcopy` | 通过；最后一次生成包含所有入口，guest.bin SHA-256 为 `b24871c75d9b38eb4113309cb8e2bb46ab1c1b50f5325f87239217038bf6c3b4`。汇编源和 binary 均纳入改动。 |
+| `make snapshot-fmt` | 最终源码通过。 |
+| `make snapshot-check CC_LINUX=/opt/homebrew/bin/x86_64-linux-musl-gcc` | 最终通过，包含 `--tests --target x86_64-unknown-linux-gnu`；最终 CPUID filter/topology 和 PitState2/deadline capability 改动已重查。 |
+| `make snapshot-build CC_LINUX=/opt/homebrew/bin/x86_64-linux-musl-gcc` | 最终通过，生成 krun-vmm rlib（非 libkrun shared library/可运行产物）；内部实验入口未由生产调用方使用，因此存在 dead-code warnings。 |
+| `make snapshot-test SNAPSHOT_CARGO_FLAGS='--offline --no-run' CC_LINUX=/opt/homebrew/bin/x86_64-linux-musl-gcc`，另设置 `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/opt/homebrew/bin/x86_64-linux-musl-gcc` | Rust codegen 到达链接，但失败：本机只有 musl cross linker/native 库，GNU std 需要的 `ftruncate64/fstat64/open64` 等及 compression symbols 未解析。不能据此称测试 executable 已构建或测试已通过。 |
+| `make snapshot-test SNAPSHOT_TARGET=x86_64-unknown-linux-musl SNAPSHOT_CARGO_FLAGS='--offline --no-run' CC_LINUX=/opt/homebrew/bin/x86_64-linux-musl-gcc`，使用 musl target CC/linker | 失败于已有 `devices/src/virtio/fs/linux/passthrough.rs`：libc 0.2.183 的该 target 不提供 `statx/STATX_BASIC_STATS/STATX_MNT_ID`。未改动相邻 fs 代码或依赖版本。 |
+
+没有依赖升级。Cargo.lock 仅增加 kvm-bindings 启用 serde 后的 serde/zerocopy feature 边；最后的检查、构建和测试链接尝试均使用已缓存的锁定版本与 offline 模式。
+
+父仓库和子模块 `git diff --check` 通过。所有 KVM 运行、guest continuation/timer 验收、通信单元测试执行以及全生产回退的回归失败/恢复通过对照均为 **UNVERIFIED**；没有把 `check --tests` 或 rlib build 当成运行结果。验证仅在本机完成，未使用远程测试环境。
