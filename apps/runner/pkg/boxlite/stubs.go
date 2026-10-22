@@ -51,11 +51,11 @@ func recoverCreateDto(boxId string, recoverDto dto.RecoverBoxDTO) dto.CreateBoxD
 	}
 }
 
-// UpdateNetworkSettings updates the network allowlist/blocklist for a box.
-// TODO: Implement when BoxLite Go SDK exposes network configuration.
+// UpdateNetworkSettings is the unsupported legacy partial allowlist/blocklist API.
+// Full outbound replacements use SetOutboundNetwork.
 func (c *Client) UpdateNetworkSettings(ctx context.Context, boxId string, settings dto.UpdateNetworkSettingsDTO) error {
 	c.logger.Warn("update network settings not yet implemented in BoxLite", "box", boxId)
-	return errdefs.ErrNotImplemented.WithMessage("live network settings update is not supported by the BoxLite Go SDK")
+	return errdefs.ErrNotImplemented.WithMessage("legacy network patches are unsupported; use the outbound policy update")
 }
 
 // GetDaemonVersion returns the runtime version for the legacy API field.

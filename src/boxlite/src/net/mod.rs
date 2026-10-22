@@ -58,6 +58,8 @@ pub enum NetworkBackendEndpoint {
 /// can derive.
 #[derive(Debug, Clone)]
 pub struct NetworkBackendConfig {
+    /// Suspend packet delivery while keeping the NIC available for restoration.
+    pub outbound_disabled: bool,
     /// Unix socket path for the network backend (`net.sock`).
     pub socket_path: PathBuf,
     /// Network allowlist. When non-empty, the gateway allows only listed
@@ -81,6 +83,8 @@ pub struct NetworkBackendConfig {
 /// line. `secrets` already redacts via [`Secret`](crate::runtime::options::Secret).
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct NetworkBackendSpec {
+    #[serde(default)]
+    pub outbound_disabled: bool,
     /// Unix socket path for the network backend.
     pub socket_path: PathBuf,
     /// Network allowlist. When non-empty, the gateway allows only listed
@@ -383,6 +387,17 @@ fn control_unsupported(op: &str) -> BoxliteError {
 )]
 #[async_trait]
 pub trait NetworkBackend: Send + Sync + std::fmt::Debug {
+    async fn set_outbound(
+        &self,
+        _config: &crate::runtime::options::OutboundNetworkConfig,
+    ) -> BoxliteResult<()> {
+        Err(control_unsupported("set_outbound"))
+    }
+
+    async fn outbound(&self) -> BoxliteResult<crate::runtime::options::OutboundNetworkConfig> {
+        Err(control_unsupported("outbound"))
+    }
+
     /// A human-readable name for this backend (e.g. `"gvisor-tap-vsock"`).
     fn name(&self) -> &'static str;
 
@@ -497,6 +512,7 @@ mod tests {
         let key_sentinel = "----BEGIN PRIVATE KEY----TOPSECRETPKCS8";
         let cert_sentinel = "----BEGIN CERTIFICATE----TOPSECRETCERT";
         let spec = NetworkBackendSpec {
+            outbound_disabled: false,
             socket_path: PathBuf::from("/tmp/test-net.sock"),
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -530,6 +546,7 @@ mod tests {
     #[test]
     fn spec_serde_carries_ca_pems_that_debug_redacts() {
         let spec = NetworkBackendSpec {
+            outbound_disabled: false,
             socket_path: PathBuf::from("/tmp/net.sock"),
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -563,6 +580,7 @@ mod tests {
     #[test]
     fn spec_round_trips_rate_limit_and_omits_it_when_unlimited() {
         let spec = NetworkBackendSpec {
+            outbound_disabled: false,
             socket_path: PathBuf::from("/tmp/net.sock"),
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -592,6 +610,7 @@ mod tests {
     #[test]
     fn default_factory_creates_runtime_gvproxy_backend_without_ffi_feature() {
         let config = NetworkBackendConfig {
+            outbound_disabled: false,
             socket_path: PathBuf::from("/tmp/default-factory/net.sock"),
             allow_net: vec!["example.com".to_string()],
             secrets: Vec::new(),
@@ -672,6 +691,7 @@ mod tests {
 
         fn spec(&self) -> NetworkBackendSpec {
             NetworkBackendSpec {
+                outbound_disabled: false,
                 socket_path: PathBuf::from("/tmp/net.sock"),
                 allow_net: Vec::new(),
                 secrets: Vec::new(),

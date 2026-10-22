@@ -110,6 +110,8 @@ export {
   NetworkHandle,
   SshHandle,
   type NetworkSpec,
+  type InboundNetworkSpec,
+  type OutboundNetworkSpec,
   type SocketAddress,
   type AdvancedBoxOptions,
   type ContainerCapabilities,

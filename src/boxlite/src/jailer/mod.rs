@@ -113,6 +113,7 @@ pub(crate) fn reap_box(_box_id: &crate::runtime::id::BoxID) -> bool {
 
 // Volume specification (convenience re-export)
 pub use crate::runtime::options::VolumeSpec;
+use crate::runtime::options::{MountSpec, MountType};
 
 // Linux-specific exports
 #[cfg(target_os = "linux")]
@@ -207,10 +208,15 @@ use std::path::PathBuf;
 /// ~/.boxlite/rootfs/              [RO]  # shared guest rootfs backing directory
 /// ~/.boxlite/layers/              [RO]  # disk fork points (snapshot/clone bases)
 ///
-/// User volumes:
+/// User volumes and bind mounts:
 /// {host_path}                     [per VolumeSpec.read_only]
+/// {source}                        [per MountSpec.read_only]
 /// ```
-fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Vec<PathAccess> {
+fn build_path_access(
+    layout: &BoxFilesystemLayout,
+    volumes: &[VolumeSpec],
+    mounts: &[MountSpec],
+) -> Vec<PathAccess> {
     let mut paths = Vec::new();
 
     // Writable directories (shim creates files inside these at runtime)
@@ -348,6 +354,26 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         }
     }
 
+    // Bind mounts from `BoxOptions::mounts`, by the same rules as the user
+    // volumes above: a directory is shared directly(TODO), so the VMM needs
+    // access to it; a single file is staged under shared_dir(TODO), which is
+    // already granted, so its host siblings stay out of the sandbox. A volume
+    // mount names no host path, and the local runtime refuses one before boot.
+    for mount in mounts {
+        if mount.mount_type != MountType::Bind {
+            continue;
+        }
+        let Some(source) = mount.source.as_deref() else {
+            continue;
+        };
+        if let Some(VolumeShare::Dir(dir)) = classify_volume_share(Path::new(source)) {
+            paths.push(PathAccess {
+                path: dir,
+                writable: !mount.read_only,
+            });
+        }
+    }
+
     paths
 }
 
@@ -392,6 +418,8 @@ pub struct Jailer<S: Sandbox> {
     pub(crate) security: SecurityOptions,
     /// Volume mounts (for sandbox path restrictions).
     pub(crate) volumes: Vec<VolumeSpec>,
+    /// Typed mounts (for sandbox path restrictions).
+    pub(crate) mounts: Vec<MountSpec>,
     /// Unique box identifier.
     pub(crate) box_id: String,
     /// Box filesystem layout (provides typed path accessors).
@@ -538,6 +566,11 @@ impl<S: Sandbox> Jailer<S> {
         &self.volumes
     }
 
+    /// Get the typed mounts.
+    pub fn mounts(&self) -> &[MountSpec] {
+        &self.mounts
+    }
+
     /// Get the box ID.
     pub fn box_id(&self) -> &str {
         &self.box_id
@@ -562,7 +595,7 @@ impl<S: Sandbox> Jailer<S> {
     ///
     /// Delegates to [`build_path_access`] for granular filesystem rules.
     fn context(&self) -> SandboxContext<'_> {
-        let mut paths = build_path_access(&self.layout, &self.volumes);
+        let mut paths = build_path_access(&self.layout, &self.volumes, &self.mounts);
         paths.extend_from_slice(&self.additional_path_access);
         let unix_sockets = if self.layout.sockets_dir().exists() {
             let sockets = self.layout.sockets();
@@ -641,7 +674,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let layout = test_layout(dir.path().to_path_buf());
 
-        let paths = build_path_access(&layout, &[]);
+        let paths = build_path_access(&layout, &[], &[]);
 
         let existing_ca_paths: Vec<_> = system_ca_paths()
             .into_iter()
@@ -679,7 +712,7 @@ mod tests {
         let sockets = layout.sockets();
         sockets.ensure().unwrap();
 
-        let paths = build_path_access(&layout, &[]);
+        let paths = build_path_access(&layout, &[], &[]);
 
         let find = |p: &std::path::Path| paths.iter().find(|pa| pa.path == p);
         let real = find(&layout.sockets_dir()).expect("real sockets dir entry");
@@ -704,7 +737,7 @@ mod tests {
         std::fs::create_dir_all(layout.tmp_dir()).unwrap();
         std::fs::create_dir_all(layout.logs_dir()).unwrap();
 
-        let paths = build_path_access(&layout, &[]);
+        let paths = build_path_access(&layout, &[], &[]);
 
         let writable_dirs: Vec<_> = paths
             .iter()
@@ -736,7 +769,7 @@ mod tests {
         // Note: console_output_path() is inside logs/ [RW subpath], not a standalone file grant
         std::fs::File::create(layout.exit_file_path()).unwrap();
 
-        let paths = build_path_access(&layout, &[]);
+        let paths = build_path_access(&layout, &[], &[]);
 
         let writable_files: Vec<_> = paths
             .iter()
@@ -760,7 +793,7 @@ mod tests {
         std::fs::create_dir_all(layout.boot_dir()).unwrap();
         std::fs::create_dir_all(layout.shared_dir()).unwrap();
 
-        let paths = build_path_access(&layout, &[]);
+        let paths = build_path_access(&layout, &[], &[]);
 
         let bin = paths.iter().find(|p| p.path == layout.bin_dir());
         assert!(bin.is_some(), "bin/ should be included");
@@ -790,7 +823,7 @@ mod tests {
 
         let layout = test_layout(box_dir);
 
-        let paths = build_path_access(&layout, &[]);
+        let paths = build_path_access(&layout, &[], &[]);
 
         // bases/ is granted by its canonical path; compare canonical forms so the
         // assertion holds even when $TMPDIR itself contains a symlink.
@@ -826,7 +859,7 @@ mod tests {
         std::fs::create_dir_all(&real_bases).unwrap();
 
         let layout = test_layout(box_dir);
-        let paths = build_path_access(&layout, &[]);
+        let paths = build_path_access(&layout, &[], &[]);
 
         let expected = real_bases.canonicalize().unwrap();
         assert!(
@@ -849,7 +882,7 @@ mod tests {
             return;
         }
 
-        let paths = build_path_access(&layout, &[]);
+        let paths = build_path_access(&layout, &[], &[]);
 
         for ca_path in existing_ca_paths {
             let entry = paths
@@ -990,7 +1023,7 @@ mod tests {
         )
         .unwrap();
 
-        let paths = build_path_access(&layout, &[]);
+        let paths = build_path_access(&layout, &[], &[]);
 
         let expected_backing = base_disk.canonicalize().unwrap_or(base_disk);
         let backing_paths: Vec<_> = paths
@@ -1037,7 +1070,7 @@ mod tests {
             },
         ];
 
-        let paths = build_path_access(&layout, &volumes);
+        let paths = build_path_access(&layout, &volumes, &[]);
 
         let vol_paths: Vec<_> = paths
             .iter()
@@ -1064,7 +1097,7 @@ mod tests {
             read_only: true,
         }];
 
-        let paths = build_path_access(&layout, &volumes);
+        let paths = build_path_access(&layout, &volumes, &[]);
 
         assert!(
             paths.iter().all(|p| p.path != Path::new("/does/not/exist")),
@@ -1089,13 +1122,127 @@ mod tests {
             read_only: true,
         }];
 
-        let paths = build_path_access(&layout, &volumes);
+        let paths = build_path_access(&layout, &volumes, &[]);
 
         // A single file is staged under shared_dir, so it must not widen path
         // access to the file or its parent (which would expose host siblings).
         assert!(
             paths.iter().all(|p| p.path != file && p.path != parent),
             "single-file volume must not grant its host file or parent dir"
+        );
+    }
+
+    /// Bind mounts get the grants bind volumes get: a directory is readable,
+    /// and writable unless the mount is read-only. A single file, a missing
+    /// source and a volume mount grant nothing — the last even when its source
+    /// happens to name a real directory, since that source is a volume
+    /// reference, not a path.
+    #[test]
+    fn test_build_path_access_bind_mounts() {
+        use crate::runtime::options::MountSpec;
+
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+
+        let mount_ro = dir.path().join("input");
+        let mount_rw = dir.path().join("output");
+        std::fs::create_dir_all(&mount_ro).unwrap();
+        std::fs::create_dir_all(&mount_rw).unwrap();
+        let parent = dir.path().join("cfg");
+        std::fs::create_dir_all(&parent).unwrap();
+        let file = parent.join("app.conf");
+        std::fs::write(&file, "k=v\n").unwrap();
+
+        let mounts = vec![
+            MountSpec {
+                read_only: true,
+                ..MountSpec::bind_mount(mount_ro.to_string_lossy(), "/mnt/input")
+            },
+            MountSpec::bind_mount(mount_rw.to_string_lossy(), "/mnt/output"),
+            MountSpec::bind_mount(file.to_string_lossy(), "/etc/app.conf"),
+            MountSpec::bind_mount("/does/not/exist", "/mnt/missing"),
+            MountSpec::volume_mount(parent.to_string_lossy(), "/workspace"),
+        ];
+
+        let paths = build_path_access(&layout, &[], &mounts);
+
+        let grant = |path: &Path| {
+            paths
+                .iter()
+                .find(|access| access.path == path)
+                .map(|access| access.writable)
+        };
+        assert_eq!(grant(&mount_ro), Some(false), "read-only bind: RO grant");
+        assert_eq!(grant(&mount_rw), Some(true), "writable bind: RW grant");
+        assert_eq!(grant(&file), None, "a single file is staged, not granted");
+        assert_eq!(
+            grant(&parent),
+            None,
+            "neither a staged file's parent nor a volume mount's source is granted"
+        );
+        assert_eq!(grant(Path::new("/does/not/exist")), None);
+    }
+
+    /// Volumes and bind mounts are shared(TODO) into the same VM, so one call
+    /// has to grant the directories of both lists.
+    #[test]
+    fn test_build_path_access_grants_volumes_and_mounts_together() {
+        use crate::runtime::options::MountSpec;
+
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+        let volume_dir = dir.path().join("volume");
+        let mount_dir = dir.path().join("mount");
+        std::fs::create_dir_all(&volume_dir).unwrap();
+        std::fs::create_dir_all(&mount_dir).unwrap();
+
+        let paths = build_path_access(
+            &layout,
+            &[VolumeSpec::bind_mount(volume_dir.to_string_lossy(), "/vol")],
+            &[MountSpec::bind_mount(mount_dir.to_string_lossy(), "/mnt")],
+        );
+
+        for shared in [&volume_dir, &mount_dir] {
+            assert!(
+                paths
+                    .iter()
+                    .any(|access| &access.path == shared && access.writable),
+                "{} must be granted read-write",
+                shared.display()
+            );
+        }
+    }
+
+    /// The sandbox context is built from the mounts the builder was given, so a
+    /// box's bind mount is reachable under the jailer, not only in a unit call.
+    #[test]
+    fn test_context_grants_the_builders_bind_mounts() {
+        use crate::runtime::options::MountSpec;
+
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+        let mount_dir = dir.path().join("my-mount");
+        std::fs::create_dir_all(&mount_dir).unwrap();
+
+        let jail = JailerBuilder::new()
+            .with_box_id("mount-grant")
+            .with_layout(layout)
+            .with_mounts(vec![MountSpec {
+                read_only: true,
+                ..MountSpec::bind_mount(mount_dir.to_string_lossy(), "/mnt/data")
+            }])
+            .build()
+            .unwrap();
+
+        let ctx = jail.context();
+        let grant = ctx
+            .paths
+            .iter()
+            .find(|access| access.path == mount_dir)
+            .expect("the bind mount's directory must be in the sandbox context");
+        assert!(
+            !grant.writable,
+            "a read-only bind mount is granted read-only"
         );
     }
 
@@ -1111,7 +1258,7 @@ mod tests {
         std::fs::create_dir_all(layout.logs_dir()).unwrap();
         std::fs::create_dir_all(layout.bin_dir()).unwrap();
 
-        let paths = build_path_access(&layout, &[]);
+        let paths = build_path_access(&layout, &[], &[]);
 
         // The box_dir itself should NOT appear as a path — only its children
         assert!(
@@ -1133,7 +1280,7 @@ mod tests {
         std::fs::create_dir_all(layout.sockets_dir()).unwrap();
         std::fs::create_dir_all(layout.logs_dir()).unwrap();
 
-        let paths = build_path_access(&layout, &[]);
+        let paths = build_path_access(&layout, &[], &[]);
 
         // mounts_dir must be absent
         assert!(
@@ -1156,7 +1303,7 @@ mod tests {
 
         std::fs::create_dir_all(layout.shared_dir()).unwrap();
 
-        let paths = build_path_access(&layout, &[]);
+        let paths = build_path_access(&layout, &[], &[]);
 
         let shared = paths.iter().find(|p| p.path == layout.shared_dir());
         assert!(shared.is_some(), "shared_dir should be in path access");
@@ -1175,7 +1322,7 @@ mod tests {
         std::fs::File::create(layout.exit_file_path()).unwrap();
         std::fs::File::create(layout.console_output_path()).unwrap();
 
-        let paths = build_path_access(&layout, &[]);
+        let paths = build_path_access(&layout, &[], &[]);
 
         // logs_dir covers both shim logs and console.log
         let logs = paths.iter().find(|p| p.path == layout.logs_dir());

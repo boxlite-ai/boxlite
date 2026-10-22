@@ -37,7 +37,10 @@ export type SshStatus = JsSshStatus;
 
 type BoxLike = Omit<JsBox, "network"> & {
   readonly network: {
+    updateInbound(spec: InboundNetworkSpec): Promise<void>;
+    updateOutbound(spec: OutboundNetworkSpec): Promise<void>;
     tunnel(port: number): Promise<NativeBoxTunnel>;
+    revokeTunnel(port: number): Promise<void>;
   };
 };
 
@@ -380,7 +383,24 @@ export interface AdvancedBoxOptions {
 /** Box-scoped network operations for a SimpleBox. */
 export class NetworkHandle {
   /** @internal */
-  constructor(private readonly ensureBox: () => Promise<BoxLike>) {}
+  constructor(
+    private readonly ensureBox: () => Promise<BoxLike>,
+    private readonly existingBox: () => BoxLike,
+  ) {}
+
+  /** Replace inbound policy; a non-empty allowlist is unsupported. */
+  async updateInbound(spec: InboundNetworkSpec): Promise<void> {
+    validateNetworkReplacement(spec, "inbound");
+    const box = this.existingBox();
+    await box.network.updateInbound(spec);
+  }
+
+  /** Replace outbound policy. Enabled with an empty list clears restrictions. */
+  async updateOutbound(spec: OutboundNetworkSpec): Promise<void> {
+    validateNetworkReplacement(spec, "outbound");
+    const box = this.existingBox();
+    await box.network.updateOutbound(spec);
+  }
 
   /** Prepare a one-shot tunnel for a port inside this box. */
   async tunnel(port: number): Promise<BoxTunnel> {
@@ -389,6 +409,40 @@ export class NetworkHandle {
     }
     const box = await this.ensureBox();
     return new BoxTunnel(await box.network.tunnel(port));
+  }
+
+  /** Withdraw public access to a port; open connections are not closed. */
+  async revokeTunnel(port: number): Promise<void> {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new RangeError("port must be an integer between 1 and 65535");
+    }
+    const box = await this.ensureBox();
+    await box.network.revokeTunnel(port);
+  }
+}
+
+function validateNetworkReplacement(
+  spec: unknown,
+  direction: "inbound" | "outbound",
+): void {
+  if (
+    !isRecord(spec) ||
+    (spec.mode !== "enabled" && spec.mode !== "disabled")
+  ) {
+    throw new TypeError(`${direction}.mode must be "enabled" or "disabled"`);
+  }
+  if (Object.keys(spec).some((key) => key !== "mode" && key !== "allowNet")) {
+    throw new TypeError(`unknown ${direction} policy field`);
+  }
+  const rules = spec.allowNet ?? [];
+  if (
+    !Array.isArray(rules) ||
+    rules.some((rule) => typeof rule !== "string" || !rule.trim())
+  ) {
+    throw new TypeError("allowNet must be an array of non-empty rules");
+  }
+  if (rules.length && (direction === "inbound" || spec.mode === "disabled")) {
+    throw new TypeError(`${direction} ${spec.mode} does not support allowNet`);
   }
 }
 
@@ -580,7 +634,17 @@ export class SimpleBox {
 
     this._name = options.name;
     this._reuseExisting = options.reuseExisting ?? false;
-    this.network = new NetworkHandle(() => this._ensureBox());
+    this.network = new NetworkHandle(
+      () => this._ensureBox(),
+      () => {
+        if (!this._box) {
+          throw new Error(
+            "Box not yet created. Call exec() before updating its policy.",
+          );
+        }
+        return this._box;
+      },
+    );
     this.ssh = new SshHandle(() => this._ensureBox());
   }
 

@@ -14,7 +14,8 @@ use crate::litebox::{
 };
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
-    BoxArchive, BoxOptions, CloneOptions, ExportOptions, SnapshotOptions,
+    BoxArchive, BoxOptions, CloneOptions, ExportOptions, InboundNetworkConfig,
+    OutboundNetworkConfig, SnapshotOptions,
 };
 use crate::runtime::types::BoxInfo;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -178,12 +179,32 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 )]
 #[async_trait]
 pub(crate) trait BoxNetworkBackend: Send + Sync {
+    async fn update_inbound(&self, _config: InboundNetworkConfig) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support inbound policy updates".into(),
+        ))
+    }
+
+    async fn update_outbound(&self, _config: OutboundNetworkConfig) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support outbound policy updates".into(),
+        ))
+    }
+
     /// Prepare a one-shot tunnel to a service port inside the box.
     ///
     /// Check here that the box can carry the tunnel and mint any public URI,
     /// but open no connection: return a [`BoxTunnel::new`] whose future opens
     /// it on `connect()`, so a port nothing listens on fails there.
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
+
+    /// Withdraw any public access `tunnel()` granted to `port`.
+    ///
+    /// A backend that publishes nothing, like the local one, has nothing to
+    /// withdraw. Connections already open are not closed.
+    async fn revoke_tunnel(&self, _port: u16) -> BoxliteResult<()> {
+        Ok(())
+    }
 }
 
 /// Backend abstraction for snapshot lifecycle operations on a box.

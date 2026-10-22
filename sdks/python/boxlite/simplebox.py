@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING, Optional
 from .exec import ExecResult
 
 if TYPE_CHECKING:
-    from .boxlite import Boxlite, TunnelForwarder
+    from .boxlite import (
+        Boxlite,
+        InboundNetworkSpec,
+        OutboundNetworkSpec,
+        TunnelForwarder,
+    )
 
 logger = logging.getLogger("boxlite.simplebox")
 
@@ -50,6 +55,18 @@ class NetworkHandle:
     def __init__(self, box: "SimpleBox") -> None:
         self._owner = box
 
+    async def update_inbound(self, spec: "InboundNetworkSpec") -> None:
+        """Replace inbound policy on a started box."""
+        if not self._owner._started:
+            raise RuntimeError("Box not started; call await box.start() first.")
+        await self._owner._box.network.update_inbound(spec)
+
+    async def update_outbound(self, spec: "OutboundNetworkSpec") -> None:
+        """Replace outbound policy, including the entire allowlist."""
+        if not self._owner._started:
+            raise RuntimeError("Box not started; call await box.start() first.")
+        await self._owner._box.network.update_outbound(spec)
+
     async def tunnel(self, port: int) -> BoxTunnel:
         """Prepare a one-shot tunnel for a port inside the box."""
         if not self._owner._started:
@@ -58,6 +75,10 @@ class NetworkHandle:
                 "or call 'await box.start()' first."
             )
         return BoxTunnel(await self._owner._create_tunnel(port))
+
+    async def revoke_tunnel(self, port: int) -> None:
+        """Withdraw public access to a port; open connections are not closed."""
+        await self._owner._revoke_tunnel(port)
 
 
 class SimpleBox:
@@ -146,6 +167,14 @@ class SimpleBox:
         if not isinstance(port, int) or not 1 <= port <= 65535:
             raise ValueError("port must be an integer between 1 and 65535")
         return await self._box.network.tunnel(port)
+
+    async def _revoke_tunnel(self, port: int) -> None:
+        """Withdraw public access to a service port."""
+        if self._box is None:
+            raise RuntimeError("Box not created")
+        if not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ValueError("port must be an integer between 1 and 65535")
+        await self._box.network.revoke_tunnel(port)
 
     async def __aenter__(self):
         """Async context manager entry - creates or reuses an existing box.

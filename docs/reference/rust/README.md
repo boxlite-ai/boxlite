@@ -362,7 +362,7 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
 | `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH (local or REST-backed); only configure may implicitly start the box |
-| `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped tunnel operations |
+| `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped policy and tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
@@ -547,7 +547,10 @@ pub struct BoxState {
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
 | Get handle | `LiteBox::network(&self) -> NetworkHandle` | Get box-scoped network operations |
+| Update inbound | `NetworkHandle::update_inbound(InboundNetworkConfig).await -> BoxliteResult<()>` | Replace inbound mode; cloud only |
+| Update outbound | `NetworkHandle::update_outbound(OutboundNetworkConfig).await -> BoxliteResult<()>` | Replace outbound mode and allowlist |
 | Tunnel | `async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>` | Prepare a one-shot tunnel to one guest TCP service |
+| Revoke | `async fn revoke_tunnel(&self, port: u16) -> BoxliteResult<()>` | Withdraw the port's public URL; a no-op on a local box |
 | Forward | `async fn BoxTunnel::forward(self, listen: SocketAddress) -> BoxliteResult<TunnelForwarder>` | Consume the tunnel into a TCP or Unix listener |
 | Inspect | `BoxTunnel::uri(&self) -> Option<&str>` | Read the prepared public URL; `None` for a local box |
 | Descriptor | `BoxConnection::raw_fd(&self) -> Option<RawFd>` | Borrowed fd; `None` for a remotely served connection |
@@ -983,7 +986,7 @@ pub enum NetworkSpec {
 }
 ```
 
-`allow_net` supports exact hosts, wildcard hosts, IPs, and CIDRs, and restricts both TCP and UDP egress. Hostname rules rely on TLS SNI / HTTP Host inspection, which only TCP carries, so an `allow_net` holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP open. A host matched by a configured `Secret` is additionally reachable on port 443 without a rule of its own, so `allow_net` is not the only egress gate. The connection is dialed by name, and under a non-empty allowlist an answer in a private, loopback or CGNAT range is refused unless an IP or CIDR rule covers it. `Disabled` removes the guest network interface entirely.
+`allow_net` supports exact hosts, wildcard hosts, IPv4 addresses, and IPv4 CIDRs; create and `update_outbound` reject anything else. It restricts both TCP and UDP egress. Hostname rules rely on TLS SNI / HTTP Host inspection, which only TCP carries, so an `allow_net` holding only hostnames denies all UDP egress — add the IP or CIDR to keep UDP open. A host matched by a configured `Secret` is additionally reachable on port 443 without a rule of its own, so `allow_net` is not the only egress gate. The connection is dialed by name, and under a non-empty allowlist an answer in a private, loopback or CGNAT range is refused unless an IP or CIDR rule covers it. `Disabled` removes the guest network interface entirely.
 
 The inbound direction — whether services the box exposes are reachable from
 outside it — is the sibling field `BoxOptions::inbound_network`, which reuses

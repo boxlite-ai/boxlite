@@ -40,6 +40,8 @@ Key test entry points:
 - `make test:integration` - all integration suites
 - `make test:all:python` - Python unit + integration suites
 - `make test:all:c` - C SDK suite via CMake/CTest
+- `make test:apps:runner FILTER=NetworkPolicy` - runner Go tests with the local C/Go SDK
+- `make fmt:apps FILES='api/src/path.ts'` - format selected files relative to `apps/`
 
 ### Coverage
 

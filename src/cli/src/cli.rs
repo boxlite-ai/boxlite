@@ -203,11 +203,23 @@ const AUTH_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
-const NETWORK_SCOPES: &[CommandScope] = &[CommandScope {
-    name: "tunnel",
-    globals: BOX_GLOBALS,
-    children: &[],
-}];
+const NETWORK_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "inbound",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "outbound",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "tunnel",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+];
 const VOLUME_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "create",
@@ -1152,10 +1164,10 @@ pub struct NetworkFlags {
 
     /// Restrict TCP and UDP egress to the listed hosts/IPs (repeatable);
     /// everything else is refused at connect time. Implies network=enabled.
-    /// Patterns: exact host, "*.example.com", IP, or CIDR. Hostname rules need
-    /// TLS SNI / HTTP Host inspection, so a hostname-only list denies all UDP;
-    /// add the IP or CIDR to keep UDP open. Incompatible with `--network
-    /// disabled`.
+    /// Patterns: exact host, "*.example.com", IPv4, or IPv4 CIDR. Hostname
+    /// rules need TLS SNI / HTTP Host inspection, so a hostname-only list
+    /// denies all UDP; add the IP or CIDR to keep UDP open. Incompatible with
+    /// `--network disabled`.
     #[arg(long = "allow-net", value_name = "HOST")]
     pub allow_net: Vec<String>,
 
@@ -2640,7 +2652,9 @@ mod tests {
         let Commands::Network(network) = cli.command else {
             panic!("expected Commands::Network");
         };
-        let NetworkCommand::Tunnel(args) = network.command;
+        let NetworkCommand::Tunnel(args) = network.command else {
+            panic!("expected tunnel command");
+        };
         assert_eq!(args.target, "mybox");
         assert_eq!(args.port, 3000);
         assert!(args.listen.is_none());

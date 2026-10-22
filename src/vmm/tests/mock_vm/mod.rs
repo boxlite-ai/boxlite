@@ -1,8 +1,9 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! A mock hypervisor backend that records memory registrations and can be
-//! told to fail, so the VMM's lifetime rules are testable without a host VM.
+//! A mock hypervisor backend that records memory registrations and interrupt
+//! line changes and can be told to fail, so the VMM's lifetime rules and
+//! interrupt path are testable without a host VM.
 
 use std::{
     io,
@@ -25,6 +26,10 @@ pub(crate) enum Call {
         host_addr: usize,
         size: usize,
     },
+    SetIrqLine {
+        line: u32,
+        level: bool,
+    },
 }
 
 impl Call {
@@ -45,9 +50,9 @@ impl Call {
     }
 }
 
-/// Records every map and unmap and fails the calls whose zero-based index
-/// (map and unmap counted together) was selected. A failed unmap keeps the
-/// registration, as KVM does.
+/// Records every map, unmap and interrupt line change, and fails the calls
+/// whose zero-based index (all calls counted together) was selected. A
+/// failed unmap keeps the registration, as KVM does.
 #[derive(Debug, Default)]
 pub(crate) struct MockVm {
     log: Arc<Mutex<Vec<Call>>>,
@@ -98,6 +103,7 @@ impl MockVm {
                 size,
                 source,
             },
+            Call::SetIrqLine { line, .. } => Error::SetIrqLine { line, source },
         })
     }
 }
@@ -117,8 +123,8 @@ impl Vm for MockVm {
         Ok(MockVcpu)
     }
 
-    fn set_irq_line(&self, _line: u32, _level: bool) -> Result<()> {
-        Ok(())
+    fn set_irq_line(&self, line: u32, level: bool) -> Result<()> {
+        self.record(Call::SetIrqLine { line, level })
     }
 }
 

@@ -16,6 +16,19 @@ use crate::runtime::types::BoxStatus;
 // ============================================================================
 
 impl BoxImpl {
+    fn options_for_copy(&self) -> BoxliteResult<crate::runtime::options::BoxOptions> {
+        let mut options = self.config.options.clone();
+        if let Some(policy) = self
+            .runtime
+            .box_manager
+            .update_box(self.id())?
+            .outbound_policy
+        {
+            options.network = policy.try_into()?;
+        }
+        Ok(options)
+    }
+
     pub(crate) async fn clone_box(
         &self,
         options: crate::runtime::options::CloneOptions,
@@ -125,13 +138,14 @@ impl BoxImpl {
         // Each clone's disk is a copy of this one, so it runs the same build.
         // Read before the loop: the guard must not be held across an await.
         let resolved_image = self.state.read().resolved_image.clone();
+        let copy_options = self.options_for_copy()?;
         let mut clones = Vec::with_capacity(count);
         for (i, staging) in staging_dirs.into_iter().enumerate() {
             let litebox = match rt
                 .provision_box(
                     staging.clone(),
                     names.get(i).cloned(),
-                    self.config.options.clone(),
+                    copy_options.clone(),
                     BoxStatus::Stopped,
                     resolved_image.clone(),
                 )
@@ -202,7 +216,7 @@ impl BoxImpl {
         // Phase 2: Checksum + manifest + archive run with VM resumed.
         // These only read static temp files, no disk consistency needed.
         let config_name = self.config.name.clone();
-        let config_options = self.config.options.clone();
+        let config_options = self.options_for_copy()?;
         let box_id_str = self.id().to_string();
         let dest = dest.to_path_buf();
 

@@ -31,6 +31,7 @@ use std::path::PathBuf;
 pub struct VmmSpawnTask;
 
 struct VmmSpawnInputs {
+    outbound_policy: Option<crate::runtime::options::OutboundNetworkConfig>,
     options: BoxOptions,
     layout: BoxFilesystemLayout,
     container_image_config: ContainerImageConfig,
@@ -65,6 +66,7 @@ impl VmmSpawnInputs {
             .to_path_buf();
 
         Ok(Self {
+            outbound_policy: ctx.outbound_policy.clone(),
             options: ctx.config.options.clone(),
             layout,
             container_image_config,
@@ -132,6 +134,7 @@ async fn build_config(
     Option<Box<dyn NetworkBackend>>,
 )> {
     let VmmSpawnInputs {
+        outbound_policy,
         options,
         layout,
         container_image_config,
@@ -230,7 +233,8 @@ async fn build_config(
     // The box's one network backend: it produces the wire spec now, and is
     // threaded on to LiveState (via the init ctx) for runtime control.
     warn_unpublished_exposed_ports(container_image_config, options);
-    let network_backend = build_network_backend(options, layout, runtime)?;
+    let network_backend =
+        build_network_backend(options, layout, runtime, outbound_policy.as_ref())?;
     let network_backend_spec = network_backend.as_ref().map(|backend| backend.spec());
 
     // Assemble VMM instance spec
@@ -348,6 +352,7 @@ fn build_network_backend(
     options: &crate::runtime::options::BoxOptions,
     layout: &BoxFilesystemLayout,
     runtime: &SharedRuntimeImpl,
+    outbound_policy: Option<&crate::runtime::options::OutboundNetworkConfig>,
 ) -> BoxliteResult<Option<Box<dyn NetworkBackend>>> {
     // Disabled = no network at all.
     let allow_net = match &options.network {
@@ -356,8 +361,10 @@ fn build_network_backend(
     };
 
     let config = NetworkBackendConfig {
+        outbound_disabled: outbound_policy
+            .is_some_and(|policy| policy.mode == crate::runtime::options::NetworkMode::Disabled),
         socket_path: layout.net_backend_socket_path(),
-        allow_net,
+        allow_net: outbound_policy.map_or(allow_net, |policy| policy.allow_net.clone()),
         secrets: options.secrets.clone(),
         ca_dir: layout.ca_dir(),
         rate_limit: options.advanced.network_rate_limit,

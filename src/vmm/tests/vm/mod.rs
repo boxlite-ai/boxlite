@@ -22,6 +22,9 @@ fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
     VmConfig {
         vcpu_count,
         memory_mib,
+        kernel: "vmlinux".into(),
+        cmdline: "console=ttyS0".into(),
+        initramfs: None,
     }
 }
 
@@ -35,7 +38,7 @@ fn invalid_configuration_fails_before_the_host_vm_exists() {
     ];
     for (config, message) in cases {
         let built = Cell::new(false);
-        let error = Vm::with_backend(config, || {
+        let error = Vm::with_backend(config.clone(), || {
             built.set(true);
             Ok(MockVm::new())
         })

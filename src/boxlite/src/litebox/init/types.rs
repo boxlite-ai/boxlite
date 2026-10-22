@@ -303,6 +303,7 @@ impl Drop for CleanupGuard {
 /// Contains all inputs and outputs for pipeline tasks.
 /// Tasks read from config/runtime and write to Option fields.
 pub struct InitPipelineContext {
+    pub outbound_policy: Option<crate::runtime::options::OutboundNetworkConfig>,
     pub config: BoxConfig,
     pub runtime: SharedRuntimeImpl,
     pub guard: CleanupGuard,
@@ -352,6 +353,7 @@ impl InitPipelineContext {
     ) -> Self {
         let guard = CleanupGuard::new(runtime.clone(), config.id.clone());
         Self {
+            outbound_policy: None,
             config,
             runtime,
             guard,

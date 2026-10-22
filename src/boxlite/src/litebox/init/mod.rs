@@ -234,13 +234,14 @@ impl BoxBuilder {
         let reuse_rootfs = status == BoxStatus::Stopped;
         let skip_guest_wait = status == BoxStatus::Running;
 
-        let ctx = InitPipelineContext::new(
+        let mut ctx = InitPipelineContext::new(
             config,
             runtime.clone(),
             reuse_rootfs,
             skip_guest_wait,
             state.resolved_image.clone(),
         );
+        ctx.outbound_policy = state.outbound_policy.clone();
         let ctx = Arc::new(Mutex::new(ctx));
         let ctx_for_cleanup = Arc::clone(&ctx);
 
