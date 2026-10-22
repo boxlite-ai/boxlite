@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils'
 import { useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { OAuthClientDialog } from '../OAuthClientDialog'
 import { ProviderLogo } from '../ProviderLogo'
 import {
   copyText,
@@ -261,34 +262,57 @@ function MethodMenu({ items }: { items: { label: string; text: string; done: str
   )
 }
 
-function MethodRow({ app, status, method }: { app: AppDetail; status: AppAuthStatus; method: AppSignInMethod }) {
+function MethodRow({
+  app,
+  status,
+  method,
+  onEdit,
+}: {
+  app: AppDetail
+  status: AppAuthStatus
+  method: AppSignInMethod
+  onEdit: () => void
+}) {
   const label = providerLabel(method.provider)
   const copyUri = { label: 'Copy redirect URI', text: method.redirectUri, done: `${label} redirect URI copied` }
-  // Not set up on this platform: one muted line, nothing to do in the app.
-  if (method.status !== 'ready') {
+  const ready = method.status === 'ready'
+  // Clicking a method opens its OAuth app: BoxLite-managed keys or the app's own.
+  const rowProps = {
+    role: 'button' as const,
+    tabIndex: 0,
+    onClick: onEdit,
+    onKeyDown: (e: React.KeyboardEvent) => e.key === 'Enter' && e.target === e.currentTarget && onEdit(),
+    'data-testid': `method-${method.provider}`,
+  }
+  const stop = {
+    onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    onKeyDown: (e: React.KeyboardEvent) => e.stopPropagation(),
+  }
+  if (!ready) {
     return (
       <div
-        className="flex min-h-[48px] items-center gap-4 border-b border-border/60 px-2 text-muted-foreground"
-        data-testid={`method-${method.provider}`}
+        {...rowProps}
+        className="flex min-h-[48px] cursor-pointer items-center gap-4 border-b border-border/60 px-2 text-muted-foreground outline-none transition-colors hover:bg-card/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/35"
       >
         <span className="flex w-5 justify-center opacity-60">
           <ProviderLogo provider={method.provider} />
         </span>
         <span>{label}</span>
         <span className="truncate text-[12px]">
-          BoxLite hasn&apos;t set up {label} sign-in here yet, so the sign-in page leaves it out.
+          BoxLite hasn&apos;t set up {label} sign-in here yet. Use your own {label} OAuth app to offer it.
         </span>
-        <span className="ml-auto flex shrink-0 items-center gap-3">
-          <Tag>Not configured</Tag>
+        <span className="ml-auto flex shrink-0 items-center gap-3" {...stop}>
+          <ToolButton onClick={onEdit}>Set up</ToolButton>
           <MethodMenu items={[copyUri]} />
         </span>
       </div>
     )
   }
+  const keys = method.keys === 'own' ? 'Your OAuth app' : 'BoxLite-managed'
   return (
     <div
-      className="flex min-h-[56px] items-center gap-4 border-b border-border/60 px-2 transition-colors hover:bg-card/50"
-      data-testid={`method-${method.provider}`}
+      {...rowProps}
+      className="flex min-h-[56px] cursor-pointer items-center gap-4 border-b border-border/60 px-2 outline-none transition-colors hover:bg-card/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/35"
     >
       <span className="flex w-5 justify-center text-foreground">
         <ProviderLogo provider={method.provider} />
@@ -297,10 +321,12 @@ function MethodRow({ app, status, method }: { app: AppDetail; status: AppAuthSta
         {label}
       </span>
       {!method.declared && (
-        <span className="truncate text-[12px] text-muted-foreground">Ready, but not on this app&apos;s sign-in page</span>
+        <span className="truncate text-[12px] text-muted-foreground">
+          Ready, but not on this app&apos;s sign-in page
+        </span>
       )}
-      <span className="ml-auto flex shrink-0 items-center gap-3">
-        <Tag tone={method.declared ? 'good' : 'neutral'}>BoxLite-managed · ready</Tag>
+      <span className="ml-auto flex shrink-0 items-center gap-3" {...stop}>
+        <Tag tone={method.declared ? 'good' : 'neutral'}>{keys} · ready</Tag>
         <MethodMenu
           items={
             method.declared
@@ -344,22 +370,8 @@ function SignInOff({ app, status }: { app: AppDetail; status: AppAuthStatus }) {
   )
 }
 
-function Methods({
-  app,
-  status,
-  onSettings,
-}: {
-  app: AppDetail
-  status: AppAuthStatus
-  onSettings: () => void
-}) {
-  if (!status.declared) {
-    return (
-      <Screen title="Sign-in methods">
-        <SignInOff app={app} status={status} />
-      </Screen>
-    )
-  }
+function Methods({ app, status, onSettings }: { app: AppDetail; status: AppAuthStatus; onSettings: () => void }) {
+  const [editing, setEditing] = useState<AppSignInMethod | null>(null)
   // Working methods first, then ones BoxLite runs that this app does not use, then the unconfigured ones.
   const rank = (m: AppSignInMethod) => (m.status !== 'ready' ? 2 : m.declared ? 0 : 1)
   const methods = [...status.methods].sort((a, b) => rank(a) - rank(b))
@@ -377,11 +389,20 @@ function Methods({
         </>
       }
     >
+      {/* Off: say so first; the methods below can still be prepared before turning sign-in on. */}
+      {!status.declared && <SignInOff app={app} status={status} />}
       <div className="border-t border-border/60">
         {methods.map((method) => (
-          <MethodRow key={method.provider} app={app} status={status} method={method} />
+          <MethodRow
+            key={method.provider}
+            app={app}
+            status={status}
+            method={method}
+            onEdit={() => setEditing(method)}
+          />
         ))}
       </div>
+      {editing && <OAuthClientDialog app={app} method={editing} onClose={() => setEditing(null)} />}
     </Screen>
   )
 }

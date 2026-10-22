@@ -264,12 +264,18 @@ export type AppTab = 'overview' | 'deployments' | 'logs' | 'domains' | 'auth' | 
 
 export interface AppSignInMethod {
   provider: string
-  /** ready: BoxLite's own OAuth app is set up on the control plane; not_configured: it is not. */
+  /** ready: an OAuth app signs users in for it (the App's own, or BoxLite's); not_configured: none. */
   status: 'ready' | 'not_configured'
   /** This environment's [auth] lists it. */
   declared: boolean
   /** The platform-wide OAuth callback the provider's app lists. */
   redirectUri: string
+  /** Whose OAuth app signs users in: BoxLite's (`shared`) or the App's own. */
+  keys: 'shared' | 'own'
+  /** The App's own OAuth client id (the secret is never sent to the console). */
+  clientId: string | null
+  /** BoxLite runs an OAuth app for this provider, so its keys can be used. */
+  managedAvailable: boolean
 }
 
 /** End-user sign-in of an environment, as the control plane reports it. */

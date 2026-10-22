@@ -182,6 +182,35 @@ export function useEndUserAction() {
   })
 }
 
+/** Whose OAuth app signs users in for one provider: BoxLite's, or the App's own (all environments). */
+export function useSetOAuthClient() {
+  const queryClient = useQueryClient()
+  const env = useAppEnv()
+  return useMutation({
+    mutationFn: async ({
+      appId,
+      provider,
+      body,
+    }: {
+      appId: string
+      provider: string
+      body: { keys: 'shared' } | { keys: 'own'; clientId: string; clientSecret?: string }
+    }) =>
+      (
+        await appsClient.put<AppAuthDetail>(
+          `/apps/${encodeURIComponent(appId)}/auth/methods/${encodeURIComponent(provider)}`,
+          body,
+          { params: { env } },
+        )
+      ).data,
+    onSuccess: (data, { appId }) => {
+      queryClient.setQueryData([...queryKeys.apps.detail(APPS_SCOPE, appId, env), 'auth'], data)
+      // Other environments of the App use the same OAuth app.
+      queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, appId) })
+    },
+  })
+}
+
 /** Brings a soft-deleted app back (keys work again; Boxes wake on the next request). */
 export function useRestoreApp() {
   const queryClient = useQueryClient()
