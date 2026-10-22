@@ -311,6 +311,24 @@ async function main() {
     for (const s of ['e2e first', 'e2e v2', 'e2e broken', 'Roll back']) assert(t.includes(s), `missing "${s}"`)
   })
 
+  await check('a service that dies for an unset variable is diagnosed by name; setting it brings the app back', async () => {
+    const guard = `command = "sh -c '[ -n \\"$REPORT_REGION\\" ] || { echo \\"Error: REPORT_REGION is not set\\" >&2; exit 1; }; exec node server.js'"`
+    setToml((s) => s.replace('command = "node server.js"', guard))
+    const r = cli(['deploy', '-m', 'e2e needs a region'])
+    assert(r.code === 8, `exit ${r.code}`)
+    const d = r.json?.error?.diagnosis ?? r.json?.diagnosis ?? {}
+    const said = JSON.stringify(r.json ?? r.err)
+    assert(/missing_variable/.test(said) && /REPORT_REGION/.test(said), `not diagnosed as missing_variable: ${said.slice(0, 400)}`)
+    assert(/app vars set REPORT_REGION=/.test(said), 'no vars set command in the fix')
+    const set = cli(['app', 'vars', 'set', 'REPORT_REGION=eu'])
+    assert(set.code === 0, `vars set exit ${set.code} ${set.err}`)
+    const again = cli(['deploy', '-m', 'e2e region set'])
+    setToml((s) => s.replace(guard, 'command = "node server.js"'))
+    cli(['app', 'vars', 'unset', 'REPORT_REGION'])
+    assert(again.code === 0, `deploy after setting the variable: exit ${again.code} ${again.err.slice(0, 300)}`)
+    return d.cause ?? 'missing_variable'
+  })
+
   // ---- sleep and wake --------------------------------------------------------------
   await check('stopped Box wakes on the next request with a starting page, not a 502', async () => {
     const st = cli(['app', 'status']).json

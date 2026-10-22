@@ -470,7 +470,7 @@ func (m *Manager) activate(ctx context.Context, n int, kind string) bool {
 		ok := exp.AwaitHealth(hctx)
 		cancel()
 		if !ok {
-			tail := m.tailFor(exp.Name(), n)
+			tail := m.serviceTail(exp.Name(), n)
 			// Kill the candidate; the old release never stopped serving.
 			group.Stop(2 * time.Second)
 			if ctx.Err() != nil {
@@ -485,7 +485,7 @@ func (m *Manager) activate(ctx context.Context, n int, kind string) bool {
 	// crashes, or a worker that dies on start, would go live and crash-loop.
 	// Every service of the candidate has to stay up for the settle window.
 	if name, st := m.settle(ctx, group); name != "" {
-		tail := m.tailFor(name, n)
+		tail := m.serviceTail(name, n)
 		group.Stop(2 * time.Second)
 		if ctx.Err() != nil {
 			m.fail(ctx, n, "start", m.why(ctx, ctx, ctx.Err()), tail)
@@ -806,6 +806,18 @@ func (m *Manager) tailFor(source string, n int) []string {
 		mine = mine[len(mine)-50:]
 	}
 	return logs.Lines(mine)
+}
+
+// serviceTail is tailFor a service, each line tagged "[name] " as the control
+// plane tags log lines: the failure classifier finds the service's own words
+// (its stderr) by that tag, and the tail reaches the control plane before the
+// shipped log lines do.
+func (m *Manager) serviceTail(name string, n int) []string {
+	tail := m.tailFor(name, n)
+	for i, l := range tail {
+		tail[i] = "[" + name + "] " + l
+	}
+	return tail
 }
 
 // fail logs and reports a failed phase. The live release is never touched.

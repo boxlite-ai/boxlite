@@ -293,7 +293,7 @@ async function main() {
       await page.fill('textarea', 'create table nope (id int)')
       await page.keyboard.press('ControlOrMeta+Enter')
       const err = await text(page.getByTestId('sql-error'))
-      assert(/migrations\/0002_change\.sql/.test(err) && /boxlite-app deploy/.test(err), `no migration hint: ${err}`)
+      assert(/migrations\/0002_change\.sql/.test(err) && /Ask your agent/.test(err) && !/boxlite-app/.test(err), `no migration hint in words: ${err}`)
       await shot('sql-ddl-refused')
       await page.fill('textarea', "insert into items (title) values ('from the console')")
       await page.keyboard.press('ControlOrMeta+Enter')

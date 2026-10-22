@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -941,7 +942,7 @@ func TestWebThatExitsBeforeAnsweringFailsWithItsExit(t *testing.T) {
 	h.mgr.Wait()
 
 	exiting := helperServices()
-	exiting[0].Command = "exit 0"
+	exiting[0].Command = "echo 'Error: REPORT_REGION is not set' >&2; exit 0"
 	fake.set(h.spec(2, "two", nil, exiting), map[string]string{"README.md": "two"})
 	h.deploymentCall("deploy", 2)
 	fake.waitPhase(t, 2, api.PhaseBuilt)
@@ -951,6 +952,11 @@ func TestWebThatExitsBeforeAnsweringFailsWithItsExit(t *testing.T) {
 	h.mgr.Wait()
 	if failed.Step != "start" || !strings.Contains(failed.Error, "web exited with code 0 before answering /healthz") {
 		t.Fatalf("an exiting web must fail the start step with its exit: %+v", failed)
+	}
+	// The tail names its source like the control plane's log lines, so the
+	// classifier can tell the service's own words from the platform's.
+	if !slices.Contains(failed.LogTail, "[web] Error: REPORT_REGION is not set") {
+		t.Fatalf("the failure tail lacks the service's stderr, tagged with its name: %q", failed.LogTail)
 	}
 	if hr := h.health(); hr.Deployment != 1 {
 		t.Fatalf("#1 must stay live, got %+v", hr)
