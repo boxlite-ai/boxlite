@@ -197,3 +197,17 @@ test('the console reads milestones for people and keeps platform detail behind i
   assert.equal(byId.get('l11')!.detail, true);
   assert.equal(byId.get('l11')!.level, 'error');
 });
+
+test('what a deployment changed reads as sentences, not diff paths; variable values stay out', async () => {
+  const { humanChange } = await import('../src/console-deployment.js');
+  assert.equal(humanChange({ kind: '+', path: 'migrations/0003_import.sql', to: 'pending' }), 'New migration 0003_import.sql');
+  assert.equal(humanChange({ kind: '+', path: 'services.worker', to: {} }), 'New service worker');
+  assert.equal(humanChange({ kind: '-', path: 'services.worker', from: {} }), 'Removed service worker');
+  assert.equal(humanChange({ kind: '~', path: 'services.web.command', from: 'node a.js', to: 'node b.js' }), 'web: command changed');
+  assert.equal(humanChange({ kind: '+', path: 'database', to: 'neon branch main' }), 'Added a database');
+  assert.equal(humanChange({ kind: '+', path: 'variables.LOG_LEVEL', to: 'debug' }), 'New variable LOG_LEVEL');
+  assert.equal(humanChange({ kind: '~', path: 'variables.GREETING', from: 'a', to: 'b' }), 'Changed variable GREETING');
+  assert.equal(humanChange({ kind: '+', path: 'secrets.OPENAI_API_KEY', to: 'org/openai' }), 'OPENAI_API_KEY now comes from org/openai');
+  assert.equal(humanChange({ kind: '~', path: 'access', from: 'private', to: 'public' }), 'Access: private → public');
+  assert.equal(humanChange({ kind: '~', path: 'runtime.size', from: 'small', to: 'medium' }), 'Box size: small → medium');
+});

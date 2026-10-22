@@ -422,8 +422,8 @@ test('deployment detail is a timeline: timed steps, grouped changes, code file c
   const first = (await api('/apps/crm/deployments/1')).body;
   assert.equal(first.status, 'live');
   assert.ok(first.timeline.length > 3 && first.timeline.every((s: any) => s.startedAt && s.status === 'done'), JSON.stringify(first.timeline));
-  assert.ok(first.changeSet.infrastructure.some((c: string) => c.startsWith('+ database')));
-  assert.ok(first.changeSet.configuration.some((c: string) => c.includes('variables.LOG_LEVEL')));
+  assert.ok(first.changeSet.infrastructure.includes('Added a database'), JSON.stringify(first.changeSet));
+  assert.ok(first.changeSet.configuration.includes('New variable LOG_LEVEL'), JSON.stringify(first.changeSet));
   assert.deepEqual(first.changeSet.code, { added: 5, changed: 0, removed: 0, files: 5, comparedWith: null });
   assert.equal(first.failure, null);
   assert.equal(first.specVersion, 1);

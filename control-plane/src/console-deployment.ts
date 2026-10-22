@@ -69,6 +69,46 @@ export function changeText(c: Change): string {
   return `${c.kind} ${c.path}`;
 }
 
+/** One change of a deployment, as a sentence for the console (the CLI's `plan` keeps `changeText`). */
+export function humanChange(c: Change): string {
+  const [head, name, field] = c.path.split('.');
+  const added = c.kind === '+';
+  const removed = c.kind === '-';
+  const verb = (thing: string) => (added ? `New ${thing}` : removed ? `Removed ${thing}` : `Changed ${thing}`);
+  const migration = /^migrations\/(.+)$/.exec(c.path);
+  if (migration) return added ? `New migration ${migration[1]}` : removed ? `Migration ${migration[1]} removed` : `Migration ${migration[1]} changed`;
+  const fromTo = (label: string) => `${label}: ${String(c.from)} → ${String(c.to)}`;
+  switch (head) {
+    case 'services':
+    case 'schedules':
+    case 'volumes': {
+      const kind = head.slice(0, -1);
+      if (name && field) return `${name}: ${field} changed`;
+      return verb(`${kind} ${name ?? ''}`.trim());
+    }
+    case 'database':
+      if (name === 'migrations') return 'Migrations folder changed';
+      return added ? 'Added a database' : removed ? 'Removed the database' : 'Database changed';
+    case 'variables':
+      return verb(`variable ${name}`);
+    case 'secrets':
+      return removed ? `Removed secret ${name}` : `${name} now comes from ${String(c.to)}`;
+    case 'auth':
+      return added ? 'Sign-in turned on' : removed ? 'Sign-in turned off' : 'Sign-in settings changed';
+    case 'access':
+      return c.kind === '~' ? fromTo('Access') : `Access: ${String(c.to)}`;
+    case 'runtime':
+      if (name === 'size') return fromTo('Box size');
+      if (name === 'image') return fromTo('Image');
+      if (name === 'build') return 'Build commands changed';
+      return added ? `Runtime: ${String(c.to)}` : 'Runtime changed';
+    case 'domains':
+      return 'Custom domains changed';
+    default:
+      return changeText(c);
+  }
+}
+
 function codeChanges(ctx: Pick<Ctx, 'store'>, app: AppRow, env: EnvRow, d: Deployment): CodeChanges | null {
   // An apply records the snapshot of the release it restarts; it never changes code.
   if (!d.snapshot_id || d.kind === 'apply') return null;
@@ -90,7 +130,7 @@ function codeChanges(ctx: Pick<Ctx, 'store'>, app: AppRow, env: EnvRow, d: Deplo
 export function deploymentChanges(ctx: Pick<Ctx, 'store'>, app: AppRow, env: EnvRow, d: Deployment): DeploymentChanges {
   const infrastructure: string[] = [];
   const configuration: string[] = [];
-  for (const c of d.changes) (INFRASTRUCTURE.test(c.path) ? infrastructure : configuration).push(changeText(c));
+  for (const c of d.changes) (INFRASTRUCTURE.test(c.path) ? infrastructure : configuration).push(humanChange(c));
   return { infrastructure, configuration, code: codeChanges(ctx, app, env, d) };
 }
 
