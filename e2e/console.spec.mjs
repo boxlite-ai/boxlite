@@ -211,13 +211,16 @@ async function main() {
       assert(log.includes(someLine.slice(0, 40)), `log misses "${someLine}"`)
       const code = await text(page.getByTestId('code-changes'))
       assert(/\+\d+ added/.test(code), `no code file counts: ${code}`)
-      assert(/key …/.test(await text(page.getByTestId('deployment-detail'))), 'who triggered it is missing')
+      assert(/agent …/.test(await text(page.getByTestId('deployment-detail'))), 'who triggered it is missing')
       await shot('deployment-detail')
       return `${truth.steps.length} steps, ${truth.logs.length} log lines`
     })
 
-    await step('overview services and schedules match the CP', async () => {
+    await step('services and schedules (Deployments › Services) match the CP', async () => {
       await tab('Overview')
+      // The Overview says whether everything runs; the services themselves are under Deployments.
+      await page.getByRole('button', { name: /Services →/ }).click()
+      await page.getByRole('tab', { name: /^Services/ }).waitFor()
       const services = await cpApi('/envs/main/services')
       for (const s of services) {
         // The process details (pid, port, restarts) are in the row's expanded part.
@@ -231,7 +234,7 @@ async function main() {
       // The table says the schedule in words; the raw cron is on hover.
       for (const s of schedules) await page.locator(`[title="${s.cron}"]`).first().waitFor()
       await page.getByText('every minute').first().waitFor()
-      await shot('overview-live')
+      await shot('services')
       return `${services.length} service(s), ${schedules.length} schedule(s)`
     })
 
