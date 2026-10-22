@@ -40,6 +40,7 @@ type Client struct {
 	runtime *boxlite.Runtime
 	logger  *slog.Logger
 	homeDir string
+	cacheMu sync.Mutex
 	mu      sync.RWMutex
 	boxes   map[string]*boxlite.Box
 	// What each freshly created box's image resolved to, until it has been
@@ -466,6 +467,17 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithAdvancedOptions(advanced))
 	}
 
+	// A persistent cache lease covers configured/stopped boxes as well: they
+	// can restart. Serialize admission until native identity is durable.
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+	cacheMounts, err := c.acquireCaches(ctx, boxDto)
+	if err != nil {
+		return "", "", err
+	}
+	for _, vol := range cacheMounts {
+		opts = append(opts, boxlite.WithBindMount(vol.hostPath, vol.mountPath))
+	}
 	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Volumes)
 	if err != nil {
 		return "", "", err
@@ -618,11 +630,14 @@ func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
 
 // Destroy removes a box entirely.
 func (c *Client) Destroy(ctx context.Context, boxId string) error {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
 	c.forgetBox(boxId)
 
 	if err := c.runtime.ForceRemove(ctx, boxId); err != nil {
 		return err
 	}
+	// Leases reconcile lazily against confirmed native absence. Data is kept.
 
 	if err := c.removeBoxVolumeMountRecord(ctx, boxId); err != nil {
 		c.logger.WarnContext(ctx, "failed to remove box volume mount record", "box", boxId, "error", err)

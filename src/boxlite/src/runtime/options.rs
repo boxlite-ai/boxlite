@@ -824,7 +824,8 @@ impl Default for RootfsSpec {
 
 /// Filesystem mount specification.
 ///
-/// A mount has exactly one origin: `managed_volume` for a server-side managed
+/// A mount has exactly one origin: `cache_volume` for a runner-local cache,
+/// `managed_volume` for a server-side managed
 /// volume, or `host_path` for a bind mount from the machine running the box.
 /// Build one with [`VolumeSpec::managed_volume`] or [`VolumeSpec::bind_mount`]
 /// instead of filling the fields by hand.
@@ -834,6 +835,9 @@ impl Default for RootfsSpec {
 /// constructor — would strand every box written before such a rename.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct VolumeSpec {
+    /// Runner-local, tenant-scoped cache ID. REST runtimes only; never a host path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_volume: Option<String>,
     /// Managed volume to mount, addressed by its server-assigned id **or** by
     /// its name — the server resolves either.
     ///
@@ -858,6 +862,7 @@ impl VolumeSpec {
     /// Bind a host directory or file into the box.
     pub fn bind_mount(host_path: impl Into<String>, guest_path: impl Into<String>) -> Self {
         Self {
+            cache_volume: None,
             managed_volume: None,
             host_path: host_path.into(),
             guest_path: guest_path.into(),
@@ -868,6 +873,7 @@ impl VolumeSpec {
     /// Mount a managed volume, addressed by server-assigned id or by name.
     pub fn managed_volume(volume: impl Into<String>, guest_path: impl Into<String>) -> Self {
         Self {
+            cache_volume: None,
             managed_volume: Some(volume.into()),
             host_path: String::new(),
             guest_path: guest_path.into(),
@@ -875,12 +881,38 @@ impl VolumeSpec {
         }
     }
 
-    /// Reject a mount that names no origin, both origins, or an empty one.
+    /// Mount a cache resolved on the scheduled runner, independently per tenant.
+    pub fn cache_volume(id: impl Into<String>, guest_path: impl Into<String>) -> Self {
+        Self {
+            cache_volume: Some(id.into()),
+            managed_volume: None,
+            host_path: String::new(),
+            guest_path: guest_path.into(),
+            read_only: false,
+        }
+    }
+
+    /// Reject a mount that names no origin, multiple origins, or an empty one.
     ///
     /// FFI callers (C/Go) and hand-built literals can reach either invalid
     /// shape, so this runs at create rather than only in the constructors.
     pub fn validate(&self) -> BoxliteResult<()> {
         let guest_path = &self.guest_path;
+        if let Some(id) = &self.cache_volume {
+            if self.managed_volume.is_some()
+                || !self.host_path.is_empty()
+                || self.read_only
+                || id.is_empty()
+                || id.len() > 64
+                || !id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                    "cache_volume requires an exclusive writable origin and a 1..64 character ASCII alphanumeric, dash or underscore ID".into()));
+            }
+            return Ok(());
+        }
         match &self.managed_volume {
             Some(volume) if !self.host_path.is_empty() => Err(
                 boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
@@ -1499,6 +1531,22 @@ pub struct CloneOptions {}
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cache_volume_rejects_ambiguous_origins_and_unsafe_ids() {
+        for id in ["", "../escape", "/absolute", "a/b", "with space"] {
+            assert!(VolumeSpec::cache_volume(id, "/cache").validate().is_err());
+        }
+        let mut cache = VolumeSpec::cache_volume("build-1", "/cache");
+        assert!(cache.validate().is_ok());
+        cache.managed_volume = Some("durable".into());
+        assert!(cache.validate().is_err());
+        cache.managed_volume = None;
+        cache.read_only = true;
+        assert!(cache.validate().is_err());
+        let wire = serde_json::to_value(VolumeSpec::cache_volume("build-1", "/cache")).unwrap();
+        assert_eq!(wire["cache_volume"], "build-1");
+        assert!(wire.get("managed_volume").is_none());
+    }
     use super::*;
     use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
     use crate::runtime::advanced_options::{
@@ -2429,6 +2477,7 @@ mod tests {
     fn test_sanitize_rejects_ambiguous_volume_origin() {
         let mut both = BoxOptions {
             volumes: vec![VolumeSpec {
+                cache_volume: None,
                 managed_volume: Some("my-data".into()),
                 host_path: "/tmp/data".into(),
                 guest_path: "/data".into(),

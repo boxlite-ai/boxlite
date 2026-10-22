@@ -282,7 +282,7 @@ Configuration options for creating a box.
 - `disk_size_gb: int | None` - Container disk size in GB, never smaller than the image (default: None, the image size)
 - `working_dir: str` - Working directory in container (default: `"/root"`)
 - `env: List[Tuple[str, str]]` - Environment variables as (key, value) pairs
-- `volumes: List[Tuple | Dict]` - Volume mounts; a tuple is a host bind, a dict takes `managed_volume` (id or name) or `host_path`
+- `volumes: List[Tuple | Dict]` - Volume mounts; a tuple is a host bind, a dict takes exactly one of `managed_volume` (id or name), `cache_volume` (runner-local ID), or `host_path`. [Cache lifecycle and limitations](../../docs/guides/runner-local-cache.md).
   - `read_only` is a bool and defaults to `False`
 - `network: NetworkSpec | None` - Structured network configuration
 - `ports: List[Tuple | Dict]` - Local TCP forwarding; omit `host_port` in a dict for automatic allocation

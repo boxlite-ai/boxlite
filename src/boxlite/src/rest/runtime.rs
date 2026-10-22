@@ -272,7 +272,7 @@ impl BoxOptions {
         if self
             .volumes
             .iter()
-            .any(|volume| volume.managed_volume.is_none())
+            .any(|volume| volume.managed_volume.is_none() && volume.cache_volume.is_none())
         {
             return Err(BoxliteError::Unsupported(
                 "host bind mounts are only supported by the local runtime; mount a managed volume \
@@ -362,6 +362,9 @@ impl RuntimeBackend for RestRuntime {
             if options.advanced.capabilities().is_some() {
                 self.client.require_linux_capabilities_enabled().await?;
             }
+            if options.volumes.iter().any(|v| v.cache_volume.is_some()) {
+                self.client.require_cache_volumes_enabled().await?;
+            }
             Some(CreateBoxRequest::from_options(&options, None))
         } else {
             None
@@ -403,6 +406,9 @@ impl RuntimeBackend for RestRuntime {
         }
         if options.advanced.privileged {
             self.client.require_privileged_enabled().await?;
+        }
+        if options.volumes.iter().any(|v| v.cache_volume.is_some()) {
+            self.client.require_cache_volumes_enabled().await?;
         }
 
         let req = CreateBoxRequest::from_options(&options, name);
@@ -703,6 +709,22 @@ mod tests {
         };
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn cache_volume_requires_server_advertisement_before_create() {
+        let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let options = BoxOptions {
+            volumes: vec![crate::runtime::options::VolumeSpec::cache_volume(
+                "build", "/cache",
+            )],
+            ..BoxOptions::default()
+        };
+        let result = RuntimeBackend::create(&runtime, options, None).await;
+        assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
         assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
     }
 

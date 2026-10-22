@@ -56,7 +56,7 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
         // below and surfaces as "host path does not exist: my-data", which
         // points the caller at their own filesystem instead of at the
         // runtime they used.
-        if let Some(reference) = &vol.managed_volume {
+        if let Some(reference) = vol.managed_volume.as_ref().or(vol.cache_volume.as_ref()) {
             return Err(BoxliteError::Unsupported(format!(
                 "managed volume {reference:?} requires a REST runtime; the local runtime has no \
                  volume backend to resolve it against"
@@ -388,6 +388,7 @@ mod tests {
     fn resolve_volume_gets_owner_uid() {
         let tmp = tempfile::tempdir().unwrap();
         let volumes = vec![VolumeSpec {
+            cache_volume: None,
             managed_volume: None,
             host_path: tmp.path().to_str().unwrap().to_string(),
             guest_path: "/data".to_string(),
@@ -447,6 +448,7 @@ mod tests {
         std::fs::write(&file_path, "key=value\n").unwrap();
 
         let volumes = vec![VolumeSpec {
+            cache_volume: None,
             managed_volume: None,
             host_path: file_path.to_str().unwrap().to_string(),
             guest_path: "/etc/app.conf".to_string(),

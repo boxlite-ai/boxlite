@@ -36,6 +36,8 @@ export class BoxProgressDto {
 
 @ApiSchema({ name: 'BoxVolume' })
 export class BoxVolume {
+  @ApiPropertyOptional({ enum: ['volume', 'cache'], default: 'volume' })
+  type?: 'volume' | 'cache'
   @ApiProperty({
     description: 'The ID of the volume',
     example: 'volume123',

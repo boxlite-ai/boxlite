@@ -179,6 +179,7 @@ async fn check_ssh_start_policy(
     let record = files.path().join("runs");
     std::fs::write(&record, "").unwrap();
     options.volumes = vec![boxlite::runtime::options::VolumeSpec {
+        cache_volume: None,
         managed_volume: None,
         host_path: files.path().to_str().unwrap().into(),
         guest_path: "/proof".into(),

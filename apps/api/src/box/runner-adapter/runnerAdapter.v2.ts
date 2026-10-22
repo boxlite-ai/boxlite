@@ -138,6 +138,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       entrypoint: box.entrypoint,
       cmd: box.cmd,
       volumes: box.volumes?.map((volume) => ({
+        type: volume.type,
         volumeId: volume.volumeId,
         mountPath: volume.mountPath,
         subpath: volume.subpath,

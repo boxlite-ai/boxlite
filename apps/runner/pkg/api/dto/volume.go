@@ -5,6 +5,7 @@
 package dto
 
 type VolumeDTO struct {
+	Type      string  `json:"type,omitempty"`
 	VolumeId  string  `json:"volumeId"`
 	MountPath string  `json:"mountPath"`
 	Subpath   *string `json:"subpath,omitempty"`

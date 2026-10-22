@@ -64,7 +64,8 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   createDto.volumes = dto.volumes?.map((volume) => ({
     // `volumeId` is the internal DTO's name for what the volume service looks
     // up by id *or* by name (see VolumeService.validateVolumes).
-    volumeId: volume.managed_volume,
+    volumeId: volume.cache_volume ?? volume.managed_volume,
+    ...(volume.cache_volume !== undefined ? { type: 'cache' as const } : {}),
     mountPath: volume.guest_path,
   }))
   createDto.secrets = dto.secrets?.map((secret) => ({

@@ -183,6 +183,7 @@ mod tests {
             .with_layout(test_layout("/tmp/ctx-test"))
             .with_security(security)
             .with_volume(VolumeSpec {
+                cache_volume: None,
                 managed_volume: None,
                 host_path: "/data".to_string(),
                 guest_path: "/mnt/data".to_string(),

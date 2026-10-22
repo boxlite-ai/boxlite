@@ -211,3 +211,25 @@ Child creation uses normal Box admission/quotas with an explicit owner placement
 constraint; no inaccessible-runner fallback. New external volumes are explicit
 inputs. Verify S2/S3/S4 with actual children and a runner restart; exercise typed
 missing/type/version/permission failures before accepting F5.
+
+## F6 implementation decision (before edits)
+
+Add an explicit `cache_volume` origin to SDK volume specs and `type: cache` to
+runner mounts. Keep durable volume resolution unchanged. API supplies the trusted
+organization ID; runner resolves storage under its runtime home's private cache
+root after normal placement. IDs are bounded simple names, never host paths.
+Mount only the data subdirectory; lease metadata stays outside the guest.
+
+Use persistent exclusive ownership for the entire Box lifetime, including stopped
+Boxes that can restart. Release after confirmed native deletion; on process-crash
+recovery, reclaim a lease only when its native Box is absent. Unknown state fails
+closed. Serialize lease admission with create/delete and preserve data on release.
+Explicit deletion/age-based collection refuses any owned cache; no automatic
+eviction or cross-runner synchronization. This conservative policy also prevents
+two active Docker daemons sharing a directory, but does not establish Docker
+filesystem compatibility or V4: F1's exhausted failure blocks those claims.
+
+Qualify ordinary cache writes with two local runner processes and independent
+runtime/cache roots on this Mac. Exercise restart, deletion refusal, tenant
+separation, concurrency and FS snapshot exclusion through real guests. Docker
+storage-driver/version compatibility and combined Swarm remain BLOCKED by F1.

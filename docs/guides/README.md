@@ -10,6 +10,7 @@ Each guide walks through one task. How the underlying pieces work is in
 - [Docker Swarm](docker-swarm.md): guest kernel, node IP transport, VIP/DNSRR and ingress qualification.
 - [Running examples](running-examples.md): nine of the Python examples and what each one shows.
 - [Mounting volumes](volumes.md): share host directories with a box for input and output.
+- [Runner-local caches](runner-local-cache.md): exclusive local volumes and qualified Docker image/build reuse.
 - [Filesystem snapshots](filesystem-snapshots.md): capture and restore a Box's writable disk.
 - [Creating Boxes from snapshots](create-from-snapshot.md): independent children and runner placement.
 - [Memory snapshot contract](memory-snapshots.md): explicit mock testing and production rejection.

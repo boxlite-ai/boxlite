@@ -120,6 +120,8 @@ func (a *ApiServer) Start(ctx context.Context) error {
 	protected.GET("/v1/snapshots/:snapshot", controllers.BoxliteRuntimeSnapshot)
 	protected.POST("/v1/snapshots/:snapshot/archive", controllers.BoxliteExportSnapshot)
 	protected.POST("/v1/snapshot-imports/:name", controllers.BoxliteImportSnapshot)
+	protected.GET("/v1/caches/:tenant/:cache", controllers.BoxliteCache)
+	protected.DELETE("/v1/caches/:tenant/:cache", controllers.BoxliteCache)
 	protected.DELETE("/v1/snapshots/:snapshot", controllers.BoxliteRuntimeSnapshot)
 
 	metricsController := protected.Group("/metrics")

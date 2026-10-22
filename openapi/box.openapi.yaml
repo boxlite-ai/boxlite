@@ -541,6 +541,55 @@ paths:
   # -------------------------------------------------------------------------
   # Snapshot / Portability
   # -------------------------------------------------------------------------
+  /{prefix}/caches/{runner_id}/{cache_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - name: runner_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: cache_id
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+    get:
+      operationId: getRunnerCache
+      summary: Inspect this organization's cache on one runner
+      tags: [Volumes]
+      responses:
+        "200":
+          description: Persistent cache ownership; stopped Boxes remain owners
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, id, runner_id, in_use, idle_since]
+                properties:
+                  type: { type: string, const: cache }
+                  id: { type: string }
+                  runner_id: { type: string, format: uuid }
+                  in_use: { type: boolean }
+                  box_id: { type: string }
+                  idle_since: { type: string, format: date-time }
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      operationId: removeRunnerCache
+      summary: Explicitly collect an unowned runner-local cache
+      tags: [Volumes]
+      parameters:
+        - name: idle_before
+          in: query
+          schema: { type: string, format: date-time }
+          description: Optional cutoff; only caches observed idle before it may be removed
+      responses:
+        "204":
+          description: Cache removed; next mount initializes an empty directory
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          description: Cache still owned by a Box, or has not reached the requested idle age
+
   /{prefix}/snapshots/{snapshot_id}:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -2064,6 +2113,9 @@ components:
               type: boolean
               default: false
               description: Supports explicit filesystem snapshot copies between available runners.
+            cache_volumes_enabled:
+              type: boolean
+              description: Runner-local exclusive cache volumes. Does not imply Docker storage-driver compatibility.
             memory_snapshots_enabled:
               type: boolean
               description: Real memory snapshot support. False in production; test mocks never imply real memory support.
@@ -2575,13 +2627,20 @@ components:
     VolumeSpec:
       type: object
       description: |
-        Managed volume mounted into a box. Host bind mounts have no
-        representation here: the path would name the server's filesystem, not
-        the caller's, so the only mount source this API accepts is a managed
-        volume.
+        Managed durable volume or runner-local cache mounted into a box.
+        Exactly one origin is required. Cache contents are tenant-scoped and
+        independent on each runner; placement is not constrained by a cache.
+        Host bind mounts have no representation on this API.
       additionalProperties: false
-      required: [managed_volume, guest_path]
+      required: [guest_path]
+      oneOf:
+        - required: [managed_volume]
+        - required: [cache_volume]
       properties:
+        cache_volume:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{1,64}$'
+          description: Logical cache ID, held exclusively until the Box is deleted.
         managed_volume:
           type: string
           minLength: 1

@@ -18,6 +18,7 @@ import {
   IsArray,
   Max,
   Min,
+  Matches,
   IsIn,
   Validate,
   ValidateIf,
@@ -185,7 +186,22 @@ class IsNotHostPathConstraint implements ValidatorConstraintInterface {
   }
 }
 
+@ValidatorConstraint({ name: 'oneVolumeOrigin', async: false })
+class OneVolumeOrigin implements ValidatorConstraintInterface {
+  validate(_: unknown, args: { object: object }): boolean {
+    const v = args.object as VolumeSpecDto
+    return Number(v.managed_volume !== undefined) + Number(v.cache_volume !== undefined) === 1
+  }
+  defaultMessage(): string {
+    return 'volume requires exactly one of managed_volume or cache_volume'
+  }
+}
+
 export class VolumeSpecDto {
+  @ValidateIf((v) => v.managed_volume === undefined || v.cache_volume !== undefined)
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{1,64}$/)
+  cache_volume?: string
   /**
    * The volume's server-assigned id or its name - the server resolves either.
    *
@@ -193,12 +209,14 @@ export class VolumeSpecDto {
    * validation error on its own rather than reaching the mapper as a lookup
    * that can never match.
    */
+  @ValidateIf((v) => v.cache_volume === undefined || v.managed_volume !== undefined)
   @IsString()
   @IsNotEmpty()
   @Validate(IsNotHostPathConstraint)
-  managed_volume: string
+  managed_volume?: string
 
   @IsString()
+  @Validate(OneVolumeOrigin)
   guest_path: string
 
   /**

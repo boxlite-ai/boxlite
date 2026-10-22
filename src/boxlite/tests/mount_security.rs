@@ -82,6 +82,7 @@ async fn mount_security_integration() {
         .create(
             BoxOptions {
                 volumes: vec![VolumeSpec {
+                    cache_volume: None,
                     managed_volume: None,
                     host_path: tmp.path().to_str().unwrap().into(),
                     guest_path: "/workspace/data".into(),

@@ -1774,11 +1774,12 @@ fn reject_local_unsupported_options(options: &BoxOptions) -> BoxliteResult<()> {
     // `resolve_user_volumes` catches this too, but only once boot is under way
     // — after the image is pulled and the box record exists. Fail here instead,
     // mirroring `BoxOptions::sanitize_remote`'s mount rules on the REST side.
-    if let Some(volume) = options
-        .volumes
-        .iter()
-        .find_map(|volume| volume.managed_volume.as_deref())
-    {
+    if let Some(volume) = options.volumes.iter().find_map(|volume| {
+        volume
+            .managed_volume
+            .as_deref()
+            .or(volume.cache_volume.as_deref())
+    }) {
         return Err(BoxliteError::Unsupported(format!(
             "managed volume {volume:?} is only supported by REST runtimes; the local runtime has \
              no volume backend to resolve it against"

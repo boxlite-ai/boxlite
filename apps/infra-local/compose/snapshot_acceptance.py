@@ -8,7 +8,15 @@ from pathlib import Path
 import uuid
 import time
 
-from .acceptance import ROOT, STATE, API, ADMIN_KEY, request, restart
+from .acceptance import (
+    ROOT,
+    STATE,
+    API,
+    ADMIN_KEY,
+    request,
+    restart,
+    runner_home_for_box,
+)
 from .config import worktree_home
 from .orchestrator import exec_collect
 
@@ -114,11 +122,12 @@ async def runner_probe():
         ),
         180,
     )
+    home = runner_home_for_box(box.id)
     record = {
         "id": box.id,
         "image": "alpine:3.23",
         "snapshot_name": marker,
-        "runner_home": str(worktree_home(ROOT, "qa")),
+        "runner_home": str(home),
     }
     (STATE / "fs-runner-box.json").write_text(json.dumps(record, indent=2))
     log = STATE / "fs-runner-guest.log"
@@ -134,15 +143,13 @@ async def runner_probe():
     await run(
         "printf before > /root/state; chmod 640 /root/state; printf modified > /etc/motd; rm /etc/issue; sync"
     )
-    existing_disks = set(worktree_home(ROOT, "qa").glob("snapshots/*/disk.qcow2"))
+    existing_disks = set(home.glob("snapshots/*/disk.qcow2"))
     info = await asyncio.wait_for(box.snapshot.create(name=marker), 90)
     assert info.snapshot_type == "filesystem" and not info.is_mock
     assert info.box_id == box.id
     assert (await box.snapshot.get(marker)).id == info.id
     assert info.id in [s.id for s in await box.snapshot.list()]
-    disks = list(
-        set(worktree_home(ROOT, "qa").glob("snapshots/*/disk.qcow2")) - existing_disks
-    )
+    disks = list(set(home.glob("snapshots/*/disk.qcow2")) - existing_disks)
     assert len(disks) == 1, "snapshot absent from this checkout's actual runner home"
     before = digest(disks[0])
     record.update(snapshot_id=info.id, disk=str(disks[0]), snapshot_sha256=before)

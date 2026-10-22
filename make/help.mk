@@ -91,6 +91,8 @@ help:
 	@echo "    make test:runner-ci:infra  - Start and verify isolated local API/runner infrastructure"
 	@echo "    make test:runner-ci:dind   - Verify guest Docker and Compose through SDK/API/runner"
 	@echo "    make test:runner-ci:snapshot-copy - Verify immutable snapshot transfer between two local runners"
+	@echo "    make test:runner-ci:combined - Verify snapshot children, cross-runner Swarm and Docker cache reuse"
+	@echo "    make test:runner-ci:swarm-stop - Preserve the last Swarm scene and stop its guests"
 	@echo "    make fmt:snapshot-copy / lint:snapshot-copy - Format or lint snapshot transfer acceptance"
 	@echo "    make test:runner-ci:dind-diagnose - Inspect a retained Docker guest after failure"
 	@echo "    make test:skill:boxlite-diagrams - Run diagram skill validator tests"

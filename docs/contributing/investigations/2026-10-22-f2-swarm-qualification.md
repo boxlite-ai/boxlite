@@ -33,7 +33,7 @@ JSON records and full guest logs are under `.apps-local/runner-acceptance/`.
 | M1–M4/M6, same runner | PASS | `make test:runner-ci:swarm TOPOLOGY=same-runner`; `f2-r9-same-runner.log`; `swarm-same-runner-2dfed9e3` |
 | M1–M4/M6, different runners | PASS | `make test:runner-ci:swarm TOPOLOGY=different-runners`; `f2-r9-different-runners.log`; `swarm-different-runners-d2c55971` |
 | M5 | PASS | Both complete topology runs above, separate records |
-| Combined E | BLOCKED | Existing snapshot contract restricts children to the snapshot-owning runner; one snapshot cannot place children on both runners |
+| Combined E | PASS in later F5/F6 work | [Migration-backed snapshot copy and cached Engines](2026-10-22-combined-snapshot-swarm-cache.md) remove the former owner-placement block |
 
 Every service has one running task constrained by actual Swarm node ID. VIP and
 DNSRR each check both directed cross-node pairs by service name, HTTP 200 and

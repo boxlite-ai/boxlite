@@ -15,6 +15,7 @@
 
 
 export interface DtoVolumeDTO {
+    'type'?: 'volume' | 'cache';
     'mountPath'?: string;
     'subpath'?: string;
     'volumeId'?: string;

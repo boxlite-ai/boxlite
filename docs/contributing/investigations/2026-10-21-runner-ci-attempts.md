@@ -58,7 +58,7 @@ exit codes, hypotheses, versions, retained patch and guest evidence.
 ## Remaining features
 
 F2: zero rounds, BLOCKED by F1; see [Swarm report](2026-10-22-f2-swarm-blocked.md).
-F6: zero implementation/verification rounds. No acceptance claim yet.
+F6: in progress; see its rounds below. Docker reuse remains blocked by F1.
 
 ## F3
 
@@ -154,3 +154,40 @@ F6: zero implementation/verification rounds. No acceptance claim yet.
    children have distinct boot IDs and independent disks, and source/snapshot
    deletion and process restart preserve the documented lifecycle. Six rounds
    used; no further implementation round is available for F5.
+
+## F6
+
+1. Hypothesis: runner-side bind resolution plus a persistent native-Box lease
+   can reuse local cache data without changing durable-volume semantics or
+   scheduling. Add SDK/API cache origin, isolated runner paths, exclusive leases,
+   authenticated query/delete and two-runner harness. Native build and API checks
+   pass. `make test:runner-ci:cache` exits 0 (`f6-r1-cache.log`): V1/V2 and S5
+   pass through actual guests; restart/deletion/conflict pass, tenant and abnormal
+   recovery remain pending. `make test:apps:runner FILTER=CacheLease SETUP_DONE=1`
+   exits 2 because the new unit fixture did not initialize the existing runner
+   configuration singleton; Destroy panics in GetEnvironment. No cache assertion
+   failed. Log `f6-r1-runner.log`, parent `6010f8a9`, same environment as F5.
+2. Hypothesis: initializing the existing configuration fixture lets the native
+   lease test reach deletion and recovery. Extend real probes for separate tenant
+   identity and abnormal runner exit; preserve the F1 dependency for Docker.
+   Native lease test passes (`f6-r2-runner.log`), core volume regressions pass
+   (25), API checks pass (94). Real tenant probe fails its stdout assertion
+   (`f6-r2-cache.log`, exit 2), although both runner data files contain the
+   correct distinct markers. Preserve disks and `f6-r2-scene/` before cleanup.
+   `make test:runner-ci:cache-diagnose` proves guest status reports 37 for exit 37,
+   1 for wrong content and 0 for correct content, while stdout is absent. The
+   existing WS authenticator scopes API keys to their key tenant, unlike admin
+   HTTP prefix switching; the fixture used the original tenant's admin key.
+3. Hypothesis: a separately scoped API key is required for tenant B's complete
+   HTTP/WS execution path. Provision that local authentication fixture, preserving
+   the strict guest stdout/content assertions. No production WS behavior changes.
+   Real `make test:runner-ci:cache` passes, including the strict shell-error run
+   (`f6-r3-cache-strict.log`, exit 0): V1/V2/V3, generic exclusive ownership and
+   SIGKILL/restart recovery, and S5 cache exclusion/explicit replacement mounts.
+   SDK boundary, core volume, API and runner lease tests pass. Three rounds used;
+   stop independent cache implementation after verification. F6 remains INCOMPLETE
+   because Docker reuse, its storage-driver compatibility and configuration
+   profile are blocked by F1; no additional F1 attempt is hidden in F6.
+
+The F5 parent used during F6 development was `6010f8a9`; a final formatting-only
+amend retained feature ownership and changed that commit to `c16be9c7`.

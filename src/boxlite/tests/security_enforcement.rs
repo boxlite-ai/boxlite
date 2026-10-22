@@ -78,12 +78,14 @@ async fn virtiofs_readonly_and_capabilities() {
             BoxOptions {
                 volumes: vec![
                     VolumeSpec {
+                        cache_volume: None,
                         managed_volume: None,
                         host_path: ro_dir.path().to_str().unwrap().into(),
                         guest_path: "/data/readonly".into(),
                         read_only: true,
                     },
                     VolumeSpec {
+                        cache_volume: None,
                         managed_volume: None,
                         host_path: rw_dir.path().to_str().unwrap().into(),
                         guest_path: "/data/writable".into(),

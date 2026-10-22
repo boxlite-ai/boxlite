@@ -257,6 +257,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     const response = await this.boxApiClient.create({
       id: box.id,
       snapshotId: box.snapshotId,
+      volumes: box.volumes,
       image,
       osUser: box.osUser,
       cpuQuota: box.cpu,
@@ -346,6 +347,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         placeholder: secret.placeholder,
       })),
       volumes: box.volumes?.map((volume) => ({
+        type: volume.type,
         volumeId: volume.volumeId,
         mountPath: volume.mountPath,
         subpath: volume.subpath,

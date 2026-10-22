@@ -71,6 +71,12 @@ func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) (
 	fuseMountedVolumes := make(map[string]bool)
 
 	for _, vol := range volumes {
+		if vol.Type == "cache" {
+			continue
+		} // resolved by the local cache facade
+		if vol.Type != "" && vol.Type != "volume" {
+			return nil, fmt.Errorf("unknown volume type")
+		}
 		volumeIdPrefixed := fmt.Sprintf("%s%s", volumeMountPrefix, vol.VolumeId)
 		baseMountPath := filepath.Join(getVolumeMountBasePath(), volumeIdPrefixed)
 

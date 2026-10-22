@@ -772,6 +772,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
 /// vocabulary spans Python, the Rust core and the wire.
 #[derive(Clone, Debug)]
 pub(crate) struct PyVolumeSpec {
+    cache_volume: Option<String>,
     managed_volume: Option<String>,
     host_path: String,
     guest_path: String,
@@ -780,6 +781,9 @@ pub(crate) struct PyVolumeSpec {
 
 impl From<PyVolumeSpec> for VolumeSpec {
     fn from(v: PyVolumeSpec) -> Self {
+        if let Some(id) = v.cache_volume {
+            return VolumeSpec::cache_volume(id, v.guest_path);
+        }
         let spec = match v.managed_volume {
             Some(managed_volume) => VolumeSpec::managed_volume(managed_volume, v.guest_path),
             None => VolumeSpec::bind_mount(v.host_path, v.guest_path),
@@ -826,6 +830,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
             }
 
             return Ok(PyVolumeSpec {
+                cache_volume: None,
                 managed_volume: None,
                 host_path,
                 guest_path,
@@ -837,7 +842,13 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
             // Unknown keys are an error, not noise. `ro` and `guest` used to be
             // accepted aliases; ignoring them now would silently hand back a
             // read-write mount to a caller who asked for read-only.
-            const KEYS: [&str; 4] = ["managed_volume", "host_path", "guest_path", "read_only"];
+            const KEYS: [&str; 5] = [
+                "cache_volume",
+                "managed_volume",
+                "host_path",
+                "guest_path",
+                "read_only",
+            ];
             for key in d.keys() {
                 let key: String = key.extract()?;
                 if !KEYS.contains(&key.as_str()) {
@@ -848,6 +859,34 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
                 }
             }
 
+            if let Some(id) = d.get_item("cache_volume")? {
+                if d.contains("managed_volume")? || d.contains("host_path")? {
+                    return Err(PyRuntimeError::new_err(
+                        "cache_volume cannot be combined with another origin",
+                    ));
+                }
+                let read_only = d
+                    .get_item("read_only")?
+                    .map(|v| v.extract::<bool>())
+                    .transpose()?
+                    .unwrap_or(false);
+                if read_only {
+                    return Err(PyRuntimeError::new_err(
+                        "cache volumes require exclusive writable access",
+                    ));
+                }
+                let guest_path = d
+                    .get_item("guest_path")?
+                    .ok_or_else(|| PyRuntimeError::new_err("volume dict missing guest_path"))?
+                    .extract()?;
+                return Ok(PyVolumeSpec {
+                    cache_volume: Some(id.extract()?),
+                    managed_volume: None,
+                    host_path: String::new(),
+                    guest_path,
+                    read_only,
+                });
+            }
             let managed_volume: Option<String> = match d.get_item("managed_volume") {
                 Ok(Some(v)) => Some(v.extract()?),
                 _ => None,
@@ -883,6 +922,7 @@ impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for PyVolumeSpec {
             };
 
             return Ok(PyVolumeSpec {
+                cache_volume: None,
                 managed_volume,
                 host_path,
                 guest_path,

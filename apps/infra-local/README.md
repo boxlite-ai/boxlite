@@ -85,12 +85,20 @@ Use the [DinD firmware build](../../docs/guides/docker-in-docker.md); keep
 | `test:runner-ci:swarm TOPOLOGY=different-runners` | The same checks on two local runner processes with distinct runtime homes |
 | `test:runner-ci:swarm-diagnose` | Inspect the latest retained Swarm guest |
 | `test:runner-ci:swarm-transport` | Compare guest ingress HTTP, published URI, DNS and SDK CONNECT |
+| `test:runner-ci:cache` | V1–V3: independent runner data, restart/crash leases, tenants, explicit deletion and snapshot boundaries |
+| `test:runner-ci:docker-cache` | V4/V5: actual image/build reuse, exact live/crashed ownership refusal, recovery and incompatible-profile checks |
+| `test:runner-ci:docker-cache-diagnose` | Inspect latest retained Docker cache guest |
 
 Run the probes sequentially: they temporarily control scheduling and restore it
 afterward. Swarm's guest VPN carries the required IP protocols through a live SDK
 forwarder; it does not provide automatic multi-host mesh networking. See
 [Swarm results](../../docs/contributing/investigations/2026-10-22-f2-swarm-qualification.md)
-for the current status. `make fmt:swarm` and `make lint:swarm` check this fixture.
+and [cache results](../../docs/contributing/investigations/2026-10-22-f6-cache-qualification.md).
+`fixtures/docker-cache.sh` is the qualified, version-checked ext4/overlay2 guest
+recipe; see [its lifecycle contract](../../docs/guides/runner-local-cache.md).
+`make fmt:runner-ci` and `make lint:runner-ci` check these files. The combined
+snapshot-to-cross-runner path remains blocked by snapshot placement; independent
+Swarm/cache passes do not qualify that path.
 
 ### Full stack smoke test
 

@@ -11,6 +11,7 @@ import { OrganizationResourcePermission } from '../organization/enums/organizati
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteSnapshotController } from './boxlite-snapshot.controller'
+import { BoxliteCacheController } from './boxlite-cache.controller'
 
 // http-proxy-middleware ships ESM only and the proxy controller imports it at
 // module scope; mock it the way the routing spec does so the class can load.
@@ -30,6 +31,8 @@ const reflector = new Reflector()
 // `null` means intentionally open: a read a plain org member may perform. There
 // is no `read:boxes` permission, so reads are gated by membership alone.
 const EXPECTED: Record<string, OrganizationResourcePermission[] | null> = {
+  getCache: [OrganizationResourcePermission.READ_VOLUMES],
+  removeCache: [OrganizationResourcePermission.DELETE_VOLUMES],
   get: null,
   remove: [WRITE_BOXES],
   create: [WRITE_BOXES],
@@ -76,6 +79,7 @@ function routeMethods(controller: Controller): string[] {
 
 describe('REST box/proxy permission coverage (GHSA-2qqv-7cwv-mj8h)', () => {
   const controllers: Controller[] = [
+    BoxliteCacheController as Controller,
     BoxliteBoxController as Controller,
     BoxliteProxyController as Controller,
     BoxliteSnapshotController as Controller,

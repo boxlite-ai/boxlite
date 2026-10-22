@@ -342,7 +342,7 @@ fn build_path_access(
     // A managed volume names no host path, so there is nothing to grant; the
     // local runtime rejects one before boot anyway (`resolve_user_volumes`).
     for vol in volumes {
-        if vol.managed_volume.is_some() {
+        if vol.managed_volume.is_some() || vol.cache_volume.is_some() {
             continue;
         }
         let p = PathBuf::from(&vol.host_path);
@@ -1057,12 +1057,14 @@ mod tests {
 
         let volumes = vec![
             VolumeSpec {
+                cache_volume: None,
                 managed_volume: None,
                 host_path: vol_ro.to_string_lossy().to_string(),
                 guest_path: "/mnt/input".to_string(),
                 read_only: true,
             },
             VolumeSpec {
+                cache_volume: None,
                 managed_volume: None,
                 host_path: vol_rw.to_string_lossy().to_string(),
                 guest_path: "/mnt/output".to_string(),
@@ -1091,6 +1093,7 @@ mod tests {
         let layout = test_layout(dir.path().to_path_buf());
 
         let volumes = vec![VolumeSpec {
+            cache_volume: None,
             managed_volume: None,
             host_path: "/does/not/exist".to_string(),
             guest_path: "/mnt/data".to_string(),
@@ -1116,6 +1119,7 @@ mod tests {
         std::fs::write(&file, "k=v\n").unwrap();
 
         let volumes = vec![VolumeSpec {
+            cache_volume: None,
             managed_volume: None,
             host_path: file.to_string_lossy().to_string(),
             guest_path: "/etc/app.conf".to_string(),
@@ -1369,6 +1373,7 @@ mod tests {
             .with_security(security)
             .with_network_backend_enabled(true)
             .with_volumes(vec![VolumeSpec {
+                cache_volume: None,
                 managed_volume: None,
                 host_path: vol_dir.to_string_lossy().to_string(),
                 guest_path: "/mnt/data".to_string(),
