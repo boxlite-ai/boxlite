@@ -198,6 +198,16 @@ fn test_box_network_null_pointer_validation() {
         assert!(!error.message.is_null());
         boxlite_error_free(&mut error as *mut _);
 
+        for updater in [
+            boxlite_network_update_inbound,
+            boxlite_network_update_outbound,
+        ] {
+            let code = updater(ptr::null_mut(), ptr::null(), &mut error);
+            assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+            assert!(!error.message.is_null());
+            boxlite_error_free(&mut error);
+        }
+
         let handle = std::ptr::NonNull::<CBoxHandle>::dangling().as_ptr();
         let code = boxlite_box_network(handle, ptr::null_mut(), &mut error as *mut _);
         assert_eq!(code, BoxliteErrorCode::InvalidArgument);

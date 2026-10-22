@@ -280,6 +280,11 @@ impl ApiClient {
         self.send_no_content(builder).await
     }
 
+    pub async fn put_no_content<B: Serialize>(&self, path: &str, body: &B) -> BoxliteResult<()> {
+        self.send_no_content(self.http.put(self.url(path)).json(body))
+            .await
+    }
+
     pub async fn post_empty<T: DeserializeOwned>(&self, path: &str) -> BoxliteResult<T> {
         let builder = self.empty_post_request(path);
         self.send_json(builder).await
@@ -467,6 +472,17 @@ impl ApiClient {
             .header(reqwest::header::ACCEPT, "application/json");
         let descriptor: TunnelDescriptor = self.send_json(builder).await?;
         Ok(descriptor.uri)
+    }
+
+    /// Withdraw public access to a box service port.
+    pub(crate) async fn revoke_box_tunnel(
+        &self,
+        box_id: impl AsRef<str>,
+        port: u16,
+    ) -> BoxliteResult<()> {
+        let path = format!("/boxes/{}/network/tunnel", box_id.as_ref());
+        self.delete_with_query(&path, &[("port", &port.to_string())])
+            .await
     }
 
     /// Build an authorized file request bounded by the box lifetime.

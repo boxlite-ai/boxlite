@@ -37,6 +37,8 @@ pub struct DnsRecord {
 /// land in a log file.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GvproxyConfig {
+    #[serde(default)]
+    pub outbound_disabled: bool,
     /// Unix socket path for the network tap interface.
     /// Caller-provided to ensure each box gets a unique, collision-free path.
     pub socket_path: PathBuf,
@@ -231,6 +233,7 @@ fn defaults_with_socket_path(socket_path: PathBuf) -> GvproxyConfig {
     use crate::net::constants::*;
 
     GvproxyConfig {
+        outbound_disabled: false,
         socket_path,
         control_socket_path: PathBuf::new(),
         subnet: SUBNET.to_string(),

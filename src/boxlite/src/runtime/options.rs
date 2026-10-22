@@ -635,6 +635,15 @@ impl BoxOptions {
         self.effective_auto_delete() > 0
     }
 
+    /// Validate options for a new box: [`Self::sanitize_common`] plus the
+    /// outbound rules `update_outbound` accepts, so every saved allowlist can be
+    /// re-sent or rolled back to. Start and import skip the rule check, keeping
+    /// boxes and archives saved by older releases usable.
+    pub(crate) fn sanitize_create(&self) -> BoxliteResult<()> {
+        self.sanitize_common()?;
+        OutboundNetworkConfig::from(&self.network).validate()
+    }
+
     /// Sanitize and validate options.
     ///
     /// Validates option combinations:
@@ -1076,6 +1085,48 @@ pub struct OutboundNetworkConfig {
     pub mode: NetworkMode,
     #[serde(default)]
     pub allow_net: Vec<String>,
+}
+
+impl OutboundNetworkConfig {
+    /// Validate a complete replacement before contacting the network backend.
+    pub fn validate(&self) -> boxlite_shared::errors::BoxliteResult<()> {
+        NetworkSpec::try_from(self.clone())?;
+        // Padding is trimmed, not rejected: gvproxy and the cloud API always
+        // accepted it.
+        for rule in self.allow_net.iter().map(|rule| rule.trim()) {
+            let valid = if rule.parse::<std::net::Ipv4Addr>().is_ok() {
+                true
+            } else if let Some((address, prefix)) = rule.split_once('/') {
+                address.parse::<std::net::Ipv4Addr>().is_ok()
+                    && !prefix.is_empty()
+                    && prefix.bytes().all(|c| c.is_ascii_digit())
+                    && prefix.parse::<u8>().is_ok_and(|bits| bits <= 32)
+            } else {
+                let hostname = rule.strip_prefix("*.").unwrap_or(rule);
+                !hostname.is_empty()
+                    && hostname.len() <= 253
+                    && !(hostname.split('.').count() == 4
+                        && hostname.bytes().all(|c| c.is_ascii_digit() || c == b'.'))
+                    && hostname.split('.').all(|label| {
+                        !label.is_empty()
+                            && label.len() <= 63
+                            && !label.starts_with('-')
+                            && !label.ends_with('-')
+                            && label
+                                .bytes()
+                                .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                    })
+            };
+            if !valid {
+                return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                    format!(
+                        "invalid allow_net rule: {rule:?}; expected a hostname, wildcard hostname, IPv4 or IPv4 CIDR"
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Wire shape for the inbound direction, aligned field-for-field with
@@ -2257,6 +2308,43 @@ mod tests {
             ),
             "expected InvalidArgument (→ HTTP 400), got {err:?}"
         );
+    }
+
+    /// Create must refuse rules that `update_outbound` refuses; otherwise a
+    /// box keeps an allowlist that can never be re-sent or rolled back to.
+    /// Start and import keep accepting them, so older saved boxes still run.
+    #[test]
+    fn test_sanitize_create_rejects_invalid_outbound_allow_net() {
+        // Padding was always accepted (gvproxy and the cloud API trim it), so
+        // create and update keep accepting it.
+        for rule in [" example.com ", "10.0.0.0/8 ", " *.example.com"] {
+            let opts = BoxOptions {
+                network: NetworkSpec::Enabled {
+                    allow_net: vec![rule.to_string()],
+                },
+                ..Default::default()
+            };
+            opts.sanitize_create()
+                .unwrap_or_else(|err| panic!("{rule:?}: padding must stay accepted: {err}"));
+        }
+        for rule in ["example.com:443", "a.com,b.com", "", "  ", "10.0.0.0/33"] {
+            let opts = BoxOptions {
+                network: NetworkSpec::Enabled {
+                    allow_net: vec![rule.to_string()],
+                },
+                ..Default::default()
+            };
+            opts.sanitize_persisted()
+                .unwrap_or_else(|err| panic!("{rule:?}: a saved box must still start: {err}"));
+            let err = opts.sanitize_create().unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    boxlite_shared::errors::BoxliteError::InvalidArgument(_)
+                ),
+                "{rule:?}: expected InvalidArgument, got {err:?}"
+            );
+        }
     }
 
     /// `VolumeSpec::managed_volume` and `VolumeSpec::bind_mount` cannot produce a mount

@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::runtime::backend::BoxNetworkBackend;
+use crate::runtime::options::{InboundNetworkConfig, NetworkSpec, OutboundNetworkConfig};
 
 const MAX_FORWARD_CONNECTIONS: usize = 64;
 
@@ -363,6 +364,21 @@ impl NetworkHandle {
         Self { network_backend }
     }
 
+    /// Replace inbound access policy. Non-empty inbound allowlists are unsupported.
+    pub async fn update_inbound(&self, config: InboundNetworkConfig) -> BoxliteResult<()> {
+        NetworkSpec::try_from(config.clone())?;
+        self.network_backend.update_inbound(config).await
+    }
+
+    /// Replace outbound policy, including the entire allowlist.
+    ///
+    /// Enabled with an empty list removes allowlist restrictions. Existing
+    /// connections retain their policy; disabled suspends network traffic.
+    pub async fn update_outbound(&self, config: OutboundNetworkConfig) -> BoxliteResult<()> {
+        config.validate()?;
+        self.network_backend.update_outbound(config).await
+    }
+
     /// Prepare a one-shot tunnel to a service port inside the box.
     ///
     /// This checks that the box can carry the tunnel and records any public
@@ -381,6 +397,19 @@ impl NetworkHandle {
             .tunnel(target)
             .await
             .map(|tunnel| tunnel.with_opener(opener))
+    }
+
+    /// Withdraw the public access `tunnel()` granted to `port`.
+    ///
+    /// Safe to repeat. Connections already open are not closed, and
+    /// `tunnel()` on the same port reopens it at the same URI.
+    pub async fn revoke_tunnel(&self, port: u16) -> BoxliteResult<()> {
+        if port == 0 {
+            return Err(BoxliteError::InvalidArgument(
+                "tunnel port must be non-zero".into(),
+            ));
+        }
+        self.network_backend.revoke_tunnel(port).await
     }
 }
 

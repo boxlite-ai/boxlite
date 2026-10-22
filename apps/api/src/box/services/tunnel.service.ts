@@ -36,6 +36,20 @@ export class TunnelService {
     await this.redis.del(this.accessCacheKey(boxId, port))
   }
 
+  /**
+   * Withdraw a port's public declaration. Repeating it, or naming a port never
+   * declared, changes nothing. Connections already open are not closed.
+   */
+  async revoke(boxId: string, port: number): Promise<void> {
+    this.assertPort(port)
+    await this.tunnels.query(
+      `UPDATE "tunnel" SET "revoked_at" = now()
+       WHERE "box_id" = $1 AND "port" = $2 AND "access_mode" = 'public' AND "revoked_at" IS NULL`,
+      [boxId, port],
+    )
+    await this.redis.del(this.accessCacheKey(boxId, port))
+  }
+
   async isPublicAccessAllowed(boxId: string, port: number): Promise<boolean> {
     this.assertPort(port)
     const cacheKey = this.accessCacheKey(boxId, port)

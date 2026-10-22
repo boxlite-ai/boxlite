@@ -30,6 +30,7 @@ fn backend_for(
     let net_sock = dir.path().join("net.sock");
     let control_sock = dir.path().join("gvproxy-ctl.sock");
     let spec = NetworkBackendSpec {
+        outbound_disabled: false,
         socket_path: net_sock.clone(),
         allow_net: Vec::new(),
         secrets: Vec::new(),
@@ -39,6 +40,7 @@ fn backend_for(
     };
     let (instance, endpoint) = GvproxyInstance::from_config(&spec).expect("create gvproxy");
     let config = NetworkBackendConfig {
+        outbound_disabled: false,
         socket_path: net_sock,
         allow_net: Vec::new(),
         secrets: Vec::new(),

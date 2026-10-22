@@ -17,21 +17,23 @@ inspect the error's host cause.
 ```text
 boxlite-vmm
 ├── boxlite-hypervisor
+├── mio (the event loop's poller)
 ├── vm-memory
-└── linux-loader (Linux x86_64 ELF loading)
+└── linux-loader (Linux x86_64 ELF loading and boot parameters)
 ```
 
 | Module | Planned responsibility |
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, then allocate and register RAM on host backend `H`; `run` is a placeholder |
-| `boot` | Linux x86_64 boot: load the pinned ELF kernel through linux-loader and prepare the 64-bit entry state (GDT, identity page tables, registers); boot data and lifecycle wiring follow |
-| `config` | `VmConfig { vcpu_count, memory_mib }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB |
+| `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
+| `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes |
 | `error` | VMM errors that keep the hypervisor's cause chain |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
 | `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
 | `vcpu` | Worker threads, stop coordination, and exit handling |
-| `irq` | Device interrupt assignment and routing; HVF and KVM provide the controller, WHP (M10) only local APICs |
-| `bus` | Address-range registration and device I/O dispatch |
+| `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
+| `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
+| `events` | `Event`, which ends the VM, `EventSender`, and `EventLoop`, the poller that waits for the first event |
 
 Backend implementation and guest boot follow in M1. Virtio devices, the BoxLite
 engine adapter, engine selection, and `native` feature wiring follow in M2.
@@ -94,7 +96,111 @@ make test:integration:vmm:elf VMM_KERNEL=/absolute/path/to/vmlinux
 the entry and loaded bytes with independent `readelf` output, checks BSS in
 fresh RAM, then runs a vCPU checksum over the loaded span. Missing hardware
 or kernel input fails qualification. This proves loading and guest visibility;
-boot data and Linux execution belong to later slices.
+the [boot tests](#boot-tests) run Linux itself.
+
+## Boot parameters
+
+On Linux x86_64, `boot::params::write_boot_params(ram, cmdline, ranges,
+initramfs)` fills the zero page that RSI points to at the 64-bit entry
+(`Documentation/arch/x86/boot.rst`, `zero-page.rst`) and returns its address,
+`0x7000`:
+
+- Setup header: `type_of_loader` `0xFF`, `boot_flag` `0xAA55`, the `HdrS`
+  magic, a 16 MiB `kernel_alignment`, and `cmd_line_ptr` and `cmdline_size`
+  for the NUL-terminated command line at `0x2_0000`, plus `ramdisk_image` and
+  `ramdisk_size` when there is an initramfs. The rest stays zero: no
+  `loadflags` or ACPI tables.
+- E820: each RAM range as usable RAM outside `[0x9_FC00, 1 MiB)`, where the
+  MP table and the legacy BIOS areas go. More entries than the 128 table slots
+  fail with `InvalidInput` before anything is written.
+
+`VmConfig::validate` accepts a command line only if it is printable ASCII and
+shorter than 2048 bytes, the kernel's `COMMAND_LINE_SIZE` with the NUL.
+linux-loader's `Cmdline` refuses the same lines, after trimming surrounding
+whitespace.
+
+`boot::prepare(ram, config)` opens `config.kernel` and runs `load_elf`, then
+`load_initramfs` when `config.initramfs` is set, then `write_boot_params`,
+`write_mptable` and `long_mode_entry`, in that order on fresh RAM, and returns
+a `BootSetup` with the boot vCPU registers. A failure names its step,
+`LoadKernel`, `LoadInitramfs` or `WriteBootData`, and keeps the I/O cause.
+Nothing calls `prepare` from `Vm` yet.
+
+## MP table
+
+Without ACPI, Linux learns the vCPUs and the IOAPIC from the MP table, and
+turns off SMP and the IOAPIC without one. `boot::mptable::write_mptable(ram,
+vcpu_count)` writes the floating pointer at `0x9_FC00`, where Linux scans the
+last KiB below 640 KiB, and the configuration table right after it. It lists
+the same entries as Firecracker:
+
+- one processor per vCPU, with APIC ID equal to its index as `vcpu_cpuid`
+  assigns it, and vCPU 0 as the bootstrap processor;
+- an ISA bus and KVM's in-kernel IOAPIC at `0xFEC0_0000` with ID
+  `vcpu_count + 1`;
+- ISA IRQ k on IOAPIC pin k for 0 to 23, the GSI routing KVM sets up;
+- ExtINT on the boot vCPU's LINT0 and NMI on every LINT1.
+
+The table takes 284 bytes plus 20 per vCPU, 1564 at 64, all inside the
+reserved `[0x9_FC00, 1 MiB)`. With it Linux enables the IOAPIC even on one
+vCPU, so device interrupts such as the serial IRQ 4 arrive through IOAPIC pins
+instead of the PIC. The other vCPUs then start when Linux sends them INIT and
+SIPI; on KVM each waiting vCPU's `run` returns `Interrupted` once, for the
+`EAGAIN` that wake-up produces.
+
+## Initramfs
+
+`boot::initramfs::load_initramfs(ram, image, size)` reads the archive into the
+highest 4 KiB-aligned slot of the RAM region at 0, as Firecracker and
+cloud-hypervisor do, and returns its start. An empty archive, or one larger
+than that region, fails with `InvalidInput` before anything is written.
+
+Like those VMMs, it does not check that the slot stays clear of the kernel.
+Only tests boot an initramfs; production boots from a disk. Their inputs are
+fixed, and the KVM boot test below fails if the archive overwrites the kernel.
+Accepting an initramfs from production configuration would need that check.
+
+Linux ignores `initrd_addr_max`, so
+the archive may sit anywhere in RAM; it must be uncompressed newc, since the
+pinned kernel has no decompressors. With 256 MiB of RAM, a 372-byte archive
+starts at `0x0FFF_F000` and Linux prints `RAMDISK: [mem 0x0ffff000-0x0fffffff]`.
+
+## Boot tests
+
+Unit tests read the generated boot data back from guest RAM. Hardware boot
+tests are ignored by default and run explicitly through the target below.
+
+The boot tests need Linux x86_64, read/write `/dev/kvm` and the same
+`VMM_KERNEL` as the ELF probe:
+
+```sh
+make test:integration:vmm:linux
+```
+
+Each runs `prepare` for 256 MiB of RAM and the command line
+`earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k`, then runs each
+KVM vCPU on its own thread with its guest CPUID and the boot MSRs. Every vCPU
+is created before any runs, and only vCPU 0 gets the entry registers. A
+test-local stub stands in for the devices: it keeps the earlycon bytes written
+to `0x3f8`, reports the UART as idle on `0x3fd`, reads every other port and
+MMIO address as zero, and ignores other writes. Each run ends when a vCPU
+writes `0xFE` to the i8042 port `0x64`, the reset `reboot=k` asks for after a
+panic, and every vCPU is then kicked; an unexpected exit or a watchdog after 30
+seconds also ends it, so a failed boot reports the log so far.
+
+- On one vCPU without an initramfs, the log must show the kernel version, the exact
+  command line, the two E820 entries, the memory total and
+  `VFS: Unable to mount root fs`.
+- On one vCPU with a generated archive whose `/init`, a 132-byte static ELF, calls
+  `exit_group(42)`, the log must show the `RAMDISK:` range from the zero page,
+  `Unpacking initramfs...`, `Run /init as init process` and
+  `Attempted to kill init! exitcode=0x00002a00`, in that order.
+- On four vCPUs without an initramfs, the log must show the MP table at
+  `0x9fc00`, `Processor #0` to `#3`, the IOAPIC with ID 5 and GSI 0-23,
+  `smp: Brought up 1 node, 4 CPUs`, and no unstable TSC.
+- On four vCPUs with an `/init` that pins itself to each CPU in turn with
+  `sched_setaffinity` and sets bit i when `getcpu` then reports CPU i, the log
+  must show `exitcode=0x00000f00`.
 
 ## Long-mode entry
 
@@ -134,6 +240,36 @@ write-back default; KVM already creates the other boot MSRs as zero. The
 local APIC keeps its KVM reset state, with LINT0 in ExtINT mode on the boot
 vCPU; Linux programs LINT1 itself.
 
+## Buses, lines and events
+
+These are the pieces devices are built from; no device uses them yet.
+
+- **Buses.** `bus::Bus` maps non-overlapping `BusRange`s, each named by its
+  owner, to a `BusDevice` and the register offset the device sees at the
+  range base, so the i8042 can claim port `0x60` as register 0 and port
+  `0x64` as register 4. `insert` fails with the owner of the range a new one
+  overlaps. A range without a device reserves a window the host serves in
+  the kernel. The bus holds the devices' strong references and never changes
+  once built, so lookups take no lock.
+- **Dispatch.** `Buses::dispatch` serves `MmioRead`, `MmioWrite`, `IoIn` and
+  `IoOut` and returns every other exit. An access must lie entirely inside one
+  range. An access no device holds, or one that crosses a range end, reads
+  `0xFF`, drops its write and is counted by `Bus::unclaimed`; Linux probes
+  port `0x87` once at boot and takes `0xFF` as no ISA DMA controller. Reads
+  reach a device zero-filled. A device whose lock an earlier panic poisoned
+  stops the next access too.
+- **Lines.** `irq::IrqLine` drives one line through `IrqChip`, which every
+  host VM implements with `Vm::set_irq_line`. It is not `Clone`. `pulse`
+  raises an edge; `set_level` holds a level, makes no host call for a repeated
+  level and keeps the old level when the host call fails, so the next call
+  retries. Dropping a line held high lowers it.
+- **Events.** A device ends the VM by sending `Event::GuestReset` or
+  `Event::DeviceFailed` through an `EventSender`, which never blocks or
+  panics and wakes the `EventLoop`'s `mio` poller. `EventLoop::wait` returns
+  the oldest event, or `None` at its timeout, and rechecks the queue every
+  second in case a wake-up was lost. Every event ends the VM; the VMM never
+  restarts a guest.
+
 ## Build
 
 `make vmm:boot` builds the pinned x86_64 ELF kernel (`vmlinux`) inside a pinned
@@ -157,8 +293,12 @@ reports it on port `0x3f8`. A 64-bit guest entered through
 segments from the GDT in RAM, reads markers at RSI and at the top of RAM, and
 stores RFLAGS, CR0, CR3, CR4, EFER, CPUID leaves 1 and 0xB, MISC_ENABLE and
 MTRRdefType for the test to compare. The 3 GiB allocation is `MAP_NORESERVE`, so only the touched
-pages are committed; a host with `vm.overcommit_memory=2` refuses it. CI runs
-the same tests through `make coverage:vmm:kvm`.
+pages are committed; a host with `vm.overcommit_memory=2` refuses it. The
+[bus](#buses-lines-and-events) tests in `tests::kvm` modules need 2 MiB: a
+flat 32-bit guest writes and reads a test device on the port bus at its
+register offset, and an `IrqLine` sets GSI 4 and 5 through `KVM_IRQ_LINE`,
+skipping a repeated level. CI runs the same tests through
+`make coverage:vmm:kvm`.
 
 With the corresponding Rust targets installed, the crate can also be compiled
 for each host with a backend module without booting a VM:

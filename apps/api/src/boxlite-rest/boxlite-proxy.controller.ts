@@ -257,6 +257,20 @@ export class BoxliteProxyController {
     return { uri }
   }
 
+  // Revoking needs neither inbound access nor a running box: it only withdraws
+  // the declaration, so a port stays revocable after either is turned off.
+  @Delete(':boxId/network/tunnel')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async revokeNetworkTunnel(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Query('port', ParseIntPipe) port: number,
+  ): Promise<void> {
+    const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+    await this.tunnelService.revoke(box.id, port)
+  }
+
   private async proxyToRunner(
     authContext: OrganizationAuthContext,
     boxId: string,

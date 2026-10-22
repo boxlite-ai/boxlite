@@ -49,7 +49,8 @@ pub enum VcpuExit<'a> {
         /// Borrowed guest data, unchanged by device handling.
         bytes: &'a [u8],
     },
-    /// Host interruption; recheck control requests before re-entry.
+    /// Host interruption, or on KVM a waiting secondary vCPU that accepted INIT
+    /// or SIPI; recheck control requests before re-entry.
     Interrupted,
     /// This vCPU is idle until woken; the VM has not requested shutdown.
     Halted,

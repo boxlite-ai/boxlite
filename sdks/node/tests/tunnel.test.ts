@@ -102,6 +102,21 @@ describe("SimpleBox", () => {
     expect(nativeForwarder.close).toHaveBeenCalledOnce();
   });
 
+  test("revokeTunnel withdraws the port through the native handle", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const revokeTunnel = vi.fn(async () => undefined);
+    const box = new SimpleBox({ image: "alpine:latest" }) as SimpleBox & {
+      _box: { network: { revokeTunnel: typeof revokeTunnel } };
+    };
+    box._box = { network: { revokeTunnel } };
+
+    await box.network.revokeTunnel(3000);
+    expect(revokeTunnel).toHaveBeenCalledWith(3000);
+
+    await expect(box.network.revokeTunnel(0)).rejects.toThrow(RangeError);
+    expect(revokeTunnel).toHaveBeenCalledOnce();
+  });
+
   test("info resolves asynchronously", async () => {
     const { SimpleBox } = await import("../lib/simplebox.js");
     const metadata = { id: "box-1" };

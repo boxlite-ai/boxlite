@@ -698,6 +698,28 @@ async def stop_box(
     return box_info_to_dict(info)
 
 
+@app.put("/v1/{prefix}/boxes/{box_id}/network/inbound")
+async def set_inbound_network(
+    prefix: str, box_id: str, req: NetworkSpec, _auth: dict = Depends(require_auth)
+):
+    box_handle = await get_box_or_404(box_id)
+    await box_handle.network.update_inbound(
+        boxlite.InboundNetworkSpec(mode=req.mode, allow_net=req.allow_net)
+    )
+    return req.model_dump()
+
+
+@app.put("/v1/{prefix}/boxes/{box_id}/network/outbound")
+async def set_outbound_network(
+    prefix: str, box_id: str, req: NetworkSpec, _auth: dict = Depends(require_auth)
+):
+    box_handle = await get_box_or_404(box_id)
+    await box_handle.network.update_outbound(
+        boxlite.OutboundNetworkSpec(mode=req.mode, allow_net=req.allow_net)
+    )
+    return req.model_dump()
+
+
 @app.post("/v1/{prefix}/boxes/{box_id}/snapshots", status_code=201)
 async def create_snapshot(
     prefix: str,

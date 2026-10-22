@@ -1,10 +1,10 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Native VMM skeleton with VM and vCPU entry points, plus x86_64 ELF loading.
-//! `Vm::new` validates the configuration, creates the host VM and registers
-//! guest RAM; kernel loading is not wired into it yet. The `run` entry points
-//! are placeholders that panic if called.
+//! Native VMM skeleton with VM and vCPU entry points, plus x86_64 boot
+//! preparation. `Vm::new` validates the configuration, creates the host VM and
+//! registers guest RAM; boot preparation is not wired into it yet. The `run`
+//! entry points are placeholders that panic if called.
 //!
 //! The VMM owns the guest machine and delegates host operations to
 //! `boxlite-hypervisor`. BoxLite runtime integration belongs in its engine adapter.
@@ -15,6 +15,7 @@
     expect(dead_code, reason = "Vm::new does not load the kernel yet.")
 )]
 mod boot;
+#[cfg_attr(not(test), expect(dead_code, reason = "No device sits on a bus yet."))]
 mod bus;
 #[cfg_attr(
     not(test),
@@ -28,6 +29,9 @@ mod config;
 )]
 mod cpu_features;
 mod error;
+#[cfg_attr(not(test), expect(dead_code, reason = "No device sends an event yet."))]
+mod events;
+#[cfg_attr(not(test), expect(dead_code, reason = "No device raises a line yet."))]
 mod irq;
 #[cfg_attr(
     not(test),
@@ -46,3 +50,9 @@ mod vm;
 #[cfg(test)]
 #[path = "../tests/mock_vm/mod.rs"]
 mod mock_vm;
+
+/// A flat 32-bit guest on a KVM vCPU, shared by the KVM tests that drive the
+/// buses without a kernel.
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "../tests/flat_guest/mod.rs"]
+mod flat_guest;

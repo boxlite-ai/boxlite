@@ -166,6 +166,14 @@ impl BoxManager {
         Ok(())
     }
 
+    pub fn save_outbound(
+        &self,
+        id: &BoxID,
+        policy: &crate::runtime::options::OutboundNetworkConfig,
+    ) -> BoxliteResult<()> {
+        self.store.update_outbound(id.as_str(), policy)
+    }
+
     /// Load box state from the database.
     ///
     /// Returns the latest state from DB.

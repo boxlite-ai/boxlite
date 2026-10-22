@@ -126,6 +126,7 @@ pub(crate) struct BoxImpl {
     /// Serializes disk-mutating snapshot/clone/export operations.
     /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
     pub(crate) disk_ops: tokio::sync::Mutex<()>,
+    network_updates: tokio::sync::Mutex<()>,
 
     /// Event listeners (from runtime options).
     pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
@@ -185,6 +186,7 @@ impl BoxImpl {
             layout,
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
+            network_updates: tokio::sync::Mutex::new(()),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
             watcher: std::sync::OnceLock::new(),
@@ -264,6 +266,12 @@ impl BoxImpl {
             network.published_ports = Some(bindings.to_vec());
         }
         info
+    }
+
+    pub(crate) fn refresh_network_policy(&self) -> BoxliteResult<()> {
+        let persisted = self.runtime.box_manager.update_box(&self.config.id)?;
+        self.state.write().outbound_policy = persisted.outbound_policy;
+        Ok(())
     }
 
     // ========================================================================
@@ -674,6 +682,7 @@ impl BoxImpl {
     }
 
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
+        let _network_update = self.network_updates.lock().await;
         let t0 = Instant::now();
 
         // Early exit if already stopped (idempotent, prevents double-counting)
@@ -1247,6 +1256,12 @@ impl BoxImpl {
         // The returned cleanup_guard stays armed until we disarm it after all
         // operations succeed. If any operation fails, the guard's Drop will
         // cleanup the VM process and directory.
+        let mut state = state;
+        state.outbound_policy = self
+            .runtime
+            .box_manager
+            .update_box(&self.config.id)?
+            .outbound_policy;
         let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
         let crate::litebox::init::BuiltBox {
             live: live_state,
@@ -1549,6 +1564,7 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     }
 
     async fn info(&self) -> BoxliteResult<BoxInfo> {
+        self.refresh_network_policy()?;
         Ok(BoxImpl::info(self))
     }
 
@@ -1630,6 +1646,53 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
 #[async_trait::async_trait]
 impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
+    async fn update_outbound(
+        &self,
+        policy: crate::runtime::options::OutboundNetworkConfig,
+    ) -> BoxliteResult<()> {
+        let _update = self.network_updates.lock().await;
+        if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
+            return Err(BoxliteError::InvalidState(
+                "outbound policy updates require a running box".into(),
+            ));
+        }
+        let backend = self.network().await?;
+        let lock_id = self
+            .state
+            .read()
+            .lock_id
+            .ok_or_else(|| BoxliteError::Internal("running box has no lock".into()))?;
+        let locker = self.runtime.lock_manager.retrieve(lock_id)?;
+        let _guard = loop {
+            if let Some(guard) = LockGuard::try_new(&*locker) {
+                break guard;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        let current = self.runtime.box_manager.update_box(&self.config.id)?;
+        if current.status != BoxStatus::Running {
+            return Err(BoxliteError::InvalidState(
+                "outbound policy updates require a running box".into(),
+            ));
+        }
+        let previous = backend.outbound().await?;
+        backend.set_outbound(&policy).await?;
+        if let Err(error) = self
+            .runtime
+            .box_manager
+            .save_outbound(&self.config.id, &policy)
+        {
+            if let Err(rollback) = backend.set_outbound(&previous).await {
+                return Err(BoxliteError::InvalidState(format!(
+                    "outbound policy persistence failed ({error}); rollback failed ({rollback}); live policy is uncertain, retry the complete update"
+                )));
+            }
+            return Err(error);
+        }
+        self.state.write().outbound_policy = Some(policy);
+        Ok(())
+    }
+
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
         let network = self
             .live_state()

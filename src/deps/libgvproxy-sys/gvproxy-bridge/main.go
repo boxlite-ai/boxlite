@@ -189,6 +189,7 @@ type GvproxyConfig struct {
 	Debug            bool           `json:"debug"`
 	CaptureFile      *string        `json:"capture_file,omitempty"`
 	AllowNet         []string       `json:"allow_net,omitempty"`
+	OutboundDisabled bool           `json:"outbound_disabled,omitempty"`
 	Secrets          []SecretConfig `json:"secrets,omitempty"`
 	CACertPEM        string         `json:"ca_cert_pem,omitempty"`
 	CAKeyPEM         string         `json:"ca_key_pem,omitempty"`
@@ -455,29 +456,14 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 			return
 		}
 
-		// Override the TCP and UDP handlers with the AllowNet filter and/or
-		// MITM secret substitution
-		if len(config.AllowNet) > 0 || instance.secretMatcher != nil {
-			// nil without an allow_net; the transport handlers read that as
-			// "no policy" and only the secret MITM path stays active.
-			var allowNetFilter *AllowNetFilter
-			if len(config.AllowNet) > 0 {
-				allowNetFilter = newAllowNetFilter(config)
-			}
-			dialer, err := newEgressDialer(allowNetFilter, config.Subnet)
-			if err != nil {
-				logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("allowNet: failed to build egress dialer")
-				initErr <- err
-				return
-			}
-			// Fatal on purpose: the handlers left behind are upstream's
-			// unfiltered forwarders, so a box that starts anyway would carry
-			// an allow_net the caller believes in and the network ignores.
-			if err := installAllowNetHandlers(vn, tapConfig, tapConfig.Ec2MetadataAccess, allowNetFilter, dialer, instance.ca, instance.secretMatcher); err != nil {
-				logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("allowNet: failed to install transport handlers")
-				initErr <- fmt.Errorf("failed to install allow_net transport handlers: %w", err)
-				return
-			}
+		mode := "enabled"
+		if config.OutboundDisabled {
+			mode = "disabled"
+		}
+		policy, err := newOutboundPolicyController(vn, tapConfig, config.GuestIP, instance.ca, instance.secretMatcher, outboundPolicy{Mode: mode, AllowNet: config.AllowNet})
+		if err != nil {
+			initErr <- fmt.Errorf("initialize outbound policy: %w", err)
+			return
 		}
 
 		// Store VirtualNetwork reference for stats collection
@@ -505,7 +491,10 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 				controlListener = l
 				logrus.WithField("path", config.ControlSocketPath).Info("Serving gvproxy ServicesMux")
 				go func() {
-					if sErr := http.Serve(l, controlMux(vn.ServicesMux(), vn.DialContextTCP)); sErr != nil && ctx.Err() == nil {
+					mux := http.NewServeMux()
+					mux.Handle("/", controlMux(vn.ServicesMux(), vn.DialContextTCP))
+					mux.Handle("/network/outbound", policy)
+					if sErr := http.Serve(l, mux); sErr != nil && ctx.Err() == nil {
 						logrus.WithError(sErr).Error("gvproxy services HTTP server exited")
 					}
 				}()
