@@ -765,7 +765,7 @@ export class Store {
     return out;
   }
 
-  logs(envId: string, opts: { source?: string; since?: string; limit?: number; deployment?: number }): LogLine[] {
+  logs(envId: string, opts: { source?: string; since?: string; until?: string; limit?: number; deployment?: number }): LogLine[] {
     const where = ['env_id = ?'];
     const params: SQLInputValue[] = [envId];
     if (opts.source) {
@@ -775,6 +775,10 @@ export class Store {
     if (opts.since) {
       where.push('ts >= ?');
       params.push(opts.since);
+    }
+    if (opts.until) {
+      where.push('ts <= ?');
+      params.push(opts.until);
     }
     if (opts.deployment !== undefined) {
       where.push('deployment = ?');

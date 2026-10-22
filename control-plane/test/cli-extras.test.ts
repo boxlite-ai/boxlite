@@ -295,3 +295,12 @@ test('feedback: an agent reports a platform problem; the platform admin reads it
   for (let i = 0; i < 25 && last !== 429; i++) last = (await h.request('/v1/apps/crm/feedback', { method: 'POST', key, json: { message: `report number ${i} about the platform` } })).status;
   assert.equal(last, 429, 'more than 20 reports an hour are refused');
 });
+
+test("a deployment's log is the deployment's: its release's later runtime output stays out", async () => {
+  const n = await deploy(TOML);
+  const later = new Date(Date.now() + 3_600_000).toISOString();
+  h.ctx.store.appendLogs(env().id, [{ ts: later, source: 'web', level: 'error', line: 'an hour later: crash', deployment: n }]);
+  const t = (await (await get(`/envs/main/deployments/${n}/timeline`)).json()) as Record<string, any>;
+  assert.ok(t.logs.some((l: any) => /is live at/.test(l.line)), 'the deployment lines are there');
+  assert.ok(!t.logs.some((l: any) => /an hour later/.test(l.line)), 'runtime output after the deployment is not');
+});

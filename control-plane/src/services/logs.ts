@@ -30,10 +30,19 @@ export function storedLevelsAtLeast(min: 'warn' | 'error'): string[] {
  * supervisor lines the release it was told to run; for apply and rollback those differ, so the
  * release's lines inside the deployment's time window are merged in.
  */
+/** Lines a little after a deployment finished still belong to it: the settle window, the first requests. */
+const AFTER_FINISH_MS = 30_000;
+
+/**
+ * A deployment's own lines: everything tagged with it or (for an apply or rollback) with the
+ * release it started, from its start until shortly after it finished. The release keeps logging
+ * under the same number for as long as it runs; that is runtime output, read in Logs.
+ */
 export function deploymentLogs(store: Pick<Store, 'logs'>, envId: string, d: Deployment, limit: number): LogLine[] {
-  const own = store.logs(envId, { deployment: d.number, limit });
+  const until = d.finished_at ? new Date(Date.parse(d.finished_at) + AFTER_FINISH_MS).toISOString() : undefined;
+  const own = store.logs(envId, { deployment: d.number, ...(until ? { until } : {}), limit });
   const release =
-    d.release && d.release !== d.number ? store.logs(envId, { deployment: d.release, since: d.started_at ?? d.created_at, limit }).filter((l) => !d.finished_at || l.ts <= d.finished_at) : [];
+    d.release && d.release !== d.number ? store.logs(envId, { deployment: d.release, since: d.started_at ?? d.created_at, ...(until ? { until } : {}), limit }) : [];
   return [...own, ...release].sort((a, b) => (a.id ?? 0) - (b.id ?? 0)).slice(-limit);
 }
 
