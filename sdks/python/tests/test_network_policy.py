@@ -3,9 +3,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from boxlite import InboundNetworkSpec, OutboundNetworkSpec
 from boxlite.simplebox import NetworkHandle
 from boxlite.sync_api._network import SyncNetworkHandle
+
+# The wrappers forward specs untouched, so plain objects stand in for the
+# native spec classes: the CI unit job runs without the Rust extension.
+InboundNetworkSpec = OutboundNetworkSpec = SimpleNamespace
 
 
 @pytest.mark.asyncio
@@ -37,7 +40,9 @@ def test_network_policy_sync_wrapper_dispatches_updates():
     native = SimpleNamespace(update_inbound=AsyncMock(), update_outbound=AsyncMock())
     owner = SimpleNamespace(_box=SimpleNamespace(network=native), _sync=asyncio.run)
     network = SyncNetworkHandle(owner)
-    inbound, outbound = InboundNetworkSpec(), OutboundNetworkSpec()
+    # Distinct values: equal stand-ins would hide a swapped dispatch.
+    inbound = InboundNetworkSpec(mode="enabled")
+    outbound = OutboundNetworkSpec(mode="disabled")
     network.update_inbound(inbound)
     network.update_outbound(outbound)
     native.update_inbound.assert_awaited_once_with(inbound)
