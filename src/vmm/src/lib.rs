@@ -14,7 +14,7 @@ mod boot;
 mod bus;
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "No platform builds a chipset yet.")
+    expect(dead_code, reason = "No platform adds a device yet.")
 )]
 mod chipset;
 #[cfg_attr(

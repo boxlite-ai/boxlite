@@ -184,7 +184,9 @@ mod stubs {
     use std::sync::{Arc, Mutex};
 
     use crate::{
-        bus::{BusDevice, BusRange, Buses},
+        bus::BusDevice,
+        chipset::ChipsetBuilder,
+        error::Result,
         events::{Event, EventSender},
     };
 
@@ -228,30 +230,22 @@ mod stubs {
         fn write(&mut self, _offset: u64, _data: &[u8]) {}
     }
 
-    /// Puts the stubs on `buses` and returns the log COM1 fills.
-    pub(super) fn add(buses: &mut Buses, events: &EventSender) -> Arc<Mutex<Vec<u8>>> {
+    /// Adds the stubs to `chipset` and returns the log COM1 fills.
+    pub(super) fn add(chipset: &mut ChipsetBuilder) -> Result<Arc<Mutex<Vec<u8>>>> {
         let log = Arc::new(Mutex::new(Vec::new()));
-        type Stub = (u64, u64, &'static str, Arc<Mutex<dyn BusDevice>>);
-        let devices: [Stub; 3] = [
-            (
-                0x3f8,
-                8,
-                "com1",
-                Arc::new(Mutex::new(Com1(Arc::clone(&log)))),
-            ),
-            (
-                0x60,
-                5,
-                "i8042",
-                Arc::new(Mutex::new(I8042(events.clone()))),
-            ),
-            (0x70, 2, "cmos", Arc::new(Mutex::new(Zeros))),
-        ];
-        for (base, len, owner, device) in devices {
-            let range = BusRange::new(base, len).unwrap();
-            buses.pio.insert(range, owner, Some((device, 0))).unwrap();
-        }
-        log
+        chipset.add("com1", |resources| {
+            resources.pio(0x3f8, 8);
+            Ok(Com1(Arc::clone(&log)))
+        })?;
+        chipset.add("i8042", |resources| {
+            resources.pio(0x60, 5);
+            Ok(I8042(resources.event_sender()))
+        })?;
+        chipset.add("cmos", |resources| {
+            resources.pio(0x70, 2);
+            Ok(Zeros)
+        })?;
+        Ok(log)
     }
 }
 
@@ -275,7 +269,10 @@ fn linux_vm(config: &VmConfig) -> LinuxVm {
             zero_page = Some(ram.memory().read_obj(address).unwrap());
             Ok(setup.boot_regs)
         },
-        |buses, events| log = Some(stubs::add(buses, events)),
+        |chipset| {
+            log = Some(stubs::add(chipset)?);
+            Ok(())
+        },
     )
     .expect("create the KVM VM");
     LinuxVm {

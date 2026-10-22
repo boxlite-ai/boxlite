@@ -9,8 +9,9 @@ boot data; `Vm::run` runs every vCPU until the guest powers off or resets, or a
 lifecycle API, memory layout, buses, interrupts, and threads.
 
 `Vm`, `VmConfig`, `VmExit`, `StopHandle`, `Error` and `Result` are public; M2's
-engine adapter will consume that API and inspect the error's host cause. No
-device sits on the buses yet, so `Vm::new` boots a guest without a console.
+engine adapter will consume that API and inspect the error's host cause.
+`Vm::new` adds no device to its chipset yet, so it boots a guest without a
+console.
 
 ```text
 boxlite-vmm
@@ -22,7 +23,7 @@ boxlite-vmm
 
 | Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, load the boot data, and run the vCPUs until the first event; `StopHandle` and `VmExit` |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, own the devices in a `Chipset`, load the boot data, and run the vCPUs until the first event; `StopHandle` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes |
 | `error` | VMM errors that keep the hypervisor's cause chain |
@@ -178,7 +179,7 @@ make test:integration:vmm:linux
 
 Each builds a KVM `Vm` with `prepare` for 256 MiB of RAM and the command line
 `earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k`, and runs it with
-`Vm::run`. Test-local stubs on the port bus stand in for the devices: COM1
+`Vm::run`. Test-local stubs, added through `ChipsetBuilder`, stand in for the devices: COM1
 keeps the earlycon bytes written to `0x3f8` and reports the UART as idle on
 `0x3fd`; the i8042 at `0x60` to `0x64` sends `GuestReset` when a vCPU writes
 `0xFE` to `0x64`, the reset `reboot=k` asks for after a panic; the CMOS ports
@@ -206,7 +207,10 @@ failed boot reports the log so far.
 ## Lifecycle
 
 `Vm::run` runs on x86_64, against any backend that implements
-`boxlite_hypervisor::X86Vm`; unit tests drive it on the mock backend.
+`boxlite_hypervisor::X86Vm`; unit tests drive it on the mock backend. Before
+it registers any RAM, `Vm::with_backend` builds the `Chipset` from the
+devices it is given, so a conflict fails with `ChipsetConflicts` and leaves
+nothing mapped.
 
 1. It starts one scoped thread per vCPU, named `vcpuN`. Each creates its vCPU,
    sets its CPUID from `vcpu_cpuid` and the boot MSRs, and on vCPU 0 the entry
@@ -214,7 +218,7 @@ failed boot reports the log so far.
    vCPU that fails setup still arrives, and a thread that fails to start
    aborts the gate, so no worker waits forever.
 2. Each worker then loops: check the stop latch, run, and hand the exit to
-   `Buses::dispatch`. `Shutdown` sends `GuestShutdown` and `Reset` sends
+   `Chipset::dispatch`. `Shutdown` sends `GuestShutdown` and `Reset` sends
    `GuestReset`; a run error, any other exit, such as `Halted`, which KVM never
    returns with its in-kernel irqchip, or a panic caught around the worker
    sends `VcpuFailed`. A worker that sees the latch completes the pending

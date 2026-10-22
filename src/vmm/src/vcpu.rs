@@ -14,7 +14,7 @@ use std::{
 use boxlite_hypervisor::{Vcpu, VcpuExit, X86BootRegisters, X86Vcpu, X86Vm};
 
 use crate::{
-    bus::Buses,
+    chipset::Chipset,
     cpu_features::{BOOT_MSRS, vcpu_cpuid},
     error::{Error, Result},
     events::{Event, EventSender},
@@ -53,7 +53,7 @@ pub(crate) struct Workers<'a, H: X86Vm> {
     pub(crate) host_vm: &'a H,
     pub(crate) vcpu_count: u8,
     pub(crate) boot_regs: &'a X86BootRegisters,
-    pub(crate) buses: &'a Buses,
+    pub(crate) chipset: &'a Chipset,
     pub(crate) sender: &'a EventSender,
     /// The kick handle of every configured vCPU, for the thread that stops them.
     pub(crate) kicks: &'a Mutex<Vec<<H::Vcpu as Vcpu>::Handle>>,
@@ -102,7 +102,7 @@ impl<H: X86Vm> Workers<'_, H> {
                 vcpu.complete_pending_io()?;
                 return Ok(None);
             }
-            match self.buses.dispatch(vcpu.run()?) {
+            match self.chipset.dispatch(vcpu.run()?) {
                 None | Some(VcpuExit::Interrupted) => {}
                 Some(VcpuExit::Shutdown) => return Ok(Some(Event::GuestShutdown)),
                 Some(VcpuExit::Reset) => return Ok(Some(Event::GuestReset)),

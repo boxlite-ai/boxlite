@@ -55,7 +55,7 @@ the support matrix in the root `README.md:241` changes from "macOS 12+" to macOS
 boxlite-shim                    one jailed process per box
 └─ engine adapter (M2)          implements Vmm and VmmInstanceImpl (src/boxlite/src/vmm/engine.rs:51-104)
    └─ boxlite_vmm::Vm           new(config), then run() → VmExit or Error
-      ├─ vcpuN threads          Vcpu::run → VcpuExit → bus dispatch → run again
+      ├─ vcpuN threads          Vcpu::run → VcpuExit → chipset dispatch → run again
       ├─ device workers         virtqueues and host backends: disk, fs, vsock, net, console
       ├─ the run() thread       one poller: stop requests, vCPU outcomes, device failures
       └─ boxlite_hypervisor     Vm and Vcpu traits; hvf (macOS arm64), kvm (Linux) or whp (Windows, M10)
@@ -323,7 +323,7 @@ today.
   it claims. `build` reports every conflict at once, naming the claimant and
   the owner, or returns an immutable `Chipset` that owns the devices. Devices register while
   the VM is built; M6 and M7 change the guest without adding bus devices.
-- **Dispatch.** `Buses::dispatch` serves MMIO and port exits and returns every
+- **Dispatch.** `Chipset::dispatch` serves MMIO and port exits through the buses and returns every
   other exit to the vCPU loop. An access must lie entirely inside one range,
   as in Firecracker's bus. Any other access reads `0xFF`, drops its write and
   is counted, as on a PC bus with nothing driving it. A claimed read reaches
@@ -373,7 +373,7 @@ today.
   - `run()` spawns one per vCPU, named `vcpuN`. Each creates and configures its
     vCPU and waits at a start gate until every vCPU is configured; a thread
     that fails to start aborts the gate.
-  - It then loops: run, dispatch the exit to a bus, run again.
+  - It then loops: run, dispatch the exit through the chipset, run again.
   - On `Halted`, which in practice only HVF returns, it parks until the guest timer's
     deadline, an interrupt, or a stop.
   - The VMM's interrupt path unparks halted vCPUs after it sets a line;

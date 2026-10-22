@@ -23,7 +23,7 @@ use crate::{
     not(target_arch = "x86_64"),
     expect(clippy::unit_arg, reason = "arm64 has no boot registers yet.")
 )]
-fn bare<H: boxlite_hypervisor::Vm>(
+fn bare<H: boxlite_hypervisor::Vm + 'static>(
     config: VmConfig,
     host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
 ) -> crate::error::Result<Vm<H>> {
@@ -31,7 +31,7 @@ fn bare<H: boxlite_hypervisor::Vm>(
         config,
         host_vm,
         |_, _| Ok(BootRegisters::default()),
-        |_, _| {},
+        |_| Ok(()),
     )
 }
 
@@ -116,6 +116,44 @@ fn a_rejected_mapping_returns_the_hypervisor_error_and_keeps_no_registration() {
         "nothing was registered, so nothing is unmapped"
     );
     assert!(matches!(calls[0], Call::Map { .. }));
+}
+
+/// A chipset conflict fails the build before any RAM is registered, so the
+/// failed VM leaves nothing mapped and leaks no guest RAM.
+#[test]
+fn a_chipset_conflict_fails_before_any_ram_is_registered() {
+    struct Idle;
+
+    impl crate::bus::BusDevice for Idle {
+        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+
+        fn write(&mut self, _offset: u64, _data: &[u8]) {}
+    }
+
+    let backend = MockVm::new();
+    let log = backend.log();
+
+    let error = Vm::with_backend(
+        config(1, 16),
+        || Ok(backend),
+        |_, _| Ok(BootRegisters::default()),
+        |chipset| {
+            for name in ["first", "second"] {
+                chipset.add(name, |resources| {
+                    resources.mmio(0xd000_0000, 0x1000);
+                    Ok(Idle)
+                })?;
+            }
+            Ok(())
+        },
+    )
+    .expect_err("the second device claims a taken range");
+
+    assert!(
+        matches!(&error, Error::ChipsetConflicts(conflicts) if conflicts.len() == 1),
+        "{error:?}"
+    );
+    assert_eq!(*log.lock().unwrap(), [], "no RAM was registered");
 }
 
 #[test]
@@ -341,18 +379,10 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
 /// then wait for a kick.
 #[cfg(target_arch = "x86_64")]
 mod lifecycle {
-    use std::{
-        sync::{Arc, Mutex, mpsc},
-        thread,
-        time::Duration,
-    };
+    use std::{sync::mpsc, thread, time::Duration};
 
     use super::{config, *};
-    use crate::{
-        VmExit,
-        bus::{BusDevice, BusRange},
-        mock_vm::Step,
-    };
+    use crate::{VmExit, bus::BusDevice, mock_vm::Step};
 
     /// Runs `vm` on another thread and fails the test instead of hanging when
     /// the run never returns.
@@ -502,13 +532,11 @@ mod lifecycle {
             config(2, 16),
             || Ok(backend),
             |_, _| Ok(BootRegisters::default()),
-            |buses, _| {
-                let device: Arc<Mutex<dyn BusDevice>> = Arc::new(Mutex::new(Panics));
-                let range = BusRange::new(DEVICE, 1).unwrap();
-                buses
-                    .mmio
-                    .insert(range, "panics", Some((device, 0)))
-                    .unwrap();
+            |chipset| {
+                chipset.add("panics", |resources| {
+                    resources.mmio(DEVICE, 1);
+                    Ok(Panics)
+                })
             },
         )
         .unwrap();
@@ -592,11 +620,9 @@ fn new_names_a_kernel_it_cannot_load() {
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
 fn a_kvm_vm_runs_until_its_guest_resets() {
-    use std::sync::{Arc, Mutex};
-
     use crate::{
         VmExit,
-        bus::{BusDevice, BusRange},
+        bus::BusDevice,
         events::{Event, EventSender},
         flat_guest,
     };
@@ -619,10 +645,11 @@ fn a_kvm_vm_runs_until_its_guest_resets() {
         config(2, 2),
         boxlite_hypervisor::KvmVm::new,
         |ram, _| Ok(flat_guest::load(ram.memory(), &program)),
-        |buses, events| {
-            let device: Arc<Mutex<dyn BusDevice>> = Arc::new(Mutex::new(Reset(events.clone())));
-            let range = BusRange::new(0x64, 1).unwrap();
-            buses.pio.insert(range, "i8042", Some((device, 0))).unwrap();
+        |chipset| {
+            chipset.add("i8042", |resources| {
+                resources.pio(0x64, 1);
+                Ok(Reset(resources.event_sender()))
+            })
         },
     )
     .unwrap();

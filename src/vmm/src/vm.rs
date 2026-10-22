@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use boxlite_hypervisor::Vm as HostVm;
 
 use crate::{
-    bus::Buses,
+    chipset::{Chipset, ChipsetBuilder},
     config::VmConfig,
     error::{Error, Result},
     events::{Event, EventLoop, EventSender},
@@ -60,8 +60,9 @@ enum VmState {
 pub struct Vm<H: HostVm> {
     // Field order is load-bearing: devices go first, then the host VM, which
     // releases its guest mappings, then the RAM that backs them. `Drop`
-    // unmaps the RAM anyway, since a device may hold the host VM longer.
-    buses: Buses,
+    // unmaps the RAM anyway, since a device's interrupt line holds the host
+    // VM longer.
+    chipset: Chipset,
     events: Mutex<EventLoop>,
     sender: EventSender,
     boot_regs: BootRegisters,
@@ -90,22 +91,27 @@ impl Vm<boxlite_hypervisor::KvmVm> {
             config,
             boxlite_hypervisor::KvmVm::new,
             |ram, config| crate::boot::prepare(ram, config).map(|setup| setup.boot_regs),
-            |_, _| {},
+            |_| Ok(()),
         )
     }
 }
 
 impl<H: HostVm> Vm<H> {
     /// Validates `config`, allocates the RAM layout, creates the host VM with
-    /// `host_vm`, registers every RAM range, writes the boot data with `boot`
-    /// and lets `devices` put devices on the buses. Invalid configuration
-    /// fails before `host_vm` runs; tests pass a mock backend and devices.
+    /// `host_vm`, builds the chipset from the devices `devices` adds,
+    /// registers every RAM range and writes the boot data with `boot`.
+    /// Invalid configuration fails before `host_vm` runs, and a chipset
+    /// conflict before any RAM is registered; tests pass a mock backend and
+    /// devices.
     pub(crate) fn with_backend(
         config: VmConfig,
         host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
         boot: impl FnOnce(&GuestRam, &VmConfig) -> Result<BootRegisters>,
-        devices: impl FnOnce(&mut Buses, &EventSender),
-    ) -> Result<Self> {
+        devices: impl FnOnce(&mut ChipsetBuilder) -> Result<()>,
+    ) -> Result<Self>
+    where
+        H: 'static,
+    {
         config.validate()?;
         let events = EventLoop::new().map_err(Error::EventLoop)?;
         let sender = events.sender();
@@ -113,10 +119,13 @@ impl<H: HostVm> Vm<H> {
         // locals drop in reverse order, so the host VM goes before the RAM.
         let mut ram = GuestRam::new(&ram_ranges(config.memory_mib))?;
         let host_vm = Arc::new(host_vm()?);
+        let mut chipset = ChipsetBuilder::new(host_vm.clone(), sender.clone());
+        devices(&mut chipset)?;
+        let chipset = chipset.build()?;
         ram.map(&*host_vm)?;
         // From here on `Drop` unmaps the RAM if a later step fails.
         let mut vm = Self {
-            buses: Buses::default(),
+            chipset,
             events: Mutex::new(events),
             sender,
             boot_regs: BootRegisters::default(),
@@ -126,7 +135,6 @@ impl<H: HostVm> Vm<H> {
             ram,
         };
         vm.boot_regs = boot(&vm.ram, &config)?;
-        devices(&mut vm.buses, &vm.sender);
         Ok(vm)
     }
 
@@ -159,7 +167,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             host_vm: &*self.host_vm,
             vcpu_count: self.vcpu_count,
             boot_regs: &self.boot_regs,
-            buses: &self.buses,
+            chipset: &self.chipset,
             sender: &self.sender,
             kicks: &kicks,
             gate: &gate,
