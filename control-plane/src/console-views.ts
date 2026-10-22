@@ -1,6 +1,6 @@
 /** Builds the console's app summary and detail views from real CP state. */
 import { orgSecret } from './orgs.js';
-import { missingVariableIn } from '@microcloud/shared';
+import { errorFocus, missingVariableIn } from '@microcloud/shared';
 import type { AppRow, Deployment, EnvRow } from './db.js';
 import { ACTIVE_STATUSES, now } from './db.js';
 import type { Ctx } from './ctx.js';
@@ -199,7 +199,7 @@ function problemsOf(ctx: Pick<Ctx, 'store'>, app: AppRow, env: EnvRow, latest: D
       const looping = crashLooping(s);
       if (s.state !== 'failed' && s.health !== 'unhealthy' && !looping) continue;
       // Its own last words say more than any counter: "Error: SLACK_TOKEN is not set".
-      const said = s.recentErrors.at(-1)?.replace(/^\S+Z /, '');
+      const said = errorFocus(s.recentErrors, 1)[0]?.replace(/^\S+Z /, '');
       const exits = s.lastExitCode !== undefined ? `exited with code ${s.lastExitCode}` : 'stopped';
       out.push({
         summary: s.state === 'failed' ? `${s.name} has crashed` : looping ? `${s.name} keeps crashing` : `${s.name} is failing its health check`,
