@@ -1,11 +1,4 @@
-import { createHmac } from 'node:crypto';
-import { safeEqual } from './auth.js';
-
-/**
- * Platform cookies and signed values, for every origin (API, console, app envs). One place for
- * the cookie rules (code health M18/M19): names, attributes, parsing, and the HMAC behind each
- * signed cookie or token, with a domain tag so a value signed for one use never verifies for another.
- */
+/** Platform cookies on every origin (code health M18): the `__Host-` naming rule, Set-Cookie attributes, reading a request cookie. Signed values: signed-token.ts. */
 
 /** Is this origin https (then cookies carry `Secure` and the `__Host-` prefix)? */
 export const isSecureUrl = (url: string) => url.startsWith('https:');
@@ -33,8 +26,3 @@ export function readCookie(headers: Headers, name: string): string | undefined {
   }
   return undefined;
 }
-
-/** HMAC-SHA256 of `<domain>:<body>`, base64url. */
-export const signedMac = (secret: string, domain: string, body: string) => createHmac('sha256', secret).update(`${domain}:${body}`).digest('base64url');
-
-export const verifyMac = (secret: string, domain: string, body: string, mac: string) => safeEqual(mac, signedMac(secret, domain, body));

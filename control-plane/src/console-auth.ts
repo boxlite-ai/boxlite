@@ -3,8 +3,9 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { safeEqual } from './auth.js';
 import type { Config } from './config.js';
 import { fail } from './errors.js';
-import { hostCookieName, isSecureUrl, signedMac } from './cookies.js';
-import { escapeHtml } from './routes/util.js';
+import { hostCookieName, isSecureUrl } from './http/cookies.js';
+import { escapeHtml } from './http/html.js';
+import { signExpiring, verifyExpiring } from './http/signed-token.js';
 
 /**
  * Console login, prototype edition: the operator pastes the CP's ADMIN_TOKEN once and gets an
@@ -18,22 +19,14 @@ const TTL_SECONDS = 7 * 24 * 3600;
 /** The only console identity until real login lands; Activity shows it as the actor. */
 export const CONSOLE_USER = 'admin';
 
-const mac = (secret: string, user: string, exp: number) => signedMac(secret, 'console-session', `${user}:${exp}`);
-
+/** `<user>.<expiry>.<mac>`, the MAC over `<user>:<expiry>` (http/signed-token.ts). */
 export function signConsoleSession(secret: string, user = CONSOLE_USER, ttlSeconds = TTL_SECONDS): string {
-  const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
-  return `${user}.${exp}.${mac(secret, user, exp)}`;
+  return signExpiring(secret, 'console-session', user, ttlSeconds, ':');
 }
 
 /** The signed-in console user, or null. */
 export function verifyConsoleSession(secret: string, value: string | undefined): string | null {
-  if (!value) return null;
-  const parts = value.split('.');
-  if (parts.length !== 3) return null;
-  const [user, expText, sig] = parts as [string, string, string];
-  const exp = Number(expText);
-  if (!Number.isInteger(exp) || exp < Date.now() / 1000) return null;
-  return safeEqual(sig, mac(secret, user, exp)) ? user : null;
+  return verifyExpiring(secret, 'console-session', value, ':');
 }
 
 /**
@@ -90,7 +83,7 @@ export function requireConsolePage(config: Config): MiddlewareHandler {
   };
 }
 
-function safeNext(v: string | undefined): string {
+function consoleNext(v: string | undefined): string {
   // Only paths inside the console; never an absolute or protocol-relative URL.
   return v && v.startsWith('/console/') && !v.startsWith('//') ? v : '/console/';
 }
@@ -110,13 +103,13 @@ export function loginRoutes(config: Config) {
   const secure = isSecureUrl(config.publicUrl);
   return {
     page: (c: Context) => {
-      if (consoleUser(config, c)) return c.redirect(safeNext(c.req.query('next')), 302);
-      return c.html(loginPage(null, safeNext(c.req.query('next'))), 200, { 'cache-control': 'no-store' });
+      if (consoleUser(config, c)) return c.redirect(consoleNext(c.req.query('next')), 302);
+      return c.html(loginPage(null, consoleNext(c.req.query('next'))), 200, { 'cache-control': 'no-store' });
     },
     submit: async (c: Context) => {
       const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
       const token = typeof form.token === 'string' ? form.token.trim() : '';
-      const next = safeNext(typeof form.next === 'string' ? form.next : undefined);
+      const next = consoleNext(typeof form.next === 'string' ? form.next : undefined);
       if (!token || !safeEqual(token, config.adminToken)) return c.html(loginPage('That token does not match this control plane.', next), 401, { 'cache-control': 'no-store' });
       // Path=/ (required by __Host-): the console has its own origin, so nothing else shares the path.
       setCookie(c, consoleCookieName(config), signConsoleSession(config.sessionSecret), { path: '/', httpOnly: true, sameSite: 'Lax', secure, maxAge: TTL_SECONDS });

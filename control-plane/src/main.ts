@@ -1,7 +1,8 @@
 import { loadConfig, loadDotEnvLocal } from './config.js';
 import { startPurger } from './lifecycle.js';
 import { NodeListeners } from './origins.js';
-import { handleUpgrade } from './routes/proxy.js';
+import { handleUpgrade } from './proxy/upgrade.js';
+import { handleDbConnect } from './dbproxy/index.js';
 import { buildCtx, createServer, realDeps } from './server.js';
 
 loadDotEnvLocal();
@@ -16,7 +17,7 @@ const stopPurger = startPurger(ctx);
 // One Hono app, one listener per origin (origins.ts): API on PORT, the console on CONSOLE_PORT, and
 // one port per app env. Each listener tags its requests with its port, which decides their role.
 const listeners = new NodeListeners(app.fetch, (req, socket, head, port) => {
-  handleUpgrade(ctx, req, socket, head, port).catch((err) => {
+  (handleDbConnect(ctx, req, socket, head, port) ?? handleUpgrade(ctx, req, socket, head, port)).catch((err) => {
     console.error(`[proxy] upgrade on :${port}: ${(err as Error).message}`);
     socket.destroy();
   });

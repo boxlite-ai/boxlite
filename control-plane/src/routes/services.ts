@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { dbCoordinates } from '../services/db.js';
 import type { Vars } from '../auth.js';
 import type { Ctx } from '../ctx.js';
 import { fail } from '../errors.js';
@@ -65,7 +66,10 @@ export function serviceRoutes(ctx: Ctx) {
       await ctx.resources.ensureDatabase(app.id, env.id);
       env = ctx.store.envById(env.id)!;
     }
-    return c.json({ env: ctx.resources.runtimeEnv(app, env, spec) });
+    // No database password leaves the CP: `boxlite-app app dev` points DATABASE_URL at its local
+    // `db proxy` (owner login, through the App key) and only needs the database's name here.
+    const { DATABASE_URL: _password, ...vars } = ctx.resources.runtimeEnv(app, env, spec);
+    return c.json({ env: vars, database: env.db_url ? { name: dbCoordinates(env.db_url).database } : null });
   });
 
   return r;

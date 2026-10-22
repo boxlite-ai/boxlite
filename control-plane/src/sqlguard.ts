@@ -38,6 +38,8 @@ export interface Statement {
   /** read: no writes; write: DML (needs write:true, Postgres enforces); ddl: schema/platform changes. */
   kind: StatementKind;
   ddl: boolean;
+  /** Proxy mode: BEGIN/START/SET TRANSACTION … READ WRITE (or transaction_read_only = off). */
+  readWrite?: boolean;
 }
 
 export interface Classification {
@@ -47,7 +49,23 @@ export interface Classification {
   refused: string | null;
   /** Set when the text does not parse; the route answers sql_error like Postgres would. */
   syntaxError?: { message: string; position: number };
+  /** Highest `$n` placeholder used (0 when none). */
+  params: number;
 }
+
+/**
+ * `endpoint`: POST /db/sql and the table browser (each query is its own transaction).
+ * `proxy`: a Postgres session through `boxlite-app app db proxy`, where the client drives the
+ * transaction: transaction control, PREPARE/EXECUTE, LISTEN, DISCARD, timeouts and COPY to/from
+ * the client are allowed; everything that changes who the session is or reaches the server's
+ * files, programs or other sessions is refused exactly as on the endpoint.
+ */
+export type GuardMode = 'endpoint' | 'proxy';
+
+/** Statements a proxy session may run (the client owns the session and its transactions). */
+const PROXY_ALLOWED = new Set(['TransactionStmt', 'DiscardStmt', 'ListenStmt', 'UnlistenStmt', 'NotifyStmt', 'PrepareStmt', 'ExecuteStmt', 'DeallocateStmt']);
+/** Settings a proxy session may change: the timeouts are the client's own business there. */
+const PROXY_SETTINGS = new Set(['statement_timeout', 'idle_in_transaction_session_timeout', 'transaction_timeout', 'lock_timeout', 'default_transaction_isolation', 'default_transaction_deferrable', 'session characteristics', 'transaction', 'transaction_isolation', 'transaction_deferrable', 'transaction_read_only']);
 
 type Node = Record<string, unknown>;
 
@@ -226,17 +244,22 @@ function firstKeyword(text: string): string {
 }
 
 /** Why one parsed statement must be refused, or null. */
-function refusal(type: string, data: Node, keyword: string): string | null {
-  const reason = REFUSED_STATEMENTS[type];
+function refusal(type: string, data: Node, keyword: string, mode: GuardMode): string | null {
+  const reason = mode === 'proxy' && PROXY_ALLOWED.has(type) ? undefined : REFUSED_STATEMENTS[type];
   if (reason) return `${keyword} ${reason}`;
   if (type === 'VariableSetStmt') {
-    if (data.kind === 'VAR_RESET_ALL') return 'RESET ALL is not allowed: it would lift the guard rails the query runs under';
     const name = String(data.name ?? '').toLowerCase();
-    if (DENIED_SETTINGS.has(name) || name.startsWith('transaction')) return `${keyword} ${name} is not allowed`;
+    if (mode === 'proxy') {
+      // RESET ALL / RESET x go back to the login's own defaults (the reader's stay read-only).
+      if (DENIED_SETTINGS.has(name) && !PROXY_SETTINGS.has(name) && data.kind !== 'VAR_RESET_ALL') return `${keyword} ${name} is not allowed`;
+    } else {
+      if (data.kind === 'VAR_RESET_ALL') return 'RESET ALL is not allowed: it would lift the guard rails the query runs under';
+      if (DENIED_SETTINGS.has(name) || name.startsWith('transaction')) return `${keyword} ${name} is not allowed`;
+    }
   }
   if (type === 'CopyStmt') {
     if (data.is_program || data.filename) return 'COPY to or from a server file or program is never allowed';
-    return 'COPY is not supported through the SQL endpoint: use SELECT to read and INSERT to write';
+    if (mode === 'endpoint') return 'COPY is not supported through the SQL endpoint: use SELECT to read and INSERT to write';
   }
   for (const [t, d] of [[type, data] as [string, Node], ...walk(data)]) {
     if (t === 'FuncCall') {
@@ -259,12 +282,25 @@ function refusal(type: string, data: Node, keyword: string): string | null {
   return null;
 }
 
-function kindOf(type: string, data: Node): StatementKind {
+function kindOf(type: string, data: Node, mode: GuardMode = 'endpoint'): StatementKind {
   if (type === 'ExplainStmt') {
     const analyze = (data.options as unknown[] | undefined)?.some((o) => (o as { DefElem?: { defname?: string } }).DefElem?.defname === 'analyze');
     if (!analyze) return 'read';
     const [t, d] = nodeType(data.query as Node);
-    return kindOf(t, d);
+    return kindOf(t, d, mode);
+  }
+  if (mode === 'proxy') {
+    if (type === 'PrepareStmt') {
+      const [t, d] = nodeType(data.query as Node);
+      return kindOf(t, d, mode);
+    }
+    // EXECUTE runs what PREPARE (checked then) holds; the rest only touch the session.
+    if (PROXY_ALLOWED.has(type)) return type === 'NotifyStmt' ? 'write' : 'read';
+    if (type === 'CopyStmt') {
+      if (data.is_from) return 'write';
+      for (const [t] of walk(data)) if (DML_NODES.has(t)) return 'write';
+      return 'read';
+    }
   }
   if (type === 'SelectStmt' && data.intoClause) return 'ddl';
   if (READ_STATEMENTS.has(type) || WRITE_STATEMENTS.has(type)) {
@@ -281,8 +317,29 @@ function sliceBytes(buf: Buffer, start: number, end: number): string {
   return buf.subarray(start, end).toString('utf8');
 }
 
-export function classify(sql: string): Classification {
-  if (!sql.trim()) return { statements: [], ddl: false, refused: 'empty query' };
+/** BEGIN/START/SET TRANSACTION/SET SESSION CHARACTERISTICS … READ WRITE, or SET transaction_read_only = off. */
+function opensReadWrite(type: string, data: Node): boolean {
+  const readOnlyOff = (defs: unknown) =>
+    Array.isArray(defs) &&
+    defs.some((d) => {
+      const def = (d as { DefElem?: { defname?: string; arg?: { A_Const?: { ival?: { ival?: number } } } } }).DefElem;
+      return def?.defname === 'transaction_read_only' && !def.arg?.A_Const?.ival?.ival;
+    });
+  if (type === 'TransactionStmt') return readOnlyOff(data.options);
+  if (type !== 'VariableSetStmt') return false;
+  const name = String(data.name ?? '').toLowerCase();
+  if (name === 'transaction' || name === 'session characteristics') return readOnlyOff(data.args);
+  if (name === 'transaction_read_only' && data.kind === 'VAR_SET_VALUE') {
+    const arg = (data.args as { A_Const?: { sval?: { sval?: string }; ival?: { ival?: number }; boolval?: { boolval?: boolean } } }[] | undefined)?.[0]?.A_Const;
+    const v = String(arg?.sval?.sval ?? arg?.ival?.ival ?? arg?.boolval?.boolval ?? '').toLowerCase();
+    return !['on', 'true', '1', 'yes', 't', 'y'].includes(v);
+  }
+  return false;
+}
+
+export function classify(sql: string, opts: { mode?: GuardMode } = {}): Classification {
+  const mode = opts.mode ?? 'endpoint';
+  if (!sql.trim()) return { statements: [], ddl: false, refused: 'empty query', params: 0 };
   let parsed: { stmts?: { stmt: Node; stmt_location?: number; stmt_len?: number }[] };
   try {
     parsed = parseSync(sql) as typeof parsed;
@@ -290,21 +347,53 @@ export function classify(sql: string): Classification {
     const e = err as { message?: string; sqlDetails?: { cursorPosition?: number } };
     // libpg-query reports a 0-based character offset; Postgres reports 1-based.
     const position = (e.sqlDetails?.cursorPosition ?? 0) + 1;
-    return { statements: [], ddl: false, refused: null, syntaxError: { message: e.message ?? 'syntax error', position } };
+    return { statements: [], ddl: false, refused: null, syntaxError: { message: e.message ?? 'syntax error', position }, params: 0 };
   }
   const buf = Buffer.from(sql, 'utf8');
   const statements: Statement[] = [];
   let refused: string | null = null;
+  let params = 0;
   for (const s of parsed.stmts ?? []) {
     const start = s.stmt_location ?? 0;
     const text = sliceBytes(buf, start, s.stmt_len ? start + s.stmt_len : buf.length).trim();
     const [type, data] = nodeType(s.stmt);
     const keyword = firstKeyword(text) || type.replace(/Stmt$/, '').toUpperCase();
-    let kind = kindOf(type, data);
+    let kind = kindOf(type, data, mode);
     if (securityDefiner(type, data)) kind = 'ddl';
-    statements.push({ text, keyword, kind, ddl: kind === 'ddl' });
-    refused ??= refusal(type, data, keyword);
+    const st: Statement = { text, keyword, kind, ddl: kind === 'ddl' };
+    if (mode === 'proxy' && opensReadWrite(type, data)) st.readWrite = true;
+    statements.push(st);
+    refused ??= refusal(type, data, keyword, mode);
+    for (const [t, d] of walk(data)) if (t === 'ParamRef' && typeof d.number === 'number') params = Math.max(params, d.number);
   }
   if (statements.length === 0) refused ??= 'empty query';
-  return { statements, ddl: statements.some((s) => s.ddl), refused };
+  return { statements, ddl: statements.some((s) => s.ddl), refused, params };
+}
+
+export interface ProxySession {
+  /** Logged in as the owner (`--write`); otherwise as boxlite_reader. */
+  write: boolean;
+  /** The env is `main`: schema changes only through migrations. */
+  main: boolean;
+}
+
+/**
+ * What a `db proxy` session may not run, or null. The proxy checks every simple-query and Parse
+ * message with this before it reaches the database. Statements that do not parse, and empty
+ * ones, pass: the database answers them exactly as it would anyway.
+ */
+export function proxyRefusal(sql: string, session: ProxySession): { message: string; hint: string; params: number } | null {
+  const cls = classify(sql, { mode: 'proxy' });
+  if (cls.syntaxError || cls.statements.length === 0) return null;
+  if (cls.refused) return { message: cls.refused, hint: 'this is refused on every BoxLite database connection', params: cls.params };
+  const kws = (list: Statement[]) => [...new Set(list.map((s) => s.keyword))].join(', ');
+  const ddl = cls.statements.filter((s) => s.ddl);
+  if (ddl.length && session.main) {
+    return { message: `schema changes (DDL: ${kws(ddl)}) are not allowed on main`, hint: 'add a file under migrations/ (`boxlite-app app db migration new <name>`), then `boxlite-app apply --yes`', params: cls.params };
+  }
+  if (!session.write) {
+    const writes = cls.statements.filter((s) => s.kind !== 'read' || s.readWrite);
+    if (writes.length) return { message: `${kws(writes)} would change data, and this connection is read-only`, hint: 'restart the proxy with --write: `boxlite-app app db proxy --write`', params: cls.params };
+  }
+  return null;
 }

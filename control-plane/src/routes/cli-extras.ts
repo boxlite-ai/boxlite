@@ -7,11 +7,10 @@ import type { Ctx } from '../ctx.js';
 import { now, type LogLine } from '../db.js';
 import { fail } from '../errors.js';
 import { TABLES_QUERY } from '../services/db.js';
-import { deploymentLogs, storedLevelsAtLeast } from '../services/logs.js';
+import { deploymentLogs, parseSince, storedLevelsAtLeast } from '../services/logs.js';
 import { deploymentView, envStatus } from '../views.js';
 import { readVolume, VOLUME_FILE_MAX, volumePath, writeVolume } from '../volume-files.js';
-import { parseSince } from './logs.js';
-import { forward } from './proxy.js';
+import { forward } from '../proxy/forward.js';
 import { envOf, intParam, type C } from './util.js';
 
 /**

@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Vars } from '../auth.js';
 import type { Ctx } from '../ctx.js';
-import { authStatus, blockUser, createTestSession, exportUsersCsv, listUsers, redirectUris, signOutUser, unblockUser } from '../enduser-auth.js';
+import { authStatus, blockUser, createTestSession, exportUsersCsv, listUsers, redirectUris, signOutUser, unblockUser } from '../enduser/management.js';
 import { body, envOf } from './util.js';
 
 /** `/v1/apps/{app}/envs/{env}/auth…`: end-user sign-in status and user management (PRD 3.8). */

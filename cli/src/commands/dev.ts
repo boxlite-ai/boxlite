@@ -10,7 +10,9 @@ import type { MakeCtx } from '../cli.js';
 import type { Ctx } from '../context.js';
 import { describe } from '../meta.js';
 import { pad } from '../output.js';
-import { requireCheck } from './common.js';
+import { parseInteger, requireCheck } from './common.js';
+import { openDbProxy } from './db.js';
+import type { DbBridge } from '../dbproxy.js';
 
 export const DEV_PORT = 3000;
 
@@ -92,11 +94,21 @@ function runBuild(ctx: Ctx, manifest: Manifest, env: NodeJS.ProcessEnv): Promise
   );
 }
 
-async function dev(ctx: Ctx, opts: { as?: string; build?: boolean }): Promise<void> {
+async function dev(ctx: Ctx, opts: { as?: string; build?: boolean; dbPort?: string }): Promise<void> {
   const checked = await requireCheck(ctx);
   const manifest = checked.manifest;
-  const { env: remote } = await (await ctx.appApi()).devEnv();
-  const devEnv: Record<string, string> = { ...remote, BOXLITE_ENV: remote.BOXLITE_ENV ?? ctx.envName };
+  const { env: remote, database } = await (await ctx.appApi()).devEnv();
+  const { DATABASE_URL: _never, ...vars } = remote;
+  const devEnv: Record<string, string> = { ...vars, BOXLITE_ENV: remote.BOXLITE_ENV ?? ctx.envName };
+  // The database is reached through a local `db proxy` as the owner (the app writes), so no
+  // password is ever written to .env.local. DDL on main is refused there like everywhere.
+  let db: DbBridge | undefined;
+  if (database) {
+    const opened = await openDbProxy(ctx, { port: opts.dbPort !== undefined ? parseInteger(opts.dbPort, '--db-port') : 0, write: true });
+    db = opened.bridge;
+    devEnv.DATABASE_URL = opened.url;
+    ctx.out.line(`${pad('db', 3)} | DATABASE_URL=${opened.url} (local proxy to ${ctx.envName}'s database, as its owner; runs while app dev runs)`);
+  }
   if (opts.as) devEnv.BOXLITE_DEV_USER = opts.as;
   await writeFile(join(ctx.cwd, '.env.local'), renderDotenv(devEnv), { mode: 0o600 });
   ctx.out.line(`wrote .env.local (${Object.keys(devEnv).length} variables, mode 0600; keep it out of git)`);
@@ -125,6 +137,7 @@ async function dev(ctx: Ctx, opts: { as?: string; build?: boolean }): Promise<vo
   if (exposed?.command !== undefined) ctx.out.line(`${pad(exposed.name, width)} | expected at http://localhost:${DEV_PORT}/`);
   if (children.length === 0 && !server) {
     ctx.out.line('nothing to run');
+    await db?.close();
     return;
   }
 
@@ -148,16 +161,18 @@ async function dev(ctx: Ctx, opts: { as?: string; build?: boolean }): Promise<vo
       });
     }
   });
+  await db?.close();
 }
 
 export function registerDev(app: Command, make: MakeCtx): void {
   describe(
     app
       .command('dev')
-      .description("fetch the environment's variables into .env.local and run every service locally against the cloud database")
+      .description("fetch the environment's variables into .env.local and run every service locally against the cloud database (DATABASE_URL is a local db proxy, no password)")
       .option('--as <email>', 'act as this end user (sets BOXLITE_DEV_USER)')
       .option('--build', 'run runtime.build first')
-      .action(async (opts: { as?: string; build?: boolean }, cmd: Command) => dev(await make(cmd), opts)),
+      .option('--db-port <n>', 'local port of the database proxy behind DATABASE_URL (default: any free port)')
+      .action(async (opts: { as?: string; build?: boolean; dbPort?: string }, cmd: Command) => dev(await make(cmd), opts)),
     { json: 'NDJSON stream: { source: string, line: string } per output line', exits: [2, 3, 7], online: true },
   );
 }

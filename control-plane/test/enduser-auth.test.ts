@@ -3,7 +3,8 @@ import { createHash, createPublicKey, verify, type JsonWebKey } from 'node:crypt
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, afterEach, before, test } from 'node:test';
-import { isProtected, safeNext, signState, verifyState } from '../src/enduser-auth.js';
+import { isProtected, safeNext } from '../src/enduser/paths.js';
+import { signState, verifyState } from '../src/enduser/state.js';
 import { ADMIN, createApp, harness, TOML, type Harness } from './helpers.js';
 
 // ---- pure helpers ---------------------------------------------------------------

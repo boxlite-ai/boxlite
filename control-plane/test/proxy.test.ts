@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, beforeEach, test } from 'node:test';
-import { filterSetCookie, rewriteLocation } from '../src/routes/proxy.js';
+import { filterSetCookie, rewriteLocation } from '../src/proxy/forward.js';
 import { ADMIN, API_PORT, CONSOLE_PORT, createApp, harness, type Harness } from './helpers.js';
 
 let upstream: Server;
@@ -240,7 +240,7 @@ test('open tickets: single use, 60 s, stored hashed, bound to their env, set a h
   assert.equal((await h.appRequest(lu.pathname + lu.search, {}, 'ledger')).status, 401);
   // A forged or other env's cookie does nothing.
   assert.equal((await h.appRequest('/deals', { headers: { cookie: `__Host-bxl_access=${env().id}.9999999999.forged` } }, 'ledger')).status, 401);
-  const { signAccess } = await import('../src/routes/proxy.js');
+  const { signAccess } = await import('../src/proxy/gate.js');
   assert.equal((await h.appRequest('/deals', { headers: { cookie: `__Host-bxl_access=${signAccess('test-session-secret', env().id)}` } }, 'ledger')).status, 401);
   // A bad next is refused at creation; an App key only opens its own app.
   assert.equal((await h.request('/v1/apps/ledger/envs/main/open-ticket', { method: 'POST', key: ADMIN, json: { next: '//evil.test' } })).status, 400);

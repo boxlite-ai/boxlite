@@ -16,6 +16,10 @@ class FakePg {
   tables = new Map<string, () => unknown[][]>();
   /** Reader password the "server" accepts. */
   readerPassword = 'pw1';
+  /** Errors thrown by the next query() calls, in order (undefined = succeed). */
+  faults: (Error | undefined)[] = [];
+  /** Errors thrown by the next cursor reads, in order. */
+  readFaults: (Error | undefined)[] = [];
 
   connect = async (url: string): Promise<DbConn> => {
     const u = new URL(url);
@@ -29,7 +33,9 @@ class FakePg {
     return {
       async query(text: string, values?: unknown[]) {
         self.log.push(values?.length ? `${text} ${JSON.stringify(values)}` : text);
-        if (text.startsWith('BEGIN')) readOnly = text !== 'BEGIN';
+        if (text.startsWith('BEGIN')) readOnly = text.startsWith('BEGIN TRANSACTION READ ONLY');
+        const fault = self.faults.shift();
+        if (fault) throw fault;
         return { rows: [] };
       },
       cursor(text: string, values: unknown[]): DbCursor {
@@ -39,6 +45,8 @@ class FakePg {
         let at = 0;
         return {
           async read(n: number) {
+            const fault = self.readFaults.shift();
+            if (fault) throw fault;
             const batch = all.slice(at, at + n);
             at += batch.length;
             self.handed += batch.length;
@@ -85,8 +93,7 @@ test('reads log in as boxlite_reader, run READ ONLY with timeouts, and roll back
   assert.deepEqual(res.rows, [[1]]);
   assert.deepEqual(pg.log, [
     `connect ${READER_ROLE}`,
-    'BEGIN TRANSACTION READ ONLY',
-    `SELECT set_config('statement_timeout', $1, true), set_config('idle_in_transaction_session_timeout', $2, true) ["15s","20s"]`,
+    `BEGIN TRANSACTION READ ONLY; SELECT set_config('statement_timeout', '15s', true), set_config('idle_in_transaction_session_timeout', '20s', true)`,
     `cursor(${READER_ROLE},ro) SELECT 1`,
     'ROLLBACK',
   ]);
@@ -98,8 +105,7 @@ test('writes log in as the owner and commit', async () => {
   assert.equal(res.row_count, 3);
   assert.deepEqual(pg.log, [
     'connect neondb_owner',
-    'BEGIN',
-    `SELECT set_config('statement_timeout', $1, true), set_config('idle_in_transaction_session_timeout', $2, true) ["15s","20s"]`,
+    `BEGIN; SELECT set_config('statement_timeout', '15s', true), set_config('idle_in_transaction_session_timeout', '20s', true)`,
     'cursor(neondb_owner) UPDATE t SET a = 1',
     'COMMIT',
   ]);
@@ -164,4 +170,52 @@ test('only the last statement is returned; earlier reads are executed, not buffe
   const res = await db(pg).db.query(URL_OWNER, ['SELECT * FROM big', 'SELECT 2'], { write: false });
   assert.deepEqual(res.rows, [[2]]);
   assert.ok(pg.handed <= 2, `handed out ${pg.handed}`);
+});
+
+const reset = () => Object.assign(new Error('Connection terminated unexpectedly'), {});
+const econnreset = () => Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET', errno: -54, syscall: 'read' });
+
+test('a connection that died while idle in the pool is retried once on a fresh one', async () => {
+  const pg = new FakePg();
+  pg.tables.set('SELECT 1', () => [[1]]);
+  pg.faults = [econnreset()];
+  const res = await db(pg).db.query(URL_OWNER, ['SELECT 1'], { write: false });
+  assert.deepEqual(res.rows, [[1]]);
+  assert.equal(pg.log.filter((l) => l.startsWith('connect')).length, 2);
+});
+
+test('a read is retried even when the connection breaks mid-statement (it is rolled back either way)', async () => {
+  const pg = new FakePg();
+  pg.tables.set('SELECT 1', () => [[1]]);
+  pg.readFaults = [reset()];
+  const res = await db(pg).db.query(URL_OWNER, ['SELECT 1'], { write: false });
+  assert.deepEqual(res.rows, [[1]]);
+});
+
+test('a write is retried only if it broke before its statements were sent', async () => {
+  const pg = new FakePg();
+  pg.faults = [econnreset()];
+  await db(pg).db.query(URL_OWNER, ['UPDATE t SET a = 1'], { write: true });
+  assert.equal(pg.log.filter((l) => l.startsWith('cursor')).length, 1, 'ran once, on the second connection');
+
+  const pg2 = new FakePg();
+  pg2.tables.set('UPDATE t SET a = 1 RETURNING a', () => [[1]]);
+  pg2.readFaults = [reset()];
+  await assert.rejects(db(pg2).db.query(URL_OWNER, ['UPDATE t SET a = 1 RETURNING a'], { write: true }), (err: { code?: string }) => err.code === 'unavailable');
+  assert.equal(pg2.log.filter((l) => l.startsWith('connect')).length, 1, 'not retried: COMMIT may or may not have landed');
+});
+
+test('only one retry: two broken connections in a row answer unavailable', async () => {
+  const pg = new FakePg();
+  pg.faults = [econnreset(), econnreset() /* its ROLLBACK */, econnreset()];
+  await assert.rejects(db(pg).db.query(URL_OWNER, ['SELECT 1'], { write: false }), (err: { code?: string }) => err.code === 'unavailable');
+  assert.equal(pg.log.filter((l) => l.startsWith('connect')).length, 2);
+});
+
+test('a statement error (SQLSTATE) is never retried', async () => {
+  const pg = new FakePg();
+  pg.readFaults = [Object.assign(new Error('relation "nope" does not exist'), { code: '42P01' })];
+  pg.tables.set('SELECT * FROM nope', () => []);
+  await assert.rejects(db(pg).db.query(URL_OWNER, ['SELECT * FROM nope'], { write: false }), (err: { code?: string }) => err.code === 'sql_error');
+  assert.equal(pg.log.filter((l) => l.startsWith('connect')).length, 1);
 });

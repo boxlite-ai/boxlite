@@ -6,17 +6,8 @@ import type { Ctx } from '../ctx.js';
 import { fail } from '../errors.js';
 import { logsTopic } from '../events.js';
 import { credentialOf, limitsOf, sseBusy, sseSlot } from '../limits.js';
+import { parseSince } from '../services/logs.js';
 import { envOf } from './util.js';
-
-/** `since` is an ISO timestamp or a duration back from now: 90s, 30m, 1h, 2d. */
-export function parseSince(v: string | undefined, at = Date.now()): string | undefined {
-  if (!v) return undefined;
-  const d = /^(\d+)([smhd])$/.exec(v.trim());
-  if (d) return new Date(at - Number(d[1]) * { s: 1e3, m: 6e4, h: 36e5, d: 864e5 }[d[2] as 's' | 'm' | 'h' | 'd']).toISOString();
-  const t = Date.parse(v);
-  if (Number.isNaN(t)) throw fail('invalid_request', 'since must be an ISO 8601 timestamp or a duration like 30m, 1h, 2d');
-  return new Date(t).toISOString();
-}
 
 const view = (l: LogLine) => ({ id: l.id, ts: l.ts, source: l.source, level: l.level, line: l.line, deployment: l.deployment ?? null });
 

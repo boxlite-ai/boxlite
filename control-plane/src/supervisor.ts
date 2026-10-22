@@ -11,6 +11,16 @@ export interface ServiceState {
   port?: number | null;
 }
 
+/** What the supervisor reports on POST /sv/v1/status. */
+export interface SupervisorStatus {
+  deployment: number;
+  phase: 'building' | 'built' | 'starting' | 'live' | 'failed';
+  step?: string;
+  error?: string;
+  log_tail?: string[];
+  services?: ServiceState[];
+}
+
 export interface SupervisorHealth {
   /** Wire protocol (contracts §2.3); see SUPERVISOR_PROTOCOL. */
   version?: number;

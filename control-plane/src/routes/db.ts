@@ -8,11 +8,30 @@ import { fail } from '../errors.js';
 import { MAX_ROWS } from '../appdb.js';
 import { classify } from '../sqlguard.js';
 import { body, envOf } from './util.js';
-import { dbCoordinates, quoteIdent } from '../services/db.js';
+import { dbCoordinates, quoteIdent, TABLES_QUERY } from '../services/db.js';
+import { Readable } from 'node:stream';
+import type { ReadableStream as WebReadableStream } from 'node:stream/web';
+import type { AppDatabase } from '../appdb.js';
+import { csvHeader } from '../dbtransfer.js';
 
 function dbUrl(env: EnvRow): string {
   if (!env.db_url) throw fail('not_found', `env "${env.name}" has no database`, 'add [database] to boxlite.toml and run `boxlite-app apply --yes`');
   return env.db_url;
+}
+
+/** Export and import need the real database (dbtransfer.ts). */
+function transfers(appdb: AppDatabase): Required<Pick<AppDatabase, 'exportCsv' | 'exportSql' | 'importCsv'>> {
+  if (!appdb.exportCsv || !appdb.exportSql || !appdb.importCsv) throw fail('unavailable', 'this control plane cannot export or import databases', 'tell the user the platform operator must configure the database service');
+  return appdb as Required<Pick<AppDatabase, 'exportCsv' | 'exportSql' | 'importCsv'>>;
+}
+
+/** The app's tables (public base tables); `not_found` when `table` is given and is not one of them. */
+async function publicTables(appdb: AppDatabase, url: string, table?: string): Promise<string[]> {
+  const names = (await appdb.query(url, [TABLES_QUERY], { write: false })).rows.map(([n]) => String(n));
+  if (table !== undefined && !names.includes(table)) {
+    throw fail('not_found', `no table public.${table}`, names.length ? `tables: ${names.join(', ')}` : 'this database has no tables yet: add a migration (`boxlite-app app db migration new <name>`)');
+  }
+  return names;
 }
 
 export function dbRoutes(ctx: Ctx) {
@@ -132,6 +151,59 @@ export function dbRoutes(ctx: Ctx) {
     const res = await appdb.query(dbUrl(env), statements, { write: !!b.write });
     if (b.write) store.recordActivity(app.id, env.name, c.get('actor'), 'db.sql.write', { statements: cls.statements.map((s) => s.keyword) });
     return c.json(res);
+  });
+
+  /**
+   * GET …/db/export?table=&format=csv|sql — streamed. CSV needs a table (COPY … TO STDOUT, as the
+   * reader); SQL is schema and data of public, or of one table. Activity `db.export`.
+   */
+  r.get('/envs/:env/db/export', async (c) => {
+    const app = c.get('app');
+    const env = envOf(ctx, c);
+    const url = dbUrl(env);
+    const table = c.req.query('table') || undefined;
+    const format = c.req.query('format') || (table ? 'csv' : 'sql');
+    if (format !== 'csv' && format !== 'sql') throw fail('invalid_request', '`format` must be csv or sql');
+    if (format === 'csv' && !table) throw fail('invalid_request', 'a CSV export is one table: pass `table`', '`boxlite-app app db export --table <table>`, or `--format sql` for the whole database');
+    const t = transfers(appdb);
+    await publicTables(appdb, url, table);
+    const stream = format === 'csv' ? await t.exportCsv(url, table!) : await t.exportSql(url, { table, title: `BoxLite database export of ${app.name}/${env.name}` });
+    store.recordActivity(app.id, env.name, c.get('actor'), 'db.export', { format, table: table ?? null });
+    const file = `${app.name}-${env.name}${table ? `-${table.replace(/[^A-Za-z0-9_.-]/g, '_')}` : ''}.${format}`;
+    return new Response(Readable.toWeb(stream) as ReadableStream, {
+      headers: {
+        'content-type': format === 'csv' ? 'text/csv; charset=utf-8' : 'application/sql; charset=utf-8',
+        'content-disposition': `attachment; filename="${file}"`,
+        'cache-control': 'no-store',
+      },
+    });
+  });
+
+  /**
+   * POST …/db/import?table=t, body: CSV whose header names the columns. COPY FROM STDIN as the
+   * owner in one transaction (every row or none). A db snapshot (restore point) is recorded first.
+   * Activity `db.import`. The CLI asks for --yes; on main it always does.
+   */
+  r.post('/envs/:env/db/import', async (c) => {
+    const app = c.get('app');
+    const env = envOf(ctx, c);
+    const url = dbUrl(env);
+    const table = c.req.query('table');
+    if (!table) throw fail('invalid_request', 'pass `table`: the table the rows go into', '`boxlite-app app db import <file.csv> --table <table> --yes`');
+    if (!c.req.raw.body) throw fail('invalid_request', 'the request body must be the CSV');
+    const t = transfers(appdb);
+    await publicTables(appdb, url, table);
+    const { columns, stream } = await csvHeader(Readable.fromWeb(c.req.raw.body as WebReadableStream));
+    if (!columns.length) throw fail('invalid_request', 'the CSV has no header row', 'the first line must name the columns, e.g. `title,amount`');
+    const known = (await appdb.query(url, [`SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1`], { write: false, params: [table] })).rows.map(([n]) => String(n));
+    const unknown = columns.filter((col) => !known.includes(col));
+    if (unknown.length) throw fail('invalid_request', `the CSV header names column(s) ${unknown.join(', ')} that public.${table} does not have`, `columns of ${table}: ${known.join(', ')}`);
+    const ts = now();
+    const snapshot = newId('dbs');
+    store.run('INSERT INTO db_snapshots (id, env_id, message, ts, by) VALUES (?, ?, ?, ?, ?)', snapshot, env.id, `before import into ${table}`, ts, c.get('actor'));
+    const rows = await t.importCsv(url, table, columns, stream);
+    store.recordActivity(app.id, env.name, c.get('actor'), 'db.import', { table, rows, columns, snapshot });
+    return c.json({ table, rows, columns, snapshot });
   });
 
   r.get('/envs/:env/db/migrations', async (c) => {

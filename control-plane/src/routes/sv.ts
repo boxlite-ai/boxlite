@@ -10,7 +10,7 @@ import type { Ctx } from '../ctx.js';
 import { fail } from '../errors.js';
 import { admitLogs } from '../limits.js';
 import { recordLogs } from '../logsink.js';
-import type { SupervisorStatus } from '../orchestrator.js';
+import type { SupervisorStatus } from '../supervisor.js';
 import { body } from './util.js';
 
 const logSchema = z

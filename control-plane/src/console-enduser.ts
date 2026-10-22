@@ -1,10 +1,11 @@
 import type { AppRow, EnvRow } from './db.js';
 import type { Ctx } from './ctx.js';
-import * as enduser from './enduser-auth.js';
+import * as enduser from './enduser/management.js';
+import type { UserView } from './enduser/sessions.js';
 
 /**
- * The console's view of end-user sign-in (the Auth tab), mapped from src/enduser-auth.ts. User
- * operations run as actor `console` (enduser-auth records the activity itself).
+ * The console's view of end-user sign-in (the Auth tab), mapped from src/enduser/management.ts. User
+ * operations run as actor `console` (enduser/management.ts records the activity itself).
  */
 
 export interface EndUserView {
@@ -43,7 +44,7 @@ export interface AuthStatusView {
 
 const ACTOR = 'console';
 
-function userView(u: enduser.UserView): EndUserView {
+function userView(u: UserView): EndUserView {
   return { id: u.id, email: u.email, name: u.name, provider: u.provider, firstSeen: u.first_seen, lastSeen: u.last_seen, sessions: u.active_sessions, blocked: u.blocked };
 }
 

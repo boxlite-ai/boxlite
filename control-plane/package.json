@@ -20,6 +20,7 @@
     "hono": "^4.10.0",
     "libpg-query": "17.7.3",
     "pg": "^8.16.0",
+    "pg-copy-streams": "^7.0.0",
     "pg-cursor": "^2.22.1",
     "tar-stream": "^3.1.7",
     "zod": "^4.1.0"
@@ -27,6 +28,7 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/pg": "^8.15.0",
+    "@types/pg-copy-streams": "^1.2.5",
     "@types/pg-cursor": "^2.7.2",
     "@types/tar-stream": "^3.1.4",
     "esbuild": "^0.28.0",

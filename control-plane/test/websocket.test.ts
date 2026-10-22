@@ -3,7 +3,7 @@ import { createServer, request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, test } from 'node:test';
 import { serve } from '@hono/node-server';
-import { handleUpgrade } from '../src/routes/proxy.js';
+import { handleUpgrade } from '../src/proxy/upgrade.js';
 import { createApp, harness } from './helpers.js';
 
 const h = harness();

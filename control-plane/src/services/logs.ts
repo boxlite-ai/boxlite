@@ -1,4 +1,6 @@
+/** Log levels, a deployment's log lines, and `since` parsing: shared by the CLI log routes and the console. */
 import type { Deployment, LogLine, Store } from '../db.js';
+import { fail } from '../errors.js';
 
 /**
  * Log levels. Stored lines keep the level their writer sent (the supervisor sends `info`/`error`,
@@ -37,3 +39,13 @@ export function deploymentLogs(store: Pick<Store, 'logs'>, envId: string, d: Dep
 
 /** `<ts> [<source>] <line>`: the log tail of a deployment, and what the failure classifier reads. */
 export const formatLogLine = (l: LogLine) => `${l.ts} [${l.source}] ${l.line}`;
+
+/** `since` is an ISO timestamp or a duration back from now: 90s, 30m, 1h, 2d. */
+export function parseSince(v: string | undefined, at = Date.now()): string | undefined {
+  if (!v) return undefined;
+  const d = /^(\d+)([smhd])$/.exec(v.trim());
+  if (d) return new Date(at - Number(d[1]) * { s: 1e3, m: 6e4, h: 36e5, d: 864e5 }[d[2] as 's' | 'm' | 'h' | 'd']).toISOString();
+  const t = Date.parse(v);
+  if (Number.isNaN(t)) throw fail('invalid_request', 'since must be an ISO 8601 timestamp or a duration like 30m, 1h, 2d');
+  return new Date(t).toISOString();
+}

@@ -497,6 +497,67 @@ Usage: `boxlite-app app db rows <table> [options]`
 - `--json`: `{ columns, rows, row_count, elapsed_ms, truncated, limit, offset }`
 - Exit codes: 0, 1, 2, 3, 4
 
+### `boxlite-app app db proxy`
+
+a local Postgres port for psql, ORMs and scripts, authenticated with the App key (read-only unless --write); no password is ever shown
+
+Usage: `boxlite-app app db proxy [options]`
+
+| option | description | default |
+|---|---|---|
+| `--port <n>` | local port (0 = any free port) | `5432` |
+| `--write` | log in as the database owner (DDL is still refused on main) |  |
+
+- Network: talks to the control plane
+- `--json`: `NDJSON stream: { event: "listening", app, env, host, port, role: "reader" | "owner", database_url }`
+- Exit codes: 0, 1, 2, 3, 4
+
+```sh
+boxlite-app app db proxy
+boxlite-app app db proxy --port 15432 --write
+```
+
+### `boxlite-app app db export`
+
+download the database: one table as CSV, or schema + data as SQL (streamed)
+
+Usage: `boxlite-app app db export [options]`
+
+| option | description | default |
+|---|---|---|
+| `--table <name>` | one table (required for CSV) |  |
+| `--format <fmt>` | csv \| sql (default: csv with --table, else sql) |  |
+| `-o, --output <file>` | write to a file instead of stdout |  |
+
+- Network: talks to the control plane
+- `--json`: `{ file, format: "csv" | "sql", table: string | null, bytes } (needs -o)`
+- Exit codes: 0, 1, 2, 3, 4
+
+```sh
+boxlite-app app db export --table deals -o deals.csv
+boxlite-app app db export --format sql -o dump.sql
+```
+
+### `boxlite-app app db import`
+
+append the rows of a CSV file (header = column names) to a table, all or nothing; snapshot first
+
+Usage: `boxlite-app app db import <file> [options]`
+
+| option | description | default |
+|---|---|---|
+| `--table <name>` | the table the rows go into |  |
+| `-y, --yes` | confirm (always required on main) |  |
+
+- Network: talks to the control plane
+- Destructive: prints what it destroys; needs `--yes` (without it: exit 10 `confirmation_required` in `--json` mode or without a terminal)
+- `--json`: `{ table, rows, columns: string[], snapshot }`
+- Exit codes: 0, 1, 2, 3, 4, 10
+
+```sh
+boxlite-app app db import deals.csv --table deals --yes
+```
+
 ### `boxlite-app app db migrations`
 
 applied / pending / changed per migration file (local files vs the database when run in the project)
@@ -673,7 +734,7 @@ boxlite-app app volume cp uploads:/exports/report.csv ./
 
 ### `boxlite-app app dev`
 
-fetch the environment's variables into .env.local and run every service locally against the cloud database
+fetch the environment's variables into .env.local and run every service locally against the cloud database (DATABASE_URL is a local db proxy, no password)
 
 Usage: `boxlite-app app dev [options]`
 
@@ -681,6 +742,7 @@ Usage: `boxlite-app app dev [options]`
 |---|---|---|
 | `--as <email>` | act as this end user (sets BOXLITE_DEV_USER) |  |
 | `--build` | run runtime.build first |  |
+| `--db-port <n>` | local port of the database proxy behind DATABASE_URL (default: any free port) |  |
 
 - Network: talks to the control plane
 - `--json`: `NDJSON stream: { source: string, line: string } per output line`

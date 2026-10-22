@@ -4,7 +4,7 @@ import { now } from './db.js';
 import type { Ctx } from './ctx.js';
 import { fail } from './errors.js';
 import { recordLogs } from './logsink.js';
-import { forward } from './routes/proxy.js';
+import { forward } from './proxy/forward.js';
 
 /** A run that has not answered by then is recorded as failed (504) and retried at its next time. */
 const SCHEDULE_TIMEOUT_MS = 30_000;

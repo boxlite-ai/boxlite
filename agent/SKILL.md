@@ -112,12 +112,14 @@ These are hard requirements. Most failed deploys break one of them.
 boxlite-app check             # local, instant: fix every error it lists (file:line, rule)
 boxlite-app plan              # what will change online
 boxlite-app apply --yes       # create database / volumes / login now (no code upload)
-boxlite-app app dev           # run locally against the real cloud database; writes .env.local
+boxlite-app app dev           # run locally against the real cloud database; writes .env.local (DATABASE_URL = a local proxy, no password)
 boxlite-app deploy -m "what changed"   # upload → cloud build → migrate → start → health → live
 ```
 
 - Run `check` after every edit to `boxlite.toml` or `migrations/`. Its JSON form is `boxlite-app check --json`.
 - New table or column: `boxlite-app app db migration new <name>` creates the next numbered file; `boxlite-app app db diff` shows which files are applied, pending or (never do this) edited after applying.
+- Database tools that need a real Postgres connection (psql, an ORM's studio, a seed script): `boxlite-app app db proxy` opens `127.0.0.1:5432` (`--port <n>` if that is taken) and prints the DATABASE_URL to use; it runs until Ctrl-C, so start it in the background. It is read-only; `--write` logs in as the owner (on `main` schema changes are still refused: use a migration). Any user name works and there is no password: the CLI authenticates with the App key. `app dev` starts the same proxy as the owner for the app it runs.
+- Bulk data: `boxlite-app app db export --table <t> -o t.csv` (one table as CSV) or `boxlite-app app db export --format sql -o dump.sql` (schema and data); `boxlite-app app db import rows.csv --table <t> --yes` appends a CSV whose first line names the columns, all rows or none, with a snapshot taken first. Importing changes the user's data: on `main` ask first.
 - `boxlite-app deploy --dry-run` runs check and plan and sizes the upload without deploying.
 - `deploy` streams progress (`--verbose` adds the build output) and returns only when the deployment is live or failed.
 - Exit codes (every command; the error's `code` says which case it is):

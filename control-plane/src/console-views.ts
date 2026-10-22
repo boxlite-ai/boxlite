@@ -1,16 +1,18 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+/** Builds the console's app summary and detail views from real CP state. */
 import type { AppRow, Deployment, EnvRow } from './db.js';
 import { ACTIVE_STATUSES, now } from './db.js';
 import type { Ctx } from './ctx.js';
 import { schedulesOf } from './agent-context.js';
 import type { AccessLog } from './console-access.js';
-import { activityView, actorLabel, type ActivityView } from './console-activity.js';
-import { changeText, failureView, runningStepStartedAt } from './console-deployment.js';
-import { endUserAuth, type AuthStatusView } from './console-enduser.js';
+import { activityView } from './console-activity.js';
+import { failureView } from './console-deployment.js';
+import { endUserAuth } from './console-enduser.js';
+import { currentKey, handoffPrompt, maskKey } from './console-prompt.js';
+import { lastDeploy, releaseId, releaseViews, runningOf } from './console-releases.js';
+import type { AppDetailView, AppSummaryView, ConsoleStatus, DatabaseSummaryView, EnvironmentSummaryView, ProblemView, ServiceView, VolumeView } from './console-view-types.js';
 import type { VolumeInfo } from './boxlite.js';
 import { BOX_SIZES } from './platform.js';
-import { volumeName } from './resources.js';
+import { volumeName } from './resources/volumes.js';
 import { dbCoordinates } from './services/db.js';
 import type { Spec } from './spec.js';
 import type { ServiceState } from './supervisor.js';
@@ -20,172 +22,12 @@ import { logLevel } from './services/logs.js';
  * Builds the console's view objects (the shapes of the dashboard's lib/apps/types.ts) from real CP
  * state. Where the CP has no data a field is null or empty and the console hides it; nothing here
  * invents a number.
+ *
+ * Split by concern: view types in console-view-types.ts, releases in console-releases.ts, the
+ * hand-off prompt in console-prompt.ts; this file builds the app summary and detail views.
  */
 
-export type ConsoleStatus = 'draft' | 'building' | 'live' | 'degraded' | 'sleeping' | 'failed';
-type Access = 'private' | 'org' | 'public';
-
-export interface LastDeployView {
-  releaseId: string;
-  at: string;
-  by: string;
-}
-
-export interface AppSummaryView {
-  id: string;
-  name: string;
-  slug: string;
-  /** The env's own origin, as the CP serves it (resources.appUrl); exists from creation. */
-  url: string;
-  visibility: Access;
-  status: ConsoleStatus;
-  lastDeploy: LastDeployView | null;
-  resources: { database: boolean; storage: number; users: null };
-  createdAt: string;
-  environments: number;
-  attention?: string;
-  /** While main deploys: "Deploying #4 · build". */
-  progress?: string;
-}
-
-export interface EnvironmentSummaryView {
-  name: string;
-  status: ConsoleStatus;
-  url: string;
-  box: string | null;
-  lastDeploy: LastDeployView | null;
-  from: string | null;
-}
-
-export interface ServiceView {
-  name: string;
-  command: string[];
-  exposed: boolean;
-  port?: number;
-  healthPath?: string;
-  staticDir?: string;
-  state: string;
-  pid?: number;
-  restarts: number;
-  lastExitCode?: number;
-  health: string;
-  /** The service's last error lines, when it is crashing, restarting or unhealthy. */
-  recentErrors: string[];
-}
-
-export interface ScheduleView {
-  name: string;
-  cron: string;
-  target: string;
-  /** null while nothing is live (schedules only run against a live release). */
-  nextRun: string | null;
-  lastRun: string | null;
-  /** HTTP status of the last run. */
-  lastStatus: number | null;
-}
-
-export interface ReleaseView {
-  id: string;
-  number: number;
-  summary: string;
-  createdAt: string;
-  finishedAt: string | null;
-  by: string;
-  status: Deployment['status'];
-  current: boolean;
-  error?: string;
-  steps: Deployment['steps'];
-  changes: string[];
-  files: number | null;
-  bytes: number | null;
-  buildSeconds: number | null;
-  hasSource: boolean;
-  rollback: { possible: boolean; reason?: string };
-  restorePoint: string | null;
-  startedAt: string | null;
-  /** The step running now and since when, while the deployment is in progress. */
-  running: { name: string; detail?: string; since: string | null } | null;
-  /** For a failed deployment: the classified cause, in a line. */
-  cause: string | null;
-}
-
-export interface DatabaseSummaryView {
-  status: 'ready';
-  engine: string;
-  host: string;
-  name: string;
-  user: string;
-  branch: string | null;
-  injectedAs: string;
-  injectedInto: string[];
-}
-
-export interface VolumeView {
-  name: string;
-  mountPath: string;
-  mode: string;
-  volumeName: string;
-  volumeId: string | null;
-  sizeBytes: number | null;
-  state: string | null;
-}
-
-export interface SecretRefView {
-  name: string;
-  from: string;
-  inject: 'env';
-  usedBy: string[];
-  /** false when the org secret it names has been deleted since. */
-  present: boolean;
-}
-
-export interface ProblemView {
-  summary: string;
-  detail: string;
-  fixPrompt?: string;
-  /** The failed deployment this problem is about. */
-  deployment?: number;
-  /** What still serves users, when something does. */
-  serving?: string;
-}
-
-export interface AppDetailView extends Omit<AppSummaryView, 'environments'> {
-  environment: string;
-  createdFrom: string | null;
-  runtime: { image: string; size: string; cpus: number | null; memoryMib: number | null } | null;
-  box: { id: string; state: string } | null;
-  services: ServiceView[];
-  activeRelease: string | null;
-  releases: ReleaseView[];
-  activity: ActivityView[];
-  database: DatabaseSummaryView | null;
-  storages: VolumeView[];
-  secrets: SecretRefView[];
-  /** [variables] of the latest spec; null before the first apply/deploy (nothing to edit yet). */
-  variables: Record<string, string> | null;
-  platformVariables: { name: string; value: string; kind: string }[];
-  problems: ProblemView[];
-  statusDetail: string | null;
-  /** The deployment in progress, for the header's live line. */
-  deploying: { id: string; number: number; step: string | null; detail: string | null; since: string } | null;
-  schedules: ScheduleView[];
-  /** [variables] of the live release; differs from `variables` while a change is being deployed. */
-  liveVariables: Record<string, string> | null;
-  metrics: { requests: number[]; errors: number[]; p95Ms: number[]; previousRequests: number } | null;
-  handoffPrompt: string;
-  key: { last4: string; createdAt: string } | null;
-  accessSource: 'manifest' | 'online';
-  specVersion: number | null;
-  auth: AuthStatusView;
-}
-
 // ---- small helpers -----------------------------------------------------------
-
-export const releaseId = (n: number) => `#${n}`;
-
-function lastDeploy(d: Deployment | undefined): LastDeployView | null {
-  return d ? { releaseId: releaseId(d.number), at: d.created_at, by: actorLabel(d.by) } : null;
-}
 
 function parseServices(env: EnvRow): ServiceState[] {
   try {
@@ -210,45 +52,6 @@ export function envStatus(ctx: Pick<Ctx, 'store'>, env: EnvRow, box: string | nu
 function failureLine(d: Deployment): string | undefined {
   if (d.status !== 'failed' || !d.error) return undefined;
   return `#${d.number} failed at ${d.error.step}: ${d.error.message}`;
-}
-
-/** The agent's message when it gave one; otherwise what changed, from the CP's own diff. */
-function summaryOf(d: Deployment): string {
-  if (d.message) return d.message;
-  const paths = d.changes.map((c) => `${c.kind === 'online_only' ? '' : c.kind}${c.path}`);
-  if (paths.length) return paths.slice(0, 3).join(', ') + (paths.length > 3 ? ` (+${paths.length - 3} more)` : '');
-  return d.kind === 'deploy' ? 'Deploy' : d.kind === 'apply' ? 'Configuration change' : 'Rollback';
-}
-
-// ---- prompt -----------------------------------------------------------------
-
-const FALLBACK_TEMPLATE = `You are building an app on BoxLite Cloud. First read {{CP_URL}}/agent.md and follow it exactly.
-
-BOXLITE_API_URL={{CP_URL}}
-BOXLITE_API_KEY={{APP_KEY}}
-App: {{APP}}
-
-What I want: {{REQUEST}}
-`;
-
-function promptTemplate(ctx: Pick<Ctx, 'config'>): string {
-  const path = ctx.config.promptTemplatePath ?? join(dirname(ctx.config.agentMdPath), 'prompt-template.md');
-  return existsSync(path) ? readFileSync(path, 'utf8') : FALLBACK_TEMPLATE;
-}
-
-/** agent/prompt-template.md filled in. Without a request the "What I want" line is left for the user to finish in their agent. */
-export function handoffPrompt(ctx: Pick<Ctx, 'config'>, app: string, key: string, request?: string): string {
-  let text = promptTemplate(ctx).replaceAll('{{CP_URL}}', ctx.config.publicUrl).replaceAll('{{APP_KEY}}', key).replaceAll('{{APP}}', app);
-  if (request?.trim()) text = text.replaceAll('{{REQUEST}}', request.trim());
-  else text = text.replace(/^.*\{\{REQUEST\}\}.*$/m, 'What I want: (tell your agent here)');
-  return text.trimEnd() + '\n';
-}
-
-const maskKey = (last4: string) => `bxl_app_••••••••••••${last4}`;
-
-function currentKey(ctx: Pick<Ctx, 'store'>, app: AppRow): { last4: string; createdAt: string } | null {
-  const row = ctx.store.get<{ last4: string; created_at: string }>('SELECT last4, created_at FROM keys WHERE app_id = ? AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1', app.id);
-  return row ? { last4: row.last4, createdAt: row.created_at } : null;
 }
 
 // ---- BoxLite volumes (size/state when the API reports them) ------------------
@@ -277,46 +80,6 @@ export async function volumeViews(ctx: Pick<Ctx, 'boxlite'>, app: AppRow, env: E
     const r = remote?.find((x) => x.name === name);
     return { name: v.name, mountPath: v.mount, mode: v.mode, volumeName: name, volumeId: r?.id ?? null, sizeBytes: r?.sizeBytes ?? null, state: r?.state ?? null };
   });
-}
-
-// ---- deployments -----------------------------------------------------------------
-
-export function releaseViews(ctx: Pick<Ctx, 'store' | 'orchestrator'>, app: AppRow, env: EnvRow, limit = 50): ReleaseView[] {
-  return ctx.store.deployments(env.id, limit).map((d) => {
-    const snap = d.snapshot_id ? ctx.store.snapshot(app.id, d.snapshot_id) : undefined;
-    const build = d.steps.find((s) => s.name === 'build' && s.status === 'done');
-    const current = env.live_deployment === d.number;
-    // A rollback restores the target's code and configuration, so an older deployment of the live release still counts.
-    const problem = current ? 'this deployment is live' : ctx.orchestrator.rollbackProblem(env, d.number);
-    return {
-      id: releaseId(d.number),
-      number: d.number,
-      summary: summaryOf(d),
-      createdAt: d.created_at,
-      finishedAt: d.finished_at,
-      by: actorLabel(d.by),
-      status: d.status,
-      current,
-      ...(d.error ? { error: `${d.error.step}: ${d.error.message}` } : {}),
-      steps: d.steps,
-      changes: d.changes.map(changeText),
-      files: snap?.files ?? null,
-      bytes: snap?.bytes ?? null,
-      buildSeconds: build?.ms !== undefined ? Math.round(build.ms / 100) / 10 : null,
-      hasSource: !!snap,
-      rollback: problem ? { possible: false, reason: problem } : { possible: true },
-      restorePoint: d.restore_point,
-      startedAt: d.started_at,
-      running: ACTIVE_STATUSES.includes(d.status) ? runningOf(ctx, env, d) : null,
-      cause: failureView(ctx, app, env, d)?.diagnosis.summary ?? null,
-    };
-  });
-}
-
-function runningOf(ctx: Pick<Ctx, 'store'>, env: EnvRow, d: Deployment): ReleaseView['running'] {
-  const step = d.steps.find((s) => s.status === 'running');
-  if (!step) return null;
-  return { name: step.name, ...(step.detail ? { detail: step.detail } : {}), since: runningStepStartedAt(ctx, env, d) };
 }
 
 // ---- summary / detail ----------------------------------------------------------------

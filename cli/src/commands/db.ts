@@ -1,11 +1,16 @@
 import { MANIFEST_FILE, MicrocloudError, nextMigrationName, parseManifest, readMigrations, type MigrationFile } from '@microcloud/shared';
 import type { Command } from 'commander';
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import type { AppliedMigration, SqlResult } from '../api.js';
 import type { MakeCtx } from '../cli.js';
 import type { Ctx } from '../context.js';
+import { localDatabaseUrl, startDbBridge, type BridgeSocket, type DbBridge } from '../dbproxy.js';
+import { abortOnSigint } from '../follow.js';
 import { describe } from '../meta.js';
 import { formatAgo, formatBytes, formatValue, table } from '../output.js';
 import { parseInteger } from './common.js';
@@ -268,6 +273,104 @@ async function reset(ctx: Ctx): Promise<void> {
   ctx.out.next(`\`boxlite-app apply --yes --env ${ctx.envName}\` re-runs the migrations`);
 }
 
+/**
+ * Starts the local Postgres port for this App env (`db proxy`, `app dev`). Fails before listening
+ * when the env has no database or the key is wrong (the WebSocket itself cannot say why).
+ */
+export async function openDbProxy(ctx: Ctx, opts: { port: number; write: boolean }): Promise<{ bridge: DbBridge; url: string; database: string }> {
+  const api = await ctx.appApi();
+  const db = await api.dbInfo();
+  if (db.status === 'none' || !db.database) throw new MicrocloudError('not_found', `${ctx.envName} has no database`, 'add [database] to boxlite.toml, then `boxlite-app apply --yes`');
+  const session = randomUUID();
+  let bridge: DbBridge;
+  try {
+    bridge = await startDbBridge(() => api.dbSocket(opts.write, session) as unknown as BridgeSocket, opts.port, { onError: (m) => ctx.out.note(m) });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+      throw new MicrocloudError('conflict', `127.0.0.1:${opts.port} is already in use (a local Postgres?)`, `pick another port: \`boxlite-app app db proxy --port ${opts.port === 5432 ? 15432 : opts.port + 1}\``);
+    }
+    throw err;
+  }
+  return { bridge, url: localDatabaseUrl(bridge.port, db.database), database: db.database };
+}
+
+async function proxy(ctx: Ctx, opts: { port?: string; write?: boolean }): Promise<void> {
+  const port = opts.port !== undefined ? parseInteger(opts.port, '--port') : 5432;
+  const write = opts.write === true;
+  const app = await ctx.appName();
+  const { bridge, url } = await openDbProxy(ctx, { port, write });
+  const role = write ? 'read-write, as the database owner' : 'read-only, as boxlite_reader';
+  ctx.out.stream({ event: 'listening', app, env: ctx.envName, host: '127.0.0.1', port: bridge.port, role: write ? 'owner' : 'reader', database_url: url });
+  ctx.out.line(`Postgres for ${app}/${ctx.envName} on 127.0.0.1:${bridge.port} (${role}; authenticated with your App key)`);
+  ctx.out.line(`DATABASE_URL=${url}`);
+  if (write && ctx.envName === 'main') ctx.out.line('schema changes (DDL) are refused on main: they go through migrations/');
+  ctx.out.line('every connection is recorded in the App\'s Activity; Ctrl-C stops the proxy');
+  ctx.out.next(`\`psql "${url}"\` in another terminal`);
+  const { signal, dispose } = abortOnSigint();
+  const onTerm = () => process.emit('SIGINT');
+  process.once('SIGTERM', onTerm);
+  await new Promise<void>((r) => signal.addEventListener('abort', () => r(), { once: true }));
+  dispose();
+  process.off('SIGTERM', onTerm);
+  await bridge.close();
+  ctx.out.line('proxy stopped');
+}
+
+async function exportDb(ctx: Ctx, opts: { table?: string; format?: string; output?: string }): Promise<void> {
+  const format = opts.format ?? (opts.table ? 'csv' : 'sql');
+  if (format !== 'csv' && format !== 'sql') throw new MicrocloudError('usage', '--format must be csv or sql', '`boxlite-app app db export --table deals --format csv`');
+  if (format === 'csv' && !opts.table) throw new MicrocloudError('usage', 'a CSV export is one table: pass --table', '`boxlite-app app db export --table <table>`, or `boxlite-app app db export --format sql` for the whole database');
+  if (ctx.json && !opts.output) throw new MicrocloudError('usage', 'with --json the export needs -o <file> (stdout carries the JSON result)', '`boxlite-app app db export --format sql -o dump.sql --json`');
+  const res = await (await ctx.appApi()).dbExport({ table: opts.table, format });
+  if (!res.body) throw new MicrocloudError('unavailable', 'the control plane sent no data', 'rerun the export');
+  const body = Readable.fromWeb(res.body as import('node:stream/web').ReadableStream);
+  if (!opts.output) {
+    await pipeline(body, ctx.io.stdout, { end: false });
+    return;
+  }
+  const file = resolve(ctx.cwd, opts.output);
+  const partial = `${file}.partial`;
+  try {
+    await pipeline(body, createWriteStream(partial));
+    await rename(partial, file);
+  } catch (err) {
+    await rm(partial, { force: true });
+    throw new MicrocloudError('unavailable', `the export stopped before it finished: ${(err as Error).message}`, 'rerun the export; nothing was written to the output file');
+  }
+  const bytes = (await stat(file)).size;
+  ctx.out.data({ file: opts.output, format, table: opts.table ?? null, bytes });
+  ctx.out.line(`wrote ${opts.output} (${formatBytes(bytes)}, ${format}${opts.table ? `, table ${opts.table}` : ', whole database'})`);
+}
+
+async function importDb(ctx: Ctx, file: string, opts: { table: string }): Promise<void> {
+  const path = resolve(ctx.cwd, file);
+  let size: number;
+  try {
+    size = (await stat(path)).size;
+  } catch {
+    throw new MicrocloudError('not_found', `cannot read ${file}`, 'check the path (relative to the current directory)');
+  }
+  const app = await ctx.appName();
+  const brief = {
+    action: `import ${file} (${formatBytes(size)} of CSV) into table ${opts.table} of ${app}/${ctx.envName}`,
+    destroys: [`nothing is replaced: the rows are added to ${opts.table}; if one row fails (constraint, type), none are added`],
+    undo: 'a snapshot is taken first; `boxlite-app app db restore --snapshot <id> --yes` brings the table back',
+  };
+  // On main an import always needs an explicit --yes, even on a terminal.
+  if (ctx.envName === 'main' && !ctx.yes) {
+    for (const l of [`This will ${brief.action}:`, ...brief.destroys.map((d) => `  - ${d}`), `Undo: ${brief.undo}`]) ctx.out.note(l);
+    throw new MicrocloudError('confirmation_required', `refusing to import into main without --yes`, `rerun as \`${ctx.commandLine(['--yes'])}\` once the user agreed`, { action: brief.action, destroys: brief.destroys, undo: brief.undo, command: ctx.commandLine(['--yes']) });
+  }
+  if (!(await ctx.confirmDestructive(brief))) {
+    ctx.out.line('cancelled');
+    return;
+  }
+  const result = await (await ctx.appApi()).dbImport(opts.table, createReadStream(path));
+  ctx.out.data(result);
+  ctx.out.line(`imported ${result.rows} row${result.rows === 1 ? '' : 's'} into ${result.table} (${result.columns.join(', ')})`);
+  ctx.out.next(`\`boxlite-app app db rows ${result.table}\`; undo with \`boxlite-app app db restore --snapshot ${result.snapshot} --yes\``);
+}
+
 export function registerDb(app: Command, make: MakeCtx): void {
   describe(
     app
@@ -285,7 +388,7 @@ export function registerDb(app: Command, make: MakeCtx): void {
     },
   );
 
-  const db = app.command('db').description('database info, schema, rows, migrations, snapshots, restore, reset');
+  const db = app.command('db').description('database info, schema, rows, local proxy, export, import, migrations, snapshots, restore, reset');
   describe(db.command('info').description('connection and size summary (no password)').action(async (_o: unknown, cmd: Command) => info(await make(cmd))), {
     json: '{ status: "ready" | "unknown" | "none", host?, database?, user?, branch?, size_bytes? }',
     exits: [2, 3],
@@ -307,6 +410,44 @@ export function registerDb(app: Command, make: MakeCtx): void {
       .option('--offset <n>', 'skip rows')
       .action(async (tableName: string, opts: { where?: string; limit?: string; offset?: string }, cmd: Command) => rows(await make(cmd), tableName, opts)),
     { json: '{ columns, rows, row_count, elapsed_ms, truncated, limit, offset }', exits: [2, 3, 4], online: true },
+  );
+  describe(
+    db
+      .command('proxy')
+      .description('a local Postgres port for psql, ORMs and scripts, authenticated with the App key (read-only unless --write); no password is ever shown')
+      .option('--port <n>', 'local port (0 = any free port)', '5432')
+      .option('--write', 'log in as the database owner (DDL is still refused on main)')
+      .action(async (opts: { port?: string; write?: boolean }, cmd: Command) => proxy(await make(cmd), opts)),
+    {
+      json: 'NDJSON stream: { event: "listening", app, env, host, port, role: "reader" | "owner", database_url }',
+      exits: [1, 2, 3, 4],
+      online: true,
+      examples: ['boxlite-app app db proxy', 'boxlite-app app db proxy --port 15432 --write'],
+    },
+  );
+  describe(
+    db
+      .command('export')
+      .description('download the database: one table as CSV, or schema + data as SQL (streamed)')
+      .option('--table <name>', 'one table (required for CSV)')
+      .option('--format <fmt>', 'csv | sql (default: csv with --table, else sql)')
+      .option('-o, --output <file>', 'write to a file instead of stdout')
+      .action(async (opts: { table?: string; format?: string; output?: string }, cmd: Command) => exportDb(await make(cmd), opts)),
+    {
+      json: '{ file, format: "csv" | "sql", table: string | null, bytes } (needs -o)',
+      exits: [1, 2, 3, 4],
+      online: true,
+      examples: ['boxlite-app app db export --table deals -o deals.csv', 'boxlite-app app db export --format sql -o dump.sql'],
+    },
+  );
+  describe(
+    db
+      .command('import <file>')
+      .description('append the rows of a CSV file (header = column names) to a table, all or nothing; snapshot first')
+      .requiredOption('--table <name>', 'the table the rows go into')
+      .option('-y, --yes', 'confirm (always required on main)')
+      .action(async (file: string, opts: { table: string }, cmd: Command) => importDb(await make(cmd), file, opts)),
+    { json: '{ table, rows, columns: string[], snapshot }', exits: [1, 2, 3, 4, 10], destructive: true, online: true, examples: ['boxlite-app app db import deals.csv --table deals --yes'] },
   );
   describe(db.command('migrations').description('applied / pending / changed per migration file (local files vs the database when run in the project)').action(async (_o: unknown, cmd: Command) => migrations(await make(cmd))), {
     json: '{ file, status: "applied" | "pending" | "changed" | "missing_locally", deployment, applied_at }[]',

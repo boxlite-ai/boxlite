@@ -279,7 +279,7 @@ test('the Auth tab maps end-user sign-in: methods, users, and user actions as ac
   assert.equal((await api('/apps/crm')).body.auth.declared, true);
 
   // A real user from the end-user module: a test session creates one.
-  const { createTestSession } = await import('../src/enduser-auth.js');
+  const { createTestSession } = await import('../src/enduser/management.js');
   const app = h.ctx.store.appByName('crm')!;
   const s = await createTestSession(h.ctx, app, mainEnv(), 'qa@example.com', 'test');
   const users = (await api('/apps/crm/auth')).body.users;

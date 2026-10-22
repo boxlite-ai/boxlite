@@ -114,6 +114,9 @@ POST   /v1/apps/{app}/envs/{env}/db/sql               {query, write?: bool, expl
 GET    /v1/apps/{app}/envs/{env}/db/migrations         → [{file, status: applied|pending|changed, deployment?}]
 GET|POST /v1/apps/{app}/envs/{env}/db/snapshots        POST {message}
 POST   /v1/apps/{app}/envs/{env}/db/restore            {to?: iso8601, snapshot?: id}
+GET    /v1/apps/{app}/envs/{env}/db/connect?write=1    WebSocket: one Postgres connection (`app db proxy`, 4.1 "db proxy")
+GET    /v1/apps/{app}/envs/{env}/db/export?table=&format=csv|sql   → streamed CSV or SQL (4.1)
+POST   /v1/apps/{app}/envs/{env}/db/import?table=      body: CSV → {table, rows, columns, snapshot}
 POST   /v1/apps/{app}/envs/{env}/open-ticket          {next?} → 201 {url, expires_at}   (§3)
 ```
 
@@ -335,11 +338,11 @@ Console origin:
 
 Wake: if the Box tunnel answers 503 `BOX_STARTING`/connection refused, the CP serves a "Starting…" HTML page with `Retry-After: 3` and meta-refresh, and calls `POST /v1/boxes/{id}/start` if the Box state is `stopped`.
 
-WebSocket upgrades on an app origin pass the same gate (cookie or Bearer key), get the same headers and reach the app at the same path; upgrades on the API or console origin are refused.
+WebSocket upgrades on an app origin pass the same gate (cookie or Bearer key), get the same headers and reach the app at the same path; upgrades on the API or console origin are refused, except `…/db/connect` on the API origin (the db proxy, 4.1).
 
 ## 4. Additions
 
-- `GET /v1/apps/{app}/envs/{env}/dev-env` → `{"env": {"DATABASE_URL": "<direct Neon URL for app dev>", "BOXLITE_APP_URL": "…", "BOXLITE_ENV": "…", …variables, …resolved secrets}}` — used by `boxlite-app dev` to write `.env.local`. Prototype only: the DB URL carries a password; the PRD's `db proxy` replaces this later.
+- `GET /v1/apps/{app}/envs/{env}/dev-env` → `{"env": {"BOXLITE_APP_URL": "…", "BOXLITE_ENV": "…", …variables, …resolved secrets}, "database": {"name": "neondb"} | null}` — used by `boxlite-app app dev` to write `.env.local`. No DATABASE_URL and no password: `app dev` starts a local `db proxy` as the owner and sets DATABASE_URL to it (4.1 "db proxy").
 - Shared TypeScript package `shared/` (`@microcloud/shared`) owns: `parseManifest(tomlText, envName) → {manifest, errors, warnings}`, `checkLocal(projectDir, manifest)`, the upload ignore rules (2.4 of the PRD), `MANIFEST_SCHEMA` types. Both CLI and CP import it so there is one validator.
 - `POST /v1/apps` `{name}` with header `Authorization: Bearer <admin token>` (CP's own `ADMIN_TOKEN`) creates an App and returns `{app, key}` once. Prototype stand-in for the console's New App.
 
@@ -390,6 +393,15 @@ Other endpoints
   - Migrations are not classified: they run as the owner, in the deploy/apply migrate step.
   - SQL errors → `sql_error` with `sqlstate`, `position`.
 - `GET …/db/rows/{table}?where=` runs as a read (reader role, read-only) with `where` as a single expression: the composed `SELECT` must parse as one read statement and pass the same refusals (else `invalid_request`/`forbidden`). Snapshots are `{id, message, ts, created_at, by}`. `POST …/db/restore` → `{restored_to, preserved_as}`.
+- **App database connections** (`appdb.ts`): one pool per login URL (database + role), at most 3 connections, idle ones closed after 30 s. Every unit of work is one transaction; the CP's settings are SET LOCAL; `DISCARD ALL` runs before a connection goes back to the pool. A connection-class failure (no SQLSTATE, 08, 53, 57P) is retried once on a fresh connection; a write only if it failed before its statements were sent.
+- **db proxy**: `GET …/envs/{env}/db/connect` on the API origin, a WebSocket upgrade (`Upgrade: websocket`, binary messages carry the Postgres byte stream; the CP pings every 25 s). Auth: `Authorization: Bearer <App key>` (or the admin token), checked before the upgrade: 401 `unauthenticated`, 403 `forbidden` (another App's key), 404 `not_found_app`/`not_found_env`/`not_found` (no database), 429 `rate_limited` (20 open proxied connections per env), 503 `unavailable`; JSON error bodies. Optional `X-BoxLite-Proxy-Session: <8–64 [A-Za-z0-9-]>` groups the connections of one CLI run.
+  - The CP answers the client's startup itself: SSLRequest/GSSENCRequest → `N` (the WebSocket is the encrypted leg), any user/password/database accepted, no auth request (AuthenticationOk right away). Protocol 3.0 (a newer minor or `_pq_.*` options get NegotiateProtocolVersion); `replication` refused. Passed on: `application_name` (prefixed `boxlite-proxy:`), `client_encoding`, `DateStyle`, `TimeZone`, `IntervalStyle`, `extra_float_digits`; never `options`.
+  - The CP logs in to the env's database over TLS (SNI) with SCRAM-SHA-256 as `boxlite_reader` (default) or the owner (`?write=1`); a refused reader login refreshes the password once. A login failure reaches the client as a FATAL ErrorResponse.
+  - Every simple Query and Parse is checked by the SQL guard in proxy mode (`proxyRefusal`). Allowed beyond the SQL endpoint: transaction control, PREPARE/EXECUTE/DEALLOCATE, DISCARD, LISTEN/UNLISTEN/NOTIFY, `SET` of timeouts and isolation, `RESET ALL`, `COPY … TO STDOUT`, `COPY … FROM STDIN`. Refused always: what the endpoint refuses otherwise (SET ROLE/SESSION AUTHORIZATION/default_transaction_read_only, set_config, server files/programs, signalling functions, roles, databases, extensions, ALTER SYSTEM, …). Reader sessions: anything that writes or is DDL-class, and `BEGIN/START/SET TRANSACTION … READ WRITE`, `SET SESSION CHARACTERISTICS … READ WRITE`, `SET transaction_read_only = off`. Owner sessions on `main`: DDL-class statements. A refused statement is replaced by `DO … RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'BoxLite: <why>', HINT = '<what to do>'`, so the client gets an ordinary ERROR in order (and an open transaction is aborted). The fast-path FunctionCall message closes the session (FATAL 0A000).
+  - The client gets a BackendKeyData of the CP's own; a CancelRequest arriving on a new db/connect of the same App is forwarded to the database (over TLS) with the real key.
+  - Activity `db.proxy`, one row per proxy run (same App, env, actor, role and session header), updated as connections open and close: `{role: reader|owner, session, started_at, ended_at, duration_ms, connections, open, statements, refused}`.
+- `GET …/envs/{env}/db/export?table=&format=` → streamed, `content-disposition: attachment; filename="<app>-<env>[-<table>].<csv|sql>"`. `format` defaults to `csv` with a table, else `sql`; `csv` needs `table` (`invalid_request`). CSV: `COPY public.<t> TO STDOUT WITH (FORMAT csv, HEADER)` as the reader in a READ ONLY transaction. SQL: the public schema (or one table) as statements for `psql -f` into an empty database: extensions, enum types, sequences, functions, tables, data as `INSERT` (100 rows each), sequence positions, constraints, indexes, triggers, RLS and policies, views; one REPEATABLE READ READ ONLY snapshot as the reader. Statement timeout 10 min. Unknown table → `not_found`. Activity `db.export {format, table}`.
+- `POST …/envs/{env}/db/import?table=` body = CSV whose first line names the columns → `{table, rows, columns, snapshot}`. The table must be a public base table (`not_found`) and every header name one of its columns (`invalid_request` listing them). Records a db snapshot "before import into <t>", then `COPY public.<t> (<header>) FROM STDIN WITH (FORMAT csv, HEADER MATCH)` as the owner in one transaction (all rows or none; a bad row → `sql_error`). At most 512 MiB. Activity `db.import {table, rows, columns, snapshot}`. The CLI requires `--yes`, on `main` always.
 - `[[schedule]]` is checked every 30 s and a due run is sent as `POST <target path>` (never GET) with header `X-BoxLite-Schedule: <name>`, sent through the app proxy path, so a sleeping Box is woken. Due runs go out concurrently, each with a 30 s limit, so one slow app does not delay the others. A run is retried on the next tick while the Box starts. Missed runs are not replayed. Each run is logged as `source: schedule`. `POST …/schedules/{name}/run` → `{name, status, ms, starting}`.
 - Admin (`Authorization: Bearer <ADMIN_TOKEN>`): `PUT /admin/secrets/{scope}/{name} {value}` (for example `org/openai`), `GET /admin/secrets` (names only), `DELETE /admin/secrets/{scope}/{name}`. This is the only way to set a secret value: the console lists org secrets and references them, but cannot set one. The admin token is also accepted on every `/v1/apps/{app}/…` route (actor `admin`).
 - Unauthenticated, API origin: `GET /` (status page), `GET /healthz`, `GET /agent.md` (`AGENT_MD_PATH`, front matter stripped), `GET /cli/boxlite-app.tgz` (`CLI_TGZ_PATH`), `GET /cli/version`, `GET /sv/bin/{file}` (`SV_BIN_DIR`), and the sign-in hops `GET /auth/start`, `GET /auth/callback/{provider}`, `GET /auth/jwks.json` (§3).
@@ -423,7 +435,7 @@ App proxy (section 3, details)
 - WebSocket upgrades are passed through with the same gate and headers.
 - No end-user request reaches `/.boxlite/…` on the Box (404 at the CP): the supervisor's control API lives there. Behind that, the gateway refuses the forwarding secret the proxy adds on any spelling of `/.boxlite/sv/*` (2.3), so a parser difference between the CP and the gateway cannot open the control API.
 
-End-user sign-in (`[auth]`, PRD 3.8 case 1; `control-plane/src/enduser-auth.ts`)
+End-user sign-in (`[auth]`, PRD 3.8 case 1; `control-plane/src/enduser/`)
 
 - Providers: `github`, `google`. A provider is ready when the CP has `<NAME>_CLIENT_ID` and `<NAME>_CLIENT_SECRET`; others are skipped. One platform-wide callback per provider: `${PUBLIC_URL}/auth/callback/<provider>`.
 - Routes on each env's origin, answered by the CP after the access gate: `GET /.boxlite/auth/login?next=&provider=` (one ready provider → straight on, else a page with a button each), `/.boxlite/auth/complete?code=`, `GET /.boxlite/auth/logout?next=`, `GET /.boxlite/auth/me` → `{id, email, name, provider, avatar_url}` or 401. `GET /.boxlite/auth/jwks.json` (also `/auth/jwks.json` on the API origin) is public.
@@ -477,10 +489,10 @@ Configuration (environment of the CP process; `control-plane/src/config.ts` unle
 | `NEON_API_KEY`, `NEON_ORG_ID`, `NEON_REGION` | none, none, `aws-us-east-2` | databases; without them `[database]` fails with `unavailable` |
 | `<PROVIDER>_CLIENT_ID`, `<PROVIDER>_CLIENT_SECRET` | none | `github`, `google` sign-in |
 | `SV_BIN_DIR`, `AGENT_MD_PATH`, `CLI_TGZ_PATH` | `../supervisor/bin`, `../agent/SKILL.md`, `../cli/boxlite-app.tgz` | files the CP serves |
-| `CONSOLE_DIR` | `../console-dist` (read in `routes/console.ts`) | the dashboard build served at `/console/` |
-| `PROMPT_TEMPLATE_PATH` | `prompt-template.md` next to `AGENT_MD_PATH` (read in `console-views.ts`) | the App prompt template (`agent/prompt-template.md`) |
+| `CONSOLE_DIR` | `../console-dist` (served by `routes/console/static.ts`) | the dashboard build served at `/console/` |
+| `PROMPT_TEMPLATE_PATH` | `prompt-template.md` next to `AGENT_MD_PATH` (read in `console-prompt.ts`) | the App prompt template (`agent/prompt-template.md`) |
 
-### 4.2 Console API (`/console/api`, console origin; `routes/console.ts`)
+### 4.2 Console API (`/console/api`, console origin; `routes/console/`)
 
 Console session cookie; every write carries `X-BoxLite-Console: 1`. Most writes go through the `/v1` routes in-process with the admin token and `X-BoxLite-Actor: console`, so Activity records actor `console` (the admin token alone stays `admin`). `{app}` is the App name everywhere; `?env=` picks the environment (default `main`). Shapes are the dashboard's types (`console-views.ts`).
 
@@ -504,6 +516,7 @@ GET    /secrets                                     org secret names only; value
 GET    /apps/{app}/auth   /users.csv                POST /apps/{app}/users/{uid}/sign-out|block|unblock
 GET    /apps/{app}/logs
 GET    /apps/{app}/database   /database/rows/{table}   POST /apps/{app}/sql   POST /apps/{app}/database/restore
+GET    /apps/{app}/database/export?env=&table=&format=   streams /v1 …/db/export (Tables → Export CSV, Connection → Download dump; actor console)
 ```
 
 Details of the routes the dashboard needed beyond the `/v1` shapes:

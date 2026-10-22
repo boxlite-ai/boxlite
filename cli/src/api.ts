@@ -1,7 +1,8 @@
 import { MicrocloudError, type AgentContext, type CheckError, type CheckWarning, type Manifest, type MigrationFile, type UploadFile } from '@microcloud/shared';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
-import { fetch, type Dispatcher, type Response } from 'undici';
+import { fetch, WebSocket, type Dispatcher, type Response } from 'undici';
+import type { Readable } from 'node:stream';
 import type { PlanChange } from './output.js';
 import { parseJsonData, parseSse, type SseEvent } from './sse.js';
 
@@ -115,6 +116,13 @@ export interface SqlResult {
   row_count: number;
 }
 
+export interface DbImport {
+  table: string;
+  rows: number;
+  columns: string[];
+  snapshot: string;
+}
+
 export interface MigrationStatus {
   file: string;
   status: 'applied' | 'pending' | 'changed' | string;
@@ -160,6 +168,8 @@ export interface ApiOptions {
 interface RequestOptions {
   body?: unknown;
   raw?: Buffer;
+  /** A streamed request body (never retried). */
+  stream?: { body: Readable; type: string };
   query?: Record<string, string | number | boolean | undefined>;
   headers?: Record<string, string>;
   accept?: string;
@@ -232,7 +242,11 @@ export class Api {
     for (const [k, v] of Object.entries(opts.query ?? {})) if (v !== undefined && v !== '') url.searchParams.set(k, String(v));
     const headers: Record<string, string> = { authorization: `Bearer ${this.key}`, accept: opts.accept ?? 'application/json', ...opts.headers };
     let body: string | Buffer | undefined;
-    if (opts.raw !== undefined) {
+    let stream: Readable | undefined;
+    if (opts.stream) {
+      stream = opts.stream.body;
+      headers['content-type'] = opts.stream.type;
+    } else if (opts.raw !== undefined) {
       body = opts.raw;
       headers['content-type'] = 'application/octet-stream';
     } else if (opts.body !== undefined) {
@@ -246,7 +260,7 @@ export class Api {
     for (let attempt = 1; ; attempt++) {
       let res: Response;
       try {
-        res = await fetch(url, { method, headers, body, signal: opts.signal, ...(this.dispatcher ? { dispatcher: this.dispatcher } : {}) });
+        res = await fetch(url, { method, headers, body: stream ?? body, ...(stream ? { duplex: 'half' as const } : {}), signal: opts.signal, ...(this.dispatcher ? { dispatcher: this.dispatcher } : {}) });
       } catch (e) {
         if ((e as Error).name === 'AbortError') throw e;
         if (attempt < attempts) {
@@ -509,8 +523,26 @@ export class Api {
     return this.json('POST', `${this.envPath}/db/restore`, { body });
   }
 
-  devEnv(): Promise<{ env: Record<string, string> }> {
+  /** Variables for `app dev`; no DATABASE_URL (it goes through the local db proxy), just the database's name. */
+  devEnv(): Promise<{ env: Record<string, string>; database?: { name: string } | null }> {
     return this.json('GET', `${this.envPath}/dev-env`);
+  }
+
+  /** A WebSocket carrying one Postgres connection (`app db proxy`); `write` logs in as the owner. */
+  dbSocket(write: boolean, session: string): WebSocket {
+    const url = new URL(`${this.baseUrl}${this.envPath}/db/connect`);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    if (write) url.searchParams.set('write', '1');
+    return new WebSocket(url, { headers: { authorization: `Bearer ${this.key}`, 'x-boxlite-proxy-session': session }, ...(this.dispatcher ? { dispatcher: this.dispatcher } : {}) });
+  }
+
+  /** The export as a streamed response (CSV of one table, or SQL). */
+  dbExport(q: { table?: string; format?: string }): Promise<Response> {
+    return this.request('GET', `${this.envPath}/db/export`, { query: q, accept: 'text/csv, application/sql, application/json', noRetry: true });
+  }
+
+  dbImport(table: string, csv: Readable): Promise<DbImport> {
+    return this.json('POST', `${this.envPath}/db/import`, { query: { table }, stream: { body: csv, type: 'text/csv' } });
   }
 
   // End-user sign-in

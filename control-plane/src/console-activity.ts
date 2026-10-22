@@ -53,6 +53,9 @@ const RULES: Rule[] = [
   [/^auth\.test_session$/, () => 'opened a test session', { tab: 'auth' }],
   [/^db\.sql\.write$/, () => 'ran a write query', { tab: 'database', section: 'sql' }],
   [/^db\.reset$/, () => 'reset the database', { tab: 'database' }],
+  [/^db\.proxy$/, () => 'connected to the database through the local proxy', { tab: 'database', section: 'connection' }],
+  [/^db\.export$/, () => 'exported the database', { tab: 'database' }],
+  [/^db\.import$/, () => 'imported rows into the database', { tab: 'database', section: 'tables' }],
   [/^read status$/, () => 'read the status'],
   [/^read context$/, () => 'read the context'],
   [/^POST \/envs\/[^/]+\/deployments$/, () => 'started a deployment', { tab: 'deployments' }],
@@ -70,7 +73,7 @@ const RULES: Rule[] = [
 ];
 
 /** Per-file upload calls are plumbing of one upload; reads through POST /db/sql change nothing (writes are db.sql.write). */
-const HIDDEN = [/^PUT \/uploads\//, /^POST \/uploads\/[^/]+\/complete$/, /^POST \/envs\/[^/]+\/db\/sql$/, /^POST \/envs\/[^/]+\/auth\/test-sessions$/];
+const HIDDEN = [/^PUT \/uploads\//, /^POST \/uploads\/[^/]+\/complete$/, /^POST \/envs\/[^/]+\/db\/sql$/, /^POST \/envs\/[^/]+\/db\/import$/, /^POST \/envs\/[^/]+\/auth\/test-sessions$/];
 
 function parse(detail: string | null): Record<string, unknown> | null {
   if (!detail || detail === 'null') return null;
@@ -88,6 +91,13 @@ function detailText(action: string, d: Record<string, unknown> | null): string |
   if (action === 'app.delete' && typeof d.purge_after === 'string') return `kept until ${d.purge_after.slice(0, 16).replace('T', ' ')} UTC`;
   if (action.startsWith('auth.') && typeof d.email === 'string') return d.email;
   if (action === 'db.sql.write' && Array.isArray(d.statements)) return d.statements.map(String).join(', ');
+  if (action === 'db.proxy') {
+    const secs = Math.round(Number(d.duration_ms ?? 0) / 1000);
+    const len = secs < 120 ? `${secs} s` : `${Math.round(secs / 60)} min`;
+    return `${d.role === 'owner' ? 'read-write (owner)' : 'read-only'} · ${d.open ? `open for ${len}` : len} · ${d.connections ?? 0} connection${d.connections === 1 ? '' : 's'}${d.refused ? ` · ${d.refused} refused` : ''}`;
+  }
+  if (action === 'db.export') return d.table ? `${d.format} of ${d.table}` : `${d.format} dump`;
+  if (action === 'db.import' && typeof d.table === 'string') return `${d.rows} row${d.rows === 1 ? '' : 's'} into ${d.table}`;
   if (action === 'db.reset' && Array.isArray(d.dropped)) return `dropped ${d.dropped.length} table${d.dropped.length === 1 ? '' : 's'}`;
   return undefined;
 }

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Vars } from '../auth.js';
 import type { AppRow, Change, EnvRow, MigrationFile } from '../db.js';
 import type { Ctx } from '../ctx.js';
-import { configuredProviders } from '../enduser-auth.js';
+import { configuredProviders } from '../enduser/config.js';
 import { HttpError } from '../errors.js';
 import { validateMigrationFiles } from '../migrations.js';
 import { classifyMigrations, diffSpecs, onlineChecks } from '../spec.js';

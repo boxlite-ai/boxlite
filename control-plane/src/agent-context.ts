@@ -2,7 +2,7 @@ import { contextFindings, type AgentContext, type AgentDatabase, type AgentSched
 import { Cron } from 'croner';
 import type { AppRow, EnvRow } from './db.js';
 import type { Ctx } from './ctx.js';
-import { authStatus } from './enduser-auth.js';
+import { authStatus } from './enduser/management.js';
 import type { Spec } from './spec.js';
 import { envStatus } from './views.js';
 import { storedLevelsAtLeast } from './services/logs.js';

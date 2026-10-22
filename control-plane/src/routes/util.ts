@@ -115,7 +115,3 @@ export function intParam(v: string | undefined, name: string): number {
   if (!Number.isInteger(n) || n < 1) throw fail('invalid_request', `${name} must be a positive integer`);
   return n;
 }
-
-export function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!);
-}

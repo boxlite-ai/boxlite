@@ -8,7 +8,7 @@ import type { Config } from '../src/config.js';
 import type { Ctx } from '../src/ctx.js';
 import type { MigrationFile } from '../src/db.js';
 import type { NeonBranch, NeonClient, NeonProject } from '../src/neon.js';
-import type { SupervisorStatus } from '../src/orchestrator.js';
+import type { SupervisorStatus } from '../src/supervisor.js';
 import { UpstreamError } from '../src/errors.js';
 import { deriveOriginUrl } from '../src/origins.js';
 import { buildCtx, createServer } from '../src/server.js';

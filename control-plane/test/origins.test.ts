@@ -3,9 +3,9 @@ import { createServer, type Server } from 'node:http';
 import { createServer as netServer, type AddressInfo } from 'node:net';
 import { after, test } from 'node:test';
 import { NodeListeners, deriveOriginUrl, isLocalUrl } from '../src/origins.js';
-import { createTestSession } from '../src/enduser-auth.js';
-import { isResponse } from '../src/routes/proxy.js';
-import { handleUpgrade } from '../src/routes/proxy.js';
+import { createTestSession } from '../src/enduser/management.js';
+import { isResponse } from '../src/http/response.js';
+import { handleUpgrade } from '../src/proxy/upgrade.js';
 import { createApp, harness, type Harness } from './helpers.js';
 
 test('origin URLs are derived from the API origin', () => {

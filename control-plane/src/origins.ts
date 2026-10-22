@@ -6,7 +6,7 @@ import type { BoxliteClient } from './boxlite.js';
 import type { Config } from './config.js';
 import type { EnvRow, Store } from './db.js';
 import { UpstreamError } from './errors.js';
-import { isSecureUrl } from './cookies.js';
+import { isSecureUrl } from './http/cookies.js';
 import { retry } from './http.js';
 
 /**
