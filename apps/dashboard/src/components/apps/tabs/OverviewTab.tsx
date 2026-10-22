@@ -12,28 +12,15 @@ import { toast } from 'sonner'
 import { AgentHandoffPanel } from '../AgentHandoffPanel'
 import { DeployProgress } from '../DeployProgress'
 import { HandoffToAgent } from '../HandoffToAgent'
-import {
-  CopyIconButton,
-  copyText,
-  Disclosure,
-  FlatButton,
-  PromptBlock,
-  SectionTitle,
-  SpecRow,
-  StatusBadge,
-} from '../spec'
-import { LivePreview, MetricStrip } from '../viz'
+import { CopyIconButton, copyText, Disclosure, FlatButton, PromptBlock, SpecRow, StatusBadge } from '../spec'
+import { TrafficPanel } from '../TrafficPanel'
+import { LivePreview } from '../viz'
 
 // Overview answers three things, in this order: does anything need you, what
 // is live right now, and how it is doing. Identity (app id, image, created) is
 // one click away under Details; process ids and exit codes live inside each
 // service row. One primary action per state: open the app when healthy, copy
 // the fix when broken, hand the app to the agent when nothing is deployed.
-
-const sum = (data: number[]) => data.reduce((a, b) => a + b, 0)
-const last = (data: number[]) => data[data.length - 1] ?? 0
-/** The newest hour that had requests, or null: an hour without requests has no latency. */
-const lastMeasured = (data: (number | null)[]) => [...data].reverse().find((v) => v !== null) ?? null
 
 function copyWithNotice(text: string, notice: string) {
   copyText(text)
@@ -225,14 +212,6 @@ export function OverviewTab({
   const previous = app.releases.find((r) => !r.current && r.rollback.possible) ?? null
   const failing = app.problems
   const m = app.metrics
-  const total = m ? sum(m.requests) : 0
-  const delta =
-    m?.previousRequests && m.previousRequests > 0
-      ? Math.round(((total - m.previousRequests) / m.previousRequests) * 100)
-      : null
-  const errTotal = m ? sum(m.errors) : 0
-  const errRate = total ? (errTotal / total) * 100 : 0
-  const p95 = m ? lastMeasured(m.p95Ms) : null
 
   if (app.status === 'draft') {
     return <HandoffToAgent app={app} />
@@ -257,41 +236,7 @@ export function OverviewTab({
       <RuntimeLine app={app} onOpen={() => onGoTo('deployments', 'services')} />
 
       {/* From the app proxy's access log and the sign-in sessions; hidden until there is either. */}
-      {m && (
-        <section>
-          <SectionTitle title="Last 24 hours" />
-          <MetricStrip
-            metrics={[
-              {
-                label: 'Requests',
-                value: total.toLocaleString('en-US'),
-                caption: delta === null ? undefined : `${delta >= 0 ? '+' : ''}${delta}% vs previous 24h`,
-                data: m.requests,
-              },
-              {
-                label: 'Errors (5xx)',
-                value: errTotal.toLocaleString('en-US'),
-                caption: total ? `${errRate.toFixed(2)}% of requests` : undefined,
-                tone: errRate > 1 ? 'bad' : 'neutral',
-                data: m.errors,
-              },
-              {
-                label: 'p95 latency',
-                value: p95 === null ? '—' : String(p95),
-                unit: p95 === null ? undefined : 'ms',
-                caption: p95 === null ? 'No requests yet' : undefined,
-                tone: p95 !== null && p95 > 500 ? 'bad' : 'neutral',
-                data: m.p95Ms.map((v) => v ?? 0),
-              },
-              {
-                label: 'Signed-in users',
-                value: String(last(m.activeUsers)),
-                data: m.activeUsers,
-              },
-            ]}
-          />
-        </section>
-      )}
+      {m && <TrafficPanel metrics={m} />}
 
       <AgentHandoffPanel app={app} />
     </div>
@@ -300,7 +245,8 @@ export function OverviewTab({
 
 /** One line on whether everything the app runs is up; the services themselves are under Deployments. */
 function RuntimeLine({ app, onOpen }: { app: AppDetail; onOpen: () => void }) {
-  if (app.services.length === 0) return null
+  // Asleep is said once, under the address.
+  if (app.services.length === 0 || app.status === 'sleeping') return null
   const up = app.services.filter((s) => s.state === 'running' && s.health !== 'unhealthy').length
   const asleep = app.services.every((s) => s.state === 'asleep')
   const all = app.services.length
