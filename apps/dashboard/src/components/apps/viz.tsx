@@ -159,50 +159,45 @@ export function Tag({
 }
 
 /**
- * What the live URL showed at its last capture. Only a real capture is shown:
- * no frame, no placeholder. Click opens the app. Captures are taken when a
- * release goes live, so the release and time beside it already describe the
- * picture; a caption appears only when the picture is from another release.
+ * What the live URL showed at its last capture: the control plane renders the
+ * app when a deployment goes live (and again when the picture is a day old).
+ * Only a real capture is shown: no frame, no placeholder. Click opens the app.
+ * The caption names the deployment and the time; it turns amber when the
+ * picture is of an older deployment than the one serving now.
  */
 export function LivePreview({
   preview,
   liveRelease,
-  href,
+  onOpen,
   name,
 }: {
   preview: AppPreview
   liveRelease: string | null
-  href: string | null
+  onOpen: () => void
   name: string
 }) {
-  const image = (
-    <img
-      src={preview.src}
-      alt={`${name} at ${preview.releaseId}`}
-      className="aspect-[16/10] w-full object-cover object-top"
-      loading="lazy"
-    />
-  )
+  const stale = preview.releaseId !== liveRelease
   return (
     <figure className="flex min-w-0 flex-col gap-2">
-      {href ? (
-        <a
-          href={href}
-          target="_blank"
-          rel="noreferrer"
-          title={`Open ${href}`}
-          className="block border border-border transition-colors hover:border-brand"
-        >
-          {image}
-        </a>
-      ) : (
-        <div className="border border-border">{image}</div>
-      )}
-      {preview.releaseId !== liveRelease && (
-        <figcaption className="font-mono text-meta text-warning">
-          screenshot from {preview.releaseId} · {relTime(preview.capturedAt)}
-        </figcaption>
-      )}
+      <button
+        type="button"
+        onClick={onOpen}
+        title={`Open ${name}`}
+        className="block border border-border outline-none transition-colors hover:border-brand focus-visible:ring-2 focus-visible:ring-brand/35"
+      >
+        <img
+          src={preview.src}
+          alt={`${name} at ${preview.releaseId}`}
+          className="aspect-[16/10] w-full object-cover object-top"
+          loading="lazy"
+        />
+      </button>
+      <figcaption
+        className={cn('font-mono text-meta', stale ? 'text-warning' : 'text-muted-foreground')}
+        title={new Date(preview.capturedAt).toLocaleString()}
+      >
+        {stale ? `Screenshot from ${preview.releaseId}` : preview.releaseId} · captured {relTime(preview.capturedAt)}
+      </figcaption>
     </figure>
   )
 }

@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { downloadUrl } from '@/lib/apps/client'
 import { appStatusOf, relTime, STATUS } from '@/lib/apps/format'
 import { openApp } from '@/lib/apps/open'
 import type { AppDetail, AppProblem, AppRelease, AppTab } from '@/lib/apps/types'
+import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { AgentHandoffPanel } from '../AgentHandoffPanel'
 import { DeployProgress } from '../DeployProgress'
@@ -23,7 +25,7 @@ import {
   StatusBadge,
 } from '../spec'
 import { ToolButton } from '../SubNav'
-import { MetricStrip } from '../viz'
+import { LivePreview, MetricStrip } from '../viz'
 
 // Overview answers three things, in this order: does anything need you, what
 // is live right now, and how it is doing. Identity (app id, image, created) is
@@ -33,6 +35,8 @@ import { MetricStrip } from '../viz'
 
 const sum = (data: number[]) => data.reduce((a, b) => a + b, 0)
 const last = (data: number[]) => data[data.length - 1] ?? 0
+/** The newest hour that had requests, or null: an hour without requests has no latency. */
+const lastMeasured = (data: (number | null)[]) => [...data].reverse().find((v) => v !== null) ?? null
 
 function copyWithNotice(text: string, notice: string) {
   copyText(text)
@@ -79,7 +83,7 @@ function FailurePanel({
             variant="primary"
             onClick={() => copyWithNotice(prompt, `Copied fix instructions for ${app.name} · ${app.environment}`)}
           >
-            Copy fix instructions for your agent
+            Copy fix instructions
           </FlatButton>
         )}
         {failedDeployment ? (
@@ -104,36 +108,42 @@ function FailurePanel({
 
 /** A new environment is not a broken one: nothing red, one task, one action. */
 
-/** What is live: the address, the deployment and what it changed. */
+/** What is live: the picture, the address, the deployment and what it changed. */
 function LiveDeployment({
   app,
   active,
+  failing,
   onGoTo,
 }: {
   app: AppDetail
   active: AppRelease | null
+  failing: boolean
   onGoTo: (tab: AppTab, section?: string) => void
 }) {
   const runtime = appStatusOf(app.status)
+  const open = () => void openApp(app.id, app.environment)
+  // A failing app gets no screenshot: the last good picture would say all is well.
+  const preview = app.preview && !failing ? { ...app.preview, src: downloadUrl(app.preview.src) } : null
   return (
-    <section className="grid gap-x-10 gap-y-6">
+    <section className={cn('grid gap-x-10 gap-y-6', preview && 'lg:grid-cols-[340px_minmax(0,1fr)]')}>
+      {preview && <LivePreview preview={preview} liveRelease={app.activeRelease} onOpen={open} name={app.name} />}
       <div className="flex min-w-0 flex-col gap-5 py-1">
         <div className="flex flex-col gap-2">
           <span className="inline-flex max-w-full items-center gap-2">
             {app.activeRelease ? (
               <button
                 type="button"
-                onClick={() => void openApp(app.id, app.environment)}
+                onClick={open}
                 className="truncate font-mono text-em font-semibold text-foreground hover:underline"
               >
-                {app.url.replace(/^https?:\/\//, '')}
+                {app.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
               </button>
             ) : (
               <span className="truncate font-mono text-em font-semibold text-muted-foreground">
-                {app.url.replace(/^https?:\/\//, '')}
+                {app.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
               </span>
             )}
-            <CopyIconButton text={app.url} />
+            <CopyIconButton text={app.url} title="Copy URL" />
           </span>
           {/* The header already states the runtime; only a quiet state (asleep) gets a line of why. */}
           {app.status === 'sleeping' && app.statusDetail && (
@@ -157,7 +167,8 @@ function LiveDeployment({
               <span className="truncate text-foreground">{active.summary}</span>
             </button>
             <span className="text-[12px] text-muted-foreground">
-              {relTime(active.createdAt)} by {active.by}
+              <span title={new Date(active.createdAt).toLocaleString()}>{relTime(active.createdAt)}</span> by{' '}
+              {active.by}
               {app.box ? ` · box ${app.box.id}` : ''}
             </span>
           </div>
@@ -165,9 +176,9 @@ function LiveDeployment({
 
         <Disclosure label="Details">
           <div className="max-w-[560px]">
-            <SpecRow label="App">
+            <SpecRow label="App id">
               <span className="inline-flex items-center gap-2">
-                {app.name} <CopyIconButton text={app.name} title="Copy app name" />
+                {app.appId} <CopyIconButton text={app.appId} title="Copy app id" />
               </span>
             </SpecRow>
             {app.runtime && (
@@ -183,7 +194,6 @@ function LiveDeployment({
                 {app.box.id} · {app.box.state}
               </SpecRow>
             )}
-            {app.specVersion !== null && <SpecRow label="Configuration">version {app.specVersion}</SpecRow>}
             <SpecRow label="Created">
               <span title={new Date(app.createdAt).toLocaleString()}>{relTime(app.createdAt)}</span>
             </SpecRow>
@@ -222,6 +232,7 @@ export function OverviewTab({
       : null
   const errTotal = m ? sum(m.errors) : 0
   const errRate = total ? (errTotal / total) * 100 : 0
+  const p95 = m ? lastMeasured(m.p95Ms) : null
 
   if (app.status === 'draft') {
     return <HandoffToAgent app={app} />
@@ -240,7 +251,7 @@ export function OverviewTab({
         />
       )}
 
-      <LiveDeployment app={app} active={active} onGoTo={onGoTo} />
+      <LiveDeployment app={app} active={active} failing={failing.length > 0} onGoTo={onGoTo} />
 
       <section>
         <SectionTitle
@@ -252,15 +263,7 @@ export function OverviewTab({
           }
         />
         {app.services.length === 0 ? (
-          <div className="flex flex-col gap-3 font-mono text-[13px] text-muted-foreground">
-            <span>No service declared yet. Your agent adds one to boxlite.toml and deploys:</span>
-            <PromptBlock
-              text={
-                '[[service]]\nname = "web"\ncommand = "node server.js"\nport = 3000\nhealth = "/healthz"\n\n# then: boxlite-app deploy'
-              }
-              compact
-            />
-          </div>
+          <p className="font-mono text-[13px] text-muted-foreground">No services yet; they start with the next deployment.</p>
         ) : (
           <ServicesTable
             services={app.services}
@@ -271,19 +274,15 @@ export function OverviewTab({
         )}
       </section>
 
-      <section>
-        <SectionTitle title="Schedules" count={app.schedules.length || undefined} />
-        {app.schedules.length === 0 ? (
-          <p className="font-mono text-[13px] text-muted-foreground">
-            No schedules. A [[schedule]] in boxlite.toml (name, cron, target = &quot;web:/jobs/…&quot;) runs a POST on
-            your app; it starts with the next <code>boxlite-app deploy</code>.
-          </p>
-        ) : (
+      {/* Only an app with scheduled jobs has this section. */}
+      {app.schedules.length > 0 && (
+        <section>
+          <SectionTitle title="Schedules" />
           <SchedulesTable app={app} />
-        )}
-      </section>
+        </section>
+      )}
 
-      {/* From the app proxy's access log; hidden until the URL has had traffic. */}
+      {/* From the app proxy's access log and the sign-in sessions; hidden until there is either. */}
       {m && (
         <section>
           <SectionTitle title="Last 24 hours" />
@@ -298,17 +297,22 @@ export function OverviewTab({
               {
                 label: 'Errors (5xx)',
                 value: errTotal.toLocaleString('en-US'),
-                caption: `${errRate.toFixed(2)}% of requests`,
+                caption: total ? `${errRate.toFixed(2)}% of requests` : undefined,
                 tone: errRate > 1 ? 'bad' : 'neutral',
                 data: m.errors,
               },
               {
                 label: 'p95 latency',
-                value: String(last(m.p95Ms)),
-                unit: 'ms',
-                caption: 'this hour, to first byte',
-                tone: last(m.p95Ms) > 500 ? 'bad' : 'neutral',
-                data: m.p95Ms,
+                value: p95 === null ? '—' : String(p95),
+                unit: p95 === null ? undefined : 'ms',
+                caption: p95 === null ? 'No requests yet' : undefined,
+                tone: p95 !== null && p95 > 500 ? 'bad' : 'neutral',
+                data: m.p95Ms.map((v) => v ?? 0),
+              },
+              {
+                label: 'Signed-in users',
+                value: String(last(m.activeUsers)),
+                data: m.activeUsers,
               },
             ]}
           />

@@ -6,6 +6,7 @@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Check, Copy } from '@/components/ui/icon'
 import { useRotateKey } from '@/hooks/mutations/useAppMutations'
+import { freshPrompt } from '@/lib/apps/handoff'
 import type { AppDetail } from '@/lib/apps/types'
 import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
@@ -17,9 +18,10 @@ import { copyText, DIALOG_FRAME, FlatButton, SectionTitle } from './spec'
 import { ToolButton } from './SubNav'
 
 // What a new (not yet deployed) environment shows instead of the live overview:
-// the control plane's prompt for the agent. The App key inside it is shown in
-// full only once (when the app is created, or right after a rotation); here it
-// is masked. Rotating issues a new key and prompt and retires the old key.
+// the control plane's prompt for the agent, marked with the agents it works in.
+// The App key inside it is shown in full only once (when the app is created, or
+// right after a rotation): the page shows it masked, and Copy prompt copies the
+// working prompt while this tab still holds it, or issues a new key first.
 
 /** Rotate key: confirm, call the control plane, show the new prompt once. */
 export function useRotateKeyFlow(app: AppDetail) {
@@ -90,6 +92,16 @@ export function useRotateKeyFlow(app: AppDetail) {
 
 export function HandoffToAgent({ app }: { app: AppDetail }) {
   const flow = useRotateKeyFlow(app)
+  const [copied, setCopied] = useState(false)
+  const fresh = freshPrompt(app.id)
+  // The prompt with its working key is known right after creation; later only a new key can make one.
+  const copy = () => {
+    if (!fresh) return void flow.start()
+    copyText(fresh)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1600)
+    toast.success('Copied. Paste it into your coding agent, then tell it what to build.')
+  }
   return (
     <div className="flex flex-col">
       <section className="flex flex-col">
@@ -98,8 +110,9 @@ export function HandoffToAgent({ app }: { app: AppDetail }) {
           right={
             <>
               <AgentLogos className="mr-3" />
-              <ToolButton primary loading={flow.pending} onClick={() => void flow.start()}>
-                Rotate key and get prompt
+              <ToolButton primary loading={flow.pending} onClick={copy}>
+                {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                {copied ? 'Copied' : 'Copy prompt'}
               </ToolButton>
             </>
           }
@@ -108,9 +121,8 @@ export function HandoffToAgent({ app }: { app: AppDetail }) {
           {app.handoffPrompt}
         </pre>
         <p className="mt-3 font-mono text-meta text-muted-foreground">
-          The prompt with its key was shown when the app was created. Paste it into Claude Code, Codex, Cursor or any
-          coding agent and tell it what to build; this page turns live when its first deployment does. Lost the prompt?
-          Rotate the key for a new one.
+          Paste it into Claude Code, Codex, Cursor or any coding agent, then tell it what to build. The key in it can
+          manage only this app{fresh ? '' : '; copying gives a new key and retires the old one'}.
         </p>
       </section>
       {flow.element}

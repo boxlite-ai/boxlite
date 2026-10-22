@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { rememberPrompt } from '@/lib/apps/handoff'
 import { appsClient } from '@/lib/apps/client'
 import type {
   AppActionInput,
@@ -89,7 +90,11 @@ export function useAppMutation() {
 export function useCreateApp() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (input: CreateAppInput) => (await appsClient.post<CreatedApp>('/apps', input)).data,
+    mutationFn: async (input: CreateAppInput) => {
+      const created = (await appsClient.post<CreatedApp>('/apps', input)).data
+      rememberPrompt(created.app.id, created.prompt)
+      return created
+    },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.apps.list(APPS_SCOPE) }),
   })
 }
@@ -98,12 +103,15 @@ export function useCreateApp() {
 export function useRotateKey() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (appId: string) =>
-      (
+    mutationFn: async (appId: string) => {
+      const out = (
         await appsClient.post<{ key: string; prompt: string; last4: string }>(
           `/apps/${encodeURIComponent(appId)}/key/rotate`,
         )
-      ).data,
+      ).data
+      rememberPrompt(appId, out.prompt)
+      return out
+    },
     onSuccess: (_data, appId) => queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, appId) }),
   })
 }

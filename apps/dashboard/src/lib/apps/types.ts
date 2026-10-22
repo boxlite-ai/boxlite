@@ -258,7 +258,7 @@ export interface AppProblem {
   serving?: string
 }
 
-export type AppTab = 'overview' | 'deployments' | 'logs' | 'auth' | 'database' | 'volumes' | 'variables'
+export type AppTab = 'overview' | 'deployments' | 'logs' | 'domains' | 'auth' | 'database' | 'volumes' | 'variables'
 
 export interface AppSignInMethod {
   provider: string
@@ -302,11 +302,14 @@ export interface AppAuthDetail {
   events: { id: string; ts: string; level: string; line: string }[]
 }
 
-/** 24 hourly buckets, oldest first, from the app proxy's access log. */
+/** 24 hourly buckets, oldest first, from the app proxy's access log and the env's sign-in sessions. */
 export interface AppMetrics {
   requests: number[]
   errors: number[]
-  p95Ms: number[]
+  /** null for an hour without requests. */
+  p95Ms: (number | null)[]
+  /** Distinct end users with a live session in each hour. */
+  activeUsers: number[]
   /** Requests in the 24 hours before these, for a like-for-like comparison. */
   previousRequests?: number
 }
@@ -354,14 +357,17 @@ export interface EnvironmentSummary {
   from: string | null
 }
 
-/** Kept for the preview component; the control plane does not capture screenshots yet. */
+/** The control plane's last screenshot of the live URL (taken when a deployment goes live). */
 export interface AppPreview {
+  /** Relative to the console API; read it through downloadUrl(). */
   src: string
   capturedAt: string
   releaseId: string
 }
 
 export interface AppDetail extends Omit<AppSummary, 'environments'> {
+  /** The control plane's own id of the App (app_…); `id` is its name. */
+  appId: string
   /** Which environment this record describes. Everything below is scoped to it. */
   environment: string
   createdFrom: string | null
@@ -386,8 +392,9 @@ export interface AppDetail extends Omit<AppSummary, 'environments'> {
   schedules: AppSchedule[]
   /** [variables] of the release serving now; differs from `variables` while a change deploys. */
   liveVariables: Record<string, string> | null
-  /** null: no traffic recorded in the last 48 hours. */
+  /** null: no traffic in the last 48 hours and nobody signed in during the last 24. */
   metrics: AppMetrics | null
+  preview: AppPreview | null
   /** The handoff prompt with the App key masked; the full key is shown only once. */
   handoffPrompt: string
   key: { last4: string; createdAt: string } | null
