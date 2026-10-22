@@ -8,7 +8,8 @@ boot data; `Vm::run` runs every vCPU until the guest powers off or resets, or a
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
 lifecycle API, memory layout, buses, interrupts, and threads.
 
-`Vm`, `VmConfig`, `VmExit`, `StopHandle`, `Error` and `Result` are public; M2's
+`Vm`, `VmConfig`, `VmExit`, `StopHandle`, `Error` and `Result` are public, as
+are `BusKind` and `Conflict`, which `Error::ChipsetConflicts` carries; M2's
 engine adapter will consume that API and inspect the error's host cause.
 `Vm::new` adds no device to its chipset yet, so it boots a guest without a
 console.
