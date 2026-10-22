@@ -24,6 +24,11 @@ def target_dir():
     return Path(os.environ["CARGO_TARGET_DIR"]).resolve()
 
 if tool == "make":
+    import json
+
+    target_dir().mkdir(parents=True, exist_ok=True)
+    with (target_dir() / "make-invocations.jsonl").open("a") as log:
+        log.write(json.dumps(args) + "\\n")
     for target in args:
         if target in ("dev:python", "dev:node", "test:unit:c"):
             sdk = target.split(":")[-1]
@@ -85,6 +90,42 @@ class NativeCoveragePathsTest(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             report = (root / "target/coverage/native-sdk/lcov.info").read_text()
+            # The Node integration step must stay scoped to the no-VM
+            # loopback suites. Read the make argv the collector actually
+            # passed and apply its FILTER the way vitest applies a
+            # testNamePattern: the loopback suites are selected and the
+            # VM-booting SSH suites are not.
+            import json
+
+            invocations_path = (
+                root / "target/native-sdk-coverage/make-invocations.jsonl"
+                if override is None
+                else expected / "make-invocations.jsonl"
+            )
+            node_runs = []
+            for line in invocations_path.read_text().splitlines():
+                argv = json.loads(line)
+                if "test:integration:node" in argv:
+                    node_runs.append(argv)
+            self.assertTrue(node_runs, str(invocations_path))
+            for argv in node_runs:
+                filters = [a for a in argv if a.startswith("FILTER=")]
+                self.assertEqual(
+                    len(filters), 1, "test:integration:node ran unfiltered: %r" % argv
+                )
+                pattern = filters[0][len("FILTER="):]
+                for suite in (
+                    "image catalog",
+                    "registry logins",
+                    "box.ssh over a REST transport",
+                    "SimpleBox.ssh over a REST transport",
+                ):
+                    self.assertRegex(suite, pattern)
+                for vm_suite in (
+                    "SimpleBox.ssh",
+                    "SimpleBox.ssh with an explicit main command",
+                ):
+                    self.assertNotRegex(vm_suite, pattern)
             for sdk in ("python", "node", "c"):
                 self.assertIn("SF:" + str(expected / (sdk + ".o")), report)
 

@@ -7,7 +7,8 @@
  * `src/cli/src/commands/serve/tests/ssh.rs`: what crosses the wire, backend
  * failures kept as themselves, and — the reason this file exists — a malformed
  * configuration rejected at the binding boundary with one fixed message that
- * never echoes the rejected value, before any request is sent.
+ * never echoes the rejected value, before any SSH request is sent (box
+ * creation may still run first through `SimpleBox`'s lazy init).
  */
 
 import { createServer, type Server } from "node:http";
@@ -35,13 +36,16 @@ const BOX_JSON = {
 };
 
 function wireStatus(status: SshStatus): string {
+  // `JSON.stringify` cannot carry a bigint: splice the generation in as a
+  // raw JSON numeric literal so every u64 value arrives exactly, with no
+  // lossy `Number` conversion on the way.
   return JSON.stringify({
     enabled: status.enabled,
-    generation: Number(status.generation),
+    generation: "__GENERATION__",
     listen_address: status.listenAddress,
     host_public_key: status.hostPublicKey,
     host_key_fingerprint: status.hostKeyFingerprint,
-  });
+  }).replace('"__GENERATION__"', status.generation.toString());
 }
 
 const ENABLED: SshStatus = {
@@ -156,6 +160,13 @@ beforeAll(async () => {
       if (req.method === "POST") {
         requests.push(body);
       }
+      // Box creation: `SimpleBox`'s lazy init creates the box before the
+      // first SSH call reaches the binding.
+      if (req.url === "/v1/boxes" && req.method === "POST") {
+        res.writeHead(201, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(BOX_JSON));
+        return;
+      }
       if (req.url === `/v1/boxes/${BOX}` && req.method === "GET") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(BOX_JSON));
@@ -225,6 +236,21 @@ describe("box.ssh over a REST transport", () => {
     ]);
   });
 
+  test("status decodes the full u64 generation from a raw JSON literal", async () => {
+    const box = await nativeBox();
+    requests = [];
+    const u64Max = 18446744073709551615n;
+    const raw = wireStatus({ ...ENABLED, generation: u64Max });
+    expect(raw).toContain('"generation":18446744073709551615,');
+    replies = [{ status: 200, body: raw }];
+
+    const status = await box.ssh.status();
+
+    expect(typeof status.generation).toBe("bigint");
+    expect(status.generation).toBe(u64Max);
+    expect(requests).toEqual([`GET /v1/boxes/${BOX}/ssh`]);
+  });
+
   for (const [name, config] of malformedConfigs()) {
     test(`a malformed configuration (${name}) is rejected before any request, without echoing it`, async () => {
       const box = await nativeBox();
@@ -268,17 +294,22 @@ describe("box.ssh over a REST transport", () => {
 });
 
 describe("SimpleBox.ssh over a REST transport", () => {
-  function newBox(): SimpleBox {
+  function newBox(reuseExisting: boolean): SimpleBox {
     return new SimpleBox({
       image: "alpine:latest",
       runtime,
       name: BOX,
-      reuseExisting: true,
+      reuseExisting,
     });
   }
 
+  // `configure` as the very first call drives `SimpleBox`'s lazy init: the
+  // box is created (or fetched) before the native validation runs, so a
+  // wrong-typed configuration can leave a configured box behind — but no
+  // SSH operation may cross the wire for it.
+
   test("configure reuses the named box and sends the complete configuration", async () => {
-    const box = newBox();
+    const box = newBox(true);
     requests = [];
     replies = [{ status: 200, body: wireStatus(ENABLED) }];
 
@@ -290,13 +321,11 @@ describe("SimpleBox.ssh over a REST transport", () => {
     expect(requests).toHaveLength(3);
   });
 
-  for (const [name, config] of malformedConfigs()) {
-    test(`a malformed configuration (${name}) is rejected before any request, without echoing it`, async () => {
-      const box = newBox();
-      // Create the box handle first so the snapshot covers only configure.
-      replies = [{ status: 200, body: wireStatus(ENABLED) }];
-      expect(await box.ssh.status()).toEqual(ENABLED);
+  for (const [configName, config] of malformedConfigs()) {
+    test(`a malformed configuration (${configName}) is rejected after creating a fresh box, before any SSH request, without echoing it`, async () => {
+      const box = newBox(false);
       requests = [];
+      replies = [];
 
       const err = await rejectionOf(() =>
         box.ssh.configure(config as SshConfig),
@@ -305,7 +334,34 @@ describe("SimpleBox.ssh over a REST transport", () => {
       expect(err.message).toBe("invalid SSH configuration");
       expect((err as Error & { code?: unknown }).code).toBe("InvalidArg");
       expect(err.message).not.toContain(SENTINEL);
-      expect(requests).toEqual([]);
+      expect((box as SimpleBox & { _box: unknown })._box).not.toBeNull();
+      expect(requests).toHaveLength(2);
+      expect(requests[0]).toBe("POST /v1/boxes");
+      expect(JSON.parse(requests[1])).toMatchObject({
+        image: "alpine:latest",
+        name: BOX,
+      });
+      for (const request of requests) {
+        expect(request).not.toContain("/ssh");
+      }
+    });
+  }
+
+  for (const [configName, config] of malformedConfigs()) {
+    test(`a malformed configuration (${configName}) is rejected after reusing the named box, before any SSH request, without echoing it`, async () => {
+      const box = newBox(true);
+      requests = [];
+      replies = [];
+
+      const err = await rejectionOf(() =>
+        box.ssh.configure(config as SshConfig),
+      );
+
+      expect(err.message).toBe("invalid SSH configuration");
+      expect((err as Error & { code?: unknown }).code).toBe("InvalidArg");
+      expect(err.message).not.toContain(SENTINEL);
+      expect((box as SimpleBox & { _box: unknown })._box).not.toBeNull();
+      expect(requests).toEqual([`GET /v1/boxes/${BOX}`]);
     });
   }
 });

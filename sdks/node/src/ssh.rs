@@ -1,8 +1,10 @@
 //! Node.js bindings for guest SSH control.
 //!
-//! Mirrors `boxlite::SshHandle`: only `configure` may start the box, and the
-//! credential-bearing input types deliberately have no `Debug` impl so key
-//! material cannot reach logs through this crate.
+//! Mirrors `boxlite::SshHandle`: only `configure` may start the box. The
+//! credential-bearing input types implement `Debug` with every credential
+//! field redacted, so key material cannot reach logs through this crate.
+
+use std::fmt;
 
 use boxlite::{LiteBox, SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
 use napi::{bindgen_prelude::sys, bindgen_prelude::*};
@@ -17,6 +19,15 @@ pub struct JsSshCaConfig {
     pub principal: String,
 }
 
+impl fmt::Debug for JsSshCaConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JsSshCaConfig")
+            .field("public_key", &"[redacted]")
+            .field("principal", &"[redacted]")
+            .finish()
+    }
+}
+
 /// Credentials accepted for one SSH login (not a container OS identity).
 #[napi(object)]
 pub struct JsSshAccount {
@@ -25,6 +36,15 @@ pub struct JsSshAccount {
     pub ca: Option<JsSshCaConfig>,
 }
 
+impl fmt::Debug for JsSshAccount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JsSshAccount")
+            .field("login", &self.login)
+            .field("authorized_keys", &"[redacted]")
+            .field("ca", &"[redacted]")
+            .finish()
+    }
+}
 /// Complete guest SSH configuration; keys are never persisted by the runtime.
 #[napi(object)]
 pub struct JsSshConfig {
@@ -33,6 +53,16 @@ pub struct JsSshConfig {
     pub accounts: Vec<JsSshAccount>,
 }
 
+impl fmt::Debug for JsSshConfig {
+    // Accounts render through `JsSshAccount`'s redacted `Debug`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JsSshConfig")
+            .field("listen_address", &self.listen_address)
+            .field("host_private_key", &"[redacted]")
+            .field("accounts", &self.accounts)
+            .finish()
+    }
+}
 impl From<JsSshCaConfig> for SshCaConfig {
     fn from(ca: JsSshCaConfig) -> Self {
         Self {
@@ -68,11 +98,30 @@ impl From<JsSshConfig> for SshConfig {
 /// napi's conversion errors quote the rejected JavaScript value — for this
 /// credential-bearing type that would echo key material into the thrown
 /// error — so any conversion failure, top-level or nested, becomes a single
-/// sanitized `InvalidArg` before the handle, or any request, is touched.
+/// sanitized `InvalidArg` before the handle, or any SSH request, is touched.
 pub struct SshConfigArg(JsSshConfig);
 
+/// Same redaction as the wrapped configuration; the wrapper adds no fields.
+impl fmt::Debug for SshConfigArg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 impl FromNapiValue for SshConfigArg {
+    /// Convert the `configure` argument into the wrapper.
+    ///
+    /// # Safety
+    ///
+    /// The napi-rs `FromNapiValue` contract; the error mapping below does
+    /// not waive any part of it:
+    ///
+    /// - `env` must be a valid `napi_env` pointer.
+    /// - `napi_val` must be a valid JavaScript value pointer in `env`.
+    /// - The value's type must be accepted by `ValidateNapiValue::validate`.
     unsafe fn from_napi_value(env: sys::napi_env, napi_val: sys::napi_value) -> Result<Self> {
+        // SAFETY: the caller upholds the contract above for both handles;
+        // the generated conversion only reads from them.
         unsafe { JsSshConfig::from_napi_value(env, napi_val) }
             .map(SshConfigArg)
             .map_err(|_| Error::new(Status::InvalidArg, "invalid SSH configuration"))
@@ -81,6 +130,7 @@ impl FromNapiValue for SshConfigArg {
 
 /// Guest listener state and public host identity; contains no credentials.
 #[napi(object)]
+#[derive(Debug)]
 pub struct JsSshStatus {
     pub enabled: bool,
     /// Increments on each successful listener start; `bigint` keeps all
@@ -111,6 +161,13 @@ impl From<SshStatus> for JsSshStatus {
 #[napi]
 pub struct JsSshHandle {
     pub(crate) handle: SshHandle,
+}
+
+impl fmt::Debug for JsSshHandle {
+    /// Non-exhaustive: the core handle and its backend are not printable.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JsSshHandle").finish_non_exhaustive()
+    }
 }
 
 #[napi]
@@ -201,5 +258,39 @@ mod tests {
         assert!(!negative);
         assert!(lossless);
         assert_eq!(value, u64::MAX);
+    }
+
+    #[test]
+    fn debug_output_redacts_every_credential_field() {
+        let ca = JsSshCaConfig {
+            public_key: "ca-key-sentinel".into(),
+            principal: "principal-sentinel".into(),
+        };
+        let ca_debug = format!("{ca:?}");
+        let account = JsSshAccount {
+            login: "alice".into(),
+            authorized_keys: Some(vec!["authorized-key-sentinel".into()]),
+            ca: Some(ca),
+        };
+        let account_debug = format!("{account:?}");
+        let config = JsSshConfig {
+            listen_address: "0.0.0.0:2222".into(),
+            host_private_key: "host-key-sentinel".into(),
+            accounts: vec![account],
+        };
+        let config_debug = format!("{config:?}");
+        let arg_debug = format!("{:?}", SshConfigArg(config));
+
+        for output in [ca_debug, account_debug, config_debug, arg_debug] {
+            for sentinel in [
+                "ca-key-sentinel",
+                "principal-sentinel",
+                "authorized-key-sentinel",
+                "host-key-sentinel",
+            ] {
+                assert!(!output.contains(sentinel), "leaked {sentinel} in {output}");
+            }
+            assert!(output.contains("[redacted]"), "no redaction in {output}");
+        }
     }
 }

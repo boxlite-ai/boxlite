@@ -433,6 +433,11 @@ interface SshStatus {
 }
 ```
 
+On a `SimpleBox`, a first `configure` call lazily creates or fetches the box
+before validating the configuration: a wrong-typed configuration can leave the
+created box behind, but no SSH operation is sent for it. `status` and
+`disable` never start the VM.
+
 Invalid configuration field types report `InvalidArg` with the message
 `invalid SSH configuration`, without echoing rejected values. Other errors
 use the SDK's existing [error types](#error-types).
