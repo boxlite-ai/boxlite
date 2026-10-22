@@ -1164,10 +1164,10 @@ pub struct NetworkFlags {
 
     /// Restrict TCP and UDP egress to the listed hosts/IPs (repeatable);
     /// everything else is refused at connect time. Implies network=enabled.
-    /// Patterns: exact host, "*.example.com", IPv4, or IPv4 CIDR; a lone "" is
-    /// the empty list. Hostname rules need TLS SNI / HTTP Host inspection, so
-    /// a hostname-only list denies all UDP; add the IP or CIDR to keep UDP
-    /// open. Incompatible with `--network disabled`.
+    /// Patterns: exact host, "*.example.com", IPv4, or IPv4 CIDR. Hostname
+    /// rules need TLS SNI / HTTP Host inspection, so a hostname-only list
+    /// denies all UDP; add the IP or CIDR to keep UDP open. Incompatible with
+    /// `--network disabled`.
     #[arg(long = "allow-net", value_name = "HOST")]
     pub allow_net: Vec<String>,
 
@@ -1219,7 +1219,7 @@ impl NetworkFlags {
         };
         opts.network = NetworkSpec::try_from(OutboundNetworkConfig {
             mode,
-            allow_net: crate::commands::network::policy::allow_net_rules(&self.allow_net),
+            allow_net: self.allow_net.clone(),
         })?;
         opts.inbound_network = NetworkSpec::try_from(InboundNetworkConfig {
             mode: inbound_mode,
@@ -2268,24 +2268,6 @@ mod tests {
             net_tx_kbps: None,
             net_rx_kbps: None,
         }
-    }
-
-    /// A lone `--allow-net ''` means the empty allowlist, as it does for
-    /// `network outbound`; passing `""` through made gvproxy deny all egress.
-    #[test]
-    fn allow_net_lone_empty_rule_means_empty_allowlist() {
-        let mut opts = BoxOptions::default();
-        network_flags(None, &[""]).apply_to(&mut opts).unwrap();
-        assert!(matches!(
-            opts.network,
-            boxlite::NetworkSpec::Enabled { ref allow_net } if allow_net.is_empty()
-        ));
-
-        let mut opts = BoxOptions::default();
-        network_flags(Some("disabled"), &[""])
-            .apply_to(&mut opts)
-            .expect("an empty rule is not a rule");
-        assert!(matches!(opts.network, boxlite::NetworkSpec::Disabled));
     }
 
     /// apply_to returns early when no mode or allowlist flag is set. A rate

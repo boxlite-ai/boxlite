@@ -18,26 +18,17 @@ pub struct InboundArgs {
 pub struct OutboundArgs {
     #[command(flatten)]
     pub access: InboundArgs,
-    /// Allow one hostname, wildcard, IPv4 or IPv4 CIDR. Repeat for multiple rules.
-    /// Omit or pass a single empty string to use the default empty allowlist.
+    /// Allow one hostname, wildcard, IPv4 or IPv4 CIDR. Repeat for multiple
+    /// rules. Omit to use the default empty allowlist.
     #[arg(long, value_name = "RULE")]
     pub allow_net: Vec<String>,
-}
-
-/// A lone `--allow-net ''` spells the empty allowlist; any other list is kept
-/// as given so validation can reject an empty rule mixed with real ones.
-pub(crate) fn allow_net_rules(rules: &[String]) -> Vec<String> {
-    match rules {
-        [rule] if rule.is_empty() => Vec::new(),
-        rules => rules.to_vec(),
-    }
 }
 
 impl OutboundArgs {
     fn config(&self) -> Result<OutboundNetworkConfig> {
         let config = OutboundNetworkConfig {
             mode: self.access.mode.parse::<NetworkMode>()?,
-            allow_net: allow_net_rules(&self.allow_net),
+            allow_net: self.allow_net.clone(),
         };
         config.validate()?;
         Ok(config)
@@ -74,33 +65,6 @@ mod tests {
     use crate::cli::{Cli, Commands};
     use crate::commands::network::NetworkCommand;
     use clap::Parser;
-
-    #[test]
-    fn network_policy_accepts_explicit_empty_allowlist() {
-        let cli = Cli::try_parse_from([
-            "boxlite",
-            "network",
-            "outbound",
-            "box",
-            "enabled",
-            "--allow-net",
-            "",
-        ])
-        .unwrap();
-        let Commands::Network(args) = cli.command else {
-            panic!("network command")
-        };
-        let NetworkCommand::Outbound(args) = args.command else {
-            panic!("outbound command")
-        };
-        let config = args
-            .config()
-            .expect("an explicit empty argument clears rules");
-        assert_eq!(
-            serde_json::to_value(config).unwrap(),
-            serde_json::json!({"mode": "enabled", "allow_net": []})
-        );
-    }
 
     #[test]
     fn network_policy_requires_box_mode_and_direction_specific_flags() {
@@ -157,6 +121,10 @@ mod tests {
         );
         for args in [
             vec!["disabled", "--allow-net", "example.com"],
+            // Create rejects an empty rule, so updates do too; omit the flag
+            // for the empty list.
+            vec!["enabled", "--allow-net", ""],
+            vec!["disabled", "--allow-net", ""],
             vec!["enabled", "--allow-net", "", "--allow-net", "example.com"],
             vec!["enabled", "--allow-net", "example.com", "--allow-net", ""],
             vec!["enabled", "--allow-net", "", "--allow-net", ""],

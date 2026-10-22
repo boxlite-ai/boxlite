@@ -125,6 +125,8 @@ func (p outboundPolicy) validate() error {
 		return fmt.Errorf("disabled policy cannot include allow_net")
 	}
 	for _, rule := range p.AllowNet {
+		// NewAllowNetFilter trims rules, and create accepts padded ones.
+		rule = strings.TrimSpace(rule)
 		if ip := net.ParseIP(rule); ip != nil && ip.To4() != nil {
 			continue
 		}

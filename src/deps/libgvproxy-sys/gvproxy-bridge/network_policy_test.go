@@ -128,6 +128,14 @@ func TestOutboundPolicyRejectsInvalidReplacementWithoutChangingCurrent(t *testin
 	}
 }
 
+// Create accepts padded rules and the filter trims them, so a replacement
+// carrying a saved padded rule must be accepted too.
+func TestOutboundPolicyAcceptsPaddedRules(t *testing.T) {
+	tap := startNetwork(t, nil)
+	replacePolicy(t, tap, `{"mode":"enabled","allow_net":[" example.com ","10.0.0.0/8 "]}`, http.StatusOK)
+	replacePolicy(t, tap, `{"mode":"enabled","allow_net":["  "]}`, http.StatusBadRequest)
+}
+
 func TestOutboundPolicyInitialEmptyListIsAnArray(t *testing.T) {
 	tap := startNetwork(t, nil)
 	response := httptest.NewRecorder()

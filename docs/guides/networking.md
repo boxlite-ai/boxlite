@@ -59,7 +59,6 @@ object such as `{"mode":"enabled","allow_net":["example.com"]}`.
 boxlite network inbound mybox enabled
 boxlite network outbound mybox enabled --allow-net '*.example.com' --allow-net 10.0.0.0/8
 boxlite network outbound mybox enabled  # default empty list: unrestricted
-boxlite network outbound mybox enabled --allow-net ''  # explicit empty list: same result
 boxlite network outbound mybox disabled
 boxlite inspect mybox
 ```
@@ -67,9 +66,9 @@ boxlite inspect mybox
 | Contract | Behavior |
 | --- | --- |
 | Replacement | No implicit append; repeat `--allow-net` once per rule. |
-| Default list | Omitted rules and `--allow-net ''` both replace with an empty list. |
+| Default list | Omit `--allow-net` to replace with an empty list. |
 | Rules | Exact hostname, wildcard hostname, IPv4 or IPv4 CIDR; no CSV. |
-| Invalid combinations | Reject inbound allowlists, disabled outbound with nonempty rules, and mixing an empty argument with other rules. |
+| Invalid combinations | Reject inbound allowlists, disabled outbound with any `--allow-net`, and empty rules such as `''`. |
 | Local/serve outbound | Requires a running box created with networking enabled. |
 | Local inbound | Unsupported; inbound visibility is enforced by the cloud proxy. |
 | No NIC, old backend | Explicit error; no implicit start, restart or hot-plug. |
@@ -103,13 +102,11 @@ outbound with an empty list and disabled inbound. Creation with `--network
 disabled` cannot include rules because it provisions no NIC.
 
 Creation and updates accept the same rules: hostnames, `*.` wildcard hostnames,
-IPv4 addresses and IPv4 CIDRs. Create rejects anything else, such as
-`example.com:443` or `a.com,b.com`, so every saved list can be re-sent as an
-update. Start and import do not recheck rules, so boxes and archives saved by
+IPv4 addresses and IPv4 CIDRs, with surrounding spaces trimmed. Both reject
+anything else, such as `''`, `example.com:443` or `a.com,b.com`, so every saved
+list can be re-sent as an update. Start and import do not recheck rules, so boxes and archives saved by
 older releases keep working; replace such a list with a valid one before
-updating it. A single `--allow-net ''` at creation means the empty list, as it does
-for `network outbound`. The cloud API trims spaces around each rule on create
-and update alike.
+updating it.
 
 ### Update paths
 

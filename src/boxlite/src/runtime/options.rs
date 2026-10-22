@@ -1091,7 +1091,9 @@ impl OutboundNetworkConfig {
     /// Validate a complete replacement before contacting the network backend.
     pub fn validate(&self) -> boxlite_shared::errors::BoxliteResult<()> {
         NetworkSpec::try_from(self.clone())?;
-        for rule in &self.allow_net {
+        // Padding is trimmed, not rejected: gvproxy and the cloud API always
+        // accepted it.
+        for rule in self.allow_net.iter().map(|rule| rule.trim()) {
             let valid = if rule.parse::<std::net::Ipv4Addr>().is_ok() {
                 true
             } else if let Some((address, prefix)) = rule.split_once('/') {
@@ -2313,7 +2315,19 @@ mod tests {
     /// Start and import keep accepting them, so older saved boxes still run.
     #[test]
     fn test_sanitize_create_rejects_invalid_outbound_allow_net() {
-        for rule in ["example.com:443", "a.com,b.com", "", "10.0.0.0/33"] {
+        // Padding was always accepted (gvproxy and the cloud API trim it), so
+        // create and update keep accepting it.
+        for rule in [" example.com ", "10.0.0.0/8 ", " *.example.com"] {
+            let opts = BoxOptions {
+                network: NetworkSpec::Enabled {
+                    allow_net: vec![rule.to_string()],
+                },
+                ..Default::default()
+            };
+            opts.sanitize_create()
+                .unwrap_or_else(|err| panic!("{rule:?}: padding must stay accepted: {err}"));
+        }
+        for rule in ["example.com:443", "a.com,b.com", "", "  ", "10.0.0.0/33"] {
             let opts = BoxOptions {
                 network: NetworkSpec::Enabled {
                     allow_net: vec![rule.to_string()],

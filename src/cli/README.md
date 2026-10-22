@@ -188,14 +188,13 @@ use. Executing invocations reject unsupported options; Clap's `--help` and
 boxlite network inbound mybox enabled
 boxlite network outbound mybox enabled --allow-net '*.example.com'
 boxlite network outbound mybox enabled  # default empty list: unrestricted
-boxlite network outbound mybox enabled --allow-net ''  # explicit empty list
 boxlite network outbound mybox disabled
 boxlite inspect mybox
 ```
 
 The box and mode are required. Repeat `--allow-net` for multiple outbound rules.
-Omission and a single `--allow-net ''` both use the default empty list. Inbound
-accepts no list; disabled outbound rejects nonempty rules. Each command replaces
+Omit `--allow-net` for the default empty list; `''` is rejected, as at create.
+Inbound accepts no list; disabled outbound accepts no `--allow-net`. Each command replaces
 one direction without retaining earlier rules. See [networking](../../docs/guides/networking.md#updating-a-running-box)
 for runtime support, connection lifetime and persistence.
 
@@ -376,7 +375,7 @@ silently restarting it, because restarting would run the command a second time.
 | `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--network <enabled\|disabled>` | | Outbound network mode (default `enabled`) |
-| `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IPv4, or IPv4 CIDR; repeatable, implies enabled networking, and a lone `''` means the empty list |
+| `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IPv4, or IPv4 CIDR; repeatable and implies enabled networking |
 | `--inbound <enabled\|disabled>` | | Inbound network mode (default `disabled`) |
 | `--net-tx-kbps KBPS` | | Cap what the box sends, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
 | `--net-rx-kbps KBPS` | | Cap what reaches the box, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
@@ -438,7 +437,7 @@ default, and `exec` still starts it on demand.
 | `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--network <enabled\|disabled>` | | Outbound network mode (default `enabled`) |
-| `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IPv4, or IPv4 CIDR; repeatable, implies enabled networking, and a lone `''` means the empty list |
+| `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IPv4, or IPv4 CIDR; repeatable and implies enabled networking |
 | `--inbound <enabled\|disabled>` | | Inbound network mode (default `disabled`) |
 | `--net-tx-kbps KBPS` | | Cap what the box sends, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
 | `--net-rx-kbps KBPS` | | Cap what reaches the box, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
