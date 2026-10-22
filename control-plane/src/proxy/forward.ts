@@ -1,9 +1,8 @@
 /** Forwarding to the env's supervisor gateway: waking a stopped Box, header and cookie filtering both ways, Location rewriting. */
 import type { AppRow, EnvRow } from '../db.js';
 import type { Ctx } from '../ctx.js';
-import { escapeHtml } from '../http/html.js';
 import { forwardHeaders } from '../supervisor.js';
-import { notRunningPage, page, startingPage } from './pages.js';
+import { badGatewayPage, notDeployedPage, notRunningPage, startingPage, timeoutPage } from './pages.js';
 
 /**
  * Forwarding one request to the env's supervisor gateway through the Box tunnel, waking a stopped
@@ -85,7 +84,7 @@ const RESPONSE_TIMEOUT_MS = 100_000;
  */
 export async function forward(ctx: Ctx, app: AppRow, env: EnvRow, req: ForwardRequest): Promise<Response> {
   if (!env.box_id || !env.box_url || !env.live_deployment) {
-    return page(`${app.name} is not deployed`, `<h1>${escapeHtml(app.name)} is not deployed yet</h1><p>Run <code>boxlite-app deploy</code>.</p>`, 503);
+    return notDeployedPage(ctx, app, env, req.headers);
   }
   let status = 'unknown';
   try {
@@ -94,11 +93,11 @@ export async function forward(ctx: Ctx, app: AppRow, env: EnvRow, req: ForwardRe
     console.error(`[proxy] box status ${env.box_id}: ${(err as Error).message}`);
   }
   // Neither waits for anything: say so, instead of a "Starting…" page that never ends.
-  if (status === 'missing') return notRunningPage(app.name, 'Its Box no longer exists; the next deploy creates a new one.');
+  if (status === 'missing') return notRunningPage(ctx, app, env, 'box_missing', req.headers);
   if (status === 'stopped') {
-    if (ctx.resources.wakeFailure(env.box_id)) return notRunningPage(app.name, 'It was asleep and could not be started just now. Try again in a minute.');
+    if (ctx.resources.wakeFailure(env.box_id)) return notRunningPage(ctx, app, env, 'wake_failed', req.headers);
     void ctx.resources.wake(env.box_id);
-    return startingPage(app.name);
+    return startingPage(app, env, req.headers);
   }
 
   const appUrl = ctx.resources.appUrl(app.name, env.name);
@@ -139,10 +138,10 @@ export async function forward(ctx: Ctx, app: AppRow, env: EnvRow, req: ForwardRe
     } as RequestInit);
   } catch (err) {
     if (deadline.signal.aborted) {
-      return page('Gateway timeout', `<h1>${escapeHtml(app.name)} did not answer in time</h1><p>The app did not start its response within ${Math.round(timeoutMs / 1000)} seconds.</p>`, 504);
+      return timeoutPage(ctx, app, env, Math.round(timeoutMs / 1000), req.headers);
     }
-    if (ctx.resources.recentlyWoken(env.box_id) || status !== 'running') return startingPage(app.name);
-    return page('Bad gateway', `<h1>${escapeHtml(app.name)} is not answering</h1><p>${escapeHtml((err as Error).message)}</p>`, 502);
+    if (ctx.resources.recentlyWoken(env.box_id) || status !== 'running') return startingPage(app, env, req.headers);
+    return badGatewayPage(ctx, app, env, (err as Error).message, req.headers);
   } finally {
     clearTimeout(timer);
   }
@@ -156,7 +155,7 @@ export async function forward(ctx: Ctx, app: AppRow, env: EnvRow, req: ForwardRe
     if (starting) {
       if (/BOX_STOPPED/.test(text)) void ctx.resources.wake(env.box_id);
       await res.body?.cancel().catch(() => undefined);
-      return startingPage(app.name);
+      return startingPage(app, env, req.headers);
     }
     if (res.status === 503) return new Response(text, { status: 503, headers: responseHeaders(res, env.box_url, appUrl) });
   }

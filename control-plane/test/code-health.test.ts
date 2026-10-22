@@ -273,20 +273,24 @@ test('a Box that cannot be woken gets an error page and a system log line, not "
   });
   assert.equal(first.status, 503);
   assert.equal(first.headers.get('x-boxlite-starting'), '1');
-  const second = await h.appRequest('/');
+  const second = await h.appRequest('/', { headers: { accept: 'text/html' } });
   assert.equal(second.status, 503);
   assert.equal(second.headers.get('x-boxlite-starting'), null);
-  assert.match(await second.text(), /could not be started/);
+  assert.match(await second.text(), /could not be started just now/);
+  // A program gets the same answer as JSON, with what to do.
+  const api = (await (await h.appRequest('/api')).json()) as { error: { code: string; next: string } };
+  assert.equal(api.error.code, 'unavailable');
+  assert.match(api.error.next, /boxlite-app app logs/);
   const system = h.ctx.store.logs(env().id, { source: 'system' });
   assert.ok(system.some((l) => l.level === 'error' && /could not start Box .*quota exceeded/.test(l.line)), JSON.stringify(system));
 });
 
 test('a Box BoxLite no longer has gets a "not running" page', async () => {
   h.ctx.store.updateEnv(env().id, { box_id: 'gone', box_url: 'http://127.0.0.1:9', live_deployment: 1, access_override: 'public' });
-  const res = await h.appRequest('/');
+  const res = await h.appRequest('/', { headers: { accept: 'text/html' } });
   assert.equal(res.status, 503);
   assert.equal(res.headers.get('x-boxlite-starting'), null);
-  assert.match(await res.text(), /no longer exists/);
+  assert.match(await res.text(), /crm is not available right now/);
 });
 
 // ---- reserved names -------------------------------------------------------------------------

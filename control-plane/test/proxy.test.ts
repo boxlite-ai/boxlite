@@ -163,8 +163,8 @@ test('a private app answers 401 with what happened and how to get in; ?__key= no
   assert.equal(html.status, 401);
   const text = await html.text();
   assert.match(text, /crm is private/);
-  assert.match(text, /Open it from the BoxLite console/);
-  assert.match(text, /href="https:\/\/8081-cp\.test\/console\/dashboard\/apps\/crm"/);
+  assert.match(text, /open it from the BoxLite console/);
+  assert.match(text, /href="https:\/\/8081-cp\.test\/console\/dashboard\/apps\/crm\?tab=overview"/);
   assert.match(text, /Authorization: Bearer/);
   const json = await h.appRequest('/api/x');
   assert.equal(json.status, 401);
@@ -273,11 +273,11 @@ test('old path-prefix URLs on the API origin answer 301 to the env origin, dropp
 
 test('a stopped Box is started and the visitor gets a Starting page', async () => {
   h.boxlite.boxes.get(env().box_id!)!.status = 'stopped';
-  const res = await h.appRequest('/');
+  const res = await h.appRequest('/', { headers: { accept: 'text/html' } });
   assert.equal(res.status, 503);
   assert.equal(res.headers.get('retry-after'), '3');
   const html = await res.text();
-  assert.match(html, /Starting crm/);
+  assert.match(html, /Waking up crm/);
   assert.match(html, /http-equiv="refresh" content="3"/);
   await new Promise((r) => setTimeout(r, 10));
   assert.ok(h.boxlite.calls.includes(`start ${env().box_id}`));

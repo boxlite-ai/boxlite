@@ -1,12 +1,10 @@
 /** The HTML pages, redirects and JSON 401 that sign-in answers with. */
+import { brandPage } from '../http/brand-page.js';
 import { escapeHtml } from '../http/html.js';
 
 export function htmlPage(title: string, body: string, status: number, headers: Headers = new Headers()): Response {
-  headers.set('content-type', 'text/html; charset=utf-8');
-  headers.set('cache-control', 'no-store');
-  const doc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title>
-<style>body{font:15px/1.5 system-ui,sans-serif;max-width:38rem;margin:15vh auto;padding:0 1rem;color:#222}h1{font-size:1.3rem}code{background:#f3f3f3;padding:0 .25rem}a.btn{display:block;max-width:18rem;border:1px solid #ccc;border-radius:6px;padding:.6rem 1rem;margin:.6rem 0;color:#222;text-decoration:none}a.btn:hover{background:#f6f6f6}</style></head><body>${body}</body></html>`;
-  return new Response(doc, { status, headers });
+  // The BoxLite look of every CP page (http/brand-page.ts); `body` is the caller's escaped markup.
+  return brandPage({ title, tone: status >= 500 ? 'error' : status >= 400 ? 'stopped' : 'progress', label: title, bodyHtml: body }, status, headers);
 }
 
 export const wantsHtml = (method: string, headers: Headers) => (method === 'GET' || method === 'HEAD') && (headers.get('accept') ?? '').includes('text/html');
