@@ -9,7 +9,7 @@ import { useAppSql, useRestoreDatabase } from '@/hooks/mutations/useAppMutations
 import { useAppDatabase, useTableRows } from '@/hooks/queries/useAppsQuery'
 import { formatBytes, relTime, STATUS } from '@/lib/apps/format'
 import type { AppDatabaseDetail, AppDetail, AppTable, QueryResult } from '@/lib/apps/types'
-import { errorBody, errorText } from '@/lib/apps/client'
+import { downloadUrl, errorBody, errorText } from '@/lib/apps/client'
 import {
   isDdlKind,
   isWriteKind,
@@ -50,6 +50,16 @@ type Section = 'tables' | 'sql' | 'migrations' | 'backups' | 'connection'
 const SECTION_IDS: Section[] = ['tables', 'sql', 'migrations', 'backups', 'connection']
 
 const asText = (rows: QueryResult['rows']) => rows.map((row) => row.map((cell) => (cell === null ? '' : String(cell))))
+
+/** A download streamed by the control plane (whole table as CSV, or the database as a SQL dump). */
+const exportUrl = (app: AppDetail, query: Record<string, string>) =>
+  downloadUrl(
+    `/apps/${encodeURIComponent(app.id)}/database/export?${new URLSearchParams({ env: app.environment, ...query })}`,
+  )
+
+/** An anchor that looks like a ToolButton, for downloads the browser saves itself. */
+const DOWNLOAD_LINK =
+  'inline-flex h-[28px] items-center border border-border px-[10px] font-mono text-[12px] text-muted-foreground transition-colors hover:border-brand hover:text-foreground'
 
 const looksJson = (text: string) => /^[[{]/.test(text) && /[\]}]$/.test(text)
 
@@ -112,7 +122,19 @@ function Connection({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
   const connection = `postgresql://${db.user}@${db.host}/${db.name}?sslmode=require`
   const statusColor = db.status === 'ready' ? STATUS.running : STATUS.idle
   return (
-    <Screen title="Connection">
+    <Screen
+      title="Connection"
+      actions={
+        <a
+          href={exportUrl(app, { format: 'sql' })}
+          download
+          title="Schema and data of every table, as SQL"
+          className={DOWNLOAD_LINK}
+        >
+          Download dump
+        </a>
+      }
+    >
       <div className="flex flex-col gap-3">
         <Panel>
           <div className="mb-4 flex items-center gap-3">
@@ -146,7 +168,8 @@ function Connection({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
             compact
           />
           <span>
-            It writes DATABASE_URL (with the password) to .env.local and runs the services locally. For one-off queries:
+            It runs the services locally with DATABASE_URL pointing at a local proxy, so no password is written
+            anywhere. For psql or an ORM: boxlite-app app db proxy (read-only unless --write). For one-off queries:
             boxlite-app app sql &quot;select …&quot;.
           </span>
         </div>
@@ -659,12 +682,14 @@ function TableSheet({
             >
               Query in SQL console
             </ToolButton>
-            <ToolButton
-              disabled={!data}
-              onClick={() => data && downloadCsv(`${table.name}.csv`, data.columns, asText(data.rows))}
+            <a
+              href={exportUrl(app, { table: table.name, format: 'csv' })}
+              download
+              title={`Every row of ${table.name}, not only this page`}
+              className={DOWNLOAD_LINK}
             >
               Export CSV
-            </ToolButton>
+            </a>
           </span>
         </div>
         <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
