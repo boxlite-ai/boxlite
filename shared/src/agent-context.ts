@@ -1,4 +1,4 @@
-import { classifyFailure, errorFocus } from './diagnose.js';
+import { classifyFailure, errorFocus, looksLikeCredential, secretRefFix } from './diagnose.js';
 
 /**
  * Everything an agent needs about one environment, as returned by
@@ -173,6 +173,18 @@ export function contextFindings(c: Omit<AgentContext, 'next_actions'>): Finding[
   const unresolved = c.variables.filter((v) => v.secret && !v.resolved);
   if (unresolved.length) {
     out.push({ id: 'secret_missing', severity: 'error', title: `secret(s) not set on the platform: ${unresolved.map((v) => `${v.name} (${v.source})`).join(', ')}`, fix: 'ask the user to have a platform admin create the org secret each one references (in parentheses; the console can list secrets but not set them), then `boxlite-app deploy`; never put the value in boxlite.toml or the code' });
+  }
+
+  // Advisor: a credential kept as a plain variable is readable by anyone who can open the console or the CLI.
+  const plain = c.variables.filter((v) => !v.secret && looksLikeCredential(v.name));
+  if (plain.length) {
+    const names = plain.map((v) => v.name);
+    out.push({
+      id: 'plain_credential',
+      severity: 'info',
+      title: `${names.join(', ')} ${names.length === 1 ? 'looks like a credential but is a plain variable' : 'look like credentials but are plain variables'}, readable in the console and \`app vars list\``,
+      fix: names.map((n) => `${n}: ${secretRefFix(n)}`).join('; '),
+    });
   }
 
   const recent = c.recent_errors.filter((e) => Date.parse(c.generated_at) - Date.parse(e.ts) < 3_600_000);

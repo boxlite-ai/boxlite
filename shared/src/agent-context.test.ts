@@ -77,3 +77,15 @@ test('a crash loop names its cause and shows the error line, not the end of a st
   assert.match(generic.title, /web restarted 9 times/);
   assert.equal(generic.evidence![0], 'Error: listen EADDRINUSE: address already in use 0.0.0.0:3000');
 });
+
+test('a credential kept as a plain variable is pointed out, with the secret-store path', () => {
+  const c = base();
+  c.variables.push({ name: 'SLACK_TOKEN', value: 'xoxb-1', secret: false, source: 'online', resolved: true });
+  c.variables.push({ name: 'LOG_LEVEL', value: 'info', secret: false, source: 'boxlite.toml', resolved: true });
+  c.variables.push({ name: 'OPENAI_API_KEY', value: null, secret: true, source: 'secret org/openai', resolved: true });
+  const f = contextFindings(c);
+  assert.deepEqual(f.map((x) => [x.id, x.severity]), [['plain_credential', 'info']]);
+  assert.match(f[0]!.title, /SLACK_TOKEN/);
+  assert.doesNotMatch(f[0]!.title, /LOG_LEVEL|OPENAI/);
+  assert.match(f[0]!.fix, /secrets ref SLACK_TOKEN org\/slack-token/);
+});

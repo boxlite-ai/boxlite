@@ -289,12 +289,20 @@ export function missingVariableIn(text: string): string | undefined {
 
 const CREDENTIAL_RE = /(TOKEN|KEY|SECRET|PASSWORD|PASS|CREDENTIALS?|DSN|WEBHOOK)(_|$)/;
 
+/** A variable name that holds a credential by convention (…_TOKEN, …_KEY, …_SECRET, …). */
+export function looksLikeCredential(name: string): boolean {
+  return CREDENTIAL_RE.test(name);
+}
+
+/** How to keep credential `name` in the org's secret store and reference it: the steps an agent can take. */
+export function secretRefFix(name: string): string {
+  const ref = `org/${name.toLowerCase().replace(/_/g, '-')}`;
+  return `ask the user for it to be stored as the org secret ${ref} (or the name they already use), then \`boxlite-app app secrets ref ${name} ${ref}\` and \`boxlite-app deploy\`; never invent its value or write it into a file`;
+}
+
 /** How to give a service the variable it lacks: a credential comes from the org's secret store, anything else is a plain variable. */
 function variableFix(name: string): string {
-  if (CREDENTIAL_RE.test(name)) {
-    const ref = `org/${name.toLowerCase().replace(/_/g, '-')}`;
-    return `${name} is a credential: ask the user for it to be stored as the org secret ${ref} (or the name they already use), then \`boxlite-app app secrets ref ${name} ${ref}\` and \`boxlite-app deploy\`; never invent its value or write it into a file`;
-  }
+  if (looksLikeCredential(name)) return `${name} is a credential: ${secretRefFix(name)}`;
   return `\`boxlite-app app vars set ${name}=<value>\` with the value the app expects (ask the user if you do not know it), then \`boxlite-app deploy\``;
 }
 
