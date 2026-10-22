@@ -24,6 +24,9 @@ function answer(headers: Headers, status: number, page: BrandPage, json: { code:
   return brandPage(page, status, extra);
 }
 
+/** "photos · main", top right of every page about one app. */
+const contextOf = (app: AppRow, env: EnvRow) => `${app.name} · ${env.name}`;
+
 /** 503 while an asleep app wakes; reloads itself. */
 export function startingPage(app: AppRow, env: EnvRow, headers: Headers): Response {
   const label = labelOf(app, env);
@@ -32,10 +35,11 @@ export function startingPage(app: AppRow, env: EnvRow, headers: Headers): Respon
     503,
     {
       title: `Starting ${label}…`,
+      context: contextOf(app, env),
       tone: 'progress',
       label: 'Starting',
       heading: `Waking up ${label}`,
-      lines: ['This app sleeps while nobody uses it, and it is starting now.', 'That usually takes 5 to 20 seconds. This page reloads by itself.'],
+      lines: ['It sleeps while nobody uses it and is starting now.', 'Usually 5 to 20 seconds. This page moves on to the app by itself.'],
       refreshSeconds: 3,
     },
     { code: 'starting', message: `${label} is waking up`, next: 'retry after the seconds in Retry-After; it answers as soon as it is up' },
@@ -55,6 +59,7 @@ export function notRunningPage(ctx: Ctx, app: AppRow, env: EnvRow, reason: 'wake
     503,
     {
       title: `${label} is not available`,
+      context: contextOf(app, env),
       tone: 'stopped',
       label: 'Unavailable',
       heading: `${label} is not available right now`,
@@ -76,6 +81,7 @@ export function notDeployedPage(ctx: Ctx, app: AppRow, env: EnvRow, headers: Hea
     503,
     {
       title: `${label} is not live yet`,
+      context: contextOf(app, env),
       tone: 'stopped',
       label: 'Not deployed',
       heading: `${label} is not live yet`,
@@ -95,6 +101,7 @@ export function timeoutPage(ctx: Ctx, app: AppRow, env: EnvRow, seconds: number,
     504,
     {
       title: `${label} took too long`,
+      context: contextOf(app, env),
       tone: 'error',
       label: 'Timed out',
       heading: `${label} took too long to answer`,
@@ -115,6 +122,7 @@ export function badGatewayPage(ctx: Ctx, app: AppRow, env: EnvRow, detail: strin
     502,
     {
       title: `${label} is not answering`,
+      context: contextOf(app, env),
       tone: 'error',
       label: 'Not answering',
       heading: `${label} is not answering`,
@@ -136,6 +144,7 @@ export function gatePage(ctx: Ctx, app: AppRow, env: EnvRow, access: string, hea
     401,
     {
       title: `${label} is ${access}`,
+      context: contextOf(app, env),
       tone: 'locked',
       label: access === 'private' ? 'Private' : 'Members only',
       heading: access === 'private' ? `${label} is private` : `${label} is for its organization`,
