@@ -66,8 +66,11 @@ export function releaseStatusOf(status: ReleaseStatus): { label: string; color: 
       return { label: 'Rolled back', color: STATUS.dim }
     case 'cancelled':
       return { label: 'Cancelled', color: STATUS.dim }
+    case 'queued':
+      return { label: 'Queued', color: STATUS.idle }
     default:
-      return { label: capitalize(status), color: STATUS.idle }
+      // uploading … starting: the row names the step it is on; the status says only that it is under way.
+      return { label: 'Deploying', color: STATUS.idle }
   }
 }
 
