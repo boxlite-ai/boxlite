@@ -1,6 +1,6 @@
 # libkrun 分阶段快照计划
 
-2026-10-22 · 阶段 1 RAM 与阶段 2 最小 VM CPU/KVM/RAM 实现已编写，Linux x86_64 交叉检查与 krun-vmm rlib 构建通过；测试可执行文件链接受本机工具链限制，KVM 运行验收仍为 **UNVERIFIED**。设备及完整 box 闭环仍待后续阶段。
+2026-10-22 · 阶段 1 RAM 与阶段 2 最小 VM CPU/KVM/RAM 实现已编写，Linux x86_64 交叉检查与 krun-vmm rlib 构建通过（历史执行结果）；测试可执行文件链接受本机工具链限制，KVM 运行验收仍为 UNVERIFIED。阶段 3 内部 virtio-blk（冻结/恢复、KRUNVM v2 磁盘段、导入守卫）已实现**源码与测试**，全部未执行、整体 **UNVERIFIED**；完整 BoxLite box 闭环仍属后续阶段。
 
 ## 目标与范围
 
@@ -304,3 +304,48 @@
 没有依赖升级。Cargo.lock 仅增加 kvm-bindings 启用 serde 后的 serde/zerocopy feature 边；最后的检查、构建和测试链接尝试均使用已缓存的锁定版本与 offline 模式。
 
 父仓库和子模块 `git diff --check` 通过。所有 KVM 运行、guest continuation/timer 验收、通信单元测试执行以及全生产回退的回归失败/恢复通过对照均为 **UNVERIFIED**；没有把 `check --tests` 或 rlib build 当成运行结果。验证仅在本机完成，未使用远程测试环境。
+
+## 阶段 3 实施前设计（2026-10-22）
+
+### TL;DR
+
+在阶段 2 私有 `RamSnapshotVm` 上增加内部 virtio-blk 磁盘挂载、设备冻结与 KRUNVM v2 全量快照：单个快照文件含 CPU/KVM/RAM 与按序 raw 磁盘段；恢复把磁盘段导入调用方指定的新目录并返回暂停 VM。不接入普通 `Vmm`、C ABI、SDK、CLI。
+
+### 原始依据与取舍
+
+已下载并阅读 Firecracker 固定提交 `6ec271414300fb8f0ff1ff79ad321bb7467d072f` 的 `src/vmm/src/devices/virtio/persist.rs` 原文，以及 Linux v6.12 `virt/kvm/eventfd.c` 原文，并与本地代码核对：
+
+| 问题 | 原文机制、现有代码核对与决定 |
+| --- | --- |
+| 可复用 virtio 状态 | Firecracker `QueueState` 保存 max/size/ready、三环 GPA、next_avail/next_used/num_added；`VirtioDeviceState` 保存类型/features/队列/activated；`MmioTransportState` 保存全部 selector、status、config generation 与 interrupt status。本地 `Queue` 额外有 `event_idx_enabled`（激活时由 acked features 派生），v2 版序列化显式保存并在恢复时校验与 acked features 一致；未激活队列该值必须为 false（本地仅在 activate 设置）。Firecracker `restore` 对激活队列调用 `queue.initialize`，本地等价为 `is_valid` 式范围/对齐校验加游标与 RAM 环内容一致性校验。 |
+| 队列状态来源 | 本地 mmio transport 激活时把队列移交设备（`queues.take()`），活动队列在 `BlockWorker` 内。保存时活动队列状态只能来自 worker 冻结确认（每个请求独立 bounded(1) reply），未激活队列来自 transport 自持队列；与 Firecracker 从 device.queues() 读取的结构差异一致处理。 |
+| irqfd 注入完成边界 | Linux v6.12 `virt/kvm/eventfd.c`：`kvm_irqfd_deassign` 匹配 fd+gsi 后 `irqfd_deactivate` 并 `flush_workqueue(irqfd_cleanup_wq)`，`irqfd_shutdown` 内 `eventfd_ctx_remove_wait_queue` 后 `flush_work(&irqfd->inject)`；即 DEASSIGN ioctl 返回后所有已排队注入完成且不再有新注入。用 `kvm_ioctls::VmFd::unregister_irqfd`（KVM_IRQFD_FLAG_DEASSIGN）实现中断 drain，随后 poll-drain 事件计数，再捕获 CPU/KVM。 |
+| 中断恢复 | 注入完成的中断存于内核 irqchip（阶段 2 已随 VM state 保存/恢复）；目标端只注册新 eventfd 的 irqfd，不向其写入。transport `interrupt_status` 仅恢复寄存器可见性，不复播 eventfd。 |
+| 磁盘内容归一 | 现有 `DiskProperties`/`SyncFormatAccess`（imago RAW/QCOW2/VMDK 统一读写）即现有读取接口；冻结 flush 后经共享 `Arc<Mutex<SyncFormatAccess>>` 分块读取逻辑容量，QCOW2 backing 内容随逻辑读自然展平，不需要单独的格式归一器。 |
+| guest 可见配置 | `VirtioBlkConfig` 为 packed POD；按字节整体保存/恢复，容量字段与磁盘段长度、恢复文件实际 nsectors 三方校验；恢复端按保存的 avail features 反推 sync_mode/只读，重建后必须与保存 features 逐位相等，保持原 guest flush 语义。 |
+
+保留 Firecracker Apache-2.0/BSD 来源标注；新模块注明固定来源与本地差异。
+
+### 机制、边界与所有权
+
+- 设备侧新增（krun-devices，feature `blk`）：`virtio/persist.rs` 提供 `QueueState`/`VirtioDeviceState`/`MmioTransportState` serde 状态与校验（类型/feature 子集/队列数/max size；激活队列要求 ready、2 的幂、范围与对齐、used.idx==next_used、avail 未消费数 ≤ size，含 u16 环绕算术）；`MmioTransport` 增加 transport 状态与队列保存/恢复入口及 `activate_restored`（用恢复队列直接激活，不重走协商、不重置）；`VirtioDevice` trait 增加 `activate_frozen` 默认实现；`BlockWorker` 增加控制 eventfd + 命令通道 + 每请求独立 bounded(1) reply。
+- 冻结语义：worker 以单一 `frozen` 字段为准；控制命令在弹出下一个描述符之前检查，Freeze 落在单个描述符链边界（该链完成 status 写、used 环更新与必要中断之后），每个链的处理都在独立作用域内持有 guest 内存克隆，冻结确认发出时没有任何临时映射克隆存活。确认后不再执行任何 ring 写（含 enable_notification）。冻结确认前无条件对磁盘 `flush()+sync()`（与 guest cache mode 无关；未激活设备直接 flush 共享 image），失败回 Err 且置 frozen，由保存方走恢复路径。Resume 只清 frozen 并把 reply 交给 epoll 循环延后确认，随后在循环层主动重查队列（disable→处理→enable_notification），绝不从命令处理内递归处理队列；丢失 eventfd 计数不会挂起。命令通道容量 16，`send_timeout` 计入 30 秒控制预算；超时不取消 I/O、不释放存活资源、不发布快照；过期 reply 由容量 1 通道丢弃，不污染共享通道；worker 退出/断链报错。
+- 内部挂载（krun-vmm，cfg feature `blk`）：`RamSnapshotVm::attach_disk` 仅允许在 vCPU 启动前；固定内部 MMIO 窗口（0xd0000000 起，0x1000 步进，最多 8 个）与 GSI 16–23；首个设备挂载前先做阶段 2 RAM 别名探测（无设备附加基准），之后保存时按"每设备 transport 1 份 + 激活后 device_state 与 worker 各 1 份"的预期克隆数校验 region Arc 计数，不删除阶段 2 保护。
+- KRUNVM v2：同 v1 头布局（magic/version/JSON 长度），JSON 增加有序 `disks` 数组（MMIO 地址/长度/IRQ/device id、transport 与 device 可复用状态、config 字节、image id、只读/cache、磁盘字节数），RAM 后按序追加 raw 磁盘段。JSON ≤16 MiB；恢复前校验版本、精确总长、容量乘法溢出、设备数 ≤8、唯一身份、MMIO/IRQ 窗口与 RAM/互不重叠（含 irqchip 保留 GSI 0–15 不用于内部设备）、config/image id 长度与三方容量一致。v1 `restore_full` 保持；v2 交给新 `restore_full_with_disks(path, destination)`，v1 文件在该入口下按无设备恢复。
+- 保存顺序：配置检查 → Pause/确认全部 vCPU → 冻结并 flush 全部设备 → 在冻结后的静默边界按受控克隆数做 RAM 别名探测 → 逐设备同步 DEASSIGN irqfd（内核 flush 语义）并 drain 事件计数 → 捕获设备/CPU/KVM/RAM 与磁盘段 → sync 文件 → 重赋源 irqfd → 恢复全部源设备 → 恢复全部源 CPU → 写有效 magic。恢复阶段（irqfd 重赋、设备 Resume、CPU Resume）各自独立全量尝试并聚合错误；任一步失败 poison owner，绝不发布有效文件。
+- 恢复顺序：metadata 校验（版本/长度/窗口/身份/features 契约等结构性检查）→ 读取 RAM 并校验活动 ring → 在创建守卫下导入磁盘文件（0700 目录、0600 独占编号文件）→ 创建 VM/irqchip/PIT → 按保存位置重建 frozen 设备 → 创建暂停 vCPU → 载入 CPU/TSC/VM 时钟状态（沿用阶段 2 契约）→ 返回暂停 owner，显式 resume 才启动。任何失败与销毁的清理顺序都是先 join 全部 CPU，再 join 全部 worker，最后释放资源与 owner 自建文件；守卫只删除自己创建的文件，预存在目录永不触碰。
+
+### 验证计划
+
+krun-devices 单测（无 KVM）：队列状态未激活/协商中/激活、游标环绕、event-index 一致性、pending 通知与 interrupt status 恢复；畸形队列拒绝；worker 冻结覆盖读/写/flush 中的边界、已消费请求恰好完成一次、未消费请求 resume 后完成、冻结切点内 RAM/磁盘稳定；控制超时/迟回复/线程退出。krun-vmm 测试（KVM，UNVERIFIED）：多磁盘/只读/QCOW2 backing 链与删除源文件后的恢复读写 flush、真实 guest 块 I/O 续跑（手写字节 fixture，保留现有 guest.bin 不再生成）、pending 中断与长暂停、畸形元数据/截断段/非法队列、注入写失败的中途清理与保存恢复。全部测试本阶段只写源码不执行。
+
+### 阶段 3 最终契约与实施结果
+
+- 设备侧（krun-devices，新增 serde 依赖，Cargo.lock 仅加边）：`virtio/persist.rs`（Firecracker 派生，保留来源标注）提供 `QueueState`/`VirtioDeviceState`（`validate_structure` 与带 RAM 的 `validate` 两级校验）/`MmioTransportState`（保留全部 guest 可写 selector 含 `shm_region_select`，不设范围检查；只拒绝状态机外的 device_status 与未知 interrupt 位）。`Queue::{is_event_idx_enabled}` 与 `pub(crate) num_added` 补只读/可见入口。`MmioTransport::{save_transport_state,queue_states,restore_transport_state,activate_restored}`；`VirtioDevice::activate_frozen` 默认返回 `BadActivate`（未支持设备不得静默起活 worker），Block 覆盖。
+- `BlockWorker`：控制 eventfd + 容量 16 命令通道 + 每请求独立 bounded(1) reply；`send_timeout` 与 30 秒控制预算；单一 `frozen` 字段；控制命令在弹出下一个描述符前检查；每链独立作用域持有映射克隆（冻结确认时无临时克隆）；确认后零 ring 写；未激活设备由保存方直接 flush 共享 image；Resume reply 延后到 epoll 循环层主动重查后确认。`Block` 提供 `worker_control/config_bytes/nsectors/image_id/cache_type/shared_image/read_snapshot_chunk`（直接借用共享 image，无临时 DiskProperties Drop flush）与 `restore_snapshot_identity`；`reset` 同时丢弃控制句柄；`snapshot_offered_features(read_only)` 是恢复端校验用的预期 offered features 集合（与 `Block::new` 固定 `SyncMode::Full` 构造出的集合一致，含 RO 位一致性；`Block::new` 仍有自己的构造表达式，二者未共享实现）。
+- vmm 侧 `ram_snapshot/blk/`（cfg feature `blk`）：`attach_disk` 仅 vCPU 启动前、拒绝非普通文件/不可用 owner/MMIO 窗口与 RAM 重叠（调用方前置条件：源盘文件及其整条 backing 链在挂载生命周期内不得有本私有 owner 之外的写入者，一致切点假设独占所有权，实现不取任何锁），任何失败 poison owner 并回滚已注册 ioeventfd/irqfd；`register_device` 需要 `&mut` owner（Bus::insert），先 ioevent 后 irqfd 后入 bus，失败全回滚。保存：pause → freeze 全部（active 走 worker，inactive 直接 flush）→ 静默边界按受控克隆数做 RAM 别名探测 → 逐盘 DEASSIGN+drain → 捕获（活动 ring 一致性用 guest RAM 校验）→ 分段拷贝 → sync → 独立依次重赋 irqfd / Resume 全部设备 / Resume 全部 CPU（聚合失败、poison、不发布）。恢复：metadata-only 校验（窗口/唯一性/重叠/config 与 image id 长度/容量乘法/transport 状态/结构 features/offered features 契约/DRIVER_OK⇔activated）在创建任何资源前；read_ram 后校验活动 ring；`ImportedDir` 创建守卫独占 0700 目录、逐文件 create_new 0600 并在创建时记录路径，Drop 只删除自己创建的文件与目录（预存在目录报错且永不触碰，有 sentinel 回归测试）；owner 在任何 worker 启动前接管守卫；`resume` 设备先行，任一失败即 join 全部 CPU 再 join 全部 worker 并 poison；Drop 顺序 CPU → worker → 守卫。
+- KRUNVM v1/KRUNRAM v1 语义不变；`restore_full` 对 v2 明确报错；带盘 `save_full` 即 v2；RAM-only `save` 对已挂盘 owner 明确拒绝。guest fixture 由测试内字节 emitter 生成（GDTR@0x500→GDT@0x520、16 位代码段 D=0 G=1 与 4 GiB 数据段的 unreal mode 设置，返回实模式后不重载 DS/ES；三描述符链 header/data/status、状态哨兵 0xEE、0x41+计数写模式、读校验 0xC7、FLUSH 轮转、IOAPIC GSI16/x2APIC 中断；第 BARRIER_REQUEST-1=10 号请求提交前先 cli（该号为 WRITE 相位），完成计数达到 BARRIER_REQUEST=11 后驻留屏障并置字节标记，释放后 sti 并以独立 post-STI 标记证明 pending IRQ 在没有任何新请求的情况下送达；普通测试预置释放字节不驻留），阶段 2 fixture 与测试保持不动；worker 侧用按队列 eventfd 键控的一次性 RAII 请求门（键控 map，等待前移除条目，互不干扰、panic 安全）确定性覆盖 IN/OUT/FLUSH 三种 held 请求。Makefile snapshot 目标启用 `blk` feature 并纳入 krun-devices 测试（按 `snapshot` 名称过滤）；snapshot-fmt 覆盖全部新文件。libkrun README 增补 stage 3 行为。
+
+### 阶段 3 未验证事项（全部 UNVERIFIED）
+
+遵照任务要求未运行任何格式检查、构建、测试、KVM 验收或 `git diff --check`；仅做源码阅读与逐项核对。因此：测试内字节 emitter 生成的 unreal-mode guest 程序（含全部编码与标签 fixup）、手工 qcow2 v3+backing 头部布局、irqfd DEASSIGN/drain 时序、屏障 pending 中断跨切点保存与恢复、导入目录权限/守卫清理、以及全部单测/集成测试的可编译性与通过性均未经执行验证。阶段 2 遗留的 musl/GNU 交叉链接限制对新增代码同样适用。下一执行环境应在 Linux x86_64/KVM 主机上先运行 `make snapshot-check`、`make snapshot-fmt`、`make snapshot-test`，再跑 blk KVM 验收；真实 guest 续跑断言依赖 emitter 编码正确性，首次执行需按失败现场逐条核对指令编码。
