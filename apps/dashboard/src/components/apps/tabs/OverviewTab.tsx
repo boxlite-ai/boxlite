@@ -12,8 +12,6 @@ import { toast } from 'sonner'
 import { AgentHandoffPanel } from '../AgentHandoffPanel'
 import { DeployProgress } from '../DeployProgress'
 import { HandoffToAgent } from '../HandoffToAgent'
-import { SchedulesTable } from '../SchedulesTable'
-import { ServicesTable } from '../ServicesTable'
 import {
   CopyIconButton,
   copyText,
@@ -24,7 +22,6 @@ import {
   SpecRow,
   StatusBadge,
 } from '../spec'
-import { ToolButton } from '../SubNav'
 import { LivePreview, MetricStrip } from '../viz'
 
 // Overview answers three things, in this order: does anything need you, what
@@ -216,16 +213,11 @@ export function OverviewTab({
   app,
   onGoTo,
   onRollback,
-  onRestartService,
-  restarting,
   onOpenDeployment,
 }: {
   app: AppDetail
   onGoTo: (tab: AppTab, section?: string, extra?: Record<string, string>) => void
   onRollback: (release: AppRelease) => void
-  onRestartService: (service: string) => void
-  /** The service being restarted right now, if any. */
-  restarting: string | null
   onOpenDeployment: (n: number) => void
 }) {
   const active = app.releases.find((r) => r.id === app.activeRelease) ?? null
@@ -262,36 +254,7 @@ export function OverviewTab({
 
       <LiveDeployment app={app} active={active} failing={failing.length > 0} onGoTo={onGoTo} />
 
-      <section>
-        <SectionTitle
-          title="Services"
-          right={
-            app.services.length > 1 && (
-              <ToolButton onClick={() => app.services.forEach((s) => onRestartService(s.name))}>Restart all</ToolButton>
-            )
-          }
-        />
-        {app.services.length === 0 ? (
-          <p className="font-mono text-[13px] text-muted-foreground">
-            No services yet; they start with the next deployment.
-          </p>
-        ) : (
-          <ServicesTable
-            services={app.services}
-            started={!!app.activeRelease}
-            restarting={restarting}
-            onRestart={onRestartService}
-          />
-        )}
-      </section>
-
-      {/* Only an app with scheduled jobs has this section. */}
-      {app.schedules.length > 0 && (
-        <section>
-          <SectionTitle title="Schedules" />
-          <SchedulesTable app={app} />
-        </section>
-      )}
+      <RuntimeLine app={app} onOpen={() => onGoTo('deployments', 'services')} />
 
       {/* From the app proxy's access log and the sign-in sessions; hidden until there is either. */}
       {m && (
@@ -332,5 +295,38 @@ export function OverviewTab({
 
       <AgentHandoffPanel app={app} />
     </div>
+  )
+}
+
+/** One line on whether everything the app runs is up; the services themselves are under Deployments. */
+function RuntimeLine({ app, onOpen }: { app: AppDetail; onOpen: () => void }) {
+  if (app.services.length === 0) return null
+  const up = app.services.filter((s) => s.state === 'running' && s.health !== 'unhealthy').length
+  const asleep = app.services.every((s) => s.state === 'asleep')
+  const all = app.services.length
+  const text = asleep
+    ? 'Asleep: the next visit wakes it'
+    : up === all
+      ? `${all === 1 ? 'Its service is' : `All ${all} services are`} running`
+      : `${up} of ${all} services running`
+  const schedules = app.schedules.length
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="-mt-4 flex w-fit items-center gap-2 font-mono text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+    >
+      <StatusBadge
+        label={text}
+        color={asleep ? STATUS.stopped : up === all ? STATUS.running : STATUS.idle}
+        className="font-normal"
+      />
+      {schedules > 0 && (
+        <span>
+          · {schedules} scheduled job{schedules === 1 ? '' : 's'}
+        </span>
+      )}
+      <span>· Services →</span>
+    </button>
   )
 }

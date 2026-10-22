@@ -322,14 +322,16 @@ export default function AppDetails() {
               app={app}
               onGoTo={goTo}
               onRollback={rollback}
-              onRestartService={restartService}
-              restarting={restarting}
               onOpenDeployment={(n) => goTo('deployments', undefined, { deployment: String(n) })}
             />
           )}
           {tab === 'deployments' && (
             <DeploymentsTab
               app={app}
+              section={sectionParam}
+              onSection={(next) => goTo('deployments', next === 'history' ? undefined : next)}
+              restarting={restarting}
+              onRestartService={restartService}
               onRollback={rollback}
               rollingBack={rollingBack}
               selected={Number(searchParams.get('deployment')) || null}

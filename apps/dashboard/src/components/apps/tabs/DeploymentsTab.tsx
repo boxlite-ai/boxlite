@@ -12,7 +12,8 @@ import { cn } from '@/lib/utils'
 import { useState } from 'react'
 import { DeploymentDetail } from '../DeploymentDetail'
 import { EmptyNote, GridHeader, HoverActions, MoreButton, SearchField, StatusBadge } from '../spec'
-import { FilterChip, FilterGroup, Screen, ToolButton } from '../SubNav'
+import { FilterChip, FilterGroup, Screen, ToolButton, Workbench } from '../SubNav'
+import { ServicesSection } from './ServicesSection'
 import { useElapsed } from '../useElapsed'
 import { Tag } from '../viz'
 
@@ -132,24 +133,34 @@ function DeploymentRow({
   )
 }
 
+type Section = 'history' | 'services'
+
+/** Deployments: the history (and one deployment's timeline), and the services they run. */
 export function DeploymentsTab({
   app,
+  section,
+  onSection,
   onRollback,
   rollingBack = null,
   selected,
   onSelect,
   onOpenLogs,
+  restarting,
+  onRestartService,
 }: {
   app: AppDetail
+  /** ?section=services, else the history. */
+  section?: string
+  onSection: (next: Section) => void
   onRollback: (release: AppRelease) => void
   rollingBack?: string | null
   /** The deployment whose timeline is open (?deployment=N). */
   selected: number | null
   onSelect: (n: number | null) => void
   onOpenLogs: (n: number) => void
+  restarting: string | null
+  onRestartService: (service: string) => void
 }) {
-  const [filter, setFilter] = useState<'all' | 'live' | 'failed'>('all')
-  const [search, setSearch] = useState('')
   if (selected) {
     return (
       <DeploymentDetail
@@ -161,6 +172,46 @@ export function DeploymentsTab({
       />
     )
   }
+  const current: Section = section === 'services' ? 'services' : 'history'
+  return (
+    <Workbench<Section>
+      items={[
+        { id: 'history', label: 'Deployments', count: app.releases.length },
+        { id: 'services', label: 'Services', count: app.services.length },
+      ]}
+      value={current}
+      onChange={onSection}
+    >
+      {current === 'services' ? (
+        <ServicesSection app={app} restarting={restarting} onRestartService={onRestartService} />
+      ) : (
+        <History
+          app={app}
+          onRollback={onRollback}
+          rollingBack={rollingBack}
+          onSelect={onSelect}
+          onOpenLogs={onOpenLogs}
+        />
+      )}
+    </Workbench>
+  )
+}
+
+function History({
+  app,
+  onRollback,
+  rollingBack,
+  onSelect,
+  onOpenLogs,
+}: {
+  app: AppDetail
+  onRollback: (release: AppRelease) => void
+  rollingBack: string | null
+  onSelect: (n: number | null) => void
+  onOpenLogs: (n: number) => void
+}) {
+  const [filter, setFilter] = useState<'all' | 'live' | 'failed'>('all')
+  const [search, setSearch] = useState('')
   const rows = app.releases.filter((release) => {
     if (filter === 'live' && release.status !== 'live') return false
     if (filter === 'failed' && release.status !== 'failed') return false
