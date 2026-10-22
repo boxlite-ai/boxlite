@@ -55,7 +55,7 @@ create_remote() {
 }
 
 nested_oid="$(create_remote untrusted nested)"
-libkrun_oid="$(create_remote boxlite-ai libkrun "$nested_oid")"
+libkrun_oid="$(create_remote lfld287 libkrun "$nested_oid")"
 libkrunfw_oid="$(create_remote boxlite-ai libkrunfw)"
 e2fsprogs_oid="$(create_remote tytso e2fsprogs)"
 bubblewrap_oid="$(create_remote containers bubblewrap)"
@@ -65,6 +65,7 @@ mkdir -p "$fixture"
 git -C "$fixture" init -q -b main
 git -C "$fixture" config user.name "BoxLite Setup Test"
 git -C "$fixture" config user.email "setup-test@boxlite.invalid"
+git config -f "$scratch/gitconfig" "url.file://$scratch/remotes/lfld287/.insteadOf" "https://github.com/lfld287/"
 git config -f "$scratch/gitconfig" "url.file://$scratch/remotes/boxlite-ai/.insteadOf" "https://github.com/boxlite-ai/"
 git config -f "$scratch/gitconfig" "url.file://$scratch/remotes/tytso/.insteadOf" "https://github.com/tytso/"
 git config -f "$scratch/gitconfig" "url.file://$scratch/remotes/containers/.insteadOf" "https://github.com/containers/"

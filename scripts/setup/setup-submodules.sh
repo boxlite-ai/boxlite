@@ -49,7 +49,7 @@ validate_submodules() {
         "$repo_root" \
         "src/deps/libkrun-sys/vendor/libkrun" \
         "src/deps/libkrun-sys/vendor/libkrun" \
-        "https://github.com/boxlite-ai/libkrun.git"
+        "https://github.com/lfld287/libkrun.git"
     validate_submodule \
         "$repo_root" \
         "src/deps/libkrun-sys/vendor/libkrunfw" \
