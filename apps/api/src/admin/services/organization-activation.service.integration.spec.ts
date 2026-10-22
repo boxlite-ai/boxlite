@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common'
 import { randomUUID } from 'node:crypto'
-import { DataSource, MigrationInterface } from 'typeorm'
+import { DataSource } from 'typeorm'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
 import { Box } from '../../box/entities/box.entity'
 import { BoxLastActivity } from '../../box/entities/box-last-activity.entity'
@@ -8,7 +8,6 @@ import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BoxState } from '../../box/enums/box-state.enum'
 import { BoxRepository } from '../../box/repositories/box.repository'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
-import { DropOrganizationActivationTriggers1792510000000 } from '../../migrations/post-deploy/1792510000000-drop-organization-activation-triggers-migration'
 import { AddOrganizationActivationFacts1792490000000 } from '../../migrations/pre-deploy/1792490000000-add-organization-activation-facts-migration'
 import { Organization } from '../../organization/entities/organization.entity'
 import { OrganizationInvitation } from '../../organization/entities/organization-invitation.entity'
@@ -32,19 +31,18 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
     password: process.env.DB_PASSWORD,
   }
   const facts = new AddOrganizationActivationFacts1792490000000()
-  const dropTriggers = new DropOrganizationActivationTriggers1792510000000()
   let dataSource: DataSource
   let boxes: BoxRepository
   let organizations: OrganizationService
   let service: AdminOrganizationActivationService
   let ownsDatabase = false
 
-  const migrate = async (migration: MigrationInterface, direction: 'up' | 'down') => {
+  const migrate = async (direction: 'up' | 'down') => {
     const runner = dataSource.createQueryRunner()
     await runner.connect()
     await runner.startTransaction()
     try {
-      await migration[direction](runner)
+      await facts[direction](runner)
       await runner.commitTransaction()
     } catch (error) {
       await runner.rollbackTransaction()
@@ -53,20 +51,6 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
       await runner.release()
     }
   }
-  const install = async () => {
-    await migrate(facts, 'up')
-    await migrate(dropTriggers, 'up')
-  }
-  const uninstall = async () => {
-    await migrate(dropTriggers, 'down')
-    await migrate(facts, 'down')
-  }
-  const triggers = async () =>
-    (
-      await dataSource.query(
-        `SELECT tgname FROM pg_trigger WHERE tgname LIKE 'organization_activation_%' ORDER BY tgname`,
-      )
-    ).map((row: { tgname: string }) => row.tgname)
   const organization = async () =>
     (await organizations.create({ name: 'Lifecycle fixture' }, `creator-${randomUUID()}`, false, true)).id
   const legacyOrganization = async (manager = dataSource.manager) => {
@@ -117,7 +101,7 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
       entitySkipConstructor: true,
       synchronize: true,
     }).initialize()
-    await install()
+    await migrate('up')
     boxes = new BoxRepository(
       dataSource,
       { emit: jest.fn() } as never,
@@ -322,39 +306,31 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
     expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: at(restarted) })
   })
 
-  it('removes the triggers, reinstalls them on revert and stops recording writes that bypass the repository', async () => {
-    expect(await triggers()).toEqual([])
+  it('installs no triggers, so writes that bypass the application are not recorded', async () => {
+    expect(
+      await dataSource.query(
+        `SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgrelid IN ('box'::regclass, 'organization'::regclass)`,
+      ),
+    ).toEqual([])
     const id = await organization()
     const boxId = await box(id, earlier)
     await dataSource.query(`UPDATE box SET state = 'started' WHERE id = $1`, [boxId])
-    expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: null })
-
-    await migrate(dropTriggers, 'down')
-    try {
-      expect(await triggers()).toEqual(['organization_activation_box_write', 'organization_activation_insert'])
-      const legacy = await legacyOrganization()
-      expect(await service.get(legacy)).toMatchObject({ boxHistoryComplete: true })
-      await dataSource.query(`UPDATE box SET state = 'stopped' WHERE id = $1`, [boxId])
-      await dataSource.query(`UPDATE box SET state = 'started' WHERE id = $1`, [boxId])
-      expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: expect.any(String) })
-      const overlapping = await organization()
-      expect(await service.get(overlapping)).toMatchObject({ boxHistoryComplete: true })
-    } finally {
-      await migrate(dropTriggers, 'up')
-    }
-    expect(await triggers()).toEqual([])
+    expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: earlier, lastBoxModifiedAt: null })
+    const legacy = await legacyOrganization()
+    expect(await factRows(legacy)).toEqual([])
+    expect(await service.get(legacy)).toMatchObject({ boxHistoryComplete: false })
   })
 
   it('backfills creation maxima only and marks preexisting or missing history incomplete', async () => {
     // Without the facts table, the repository's follow-up updates fail and only log.
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
-    await uninstall()
+    await migrate('down')
     const older = await legacyOrganization()
     const unknown = await legacyOrganization()
     await box(older, earlier)
     const retained = await box(older, later)
     await transition(retained, BoxState.STARTED)
-    await install()
+    await migrate('up')
     expect(await service.get(older)).toMatchObject({
       lastBoxCreatedAt: later,
       lastBoxModifiedAt: null,
@@ -375,8 +351,8 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
     })
   })
 
-  it('covers an old application insert waiting for the pre-deploy installation to commit', async () => {
-    await uninstall()
+  it('reads an organization the previous revision inserts during installation as incomplete', async () => {
+    await migrate('down')
     const installer = dataSource.createQueryRunner()
     const writer = dataSource.createQueryRunner()
     await installer.connect()
@@ -393,13 +369,13 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
       }, 'The organization insert did not wait for the migration')
       await installer.commitTransaction()
       const id = await pending
-      expect(await service.get(id)).toMatchObject({ boxHistoryComplete: true })
+      expect(await factRows(id)).toEqual([])
+      expect(await service.get(id)).toMatchObject({ boxHistoryComplete: false })
     } finally {
       if (installer.isTransactionActive) await installer.rollbackTransaction()
       if (pending) await pending.catch(() => undefined)
       await installer.release()
       await writer.release()
-      await migrate(dropTriggers, 'up')
     }
   })
 })

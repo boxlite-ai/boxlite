@@ -14,9 +14,10 @@ itself, optimistically, without a transactional guarantee.
 
 Decision:
 
-- A new post-deploy migration drops both activation triggers and functions. The
-  applied pre-deploy migration keeps its SQL; it only exports the trigger
-  statements so the new `down` can reinstall them.
+- The pre-deploy migration only creates `organization_activation_facts` and
+  backfills it; it installs no triggers, and no later migration removes any. An
+  environment that applied the earlier, unreleased revision drops its two
+  activation triggers and functions manually.
 - After `BoxRepository.insert`, `update` or `updateWhere` commits, the repository
   compares the previous and committed Box and runs one autocommit `UPDATE` that
   uses `GREATEST` and matches only when a value advances.
@@ -49,7 +50,7 @@ unless deletion was requested, and both cleanup crons delete only such Boxes
 | Concurrent or late updates | Read Committed rechecks `WHERE` on the newest row; times never regress. |
 | Update fails, or the process exits after commit | That advance is lost and logged; the Box result stands. |
 | Organization deleted | The `UPDATE` matches nothing; facts are not recreated. |
-| Raw SQL, or old instances after trigger removal | Not recorded. |
+| Raw SQL, or instances on the previous revision | Not recorded; organizations they create get no row and stay incomplete. |
 
 There is no retry, outbox or backlog. A lost advance is repaired only by a later
 event of the same kind for that organization. `boxHistoryComplete` now means
@@ -74,14 +75,14 @@ Rejected alternatives:
 
 Rollout and rollback:
 
-- An environment that already ran the pre-deploy migration keeps its triggers
-  until the post-deploy migration. Meanwhile triggers and new instances both
-  update the row; repeated maxima are idempotent.
-- Startup runs pre- and post-deploy migrations together when migrations are enabled
-  (`apps/api/src/app.module.ts`). Dropping the triggers waits at most five seconds
-  for its table locks.
-- Before rolling the API back, revert the post-deploy migration; `down` reinstalls
-  the triggers that the previous revision relies on.
+- The migration creates the table and backfills existing organizations in one
+  transaction. The foreign key takes `SHARE ROW EXCLUSIVE` on `organization`, so
+  organization writes wait until the backfill commits; the lock wait is capped
+  at five seconds and each statement at sixty.
+- During a rolling deploy, instances on the previous revision write no facts:
+  their Box events are lost. Organizations they create get no row, so their later
+  events are never recorded either, and they read as incomplete.
+- Rolling the API back leaves the table unused; reverting the migration drops it.
 
 Validation, on real PostgreSQL:
 
@@ -92,17 +93,17 @@ Validation, on real PostgreSQL:
 - [x] A failed update keeps the Box result and logs; the next start recovers.
 - [x] Box deletion keeps facts; organization deletion is not undone; the event
   table above holds.
-- [x] Upgrade from the pre-deploy schema, trigger removal, `down` reinstall and reapply.
+- [x] The migration installs no triggers; raw SQL writes and organizations the
+  previous revision inserts during installation stay unrecorded or incomplete.
 
-With every production file reverted and the post-deploy migration replaced by a
-test-only no-op, the lock test failed with "The Box start did not commit while
-the facts row was locked".
+With every non-test file restored to the trigger revision, the lock test failed
+with "The Box start did not commit while the facts row was locked".
 
-Nine other cases failed as well. Six compare times,
-and the trigger records statement time rather than the write time. The
-delayed-update case timed out, the failed-update case failed the Box write itself,
-and the migration case still found both triggers. Restoring the change passed all
-13 lifecycle cases and all 1,798 API tests on PostgreSQL 17.11 and Redis.
+Nine other cases failed as well. Five compare times, and the trigger records
+statement time rather than the write time. The delayed-update case timed out, and
+the failed-update case failed the Box write itself. The two migration cases found
+the triggers and a trigger-created row. Restoring the change passed all 13
+lifecycle cases and all 1,828 API tests on PostgreSQL 17.11 and Redis.
 
 That full run also exposed an activity calculation that threw after a committed
 warm claim, failing an existing creation-admission test. It now runs inside the
@@ -135,7 +136,7 @@ keep the ordinary transactional revert default for all other migrations.
 Use `each` for CLI, application startup and the integration data source. Only
 the usage-index migration opts out; create/drop both indexes concurrently,
 preserve valid completed indexes on retry, and remove invalid leftovers before
-rebuilding. The activation migration retains its atomic triggers and backfill.
+rebuilding. The activation migration keeps its table creation and backfill atomic.
 Reject ordinary index builds because they block writes; reject globally disabling
 transactions because the activation migration requires one. No API changes.
 
@@ -188,7 +189,7 @@ usage-period start does not represent it. Label edits, stop, retries, deletion c
 after acceptance, and delayed physical cleanup must not advance the maximum.
 
 Reuse the pending facts-table migration; the optimistic follow-up above replaced
-its Box triggers with an application update after commit.
+its unreleased Box triggers with an application update after commit.
 
 Store
 only organization maxima, independent of Box retention; no per-Box event ledger,
@@ -293,7 +294,7 @@ The source at `72f56d099` provides the following boundaries:
   physically removed (`1351–1382`), so counting current Boxes loses history.
 
 [PostgreSQL triggers](https://www.postgresql.org/docs/current/trigger-definition.html)
-run in the originating transaction, so the first revision covered raw writes and
+run in the originating transaction, so an unreleased revision covered raw writes and
 old instances, but held the facts row lock until every Box commit. The optimistic
 follow-up accepts application-only, best-effort coverage instead. A separate table
 avoids altering existing responses that serialize organizations.
@@ -302,15 +303,12 @@ avoids altering existing responses that serialize organizations.
 
 An additive, transactional pre-deploy migration creates `organization_activation_facts`
 and backfills the maximum retained Box creation time. Organizations already present
-have incomplete lifecycle history. It also installs interim triggers so that instances
-running the previous revision keep recording until the post-deploy migration drops them.
-The table references organizations with cascade deletion, but never references Boxes.
+have incomplete lifecycle history. The migration installs no triggers. The table
+references organizations with cascade deletion, but never references Boxes.
 
-Trigger installation locks source tables against concurrent writers until commit.
-No API instance can commit an unobserved organization/Box write between
-installation and backfill. Migration lock acquisition is limited to five seconds
-and individual statements to sixty seconds; contention or excessive data causes
-rollback, not partial installation. Production data volume has not been measured.
+Migration lock acquisition is limited to five seconds and individual statements to
+sixty seconds; contention or excessive data causes rollback, not partial
+installation. Production data volume has not been measured.
 
 Organization creation inserts a complete facts row in its own transaction. After
 `BoxRepository` commits an insert or update, it applies the event table in the

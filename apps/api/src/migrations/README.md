@@ -202,7 +202,7 @@ CLI and application startup run pending migrations in `each` mode: each ordinary
 migration has its own transaction, while an explicit `transaction = false` allows
 operations such as concurrent index builds. A later failure leaves earlier completed
 migrations recorded; fix the failure and rerun to resume. The activation facts migration
-still creates its triggers and backfill atomically.
+still creates its table and backfill atomically.
 
 ```bash
 npm run migration:revert

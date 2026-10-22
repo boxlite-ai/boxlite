@@ -243,14 +243,13 @@ and for organizations receiving transferred Boxes. Null with incomplete history
 means unknown. For organizations created later, `true` means tracking began at
 creation, not that every best-effort update landed.
 
-The pre-deploy migration creates the facts table, installs interim triggers and
-backfills retained Box creation evidence. It requires a transaction, limits lock
+The pre-deploy migration creates the facts table and backfills retained Box
+creation evidence; it installs no triggers. It requires a transaction, limits lock
 waits to five seconds and individual statements to sixty seconds, and rolls back
-if either limit is exceeded. The post-deploy migration drops those triggers within
-the same five-second lock limit; while it waits, Box reads and writes queue behind
-its exclusive lock, and a timeout fails a startup that runs migrations. Revert it
-before rolling the API back to a
-trigger-reliant revision; its `down` reinstalls them. Production migration
-duration is unmeasured. Metadata validation rules and administrator authorization
+if either limit is exceeded; organization writes wait until the backfill commits.
+During a rolling deploy, instances on the previous revision write no facts.
+Organizations they create get no row, so even later events are not recorded and
+they read as incomplete.
+Production migration duration is unmeasured. Metadata validation rules and administrator authorization
 apply to this selection. See the [activation design](../../docs/contributing/investigations/organization-activation-facts.md#review-follow-up-optimistic-updates-outside-box-transactions)
 for the source evidence, concurrency model and verification boundaries.

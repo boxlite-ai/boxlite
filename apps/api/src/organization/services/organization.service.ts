@@ -522,11 +522,9 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
 
     await entityManager.transaction(async (em) => {
       organization = await em.save(organization)
-      // A new organization has no Box history to miss. The conflict clause covers
-      // the insert trigger that remains until the post-deploy migration drops it.
+      // A new organization has no Box history to miss.
       await em.query(
-        `INSERT INTO organization_activation_facts ("organizationId", "boxHistoryComplete")
-         VALUES ($1, true) ON CONFLICT ("organizationId") DO NOTHING`,
+        `INSERT INTO organization_activation_facts ("organizationId", "boxHistoryComplete") VALUES ($1, true)`,
         [organization.id],
       )
       await this.eventEmitter.emitAsync(OrganizationEvents.CREATED, organization)
