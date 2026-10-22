@@ -108,6 +108,20 @@ impl crate::Vcpu for KvmVcpu {
     }
 }
 
+impl crate::X86Vcpu for KvmVcpu {
+    fn set_cpu_features(
+        &mut self,
+        cpuid: &[crate::X86CpuidEntry],
+        msrs: &[crate::X86Msr],
+    ) -> Result<()> {
+        Self::set_cpu_features(self, cpuid, msrs)
+    }
+
+    fn set_boot_registers(&mut self, state: &crate::X86BootRegisters) -> Result<()> {
+        Self::set_boot_registers(self, state)
+    }
+}
+
 #[derive(Debug, Default)]
 struct PendingIo(bool);
 

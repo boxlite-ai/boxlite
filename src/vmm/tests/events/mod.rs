@@ -101,3 +101,20 @@ fn a_wait_finds_an_event_whose_wake_up_was_lost() {
         .expect("the wait slept through an event whose wake-up was lost");
     assert!(matches!(event, Ok(Some(Event::GuestReset))), "{event:?}");
 }
+
+/// A send latches the stop for every sender before it returns, so the vCPU
+/// that sent never re-enters the guest while the loop is still asleep.
+#[test]
+fn a_send_latches_the_stop_for_every_sender_before_it_returns() {
+    let events = EventLoop::new().unwrap();
+    let (device, vcpu) = (events.sender(), events.sender());
+    assert!(!vcpu.is_stopping());
+
+    device.send(Event::GuestReset);
+
+    assert!(vcpu.is_stopping());
+    drop(events);
+    // With the loop gone the event is dropped, but the latch still holds.
+    device.send(Event::GuestShutdown);
+    assert!(vcpu.is_stopping());
+}

@@ -88,7 +88,7 @@ need no hypervisor.
 | Map guest memory | `Vm::map_memory` (`unsafe`) | `hv_vm_map` | `KVM_SET_USER_MEMORY_REGION`; the backend picks the slot | `WHvMapGpaRange` |
 | Unmap guest memory | `Vm::unmap_memory` | `hv_vm_unmap` | the same slot, set to size 0 | `WHvUnmapGpaRange` |
 | Create a vCPU | `Vm::create_vcpu`, on the thread that will run it | `hv_vcpu_create`, which also returns the `hv_vcpu_exit_t` the vCPU reports its exits in | `KVM_CREATE_VCPU`, then `mmap` of its `kvm_run`; `KVM_ARM_VCPU_INIT` on arm64, with secondaries powered off (`KVM_ARM_VCPU_POWER_OFF`) | `WHvCreateVirtualProcessor` |
-| Set boot registers | M1 adds it | `hv_vcpu_set_reg`, `hv_vcpu_set_sys_reg` | `KVM_SET_ONE_REG` on arm64; on x86_64 `KVM_SET_CPUID2`, then `KVM_SET_MSRS`, `KVM_SET_REGS`, `KVM_SET_FPU` and `KVM_SET_SREGS`, in Firecracker's order ([Firecracker `src/vmm/src/arch/x86_64/vcpu.rs:222–301`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/x86_64/vcpu.rs#L222-L301)); unlike Firecracker, the VMM leaves the local APIC LINT pins in their KVM reset state, ExtINT on the boot vCPU LINT0, and Linux programs LINT1 itself | `WHvSetVirtualProcessorRegisters` |
+| Set boot registers | x86_64: `X86Vcpu::set_cpu_features`, then `X86Vcpu::set_boot_registers`; arm64 adds its own extension trait | `hv_vcpu_set_reg`, `hv_vcpu_set_sys_reg` | `KVM_SET_ONE_REG` on arm64; on x86_64 `KVM_SET_CPUID2`, then `KVM_SET_MSRS`, `KVM_SET_REGS`, `KVM_SET_FPU` and `KVM_SET_SREGS`, in Firecracker's order ([Firecracker `src/vmm/src/arch/x86_64/vcpu.rs:222–301`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/x86_64/vcpu.rs#L222-L301)); unlike Firecracker, the VMM leaves the local APIC LINT pins in their KVM reset state, ExtINT on the boot vCPU LINT0, and Linux programs LINT1 itself | `WHvSetVirtualProcessorRegisters` |
 | Run to the next exit | `Vcpu::run` → `VcpuExit` | `hv_vcpu_run` | `KVM_RUN` | `WHvRunVirtualProcessor` |
 | Complete pending I/O before stop or state capture | `Vcpu::complete_pending_io`; no further guest instruction executes | write the read result and advance PC without `hv_vcpu_run` | `KVM_RUN` with `immediate_exit` set; KVM completes the access before checking it | finish emulation and update registers/RIP without `WHvRunVirtualProcessor` |
 | Read the exit | the backend decodes it into a `VcpuExit` | `hv_vcpu_exit_t`: the reason and, for an exception, the syndrome and guest address | `kvm_run.exit_reason` and its union | the `WHV_RUN_VP_EXIT_CONTEXT` that `WHvRunVirtualProcessor` fills |
@@ -155,10 +155,14 @@ HVF and KVM keep these rules; [M10](#room-for-later-milestones) covers WHP:
     and hyperlight's
     [`Unknown(String)`](https://github.com/hyperlight-dev/hyperlight/blob/398e7957c194ef6227d79fa729fd8dd43e5dc117/src/hyperlight_host/src/hypervisor/virtual_machine/mod.rs#L155).
 
-The traits do not yet cover vCPU registers. M1 adds the register access that
-boot needs: PC, X0, PSTATE and MPIDR_EL1 on arm64, where MPIDR_EL1 matches each
-vCPU to its GIC redistributor; registers, segments, CPUID and MSRs on x86_64.
-M8 extends it to saving and restoring full vCPU state.
+The register access that boot needs lives in per-architecture extension
+traits, as crosvm's `VcpuX86_64: Vcpu` does, so neither architecture's types
+leak into the other. On x86_64, `X86Vm::supported_cpuid` returns the host's
+CPUID ceiling, and `X86Vcpu` sets CPUID and MSRs (`set_cpu_features`), then
+registers and segments (`set_boot_registers`, on the boot vCPU only). arm64
+adds its trait with its boot path: PC, X0, PSTATE and MPIDR_EL1, where
+MPIDR_EL1 matches each vCPU to its GIC redistributor. M8 extends them to
+saving and restoring full vCPU state.
 
 The names come from a survey of nine projects: crosvm, cloud-hypervisor,
 Firecracker, libkrun, hyperlight, alioth, applevisor, kvm-ioctls and QEMU
@@ -366,8 +370,9 @@ today.
 ### Threads
 
 - **vCPU threads.**
-  - `run()` spawns one per vCPU, named `vcpuN`. Each creates its vCPU and waits
-    until every vCPU exists.
+  - `run()` spawns one per vCPU, named `vcpuN`. Each creates and configures its
+    vCPU and waits at a start gate until every vCPU is configured; a thread
+    that fails to start aborts the gate.
   - It then loops: run, dispatch the exit to a bus, run again.
   - On `Halted`, which in practice only HVF returns, it parks until the guest timer's
     deadline, an interrupt, or a stop.
@@ -389,17 +394,19 @@ today.
   - The poller is `mio`, which uses epoll on Linux and kqueue on macOS and is
     already in `Cargo.lock` through tokio. rust-vmm's event-manager and crosvm's
     `WaitContext` are epoll-only.
-- **Stopping.** The first terminal event decides the outcome. The `run()` thread
-  then:
-  1. sets the stop flag;
-  2. kicks and unparks every vCPU;
-  3. joins the vCPU threads;
-  4. stops and joins the device workers;
-  5. returns.
+- **Stopping.** The first terminal event decides the outcome. Sending any
+  event sets the stop flag before it queues, so the vCPU that sent it, such as
+  the one that reset the i8042, never enters the guest again; every vCPU
+  checks the flag before each entry. The `run()` thread then:
+  1. kicks and unparks every vCPU;
+  2. joins the vCPU threads;
+  3. stops and joins the device workers;
+  4. returns.
 
 ## VM lifecycle and errors
 
-M1 implements this API in `boxlite-vmm`, and the M2 engine adapter calls it from
+M1 implements this public API in `boxlite-vmm` on Linux x86_64, and the M2
+engine adapter calls it from
 `VmmInstance::enter`:
 
 ```rust
@@ -408,9 +415,9 @@ let stop = vm.stop_handle();   // Clone + Send; the shim's SIGTERM path calls st
 let exit = vm.run()?;          // VmExit::GuestShutdown, GuestReset or StopRequested
 ```
 
-The current M0 skeleton keeps `Vm`, `VmExit`, `Error` and `Result`
-crate-visible. M1 exposes them together when the lifecycle is implemented;
-the M2 adapter's error mapping below describes that future public API.
+`run` returns once: a second call fails with `AlreadyRan`, since a VM never
+restarts. `Vm::new` takes no console argument yet; it comes with the M1
+devices.
 
 - **`run` reports how the VM ended, not the box's exit code.**
   - The guest agent writes the box's exit code to `exit.json` on the SHARED

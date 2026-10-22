@@ -22,17 +22,17 @@ pub(crate) const MAX_CMDLINE_BYTES: usize = 2048;
 /// The machine the VMM builds. The M2 engine adapter fills it from the
 /// runtime's `InstanceSpec`, whose `memory_mib` field shares the name.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct VmConfig {
+pub struct VmConfig {
     /// Number of vCPUs, `1..=MAX_VCPUS`.
-    pub(crate) vcpu_count: u8,
+    pub vcpu_count: u8,
     /// Guest RAM in MiB, `1..=MAX_MEMORY_MIB`.
-    pub(crate) memory_mib: u32,
+    pub memory_mib: u32,
     /// The ELF kernel image to load.
-    pub(crate) kernel: PathBuf,
+    pub kernel: PathBuf,
     /// The kernel command line: printable ASCII, under `MAX_CMDLINE_BYTES`.
-    pub(crate) cmdline: String,
+    pub cmdline: String,
     /// The uncompressed newc archive to load as the initramfs, if any.
-    pub(crate) initramfs: Option<PathBuf>,
+    pub initramfs: Option<PathBuf>,
 }
 
 impl VmConfig {

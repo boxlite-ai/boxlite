@@ -10,13 +10,30 @@ use std::{cell::Cell, error::Error as _, io};
 use boxlite_hypervisor::Error as HypervisorError;
 use vm_memory::GuestMemoryBackend;
 
-use super::Vm;
+use super::{BootRegisters, Vm};
 use crate::{
     config::{MAX_VCPUS, VmConfig},
     error::Error,
     memory::{MAX_MEMORY_MIB, RAM_START, ram_ranges},
     mock_vm::{Call, MockVm},
 };
+
+/// A VM on `host_vm` with no boot data and no devices.
+#[cfg_attr(
+    not(target_arch = "x86_64"),
+    expect(clippy::unit_arg, reason = "arm64 has no boot registers yet.")
+)]
+fn bare<H: boxlite_hypervisor::Vm>(
+    config: VmConfig,
+    host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
+) -> crate::error::Result<Vm<H>> {
+    Vm::with_backend(
+        config,
+        host_vm,
+        |_, _| Ok(BootRegisters::default()),
+        |_, _| {},
+    )
+}
 
 fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
     VmConfig {
@@ -38,7 +55,7 @@ fn invalid_configuration_fails_before_the_host_vm_exists() {
     ];
     for (config, message) in cases {
         let built = Cell::new(false);
-        let error = Vm::with_backend(config.clone(), || {
+        let error = bare(config.clone(), || {
             built.set(true);
             Ok(MockVm::new())
         })
@@ -58,7 +75,7 @@ fn invalid_configuration_fails_before_the_host_vm_exists() {
 
 #[test]
 fn maps_the_ram_layout_with_its_host_address_and_unmaps_on_drop() {
-    let vm = Vm::with_backend(config(1, 16), || Ok(MockVm::new())).unwrap();
+    let vm = bare(config(1, 16), || Ok(MockVm::new())).unwrap();
     let log = vm.backend.log();
     let [(start, size)] = ram_ranges(16)[..] else {
         panic!("one region")
@@ -86,7 +103,7 @@ fn a_rejected_mapping_returns_the_hypervisor_error_and_keeps_no_registration() {
     let backend = MockVm::failing_at(&[0]);
     let log = backend.log();
 
-    let error = Vm::with_backend(config(1, 16), || Ok(backend))
+    let error = bare(config(1, 16), || Ok(backend))
         .err()
         .expect("mapping fails");
 
@@ -106,7 +123,7 @@ fn a_rejected_mapping_returns_the_hypervisor_error_and_keeps_no_registration() {
 
 #[test]
 fn a_failing_host_vm_keeps_its_cause() {
-    let error = Vm::<MockVm>::with_backend(config(1, 16), || {
+    let error = bare::<MockVm>(config(1, 16), || {
         Err(HypervisorError::CreateVm(io::Error::from(
             io::ErrorKind::Unsupported,
         )))
@@ -139,7 +156,7 @@ fn a_kvm_guest_reads_the_last_byte_of_the_mapped_layout() {
 
     use crate::memory::MMIO_HOLE_START;
 
-    let vm = Vm::new(config(1, MAX_MEMORY_MIB)).unwrap();
+    let vm = bare(config(1, MAX_MEMORY_MIB), boxlite_hypervisor::KvmVm::new).unwrap();
     let memory = Arc::clone(vm.ram.memory());
     let last = GuestAddress(MMIO_HOLE_START - 1);
     // mov al,[0xBFFFFFFF]; mov dx,0x3f8; out dx,al; hlt
@@ -278,7 +295,7 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
     ]);
 
     // Two vCPUs so the topology has a count to check; only vCPU 0 runs.
-    let vm = Vm::new(config(2, MAX_MEMORY_MIB)).unwrap();
+    let vm = bare(config(2, MAX_MEMORY_MIB), boxlite_hypervisor::KvmVm::new).unwrap();
     let memory = Arc::clone(vm.ram.memory());
     memory.write_slice(&program, GuestAddress(ENTRY)).unwrap();
     memory
@@ -322,4 +339,202 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
     assert_eq!(msrs, [0x1801, 0x806]);
     // ud2 without an IDT escalates to a triple fault.
     assert!(matches!(vcpu.run().unwrap(), VcpuExit::Reset));
+}
+
+/// `Vm::run` on the mock backend, whose scripted vCPUs exit as listed and
+/// then wait for a kick.
+#[cfg(target_arch = "x86_64")]
+mod lifecycle {
+    use std::{
+        sync::{Arc, Mutex, mpsc},
+        thread,
+        time::Duration,
+    };
+
+    use super::{config, *};
+    use crate::{
+        VmExit,
+        bus::{BusDevice, BusRange},
+        mock_vm::Step,
+    };
+
+    /// Runs `vm` on another thread and fails the test instead of hanging when
+    /// the run never returns.
+    fn run(mut vm: Vm<MockVm>) -> (crate::Result<VmExit>, Vm<MockVm>) {
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || {
+            let exit = vm.run();
+            let _ = done.send((exit, vm));
+        });
+        finished
+            .recv_timeout(Duration::from_secs(10))
+            .expect("Vm::run did not return")
+    }
+
+    fn mock(vcpu_count: u8, backend: MockVm) -> Vm<MockVm> {
+        bare(config(vcpu_count, 16), || Ok(backend)).unwrap()
+    }
+
+    #[test]
+    fn the_first_guest_exit_decides_the_outcome_and_stops_every_vcpu() {
+        for (step, expected) in [
+            (Step::Shutdown, VmExit::GuestShutdown),
+            (Step::Reset, VmExit::GuestReset),
+        ] {
+            // vCPU 1 never exits on its own, so only a kick ends it.
+            let (exit, vm) = run(mock(2, MockVm::with_scripts(vec![vec![step]])));
+            assert_eq!(exit.unwrap(), expected);
+            let log = vm.backend.log();
+            drop(vm);
+            let calls = log.lock().unwrap().clone();
+            let first_unmap = calls
+                .iter()
+                .position(|call| matches!(call, Call::Unmap { .. }))
+                .unwrap();
+            let drops: Vec<_> = calls
+                .iter()
+                .enumerate()
+                .filter(|(_, call)| matches!(call, Call::DropVcpu { .. }))
+                .map(|(index, _)| index)
+                .collect();
+            assert_eq!(drops.len(), 2, "{calls:?}");
+            assert!(drops.iter().all(|&index| index < first_unmap), "{calls:?}");
+        }
+    }
+
+    #[test]
+    fn only_vcpu_0_gets_the_boot_registers() {
+        let (exit, vm) = run(mock(3, MockVm::with_scripts(vec![vec![Step::Shutdown]])));
+        exit.unwrap();
+
+        let calls = vm.backend.calls();
+        let boot: Vec<_> = calls
+            .iter()
+            .filter(|call| matches!(call, Call::SetBootRegisters { .. }))
+            .collect();
+        let features = calls
+            .iter()
+            .filter(|call| matches!(call, Call::SetCpuFeatures { .. }))
+            .count();
+        assert_eq!(boot, [&Call::SetBootRegisters { id: 0 }]);
+        assert_eq!(features, 3);
+    }
+
+    #[test]
+    fn a_failed_run_keeps_the_hypervisor_cause() {
+        let (exit, _) = run(mock(2, MockVm::with_scripts(vec![vec![Step::Fail]])));
+
+        let error = exit.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Hypervisor(HypervisorError::RunVcpu { id: 0, .. })
+            ),
+            "{error:?}"
+        );
+        let cause = error
+            .source()
+            .and_then(|hypervisor| hypervisor.source())
+            .and_then(|cause| cause.downcast_ref::<io::Error>())
+            .expect("host cause");
+        assert_eq!(cause.kind(), io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn a_halted_vcpu_is_unexpected_with_an_in_kernel_irqchip() {
+        let (exit, _) = run(mock(1, MockVm::with_scripts(vec![vec![Step::Halted]])));
+
+        let error = exit.unwrap_err();
+        assert!(
+            matches!(&error, Error::UnexpectedExit { vcpu: 0, exit } if exit == "Halted"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_stop_from_another_thread_ends_the_run() {
+        let vm = mock(2, MockVm::new());
+        let stop = vm.stop_handle();
+        let stopping = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            stop.stop();
+        });
+
+        let (exit, _) = run(vm);
+
+        assert_eq!(exit.unwrap(), VmExit::StopRequested);
+        stopping.join().unwrap();
+    }
+
+    #[test]
+    fn a_stop_before_the_run_ends_it_at_once() {
+        let vm = mock(2, MockVm::new());
+        vm.stop_handle().stop();
+
+        let (exit, _) = run(vm);
+
+        assert_eq!(exit.unwrap(), VmExit::StopRequested);
+    }
+
+    #[test]
+    fn a_vm_runs_once() {
+        let (exit, mut vm) = run(mock(1, MockVm::with_scripts(vec![vec![Step::Reset]])));
+        exit.unwrap();
+
+        assert!(matches!(vm.run(), Err(Error::AlreadyRan)));
+    }
+
+    struct Panics;
+
+    impl BusDevice for Panics {
+        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+
+        fn write(&mut self, _offset: u64, _data: &[u8]) {
+            panic!("a device bug");
+        }
+    }
+
+    #[test]
+    fn a_panicking_device_ends_the_vm_with_an_error() {
+        const DEVICE: u64 = 0xd000_0000;
+        let backend = MockVm::with_scripts(vec![vec![Step::Write {
+            addr: DEVICE,
+            byte: 1,
+        }]]);
+        let vm = Vm::with_backend(
+            config(2, 16),
+            || Ok(backend),
+            |_, _| Ok(BootRegisters::default()),
+            |buses, _| {
+                let device: Arc<Mutex<dyn BusDevice>> = Arc::new(Mutex::new(Panics));
+                let range = BusRange::new(DEVICE, 1).unwrap();
+                buses
+                    .mmio
+                    .insert(range, "panics", Some((device, 0)))
+                    .unwrap();
+            },
+        )
+        .unwrap();
+
+        let (exit, _) = run(vm);
+
+        assert!(
+            matches!(exit, Err(Error::VcpuPanicked { vcpu: 0 })),
+            "{exit:?}"
+        );
+    }
+
+    #[test]
+    fn a_vcpu_that_fails_setup_ends_the_vm_without_a_deadlock() {
+        let (exit, _) = run(mock(3, MockVm::failing_setup_of(1)));
+
+        let error = exit.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                Error::Hypervisor(HypervisorError::ConfigureVcpu { id: 1, .. })
+            ),
+            "{error:?}"
+        );
+    }
 }

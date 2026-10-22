@@ -176,119 +176,158 @@ fn linux_config(vcpu_count: u8, initramfs: Option<PathBuf>) -> VmConfig {
     config
 }
 
-/// Boots `config` on KVM, one thread per vCPU, until the guest pulses the
-/// i8042 reset that `panic=-1 reboot=k` turn every panic into. Every vCPU
-/// exists before any runs, and only vCPU 0 gets the entry registers; the others
-/// wait for the INIT and SIPI Linux sends them. A serial stub collects the
-/// earlycon log from every vCPU; the zero page is read before they first run.
-/// The reset, the first failure or a watchdog deadline kicks every vCPU.
+/// Stub devices for the real-kernel boots. COM1 collects the earlycon log
+/// and reports an idle line; the i8042 turns the reset pulse that
+/// `panic=-1 reboot=k` make of every panic into `GuestReset`; the CMOS clock
+/// reads zero. Every other port reads 0xFF, as the buses make it.
+mod stubs {
+    use std::sync::{Arc, Mutex};
+
+    use crate::{
+        bus::{BusDevice, BusRange, Buses},
+        events::{Event, EventSender},
+    };
+
+    /// Transmitter holding register and shifter empty, which earlycon polls for.
+    const LSR_IDLE: u8 = 0x60;
+
+    struct Com1(Arc<Mutex<Vec<u8>>>);
+
+    impl BusDevice for Com1 {
+        fn read(&mut self, offset: u64, data: &mut [u8]) {
+            if offset == 5 {
+                data[0] = LSR_IDLE;
+            }
+        }
+
+        fn write(&mut self, offset: u64, data: &[u8]) {
+            if offset == 0 {
+                self.0.lock().unwrap().extend_from_slice(data);
+            }
+        }
+    }
+
+    struct I8042(EventSender);
+
+    impl BusDevice for I8042 {
+        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+
+        fn write(&mut self, offset: u64, data: &[u8]) {
+            // Port 0x64, the command register.
+            if offset == 4 && data == [0xfe] {
+                self.0.send(Event::GuestReset);
+            }
+        }
+    }
+
+    struct Zeros;
+
+    impl BusDevice for Zeros {
+        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+
+        fn write(&mut self, _offset: u64, _data: &[u8]) {}
+    }
+
+    /// Puts the stubs on `buses` and returns the log COM1 fills.
+    pub(super) fn add(buses: &mut Buses, events: &EventSender) -> Arc<Mutex<Vec<u8>>> {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        type Stub = (u64, u64, &'static str, Arc<Mutex<dyn BusDevice>>);
+        let devices: [Stub; 3] = [
+            (
+                0x3f8,
+                8,
+                "com1",
+                Arc::new(Mutex::new(Com1(Arc::clone(&log)))),
+            ),
+            (
+                0x60,
+                5,
+                "i8042",
+                Arc::new(Mutex::new(I8042(events.clone()))),
+            ),
+            (0x70, 2, "cmos", Arc::new(Mutex::new(Zeros))),
+        ];
+        for (base, len, owner, device) in devices {
+            let range = BusRange::new(base, len).unwrap();
+            buses.pio.insert(range, owner, Some((device, 0))).unwrap();
+        }
+        log
+    }
+}
+
+/// A KVM VM booting `config` on the stubs, the earlycon log they collect, and
+/// the zero page as `prepare` wrote it.
+struct LinuxVm {
+    vm: crate::Vm<boxlite_hypervisor::KvmVm>,
+    log: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    zero_page: boot_params,
+}
+
+fn linux_vm(config: &VmConfig) -> LinuxVm {
+    let mut zero_page = None;
+    let mut log = None;
+    let vm = crate::Vm::with_backend(
+        config.clone(),
+        boxlite_hypervisor::KvmVm::new,
+        |ram, config| {
+            let setup = prepare(ram, config)?;
+            let address = GuestAddress(setup.boot_regs.rsi);
+            zero_page = Some(ram.memory().read_obj(address).unwrap());
+            Ok(setup.boot_regs)
+        },
+        |buses, events| log = Some(stubs::add(buses, events)),
+    )
+    .expect("create the KVM VM");
+    LinuxVm {
+        vm,
+        log: log.unwrap(),
+        zero_page: zero_page.unwrap(),
+    }
+}
+
+fn log_text(log: &std::sync::Mutex<Vec<u8>>) -> String {
+    String::from_utf8_lossy(&log.lock().unwrap()).into_owned()
+}
+
+/// Boots `config` through `Vm::run` until the guest pulses the i8042 reset.
+/// A watchdog stops a boot that has not reset after 30 seconds, so a failed
+/// boot reports the log so far.
 fn boot_to_reset(config: &VmConfig) -> (String, boot_params) {
     use std::{
-        sync::{Barrier, Condvar, Mutex},
+        sync::mpsc::{self, RecvTimeoutError},
         thread,
         time::{Duration, Instant},
     };
 
-    use boxlite_hypervisor::{KvmVcpuHandle, KvmVm, VcpuExit, VcpuHandle as _};
-
-    use crate::cpu_features::{BOOT_MSRS, vcpu_cpuid};
-
     const TIMEOUT: Duration = Duration::from_secs(30);
-    const COM1: u16 = 0x3f8;
-    const COM1_LSR: u16 = COM1 + 5;
-    /// Transmitter holding register and shifter empty, which earlycon polls for.
-    const LSR_IDLE: u8 = 0x60;
-    /// `reboot=k` pulses the reset line by writing 0xfe to this i8042 port.
-    const I8042_COMMAND: u16 = 0x64;
 
-    // RAM is declared before the VM and vCPUs so it outlives them during unwinding.
-    let mut ram = GuestRam::new(&ram_ranges(config.memory_mib)).unwrap();
-    let vm = KvmVm::new().expect("create KVM VM");
-    ram.map(&vm).expect("map guest RAM");
-    let setup = prepare(&ram, config).unwrap();
-    let zero_page = ram
-        .memory()
-        .read_obj(GuestAddress(setup.boot_regs.rsi))
-        .unwrap();
-
-    let count = config.vcpu_count;
-    let started = Instant::now();
-    let log = Mutex::new(Vec::new());
-    // `None` while the guest runs, then the reset or the first failure.
-    let outcome = Mutex::new(None::<Result<(), String>>);
-    let stopped = Condvar::new();
-    let kicks = Mutex::new(Vec::<KvmVcpuHandle>::new());
-    let barrier = Barrier::new(usize::from(count) + 1);
-    let stop = |result: Result<(), String>| {
-        outcome.lock().unwrap().get_or_insert(result);
-        stopped.notify_all();
-        for kick in kicks.lock().unwrap().iter() {
-            kick.kick().unwrap();
+    let LinuxVm {
+        mut vm,
+        log,
+        zero_page,
+    } = linux_vm(config);
+    let stop = vm.stop_handle();
+    let (finished, done) = mpsc::channel::<()>();
+    let watchdog = thread::spawn(move || {
+        let fired = matches!(done.recv_timeout(TIMEOUT), Err(RecvTimeoutError::Timeout));
+        if fired {
+            stop.stop();
         }
-    };
-    let is_stopped = || outcome.lock().unwrap().is_some();
-
-    thread::scope(|scope| {
-        for index in 0..count {
-            let (vm, setup, log, kicks, barrier) = (&vm, &setup, &log, &kicks, &barrier);
-            let (stop, is_stopped) = (&stop, &is_stopped);
-            scope.spawn(move || {
-                let vcpu = vm.create_vcpu(index.into()).and_then(|mut vcpu| {
-                    let cpuid = vcpu_cpuid(vm.supported_cpuid(), index, count);
-                    vcpu.set_cpu_features(&cpuid, &BOOT_MSRS)?;
-                    if index == 0 {
-                        vcpu.set_boot_registers(&setup.boot_regs)?;
-                    }
-                    Ok(vcpu)
-                });
-                match &vcpu {
-                    Ok(vcpu) => kicks.lock().unwrap().push(vcpu.handle()),
-                    Err(error) => stop(Err(format!("set up vCPU {index}: {error:?}"))),
-                }
-                barrier.wait();
-                let Ok(mut vcpu) = vcpu else { return };
-                // The stub: earlycon output on COM1, an idle line status, zero
-                // for every other read, and every other write ignored.
-                while !is_stopped() {
-                    match vcpu.run() {
-                        Ok(VcpuExit::IoOut { port: COM1, bytes }) => {
-                            log.lock().unwrap().extend_from_slice(bytes)
-                        }
-                        Ok(VcpuExit::IoOut {
-                            port: I8042_COMMAND,
-                            bytes: [0xfe],
-                        }) => stop(Ok(())),
-                        Ok(VcpuExit::IoIn { port, bytes }) => {
-                            bytes.fill(if port == COM1_LSR { LSR_IDLE } else { 0 })
-                        }
-                        Ok(VcpuExit::MmioRead { bytes, .. }) => bytes.fill(0),
-                        Ok(
-                            VcpuExit::IoOut { .. }
-                            | VcpuExit::MmioWrite { .. }
-                            | VcpuExit::Interrupted,
-                        ) => {}
-                        Ok(exit) => stop(Err(format!("vCPU {index}: {exit:?}"))),
-                        Err(error) => stop(Err(format!("vCPU {index}: {error:?}"))),
-                    }
-                }
-                vcpu.complete_pending_io().unwrap();
-            });
-        }
-        barrier.wait();
-        let running = outcome.lock().unwrap();
-        let (running, wait) = stopped
-            .wait_timeout_while(running, TIMEOUT, |outcome| outcome.is_none())
-            .unwrap();
-        drop(running);
-        if wait.timed_out() {
-            stop(Err(format!("no reset within {TIMEOUT:?}")));
-        }
+        fired
     });
-    ram.unmap(&vm).unwrap();
+    let started = Instant::now();
 
-    let log = String::from_utf8_lossy(&log.into_inner().unwrap()).into_owned();
-    if let Err(failure) = outcome.into_inner().unwrap().expect("stopped") {
-        panic!("{failure} after {:?}; log:\n{log}", started.elapsed());
+    let exit = vm.run();
+    drop(finished);
+
+    let fired = watchdog.join().unwrap();
+    let log = log_text(&log);
+    if !matches!(exit, Ok(crate::VmExit::GuestReset)) {
+        let watchdog = if fired { " (watchdog)" } else { "" };
+        panic!(
+            "{exit:?}{watchdog} after {:?}; log:\n{log}",
+            started.elapsed()
+        );
     }
     (log, zero_page)
 }
@@ -513,4 +552,46 @@ fn runs_user_code_on_every_vcpu() {
 
     let panic = "Kernel panic - not syncing: Attempted to kill init! exitcode=0x00000f00";
     assert!(log.lines().any(|line| line == panic), "{log}");
+}
+
+/// Boots the kernel named by `VMM_KERNEL` with an `/init` that sleeps forever.
+/// Once it runs, a stop from another thread must end `Vm::run` within two
+/// seconds, every vCPU thread joined.
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm and VMM_KERNEL naming an x86_64 vmlinux"]
+fn stops_a_guest_that_sleeps_forever() {
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
+
+    // pause: mov eax, 34 (pause); syscall; jmp pause
+    let init = static_program(&[0xb8, 34, 0, 0, 0, 0x0f, 0x05, 0xeb, 0xf7]);
+    let archive = newc_archive("init", &init);
+    let initramfs = TempFile::new("pause.cpio", &archive);
+    let LinuxVm { mut vm, log, .. } = linux_vm(&linux_config(1, Some(initramfs.0.clone())));
+    let stop = vm.stop_handle();
+    let watched = std::sync::Arc::clone(&log);
+    let stopper = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !log_text(&watched).contains("Run /init as init process") && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        // Let init reach its pause before the stop.
+        thread::sleep(Duration::from_millis(200));
+        let stopped = Instant::now();
+        stop.stop();
+        stopped
+    });
+
+    let exit = vm.run();
+    let returned = Instant::now();
+
+    let stopped = stopper.join().unwrap();
+    let log = log_text(&log);
+    assert!(log.contains("Run /init as init process"), "{log}");
+    assert_eq!(exit.unwrap(), crate::VmExit::StopRequested, "{log}");
+    let took = returned.duration_since(stopped);
+    assert!(took < Duration::from_secs(2), "{took:?}");
 }

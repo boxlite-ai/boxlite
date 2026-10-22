@@ -59,6 +59,11 @@ MSRs are explicit index/value writes. A short KVM write is an error identifying
 the first rejected MSR, never a successful partially configured CPU. Host feature
 discovery is a ceiling, not permission to add unsupported instructions.
 
+These three methods form the x86_64 extension traits `X86Vm`
+(`supported_cpuid`) and `X86Vcpu` (`set_cpu_features`, `set_boot_registers`),
+which `KvmVm` and `KvmVcpu` implement, so the VMM's vCPU workers and its mock
+backend use one interface. arm64 adds its own extension trait with its boot path.
+
 `KvmVcpu::handle()` can kick a worker before or during guest entry. Cloned handles
 become inert when the vCPU is dropped or its worker exits, even if safe code
 forgets the vCPU. `KvmVm::new()` reserves `SIGRTMIN + 1` on each worker, or the

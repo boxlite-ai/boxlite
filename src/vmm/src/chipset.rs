@@ -31,7 +31,8 @@ use crate::{
 
 /// Which address space a range lives in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BusKind {
+#[non_exhaustive]
+pub enum BusKind {
     Mmio,
     #[cfg(target_arch = "x86_64")]
     Pio,
@@ -50,7 +51,8 @@ impl fmt::Display for BusKind {
 /// A claim the builder rejected. `claimant` made the claim; `owner`, a device
 /// or a reserved window, already owns the resource.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Conflict {
+#[non_exhaustive]
+pub enum Conflict {
     /// The claimed range overlaps a range `owner` owns.
     RangeTaken {
         bus: BusKind,

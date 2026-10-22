@@ -6,21 +6,15 @@
 use std::{error, fmt, io, path::PathBuf};
 
 /// Result of a VMM operation.
-pub(crate) type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// A failure that ends the VM.
 ///
 /// The cause chain stays intact through [`error::Error::source`], so callers
 /// can tell a host that cannot run VMs from other failures.
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Only the unwired Vm::new, boot::prepare and the chipset build these."
-    )
-)]
-pub(crate) enum Error {
+#[non_exhaustive]
+pub enum Error {
     /// The vCPU count is outside `1..=config::MAX_VCPUS`.
     InvalidVcpuCount(u8),
     /// The RAM size is outside `1..=memory::MAX_MEMORY_MIB`.
@@ -37,26 +31,25 @@ pub(crate) enum Error {
     /// built.
     LineNotArmed(u32),
     /// Opening or loading the kernel image failed.
-    #[cfg_attr(
-        all(test, not(all(target_os = "linux", target_arch = "x86_64"))),
-        expect(dead_code, reason = "Only the Linux x86_64 boot module builds it.")
-    )]
     LoadKernel { path: PathBuf, source: io::Error },
     /// Opening or loading the initramfs failed.
-    #[cfg_attr(
-        all(test, not(all(target_os = "linux", target_arch = "x86_64"))),
-        expect(dead_code, reason = "Only the Linux x86_64 boot module builds it.")
-    )]
     LoadInitramfs { path: PathBuf, source: io::Error },
     /// Writing boot data into guest RAM failed.
-    #[cfg_attr(
-        all(test, not(all(target_os = "linux", target_arch = "x86_64"))),
-        expect(dead_code, reason = "Only the Linux x86_64 boot module builds it.")
-    )]
     WriteBootData {
         what: &'static str,
         source: io::Error,
     },
+    /// Creating the vCPU event loop failed, or waiting on it did.
+    EventLoop(io::Error),
+    /// Starting the thread of vCPU `vcpu` failed.
+    SpawnVcpu { vcpu: u32, source: io::Error },
+    /// vCPU `vcpu` exited in a way this host should never report, such as
+    /// `Halted` with KVM's in-kernel interrupt controller.
+    UnexpectedExit { vcpu: u32, exit: String },
+    /// The thread of vCPU `vcpu` panicked; the VMM caught it and stopped the VM.
+    VcpuPanicked { vcpu: u32 },
+    /// `Vm::run` was called again; a VM runs once.
+    AlreadyRan,
 }
 
 impl fmt::Display for Error {
@@ -93,6 +86,13 @@ impl fmt::Display for Error {
             Self::WriteBootData { what, .. } => {
                 write!(f, "failed to write the {what} into guest RAM")
             }
+            Self::EventLoop(_) => f.write_str("the VM event loop failed"),
+            Self::SpawnVcpu { vcpu, .. } => write!(f, "failed to start vCPU {vcpu}"),
+            Self::UnexpectedExit { vcpu, exit } => {
+                write!(f, "vCPU {vcpu} exited unexpectedly: {exit}")
+            }
+            Self::VcpuPanicked { vcpu } => write!(f, "vCPU {vcpu} panicked"),
+            Self::AlreadyRan => f.write_str("the VM has already run"),
         }
     }
 }
@@ -104,11 +104,16 @@ impl error::Error for Error {
             | Self::InvalidMemorySize(_)
             | Self::InvalidCommandLine(_)
             | Self::ChipsetConflicts(_)
-            | Self::LineNotArmed(_) => None,
+            | Self::LineNotArmed(_)
+            | Self::UnexpectedExit { .. }
+            | Self::VcpuPanicked { .. }
+            | Self::AlreadyRan => None,
             Self::AllocateMemory { source, .. }
             | Self::LoadKernel { source, .. }
             | Self::LoadInitramfs { source, .. }
-            | Self::WriteBootData { source, .. } => Some(source),
+            | Self::WriteBootData { source, .. }
+            | Self::SpawnVcpu { source, .. }
+            | Self::EventLoop(source) => Some(source),
             Self::Hypervisor(source) => Some(source),
         }
     }

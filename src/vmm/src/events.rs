@@ -9,10 +9,19 @@
 //! poller, so the loop can later wait on file descriptors as well. Sending
 //! never panics and never blocks, since a device sends from a vCPU thread
 //! under its own lock.
+//!
+//! Sending also sets a stop latch before it queues, and every vCPU checks the
+//! latch before each guest entry. The vCPU that sends, such as the one whose
+//! write reset the i8042, therefore never enters the guest again, whether or
+//! not the loop has woken yet.
 
 use std::{
     io,
-    sync::{Arc, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 
@@ -23,8 +32,14 @@ use crate::error::Error;
 /// Something that ends the VM.
 #[derive(Debug)]
 pub(crate) enum Event {
+    /// The host asked the VM to stop.
+    StopRequested,
     /// The guest asked for a reset, which on x86_64 arrives through the i8042.
     GuestReset,
+    /// The guest asked to power off.
+    GuestShutdown,
+    /// A vCPU failed, panicked or exited in a way the VMM does not handle.
+    VcpuFailed(Error),
     /// A device can no longer serve the guest.
     DeviceFailed(Error),
 }
@@ -41,19 +56,27 @@ const RECHECK: Duration = Duration::from_secs(1);
 pub(crate) struct EventSender {
     events: mpsc::Sender<Event>,
     waker: Arc<Waker>,
+    stopping: Arc<AtomicBool>,
 }
 
 impl EventSender {
-    /// Queues `event` and wakes the loop. An event sent after the loop is
-    /// dropped is logged and discarded: the VM has already ended. Only a
-    /// broken host fails the wake-up; the failure is logged, and
-    /// [`EventLoop::wait`] still finds the event at its next recheck.
+    /// Sets the stop latch, then queues `event` and wakes the loop. An event
+    /// sent after the loop is dropped is logged and discarded: the VM has
+    /// already ended. Only a broken host fails the wake-up; the failure is
+    /// logged, and [`EventLoop::wait`] still finds the event at its next
+    /// recheck.
     pub(crate) fn send(&self, event: Event) {
+        self.stopping.store(true, Ordering::SeqCst);
         if let Err(mpsc::SendError(event)) = self.events.send(event) {
             tracing::debug!(?event, "event sent after the VM ended; discarded");
         } else if let Err(error) = self.waker.wake() {
             tracing::warn!(%error, "event loop wake-up failed; the event waits for the next recheck");
         }
+    }
+
+    /// Whether any event has been sent, so the VM is ending.
+    pub(crate) fn is_stopping(&self) -> bool {
+        self.stopping.load(Ordering::SeqCst)
     }
 }
 
@@ -76,7 +99,11 @@ impl EventLoop {
             // the channel.
             readiness: Events::with_capacity(1),
             events: rx,
-            sender: EventSender { events: tx, waker },
+            sender: EventSender {
+                events: tx,
+                waker,
+                stopping: Arc::new(AtomicBool::new(false)),
+            },
         })
     }
 

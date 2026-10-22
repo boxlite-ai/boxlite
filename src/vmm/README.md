@@ -1,18 +1,16 @@
 # boxlite-vmm
 
-BoxLite's native VMM. `Vm::new` validates the machine configuration, creates
-the host VM and registers guest RAM. The crate-visible VM and vCPU `run` entry
-points still sketch event dispatch, guest exits, and worker cleanup with inline
-`todo!()` operations that panic if called; vCPU exits use
-`boxlite_hypervisor::VcpuExit`, and `Error` wraps `boxlite_hypervisor::Error`
-with its cause chain intact. This crate cannot boot a kernel yet. The
+BoxLite's native VMM. On Linux x86_64, `Vm::new` validates the machine
+configuration, creates the KVM VM, registers guest RAM and loads the kernel and
+boot data; `Vm::run` runs every vCPU until the guest powers off or resets, or a
+`StopHandle` stops it, and returns how the VM ended (see [Lifecycle](#lifecycle)).
+`Error` wraps `boxlite_hypervisor::Error` with its cause chain intact. The
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
-lifecycle API, memory layout, buses, interrupts, and threads it will implement.
+lifecycle API, memory layout, buses, interrupts, and threads.
 
-The lifecycle types and `Error` remain crate-visible while those entry points
-are placeholders. M1 will make the implemented `Vm`, `VmExit`, `Error` and
-`Result` public together; M2's engine adapter will then consume that API and
-inspect the error's host cause.
+`Vm`, `VmConfig`, `VmExit`, `StopHandle`, `Error` and `Result` are public; M2's
+engine adapter will consume that API and inspect the error's host cause. No
+device sits on the buses yet, so `Vm::new` boots a guest without a console.
 
 ```text
 boxlite-vmm
@@ -22,21 +20,22 @@ boxlite-vmm
 └── linux-loader (Linux x86_64 ELF loading and boot parameters)
 ```
 
-| Module | Planned responsibility |
+| Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, then allocate and register RAM on host backend `H`; `run` is a placeholder |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, load the boot data, and run the vCPUs until the first event; `StopHandle` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes |
 | `error` | VMM errors that keep the hypervisor's cause chain |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
 | `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
-| `vcpu` | Worker threads, stop coordination, and exit handling |
+| `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
-| `events` | `Event`, which ends the VM, `EventSender`, and `EventLoop`, the poller that waits for the first event |
+| `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
-Backend implementation and guest boot follow in M1. Virtio devices, the BoxLite
+The x86_64 KVM boot and lifecycle are in place; the M1 devices, arm64 and HVF
+follow in M1. Virtio devices, the BoxLite
 engine adapter, engine selection, and `native` feature wiring follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
@@ -75,8 +74,7 @@ segment loading to rust-vmm's linux-loader and returns the entry address as
 `io::Result<u64>`. It reads `kernel` through a seekable reader, usually the
 kernel file, so segments go straight into guest RAM without buffering the
 whole image. It uses vm-memory 0.18 and linux-loader 0.14 with only the ELF
-feature. The function stays crate-visible until the lifecycle slice wires
-it into `Vm::new`; the VM cannot boot Linux yet.
+feature. `boot::prepare` calls it for `Vm::new`.
 
 Pass the pinned `vmlinux` from `make vmm:boot` and fresh zero-filled guest
 RAM before guest execution. BSS relies on that initial zero state. Validation
@@ -125,7 +123,7 @@ whitespace.
 `write_mptable` and `long_mode_entry`, in that order on fresh RAM, and returns
 a `BootSetup` with the boot vCPU registers. A failure names its step,
 `LoadKernel`, `LoadInitramfs` or `WriteBootData`, and keeps the I/O cause.
-Nothing calls `prepare` from `Vm` yet.
+`Vm::new` calls `prepare` once RAM is registered.
 
 ## MP table
 
@@ -178,16 +176,15 @@ The boot tests need Linux x86_64, read/write `/dev/kvm` and the same
 make test:integration:vmm:linux
 ```
 
-Each runs `prepare` for 256 MiB of RAM and the command line
-`earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k`, then runs each
-KVM vCPU on its own thread with its guest CPUID and the boot MSRs. Every vCPU
-is created before any runs, and only vCPU 0 gets the entry registers. A
-test-local stub stands in for the devices: it keeps the earlycon bytes written
-to `0x3f8`, reports the UART as idle on `0x3fd`, reads every other port and
-MMIO address as zero, and ignores other writes. Each run ends when a vCPU
-writes `0xFE` to the i8042 port `0x64`, the reset `reboot=k` asks for after a
-panic, and every vCPU is then kicked; an unexpected exit or a watchdog after 30
-seconds also ends it, so a failed boot reports the log so far.
+Each builds a KVM `Vm` with `prepare` for 256 MiB of RAM and the command line
+`earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k`, and runs it with
+`Vm::run`. Test-local stubs on the port bus stand in for the devices: COM1
+keeps the earlycon bytes written to `0x3f8` and reports the UART as idle on
+`0x3fd`; the i8042 at `0x60` to `0x64` sends `GuestReset` when a vCPU writes
+`0xFE` to `0x64`, the reset `reboot=k` asks for after a panic; the CMOS ports
+`0x70` and `0x71` read zero. Every other port reads `0xFF`, as on the buses.
+A boot must end in `GuestReset`; a watchdog stops it after 30 seconds, so a
+failed boot reports the log so far.
 
 - On one vCPU without an initramfs, the log must show the kernel version, the exact
   command line, the two E820 entries, the memory total and
@@ -202,14 +199,44 @@ seconds also ends it, so a failed boot reports the log so far.
 - On four vCPUs with an `/init` that pins itself to each CPU in turn with
   `sched_setaffinity` and sets bit i when `getcpu` then reports CPU i, the log
   must show `exitcode=0x00000f00`.
+- On one vCPU with an `/init` that calls `pause` forever, a `StopHandle::stop`
+  sent once `Run /init as init process` appears must make `Vm::run` return
+  `StopRequested` within two seconds.
+
+## Lifecycle
+
+`Vm::run` runs on x86_64, against any backend that implements
+`boxlite_hypervisor::X86Vm`; unit tests drive it on the mock backend.
+
+1. It starts one scoped thread per vCPU, named `vcpuN`. Each creates its vCPU,
+   sets its CPUID from `vcpu_cpuid` and the boot MSRs, and on vCPU 0 the entry
+   registers, then waits at a start gate until every vCPU is configured. A
+   vCPU that fails setup still arrives, and a thread that fails to start
+   aborts the gate, so no worker waits forever.
+2. Each worker then loops: check the stop latch, run, and hand the exit to
+   `Buses::dispatch`. `Shutdown` sends `GuestShutdown` and `Reset` sends
+   `GuestReset`; a run error, any other exit, such as `Halted`, which KVM never
+   returns with its in-kernel irqchip, or a panic caught around the worker
+   sends `VcpuFailed`. A worker that sees the latch completes the pending
+   access and returns without sending.
+3. `EventSender::send` sets the stop latch before it queues, so the vCPU
+   that sends, such as the one whose `0xFE` reached the i8042, never enters
+   the guest again. `run` takes the first event from the `EventLoop`, kicks
+   every vCPU, and joins them all before it returns: `StopRequested`,
+   `GuestShutdown` and `GuestReset` become `VmExit`, and `VcpuFailed` or
+   `DeviceFailed` its error. Later events are dropped.
+
+`Vm::stop_handle` returns a `StopHandle` that sends `StopRequested` from any
+thread, even before `run` starts. A VM runs once: a second `run` fails with
+`AlreadyRan`, since its latch stays set and its vCPUs already exist.
 
 ## Long-mode entry
 
 On Linux x86_64, `boot::entry::long_mode_entry(ram, entry, boot_params)`
 writes the state that the Linux 64-bit boot protocol requires
 (`Documentation/arch/x86/boot.rst`, "64-bit Boot Protocol") and returns the
-boot vCPU registers. vCPU workers will apply them after the vCPU's CPUID and
-MSRs; nothing calls it from `Vm` yet.
+boot vCPU registers, which the vCPU 0 worker applies after its CPUID and
+MSRs.
 
 - Guest RAM: the GDT at `0x500` holds flat `__BOOT_CS` (`0x10`) and
   `__BOOT_DS` (`0x18`). Page tables from `0x9000` identity-map
@@ -268,8 +295,9 @@ These are the pieces devices are built from; no device uses them yet.
   failure to do so.
 - **Events.** A device ends the VM by sending `Event::GuestReset` or
   `Event::DeviceFailed` through an `EventSender`, which never blocks or
-  panics and wakes the `EventLoop`'s `mio` poller. An event sent after the
-  loop is gone is logged at debug level and discarded. `EventLoop::wait` returns
+  panics, latches the stop for every vCPU, and wakes the `EventLoop`'s `mio`
+  poller. vCPU workers and `StopHandle` send the other events. An event sent
+  after the loop is gone is logged at debug level and discarded. `EventLoop::wait` returns
   the oldest event, or `None` at its timeout, and rechecks the queue every
   second in case a wake-up was lost. Every event ends the VM; the VMM never
   restarts a guest.
