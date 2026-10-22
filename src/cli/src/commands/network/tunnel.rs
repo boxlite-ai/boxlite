@@ -108,7 +108,9 @@ mod tests {
         let Commands::Network(network) = cli.command else {
             panic!("expected the network command");
         };
-        let NetworkCommand::Tunnel(tunnel) = network.command;
+        let NetworkCommand::Tunnel(tunnel) = network.command else {
+            panic!("expected the tunnel command");
+        };
         Ok(tunnel)
     }
 
