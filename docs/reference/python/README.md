@@ -424,6 +424,11 @@ Both `boxlite.Box` and `SyncBox` expose `box.ssh`.
 | Query | `await box.ssh.status() -> SshStatus` | Return SSH status |
 | Disable | `await box.ssh.disable() -> SshStatus` | Disable SSH |
 
+If a box is not running and explicitly sets `BoxOptions.cmd` or `entrypoint`,
+call `await box.start()` before configuring SSH; otherwise `configure()` raises
+`InvalidStateError`. See the [SSH lifecycle guide](../../guides/ssh.md) for
+implicit startup and stopped-box behavior.
+
 ```python
 from boxlite import SshAccount, SshConfig
 
@@ -441,6 +446,25 @@ In the sync API the same calls drop `await`: `box.ssh.configure(config)`.
 `SshAccount(login, authorized_keys=[], ca=None)` entries; certificate
 authentication uses `SshCaConfig(public_key, principal)`. Credential-bearing
 objects redact keys in `repr()`.
+
+Configuration getters return copies: `config.accounts`, each account's
+`authorized_keys`, and its nested `ca` must be assigned back after editing.
+For example, `config.accounts[0].authorized_keys.append(key)` does not update
+`config`. This follows [PyO3's field-copying rules](https://pyo3.rs/v0.27.1/faq#pyo3get-clones-my-field).
+
+```python
+accounts = config.accounts
+account = accounts[0]
+keys = account.authorized_keys
+keys.append(open("new_user.pub").read())
+account.authorized_keys = keys
+ca = account.ca
+if ca is not None:
+    ca.principal = "updated-principal"
+    account.ca = ca
+config.accounts = accounts
+status = await box.ssh.configure(config)
+```
 
 `SshStatus` exposes `enabled: bool`, `generation: int`, `listen_address`,
 `host_public_key`, and `host_key_fingerprint`. `generation` is a Python `int`

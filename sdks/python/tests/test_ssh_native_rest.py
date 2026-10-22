@@ -21,10 +21,6 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("greenlet")
-
-from boxlite.sync_api import SyncSshHandle
-
 # Skip only when the extension module file itself is absent (the CI unit
 # job collects this file before any build). When the module exists, the
 # unguarded imports below must succeed: an unloadable extension or missing
@@ -134,6 +130,66 @@ def _answered_box(server):
 
 @requires_native
 class TestAsyncSshOverRest:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("assign_back", ["none", "accounts", "all"])
+    async def test_configure_requires_assignment_at_each_level(
+        self, server, assign_back
+    ):
+        import boxlite
+
+        url = _answered_box(server)
+        _, replies, requests = server
+        replies[("POST", f"/v1/boxes/{BOX_ID}/ssh")] = (200, SSH_STATUS)
+        config = _native_config()
+        accounts = config.accounts
+        account = accounts[0]
+        keys = account.authorized_keys
+        ca = account.ca
+        account.login = "updated"
+        keys.append("ssh-ed25519 AAAAupdated user@test")
+        ca.public_key = "ssh-ed25519 AAAAupdated ca@test"
+        ca.principal = "updated"
+        accounts.append(SshAccount("carol"))
+        if assign_back == "all":
+            account.authorized_keys = keys
+            account.ca = ca
+        if assign_back != "none":
+            config.accounts = accounts
+
+        runtime = boxlite.Boxlite.rest(boxlite.BoxliteRestOptions(url=url))
+        box = await runtime.get(BOX_ID)
+        await box.ssh.configure(config)
+
+        expected_accounts = [
+            {
+                "login": "alice" if assign_back == "none" else "updated",
+                "authorized_keys": [USER_KEY],
+                "ca": {"public_key": CA_KEY, "principal": "alice"},
+            },
+            {"login": "bob", "authorized_keys": [], "ca": None},
+        ]
+        if assign_back == "all":
+            expected_accounts[0]["authorized_keys"].append(
+                "ssh-ed25519 AAAAupdated user@test"
+            )
+            expected_accounts[0]["ca"] = {
+                "public_key": "ssh-ed25519 AAAAupdated ca@test",
+                "principal": "updated",
+            }
+        if assign_back != "none":
+            expected_accounts.append(
+                {"login": "carol", "authorized_keys": [], "ca": None}
+            )
+        assert [(method, path) for method, path, _ in requests] == [
+            ("GET", f"/v1/boxes/{BOX_ID}"),
+            ("POST", f"/v1/boxes/{BOX_ID}/ssh"),
+        ]
+        assert json.loads(requests[1][2]) == {
+            "listen_address": "0.0.0.0:2222",
+            "host_private_key": HOST_KEY,
+            "accounts": expected_accounts,
+        }
+
     @pytest.mark.asyncio
     async def test_configure_sends_nested_ca_and_preserves_empty_and_absent(
         self, server
@@ -285,7 +341,11 @@ class TestAsyncSshErrorsKeepTheirClass:
 @requires_native
 class TestSyncSshOverRest:
     def test_a_sync_box_manages_ssh_and_caches_its_handle(self, server):
+        if importlib.util.find_spec("greenlet") is None:
+            pytest.skip("greenlet not installed")
+
         import boxlite
+        from boxlite.sync_api import SyncSshHandle
 
         url, replies, requests = server
         replies[("GET", f"/v1/boxes/{BOX_ID}")] = (200, BOX)

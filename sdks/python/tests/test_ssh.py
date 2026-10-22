@@ -18,10 +18,7 @@ import types
 
 import pytest
 
-pytest.importorskip("greenlet")
-
 from boxlite.errors import NotFoundError
-from boxlite.sync_api import SyncBox, SyncBoxlite, SyncSshHandle
 
 # Skip only when the extension module file itself is absent (the CI unit
 # job collects this file before any build). When the module exists, the
@@ -78,7 +75,16 @@ class _NativeBoxlite:
 
 
 @pytest.fixture
-def _native_stand_in(monkeypatch):
+def sync_api():
+    if importlib.util.find_spec("greenlet") is None:
+        pytest.skip("greenlet not installed")
+    from boxlite import sync_api
+
+    return sync_api
+
+
+@pytest.fixture
+def _native_stand_in(monkeypatch, sync_api):
     """Stand in for `boxlite.boxlite`; only the sync wrapper tests install it."""
     native = types.ModuleType("boxlite.boxlite")
     native.Boxlite = _NativeBoxlite
@@ -86,14 +92,14 @@ def _native_stand_in(monkeypatch):
 
 
 @pytest.fixture
-def sync_box(_native_stand_in):
-    with SyncBoxlite.rest(object()) as runtime:
-        yield SyncBox(runtime, _NativeBox())
+def sync_box(_native_stand_in, sync_api):
+    with sync_api.SyncBoxlite.rest(object()) as runtime:
+        yield sync_api.SyncBox(runtime, _NativeBox())
 
 
 class TestSyncSshHandle:
-    def test_ssh_returns_a_cached_sync_handle(self, sync_box):
-        assert isinstance(sync_box.ssh, SyncSshHandle)
+    def test_ssh_returns_a_cached_sync_handle(self, sync_box, sync_api):
+        assert isinstance(sync_box.ssh, sync_api.SyncSshHandle)
         assert sync_box.ssh is sync_box.ssh
 
     def test_each_call_returns_what_the_native_call_answered(self, sync_box):
@@ -206,16 +212,16 @@ def test_public_exports():
 
 
 # Pure-Python exports: these must hold in both environments, with or
-# without the native extension, so they carry no skip guard.
-def test_sync_ssh_handle_is_exported_at_top_level():
+# without the native extension; only greenlet is required.
+def test_sync_ssh_handle_is_exported_at_top_level(sync_api):
     import boxlite
 
     assert "SyncSshHandle" in boxlite.__all__
-    assert boxlite.SyncSshHandle is SyncSshHandle
+    assert boxlite.SyncSshHandle is sync_api.SyncSshHandle
 
 
-def test_sync_ssh_handle_is_exported_from_sync_api():
-    from boxlite import sync_api
+def test_sync_ssh_handle_is_exported_from_sync_api(sync_api):
+    from boxlite.sync_api._ssh import SyncSshHandle
 
     assert "SyncSshHandle" in sync_api.__all__
     assert sync_api.SyncSshHandle is SyncSshHandle
