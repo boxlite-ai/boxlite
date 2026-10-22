@@ -11,7 +11,7 @@ import { RELEASE_IN_PROGRESS, type AppDetail, type AppRelease } from '@/lib/apps
 import { cn } from '@/lib/utils'
 import { useState } from 'react'
 import { DeploymentDetail } from '../DeploymentDetail'
-import { EmptyNote, GridHeader, HoverActions, MoreButton, PromptBlock, SearchField, StatusBadge } from '../spec'
+import { EmptyNote, GridHeader, HoverActions, MoreButton, SearchField, StatusBadge } from '../spec'
 import { FilterChip, FilterGroup, Screen, ToolButton } from '../SubNav'
 import { useElapsed } from '../useElapsed'
 import { Tag } from '../viz'
@@ -178,21 +178,9 @@ export function DeploymentsTab({
         </FilterGroup>
       </div>
       {rows.length === 0 ? (
-        <EmptyNote
-          title={app.releases.length === 0 ? 'No deployments yet' : 'Nothing matches'}
-          action={
-            app.releases.length === 0 ? (
-              <div className="w-full max-w-[560px] text-left">
-                <PromptBlock
-                  text={`boxlite-app deploy${app.environment === 'main' ? '' : ` --env ${app.environment}`}`}
-                  compact
-                />
-              </div>
-            ) : undefined
-          }
-        >
+        <EmptyNote title={app.releases.length === 0 ? 'No deployments yet' : 'Nothing matches'}>
           {app.releases.length === 0 &&
-            'Your agent runs this in the project directory. Each deployment lands here with its steps, changes and log, live while it runs.'}
+            'Your agent deploys from its project folder. Each deployment lands here with its steps, changes and log, live while it runs.'}
         </EmptyNote>
       ) : (
         <>

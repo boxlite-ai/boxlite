@@ -27,6 +27,7 @@ import { useConfirm } from '../confirm'
 import { useAppAction } from '../useAppAction'
 import {
   CopyIconButton,
+  copyText,
   downloadCsv,
   EmptyNote,
   GridHeader,
@@ -103,16 +104,14 @@ function NoDatabase({ app }: { app: AppDetail }) {
         action={
           <div className="w-full max-w-[640px] text-left">
             <PromptBlock
-              text={
-                '[database]\nmigrations = "migrations/"\n\n# schema in migrations/0001_init.sql, then: boxlite-app apply'
-              }
+              text={`Give BoxLite app "${app.name}" a Postgres database: write the schema as a migration and deploy.`}
               compact
             />
           </div>
         }
       >
-        Add [database] to boxlite.toml and run boxlite-app apply. The control plane creates a Postgres branch for{' '}
-        {app.environment} and gives the app its connection string as DATABASE_URL.
+        Ask your agent to add one. BoxLite creates a Postgres database for {app.environment} and hands the app its
+        connection string; its tables show up here.
       </EmptyNote>
     </Screen>
   )
@@ -161,21 +160,34 @@ function Connection({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
           <SpecRow label="Engine">{db.engine}</SpecRow>
           {db.branch && <SpecRow label="Branch">{db.branch}</SpecRow>}
         </Panel>
-        <div className="flex flex-col gap-2 text-[12px] text-muted-foreground">
-          <span>To work against this database from a laptop, your agent runs:</span>
-          <PromptBlock
-            text={`boxlite-app app dev${app.environment === 'main' ? '' : ` --env ${app.environment}`}`}
-            compact
-          />
+        <div className="flex flex-wrap items-center gap-3 text-[12px] text-muted-foreground">
           <span>
-            It runs the services locally with DATABASE_URL pointing at a local proxy, so no password is written
-            anywhere. For psql or an ORM: boxlite-app app db proxy (read-only unless --write). For one-off queries:
-            boxlite-app app sql &quot;select …&quot;.
+            The password never leaves BoxLite: the app gets it inside DATABASE_URL, and a laptop connects through
+            BoxLite.
           </span>
+          <ToolButton
+            onClick={() => {
+              copyText(localDevPrompt(app))
+              toast.success('Instructions copied. Paste them to your agent.')
+            }}
+          >
+            Copy instructions for your agent
+          </ToolButton>
         </div>
       </div>
     </Screen>
   )
+}
+
+/** For the agent, not the page: how to work against this database from the user's laptop. */
+function localDevPrompt(app: AppDetail): string {
+  const env = app.environment === 'main' ? '' : ` --env ${app.environment}`
+  return [
+    `To work on BoxLite app "${app.name}" (${app.environment}) from this laptop:`,
+    `- \`boxlite-app app dev${env}\` runs the services locally with DATABASE_URL pointing at a local proxy, so no password is written anywhere.`,
+    `- \`boxlite-app app db proxy${env}\` gives psql or an ORM a local port (read-only unless --write).`,
+    `- \`boxlite-app app sql${env} "select …"\` runs one query.`,
+  ].join('\n')
 }
 
 function Tables({ app, db, onQuery }: { app: AppDetail; db: AppDatabaseDetail; onQuery: (query: string) => void }) {
@@ -187,19 +199,7 @@ function Tables({ app, db, onQuery }: { app: AppDetail; db: AppDatabaseDetail; o
       {db.tables === null ? (
         <EmptyNote title="Tables could not be read">{db.errors?.join(' · ')}</EmptyNote>
       ) : tables.length === 0 ? (
-        <EmptyNote
-          title="No tables yet"
-          action={
-            <div className="w-full max-w-[560px] text-left">
-              <PromptBlock
-                text={
-                  '# migrations/0001_init.sql\ncreate table items (id serial primary key, title text not null);\n\n# then: boxlite-app deploy'
-                }
-                compact
-              />
-            </div>
-          }
-        >
+        <EmptyNote title="No tables yet">
           Tables come from migrations, applied on deploy in file order, one transaction each.
         </EmptyNote>
       ) : (
@@ -291,7 +291,7 @@ function Sql({ app, db, initial }: { app: AppDetail; db: AppDatabaseDetail; init
     if (ddl.length > 0 && app.environment === 'main') {
       setRan(query)
       setError(
-        `${ddl.join(', ')} changes the schema, which main only takes through a migration. Next: put it in migrations/${migration} and run boxlite-app deploy (or try it on another environment first).`,
+        `${ddl.join(', ')} changes the schema, which main only takes through a migration. Ask your agent to add it as migrations/${migration} and deploy, or try it on another environment first.`,
       )
       return
     }
@@ -481,17 +481,7 @@ function Migrations({ db, onOpenDeployment }: { db: AppDatabaseDetail; onOpenDep
       {db.migrations === null ? (
         <EmptyNote title="Migrations could not be read">{db.errors?.join(' · ')}</EmptyNote>
       ) : migrations.length === 0 ? (
-        <EmptyNote
-          title="No migrations applied"
-          action={
-            <div className="w-full max-w-[560px] text-left">
-              <PromptBlock
-                text={'boxlite-app app db migration new init   # writes migrations/0001_init.sql\nboxlite-app deploy'}
-                compact
-              />
-            </div>
-          }
-        >
+        <EmptyNote title="No migrations applied">
           Each file under migrations/ runs once, in file order, on the next deploy. Applied files never change.
         </EmptyNote>
       ) : (

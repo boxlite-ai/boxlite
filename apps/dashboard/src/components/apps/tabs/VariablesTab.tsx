@@ -396,22 +396,20 @@ export function VariablesTab({ app }: { app: AppDetail }) {
           action={
             <div className="w-full max-w-[560px] text-left">
               <PromptBlock
-                text={
-                  '[variables]\nLOG_LEVEL = "info"\n\n[secrets]\nOPENAI_API_KEY = "org/openai"\n\n# then: boxlite-app apply'
-                }
+                text={`Give BoxLite app "${app.name}" the settings it needs as variables, take API keys from the org's secret store, and deploy.`}
                 compact
               />
             </div>
           }
         >
-          Variables start in boxlite.toml. Once your agent has applied or deployed it, they are listed here and can be
-          changed; each save is one deployment.
+          Your agent sets them up with the first deployment. Then they are listed here and you can change them; each
+          save restarts the services with the new values.
         </EmptyNote>
       ) : (
         <>
           <p className="pb-4 font-mono text-[13px] text-muted-foreground">
-            Secrets stay in your org&apos;s secret store and are never shown. Saving restarts the services with the
-            new values; no rebuild.
+            Secrets stay in your org&apos;s secret store and are never shown. Saving restarts the services with the new
+            values; no rebuild.
           </p>
           {removed.length > 0 && (
             <p className="pb-3 font-mono text-[12px] text-warning">
