@@ -102,6 +102,15 @@ boxlite start mybox
 outbound with an empty list and disabled inbound. Creation with `--network
 disabled` cannot include rules because it provisions no NIC.
 
+Creation and updates accept the same rules: hostnames, `*.` wildcard hostnames,
+IPv4 addresses and IPv4 CIDRs. Create rejects anything else, such as
+`example.com:443` or `a.com,b.com`, so every saved list can be re-sent as an
+update. Start and import do not recheck rules, so boxes and archives saved by
+older releases keep working; replace such a list with a valid one before
+updating it. A single `--allow-net ''` at creation means the empty list, as it does
+for `network outbound`. The cloud API trims spaces around each rule on create
+and update alike.
+
 ### Update paths
 
 | Path | Application and persistence |

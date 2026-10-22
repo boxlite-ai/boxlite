@@ -1344,9 +1344,10 @@ export class BoxService {
     if (policy.mode === 'disabled' && policy.allow_net.length) {
       throw new BadRequestError('disabled outbound cannot include allow_net')
     }
-    this.resolveOutboundAllowNet(policy.allow_net)
+    const allowNet = this.resolveOutboundAllowNet(policy.allow_net) ?? []
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-    return this.boxRepository.replaceOutbound(box.id, organizationId, policy, async (locked, next) => {
+    const resolved = { ...policy, allow_net: allowNet }
+    return this.boxRepository.replaceOutbound(box.id, organizationId, resolved, async (locked, next) => {
       const runner = await this.runnerService.findOne(locked.runnerId)
       if (!runner) throw new ConflictException('Box runner is unavailable')
       await setRunnerOutbound(runner, locked.id, next)

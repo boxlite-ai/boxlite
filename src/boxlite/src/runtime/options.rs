@@ -635,6 +635,15 @@ impl BoxOptions {
         self.effective_auto_delete() > 0
     }
 
+    /// Validate options for a new box: [`Self::sanitize_common`] plus the
+    /// outbound rules `update_outbound` accepts, so every saved allowlist can be
+    /// re-sent or rolled back to. Start and import skip the rule check, keeping
+    /// boxes and archives saved by older releases usable.
+    pub(crate) fn sanitize_create(&self) -> BoxliteResult<()> {
+        self.sanitize_common()?;
+        OutboundNetworkConfig::from(&self.network).validate()
+    }
+
     /// Sanitize and validate options.
     ///
     /// Validates option combinations:
@@ -2297,6 +2306,31 @@ mod tests {
             ),
             "expected InvalidArgument (→ HTTP 400), got {err:?}"
         );
+    }
+
+    /// Create must refuse rules that `update_outbound` refuses; otherwise a
+    /// box keeps an allowlist that can never be re-sent or rolled back to.
+    /// Start and import keep accepting them, so older saved boxes still run.
+    #[test]
+    fn test_sanitize_create_rejects_invalid_outbound_allow_net() {
+        for rule in ["example.com:443", "a.com,b.com", "", "10.0.0.0/33"] {
+            let opts = BoxOptions {
+                network: NetworkSpec::Enabled {
+                    allow_net: vec![rule.to_string()],
+                },
+                ..Default::default()
+            };
+            opts.sanitize_persisted()
+                .unwrap_or_else(|err| panic!("{rule:?}: a saved box must still start: {err}"));
+            let err = opts.sanitize_create().unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    boxlite_shared::errors::BoxliteError::InvalidArgument(_)
+                ),
+                "{rule:?}: expected InvalidArgument, got {err:?}"
+            );
+        }
     }
 
     /// `VolumeSpec::managed_volume` and `VolumeSpec::bind_mount` cannot produce a mount

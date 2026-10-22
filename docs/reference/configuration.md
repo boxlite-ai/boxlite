@@ -112,8 +112,10 @@ Structured network configuration for outbound connectivity.
 **Supported patterns:**
 - Exact hostname: `"api.openai.com"`
 - Wildcard hostname: `"*.example.com"`
-- Exact IP: `"192.168.1.10"`
-- CIDR range: `"10.0.0.0/8"`
+- Exact IPv4: `"192.168.1.10"`
+- IPv4 CIDR range: `"10.0.0.0/8"`
+
+Create and runtime updates reject any other rule, such as `"example.com:443"`.
 
 ### `secrets`
 

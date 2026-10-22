@@ -376,7 +376,7 @@ silently restarting it, because restarting would run the command a second time.
 | `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--network <enabled\|disabled>` | | Outbound network mode (default `enabled`) |
-| `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IP, or CIDR; repeatable and implies enabled networking |
+| `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IPv4, or IPv4 CIDR; repeatable, implies enabled networking, and a lone `''` means the empty list |
 | `--inbound <enabled\|disabled>` | | Inbound network mode (default `disabled`) |
 | `--net-tx-kbps KBPS` | | Cap what the box sends, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
 | `--net-rx-kbps KBPS` | | Cap what reaches the box, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
@@ -438,7 +438,7 @@ default, and `exec` still starts it on demand.
 | `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--network <enabled\|disabled>` | | Outbound network mode (default `enabled`) |
-| `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IP, or CIDR; repeatable and implies enabled networking |
+| `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IPv4, or IPv4 CIDR; repeatable, implies enabled networking, and a lone `''` means the empty list |
 | `--inbound <enabled\|disabled>` | | Inbound network mode (default `disabled`) |
 | `--net-tx-kbps KBPS` | | Cap what the box sends, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
 | `--net-rx-kbps KBPS` | | Cap what reaches the box, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |

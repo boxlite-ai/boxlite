@@ -5,7 +5,7 @@ use clap::{Args, Subcommand};
 
 use crate::cli::GlobalFlags;
 
-mod policy;
+pub(crate) mod policy;
 pub mod tunnel;
 
 #[derive(Args, Debug)]

@@ -18,20 +18,26 @@ pub struct InboundArgs {
 pub struct OutboundArgs {
     #[command(flatten)]
     pub access: InboundArgs,
-    /// Allow one hostname, wildcard, IP or CIDR. Repeat for multiple rules.
+    /// Allow one hostname, wildcard, IPv4 or IPv4 CIDR. Repeat for multiple rules.
     /// Omit or pass a single empty string to use the default empty allowlist.
     #[arg(long, value_name = "RULE")]
     pub allow_net: Vec<String>,
+}
+
+/// A lone `--allow-net ''` spells the empty allowlist; any other list is kept
+/// as given so validation can reject an empty rule mixed with real ones.
+pub(crate) fn allow_net_rules(rules: &[String]) -> Vec<String> {
+    match rules {
+        [rule] if rule.is_empty() => Vec::new(),
+        rules => rules.to_vec(),
+    }
 }
 
 impl OutboundArgs {
     fn config(&self) -> Result<OutboundNetworkConfig> {
         let config = OutboundNetworkConfig {
             mode: self.access.mode.parse::<NetworkMode>()?,
-            allow_net: match self.allow_net.as_slice() {
-                [rule] if rule.is_empty() => Vec::new(),
-                rules => rules.to_vec(),
-            },
+            allow_net: allow_net_rules(&self.allow_net),
         };
         config.validate()?;
         Ok(config)

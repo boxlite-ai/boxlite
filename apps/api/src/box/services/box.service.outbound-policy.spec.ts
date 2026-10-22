@@ -37,6 +37,17 @@ describe('BoxService outbound policy replacement', () => {
     expect(send).toHaveBeenCalledWith({ id: 'runner1' }, 'box1', policy)
   })
 
+  it('sends and stores the trimmed outbound allowlist that create would store', async () => {
+    const send = jest.spyOn(networkPolicy, 'setRunnerOutbound').mockResolvedValue(undefined)
+    const { service, boxRepository } = fixture()
+
+    await service.setOutboundNetwork('box1', { mode: 'enabled', allow_net: [' example.com '] }, 'org1')
+
+    const trimmed = { mode: 'enabled', allow_net: ['example.com'] }
+    expect(boxRepository.replaceOutbound).toHaveBeenCalledWith('box1', 'org1', trimmed, expect.any(Function))
+    expect(send).toHaveBeenCalledWith({ id: 'runner1' }, 'box1', trimmed)
+  })
+
   it.each([
     ['a disabled policy with rules', { mode: 'disabled' as const, allow_net: ['example.com'] }, 'disabled outbound'],
     ['an invalid rule', { mode: 'enabled' as const, allow_net: ['10.0.0.0/33'] }, 'Invalid network allow list'],
