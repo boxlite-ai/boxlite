@@ -68,6 +68,37 @@ func main() {
 }
 ```
 
+### Running Commands
+
+```go
+res, err := box.Exec(ctx, "sh", "-c", "echo hello")   // buffered stdout/stderr + exit code
+out, err := box.Command("ls", "-la").Output(ctx)     // os/exec-style
+```
+
+`Exec` and `Cmd` close the process's stdin as soon as it starts, so a command
+that reads stdin to EOF (`cat`, `wc`, `sort`) sees empty input and exits. To
+feed input, use `StartExecution` and write to `Execution.Stdin`, then close it:
+
+```go
+var out bytes.Buffer
+ex, err := box.StartExecution(ctx, "wc", []string{"-c"}, &boxlite.ExecutionOptions{Stdout: &out})
+if err != nil {
+	log.Fatal(err)
+}
+defer ex.Close()
+if _, err := ex.Stdin.Write([]byte("hello")); err != nil {
+	log.Fatal(err)
+}
+if err := ex.Stdin.Close(); err != nil {
+	log.Fatal(err)
+}
+code, err := ex.Wait(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(code, out.String()) // 0 5
+```
+
 ### Archive Export and Import
 
 ```go
