@@ -161,9 +161,11 @@ const asleep = (sv: ServiceView): ServiceView => ({ ...sv, state: 'asleep', heal
 const troubled = (r: ServiceState | undefined) =>
   !!r && (r.state === 'failed' || r.state === 'restarting' || r.health === 'unhealthy' || (r.last_exit_code ?? 0) !== 0);
 
+/** The service's last error lines since the serving deployment started: earlier ones are history, not its trouble now. */
 function recentErrors(ctx: Pick<Ctx, 'store'>, env: EnvRow, service: string): string[] {
+  const serving = env.live_deployment ? ctx.store.deployment(env.id, env.live_deployment) : undefined;
   return ctx.store
-    .logs(env.id, { source: service, limit: 200 })
+    .logs(env.id, { source: service, limit: 200, ...(serving?.started_at ? { since: serving.started_at } : {}) })
     .filter((l) => logLevel(l.level) === 'error')
     .slice(-8)
     .map((l) => `${l.ts} ${l.line}`);

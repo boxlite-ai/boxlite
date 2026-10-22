@@ -520,3 +520,19 @@ test('the built console is served under /console/ with an SPA fallback', async (
   assert.equal((await get('/console/assets/missing.js')).status, 404);
   assert.equal((await get('/console/..%2f..%2fetc%2fpasswd')).status, 404);
 });
+
+test("a troubled service's errors are the serving deployment's, not ones from before it", async () => {
+  const { key } = await createViaConsole();
+  h.supervisor.health = async () => ({ ok: true, deployment: 1, services: [{ name: 'web', state: 'restarting', health: 'none', port: 20001, pid: null, restarts: 3, last_exit_code: 1 }] });
+  await deploy(key, TOML);
+  const env = mainEnv();
+  h.ctx.store.appendLogs(env.id, [
+    { ts: '2020-01-01T00:00:00.000Z', source: 'web', level: 'error', line: 'Error: from before this deployment', deployment: null },
+    { ts: new Date(Date.now() + 1000).toISOString(), source: 'web', level: 'error', line: 'Error: SLACK_TOKEN is not set', deployment: 1 },
+  ]);
+  const web = (await api('/apps/crm')).body.services.find((s: any) => s.name === 'web');
+  assert.equal(web.recentErrors.length, 1, web.recentErrors.join(' | '));
+  assert.match(web.recentErrors[0], /SLACK_TOKEN is not set$/);
+  const problem = (await api('/apps/crm')).body.problems.find((p: any) => /web/.test(p.summary));
+  assert.equal(problem?.missingVariable, 'SLACK_TOKEN');
+});

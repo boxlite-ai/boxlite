@@ -29,6 +29,8 @@ export interface PreviewMeta {
 }
 
 const TIMEOUT_MS = 45_000;
+/** How long a capture waits for an app behind the "Starting…" page. */
+const STARTING_WAIT_MS = 30_000;
 const STALE_MS = 24 * 3600_000;
 const VIEWPORT = { width: 1280, height: 800 };
 
@@ -110,8 +112,16 @@ async function capture(ctx: Ctx, appId: string, envId: string, deployment: numbe
     const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1 });
     // Public envs open directly; others through a one-time ticket that sets the access cookie.
     const url = ctx.resources.effectiveAccess(env) === 'public' ? ctx.resources.appUrl(app.name, env.name) + '/' : createOpenTicket(ctx, app, env, '/', 'system').url;
-    // Whatever the page shows is the picture, an error page included: that is what visitors see.
-    await page.goto(url, { waitUntil: 'networkidle', timeout: TIMEOUT_MS - 10_000 });
+    // Whatever the app shows is the picture, its error pages included: that is what visitors see.
+    // The CP's own "Starting…" page is not the app, so wait for the app instead, and keep the old
+    // picture if it never finishes starting.
+    const deadline = Date.now() + STARTING_WAIT_MS;
+    let res = await page.goto(url, { waitUntil: 'networkidle', timeout: TIMEOUT_MS - 10_000 });
+    while (res?.headers()['x-boxlite-starting'] && Date.now() < deadline) {
+      await page.waitForTimeout(3000);
+      res = await page.reload({ waitUntil: 'networkidle', timeout: TIMEOUT_MS - 10_000 });
+    }
+    if (res?.headers()['x-boxlite-starting']) throw new Error('the app was still starting');
     await page.waitForTimeout(500);
     const shot = await page.screenshot({ type: 'jpeg', quality: 72 });
     mkdirSync(dir(ctx), { recursive: true });
