@@ -57,6 +57,8 @@ saying what it owns; a file of the same name next to it (`orchestrator.ts`, `res
 | `http/` | HTTP helpers for every origin: `cookies.ts` (`__Host-` names, Set-Cookie, reading), `signed-token.ts` (domain-tagged HMAC, `<subject>.<expiry>.<mac>`), `html.ts` (`escapeHtml`), `response.ts` (`isResponse`). `http.ts` is the outbound JSON client with retry |
 | `services/` | logic both the CLI routes and the console call: `apps.ts` (create an App, rotate its key), `logs.ts` (log levels, a deployment's lines, `since`), `db.ts` (SQL the CP builds itself, db URL coordinates) |
 | `lifecycle.ts` | soft delete, restore, purge after 7 days |
+| `orgs.ts` | console users and organizations as on the BoxLite platform: the first sign-in creates the user's Default Organization (owner); Apps and org secrets belong to an org; org App limit and suspension; `org_platform` holds everything from before and goes to the legacy owner |
+| `console-signin.ts` | "Continue with GitHub" for the console: console origin → API-origin start → GitHub → the shared `/auth/callback/github` → one-time code back to the console origin |
 | `feedback.ts` | `boxlite-app feedback`: agents' reports about the platform, redacted, capped per hour, listed at `/admin/feedback` |
 | `limits.ts` | rate limits, SSE caps, log ingest caps, queue cap |
 | `scheduler.ts` | `[[schedule]]` cron → request through the app origin (`proxy/forward.ts`, wakes the Box) |
@@ -78,6 +80,7 @@ Import layering:
 Rules that keep it safe:
 
 - Platform cookies are `__Host-bxl_*` on https and never reach apps; apps cannot set `bxl_*` cookies.
+- The console works in the viewer's organization: every App route goes through `kit.appOf`, which answers not_found for another org's App. Org secrets resolve only for Apps of their org (`orgSecret`).
 - No App key in URLs. Agents send it as `Authorization: Bearer`; the proxy checks and strips it.
 - Reads never run as the database owner. Writes need `--write`; DDL on `main` only through migrations.
 - A failed or cancelled deployment never changes "the env's state" (`effectiveSpecVersion`).
