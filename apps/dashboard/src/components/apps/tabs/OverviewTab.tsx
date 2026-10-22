@@ -51,6 +51,7 @@ function FailurePanel({
   onRollback,
   onOpenLogs,
   onOpenDeployment,
+  onSetVariable,
 }: {
   app: AppDetail
   failing: AppProblem[]
@@ -58,6 +59,7 @@ function FailurePanel({
   onRollback: (release: AppRelease) => void
   onOpenLogs: () => void
   onOpenDeployment: (n: number) => void
+  onSetVariable: (name: string) => void
 }) {
   const prompt = failing
     .map((problem) => problem.fixPrompt)
@@ -66,6 +68,8 @@ function FailurePanel({
   const failedDeployment = failing.find((p) => p.deployment)?.deployment
   // A failed deployment with an older release still serving needs a fix, not a rollback.
   const serving = failing.find((p) => p.serving)?.serving
+  // A service that says which variable it lacks can be fixed here, without the agent.
+  const missing = failing.find((p) => p.missingVariable)?.missingVariable
   return (
     <section className="border border-destructive/40 bg-destructive/[0.04] px-5 py-4" data-testid="failure-panel">
       {failing.map((check) => (
@@ -78,9 +82,14 @@ function FailurePanel({
         </div>
       ))}
       <div className="mt-4 flex flex-wrap items-center gap-1 pl-[15px]">
+        {missing && (
+          <FlatButton variant="primary" onClick={() => onSetVariable(missing)}>
+            Set {missing}
+          </FlatButton>
+        )}
         {prompt && (
           <FlatButton
-            variant="primary"
+            variant={missing ? undefined : 'primary'}
             onClick={() => copyWithNotice(prompt, `Copied fix instructions for ${app.name} · ${app.environment}`)}
           >
             Copy fix instructions
@@ -213,7 +222,7 @@ export function OverviewTab({
   onOpenDeployment,
 }: {
   app: AppDetail
-  onGoTo: (tab: AppTab, section?: string) => void
+  onGoTo: (tab: AppTab, section?: string, extra?: Record<string, string>) => void
   onRollback: (release: AppRelease) => void
   onRestartService: (service: string) => void
   /** The service being restarted right now, if any. */
@@ -248,6 +257,7 @@ export function OverviewTab({
           onRollback={onRollback}
           onOpenLogs={() => onGoTo('logs', 'runtime')}
           onOpenDeployment={onOpenDeployment}
+          onSetVariable={(name) => onGoTo('variables', undefined, { add: name })}
         />
       )}
 
@@ -263,7 +273,9 @@ export function OverviewTab({
           }
         />
         {app.services.length === 0 ? (
-          <p className="font-mono text-[13px] text-muted-foreground">No services yet; they start with the next deployment.</p>
+          <p className="font-mono text-[13px] text-muted-foreground">
+            No services yet; they start with the next deployment.
+          </p>
         ) : (
           <ServicesTable
             services={app.services}

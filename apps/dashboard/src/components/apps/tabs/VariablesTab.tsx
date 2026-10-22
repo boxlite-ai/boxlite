@@ -11,7 +11,8 @@ import { useAppEnvironments, useOrgSecrets } from '@/hooks/queries/useAppsQuery'
 import type { AppDetail } from '@/lib/apps/types'
 import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useConfirm } from '../confirm'
 import {
@@ -110,7 +111,7 @@ function InlineEditor({
     <div className={`grid ${ENV_GRID} items-center bg-card/60 px-2 py-2`}>
       <span className="flex flex-col gap-1">
         <input
-          autoFocus={!lockName}
+          autoFocus={!lockName && !initialName}
           disabled={lockName}
           value={name}
           onChange={(e) => setName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'))}
@@ -121,7 +122,7 @@ function InlineEditor({
         {nameError && <span className="text-[12px] text-destructive">{nameError}</span>}
       </span>
       <input
-        autoFocus={lockName}
+        autoFocus={lockName || !!initialName}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={keys}
@@ -319,6 +320,21 @@ export function VariablesTab({ app }: { app: AppDetail }) {
   const [confirm, confirmElement] = useConfirm()
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
+  // ?add=NAME (from "Set NAME" on a crashing service): open that variable, then drop the parameter.
+  const [params, setParams] = useSearchParams()
+  const [prefill, setPrefill] = useState<string | undefined>()
+  useEffect(() => {
+    const name = params.get('add')
+    if (!name) return
+    if (app.variables && name in app.variables) setEditing(name)
+    else {
+      setPrefill(name)
+      setAdding(true)
+    }
+    const next = new URLSearchParams(params)
+    next.delete('add')
+    setParams(next, { replace: true })
+  }, [params, setParams, app.variables])
   const [dialog, setDialog] = useState<'import' | 'secret' | null>(null)
   const variables = app.variables
   const configured = variables !== null
@@ -354,6 +370,7 @@ export function VariablesTab({ app }: { app: AppDetail }) {
     )
     if (ok) {
       setAdding(false)
+      setPrefill(undefined)
       setEditing(null)
     }
   }
@@ -420,9 +437,13 @@ export function VariablesTab({ app }: { app: AppDetail }) {
           <GridHeader grid={ENV_GRID} columns={['Name', 'Value', 'How it reaches the app', 'Used by', '']} />
           {adding && (
             <InlineEditor
+              initialName={prefill}
               busy={pending?.startsWith('set:') ?? false}
               onSave={(name, value) => void save(name, value)}
-              onCancel={() => setAdding(false)}
+              onCancel={() => {
+                setAdding(false)
+                setPrefill(undefined)
+              }}
             />
           )}
           {rows.length === 0 && !adding ? (

@@ -256,6 +256,8 @@ export interface AppProblem {
   deployment?: number
   /** What still serves users, when something does (#2). */
   serving?: string
+  /** The variable a crashing service says it lacks; the console offers "Set NAME". */
+  missingVariable?: string
 }
 
 export type AppTab = 'overview' | 'deployments' | 'logs' | 'domains' | 'auth' | 'database' | 'volumes' | 'variables'
