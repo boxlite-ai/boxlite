@@ -41,6 +41,16 @@ Key test entry points:
 - `make test:all:python` - Python unit + integration suites
 - `make test:all:c` - C SDK suite via CMake/CTest
 
+Python SDK tests run in two environments. Without the native extension
+(`make test:unit:python`, `make coverage:python` — the shape of the CI unit
+job, which never builds it), extension-dependent tests skip and everything
+else — pure-Python wrappers, sync wrappers over a stand-in native module,
+and SDK export checks — must pass. After `make dev:python` (or
+`make coverage:python:integration`), the same suite also exercises the
+native classes; there an extension that exists but cannot load, or that
+lacks an expected type, fails instead of skipping. Run both before
+shipping Python SDK changes.
+
 ### Coverage
 
 `make codecov` collects fresh Rust coverage. Codecov requires **90% coverage

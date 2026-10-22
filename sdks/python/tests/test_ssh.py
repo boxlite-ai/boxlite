@@ -1,15 +1,18 @@
 """
 SSH bindings unit tests (no VM required).
 
-Two layers, matching the repo's existing mock style: the sync wrapper is
-driven against a stand-in native module (these run in the CI unit job,
-which does not build the extension), and the native classes are tested
-directly when the extension is importable (unit runs after `make
-dev:python` and every integration run).
+Two environments run this file. The CI unit job collects it before the
+native extension is built: the sync wrapper is driven against a stand-in
+native module and the pure-Python SyncSshHandle export checks run, while
+the native tests skip — solely because the extension module file is
+absent. Runs after `make dev:python` (and every integration run) load the
+real classes: an extension that exists but cannot be imported, or that
+lacks the SSH types, fails the run instead of skipping.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 import types
 
@@ -20,12 +23,18 @@ pytest.importorskip("greenlet")
 from boxlite.errors import NotFoundError
 from boxlite.sync_api import SyncBox, SyncBoxlite, SyncSshHandle
 
-try:
+# Skip only when the extension module file itself is absent (the CI unit
+# job collects this file before any build). When the module exists, the
+# unguarded import below must succeed: an unloadable extension or missing
+# SSH types is a build break, not a skip.
+NATIVE_MODULE_ABSENT = importlib.util.find_spec("boxlite.boxlite") is None
+
+if not NATIVE_MODULE_ABSENT:
     from boxlite.boxlite import SshAccount, SshCaConfig, SshConfig
 
-    NATIVE_AVAILABLE = True
-except ImportError:
-    NATIVE_AVAILABLE = False
+requires_native = pytest.mark.skipif(
+    NATIVE_MODULE_ABSENT, reason="native extension module not built"
+)
 
 
 # ── Sync wrapper over a stand-in native module ────────────────────────────────
@@ -68,15 +77,16 @@ class _NativeBoxlite:
         return cls(options)
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def _native_stand_in(monkeypatch):
+    """Stand in for `boxlite.boxlite`; only the sync wrapper tests install it."""
     native = types.ModuleType("boxlite.boxlite")
     native.Boxlite = _NativeBoxlite
     monkeypatch.setitem(sys.modules, "boxlite.boxlite", native)
 
 
 @pytest.fixture
-def sync_box():
+def sync_box(_native_stand_in):
     with SyncBoxlite.rest(object()) as runtime:
         yield SyncBox(runtime, _NativeBox())
 
@@ -127,7 +137,7 @@ def _native_config():
     )
 
 
-@pytest.mark.skipif(not NATIVE_AVAILABLE, reason="native extension not built")
+@requires_native
 class TestNativeReprRedaction:
     """repr() must keep diagnostics useful without exposing credentials."""
 
@@ -154,7 +164,7 @@ class TestNativeReprRedaction:
         assert text.count("[REDACTED]") == 2
 
 
-@pytest.mark.skipif(not NATIVE_AVAILABLE, reason="native extension not built")
+@requires_native
 class TestNativeConstruction:
     def test_defaults_are_empty_credentials(self):
         account = SshAccount(login="bob")
@@ -186,9 +196,26 @@ class TestNativeConstruction:
             SshConfig("0.0.0.0:2222", HOST_KEY, accounts=["alice"])
 
 
+@requires_native
 def test_public_exports():
     import boxlite
 
     for name in ("SshConfig", "SshAccount", "SshCaConfig", "SshStatus", "SshHandle"):
         assert name in boxlite.__all__
-        assert getattr(boxlite, name, None) is not None or not NATIVE_AVAILABLE
+        assert getattr(boxlite, name) is not None
+
+
+# Pure-Python exports: these must hold in both environments, with or
+# without the native extension, so they carry no skip guard.
+def test_sync_ssh_handle_is_exported_at_top_level():
+    import boxlite
+
+    assert "SyncSshHandle" in boxlite.__all__
+    assert boxlite.SyncSshHandle is SyncSshHandle
+
+
+def test_sync_ssh_handle_is_exported_from_sync_api():
+    from boxlite import sync_api
+
+    assert "SyncSshHandle" in sync_api.__all__
+    assert sync_api.SyncSshHandle is SyncSshHandle
