@@ -1,6 +1,6 @@
 # libkrun 分阶段快照计划
 
-2026-10-22 · 设计研究，尚未实现。
+2026-10-22 · 阶段 1 内部 RAM 保存/恢复已编写；未构建、未运行测试，完整运行态快照仍待后续阶段。
 
 ## 目标与范围
 
@@ -14,7 +14,7 @@
 
 ## 固定源码基线与取舍
 
-以下“现有实现”均指这些固定提交，阶段中的改动和验收均为后续工作：
+以下“现有实现”均指这些固定提交；阶段 1 本地实现见文末，其余阶段的改动和全部运行时验收仍为后续工作：
 
 | 项目 | 固定版本 | 作用 |
 | --- | --- | --- |
@@ -176,7 +176,7 @@ guest 内可见时间采用冻结期间不倒退的暂停语义；阶段 2 明�
 
 ## 本次文档检查范围
 
-仅核对固定版本源码、Markdown 结构和 `git diff --check`。本次不实现快照，也不运行测试；所有运行时验收留待对应阶段实现。
+本次核对固定版本源码和依赖 API，并检查 Markdown、Rust 格式及 `git diff --check`。已编写阶段 1 实现与测试，但遵照任务要求不构建、不运行任何测试；条件编译、Linux KVM 行为及全部运行时验收尚未验证。
 
 [boxlite]: https://github.com/boxlite-ai/boxlite/tree/2794df3f4ee38738b5d3c2dc73b1d566a82f94cd
 [libkrun]: https://github.com/boxlite-ai/libkrun/tree/e12b9b3780ffa8df9f3e1797b217d13453479167
@@ -201,3 +201,39 @@ guest 内可见时间采用冻结期间不倒退的暂停语义；阶段 2 明�
 [cmos]: https://github.com/boxlite-ai/libkrun/blob/e12b9b3780ffa8df9f3e1797b217d13453479167/src/devices/src/legacy/x86_64/cmos.rs
 [i8042]: https://github.com/boxlite-ai/libkrun/blob/e12b9b3780ffa8df9f3e1797b217d13453479167/src/devices/src/legacy/i8042.rs#L73-L114
 [legacy]: https://github.com/boxlite-ai/libkrun/blob/e12b9b3780ffa8df9f3e1797b217d13453479167/src/vmm/src/device_manager/legacy.rs#L38-L147
+
+## 阶段 1 本地实施设计（2026-10-22）
+
+问题是最终注册的 RAM 缺少独立文件契约；本阶段增加 krun-vmm 内部保存和新 KVM VM 的内存恢复，仍不提供进程续跑、C ABI 或 BoxLite 用户入口。
+
+### 依据与取舍
+
+- 固定源码 `linux/vstate.rs::running/run_emulation`：IO/MMIO 返回 `Handled` 后继续 `KVM_RUN`，只在 EINTR 后处理 Pause；signal handler 设置 immediate_exit。因此沿用该完成边界，不额外执行可能运行 guest 的 ioctl。依据 [KVM API §5][kvm-run]，挂起 IO/MMIO 在重入完成，然后才检查信号/immediate_exit。
+- `builder.rs::create_guest_memory/load_payload`：KernelMmap 将 libkrunfw 的 raw region 插入最终内存；ShmManager 的 DAX/GPU region 同样是 anonymous，单看 mmap flags 不足以判定可保存性。
+- vm-memory 0.17.1 `MmapRegion::{owned,flags,prot,file_offset}` 和 `GuestMemory::iter` 可校验与枚举真实映射；不保存宿主地址或 FD。普通映射必须 owned、private anonymous、可读写；仅允许加载器产生并记录的精确 kernel raw region。
+- 普通 builder 无条件附加 balloon/rng，故必然拒绝阶段 1 保存。增加独立受控最小构造路径，复用 create_guest_memory 和 Vm::memory_init，但不建立任何设备、event subscriber 或后台 worker；不增加“已冻结”布尔开关。
+
+### 调用与所有权
+
+- `Vmm::save_ram_snapshot(path)` 在 Vmm 管理锁下检查实际 MMIO 注册表、共享区域和后台 observer，再验证映射；发送所有 Pause，再逐 CPU 有界等待 Paused。已暂停 CPU 对重复 Pause 返回 Paused；失败仍向全部 CPU 发 Resume，并逐个等待，容忍此前 Pause 的滞后确认，但不接受 Exited/断链。
+- 新模块 `ram_snapshot` 内部完成 region 表验证、固定大小分块读写；保存先写无效 magic 到 create_new 文件，完成复制与 flush 后先恢复源 CPU，再写有效 magic。任何暂停、写入或恢复失败均返回错误并删除/保持无效文件；成功文件必须在 Resume 成功后才成为可恢复文件。
+- `builder::build_ram_snapshot_vm(mem_size_mib, resources, payload)` 创建无设备最小 VM，复用 `create_guest_memory` 加载 payload，再通过现有 `Vm::memory_init` 注册最终 RAM；不执行 configure_system/启动参数覆盖或自动运行 CPU。返回 `ram_snapshot::RamSnapshotVm`，其 `start_vcpus(count, entry)` 仅启动受控 real-mode RAM 程序，使用同样的 Pause/Resume 通道；不接受外部 CPU/bus/后台 writer。启动中途失败时退出并 join 已创建线程，禁止再次快照。
+- `RamSnapshotVm::restore` 先用目标 KVM max_memslots 和实际文件长度验证全部 metadata，再分配新 anonymous mappings、分块填充，调用现有 `Vm::memory_init`。返回私有字段的拥有者，VM 先于 RAM drop；创建/注册失败时先关闭整个新 VM，撤销全部部分注册，然后释放 RAM，不将半注册 VM 暴露给调用者。
+- 实际恢复入口为 `RamSnapshotVm::restore(path)`，保存入口为 `RamSnapshotVm::save(path)` 和 `Vmm::save_ram_snapshot(path)`，全部仅为 crate 内部入口。恢复不创建 CPU；调用 `start_vcpus` 会初始化全新 CPU，不能解释为恢复原进程。最小 owner 在销毁时发送 Finish 并 join CPU，再释放 VM 与 RAM；普通退出仍等待正常 Vmm 进程退出。`KvmContext::new` 对 `/dev/kvm` 打开失败返回上下文错误。
+- 任意暂停/恢复通信不确定都会将 controller 标记为不可再次快照，避免旧确认污染下一次请求；恢复会尝试每一个 handle 并保留原始错误和恢复错误。队列仅在 EINTR 或已暂停边界排空，避免合并 kick 遗留控制命令，也不跳过 pending IO/MMIO 完成。
+
+### 文件契约与冻结边界
+
+- 独立版本 1，little endian：8-byte magic、u32 version、u32 count；随后 count 个 `{u64 GPA,u64 length,u64 attributes}`，然后各 region 的全部字节，GPA 顺序且允许空洞。attributes=0 唯一表示普通非加密读写 RAM，kernel 来源不影响恢复属性。
+- magic 为 `KRUNRAM\0`（8 字节）；保存以 `create_new` 拒绝覆盖已有路径，以 0600 创建文件（umask 可进一步收紧），失败文件不会获得有效 magic。
+- 分配前验证 count 非零且不超 KVM memslot 容量、4 KiB 对齐、非零长度、地址/总长度溢出、相邻重叠/乱序、未知属性、版本、截断及尾随字节。读取有上限的 metadata 后才分配 RAM；内容缓冲固定 64 KiB。
+- 阶段 1 的设备冻结契约是拒绝：任意实际 virtio、DAX/GPU shared ranges、file/shared/任意未知 raw mappings、后台 RAM 写入者均不支持。最小构造器没有这些 writer；正常 Vmm 在实际拓扑边界拒绝，不让配置开关宣称冻结。
+- 恢复仅产生新 VM 和 RAM，不创建/运行 CPU，不调用 payload loader、cmdline 或 boot parameter 初始化；CPU/中断/时钟与设备状态仍属后续阶段。
+
+### 验证计划与当前证据
+
+只写、不得运行测试，也不构建。测试覆盖最终内存/kernel region/空洞、销毁源后保留旧地址占位从而强制新地址、比较内容、新 KVM 注册及 guest 实际写入、畸形 metadata、全 CPU 暂停/重复暂停/超时/退出/通信失败、创建/中途复制写入失败后恢复、恢复失败时无有效 magic、共享/DAX/virtio/后台 writer 拒绝，以及 pending IO/MMIO 的真实 KVM 完成边界和排队控制命令。
+中途写入失败注入只存在于测试编译的 payload File 写入处，使用线程局部限额，不改变进程全局资源限制。测试源码位于 `src/vmm/src/ram_snapshot/tests.rs`，KVM run-loop 和实际 virtio 注册回归分别在 `linux/vstate.rs`、`device_manager/kvm/mmio.rs`。
+源码/API 静态核对、指定 Rust 文件的 rustfmt 检查，以及父仓库和 libkrun 子模块的 `git diff --check` 已通过；Linux KVM 执行、条件编译和所有测试验收均未验证。变更保留在本地，未创建 PR 或提交。
+
+[kvm-run]: https://docs.kernel.org/virt/kvm/api.html#the-kvm-run-structure
