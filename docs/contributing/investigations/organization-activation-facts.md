@@ -4,6 +4,114 @@ Keep the latest Box creation and start/delete times after Box cleanup.
 
 ## Details
 
+### Review follow-up: optimistic updates outside Box transactions
+
+At `87e0efe45`, an `AFTER` trigger updates the organization's facts row inside each
+Box write transaction, so same-organization Box transactions queue on that row
+until commit. The synthetic test below measured a 261 ms wait behind a 250 ms
+holder. Review asked for no database triggers: the application issues the update
+itself, optimistically, without a transactional guarantee.
+
+Decision:
+
+- A new post-deploy migration drops both activation triggers and functions. The
+  applied pre-deploy migration keeps its SQL; it only exports the trigger
+  statements so the new `down` can reinstall them.
+- After `BoxRepository.insert`, `update` or `updateWhere` commits, the repository
+  compares the previous and committed Box and runs one autocommit `UPDATE` that
+  uses `GREATEST` and matches only when a value advances.
+- Organization creation inserts the facts row in its own transaction. The reader
+  and API contract are unchanged.
+
+| Application Box write | Facts effect |
+| --- | --- |
+| Insert into a real organization | Creation is `createdAt`. |
+| Warm-pool claim | Creation is the claim `createdAt` (the write time if unchanged); modification if already `started`. |
+| Transfer between real organizations | Destination history becomes incomplete. |
+| Enter `started`; first `desiredState=destroyed` | Modification is the write time. |
+| Stop, labels, repeated state, completion, cleanup | None. |
+
+The write time is the `updatedAt` value `BoxRepository` sets in memory for that
+write, taken from the API instance clock like `createdAt`. It can differ slightly
+from the stored `updatedAt`, and clock skew between instances can reorder
+near-simultaneous events by that skew.
+
+The trigger also recorded direct destruction and physical deletion without prior
+intent. No application path produces them: `Box.assertValid` rejects `destroyed`
+unless deletion was requested, and both cleanup crons delete only such Boxes
+(`apps/api/src/box/services/box.service.ts`, `cleanupDestroyedBoxes`,
+`cleanupStaleErrorBoxes`).
+
+| Situation | Result |
+| --- | --- |
+| Facts row locked | The Box commits; only the follow-up update waits. |
+| Box transaction rolls back | No facts update runs. |
+| Concurrent or late updates | Read Committed rechecks `WHERE` on the newest row; times never regress. |
+| Update fails, or the process exits after commit | That advance is lost and logged; the Box result stands. |
+| Organization deleted | The `UPDATE` matches nothing; facts are not recreated. |
+| Raw SQL, or old instances after trigger removal | Not recorded. |
+
+There is no retry, outbox or backlog. A lost advance is repaired only by a later
+event of the same kind for that organization. `boxHistoryComplete` now means
+tracking began at organization creation, not that every update landed.
+
+[Row-level locks §13.3.2](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS)
+are released at transaction end, which is why the trigger serialized Box commits.
+[Read Committed §13.2.1](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED)
+re-evaluates the `WHERE` clause on the updated row version, so concurrent
+`GREATEST` updates cannot move a time backwards.
+
+Rejected alternatives:
+
+- A conditional `WHERE` inside the trigger still runs in the Box transaction.
+- An outbox plus worker is durable, but adds a table, cron and retention that
+  review declined.
+- `EventEmitter` listeners: `updateWhere` emits before commit, and payloads lack
+  the previous desired state.
+- A Redis buffer like `BoxActivityService` adds a dependency with the same loss window.
+- A stage flag: without triggers the cost is one primary-key `UPDATE` per
+  lifecycle event, and a disabled period would break history completeness.
+
+Rollout and rollback:
+
+- An environment that already ran the pre-deploy migration keeps its triggers
+  until the post-deploy migration. Meanwhile triggers and new instances both
+  update the row; repeated maxima are idempotent.
+- Startup runs pre- and post-deploy migrations together when migrations are enabled
+  (`apps/api/src/app.module.ts`). Dropping the triggers waits at most five seconds
+  for its table locks.
+- Before rolling the API back, revert the post-deploy migration; `down` reinstalls
+  the triggers that the previous revision relies on.
+
+Validation, on real PostgreSQL:
+
+- [x] A Box start commits while another transaction holds the facts row; facts
+  advance after release. With production reverted, the start blocks.
+- [x] Rolled-back Box writes leave facts unchanged; a delayed older update does
+  not replace a newer time.
+- [x] A failed update keeps the Box result and logs; the next start recovers.
+- [x] Box deletion keeps facts; organization deletion is not undone; the event
+  table above holds.
+- [x] Upgrade from the pre-deploy schema, trigger removal, `down` reinstall and reapply.
+
+With every production file reverted and the post-deploy migration replaced by a
+test-only no-op, the lock test failed with "The Box start did not commit while
+the facts row was locked".
+
+Nine other cases failed as well. Six compare times,
+and the trigger records statement time rather than the write time. The
+delayed-update case timed out, the failed-update case failed the Box write itself,
+and the migration case still found both triggers. Restoring the change passed all
+13 lifecycle cases and all 1,798 API tests on PostgreSQL 17.11 and Redis.
+
+That full run also exposed an activity calculation that threw after a committed
+warm claim, failing an existing creation-admission test. It now runs inside the
+logged `try`.
+
+A local pgbench run sent the follow-up `UPDATE` from eight clients, 2,000 times
+each: 0.827 ms average latency on one organization row and 0.310 ms across eight.
+This is synthetic container data, not production capacity.
+
 ### Review follow-up: migration availability
 
 At `47a83edb1`, the usage-window migration builds two ordinary indexes. The
@@ -74,14 +182,15 @@ and their coverage flag. Current Box state answers whether a Box is running.
 
 Inspection at `13ed02038` found no `startAt` or `deleteAt` on `Box`
 (`apps/api/src/box/entities/box.entity.ts`). Start means a committed transition
-into `started`; delete means the first accepted `desiredState=destroyed`, or a
-direct transition into `destroyed` without an earlier request. Record their
-database statement timestamps. Neither generic `updatedAt` nor usage-period
-starts represent these events. Label edits, stop, retries, deletion completion
+into `started`; delete means the first accepted `desiredState=destroyed`. The
+event's own committed write time is recorded; a later generic `updatedAt` or
+usage-period start does not represent it. Label edits, stop, retries, deletion completion
 after acceptance, and delayed physical cleanup must not advance the maximum.
-A direct physical delete without prior deletion intent counts at deletion time.
 
-Reuse the pending facts-table migration and transactional Box triggers. Store
+Reuse the pending facts-table migration; the optimistic follow-up above replaced
+its Box triggers with an application update after commit.
+
+Store
 only organization maxima, independent of Box retention; no per-Box event ledger,
 new route, usage query, or continuous-activity inference. Warm-pool claims count
 as creation, and as start if already running; transfers between real organizations
@@ -89,12 +198,10 @@ are not creation/start and make destination history incomplete. Backfill only
 the maximum retained `createdAt`; old start/delete history is unknown, so leave
 modification null and history incomplete. Missing facts also report incomplete.
 
-[PostgreSQL trigger behavior §37.1](https://www.postgresql.org/docs/current/trigger-definition.html)
-puts AFTER triggers in the source transaction, covering raw/old application
-writes and rollback. [Conditional expressions §9.18.4](https://www.postgresql.org/docs/current/functions-conditional.html#FUNCTIONS-GREATEST-LEAST)
+[Conditional expressions §9.18.4](https://www.postgresql.org/docs/current/functions-conditional.html#FUNCTIONS-GREATEST-LEAST)
 defines null-aware `GREATEST`, suitable for monotonic maxima under row locking.
-Application events can miss writes; querying current Boxes loses deletions;
-keeping first-use/compute facts adds analysis outside this requested contract.
+Querying current Boxes loses deletions; keeping first-use/compute facts adds
+analysis outside this requested contract.
 
 Implementation checklist:
 
@@ -184,22 +291,19 @@ The source at `72f56d099` provides the following boundaries:
 - Warm-pool claims replace organization and creation time
   (`apps/api/src/box/services/box.service.ts:397–449`). Destroyed Boxes are later
   physically removed (`1351–1382`), so counting current Boxes loses history.
-PostgreSQL executes a trigger in the originating statement's transaction:
-failure rolls both changes back. `AFTER` triggers see the final row and are
-suited to propagating changes to another table.
-[Trigger behavior, sections on transactionality and AFTER triggers](https://www.postgresql.org/docs/current/trigger-definition.html).
 
-Application dual writes would leave old instances uninstrumented during rolling
-deployment. An event listener would inherit the existing delivery gap. Database
-triggers cover both versions without adding another queue or changing billing.
-A separate table avoids altering existing responses that serialize organizations.
+[PostgreSQL triggers](https://www.postgresql.org/docs/current/trigger-definition.html)
+run in the originating transaction, so the first revision covered raw writes and
+old instances, but held the facts row lock until every Box commit. The optimistic
+follow-up accepts application-only, best-effort coverage instead. A separate table
+avoids altering existing responses that serialize organizations.
 
 ### How it works
 
-An additive, transactional migration creates `organization_activation_facts`,
-installs triggers, and backfills the maximum retained Box creation time.
-Organizations already present have incomplete lifecycle history; an organization
-insert trigger initializes future organizations with complete lifecycle history.
+An additive, transactional pre-deploy migration creates `organization_activation_facts`
+and backfills the maximum retained Box creation time. Organizations already present
+have incomplete lifecycle history. It also installs interim triggers so that instances
+running the previous revision keep recording until the post-deploy migration drops them.
 The table references organizations with cascade deletion, but never references Boxes.
 
 Trigger installation locks source tables against concurrent writers until commit.
@@ -208,31 +312,32 @@ installation and backfill. Migration lock acquisition is limited to five seconds
 and individual statements to sixty seconds; contention or excessive data causes
 rollback, not partial installation. Production data volume has not been measured.
 
-Box inserts and claims advance the creation maximum. Successful starts and first
-delete acceptance advance the modification maximum, including direct destruction
-or physical deletion without prior intent. Repeated writes, stops, label changes,
-delete completion and cleanup leave it unchanged. Pool-only activity is ignored.
-Transfers between real organizations mark the destination incomplete and do not
-attribute the source's lifecycle times to it. There is no usage-table trigger.
+Organization creation inserts a complete facts row in its own transaction. After
+`BoxRepository` commits an insert or update, it applies the event table in the
+optimistic follow-up: inserts and claims advance the creation maximum; successful
+starts and first deletion requests advance the modification maximum. Repeated
+writes, stops, label changes, deletion completion and cleanup leave it unchanged.
+Pool-only activity is ignored; real-organization transfers mark the destination incomplete.
 
-Writes lock source rows before their organization's facts row. Facts updates never
-read or lock Boxes or organizations. Organization creation owns its row
-before inserting facts; deletion cascades only into facts. The read uses one SQL
-statement. Concurrent maximum updates therefore serialize on one facts row without
-introducing a reverse facts-to-source lock path.
+The follow-up `UPDATE` runs in its own autocommit transaction and never reads or
+locks Boxes or organizations. Box transactions therefore hold no facts lock, and
+concurrent facts updates serialize only for one statement. The read uses one SQL statement.
 
 ### Validation
 
-Real PostgreSQL tests exercise maxima, successful start/restart, deletion acceptance,
-delayed cleanup, direct removal, unrelated changes, rollback, concurrent creates,
-pool claims/transfers, backfill and migration installation. HTTP tests retain
+Real PostgreSQL tests drive `BoxRepository` and `OrganizationService` through maxima,
+successful start/restart, deletion acceptance, delayed cleanup, unrelated changes,
+failed writes, a held facts lock, delayed and failed updates, organization deletion,
+pool claims/transfers, backfill, and migration upgrade/revert. HTTP tests retain
 administrator guards, date filters and optional-section isolation. The consumer
 checks timestamp types, missing fields, organization identity and scoped access.
+Go and TypeScript client request tests send each new optional query parameter
+(`createdFrom`, `createdTo`, `include`) only when set, against a local server.
 Generated clients and the daily-report example use the same two timestamps.
 Production migration duration and large-organization contention remain unmeasured.
 
-The focused lifecycle, organization-query, provider and overview suite passes 52
-checks with real PostgreSQL, including 12 lifecycle scenarios. Before production
+The focused lifecycle, organization-query, provider and overview suite passes 53
+checks with real PostgreSQL, including 13 lifecycle scenarios. Before production
 edits, the new contract check failed because the old reader omitted both latest
 fields. The final lifecycle suite creates no usage tables, checking that this
 contract depends only on organization and Box writes.
@@ -240,8 +345,11 @@ Run with `make test:apps:api FILTER='AdminOrganizationActivationService|AdminOrg
 and disposable PostgreSQL configured through `DB_*`.
 
 Focused source lint passes. Three generated clients were regenerated twice without
-Nx cache; all 532 generated files matched on the second run. Repository-wide
-format still reports 201 generated-client files, lint reports three infra
-module-boundary errors, and the full test target cannot build missing vendored
-runtime dependencies. API production and all three client builds pass. These are local
-checks, not production rollout or migration-capacity evidence.
+Nx cache; all 532 generated files matched on the second run.
+
+Repository-wide format still reports 199 generated-client files, and lint reports three infra
+module-boundary errors. The full test target stopped in an infra Pulumi log test,
+and its CLI suite failed while cloud credentials and a loopback proxy were set.
+The API build and spec type check pass; the apps build fails only in the runner
+version check and dashboard bundling. These are local checks, not production
+rollout or migration-capacity evidence.

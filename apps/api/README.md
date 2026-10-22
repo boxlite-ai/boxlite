@@ -225,21 +225,32 @@ returns 404. Omitting this selection avoids the facts query and field.
 `lastBoxCreatedAt` is the maximum retained Box creation or warm-pool claim time.
 `lastBoxModifiedAt` is the maximum observed successful-start or accepted-deletion
 time. Start means entering `started`; delete means the first request setting
-`desiredState=destroyed`, or direct destruction/removal without prior intent.
-Times are recorded in the source database transaction. Stops, label changes,
-retries, deletion completion and delayed physical cleanup do not advance them.
-Use current Box state to identify running Boxes; timestamps do not measure ongoing
-execution or user interaction. Automatic lifecycle actions also count.
+`desiredState=destroyed`. Stops, label changes, retries, deletion completion and
+delayed physical cleanup do not advance them. Use current Box state to identify
+running Boxes; timestamps do not measure ongoing execution or user interaction.
+Automatic lifecycle actions also count.
+
+`BoxRepository` records these times after the Box write commits, with one
+conditional `UPDATE` that only moves a time forward. Box transactions never wait
+on the facts row. The update is best effort: a failure, or a process exit right
+after the commit, loses that advance and only logs it. A later event of the same
+kind repairs it. Writes that bypass `BoxRepository`, such as raw SQL, are not recorded.
 
 Facts survive Box deletion and are removed with the organization. Preexisting
 organizations only backfill maximum retained creation time; past start/delete
 history is unavailable and remains null. `boxHistoryComplete` is false for them
 and for organizations receiving transferred Boxes. Null with incomplete history
-means unknown. New organizations track all subsequent creation/start/delete writes.
+means unknown. For organizations created later, `true` means tracking began at
+creation, not that every best-effort update landed.
 
-The pre-deploy migration installs transactional triggers and backfills retained
-Box creation evidence. It requires a transaction, limits lock waits to five
-seconds and individual statements to sixty seconds, and rolls back if either limit
-is exceeded. Production migration duration is unmeasured. Metadata validation rules
-and administrator authorization apply to this selection. See the [activation design](../../docs/contributing/investigations/organization-activation-facts.md)
+The pre-deploy migration creates the facts table, installs interim triggers and
+backfills retained Box creation evidence. It requires a transaction, limits lock
+waits to five seconds and individual statements to sixty seconds, and rolls back
+if either limit is exceeded. The post-deploy migration drops those triggers within
+the same five-second lock limit; while it waits, Box reads and writes queue behind
+its exclusive lock, and a timeout fails a startup that runs migrations. Revert it
+before rolling the API back to a
+trigger-reliant revision; its `down` reinstalls them. Production migration
+duration is unmeasured. Metadata validation rules and administrator authorization
+apply to this selection. See the [activation design](../../docs/contributing/investigations/organization-activation-facts.md#review-follow-up-optimistic-updates-outside-box-transactions)
 for the source evidence, concurrency model and verification boundaries.

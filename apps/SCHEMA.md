@@ -208,7 +208,8 @@ state inline.
 
 ### `organization_activation_facts`
 
-Transactional triggers maintain this table independently of Box retention. Organization
+Organization creation inserts the row. After each committed Box write, `BoxRepository`
+advances it with a best-effort conditional `UPDATE` outside the Box transaction. Organization
 deletion cascades to its facts; Box deletion does not. The API reads it only when activation
 is selected with include=activation on the existing organization detail.
 
@@ -220,7 +221,7 @@ is selected with include=activation on the existing organization detail.
 | `lastBoxModifiedAt` | `timestamptz` | nullable; maximum successful-start or accepted-deletion time |
 
 The [activation design](../docs/contributing/investigations/organization-activation-facts.md)
-describes migration locking, backfill, uncertainty and transaction tests.
+describes the optimistic update, migration locking, backfill and uncertainty.
 
 ### `user`
 
