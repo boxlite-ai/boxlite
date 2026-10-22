@@ -294,11 +294,20 @@ async function main() {
     await step('volumes list the CP volumes and their files', async () => {
       await tab('Volumes')
       const vols = await cpApi('/envs/main/volumes')
-      for (const v of vols) await page.getByTestId(`volume-files-${v.name}`).waitFor()
-      await page.waitForTimeout(1500)
       await shot('volumes')
-      const panel = await text(page.getByTestId(`volume-files-${vols[0].name}`))
-      return panel.split('\n').slice(0, 2).join(' · ')
+      // Each volume's files open in a side panel from its "Browse files" button.
+      const summaries = []
+      for (const [i, v] of vols.entries()) {
+        await page.getByRole('button', { name: 'Browse files' }).nth(i).click()
+        const sheet = page.getByTestId(`volume-files-${v.name}`)
+        await sheet.waitFor()
+        await page.waitForTimeout(1500)
+        if (i === 0) await shot('volume-files')
+        summaries.push((await text(sheet)).split('\n').slice(0, 2).join(' · '))
+        await page.keyboard.press('Escape')
+        await sheet.waitFor({ state: 'detached' })
+      }
+      return summaries.join(' | ')
     })
 
     await step('variables show live values; editing one starts a deployment that goes live', async () => {
