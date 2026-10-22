@@ -267,7 +267,10 @@ function MethodRow({ app, status, method }: { app: AppDetail; status: AppAuthSta
   // Not set up on this platform: one muted line, nothing to do in the app.
   if (method.status !== 'ready') {
     return (
-      <div className="flex min-h-[48px] items-center gap-4 border-b border-border/60 px-2 text-muted-foreground">
+      <div
+        className="flex min-h-[48px] items-center gap-4 border-b border-border/60 px-2 text-muted-foreground"
+        data-testid={`method-${method.provider}`}
+      >
         <span className="flex w-5 justify-center opacity-60">
           <ProviderLogo provider={method.provider} />
         </span>
@@ -283,7 +286,10 @@ function MethodRow({ app, status, method }: { app: AppDetail; status: AppAuthSta
     )
   }
   return (
-    <div className="flex min-h-[56px] items-center gap-4 border-b border-border/60 px-2 transition-colors hover:bg-card/50">
+    <div
+      className="flex min-h-[56px] items-center gap-4 border-b border-border/60 px-2 transition-colors hover:bg-card/50"
+      data-testid={`method-${method.provider}`}
+    >
       <span className="flex w-5 justify-center text-foreground">
         <ProviderLogo provider={method.provider} />
       </span>
