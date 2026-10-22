@@ -7,7 +7,7 @@ import { StatCard } from '@/components/ascii'
 import { AppTable } from '@/components/apps/AppTable'
 import { CreateAppDialog } from '@/components/apps/CreateAppDialog'
 import { RecentlyDeleted } from '@/components/apps/RecentlyDeleted'
-import { deleteAppBody } from '@/components/apps/deleteCopy'
+import { deleteAppBody, toastDeleted } from '@/components/apps/deleteCopy'
 import { SearchField } from '@/components/apps/spec'
 import {
   AlertDialog,
@@ -21,7 +21,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Plus } from '@/components/ui/icon'
 import { RoutePath } from '@/enums/RoutePath'
-import { useAppMutation } from '@/hooks/mutations/useAppMutations'
+import { useAppMutation, useRestoreApp } from '@/hooks/mutations/useAppMutations'
 import { useAppsQuery } from '@/hooks/queries/useAppsQuery'
 import type { AppSummary } from '@/lib/apps/types'
 import { errorText } from '@/lib/apps/client'
@@ -37,6 +37,7 @@ const Apps: React.FC = () => {
   const navigate = useNavigate()
   const { data: apps = [], isLoading, error, refetch } = useAppsQuery()
   const mutation = useAppMutation()
+  const restore = useRestoreApp()
   const [filter, setFilter] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [toDelete, setToDelete] = useState<AppSummary | null>(null)
@@ -93,7 +94,10 @@ const Apps: React.FC = () => {
       <CreateAppDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onOpen={(app) => navigate(`${generatePath(RoutePath.APP_DETAILS, { appId: app.id })}?tab=overview`)}
+        onCreated={(app) => {
+          toast.success(`${app.name} is ready for your agent`)
+          navigate(`${generatePath(RoutePath.APP_DETAILS, { appId: app.id })}?tab=overview`)
+        }}
       />
 
       <AlertDialog open={!!toDelete} onOpenChange={(open) => !open && setToDelete(null)}>
@@ -114,9 +118,7 @@ const Apps: React.FC = () => {
                 if (!target) return
                 try {
                   await mutation.mutateAsync({ kind: 'delete', appId: target.id })
-                  toast.success(`${target.name} deleted`, {
-                    description: 'Restore it from Recently deleted within 7 days.',
-                  })
+                  toastDeleted(target.name, (name) => restore.mutateAsync(name))
                 } catch (error) {
                   handleApiError(error, 'Failed to delete app')
                 }

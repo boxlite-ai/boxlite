@@ -21,6 +21,7 @@ import {
   Database,
   FileText,
   Folder,
+  Globe,
   LayoutDashboard,
   MoreVertical,
   RefreshCw,
@@ -28,7 +29,7 @@ import {
   type LucideIcon,
 } from '@/components/ui/icon'
 import { RoutePath } from '@/enums/RoutePath'
-import { useAppMutation } from '@/hooks/mutations/useAppMutations'
+import { useAppMutation, useRestoreApp } from '@/hooks/mutations/useAppMutations'
 import { useAppEnv, useAppQuery, useRefreshOnDeployDone } from '@/hooks/queries/useAppsQuery'
 import { errorText, httpStatusOf } from '@/lib/apps/client'
 import { appStatusOf, capitalize, VISIBILITY_LABEL, VISIBILITY_ORDER } from '@/lib/apps/format'
@@ -42,12 +43,13 @@ import { toast } from 'sonner'
 import { DeployProgress } from './DeployProgress'
 import { EnvironmentSwitcher } from './EnvironmentSwitcher'
 import { useConfirm } from './confirm'
-import { deleteAppBody } from './deleteCopy'
+import { deleteAppBody, toastDeleted } from './deleteCopy'
 import { StatusBadge } from './spec'
 import { Tag } from './viz'
 import { DatabaseTab } from './tabs/DatabaseTab'
 import { AuthTab } from './tabs/AuthTab'
 import { DeploymentsTab } from './tabs/DeploymentsTab'
+import { DomainsTab } from './tabs/DomainsTab'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { LogsTab } from './tabs/LogsTab'
 import { OverviewTab } from './tabs/OverviewTab'
@@ -55,11 +57,11 @@ import { VariablesTab } from './tabs/VariablesTab'
 import { VolumesTab } from './tabs/VolumesTab'
 
 // Each tab carries the console's pixel glyph for what it holds, so the strip can be scanned by shape.
-// Domains is not offered: each environment is served at the one origin the control plane assigns it.
 const TABS: { id: AppTab; label: string; icon: LucideIcon }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'deployments', label: 'Deployments', icon: CloudUpload },
   { id: 'logs', label: 'Logs', icon: FileText },
+  { id: 'domains', label: 'Domains', icon: Globe },
   { id: 'auth', label: 'Auth', icon: ShieldCheck },
   { id: 'database', label: 'Database', icon: Database },
   { id: 'volumes', label: 'Volumes', icon: Folder },
@@ -85,6 +87,7 @@ export default function AppDetails() {
   const { data: app, isLoading, isError, error, refetch, isFetching } = useAppQuery(appId)
   useRefreshOnDeployDone(app)
   const mutation = useAppMutation()
+  const restoreApp = useRestoreApp()
   const [confirm, confirmElement] = useConfirm()
   // What the console asked for right now (restart, access), said in the header while it happens.
   const [inFlight, setInFlight] = useState<string | null>(null)
@@ -139,8 +142,8 @@ export default function AppDetails() {
         title: `Open ${app.name} · ${app.environment} to anyone?`,
         body: (
           <>
-            Anyone with {app.url} can open it without signing in{exposed ? ` (it serves ${exposed.name})` : ''}. The
-            setting wins over access in boxlite.toml until you change it here again.
+            Anyone with {app.url} can open it without signing in{exposed ? ` (it serves ${exposed.name})` : ''}. Your
+            agent&apos;s later deploys keep this setting until you change it here.
           </>
         ),
         confirmLabel: 'Make public',
@@ -195,6 +198,8 @@ export default function AppDetails() {
     setRestarting(null)
   }
 
+  // Deleting an app can be undone for 7 days (Recently deleted), so it asks once and offers Undo;
+  // only an environment, which is removed for good, asks for its name.
   const deleteApp = async () => {
     if (!app) return
     const ok = await confirm({
@@ -202,11 +207,15 @@ export default function AppDetails() {
       body: deleteAppBody(app.name),
       confirmLabel: 'Delete app',
       danger: true,
-      typeToConfirm: app.name,
     })
     if (!ok) return
-    if (await run({ kind: 'delete', appId: app.id }, `${app.name} deleted`, 'Failed to delete'))
+    try {
+      await mutation.mutateAsync({ kind: 'delete', appId: app.id })
+      toastDeleted(app.name, (name) => restoreApp.mutateAsync(name))
       navigate(RoutePath.APPS)
+    } catch (err) {
+      handleApiError(err, 'Failed to delete')
+    }
   }
 
   const deleteEnvironment = async () => {
@@ -348,6 +357,7 @@ export default function AppDetails() {
               onOpenDeployment={(n) => goTo('deployments', undefined, { deployment: String(n) })}
             />
           )}
+          {tab === 'domains' && <DomainsTab app={app} />}
           {tab === 'volumes' && <VolumesTab app={app} />}
           {tab === 'variables' && <VariablesTab app={app} />}
 
@@ -429,28 +439,18 @@ function Header({
           <DropdownMenuContent align="end" className="min-w-[15rem] font-mono">
             <div className="px-2 py-1.5 text-[12px] text-muted-foreground">Environment · {app.environment}</div>
             {/* Nothing runs before the first release, so there is nothing to restart or sleep. */}
-            {app.activeRelease && (
+            {/* Asleep, there is nothing to restart or put to sleep; the next request wakes it. */}
+            {app.activeRelease && app.status !== 'sleeping' && app.box && (
               <>
-                <DropdownMenuItem
-                  className="cursor-pointer"
-                  onClick={onRestart}
-                  disabled={app.services.length === 0 || app.status === 'sleeping'}
-                >
-                  Restart services
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="cursor-pointer"
-                  onClick={onSleep}
-                  disabled={app.status === 'sleeping' || !app.box}
-                >
+                {app.services.length > 0 && (
+                  <DropdownMenuItem className="cursor-pointer" onClick={onRestart}>
+                    Restart services
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem className="cursor-pointer" onClick={onSleep}>
                   Sleep now
                 </DropdownMenuItem>
               </>
-            )}
-            {app.box && (
-              <div className="px-2 py-1.5 text-[12px] text-muted-foreground">
-                Box {app.box.id} · {app.box.state}
-              </div>
             )}
             <DropdownMenuItem className="cursor-pointer" onClick={onRefresh}>
               Refresh
@@ -494,7 +494,7 @@ function Header({
 const ACCESS_REASON: Record<AppVisibility, string> = {
   private: 'You and anyone signed in to this console',
   org: 'Members of your BoxLite organization, signed in',
-  public: 'Anyone with the URL, no sign-in ([auth] still protects its paths)',
+  public: 'Anyone with the URL; pages behind sign-in still ask for it',
 }
 
 function AccessMenu({
@@ -517,7 +517,7 @@ function AccessMenu({
       <DropdownMenuContent align="end" className="w-[20rem] font-mono">
         <div className="px-2 py-1.5 text-[12px] text-muted-foreground">
           Who can open {app.environment}
-          {app.accessSource === 'online' ? ' · set here, wins over boxlite.toml' : ' · from boxlite.toml'}
+          {app.accessSource === 'online' ? ' · set here' : ' · as your agent set it'}
         </div>
         {VISIBILITY_ORDER.map((visibility) => (
           <DropdownMenuItem

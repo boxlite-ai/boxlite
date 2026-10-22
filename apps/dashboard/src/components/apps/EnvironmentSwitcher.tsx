@@ -196,8 +196,8 @@ function NewEnvironmentDialog({
           ))}
         </div>
         <span className="text-[12px] text-muted-foreground">
-          Variables come from boxlite.toml ([env.{name || 'staging'}]) and files are never copied. The new environment
-          starts with nothing deployed; your agent deploys to it with --env {name || 'staging'}.
+          Files are never copied, and variables are your agent&apos;s to set. The new environment starts with nothing
+          deployed; hand it to your agent from its Overview.
         </span>
         <DialogFooter className="gap-2">
           <FlatButton onClick={onClose}>Cancel</FlatButton>

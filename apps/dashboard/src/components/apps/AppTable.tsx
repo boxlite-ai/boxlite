@@ -13,6 +13,16 @@ import { GridHeader, HoverActions, MoreButton, StatusBadge } from './spec'
 
 const GRID = 'grid-cols-[1.5fr_1.8fr_1.4fr_1.4fr_96px] gap-3'
 
+/**
+ * The host, readable in a column: tunnel hosts are long and alike at the start and the end, so a
+ * long one keeps both ends around a middle ellipsis (10024-d-7641…dev.boxlite.ai). The full URL
+ * is on hover and in the copy and open actions.
+ */
+function shortHost(url: string): string {
+  const host = url.replace(/^https?:\/\//, '').replace(/\/$/, '')
+  return host.length <= 34 ? host : `${host.slice(0, 12)}…${host.slice(-18)}`
+}
+
 export function AppTable({
   apps,
   loading,
@@ -106,10 +116,18 @@ export function AppTable({
                 )}
               </span>
               <span className="flex min-w-0 flex-col font-mono text-[12px]">
-                <span className="truncate text-foreground">{app.url.replace(/^https?:\/\//, '')}</span>
-                <span className="text-[11px] text-muted-foreground">
-                  {capitalize(VISIBILITY_LABEL[app.visibility])}
-                </span>
+                {app.status === 'draft' ? (
+                  <span className="text-muted-foreground">Not published</span>
+                ) : (
+                  <>
+                    <span className="truncate text-foreground" title={app.url}>
+                      {shortHost(app.url)}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">
+                      {capitalize(VISIBILITY_LABEL[app.visibility])}
+                    </span>
+                  </>
+                )}
               </span>
               <span className="flex min-w-0 flex-col gap-0.5">
                 <StatusBadge label={status.label} color={status.color} caps />
