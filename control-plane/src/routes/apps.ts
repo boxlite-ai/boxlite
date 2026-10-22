@@ -5,6 +5,7 @@ import type { Vars } from '../auth.js';
 import { now } from '../db.js';
 import type { Ctx } from '../ctx.js';
 import { fail } from '../errors.js';
+import { listFeedback } from '../feedback.js';
 import { createApp } from '../services/apps.js';
 import { envSummary } from '../views.js';
 import { body, type C } from './util.js';
@@ -29,6 +30,7 @@ export function adminSecretRoutes(ctx: Ctx) {
     ctx.store.run('INSERT INTO org_secrets (name, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at', name, b.value, now());
     return c.json({ name, updated_at: now() });
   });
+  r.get('/feedback', (c) => c.json(listFeedback(ctx))); // agents' reports about the platform, newest first
   r.get('/secrets', (c) => c.json(ctx.store.all<{ name: string; updated_at: string }>('SELECT name, updated_at FROM org_secrets ORDER BY name')));
   r.delete('/secrets/:name{.+}', (c) => {
     ctx.store.run('DELETE FROM org_secrets WHERE name = ?', c.req.param('name'));

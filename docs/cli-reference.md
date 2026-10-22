@@ -168,6 +168,24 @@ boxlite-app docs runtime
 boxlite-app docs reference app logs
 ```
 
+### `boxlite-app feedback`
+
+report a platform problem (a bug, a missing capability, docs that reality contradicts) to the BoxLite team
+
+Usage: `boxlite-app feedback <message...> [options]`
+
+| option | description | default |
+|---|---|---|
+| `--command <cmd>` | the command that misbehaved |  |
+
+- Network: talks to the control plane
+- `--json`: `{ id, received_at, next }`
+- Exit codes: 0, 1, 2, 6
+
+```sh
+boxlite-app feedback --command "boxlite-app deploy" "deploy stayed at box for 10 minutes; app status showed the Box running"
+```
+
 ### `boxlite-app app status`
 
 environments, URLs and latest deployments

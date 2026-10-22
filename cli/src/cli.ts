@@ -8,6 +8,7 @@ import { registerCheck } from './commands/check.js';
 import { registerDeploy } from './commands/deploy.js';
 import { registerDocs } from './commands/docs.js';
 import { registerDoctor } from './commands/doctor.js';
+import { registerFeedback } from './commands/feedback.js';
 import { registerInit } from './commands/init.js';
 import { registerPlan } from './commands/plan.js';
 import { registerWhoami } from './commands/whoami.js';
@@ -46,6 +47,7 @@ export function buildProgram(run: RunOptions, argv: readonly string[] = [], out:
   registerWhoami(program, make);
   registerDoctor(program, make);
   registerDocs(program, make);
+  registerFeedback(program, make);
   registerAuth(registerApp(program, make), make);
   return program;
 }

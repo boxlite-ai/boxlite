@@ -328,6 +328,11 @@ export class Api {
     return this.json('GET', `${this.envPath}/context`);
   }
 
+  /** A report about the platform for the BoxLite team (the feedback command). */
+  feedback(body: { message: string; command?: string; env?: string; cli_version?: string }): Promise<{ id: string; received_at: string; next: string }> {
+    return this.json('POST', `/v1/apps/${encodeURIComponent(this.appName ?? 'me')}/feedback`, { body });
+  }
+
   whoami(): Promise<WhoAmI> {
     return this.json('GET', `/v1/apps/${encodeURIComponent(this.appName ?? 'me')}/whoami`);
   }

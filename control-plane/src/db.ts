@@ -286,6 +286,20 @@ const MIGRATIONS: string[] = [
   ALTER TABLE console_access_v7 RENAME TO console_access;
   CREATE INDEX console_access_env ON console_access(env_id, id);
   `,
+  // Agents' reports about the platform (boxlite-app feedback "<message>"); kept when the App is purged.
+  `
+  CREATE TABLE IF NOT EXISTS feedback (
+    id TEXT PRIMARY KEY,
+    app_id TEXT NOT NULL,
+    env TEXT,
+    actor TEXT NOT NULL,
+    message TEXT NOT NULL,
+    command TEXT,
+    cli_version TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS feedback_app ON feedback(app_id, created_at);
+  `,
 ];
 
 export const LOG_RING_SIZE = 20_000;

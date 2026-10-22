@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import type { SQLInputValue } from 'node:sqlite';
 import { buildAgentContext, schedulesOf, variablesOf } from '../agent-context.js';
 import { newId, requireAppKey, type Vars } from '../auth.js';
@@ -6,12 +7,13 @@ import { cliPackage } from '../cli-version.js';
 import type { Ctx } from '../ctx.js';
 import { now, type LogLine } from '../db.js';
 import { fail } from '../errors.js';
+import { recordFeedback } from '../feedback.js';
 import { TABLES_QUERY } from '../services/db.js';
 import { deploymentLogs, parseSince, storedLevelsAtLeast } from '../services/logs.js';
 import { deploymentView, envStatus } from '../views.js';
 import { readVolume, VOLUME_FILE_MAX, volumePath, writeVolume } from '../volume-files.js';
 import { forward } from '../proxy/forward.js';
-import { envOf, intParam, type C } from './util.js';
+import { body, envOf, intParam, type C } from './util.js';
 
 /**
  * Endpoints for the agent-facing CLI (contracts §4.1 "CLI extras"): discovery (whoami, context,
@@ -66,6 +68,16 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
       control_plane: ctx.config.publicUrl,
       cli: { latest_version: await latestCli(ctx), download_url: `${ctx.config.publicUrl}/cli/boxlite-app.tgz` },
     });
+  });
+
+  /** boxlite-app feedback "<message>": the agent reports something the platform got wrong, then carries on. */
+  r.post('/feedback', async (c) => {
+    const b = await body(
+      c,
+      z.object({ message: z.string().trim().min(10).max(4000), command: z.string().max(500).optional(), env: z.string().max(64).optional(), cli_version: z.string().max(32).optional() }),
+    );
+    const out = recordFeedback(ctx, c.get('app').id, c.get('actor'), b);
+    return c.json({ ...out, next: 'thanks: the BoxLite team reads every report; continue the user\'s task with a workaround' }, 201);
   });
 
   r.get('/envs/:env/context', async (c) => c.json(await buildAgentContext(ctx, c.get('app'), envOf(ctx, c), await latestCli(ctx))));

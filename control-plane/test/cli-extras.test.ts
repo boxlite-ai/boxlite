@@ -274,3 +274,24 @@ test('context reads the services live, so a crash that starts after go-live is a
   assert.deepEqual(c.services.map((s: any) => [s.name, s.state, s.restarts, s.last_exit_code]), [['web', 'restarting', 12, 1]]);
   assert.equal(c.next_actions[0].id, 'crash_loop');
 });
+
+test('feedback: an agent reports a platform problem; the platform admin reads it, keys redacted; floods are capped', async () => {
+  const res = await h.request('/v1/apps/crm/feedback', { method: 'POST', key, json: { message: `deploy hung at "box" for 10 minutes, key ${key} in my shell`, command: 'boxlite-app deploy', env: 'main', cli_version: '0.2.0' } });
+  assert.equal(res.status, 201, await res.clone().text());
+  const got = (await res.json()) as { id: string; next: string };
+  assert.match(got.id, /^fb_/);
+  assert.match(got.next, /workaround/);
+
+  const list = await h.request('/admin/feedback', { headers: { authorization: `Bearer ${ADMIN}` } });
+  const rows = (await list.json()) as { id: string; app: string; env: string; actor: string; message: string; command: string }[];
+  const mine = rows.find((r) => r.id === got.id)!;
+  assert.equal(mine.app, 'crm');
+  assert.equal(mine.command, 'boxlite-app deploy');
+  assert.match(mine.actor, /^key:…/);
+  assert.ok(!mine.message.includes(key), 'the App key is redacted from the stored report');
+
+  assert.equal((await h.request('/v1/apps/crm/feedback', { method: 'POST', key, json: { message: 'short' } })).status, 400);
+  let last = 0;
+  for (let i = 0; i < 25 && last !== 429; i++) last = (await h.request('/v1/apps/crm/feedback', { method: 'POST', key, json: { message: `report number ${i} about the platform` } })).status;
+  assert.equal(last, 429, 'more than 20 reports an hour are refused');
+});
