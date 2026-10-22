@@ -233,7 +233,7 @@ func newHarness(t *testing.T, stateDir string, fake *fakeCP) *harness {
 
 	mgr := New(Options{
 		CP: client, Hub: hub, Store: store, Reaper: reaper, Version: "test",
-		HealthBudget: 3 * time.Second, HealthInterval: 30 * time.Millisecond,
+		HealthBudget: 3 * time.Second, HealthInterval: 30 * time.Millisecond, SettleWindow: 400 * time.Millisecond,
 		StopGrace: time.Second, SpecRetry: 150 * time.Millisecond, Keep: 3,
 		BaseEnv: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")},
 	})
@@ -600,6 +600,34 @@ func TestDeployActivateRollbackLifecycle(t *testing.T) {
 	h.mgr.Shutdown()
 	for _, pid := range pids {
 		waitUntil(t, fmt.Sprintf("pid %d gone", pid), func() bool { return syscall.Kill(pid, 0) == syscall.ESRCH })
+	}
+}
+
+// A release whose web answers its health check but whose worker dies right away
+// must not go live: one good health answer does not make a healthy release.
+func TestCrashingWorkerNeverGoesLive(t *testing.T) {
+	fake := newFakeCP(t, nil)
+	h := newHarness(t, t.TempDir(), fake)
+
+	fake.set(h.spec(1, "one", nil, helperServices()), map[string]string{"README.md": "one"})
+	h.mgr.Boot(context.Background())
+	fake.waitPhase(t, 1, api.PhaseLive)
+	h.mgr.Wait()
+
+	crashing := helperServices()
+	crashing[1].Command = "sleep 0.1; exit 4"
+	fake.set(h.spec(2, "two", nil, crashing), map[string]string{"README.md": "two"})
+	h.deploymentCall("deploy", 2)
+	fake.waitPhase(t, 2, api.PhaseBuilt)
+	h.mgr.Wait()
+	h.deploymentCall("activate", 2)
+	failed := fake.waitPhase(t, 2, api.PhaseFailed)
+	h.mgr.Wait()
+	if failed.Step != "start" || !strings.Contains(failed.Error, "worker exited with code 4") {
+		t.Fatalf("crashing worker must fail the start step: %+v", failed)
+	}
+	if hr := h.health(); hr.Deployment != 1 {
+		t.Fatalf("#1 must stay live, got %+v", hr)
 	}
 }
 

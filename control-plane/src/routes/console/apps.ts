@@ -5,6 +5,7 @@ import { environmentViews, summaryView } from '../../console-views.js';
 import { handoffPrompt } from '../../console-prompt.js';
 import { fail } from '../../errors.js';
 import { deleteApp, restoreApp } from '../../lifecycle.js';
+import { previewImage } from '../../preview.js';
 import { createOpenTicket } from '../../proxy/gate.js';
 import { createApp, rotateKey } from '../../services/apps.js';
 import { ACTOR, type ConsoleKit } from './kit.js';
@@ -42,6 +43,15 @@ export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
   api.get('/apps/:id', async (c) => {
     const app = appOf(c);
     return c.json(await detail(app, envOf(c, app)));
+  });
+
+  /** The last screenshot of the env's live URL (preview.ts), for the Overview. */
+  api.get('/apps/:id/preview', (c) => {
+    const app = appOf(c);
+    const env = envOf(c, app);
+    const image = previewImage(ctx, env.id);
+    if (!image) throw fail('not_found', `no screenshot of ${app.name} · ${env.name} yet`, 'one is taken when a deployment goes live');
+    return c.body(new Uint8Array(image), 200, { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=86400' });
   });
 
   /** Delete is the soft delete of PRD 3.13; the purger removes the resources later. */

@@ -29,3 +29,4 @@ Findings from real runs, newest last. Each line: finding → owner area → stat
 - Agents handed users one-time `app open` links that expire in 60 s → SKILL.md: report the permanent URL; owner opens private apps from the console → fixed
 - A DELETE without --write answered "cannot execute DELETE in a read-only transaction / fix the SQL", so an agent concluded it could not clean its test rows → refused before execution with `write_requires_flag` and the exact `--write` command; 25006 fallback hint → fixed
 - SKILL.md never told agents to remove their test data → section 5 cleanup rule → fixed
+- A release whose web passed one health check but whose worker (or web) crashed right after went live and crash-looped (found by the fidelity engineer's "alerts" fixture) → supervisor settle window: every service must stay up 5 s after the health check before traffic moves → fixed; test proven to fail without the fix

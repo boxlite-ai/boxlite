@@ -20,6 +20,16 @@ export interface AccessRow {
   ms: number;
 }
 
+/** The Overview's last 24 hours, hourly buckets oldest first. */
+export interface ConsoleMetrics {
+  requests: number[];
+  errors: number[];
+  /** null for an hour without requests: there is no latency to report. */
+  p95Ms: (number | null)[];
+  activeUsers: number[];
+  previousRequests: number;
+}
+
 export class AccessLog {
   private inserts = 0;
 
@@ -40,10 +50,11 @@ export class AccessLog {
   }
 
   /**
-   * 24 hourly buckets (oldest first) of requests, 5xx errors and p95 latency, plus the request
-   * count of the 24 hours before. null when the env had no traffic in the last 48 hours.
+   * 24 hourly buckets (oldest first) of requests, 5xx errors, p95 latency (null for an hour without
+   * requests) and signed-in users, plus the request count of the 24 hours before. null when the env
+   * had neither traffic in the last 48 hours nor a signed-in user in the last 24.
    */
-  metrics(envId: string, at = Date.now()): { requests: number[]; errors: number[]; p95Ms: number[]; previousRequests: number } | null {
+  metrics(envId: string, at = Date.now()): ConsoleMetrics | null {
     const hour = 3_600_000;
     const end = Math.ceil(at / hour) * hour;
     const start = end - 24 * hour;
@@ -52,7 +63,8 @@ export class AccessLog {
       envId,
       new Date(start - 24 * hour).toISOString(),
     );
-    if (!rows.length) return null;
+    const activeUsers = this.signedInUsers(envId, start, hour);
+    if (!rows.length && !activeUsers.some((n) => n > 0)) return null;
     const requests = Array.from({ length: 24 }, () => 0);
     const errors = Array.from({ length: 24 }, () => 0);
     const latencies: number[][] = Array.from({ length: 24 }, () => []);
@@ -69,11 +81,34 @@ export class AccessLog {
       latencies[i]!.push(r.ms);
     }
     const p95Ms = latencies.map((l) => {
-      if (!l.length) return 0;
+      if (!l.length) return null;
       l.sort((a, b) => a - b);
       return l[Math.min(l.length - 1, Math.ceil(l.length * 0.95) - 1)]!;
     });
-    return { requests, errors, p95Ms, previousRequests };
+    return { requests, errors, p95Ms, activeUsers, previousRequests };
+  }
+
+  /**
+   * Distinct end users with a session alive at some point of each hour (app_sessions: from its
+   * creation until it was revoked or expired), 24 buckets from `start`.
+   */
+  private signedInUsers(envId: string, start: number, hour: number): number[] {
+    const end = start + 24 * hour;
+    const sessions = this.ctx.store.all<{ user_id: string; created_at: string; expires_at: string; revoked_at: string | null }>(
+      'SELECT user_id, created_at, expires_at, revoked_at FROM app_sessions WHERE env_id = ? AND created_at < ? AND COALESCE(revoked_at, expires_at) > ?',
+      envId,
+      new Date(end).toISOString(),
+      new Date(start).toISOString(),
+    );
+    const users: Set<string>[] = Array.from({ length: 24 }, () => new Set());
+    for (const s of sessions) {
+      const from = Date.parse(s.created_at);
+      const until = Math.min(Date.parse(s.expires_at), s.revoked_at ? Date.parse(s.revoked_at) : Infinity);
+      const first = Math.max(0, Math.floor((from - start) / hour));
+      const last = Math.min(23, Math.floor((until - start) / hour));
+      for (let i = first; i <= last; i++) users[i]!.add(s.user_id);
+    }
+    return users.map((u) => u.size);
   }
 }
 

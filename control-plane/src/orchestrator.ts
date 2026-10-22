@@ -11,6 +11,7 @@ import { runDeploy } from './orchestrator/deploy.js';
 import { Cancelled, Job, StepFailure, type JobHost } from './orchestrator/job.js';
 import { rollbackProblem, runRollback } from './orchestrator/rollback.js';
 import { SupervisorLink } from './orchestrator/supervisor-link.js';
+import { capturePreview } from './preview.js';
 
 /**
  * Runs deployments. One queue per env: a deployment starts only when the previous one in that env
@@ -171,6 +172,7 @@ export class Orchestrator implements JobHost {
     });
     job.log(`deployment #${job.dep.number} is live at ${this.ctx.resources.appUrl(job.app.name, env.name)}`);
     this.emitDone(env.id, job.dep.number);
+    capturePreview(this.ctx, job.app.id, env.id, job.dep.number);
   }
 
   private finishFailed(job: Job, err: unknown): void {

@@ -19,8 +19,10 @@ await build({
   target: 'node22',
   format: 'esm',
   sourcemap: true,
-  // pg optionally requires pg-native; it is never installed.
-  external: ['pg-native'],
+  // pg optionally requires pg-native; it is never installed. playwright-core (app screenshots,
+  // preview.ts) is loaded lazily and ships beside the bundle as node_modules/playwright-core
+  // (deploy/deploy-cp.sh): it reads its own package files at run time, so it is not bundled.
+  external: ['pg-native', 'playwright-core'],
   define: { __dirname: '__bundleDirname', __filename: '__bundleFilename' },
   // Bundled CJS deps (pg, libpg-query) call require() and read __dirname; give the ESM bundle both.
   banner: {

@@ -17,6 +17,7 @@ import { dbCoordinates } from './services/db.js';
 import type { Spec } from './spec.js';
 import type { ServiceState } from './supervisor.js';
 import { logLevel } from './services/logs.js';
+import { previewMeta, refreshPreviewIfStale } from './preview.js';
 
 /**
  * Builds the console's view objects (the shapes of the dashboard's lib/apps/types.ts) from real CP
@@ -45,9 +46,13 @@ export function envStatus(ctx: Pick<Ctx, 'store'>, env: EnvRow, box: string | nu
   // An apply before any deploy is "live" in the CP but nothing runs yet.
   if (!env.live_deployment || !env.box_id) return latest.status === 'failed' ? 'failed' : 'draft';
   if (box === 'stopped') return 'sleeping';
-  if (services.some((s) => s.state === 'failed' || s.health === 'unhealthy')) return 'degraded';
+  if (services.some((s) => s.state === 'failed' || s.health === 'unhealthy' || crashLooping(s))) return 'degraded';
   return 'live';
 }
+
+/** The supervisor keeps restarting a service that keeps exiting non-zero: it never serves, though never "failed". */
+const crashLooping = (s: { state: string; restarts?: number; last_exit_code?: number | null; lastExitCode?: number }) =>
+  s.state === 'restarting' && (s.restarts ?? 0) >= 3 && (s.last_exit_code ?? s.lastExitCode ?? 0) !== 0;
 
 function failureLine(d: Deployment): string | undefined {
   if (d.status !== 'failed' || !d.error) return undefined;
@@ -194,7 +199,8 @@ function problemsOf(ctx: Pick<Ctx, 'store'>, app: AppRow, env: EnvRow, latest: D
   if (latest && failure) {
     out.push({
       summary: `Deployment #${latest.number} failed at ${failure.step}`,
-      detail: `${failure.diagnosis.summary}. Fix: ${failure.diagnosis.fix}`,
+      // The fix itself is written for the agent (commands, files): it travels in fixPrompt.
+      detail: `${failure.diagnosis.summary.charAt(0).toUpperCase()}${failure.diagnosis.summary.slice(1)}.`,
       fixPrompt: failure.fixPrompt,
       deployment: latest.number,
       ...(env.live_deployment && env.box_id ? { serving: releaseId(env.live_deployment) } : {}),
@@ -202,13 +208,18 @@ function problemsOf(ctx: Pick<Ctx, 'store'>, app: AppRow, env: EnvRow, latest: D
   }
   if (reportedAny && env.live_deployment) {
     for (const s of services) {
-      if (s.state !== 'failed' && s.health !== 'unhealthy') continue;
+      const looping = crashLooping(s);
+      if (s.state !== 'failed' && s.health !== 'unhealthy' && !looping) continue;
+      // Its own last words say more than any counter: "Error: SLACK_TOKEN is not set".
+      const said = s.recentErrors.at(-1)?.replace(/^\S+Z /, '');
+      const exits = s.lastExitCode !== undefined ? `exited with code ${s.lastExitCode}` : 'stopped';
       out.push({
-        summary: s.state === 'failed' ? `${s.name} has crashed` : `${s.name} is failing its health check`,
-        detail: [s.lastExitCode !== undefined ? `last exit code ${s.lastExitCode}` : null, `${s.restarts} restart${s.restarts === 1 ? '' : 's'}`, s.healthPath ? `health path ${s.healthPath}` : null]
-          .filter(Boolean)
-          .join(' · '),
-        fixPrompt: `The service "${s.name}" of the BoxLite app "${app.name}" (environment ${env.name}) is ${s.state === 'failed' ? 'crashing' : 'failing its health check'}.\nRead \`boxlite-app app logs --source ${s.name} --since 30m\` and \`boxlite-app app services\`, fix the cause, then deploy again.`,
+        summary: s.state === 'failed' ? `${s.name} has crashed` : looping ? `${s.name} keeps crashing` : `${s.name} is failing its health check`,
+        detail:
+          s.health === 'unhealthy' && !looping && s.state !== 'failed'
+            ? `It answers ${s.healthPath ?? 'its health check'} with an error${said ? `: "${said}"` : ''}.`
+            : `It ${exits}${said ? `: "${said}"` : ''}. Restarted ${s.restarts} time${s.restarts === 1 ? '' : 's'} so far.`,
+        fixPrompt: `The service "${s.name}" of the BoxLite app "${app.name}" (environment ${env.name}) is ${s.state === 'failed' || looping ? 'crashing' : 'failing its health check'}.\nRead \`boxlite-app app logs --source ${s.name} --since 30m\` and \`boxlite-app app services\`, fix the cause, then deploy again.`,
       });
     }
   }
@@ -260,8 +271,12 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
         ? `Deploying #${active.number}${running ? ` · ${running.name}${running.detail ? ` (${running.detail})` : ''}` : ` · ${active.status}`}`
         : null;
 
+  refreshPreviewIfStale(ctx, app, fresh, state.box);
+  const shot = fresh.live_deployment ? previewMeta(ctx, fresh.id) : null;
+
   return {
     id: app.name,
+    appId: app.id,
     name: app.name,
     slug: app.name,
     url: ctx.resources.appUrl(app.name, fresh.name) + '/',
@@ -299,6 +314,9 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
     schedules: schedulesOf(ctx, fresh, current).map((s) => ({ name: s.name, cron: s.cron, target: s.target, nextRun: s.next_run, lastRun: s.last_run, lastStatus: s.last_status })),
     liveVariables: current ? { ...current.variables } : null,
     metrics: access.metrics(fresh.id),
+    preview: shot
+      ? { src: `/apps/${encodeURIComponent(app.name)}/preview?env=${encodeURIComponent(fresh.name)}&v=${encodeURIComponent(shot.capturedAt)}`, capturedAt: shot.capturedAt, releaseId: releaseId(shot.deployment) }
+      : null,
     handoffPrompt: handoffPrompt(ctx, app.name, key ? maskKey(key.last4) : '<rotate the key to get a new one>'),
     key,
     specVersion: spec?.version ?? null,

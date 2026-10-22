@@ -56,6 +56,7 @@ type Options struct {
 
 	HealthBudget   time.Duration // 60 s
 	HealthInterval time.Duration // 500 ms
+	SettleWindow   time.Duration // 5 s every service must stay up after the health check, before traffic moves
 	StopGrace      time.Duration // 10 s between SIGTERM and SIGKILL
 	BuildTimeout   time.Duration // 30 min ceiling for download, extraction and every build step together
 	SpecRetry      time.Duration // 5 s between boot-time spec fetches
@@ -97,6 +98,9 @@ func New(o Options) *Manager {
 	}
 	if o.StopGrace <= 0 {
 		o.StopGrace = 10 * time.Second
+	}
+	if o.SettleWindow <= 0 {
+		o.SettleWindow = 5 * time.Second
 	}
 	if o.BuildTimeout <= 0 {
 		o.BuildTimeout = 30 * time.Minute
@@ -477,6 +481,19 @@ func (m *Manager) activate(ctx context.Context, n int, kind string) bool {
 			return false
 		}
 	}
+	// One good health answer is not enough: an app that answers once and then
+	// crashes, or a worker that dies on start, would go live and crash-loop.
+	// Every service of the candidate has to stay up for the settle window.
+	if name, st := m.settle(ctx, group); name != "" {
+		tail := m.tailFor(name, n)
+		group.Stop(2 * time.Second)
+		if ctx.Err() != nil {
+			m.fail(ctx, n, "start", m.why(ctx, ctx, ctx.Err()), tail)
+		} else {
+			m.fail(ctx, n, "start", fmt.Errorf("service %s %s within %s of starting", name, st, m.o.SettleWindow), tail)
+		}
+		return false
+	}
 	if ctx.Err() != nil {
 		// Cancelled while the candidate came up: it never takes traffic.
 		group.Stop(2 * time.Second)
@@ -510,6 +527,32 @@ func (m *Manager) activate(ctx context.Context, n int, kind string) bool {
 	hub.Systemf(n, api.LevelInfo, "%s #%d: live", kind, n)
 	m.report(ctx, api.Status{Deployment: n, Phase: api.PhaseLive, Services: group.Statuses()})
 	return true
+}
+
+// settle waits SettleWindow and returns the first service that exited or
+// restarted meanwhile, with a short description; "" when all stayed up.
+func (m *Manager) settle(ctx context.Context, group *proc.Group) (string, string) {
+	t := time.NewTimer(m.o.SettleWindow)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return "", ""
+	case <-t.C:
+	}
+	for _, st := range group.Statuses() {
+		if st.Restarts == 0 && (st.State == "running" || st.State == "starting") {
+			continue
+		}
+		what := "stopped"
+		if st.LastExitCode != nil {
+			what = fmt.Sprintf("exited with code %d", *st.LastExitCode)
+		}
+		if st.Restarts > 0 {
+			what += fmt.Sprintf(" (restarted %d time(s))", st.Restarts)
+		}
+		return st.Name, what
+	}
+	return "", ""
 }
 
 // startGroup starts every service of rel. The exposed command service gets a

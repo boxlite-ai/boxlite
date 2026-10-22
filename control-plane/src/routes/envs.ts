@@ -5,6 +5,7 @@ import { ACTIVE_STATUSES, now } from '../db.js';
 import type { Ctx } from '../ctx.js';
 import { fail } from '../errors.js';
 import { nameProblem } from '../platform.js';
+import { dropPreview } from '../preview.js';
 import { envSummary } from '../views.js';
 import { body, envOf } from './util.js';
 
@@ -72,6 +73,7 @@ export function envRoutes(ctx: Ctx) {
       store.run('DELETE FROM logs WHERE env_id = ?', env.id);
       store.run('DELETE FROM envs WHERE id = ?', env.id);
     });
+    dropPreview(ctx, env.id);
     return c.json({ deleted: env.name });
   });
 

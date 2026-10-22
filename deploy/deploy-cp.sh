@@ -46,8 +46,10 @@ echo "   $URL"
 
 echo "== bundle"
 STAGE=$(mktemp -d)
-mkdir -p "$STAGE/cp/control-plane/dist" "$STAGE/cp/supervisor/bin" "$STAGE/cp/agent" "$STAGE/cp/cli" "$STAGE/cp/console-dist"
+mkdir -p "$STAGE/cp/control-plane/dist" "$STAGE/cp/control-plane/node_modules" "$STAGE/cp/supervisor/bin" "$STAGE/cp/agent" "$STAGE/cp/cli" "$STAGE/cp/console-dist"
 cp -R "$ROOT/control-plane/dist/." "$STAGE/cp/control-plane/dist/"
+# App screenshots (preview.ts): playwright-core is not bundled; it has no dependencies of its own.
+cp -RL "$ROOT/control-plane/node_modules/playwright-core" "$STAGE/cp/control-plane/node_modules/"
 cp "$ROOT/supervisor/bin/"supervisor-linux-* "$STAGE/cp/supervisor/bin/"
 cp "$ROOT/agent/SKILL.md" "$ROOT/agent/prompt-template.md" "$STAGE/cp/agent/"
 cp "$ROOT/cli/boxlite-app.tgz" "$STAGE/cp/cli/"
@@ -71,6 +73,7 @@ SV_BIN_DIR=/home/boxlite/cp/supervisor/bin
 AGENT_MD_PATH=/home/boxlite/cp/agent/SKILL.md
 CLI_TGZ_PATH=/home/boxlite/cp/cli/boxlite-app.tgz
 CONSOLE_DIR=/home/boxlite/cp/console-dist
+CHROMIUM_PATH=/usr/bin/chromium
 GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
 GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
 GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
@@ -81,6 +84,9 @@ bl cp "$STAGE/bundle.tgz" "$BOX:/home/boxlite/bundle.tgz"
 # Keep data/ across deploys; replace everything else, then restart the server process.
 bl exec "$BOX" -- sh -c 'mkdir -p /home/boxlite/cp/data && cd /home/boxlite && rm -rf cp/console-dist && tar xzf bundle.tgz && chmod 600 cp/cp.env && pkill -f "^node dist/server.mjs" || true' || true
 rm -rf "$STAGE"
+
+# The console's app screenshots (preview.ts) render in Debian's Chromium; installed once per Box.
+bl exec "$BOX" -- sh -c 'command -v chromium >/dev/null || { sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq chromium fonts-noto-core fonts-noto-cjk >/dev/null; }' || echo "   chromium not installed; app screenshots stay off"
 
 echo "== wait"
 i=0; until curl -fsS "$URL/healthz" >/dev/null 2>&1; do i=$((i+1)); [ $i -gt 30 ] && { echo "CP did not come up"; bl exec "$BOX" -- tail -40 /home/boxlite/cp/cp.log; exit 1; }; sleep 2; done

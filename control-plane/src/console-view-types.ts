@@ -1,4 +1,5 @@
 /** The console's view types: the shapes of the dashboard's lib/apps/types.ts, as the console API returns them. */
+import type { ConsoleMetrics } from './console-access.js';
 import type { ActivityView } from './console-activity.js';
 import type { AuthStatusView } from './console-enduser.js';
 import type { Deployment } from './db.js';
@@ -131,6 +132,8 @@ export interface ProblemView {
 }
 
 export interface AppDetailView extends Omit<AppSummaryView, 'environments'> {
+  /** The CP's own id of the App (app_…), for support; `id` is the name the console routes by. */
+  appId: string;
   environment: string;
   createdFrom: string | null;
   runtime: { image: string; size: string; cpus: number | null; memoryMib: number | null } | null;
@@ -152,7 +155,9 @@ export interface AppDetailView extends Omit<AppSummaryView, 'environments'> {
   schedules: ScheduleView[];
   /** [variables] of the live release; differs from `variables` while a change is being deployed. */
   liveVariables: Record<string, string> | null;
-  metrics: { requests: number[]; errors: number[]; p95Ms: number[]; previousRequests: number } | null;
+  metrics: ConsoleMetrics | null;
+  /** The last screenshot of the live URL (preview.ts); `src` is relative to the console API. */
+  preview: { src: string; capturedAt: string; releaseId: string } | null;
   handoffPrompt: string;
   key: { last4: string; createdAt: string } | null;
   accessSource: 'manifest' | 'online';

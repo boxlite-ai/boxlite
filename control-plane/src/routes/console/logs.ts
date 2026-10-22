@@ -1,6 +1,7 @@
-/** Console API: the Logs tab, stored log lines merged with the app proxy access log. */
+/** Console API: the Logs tab, stored log lines merged with the app proxy access log, presented by console-logs.ts. */
 import type { Hono } from 'hono';
-import { logLevel, parseSince } from '../../services/logs.js';
+import { presentLogLines } from '../../console-logs.js';
+import { parseSince } from '../../services/logs.js';
 import type { ConsoleKit } from './kit.js';
 
 export function consoleLogRoutes(api: Hono, k: ConsoleKit): void {
@@ -21,7 +22,7 @@ export function consoleLogRoutes(api: Hono, k: ConsoleKit): void {
       id: `l${l.id}`,
       ts: l.ts,
       source: l.source,
-      level: logLevel(l.level),
+      level: l.level,
       line: l.line,
       deployment: l.deployment ?? null,
     }));
@@ -34,7 +35,7 @@ export function consoleLogRoutes(api: Hono, k: ConsoleKit): void {
       line: `${r.method} ${r.path} ${r.status} ${r.ms}ms`,
       deployment: null,
     }));
-    const all = [...lines, ...requests].sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0)).slice(0, limit);
+    const all = presentLogLines([...lines, ...requests], (n) => store.deployment(env.id, n)).slice(0, limit);
     return c.json(all);
   });
 }
