@@ -21,6 +21,7 @@ import { FilterChip, FilterGroup, Screen, ToolButton, Workbench } from '../SubNa
 // The default view leaves detail lines out; they show only when their source is picked.
 const CURATED_SOURCES = ['deploy', 'db', 'auth', 'schedule']
 const DETAIL_SOURCES = ['build', 'access', 'system']
+const PAGE = 200
 const RANGES = ['30m', '1h', '24h', '3d'] as const
 const RANGE_MS: Record<(typeof RANGES)[number], number> = {
   '30m': 30 * 60_000,
@@ -126,6 +127,10 @@ function RuntimeLogs({
   const [live, setLive] = useState(true)
   const [selected, setSelected] = useState<string | null>(null)
   const [scrolledAway, setScrolledAway] = useState(false)
+  // The newest PAGE lines render; older ones come in a page at a time, so a busy 24h window
+  // stays one screen of reading instead of thousands of rows.
+  const [limit, setLimit] = useState(PAGE)
+  useEffect(() => setLimit(PAGE), [sources, level, search, range])
   useEffect(() => {
     const onScroll = () => setScrolledAway(window.scrollY > FOLLOW_SCROLL)
     window.addEventListener('scroll', onScroll, { passive: true })
@@ -206,6 +211,7 @@ function RuntimeLogs({
     if (search && !line.message.toLowerCase().includes(search.toLowerCase())) return false
     return true
   })
+  const rows = visible.slice(0, limit)
   const detail = visible.find((line) => line.id === selected) ?? null
 
   const toggleSource = (source: string) =>
@@ -306,11 +312,11 @@ function RuntimeLogs({
             </EmptyNote>
           ) : (
             <>
-              {visible.map((line, i) => {
+              {rows.map((line, i) => {
                 // Newest first; a day rule wherever the date changes, so a 24h window
                 // that crosses midnight never reads as one unbroken sequence.
                 const day = dayLabel(line.at)
-                const newDay = i === 0 || dayLabel(visible[i - 1].at) !== day
+                const newDay = i === 0 || dayLabel(rows[i - 1].at) !== day
                 return (
                   <div key={line.id}>
                     {newDay && (
@@ -347,6 +353,12 @@ function RuntimeLogs({
                   </div>
                 )
               })}
+              {visible.length > rows.length && (
+                <div className="flex items-center justify-center gap-3 py-4 text-[12px] text-muted-foreground">
+                  Showing the newest {rows.length} of {visible.length} lines
+                  <ToolButton onClick={() => setLimit((n) => n + PAGE)}>Show older</ToolButton>
+                </div>
+              )}
             </>
           )}
         </div>
