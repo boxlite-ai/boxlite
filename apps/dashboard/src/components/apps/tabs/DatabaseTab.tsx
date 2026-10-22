@@ -28,12 +28,12 @@ import { useAppAction } from '../useAppAction'
 import {
   CopyIconButton,
   copyText,
+  Disclosure,
   downloadCsv,
   EmptyNote,
   GridHeader,
   GridRow,
   HoverActions,
-  Panel,
   SearchField,
   PromptBlock,
   SpecRow,
@@ -120,62 +120,89 @@ function NoDatabase({ app }: { app: AppDetail }) {
 function Connection({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
   const connection = `postgresql://${db.user}@${db.host}/${db.name}?sslmode=require`
   const statusColor = db.status === 'ready' ? STATUS.running : STATUS.idle
+  const usedBy = app.database?.injectedInto.length ? app.database.injectedInto.join(', ') : 'no service yet'
+  const facts = [
+    db.sizeBytes != null ? formatBytes(db.sizeBytes) : null,
+    db.tables ? `${db.tables.length} table${db.tables.length === 1 ? '' : 's'}` : null,
+    db.backups?.[0] ? `last backup ${relTime(db.backups[0].ts)}` : null,
+  ].filter(Boolean)
   return (
-    <Screen
-      title="Connection"
-      actions={
-        <a
-          href={exportUrl(app, { format: 'sql' })}
-          download
-          title="Schema and data of every table, as SQL"
-          className={DOWNLOAD_LINK}
-        >
-          Download dump
-        </a>
-      }
-    >
-      <div className="flex flex-col gap-3">
-        <Panel>
-          <div className="mb-4 flex items-center gap-3">
-            <StatusBadge label={db.status === 'ready' ? 'Ready' : 'Unknown'} color={statusColor} />
-            <span className="text-muted-foreground">
-              {db.sizeBytes != null && <>· {formatBytes(db.sizeBytes)} </>}
-              {db.tables && <>· {db.tables.length} tables </>}
-              {db.backups?.[0] && <>· last backup {relTime(db.backups[0].ts)}</>}
+    <Screen title="Connection">
+      {/* One panel, headed like Volumes: what the database is, how the app reaches it, the rest behind Details. */}
+      <section className="border border-border bg-card font-mono">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-[22px] py-4">
+          <h3 className="text-em font-semibold text-foreground">{db.engine}</h3>
+          <StatusBadge label={db.status === 'ready' ? 'Ready' : 'Unknown'} color={statusColor} />
+          {facts.length > 0 && <span className="text-meta text-muted-foreground">{facts.join(' · ')}</span>}
+          <span className="ml-auto flex gap-[6px]">
+            <a
+              href={exportUrl(app, { format: 'sql' })}
+              download
+              title="Schema and data of every table, as SQL"
+              className={DOWNLOAD_LINK}
+            >
+              Download dump
+            </a>
+          </span>
+        </div>
+
+        <div className="flex flex-col gap-5 px-[22px] py-[18px]">
+          <div className="flex flex-col gap-1">
+            <Label>Connection string</Label>
+            <span className="flex items-start gap-2">
+              <code className="min-w-0 break-all text-body text-foreground">{connection}</code>
+              <CopyIconButton text={connection} title="Copy connection string" />
             </span>
           </div>
-          <SpecRow label="Connection string">
-            <span className="inline-flex max-w-full items-center gap-2">
-              <span className="min-w-0 truncate" title={connection}>
-                {connection}
+          <div className="grid gap-x-10 gap-y-5 md:grid-cols-2">
+            <div className="flex flex-col gap-1">
+              <Label>The app gets it as</Label>
+              <span className="text-body text-foreground">
+                {app.database?.injectedAs ?? 'DATABASE_URL'} <span className="text-muted-foreground">in {usedBy}</span>
               </span>
-              <CopyIconButton text={connection} />
-            </span>
-          </SpecRow>
-          <SpecRow label="Password">not shown · the app receives it inside DATABASE_URL</SpecRow>
-          <SpecRow label="Injected as">
-            {app.database?.injectedAs ?? 'DATABASE_URL'} →{' '}
-            {app.database?.injectedInto.length ? app.database.injectedInto.join(', ') : 'no service yet'}
-          </SpecRow>
-          <SpecRow label="Engine">{db.engine}</SpecRow>
-          {db.branch && <SpecRow label="Branch">{db.branch}</SpecRow>}
-        </Panel>
-        <div className="flex flex-wrap items-center gap-3 text-[12px] text-muted-foreground">
-          <span>
-            The password never leaves BoxLite: the app gets it inside DATABASE_URL, and a laptop connects through
-            BoxLite.
-          </span>
-          <ToolButton
-            onClick={() => {
-              copyText(localDevPrompt(app))
-              toast.success('Instructions copied. Paste them to your agent.')
-            }}
-          >
-            Copy instructions for your agent
-          </ToolButton>
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label>Password</Label>
+              <span className="text-body text-foreground">
+                Never shown <span className="text-muted-foreground">· it stays inside BoxLite</span>
+              </span>
+            </div>
+          </div>
+          <Disclosure>
+            <div className="max-w-[640px]">
+              <SpecRow label="Host">{db.host}</SpecRow>
+              <SpecRow label="Database">{db.name}</SpecRow>
+              <SpecRow label="User">{db.user}</SpecRow>
+              {db.branch && <SpecRow label="Branch">{db.branch}</SpecRow>}
+            </div>
+          </Disclosure>
         </div>
-      </div>
+
+        <div className="flex flex-wrap items-center gap-3 border-t border-border px-[22px] py-3 text-[12px] text-muted-foreground">
+          <span>
+            To work on it from a laptop, your agent connects through BoxLite; no password is written anywhere.
+          </span>
+          <span className="ml-auto">
+            <ToolButton
+              onClick={() => {
+                copyText(localDevPrompt(app))
+                toast.success('Instructions copied. Paste them to your agent.')
+              }}
+            >
+              Copy instructions for your agent
+            </ToolButton>
+          </span>
+        </div>
+      </section>
     </Screen>
+  )
+}
+
+function Label({ children }: { children: string }) {
+  return (
+    <span className="text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+      <span className="text-brand">▸</span> {children}
+    </span>
   )
 }
 
