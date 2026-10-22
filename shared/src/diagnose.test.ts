@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { classifyFailure, lineOfPosition } from './diagnose.js';
+import { classifyFailure, lineOfPosition, missingVariableIn } from './diagnose.js';
 import { redact } from './redact.js';
 
 const TS = '2026-10-21T10:00:00.000Z';
@@ -88,4 +88,19 @@ test('redact masks App keys, box tokens and database passwords', () => {
   assert.equal(redact('bxt_abcdefghij2345'), 'bxt_…2345');
   assert.equal(redact('DATABASE_URL=postgresql://neondb_owner:s3cr3t@ep-x.neon.tech/neondb?sslmode=require'), 'DATABASE_URL=postgresql://neondb_owner:****@ep-x.neon.tech/neondb?sslmode=require');
   assert.equal(redact('nothing here'), 'nothing here');
+});
+
+test('a service that exits because a variable is missing names it, with the command that sets it', () => {
+  const tail = (line: string) => [`${TS} [web] ${line}`, `${TS} [system] service web exited with code 1 after 30ms; restarting in 1s`];
+  const token = classifyFailure({ step: 'start', message: 'service web exited with code 1 before answering /healthz', service: { name: 'web', command: 'node server.js' }, log_tail: tail('Error: SLACK_TOKEN is not set') });
+  assert.equal(token.cause, 'missing_variable');
+  assert.match(token.summary, /web needs SLACK_TOKEN/);
+  // A credential comes from the org's secret store, never from a value the agent makes up.
+  assert.match(token.fix, /boxlite-app app secrets ref SLACK_TOKEN org\/slack-token/);
+  assert.match(token.fix, /ask the user/);
+  const plain = classifyFailure({ step: 'start', message: 'x', service: { name: 'web', command: 'node server.js' }, log_tail: tail('LOG_LEVEL is required') });
+  assert.equal(plain.cause, 'missing_variable');
+  assert.match(plain.fix, /boxlite-app app vars set LOG_LEVEL=<value>/);
+  assert.equal(missingVariableIn('Missing environment variable: STRIPE_KEY'), 'STRIPE_KEY');
+  assert.equal(missingVariableIn('the value is not set yet'), undefined);
 });

@@ -15,6 +15,7 @@ export type FailureCause =
   | 'health_404'
   | 'health_failed'
   | 'crash_on_start'
+  | 'missing_variable'
   | 'migration_sql_error'
   | 'migration_changed'
   | 'invalid_manifest'
@@ -229,6 +230,17 @@ function startDiagnosis(input: FailureInput, message: string, tail: readonly str
     };
   }
 
+  const missing = stderr.map((l) => missingVariableIn(l)).find((name) => name !== undefined);
+  if (exited && missing) {
+    return {
+      cause: 'missing_variable',
+      summary: `${exited[1]} needs ${missing}, which is not set`,
+      fix: variableFix(missing),
+      file: 'boxlite.toml',
+      evidence: stderr.length ? stderr : grab(all, /exited|error|Error/),
+    };
+  }
+
   if (exited) {
     const code = exited[2];
     return {
@@ -248,6 +260,25 @@ function startDiagnosis(input: FailureInput, message: string, tail: readonly str
     };
   }
   return unknownDiagnosis(input, message, tail);
+}
+
+/** The environment variable a service says it lacks: `Error: SLACK_TOKEN is not set` → SLACK_TOKEN. */
+export function missingVariableIn(text: string): string | undefined {
+  const m =
+    /\b([A-Z][A-Z0-9_]{1,63}) (?:is not set|is not defined|is missing|is required|must be set|not set)\b/.exec(text) ??
+    /\b(?:missing|required) (?:environment )?(?:variable|env var|env)[: ]+([A-Z][A-Z0-9_]{1,63})\b/i.exec(text);
+  return m?.[1];
+}
+
+const CREDENTIAL_RE = /(TOKEN|KEY|SECRET|PASSWORD|PASS|CREDENTIALS?|DSN|WEBHOOK)(_|$)/;
+
+/** How to give a service the variable it lacks: a credential comes from the org's secret store, anything else is a plain variable. */
+function variableFix(name: string): string {
+  if (CREDENTIAL_RE.test(name)) {
+    const ref = `org/${name.toLowerCase().replace(/_/g, '-')}`;
+    return `${name} is a credential: ask the user for it to be stored as the org secret ${ref} (or the name they already use), then \`boxlite-app app secrets ref ${name} ${ref}\` and \`boxlite-app deploy\`; never invent its value or write it into a file`;
+  }
+  return `\`boxlite-app app vars set ${name}=<value>\` with the value the app expects (ask the user if you do not know it), then \`boxlite-app deploy\``;
 }
 
 function unknownDiagnosis(input: FailureInput, message: string, tail: readonly string[]): Diagnosis {
