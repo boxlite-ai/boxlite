@@ -288,9 +288,12 @@ mod tests {
                 "authorized-key-sentinel",
                 "host-key-sentinel",
             ] {
-                assert!(!output.contains(sentinel), "leaked {sentinel} in {output}");
+                assert!(
+                    !output.contains(sentinel),
+                    "credential leaked in Debug output"
+                );
             }
-            assert!(output.contains("[redacted]"), "no redaction in {output}");
+            assert!(output.contains("[redacted]"), "missing redaction marker");
         }
     }
 }
