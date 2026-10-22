@@ -160,12 +160,13 @@ test('the console reads milestones for people and keeps platform detail behind i
       line(11, 'access', 'error', 'GET /api/deals 502 40ms', null),
       line(12, 'system', 'error', 'failed at build: build step 2 (npm run build) exited with code 1', 4),
       line(13, 'system', 'error', 'deployment #4 failed at step build: build step 2 (npm run build) exited with code 1 (previous release stays live)', 4),
+      line(14, 'build', 'error', 'npm warn exec The following package was not found and will be installed: tsc@2.0.4', 4),
     ],
     (n) => (n === 3 ? dep({}) : undefined),
   );
   const byId = new Map(out.map((l) => [l.id, l]));
   // Newest first.
-  assert.equal(out[0]!.id, 'l13');
+  assert.equal(out[0]!.id, 'l14');
 
   assert.deepEqual(byId.get('l7'), { id: 'l7', ts: line(7, '', '', '').ts, source: 'deploy', level: 'info', line: '#3 is live · by key …abcd in 13 s', deployment: 3, detail: false });
   assert.equal(byId.get('l6')!.source, 'db');
@@ -189,7 +190,10 @@ test('the console reads milestones for people and keeps platform detail behind i
   assert.equal(byId.get('l9')!.detail, true);
   assert.equal(byId.get('l10')!.level, 'error');
   assert.equal(byId.get('l10')!.detail, false);
-  // Requests are listed only under their own source, errors included.
+  // A build tool's warning is a warning even when it names something "not found"; it stays with the build output.
+  assert.equal(byId.get('l14')!.level, 'warn');
+  assert.equal(byId.get('l14')!.detail, true);
+    // Requests are listed only under their own source, errors included.
   assert.equal(byId.get('l11')!.detail, true);
   assert.equal(byId.get('l11')!.level, 'error');
 });

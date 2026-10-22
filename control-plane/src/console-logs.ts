@@ -9,7 +9,7 @@
  *     output and visitor requests are `detail`: the console shows them only when their source is
  *     picked, while warnings and errors (other than requests) stay in the default view;
  *   - levels are corrected where the writer's level misleads: build tools print progress on stderr
- *     (`npm notice` is not an error), and a service stopped by SIGTERM (exit 143) during a planned
+ *     (`npm notice` is not an error, `npm warn … not found` is a warning read with the build), and a service stopped by SIGTERM (exit 143) during a planned
  *     stop, sleep or redeploy is not a crash.
  */
 import { actorLabel } from './console-activity.js';
@@ -44,6 +44,8 @@ const FAILED_RE = /^deployment #(\d+) failed at step ([\w-]+): (.*?)(?: \(previo
 const APPLYING_RE = /^applying migration (\S+)/;
 const APPLIED_RE = /^applied (\d+) migration\(s\)/;
 const SIGTERM_EXIT_RE = /^service (\S+) (?:exited with code 143|stopped \(exit code 143\))/;
+/** A build tool's own warning marker (`npm warn`, `warning:`, `[WARN]`), checked before the error words it may contain. */
+const BUILD_WARN_RE = /^\s*(?:npm warn\b|warn(?:ing)?\b[:\s]|\[warn(?:ing)?\])/i;
 /** A build line on stderr is an error only when it says so. */
 const BUILD_ERROR_RE = /\b(error|failed|fatal|exception|cannot find|not found)\b|\bERR!/i;
 
@@ -105,13 +107,17 @@ export function presentLogLines(lines: RawLogLine[], deployment: (n: number) => 
         // SIGTERM comes from a planned stop (sleep, redeploy, restart), not from the app failing.
         level = 'info';
       }
+    } else if (l.source === 'build' && level === 'error' && BUILD_WARN_RE.test(l.line)) {
+      level = 'warn';
     } else if (l.source === 'build' && level === 'error' && !BUILD_ERROR_RE.test(l.line)) {
       level = 'info';
     }
 
-    // Warnings and errors of the platform stay in view; visitor requests are counted on the
-    // Overview and listed only under their own source.
-    if (detail && level !== 'info' && source !== 'access') detail = false;
+    // Warnings and errors of the platform stay in view, except a build tool's warnings (read with
+    // the build output); visitor requests are counted on the Overview and listed only under their
+    // own source.
+    const stayInView = level === 'error' || (level === 'warn' && source !== 'build');
+    if (detail && stayInView && source !== 'access') detail = false;
     out.push({ id: l.id, ts: l.ts, source, level, line, deployment: l.deployment, detail });
   }
   return out.reverse();
