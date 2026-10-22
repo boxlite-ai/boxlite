@@ -75,7 +75,7 @@ fn invalid_configuration_fails_before_the_host_vm_exists() {
 #[test]
 fn maps_the_ram_layout_with_its_host_address_and_unmaps_on_drop() {
     let vm = bare(config(1, 16), || Ok(MockVm::new())).unwrap();
-    let log = vm.backend.log();
+    let log = vm.host_vm.log();
     let [(start, size)] = ram_ranges(16)[..] else {
         panic!("one region")
     };
@@ -171,7 +171,7 @@ fn a_kvm_guest_reads_the_last_byte_of_the_mapped_layout() {
             .unwrap();
     }
 
-    let mut vcpu = vm.backend.create_vcpu(0).unwrap();
+    let mut vcpu = vm.host_vm.create_vcpu(0).unwrap();
     let code = X86Segment {
         limit: u32::MAX,
         selector: 8,
@@ -299,9 +299,9 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
         .unwrap();
     memory.write_obj(TOP_MARKER, GuestAddress(top)).unwrap();
     let regs = long_mode_entry(&*memory, ENTRY, BOOT_PARAMS).unwrap();
-    let cpuid = vcpu_cpuid(vm.backend.supported_cpuid(), 0, 2);
+    let cpuid = vcpu_cpuid(vm.host_vm.supported_cpuid(), 0, 2);
 
-    let mut vcpu = vm.backend.create_vcpu(0).unwrap();
+    let mut vcpu = vm.host_vm.create_vcpu(0).unwrap();
     vcpu.set_cpu_features(&cpuid, &BOOT_MSRS).unwrap();
     vcpu.set_boot_registers(&regs).unwrap();
     match vcpu.run().unwrap() {
@@ -380,7 +380,7 @@ mod lifecycle {
             // vCPU 1 never exits on its own, so only a kick ends it.
             let (exit, vm) = run(mock(2, MockVm::with_scripts(vec![vec![step]])));
             assert_eq!(exit.unwrap(), expected);
-            let log = vm.backend.log();
+            let log = vm.host_vm.log();
             drop(vm);
             let calls = log.lock().unwrap().clone();
             let first_unmap = calls
@@ -403,7 +403,7 @@ mod lifecycle {
         let (exit, vm) = run(mock(3, MockVm::with_scripts(vec![vec![Step::Shutdown]])));
         exit.unwrap();
 
-        let calls = vm.backend.calls();
+        let calls = vm.host_vm.calls();
         let boot: Vec<_> = calls
             .iter()
             .filter(|call| matches!(call, Call::SetBootRegisters { .. }))
@@ -477,6 +477,7 @@ mod lifecycle {
         let (exit, mut vm) = run(mock(1, MockVm::with_scripts(vec![vec![Step::Reset]])));
         exit.unwrap();
 
+        assert_eq!(format!("{vm:?}"), "Vm { vcpus: 1, state: Exited, .. }");
         assert!(matches!(vm.run(), Err(Error::AlreadyRan)));
     }
 
@@ -568,7 +569,7 @@ fn lifecycle_errors_describe_themselves() {
 fn debug_shows_the_vm_shape_without_its_internals() {
     let vm = bare(config(2, 16), || Ok(MockVm::new())).unwrap();
 
-    assert_eq!(format!("{vm:?}"), "Vm { vcpus: 2, ran: false, .. }");
+    assert_eq!(format!("{vm:?}"), "Vm { vcpus: 2, state: Created, .. }");
     assert!(format!("{:?}", vm.stop_handle()).starts_with("StopHandle("));
 }
 

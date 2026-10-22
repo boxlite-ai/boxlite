@@ -47,6 +47,15 @@ impl StopHandle {
     }
 }
 
+/// Where a VM is in its life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VmState {
+    /// Built; [`Vm::run`] has not started.
+    Created,
+    /// [`Vm::run`] has started. A VM runs once, so it never leaves this state.
+    Exited,
+}
+
 /// The guest machine on host backend `H`.
 pub struct Vm<H: HostVm> {
     // Field order is load-bearing: devices go first, then the host VM, which
@@ -57,17 +66,17 @@ pub struct Vm<H: HostVm> {
     sender: EventSender,
     boot_regs: BootRegisters,
     vcpu_count: u8,
-    ran: bool,
-    backend: Arc<H>,
+    state: VmState,
+    host_vm: Arc<H>,
     ram: GuestRam,
 }
 
 impl<H: HostVm> std::fmt::Debug for Vm<H> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (vcpus, ran) = (self.vcpu_count, self.ran);
+        let (vcpus, state) = (self.vcpu_count, self.state);
         f.debug_struct("Vm")
             .field("vcpus", &vcpus)
-            .field("ran", &ran)
+            .field("state", &state)
             .finish_non_exhaustive()
     }
 }
@@ -103,8 +112,8 @@ impl<H: HostVm> Vm<H> {
         // Allocating first keeps the drop order safe on every early return:
         // locals drop in reverse order, so the host VM goes before the RAM.
         let mut ram = GuestRam::new(&ram_ranges(config.memory_mib))?;
-        let backend = Arc::new(host_vm()?);
-        ram.map(&*backend)?;
+        let host_vm = Arc::new(host_vm()?);
+        ram.map(&*host_vm)?;
         // From here on `Drop` unmaps the RAM if a later step fails.
         let mut vm = Self {
             buses: Buses::default(),
@@ -112,8 +121,8 @@ impl<H: HostVm> Vm<H> {
             sender,
             boot_regs: BootRegisters::default(),
             vcpu_count: config.vcpu_count,
-            ran: false,
-            backend,
+            state: VmState::Created,
+            host_vm,
             ram,
         };
         vm.boot_regs = boot(&vm.ram, &config)?;
@@ -140,17 +149,18 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
 
         use crate::vcpu::{StartGate, Workers};
 
-        if std::mem::replace(&mut self.ran, true) {
+        if self.state != VmState::Created {
             return Err(Error::AlreadyRan);
         }
+        self.state = VmState::Exited;
         let gate = StartGate::default();
         let kicks = Mutex::new(Vec::new());
         let workers = Workers {
-            vm: &*self.backend,
-            count: self.vcpu_count,
+            host_vm: &*self.host_vm,
+            vcpu_count: self.vcpu_count,
             boot_regs: &self.boot_regs,
             buses: &self.buses,
-            events: &self.sender,
+            sender: &self.sender,
             kicks: &kicks,
             gate: &gate,
         };
@@ -159,7 +169,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner);
         let event = thread::scope(|scope| {
-            for id in 0..workers.count {
+            for id in 0..workers.vcpu_count {
                 let workers = &workers;
                 let spawned = thread::Builder::new()
                     .name(format!("vcpu{id}"))
@@ -167,7 +177,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                 if let Err(source) = spawned {
                     let vcpu = id.into();
                     workers
-                        .events
+                        .sender
                         .send(Event::VcpuFailed(Error::SpawnVcpu { vcpu, source }));
                     gate.abort();
                     break;
@@ -177,7 +187,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             if event.is_err() {
                 // Without an event the stop latch is still open; close it so
                 // the vCPUs stop and the scope can join them.
-                workers.events.send(Event::StopRequested);
+                workers.sender.send(Event::StopRequested);
             }
             // Wake every vCPU still in the guest; a vCPU still being
             // configured sees the latch before its first entry.
@@ -202,7 +212,7 @@ impl<H: HostVm> Drop for Vm<H> {
     fn drop(&mut self) {
         // A VM that never ran still holds its registrations. Remove them so
         // the backing can be released; `GuestRam` leaks it on failure.
-        let _ = self.ram.unmap(&*self.backend);
+        let _ = self.ram.unmap(&*self.host_vm);
     }
 }
 

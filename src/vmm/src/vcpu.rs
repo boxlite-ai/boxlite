@@ -50,11 +50,11 @@ impl StartGate {
 
 /// What every worker of one VM shares.
 pub(crate) struct Workers<'a, H: X86Vm> {
-    pub(crate) vm: &'a H,
-    pub(crate) count: u8,
+    pub(crate) host_vm: &'a H,
+    pub(crate) vcpu_count: u8,
     pub(crate) boot_regs: &'a X86BootRegisters,
     pub(crate) buses: &'a Buses,
-    pub(crate) events: &'a EventSender,
+    pub(crate) sender: &'a EventSender,
     /// The kick handle of every configured vCPU, for the thread that stops them.
     pub(crate) kicks: &'a Mutex<Vec<<H::Vcpu as Vcpu>::Handle>>,
     pub(crate) gate: &'a StartGate,
@@ -67,18 +67,18 @@ impl<H: X86Vm> Workers<'_, H> {
     pub(crate) fn run(&self, id: u8) {
         let vcpu = catch_panic(id, || self.configure(id));
         // A failed vCPU still arrives, so the others are never left waiting.
-        self.gate.arrive_and_wait(self.count);
+        self.gate.arrive_and_wait(self.vcpu_count);
         let outcome = vcpu.and_then(|mut vcpu| catch_panic(id, || self.run_guest(&mut vcpu, id)));
         match outcome {
-            Ok(Some(event)) => self.events.send(event),
+            Ok(Some(event)) => self.sender.send(event),
             Ok(None) => {}
-            Err(error) => self.events.send(Event::VcpuFailed(error)),
+            Err(error) => self.sender.send(Event::VcpuFailed(error)),
         }
     }
 
     fn configure(&self, id: u8) -> Result<H::Vcpu> {
-        let mut vcpu = self.vm.create_vcpu(id.into())?;
-        let cpuid = vcpu_cpuid(self.vm.supported_cpuid(), id, self.count);
+        let mut vcpu = self.host_vm.create_vcpu(id.into())?;
+        let cpuid = vcpu_cpuid(self.host_vm.supported_cpuid(), id, self.vcpu_count);
         vcpu.set_cpu_features(&cpuid, &BOOT_MSRS)?;
         // The other vCPUs wait in their reset state for INIT and SIPI.
         if id == 0 {
@@ -98,7 +98,7 @@ impl<H: X86Vm> Workers<'_, H> {
         loop {
             // Checked before every entry: a stop that lands earlier still
             // returns from the next entry at once, since its kick is pending.
-            if self.events.is_stopping() {
+            if self.sender.is_stopping() {
                 vcpu.complete_pending_io()?;
                 return Ok(None);
             }
