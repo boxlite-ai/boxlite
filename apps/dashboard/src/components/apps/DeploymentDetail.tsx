@@ -144,7 +144,10 @@ function Changes({ detail }: { detail: Detail }) {
       <div className="flex flex-col gap-1">
         <span className="text-[10px] uppercase tracking-[1px] text-muted-foreground">{title}</span>
         {items.map((item) => (
-          <span key={item} className={cn('text-[13px]', item.startsWith('-') ? 'text-destructive' : 'text-foreground')}>
+          <span
+            key={item}
+            className={cn('text-[13px]', item.startsWith('Removed') ? 'text-destructive' : 'text-foreground')}
+          >
             {item}
           </span>
         ))}
@@ -152,8 +155,8 @@ function Changes({ detail }: { detail: Detail }) {
     )
   return (
     <div className="grid gap-6 font-mono md:grid-cols-3">
-      {list('Infrastructure', infrastructure)}
-      {list('Configuration', configuration)}
+      {list('Services & data', infrastructure)}
+      {list('Settings', configuration)}
       {code && (
         <div className="flex flex-col gap-1">
           <span className="text-[10px] uppercase tracking-[1px] text-muted-foreground">Code</span>
@@ -255,62 +258,50 @@ export function DeploymentDetail({
     <div className="flex flex-col gap-8" data-testid="deployment-detail">
       <div className="flex flex-col gap-3">
         {back}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <h2 className="font-mono text-em font-semibold text-foreground">{detail.id}</h2>
-          <StatusBadge label={status.label} color={status.color} caps />
-          {detail.current && <Tag tone="brand">Current</Tag>}
-          <span className="min-w-0 truncate font-mono text-body text-foreground">{detail.summary}</span>
-          <span className="ml-auto flex flex-wrap gap-1">
-            {detail.rollback.possible && (
-              <ToolButton onClick={() => onRollback(detail)}>Roll back to {detail.id}</ToolButton>
-            )}
-            <ToolButton onClick={() => onOpenLogs(detail.number)}>View in Logs</ToolButton>
-            {detail.hasSource && (
-              <a
-                href={downloadUrl(source)}
-                download
-                className="inline-flex h-[28px] items-center border border-border px-[10px] font-mono text-[12px] text-muted-foreground transition-colors hover:border-brand hover:text-foreground"
-              >
-                Download source
-              </a>
-            )}
-          </span>
-        </div>
-        <div className="grid max-w-[980px] gap-x-10 md:grid-cols-2">
-          <div>
-            <SpecRow label="Started by">{actorName(detail.by, { short: true })}</SpecRow>
-            <SpecRow label="Created">
-              <span title={detail.createdAt}>
-                {new Date(detail.createdAt).toLocaleString()} · {relTime(detail.createdAt)}
+        {/* The brief: what this deployment is, how it went, and what it changed. */}
+        <section className="border border-border bg-card">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-[22px] py-4">
+            <h2 className="font-mono text-em font-semibold text-foreground">{detail.id}</h2>
+            <StatusBadge label={status.label} color={status.color} caps />
+            {detail.current && <Tag tone="brand">Current</Tag>}
+            <span className="min-w-0 truncate font-mono text-body text-foreground">{detail.summary}</span>
+            <span className="ml-auto flex flex-wrap gap-1">
+              {detail.rollback.possible && (
+                <ToolButton onClick={() => onRollback(detail)}>Roll back to {detail.id}</ToolButton>
+              )}
+              <ToolButton onClick={() => onOpenLogs(detail.number)}>View in Logs</ToolButton>
+              {detail.hasSource && (
+                <a
+                  href={downloadUrl(source)}
+                  download
+                  className="inline-flex h-[28px] items-center border border-border px-[10px] font-mono text-[12px] text-muted-foreground transition-colors hover:border-brand hover:text-foreground"
+                >
+                  Download source
+                </a>
+              )}
+            </span>
+          </div>
+          <div className="flex flex-col gap-5 px-[22px] py-[18px] font-mono">
+            <span className="text-[13px] text-muted-foreground">
+              {detail.rollbackTo !== null ? `Rolled back to #${detail.rollbackTo}` : 'Deployed'}{' '}
+              <span title={new Date(detail.createdAt).toLocaleString()}>{relTime(detail.createdAt)}</span> by{' '}
+              {actorName(detail.by, { short: true })}
+              {took ? ` · ${detail.finishedAt ? 'took' : 'running for'} ${took}` : ''}
+            </span>
+            <div className="flex flex-col gap-2">
+              <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+                <span className="text-brand">▸</span> What changed
               </span>
-            </SpecRow>
-            <SpecRow label={detail.finishedAt ? 'Took' : 'Running for'}>{took ?? '—'}</SpecRow>
+              <Changes detail={detail} />
+            </div>
           </div>
-          <div>
-            <SpecRow label="Configuration">
-              {detail.specVersion !== null ? `version ${detail.specVersion}` : 'not written yet'}
-              {detail.baseVersion ? ` (planned against v${detail.baseVersion})` : ''}
-            </SpecRow>
-            {detail.files !== null && detail.bytes !== null && (
-              <SpecRow label="Upload">
-                {detail.files} files · {formatBytes(detail.bytes)}
-              </SpecRow>
-            )}
-            {detail.rollbackTo !== null && <SpecRow label="Rolls back to">#{detail.rollbackTo}</SpecRow>}
-            {detail.restorePoint && (
-              <SpecRow label="Restore point">{new Date(detail.restorePoint).toLocaleString()}</SpecRow>
-            )}
-            {!detail.current && !detail.rollback.possible && detail.rollback.reason && (
-              <SpecRow label="Rollback">{detail.rollback.reason}</SpecRow>
-            )}
-          </div>
-        </div>
+        </section>
       </div>
 
       {detail.failure && <Failure detail={detail} f={detail.failure} />}
 
       <section>
-        <SectionTitle title="Timeline" count={`${detail.timeline.length} steps`} />
+        <SectionTitle title="Steps" count={detail.timeline.length || undefined} />
         {detail.timeline.length === 0 ? (
           <p className="font-mono text-[13px] text-muted-foreground">
             Queued: it starts when the deployment before it finishes.
@@ -328,14 +319,31 @@ export function DeploymentDetail({
       </section>
 
       <section>
-        <SectionTitle title="What changed" />
-        <Changes detail={detail} />
-      </section>
-
-      <section>
         <SectionTitle title="Log" count={`${detail.log.length} lines`} />
         <Log detail={detail} />
       </section>
+
+      <Disclosure label="Details">
+        <div className="max-w-[640px]">
+          <SpecRow label="Created">{new Date(detail.createdAt).toLocaleString()}</SpecRow>
+          <SpecRow label="Started by">{detail.by}</SpecRow>
+          <SpecRow label="Configuration">
+            {detail.specVersion !== null ? `version ${detail.specVersion}` : 'not written yet'}
+            {detail.baseVersion ? ` (planned against v${detail.baseVersion})` : ''}
+          </SpecRow>
+          {detail.files !== null && detail.bytes !== null && (
+            <SpecRow label="Upload">
+              {detail.files} files · {formatBytes(detail.bytes)}
+            </SpecRow>
+          )}
+          {detail.restorePoint && (
+            <SpecRow label="Database restore point">{new Date(detail.restorePoint).toLocaleString()}</SpecRow>
+          )}
+          {!detail.current && !detail.rollback.possible && detail.rollback.reason && (
+            <SpecRow label="Rollback">{detail.rollback.reason}</SpecRow>
+          )}
+        </div>
+      </Disclosure>
     </div>
   )
 }
