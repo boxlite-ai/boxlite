@@ -34,6 +34,8 @@ on:
       - '.config/nextest.toml'
       - '.gitmodules'
       - 'scripts/setup/**'
+      - 'scripts/test/coverage-bindings.sh'
+      - 'tests/scripts/**'
       - 'Makefile'
       - 'make/**'
       - 'rust-toolchain.toml'
@@ -138,6 +140,12 @@ jobs:
               - 'sdks/c/src/**/!(*.md)'
               - 'sdks/c/build.rs'
               - 'sdks/python/src/**/!(*.md)'
+              # The rust job also runs the external collector, whose Python
+              # suite drives these bindings through a built extension.
+              - 'sdks/python/boxlite/**/!(*.md)'
+              - 'sdks/python/tests/**/!(*.md)'
+              - 'scripts/test/coverage-bindings.sh'
+              - 'tests/scripts/**/!(*.md)'
               - 'sdks/node/src/**/!(*.md)'
               - 'sdks/node/build.rs'
               - 'src/test-utils/**/!(*.md)'

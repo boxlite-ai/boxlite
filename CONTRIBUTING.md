@@ -51,6 +51,17 @@ native classes; there an extension that exists but cannot load, or that
 lacks an expected type, fails instead of skipping. Run both before
 shipping Python SDK changes.
 
+`BOXLITE_REQUIRE_NATIVE=1` makes the second environment mandatory for a
+single run: the shared pytest configuration then imports the extension
+module directly and fails collection when it is absent, unloadable, or
+missing SSH types, instead of letting native tests skip. After
+`make dev:python`, run the gated suite with
+`BOXLITE_REQUIRE_NATIVE=1 make coverage:python` — the same invocation
+`scripts/test/coverage-bindings.sh` (the external coverage collector, run by
+the Test workflow's Rust job) uses after building the extension, so the
+coverage it attributes to the Rust bindings always comes from a suite that
+really ran them.
+
 ### Coverage
 
 `make codecov` collects fresh Rust coverage. Codecov requires **90% coverage

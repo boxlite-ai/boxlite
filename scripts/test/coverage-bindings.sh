@@ -20,7 +20,9 @@ cargo llvm-cov clean --workspace
 
 make dev:python dev:node
 make test:unit:c
-make coverage:python
+# The suite must exercise the extension just built: the gate turns an
+# absent or broken module into a collection failure, not a silent skip.
+BOXLITE_REQUIRE_NATIVE=1 make coverage:python
 # These suites use loopback HTTP and an empty local cache; they never boot a VM.
 make test:integration:node FILTER='image catalog|registry logins'
 
