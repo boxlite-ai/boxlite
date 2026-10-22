@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { Vars } from '../auth.js';
 import type { AppRow, Change, EnvRow, MigrationFile } from '../db.js';
 import type { Ctx } from '../ctx.js';
-import { configuredProviders } from '../enduser/config.js';
+import { appProviders } from '../enduser/config.js';
 import { HttpError } from '../errors.js';
 import { validateMigrationFiles } from '../migrations.js';
 import { classifyMigrations, diffSpecs, onlineChecks } from '../spec.js';
@@ -40,7 +40,7 @@ export function prepare(
   }
   if (!manifest) return { manifest, errors, warnings, migrations, changes: [], latest, stale };
 
-  const online = onlineChecks(manifest, { appName: app.name, envName: env.name, secretExists: (ref) => orgSecret(ctx, app, ref) !== undefined, uploadBytes: input.uploadBytes, configuredProviders: configuredProviders(ctx) });
+  const online = onlineChecks(manifest, { appName: app.name, envName: env.name, secretExists: (ref) => orgSecret(ctx, app, ref) !== undefined, uploadBytes: input.uploadBytes, configuredProviders: appProviders(ctx, app) });
   errors.push(...online.errors);
   warnings.push(...online.warnings);
 

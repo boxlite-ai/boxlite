@@ -3,7 +3,7 @@ import type { AppRow, EnvRow } from '../db.js';
 import type { Ctx } from '../ctx.js';
 import { fail } from '../errors.js';
 import { OAUTH_PROVIDERS } from '../oauth-providers.js';
-import { TEST_SESSION_TTL_S, configuredProviders, redirectUri, sessionName } from './config.js';
+import { TEST_SESSION_TTL_S, appProviders, configuredProviders, redirectUri, sessionName } from './config.js';
 import { mirrorUser } from './mirror.js';
 import { createSession, revokeSessions, upsertUser, userById, view, type AppUser, type UserView } from './sessions.js';
 
@@ -17,7 +17,7 @@ export interface AuthStatus {
 
 export function authStatus(ctx: Ctx, app: AppRow, env: EnvRow): AuthStatus {
   const auth = ctx.resources.currentSpec(env)?.auth ?? null;
-  const ready = configuredProviders(ctx);
+  const ready = appProviders(ctx, app);
   return {
     enabled: auth !== null,
     providers: (auth?.providers ?? []).map((name) => ({ name, status: ready.includes(name) ? 'ready' : 'not_configured' })),

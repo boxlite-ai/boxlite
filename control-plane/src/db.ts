@@ -355,6 +355,17 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
       `);
     }
   },
+  // An App's own OAuth clients for end-user sign-in (enduser/config.ts oauthClientFor), set in the console.
+  `
+  CREATE TABLE IF NOT EXISTS app_oauth_clients (
+    app_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    client_secret TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (app_id, provider)
+  );
+  `,
 ];
 
 export const LOG_RING_SIZE = 20_000;

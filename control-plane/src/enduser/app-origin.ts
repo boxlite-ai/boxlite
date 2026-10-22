@@ -7,7 +7,7 @@ import type { Ctx } from '../ctx.js';
 import { hostCookieName, readCookie, setCookieValue } from '../http/cookies.js';
 import { escapeHtml } from '../http/html.js';
 import { OAUTH_PROVIDERS } from '../oauth-providers.js';
-import { AUTH_PATH, SESSION_COOKIE_MAX_AGE_S, SESSION_COOKIE_NAME, SESSION_TTL_S, STATE_TTL_S, appSecure, loginNonceName, sessionName } from './config.js';
+import { AUTH_PATH, SESSION_COOKIE_MAX_AGE_S, SESSION_COOKIE_NAME, SESSION_TTL_S, STATE_TTL_S, appSecure, loginNonceName, oauthClientFor, sessionName } from './config.js';
 import { identityToken, jwksResponse } from './identity.js';
 import { authLog } from './oauth-flow.js';
 import { htmlPage, noAccessPage, redirect, unauthenticated, wantsHtml } from './pages.js';
@@ -75,7 +75,7 @@ function authRoute(ctx: Ctx, req: ProxyRequest, app: AppRow, env: EnvRow, route:
   if (route !== '/login') return htmlPage('Not found', '<h1>Not found</h1>', 404);
 
   if (sessionUser(ctx, env, readCookie(req.headers, hostCookieName(SESSION_COOKIE_NAME, secure)))) return redirect(next);
-  const ready = providers.filter((p) => ctx.config.oauth?.[p] && OAUTH_PROVIDERS[p]);
+  const ready = providers.filter((p) => oauthClientFor(ctx, app, p));
   if (!ready.length) {
     return htmlPage('Sign-in unavailable', `<h1>Sign-in is not available yet</h1><p>None of this app's sign-in providers (${escapeHtml(providers.join(', '))}) is configured on this platform yet.</p>`, 503);
   }

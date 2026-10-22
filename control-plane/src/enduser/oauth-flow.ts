@@ -9,7 +9,7 @@ import { readCookie, setCookieValue } from '../http/cookies.js';
 import { escapeHtml } from '../http/html.js';
 import { recordLogs } from '../logsink.js';
 import { OAUTH_PROVIDERS, type OAuthProfile } from '../oauth-providers.js';
-import { AUTH_PATH, HANDOFF_TTL_S, OAUTH_TIMEOUT_MS, STATE_TTL_S, apiSecure, redirectUri, verifierCookieName, withTimeout } from './config.js';
+import { AUTH_PATH, HANDOFF_TTL_S, OAUTH_TIMEOUT_MS, STATE_TTL_S, apiSecure, oauthClientFor, redirectUri, verifierCookieName, withTimeout } from './config.js';
 import { jwksResponse } from './identity.js';
 import { mirrorUser } from './mirror.js';
 import { htmlPage, noAccessPage, redirect } from './pages.js';
@@ -57,7 +57,7 @@ function start(ctx: Ctx, req: Request): Response {
   const auth = ctx.resources.currentSpec(env)?.auth;
   const providerName = q.get('provider') ?? '';
   const provider = OAUTH_PROVIDERS[providerName];
-  const creds = ctx.config.oauth?.[providerName];
+  const creds = oauthClientFor(ctx, app, providerName);
   if (!auth || !provider || !creds || !(auth.providers as string[]).includes(providerName)) {
     return htmlPage('Sign-in unavailable', `<h1>That sign-in method is not available for ${escapeHtml(app.name)}</h1>`, 400);
   }
@@ -95,7 +95,7 @@ async function callback(ctx: Ctx, providerName: string, req: Request): Promise<R
   // The verifier cookie binds the callback to the browser that started the sign-in.
   if (!verifier || !safeEqual(sha256hex(verifier), st.vh)) authLog(ctx, env, 'warn', `${providerName} sign-in rejected: callback came from a browser that did not start it, or after 10 minutes`);
   if (!verifier || !safeEqual(sha256hex(verifier), st.vh)) return htmlPage('Sign-in expired', `<h1>Start the sign-in again</h1><p>This browser did not start this sign-in, or it took longer than 10 minutes.</p>${retry}`, 400, headers);
-  const creds = ctx.config.oauth?.[providerName];
+  const creds = oauthClientFor(ctx, app, providerName);
   const auth = ctx.resources.currentSpec(env)?.auth;
   if (!creds || !(auth?.providers as string[] | undefined)?.includes(providerName)) return htmlPage('Sign-in unavailable', `<h1>${escapeHtml(provider.label)} sign-in is not enabled for ${escapeHtml(app.name)}</h1>`, 400, headers);
   const code = url.searchParams.get('code');

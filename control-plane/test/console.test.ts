@@ -546,3 +546,28 @@ test('Sleep on a Box that already stopped by itself succeeds instead of failing'
   assert.equal(slept.status, 200, JSON.stringify(slept.body));
   assert.equal(slept.body.status, 'sleeping');
 });
+
+test('a sign-in method can use the App own OAuth app; its secret never comes back', async () => {
+  const { key } = await createViaConsole();
+  await deploy(key, TOML);
+  const before = (await api('/apps/crm/auth')).body.status.methods;
+  assert.equal(before.find((m: any) => m.provider === 'google').status, 'not_configured', 'BoxLite has no Google app here');
+
+  const saved = await api('/apps/crm/auth/methods/google', { method: 'PUT', json: { keys: 'own', clientId: 'my-google-id', clientSecret: 'my-google-secret' } });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  const google = saved.body.status.methods.find((m: any) => m.provider === 'google');
+  assert.deepEqual([google.status, google.keys, google.clientId], ['ready', 'own', 'my-google-id']);
+  assert.ok(!JSON.stringify(saved.body).includes('my-google-secret'), 'the secret is never returned');
+  const { oauthClientFor } = await import('../src/enduser/config.js');
+  const app = h.ctx.store.appByName('crm')!;
+  assert.deepEqual(oauthClientFor(h.ctx, app, 'google'), { clientId: 'my-google-id', clientSecret: 'my-google-secret', own: true });
+
+  // A new client id without a secret keeps the saved secret.
+  await api('/apps/crm/auth/methods/google', { method: 'PUT', json: { keys: 'own', clientId: 'my-google-id-2' } });
+  assert.equal(oauthClientFor(h.ctx, app, 'google')!.clientSecret, 'my-google-secret');
+  // Back to BoxLite's keys.
+  const back = await api('/apps/crm/auth/methods/google', { method: 'PUT', json: { keys: 'shared' } });
+  assert.equal(back.body.status.methods.find((m: any) => m.provider === 'google').status, 'not_configured');
+  // Own keys without ever giving a secret are refused.
+  assert.equal((await api('/apps/crm/auth/methods/github', { method: 'PUT', json: { keys: 'own', clientId: 'gh-id' } })).status, 400);
+});
