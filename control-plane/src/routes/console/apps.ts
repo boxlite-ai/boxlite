@@ -8,35 +8,43 @@ import { deleteApp, restoreApp } from '../../lifecycle.js';
 import { previewImage } from '../../preview.js';
 import { createOpenTicket } from '../../proxy/gate.js';
 import { createApp, rotateKey } from '../../services/apps.js';
+import { assertCanCreate, canSee, orgIdFor, type Viewer } from '../../orgs.js';
 import { ACTOR, type ConsoleKit } from './kit.js';
 
+/** Activity's actor for what a console user does directly: their GitHub login (`console` for the admin). */
+const actorOf = (v: Viewer) => (v.kind === 'admin' ? ACTOR : (v.user.login ?? v.user.email ?? v.user.id));
+
 export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
-  const { ctx, cp, appOf, envOf, v1, detail, json } = k;
+  const { ctx, cp, appOf, viewer, envOf, v1, detail, json } = k;
   const { store } = ctx;
 
   // ---- apps ----------------------------------------------------------------
 
   api.get('/apps', async (c) => {
-    return c.json(await Promise.all(store.apps().map((a) => summaryView(ctx, a))));
+    const v = viewer(c);
+    return c.json(await Promise.all(store.apps().filter((a) => canSee(v, a)).map((a) => summaryView(ctx, a))));
   });
 
   /** The key exists in clear text only in this response; the CP keeps its sha256. */
   api.post('/apps', async (c) => {
     const b = await json(c, z.object({ name: z.string().trim().min(1).max(64) }));
-    const { app, key } = createApp(ctx, b.name, ACTOR);
+    const v = viewer(c);
+    assertCanCreate(ctx, v);
+    const { app, key } = createApp(ctx, b.name, actorOf(v), orgIdFor(v));
     const env = store.envByName(app.id, 'main')!;
     return c.json({ app: await detail(app, env), key, prompt: handoffPrompt(ctx, app.name, key) }, 201);
   });
 
   /** Soft-deleted apps (PRD 3.13): kept until purge_after, restorable until then. */
   api.get('/deleted-apps', (c) => {
-    return c.json(store.deletedApps().map((a) => ({ name: a.name, deletedAt: a.deleted_at, purgeAfter: a.purge_after, environments: store.envs(a.id).length })));
+    const v = viewer(c);
+    return c.json(store.deletedApps().filter((a) => canSee(v, a)).map((a) => ({ name: a.name, deletedAt: a.deleted_at, purgeAfter: a.purge_after, environments: store.envs(a.id).length })));
   });
 
   api.post('/deleted-apps/:name/restore', async (c) => {
     const app = store.appByNameAnyState(c.req.param('name'));
-    if (!app?.deleted_at) throw fail('not_found_app', `no deleted app named "${c.req.param('name')}"`, 'it may have been purged already');
-    restoreApp(ctx, app, ACTOR);
+    if (!app?.deleted_at || !canSee(viewer(c), app)) throw fail('not_found_app', `no deleted app named "${c.req.param('name')}"`, 'it may have been purged already');
+    restoreApp(ctx, app, actorOf(viewer(c)));
     return c.json(await summaryView(ctx, store.appById(app.id)!));
   });
 
@@ -56,14 +64,14 @@ export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
 
   /** Delete is the soft delete of PRD 3.13; the purger removes the resources later. */
   api.delete('/apps/:id', async (c) => {
-    await deleteApp(ctx, appOf(c), ACTOR);
+    await deleteApp(ctx, appOf(c), actorOf(viewer(c)));
     return c.body(null, 204);
   });
 
   /** New App key; the old one stops working now. Returns the new prompt once. */
   api.post('/apps/:id/key/rotate', (c) => {
     const app = appOf(c);
-    const key = rotateKey(ctx, app, ACTOR);
+    const key = rotateKey(ctx, app, actorOf(viewer(c)));
     return c.json({ key, prompt: handoffPrompt(ctx, app.name, key), last4: key.slice(-4) });
   });
 
@@ -75,7 +83,7 @@ export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
     const app = appOf(c);
     const env = envOf(c, app);
     const b = c.req.header('content-type')?.includes('json') ? await json(c, z.object({ next: z.string().max(2000).optional() })) : {};
-    const { url } = createOpenTicket(ctx, app, env, b.next ?? c.req.query('next'), ACTOR);
+    const { url } = createOpenTicket(ctx, app, env, b.next ?? c.req.query('next'), actorOf(viewer(c)));
     return c.json({ url });
   });
 
@@ -122,7 +130,7 @@ export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
     const env = envOf(c, app);
     if (!env.box_id) throw fail('conflict', 'nothing is running yet', 'deploy first');
     await ctx.resources.sleep(env.box_id);
-    store.recordActivity(app.id, env.name, ACTOR, 'box.sleep');
+    store.recordActivity(app.id, env.name, actorOf(viewer(c)), 'box.sleep');
     return c.json(await detail(app, env));
   });
 

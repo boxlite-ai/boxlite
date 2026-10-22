@@ -1,6 +1,7 @@
 /** The console: login/logout, the console API under /console/api (assembled from the route groups here), and the static dashboard. */
 import { Hono } from 'hono';
-import { CONSOLE_USER, loginRoutes, requireConsoleApi, requireConsolePage } from '../../console-auth.js';
+import { consoleViewer, loginRoutes, requireConsoleApi, requireConsolePage } from '../../console-auth.js';
+import { githubSignInAvailable, mountConsoleSignIn } from '../../console-signin.js';
 import type { Ctx } from '../../ctx.js';
 import { fail } from '../../errors.js';
 import { RESERVED_NAMES } from '../../platform.js';
@@ -24,21 +25,35 @@ import { consoleVolumeRoutes } from './volumes.js';
  */
 
 export function mountConsole(root: Hono, ctx: Ctx): void {
-  const login = loginRoutes(ctx.config);
+  const login = loginRoutes(ctx, githubSignInAvailable(ctx));
   root.get('/console/login', login.page);
   root.post('/console/login', login.submit);
   root.on(['GET', 'POST'], '/console/logout', login.logout);
+  mountConsoleSignIn(root, ctx);
   root.route('/console/api', consoleApi(root, ctx));
   root.get('/console', (c) => c.redirect('/console/', 308));
-  root.get('/console/*', requireConsolePage(ctx.config), (c) => staticHandler(c, ctx.config.consoleDir));
+  root.get('/console/*', requireConsolePage(ctx), (c) => staticHandler(c, ctx.config.consoleDir));
 }
 
 function consoleApi(root: Hono, ctx: Ctx) {
   const api = new Hono();
   const k = consoleKit(root, ctx);
-  api.use('*', requireConsoleApi(ctx.config));
+  api.use('*', requireConsoleApi(ctx));
 
-  api.get('/session', (c) => c.json({ user: CONSOLE_USER, controlPlane: ctx.config.publicUrl, reservedNames: [...RESERVED_NAMES].sort() }));
+  /** Who is signed in and the organization they work in (orgs.ts); the platform admin has none. */
+  api.get('/session', (c) => {
+    const v = consoleViewer(ctx, c)!;
+    const base = { controlPlane: ctx.config.publicUrl, reservedNames: [...RESERVED_NAMES].sort() };
+    if (v.kind === 'admin') return c.json({ ...base, user: 'admin', admin: true, organization: null });
+    const apps = ctx.store.get<{ n: number }>('SELECT count(*) AS n FROM apps WHERE org_id = ?', v.org.id)!.n;
+    return c.json({
+      ...base,
+      user: v.user.name ?? v.user.login ?? v.user.email ?? 'you',
+      admin: false,
+      profile: { name: v.user.name, login: v.user.login, email: v.user.email, avatarUrl: v.user.avatar_url },
+      organization: { id: v.org.id, name: v.org.name, role: v.role, suspendedReason: v.org.suspended_reason, appLimit: v.org.app_limit, apps },
+    });
+  });
 
   consoleAppRoutes(api, k);
   consoleDeploymentRoutes(api, k);

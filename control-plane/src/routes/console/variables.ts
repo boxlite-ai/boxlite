@@ -1,5 +1,5 @@
 /** Console API: variable and secret-reference edits (each save is one apply deployment), copying variables, backups, the org secret list. */
-import { orgSecret } from '../../orgs.js';
+import { PLATFORM_ORG, orgSecret, orgSecretNames } from '../../orgs.js';
 import { buffer } from 'node:stream/consumers';
 import type { Manifest } from '@microcloud/shared';
 import type { Hono } from 'hono';
@@ -135,5 +135,9 @@ export function consoleVariableRoutes(api: Hono, k: ConsoleKit): void {
     return c.json(await detail(app, env));
   });
 
-  api.get('/secrets', async (c) => c.json(await cp<{ name: string; updated_at: string }[]>('GET', '/admin/secrets')));
+  /** The secrets of the viewer's organization (orgs.ts), for "Reference a secret". */
+  api.get('/secrets', (c) => {
+    const v = k.viewer(c);
+    return c.json(orgSecretNames(ctx, v.kind === 'admin' ? PLATFORM_ORG : v.org.id));
+  });
 }

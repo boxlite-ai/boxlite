@@ -15,6 +15,8 @@ export interface OAuthProfile {
   email: string | null;
   name: string | null;
   avatarUrl: string | null;
+  /** The account's handle where the provider has one (GitHub login). */
+  login?: string;
 }
 
 export interface OAuthProvider {
@@ -75,7 +77,7 @@ const github: OAuthProvider = {
     const emails = await json<{ email: string; primary: boolean; verified: boolean }[]>(await fetch('https://api.github.com/user/emails', { headers }), 'GitHub /user/emails');
     const verified = Array.isArray(emails) ? emails.filter((e) => e.verified) : [];
     const email = (verified.find((e) => e.primary) ?? verified[0])?.email ?? null;
-    return { id: String(user.id), email, name: user.name || user.login, avatarUrl: user.avatar_url ?? null };
+    return { id: String(user.id), email, name: user.name || user.login, avatarUrl: user.avatar_url ?? null, login: user.login };
   },
 };
 

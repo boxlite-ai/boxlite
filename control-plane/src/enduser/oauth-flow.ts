@@ -16,6 +16,7 @@ import { htmlPage, noAccessPage, redirect } from './pages.js';
 import { safeNext } from './paths.js';
 import { revokeSessions, upsertUser } from './sessions.js';
 import { signState, verifyState } from './state.js';
+import { consoleCallback } from '../console-signin.js';
 
 /**
  * End-user sign-in for apps that declare `[auth]` (PRD 3.8, case 1): platform-hosted OAuth, a user
@@ -77,6 +78,8 @@ async function callback(ctx: Ctx, providerName: string, req: Request): Promise<R
   if (!provider || !st || st.provider !== providerName) {
     return htmlPage('Sign-in expired', '<h1>This sign-in link has expired</h1><p>Go back to the app and sign in again.</p>', 400);
   }
+  // The console's own sign-in shares the one registered callback.
+  if (st.purpose === 'console') return consoleCallback(ctx, st, req);
   const app = ctx.store.appByName(st.app);
   const env = app ? ctx.store.envByName(app.id, st.env) : undefined;
   if (!app || !env) return htmlPage('Not found', '<h1>This app no longer exists</h1>', 404);

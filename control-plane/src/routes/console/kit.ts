@@ -5,7 +5,9 @@ import type { AppDetailView } from '../../console-view-types.js';
 import { detailView } from '../../console-views.js';
 import type { AppRow, EnvRow } from '../../db.js';
 import type { Ctx } from '../../ctx.js';
+import { consoleViewer } from '../../console-auth.js';
 import { HttpError, fail } from '../../errors.js';
+import { canSee, type Viewer } from '../../orgs.js';
 import { body, type C } from '../util.js';
 
 export type Cp = <T>(method: string, path: string, json?: unknown) => Promise<T>;
@@ -50,8 +52,10 @@ export interface ConsoleKit {
   cp: Cp;
   /** The same, with a raw body and the raw Response. */
   raw: Raw;
-  /** The App named by `:id`, or not_found_app. */
+  /** The App named by `:id` in the viewer's organization, or not_found_app (also for another org's App). */
   appOf(c: Context): AppRow;
+  /** Who is using the console (requireConsoleApi has checked there is someone). */
+  viewer(c: Context): Viewer;
   /** The env named by `?env=` (default main), or not_found_env. */
   envOf(c: Context, app: AppRow): EnvRow;
   /** `/v1/apps/<app>[/envs/<env>]`. */
@@ -66,10 +70,15 @@ export function consoleKit(root: Hono, ctx: Ctx): ConsoleKit {
   const access = ctx.accessLog;
   const { store } = ctx;
   const { call: cp, raw } = cpClient(root, ctx);
+  const viewer = (c: Context): Viewer => {
+    const v = consoleViewer(ctx, c);
+    if (!v) throw fail('unauthenticated', 'sign in to the console first', 'open /console/login');
+    return v;
+  };
   const appOf = (c: Context): AppRow => {
     const name = c.req.param('id') ?? '';
     const app = store.appByName(name);
-    if (!app) throw fail('not_found_app', `no app named "${name}"`);
+    if (!app || !canSee(viewer(c), app)) throw fail('not_found_app', `no app named "${name}"`);
     return app;
   };
   const envOf = (c: Context, app: AppRow): EnvRow => {
@@ -81,5 +90,5 @@ export function consoleKit(root: Hono, ctx: Ctx): ConsoleKit {
   const v1 = (app: AppRow, env?: EnvRow) => `/v1/apps/${encodeURIComponent(app.name)}${env ? `/envs/${encodeURIComponent(env.name)}` : ''}`;
   const detail = async (app: AppRow, env: EnvRow) => detailView(ctx, access, app, env);
   const json = <T extends z.ZodType>(c: Context, schema: T) => body(c as unknown as C, schema);
-  return { ctx, cp, raw, appOf, envOf, v1, detail, json };
+  return { ctx, cp, raw, appOf, viewer, envOf, v1, detail, json };
 }
