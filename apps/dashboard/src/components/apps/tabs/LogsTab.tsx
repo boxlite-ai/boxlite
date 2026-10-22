@@ -4,21 +4,23 @@
  */
 
 import { BRAND } from '@/components/ascii'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { Check, ChevronDown, X } from '@/components/ui/icon'
 import { Spinner } from '@/components/ui/spinner'
-import { X } from '@/components/ui/icon'
 import { useAppLogs } from '@/hooks/queries/useAppsQuery'
-import { relTime } from '@/lib/apps/format'
 import { errorText } from '@/lib/apps/client'
-import type { ActivityLink, AppDetail, AppTab } from '@/lib/apps/types'
+import { relTime } from '@/lib/apps/format'
+import type { ActivityLink, AppActivity, AppDetail, AppLogLine, AppTab } from '@/lib/apps/types'
 import { cn } from '@/lib/utils'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { ChevronDown } from '@/components/ui/icon'
 import { CopyIconButton, EmptyNote, Panel, SearchField } from '../spec'
 import { FilterChip, FilterGroup, Screen, ToolButton, Workbench } from '../SubNav'
 
-// Sources the control plane writes besides the app's own services (which log under their names).
-const PLATFORM_SOURCES = ['build', 'schedule', 'auth', 'db', 'access', 'system']
+// The control plane curates the stream (console-logs.ts): deployment milestones arrive as `deploy`,
+// migrations as `db`, and platform chatter, build output and visitor requests are marked `detail`.
+// The default view leaves detail lines out; they show only when their source is picked.
+const CURATED_SOURCES = ['deploy', 'db', 'auth', 'schedule']
+const DETAIL_SOURCES = ['build', 'access', 'system']
 const RANGES = ['30m', '1h', '24h', '3d'] as const
 const RANGE_MS: Record<(typeof RANGES)[number], number> = {
   '30m': 30 * 60_000,
@@ -27,7 +29,9 @@ const RANGE_MS: Record<(typeof RANGES)[number], number> = {
   '3d': 3 * 86_400_000,
 }
 const ROW_GRID = 'grid-cols-[76px_64px_minmax(0,1fr)] gap-x-4'
-const ACTIVITY_GRID = 'grid-cols-[110px_130px_240px_minmax(0,1fr)_110px] gap-x-3'
+const ACTIVITY_GRID = 'grid-cols-[100px_130px_200px_minmax(0,1fr)_110px] gap-x-3'
+/** How far the reader may scroll before new lines stop arriving at the top. */
+const FOLLOW_SCROLL = 160
 
 type Level = 'info' | 'warn' | 'error'
 type Section = 'runtime' | 'activity'
@@ -40,6 +44,7 @@ interface Line {
   message: string
   raw: string
   deployment: number | null
+  detail: boolean
 }
 
 function dayLabel(at: Date): string {
@@ -50,34 +55,49 @@ function dayLabel(at: Date): string {
   return same(at, today) ? `today · ${date}` : same(at, yesterday) ? `yesterday · ${date}` : date
 }
 
-function DeploymentFilter({
-  app,
-  value,
-  onChange,
+/** The platform's own sources (build output, visitor requests, platform chatter), picked from a menu. */
+function PlatformSources({
+  counts,
+  selected,
+  onToggle,
 }: {
-  app: AppDetail
-  value: number | null
-  onChange: (n: number | null) => void
+  counts: Record<string, number>
+  selected: Set<string>
+  onToggle: (source: string) => void
 }) {
+  const picked = DETAIL_SOURCES.filter((source) => selected.has(source))
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="inline-flex h-[30px] items-center gap-1.5 border border-border bg-card px-3 font-mono text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand/35 data-[state=open]:text-foreground"
+          title="Build output, visitor requests and platform detail"
+          className={cn(
+            '-ml-px inline-flex h-[30px] items-center gap-1 border border-border px-3 font-mono text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand/35',
+            picked.length
+              ? 'relative z-10 border-foreground/45 bg-background font-semibold text-foreground'
+              : 'text-muted-foreground hover:text-foreground data-[state=open]:text-foreground',
+          )}
         >
-          Deployment: <span className="text-foreground">{value ? `#${value}` : 'all'}</span>
+          {picked.length ? picked.join(', ') : 'Platform'}
           <ChevronDown className="size-3.5" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-[320px] min-w-[18rem] overflow-y-auto font-mono">
-        <DropdownMenuItem className="cursor-pointer" onClick={() => onChange(null)}>
-          All deployments
-        </DropdownMenuItem>
-        {app.releases.map((r) => (
-          <DropdownMenuItem key={r.number} className="cursor-pointer gap-2" onClick={() => onChange(r.number)}>
-            <span className="w-8 shrink-0 font-semibold">{r.id}</span>
-            <span className="truncate text-muted-foreground">{r.summary}</span>
+      <DropdownMenuContent align="end" className="min-w-[13rem] font-mono">
+        {DETAIL_SOURCES.map((source) => (
+          <DropdownMenuItem
+            key={source}
+            className="cursor-pointer justify-between gap-4"
+            onSelect={(e) => {
+              e.preventDefault()
+              onToggle(source)
+            }}
+          >
+            <span className="flex items-center gap-2">
+              <Check className={cn('size-3.5', selected.has(source) ? 'opacity-100' : 'opacity-0')} />
+              {source}
+            </span>
+            <span className="text-muted-foreground">{counts[source] ?? 0}</span>
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
@@ -98,24 +118,28 @@ function RuntimeLogs({
   onDeployment: (n: number | null) => void
   onOpenDeployment: (n: number) => void
 }) {
-  // No source picked means every source; picking narrows to the picked ones.
+  // No source picked means the curated stream; picking narrows to the picked sources, detail included.
   const [sources, setSources] = useState<Set<string>>(() => (source ? new Set([source]) : new Set()))
   const [level, setLevel] = useState<'all' | 'warn' | 'error'>('all')
   const [search, setSearch] = useState('')
   const [range, setRange] = useState<(typeof RANGES)[number]>('24h')
   const [live, setLive] = useState(true)
   const [selected, setSelected] = useState<string | null>(null)
+  const [scrolledAway, setScrolledAway] = useState(false)
+  useEffect(() => {
+    const onScroll = () => setScrolledAway(window.scrollY > FOLLOW_SCROLL)
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
 
-  // While Live is on the control plane is polled; lines arrive at the top. When the
-  // reader has paused, scrolled away or opened a line, the list stops moving.
-  const following = useRef(live)
-  following.current = live && selected === null
-  const { data: fetched = [], isLoading, error } = useAppLogs(app.id, range, live && selected === null, deployment)
-  const [fresh, setFresh] = useState<Set<string>>(new Set())
-  const seen = useRef<Set<string> | null>(null)
+  // The control plane is polled all along. While the reader follows, new lines arrive at the top;
+  // once they pause, open a line or scroll away, the page holds still and new lines wait behind
+  // "N new lines · Show".
+  const following = live && selected === null && !scrolledAway
+  const { data: fetched = [], isLoading, error } = useAppLogs(app.id, range, true, deployment)
   const allLines = useMemo<Line[]>(
     () =>
-      fetched.map((l) => ({
+      (fetched as (AppLogLine & { detail?: boolean })[]).map((l) => ({
         id: l.id,
         at: new Date(l.ts),
         source: l.source,
@@ -123,21 +147,37 @@ function RuntimeLogs({
         message: l.line,
         raw: `${l.ts} [${l.source}] ${l.line}`,
         deployment: l.deployment,
+        detail: !!l.detail,
       })),
     [fetched],
   )
-  // The app's services, the platform's sources, and anything else that logged.
-  const sourceList = useMemo(
-    () => [...new Set([...app.services.map((s) => s.name), ...PLATFORM_SOURCES, ...allLines.map((l) => l.source)])],
-    [app.services, allLines],
-  )
+  // Newest line the reader has seen; anything later waits while they are not following.
+  const [heldAfter, setHeldAfter] = useState<number | null>(null)
+  const newest = allLines[0]?.at.getTime() ?? 0
+  useEffect(() => {
+    if (following) setHeldAfter(null)
+    else setHeldAfter((held) => held ?? newest)
+    // Only a change of following moves the cut-off; new lines must not.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [following])
+  const shown = heldAfter === null ? allLines : allLines.filter((l) => l.at.getTime() <= heldAfter)
+  const held = heldAfter === null ? 0 : allLines.length - shown.length
+  const showHeld = () => {
+    setLive(true)
+    setSelected(null)
+    setHeldAfter(null)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
   // Mark lines that arrived since the last poll, briefly.
+  const [fresh, setFresh] = useState<Set<string>>(new Set())
+  const seen = useRef<Set<string> | null>(null)
   useEffect(() => {
     if (isLoading) return
     const ids = new Set(allLines.map((l) => l.id))
-    if (seen.current) {
+    if (seen.current && heldAfter === null) {
       const added = allLines.filter((l) => !seen.current?.has(l.id)).map((l) => l.id)
-      if (added.length && following.current) {
+      if (added.length) {
         setFresh(new Set(added))
         const timer = window.setTimeout(() => setFresh(new Set()), 1600)
         seen.current = ids
@@ -145,12 +185,22 @@ function RuntimeLogs({
       }
     }
     seen.current = ids
-  }, [allLines, isLoading])
+  }, [allLines, isLoading, heldAfter])
 
   const since = Date.now() - RANGE_MS[range]
-  const visible = allLines.filter((line) => {
-    if (line.at.getTime() < since) return false
-    if (sources.size > 0 && !sources.has(line.source)) return false
+  const inRange = shown.filter((line) => line.at.getTime() >= since)
+  const counts: Record<string, number> = {}
+  for (const line of inRange) counts[line.source] = (counts[line.source] ?? 0) + 1
+  // The app's services, then the platform's curated sources, then anything else that logged.
+  const curatedList = [
+    ...new Set([
+      ...app.services.map((s) => s.name),
+      ...CURATED_SOURCES,
+      ...inRange.map((l) => l.source).filter((s) => !DETAIL_SOURCES.includes(s)),
+    ]),
+  ]
+  const visible = inRange.filter((line) => {
+    if (sources.size > 0 ? !sources.has(line.source) : line.detail) return false
     if (level === 'error' && line.level !== 'error') return false
     if (level === 'warn' && line.level === 'info') return false
     if (search && !line.message.toLowerCase().includes(search.toLowerCase())) return false
@@ -165,17 +215,15 @@ function RuntimeLogs({
       else next.add(source)
       return next
     })
+  const pickedNames = [...sources].join(', ')
 
   return (
     <Screen
       title="Runtime logs"
       actions={
         <ToolButton
-          onClick={() => {
-            setLive(!live)
-            if (!live) setSelected(null)
-          }}
-          title={live ? 'Stop new lines from moving the page' : 'Load new lines and keep following'}
+          onClick={() => (live ? setLive(false) : showHeld())}
+          title={live ? 'Stop new lines from moving the page' : 'Show held lines and keep following'}
         >
           <span
             className="size-[6px] rounded-full"
@@ -191,7 +239,7 @@ function RuntimeLogs({
       padded={false}
     >
       <div className="flex flex-wrap items-center gap-3 border-b border-border/60 pb-3">
-        <SearchField value={search} onChange={setSearch} placeholder="Search messages…" className="w-[260px]" />
+        <SearchField value={search} onChange={setSearch} placeholder="Search messages…" className="w-[220px]" />
         <FilterGroup>
           {(['all', 'warn', 'error'] as const).map((candidate) => (
             <FilterChip key={candidate} selected={level === candidate} onClick={() => setLevel(candidate)}>
@@ -206,20 +254,38 @@ function RuntimeLogs({
             </FilterChip>
           ))}
         </FilterGroup>
-        <DeploymentFilter app={app} value={deployment} onChange={onDeployment} />
+        {deployment !== null && (
+          <FilterGroup>
+            <FilterChip selected onClick={() => onDeployment(null)} title="Show every deployment">
+              Deployment #{deployment} <X className="size-3.5" />
+            </FilterChip>
+          </FilterGroup>
+        )}
         <FilterGroup className="ml-auto">
-          {sourceList.map((source) => {
-            const count = allLines.filter((line) => line.source === source && line.at.getTime() >= since).length
-            if (count === 0 && !sources.has(source)) return null
+          {curatedList.map((name) => {
+            const count = counts[name] ?? 0
+            if (count === 0 && !sources.has(name)) return null
             return (
-              <FilterChip key={source} selected={sources.has(source)} onClick={() => toggleSource(source)}>
-                {source} <span className="ml-1 text-muted-foreground">{count}</span>
+              <FilterChip key={name} selected={sources.has(name)} onClick={() => toggleSource(name)}>
+                {name} <span className="ml-1 text-muted-foreground">{count}</span>
               </FilterChip>
             )
           })}
+          <PlatformSources counts={counts} selected={sources} onToggle={toggleSource} />
         </FilterGroup>
       </div>
 
+      {held > 0 && (
+        <div className="sticky top-2 z-10 flex justify-center">
+          <button
+            type="button"
+            onClick={showHeld}
+            className="mt-2 bg-foreground px-3 py-1.5 font-mono text-[13px] font-semibold text-background shadow-lg"
+          >
+            {held} new line{held === 1 ? '' : 's'} · Show
+          </button>
+        </div>
+      )}
       <div className={cn('grid', detail && 'lg:grid-cols-[minmax(0,1fr)_320px]')}>
         <div className="min-w-0">
           {error ? (
@@ -231,12 +297,12 @@ function RuntimeLogs({
           ) : visible.length === 0 ? (
             <EmptyNote
               title={
-                allLines.length === 0
-                  ? `No log lines${deployment ? ` from #${deployment}` : ''} in the last ${range}`
-                  : 'No log lines match'
+                search || level !== 'all'
+                  ? 'No log lines match'
+                  : `No ${pickedNames ? `${pickedNames} ` : ''}lines${deployment ? ` from #${deployment}` : ''} in the last ${range}`
               }
             >
-              {allLines.length === 0 && !app.activeRelease && 'Logs start with the first `boxlite-app deploy`.'}
+              {!app.activeRelease && 'Logs start with the first deployment.'}
             </EmptyNote>
           ) : (
             <>
@@ -264,7 +330,7 @@ function RuntimeLogs({
                       <span className="tabular-nums text-muted-foreground">
                         {line.at.toLocaleTimeString([], { hour12: false })}
                       </span>
-                      <span className="text-muted-foreground">{line.source}</span>
+                      <span className="truncate text-muted-foreground">{line.source}</span>
                       <span
                         className={cn(
                           'truncate',
@@ -285,7 +351,7 @@ function RuntimeLogs({
           )}
         </div>
         {detail && (
-          <Panel className="self-start border-l border-border/60">
+          <Panel className="sticky top-2 self-start border-l border-border/60">
             <div className="flex items-center justify-between px-4 py-2 text-[12px] text-muted-foreground">
               <span className="font-medium text-foreground">Log line</span>
               <button
@@ -302,8 +368,6 @@ function RuntimeLogs({
                 ['Time', detail.at.toISOString()],
                 ['Source', detail.source],
                 ['Level', detail.level],
-                ['Environment', app.environment],
-                ['Box', app.box?.id ?? '—'],
               ].map(([label, value]) => (
                 <div key={label} className="flex items-baseline gap-2">
                   <span className="w-[96px] shrink-0 text-muted-foreground">{label}</span>
@@ -318,12 +382,21 @@ function RuntimeLogs({
                     className="text-foreground underline-offset-2 hover:underline"
                     onClick={() => detail.deployment !== null && onOpenDeployment(detail.deployment)}
                   >
-                    #{detail.deployment} · timeline
+                    #{detail.deployment} →
                   </button>
                 ) : (
                   <span className="text-foreground">—</span>
                 )}
               </div>
+              {[
+                ['Environment', app.environment],
+                ['Box', app.box?.id ?? '—'],
+              ].map(([label, value]) => (
+                <div key={label} className="flex items-baseline gap-2">
+                  <span className="w-[96px] shrink-0 text-muted-foreground">{label}</span>
+                  <span className="min-w-0 break-all text-foreground">{value}</span>
+                </div>
+              ))}
               <div className="flex flex-col gap-1">
                 <span className="flex items-center justify-between text-muted-foreground">
                   Message <CopyIconButton text={detail.raw} />
@@ -352,15 +425,19 @@ function linkLabel(link: ActivityLink): string {
   return `${link.tab.charAt(0).toUpperCase() + link.tab.slice(1)} →`
 }
 
+/** Who changed what: reads (an agent checking status or context) change nothing, so they are left out. */
+const changes = (activity: AppActivity[]) => activity.filter((entry) => !/^read\b/.test(entry.action))
+
 function Activity({ app, onGoTo }: { app: AppDetail; onGoTo: (link: ActivityLink) => void }) {
+  const entries = changes(app.activity)
   return (
     <Screen title="Activity · who changed what" padded={false}>
-      {app.activity.length === 0 ? (
+      {entries.length === 0 ? (
         <EmptyNote title="Nothing has happened yet">
           Every change by your agent, this console or an admin is listed here.
         </EmptyNote>
       ) : (
-        app.activity.map((entry) => (
+        entries.map((entry) => (
           <div
             key={entry.id}
             data-testid="activity-row"
@@ -418,7 +495,7 @@ export function LogsTab({
       feature="logs"
       items={[
         { id: 'runtime', label: 'Runtime logs' },
-        { id: 'activity', label: 'Activity', count: app.activity.length },
+        { id: 'activity', label: 'Activity', count: changes(app.activity).length },
       ]}
       value={current}
       onChange={onSection}
