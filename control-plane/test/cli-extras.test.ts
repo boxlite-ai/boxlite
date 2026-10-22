@@ -104,7 +104,7 @@ test('whoami names the key, its scope and the latest CLI', async () => {
 
 test('context covers services, schedules, volumes, variables, deployments and next actions', async () => {
   const toml = `${TOML}\n[[volume]]\nname = "uploads"\nmount = "/data/uploads"\n\n[[schedule]]\nname = "daily"\ncron = "0 9 * * *"\ntarget = "web:/jobs/daily"\n\n[variables]\nLOG_LEVEL = "info"\n\n[secrets]\nOPENAI_API_KEY = "org/openai"\n`;
-  h.ctx.store.run('INSERT INTO org_secrets (name, value, updated_at) VALUES (?, ?, ?)', 'org/openai', 'sk-real', new Date().toISOString());
+  h.ctx.store.run('INSERT INTO org_secrets (org_id, name, value, updated_at) VALUES (?, ?, ?, ?)', 'org_platform', 'org/openai', 'sk-real', new Date().toISOString());
   await deploy(toml);
   // The admin removed the secret after the deploy: the next start would lack OPENAI_API_KEY.
   h.ctx.store.run('DELETE FROM org_secrets WHERE name = ?', 'org/openai');
@@ -183,7 +183,7 @@ test('db applied, and reset only on non-main with a snapshot first', async () =>
 });
 
 test('vars and schedules list the live spec', async () => {
-  h.ctx.store.run('INSERT INTO org_secrets (name, value, updated_at) VALUES (?, ?, ?)', 'org/openai', 'sk-real', new Date().toISOString());
+  h.ctx.store.run('INSERT INTO org_secrets (org_id, name, value, updated_at) VALUES (?, ?, ?, ?)', 'org_platform', 'org/openai', 'sk-real', new Date().toISOString());
   await deploy(`${TOML}\n[[schedule]]\nname = "daily"\ncron = "0 9 * * *"\ntarget = "web:/jobs/daily"\n\n[secrets]\nOPENAI_API_KEY = "org/openai"\n`);
   const vars = (await (await get('/envs/main/vars')).json()) as { name: string; value: string | null; resolved: boolean; source: string }[];
   const secret = vars.find((v) => v.name === 'OPENAI_API_KEY')!;

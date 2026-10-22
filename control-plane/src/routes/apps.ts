@@ -6,6 +6,7 @@ import { now } from '../db.js';
 import type { Ctx } from '../ctx.js';
 import { fail } from '../errors.js';
 import { listFeedback } from '../feedback.js';
+import { PLATFORM_ORG, orgSecretNames } from '../orgs.js';
 import { createApp } from '../services/apps.js';
 import { envSummary } from '../views.js';
 import { body, type C } from './util.js';
@@ -22,18 +23,25 @@ export function adminRoutes(ctx: Ctx) {
 
 export function adminSecretRoutes(ctx: Ctx) {
   const r = new Hono();
+  /** Secrets belong to an organization (orgs.ts): `?org=<id>`, the platform's own org by default. */
+  const orgParam = (c: { req: { query: (k: string) => string | undefined } }): string => {
+    const org = c.req.query('org') || PLATFORM_ORG;
+    if (!ctx.store.get('SELECT 1 FROM orgs WHERE id = ?', org)) throw fail('not_found', `no organization "${org}"`);
+    return org;
+  };
   // Secret refs look like `org/openai`, so the name may contain slashes.
   r.put('/secrets/:name{.+}', async (c) => {
     const name = c.req.param('name');
     if (!SECRET_REF_RE.test(name)) throw fail('invalid_request', 'secret names look like <scope>/<name>, e.g. org/openai');
     const b = await body(c as unknown as C, z.object({ value: z.string().min(1) }));
-    ctx.store.run('INSERT INTO org_secrets (name, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at', name, b.value, now());
-    return c.json({ name, updated_at: now() });
+    const org = orgParam(c);
+    ctx.store.run('INSERT INTO org_secrets (org_id, name, value, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(org_id, name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at', org, name, b.value, now());
+    return c.json({ org, name, updated_at: now() });
   });
   r.get('/feedback', (c) => c.json(listFeedback(ctx))); // agents' reports about the platform, newest first
-  r.get('/secrets', (c) => c.json(ctx.store.all<{ name: string; updated_at: string }>('SELECT name, updated_at FROM org_secrets ORDER BY name')));
+  r.get('/secrets', (c) => c.json(orgSecretNames(ctx, orgParam(c))));
   r.delete('/secrets/:name{.+}', (c) => {
-    ctx.store.run('DELETE FROM org_secrets WHERE name = ?', c.req.param('name'));
+    ctx.store.run('DELETE FROM org_secrets WHERE org_id = ? AND name = ?', orgParam(c), c.req.param('name'));
     return c.body(null, 204);
   });
   return r;

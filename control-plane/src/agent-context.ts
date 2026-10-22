@@ -1,4 +1,5 @@
 import { contextFindings, type AgentContext, type AgentDatabase, type AgentSchedule, type AgentService, type AgentVariable } from '@microcloud/shared';
+import { orgSecret } from './orgs.js';
 import { Cron } from 'croner';
 import type { AppRow, EnvRow } from './db.js';
 import type { Ctx } from './ctx.js';
@@ -56,7 +57,7 @@ export function variablesOf(ctx: Ctx, app: AppRow, env: EnvRow, spec: Spec | und
   ];
   if (spec?.database) out.push({ name: 'DATABASE_URL', value: null, secret: true, source: 'platform (database)', resolved: env.db_url !== null });
   for (const [name, value] of Object.entries(spec?.variables ?? {})) out.push({ name, value, secret: false, source: 'boxlite.toml', resolved: true });
-  for (const [name, ref] of Object.entries(spec?.secrets ?? {})) out.push({ name, value: null, secret: true, source: `secret ${ref}`, resolved: ctx.store.secret(ref) !== undefined });
+  for (const [name, ref] of Object.entries(spec?.secrets ?? {})) out.push({ name, value: null, secret: true, source: `secret ${ref}`, resolved: orgSecret(ctx, app, ref) !== undefined });
   return out;
 }
 

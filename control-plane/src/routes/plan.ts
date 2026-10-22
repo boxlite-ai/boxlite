@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { orgSecret } from '../orgs.js';
 import type { CheckError, CheckWarning, Manifest } from '@microcloud/shared';
 import { z } from 'zod';
 import type { Vars } from '../auth.js';
@@ -39,7 +40,7 @@ export function prepare(
   }
   if (!manifest) return { manifest, errors, warnings, migrations, changes: [], latest, stale };
 
-  const online = onlineChecks(manifest, { appName: app.name, envName: env.name, secretExists: (ref) => ctx.store.secret(ref) !== undefined, uploadBytes: input.uploadBytes, configuredProviders: configuredProviders(ctx) });
+  const online = onlineChecks(manifest, { appName: app.name, envName: env.name, secretExists: (ref) => orgSecret(ctx, app, ref) !== undefined, uploadBytes: input.uploadBytes, configuredProviders: configuredProviders(ctx) });
   errors.push(...online.errors);
   warnings.push(...online.warnings);
 

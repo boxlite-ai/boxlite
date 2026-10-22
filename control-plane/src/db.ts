@@ -5,7 +5,7 @@ import type { Spec } from './spec.js';
  * The CP's own state. One sqlite file in DATA_DIR; migrations are append-only and tracked with
  * PRAGMA user_version. JSON columns are parsed in the row mappers below.
  */
-const MIGRATIONS: string[] = [
+const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
   `
   CREATE TABLE apps (
     id TEXT PRIMARY KEY,
@@ -300,6 +300,61 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS feedback_app ON feedback(app_id, created_at);
   `,
+  // Console users and organizations, as on the BoxLite platform (orgs.ts): every user gets a
+  // Default Organization; Apps and org secrets belong to an org. What existed before goes to the
+  // platform's Default Organization (org_platform), which the legacy owner takes on first sign-in.
+  (db) => {
+    db.exec(`
+    CREATE TABLE IF NOT EXISTS console_users (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      login TEXT,
+      email TEXT,
+      name TEXT,
+      avatar_url TEXT,
+      created_at TEXT NOT NULL,
+      last_login_at TEXT NOT NULL,
+      UNIQUE (provider, provider_id)
+    );
+    CREATE TABLE IF NOT EXISTS console_handoffs (
+      hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      next TEXT NOT NULL,
+      browser_hash TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS orgs (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      suspended_reason TEXT,
+      app_limit INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS org_members (
+      org_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (org_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS org_members_user ON org_members(user_id);
+    INSERT OR IGNORE INTO orgs (id, name, created_by, created_at) VALUES ('org_platform', 'Default Organization', NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+    `);
+    const columns = (table: string) => (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+    if (!columns('apps').includes('org_id')) db.exec('ALTER TABLE apps ADD COLUMN org_id TEXT');
+    db.exec("UPDATE apps SET org_id = 'org_platform' WHERE org_id IS NULL");
+    if (!columns('org_secrets').includes('org_id')) {
+      db.exec(`
+      CREATE TABLE org_secrets_v9 (org_id TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (org_id, name));
+      INSERT INTO org_secrets_v9 (org_id, name, value, updated_at) SELECT 'org_platform', name, value, updated_at FROM org_secrets;
+      DROP TABLE org_secrets;
+      ALTER TABLE org_secrets_v9 RENAME TO org_secrets;
+      `);
+    }
+  },
 ];
 
 export const LOG_RING_SIZE = 20_000;
@@ -312,6 +367,8 @@ export interface AppRow {
   neon_main_branch_id: string | null;
   deleted_at?: string | null;
   purge_after?: string | null;
+  /** The organization it belongs to (orgs.ts); org_platform for Apps from before organizations. */
+  org_id?: string | null;
 }
 
 export interface EnvRow {
@@ -457,7 +514,9 @@ export class Store {
     for (let v = current; v < MIGRATIONS.length; v++) {
       this.db.exec('BEGIN');
       try {
-        this.db.exec(MIGRATIONS[v]!);
+        const m = MIGRATIONS[v]!;
+        if (typeof m === 'string') this.db.exec(m);
+        else m(this.db);
         this.db.exec(`PRAGMA user_version = ${v + 1}`);
         this.db.exec('COMMIT');
       } catch (err) {
@@ -756,7 +815,4 @@ export class Store {
 
   // ---- secrets -----------------------------------------------------------
 
-  secret(name: string): string | undefined {
-    return this.get<{ value: string }>('SELECT value FROM org_secrets WHERE name = ?', name)?.value;
-  }
 }

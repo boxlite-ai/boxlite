@@ -1,4 +1,5 @@
 /** Console API: variable and secret-reference edits (each save is one apply deployment), copying variables, backups, the org secret list. */
+import { orgSecret } from '../../orgs.js';
 import { buffer } from 'node:stream/consumers';
 import type { Manifest } from '@microcloud/shared';
 import type { Hono } from 'hono';
@@ -100,7 +101,7 @@ export function consoleVariableRoutes(api: Hono, k: ConsoleKit): void {
         break;
       }
       case 'referenceSecret':
-        if (store.secret(a.from) === undefined) throw fail('not_found', `no org secret "${a.from}"`, 'an org admin sets it first (PUT /admin/secrets/…)');
+        if (orgSecret(ctx, app, a.from) === undefined) throw fail('not_found', `no org secret "${a.from}" in this App's organization`, 'an org admin sets it first (PUT /admin/secrets/…)');
         await applyConfig(app, env, `Reference ${a.from} as ${a.name}`, (m) => {
           delete m.variables[a.name];
           m.secrets[a.name] = a.from;

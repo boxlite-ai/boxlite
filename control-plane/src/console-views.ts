@@ -1,4 +1,5 @@
 /** Builds the console's app summary and detail views from real CP state. */
+import { orgSecret } from './orgs.js';
 import { missingVariableIn } from '@microcloud/shared';
 import type { AppRow, Deployment, EnvRow } from './db.js';
 import { ACTIVE_STATUSES, now } from './db.js';
@@ -291,7 +292,7 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
       from,
       inject: 'env' as const,
       usedBy: services.filter((s) => !s.staticDir).map((s) => s.name),
-      present: ctx.store.secret(from) !== undefined,
+      present: orgSecret(ctx, app, from) !== undefined,
     })),
     variables: spec ? { ...spec.variables } : null,
     platformVariables,

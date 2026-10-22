@@ -1,4 +1,5 @@
 /** Creating an App (row, key, `main` env) and rotating its key; called by the admin API and the console. */
+import { PLATFORM_ORG } from '../orgs.js';
 import { newAppKey, newId, newSecret, sha256hex } from '../auth.js';
 import type { AppRow } from '../db.js';
 import { now } from '../db.js';
@@ -7,18 +8,21 @@ import { fail } from '../errors.js';
 import { nameProblem } from '../platform.js';
 
 /** Creates the app row, its key and the `main` env. Neon and the Box are created lazily. */
-export function createApp(ctx: Ctx, name: string, actor = 'admin'): { app: AppRow; key: string } {
+/** A new App in `orgId` (orgs.ts; the platform's org for the admin token and the CLI's admin calls). */
+export function createApp(ctx: Ctx, name: string, actor = 'admin', orgId = PLATFORM_ORG): { app: AppRow; key: string } {
   const problem = nameProblem(name);
   if (problem) throw fail('invalid_request', `app name "${name}" ${problem}`);
   if (ctx.store.appByName(name)) throw fail('conflict', `an app named "${name}" already exists`);
   const deleted = ctx.store.appByNameAnyState(name);
   if (deleted?.deleted_at) {
+    // App names are one namespace (they are URLs); another org's deleted App is just a taken name.
+    if (deleted.org_id !== orgId) throw fail('conflict', `the name "${name}" is taken`, 'pick another name');
     throw fail('conflict', `"${name}" belongs to a deleted app that is kept until ${deleted.purge_after}`, 'restore it from Recently deleted, or pick another name');
   }
   const key = newAppKey();
   const appId = newId('app');
   ctx.store.tx(() => {
-    ctx.store.run('INSERT INTO apps (id, name, created_at) VALUES (?, ?, ?)', appId, name, now());
+    ctx.store.run('INSERT INTO apps (id, name, created_at, org_id) VALUES (?, ?, ?, ?)', appId, name, now(), orgId);
     insertKey(ctx, appId, key);
     ctx.store.run('INSERT INTO envs (id, app_id, name, created_at, forward_secret) VALUES (?, ?, ?, ?, ?)', newId('env'), appId, 'main', now(), newSecret());
   });
