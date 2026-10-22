@@ -501,8 +501,9 @@ pub struct BoxOptions {
     /// Secrets for MITM proxy injection into outbound HTTPS requests.
     ///
     /// Each secret maps a placeholder string to a real value. When the box
-    /// makes an HTTPS request to a matching host, placeholders in request
-    /// headers and body are replaced with the actual secret value.
+    /// makes an HTTPS request to one of a secret's hosts, the placeholder in
+    /// request header values is replaced with the actual secret value. The
+    /// body and URL are forwarded unchanged.
     ///
     /// The placeholder (e.g., `<BOXLITE_SECRET:openai>`) is visible to the
     /// guest; the real value never enters the VM.
@@ -513,7 +514,7 @@ pub struct BoxOptions {
 /// A secret for MITM proxy injection.
 ///
 /// When the guest sends an HTTPS request to one of the listed hosts,
-/// the MITM proxy replaces `placeholder` with `value` in headers and body.
+/// the MITM proxy replaces `placeholder` with `value` in request header values.
 /// The real `value` never enters the guest VM.
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Secret {
@@ -521,8 +522,10 @@ pub struct Secret {
     pub name: String,
     /// Hosts where this secret should be injected (e.g., ["api.openai.com"]).
     /// Supports exact match and wildcard patterns (e.g., "*.example.com").
+    /// Box creation requires at least one, with no empty entry.
     pub hosts: Vec<String>,
     /// Placeholder string visible to the guest (e.g., "<BOXLITE_SECRET:openai>").
+    /// Box creation rejects an empty one.
     pub placeholder: String,
     /// The actual secret value (e.g., "sk-..."). Never enters the VM.
     ///
@@ -744,6 +747,30 @@ impl BoxOptions {
 
         if let Some(kernel) = &self.advanced.kernel {
             kernel.sanitize_persisted()?;
+        }
+        Ok(())
+    }
+
+    /// Reject secrets the proxy cannot substitute safely. New creates only
+    /// (local create, REST clients): boot and archive import rebuild a box
+    /// stored before the rule, whose host-less secret was never substituted
+    /// and whose empty placeholder gvproxy ignores.
+    pub(crate) fn validate_secrets(&self) -> BoxliteResult<()> {
+        use boxlite_shared::errors::BoxliteError;
+        for secret in &self.secrets {
+            let name = &secret.name;
+            if secret.hosts.is_empty() || secret.hosts.iter().any(String::is_empty) {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} must list at least one host in hosts, with no empty \
+                     entry; it is substituted only in requests to those hosts"
+                )));
+            }
+            if secret.placeholder.is_empty() {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} has an empty placeholder; set a non-empty one such as \
+                     <BOXLITE_SECRET:{name}>"
+                )));
+            }
         }
         Ok(())
     }
@@ -2828,6 +2855,23 @@ mod tests {
             placeholder: "<BOXLITE_SECRET:openai>".to_string(),
             value: "sk-test-super-secret-key-12345".to_string(),
         }
+    }
+
+    /// The rule applies at create only. A box stored before it keeps booting;
+    /// its host-less secret stays as inert as it always was. Passes before and
+    /// after the change by design: it pins where the check lives.
+    #[test]
+    fn sanitize_persisted_accepts_a_stored_secret_without_hosts() {
+        let opts = BoxOptions {
+            secrets: vec![Secret {
+                hosts: vec![],
+                placeholder: String::new(),
+                ..test_secret()
+            }],
+            ..Default::default()
+        };
+        opts.sanitize_persisted()
+            .expect("a stored box must not be re-validated against the create rule");
     }
 
     #[test]

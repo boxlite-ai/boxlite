@@ -312,6 +312,10 @@ secrets=[
 ]
 ```
 
+`hosts` must name at least one host, and an explicit `placeholder` must not be
+empty; creating the box fails otherwise. Only request headers sent to those
+hosts carry the real value: bodies and URLs keep the placeholder.
+
 Each host a secret matches becomes reachable on port 443 under a non-empty
 `allow_net` without a rule of its own — a secret is an egress grant as well as
 a credential. It is a by-name dial like any hostname rule, so a host answering

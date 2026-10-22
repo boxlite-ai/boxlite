@@ -1216,11 +1216,10 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         ));
     }
 
-    // Map secrets onto the core `Secret` type and apply the placeholder
-    // default. The local runtime does not synthesize `<BOXLITE_SECRET:{name}>`
-    // for an empty placeholder (unlike the Go SDK), so defaulting here is what
-    // keeps a placeholder-less secret from silently injecting an empty env var
-    // and no MITM substitution — the same failure class POL-303 fixes on Cloud.
+    // Map secrets onto the core `Secret` type. The local runtime does not
+    // synthesize `<BOXLITE_SECRET:{name}>` (unlike the Go SDK), so an omitted
+    // placeholder gets that default here. An explicit empty one is kept, and
+    // create rejects it as on every other entry point.
     let secrets: Vec<boxlite::runtime::options::Secret> = req
         .secrets
         .as_ref()
@@ -1233,7 +1232,6 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                     placeholder: s
                         .placeholder
                         .clone()
-                        .filter(|p| !p.is_empty())
                         .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", s.name)),
                 })
                 .collect()
@@ -2176,20 +2174,6 @@ mod tests {
     }
 
     #[test]
-    fn build_box_options_defaults_an_empty_secret_placeholder() {
-        let req: super::types::CreateBoxRequest = serde_json::from_str(
-            r#"{"image":"alpine:latest","secrets":[{"name":"openai","value":"v","placeholder":""}]}"#,
-        )
-        .expect("body with empty placeholder must deserialize");
-
-        let opts = build_box_options(&req).expect("build");
-        assert_eq!(
-            opts.secrets[0].placeholder, "<BOXLITE_SECRET:openai>",
-            "an empty placeholder is as absent as an omitted one"
-        );
-    }
-
-    #[test]
     fn build_box_options_rejects_an_empty_secret_name_or_value() {
         for secrets in [
             r#"[{"name":"","value":"v"}]"#,
@@ -2468,6 +2452,51 @@ mod tests {
             StatusCode::BAD_REQUEST,
             "auto_delete <= auto_stop is forbidden by the contract"
         );
+    }
+
+    /// Serve once turned an explicit empty placeholder into the default. It
+    /// now reaches create like a host-less secret, and both are refused with
+    /// a 400 before any box exists, as on the cloud.
+    #[tokio::test]
+    async fn serve_create_refuses_a_secret_the_proxy_cannot_substitute() {
+        let home = tempfile::tempdir().expect("runtime home");
+        let runtime = BoxliteRuntime::new_for_test(boxlite::BoxliteOptions {
+            home_dir: home.path().join("boxlite"),
+            ..Default::default()
+        })
+        .expect("local runtime");
+        let state = Arc::new(AppState {
+            runtime: runtime.clone(),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+        });
+
+        // Failures name the case, not the entry: printing an entry that holds
+        // a value is what CodeQL's cleartext-logging check flags.
+        for (case, entry) in [
+            (
+                "empty placeholder",
+                r#"{"name":"openai","value":"v","hosts":["api.openai.com"],"placeholder":""}"#,
+            ),
+            ("no hosts", r#"{"name":"openai","value":"v","hosts":[]}"#),
+        ] {
+            let req: types::CreateBoxRequest = serde_json::from_str(&format!(
+                r#"{{"image":"alpine:latest","secrets":[{entry}]}}"#
+            ))
+            .expect("body must deserialize");
+            let response =
+                handlers::boxes::create_box(axum::extract::State(state.clone()), axum::Json(req))
+                    .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{case}");
+        }
+        assert!(
+            runtime.list_info().await.expect("list boxes").is_empty(),
+            "a refused secret must not provision a box"
+        );
+        runtime.shutdown(Some(1)).await.expect("shutdown runtime");
     }
 
     #[tokio::test]

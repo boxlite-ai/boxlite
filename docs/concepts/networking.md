@@ -30,6 +30,16 @@ Box                    gvproxy                  Internet
 - Built-in DHCP and DNS
 - Network metrics (bytes sent/received)
 
+### Where secrets are substituted
+
+For a request to one of a secret's `hosts`, gvproxy replaces the placeholder in
+request header values only. The body, the URL path and query, and WebSocket
+frames pass through unchanged: a host can store or reflect them, which would
+hand the real value back to the box. A host can reflect headers too, so bind a
+secret only to hosts you trust with it. Box creation rejects a secret with no
+hosts, an empty host entry, or an empty placeholder. A box stored before that
+rule still starts and imports, and `get_or_create` still returns it.
+
 ### Secret substitution certificates
 
 Each box uses a persisted, ten-year MITM CA whose private key stays on the host.

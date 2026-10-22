@@ -522,7 +522,9 @@ func TestSubstituteHeaders_MultiValueHeader(t *testing.T) {
 	}
 }
 
-func TestSubstituteHeaders_URLQueryString(t *testing.T) {
+// A query string is guest content a host may log, redirect with, or echo
+// back, so the placeholder in it must reach the host unchanged.
+func TestSubstituteHeaders_LeavesURLQueryAlone(t *testing.T) {
 	u, _ := url.Parse("https://api.example.com/v1?key=<BOXLITE_SECRET:k>&other=foo")
 	req := &http.Request{
 		Header: http.Header{},
@@ -535,11 +537,34 @@ func TestSubstituteHeaders_URLQueryString(t *testing.T) {
 	substituteHeaders(req, secrets)
 
 	q := req.URL.Query()
-	if got := q.Get("key"); got != "real-value" {
-		t.Errorf("URL query key = %q, want %q", got, "real-value")
+	if got := q.Get("key"); got != "<BOXLITE_SECRET:k>" {
+		t.Errorf("URL query key = %q, want the placeholder unchanged", got)
 	}
 	if got := q.Get("other"); got != "foo" {
 		t.Errorf("URL query other = %q, want %q", got, "foo")
+	}
+}
+
+// strings.NewReplacer("", v) inserts v at every position, so a secret with an
+// empty placeholder would splice the value into every header byte.
+func TestSubstituteHeaders_SkipsEmptyPlaceholder(t *testing.T) {
+	req := &http.Request{
+		Header: http.Header{},
+	}
+	req.Header.Set("Authorization", "Bearer <BOXLITE_SECRET:k>")
+	req.Header.Set("User-Agent", "curl/8")
+
+	secrets := []SecretConfig{
+		{Placeholder: "", Value: "SPRAYED"},
+		{Placeholder: "<BOXLITE_SECRET:k>", Value: "real-value"},
+	}
+	substituteHeaders(req, secrets)
+
+	if got := req.Header.Get("Authorization"); got != "Bearer real-value" {
+		t.Errorf("Authorization = %q, want %q", got, "Bearer real-value")
+	}
+	if got := req.Header.Get("User-Agent"); got != "curl/8" {
+		t.Errorf("User-Agent = %q, want it unchanged", got)
 	}
 }
 
@@ -612,31 +637,6 @@ func TestSubstituteHeaders_DuplicatePlaceholderInOneValue(t *testing.T) {
 	}
 }
 
-func TestSubstituteHeaders_MultipleQueryParams(t *testing.T) {
-	u, _ := url.Parse("https://api.example.com/v1?key=<BOXLITE_SECRET:a>&token=<BOXLITE_SECRET:b>&plain=hello")
-	req := &http.Request{
-		Header: http.Header{},
-		URL:    u,
-	}
-
-	secrets := []SecretConfig{
-		{Placeholder: "<BOXLITE_SECRET:a>", Value: "key-val"},
-		{Placeholder: "<BOXLITE_SECRET:b>", Value: "tok-val"},
-	}
-	substituteHeaders(req, secrets)
-
-	q := req.URL.Query()
-	if got := q.Get("key"); got != "key-val" {
-		t.Errorf("URL query key = %q, want %q", got, "key-val")
-	}
-	if got := q.Get("token"); got != "tok-val" {
-		t.Errorf("URL query token = %q, want %q", got, "tok-val")
-	}
-	if got := q.Get("plain"); got != "hello" {
-		t.Errorf("URL query plain should be unchanged, got %q", got)
-	}
-}
-
 func TestSubstituteHeaders_HeaderAndQueryCombined(t *testing.T) {
 	u, _ := url.Parse("https://api.example.com/v1?api_key=<BOXLITE_SECRET:k>")
 	req := &http.Request{
@@ -653,8 +653,8 @@ func TestSubstituteHeaders_HeaderAndQueryCombined(t *testing.T) {
 	if got := req.Header.Get("Authorization"); got != "Bearer real-key" {
 		t.Errorf("Authorization = %q, want %q", got, "Bearer real-key")
 	}
-	if got := req.URL.Query().Get("api_key"); got != "real-key" {
-		t.Errorf("URL query api_key = %q, want %q", got, "real-key")
+	if got := req.URL.Query().Get("api_key"); got != "<BOXLITE_SECRET:k>" {
+		t.Errorf("URL query api_key = %q, want the placeholder unchanged", got)
 	}
 }
 

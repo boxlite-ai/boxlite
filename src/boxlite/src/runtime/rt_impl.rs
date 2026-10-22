@@ -465,6 +465,11 @@ impl RuntimeImpl {
             };
         }
 
+        // Only a box that does not exist yet meets the create-time secret rule:
+        // one stored before it is adopted above, and archive import and clone
+        // persist through `provision_box` instead.
+        options.validate_secrets()?;
+
         // Initialize box variables with defaults
         let (config, mut state) = self.init_box_variables(&options, name.clone());
 
@@ -2071,6 +2076,84 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("my-data"), "{message}");
         assert!(message.contains("REST runtime"), "{message}");
+    }
+
+    fn test_secret() -> crate::runtime::options::Secret {
+        crate::runtime::options::Secret {
+            name: "openai".to_string(),
+            value: "sk-test".to_string(),
+            hosts: vec!["api.openai.com".to_string()],
+            placeholder: "<BOXLITE_SECRET:openai>".to_string(),
+        }
+    }
+
+    fn with_secret(secret: crate::runtime::options::Secret) -> BoxOptions {
+        BoxOptions {
+            secrets: vec![secret],
+            ..Default::default()
+        }
+    }
+
+    /// gvproxy substitutes a secret only for the hosts it lists, so one without
+    /// a usable host would be stored and never injected; an empty placeholder
+    /// would splice the value into every header byte. Create refuses both.
+    #[tokio::test]
+    async fn local_create_rejects_secrets_the_proxy_cannot_substitute() {
+        let (runtime, _dir) = create_test_runtime();
+        let local = LocalRuntime(runtime.clone());
+        assert!(
+            RuntimeBackend::create(&local, with_secret(test_secret()), None)
+                .await
+                .is_ok()
+        );
+
+        let mut no_hosts = test_secret();
+        no_hosts.hosts.clear();
+        let mut empty_host = test_secret();
+        empty_host.hosts = vec![String::new()];
+        let mut no_placeholder = test_secret();
+        no_placeholder.placeholder.clear();
+        for (broken, field) in [
+            (no_hosts, "hosts"),
+            (empty_host, "hosts"),
+            (no_placeholder, "placeholder"),
+        ] {
+            let error = match RuntimeBackend::create(&local, with_secret(broken), None).await {
+                Err(error) => error,
+                Ok(_) => panic!("create must refuse a secret the proxy cannot substitute"),
+            };
+            assert!(
+                matches!(error, BoxliteError::InvalidArgument(_)),
+                "{error:?}"
+            );
+            assert!(error.to_string().contains(field), "{error}");
+        }
+    }
+
+    /// Create refuses a secret without hosts, but a box stored before that rule
+    /// may hold one. Re-attaching by name with the caller's original options
+    /// must adopt that box, not fail the create-time check.
+    #[tokio::test]
+    async fn local_get_or_create_reattaches_a_box_with_a_hostless_secret() {
+        let (runtime, _dir) = create_test_runtime();
+        let mut legacy = test_secret();
+        legacy.hosts.clear();
+        let mut config = test_box_config_in_layout(false, &runtime);
+        config.name = Some("legacy".to_string());
+        config.options.secrets = vec![legacy.clone()];
+        runtime
+            .box_manager
+            .add_box(&config, &BoxState::new())
+            .unwrap();
+
+        let local = LocalRuntime(runtime.clone());
+        let reattached =
+            RuntimeBackend::get_or_create(&local, with_secret(legacy), Some("legacy".into())).await;
+
+        match reattached {
+            Ok((_, created)) => assert!(!created, "the stored box must be adopted"),
+            Err(error) => panic!("re-attaching must not run the create-time check: {error}"),
+        }
     }
 
     /// Until the local runtime shares typed mounts, create refuses them rather
