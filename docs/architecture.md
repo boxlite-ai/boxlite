@@ -57,6 +57,7 @@ saying what it owns; a file of the same name next to it (`orchestrator.ts`, `res
 | `http/` | HTTP helpers for every origin: `cookies.ts` (`__Host-` names, Set-Cookie, reading), `signed-token.ts` (domain-tagged HMAC, `<subject>.<expiry>.<mac>`), `html.ts` (`escapeHtml`), `response.ts` (`isResponse`). `http.ts` is the outbound JSON client with retry |
 | `services/` | logic both the CLI routes and the console call: `apps.ts` (create an App, rotate its key), `logs.ts` (log levels, a deployment's lines, `since`), `db.ts` (SQL the CP builds itself, db URL coordinates) |
 | `lifecycle.ts` | soft delete, restore, purge after 7 days |
+| `feedback.ts` | `boxlite-app feedback`: agents' reports about the platform, redacted, capped per hour, listed at `/admin/feedback` |
 | `limits.ts` | rate limits, SSE caps, log ingest caps, queue cap |
 | `scheduler.ts` | `[[schedule]]` cron → request through the app origin (`proxy/forward.ts`, wakes the Box) |
 | `agent-context.ts`, `routes/cli-extras.ts` | what `boxlite-app app context`, `doctor`, `whoami`, `app curl` need |
