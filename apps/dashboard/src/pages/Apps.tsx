@@ -22,7 +22,7 @@ import {
 import { Plus } from '@/components/ui/icon'
 import { RoutePath } from '@/enums/RoutePath'
 import { useAppMutation, useRestoreApp } from '@/hooks/mutations/useAppMutations'
-import { useAppsQuery } from '@/hooks/queries/useAppsQuery'
+import { useAppsQuery, useConsoleSession } from '@/hooks/queries/useAppsQuery'
 import type { AppSummary } from '@/lib/apps/types'
 import { errorText } from '@/lib/apps/client'
 import { handleApiError } from '@/lib/error-handling'
@@ -40,6 +40,13 @@ const Apps: React.FC = () => {
   const restore = useRestoreApp()
   const [filter, setFilter] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
+  // The organization decides whether another App fits (orgs.ts on the control plane).
+  const org = useConsoleSession().data?.organization
+  const cannotCreate = org?.suspendedReason
+    ? `${org.name} is suspended: ${org.suspendedReason}`
+    : org && org.appLimit !== null && org.apps >= org.appLimit
+      ? `${org.name} holds ${org.appLimit} Apps, its limit. Deleted Apps count until they are removed for good.`
+      : null
   const [toDelete, setToDelete] = useState<AppSummary | null>(null)
 
   const visible = useMemo(() => {
@@ -73,11 +80,14 @@ const Apps: React.FC = () => {
         <button
           type="button"
           onClick={() => setCreateOpen(true)}
-          className="inline-flex h-9 items-center justify-center gap-[7px] bg-primary px-[15px] text-[12.5px] font-semibold text-primary-foreground transition-opacity hover:opacity-85"
+          disabled={!!cannotCreate}
+          title={cannotCreate ?? undefined}
+          className="inline-flex h-9 items-center justify-center gap-[7px] bg-primary px-[15px] text-[12.5px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Plus className="size-3.5" strokeWidth={2.4} /> New App
         </button>
       </div>
+      {cannotCreate && <p className="-mt-3 text-right font-mono text-[12px] text-muted-foreground">{cannotCreate}</p>}
 
       <AppTable
         apps={visible}

@@ -454,7 +454,20 @@ export interface VolumeListing {
 }
 
 export interface ConsoleSession {
+  /** Display name: the GitHub name or login, or `admin` for the platform operator. */
   user: string
+  /** Signed in with the admin token: sees every organization. */
+  admin: boolean
+  profile?: { name: string | null; login: string | null; email: string | null; avatarUrl: string | null }
+  /** The organization the console works in (null for the admin). */
+  organization: {
+    id: string
+    name: string
+    role: 'owner' | 'member'
+    suspendedReason: string | null
+    appLimit: number | null
+    apps: number
+  } | null
   controlPlane: string
   reservedNames: string[]
 }

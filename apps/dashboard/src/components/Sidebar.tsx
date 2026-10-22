@@ -17,6 +17,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
 import { Theme, useTheme } from '@/contexts/ThemeContext'
 import { RoutePath } from '@/enums/RoutePath'
+import { useConsoleSession } from '@/hooks/queries/useAppsQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { markJustLoggedOut } from '@/lib/auth-session'
 import { ONBOARDING_OPEN_EVENT } from '@/lib/onboarding-progress'
@@ -141,8 +142,14 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
     signoutRedirect()
   }
 
-  // The console's prototype login has one identity, the control plane's admin.
-  const userName = consoleMode ? 'admin' : user?.profile.name || user?.profile.email || 'Profile'
+  // The console signs in with GitHub (or the operator's admin token) and works in one organization.
+  const { data: consoleSession } = useConsoleSession({ enabled: consoleMode })
+  const consoleProfile = consoleSession?.profile
+  const userName = consoleMode
+    ? consoleSession?.user || 'Profile'
+    : user?.profile.name || user?.profile.email || 'Profile'
+  const userEmail = consoleMode ? (consoleProfile?.email ?? consoleProfile?.login) : user?.profile.email
+  const userPicture = consoleMode ? consoleProfile?.avatarUrl : user?.profile.picture
   const initials =
     userName
       .split(/\s+/)
@@ -225,11 +232,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
           className="inline-flex h-full items-center gap-2 border-l border-border px-4 text-[13px] font-medium text-foreground outline-none transition-colors hover:bg-card data-[state=open]:bg-card sm:px-5"
         >
           <span className="flex size-[23px] shrink-0 items-center justify-center overflow-hidden bg-brand text-[9px] font-extrabold text-white">
-            {!consoleMode && user?.profile.picture ? (
-              <img src={user.profile.picture} alt={userName} className="h-full w-full object-cover" />
-            ) : (
-              initials
-            )}
+            {userPicture ? <img src={userPicture} alt={userName} className="h-full w-full object-cover" /> : initials}
           </span>
           <span className="hidden max-w-[140px] truncate xl:inline">{userName}</span>
           <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
@@ -237,9 +240,14 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
         <DropdownMenuContent align="end" className="min-w-[18rem]">
           <DropdownMenuLabel className="flex flex-col gap-0.5">
             <span className="truncate text-[13px] font-semibold text-foreground">{userName}</span>
-            {!consoleMode && user?.profile.email && user.profile.email !== userName && (
+            {userEmail && userEmail !== userName && (
+              <span className="truncate font-mono text-[11px] font-normal text-muted-foreground">{userEmail}</span>
+            )}
+            {consoleMode && consoleSession && (
               <span className="truncate font-mono text-[11px] font-normal text-muted-foreground">
-                {user.profile.email}
+                {consoleSession.organization
+                  ? `${consoleSession.organization.name} · ${consoleSession.organization.role}`
+                  : 'Platform admin · every organization'}
               </span>
             )}
           </DropdownMenuLabel>

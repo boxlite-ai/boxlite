@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
@@ -55,9 +56,11 @@ describe('Sidebar primary navigation', () => {
     act(() => {
       root = createRoot(host)
       root.render(
-        <MemoryRouter initialEntries={['/dashboard/boxes']}>
-          <Sidebar isBannerVisible={false} version="test" />
-        </MemoryRouter>,
+        <QueryClientProvider client={new QueryClient()}>
+          <MemoryRouter initialEntries={['/dashboard/boxes']}>
+            <Sidebar isBannerVisible={false} version="test" />
+          </MemoryRouter>
+        </QueryClientProvider>,
       )
     })
 

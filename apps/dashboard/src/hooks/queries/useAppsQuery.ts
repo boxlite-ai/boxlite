@@ -33,11 +33,13 @@ export const isBusy = (app: AppDetail | undefined) =>
 /** How often a busy environment is re-read: the header and Deployments row follow a deploy within this. */
 const LIVE_MS = 1500
 
-export function useConsoleSession() {
+export function useConsoleSession({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery<ConsoleSession>({
-    queryKey: [...queryKeys.apps.all, APPS_SCOPE, 'session'],
+    // Under the App list, so creating, deleting or restoring an App refreshes the org's App count too.
+    queryKey: [...queryKeys.apps.list(APPS_SCOPE), 'session'],
     queryFn: async () => (await appsClient.get<ConsoleSession>('/session')).data,
-    staleTime: Infinity,
+    staleTime: 30_000,
+    enabled,
   })
 }
 
