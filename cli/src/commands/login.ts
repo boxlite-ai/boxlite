@@ -2,7 +2,7 @@ import { MicrocloudError } from '@microcloud/shared';
 import type { Command } from 'commander';
 import { Api } from '../api.js';
 import type { MakeCtx } from '../cli.js';
-import type { Ctx } from '../context.js';
+import { isPlatformKey, type Ctx } from '../context.js';
 import { forgetKey, saveKey, savedKey } from '../credentials.js';
 import { describe } from '../meta.js';
 import { readStdin } from './common.js';
@@ -17,6 +17,7 @@ async function login(ctx: Ctx, opts: { stdin?: boolean }): Promise<void> {
   if (!key) {
     throw new MicrocloudError('usage', 'no key to save: set BOXLITE_API_KEY, or pipe it in with --stdin', 'from the App prompt: `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login`');
   }
+  if (isPlatformKey(key)) throw new MicrocloudError('usage', 'that is a BoxLite platform key (blk_…), not an App key', 'use the bxl_app_… key from the App prompt: `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<bxl_app_… key> boxlite-app login`');
   const url = ctx.env.BOXLITE_API_URL || ctx.link?.api_url;
   if (!url) throw new MicrocloudError('missing_api_url', 'BOXLITE_API_URL is not set', 'set it to the URL in the App prompt and rerun `boxlite-app login`');
   const me = await new Api({ baseUrl: url, key, env: ctx.envName, dispatcher: ctx.dispatcher }).whoami();

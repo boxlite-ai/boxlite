@@ -62,11 +62,11 @@ test('whoami: app, key scope, env, control plane, and a newer CLI', async () => 
     `App crm · environment main · key …${KEY.slice(-4)} (scope: this App only)`,
     'Control plane https://cp.test (via http://cp.test)',
     'Environments main live',
-    'CLI 0.3.10 (latest 0.9.0)',
+    'CLI 0.3.11 (latest 0.9.0)',
     'next: update the CLI: `npm install -g http://cp.test/cli/boxlite-app.tgz`',
   ]);
   const json = JSON.parse((await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent })).stdout);
-  assert.deepEqual(json.cli, { version: '0.3.10', latest_version: '0.9.0', update_available: true, update_command: 'npm install -g http://cp.test/cli/boxlite-app.tgz' });
+  assert.deepEqual(json.cli, { version: '0.3.11', latest_version: '0.9.0', update_available: true, update_command: 'npm install -g http://cp.test/cli/boxlite-app.tgz' });
   assert.deepEqual(json.linked, { link_file: true, app: 'crm', matches_key: true });
 });
 
@@ -166,7 +166,7 @@ test('doctor runs local and online checks and ranks the problems with fixes', as
   assert.equal(checks.database, 'ok');
 
   const human = await cli(['doctor'], { cwd: dir, dispatcher: agent });
-  assert.equal(human.lines[0], 'Doctor · crm/main · CLI 0.3.10');
+  assert.equal(human.lines[0], 'Doctor · crm/main · CLI 0.3.11');
   assert.match(human.lines[1] ?? '', /^x error deployment #3 failed at start: web answers 404 on its health path \/healthz/);
   assert.match(human.lines.at(-1) ?? '', /^next: add a route GET \/healthz/);
 });
@@ -226,4 +226,27 @@ test('with keys of two Apps saved, a folder that names no App never borrows the 
   assert.equal(JSON.parse(named.stdout).app, 'crm', named.stderr);
   const init = await cli(['init', '--app', 'crm', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } });
   assert.equal(init.code, 0, init.stderr);
+});
+
+test('a BoxLite platform key (blk_…) in the shell never stands in for the App key', async () => {
+  const dir = await project(root, {});
+  const config = await mkdtemp(join(tmpdir(), 'blcfg-'));
+  const PLATFORM = 'blk_live_0123456789abcdef0123456789';
+  const { agent, pool } = mockApi();
+  pool.intercept({ path: '/v1/apps/me/whoami', method: 'GET', headers: { authorization: `Bearer ${KEY}` } }).reply(200, WHOAMI, { headers: JSON_HEADERS }).times(2);
+
+  // Nothing saved: say what the variable is, not "key not recognised" from the server.
+  const none = await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_API_URL: API, BOXLITE_API_KEY: PLATFORM, BOXLITE_CONFIG_DIR: config } });
+  const err = JSON.parse(none.stderr).error;
+  assert.equal(err.code, 'unauthenticated');
+  assert.match(err.message, /platform key/);
+  assert.ok(!none.stderr.includes(PLATFORM), 'the key is never printed');
+  const login = await cli(['login', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_API_URL: API, BOXLITE_API_KEY: PLATFORM, BOXLITE_CONFIG_DIR: config } });
+  assert.match(JSON.parse(login.stderr).error.message, /platform key/);
+
+  // With the App key saved, the platform key in the profile is simply not used.
+  assert.equal((await cli(['login'], { cwd: dir, dispatcher: agent, env: { BOXLITE_API_URL: API, BOXLITE_API_KEY: KEY, BOXLITE_CONFIG_DIR: config } })).code, 0);
+  const later = await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_API_KEY: PLATFORM, BOXLITE_CONFIG_DIR: config } });
+  assert.equal(later.code, 0, later.stderr);
+  assert.equal(JSON.parse(later.stdout).app, 'crm');
 });

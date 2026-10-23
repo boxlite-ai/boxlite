@@ -7,7 +7,7 @@
 //   3. record what the agent did (time, turns, cost, tool calls, final report).
 // Independent verification of the result is done afterwards (verify-acceptance.mjs).
 //
-//   node e2e/agent-acceptance.mjs <case-id>...      cases: m1 m2 m3 m4 m5 m6 m7 (default: all, in parallel)
+//   node e2e/agent-acceptance.mjs <case-id>...      cases: m1 m2 m3 m4 m5 m6 m7 m8 (default; AGENT=codex runs Codex instead of Claude Code: all, in parallel)
 import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -28,6 +28,7 @@ export const CASES = {
   m5: { app: `ledger-${STAMP}`, ask: '用 Python 做一个家庭记账小工具：记录每笔收支和分类，按月看汇总图表，可以导出成 Excel' },
   m6: { app: `chat-${STAMP}`, ask: '做一个实时聊天室，打开链接的人起个昵称就能进来聊天，大家同时在线能马上看到别人发的消息，刷新后还能看到之前的聊天记录' },
   m7: { app: `club-${STAMP}`, ask: '做一个读书会报名网站：成员用邮箱验证码登录（我们很多人没有 GitHub），登录后能报名下一期读书会、看到自己报过哪些期。发验证码用我们的邮箱账号：SMTP 服务器 127.0.0.1，端口 2525，用户名 club，密码 club-mail-2026，发件人 读书会 <no-reply@club.test>。做好后直接上线，所有人都能打开' },
+  m8: { app: `shop-${STAMP}`, ask: '做一个卖手工蜡烛的小网店：顾客浏览商品、加购物车、填地址下单（先不接支付，下单后显示订单号）；我自己有一个后台，能上下架商品、改价格、看所有订单和改订单状态，别人进不去后台。顾客不用登录也能买，直接上线' },
 }
 
 async function consoleSession() {
@@ -42,6 +43,27 @@ async function createApp(cookie, name) {
   const b = await r.json()
   if (r.status !== 201) throw new Error(`create ${name}: ${r.status} ${JSON.stringify(b).slice(0, 300)}`)
   return b
+}
+
+/** The same journey with Codex (AGENT=codex): `codex exec` reads stdin unless it is closed. */
+function runCodex(id, prompt, dir) {
+  return new Promise((resolve) => {
+    const t0 = Date.now()
+    const last = join(OUT, `${id}.last.txt`)
+    const child = spawn('codex', ['exec', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', '-C', dir, '--json', '-o', last, prompt], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] })
+    const chunks = []
+    child.stdout.on('data', (d) => chunks.push(d))
+    const timer = setTimeout(() => child.kill('SIGTERM'), 45 * 60_000)
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      writeFileSync(join(OUT, `${id}.jsonl`), Buffer.concat(chunks))
+      const events = Buffer.concat(chunks).toString('utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
+      const tools = events.filter((e) => e.item?.type === 'command_execution' && e.type === 'item.completed').map((e) => String(e.item.command ?? '').slice(0, 160))
+      let report = ''
+      try { report = readFileSync(last, 'utf8') } catch { /* no final message */ }
+      resolve({ id, exit: code, seconds: Math.round((Date.now() - t0) / 1000), turns: tools.length, cost: undefined, tools, report })
+    })
+  })
 }
 
 function runAgent(id, prompt, dir) {
@@ -75,7 +97,7 @@ const runs = await Promise.all(ids.map(async (id) => {
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(OUT, `${id}.app.json`), JSON.stringify({ id, app: c.app, ask: c.ask, key: created.key, url: created.app?.url }, null, 2), { mode: 0o600 })
   console.log(`[${id}] ${c.app} → agent started`)
-  const r = await runAgent(id, prompt, dir)
+  const r = await (process.env.AGENT === 'codex' ? runCodex : runAgent)(id, prompt, dir)
   console.log(`[${id}] done in ${r.seconds}s, ${r.turns} turns, $${r.cost?.toFixed?.(2)}`)
   return { ...r, app: c.app, ask: c.ask }
 }))

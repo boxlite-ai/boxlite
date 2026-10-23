@@ -20,6 +20,8 @@ boxlite-app whoami            # the App this key belongs to, its environments, s
 boxlite-app app context       # services, schema, migrations, variables, recent deploys and errors, and what to do next
 ```
 
+A `BOXLITE_API_KEY` that your shell profile sets to a BoxLite platform key (`blk_…`, for the BoxLite SDKs) is not an App key: the App CLI ignores it and uses the App key you saved with `login`.
+
 If `context` shows a live deployment, this is an **update**: run `boxlite-app app clone <app>` into an empty directory (it downloads the code that is live; if its `next:` line says to, run `boxlite-app app pull` to pick up changes made online since), or work in the user's existing project directory if it has `.boxlite/link.json`. Then go to step 3.
 
 Everything the CLI can do is documented offline: `boxlite-app docs` lists the topics of this guide, and `boxlite-app docs reference [command…]` prints every command with its flags, `--json` shape and exit codes. With `--json`, a successful command prints exactly one JSON document on stdout; a failed one prints `{"error": {"code", "message", "next", …}}` on stderr. `next` is always a command to run or a file to edit.

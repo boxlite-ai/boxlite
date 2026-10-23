@@ -96,6 +96,9 @@ function shellQuote(arg: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`;
 }
 
+/** A BoxLite platform key (the SDKs' BOXLITE_API_KEY), as opposed to an App key (`bxl_app_…`). */
+export const isPlatformKey = (key: string | undefined) => !!key && key.startsWith('blk_');
+
 export class Ctx {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
@@ -124,9 +127,13 @@ export class Ctx {
     this.argv = argv;
   }
 
-  /** BOXLITE_API_KEY, else the key `boxlite-app login` saved for this App (credentials.ts). */
+  /**
+   * BOXLITE_API_KEY, else the key `boxlite-app login` saved for this App (credentials.ts). A BoxLite
+   * platform key (`blk_…`, what the BoxLite SDKs read from the same variable) is never an App key.
+   */
   get apiKey(): string | undefined {
-    return this.env.BOXLITE_API_KEY || savedKey(this.env, this.apiUrl, this.app)?.key || undefined;
+    const env = this.env.BOXLITE_API_KEY;
+    return (env && !isPlatformKey(env) ? env : undefined) || savedKey(this.env, this.apiUrl, this.app)?.key || undefined;
   }
 
   get apiUrl(): string | undefined {
@@ -160,6 +167,9 @@ export class Ctx {
     const saved = key ? [] : savedApps(this.env, this.env.BOXLITE_API_URL || this.link?.api_url);
     if (!key && !this.app && saved.length > 1) {
       throw new MicrocloudError('usage', `keys of several Apps are saved (${saved.join(', ')}) and nothing here says which App`, 'run it in the App\'s project folder (link it once with `boxlite-app init --app <name>`), or set BOXLITE_APP=<name>; the name is the "App:" line of the App prompt');
+    }
+    if (!key && isPlatformKey(this.env.BOXLITE_API_KEY)) {
+      throw new MicrocloudError('unauthenticated', 'BOXLITE_API_KEY in this shell is a BoxLite platform key (blk_…), not an App key (bxl_app_…), and no App key is saved', 'save the App key from the App prompt once: `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<bxl_app_… key> boxlite-app login`; the platform key can stay in your profile');
     }
     if (!key) throw new MicrocloudError('unauthenticated', 'no App key: BOXLITE_API_KEY is not set and none is saved', 'save the key from the App prompt once: `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login` (later shells need neither), then `boxlite-app whoami`');
     const url = this.apiUrl;

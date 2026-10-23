@@ -30,6 +30,7 @@ const EXPECT = {
   m5: { page: [/<form|<input|\.boxlite\/auth\/login|github/i], needs: ['database'] },
   m6: { page: [], needs: ['database', 'public'] },
   m7: { page: [], needs: ['database', 'public', 'email sign-in'] },
+  m8: { page: [], needs: ['database', 'public', 'owner-only admin'] },
 }
 
 /** The app's page; a sleeping app first answers 503 with the platform's wake-up page, so wait for it. */
