@@ -105,6 +105,18 @@ async function cp(ctx: Ctx, src: string, dst: string, opts: { force?: boolean })
   ctx.out.line(`${remote.volume}:${remote.path} → ${target} (${formatBytes(bytes)})`);
 }
 
+async function rm(ctx: Ctx, target: string, opts: { recursive?: boolean }): Promise<void> {
+  const remote = parseRemote(target);
+  if (!remote || remote.path === '/' || remote.path === '') {
+    throw new MicrocloudError('usage', `name a file or folder inside a volume, e.g. uploads:/old.png (got "${target}")`, '`boxlite-app app volume ls <volume>` lists what is there');
+  }
+  const what = `${remote.volume}:${remote.path}`;
+  if (!(await ctx.confirmDestructive({ action: `delete ${what} in ${ctx.envName}`, destroys: [opts.recursive ? `${what} and everything in it` : what], undo: `none: copy it out first if you may need it: \`boxlite-app app volume cp ${what} ./\`` }))) return;
+  const out = await (await ctx.appApi()).volumeRemove(remote.volume, remote.path, opts.recursive === true);
+  ctx.out.line(`deleted ${out.removed === 'directory' ? 'folder ' : ''}${what}`);
+  ctx.out.data(out);
+}
+
 export function registerVolume(app: Command, make: MakeCtx): void {
   const volume = app.command('volume').description('files on the environment’s volumes ([[volume]] in boxlite.toml)');
   describe(
@@ -130,6 +142,20 @@ export function registerVolume(app: Command, make: MakeCtx): void {
       exits: [2, 3, 4],
       online: true,
       examples: ['boxlite-app app volume cp ./seed/logo.png uploads:/logo.png', 'boxlite-app app volume cp uploads:/exports/report.csv ./'],
+    },
+  );
+  describe(
+    volume
+      .command('rm <target>')
+      .description('delete a file on a volume, or a folder with --recursive: rm <volume>:<path>')
+      .option('-r, --recursive', 'delete a folder and everything in it')
+      .option('-y, --yes', 'skip the confirmation')
+      .action(async (target: string, opts: { recursive?: boolean }, cmd: Command) => rm(await make(cmd), target, opts)),
+    {
+      json: '{ volume, path, removed: "file" | "directory" }',
+      exits: [2, 3, 4],
+      online: true,
+      examples: ['boxlite-app app volume rm uploads:/test-cover.png --yes', 'boxlite-app app volume rm uploads:/tmp --recursive --yes'],
     },
   );
 }

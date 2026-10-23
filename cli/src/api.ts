@@ -481,6 +481,10 @@ export class Api {
     return { file: res };
   }
 
+  volumeRemove(volume: string, path: string, recursive: boolean): Promise<{ volume: string; path: string; removed: 'file' | 'directory' }> {
+    return this.json('DELETE', `${this.envPath}/volumes/${encodeURIComponent(volume)}/files`, { query: { path, recursive: recursive ? 1 : undefined } });
+  }
+
   async volumePut(volume: string, path: string, bytes: Buffer, overwrite: boolean): Promise<VolumeWrite> {
     const res = await this.request('PUT', `${this.envPath}/volumes/${encodeURIComponent(volume)}/files`, { query: { path, overwrite: overwrite ? 1 : undefined }, raw: bytes });
     return (await res.json()) as VolumeWrite;

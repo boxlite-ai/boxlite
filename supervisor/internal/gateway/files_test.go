@@ -166,10 +166,6 @@ func TestFilesWrite(t *testing.T) {
 	if rec.Code != http.StatusBadRequest || body["error"] != "is_directory" {
 		t.Fatalf("dir: %d %s", rec.Code, rec.Body.String())
 	}
-	rec, _ = do(t, g, http.MethodDelete, filesURL(target), "", ctl())
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("delete: %d", rec.Code)
-	}
 	leftovers, _ := filepath.Glob(filepath.Join(mount, "avatars", "2026", ".boxlite-upload-*"))
 	if len(leftovers) != 0 {
 		t.Fatalf("temp files left: %v", leftovers)
@@ -333,5 +329,51 @@ func TestUploadsTakeTheMountOwner(t *testing.T) {
 	defer root.Close()
 	if o := ownerOf(root); !o.ok || o.uid != os.Getuid() {
 		t.Fatalf("owner of %s: %+v", mount, o)
+	}
+}
+
+func TestFilesRemove(t *testing.T) {
+	g, mount, outside := volume(t)
+	for _, f := range []string{"avatars/a.png", "avatars/2026/b.png", "keep.txt"} {
+		if rec, _ := do(t, g, http.MethodPut, filesURL(mount+"/"+f), "x", ctl()); rec.Code != http.StatusOK {
+			t.Fatalf("seed %s: %d", f, rec.Code)
+		}
+	}
+	rec, body := do(t, g, http.MethodDelete, filesURL(mount+"/avatars/a.png"), "", ctl())
+	if rec.Code != http.StatusOK || body["removed"] != "file" {
+		t.Fatalf("file: %d %s", rec.Code, rec.Body.String())
+	}
+	rec, body = do(t, g, http.MethodDelete, filesURL(mount+"/avatars"), "", ctl())
+	if rec.Code != http.StatusBadRequest || body["error"] != "is_directory" {
+		t.Fatalf("folder without recursive: %d %s", rec.Code, rec.Body.String())
+	}
+	rec, body = do(t, g, http.MethodDelete, filesURL(mount+"/avatars", "recursive", "1"), "", ctl())
+	if rec.Code != http.StatusOK || body["removed"] != "directory" {
+		t.Fatalf("folder: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(mount + "/avatars"); !os.IsNotExist(err) {
+		t.Fatalf("folder still there: %v", err)
+	}
+	rec, body = do(t, g, http.MethodDelete, filesURL(mount, "recursive", "1"), "", ctl())
+	if rec.Code != http.StatusBadRequest || body["error"] != "is_volume" {
+		t.Fatalf("the volume itself: %d %s", rec.Code, rec.Body.String())
+	}
+	rec, _ = do(t, g, http.MethodDelete, filesURL(mount+"/missing.txt"), "", ctl())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing: %d %s", rec.Code, rec.Body.String())
+	}
+	// A symlink to the outside is removed as a link; what it points to is untouched.
+	if err := os.Symlink(outside, filepath.Join(mount, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = do(t, g, http.MethodDelete, filesURL(mount+"/escape", "recursive", "1"), "", ctl())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("symlink: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(outside, "state.json")); err != nil {
+		t.Fatalf("deleting a link removed its target: %v", err)
+	}
+	if _, err := os.Stat(mount + "/keep.txt"); err != nil {
+		t.Fatalf("other files touched: %v", err)
 	}
 }

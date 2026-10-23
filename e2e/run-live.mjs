@@ -237,7 +237,11 @@ async function main() {
     assert(JSON.stringify(ls.json).includes('from-agent.txt'), `ls ${JSON.stringify(ls.json).slice(0, 200)}`)
     const l = await (await app('/api/files')).json()
     assert(l.includes('from-agent.txt'), `the app does not see it: ${JSON.stringify(l)}`)
-    return 'written as the volume owner'
+    const rm = cli(['app', 'volume', 'rm', 'uploads:/from-agent.txt', '--yes'])
+    assert(rm.code === 0 && rm.json?.removed === 'file', `volume rm: ${rm.code} ${rm.err}`)
+    const after = await (await app('/api/files')).json()
+    assert(!after.includes('from-agent.txt'), `still there after rm: ${JSON.stringify(after)}`)
+    return 'written as the volume owner, then removed'
   })
 
   // ---- sign-in ---------------------------------------------------------------------

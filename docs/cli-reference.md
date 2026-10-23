@@ -790,6 +790,26 @@ boxlite-app app volume cp ./seed/logo.png uploads:/logo.png
 boxlite-app app volume cp uploads:/exports/report.csv ./
 ```
 
+### `boxlite-app app volume rm`
+
+delete a file on a volume, or a folder with --recursive: rm <volume>:<path>
+
+Usage: `boxlite-app app volume rm <target> [options]`
+
+| option | description | default |
+|---|---|---|
+| `-r, --recursive` | delete a folder and everything in it |  |
+| `-y, --yes` | skip the confirmation |  |
+
+- Network: talks to the control plane
+- `--json`: `{ volume, path, removed: "file" | "directory" }`
+- Exit codes: 0, 1, 2, 3, 4
+
+```sh
+boxlite-app app volume rm uploads:/test-cover.png --yes
+boxlite-app app volume rm uploads:/tmp --recursive --yes
+```
+
 ### `boxlite-app app dev`
 
 fetch the environment's variables into .env.local and run every service locally against the cloud database (DATABASE_URL is a local db proxy, no password)

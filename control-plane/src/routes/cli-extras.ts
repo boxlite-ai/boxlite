@@ -11,7 +11,7 @@ import { recordFeedback } from '../feedback.js';
 import { TABLES_QUERY } from '../services/db.js';
 import { deploymentLogs, parseSince, storedLevelsAtLeast } from '../services/logs.js';
 import { deploymentView, envStatus } from '../views.js';
-import { readVolume, VOLUME_FILE_MAX, volumePath, writeVolume } from '../volume-files.js';
+import { readVolume, removeVolume, VOLUME_FILE_MAX, volumePath, writeVolume } from '../volume-files.js';
 import { forward } from '../proxy/forward.js';
 import { body, envOf, intParam, type C } from './util.js';
 
@@ -221,6 +221,14 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
     const body = await c.req.arrayBuffer();
     if (body.byteLength > VOLUME_FILE_MAX) throw fail('invalid_request', `file is ${body.byteLength} bytes; the limit is ${VOLUME_FILE_MAX}`, 'split the file or let the app write it');
     const out = await writeVolume(env, volume.name, rel, abs, body, c.req.query('overwrite') === '1');
+    return c.json({ volume: volume.name, path: rel, ...out });
+  });
+
+  r.delete('/envs/:env/volumes/:name/files', async (c) => {
+    const { env, volume, rel, abs } = await runningEnv(c);
+    if (rel === '/') throw fail('invalid_request', `refusing to delete the volume ${volume.name} itself`, `name what is inside it: \`boxlite-app app volume ls ${volume.name}\``);
+    const out = await removeVolume(env, volume.name, rel, abs, c.req.query('recursive') === '1');
+    ctx.store.recordActivity(c.get('app').id, env.name, c.get('actor'), 'volume.delete', { volume: volume.name, path: rel, removed: out.removed });
     return c.json({ volume: volume.name, path: rel, ...out });
   });
 

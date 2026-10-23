@@ -140,7 +140,7 @@ boxlite-app deploy -m "what changed"   # upload → cloud build → migrate → 
 - If the platform is at fault (a command misbehaves, this guide contradicts what happens, or a capability you need is missing), report it once with `boxlite-app feedback "<what happened, what you expected>" --command "<the command>"`, then carry on with a workaround. Never report bugs in the app's own code.
 - Stuck or unsure what is wrong: `boxlite-app doctor` checks the key, the project, the last deployment, crash-looping services, the database, pending migrations, sign-in and reachability, and lists the problems worst first, each with its fix.
 - Debug a running app: `boxlite-app app logs --source web --level error --since 10m` (also `--grep <regex>`, `--deployment <N>`, `--follow`), `boxlite-app app services`, `boxlite-app app deployment <N> --logs` (timeline with every log line).
-- Files on a volume: `boxlite-app app volume ls uploads:/`, `boxlite-app app volume cp ./seed.png uploads:/seed.png`. Live variables: `boxlite-app app vars list` (secrets masked).
+- Files on a volume: `boxlite-app app volume ls uploads:/`, `boxlite-app app volume cp ./seed.png uploads:/seed.png`, and to clean up what your checks left behind, `boxlite-app app volume rm uploads:/test.png --yes` (a folder with `--recursive`). Live variables: `boxlite-app app vars list` (secrets masked).
 
 ## 5. Verify before you report
 

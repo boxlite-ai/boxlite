@@ -54,6 +54,11 @@ async function fakeGateway(secret: string, control: string): Promise<{ server: S
     if (u.pathname === '/healthz') return void res.writeHead(200, { 'content-type': 'text/plain' }).end('ok');
     if (u.pathname !== '/.boxlite/sv/files') return void res.writeHead(404).end();
     const p = u.searchParams.get('path')!;
+    if (req.method === 'DELETE') {
+      if (p === '/data/uploads') return void res.writeHead(400, { 'content-type': 'application/json' }).end('{"error":"is_volume"}');
+      if (!files.delete(p)) return void res.writeHead(404, { 'content-type': 'application/json' }).end('{"error":"no_such_file"}');
+      return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ path: p, removed: 'file' }));
+    }
     if (req.method === 'PUT') {
       const chunks: Buffer[] = [];
       req.on('data', (c: Buffer) => chunks.push(c));
@@ -224,6 +229,13 @@ test('volume files go through the Box gateway with the secret, confined to the v
     assert.match(((await conflict.json()) as { error: { next: string } }).error.next, /--force/);
     assert.equal((await put('/logo.png&overwrite=1')).status, 200);
     assert.ok(gw.seen.includes('GET /.boxlite/sv/files?path=%2Fdata%2Fuploads%2Fa.txt'));
+
+    const del = (path: string) => h.request(`/v1/apps/crm/envs/main/volumes/uploads/files?path=${path}`, { method: 'DELETE', key });
+    assert.deepEqual(await (await del('/logo.png')).json(), { volume: 'uploads', path: '/logo.png', removed: 'file' });
+    assert.equal((await del('/logo.png')).status, 404);
+    assert.equal((await del('/')).status, 400, 'never the volume itself');
+    assert.equal((await del('/../../etc')).status, 403);
+    assert.ok(h.ctx.store.all<{ action: string }>('SELECT action FROM activity').some((a) => a.action === 'volume.delete'), 'deletes are in the activity log');
     assert.ok(!gw.seen.some((s) => s.includes('etc')));
   } finally {
     gw.server.close();

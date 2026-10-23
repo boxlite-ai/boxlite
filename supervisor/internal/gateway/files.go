@@ -59,8 +59,10 @@ func (g *Server) files(w http.ResponseWriter, r *http.Request) {
 		g.readFile(w, r)
 	case http.MethodPut:
 		g.writeFile(w, r)
+	case http.MethodDelete:
+		g.removeFile(w, r)
 	default:
-		w.Header().Set("Allow", "GET, PUT")
+		w.Header().Set("Allow", "GET, PUT, DELETE")
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method_not_allowed"})
 	}
 }
@@ -289,6 +291,57 @@ func (g *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"path": clean, "bytes": n, "replaced": replaced})
+}
+
+// removeFile deletes a file, or a directory with recursive=1, inside a
+// declared mount; never the mount itself. A symlink is removed as a link, never
+// followed (os.Root keeps everything inside the volume).
+func (g *Server) removeFile(w http.ResponseWriter, r *http.Request) {
+	clean, mount, status, code, msg := g.confine(r.Context(), r.URL.Query().Get("path"))
+	if status != 0 {
+		fileError(w, status, code, msg)
+		return
+	}
+	if clean == mount {
+		fileError(w, http.StatusBadRequest, "is_volume", "refusing to delete the volume itself; name a file or folder inside it")
+		return
+	}
+	root, err := openMount(mount)
+	if errors.Is(err, errOutsideVolume) {
+		rootError(w, clean, err)
+		return
+	}
+	if err != nil {
+		fileError(w, http.StatusNotFound, "no_such_file", "volume "+mount+" is not mounted")
+		return
+	}
+	defer root.Close()
+	name := rel(clean, mount)
+	info, err := root.Lstat(name)
+	if err != nil {
+		rootError(w, clean, err)
+		return
+	}
+	kind := "file"
+	if info.IsDir() {
+		kind = "directory"
+		if r.URL.Query().Get("recursive") != "1" {
+			fileError(w, http.StatusBadRequest, "is_directory", clean+" is a folder; delete it with everything in it by asking for a recursive delete")
+			return
+		}
+	}
+	// As the volume owner, like a write: the idmapped volume refuses root.
+	err = asOwner(ownerOf(root), func() error {
+		if kind == "directory" {
+			return root.RemoveAll(name)
+		}
+		return root.Remove(name)
+	})
+	if err != nil {
+		rootError(w, clean, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"path": clean, "removed": kind})
 }
 
 // mkdirAllOwned creates dir (relative to root) one segment at a time, giving
