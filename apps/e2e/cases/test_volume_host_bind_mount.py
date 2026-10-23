@@ -6,10 +6,11 @@ allowed"). A REST-mode `BoxOptions` carrying `volumes=[(host_path,
 guest_path, ...)]` must not produce a box with that host path
 mounted.
 
-The rejection is explicit, not silent, and it now happens in the
-client: the wire's only mount field is `volumes[].managed_volume`,
-so a host bind has nothing to serialize into and never leaves the
-SDK. Failing loud is the contract worth pinning: a silently ignored
+The rejection is explicit, not silent, and it happens in the
+client: a host bind goes only to a server whose `GET /v1/config`
+advertises `host_path_volumes_enabled` (`boxlite serve
+--host-path-root`). The cloud does not, so the bind never leaves
+the SDK. Failing loud is the contract worth pinning: a silently ignored
 bind mount leaves the caller believing the guest can see a host
 directory it cannot.
 
@@ -32,7 +33,8 @@ import pytest
 async def test_host_bind_mount_via_rest_is_rejected(rt, image):
     """`BoxOptions(volumes=[(host_dir, "/mnt/ro")])` over REST must be
     rejected. A tuple is a host bind, and the REST runtime refuses one
-    before the request is built, so the box is never created and no host
+    when the server does not advertise host-path support, before the
+    create request is built, so the box is never created and no host
     path can reach the guest."""
     with tempfile.TemporaryDirectory(prefix="boxlite_e2e_hostmount_") as host_dir:
         with pytest.raises(Exception, match="volume") as exc_info:
@@ -40,8 +42,8 @@ async def test_host_bind_mount_via_rest_is_rejected(rt, image):
                 boxlite.BoxOptions(
                     image=image,
                     auto_remove=True,
-                    # Caller asks for a host bind mount — REST has no
-                    # such surface and must refuse it outright.
+                    # Caller asks for a host bind mount — the cloud
+                    # binds none, so the client must refuse it.
                     volumes=[(host_dir, "/mnt/ro")],
                 ),
             )

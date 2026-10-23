@@ -364,6 +364,7 @@ pub(super) struct ServerCapabilities {
     pub clone_enabled: bool,
     pub export_enabled: bool,
     pub import_enabled: bool,
+    pub host_path_volumes_enabled: bool,
 }
 
 // ============================================================================

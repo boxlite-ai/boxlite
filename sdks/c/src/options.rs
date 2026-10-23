@@ -77,8 +77,10 @@ pub unsafe extern "C" fn boxlite_options_add_env(
 
 /// Bind a host directory or file into the box.
 ///
-/// Host bind mounts are local-runtime only; a REST runtime rejects them at
-/// create. Use [`boxlite_options_add_managed_volume`] against a REST runtime.
+/// Over REST the host path is a path on the server, so only a server that
+/// advertises host-path support (`boxlite serve --host-path-root`) accepts it;
+/// other REST runtimes reject it at create. Use
+/// [`boxlite_options_add_managed_volume`] there.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_add_bind_mount(
     opts: *mut CBoxliteOptions,

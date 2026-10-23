@@ -135,8 +135,20 @@ anything deeper are refused, and roots may not nest, because the runtime resolve
 the path again at every boot: a box writing inside its own bind could otherwise
 turn a deeper bind of another box into a symlink to `/` before that box restarts.
 Without the flag every host path is refused. `managed_volume` entries are always
-refused, since `serve` has no volume backend. boxlite's own REST client does not
-send host paths, so only raw HTTP callers can use them.
+refused, since `serve` has no volume backend.
+
+`GET /v1/config` reports `capabilities.host_path_volumes_enabled: true` exactly
+when a root is set. The SDKs and `boxlite --url` ask for it, uncached, before a
+create that carries a host path, and refuse locally when it is missing or false,
+so the path never reaches a server that cannot bind it, such as the cloud API. In
+Python, against `boxlite serve --host-path-root /srv/agents`:
+
+```python
+await rt.create(BoxOptions(volumes=[
+    {"host_path": "/srv/agents/a1", "guest_path": "/workspace"},
+    {"host_path": "/srv/agents/shared", "guest_path": "/shared", "read_only": True},
+]))
+```
 
 ### Box CRUD & Lifecycle
 

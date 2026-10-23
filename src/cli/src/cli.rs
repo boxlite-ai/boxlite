@@ -1357,10 +1357,15 @@ fn resolve_host_path(path: String) -> anyhow::Result<String> {
 
 impl VolumeFlags {
     /// Apply volume flags to options. Pass `home` for anonymous volume storage (e.g. from GlobalFlags).
+    ///
+    /// With `remote`, a host path names the REST server's filesystem, so only an
+    /// absolute one passes, as written: a relative path or an anonymous volume
+    /// would be resolved on this machine, and is refused before touching it.
     pub fn apply_to(
         &self,
         opts: &mut BoxOptions,
         home: Option<&std::path::Path>,
+        remote: bool,
     ) -> anyhow::Result<()> {
         let base = anonymous_volume_base(home);
         for value in self.volume.iter() {
@@ -1372,8 +1377,31 @@ impl VolumeFlags {
                     VolumeSpec::managed_volume(volume, mount.guest_path)
                 }
 
+                crate::volumespec::MountOrigin::BindMount(path) if remote => {
+                    // The path is the server's, so its form decides, not this
+                    // client's OS: `/srv/x` and `C:\data` are both absolute.
+                    let absolute = path.starts_with('/')
+                        || path.starts_with(r"\\")
+                        || crate::volumespec::is_windows_drive_prefix(&path);
+                    if !absolute {
+                        anyhow::bail!(
+                            "volume host path {path:?} is relative; against a remote server a host \
+                             path is a path on that server, so give it as an absolute path"
+                        );
+                    }
+                    VolumeSpec::bind_mount(path, mount.guest_path)
+                }
+
                 crate::volumespec::MountOrigin::BindMount(path) => {
                     VolumeSpec::bind_mount(resolve_host_path(path)?, mount.guest_path)
+                }
+
+                crate::volumespec::MountOrigin::Anonymous if remote => {
+                    anyhow::bail!(
+                        "anonymous volume {:?} lives on this machine and cannot be used with a \
+                         remote server; bind an absolute path on the server or mount a managed volume",
+                        mount.guest_path
+                    );
                 }
 
                 crate::volumespec::MountOrigin::Anonymous => {
@@ -2506,7 +2534,7 @@ mod tests {
             ],
         };
         let mut opts = BoxOptions::default();
-        flags.apply_to(&mut opts, None).unwrap();
+        flags.apply_to(&mut opts, None, false).unwrap();
         assert_eq!(opts.volumes.len(), 2);
         assert_eq!(opts.volumes[0].host_path, "/host/data");
         assert_eq!(opts.volumes[0].guest_path, "/guest/data");
@@ -2525,7 +2553,7 @@ mod tests {
             ],
         };
         let mut opts = BoxOptions::default();
-        flags.apply_to(&mut opts, None).unwrap();
+        flags.apply_to(&mut opts, None, false).unwrap();
         assert_eq!(opts.volumes.len(), 2);
         assert_eq!(opts.volumes[0].host_path, r"C:\host\data");
         assert_eq!(opts.volumes[0].guest_path, "/guest/data");
@@ -2547,7 +2575,7 @@ mod tests {
             ],
         };
         let mut opts = BoxOptions::default();
-        flags.apply_to(&mut opts, None).unwrap();
+        flags.apply_to(&mut opts, None, false).unwrap();
 
         assert_eq!(opts.volumes.len(), 2);
         assert_eq!(opts.volumes[0].managed_volume.as_deref(), Some("my-data"));
@@ -2569,7 +2597,7 @@ mod tests {
             volume: vec!["my-data:/data:ro".to_string()],
         };
         let mut opts = BoxOptions::default();
-        flags.apply_to(&mut opts, None).unwrap();
+        flags.apply_to(&mut opts, None, false).unwrap();
 
         assert_eq!(opts.volumes[0].managed_volume.as_deref(), Some("my-data"));
         assert!(opts.volumes[0].read_only);
@@ -2582,7 +2610,7 @@ mod tests {
             volume: vec!["/host/data:/data:ro".to_string()],
         };
         let mut opts = BoxOptions::default();
-        flags.apply_to(&mut opts, None).unwrap();
+        flags.apply_to(&mut opts, None, false).unwrap();
 
         assert_eq!(opts.volumes[0].host_path, "/host/data");
         assert!(opts.volumes[0].read_only);
@@ -2596,7 +2624,7 @@ mod tests {
             volume: vec!["/host/data:/guest/data".to_string()],
         };
         let mut opts = BoxOptions::default();
-        flags.apply_to(&mut opts, None).unwrap();
+        flags.apply_to(&mut opts, None, false).unwrap();
 
         assert_eq!(opts.volumes[0].managed_volume, None);
         assert_eq!(opts.volumes[0].host_path, "/host/data");
@@ -2609,7 +2637,7 @@ mod tests {
             volume: vec!["/data".to_string(), "/cache:ro".to_string()],
         };
         let mut opts = BoxOptions::default();
-        flags.apply_to(&mut opts, Some(&base)).unwrap();
+        flags.apply_to(&mut opts, Some(&base), false).unwrap();
         assert_eq!(opts.volumes.len(), 2);
         assert_eq!(opts.volumes[0].guest_path, "/data");
         assert!(
@@ -2621,6 +2649,60 @@ mod tests {
         assert_eq!(opts.volumes[1].guest_path, "/cache");
         assert!(opts.volumes[1].read_only);
         assert!(opts.volumes[1].host_path.contains("anonymous"));
+    }
+
+    /// Against a REST server a host path names the server's filesystem. A
+    /// relative path or an anonymous volume would be resolved on this machine
+    /// instead, so both are refused before the filesystem is touched; an
+    /// absolute path goes out as written.
+    #[test]
+    fn test_volume_flags_remote_refuses_paths_resolved_on_this_machine() {
+        let home = tempfile::tempdir().unwrap();
+        for value in [".:/data", "/data"] {
+            let flags = VolumeFlags {
+                volume: vec![value.to_string()],
+            };
+            let mut opts = BoxOptions::default();
+            let error = flags
+                .apply_to(&mut opts, Some(home.path()), true)
+                .expect_err("a path resolved on this machine must be refused");
+            assert!(error.to_string().contains("remote"), "{value}: {error}");
+        }
+        assert!(
+            !home.path().join("volumes").exists(),
+            "refusing an anonymous volume must not create its directory"
+        );
+
+        let flags = VolumeFlags {
+            volume: vec!["/srv/agents/a1:/workspace:ro".to_string()],
+        };
+        let mut opts = BoxOptions::default();
+        flags
+            .apply_to(&mut opts, Some(home.path()), true)
+            .expect("an absolute path is a server path");
+        assert_eq!(opts.volumes[0].host_path, "/srv/agents/a1");
+        assert!(opts.volumes[0].read_only);
+    }
+
+    /// Whether a remote host path is absolute is a property of the path, not
+    /// of this client's OS: a Unix client must not refuse a Windows server's
+    /// `C:\data`, nor a Windows client a Unix server's `/srv/x`.
+    #[test]
+    fn test_volume_flags_remote_judges_absolute_paths_by_their_form() {
+        for (value, host_path) in [
+            (r"C:\data:/data", r"C:\data"),
+            (r"\\server\share:/data", r"\\server\share"),
+            ("/srv/x:/data", "/srv/x"),
+        ] {
+            let flags = VolumeFlags {
+                volume: vec![value.to_string()],
+            };
+            let mut opts = BoxOptions::default();
+            flags
+                .apply_to(&mut opts, None, true)
+                .unwrap_or_else(|e| panic!("{value}: {e}"));
+            assert_eq!(opts.volumes[0].host_path, host_path);
+        }
     }
 
     // ─── auth subcommand parse tests ───────────────────────────────────────

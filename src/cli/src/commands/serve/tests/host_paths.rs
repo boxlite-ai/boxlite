@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::super::handlers::config::server_config;
 use super::super::host_paths::HostPathPolicy;
 use super::super::types::VolumeSpecRequest;
 
@@ -214,4 +215,19 @@ fn a_missing_root_stops_the_server() {
         .expect_err("a root that does not exist must fail startup");
 
     assert!(error.to_string().contains("--host-path-root"), "{error}");
+}
+
+/// SDK clients send a host path only to a server whose `GET /v1/config` says
+/// it binds one, so the flag must follow `--host-path-root` exactly.
+#[test]
+fn config_advertises_host_paths_only_when_a_root_is_set() {
+    let root = tempfile::tempdir().unwrap();
+    let advertised = |policy: &HostPathPolicy| {
+        serde_json::to_value(server_config(policy)).unwrap()["capabilities"]
+            ["host_path_volumes_enabled"]
+            .clone()
+    };
+
+    assert_eq!(advertised(&policy(root.path())), true);
+    assert_eq!(advertised(&HostPathPolicy::default()), false);
 }

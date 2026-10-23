@@ -94,6 +94,7 @@ pub(crate) struct ServerCapabilities {
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
     pub import_enabled: Option<bool>,
+    pub host_path_volumes_enabled: Option<bool>,
 }
 
 // ============================================================================
@@ -241,12 +242,17 @@ pub(crate) struct CreateBoxAdvancedOptions {
     pub capabilities: ContainerCapabilities,
 }
 
-/// A mount on the wire. Only managed volumes exist here — a REST server has no
-/// host filesystem to bind from, so `BoxOptions::sanitize_remote` refuses a host
-/// bind at create and this type has no field for one.
+/// A mount on the wire: exactly one of `managed_volume` or `host_path`.
+///
+/// `host_path` is a path on the server, bound only by a server that advertises
+/// `host_path_volumes_enabled` (`boxlite serve --host-path-root`); `create`
+/// checks that before building the request, so no other server receives one.
 #[derive(Debug, Serialize)]
 pub(crate) struct CreateBoxVolumeSpec {
-    pub managed_volume: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub managed_volume: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_path: Option<String>,
     pub guest_path: String,
     pub read_only: bool,
 }
@@ -254,12 +260,13 @@ pub(crate) struct CreateBoxVolumeSpec {
 impl From<&crate::runtime::options::VolumeSpec> for CreateBoxVolumeSpec {
     fn from(volume: &crate::runtime::options::VolumeSpec) -> Self {
         Self {
-            // `BoxOptions::sanitize_remote` runs first and refuses any mount whose
-            // `managed_volume` is unset, so the default is unreachable rather
-            // than a fallback: an empty string would be a selector the server
-            // can never resolve. `From` cannot report that, which is why the
-            // check lives at create instead of here.
-            managed_volume: volume.managed_volume.clone().unwrap_or_default(),
+            managed_volume: volume.managed_volume.clone(),
+            // `VolumeSpec::validate` already ran, so a mount without a managed
+            // volume has a host path, and one with a managed volume has none.
+            host_path: volume
+                .managed_volume
+                .is_none()
+                .then(|| volume.host_path.clone()),
             guest_path: volume.guest_path.clone(),
             read_only: volume.read_only,
         }
@@ -1070,7 +1077,7 @@ mod tests {
         assert!(json["network"]["mode"].is_null());
         assert_eq!(req.secrets.as_ref().map(Vec::len), Some(1));
         let volume = &req.volumes.as_ref().unwrap()[0];
-        assert_eq!(volume.managed_volume, "volume-123");
+        assert_eq!(volume.managed_volume.as_deref(), Some("volume-123"));
         assert_eq!(volume.guest_path, "/data");
         assert!(!volume.read_only);
         let json = serde_json::to_value(&req).unwrap();
@@ -1191,7 +1198,7 @@ mod tests {
 
             let req = CreateBoxRequest::from_options(&opts, None);
             let volume = &req.volumes.as_ref().unwrap()[0];
-            assert_eq!(volume.managed_volume, reference);
+            assert_eq!(volume.managed_volume.as_deref(), Some(reference));
             assert_eq!(volume.guest_path, "/data");
 
             let json = serde_json::to_value(&req).unwrap();
@@ -1202,6 +1209,32 @@ mod tests {
                 json["volumes"][0]
             );
         }
+    }
+
+    /// A host bind goes out as `host_path`, a path on the server, with its
+    /// mode; `managed_volume` is left off rather than sent empty. The runtime
+    /// builds this only after the server advertises host-path support.
+    #[test]
+    fn host_bind_reaches_wire_as_host_path() {
+        use crate::runtime::options::{BoxOptions, VolumeSpec};
+
+        let opts = BoxOptions {
+            volumes: vec![VolumeSpec {
+                read_only: true,
+                ..VolumeSpec::bind_mount("/srv/agents/shared", "/shared")
+            }],
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(CreateBoxRequest::from_options(&opts, None)).unwrap();
+        assert_eq!(
+            json["volumes"],
+            serde_json::json!([{
+                "host_path": "/srv/agents/shared",
+                "guest_path": "/shared",
+                "read_only": true
+            }])
+        );
     }
 
     #[test]

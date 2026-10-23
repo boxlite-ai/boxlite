@@ -281,7 +281,10 @@ volumes=[
 ]
 ```
 
-Managed volumes require a REST runtime; host binds are local-runtime only.
+Managed volumes require a REST runtime. A host bind names a path on the machine
+running the box: locally that is this machine; over REST it is the server, and
+only `boxlite serve --host-path-root` accepts one, so other servers are refused
+before any request.
 Either may set `"read_only": True`; a managed volume is then bound read-only
 on the runner.
 

@@ -229,7 +229,10 @@ export interface JsManagedVolumeSpec {
 }
 
 export interface JsHostPathVolumeSpec {
-  /** Path on the local host for host-path mounts. Local runtimes only. */
+  /**
+   * Path on the host running the box: this machine locally, the server over
+   * REST, where only `boxlite serve --host-path-root` accepts one.
+   */
   hostPath: string;
   guestPath: string;
   readOnly?: boolean;

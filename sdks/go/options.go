@@ -299,8 +299,9 @@ func WithEnv(key, value string) BoxOption {
 
 // WithBindMount binds a host path into the box.
 //
-// Host binds are local-runtime only; a REST runtime rejects them at create.
-// Use [WithManagedVolume] against a REST runtime.
+// Over REST the host path is a path on the server, so only a server that
+// advertises host-path support (boxlite serve --host-path-root) accepts it;
+// other REST runtimes reject it at create. Use [WithManagedVolume] there.
 func WithBindMount(hostPath, guestPath string) BoxOption {
 	return func(c *boxConfig) {
 		c.volumes = append(c.volumes, volumeEntry{hostPath: hostPath, guestPath: guestPath})

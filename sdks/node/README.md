@@ -198,7 +198,7 @@ const box = new SimpleBox({
   },
   env: { FOO: 'bar' },
   volumes: [
-    // A host bind (local runtimes only)...
+    // A host bind (local runtimes, or boxlite serve --host-path-root)...
     { hostPath: '/tmp/data', guestPath: '/data', readOnly: false },
     // ...or a managed volume, by id or by name (REST runtimes).
     { managedVolume: 'my-data', guestPath: '/cache' }

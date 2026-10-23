@@ -57,6 +57,11 @@ impl HostPathPolicy {
         Ok(Self { roots })
     }
 
+    /// Whether any root is set, so a create may bind a host path at all.
+    pub(super) fn enabled(&self) -> bool {
+        !self.roots.is_empty()
+    }
+
     /// Turn the request's `volumes` into bind mounts, refusing any entry this
     /// server cannot or may not bind.
     pub(super) fn resolve(

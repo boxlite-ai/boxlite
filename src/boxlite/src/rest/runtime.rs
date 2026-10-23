@@ -262,28 +262,11 @@ impl BoxOptions {
         // Mounts. `BoxOptions::sanitize` is local-only, so
         // `VolumeSpec::validate` — the "exactly one origin" invariant that C and
         // Go callers can violate by setting the fields directly — has no other
-        // chance to run before the request goes out.
-        //
-        // A host bind has no meaning against a REST runtime either: the path
-        // names the *server's* filesystem, not the caller's. The rejected path
-        // is deliberately not quoted back — the caller already knows what they
-        // asked for, and echoing a server-side path into a client error is a
-        // leak, not a diagnostic.
+        // chance to run before the request goes out. Host binds are gated in
+        // `create`, which can ask the server whether it binds host paths.
 
         for volume in &self.volumes {
             volume.validate()?;
-        }
-
-        if self
-            .volumes
-            .iter()
-            .any(|volume| volume.managed_volume.is_none())
-        {
-            return Err(BoxliteError::Unsupported(
-                "host bind mounts are only supported by the local runtime; mount a managed volume \
-                 by id or name instead"
-                    .to_string(),
-            ));
         }
 
         // REST runtimes send no typed mounts yet(TODO): refused here, before
@@ -321,6 +304,18 @@ impl RuntimeBackend for RestRuntime {
         // concept at all can't be trusted to preserve that from a no-op value.
         if options.advanced.capabilities().is_some() {
             self.client.require_linux_capabilities_enabled().await?;
+        }
+
+        // A host bind names the *server's* filesystem, so it goes only to a
+        // server that binds host paths — `boxlite serve --host-path-root`.
+        // Asked before the request is built: `get_or_create` reaches the POST
+        // only through here, so no other server ever sees the path.
+        if options
+            .volumes
+            .iter()
+            .any(|volume| volume.managed_volume.is_none())
+        {
+            self.client.require_host_path_volumes_enabled().await?;
         }
 
         let req = CreateBoxRequest::from_options(&options, name);
@@ -730,31 +725,65 @@ mod tests {
         assert!(error.to_string().contains("local runtime"));
     }
 
-    /// A host path has no meaning against a REST runtime — the server's
-    /// filesystem is not the caller's. The path must not leave the client at
-    /// all: it is the caller's own business, and a server-side "not found"
-    /// naming it would leak it into logs on the way back.
-    #[tokio::test]
-    async fn create_rejects_host_bind_mount_in_rest_mode() {
+    fn host_bind_options() -> BoxOptions {
         use crate::runtime::options::VolumeSpec;
 
-        let options = BoxliteRestOptions::new("http://localhost:1");
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
-        let box_options = BoxOptions {
-            volumes: vec![VolumeSpec::bind_mount("/tmp/secrets", "/mnt/ro")],
+        BoxOptions {
+            volumes: vec![VolumeSpec::bind_mount("/srv/agents/a1", "/workspace")],
             ..Default::default()
-        };
+        }
+    }
 
-        let error = RuntimeBackend::create(&runtime, box_options, None)
+    /// A host path names the server's filesystem, so it may only go to a server
+    /// that says it binds one (`boxlite serve --host-path-root`). Any other
+    /// server — the cloud API, an older serve — must never see it: the client
+    /// asks first, and the refusal does not echo the path back.
+    #[tokio::test]
+    async fn host_bind_needs_advertised_host_path_support() {
+        for config in [
+            r#"{"capabilities":{}}"#,
+            r#"{"capabilities":{"host_path_volumes_enabled":false}}"#,
+        ] {
+            let (port, server) = json_server(vec![config]).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+
+            let error = RuntimeBackend::create(&runtime, host_bind_options(), None)
+                .await
+                .err()
+                .expect("a server without host-path support must not get the bind");
+
+            assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+            assert!(
+                !error.to_string().contains("/srv/agents/a1"),
+                "the rejected host path must not be echoed back: {error}"
+            );
+            let requests = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+                .await
+                .expect("the client must ask the server before refusing")
+                .unwrap();
+            assert_eq!(requests, ["GET /v1/config HTTP/1.1"], "for {config}");
+        }
+    }
+
+    #[tokio::test]
+    async fn advertised_host_path_support_sends_the_host_bind() {
+        let (port, server) = json_server(vec![
+            r#"{"capabilities":{"host_path_volumes_enabled":true}}"#,
+            BOX_RESPONSE,
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        RuntimeBackend::create(&runtime, host_bind_options(), None)
             .await
-            .err()
-            .expect("REST host bind mounts must be rejected before network I/O");
+            .expect("a server advertising host-path support takes the bind");
 
-        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
-        assert!(error.to_string().contains("host bind mounts"));
-        assert!(
-            !error.to_string().contains("/tmp/secrets"),
-            "the rejected host path must not be echoed back: {error}"
+        assert_eq!(
+            server.await.unwrap(),
+            ["GET /v1/config HTTP/1.1", "POST /v1/boxes HTTP/1.1"]
         );
     }
 

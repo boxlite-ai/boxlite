@@ -550,6 +550,25 @@ impl ApiClient {
         )
     }
 
+    /// A host path names the server's filesystem, and must not reach a server
+    /// that cannot bind one. Rechecked live like the Linux-capabilities gate:
+    /// a cached positive answer could outlive a restart without
+    /// `--host-path-root`. The refusal never echoes the path.
+    pub async fn require_host_path_volumes_enabled(&self) -> BoxliteResult<()> {
+        let config = self.fetch_config().await?;
+        let enabled = config
+            .capabilities
+            .and_then(|capabilities| capabilities.host_path_volumes_enabled);
+        if enabled == Some(true) {
+            return Ok(());
+        }
+        Err(BoxliteError::Unsupported(
+            "host bind mounts need a remote server that binds host paths (boxlite serve \
+             --host-path-root); mount a managed volume by id or name instead"
+                .to_string(),
+        ))
+    }
+
     pub async fn require_clone_enabled(&self) -> BoxliteResult<()> {
         let config = self.get_config().await?;
         let capabilities = config.capabilities.ok_or_else(|| {

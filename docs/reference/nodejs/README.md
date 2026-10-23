@@ -255,8 +255,9 @@ volumes: [
 ];
 ```
 
-Setting both origins, or neither, is rejected. Host bind mounts are
-local-runtime only; a REST runtime refuses them.
+Setting both origins, or neither, is rejected. Over REST a host path is a
+path on the server, so only `boxlite serve --host-path-root` accepts one;
+other REST runtimes refuse it before any request.
 
 #### `JsPortSpec`
 

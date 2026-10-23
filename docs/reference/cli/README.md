@@ -946,9 +946,14 @@ means the same thing on every machine:
 **Options:** `ro` (read-only) or `rw` (read-write, default). Other options are ignored. Relative host paths are canonicalized at parse time; missing host paths fail with `volume host path ...`.
 
 **Runtime support.** Managed volumes require a REST runtime — the local runtime
-has no volume backend and rejects them at create. Host binds are the mirror
-image: they name a path on the machine running the box, so a REST runtime
-refuses them. Manage volumes with [`boxlite volume`](#boxlite-volume).
+has no volume backend and rejects them at create. Host binds name a path on the
+machine running the box. Against a REST server (`--url`, `BOXLITE_REST_URL`, or
+a stored profile) that is the server, so
+a bind is sent only to one that advertises host-path support
+([`boxlite serve --host-path-root`](#boxlite-serve)); others refuse it before
+any request. In that mode the path must be absolute and is sent as written:
+a relative path or an anonymous volume would be resolved on this machine, so
+both are refused. Manage volumes with [`boxlite volume`](#boxlite-volume).
 
 > **Behavior change.** A bare relative source is no longer a bind mount:
 > `-v data:/app` now means the managed volume `data`, not `./data`. Write

@@ -1228,8 +1228,10 @@ void boxlite_options_add_env(CBoxliteOptions *opts, const char *key, const char 
 
 // Bind a host directory or file into the box.
 //
-// Host bind mounts are local-runtime only; a REST runtime rejects them at
-// create. Use [`boxlite_options_add_managed_volume`] against a REST runtime.
+// Over REST the host path is a path on the server, so only a server that
+// advertises host-path support (`boxlite serve --host-path-root`) accepts it;
+// other REST runtimes reject it at create. Use
+// [`boxlite_options_add_managed_volume`] there.
 void boxlite_options_add_bind_mount(CBoxliteOptions *opts,
                                     const char *host_path,
                                     const char *guest_path,

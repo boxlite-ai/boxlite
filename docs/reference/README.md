@@ -45,7 +45,9 @@ implementation currently serves all 32 paths:
 `boxlite serve` also goes beyond the contract in one place: started with
 `--host-path-root`, its `POST /v1/boxes` accepts `volumes[].host_path`, a
 directory of the serving machine that the spec's `VolumeSpec` does not define.
-The [serve README](../../src/cli/src/commands/serve/README.md#auth--config)
+It advertises this as `capabilities.host_path_volumes_enabled`, and the SDKs
+send a host path only to a server that does. The
+[serve README](../../src/cli/src/commands/serve/README.md#auth--config)
 describes which paths it binds.
 
 Read each server's routes rather than either README — both under-report.

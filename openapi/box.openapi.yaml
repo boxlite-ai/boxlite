@@ -1911,6 +1911,13 @@ components:
               type: boolean
               description: Whether box export is supported
               example: true
+            host_path_volumes_enabled:
+              type: boolean
+              description: |
+                Whether `volumes[].host_path`, a directory of the serving
+                machine, may be bound. Only `boxlite serve --host-path-root`
+                sets it; clients send a host path only when it is `true`.
+              example: false
             inbound_update_enabled:
               type: boolean
               description: Whether `PUT /{prefix}/boxes/{box_id}/network/inbound` is supported
