@@ -806,7 +806,7 @@ test('email sign-in: the owner sets a sender, a visitor gets a code by mail and 
   const smtp = await fakeSmtp();
   try {
     const { key } = await setup({ auth: { providers: ['email'], protect: ['/app'] } });
-    h.ctx.config.smtpAllowPrivate = true;
+    h.ctx.config.smtpDevSink = `127.0.0.1:${smtp.port}`;
     assert.equal((await h.appRequest('/.boxlite/auth/login?next=/app')).status, 503, 'no sender yet: sign-in is not available');
     const st0 = (await (await h.request('/v1/apps/crm/envs/main/auth', { key })).json()) as { providers: { name: string; status: string }[] };
     assert.deepEqual(st0.providers, [{ name: 'email', status: 'not_configured' }]);
@@ -853,7 +853,7 @@ test('email sign-in refuses other origins, rate-limits codes, and explains SMTP 
   const smtp = await fakeSmtp();
   try {
     const { key } = await setup({ auth: { providers: ['email'], protect: ['/app'] } });
-    h.ctx.config.smtpAllowPrivate = true;
+    h.ctx.config.smtpDevSink = `127.0.0.1:${smtp.port}`;
     const put = (json: Record<string, unknown>) => h.request('/v1/apps/crm/auth/email', { method: 'PUT', key, json });
     assert.equal((await put({ host: '127.0.0.1', port: smtp.port, username: 'mailer', password: 'wrong', from: 'no-reply@crm.test' })).status, 200);
     const refused = await h.request('/v1/apps/crm/auth/email/test', { method: 'POST', key, json: { to: 'owner@crm.test' } });
@@ -864,7 +864,7 @@ test('email sign-in refuses other origins, rate-limits codes, and explains SMTP 
     assert.match(err.next, /username or password/);
 
     // A sign-in whose mail fails tells the visitor plainly and the owner (Logs) exactly.
-    const failed = await post('/.boxlite/auth/email/start', browser(), { email: 'bob@example.com', next: '/' });
+    const failed = await post('/.boxlite/auth/email/start', browser(), { email: 'carol@example.com', next: '/' });
     assert.equal(failed.status, 502);
     assert.ok(h.ctx.store.all<{ line: string }>("SELECT line FROM logs WHERE source = 'auth'").some((l) => /not sent: .*535.*username or password/.test(l.line)));
 
@@ -872,9 +872,23 @@ test('email sign-in refuses other origins, rate-limits codes, and explains SMTP 
     assert.equal((await post('/.boxlite/auth/email/start', browser(), { email: 'bob@example.com', next: '/' }, 'https://evil.test')).status, 403, 'another site cannot start a sign-in');
     for (let i = 0; i < 5; i++) assert.equal((await post('/.boxlite/auth/email/start', browser(), { email: 'bob@example.com', next: '/' })).status, 200);
     assert.equal((await post('/.boxlite/auth/email/start', browser(), { email: 'bob@example.com', next: '/' })).status, 429, 'five codes per address per hour');
+    // Requests in parallel cannot slip past the limit, and failed sends count.
+    const burst = await Promise.all(Array.from({ length: 8 }, () => post('/.boxlite/auth/email/start', browser(), { email: 'dave@example.com', next: '/' })));
+    assert.equal(burst.filter((r) => r.status === 200).length, 5, burst.map((r) => r.status).join(','));
+    for (let i = 0; i < 4; i++) await post('/.boxlite/auth/email/start', browser(), { email: 'carol@example.com', next: '/' });
+    assert.equal((await post('/.boxlite/auth/email/start', browser(), { email: 'carol@example.com', next: '/' })).status, 429, 'the failed send counted');
 
-    // Off a development CP, the sender must be a public mail server and a mail port.
-    h.ctx.config.smtpAllowPrivate = false;
+    // The dev sink is the only private address allowed; off a development CP there is none.
+    assert.equal((await put({ host: '127.0.0.1', port: 587, from: 'no-reply@crm.test' })).status, 200);
+    const other = await h.request('/v1/apps/crm/auth/email/test', { method: 'POST', key, json: { to: 'owner@crm.test' } });
+    assert.match(((await other.json()) as { error: { message: string } }).error.message, /not a public address/);
+    assert.equal((await put({ host: '127.0.0.1', port: smtp.port, from: 'no-reply@crm.test' })).status, 200);
+    h.ctx.config.smtpDevSink = undefined;
+    for (const host of ['::127.0.0.1', '64:ff9b::a9fe:a9fe', '2002:7f00:1::1', '::ffff:10.0.0.1', '169.254.169.254']) {
+      assert.equal((await put({ host, port: 587, from: 'no-reply@crm.test' })).status, 200, host);
+      const r = await h.request('/v1/apps/crm/auth/email/test', { method: 'POST', key, json: { to: 'owner@crm.test' } });
+      assert.match(((await r.json()) as { error: { message: string } }).error.message, /not a public address/, host);
+    }
     const priv = await h.request('/v1/apps/crm/auth/email/test', { method: 'POST', key, json: { to: 'owner@crm.test' } });
     assert.match(((await priv.json()) as { error: { message: string } }).error.message, /not a public address/);
     assert.equal((await put({ host: 'smtp.example.com', port: 8080, from: 'no-reply@crm.test' })).status, 400);

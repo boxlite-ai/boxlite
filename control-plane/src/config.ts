@@ -32,8 +32,8 @@ export interface Config {
   promptTemplatePath?: string;
   /** End-user sign-in: OAuth client credentials per provider; a provider without them is skipped. */
   oauth?: Partial<Record<string, { clientId: string; clientSecret: string }>>;
-  /** SMTP_ALLOW_PRIVATE=1: an App's mail sender may be a private address or any port (development CPs only). */
-  smtpAllowPrivate?: boolean;
+  /** SMTP_DEV_SINK=127.0.0.1:2525: the one private address:port an App's mail sender may use (a development CP's sink). */
+  smtpDevSink?: string;
   /** Console users and organizations (orgs.ts). Absent fields take the defaults there. */
   orgs?: { legacyOwnerEmail?: string; newOrgAppLimit?: number };
 }
@@ -109,7 +109,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     consoleDir: resolve(env.CONSOLE_DIR ?? '../console-dist'),
     ...(env.PROMPT_TEMPLATE_PATH ? { promptTemplatePath: resolve(env.PROMPT_TEMPLATE_PATH) } : {}),
     oauth: oauthFromEnv(env),
-    smtpAllowPrivate: env.SMTP_ALLOW_PRIVATE === '1',
+    ...(env.SMTP_DEV_SINK ? { smtpDevSink: env.SMTP_DEV_SINK.trim() } : {}),
     orgs: {
       ...(env.CONSOLE_LEGACY_OWNER ? { legacyOwnerEmail: env.CONSOLE_LEGACY_OWNER.trim().toLowerCase() } : {}),
       ...(env.NEW_ORG_APP_LIMIT ? { newOrgAppLimit: Number(env.NEW_ORG_APP_LIMIT) } : {}),

@@ -28,8 +28,8 @@ async function status(ctx: Ctx): Promise<void> {
   const info = await api.getApp(await ctx.appName());
   const envs = info.envs ?? [];
   const current = envs.find((e) => e.name === ctx.envName);
-  // `url` is the selected environment's (--env, main by default): the one to hand to the user.
-  ctx.out.data({ ...info, env: ctx.envName, url: current?.url ?? info.url });
+  // `url`, `status` and `access` are the selected environment's (--env, main by default): `url` is the one to hand to the user.
+  ctx.out.data({ ...info, env: ctx.envName, url: current?.url ?? info.url, status: current?.status ?? null, access: current?.access ?? null });
   ctx.out.line(`App ${info.name}`);
   const rows = envs.map((e) => {
     const d = e.latest_deployment;
@@ -202,7 +202,7 @@ export function registerApp(program: Command, make: MakeCtx): Command {
   const app = program.command('app').description('inspect and operate the App (linked directory, BOXLITE_APP, or the key’s own App)');
 
   describe(app.command('status').description('environments, URLs and latest deployments').action(async (_o: unknown, cmd: Command) => status(await make(cmd))), {
-    json: '{ name: string, created_at: string, env: string, url: string (of env), envs: EnvSummary[] }',
+    json: '{ name, created_at, env, url, status, access (all of env), envs: EnvSummary[] }',
     exits: [2, 3, 6],
     online: true,
   });

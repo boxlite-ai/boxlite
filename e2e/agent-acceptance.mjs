@@ -7,7 +7,7 @@
 //   3. record what the agent did (time, turns, cost, tool calls, final report).
 // Independent verification of the result is done afterwards (verify-acceptance.mjs).
 //
-//   node e2e/agent-acceptance.mjs <case-id>...      cases: m1 m2 m3 m4 m5 m6 (default: all, in parallel)
+//   node e2e/agent-acceptance.mjs <case-id>...      cases: m1 m2 m3 m4 m5 m6 m7 (default: all, in parallel)
 import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -27,6 +27,7 @@ export const CASES = {
   m4: { app: `weekly-${STAMP}`, ask: '做一个团队周报工具：大家用 GitHub 登录写周报，可以附上文件；每周一早上 9 点自动把上周所有人的周报汇总成一页给我看。先给我一个测试版看看，没问题再上正式版' },
   m5: { app: `ledger-${STAMP}`, ask: '用 Python 做一个家庭记账小工具：记录每笔收支和分类，按月看汇总图表，可以导出成 Excel' },
   m6: { app: `chat-${STAMP}`, ask: '做一个实时聊天室，打开链接的人起个昵称就能进来聊天，大家同时在线能马上看到别人发的消息，刷新后还能看到之前的聊天记录' },
+  m7: { app: `club-${STAMP}`, ask: '做一个读书会报名网站：成员用邮箱验证码登录（我们很多人没有 GitHub），登录后能报名下一期读书会、看到自己报过哪些期。发验证码用我们的邮箱账号：SMTP 服务器 127.0.0.1，端口 2525，用户名 club，密码 club-mail-2026，发件人 读书会 <no-reply@club.test>。做好后直接上线，所有人都能打开' },
 }
 
 async function consoleSession() {

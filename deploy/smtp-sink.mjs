@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Development only: an SMTP server on 127.0.0.1:2525 of the dev control plane's Box that accepts
 // any login and keeps each message as a file, so the live e2e can sign in with email codes
-// (e2e/email-live.mjs). Never part of a production control plane: it needs SMTP_ALLOW_PRIVATE=1.
+// (e2e/email-live.mjs). Never part of a production control plane: the CP allows it as a sender only with SMTP_DEV_SINK=127.0.0.1:2525.
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { join } from 'node:path'

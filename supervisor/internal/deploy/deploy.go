@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -634,6 +635,9 @@ func (m *Manager) serviceEnv(rel state.Release, dir, name string, port int) []st
 	for k, v := range rel.Env {
 		env[k] = v
 	}
+	if u, ok := rel.Env["DATABASE_URL"]; ok {
+		env["DATABASE_URL"] = withRootCert(u)
+	}
 	if _, ok := env["BOXLITE_ENV"]; !ok && rel.Spec.Environment != "" {
 		env["BOXLITE_ENV"] = rel.Spec.Environment
 	}
@@ -663,9 +667,7 @@ var caBundles = []string{"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/cer
 // addToolPaths lets a build step or service run what the build installed by
 // its bare name: the project's node_modules/.bin (`next start`) and pip's
 // user scripts in ~/.local/bin (`gunicorn app:app`) come before the image's
-// PATH. It also points libpq at the system CA certificates: DATABASE_URL asks
-// for sslmode=verify-full, which libpq (psycopg, psql) cannot check without a
-// root certificate file; node-postgres ignores PGSSLROOTCERT.
+// PATH.
 func addToolPaths(env map[string]string, dir string) {
 	var first []string
 	if dir != "" {
@@ -678,14 +680,27 @@ func addToolPaths(env map[string]string, dir string) {
 		first = append(first, path)
 	}
 	env["PATH"] = strings.Join(first, ":")
-	if _, ok := env["PGSSLROOTCERT"]; !ok {
-		for _, f := range caBundles {
-			if _, err := os.Stat(f); err == nil {
-				env["PGSSLROOTCERT"] = f
-				break
+}
+
+// withRootCert names the system CA bundle in the platform's DATABASE_URL. It
+// asks for sslmode=verify-full, which libpq (psycopg, psql) cannot check
+// without a root certificate file; node-postgres reads the same parameter.
+// Only this URL changes: PGSSLROOTCERT would make every other Postgres
+// connection of the app verify its server too.
+func withRootCert(dbURL string) string {
+	if dbURL == "" || strings.Contains(dbURL, "sslrootcert=") {
+		return dbURL
+	}
+	for _, f := range caBundles {
+		if _, err := os.Stat(f); err == nil {
+			sep := "?"
+			if strings.Contains(dbURL, "?") {
+				sep = "&"
 			}
+			return dbURL + sep + "sslrootcert=" + url.QueryEscape(f)
 		}
 	}
+	return dbURL
 }
 
 func (m *Manager) targetFor(group *proc.Group, rel state.Release) (int, string) {

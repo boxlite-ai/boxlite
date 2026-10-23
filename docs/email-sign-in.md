@@ -30,8 +30,9 @@ The password is write-only (never returned). `set` keeps the stored password whe
 Every change and test is in Activity. Ports 25, 465 (implicit TLS), 587 and 2525 (STARTTLS) are
 allowed. The host must resolve to public addresses only: a sender pointed at the control plane's
 own network (loopback, private, link-local, CGNAT) is refused, and the connection goes to the
-address that was checked, so DNS cannot be switched in between. `SMTP_ALLOW_PRIVATE=1` lifts that
-for a development control plane.
+address that was checked, so DNS cannot be switched in between. A development control plane names
+its own SMTP sink with `SMTP_DEV_SINK=127.0.0.1:2525`: that one address and port, and nothing else
+private, is then allowed.
 
 An SMTP failure is answered with the server's own reply and what to do (`535 authentication failed`
 → check the username and password), both by `test` and in the App's logs when a sign-in mail fails.
@@ -62,5 +63,5 @@ existing cleanup.
 
 - Unit: an in-process SMTP server receives the mail; the code from it signs in; wrong code,
   expiry, other browser, rate limits, blocked user, a private host refused.
-- Live (dev): an SMTP sink on the control plane's Box with `SMTP_ALLOW_PRIVATE=1`; the e2e signs in
+- Live (dev): an SMTP sink on the control plane's Box (`SMTP_DEV_SINK`); the e2e signs in
   through the real login page with the code the sink received.

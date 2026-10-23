@@ -521,7 +521,7 @@ test('app status --env names the environment and gives its URL, not main\'s', as
     url: 'https://10118-cp.test/',
     envs: [
       { name: 'main', status: 'new', url: 'https://10118-cp.test/' },
-      { name: 'beta', status: 'live', url: 'https://10120-cp.test/', latest_deployment: { number: 1, status: 'live' } },
+      { name: 'beta', status: 'live', url: 'https://10120-cp.test/', access: 'public', latest_deployment: { number: 1, status: 'live' } },
     ],
   };
   pool.intercept({ path: '/v1/apps/crm', method: 'GET' }).reply(200, body, { headers: JSON_HEADERS }).times(2);
@@ -531,6 +531,7 @@ test('app status --env names the environment and gives its URL, not main\'s', as
   const data = JSON.parse(beta.stdout);
   assert.equal(data.env, 'beta');
   assert.equal(data.url, 'https://10120-cp.test/');
+  assert.deepEqual([data.status, data.access], ['live', 'public']);
   const main = JSON.parse((await cli(['app', 'status', '--json'], { cwd: dir, dispatcher: agent })).stdout);
   assert.deepEqual([main.env, main.url], ['main', 'https://10118-cp.test/']);
 });

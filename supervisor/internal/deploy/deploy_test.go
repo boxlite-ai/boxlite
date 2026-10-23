@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -212,6 +213,10 @@ type harness struct {
 
 func newHarness(t *testing.T, stateDir string, fake *fakeCP) *harness {
 	t.Helper()
+	// The services echo DATABASE_URL as given; this host's CA bundle must not change it.
+	saved := caBundles
+	caBundles = nil
+	t.Cleanup(func() { caBundles = saved })
 	client, err := cp.New(fake.srv.URL, token, false)
 	if err != nil {
 		t.Fatal(err)
@@ -745,8 +750,8 @@ func TestBootWithoutControlPlaneThenReconcile(t *testing.T) {
 	}
 }
 
-// What the build installed runs by its bare name, and libpq finds the system
-// CA certificates; the app's own variables still win.
+// What the build installed runs by its bare name, and the platform's
+// DATABASE_URL names the system CA bundle (no other connection is touched).
 func TestServiceEnvToolPathsAndCA(t *testing.T) {
 	ca := filepath.Join(t.TempDir(), "ca.crt")
 	if err := os.WriteFile(ca, []byte("x"), 0o644); err != nil {
@@ -756,15 +761,19 @@ func TestServiceEnvToolPathsAndCA(t *testing.T) {
 	caBundles = []string{"/nonexistent/ca.crt", ca}
 	t.Cleanup(func() { caBundles = saved })
 	m := New(Options{BaseEnv: []string{"PATH=/usr/bin:/bin"}, RunAs: &proc.Cred{Home: "/home/boxlite", Name: "boxlite"}})
-	env := strings.Join(m.serviceEnv(state.Release{Deployment: 4}, "/rel/4", "web", 0), "\n")
-	for _, want := range []string{"PATH=/rel/4/node_modules/.bin:/home/boxlite/.local/bin:/usr/bin:/bin", "PGSSLROOTCERT=" + ca} {
+	rel := state.Release{Deployment: 4, Env: map[string]string{"DATABASE_URL": "postgresql://u:p@db/neondb?sslmode=verify-full"}}
+	env := strings.Join(m.serviceEnv(rel, "/rel/4", "web", 0), "\n")
+	for _, want := range []string{"PATH=/rel/4/node_modules/.bin:/home/boxlite/.local/bin:/usr/bin:/bin", "DATABASE_URL=postgresql://u:p@db/neondb?sslmode=verify-full&sslrootcert=" + url.QueryEscape(ca)} {
 		if !strings.Contains(env, want) {
 			t.Fatalf("missing %s in\n%s", want, env)
 		}
 	}
-	own := strings.Join(m.serviceEnv(state.Release{Deployment: 4, Env: map[string]string{"PGSSLROOTCERT": "/app/ca.pem"}}, "/rel/4", "web", 0), "\n")
-	if !strings.Contains(own, "PGSSLROOTCERT=/app/ca.pem") {
-		t.Fatalf("the app's PGSSLROOTCERT must win:\n%s", own)
+	if strings.Contains(env, "PGSSLROOTCERT") {
+		t.Fatal("PGSSLROOTCERT would change every other Postgres connection of the app")
+	}
+	own := withRootCert("postgresql://x/db?sslrootcert=/app/ca.pem")
+	if own != "postgresql://x/db?sslrootcert=/app/ca.pem" {
+		t.Fatalf("an explicit sslrootcert must stay: %s", own)
 	}
 }
 

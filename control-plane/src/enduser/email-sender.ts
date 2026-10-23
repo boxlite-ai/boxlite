@@ -63,7 +63,7 @@ export interface SenderInput {
 export function setSender(ctx: Ctx, app: AppRow, input: SenderInput, actor: string): SenderView {
   const host = input.host.trim().toLowerCase();
   if (!HOST_RE.test(host) && !isIP(host)) throw fail('invalid_request', `"${input.host}" is not a host name`, 'give the SMTP server of the mail provider, e.g. smtp.sendgrid.net');
-  if (!ctx.config.smtpAllowPrivate && !SMTP_PORTS.includes(input.port)) throw fail('invalid_request', `port ${input.port} is not an SMTP port`, `use ${SMTP_PORTS.join(', ')} (587 is the usual one)`);
+  if (!devSink(ctx, host, input.port) && !SMTP_PORTS.includes(input.port)) throw fail('invalid_request', `port ${input.port} is not an SMTP port`, `use ${SMTP_PORTS.join(', ')} (587 is the usual one)`);
   if (!FROM_RE.test(input.from.trim())) throw fail('invalid_request', `"${input.from}" is not a sender address`, 'give `no-reply@yourdomain.com` or `Your App <no-reply@yourdomain.com>`');
   const kept = senderOf(ctx, app)?.password ?? null;
   const password = input.password === undefined ? kept : input.password || null;
@@ -93,13 +93,17 @@ const INTERNAL = new BlockList();
 for (const [net, bits] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 3]] as const) {
   INTERNAL.addSubnet(net, bits, 'ipv4');
 }
-for (const [net, bits] of [['::', 127], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8], ['::ffff:0:0', 96]] as const) INTERNAL.addSubnet(net, bits, 'ipv6');
+// ::/96 also holds IPv4-compatible forms (::127.0.0.1); NAT64 and 6to4 can reach IPv4 inside.
+for (const [net, bits] of [['::', 96], ['::ffff:0:0', 96], ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['2002::', 16], ['fc00::', 7], ['fe80::', 10], ['ff00::', 8]] as const) INTERNAL.addSubnet(net, bits, 'ipv6');
 
 /**
- * The address to connect to: the host's, checked to be public (unless the CP allows private ones).
+ * The address to connect to: the host's, checked to be public (or the dev CP's own sink).
  * Connecting to this address rather than the name means DNS cannot change between check and use.
  */
-async function publicAddress(ctx: Pick<Ctx, 'config'>, host: string): Promise<string> {
+/** The development CP's own SMTP sink (SMTP_DEV_SINK=127.0.0.1:2525): the one private address allowed. */
+const devSink = (ctx: Pick<Ctx, 'config'>, host: string, port: number) => !!ctx.config.smtpDevSink && ctx.config.smtpDevSink === `${host}:${port}`;
+
+async function publicAddress(ctx: Pick<Ctx, 'config'>, host: string, port: number): Promise<string> {
   let addrs: { address: string; family: number }[];
   try {
     addrs = isIP(host) ? [{ address: host, family: isIP(host) }] : await lookup(host, { all: true });
@@ -107,7 +111,7 @@ async function publicAddress(ctx: Pick<Ctx, 'config'>, host: string): Promise<st
     throw fail('smtp_error', `${host} does not resolve`, 'check the SMTP host name of the mail provider');
   }
   const internal = addrs.find((a) => INTERNAL.check(a.address, a.family === 6 ? 'ipv6' : 'ipv4'));
-  if (internal && !ctx.config.smtpAllowPrivate) throw fail('smtp_error', `${host} resolves to ${internal.address}, which is not a public address`, "the sender must be a mail provider's public SMTP server");
+  if (internal && !devSink(ctx, host, port)) throw fail('smtp_error', `${host} resolves to ${internal.address}, which is not a public address`, "the sender must be a mail provider's public SMTP server");
   return addrs[0]!.address;
 }
 
@@ -123,13 +127,13 @@ function smtpHint(code: string | undefined, s: EmailSender): string {
 /** Sends one plain-text mail through the App's sender; throws smtp_error with the server's reply and a hint. */
 export async function sendMail(ctx: Pick<Ctx, 'config'>, s: EmailSender, msg: { to: string; subject: string; text: string }): Promise<{ ms: number }> {
   const t0 = Date.now();
-  const address = await publicAddress(ctx, s.host);
+  const address = await publicAddress(ctx, s.host, s.port);
   // Credentials never cross the network in clear: STARTTLS is required except on implicit-TLS 465.
   const transport = nodemailer.createTransport({
     host: address,
     port: s.port,
     secure: s.port === 465,
-    requireTLS: s.port !== 465 && !!s.username && !ctx.config.smtpAllowPrivate,
+    requireTLS: s.port !== 465 && !!s.username && !devSink(ctx, s.host, s.port),
     tls: { servername: isIP(s.host) ? undefined : s.host },
     auth: s.username ? { user: s.username, pass: s.password ?? '' } : undefined,
     connectionTimeout: CONNECT_TIMEOUT_MS,

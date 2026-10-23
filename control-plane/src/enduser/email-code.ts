@@ -73,23 +73,12 @@ export async function startEmail(ctx: Ctx, app: AppRow, env: EnvRow, headers: He
     return htmlPage('Try again later', '<h1>Sign-in codes are paused</h1><p>Too many were sent in the last hour. Try again later.</p>', 429);
   }
 
+  // Recorded before sending, in the same synchronous step as the counts above: parallel requests
+  // cannot all pass the limits, and a failed send still counts.
   const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
   const id = randomUUID();
   const secure = appSecure(ctx, app, env);
   const nonce = readCookie(headers, loginNonceName(secure)) ?? randomBytes(24).toString('base64url');
-  const host = new URL(ctx.resources.appUrl(app.name, env.name)).host;
-  try {
-    await sendMail(ctx, sender, {
-      to: email,
-      subject: `Your sign-in code for ${host}`,
-      text: `Your sign-in code is ${code}\n\nEnter it on ${host} within ${CODE_TTL_S / 60} minutes. If you did not ask for it, ignore this email.\n`,
-    });
-  } catch (err) {
-    const why = err instanceof HttpError ? `${err.message} (${err.next})` : (err as Error).message;
-    authLog(ctx, env, 'error', `sign-in code for ${email} not sent: ${why}`);
-    return htmlPage('Could not send the code', '<h1>We could not send the code</h1><p>The site could not send email just now. Try again in a few minutes.</p>', 502);
-  }
-  const ts = now();
   ctx.store.run('DELETE FROM auth_email_codes WHERE created_at < ?', new Date(Date.now() - 86_400_000).toISOString());
   ctx.store.run(
     'INSERT INTO auth_email_codes (id, env_id, email, code_hash, browser_hash, next, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -99,9 +88,22 @@ export async function startEmail(ctx: Ctx, app: AppRow, env: EnvRow, headers: He
     sha256hex(`${id}:${code}`),
     sha256hex(nonce),
     next,
-    ts,
+    now(),
     new Date(Date.now() + CODE_TTL_S * 1000).toISOString(),
   );
+  const host = new URL(ctx.resources.appUrl(app.name, env.name)).host;
+  try {
+    await sendMail(ctx, sender, {
+      to: email,
+      subject: `Your sign-in code for ${host}`,
+      text: `Your sign-in code is ${code}\n\nEnter it on ${host} within ${CODE_TTL_S / 60} minutes. If you did not ask for it, ignore this email.\n`,
+    });
+  } catch (err) {
+    ctx.store.run('UPDATE auth_email_codes SET used_at = ? WHERE id = ?', now(), id);
+    const why = err instanceof HttpError ? `${err.message} (${err.next})` : (err as Error).message;
+    authLog(ctx, env, 'error', `sign-in code for ${email} not sent: ${why}`);
+    return htmlPage('Could not send the code', '<h1>We could not send the code</h1><p>The site could not send email just now. Try again in a few minutes.</p>', 502);
+  }
   authLog(ctx, env, 'info', `sign-in code sent to ${email}`);
   const headersOut = new Headers({ 'set-cookie': setCookieValue(secure, loginNonceName(secure), nonce, '/', CODE_TTL_S), 'cache-control': 'no-store' });
   return htmlPage('Check your email', codeForm(email, next, `We sent a 6-digit code to <b>${escapeHtml(email)}</b>. It works for ${CODE_TTL_S / 60} minutes.`), 200, headersOut);

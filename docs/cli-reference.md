@@ -1,6 +1,6 @@
 # boxlite-app CLI reference
 
-Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.9); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
+Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.10); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
 
 ## Conventions
 
@@ -225,7 +225,7 @@ environments, URLs and latest deployments
 Usage: `boxlite-app app status`
 
 - Network: talks to the control plane
-- `--json`: `{ name: string, created_at: string, env: string, url: string (of env), envs: EnvSummary[] }`
+- `--json`: `{ name, created_at, env, url, status, access (all of env), envs: EnvSummary[] }`
 - Exit codes: 0, 1, 2, 3, 6
 
 ### `boxlite-app app context`
