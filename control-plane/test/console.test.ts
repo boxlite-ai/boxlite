@@ -606,3 +606,17 @@ test('a prompt copied from another environment names it, so the agent does not w
   assert.match(issued.body.prompt, /^Environment: staging \(run every boxlite-app command with --env staging; leave main alone\)$/m);
   assert.doesNotMatch((await api('/apps/crm/key/issue', { method: 'POST' })).body.prompt, /Environment:/, 'main needs no line');
 });
+
+test('keys are listed without their value and revoked one at a time', async () => {
+  const { key } = await createViaConsole();
+  const second = (await api('/apps/crm/key/issue', { method: 'POST' })).body.key as string;
+  const keys = (await api('/apps/crm/keys')).body as { id: string; last4: string }[];
+  assert.deepEqual(keys.map((k) => k.last4).sort(), [key.slice(-4), second.slice(-4)].sort());
+  assert.ok(!JSON.stringify(keys).includes(key) && !JSON.stringify(keys).includes(second), 'never the key itself');
+  const first = keys.find((k) => k.last4 === key.slice(-4))!;
+  assert.equal((await api(`/apps/crm/keys/${first.id}`, { method: 'DELETE' })).status, 204);
+  const whoami = (k: string) => h.request('/v1/apps/crm/whoami', { key: k });
+  assert.equal((await whoami(key)).status, 401, 'the revoked key stops working');
+  assert.equal((await whoami(second)).status, 200, 'the other agent keeps working');
+  assert.equal((await api(`/apps/crm/keys/${first.id}`, { method: 'DELETE' })).status, 404);
+});

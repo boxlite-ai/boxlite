@@ -203,7 +203,9 @@ test('what a deployment changed reads as sentences, not diff paths; variable val
   assert.equal(humanChange({ kind: '+', path: 'migrations/0003_import.sql', to: 'pending' }), 'New migration 0003_import.sql');
   assert.equal(humanChange({ kind: '+', path: 'services.worker', to: {} }), 'New service worker');
   assert.equal(humanChange({ kind: '-', path: 'services.worker', from: {} }), 'Removed service worker');
-  assert.equal(humanChange({ kind: '~', path: 'services.web.command', from: 'node a.js', to: 'node b.js' }), 'web: command changed');
+  assert.equal(humanChange({ kind: '~', path: 'services.web.command', from: 'node a.js', to: 'node b.js' }), 'web: start command changed');
+  assert.equal(humanChange({ kind: '~', path: 'service.web.health', from: '/', to: '/healthz' }), 'web: health check path changed', 'the singular form the diff also uses');
+  assert.equal(humanChange({ kind: '~', path: 'public_paths', from: [], to: ['/webhooks/*'] }), 'Open without signing in (webhooks): /webhooks/*');
   assert.equal(humanChange({ kind: '+', path: 'database', to: 'neon branch main' }), 'Added a database');
   assert.equal(humanChange({ kind: '+', path: 'variables.LOG_LEVEL', to: 'debug' }), 'New variable LOG_LEVEL');
   assert.equal(humanChange({ kind: '~', path: 'variables.GREETING', from: 'a', to: 'b' }), 'Changed variable GREETING');

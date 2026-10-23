@@ -47,6 +47,7 @@ const RULES: Rule[] = [
   [/^app\.restore$/, () => 'restored the app', { tab: 'overview' }],
   [/^key\.rotate$/, () => 'rotated the App key', { tab: 'overview' }],
   [/^key\.issue$/, () => 'issued another App key', { tab: 'overview' }],
+  [/^key\.revoke$/, () => 'revoked an App key', { tab: 'overview' }],
   [/^secret\.set$/, () => 'stored a secret', { tab: 'variables' }],
   [/^secret\.update$/, () => 'replaced a secret', { tab: 'variables' }],
   [/^secret\.delete$/, () => 'deleted a secret', { tab: 'variables' }],

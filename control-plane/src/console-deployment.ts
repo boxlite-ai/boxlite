@@ -70,6 +70,9 @@ export function changeText(c: Change): string {
 }
 
 /** One change of a deployment, as a sentence for the console (the CLI's `plan` keeps `changeText`). */
+/** Config fields in the words of the console. */
+const FIELD_NAMES: Record<string, string> = { command: 'start command', port: 'port', health: 'health check path', static: 'static files folder', cron: 'schedule', target: 'what it calls', mount: 'folder', mode: 'access mode' };
+
 export function humanChange(c: Change): string {
   const [head, name, field] = c.path.split('.');
   const added = c.kind === '+';
@@ -79,12 +82,19 @@ export function humanChange(c: Change): string {
   if (migration) return added ? `New migration ${migration[1]}` : removed ? `Migration ${migration[1]} removed` : `Migration ${migration[1]} changed`;
   const fromTo = (label: string) => `${label}: ${String(c.from)} → ${String(c.to)}`;
   switch (head) {
+    case 'service':
     case 'services':
+    case 'schedule':
     case 'schedules':
+    case 'volume':
     case 'volumes': {
-      const kind = head.slice(0, -1);
-      if (name && field) return `${name}: ${field} changed`;
+      const kind = head.replace(/s$/, '');
+      if (name && field) return `${name}: ${FIELD_NAMES[field] ?? field} changed`;
       return verb(`${kind} ${name ?? ''}`.trim());
+    }
+    case 'public_paths': {
+      const paths = (c.to as string[] | undefined) ?? [];
+      return paths.length ? `Open without signing in (webhooks): ${paths.join(', ')}` : 'No paths open without signing in';
     }
     case 'database':
       if (name === 'migrations') return 'Migrations folder changed';

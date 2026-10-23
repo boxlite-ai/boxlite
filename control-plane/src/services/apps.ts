@@ -66,3 +66,20 @@ export function rotateKey(ctx: Ctx, app: AppRow, actor: string): string {
   ctx.store.recordActivity(app.id, null, actor, 'key.rotate');
   return key;
 }
+
+/** The App's active keys: never the key, only its last 4 characters, when it was made and last used. */
+export function listKeys(ctx: Ctx, app: AppRow): { id: string; last4: string; created_at: string; last_used_at: string | null }[] {
+  return ctx.store.all<{ id: string; last4: string; created_at: string }>('SELECT id, last4, created_at FROM keys WHERE app_id = ? AND revoked_at IS NULL ORDER BY created_at', app.id).map((k) => ({
+    ...k,
+    // Calls made with a key are recorded as actor key:…<last4> (auth.ts).
+    last_used_at: ctx.store.get<{ ts: string | null }>('SELECT max(ts) AS ts FROM activity WHERE app_id = ? AND actor = ?', app.id, `key:…${k.last4}`)?.ts ?? null,
+  }));
+}
+
+/** Retires one key; every agent using another key keeps working. */
+export function revokeKey(ctx: Ctx, app: AppRow, keyId: string, actor: string): void {
+  const k = ctx.store.get<{ last4: string }>('SELECT last4 FROM keys WHERE id = ? AND app_id = ? AND revoked_at IS NULL', keyId, app.id);
+  if (!k) throw fail('not_found', 'no such active key', 'the key list shows the active ones');
+  ctx.store.run('UPDATE keys SET revoked_at = ? WHERE id = ?', now(), keyId);
+  ctx.store.recordActivity(app.id, null, actor, 'key.revoke', { last4: k.last4 });
+}
