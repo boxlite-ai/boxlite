@@ -96,11 +96,23 @@ func TestBoxNetworkRejectsClosedHandle(t *testing.T) {
 
 func TestTunnelMethodsRejectClosedHandle(t *testing.T) {
 	var tunnel *BoxTunnel
+	if _, err := tunnel.Descriptor(); !errors.Is(err, ErrRuntimeClosed) {
+		t.Fatalf("Descriptor() error = %v, want ErrRuntimeClosed", err)
+	}
 	if _, err := tunnel.URI(); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("URI() error = %v, want ErrRuntimeClosed", err)
 	}
 	if _, err := tunnel.Connect(context.Background()); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("Connect() error = %v, want ErrRuntimeClosed", err)
+	}
+}
+
+func TestTunnelOptionsDefaultToPublic(t *testing.T) {
+	if !newTunnelConfig().isPublic {
+		t.Fatal("tunnel without options is not public")
+	}
+	if newTunnelConfig(WithTunnelPublic(false)).isPublic {
+		t.Fatal("WithTunnelPublic(false) did not request a private tunnel")
 	}
 }
 

@@ -10,6 +10,7 @@ package boxlite
 import "C"
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -109,6 +110,8 @@ type BoxTunnel struct {
 	mu      sync.Mutex
 	handle  *C.CBoxTunnelHandle
 	runtime *Runtime
+	// Read once at preparation so it outlives the consumed native handle.
+	descriptor TunnelDescriptor
 }
 
 // Network returns the box-scoped handle for network operations.
@@ -243,8 +246,29 @@ func (n *Network) Close() error {
 	return nil
 }
 
+// TunnelOption configures Network.Tunnel.
+type TunnelOption func(*tunnelConfig)
+
+type tunnelConfig struct {
+	isPublic bool
+}
+
+// WithTunnelPublic sets whether the tunnel is public (the default). A
+// private tunnel requires a cloud runtime and is never downgraded to public.
+func WithTunnelPublic(isPublic bool) TunnelOption {
+	return func(c *tunnelConfig) { c.isPublic = isPublic }
+}
+
+func newTunnelConfig(opts ...TunnelOption) tunnelConfig {
+	config := tunnelConfig{isPublic: true}
+	for _, opt := range opts {
+		opt(&config)
+	}
+	return config
+}
+
 // Tunnel prepares a one-shot tunnel to a service port inside the box.
-func (n *Network) Tunnel(ctx context.Context, port uint16) (*BoxTunnel, error) {
+func (n *Network) Tunnel(ctx context.Context, port uint16, opts ...TunnelOption) (*BoxTunnel, error) {
 	if n == nil {
 		return nil, ErrRuntimeClosed
 	}
@@ -259,18 +283,25 @@ func (n *Network) Tunnel(ctx context.Context, port uint16) (*BoxTunnel, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	options := C.CString(fmt.Sprintf(`{"isPublic":%t}`, newTunnelConfig(opts...).isPublic))
+	defer C.free(unsafe.Pointer(options))
 	var cTunnel *C.CBoxTunnelHandle
 	var cerr C.CBoxliteError
-	code := C.boxlite_network_tunnel(n.handle, C.uint16_t(port), &cTunnel, &cerr)
+	code := C.boxlite_network_tunnel_with_options(n.handle, C.uint16_t(port), options, &cTunnel, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
-	tunnel := &BoxTunnel{handle: cTunnel, runtime: n.runtime}
+	descriptor, err := readTunnelDescriptor(cTunnel)
+	if err != nil {
+		C.boxlite_tunnel_free(cTunnel)
+		return nil, err
+	}
+	tunnel := &BoxTunnel{handle: cTunnel, runtime: n.runtime, descriptor: descriptor}
 	runtime.SetFinalizer(tunnel, (*BoxTunnel).Close)
 	return tunnel, nil
 }
 
-// RevokeTunnel withdraws public access to a service port inside the box.
+// RevokeTunnel revokes the tunnel for a service port inside the box.
 // It is safe to repeat; connections already open are not closed.
 func (n *Network) RevokeTunnel(ctx context.Context, port uint16) error {
 	if n == nil || n.handle == nil {
@@ -325,25 +356,39 @@ func (t *BoxTunnel) Close() error {
 }
 
 // URI returns the prepared tunnel's public URL. An empty string means local.
+// It stays readable after Connect or Forward consumes the tunnel.
 func (t *BoxTunnel) URI() (string, error) {
 	if t == nil {
 		return "", ErrRuntimeClosed
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.handle == nil {
-		return "", ErrRuntimeClosed
+	return t.descriptor.URI, nil
+}
+
+type TunnelDescriptor struct {
+	URI      string  `json:"uri"`
+	IsPublic bool    `json:"isPublic"`
+	Token    *string `json:"token"`
+}
+
+// Descriptor returns the complete token only for the preparation that created it.
+// It stays readable after Connect or Forward consumes the tunnel.
+func (t *BoxTunnel) Descriptor() (TunnelDescriptor, error) {
+	if t == nil {
+		return TunnelDescriptor{}, ErrRuntimeClosed
 	}
-	var uri *C.char
+	return t.descriptor, nil
+}
+
+func readTunnelDescriptor(handle *C.CBoxTunnelHandle) (TunnelDescriptor, error) {
+	var descriptor TunnelDescriptor
+	var value *C.char
 	var cerr C.CBoxliteError
-	if code := C.boxlite_tunnel_uri(t.handle, &uri, &cerr); code != C.Ok {
-		return "", freeError(&cerr)
+	if code := C.boxlite_tunnel_descriptor(handle, &value, &cerr); code != C.Ok {
+		return descriptor, freeError(&cerr)
 	}
-	if uri == nil {
-		return "", nil
-	}
-	defer C.boxlite_free_string(uri)
-	return C.GoString(uri), nil
+	defer C.boxlite_free_string(value)
+	err := json.Unmarshal([]byte(C.GoString(value)), &descriptor)
+	return descriptor, err
 }
 
 // Connect consumes the tunnel's single raw byte stream.

@@ -30,7 +30,7 @@ type BoxLike = Omit<JsBox, "network"> & {
   readonly network: {
     updateInbound(spec: InboundNetworkSpec): Promise<void>;
     updateOutbound(spec: OutboundNetworkSpec): Promise<void>;
-    tunnel(port: number): Promise<NativeBoxTunnel>;
+    tunnel(port: number, isPublic?: boolean): Promise<NativeBoxTunnel>;
     revokeTunnel(port: number): Promise<void>;
   };
 };
@@ -133,7 +133,7 @@ export interface OutboundNetworkSpec {
 }
 
 export interface InboundNetworkSpec {
-  /** Inbound mode: "enabled" (reachable without sign-in) or "disabled" (unreachable from outside). */
+  /** Inbound mode: "enabled" (subject to the tunnel policy) or "disabled" (unreachable from outside). */
   mode: "enabled" | "disabled";
   /**
    * Not supported yet: a non-empty value is rejected. Exists for shape
@@ -394,15 +394,15 @@ export class NetworkHandle {
   }
 
   /** Prepare a one-shot tunnel for a port inside this box. */
-  async tunnel(port: number): Promise<BoxTunnel> {
+  async tunnel(port: number, isPublic = true): Promise<BoxTunnel> {
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new RangeError("port must be an integer between 1 and 65535");
     }
     const box = await this.ensureBox();
-    return new BoxTunnel(await box.network.tunnel(port));
+    return new BoxTunnel(await box.network.tunnel(port, isPublic));
   }
 
-  /** Withdraw public access to a port; open connections are not closed. */
+  /** Revoke the tunnel for a port; open connections are not closed. */
   async revokeTunnel(port: number): Promise<void> {
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new RangeError("port must be an integer between 1 and 65535");
@@ -460,6 +460,15 @@ export class BoxTunnel {
   /** Public URL of a remotely served tunnel, or null for a local one. */
   uri(): string | null {
     return this.tunnel.uri();
+  }
+
+  isPublic(): boolean {
+    return this.tunnel.isPublic();
+  }
+
+  /** Full token on creation; masked on subsequent preparations. */
+  token(): string | null {
+    return this.tunnel.token();
   }
 
   /** Consume the tunnel and return its bidirectional byte stream. */
@@ -925,8 +934,8 @@ export class SimpleBox {
   }
 
   /** Prepare a one-shot tunnel to a port inside this box. */
-  async tunnel(port: number): Promise<BoxTunnel> {
-    return this.network.tunnel(port);
+  async tunnel(port: number, isPublic = true): Promise<BoxTunnel> {
+    return this.network.tunnel(port, isPublic);
   }
 
   /**

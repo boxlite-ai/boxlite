@@ -418,8 +418,9 @@ Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.network`.
 
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
-| Tunnel | `await box.network.tunnel(port) -> BoxTunnel` | Prepare a one-shot tunnel to a TCP service in the box |
-| Revoke | `await box.network.revoke_tunnel(port) -> None` | Withdraw the port's public URL; open connections stay open |
+| Tunnel | `await box.network.tunnel(port, is_public=True) -> BoxTunnel` | Prepare a tunnel; pass `False` for a private cloud tunnel |
+| Token | `tunnel.token() -> str \| None` | Full on creation, masked on later preparations; `is_public()` reports the mode |
+| Revoke | `await box.network.revoke_tunnel(port) -> None` | Withdraw the port's tunnel; open connections stay open |
 | Forward | `await tunnel.forward(listen) -> TunnelForwarder` | Bind one local listener and forward every client |
 | Inspect | `tunnel.uri() -> str \| None` | Read the prepared public URL; `None` for a local box |
 | Connect | `await tunnel.connect() -> BoxConnection` | Consume the prepared tunnel into its byte stream |
@@ -431,7 +432,8 @@ Use `SocketAddress.tcp(host="127.0.0.1", port=0)` or
 wait()`, and repeatable `await close()`; synchronous and `SimpleBox` wrappers
 provide the same operations.
 
-Each `BoxTunnel` is one-shot: choose `connect()` or `forward()`. This differs
+Each `BoxTunnel` is one-shot: choose `connect()` or `forward()`. Forwarding opens
+authenticated connections against the existing declaration and cannot undo revocation. This differs
 from `BoxOptions.ports`, which creates a persistent, local-only host listener
 that accepts repeated connections from ordinary host applications.
 

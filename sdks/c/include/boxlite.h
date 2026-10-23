@@ -1169,7 +1169,14 @@ enum BoxliteErrorCode boxlite_network_tunnel(CBoxNetworkHandle *network,
                                              CBoxTunnelHandle **out_tunnel,
                                              CBoxliteError *out_error);
 
-// Withdraw public access to `port` in the box.
+// Prepare a tunnel with JSON options (`{"isPublic":false}`); NULL defaults to public.
+enum BoxliteErrorCode boxlite_network_tunnel_with_options(CBoxNetworkHandle *network,
+                                                          uint16_t port,
+                                                          const char *options_json,
+                                                          CBoxTunnelHandle **out_tunnel,
+                                                          CBoxliteError *out_error);
+
+// Revoke the tunnel for `port` in the box.
 //
 // Safe to repeat. Connections already open are not closed. Returns
 // `InvalidArgument` for a null network pointer or port zero.
@@ -1181,6 +1188,7 @@ enum BoxliteErrorCode boxlite_network_revoke_tunnel(CBoxNetworkHandle *network,
 void boxlite_tunnel_free(CBoxTunnelHandle *tunnel);
 
 // Read the public URL of a remotely served tunnel, without consuming it.
+// It stays readable after connect or forward consumes the tunnel.
 //
 // On success `*out_uri` is an allocated string the caller must release with
 // `boxlite_free_string`, or NULL for a local tunnel — a local descriptor is
@@ -1190,6 +1198,13 @@ void boxlite_tunnel_free(CBoxTunnelHandle *tunnel);
 enum BoxliteErrorCode boxlite_tunnel_uri(CBoxTunnelHandle *tunnel,
                                          char **out_uri,
                                          CBoxliteError *out_error);
+
+// Read JSON containing uri, isPublic, and token (full on creation, masked later).
+// It stays readable after connect or forward consumes the tunnel.
+// Release the result with boxlite_free_string.
+enum BoxliteErrorCode boxlite_tunnel_descriptor(CBoxTunnelHandle *tunnel,
+                                                char **out_json,
+                                                CBoxliteError *out_error);
 
 // Consume the tunnel and return its owned file descriptor.
 //
@@ -1280,7 +1295,7 @@ void boxlite_options_set_network_disabled(CBoxliteOptions *opts);
 // range is refused unless an IP or CIDR rule covers it.
 void boxlite_options_add_network_allow(CBoxliteOptions *opts, const char *host);
 
-// Marks services the box exposes as reachable without sign-in.
+// Enables exposed services subject to each tunnel's access policy.
 // Mirrors `boxlite_options_set_network_enabled` for the inbound direction.
 void boxlite_options_set_network_inbound_enabled(CBoxliteOptions *opts);
 
