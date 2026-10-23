@@ -1,19 +1,27 @@
 # Docker Swarm in runner-managed guests
 
-Use a privileged guest for each Docker Engine. The published Linux x86_64
-DinD kernel supports Docker but fails actual IPVS service and VXLAN device
-creation. For Swarm on Linux x86_64, build the public DinD recipe with this
-branch's additional kernel features, then package it through the normal runtime:
+Use a privileged guest for each Docker Engine. On Linux x86_64, the `v5.4.0`
+DinD release asset refreshed on 2026-10-23 includes built-in IPVS TCP/UDP,
+round-robin scheduling, conntrack netlink, xtables IPVS/u32 and VXLAN. Follow
+the [DinD build instructions](docker-in-docker.md#build-the-runtime) for
+prerequisites and replacing an older firmware cache, then package the release
+kernel through the normal runtime:
 
 ```sh
-make kernel:swarm
-export BOXLITE_LIBKRUNFW_SOURCE="$PWD/.apps-local/runner-acceptance/firmware-swarm"
+make kernel:dind
+export BOXLITE_LIBKRUNFW_SOURCE="$PWD/.apps-local/runner-acceptance/firmware"
 make dev:runner-ci
 ```
 
-This is a local derivative of the pinned public DinD recipe, not the published
-release binary. It uses Linux 6.12.87, vendored libkrunfw patches and
-`scripts/build/dind-kernel.config`. The builder defaults to two jobs and checks
+The release kernel uses `iptables-nft`; legacy tables remain disabled. The
+ordinary prebuilt firmware is not interchangeable with this DinD asset.
+
+For a local source build, `make kernel:swarm` remains available. Set
+`BOXLITE_LIBKRUNFW_SOURCE` to
+`$PWD/.apps-local/runner-acceptance/firmware-swarm` before rebuilding the runtime.
+This alternative uses Linux 6.12.87, vendored libkrunfw patches and
+`scripts/build/dind-kernel.config`, and also enables legacy tables.
+The builder defaults to two jobs and checks
 download hashes, effective Kconfig options and the embedded config. Preserve
 the generated `SHA256SUMS` and `build-info.txt` with runtime evidence.
 It requires the normal Linux compiler/binutils, make, bc, bison, flex,
@@ -22,9 +30,6 @@ libelf headers, patch, xz, curl, flock and project Python with pyelftools.
 and `BOXLITE_KERNEL_JOBS` override its directories and parallelism.
 Apple Silicon uses the [DinD firmware builder](docker-in-docker.md).
 
-The Swarm build includes IPVS TCP/UDP and schedulers,
-conntrack netlink, xtables IPVS/u32 and VXLAN in the kernel actually packaged
-with the runtime. The ordinary prebuilt firmware is not interchangeable.
 The guest must also contain iproute2, ipvsadm and complete iptables extensions.
 The pinned qualification image needs `apk fix --no-cache iptables iptables-legacy`
 inside its ext4 filesystem to restore both `libxt_MARK.so` and `libxt_mark.so`.

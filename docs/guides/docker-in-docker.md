@@ -10,6 +10,13 @@ On Linux x86_64, `make kernel:dind` prepares the checksum-pinned
 with the vendored firmware ABI generator. Run `make _ensure-python-deps` first.
 This packages the downloaded kernel without rebuilding or modifying it.
 
+The x86_64 release asset was replaced on 2026-10-23 with a kernel containing
+built-in IPVS and VXLAN. When upgrading an existing checkout, move its
+`.apps-local/runner-acceptance/firmware` directory aside before preparing the
+firmware again. A cached file with the previous checksum is rejected; the helper
+does not automatically replace it. Rebuild the runtime and restart its runners
+and Boxes to use the replacement kernel.
+
 On Apple Silicon macOS, the DinD firmware build uses a pinned
 Ubuntu builder image, checksum-verified Linux 6.12.87 and the vendored libkrunfw
 patches. Netfilter, bridge, cgroups and overlay support are built into the kernel;
@@ -30,8 +37,9 @@ packages it through the normal runtime build. Removing the override selects the
 ordinary prebuilt firmware again. `SHA256SUMS` identifies the generated inputs.
 The macOS-built guest reports `6.12.87-boxlite-dind`; the published x86_64
 kernel reports `6.12.87`. Verify the packaged kernel's checksum and runtime
-behavior before qualifying Docker. The published DinD profile does not itself
-establish IPVS/VXLAN support; Swarm requires separate runtime checks.
+behavior before qualifying Docker. The refreshed x86_64 DinD kernel includes
+Swarm's IPVS/VXLAN features; the [Swarm guide](docker-swarm.md) covers the required
+network setup and separate runtime checks.
 This does not enable user-supplied kernel paths in REST.
 
 The macOS builder explicitly starts its Box, bounds execution, retains failed disks
