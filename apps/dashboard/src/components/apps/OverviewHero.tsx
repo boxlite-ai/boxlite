@@ -9,9 +9,9 @@ import { queryKeys } from '@/hooks/queries/queryKeys'
 import { appsClient, downloadUrl } from '@/lib/apps/client'
 import { handleApiError } from '@/lib/error-handling'
 import { useQueryClient } from '@tanstack/react-query'
-import { actorName, capitalize, relTime, STATUS } from '@/lib/apps/format'
+import { actorName, capitalize, formatBytes, relTime, STATUS } from '@/lib/apps/format'
 import { openApp } from '@/lib/apps/open'
-import type { AppDetail, AppRelease, AppTab } from '@/lib/apps/types'
+import type { AppDetail, AppRelease, AppTab, BoxUsage } from '@/lib/apps/types'
 import { cn } from '@/lib/utils'
 import { useEffect, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
@@ -147,6 +147,31 @@ export function LiveCard({
 }
 
 /** The app's basic facts, compact: label over value, two columns. */
+/** Below this share free, the Box is near its limit (the control plane says so under Problems). */
+const LOW_FREE_SHARE = 0.1
+
+/** `412 MB of 2.0 GB used`, red when less than a tenth is left. */
+function usageRow(label: string, total: number, free: number, title: string) {
+  const low = total > 0 && free < total * LOW_FREE_SHARE
+  return {
+    label,
+    title,
+    value: (
+      <span className={cn(low && 'text-destructive')}>
+        {formatBytes(total - free)} of {formatBytes(total)} used
+      </span>
+    ),
+  }
+}
+
+function usageRows(usage: BoxUsage | null | undefined) {
+  if (!usage) return []
+  return [
+    usageRow('Memory', usage.memoryTotalBytes, usage.memoryAvailableBytes, 'Memory in use by the whole Box, the app and the platform'),
+    usageRow('Disk', usage.diskTotalBytes, usage.diskFreeBytes, 'The Box disk: the app, its volumes and recent versions'),
+  ]
+}
+
 function MetaGrid({ app }: { app: AppDetail }) {
   const runtime = app.runtime
     ? `${app.runtime.image} · ${app.runtime.size}${
@@ -178,6 +203,7 @@ function MetaGrid({ app }: { app: AppDetail }) {
     },
     { label: 'Created', value: relTime(app.createdAt), title: new Date(app.createdAt).toLocaleString('en-US') },
     ...(runtime ? [{ label: 'Runtime', value: runtime }] : []),
+    ...usageRows(app.box?.usage),
     ...(services.length
       ? [
           {

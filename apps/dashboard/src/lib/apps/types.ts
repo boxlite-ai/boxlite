@@ -32,8 +32,18 @@ export interface AppService {
   restarts: number
   lastExitCode?: number
   health: ServiceHealth
+  /** Memory it and its children use, while the Box runs. */
+  memoryBytes?: number
   /** Its last error lines, when it is crashing, restarting or unhealthy. */
   recentErrors: string[]
+}
+
+/** Memory and disk of the whole Box the environment runs in (volumes live on its disk). */
+export interface BoxUsage {
+  memoryTotalBytes: number
+  memoryAvailableBytes: number
+  diskTotalBytes: number
+  diskFreeBytes: number
 }
 
 export interface AppSchedule {
@@ -392,7 +402,8 @@ export interface AppDetail extends Omit<AppSummary, 'environments'> {
   environment: string
   createdFrom: string | null
   runtime: { image: string; size: string; cpus: number | null; memoryMib: number | null } | null
-  box: { id: string; state: string } | null
+  /** `usage` is read from the running Box: absent or null while it sleeps. */
+  box: { id: string; state: string; usage?: BoxUsage | null } | null
   services: AppService[]
   activeRelease: string | null
   releases: AppRelease[]

@@ -4,7 +4,7 @@
  */
 
 import { ChevronRight } from '@/components/ui/icon'
-import { STATUS } from '@/lib/apps/format'
+import { formatBytes, STATUS } from '@/lib/apps/format'
 import type { AppService } from '@/lib/apps/types'
 import { cn } from '@/lib/utils'
 import { useState } from 'react'
@@ -12,7 +12,7 @@ import { GridHeader, HoverActions, SpecRow, StatusBadge } from './spec'
 import { ToolButton } from './SubNav'
 
 // Every service of the environment as the supervisor reports it, one compact row each: name,
-// state, health, Restart. The process details (command, pid, port, restarts, last exit, health
+// state, health, Restart. The process details (command, pid, port, restarts, memory, last exit, health
 // path) open with the row; a crashing or unhealthy service opens by itself and shows its last
 // error lines, so the cause is read without leaving the page.
 
@@ -62,6 +62,7 @@ function ServiceRow({
     service.pid ? `pid ${service.pid}` : null,
     service.port ? `port ${service.port}` : null,
     `${service.restarts} restart${service.restarts === 1 ? '' : 's'}`,
+    service.memoryBytes !== undefined ? `${formatBytes(service.memoryBytes)} memory` : null,
   ]
     .filter(Boolean)
     .join(' · ')
