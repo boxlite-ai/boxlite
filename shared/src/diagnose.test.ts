@@ -104,3 +104,15 @@ test('a service that exits because a variable is missing names it, with the comm
   assert.equal(missingVariableIn('Missing environment variable: STRIPE_KEY'), 'STRIPE_KEY');
   assert.equal(missingVariableIn('the value is not set yet'), undefined);
 });
+
+test('a hard-coded port that is already taken is a port problem, not a plain crash', () => {
+  const d = classifyFailure({
+    step: 'start',
+    message: 'web exited with code 1 before it became healthy',
+    log_tail: ['[web] Error: listen EADDRINUSE: address already in use 0.0.0.0:3000', '[web]     at Server.setupListenHandle [as _listen2] (node:net:1908:16)', '[system] service web exited with code 1 after 210ms; restarting in 1s'],
+    service: { name: 'web', command: 'node server.js', health: '/healthz' },
+  });
+  assert.equal(d.cause, 'port_binding');
+  assert.match(d.summary, /port 3000, which is already taken/);
+  assert.match(d.fix, /process\.env\.PORT/);
+});

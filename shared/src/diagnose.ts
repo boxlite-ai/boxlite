@@ -230,6 +230,17 @@ function startDiagnosis(input: FailureInput, message: string, tail: readonly str
     };
   }
 
+  // A hard-coded port that something else in the Box already holds: the app dies at listen().
+  const inUse = appLines.map((l) => /EADDRINUSE|address already in use/i.test(l) ? (/:(\d{2,5})\b/.exec(l)?.[1] ?? '') : undefined).find((p) => p !== undefined);
+  if (exited && inUse !== undefined) {
+    return {
+      cause: 'port_binding',
+      summary: `${exited[1]} tried to listen on ${inUse ? `port ${inUse}` : 'a fixed port'}, which is already taken${probePort ? `; the platform gave it PORT=${probePort}` : ''}`,
+      fix: 'listen on process.env.PORT (Node: `app.listen(Number(process.env.PORT), "0.0.0.0")`; Python: `--port $PORT`), never a fixed port, then `boxlite-app deploy`',
+      evidence: grab(appLines, /EADDRINUSE|address already in use|listen/i, 4),
+    };
+  }
+
   const missing = stderr.map((l) => missingVariableIn(l)).find((name) => name !== undefined);
   if (exited && missing) {
     return {

@@ -1,0 +1,16 @@
+[app]
+name = "errors"
+
+[runtime]
+image = "node"
+size  = "small"
+build = ["npm ci"]
+
+[[service]]
+name    = "web"
+command = "node server.js"
+port    = 3000
+health  = "/healthz"
+
+[database]
+migrations = "migrations/"
