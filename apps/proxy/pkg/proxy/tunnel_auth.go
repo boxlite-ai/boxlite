@@ -242,7 +242,17 @@ func (p *Proxy) sameTunnelOrigin(request *http.Request) bool {
 		return true
 	}
 	site := request.Header.Get("Sec-Fetch-Site")
-	return site == "" || site == "none" || site == "same-origin"
+	if site == "" {
+		// Only a client that sends no Fetch Metadata at all (non-browser or
+		// legacy) may omit the site.
+		for _, header := range []string{"Sec-Fetch-Mode", "Sec-Fetch-Dest", "Sec-Fetch-User"} {
+			if request.Header.Get(header) != "" {
+				return false
+			}
+		}
+		return true
+	}
+	return site == "none" || site == "same-origin"
 }
 
 type tunnelTokenKey struct{}

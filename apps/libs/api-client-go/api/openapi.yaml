@@ -2624,8 +2624,8 @@ paths:
                 - enabled
                 - disabled
                 type: string
-          description: "Inbound mode of the box: `enabled` means the proxy may serve\
-            \ its services without sign-in"
+          description: "Inbound mode of the box: `enabled` permits access subject\
+            \ to each tunnel policy; `disabled` rejects all callers"
       summary: Read the inbound mode of a box
       tags:
       - preview
@@ -6025,8 +6025,8 @@ components:
         mode:
           allOf:
           - $ref: "#/components/schemas/NetworkMode"
-          description: Whether exposed services are reachable through the proxy without
-            sign-in
+          description: "Whether exposed services are reachable through the proxy,\
+            \ subject to each tunnel's access policy"
         allow_net:
           description: Reserved; no layer enforces an inbound allowlist yet
           example: []

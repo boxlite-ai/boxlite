@@ -69,7 +69,8 @@ class IsUnsupportedInboundAllowNetConstraint implements ValidatorConstraintInter
 }
 
 // Aligned field-for-field with OutboundNetworkSpecDto: mode="enabled" means
-// services the box exposes are reachable through the proxy without sign-in;
+// services the box exposes are reachable through the proxy under each
+// tunnel's access policy (public: no sign-in; private: token or membership);
 // mode="disabled" makes them unreachable through the proxy, even with a
 // credential. allow_net exists for wire-shape symmetry but is rejected when
 // non-empty until enforcement exists.

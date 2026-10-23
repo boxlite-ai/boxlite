@@ -340,8 +340,9 @@ pub struct OutboundNetworkInfo {
 
 /// Network configuration for inbound (internet → guest) traffic.
 ///
-/// Records whether the guest's exposed ports/preview are reachable without
-/// sign-in.
+/// Records whether the guest's exposed ports/preview are reachable through
+/// the proxy, under each tunnel's access policy (public: no sign-in;
+/// private: tunnel token or membership).
 /// `allow_net` is always empty today — an inbound allowlist is not yet
 /// enforced by any layer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -374,7 +375,7 @@ pub struct NetworkInfo {
     pub outbound: OutboundNetworkInfo,
 
     /// External reachability: whether the box's exposed ports/preview are
-    /// reachable without sign-in. Its `allow_net` is always empty today (see
+    /// reachable under each tunnel's access policy. Its `allow_net` is always empty today (see
     /// [`InboundNetworkInfo::allow_net`]).
     pub inbound: InboundNetworkInfo,
 

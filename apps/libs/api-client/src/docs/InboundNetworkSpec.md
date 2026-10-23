@@ -5,7 +5,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**mode** | [**NetworkMode**](NetworkMode.md) | Whether exposed services are reachable through the proxy without sign-in | [default to undefined]
+**mode** | [**NetworkMode**](NetworkMode.md) | Whether exposed services are reachable through the proxy, subject to each tunnel\&#39;s access policy | [default to undefined]
 **allow_net** | **Array&lt;string&gt;** | Reserved; no layer enforces an inbound allowlist yet | [default to undefined]
 
 ## Example

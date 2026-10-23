@@ -16,7 +16,8 @@ interface UpdateBoxInboundVariables {
 
 /**
  * Enables or disables inbound access: whether the services a box exposes are
- * reachable through the proxy without signing in.
+ * reachable through the proxy under each tunnel's access policy (public
+ * tunnels need no sign-in; private ones need their token or membership).
  *
  * Invalidating the box detail query is the point: `network` lives on the box
  * record, so the detail sheet has to re-read it before it can show the new

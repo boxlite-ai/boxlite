@@ -160,6 +160,10 @@ func TestPrivateTunnelRejectsInvalidExplicitCredentialsAndForeignOrigins(t *test
 		{"invalid API key", platformAuthorizationHeader, "Bearer invalid", 401},
 		{"foreign origin", "Origin", "https://4000-other.proxy.test", 403},
 		{"same-site sibling", "Sec-Fetch-Site", "same-site", 403},
+		// Only a request with no Fetch Metadata at all may lack Sec-Fetch-Site.
+		{"partial fetch metadata: mode", "Sec-Fetch-Mode", "cors", 403},
+		{"partial fetch metadata: dest", "Sec-Fetch-Dest", "empty", 403},
+		{"partial fetch metadata: user", "Sec-Fetch-User", "?1", 403},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, privateTestURL, nil)

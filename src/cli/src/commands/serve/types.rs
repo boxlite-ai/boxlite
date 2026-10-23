@@ -138,7 +138,8 @@ pub(super) struct OutboundNetworkSpec {
 }
 
 /// Aligned field-for-field with [`OutboundNetworkSpec`]: `mode="enabled"`
-/// means services the box exposes are reachable without sign-in,
+/// means services the box exposes are reachable under each tunnel's access
+/// policy (public: no sign-in; private: tunnel token or membership),
 /// `mode="disabled"` keeps them unreachable from outside. `allow_net` exists
 /// for shape symmetry only — no layer enforces an inbound allowlist yet, so
 /// a non-empty value is rejected.

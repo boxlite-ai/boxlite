@@ -19,7 +19,7 @@ import type { NetworkMode } from './network-mode';
 
 export interface InboundNetworkSpec {
     /**
-     * Whether exposed services are reachable through the proxy without sign-in
+     * Whether exposed services are reachable through the proxy, subject to each tunnel\'s access policy
      */
     'mode': NetworkMode;
     /**

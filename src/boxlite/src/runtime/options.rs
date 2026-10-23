@@ -1158,7 +1158,8 @@ impl OutboundNetworkConfig {
 
 /// Wire shape for the inbound direction, aligned field-for-field with
 /// [`OutboundNetworkConfig`]. `Enabled` means services the box exposes are
-/// reachable without sign-in; `Disabled` means they are unreachable from
+/// reachable under each tunnel's access policy (public: no sign-in;
+/// private: tunnel token or membership); `Disabled` means they are unreachable from
 /// outside the box. `allow_net` exists for shape symmetry with outbound but
 /// is rejected when non-empty — no layer enforces an inbound allowlist yet.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

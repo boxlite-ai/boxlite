@@ -1204,7 +1204,8 @@ pub struct NetworkFlags {
     pub allow_net: Vec<String>,
 
     /// Inbound mode: "enabled" (services the box exposes are reachable
-    /// through the remote proxy without sign-in) or "disabled" (default —
+    /// through the remote proxy under each tunnel's access policy) or
+    /// "disabled" (default —
     /// unreachable from outside the box).
     #[arg(long = "inbound", value_name = "MODE")]
     pub inbound: Option<String>,
