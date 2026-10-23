@@ -9,11 +9,12 @@ import { queryKeys } from '@/hooks/queries/queryKeys'
 import { appsClient, downloadUrl } from '@/lib/apps/client'
 import { handleApiError } from '@/lib/error-handling'
 import { useQueryClient } from '@tanstack/react-query'
-import { actorName, relTime, STATUS } from '@/lib/apps/format'
+import { actorName, capitalize, relTime, STATUS } from '@/lib/apps/format'
 import { openApp } from '@/lib/apps/open'
 import type { AppDetail, AppRelease, AppTab } from '@/lib/apps/types'
 import { cn } from '@/lib/utils'
 import { useEffect, useState, type ReactNode } from 'react'
+import { toast } from 'sonner'
 import { DeployProgress } from './DeployProgress'
 import { CopyIconButton } from './spec'
 
@@ -134,6 +135,11 @@ export function LiveCard({
             Picture from {preview.releaseId}, captured {relTime(preview.capturedAt)}
           </span>
         )}
+        {app.previewAttempt?.failed && !app.previewAttempt.taking && (
+          <span className="font-mono text-[12px] text-muted-foreground">
+            New picture failed {relTime(app.previewAttempt.failed.at)}: {app.previewAttempt.failed.reason}
+          </span>
+        )}
         <MetaGrid app={app} />
       </div>
     </section>
@@ -205,31 +211,46 @@ function MetaGrid({ app }: { app: AppDetail }) {
   )
 }
 
-/** Takes a new picture of what is live (wakes a sleeping app), then shows it once it arrives. */
+/**
+ * Takes a new picture of what is live (wakes a sleeping app). Done when a newer picture arrives;
+ * when the control plane gives up it says why, and the old picture stays.
+ */
 function RetakeButton({ app }: { app: AppDetail }) {
   const queryClient = useQueryClient()
-  const [since, setSince] = useState<string | null>(null)
-  const busy = since !== null
-  // Done once the picture is newer than the one shown when asked; give up after 45 s.
+  // What was there when asked: the button waits for either to change.
+  const [asked, setAsked] = useState<{ shot: string | null; failure: string | null } | null>(null)
+  const shot = app.preview?.capturedAt ?? null
+  const failure = app.previewAttempt?.failed ?? null
+  const busy = asked !== null
   useEffect(() => {
-    if (!since) return
-    if (app.preview && app.preview.capturedAt > since) return setSince(null)
+    if (!asked) return
+    if (shot !== asked.shot) {
+      setAsked(null)
+      toast.success('New picture taken')
+      return
+    }
+    if (failure && failure.at !== asked.failure) {
+      setAsked(null)
+      toast.error('Could not take a new picture', { description: `${capitalize(failure.reason)}. The old one stays.` })
+      return
+    }
     const poll = window.setInterval(
       () => queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, app.id, app.environment) }),
       3000,
     )
-    const stop = window.setTimeout(() => setSince(null), 45_000)
+    // The control plane gives up after 90 s and says so; this is only a backstop.
+    const stop = window.setTimeout(() => setAsked(null), 120_000)
     return () => {
       window.clearInterval(poll)
       window.clearTimeout(stop)
     }
-  }, [since, app.preview, app.id, app.environment, queryClient])
+  }, [asked, shot, failure, app.id, app.environment, queryClient])
   const retake = async () => {
     try {
       await appsClient.post(`/apps/${encodeURIComponent(app.id)}/preview`, undefined, {
         params: { env: app.environment },
       })
-      setSince(app.preview?.capturedAt ?? new Date(0).toISOString())
+      setAsked({ shot, failure: failure?.at ?? null })
     } catch (error) {
       handleApiError(error, 'Could not take a new picture')
     }
@@ -239,7 +260,7 @@ function RetakeButton({ app }: { app: AppDetail }) {
       type="button"
       onClick={() => void retake()}
       disabled={busy}
-      title={busy ? 'Taking a new picture…' : 'Take a new picture'}
+      title={busy ? 'Taking a new picture (up to a minute when the app is asleep)…' : 'Take a new picture'}
       aria-label="Take a new picture"
       className="text-muted-foreground transition-colors hover:text-foreground disabled:cursor-wait"
     >

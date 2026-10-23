@@ -379,6 +379,12 @@ export interface AppPreview {
   releaseId: string
 }
 
+/** A new picture being taken, or why the last attempt failed (the picture shown stays the old one). */
+export interface AppPreviewAttempt {
+  taking: boolean
+  failed: { at: string; reason: string } | null
+}
+
 export interface AppDetail extends Omit<AppSummary, 'environments'> {
   /** The control plane's own id of the App (app_…); `id` is its name. */
   appId: string
@@ -409,6 +415,7 @@ export interface AppDetail extends Omit<AppSummary, 'environments'> {
   /** null: no traffic in the last 48 hours and nobody signed in during the last 24. */
   metrics: AppMetrics | null
   preview: AppPreview | null
+  previewAttempt: AppPreviewAttempt | null
   /** The handoff prompt with the App key masked; the full key is shown only once. */
   handoffPrompt: string
   key: { last4: string; createdAt: string } | null
