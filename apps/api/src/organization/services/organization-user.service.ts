@@ -9,7 +9,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter'
 import { InjectRepository } from '@nestjs/typeorm'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
-import { DataSource, EntityManager, Repository } from 'typeorm'
+import { DataSource, EntityManager, MoreThan, Repository } from 'typeorm'
 import { OrganizationRoleService } from './organization-role.service'
 import { OrganizationEvents } from '../constants/organization-events.constant'
 import { OrganizationUserDto } from '../dto/organization-user.dto'
@@ -53,6 +53,16 @@ export class OrganizationUserService {
     })
 
     return this.toUserDtos(organizationUsers)
+  }
+
+  async findPage(organizationId: string, pageSize: number, afterUserId?: string): Promise<OrganizationUserDto[]> {
+    const rows = await this.organizationUserRepository.find({
+      where: { organizationId, ...(afterUserId ? { userId: MoreThan(afterUserId) } : {}) },
+      relations: { assignedRoles: true },
+      order: { userId: 'ASC' },
+      take: pageSize + 1,
+    })
+    return this.toUserDtos(rows)
   }
 
   private async toUserDtos(organizationUsers: OrganizationUser[]): Promise<OrganizationUserDto[]> {

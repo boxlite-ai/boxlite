@@ -208,7 +208,18 @@ API-key validation retains the existing Redis cache namespace. Old cached scope
 labels translate on read, so membership removal, key revocation, and identity
 linking continue to invalidate the same entries across deployment versions.
 
-The integration suite runs the actual PostgreSQL upgrade and rollback. Set `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, and `DB_DATABASE`, then run `make coverage:api FILTER=AddTenantScopes1792497600000`. The database user must be able to create temporary databases.
+A separate pre-deploy migration adds `organization_invitation_request`. Creating
+an invite and saving its replay snapshot share a transaction and an advisory lock
+scoped to organization, user, and idempotency key. Replay records expire after
+24 hours; subsequent keyed requests clean expired records for their organization.
+Deleting an organization cascades to its replay records. Rollback drops this table
+and loses retry history, so coordinate rollback with stopping Admin writes.
+
+The integration tests run actual PostgreSQL migrations and services. Set
+`DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, and `DB_DATABASE`; the migration
+suite needs permission to create temporary databases. Run
+`make coverage:api FILTER='AddTenantScopes1792497600000|Admin organization storage'`.
+The suites clean their temporary databases or schemas and run in API CI.
 
 ## Reverting Migrations
 
