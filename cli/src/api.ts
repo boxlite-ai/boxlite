@@ -5,6 +5,7 @@ import { fetch, WebSocket, type Dispatcher, type Response } from 'undici';
 import type { Readable } from 'node:stream';
 import type { PlanChange } from './output.js';
 import { parseJsonData, parseSse, type SseEvent } from './sse.js';
+import type { BuildWarning } from '@microcloud/shared';
 
 export interface EnvSummary {
   name: string;
@@ -53,6 +54,8 @@ export interface Deployment {
   number: number;
   kind: string;
   status: string;
+  /** Detail view only: what the build warned about (npm audit, bundle size, deprecated packages). */
+  build_warnings?: BuildWarning[];
   message?: string | null;
   by?: string;
   created_at?: string;

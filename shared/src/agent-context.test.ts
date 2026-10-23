@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { contextFindings, type AgentContext } from './agent-context.js';
+import { buildWarnings } from './build-warnings.js';
 
 const NOW = '2026-10-21T10:00:00.000Z';
 
@@ -88,4 +89,20 @@ test('a credential kept as a plain variable is pointed out, with the secret-stor
   assert.match(f[0]!.title, /SLACK_TOKEN/);
   assert.doesNotMatch(f[0]!.title, /LOG_LEVEL|OPENAI/);
   assert.match(f[0]!.fix, /secrets set slack-token`, then `boxlite-app app secrets ref SLACK_TOKEN app\/slack-token/);
+});
+
+test('build warnings of the live deployment are findings next to a healthy app, not failures', () => {
+  const lines = [
+    '[build] added 212 packages, and audited 213 packages in 9s',
+    '[build] 1 high severity vulnerability',
+    '[build] (!) Some chunks are larger than 500 kB after minification. Consider:',
+    '[build] npm warn deprecated inflight@1.0.6: This module is not supported',
+  ];
+  const ws = buildWarnings(lines);
+  assert.deepEqual(ws.map((w) => w.id), ['npm_audit', 'large_bundle', 'deprecated_packages']);
+  assert.match(ws[0]!.title, /1 high severity vulnerability/);
+  const c = base();
+  c.build_warnings = ws;
+  const f = contextFindings(c);
+  assert.deepEqual(f.filter((x) => x.id.startsWith('build_')).map((x) => [x.id, x.severity]), [['build_npm_audit', 'warn'], ['build_large_bundle', 'info'], ['build_deprecated_packages', 'info']]);
 });

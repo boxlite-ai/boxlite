@@ -1,6 +1,7 @@
 import { ACTIVE_STATUSES, type AppRow, type Deployment, type EnvRow } from './db.js';
 import type { Ctx } from './ctx.js';
 import { deploymentLogs, formatLogLine } from './services/logs.js';
+import { buildWarnings, type BuildWarning } from '@microcloud/shared';
 
 /** Deployment object of contracts §1. `detail` adds the log tail. */
 export function deploymentView(ctx: Pick<Ctx, 'store' | 'resources'>, app: AppRow, env: EnvRow, d: Deployment, detail = false): Record<string, unknown> {
@@ -26,8 +27,14 @@ export function deploymentView(ctx: Pick<Ctx, 'store' | 'resources'>, app: AppRo
   };
   if (detail) {
     out.log_tail = logTail(ctx, env, d, 50);
+    out.build_warnings = deploymentBuildWarnings(ctx, env, d.number);
   }
   return out;
+}
+
+/** What the build of deployment `n` warned about (npm audit, bundle size, deprecated packages). */
+export function deploymentBuildWarnings(ctx: Pick<Ctx, 'store'>, env: EnvRow, n: number): BuildWarning[] {
+  return buildWarnings(ctx.store.logs(env.id, { source: 'build', deployment: n, limit: 5000 }).map((l) => l.line));
 }
 
 /** The last `n` lines of a deployment (its own and its release's), formatted. */

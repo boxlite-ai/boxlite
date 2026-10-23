@@ -342,3 +342,16 @@ test("context's recent errors leave out a build tool's notices and warnings on s
   const c = (await (await get('/envs/main/context')).json()) as Record<string, any>;
   assert.deepEqual(c.recent_errors.map((e: any) => e.line), ['npm ERR! code ERESOLVE']);
 });
+
+test('a live deployment whose build warned shows the warning in context and in its detail', async () => {
+  await deploy(TOML);
+  h.ctx.store.appendLogs(env().id, [
+    { ts: new Date().toISOString(), source: 'build', level: 'info', line: '1 high severity vulnerability', deployment: 1 },
+    { ts: new Date().toISOString(), source: 'build', level: 'warn', line: '(!) Some chunks are larger than 500 kB after minification.', deployment: 1 },
+  ]);
+  const c = (await (await get('/envs/main/context')).json()) as Record<string, any>;
+  assert.deepEqual(c.build_warnings.map((w: any) => w.id), ['npm_audit', 'large_bundle']);
+  assert.ok(c.next_actions.some((f: any) => f.id === 'build_npm_audit' && f.severity === 'warn'), JSON.stringify(c.next_actions));
+  const d = (await (await get('/envs/main/deployments/1')).json()) as Record<string, any>;
+  assert.deepEqual(d.build_warnings.map((w: any) => w.id), ['npm_audit', 'large_bundle']);
+});

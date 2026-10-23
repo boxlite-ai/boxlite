@@ -118,7 +118,7 @@ Usage: `boxlite-app deploy [options]`
 | `-y, --yes` | accepted for symmetry with apply; deploy never prompts |  |
 
 - Network: talks to the control plane
-- `--json`: `Deployment (status "live"); --dry-run: { dry_run: true, app, environment, base_version, latest_version, stale, changes, errors, warnings, upload: { files, bytes, new_files, new_bytes } }; failure (exit 8, stderr): { error: { code: "deploy_failed", deployment, step, cause, fix, file?, line?, evidence, log_tail } }`
+- `--json`: `Deployment (status "live") & { build_warnings: { id, title, fix, evidence }[] }; --dry-run: { dry_run: true, app, environment, base_version, latest_version, stale, changes, errors, warnings, upload: { files, bytes, new_files, new_bytes } }; failure (exit 8, stderr): { error: { code: "deploy_failed", deployment, step, cause, fix, file?, line?, evidence, log_tail } }`
 - Exit codes: 0, 1, 2, 3, 6, 7, 8, 9
 
 ```sh

@@ -1,4 +1,5 @@
 import { classifyFailure, errorFocus, looksLikeCredential, secretRefFix } from './diagnose.js';
+import type { BuildWarning } from './build-warnings.js';
 
 /**
  * Everything an agent needs about one environment, as returned by
@@ -28,6 +29,8 @@ export interface AgentContext {
   deployments: AgentDeployment[];
   /** Newest last: error-level lines of the last 24 h, at most 20. */
   recent_errors: { ts: string; source: string; line: string; deployment: number | null }[];
+  /** What the live deployment's build warned about (npm audit, bundle size, deprecated packages). Absent from an older control plane. */
+  build_warnings?: BuildWarning[];
   /** Ranked problems with fixes, worst first; empty when everything looks fine. */
   next_actions: Finding[];
   cli: { latest_version: string | null };
@@ -191,6 +194,11 @@ export function contextFindings(c: Omit<AgentContext, 'next_actions'>): Finding[
   if (recent.length && !out.some((f) => f.id === 'crash_loop')) {
     const sources = [...new Set(recent.map((e) => e.source))];
     out.push({ id: 'recent_errors', severity: 'warn', title: `${recent.length} error line(s) in the last hour from ${sources.join(', ')}`, fix: `\`boxlite-app app logs --level error --since 1h\``, evidence: recent.slice(-5).map((e) => `[${e.source}] ${e.line}`) });
+  }
+
+  // The app runs, and its build still left something to review: shown beside it, never as a failure.
+  for (const w of c.build_warnings ?? []) {
+    out.push({ id: `build_${w.id}`, severity: w.id === 'npm_audit' && /high|critical/i.test(w.title) ? 'warn' : 'info', title: w.title, fix: w.fix, evidence: w.evidence });
   }
 
   if (c.box?.state === 'stopped') out.push({ id: 'box_asleep', severity: 'info', title: 'the app is asleep (it stops after 15 min without traffic)', fix: 'nothing to do: the next request wakes it in a few seconds' });

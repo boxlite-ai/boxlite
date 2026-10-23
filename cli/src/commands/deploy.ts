@@ -82,9 +82,12 @@ export async function finishDeployment(ctx: Ctx, api: Api, result: FollowResult,
     if (!full.log_tail?.length) full.log_tail = printer.logTail;
     throw deployFailedError({ ...final, ...full, error: full.error ?? final.error }, failureHints(checked));
   }
-  ctx.out.data(final);
+  // Live and still worth a look: what the build warned about rides along with the result.
+  const warnings = result.status === 'live' ? ((await api.getDeployment(number).catch(() => null))?.build_warnings ?? []) : [];
+  ctx.out.data({ ...final, build_warnings: warnings });
   if (result.status === 'live') {
     ctx.out.line(stepLine(number, 'live', `${final.url ?? ''}${final.spec_version != null ? ` · spec v${final.spec_version}` : ''}`.trim()));
+    for (const w of warnings) ctx.out.line(`  build warning  ${w.title}; ${w.fix}`);
     if (final.spec_version != null) await updateLink(ctx.cwd, { base_version: final.spec_version });
     const svc = checked ? exposedService(checked.manifest) : undefined;
     if (final.url) ctx.out.next(`verify it: \`boxlite-app app curl ${svc?.health ?? '/'}\` and the pages the user asked for (\`--as qa@example.com\` for signed-in pages); \`boxlite-app app logs --since 5m\` shows what the app printed`);
@@ -158,7 +161,7 @@ export function registerDeploy(program: Command, make: MakeCtx): void {
       .option('-y, --yes', 'accepted for symmetry with apply; deploy never prompts')
       .action(async (opts: { message?: string; detach?: boolean; force?: boolean; dryRun?: boolean; verbose?: boolean }, cmd: Command) => deploy(await make(cmd), opts)),
     {
-      json: 'Deployment (status "live"); --dry-run: { dry_run: true, app, environment, base_version, latest_version, stale, changes, errors, warnings, upload: { files, bytes, new_files, new_bytes } }; failure (exit 8, stderr): { error: { code: "deploy_failed", deployment, step, cause, fix, file?, line?, evidence, log_tail } }',
+      json: 'Deployment (status "live") & { build_warnings: { id, title, fix, evidence }[] }; --dry-run: { dry_run: true, app, environment, base_version, latest_version, stale, changes, errors, warnings, upload: { files, bytes, new_files, new_bytes } }; failure (exit 8, stderr): { error: { code: "deploy_failed", deployment, step, cause, fix, file?, line?, evidence, log_tail } }',
       exits: [2, 3, 6, 7, 8, 9],
       online: true,
       examples: ['boxlite-app deploy -m "add deals board"', 'boxlite-app deploy --dry-run --json', 'boxlite-app deploy --verbose'],
