@@ -14,6 +14,7 @@ import { MAX_SNAPSHOT_BYTES } from '../platform.js';
 import { deploymentView } from '../views.js';
 import { prepare } from './plan.js';
 import { body, envOf, intParam, migrationsSchema, type C } from './util.js';
+import { checkFailedNext } from '../check-next.js';
 
 const createSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -87,7 +88,7 @@ export function deploymentRoutes(ctx: Ctx) {
       }
       const p = prepare(ctx, app, env, { manifest: b.manifest, base_version: b.base_version, migrations: b.migrations, uploadBytes });
       if (p.errors.length || !p.manifest) {
-        throw fail('invalid_manifest', `${p.errors.length} problem(s) in boxlite.toml`, 'run `boxlite-app check` and fix the errors', { errors: p.errors, warnings: p.warnings });
+        throw fail('invalid_manifest', `${p.errors.length} problem(s) in boxlite.toml`, checkFailedNext(p.errors), { errors: p.errors, warnings: p.warnings });
       }
       if (uploadBytes !== undefined && uploadBytes > MAX_SNAPSHOT_BYTES) throw fail('invalid_manifest', 'snapshot too large');
       if (p.stale && !b.force) {

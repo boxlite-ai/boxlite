@@ -10,6 +10,7 @@ import { BOX_SIZES } from '../platform.js';
 import { StepFailure, type Job } from './job.js';
 import { databaseStep, migrateStep, serviceNames, serviceSummary, writeSpec } from './steps.js';
 import type { SupervisorLink } from './supervisor-link.js';
+import { checkFailedNext } from '../check-next.js';
 
 /**
  * deploy: check → upload → database → box → build → migrate → start → live.
@@ -91,7 +92,7 @@ async function checkSnapshot(job: Job, manifest: Manifest, files: SnapshotFile[]
     const result = await Promise.resolve(checkLocal(dir, manifest));
     for (const w of result.warnings) job.log(`warning: ${w.message}`);
     if (!result.ok || result.errors.length) {
-      throw fail('invalid_manifest', `check failed: ${result.errors.map((e) => e.message).join('; ')}`, 'run `boxlite-app check` and fix the errors', { errors: result.errors });
+      throw fail('invalid_manifest', `check failed: ${result.errors.map((e) => e.message).join('; ')}`, checkFailedNext(result.errors), { errors: result.errors });
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
