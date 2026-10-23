@@ -72,7 +72,7 @@ export class DbReaders implements ReaderSource {
       'SELECT a.neon_project_id AS project_id, e.neon_branch_id AS branch_id FROM envs e JOIN apps a ON a.id = e.app_id WHERE e.db_url = ?',
       ownerUrl,
     );
-    if (!row?.project_id || !row.branch_id) throw fail('unavailable', 'this database has no Neon branch on record', 'run `boxlite-app apply --yes` so the platform provisions it');
+    if (!row?.project_id || !row.branch_id) throw fail('unavailable', 'this database has no branch on record', 'run `boxlite-app apply --yes` so the platform provisions it');
     return { projectId: row.project_id, branchId: row.branch_id };
   }
 

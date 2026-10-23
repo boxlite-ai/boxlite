@@ -27,7 +27,7 @@ export class DatabaseProvisioner {
       const { store, neon } = this.ctx;
       let app = store.appById(appId)!;
       if (!app.neon_project_id) {
-        log(`creating Neon project mc-${app.name}`);
+        log(`creating the database for ${app.name}`);
         const p = await neon.createProject(`mc-${app.name}`);
         store.updateApp(app.id, { neon_project_id: p.projectId, neon_main_branch_id: p.mainBranchId });
         const main = store.envByName(app.id, 'main');
@@ -49,7 +49,7 @@ export class DatabaseProvisioner {
           const parent = store.envByName(app.id, env.from_env ?? 'main');
           const parentBranch = parent?.neon_branch_id ?? app.neon_main_branch_id;
           const init = env.with_data ? 'parent-data' : 'schema-only';
-          log(`creating Neon branch ${env.name} from ${parent?.name ?? 'main'} (${init})`);
+          log(`creating the database of ${env.name} from ${parent?.name ?? 'main'} (${env.with_data ? 'with its data' : 'tables only'})`);
           // A SQL-created reader role would make Neon refuse schema-only branches (412); the CP's
           // start-up pass (DbReaders.migrateAll) removed those once, and nothing creates them now.
           branchId = (await neon.createBranch(app.neon_project_id!, env.name, parentBranch, init)).branchId;

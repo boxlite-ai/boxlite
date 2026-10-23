@@ -77,7 +77,7 @@ export class HttpNeonClient implements NeonClient {
     let delay = 500;
     for (;;) {
       try {
-        const { body: out } = await requestJson<T>('neon', {
+        const { body: out } = await requestJson<T>('database service', {
           method,
           url: `${this.base}${path}`,
           headers: { authorization: `Bearer ${this.apiKey}` },
@@ -113,7 +113,7 @@ export class HttpNeonClient implements NeonClient {
     }
     const main = out.branch ?? out.branches?.[0];
     const uri = out.connection_uris[0]?.connection_uri;
-    if (!main || !uri) throw new UpstreamError('neon', 201, 'project create returned no branch or connection URI');
+    if (!main || !uri) throw new UpstreamError('database service', 201, 'project create returned no branch or connection URI');
     return { projectId: out.project.id, mainBranchId: main.id, host: hostOf(uri), connectionUri: uri };
   }
 
@@ -222,8 +222,8 @@ export class HttpNeonClient implements NeonClient {
       for (let i = 0; ; i++) {
         const { operation } = await this.call<{ operation: { status: string; error?: string } }>('GET', `/projects/${projectId}/operations/${op.id}`);
         if (operation.status === 'finished' || operation.status === 'skipped') break;
-        if (['failed', 'error', 'cancelled'].includes(operation.status)) throw new UpstreamError('neon', 500, `operation ${op.id} ${operation.status}: ${operation.error ?? ''}`);
-        if (i > 120) throw new UpstreamError('neon', 504, `operation ${op.id} still ${operation.status} after 60 s`);
+        if (['failed', 'error', 'cancelled'].includes(operation.status)) throw new UpstreamError('database service', 500, `operation ${op.id} ${operation.status}: ${operation.error ?? ''}`);
+        if (i > 120) throw new UpstreamError('database service', 504, `operation ${op.id} still ${operation.status} after 60 s`);
         await sleep(500);
       }
     }

@@ -47,7 +47,7 @@ export function consoleDatabaseRoutes(api: Hono, k: ConsoleKit): void {
     if (meta.status === 'none') return c.json({ status: 'none' });
     return c.json({
       status: meta.status,
-      engine: 'Postgres (Neon)',
+      engine: 'Postgres',
       host: meta.host,
       name: meta.database,
       user: meta.user,

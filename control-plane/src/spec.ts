@@ -132,8 +132,8 @@ export function diffSpecs(prev: Spec | undefined, next: Manifest, opts: { access
 
   const db0 = before?.database ?? null;
   const db1 = next.database;
-  if (!db0 && db1) out.push({ kind: '+', path: 'database', to: `neon branch ${envName}` });
-  else if (db0 && !db1) out.push({ kind: '-', path: 'database', from: `neon branch ${envName}` });
+  if (!db0 && db1) out.push({ kind: '+', path: 'database', to: `database for ${envName}` });
+  else if (db0 && !db1) out.push({ kind: '-', path: 'database', from: `database for ${envName}` });
   else if (db0 && db1 && db0.migrations !== db1.migrations) out.push({ kind: '~', path: 'database.migrations', from: db0.migrations, to: db1.migrations });
 
   if (!same(before?.auth ?? null, next.auth)) {

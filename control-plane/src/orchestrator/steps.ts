@@ -11,8 +11,8 @@ import type { Job } from './job.js';
 export function databaseStep(job: Job): Promise<{ url: string; host: string; branchId: string }> {
   const env = job.ctx.store.envById(job.envId)!;
   return job.step('database', () => job.ctx.resources.ensureDatabase(job.app.id, job.envId, (l) => job.log(l)), {
-    detail: `neon branch ${env.name}`,
-    done: (db) => `neon branch ${env.name} on ${db.host}`,
+    detail: `database for ${env.name}`,
+    done: () => `database for ${env.name} ready`,
   });
 }
 

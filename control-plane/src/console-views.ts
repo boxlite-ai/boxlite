@@ -236,7 +236,7 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
     const db = dbCoordinates(fresh.db_url);
     database = {
       status: 'ready',
-      engine: 'Postgres (Neon)',
+      engine: 'Postgres',
       host: db.host,
       name: db.database,
       user: db.user,
@@ -251,7 +251,7 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
     { name: 'BOXLITE_ENV', value: fresh.name, kind: 'Environment' },
     { name: 'BOXLITE_APP', value: app.name, kind: 'App' },
   ];
-  if (database && spec?.database) platformVariables.unshift({ name: 'DATABASE_URL', value: `postgresql://${database.user}@${database.host}/${database.name}?sslmode=require (password hidden)`, kind: 'Database' });
+  if (database && spec?.database) platformVariables.unshift({ name: 'DATABASE_URL', value: 'postgresql://•••• (managed by BoxLite; the app gets the full URL)', kind: 'Database' });
   const exposed = services.find((s) => s.exposed && !s.staticDir);
   if (exposed) platformVariables.push({ name: 'PORT', value: exposed.port ? String(exposed.port) : 'set per start', kind: `Exposed service ${exposed.name}` });
 
