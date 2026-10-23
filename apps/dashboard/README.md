@@ -218,4 +218,14 @@ can be removed but not given another role. The member whose personal
 organization this is has no remove action, because the API refuses that
 removal.
 
-The member view combines members and outgoing invitations in one table, with Member, Invited, and Expired statuses. Owners can remove members and cancel invitations. Resend first creates a replacement invitation with the current default lifetime, then cancels the expired record; creation failure preserves the old row and cleanup failure reports both records.
+Organization Settings opens two tabs. General shows the editable
+name and copyable ID. Member combines members and outgoing invitations in one
+table, with Member, Invited, and Expired statuses. Owners can invite, remove members,
+and cancel invitations. Expired invitations offer Remove (with confirmation) and
+Resend. Resending creates a new invitation with the same permissions and the current
+default lifetime, then removes the expired record. Creation failure preserves the
+old row; cleanup failure reports that the new invitation exists and refreshes both
+rows, so the owner can remove the expired one. The old link remains unusable.
+The page shows the current organization's name.
+The Member tab can be bookmarked at
+`/dashboard/settings?tab=member`.
