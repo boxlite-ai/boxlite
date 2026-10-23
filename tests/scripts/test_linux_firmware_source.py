@@ -97,16 +97,20 @@ class LinuxFirmwareSourceTest(unittest.TestCase):
                 f"cargo:rerun-if-changed={source / 'kernel.c'}", result.stdout
             )
 
-    def test_corrupt_release_never_reaches_packaging(self):
-        sys.path.insert(0, str(ROOT / "apps/infra-local"))
+
+class LinuxFirmwarePreparationTest(unittest.TestCase):
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "scripts/build"))
         try:
-            kernel = importlib.import_module("compose.kernel")
+            self.kernel = importlib.import_module("prepare_dind_firmware")
         finally:
             sys.path.pop(0)
+
+    def test_corrupt_release_never_reaches_packaging(self):
+        kernel = self.kernel
         with tempfile.TemporaryDirectory() as scratch:
-            state = Path(scratch)
+            output = Path(scratch) / "firmware"
             with (
-                patch.object(kernel, "STATE", state),
                 patch.object(
                     kernel.urllib.request,
                     "urlopen",
@@ -115,26 +119,19 @@ class LinuxFirmwareSourceTest(unittest.TestCase):
                 patch.object(kernel.subprocess, "run") as package,
             ):
                 with self.assertRaisesRegex(RuntimeError, "SHA256 mismatch"):
-                    kernel.prepare_linux()
+                    kernel.prepare_linux(output)
                 package.assert_not_called()
-                self.assertFalse((state / "firmware" / kernel.LINUX_KERNEL).exists())
+                self.assertFalse((output / kernel.LINUX_KERNEL).exists())
 
     def test_corrupt_cache_is_not_trusted(self):
-        sys.path.insert(0, str(ROOT / "apps/infra-local"))
-        try:
-            kernel = importlib.import_module("compose.kernel")
-        finally:
-            sys.path.pop(0)
+        kernel = self.kernel
         with tempfile.TemporaryDirectory() as scratch:
-            state = Path(scratch)
-            (state / "firmware").mkdir()
-            (state / "firmware" / kernel.LINUX_KERNEL).write_bytes(b"corrupt cache")
-            with (
-                patch.object(kernel, "STATE", state),
-                patch.object(kernel.subprocess, "run") as package,
-            ):
+            output = Path(scratch) / "firmware"
+            output.mkdir()
+            (output / kernel.LINUX_KERNEL).write_bytes(b"corrupt cache")
+            with patch.object(kernel.subprocess, "run") as package:
                 with self.assertRaisesRegex(RuntimeError, "Cached.*SHA256 mismatch"):
-                    kernel.prepare_linux()
+                    kernel.prepare_linux(output)
                 package.assert_not_called()
 
 
