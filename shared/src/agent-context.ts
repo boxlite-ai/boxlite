@@ -181,8 +181,12 @@ export function contextFindings(c: Omit<AgentContext, 'next_actions'>): Finding[
 
   if (c.auth.enabled) {
     const ready = c.auth.providers.filter((p) => p.status === 'ready');
-    const missing = c.auth.providers.filter((p) => p.status !== 'ready').map((p) => p.name);
-    if (!ready.length) out.push({ id: 'auth_not_ready', severity: 'error', title: `sign-in is on but no provider is configured on this platform (${missing.join(', ')})`, fix: 'nothing to do in the app: the platform admin adds the OAuth credentials; meanwhile test with `boxlite-app app auth test-session --email qa@example.com`' });
+    // email needs the App's own mail sender, which the agent sets up; the OAuth ones need the platform admin.
+    if (c.auth.providers.some((p) => p.name === 'email' && p.status !== 'ready')) {
+      out.push({ id: 'email_sender_missing', severity: ready.length ? 'warn' : 'error', title: 'email sign-in has no mail sender: visitors cannot get codes', fix: 'ask the user for an SMTP account (host, port, username, password, from address), then `printf %s "$SMTP_PASSWORD" | boxlite-app app auth email set --host <host> --port 587 --username <user> --from "<App> <no-reply@domain>" --password-stdin` and `boxlite-app app auth email test --to <their address>`' });
+    }
+    const missing = c.auth.providers.filter((p) => p.status !== 'ready' && p.name !== 'email').map((p) => p.name);
+    if (!ready.length && missing.length) out.push({ id: 'auth_not_ready', severity: 'error', title: `sign-in is on but no provider is configured on this platform (${missing.join(', ')})`, fix: 'nothing to do in the app: the platform admin adds the OAuth credentials; meanwhile test with `boxlite-app app auth test-session --email qa@example.com`' });
     else if (missing.length) out.push({ id: 'auth_partial', severity: 'info', title: `sign-in: ${missing.join(', ')} not configured on this platform; ${ready.map((p) => p.name).join(', ')} works`, fix: `remove ${missing.join(', ')} from [auth].providers in boxlite.toml, or leave it: the login page only offers ready providers` });
   }
 

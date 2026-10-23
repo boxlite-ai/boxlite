@@ -93,3 +93,22 @@ test('app auth test-session --email prints the cookie; --json returns the API bo
   const noEmail = await cli(['app', 'auth', 'test-session'], { cwd: dir, dispatcher: agent });
   assert.notEqual(noEmail.code, 0);
 });
+
+test('app auth email set takes the password from stdin only and never prints it', async () => {
+  const dir = await project(root, { '.boxlite/link.json': linkJson(1) });
+  const { agent, pool } = mockApi();
+  let sent: Record<string, unknown> = {};
+  pool
+    .intercept({ path: '/v1/apps/crm/auth/email', method: 'PUT' })
+    .reply(200, (opts) => {
+      sent = JSON.parse(String(opts.body));
+      return { configured: true, host: 'smtp.acme.com', port: 587, username: 'apikey', from: 'Acme <no-reply@acme.com>', password_set: true };
+    }, { headers: JSON_HEADERS });
+  const r = await cli(['app', 'auth', 'email', 'set', '--host', 'smtp.acme.com', '--username', 'apikey', '--from', 'Acme <no-reply@acme.com>', '--password-stdin'], { cwd: dir, dispatcher: agent, stdin: 'S3cr3t-smtp\n' });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(sent, { host: 'smtp.acme.com', port: 587, username: 'apikey', from: 'Acme <no-reply@acme.com>', password: 'S3cr3t-smtp' });
+  assert.ok(!r.stdout.includes('S3cr3t') && !r.stderr.includes('S3cr3t'));
+  assert.match(r.stdout, /sender set: smtp\.acme\.com:587/);
+  const missing = await cli(['app', 'auth', 'email', 'set', '--host', 'smtp.acme.com', '--json'], { cwd: dir, dispatcher: agent });
+  assert.equal(JSON.parse(missing.stderr).error.code, 'usage');
+});

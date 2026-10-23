@@ -82,6 +82,11 @@ h1{font-family:Inter,system-ui,sans-serif;font-size:20px;line-height:1.3;font-we
 p{margin:0 auto 4px;color:hsl(220 9% 40%);max-width:480px}
 a.btn{display:inline-block;margin-top:18px;padding:8px 14px;border:1px solid hsl(222 20% 14%);color:hsl(222 20% 14%);text-decoration:none}
 a.btn:hover{background:hsl(222 20% 14%);color:#fff}
+form.signin{display:flex;flex-direction:column;gap:8px;margin:18px auto 0;width:280px;max-width:100%}
+form.signin input{font:inherit;padding:8px 10px;border:1px solid hsl(220 13% 82%);background:#fff;color:inherit;text-align:center}
+form.signin input:focus{outline:2px solid hsl(196 100% 40% / .35);border-color:hsl(196 100% 40%)}
+form.signin button{font:inherit;padding:8px 14px;border:1px solid hsl(222 20% 14%);background:hsl(222 20% 14%);color:#fff;cursor:pointer}
+.or{margin-top:18px;font-size:11px;color:hsl(220 9% 56%)}
 a{color:hsl(196 100% 34%)}
 .hint{margin-top:28px;font-size:12px;color:hsl(220 9% 52%);max-width:480px}
 .hint a{white-space:nowrap;color:inherit}

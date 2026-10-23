@@ -62,11 +62,11 @@ test('whoami: app, key scope, env, control plane, and a newer CLI', async () => 
     `App crm · environment main · key …${KEY.slice(-4)} (scope: this App only)`,
     'Control plane https://cp.test (via http://cp.test)',
     'Environments main live',
-    'CLI 0.3.8 (latest 0.9.0)',
+    'CLI 0.3.9 (latest 0.9.0)',
     'next: update the CLI: `npm install -g http://cp.test/cli/boxlite-app.tgz`',
   ]);
   const json = JSON.parse((await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent })).stdout);
-  assert.deepEqual(json.cli, { version: '0.3.8', latest_version: '0.9.0', update_available: true, update_command: 'npm install -g http://cp.test/cli/boxlite-app.tgz' });
+  assert.deepEqual(json.cli, { version: '0.3.9', latest_version: '0.9.0', update_available: true, update_command: 'npm install -g http://cp.test/cli/boxlite-app.tgz' });
   assert.deepEqual(json.linked, { link_file: true, app: 'crm', matches_key: true });
 });
 
@@ -166,7 +166,7 @@ test('doctor runs local and online checks and ranks the problems with fixes', as
   assert.equal(checks.database, 'ok');
 
   const human = await cli(['doctor'], { cwd: dir, dispatcher: agent });
-  assert.equal(human.lines[0], 'Doctor · crm/main · CLI 0.3.8');
+  assert.equal(human.lines[0], 'Doctor · crm/main · CLI 0.3.9');
   assert.match(human.lines[1] ?? '', /^x error deployment #3 failed at start: web answers 404 on its health path \/healthz/);
   assert.match(human.lines.at(-1) ?? '', /^next: add a route GET \/healthz/);
 });

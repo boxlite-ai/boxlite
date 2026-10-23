@@ -19,6 +19,7 @@
     "croner": "^9.1.0",
     "hono": "^4.10.0",
     "libpg-query": "17.7.3",
+    "nodemailer": "^10.2.1",
     "pg": "^8.16.0",
     "pg-copy-streams": "^7.0.0",
     "pg-cursor": "^2.22.1",
@@ -28,6 +29,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8.15.0",
     "@types/pg-copy-streams": "^1.2.5",
     "@types/pg-cursor": "^2.7.2",

@@ -16,10 +16,10 @@ test('a database that counted past the open_tickets migration without running it
     const path = join(dir, 'cp.db');
     new Store(path).db.close();
     const db = new DatabaseSync(path);
-    const latest = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
     db.exec('ALTER TABLE open_tickets DROP COLUMN as_email; ALTER TABLE open_tickets DROP COLUMN as_role; ALTER TABLE app_sessions DROP COLUMN role');
-    // What dev ran: everything up to and including the open_tickets slot, not the session role or the repair.
-    db.exec(`PRAGMA user_version = ${latest - 2}`);
+    // What dev ran: the first 13 migrations, up to and including the open_tickets slot, not the
+    // session role or the repair (an absolute count, so later migrations do not move it).
+    db.exec('PRAGMA user_version = 13');
     db.close();
 
     const store = new Store(path);

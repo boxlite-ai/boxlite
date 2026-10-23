@@ -200,7 +200,7 @@ export function onlineChecks(m: Manifest, ctx: OnlineCheckContext): { errors: Ch
   if (!BOX_SIZES[m.runtime.size]) err('size_not_allowed', `[runtime].size "${m.runtime.size}" is not available; use one of ${Object.keys(BOX_SIZES).join(', ')}`);
   for (const p of m.auth?.providers ?? []) {
     if (!SUPPORTED_AUTH_PROVIDERS.includes(p)) err('invalid_auth', `[auth] provider "${p}" is unknown; use one of ${SUPPORTED_AUTH_PROVIDERS.join(', ')}`);
-    else if (!(ctx.configuredProviders ?? []).includes(p)) warnings.push({ rule: 'auth_provider_not_configured', message: `${p}: not configured on this platform yet` });
+    else if (!(ctx.configuredProviders ?? []).includes(p)) warnings.push({ rule: 'auth_provider_not_configured', message: p === 'email' ? 'email: the App has no mail sender yet; ask the user for an SMTP account and run `boxlite-app app auth email set`' : `${p}: not configured on this platform yet` });
   }
   for (const v of m.volumes) {
     // Sharing a volume from another env needs read-only mounts, which the platform rejects today.

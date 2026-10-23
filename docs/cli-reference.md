@@ -1,6 +1,6 @@
 # boxlite-app CLI reference
 
-Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.8); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
+Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.9); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
 
 ## Conventions
 
@@ -924,6 +924,31 @@ Usage: `boxlite-app app auth users [action] [email] [options]`
 - Network: talks to the control plane
 - `--json`: `AuthUser[] ({ id, email, name, provider, first_seen, last_seen, blocked, active_sessions })`
 - Exit codes: 0, 1, 2, 3, 4
+
+### `boxlite-app app auth email`
+
+the App's SMTP sender for email code sign-in: show; set (password from stdin, never an argument); test --to; rm
+
+Usage: `boxlite-app app auth email [action] [options]`
+
+| option | description | default |
+|---|---|---|
+| `--host <host>` | SMTP server of the mail provider (set) |  |
+| `--port <port>` | 587 (STARTTLS, default) or 465 (TLS) (set) |  |
+| `--username <user>` | SMTP username (set) |  |
+| `--from <address>` | "App <no-reply@domain>" (set) |  |
+| `--password-stdin` | read the SMTP password from stdin (set) |  |
+| `--to <address>` | where the test email goes (test) |  |
+| `-y, --yes` | skip the confirmation (rm) |  |
+
+- Network: talks to the control plane
+- `--json`: `{ configured, host, port, username, from, password_set } (show, set) · { sent, to, ms } (test) · { removed } (rm)`
+- Exit codes: 0, 1, 2, 3, 10
+
+```sh
+printf %s "$SMTP_PASSWORD" | boxlite-app app auth email set --host smtp.sendgrid.net --port 587 --username apikey --from "Acme <no-reply@acme.com>" --password-stdin
+boxlite-app app auth email test --to owner@acme.com
+```
 
 ### `boxlite-app app auth test-session`
 

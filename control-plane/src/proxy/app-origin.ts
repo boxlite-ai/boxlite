@@ -22,6 +22,26 @@ import { gatePage, page } from './pages.js';
  */
 
 /** Every request that arrives on an env's own port (server.ts dispatches by local port). */
+/** A sign-in form post: a few fields, so anything over 8 KB is refused unread. */
+async function signInForm(req: Request): Promise<URLSearchParams> {
+  const limit = 8192;
+  if (!req.body || Number(req.headers.get('content-length') ?? 0) > limit) return new URLSearchParams();
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      return new URLSearchParams();
+    }
+    chunks.push(value);
+  }
+  return new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+}
+
 export async function serveAppOrigin(ctx: Ctx, c: Context, env: EnvRow): Promise<Response> {
   const url = new URL(c.req.url);
   const app = ctx.store.appById(env.app_id);
@@ -39,7 +59,7 @@ export async function serveAppOrigin(ctx: Ctx, c: Context, env: EnvRow): Promise
   if (!gate.ok) return gate.refusal ?? gatePage(ctx, app, env, gate.access, headers);
   if (gate.stripAuthorization) headers.delete('authorization');
 
-  const identity = await identityFor(ctx, { method: c.req.method, url, headers }, app, env);
+  const identity = await identityFor(ctx, { method: c.req.method, url, headers, form: () => signInForm(c.req.raw) }, app, env);
   if (isResponse(identity)) return identity;
 
   const incoming = (c.env as { incoming?: IncomingMessage } | undefined)?.incoming;

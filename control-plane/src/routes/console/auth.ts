@@ -7,7 +7,8 @@ import { z } from 'zod';
 import { now } from '../../db.js';
 import { fail } from '../../errors.js';
 import { OAUTH_PROVIDERS, appleKeyOf } from '../../oauth-providers.js';
-import type { ConsoleKit } from './kit.js';
+import { removeSender, sendMail, senderOf, setSender } from '../../enduser/email-sender.js';
+import { actorOf, type ConsoleKit } from './kit.js';
 
 export function consoleAuthRoutes(api: Hono, k: ConsoleKit): void {
   const { ctx, appOf, envOf } = k;
@@ -28,6 +29,41 @@ export function consoleAuthRoutes(api: Hono, k: ConsoleKit): void {
   api.get('/apps/:id/auth', async (c) => {
     const app = appOf(c);
     return c.json(await authView(app, envOf(c, app), c.req.query('search') || undefined));
+  });
+
+  // ---- the App's mail sender for email code sign-in (docs/email-sign-in.md) -------------
+
+  api.put('/apps/:id/auth/email', async (c) => {
+    const app = appOf(c);
+    const b = await k.json(
+      c,
+      z.object({
+        host: z.string().trim().min(1).max(253),
+        port: z.number().int().min(1).max(65535),
+        username: z.string().trim().max(320).nullable().optional(),
+        // Left out: keep the saved password.
+        password: z.string().max(1024).optional(),
+        from: z.string().trim().min(3).max(320),
+      }),
+    );
+    setSender(ctx, app, b, actorOf(k.viewer(c)));
+    return c.json(await authView(app, envOf(c, app)));
+  });
+
+  api.delete('/apps/:id/auth/email', async (c) => {
+    const app = appOf(c);
+    removeSender(ctx, app, actorOf(k.viewer(c)));
+    return c.json(await authView(app, envOf(c, app)));
+  });
+
+  api.post('/apps/:id/auth/email/test', async (c) => {
+    const app = appOf(c);
+    const b = await k.json(c, z.object({ to: z.string().trim().regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'must be an email address').max(254) }));
+    const sender = senderOf(ctx, app);
+    if (!sender) throw fail('not_found', 'this App has no mail sender yet', 'set it up first');
+    const out = await sendMail(ctx, sender, { to: b.to, subject: `Test email from ${app.name} on BoxLite`, text: `This is a test of the sign-in email sender of ${app.name}. Sign-in codes will come from ${sender.from}.\n` });
+    store.recordActivity(app.id, null, actorOf(k.viewer(c)), 'auth.email.test', { to: b.to });
+    return c.json({ sent: true, to: b.to, ms: out.ms });
   });
 
   /**

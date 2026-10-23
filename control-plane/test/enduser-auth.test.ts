@@ -723,3 +723,164 @@ test('two test sessions of one email keep their own roles', async () => {
   assert.equal(await roleWith(owner), 'owner', 'a later plain session does not demote the owner session');
   assert.equal(await roleWith(plain), 'user');
 });
+
+// ---- email code sign-in (docs/email-sign-in.md) ------------------------------------
+
+/** A minimal SMTP server: AUTH PLAIN/LOGIN with one account, keeps every message it accepts. */
+async function fakeSmtp(account = { user: 'mailer', pass: 'm4il' }) {
+  const { createServer: tcp } = await import('node:net');
+  const mails: { to: string; data: string }[] = [];
+  const server = tcp((sock) => {
+    let buf = '';
+    let to = '';
+    let data: string | null = null;
+    let loginUser: string | null | undefined;
+    sock.write('220 fake.smtp ESMTP\r\n');
+    sock.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      let i: number;
+      while ((i = buf.indexOf('\r\n')) >= 0) {
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        if (data !== null) {
+          if (line === '.') {
+            mails.push({ to, data });
+            data = null;
+            sock.write('250 queued\r\n');
+          } else data += `${line}\n`;
+          continue;
+        }
+        const ok = (u: string, p: string) => (u === account.user && p === account.pass ? '235 ok\r\n' : '535 5.7.8 Authentication credentials invalid\r\n');
+        if (loginUser === null) {
+          loginUser = Buffer.from(line, 'base64').toString();
+          sock.write('334 UGFzc3dvcmQ6\r\n');
+        } else if (loginUser !== undefined) {
+          sock.write(ok(loginUser, Buffer.from(line, 'base64').toString()));
+          loginUser = undefined;
+        } else if (/^(EHLO|HELO)/i.test(line)) sock.write('250-fake.smtp\r\n250 AUTH PLAIN LOGIN\r\n');
+        else if (/^AUTH PLAIN /i.test(line)) {
+          const [, u, p] = Buffer.from(line.slice(11), 'base64').toString().split('\0');
+          sock.write(ok(u ?? '', p ?? ''));
+        } else if (/^AUTH LOGIN/i.test(line)) {
+          loginUser = null;
+          sock.write('334 VXNlcm5hbWU6\r\n');
+        } else if (/^MAIL FROM/i.test(line)) sock.write('250 ok\r\n');
+        else if (/^RCPT TO:<(.*)>/i.test(line)) {
+          to = /<(.*)>/.exec(line)![1]!;
+          sock.write('250 ok\r\n');
+        } else if (/^DATA/i.test(line)) {
+          data = '';
+          sock.write('354 go\r\n');
+        } else if (/^QUIT/i.test(line)) sock.end('221 bye\r\n');
+        else sock.write('250 ok\r\n');
+      }
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const port = (server.address() as AddressInfo).port;
+  return { port, mails, close: () => server.close(), codeFor: (to: string) => /code is (\d{6})/.exec(mails.filter((m) => m.to === to).at(-1)?.data ?? '')?.[1] };
+}
+
+/** The browser of one person: carries its cookies from response to response. */
+function browser() {
+  const jar = new Map<string, string>();
+  return {
+    cookie: () => [...jar].map(([k, v]) => `${k}=${v}`).join('; '),
+    keep(res: Response) {
+      for (const c of res.headers.getSetCookie()) {
+        const [pair] = c.split(';');
+        const [k, v] = pair!.split('=');
+        if (v) jar.set(k!, v);
+        else jar.delete(k!);
+      }
+      return res;
+    },
+  };
+}
+
+const form = (fields: Record<string, string>) => new URLSearchParams(fields).toString();
+const post = (path: string, b: ReturnType<typeof browser>, fields: Record<string, string>, origin = APP_URL) =>
+  h.appRequest(path, { method: 'POST', body: form(fields), headers: { 'content-type': 'application/x-www-form-urlencoded', origin, cookie: b.cookie() } }).then((r) => b.keep(r));
+
+test('email sign-in: the owner sets a sender, a visitor gets a code by mail and signs in with it', async () => {
+  const smtp = await fakeSmtp();
+  try {
+    const { key } = await setup({ auth: { providers: ['email'], protect: ['/app'] } });
+    h.ctx.config.smtpAllowPrivate = true;
+    assert.equal((await h.appRequest('/.boxlite/auth/login?next=/app')).status, 503, 'no sender yet: sign-in is not available');
+    const st0 = (await (await h.request('/v1/apps/crm/envs/main/auth', { key })).json()) as { providers: { name: string; status: string }[] };
+    assert.deepEqual(st0.providers, [{ name: 'email', status: 'not_configured' }]);
+
+    const set = await h.request('/v1/apps/crm/auth/email', { method: 'PUT', key, json: { host: '127.0.0.1', port: smtp.port, username: 'mailer', password: 'm4il', from: 'CRM <no-reply@crm.test>' } });
+    assert.equal(set.status, 200, await set.clone().text());
+    const view = (await (await h.request('/v1/apps/crm/auth/email', { key })).json()) as Record<string, unknown>;
+    assert.deepEqual(view, { configured: true, host: '127.0.0.1', port: smtp.port, username: 'mailer', from: 'CRM <no-reply@crm.test>', password_set: true });
+    assert.ok(!JSON.stringify(view).includes('m4il'), 'the password is never returned');
+    const tried = await h.request('/v1/apps/crm/auth/email/test', { method: 'POST', key, json: { to: 'owner@crm.test' } });
+    assert.equal(tried.status, 200, await tried.clone().text());
+    assert.equal(smtp.mails.at(-1)?.to, 'owner@crm.test');
+
+    const b = browser();
+    const page = await (await h.appRequest('/.boxlite/auth/login?next=/app')).text();
+    assert.match(page, /action="\/.boxlite\/auth\/email\/start"/);
+    const started = await post('/.boxlite/auth/email/start', b, { email: 'Ann@Example.com', next: '/app' });
+    assert.equal(started.status, 200, await started.clone().text());
+    assert.match(await started.text(), /6-digit code to <b>ann@example.com<\/b>/);
+    const code = smtp.codeFor('ann@example.com');
+    assert.ok(code, 'the mail carries the code');
+    assert.ok(!(h.ctx.store.all<{ line: string }>('SELECT line FROM logs').map((l) => l.line).join('\n')).includes(code!), 'the code is never logged');
+
+    const wrong = await post('/.boxlite/auth/email/verify', b, { email: 'ann@example.com', code: code === '000000' ? '111111' : '000000', next: '/app' });
+    assert.equal(wrong.status, 400);
+    assert.match(await wrong.text(), /4 tries left/);
+    const otherBrowser = await post('/.boxlite/auth/email/verify', browser(), { email: 'ann@example.com', code: code!, next: '/app' });
+    assert.equal(otherBrowser.status, 400, 'a code only works in the browser that asked for it');
+
+    const ok = await post('/.boxlite/auth/email/verify', b, { email: 'ann@example.com', code: code!, next: '/app' });
+    assert.equal(ok.status, 302, await ok.clone().text());
+    assert.equal(ok.headers.get('location'), '/app');
+    const me = (await (await h.appRequest('/.boxlite/auth/me', { headers: { cookie: b.cookie() } })).json()) as { email: string; provider: string };
+    assert.deepEqual([me.email, me.provider], ['ann@example.com', 'email']);
+    assert.equal((await post('/.boxlite/auth/email/verify', b, { email: 'ann@example.com', code: code!, next: '/app' })).status, 400, 'single use');
+    const st = (await (await h.request('/v1/apps/crm/envs/main/auth', { key })).json()) as { providers: { name: string; status: string }[]; users: number };
+    assert.deepEqual([st.providers, st.users], [[{ name: 'email', status: 'ready' }], 1]);
+  } finally {
+    smtp.close();
+  }
+});
+
+test('email sign-in refuses other origins, rate-limits codes, and explains SMTP failures', async () => {
+  const smtp = await fakeSmtp();
+  try {
+    const { key } = await setup({ auth: { providers: ['email'], protect: ['/app'] } });
+    h.ctx.config.smtpAllowPrivate = true;
+    const put = (json: Record<string, unknown>) => h.request('/v1/apps/crm/auth/email', { method: 'PUT', key, json });
+    assert.equal((await put({ host: '127.0.0.1', port: smtp.port, username: 'mailer', password: 'wrong', from: 'no-reply@crm.test' })).status, 200);
+    const refused = await h.request('/v1/apps/crm/auth/email/test', { method: 'POST', key, json: { to: 'owner@crm.test' } });
+    const err = ((await refused.json()) as { error: { code: string; message: string; next: string } }).error;
+    assert.equal(refused.status, 502);
+    assert.equal(err.code, 'smtp_error');
+    assert.match(err.message, /535/);
+    assert.match(err.next, /username or password/);
+
+    // A sign-in whose mail fails tells the visitor plainly and the owner (Logs) exactly.
+    const failed = await post('/.boxlite/auth/email/start', browser(), { email: 'bob@example.com', next: '/' });
+    assert.equal(failed.status, 502);
+    assert.ok(h.ctx.store.all<{ line: string }>("SELECT line FROM logs WHERE source = 'auth'").some((l) => /not sent: .*535.*username or password/.test(l.line)));
+
+    assert.equal((await put({ host: '127.0.0.1', port: smtp.port, username: 'mailer', from: 'no-reply@crm.test', password: 'm4il' })).status, 200);
+    assert.equal((await post('/.boxlite/auth/email/start', browser(), { email: 'bob@example.com', next: '/' }, 'https://evil.test')).status, 403, 'another site cannot start a sign-in');
+    for (let i = 0; i < 5; i++) assert.equal((await post('/.boxlite/auth/email/start', browser(), { email: 'bob@example.com', next: '/' })).status, 200);
+    assert.equal((await post('/.boxlite/auth/email/start', browser(), { email: 'bob@example.com', next: '/' })).status, 429, 'five codes per address per hour');
+
+    // Off a development CP, the sender must be a public mail server and a mail port.
+    h.ctx.config.smtpAllowPrivate = false;
+    const priv = await h.request('/v1/apps/crm/auth/email/test', { method: 'POST', key, json: { to: 'owner@crm.test' } });
+    assert.match(((await priv.json()) as { error: { message: string } }).error.message, /not a public address/);
+    assert.equal((await put({ host: 'smtp.example.com', port: 8080, from: 'no-reply@crm.test' })).status, 400);
+    assert.equal((await h.request('/v1/apps/crm/auth/email', { method: 'DELETE', key })).status, 200);
+    assert.equal((await h.appRequest('/.boxlite/auth/login')).status, 503, 'without a sender, email sign-in is gone');
+  } finally {
+    smtp.close();
+  }
+});

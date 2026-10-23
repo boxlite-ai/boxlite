@@ -1,4 +1,5 @@
 import { configuredProviders, oauthClientFor } from './enduser/config.js';
+import { senderOf, senderView } from './enduser/email-sender.js';
 import type { AppRow, EnvRow } from './db.js';
 import type { Ctx } from './ctx.js';
 import * as enduser from './enduser/management.js';
@@ -49,9 +50,19 @@ export interface AuthStatusView {
   loginUrl: string;
   users: number;
   note: string | null;
+  /** The App's SMTP sender for email code sign-in (never the password). */
+  emailSender: { configured: boolean; host: string | null; port: number | null; username: string | null; from: string | null; passwordSet: boolean };
 }
 
 const ACTOR = 'console';
+
+/** What the declared but unusable providers still need, in the owner's words. */
+function noteFor(missing: string[]): string {
+  const oauth = missing.filter((p) => p !== 'email');
+  const parts = oauth.length ? [`${oauth.map((p) => OAUTH_PROVIDERS[p]?.label ?? p).join(', ')} ${oauth.length === 1 ? 'needs' : 'need'} an OAuth app before anyone can sign in with ${oauth.length === 1 ? 'it' : 'them'}`] : [];
+  if (missing.includes('email')) parts.push('email sign-in needs a mail sender before anyone can get a code');
+  return parts.join('; ');
+}
 
 function userView(u: UserView): EndUserView {
   return { id: u.id, email: u.email, name: u.name, provider: u.provider, firstSeen: u.first_seen, lastSeen: u.last_seen, sessions: u.active_sessions, blocked: u.blocked };
@@ -85,7 +96,8 @@ export const endUserAuth = {
       methods,
       loginUrl: s.login_url,
       users: s.users,
-      note: s.enabled && missing.length ? `${missing.map((p) => OAUTH_PROVIDERS[p]?.label ?? p).join(', ')} ${missing.length === 1 ? 'needs' : 'need'} an OAuth app before anyone can sign in with ${missing.length === 1 ? 'it' : 'them'}` : null,
+      note: s.enabled && missing.length ? noteFor(missing) : null,
+      emailSender: (({ password_set, ...v }) => ({ ...v, passwordSet: password_set }))(senderView(senderOf(ctx, app))),
     };
   },
   async listUsers(ctx: Ctx, app: AppRow, env: EnvRow, search?: string): Promise<EndUserView[]> {

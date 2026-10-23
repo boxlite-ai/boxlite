@@ -401,6 +401,31 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     if (!columns.includes('as_email')) db.exec('ALTER TABLE open_tickets ADD COLUMN as_email TEXT');
     if (!columns.includes('as_role')) db.exec('ALTER TABLE open_tickets ADD COLUMN as_role TEXT');
   },
+  // Email code sign-in (docs/email-sign-in.md): the App's SMTP sender, and the codes mailed to end users.
+  `
+  CREATE TABLE IF NOT EXISTS app_email_senders (
+    app_id TEXT PRIMARY KEY,
+    host TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    username TEXT,
+    password TEXT,
+    from_address TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS auth_email_codes (
+    id TEXT PRIMARY KEY,
+    env_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    browser_hash TEXT NOT NULL,
+    next TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS auth_email_codes_by_email ON auth_email_codes (env_id, email, created_at);
+  `,
 ];
 
 export const LOG_RING_SIZE = 20_000;

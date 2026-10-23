@@ -14,11 +14,14 @@ import { htmlPage, noAccessPage, redirect, unauthenticated, wantsHtml } from './
 import { isProtected, normalisePath, safeNext } from './paths.js';
 import { roleOf } from './role.js';
 import { createSession, sessionUser, type AppUser } from './sessions.js';
+import { emailForm, emailReady, startEmail, verifyEmail } from './email-code.js';
 
 export interface ProxyRequest {
   method: string;
   url: URL;
   headers: Headers;
+  /** The urlencoded form body; read only by the sign-in routes that take a POST, so other bodies still reach the app. */
+  form?: () => Promise<URLSearchParams>;
 }
 
 /**
@@ -68,6 +71,11 @@ function authRoute(ctx: Ctx, req: ProxyRequest, app: AppRow, env: EnvRow, route:
     return Response.json({ id: user.id, email: user.email, name: user.name, provider: user.provider, role: roleOf(ctx, app, user), avatar_url: user.avatar_url }, { headers: { 'cache-control': 'no-store' } });
   }
   if (route === '/complete') return complete(ctx, req, app, env);
+  if (route === '/email/start' || route === '/email/verify') {
+    if (req.method !== 'POST' || !req.form || !providers.includes('email')) return htmlPage('Not found', '<h1>Not found</h1>', 404);
+    const form = req.form;
+    return (async () => (route === '/email/start' ? startEmail : verifyEmail)(ctx, app, env, req.headers, await form()))();
+  }
   const next = safeNext(q.get('next'));
   if (next === null) return htmlPage('Bad sign-in link', '<h1>This sign-in link is not valid</h1><p>Go back to the site and sign in again.</p>', 400);
   if (route === '/logout') {
@@ -78,18 +86,21 @@ function authRoute(ctx: Ctx, req: ProxyRequest, app: AppRow, env: EnvRow, route:
   if (route !== '/login') return htmlPage('Not found', '<h1>Not found</h1>', 404);
 
   if (sessionUser(ctx, env, readCookie(req.headers, hostCookieName(SESSION_COOKIE_NAME, secure)))) return redirect(next);
-  const ready = providers.filter((p) => oauthClientFor(ctx, app, p));
+  const ready = providers.filter((p) => (p === 'email' ? emailReady(ctx, app) : oauthClientFor(ctx, app, p)));
   if (!ready.length) {
     return htmlPage('Sign-in unavailable', '<h1>Sign-in is not available yet</h1><p>The site owner has not finished setting it up.</p>', 503);
   }
   const asked = q.get('provider');
   if (asked !== null && !ready.includes(asked)) return htmlPage('Sign-in unavailable', `<h1>${escapeHtml(OAUTH_PROVIDERS[asked]?.label ?? asked)} sign-in is not available on this site</h1>`, 400);
-  const provider = asked ?? (ready.length === 1 ? ready[0]! : null);
+  const oauth = ready.filter((p) => p !== 'email');
+  // A single OAuth provider and nothing else goes straight there; email needs this page's form.
+  const provider = asked && asked !== 'email' ? asked : !asked && ready.length === 1 && oauth.length === 1 ? oauth[0]! : null;
   if (!provider) {
-    const buttons = ready
+    const buttons = (asked === 'email' ? [] : oauth)
       .map((p) => `<a class="btn" href="${escapeHtml(`/.boxlite/auth/login?provider=${p}&next=${encodeURIComponent(next)}`)}">Continue with ${escapeHtml(OAUTH_PROVIDERS[p]!.label)}</a>`)
       .join('');
-    return htmlPage('Sign in', `<h1>Sign in to continue</h1>${buttons}`, 200);
+    const email = ready.includes('email') ? `${buttons ? '<p class="or">or</p>' : ''}${emailForm(next)}` : '';
+    return htmlPage('Sign in', `<h1>Sign in to continue</h1>${buttons}${email}`, 200);
   }
   // The provider's registered callback is on the API origin, so the PKCE verifier has to be set there.
   const nonce = randomBytes(24).toString('base64url');

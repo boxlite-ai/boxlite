@@ -1,7 +1,8 @@
 export type Image = 'base' | 'python' | 'node';
 export type Size = 'nano' | 'small' | 'medium' | 'large';
 export type Access = 'private' | 'org' | 'public';
-export type AuthProvider = 'google' | 'github' | 'microsoft' | 'apple' | 'x' | 'facebook';
+/** OAuth providers, and `email`: a code mailed through the App's own SMTP sender (docs/email-sign-in.md). */
+export type AuthProvider = 'google' | 'github' | 'microsoft' | 'apple' | 'x' | 'facebook' | 'email';
 export type VolumeMode = 'rw' | 'ro';
 
 export const IMAGES: readonly Image[] = ['base', 'python', 'node'];
@@ -12,7 +13,7 @@ export const SIZES: Record<Size, { cpus: number; memory_mib: number }> = {
   large: { cpus: 4, memory_mib: 8192 },
 };
 export const ACCESS_LEVELS: readonly Access[] = ['private', 'org', 'public'];
-export const AUTH_PROVIDERS: readonly AuthProvider[] = ['google', 'github', 'microsoft', 'apple', 'x', 'facebook'];
+export const AUTH_PROVIDERS: readonly AuthProvider[] = ['google', 'github', 'microsoft', 'apple', 'x', 'facebook', 'email'];
 
 export const APP_NAME_RE = /^[a-z][a-z0-9-]{1,30}$/;
 export const SERVICE_NAME_RE = /^[a-z][a-z0-9-]{0,30}$/;

@@ -55,6 +55,7 @@ STAGE=$(mktemp -d)
 mkdir -p "$STAGE/cp/control-plane/dist" "$STAGE/cp/control-plane/node_modules" "$STAGE/cp/supervisor/bin" "$STAGE/cp/agent" "$STAGE/cp/cli" "$STAGE/cp/console-dist"
 cp -R "$ROOT/control-plane/dist/." "$STAGE/cp/control-plane/dist/"
 cp "$ROOT/agent/SKILL.md" "$ROOT/agent/prompt-template.md" "$STAGE/cp/agent/"
+cp "$ROOT/deploy/smtp-sink.mjs" "$STAGE/cp/"
 # Third-party files the console serves itself (control-plane/vendor/*/README.md).
 cp -R "$ROOT/control-plane/vendor" "$STAGE/cp/control-plane/vendor"
 if [ "$CP_ONLY" != 1 ]; then
@@ -88,6 +89,8 @@ GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
 GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
 GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
 GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+# This script deploys the dev CP: an App's mail sender may be the SMTP sink on 127.0.0.1:2525 (deploy/smtp-sink.mjs).
+SMTP_ALLOW_PRIVATE=1
 EOF
 ( cd "$STAGE" && COPYFILE_DISABLE=1 tar --no-mac-metadata -czf bundle.tgz cp )
 bl cp "$STAGE/bundle.tgz" "$BOX:/home/boxlite/bundle.tgz"
@@ -96,6 +99,8 @@ bl cp "$STAGE/bundle.tgz" "$BOX:/home/boxlite/bundle.tgz"
 CLEAN="rm -rf cp/control-plane/dist"; [ "$CP_ONLY" = 1 ] || CLEAN="$CLEAN cp/console-dist"
 bl exec "$BOX" -- sh -c "mkdir -p /home/boxlite/cp/data && cd /home/boxlite && $CLEAN && tar xzf bundle.tgz && chmod 600 cp/cp.env && pkill -f '^node dist/server.mjs' || true" || true
 rm -rf "$STAGE"
+# Dev only: the SMTP sink the email sign-in e2e reads codes from (started once; it survives CP restarts).
+bl exec "$BOX" -- sh -c 'pgrep -f smtp-sink.mjs >/dev/null || setsid nohup node /home/boxlite/cp/smtp-sink.mjs >> /home/boxlite/cp/smtp-sink.log 2>&1 < /dev/null &' || echo "   smtp sink not started; email sign-in e2e will fail"
 
 # The console's app screenshots (preview.ts) render in Debian's Chromium; installed once per Box.
 [ "$CP_ONLY" = 1 ] || bl exec "$BOX" -- sh -c 'command -v chromium >/dev/null || { sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq chromium fonts-noto-core fonts-noto-cjk >/dev/null; }' || echo "   chromium not installed; app screenshots stay off"

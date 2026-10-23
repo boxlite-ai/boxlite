@@ -3,6 +3,7 @@ import type { AppRow, EnvRow } from '../db.js';
 import type { Ctx } from '../ctx.js';
 import { hostCookieName, isSecureUrl } from '../http/cookies.js';
 import { OAUTH_PROVIDERS } from '../oauth-providers.js';
+import { senderOf } from './email-sender.js';
 
 export const STATE_TTL_S = 10 * 60;
 /** Idle timeout: each use pushes `expires_at` this far out. */
@@ -61,9 +62,10 @@ export function oauthClientFor(ctx: Pick<Ctx, 'store' | 'config'>, app: AppRow, 
   return shared ? { ...shared, own: false } : undefined;
 }
 
-/** Providers an App's sign-in can use: its own OAuth apps plus BoxLite's. */
+/** Providers an App's sign-in can use: its own OAuth apps plus BoxLite's, and `email` once it has a sender. */
 export function appProviders(ctx: Pick<Ctx, 'store' | 'config'>, app: AppRow): string[] {
-  return Object.keys(OAUTH_PROVIDERS).filter((p) => oauthClientFor(ctx, app, p));
+  const oauth = Object.keys(OAUTH_PROVIDERS).filter((p) => oauthClientFor(ctx, app, p));
+  return senderOf(ctx, app) ? [...oauth, 'email'] : oauth;
 }
 
 /**

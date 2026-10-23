@@ -126,3 +126,13 @@ test('a Box near its memory limit names the hungriest service and the next size;
   c.box.usage = { memory_total_bytes: 2 * GiB, memory_available_bytes: GiB, disk_total_bytes: 10 * GiB, disk_free_bytes: 5 * GiB };
   assert.deepEqual(contextFindings(c), []);
 });
+
+test('email sign-in without a mail sender asks the agent for SMTP details, not the platform admin', () => {
+  const c = base();
+  c.auth = { enabled: true, providers: [{ name: 'email', status: 'not_configured' }], protect: ['/app'], login_url: '', users: 0 };
+  const f = contextFindings(c);
+  assert.deepEqual(f.map((x) => [x.id, x.severity]), [['email_sender_missing', 'error']]);
+  assert.match(f[0]!.fix, /app auth email set .*--password-stdin/);
+  c.auth.providers.push({ name: 'github', status: 'ready' });
+  assert.deepEqual(contextFindings(c).map((x) => [x.id, x.severity]), [['email_sender_missing', 'warn']]);
+});

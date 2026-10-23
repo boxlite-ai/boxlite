@@ -7,6 +7,7 @@ import { describe } from '../meta.js';
 import { roleOption } from './curl.js';
 import { forgetSessions } from '../local-cache.js';
 import { formatAgo, table } from '../output.js';
+import { readStdin } from './common.js';
 
 async function status(ctx: Ctx): Promise<void> {
   const s = await (await ctx.appApi()).authStatus();
@@ -16,7 +17,7 @@ async function status(ctx: Ctx): Promise<void> {
     ctx.out.next('add [auth] with the providers `boxlite-app whoami` lists as working, e.g. providers = ["github"], then `boxlite-app apply --yes`');
     return;
   }
-  ctx.out.line(`sign-in on · ${s.providers.map((p) => `${p.name} ${p.status === 'ready' ? 'ready' : 'not configured on this platform yet'}`).join(' · ')}`);
+  ctx.out.line(`sign-in on · ${s.providers.map((p) => `${p.name} ${p.status === 'ready' ? 'ready' : p.name === 'email' ? 'needs a mail sender (`app auth email set`)' : 'not configured on this platform yet'}`).join(' · ')}`);
   ctx.out.line(`  protect  ${s.protect.length ? s.protect.join(' ') : '(none: pages decide themselves)'}`);
   ctx.out.line(`  login    ${s.login_url}`);
   ctx.out.line(`  users    ${s.users}`);
@@ -88,8 +89,53 @@ async function testSession(ctx: Ctx, opts: { email: string; role?: string }): Pr
   ctx.out.next(`curl -H 'Cookie: ${s.cookie}' "<app url>/<protected path>"`);
 }
 
+const SET_EMAIL = 'printf %s "$SMTP_PASSWORD" | boxlite-app app auth email set --host <smtp host> --port 587 --username <user> --from "App <no-reply@domain>" --password-stdin';
+
+async function email(ctx: Ctx, action: string | undefined, opts: { host?: string; port?: string; username?: string; from?: string; passwordStdin?: boolean; to?: string }): Promise<void> {
+  const api = await ctx.appApi();
+  if (!action) {
+    const s = await api.emailSender();
+    ctx.out.data(s);
+    if (!s.configured) {
+      ctx.out.line('no sender: email sign-in is not available until the App has one');
+      ctx.out.next(`ask the user for an SMTP account (host, port, username, password, from address), then \`${SET_EMAIL}\``);
+      return;
+    }
+    ctx.out.line(`sender ${s.host}:${s.port} · from ${s.from}${s.username ? ` · user ${s.username}` : ''} · password ${s.password_set ? 'set' : 'none'}`);
+    ctx.out.next('`boxlite-app app auth email test --to <address>` sends a test email');
+    return;
+  }
+  if (action === 'set') {
+    if (!opts.host || !opts.from) throw new MicrocloudError('usage', 'set needs --host and --from', `\`${SET_EMAIL}\``);
+    const port = Number(opts.port ?? 587);
+    if (!Number.isInteger(port)) throw new MicrocloudError('usage', `--port must be a number (got "${opts.port}")`, 'use 587 (STARTTLS) or 465 (TLS)');
+    const password = opts.passwordStdin ? (await readStdin(ctx)).replace(/\r?\n$/, '') : undefined;
+    const s = await api.setEmailSender({ host: opts.host, port, username: opts.username ?? null, from: opts.from, ...(password !== undefined ? { password } : {}) });
+    ctx.out.data(s);
+    ctx.out.line(`sender set: ${s.host}:${s.port} · from ${s.from} · password ${s.password_set ? 'set' : 'none'}`);
+    ctx.out.next('check it before relying on it: `boxlite-app app auth email test --to <the user\'s address>`; then add "email" to [auth].providers');
+    return;
+  }
+  if (action === 'test') {
+    if (!opts.to) throw new MicrocloudError('usage', 'test needs --to <address>', '`boxlite-app app auth email test --to you@example.com`');
+    const r = await api.testEmailSender(opts.to);
+    ctx.out.data(r);
+    ctx.out.line(`sent a test email to ${r.to} in ${r.ms} ms`);
+    ctx.out.next('ask the user whether it arrived (and not in spam)');
+    return;
+  }
+  if (action === 'rm') {
+    if (!(await ctx.confirmDestructive({ action: 'remove the sign-in email sender', destroys: ['email code sign-in (visitors can no longer get codes)'], undo: `set it again: \`${SET_EMAIL}\`` }))) return;
+    const r = await api.removeEmailSender();
+    ctx.out.data(r);
+    ctx.out.line(r.removed ? 'removed the sender' : 'there was no sender');
+    return;
+  }
+  throw new MicrocloudError('usage', `unknown action "${action}"`, 'use `app auth email`, `email set`, `email test` or `email rm`');
+}
+
 export function registerAuth(app: Command, make: MakeCtx): void {
-  const auth = app.command('auth').description('end-user sign-in: status, users, test sessions');
+  const auth = app.command('auth').description('end-user sign-in: status, users, test sessions, the email sender');
   describe(auth.command('status').description('providers, protected paths, login URL and user count').action(async (_o: unknown, cmd: Command) => status(await make(cmd))), {
     json: '{ enabled, providers: { name, status: "ready" | "not_configured" }[], protect: string[], login_url, users }',
     exits: [2, 3],
@@ -108,6 +154,25 @@ export function registerAuth(app: Command, make: MakeCtx): void {
       .option('-y, --yes', 'skip the confirmation (purge-test)')
       .action(async (action: string | undefined, email: string | undefined, opts: { search?: string }, cmd: Command) => users(await make(cmd), action, email, opts)),
     { json: 'AuthUser[] ({ id, email, name, provider, first_seen, last_seen, blocked, active_sessions })', exits: [2, 3, 4], online: true },
+  );
+  describe(
+    auth
+      .command('email [action]')
+      .description('the App\'s SMTP sender for email code sign-in: show; set (password from stdin, never an argument); test --to; rm')
+      .option('--host <host>', 'SMTP server of the mail provider (set)')
+      .option('--port <port>', '587 (STARTTLS, default) or 465 (TLS) (set)')
+      .option('--username <user>', 'SMTP username (set)')
+      .option('--from <address>', '"App <no-reply@domain>" (set)')
+      .option('--password-stdin', 'read the SMTP password from stdin (set)')
+      .option('--to <address>', 'where the test email goes (test)')
+      .option('-y, --yes', 'skip the confirmation (rm)')
+      .action(async (action: string | undefined, opts: { host?: string; port?: string; username?: string; from?: string; passwordStdin?: boolean; to?: string }, cmd: Command) => email(await make(cmd), action, opts)),
+    {
+      json: '{ configured, host, port, username, from, password_set } (show, set) · { sent, to, ms } (test) · { removed } (rm)',
+      exits: [1, 2, 3, 10],
+      online: true,
+      examples: ['printf %s "$SMTP_PASSWORD" | boxlite-app app auth email set --host smtp.sendgrid.net --port 587 --username apikey --from "Acme <no-reply@acme.com>" --password-stdin', 'boxlite-app app auth email test --to owner@acme.com'],
+    },
   );
   describe(
     auth

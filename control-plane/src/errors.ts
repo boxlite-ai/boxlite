@@ -58,6 +58,8 @@ const STATUS_BY_CODE: Record<string, number> = {
   not_supported_yet: 422,
   conflict: 409,
   rate_limited: 429,
+  /** The App's SMTP server refused or did not answer (enduser/email-sender.ts). */
+  smtp_error: 502,
 };
 
 /** Build an HttpError whose HTTP status follows from the code. */

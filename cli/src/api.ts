@@ -612,9 +612,35 @@ export class Api {
     return this.json('DELETE', `${this.envPath}/auth/test-users`);
   }
 
+  /** The App's mail sender for email code sign-in (App-wide, not per environment). */
+  emailSender(): Promise<EmailSender> {
+    return this.json('GET', `/v1/apps/${this.app}/auth/email`);
+  }
+
+  setEmailSender(body: { host: string; port: number; username?: string | null; password?: string; from: string }): Promise<EmailSender> {
+    return this.json('PUT', `/v1/apps/${this.app}/auth/email`, { body });
+  }
+
+  removeEmailSender(): Promise<{ removed: boolean }> {
+    return this.json('DELETE', `/v1/apps/${this.app}/auth/email`);
+  }
+
+  testEmailSender(to: string): Promise<{ sent: boolean; to: string; ms: number }> {
+    return this.json('POST', `/v1/apps/${this.app}/auth/email/test`, { body: { to }, noRetry: true });
+  }
+
   createTestSession(email: string, role?: EndUserRole): Promise<TestSession> {
     return this.json('POST', `${this.envPath}/auth/test-sessions`, { body: { email, ...(role ? { role } : {}) } });
   }
+}
+
+export interface EmailSender {
+  configured: boolean;
+  host: string | null;
+  port: number | null;
+  username: string | null;
+  from: string | null;
+  password_set: boolean;
 }
 
 export interface AuthStatus {

@@ -1,0 +1,17 @@
+name = "email"
+access = "public"
+
+[runtime]
+image = "node"
+size = "small"
+build = []
+
+[[service]]
+name = "web"
+command = "node server.js"
+port = 3000
+health = "/healthz"
+
+[auth]
+providers = ["email"]
+protect = ["/app"]
