@@ -19,6 +19,9 @@ import {
   ParseIntPipe,
   HttpCode,
   HttpStatus,
+  Body,
+  Header,
+  ValidationPipe,
 } from '@nestjs/common'
 import { BoxService } from '../services/box.service'
 import {
@@ -40,6 +43,10 @@ import { AUTO_RESUMABLE_STATES, BoxAutoResumeService } from '../services/box-aut
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { NetworkMode } from '../enums/network-mode.enum'
+import { Request } from 'express'
+import { AuthContextType, isAuthContext } from '../../common/interfaces/auth-context.interface'
+import { TunnelAccessDto, TunnelHandoffDto } from '../dto/tunnel.dto'
+import { UserService } from '../../user/user.service'
 
 const INBOUND_CACHE_TTL_SECONDS = 3
 // Sentinel for "no such box", distinct from both modes.
@@ -57,6 +64,7 @@ export class PreviewController {
     private readonly tunnelService: TunnelService,
     private readonly organizationService: OrganizationService,
     private readonly autoResume: BoxAutoResumeService,
+    private readonly users: UserService,
   ) {}
 
   @Get(':boxId/tunnels/:port')
@@ -70,6 +78,48 @@ export class PreviewController {
       throw new NotFoundException('Tunnel not found')
     }
     return true
+  }
+
+  @Post(':boxId/tunnels/:port/access')
+  @ApiExcludeEndpoint()
+  @UseGuards(CombinedAuthGuard, ProxyGuard)
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  async tunnelAccess(
+    @Param('boxId') boxId: string,
+    @Param('port', ParseIntPipe) port: number,
+    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })) options: TunnelAccessDto = {},
+  ) {
+    if (options.userId !== undefined) {
+      const user = await this.users.findOne(options.userId)
+      if (!user) throw new NotFoundException('User not found')
+      await this.hasBoxAccess({ user: { userId: user.id, role: user.role } } as never, boxId)
+    }
+    return this.tunnelService.access(boxId, port, options.token)
+  }
+
+  @Get(':boxId/tunnels/:port/session')
+  @ApiExcludeEndpoint()
+  @UseGuards(CombinedAuthGuard)
+  @Header('Cache-Control', 'no-store')
+  async tunnelSession(@Req() req: Request, @Param('boxId') boxId: string, @Param('port', ParseIntPipe) port: number) {
+    await this.hasBoxAccess(req, boxId)
+    const subject = (req as Request & { user: AuthContextType }).user
+    if (!isAuthContext(subject) || subject.apiKey) throw new BadRequestException('Browser login requires a user JWT')
+    return { grant: await this.tunnelService.access(boxId, port), userId: subject.userId }
+  }
+
+  @Post('tunnel-handoff')
+  @ApiExcludeEndpoint()
+  @UseGuards(CombinedAuthGuard, ProxyGuard)
+  @HttpCode(HttpStatus.OK)
+  @Header('Cache-Control', 'no-store')
+  async tunnelHandoff(
+    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })) options: TunnelHandoffDto,
+  ) {
+    if (options.grant && !options.ticket) return { ticket: await this.tunnelService.issueHandoff(options.grant) }
+    if (options.ticket && !options.grant) return { grant: await this.tunnelService.consumeHandoff(options.ticket) }
+    throw new BadRequestException('Expected a grant or ticket')
   }
 
   // The preview proxy calls this when the runner refuses a guest-port dial
@@ -118,7 +168,8 @@ export class PreviewController {
   })
   @ApiResponse({
     status: 200,
-    description: 'Inbound mode of the box: `enabled` means the proxy may serve its services without sign-in',
+    description:
+      'Inbound mode of the box: `enabled` permits access subject to each tunnel policy; `disabled` rejects all callers',
     schema: { type: 'string', enum: Object.values(NetworkMode) },
   })
   @UseGuards(CombinedAuthGuard, ProxyGuard)
@@ -164,26 +215,16 @@ export class PreviewController {
   @ApiOAuth2(['openid', 'profile', 'email'])
   @ApiBearerAuth()
   async hasBoxAccess(@Req() req: Request, @Param('boxId') boxId: string): Promise<boolean> {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
-    const userId = req.user?.userId
-
-    const cached = await this.redis.get(`preview:access:${boxId}:${userId}`)
-    if (cached) {
-      if (cached === '1') {
-        return true
-      }
-      throw new NotFoundException(`Box with ID ${boxId} not found`)
-    }
-
+    const subject = (req as Request & { user?: AuthContextType }).user
     const box = await this.boxService.findOne(boxId)
-    const hasAccess = await this.organizationUserService.exists(box.organizationId, userId)
-    if (!hasAccess) {
-      await this.redis.setex(`preview:access:${boxId}:${userId}`, 3, '0')
+    if (!subject || !isAuthContext(subject) || (subject.apiKey && subject.organizationId !== box.organizationId)) {
       throw new NotFoundException(`Box with ID ${boxId} not found`)
     }
-    //  if user has access, keep it in cache longer
-    await this.redis.setex(`preview:access:${boxId}:${userId}`, 30, '1')
+    // Reaching a tunnel needs membership only; declaring one needs write:boxes.
+    // Not cached, so a removed member loses access on the next request.
+    if (!(await this.organizationUserService.exists(box.organizationId, subject.userId))) {
+      throw new NotFoundException(`Box with ID ${boxId} not found`)
+    }
     return true
   }
 }
