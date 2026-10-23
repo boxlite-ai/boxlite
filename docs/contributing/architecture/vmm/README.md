@@ -412,14 +412,15 @@ engine adapter calls it from
 `VmmInstance::enter`:
 
 ```rust
-let mut vm = Vm::new(config)?; // validate, create the host VM, map RAM, load the kernel, build devices
+let mut vm = Vm::new(config, console)?; // validate, create the host VM, map RAM, load the kernel, build devices
 let stop = vm.stop_handle();   // Clone + Send; the shim's SIGTERM path calls stop.stop()
 let exit = vm.run()?;          // VmExit::GuestShutdown, GuestReset or StopRequested
 ```
 
 `run` returns once: a second call fails with `AlreadyRan`, since a VM never
-restarts. `Vm::new` takes no console argument yet; it comes with the M1
-devices.
+restarts. `console` is a `Box<dyn Write + Send>` that receives the guest's
+serial output through a bounded queue; `run` hands it the last byte before it
+returns.
 
 - **`run` reports how the VM ended, not the box's exit code.**
   - The guest agent writes the box's exit code to `exit.json` on the SHARED

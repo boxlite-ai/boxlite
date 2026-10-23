@@ -11,6 +11,7 @@ use boxlite_hypervisor::Vm as HostVm;
 use crate::{
     chipset::{Chipset, ChipsetBuilder},
     config::VmConfig,
+    devices::console::ConsoleWorker,
     error::{Error, Result},
     events::{Event, EventLoop, EventSender},
     memory::{GuestRam, ram_ranges},
@@ -63,6 +64,10 @@ pub struct Vm<H: HostVm> {
     // unmaps the RAM anyway, since a device's interrupt line holds the host
     // VM longer.
     chipset: Chipset,
+    /// The worker writing the guest console to the caller's sink; `run`
+    /// finishes it once every vCPU has stopped. The lock only makes `Vm`
+    /// `Sync`; `run` reaches it through `&mut self`.
+    console: Mutex<Option<ConsoleWorker>>,
     events: Mutex<EventLoop>,
     sender: EventSender,
     boot_regs: BootRegisters,
@@ -84,15 +89,23 @@ impl<H: HostVm> std::fmt::Debug for Vm<H> {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl Vm<boxlite_hypervisor::KvmVm> {
-    /// Validates `config`, creates the KVM VM, registers its RAM and loads
-    /// the kernel and boot data.
-    pub fn new(config: VmConfig) -> Result<Self> {
-        Self::with_backend(
+    /// Validates `config`, creates the KVM VM with the legacy devices,
+    /// registers its RAM and loads the kernel and boot data. The guest's COM1
+    /// output goes to `console` through a queue, so a slow sink never stalls
+    /// the guest.
+    pub fn new(config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
+        use crate::devices::{console::DEFAULT_QUEUE_BYTES, x86_64::add_legacy_devices};
+
+        let (writer, worker) =
+            ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
+        let mut vm = Self::with_backend(
             config,
             boxlite_hypervisor::KvmVm::new,
             |ram, config| crate::boot::prepare(ram, config).map(|setup| setup.boot_regs),
-            |_| Ok(()),
-        )
+            |chipset| add_legacy_devices(chipset, writer),
+        )?;
+        vm.console = Mutex::new(Some(worker));
+        Ok(vm)
     }
 }
 
@@ -126,6 +139,7 @@ impl<H: HostVm> Vm<H> {
         // From here on `Drop` unmaps the RAM if a later step fails.
         let mut vm = Self {
             chipset,
+            console: Mutex::new(None),
             events: Mutex::new(events),
             sender,
             boot_regs: BootRegisters::default(),
@@ -206,6 +220,17 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             }
             event
         });
+        let console = self
+            .console
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(console) = console {
+            console.finish();
+            let dropped = console.dropped_bytes();
+            if dropped > 0 {
+                tracing::warn!(dropped, "dropped guest console output");
+            }
+        }
         match event.map_err(Error::EventLoop)? {
             Some(Event::StopRequested) => Ok(VmExit::StopRequested),
             Some(Event::GuestShutdown) => Ok(VmExit::GuestShutdown),

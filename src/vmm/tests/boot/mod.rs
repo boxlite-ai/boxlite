@@ -380,14 +380,30 @@ fn run_linux(
     timeout: Duration,
     console: Console,
 ) -> LinuxRun {
-    use std::sync::mpsc::{self, RecvTimeoutError};
-
     let LinuxVm {
         mut vm,
         zero_page,
         console,
         gsi_4_edges,
     } = linux_vm(config, deliver_irqs, console);
+    let (exit, elapsed) = run_with_watchdog(&mut vm, timeout);
+    LinuxRun {
+        zero_page,
+        exit,
+        gsi_4_edges: gsi_4_edges.load(Ordering::Relaxed),
+        console,
+        elapsed,
+    }
+}
+
+/// Runs `vm` until it ends or a watchdog stops it at `timeout`, and returns
+/// how it ended and how long it ran.
+fn run_with_watchdog<H: boxlite_hypervisor::X86Vm>(
+    vm: &mut crate::Vm<H>,
+    timeout: Duration,
+) -> (crate::Result<VmExit>, Duration) {
+    use std::sync::mpsc::{self, RecvTimeoutError};
+
     let stop = vm.stop_handle();
     let (finished, done) = mpsc::channel::<()>();
     let watchdog = thread::spawn(move || {
@@ -401,13 +417,7 @@ fn run_linux(
     let elapsed = started.elapsed();
     drop(finished);
     watchdog.join().unwrap();
-    LinuxRun {
-        zero_page,
-        exit,
-        gsi_4_edges: gsi_4_edges.load(Ordering::Relaxed),
-        console,
-        elapsed,
-    }
+    (exit, elapsed)
 }
 
 /// Asserts that the guest asked for the reset that ended `run`, and prints
@@ -708,6 +718,35 @@ fn boots_linux_on_the_legacy_devices_until_init_restarts() {
     assert!(!log.contains("Kernel panic"), "{log}");
     assert!(run.gsi_4_edges > 0);
     assert_eq!(run.console.dropped_bytes(), 0);
+}
+
+/// The line the M1 smoke test's `/init` prints.
+const M1_MARKER: &str = "BOXLITE_M1_OK";
+
+/// The M1 smoke test: boots the kernel named by `VMM_KERNEL` through the
+/// public API alone, with an `/init` that prints `M1_MARKER` and restarts.
+/// `run` must return the reset only after the marker reached the caller's
+/// console.
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm and VMM_KERNEL naming an x86_64 vmlinux"]
+fn boots_the_m1_initramfs_through_the_public_api() {
+    let archive = newc_archive("init", &print_and_restart(M1_MARKER));
+    let initramfs = TempFile::new("m1.cpio", &archive);
+    let log = SerialLog::default();
+    let config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
+    let mut vm = crate::Vm::new(config, Box::new(log.clone())).expect("create the VM");
+
+    let (exit, elapsed) = run_with_watchdog(&mut vm, BOOT_TIMEOUT);
+
+    let log = log.text();
+    assert!(
+        matches!(exit, Ok(VmExit::GuestReset)),
+        "{exit:?} after {elapsed:?}; log:\n{log}"
+    );
+    assert!(
+        log.lines().any(|line| line.trim_end() == M1_MARKER),
+        "no {M1_MARKER} line in:\n{log}"
+    );
 }
 
 /// The line Linux prints when it finds COM1 at its port and GSI.

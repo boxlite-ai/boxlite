@@ -1,5 +1,5 @@
 PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
-PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm test\:vmm\:boot
+PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm _ensure-vmm-kernel test\:vmm\:boot
 PHONY_TARGETS += test\:apps\:runner
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
@@ -292,17 +292,18 @@ test\:integration\:vmm\:kvm: _ensure-kvm
 VMM_KERNEL ?= $(CURDIR)/target/vmm/boot/x86_64/vmlinux
 export VMM_KERNEL
 
-# Load the real ELF kernel and read it through a KVM vCPU; this does not boot Linux.
-test\:integration\:vmm\:elf: _ensure-kvm
+_ensure-vmm-kernel:
 	@test -r "$(VMM_KERNEL)" || { echo "VMM_KERNEL=$(VMM_KERNEL) is not readable; run make vmm:boot or set VMM_KERNEL" >&2; exit 1; }
+
+# Load the real ELF kernel and read it through a KVM vCPU; this does not boot Linux.
+test\:integration\:vmm\:elf: _ensure-kvm _ensure-vmm-kernel
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout 60s cargo test -p boxlite-vmm --lib boot::elf::tests:: -- --ignored --test-threads=1
 
 # Boot the real kernel on KVM and the legacy devices, on one and four vCPUs: up to its root-mount
 # panic, up to the panic when a generated init exits, and on a ttyS0 console until a generated
-# init restarts.
-test\:integration\:vmm\:linux: _ensure-kvm
-	@test -r "$(VMM_KERNEL)" || { echo "VMM_KERNEL=$(VMM_KERNEL) is not readable; run make vmm:boot or set VMM_KERNEL" >&2; exit 1; }
+# init restarts, once through the public Vm::new as the M1 smoke test.
+test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout 60s cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1
 

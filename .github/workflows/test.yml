@@ -159,6 +159,8 @@ jobs:
               - 'make/dev.mk'
               - 'make/test.mk'
               - 'make/coverage.mk'
+              - 'make/build.mk'
+              - 'scripts/build/build-vmm-boot.sh'
               - 'openapi/**/!(*.md)'
               - '**/Cargo.toml'
               - 'Cargo.lock'
@@ -352,6 +354,24 @@ jobs:
         env:
           BOXLITE_DEPS_STUB: "1"
         run: make coverage:lcov NEXTEST_PROFILE=ci
+
+      # The real-kernel boot tests need the pinned vmlinux; rebuild it only
+      # when its pins or build script change.
+      - name: Restore the VMM boot kernel
+        id: vmm-kernel
+        if: matrix.platform.target == 'linux-x64-gnu'
+        uses: actions/cache@v4
+        with:
+          path: target/vmm/boot/x86_64
+          key: vmm-kernel-${{ hashFiles('src/vmm/boot/kernel.lock', 'src/vmm/boot/kernel.config', 'scripts/build/build-vmm-boot.sh') }}
+
+      - name: Build the VMM boot kernel
+        if: matrix.platform.target == 'linux-x64-gnu' && steps.vmm-kernel.outputs.cache-hit != 'true'
+        timeout-minutes: 20
+        run: |
+          sudo apt-get install -y build-essential bc bison flex curl xz-utils libelf-dev \
+            gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
+          make vmm:boot:host
 
       - name: Enable KVM access for native hypervisor tests
         if: matrix.platform.target == 'linux-x64-gnu'

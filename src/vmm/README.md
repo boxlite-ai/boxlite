@@ -1,8 +1,8 @@
 # boxlite-vmm
 
 BoxLite's native VMM. On Linux x86_64, `Vm::new` validates the machine
-configuration, creates the KVM VM, registers guest RAM and loads the kernel and
-boot data; `Vm::run` runs every vCPU until the guest powers off or resets, or a
+configuration, creates the KVM VM with the legacy devices, registers guest RAM
+and loads the kernel and boot data; `Vm::run` runs every vCPU until the guest powers off or resets, or a
 `StopHandle` stops it, and returns how the VM ended (see [Lifecycle](#lifecycle)).
 `Error` wraps `boxlite_hypervisor::Error` with its cause chain intact. The
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
@@ -11,8 +11,9 @@ lifecycle API, memory layout, buses, interrupts, and threads.
 `Vm`, `VmConfig`, `VmExit`, `StopHandle`, `Error` and `Result` are public, as
 are `BusKind` and `Conflict`, which `Error::ChipsetConflicts` carries; M2's
 engine adapter will consume that API and inspect the error's host cause.
-`Vm::new` adds no device to its chipset yet, so it boots a guest without a
-console.
+`Vm::new(config, console)` adds COM1 and the i8042, and the guest's COM1
+output reaches `console` through the
+[console queue](#legacy-devices-and-the-console).
 
 ```text
 boxlite-vmm
@@ -215,6 +216,10 @@ log so far.
   `Run /init as init process` but not the start of `/init`'s line, and end at
   a 3-second timeout. Against vm-superio 0.8.1 it fails: the first 16 bytes
   leave without IRQ 4.
+- The M1 smoke test builds its VM with the public `Vm::new` instead, on plain
+  KVM. With `console=ttyS0 panic=-1 reboot=k`, one vCPU and the same restarting
+  `/init` printing `BOXLITE_M1_OK`, `Vm::run` must return `GuestReset` with
+  that line already in the caller's sink.
 - With the earlycon command line, one vCPU and an `/init` that calls `pause`
   forever, a `StopHandle::stop` sent once `Run /init as init process`
   appears must make `Vm::run` return `StopRequested` within two seconds.
@@ -249,6 +254,10 @@ nothing mapped.
    every vCPU, and joins them all before it returns: `StopRequested`,
    `GuestShutdown` and `GuestReset` become `VmExit`, and `VcpuFailed` or
    `DeviceFailed` its error. Later events are dropped.
+
+4. Once every vCPU has joined, `run` finishes the console worker `Vm::new`
+   started, so the guest's last output reaches the sink, or is counted as
+   dropped and logged, before `run` returns.
 
 `Vm::stop_handle` returns a `StopHandle` that sends `StopRequested` from any
 thread, even before `run` starts. A VM runs once: a second `run` fails with
@@ -295,8 +304,7 @@ vCPU; Linux programs LINT1 itself.
 ## Buses, lines and events
 
 These are the pieces the [legacy devices](#legacy-devices-and-the-console)
-are built from. `Vm` owns the chipset they form, but `Vm::new` adds no
-device yet.
+are built from. `Vm` owns the chipset they form.
 
 - **Buses.** `bus::Bus` maps non-overlapping `BusRange`s, each named by its
   owner, to a `BusDevice` and the register offset the device sees at the
@@ -359,7 +367,8 @@ devices:
 
 ## Legacy devices and the console
 
-On x86_64, `devices::x86_64::add_legacy_devices` reserves the in-kernel PIC
+On x86_64, `devices::x86_64::add_legacy_devices`, which `Vm::new` calls,
+reserves the in-kernel PIC
 (`0x20`, `0xA0`, `0x4D0`), PIT (`0x40`–`0x43`, `0x61`), IOAPIC and local APIC
 windows, then adds the legacy devices:
 
@@ -416,8 +425,10 @@ port bus at its register offset, and an `IrqLine` sets GSI 4 and 5 through
 and an unclaimed port of a built chipset, and the device's line, armed by the
 build, reaches KVM. A third runs on the [legacy devices](#legacy-devices-and-the-console):
 it prints `OK` on COM1, reads an unclaimed port and unmapped MMIO as all
-ones, and runs no instruction after its i8042 reset. CI runs the same tests through
-`make coverage:vmm:kvm`.
+ones, and runs no instruction after its i8042 reset. CI runs the same tests,
+and the [boot tests](#boot-tests) on the kernel it builds with
+`make vmm:boot:host`, through `make coverage:vmm:kvm`, which needs
+`VMM_KERNEL` like `make test:integration:vmm:linux`.
 
 With the corresponding Rust targets installed, the crate can also be compiled
 for each host with a backend module without booting a VM:

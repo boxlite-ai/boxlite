@@ -553,6 +553,74 @@ mod lifecycle {
         );
     }
 
+    /// A console sink that takes each write only after a delay, like a slow
+    /// log reader.
+    #[derive(Clone, Default)]
+    struct SlowSink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SlowSink {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            thread::sleep(Duration::from_millis(200));
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Writes every byte the guest stores at its register to the console.
+    struct ConsolePort(crate::devices::console::ConsoleWriter);
+
+    impl BusDevice for ConsolePort {
+        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+
+        fn write(&mut self, _offset: u64, data: &[u8]) {
+            std::io::Write::write_all(&mut self.0, data).unwrap();
+        }
+    }
+
+    /// `run` returns only after the slow sink has taken the console output
+    /// the guest wrote before its reset.
+    #[test]
+    fn run_returns_after_the_console_reaches_its_sink() {
+        use crate::devices::console::ConsoleWorker;
+
+        const DEVICE: u64 = 0xd000_0000;
+        let sink = SlowSink::default();
+        let (writer, worker) = ConsoleWorker::spawn(Box::new(sink.clone()), 64).unwrap();
+        let backend = MockVm::with_scripts(vec![vec![
+            Step::Write {
+                addr: DEVICE,
+                byte: b'o',
+            },
+            Step::Write {
+                addr: DEVICE,
+                byte: b'k',
+            },
+            Step::Reset,
+        ]]);
+        let mut vm = Vm::with_backend(
+            config(1, 16),
+            || Ok(backend),
+            |_, _| Ok(BootRegisters::default()),
+            |chipset| {
+                chipset.add("console", |resources| {
+                    resources.mmio(DEVICE, 1);
+                    Ok(ConsolePort(writer))
+                })
+            },
+        )
+        .unwrap();
+        vm.console = std::sync::Mutex::new(Some(worker));
+
+        let (exit, _vm) = run(vm);
+
+        assert_eq!(exit.unwrap(), VmExit::GuestReset);
+        assert_eq!(*sink.0.lock().unwrap(), b"ok");
+    }
+
     /// A vCPU that fails setup reports it before the start gate opens, so no
     /// vCPU enters the guest and the setup error, not a guest exit, ends the
     /// run. The two sends race, so the run repeats.
@@ -606,6 +674,10 @@ fn lifecycle_errors_describe_themselves() {
     let cases = [
         (Error::EventLoop(io()), "the VM event loop failed"),
         (
+            Error::SpawnConsole(io()),
+            "failed to start the console thread",
+        ),
+        (
             Error::SpawnVcpu {
                 vcpu: 3,
                 source: io(),
@@ -624,7 +696,10 @@ fn lifecycle_errors_describe_themselves() {
     ];
     for (error, message) in cases {
         assert_eq!(error.to_string(), message);
-        let has_io_cause = matches!(error, Error::EventLoop(_) | Error::SpawnVcpu { .. });
+        let has_io_cause = matches!(
+            error,
+            Error::EventLoop(_) | Error::SpawnConsole(_) | Error::SpawnVcpu { .. }
+        );
         assert_eq!(error.source().is_some(), has_io_cause, "{error:?}");
     }
 }
@@ -641,7 +716,7 @@ fn debug_shows_the_vm_shape_without_its_internals() {
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
 fn new_names_a_kernel_it_cannot_load() {
-    let error = Vm::new(config(1, 16)).expect_err("no kernel file");
+    let error = Vm::new(config(1, 16), Box::new(io::sink())).expect_err("no kernel file");
 
     assert!(
         matches!(&error, Error::LoadKernel { path, .. } if path.as_os_str() == "vmlinux"),

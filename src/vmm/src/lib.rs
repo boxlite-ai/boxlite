@@ -10,9 +10,21 @@
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod boot;
-#[cfg_attr(not(test), expect(dead_code, reason = "No VM adds a device yet."))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Only tests use part of this API, and only Linux x86_64 adds devices yet."
+    )
+)]
 mod bus;
-#[cfg_attr(not(test), expect(dead_code, reason = "No VM adds a device yet."))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Only tests use part of this API, and only Linux x86_64 adds devices yet."
+    )
+)]
 mod chipset;
 #[cfg_attr(
     not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
@@ -21,18 +33,27 @@ mod chipset;
 mod config;
 #[cfg(target_arch = "x86_64")]
 mod cpu_features;
-#[cfg_attr(not(test), expect(dead_code, reason = "No VM adds a device yet."))]
+#[cfg_attr(
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(dead_code, reason = "Only the Linux x86_64 Vm::new adds devices yet.")
+)]
 mod devices;
 mod error;
 #[cfg_attr(
-    not(all(test, target_arch = "x86_64")),
+    not(all(target_arch = "x86_64", any(test, target_os = "linux"))),
     expect(
         dead_code,
-        reason = "No device reports a failure, and only x86_64 runs vCPUs yet."
+        reason = "Only x86_64 runs vCPUs, and only Linux builds a VM yet."
     )
 )]
 mod events;
-#[cfg_attr(not(test), expect(dead_code, reason = "No VM adds a device yet."))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Only tests use part of this API, and only Linux x86_64 adds devices yet."
+    )
+)]
 mod irq;
 #[cfg_attr(
     not(any(test, all(target_os = "linux", target_arch = "x86_64"))),

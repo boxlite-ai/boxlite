@@ -67,12 +67,13 @@ coverage\:report:
 # Codecov enforces patch coverage against the PR base; total coverage is reported.
 codecov: coverage\:lcov
 
-# Add real KVM execution to the unit profiles before the CI upload. The CI
-# profile bounds each test; disabling retries preserves the first failure.
-coverage\:vmm\:kvm: _ensure-kvm
+# Add real KVM execution, including the real-kernel boots of VMM_KERNEL, to the
+# unit profiles before the CI upload. The CI profile bounds each test; disabling
+# retries preserves the first failure.
+coverage\:vmm\:kvm: _ensure-kvm _ensure-vmm-kernel
 	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 \
 		-p boxlite-hypervisor -p boxlite-vmm --lib --run-ignored only --test-threads=1 \
-		-E 'test(vm::tests::) | test(tests::kvm::)'
+		-E 'test(vm::tests::) | test(tests::kvm::) | test(boot::tests::)'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
 
 # Go's reports include every package, including packages with no tests.
