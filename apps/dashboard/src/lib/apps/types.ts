@@ -302,6 +302,17 @@ export interface AppAuthStatus {
   loginUrl: string
   users: number
   note: string | null
+  /** The App's SMTP sender for email code sign-in; absent from an older control plane. */
+  emailSender?: EmailSender
+}
+
+export interface EmailSender {
+  configured: boolean
+  host: string | null
+  port: number | null
+  username: string | null
+  from: string | null
+  passwordSet: boolean
 }
 
 export interface AppEndUser {

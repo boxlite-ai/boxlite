@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils'
 import { useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { EmailSenderDialog } from '../EmailSenderDialog'
 import { OAuthClientDialog } from '../OAuthClientDialog'
 import { ProviderLogo } from '../ProviderLogo'
 import {
@@ -50,6 +51,7 @@ const PROVIDER_LABEL: Record<string, string> = {
   apple: 'Apple',
   x: 'X',
   facebook: 'Facebook',
+  email: 'Email code',
 }
 const providerLabel = (provider: string) => PROVIDER_LABEL[provider] ?? capitalize(provider)
 
@@ -58,6 +60,9 @@ const pathWords = (glob: string) => glob.replace(/\/\*$/, '/…').replace(/\*/g,
 
 /** The methods that put people through: listed in this environment's sign-in and set up by BoxLite. */
 const working = (status: AppAuthStatus) => status.methods.filter((m) => m.declared && m.status === 'ready')
+/** How many ways in work, email code included. */
+const workingCount = (status: AppAuthStatus) =>
+  working(status).length + (status.providers.includes('email') && status.emailSender?.configured ? 1 : 0)
 
 /** What the agent needs to turn sign-in on, with the snippet; copied, never shown as page copy. */
 function turnOnPrompt(app: AppDetail, status: AppAuthStatus): string {
@@ -244,7 +249,15 @@ function Users({
   )
 }
 
-function MethodMenu({ items, onEdit }: { items: { label: string; text: string; done: string }[]; onEdit: () => void }) {
+function MethodMenu({
+  items,
+  onEdit,
+  editLabel = 'Edit OAuth app…',
+}: {
+  items: { label: string; text: string; done: string }[]
+  onEdit: () => void
+  editLabel?: string
+}) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -252,7 +265,7 @@ function MethodMenu({ items, onEdit }: { items: { label: string; text: string; d
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[14rem] font-mono">
         <DropdownMenuItem className="cursor-pointer" onClick={onEdit}>
-          Edit OAuth app…
+          {editLabel}
         </DropdownMenuItem>
         {items.map((item) => (
           <DropdownMenuItem
@@ -354,6 +367,72 @@ function MethodRow({
   )
 }
 
+/** Email code sign-in: ready once the App has its own mail sender (SMTP), whatever BoxLite runs. */
+function EmailRow({ app, status, onEdit }: { app: AppDetail; status: AppAuthStatus; onEdit: () => void }) {
+  const sender = status.emailSender
+  const declared = status.providers.includes('email')
+  const rowProps = {
+    role: 'button' as const,
+    tabIndex: 0,
+    onClick: onEdit,
+    onKeyDown: (e: React.KeyboardEvent) => e.key === 'Enter' && e.target === e.currentTarget && onEdit(),
+    'data-testid': 'method-email',
+  }
+  const stop = {
+    onClick: (e: React.MouseEvent) => e.stopPropagation(),
+    onKeyDown: (e: React.KeyboardEvent) => e.stopPropagation(),
+  }
+  const row =
+    'flex cursor-pointer items-center gap-4 border-b border-border/60 px-2 outline-none transition-colors hover:bg-card/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/35'
+  if (!sender?.configured) {
+    return (
+      <div {...rowProps} className={cn(row, 'min-h-[48px] text-muted-foreground')}>
+        <span className="flex w-5 justify-center opacity-60">
+          <ProviderLogo provider="email" />
+        </span>
+        <span>Email code</span>
+        <span className="truncate text-[12px]">
+          {declared ? 'On the sign-in page, but needs your mail sender to send codes.' : 'Needs your mail sender (SMTP).'}
+        </span>
+        <span className="ml-auto flex shrink-0 items-center gap-3" {...stop}>
+          <ToolButton primary={declared} onClick={onEdit}>
+            Set up
+          </ToolButton>
+        </span>
+      </div>
+    )
+  }
+  return (
+    <div {...rowProps} className={cn(row, 'min-h-[56px]')}>
+      <span className="flex w-5 justify-center text-foreground">
+        <ProviderLogo provider="email" />
+      </span>
+      <span className={cn('font-semibold', declared ? 'text-foreground' : 'text-muted-foreground')}>Email code</span>
+      <span className="truncate text-[12px] text-muted-foreground">
+        {declared ? `from ${sender.from}` : "Ready, but not on this app's sign-in page"}
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-3" {...stop}>
+        <Tag tone={declared ? 'good' : 'neutral'}>Your mail sender · ready</Tag>
+        <MethodMenu
+          onEdit={onEdit}
+          editLabel="Edit mail sender…"
+          items={
+            declared
+              ? []
+              : [
+                  {
+                    label: 'Copy instructions for your agent',
+                    text: addMethodPrompt(app, status, 'email'),
+                    done: 'Instructions copied. Paste them to your agent.',
+                  },
+                ]
+          }
+        />
+      </span>
+    </div>
+  )
+}
+
 function SignInOff({ app, status }: { app: AppDetail; status: AppAuthStatus }) {
   const [copied, setCopied] = useState(false)
   return (
@@ -380,6 +459,7 @@ function SignInOff({ app, status }: { app: AppDetail; status: AppAuthStatus }) {
 
 function Methods({ app, status, onSettings }: { app: AppDetail; status: AppAuthStatus; onSettings: () => void }) {
   const [editing, setEditing] = useState<AppSignInMethod | null>(null)
+  const [editingEmail, setEditingEmail] = useState(false)
   // Working methods first, then ones BoxLite runs that this app does not use, then the unconfigured ones.
   const rank = (m: AppSignInMethod) => (m.status !== 'ready' ? 2 : m.declared ? 0 : 1)
   const methods = [...status.methods].sort((a, b) => rank(a) - rank(b))
@@ -409,8 +489,12 @@ function Methods({ app, status, onSettings }: { app: AppDetail; status: AppAuthS
             onEdit={() => setEditing(method)}
           />
         ))}
+        {status.emailSender && <EmailRow app={app} status={status} onEdit={() => setEditingEmail(true)} />}
       </div>
       {editing && <OAuthClientDialog app={app} method={editing} onClose={() => setEditing(null)} />}
+      {editingEmail && status.emailSender && (
+        <EmailSenderDialog app={app} sender={status.emailSender} onClose={() => setEditingEmail(false)} />
+      )}
     </Screen>
   )
 }
@@ -493,7 +577,7 @@ export function AuthTab({ app }: { app: AppDetail }) {
     <Workbench<Section>
       items={[
         { id: 'users', label: 'Users', count: userCount, disabled: off && userCount === 0 },
-        { id: 'methods', label: 'Sign-in methods', count: off ? 'off' : working(status).length },
+        { id: 'methods', label: 'Sign-in methods', count: off ? 'off' : workingCount(status) },
       ]}
       value={current}
       onChange={(section) => go({ tab: 'auth', section })}

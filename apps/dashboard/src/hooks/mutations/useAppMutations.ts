@@ -329,3 +329,29 @@ export function useDeleteFile() {
       queryClient.invalidateQueries({ queryKey: [...queryKeys.apps.detail(APPS_SCOPE, appId, env), 'volume', volume] }),
   })
 }
+
+/** The App's mail sender for email code sign-in: save (password left out keeps the saved one) or remove. */
+export function useEmailSender() {
+  const queryClient = useQueryClient()
+  const env = useAppEnv()
+  const settle = (appId: string, data: AppAuthDetail) => {
+    queryClient.setQueryData([...queryKeys.apps.detail(APPS_SCOPE, appId, env), 'auth'], data)
+    // Every environment of the App signs in with the same sender.
+    queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, appId) })
+  }
+  const save = useMutation({
+    mutationFn: async ({ appId, body }: { appId: string; body: { host: string; port: number; username: string | null; password?: string; from: string } }) =>
+      (await appsClient.put<AppAuthDetail>(`/apps/${encodeURIComponent(appId)}/auth/email`, body, { params: { env } })).data,
+    onSuccess: (data, { appId }) => settle(appId, data),
+  })
+  const remove = useMutation({
+    mutationFn: async ({ appId }: { appId: string }) =>
+      (await appsClient.delete<AppAuthDetail>(`/apps/${encodeURIComponent(appId)}/auth/email`, { params: { env } })).data,
+    onSuccess: (data, { appId }) => settle(appId, data),
+  })
+  const test = useMutation({
+    mutationFn: async ({ appId, to }: { appId: string; to: string }) =>
+      (await appsClient.post<{ sent: boolean; to: string; ms: number }>(`/apps/${encodeURIComponent(appId)}/auth/email/test`, { to }, { params: { env } })).data,
+  })
+  return { save, remove, test }
+}
