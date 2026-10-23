@@ -1,4 +1,4 @@
-/** Console API: browse, download and upload volume files, through the CLI extras routes in-process. */
+/** Console API: browse, download, upload and delete volume files, through the CLI extras routes in-process. */
 import type { Context, Hono } from 'hono';
 import type { AppRow, EnvRow } from '../../db.js';
 import type { ConsoleKit } from './kit.js';
@@ -11,6 +11,7 @@ export function consoleVolumeRoutes(api: Hono, k: ConsoleKit): void {
   const filesPath = (c: Context, app: AppRow, env: EnvRow) => {
     const q = new URLSearchParams({ path: c.req.query('path') || '/' });
     if (c.req.query('overwrite') === '1') q.set('overwrite', '1');
+    if (c.req.query('recursive') === '1') q.set('recursive', '1');
     return `${v1(app, env)}/volumes/${encodeURIComponent(c.req.param('name') ?? '')}/files?${q}`;
   };
   /** A directory answers JSON, a file its bytes (as a download). */
@@ -30,6 +31,14 @@ export function consoleVolumeRoutes(api: Hono, k: ConsoleKit): void {
     const app = appOf(c);
     const env = envOf(c, app);
     const res = await raw('PUT', filesPath(c, app, env), await c.req.arrayBuffer());
+    return new Response(res.body, { status: res.status, headers: { 'content-type': 'application/json' } });
+  });
+
+  /** A file, or a folder with ?recursive=1; recorded in Activity like the CLI's `volume rm`. */
+  api.delete('/apps/:id/volumes/:name/files', async (c) => {
+    const app = appOf(c);
+    const env = envOf(c, app);
+    const res = await raw('DELETE', filesPath(c, app, env));
     return new Response(res.body, { status: res.status, headers: { 'content-type': 'application/json' } });
   });
 }

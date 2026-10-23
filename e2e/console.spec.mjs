@@ -360,6 +360,21 @@ async function main() {
         await page.waitForTimeout(1500)
         if (i === 0) await shot('volume-files')
         summaries.push((await text(sheet)).split('\n').slice(0, 2).join(' · '))
+        if (i === 0) {
+          // Upload through the panel, see it on the Box, then delete it through the panel.
+          const name = `console-e2e-${Date.now().toString(36)}.txt`
+          await sheet.locator('input[type=file]').setInputFiles({ name, mimeType: 'text/plain', buffer: Buffer.from('from the console') })
+          const row = sheet.locator('div.group', { hasText: name })
+          await row.waitFor({ timeout: 30_000 })
+          const onBox = async () => JSON.stringify(await cpApi(`/envs/main/volumes/${v.name}/files?path=/`)).includes(name)
+          assert(await onBox(), `${name} is not on the Box after upload`)
+          await row.hover()
+          await row.getByRole('button', { name: 'Delete' }).click()
+          await page.getByRole('button', { name: 'Delete', exact: true }).last().click()
+          await row.waitFor({ state: 'detached', timeout: 30_000 })
+          assert(!(await onBox()), `${name} is still on the Box after Delete`)
+          summaries.push(`uploaded and deleted ${name}`)
+        }
         await page.keyboard.press('Escape')
         await sheet.waitFor({ state: 'detached' })
       }
