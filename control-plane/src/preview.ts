@@ -145,6 +145,8 @@ async function capture(ctx: Ctx, appId: string, envId: string, deployment: numbe
       res = await page.reload({ waitUntil: 'load', timeout: LOAD_MS });
     }
     if (res?.headers()['x-boxlite-starting']) throw new Error('the app was still starting');
+    // The platform's own page (not deployed, unavailable, private) is not the app: keep the old picture.
+    if (res?.headers()['x-boxlite-page']) throw new Error(`the site showed a ${res.status()} page instead of the app`);
     // Let it fetch its data, but a page that keeps a request open or polls never goes idle.
     await page.waitForLoadState('networkidle', { timeout: SETTLE_MS }).catch(() => undefined);
     await page.waitForTimeout(500);

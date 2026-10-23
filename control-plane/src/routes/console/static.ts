@@ -1,6 +1,10 @@
-/** The console's static files under /console/ (the built dashboard), with the SPA fallback to index.html. */
+/**
+ * The console's static files under /console/ (the built dashboard, with the SPA fallback to
+ * index.html) and the vendored libraries under /console/vendor/ (control-plane/vendor, no fallback).
+ */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Context } from 'hono';
 
 const TYPES: Record<string, string> = {
@@ -25,17 +29,28 @@ const TYPES: Record<string, string> = {
 };
 
 export function staticHandler(c: Context, consoleDir: string | undefined): Response {
-  const dir = resolve(consoleDir ?? '../console-dist');
-  const rel = decodeURIComponent(new URL(c.req.url).pathname.slice('/console/'.length));
+  return serve(c, resolve(consoleDir ?? '../console-dist'), '/console/', true);
+}
+
+/** control-plane/vendor, next to dist/ and src/ alike. */
+export const VENDOR_DIR = fileURLToPath(new URL('../../../vendor', import.meta.url));
+
+/** Third-party files the console and its sign-in page load (vendor/README.md in each); public, like the sign-in page. */
+export function vendorHandler(c: Context): Response {
+  return serve(c, VENDOR_DIR, '/console/vendor/', false);
+}
+
+function serve(c: Context, dir: string, prefix: string, spa: boolean): Response {
+  const rel = decodeURIComponent(new URL(c.req.url).pathname.slice(prefix.length));
   const file = resolve(dir, rel || 'index.html');
   if (file !== dir && !file.startsWith(dir + sep)) return c.text('not found', 404);
   const isFile = existsSync(file) && statSync(file).isFile();
   // SPA fallback: a route path (no extension) gets index.html; a missing asset is a 404.
-  const target = isFile ? file : extname(rel) ? null : join(dir, 'index.html');
+  const target = isFile ? file : spa && !extname(rel) ? join(dir, 'index.html') : null;
   if (!target || !existsSync(target)) {
     return c.text(target ? `The console is not built. Run deploy/build-console.sh (looked in ${dir}).` : 'not found', 404);
   }
-  const hashed = target.includes(`${sep}assets${sep}`);
+  const hashed = target.includes(`${sep}assets${sep}`) || !spa;
   return new Response(readFileSync(target), {
     headers: {
       'content-type': TYPES[extname(target).toLowerCase()] ?? 'application/octet-stream',

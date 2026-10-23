@@ -39,3 +39,27 @@ test('a page that keeps polling and holds a request open still gets its picture'
     server.close();
   }
 });
+
+test('the platform\'s own page (not deployed, unavailable) never becomes the app\'s picture', { skip: !existsSync(CHROME) && 'no Chrome here' }, async () => {
+  const { brandPage } = await import('../src/http/brand-page.js');
+  const server = createServer(async (_req, res) => {
+    const page = brandPage({ title: 'Coming soon', tone: 'stopped', label: 'Coming soon', heading: 'This site is not live yet' }, 503);
+    res.writeHead(page.status, Object.fromEntries(page.headers));
+    res.end(await page.text());
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const app = h.ctx.store.appByName('crm')!;
+    const env = h.ctx.store.envByName(app.id, 'main')!;
+    const before = previewMeta(h.ctx, env.id);
+    h.ctx.resources.appUrl = () => `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    capturePreview(h.ctx, app.id, env.id, 2);
+    const t0 = Date.now();
+    while (!previewAttempt(env.id)?.failed && Date.now() - t0 < 30_000) await new Promise((r) => setTimeout(r, 200));
+    assert.match(previewAttempt(env.id)?.failed?.reason ?? '', /503 page instead of the app/);
+    assert.deepEqual(previewMeta(h.ctx, env.id), before, 'the old picture stays');
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});

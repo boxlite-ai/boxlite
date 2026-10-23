@@ -55,6 +55,8 @@ STAGE=$(mktemp -d)
 mkdir -p "$STAGE/cp/control-plane/dist" "$STAGE/cp/control-plane/node_modules" "$STAGE/cp/supervisor/bin" "$STAGE/cp/agent" "$STAGE/cp/cli" "$STAGE/cp/console-dist"
 cp -R "$ROOT/control-plane/dist/." "$STAGE/cp/control-plane/dist/"
 cp "$ROOT/agent/SKILL.md" "$ROOT/agent/prompt-template.md" "$STAGE/cp/agent/"
+# Third-party files the console serves itself (control-plane/vendor/*/README.md).
+cp -R "$ROOT/control-plane/vendor" "$STAGE/cp/control-plane/vendor"
 if [ "$CP_ONLY" != 1 ]; then
   # App screenshots (preview.ts): playwright-core is not bundled; it has no dependencies of its own.
   cp -RL "$ROOT/control-plane/node_modules/playwright-core" "$STAGE/cp/control-plane/node_modules/"

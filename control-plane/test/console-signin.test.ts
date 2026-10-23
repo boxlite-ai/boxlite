@@ -109,3 +109,19 @@ test('a handoff code works once, and only in the browser that began the sign-in'
   // And once tried, it is gone, even for the right browser.
   assert.equal((await h.request(complete, { headers: { cookie: cookiePair(begin.headers.get('set-cookie')!) } })).status, 400);
 });
+
+test('the sign-in page loads its ASCII art from this origin, and the vendor path never leaves its folder', async () => {
+  h = harness();
+  {
+    const page = await (await h.request('/console/login')).text();
+    assert.match(page, /<ascii-art piece="rotating-cube"/);
+    assert.match(page, /src="\/console\/vendor\/ascii-magic-art\/runtime\/ascii\.js"/);
+    assert.doesNotMatch(page, /https:\/\/www\.ascii-magic\.com/, 'nothing loads from a third-party origin');
+    const js = await h.request('/console/vendor/ascii-magic-art/runtime/ascii.js');
+    assert.equal(js.status, 200, 'public: the page is seen before sign-in');
+    assert.match(js.headers.get('content-type') ?? '', /javascript/);
+    assert.equal((await h.request('/console/vendor/ascii-magic-art/pieces/rotating-cube.js')).status, 200);
+    assert.equal((await h.request('/console/vendor/..%2F..%2Fpackage.json')).status, 404);
+    assert.equal((await h.request('/console/vendor/ascii-magic-art/nope')).status, 404, 'no SPA fallback here');
+  }
+});

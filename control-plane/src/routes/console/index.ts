@@ -11,7 +11,7 @@ import { consoleDatabaseRoutes } from './database.js';
 import { consoleDeploymentRoutes } from './deployments.js';
 import { consoleKit } from './kit.js';
 import { consoleLogRoutes } from './logs.js';
-import { staticHandler } from './static.js';
+import { staticHandler, vendorHandler } from './static.js';
 import { consoleVariableRoutes } from './variables.js';
 import { consoleVolumeRoutes } from './volumes.js';
 
@@ -27,6 +27,7 @@ import { consoleVolumeRoutes } from './volumes.js';
 export function mountConsole(root: Hono, ctx: Ctx): void {
   const login = loginRoutes(ctx, githubSignInAvailable(ctx));
   root.get('/console/login', login.page);
+  root.get('/console/vendor/*', vendorHandler);
   root.post('/console/login', login.submit);
   root.on(['GET', 'POST'], '/console/logout', login.logout);
   mountConsoleSignIn(root, ctx);

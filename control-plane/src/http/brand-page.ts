@@ -105,5 +105,7 @@ export function brandPage(p: BrandPage, status: number, headers: HeadersInit = {
   const h = new Headers(headers);
   h.set('content-type', 'text/html; charset=utf-8');
   h.set('cache-control', 'no-store');
+  // Marks the platform's own page, so a console screenshot (preview.ts) never keeps it as the app.
+  h.set('x-boxlite-page', p.tone);
   return new Response(brandPageHtml(p), { status, headers: h });
 }

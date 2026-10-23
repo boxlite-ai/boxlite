@@ -96,56 +96,57 @@ export function consoleNext(v: string | undefined): string {
   return v && v.startsWith('/console/') && !v.startsWith('//') ? v : '/console/';
 }
 
-// The console's door: the Box that draws itself in (the console's own loading mark, BoxCube.tsx),
-// one heading, one button. Dark like the console it opens; the operator's token form stays
-// behind a small disclosure at the foot.
-const BOX_TOP = 'M32 10L54 22L32 34L10 22Z';
-const BOX_FACES = [BOX_TOP, 'M10 22L32 34L32 56L10 44Z', 'M32 34L54 22L54 44L32 56Z'];
+// The console's door, as the mock was approved: the Box, drawn by the ascii-magic library's
+// rotating cube (vendor/ascii-magic-art, served from this origin), beside one heading and one
+// button, dark like the console it opens. The operator's token form sits behind a disclosure
+// at the foot. ART_PIECE/ART_LOOK pick the piece and its character look.
+const ART_PIECE = 'rotating-cube';
+const ART_LOOK = 'dots';
 const GITHUB_MARK = 'M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12';
+const BOXLITE_MARK = '<svg viewBox="-11 -7 22 24" aria-hidden="true"><path d="M0,-6 L10,0 L0,6 L-10,0 Z" fill="rgba(0,176,240,.25)" stroke="hsl(196 100% 52%)" stroke-width="1.2"/><path d="M10,0 L10,10 L0,16 L0,6 Z" fill="rgba(0,176,240,.12)" stroke="hsl(196 100% 52%)" stroke-width="1.2"/><path d="M-10,0 L-10,10 L0,16 L0,6 Z" fill="rgba(0,176,240,.05)" stroke="hsl(196 100% 52%)" stroke-width="1.2"/></svg>';
 
 function loginPage(error: string | null, next: string, github: boolean): string {
-  const faces = BOX_FACES.map((d, i) => `<path d="${d}" class="draw" style="animation-delay:${(i * 0.22).toFixed(2)}s"/>`).join('');
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · BoxLite</title>
 <style>
-:root{color-scheme:dark}
+:root{color-scheme:dark;--bg:hsl(218 17% 7%);--mute:hsl(221 7% 58%);--line:hsl(221 16% 16%)}
 *{box-sizing:border-box}html,body{height:100%;margin:0}
-body{background:hsl(218 17% 7%);color:#fff;font:13px/1.6 'IBM Plex Mono',ui-monospace,'SFMono-Regular','SF Mono',Menlo,monospace;display:flex;flex-direction:column}
-header{padding:22px 28px;font-weight:600;display:flex;align-items:center;gap:10px}
-header svg{width:18px;height:20px}
-main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px}
-.box{width:84px;height:84px;margin-bottom:22px;color:#fff}
-.box path{fill:none;stroke:currentColor;stroke-width:1.5;stroke-linejoin:round}
-.draw{stroke-dasharray:140;animation:draw 2.4s ease-in-out infinite}
-.lit{fill:hsl(196 100% 47%)!important;stroke:none!important;animation:lit 2.4s ease-in-out .66s infinite}
-@keyframes draw{0%{stroke-dashoffset:140}28%,82%{stroke-dashoffset:0}100%{stroke-dashoffset:140}}
-@keyframes lit{0%,22%{fill-opacity:0}42%{fill-opacity:.18}70%,100%{fill-opacity:0}}
-@media (prefers-reduced-motion:reduce){.draw{animation:none;stroke-dasharray:none}.lit{display:none}}
-h1{font-family:Inter,system-ui,sans-serif;font-size:24px;font-weight:600;letter-spacing:-.4px;margin:0 0 6px}
-.lede{color:hsl(221 7% 58%);margin:0 0 24px}
+body{background:var(--bg);color:#fff;font:13px/1.6 'IBM Plex Mono',ui-monospace,'SFMono-Regular','SF Mono',Menlo,monospace;display:grid;grid-template-columns:minmax(0,1fr) 440px}
+@media (max-width:900px){body{grid-template-columns:1fr}.stage{display:none}}
+.stage{position:relative;border-right:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden}
+ascii-art{display:block}
+.door{display:flex;flex-direction:column;padding:32px 48px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:.2px}.brand svg{width:18px;height:20px}
+main{margin:auto 0}
+.eyebrow{font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--mute)}.eyebrow::before{content:'▸ ';color:hsl(196 100% 47%)}
+h1{font-family:Inter,system-ui,sans-serif;font-size:28px;font-weight:600;letter-spacing:-.5px;margin:10px 0 6px}
+.lede{color:var(--mute);margin:0 0 28px;max-width:34ch}
 .err{color:hsl(5 71% 62%);margin:0 0 16px}
-.gh{display:inline-flex;align-items:center;gap:10px;height:42px;padding:0 22px;background:#fff;color:hsl(218 17% 7%);font-weight:600;text-decoration:none}
+.gh{display:flex;align-items:center;justify-content:center;gap:10px;height:44px;background:#fff;color:var(--bg);font-weight:600;text-decoration:none}
 .gh:hover{opacity:.88}.gh svg{width:16px;height:16px}
-.note{font-size:12px;color:hsl(221 7% 58%);margin-top:14px}
-footer{padding:20px 28px;font-size:12px;color:hsl(221 7% 58%);display:flex;justify-content:space-between;align-items:flex-start;gap:24px}
-details{max-width:360px}summary{cursor:pointer;color:hsl(221 7% 58%);list-style:none;border-bottom:1px solid hsl(221 16% 16%);display:inline}summary::-webkit-details-marker{display:none}
-summary:hover{color:#fff}
-form{margin-top:12px;text-align:left}label{display:block;font-size:12px;color:hsl(221 7% 58%)}
+.note{font-size:12px;color:var(--mute);margin-top:14px}
+footer{font-size:12px;color:var(--mute);display:flex;justify-content:space-between;align-items:flex-start;gap:24px}
+details{max-width:300px}summary{cursor:pointer;color:var(--mute);list-style:none;border-bottom:1px solid var(--line);display:inline}summary::-webkit-details-marker{display:none}summary:hover{color:#fff}
+form{margin-top:12px;text-align:left}label{display:block;font-size:12px;color:var(--mute)}
 input{width:100%;font:inherit;padding:.5rem .7rem;margin:.3rem 0 .6rem;background:hsl(222 16% 10%);border:1px solid hsl(221 16% 20%);color:#fff}
 input:focus{outline:none;border-color:hsl(196 100% 47%)}
-button{font:inherit;font-weight:600;padding:.45rem 1rem;border:0;background:#fff;color:hsl(218 17% 7%);cursor:pointer}
+button{font:inherit;font-weight:600;padding:.45rem 1rem;border:0;background:#fff;color:var(--bg);cursor:pointer}
 </style></head><body>
-<header><svg viewBox="-11 -7 22 24" aria-hidden="true"><path d="M0,-6 L10,0 L0,6 L-10,0 Z" fill="rgba(0,176,240,.25)" stroke="hsl(196 100% 52%)" stroke-width="1.2"/><path d="M10,0 L10,10 L0,16 L0,6 Z" fill="rgba(0,176,240,.12)" stroke="hsl(196 100% 52%)" stroke-width="1.2"/><path d="M-10,0 L-10,10 L0,16 L0,6 Z" fill="rgba(0,176,240,.05)" stroke="hsl(196 100% 52%)" stroke-width="1.2"/></svg>BoxLite</header>
+<div class="stage"><ascii-art piece="${ART_PIECE}" look="${ART_LOOK}" size="14" speed="0.5"></ascii-art></div>
+<div class="door">
+<div class="brand">${BOXLITE_MARK}BoxLite</div>
 <main>
-<svg class="box" viewBox="0 0 64 64" aria-hidden="true">${faces}<path d="${BOX_TOP}" class="lit" fill-opacity="0"/></svg>
+<div class="eyebrow">Apps</div>
 <h1>Sign in</h1>
 <p class="lede">Your apps, built by your coding agent, each running in its own Box.</p>
 ${error ? `<p class="err">${escapeHtml(error)}</p>` : ''}
-${github ? `<a class="gh" href="/console/login/github?next=${encodeURIComponent(next)}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="${GITHUB_MARK}"/></svg>Continue with GitHub</a><p class="note">First sign-in creates your organization · signed in for 7 days on this browser</p>` : ''}
+${github ? `<a class="gh" href="/console/login/github?next=${encodeURIComponent(next)}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="${GITHUB_MARK}"/></svg>Continue with GitHub</a><p class="note">First sign-in creates your organization. Stays signed in for 7 days on this browser.</p>` : ''}
 </main>
 <footer><span>© BoxLite</span>
 <details${github ? '' : ' open'}><summary>Platform operator: sign in with the admin token</summary>
 <form method="post" action="/console/login"><input type="hidden" name="next" value="${escapeHtml(next)}"><label>Admin token<input name="token" type="password" autocomplete="current-password"${github ? '' : ' autofocus'} required></label><button type="submit">Sign in</button></form>
 </details></footer>
+</div>
+<script type="module" src="/console/vendor/ascii-magic-art/runtime/ascii.js"></script>
 </body></html>`;
 }
 
