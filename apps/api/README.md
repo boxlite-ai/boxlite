@@ -185,11 +185,13 @@ These are protective bounds; production capacity requires workload testing befor
 Redis stores the result for 15 minutes without renewing expiration, using
 [SET with expiration](https://redis.io/docs/latest/commands/set/). All pages share the same
 query identity, timestamps and data; no database transaction spans requests. The cache binds
-the normalized query, definition version, authenticated user and API key hash (or JWT user).
+the normalized query, definition version and authenticated user. Any valid credential of that
+user may continue, because Admin access belongs to the user rather than to one API key; the
+binding omits key material so no credential digest is rehashed.
 Optional `X-Usage-Snapshot-Owner` is exactly 64 lowercase hex characters and adds a caller
 partition to that binding. It is not authentication and grants no access. Do not expose
-that partition or use it as a substitute for authorization. API key rotation invalidates
-continuation. Cursors are opaque and have no independent authority.
+that partition or use it as a substitute for authorization. Cursors are opaque and have no
+independent authority.
 
 Known errors are `400 invalid_usage_query`, `410 usage_query_expired`,
 `422 usage_query_too_large`, and `503 usage_source_unavailable`. Expiration requires restarting

@@ -176,10 +176,15 @@ describeIfServices('AdminUsageService (real PostgreSQL and Redis)', () => {
     expect(second.nextCursor).toBeNull()
     expect(await redis.pttl(key)).toBeLessThanOrEqual(ttl)
     expect(await query(continuation, auth, 'a'.repeat(64))).toEqual(second)
+    for (const sameUser of [
+      { ...auth, apiKey: { ...auth.apiKey, keyHash: 'rotated-key' } },
+      { ...auth, apiKey: undefined },
+    ]) {
+      expect(await query(continuation, sameUser as AuthContext, 'a'.repeat(64))).toEqual(second)
+    }
     for (const [extra, principal, owner] of [
       [{ metrics: 'memoryGibSeconds' }, auth, 'a'.repeat(64)],
       [{}, { ...auth, userId: 'other-admin' }, 'a'.repeat(64)],
-      [{}, { ...auth, apiKey: { ...auth.apiKey, keyHash: 'rotated-key' } } as AuthContext, 'a'.repeat(64)],
       [{}, auth, 'b'.repeat(64)],
       [{}, auth, undefined],
     ] as const) {

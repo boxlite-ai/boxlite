@@ -35,9 +35,7 @@ export class AdminUsageService {
 
   async query(request: UsageRequest, auth: AuthContext, owner?: string): Promise<AdminUsagePageDto> {
     const binding = createHash('sha256')
-      .update(
-        JSON.stringify([USAGE_DEFINITION, request.query, auth.userId, auth.apiKey?.keyHash ?? null, owner ?? null]),
-      )
+      .update(JSON.stringify([USAGE_DEFINITION, request.query, auth.userId, owner ?? null]))
       .digest('hex')
     try {
       let snapshot: UsageSnapshot
