@@ -195,21 +195,6 @@ func TestExecutionSignalAcceptsBoundarySignals(t *testing.T) {
 // Options
 // ============================================================================
 
-// WithManagedVolumeReadOnly is WithManagedVolume with the read-only flag set:
-// the same managed origin, never a host bind.
-func TestWithManagedVolumeReadOnlySetsReadOnly(t *testing.T) {
-	cfg := &boxConfig{}
-	WithManagedVolumeReadOnly("my-data", "/data")(cfg)
-
-	if len(cfg.volumes) != 1 {
-		t.Fatalf("volumes: got %d", len(cfg.volumes))
-	}
-	got := cfg.volumes[0]
-	if got.managedVolume != "my-data" || got.hostPath != "" || got.guestPath != "/data" || !got.readOnly {
-		t.Errorf("got %+v, want a read-only managed mount of my-data at /data", got)
-	}
-}
-
 // A managed volume and a host bind are different origins, not two spellings of
 // one. WithManagedVolume must not land in hostPath, or the mount would be sent
 // to a REST runtime as a server-side path and refused.
@@ -228,6 +213,8 @@ func TestWithManagedVolumeKeepsOriginsApart(t *testing.T) {
 			t.Errorf("managed volume: got managedVolume=%q hostPath=%q",
 				cfg.volumes[0].managedVolume, cfg.volumes[0].hostPath)
 		}
+		// There is no read-only counterpart: the server rejects read_only on a
+		// managed mount, so a managed volume is always read-write here.
 		if cfg.volumes[0].readOnly {
 			t.Error("WithManagedVolume should be read-write")
 		}

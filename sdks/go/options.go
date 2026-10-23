@@ -327,12 +327,9 @@ func WithManagedVolume(managedVolume, guestPath string) BoxOption {
 	}
 }
 
-// WithManagedVolumeReadOnly mounts a managed volume into the box read-only.
-func WithManagedVolumeReadOnly(managedVolume, guestPath string) BoxOption {
-	return func(c *boxConfig) {
-		c.volumes = append(c.volumes, volumeEntry{managedVolume: managedVolume, guestPath: guestPath, readOnly: true})
-	}
-}
+// Read-only managed volumes have no WithManagedVolumeReadOnly counterpart:
+// the server rejects read_only on a managed mount, so the option could only
+// ever produce an error. Host binds keep WithBindMountReadOnly.
 
 // WithPort publishes a guest port on a host port.
 //

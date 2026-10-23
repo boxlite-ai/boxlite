@@ -363,12 +363,7 @@ export class BoxService {
       // before the insert: it has no way to give a slot back, so a create its
       // own input or placement refuses must not spend one. Only the box limit
       // and a name collision, which the insert itself settles, come after it.
-      const runnerParams: GetRunnerParams = {
-        regions: [region.id],
-        boxClass,
-        requireReadOnlyVolumes: box.volumes?.some((volume) => volume.readOnly) || undefined,
-      }
-      const insertedBox = await this.persistOnAvailableRunner(box, runnerParams, async () => {
+      const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
         await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
         return createBoxDto.name
           ? this.boxRepository.insert(box, options.maxCreatedBoxes)

@@ -282,8 +282,7 @@ volumes=[
 ```
 
 Managed volumes require a REST runtime; host binds are local-runtime only.
-Either may set `"read_only": True`; a managed volume is then bound read-only
-on the runner.
+`read_only` is rejected on a managed mount - only host binds may be read-only.
 
 #### Port forwarding format
 

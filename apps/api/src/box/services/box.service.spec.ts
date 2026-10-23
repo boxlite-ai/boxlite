@@ -836,25 +836,6 @@ describe('BoxService inbound defaults', () => {
       expect.objectContaining({ updateData: expect.objectContaining({ inboundEnabled: expected }) }),
     )
   })
-
-  // An older runner drops `readOnly` and binds read-write, so only a box that
-  // asks for a read-only mount narrows placement to runners that honour it.
-  it.each([
-    [true, true],
-    [false, undefined],
-  ])('asks for a read-only capable runner only when a volume is read-only (%s)', async (readOnly, required) => {
-    const { service, runnerService } = makeCreateService({
-      volumeService: { validateVolumes: jest.fn().mockResolvedValue(new Map([['vol-1', 'vol-1']])) },
-    })
-
-    await service.create(
-      { image: 'quay.io/acme/app:v1', volumes: [{ volumeId: 'vol-1', mountPath: '/data', readOnly }] } as any,
-      { id: 'org-1' } as any,
-      Context.user(),
-    )
-
-    expect(runnerService.getRandomAvailableRunner.mock.calls[0][0].requireReadOnlyVolumes).toBe(required)
-  })
 })
 
 // Assignment is what turns a chosen runner into a committed box row. The only

@@ -931,7 +931,6 @@ means the same thing on every machine:
 | `BOX_PATH:ro` / `BOX_PATH:rw` | `/data:ro` | Anonymous volume with explicit mode |
 | `VOLUME:BOX_PATH` | `my-data:/data` | Managed volume by name |
 | `VOLUME:BOX_PATH` | `vol_01K2EXAMPLE:/data` | Managed volume by server-assigned id |
-| `VOLUME:BOX_PATH:ro` | `my-data:/data:ro` | Managed volume, bound read-only |
 | `HOST_PATH:BOX_PATH` | `/host/data:/data` | Bind mount (host directory must exist) |
 | `HOST_PATH:BOX_PATH:OPTIONS` | `./data:/data:ro` | Bind mount with options |
 | `C:\HOST\PATH:/BOX_PATH[:OPTIONS]` | `C:\data:/app/data:ro` | Windows drive paths are handled — the drive-letter colon is not treated as a separator |

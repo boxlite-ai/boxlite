@@ -1369,6 +1369,14 @@ impl VolumeFlags {
             let spec = match mount.origin {
                 // Held as written; the server resolves an id or a name.
                 crate::volumespec::MountOrigin::ManagedVolume(volume) => {
+                    // Neither the server nor the REST client accepts one yet;
+                    // saying so here beats a downgrade the caller never sees.
+                    if mount.read_only {
+                        anyhow::bail!(
+                            "read-only managed volumes are not supported yet; \
+                             mount {volume:?} read-write"
+                        );
+                    }
                     VolumeSpec::managed_volume(volume, mount.guest_path)
                 }
 
@@ -2561,23 +2569,30 @@ mod tests {
         assert_eq!(opts.volumes[1].guest_path, "/cache");
     }
 
-    /// `:ro` on a managed volume reaches the options read-only, so the server
-    /// binds it read-only instead of the CLI dropping or refusing the mode.
+    /// `:ro` on a managed volume is refused, not quietly downgraded. Neither
+    /// the server nor the REST client accepts one, and a caller who believes a
+    /// mount is protected when it is writable is the failure worth preventing.
     #[test]
-    fn test_volume_flags_keep_read_only_managed_volume() {
+    fn test_volume_flags_reject_read_only_managed_volume() {
         let flags = VolumeFlags {
             volume: vec!["my-data:/data:ro".to_string()],
         };
         let mut opts = BoxOptions::default();
-        flags.apply_to(&mut opts, None).unwrap();
 
-        assert_eq!(opts.volumes[0].managed_volume.as_deref(), Some("my-data"));
-        assert!(opts.volumes[0].read_only);
+        let error = flags
+            .apply_to(&mut opts, None)
+            .expect_err("read-only managed volumes must be refused")
+            .to_string();
+
+        assert!(error.contains("read-only"), "{error}");
+        assert!(error.contains("my-data"), "{error}");
+        assert!(opts.volumes.is_empty());
     }
 
-    /// A host bind is read-only on `:ro` too.
+    /// A host bind may still be read-only — the restriction is specific to
+    /// managed volumes, not to `:ro`.
     #[test]
-    fn test_volume_flags_allow_read_only_host_binds() {
+    fn test_volume_flags_still_allow_read_only_host_binds() {
         let flags = VolumeFlags {
             volume: vec!["/host/data:/data:ro".to_string()],
         };

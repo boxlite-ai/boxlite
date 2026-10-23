@@ -48,21 +48,6 @@ describe('RunnerAdapterV2 createBox', () => {
     )
   })
 
-  it('passes a read-only volume mount through to the CREATE_BOX job payload', async () => {
-    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
-    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
-    await adapter.init({ id: 'runner-1' } as any)
-
-    await adapter.createBox(
-      { id: 'box-1', image: 'base', volumes: [{ volumeId: 'vol-1', mountPath: '/data', readOnly: true }] } as any,
-      'base',
-    )
-
-    expect(jobService.createJob.mock.calls[0][5].volumes).toEqual([
-      { volumeId: 'vol-1', mountPath: '/data', readOnly: true },
-    ])
-  })
-
   /** The caller may pin a curated tag to the build this runner already has. */
   it('sends the image it is handed rather than the one on the box', async () => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any

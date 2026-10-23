@@ -63,17 +63,6 @@ describe('RunnerAdapterV0 createBox', () => {
     )
   })
 
-  it('passes a read-only volume mount through to the runner recover body', async () => {
-    const adapter = new RunnerAdapterV0()
-    const recover = jest.fn().mockResolvedValue(undefined)
-    ;(adapter as any).boxApiClient = { recover }
-
-    const volumes = [{ volumeId: 'vol-1', mountPath: '/data', readOnly: true }]
-    await adapter.recoverBox({ id: 'box-1', env: {}, volumes } as any)
-
-    expect(recover.mock.calls[0][1].volumes).toEqual(volumes)
-  })
-
   /** The caller may pin a curated tag to the build this runner already has. */
   it('sends the image it is handed rather than the one on the box', async () => {
     const adapter = new RunnerAdapterV0()

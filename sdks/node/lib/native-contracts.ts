@@ -224,8 +224,11 @@ export interface JsManagedVolumeSpec {
   /** Managed volume, by server-assigned id or by name — the server resolves either. */
   managedVolume: string;
   guestPath: string;
-  /** Mount the volume read-only. Default: false. */
-  readOnly?: boolean;
+  /**
+   * Read-only managed mounts are not implemented yet; `true` is rejected
+   * rather than silently downgraded to read-write.
+   */
+  readOnly?: false;
 }
 
 export interface JsHostPathVolumeSpec {

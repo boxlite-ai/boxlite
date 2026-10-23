@@ -57,11 +57,6 @@ Omitting `--version` selects the checkout's version. The release downgrade guard
 `--allow-downgrade` for an intentional rollback. Commit builds are installed through deployment.
 Read each host's outcome; a skipped or bootstrapping host is not proof it serves the target version.
 
-The API places a box with a read-only managed volume only on a runner reporting version 0.10.8 or
-later (`READ_ONLY_VOLUMES_MIN_RUNNER_VERSION` in `apps/api/src/box/utils/runner-version.util.ts`);
-an older runner would bind the volume read-write. Until such a runner is up, those creates return
-400, whatever order the API and runners deploy in.
-
 ## Scale out
 
 `RUNNERS` controls the declared fleet count. Set it in the encrypted stage store, update the digest,

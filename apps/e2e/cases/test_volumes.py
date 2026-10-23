@@ -26,7 +26,7 @@ import uuid
 import boxlite
 import pytest
 
-from conftest import drain
+from conftest import drain, with_bounded_lifetime
 from e2e_auth import auth_context, request_json
 
 
@@ -81,47 +81,36 @@ async def test_volume_is_listed_and_fetchable_through_the_sdk(rt, managed_volume
 
 
 @pytest.mark.asyncio
-async def test_a_read_only_mount_refuses_writes(rt, image, managed_volume):
-    """Asking for read-only must yield a mount the box cannot write.
+async def test_a_read_only_mount_is_refused_rather_than_downgraded(managed_volume):
+    """Asking for read-only must fail, not quietly hand back a writable mount.
 
     Ported from the intent of `src/boxlite/tests/mount_security.rs` and
     `sdks/python/tests/test_readonly_volume_remount.py`, which pin read-only
-    enforcement on the local runtime. On the cloud the runner binds the
-    volume's FUSE mount into the box read-only, so a write fails while a read of
-    what another box wrote still works.
-
-    The API places such a box only on a runner new enough to honour the flag
-    (apps/api/src/box/utils/runner-version.util.ts); a stage with none answers
-    400, an environment precondition like the fixture's 403 and 503.
+    enforcement on the local runtime. The cloud has no such enforcement yet and
+    says so at the boundary: `VolumeSpecDto.read_only` is `@IsIn([false])`
+    (apps/api/src/boxlite-rest/dto/create-box.dto.ts:170-179), rejected
+    "rather than silently downgraded to read-write, which would hand the caller
+    a writable mount they believe is protected". Raw REST because the point is
+    the server's answer, and the SDK sends `read_only` on every volume spec.
     """
-    volume = managed_volume["id"]
-    payload = f"written-by-{uuid.uuid4().hex[:8]}"
+    from conftest import DEFAULT_IMAGE
 
-    writer = await rt.create(boxlite.BoxOptions(
-        image=image, volumes=[{"managed_volume": volume, "guest_path": GUEST_PATH}],
-    ))
-    try:
-        await _exec_ok(writer, f"printf %s {payload} > {GUEST_PATH}/probe.txt")
-    finally:
-        await rt.remove(writer.id, force=True)
-
-    try:
-        reader = await rt.create(boxlite.BoxOptions(
-            image=image,
-            volumes=[{"managed_volume": volume, "guest_path": GUEST_PATH, "read_only": True}],
-        ))
-    except Exception as error:
-        if "can mount a volume read-only yet" in str(error):
-            pytest.skip("no runner on this stage binds volumes read-only yet")
-        raise
-    try:
-        assert (await _exec_ok(reader, f"cat {GUEST_PATH}/probe.txt")).strip() == payload
-        ex = await reader.exec("sh", ["-c", f"echo x > {GUEST_PATH}/denied.txt"], None)
-        await drain(ex)
-        rc = await asyncio.wait_for(ex.wait(), timeout=60)
-        assert rc.exit_code != 0, "a read-only managed mount accepted a write"
-    finally:
-        await rt.remove(reader.id, force=True)
+    status, body = request_json(
+        "POST",
+        auth_context().v1("boxes"),
+        with_bounded_lifetime({
+            "image": DEFAULT_IMAGE,
+            "volumes": [{
+                "managed_volume": managed_volume["id"],
+                "guest_path": GUEST_PATH,
+                "read_only": True,
+            }],
+        }),
+    )
+    assert status == 400, (
+        f"a read-only managed mount must be refused while enforcement is "
+        f"missing, got HTTP {status}: {body}"
+    )
 
 
 @pytest.mark.asyncio

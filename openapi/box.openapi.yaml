@@ -2418,11 +2418,10 @@ components:
         read_only:
           type: boolean
           default: false
+          enum: [false]
           description: |
-            Mount the volume read-only: the box can read but not modify the
-            files under the mount. Omitted means read-write. A server whose
-            workers cannot enforce it refuses the create rather than mounting
-            read-write.
+            Read-only managed mounts are not implemented yet; `true` is
+            rejected rather than silently downgraded to read-write.
 
     VolumeState:
       type: string

@@ -347,7 +347,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         volumeId: volume.volumeId,
         mountPath: volume.mountPath,
         subpath: volume.subpath,
-        readOnly: volume.readOnly,
       })),
       outboundEnabled: box.outboundEnabled,
       outboundAllowNet: box.outboundAllowNet ?? undefined,

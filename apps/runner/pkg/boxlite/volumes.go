@@ -51,10 +51,6 @@ type volumeMount struct {
 	hostPath  string
 	mountPath string
 	rootPath  string
-	// readOnly makes the per-box bind read-only. The FUSE mount under rootPath
-	// is shared by every box using the volume, so the mode lives here, on the
-	// bind, not on the mount.
-	readOnly bool
 }
 
 type boxVolumeMountRecord struct {
@@ -108,7 +104,6 @@ func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) (
 			hostPath:  bindSource,
 			mountPath: vol.MountPath,
 			rootPath:  baseMountPath,
-			readOnly:  vol.ReadOnly,
 		})
 	}
 
