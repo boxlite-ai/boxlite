@@ -196,6 +196,20 @@ Runs only migrations in the `post-deploy/` folder. Use this:
 - **After** the new API version is fully deployed
 - As part of your CI/CD pipeline, after the rolling update completes
 
+## Member Scopes and Invitation Retries
+
+The historical tenant-scope migration remains in the chain. The Admin migration
+renames both enum labels to `read:members` and `write:members` for API keys and
+organization roles, preserving existing grants without adding permissions to
+unscoped keys. Rollback restores the old labels. The unmerged Tenant HTTP API is
+replaced directly; no compatibility deployment with that API is required.
+
+API-key validation retains the existing Redis cache namespace. Old cached scope
+labels translate on read, so membership removal, key revocation, and identity
+linking continue to invalidate the same entries across deployment versions.
+
+The integration suite runs the actual PostgreSQL upgrade and rollback. Set `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, and `DB_DATABASE`, then run `make coverage:api FILTER=AddTenantScopes1792497600000`. The database user must be able to create temporary databases.
+
 ## Reverting Migrations
 
 ```bash

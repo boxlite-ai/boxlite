@@ -49,6 +49,8 @@ export const UpdateOrganizationRolePermissionsEnum = {
     DELETE_IMAGES: 'delete:images',
     READ_REGISTRIES: 'read:registries',
     WRITE_IMAGES: 'write:images',
+    READ_MEMBERS: 'read:members',
+    WRITE_MEMBERS: 'write:members',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 

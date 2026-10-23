@@ -85,6 +85,19 @@ serves and the events it emits are catalogued below alongside its routes.
 | `DELETE` | `/api/api-keys/{name}`          | Deletes the caller's API key by name.                          |
 | `DELETE` | `/api/api-keys/{userId}/{name}` | Deletes a named API key belonging to a specified user.         |
 
+Key creation takes an explicit `permissions` array. When authenticated with an API key,
+the requested permissions must be a subset of that key's permissions, including for
+owners and system admins; broader grants return 403 before a key is created.
+The user's existing grantability checks still apply. An owner using a user JWT
+can create a key with any supported permission.
+
+Both DELETE routes require `write:members` when authenticated with an API key,
+including owner/admin keys and revocation of the calling key itself. A
+`read:members` key cannot revoke any key. User JWTs retain their existing access:
+members can revoke their own keys; owners and admins can also revoke other users'
+keys within the selected organization. The scope does not bypass these user or
+organization boundaries.
+
 </details>
 
 <details>
