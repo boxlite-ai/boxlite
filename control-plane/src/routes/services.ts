@@ -14,8 +14,8 @@ export function serviceRoutes(ctx: Ctx) {
     const env = envOf(ctx, c);
     if (!env.box_url) return c.json([]);
     const { box, services, fresh } = await ctx.resources.liveServices(env, 10_000);
-    if (fresh) return c.json(services.map((s) => ({ name: s.name, state: s.state, restarts: s.restarts ?? 0, last_exit_code: s.last_exit_code ?? null, health: s.health ?? null, pid: s.pid ?? null })));
-    return c.json(services.map((s) => ({ ...s, state: box === 'stopped' ? 'stopped (Box asleep)' : s.state, reported_at: env.services_at })));
+    if (fresh) return c.json(services.map((s) => ({ name: s.name, state: s.state, restarts: s.restarts ?? 0, last_exit_code: s.last_exit_code ?? null, health: s.health ?? null, pid: s.pid ?? null, memory_bytes: s.memory_bytes ?? null })));
+    return c.json(services.map((s) => ({ ...s, state: box === 'stopped' ? 'stopped (Box asleep)' : s.state, memory_bytes: null, reported_at: env.services_at })));
   });
 
   r.post('/envs/:env/services/:name/restart', async (c) => {

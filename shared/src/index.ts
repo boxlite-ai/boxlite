@@ -20,6 +20,8 @@ export {
   type AgentSchedule,
   type AgentService,
   type AgentVariable,
+  type BoxUsage,
   type Finding,
   type Severity,
+  LOW_FREE_SHARE,
 } from './agent-context.js';

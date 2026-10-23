@@ -1,6 +1,6 @@
 /** An env's platform resources behind one object (`ctx.resources`): URLs, current spec and runtime env here; Box, database, volumes and wake in resources/. */
 import { secretValue } from './orgs.js';
-import type { VolumeSpec } from '@microcloud/shared';
+import type { BoxUsage, VolumeSpec } from '@microcloud/shared';
 import { now, type AppRow, type EnvRow } from './db.js';
 import type { Ctx } from './ctx.js';
 import type { Spec } from './spec.js';
@@ -122,7 +122,8 @@ export class Resources {
    * is up (within `timeoutMs`; never wakes it), else the last report. A fresh answer is stored as
    * the new last report. The console, `GET …/services` and the agent context all read this.
    */
-  async liveServices(env: EnvRow, timeoutMs = 3_000): Promise<{ box: string | null; services: ServiceState[]; fresh: boolean }> {
+  /** `usage` is read only from a running Box: null when it sleeps or does not answer. */
+  async liveServices(env: EnvRow, timeoutMs = 3_000): Promise<{ box: string | null; services: ServiceState[]; fresh: boolean; usage: BoxUsage | null }> {
     const box = env.box_id ? await this.boxStatus(env.box_id).catch(() => 'unknown') : null;
     if (box === 'running' && env.box_url) {
       let timer: NodeJS.Timeout | undefined;
@@ -133,10 +134,10 @@ export class Resources {
       clearTimeout(timer);
       if (h) {
         this.ctx.store.updateEnv(env.id, { services: JSON.stringify(h.services), services_at: now() });
-        return { box, services: h.services, fresh: true };
+        return { box, services: h.services, fresh: true, usage: h.box ?? null };
       }
     }
-    return { box, services: storedServices(env), fresh: false };
+    return { box, services: storedServices(env), fresh: false, usage: null };
   }
 }
 

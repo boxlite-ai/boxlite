@@ -15,6 +15,7 @@ import (
 	"github.com/boxlite-ai/microcloud/supervisor/internal/api"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/health"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/logs"
+	"github.com/boxlite-ai/microcloud/supervisor/internal/usage"
 )
 
 const (
@@ -431,6 +432,7 @@ func (s *Service) Status() api.ServiceStatus {
 	if s.pid > 0 {
 		pid := s.pid
 		st.PID = &pid
+		st.MemoryBytes = usage.GroupMemory(pid)
 	}
 	if s.lastExit != nil {
 		code := *s.lastExit

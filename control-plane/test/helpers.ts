@@ -141,6 +141,9 @@ export class FakeSupervisor implements SupervisorClient {
   deadBox: string | null = null;
   /** The secret each control call carried, in order. */
   secrets: string[] = [];
+  /** What health reports about the Box's memory and disk, and each service's memory. */
+  box: SupervisorHealth['box'] = null;
+  memory: Record<string, number> = {};
   ctx!: Ctx;
   /** What health answers for services: the last ones a status report carried, as a real supervisor would. */
   private running: NonNullable<SupervisorStatus['services']> = [];
@@ -164,7 +167,8 @@ export class FakeSupervisor implements SupervisorClient {
       this.forbiddenHealth--;
       throw new UpstreamError('supervisor', 403, 'GET /.boxlite/sv/health → 403', '{"error":"gateway"}');
     }
-    return { version: this.version, root: true, sudo_locked: true, ok: true, deployment: null, services: this.running };
+    const services = this.running.map((r) => ({ ...r, memory_bytes: this.memory[r.name] ?? null }));
+    return { version: this.version, root: true, sudo_locked: true, ok: true, deployment: null, services, box: this.box };
   }
   async deploy(_u: string, s: string, n: number): Promise<void> {
     this.calls.push(`deploy ${n}`);

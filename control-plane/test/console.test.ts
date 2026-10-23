@@ -377,6 +377,22 @@ test('the Logs filter for an apply shows the output of the release it restarted,
   assert.deepEqual((await api('/apps/crm/logs?since=1h&deployment=99')).body, []);
 });
 
+test('the app page shows memory per service and the Box usage; a nearly full disk is a problem in plain words', async () => {
+  const { key } = await createViaConsole();
+  await deploy(key, TOML);
+  const MiB = 1048576;
+  h.supervisor.memory = { web: 300 * MiB };
+  h.supervisor.box = { memory_total_bytes: 2048 * MiB, memory_available_bytes: 1500 * MiB, disk_total_bytes: 10240 * MiB, disk_free_bytes: 200 * MiB };
+  const app = (await api('/apps/crm')).body;
+  assert.equal(app.services[0].memoryBytes, 300 * MiB);
+  assert.deepEqual(app.box.usage, { memoryTotalBytes: 2048 * MiB, memoryAvailableBytes: 1500 * MiB, diskTotalBytes: 10240 * MiB, diskFreeBytes: 200 * MiB });
+  const disk = app.problems.find((p: any) => p.summary === 'The disk is nearly full');
+  assert.ok(disk, JSON.stringify(app.problems));
+  assert.equal(disk.detail, '200.0 MB free of 10.00 GB. Saving files fails once it is full.');
+  assert.match(disk.fixPrompt, /boxlite-app app volume rm/);
+  assert.ok(!app.problems.some((p: any) => /memory/.test(p.summary)));
+});
+
 test('sleep stops the Box and is recorded; delete is soft, restorable, then purged with its Box', async () => {
   const { key } = await createViaConsole();
   await deploy(key, TOML);

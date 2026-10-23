@@ -31,6 +31,8 @@ function servicesOf(spec: Spec | undefined, reported: ServiceState[], boxState: 
       health: r?.health ?? null,
       restarts: r?.restarts ?? null,
       last_exit_code: r?.last_exit_code ?? null,
+      // Only a live reading: the stored report of a sleeping Box says nothing about memory now.
+      memory_bytes: boxState === 'running' ? (r?.memory_bytes ?? null) : null,
     };
   });
 }
@@ -120,7 +122,7 @@ function recentErrors(ctx: Ctx, env: EnvRow, at: number): AgentContext['recent_e
 export async function buildAgentContext(ctx: Ctx, app: AppRow, env: EnvRow, latestCli: string | null, at = new Date()): Promise<AgentContext> {
   const spec = ctx.resources.currentSpec(env);
   // Live, so a service that started crashing after go-live is in the context (and its next actions).
-  const { box: boxState, services: reported } = await ctx.resources.liveServices(env);
+  const { box: boxState, services: reported, usage } = await ctx.resources.liveServices(env);
   const services = servicesOf(spec, reported, boxState);
   const exposed = services.find((s) => s.exposed);
   const appUrl = ctx.resources.appUrl(app.name, env.name);
@@ -138,7 +140,7 @@ export async function buildAgentContext(ctx: Ctx, app: AppRow, env: EnvRow, late
     access: { level: ctx.resources.effectiveAccess(env), source: env.access_override ? 'online' : 'manifest' },
     environments: ctx.store.envs(app.id).map((e) => ({ name: e.name, status: envStatus(ctx, e), url: ctx.resources.appUrl(app.name, e.name) })),
     live: live ? { deployment: live.number, spec_version: live.spec_version, live_at: live.live_at } : null,
-    box: env.box_id ? { id: env.box_id, state: boxState ?? 'unknown' } : null,
+    box: env.box_id ? { id: env.box_id, state: boxState ?? 'unknown', usage } : null,
     runtime: spec ? { image: spec.runtime.image, size: spec.runtime.size, build: spec.runtime.build } : null,
     services,
     schedules: schedulesOf(ctx, env, spec, at),

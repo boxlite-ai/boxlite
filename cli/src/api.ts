@@ -101,6 +101,8 @@ export interface ServiceStatus {
   last_exit_code?: number | null;
   health?: string;
   pid?: number | null;
+  /** Resident memory of the service and its children; null while the Box sleeps or from an older control plane. */
+  memory_bytes?: number | null;
 }
 
 export interface DbInfo {

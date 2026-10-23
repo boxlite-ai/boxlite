@@ -9,7 +9,7 @@ import type { MakeCtx } from '../cli.js';
 import type { Deployment, EnvSummary } from '../api.js';
 import { updateLink, writeLink, type Ctx } from '../context.js';
 import { describe } from '../meta.js';
-import { table } from '../output.js';
+import { formatBytes, table } from '../output.js';
 import { contextMarkdown } from '../render/context-markdown.js';
 import { editToml, ensureTable, specToToml } from '../toml-edit.js';
 import { parseInteger } from './common.js';
@@ -60,7 +60,7 @@ async function services(ctx: Ctx): Promise<void> {
     ctx.out.next('`boxlite-app deploy`');
     return;
   }
-  const rows = list.map((s) => [s.name, s.state, s.health ?? '', s.restarts !== undefined ? `restarts ${s.restarts}` : '', s.last_exit_code != null ? `exit ${s.last_exit_code}` : '', s.pid != null ? `pid ${s.pid}` : '']);
+  const rows = list.map((s) => [s.name, s.state, s.health ?? '', s.restarts !== undefined ? `restarts ${s.restarts}` : '', s.last_exit_code != null ? `exit ${s.last_exit_code}` : '', s.pid != null ? `pid ${s.pid}` : '', s.memory_bytes != null ? `memory ${formatBytes(s.memory_bytes)}` : '']);
   for (const line of table(rows)) ctx.out.line(line);
   const bad = list.find((s) => s.state === 'failed' || (s.restarts ?? 0) > 3 || s.health === 'unhealthy');
   if (bad) ctx.out.next(`\`boxlite-app app logs --source ${bad.name} --level error --since 1h\``);
@@ -217,7 +217,7 @@ export function registerApp(program: Command, make: MakeCtx): Command {
   registerLogs(app, make);
   registerCurl(app, make);
   describe(app.command('services').description('service states, health, restarts').action(async (_o: unknown, cmd: Command) => services(await make(cmd))), {
-    json: '{ name, state, restarts, last_exit_code, health, pid }[]',
+    json: '{ name, state, restarts, last_exit_code, health, pid, memory_bytes }[]',
     exits: [2, 3],
     online: true,
   });

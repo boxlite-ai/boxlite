@@ -1,5 +1,7 @@
 import { classifyFailure, errorFocus, looksLikeCredential, secretRefFix } from './diagnose.js';
 import type { BuildWarning } from './build-warnings.js';
+import { formatBytes } from './check.js';
+import { SIZES, type Size } from './types.js';
 
 /**
  * Everything an agent needs about one environment, as returned by
@@ -17,7 +19,8 @@ export interface AgentContext {
   access: { level: string; source: 'manifest' | 'online' };
   environments: { name: string; status: string; url: string }[];
   live: { deployment: number; spec_version: number | null; live_at: string | null } | null;
-  box: { id: string; state: string } | null;
+  /** `usage` is read live from the running Box: absent from an older control plane, null while it sleeps. */
+  box: { id: string; state: string; usage?: BoxUsage | null } | null;
   runtime: { image: string; size: string; build: string[] } | null;
   services: AgentService[];
   schedules: AgentSchedule[];
@@ -36,6 +39,14 @@ export interface AgentContext {
   cli: { latest_version: string | null };
 }
 
+/** The memory and disk of the whole Box (volumes are directories on its disk). */
+export interface BoxUsage {
+  memory_total_bytes: number;
+  memory_available_bytes: number;
+  disk_total_bytes: number;
+  disk_free_bytes: number;
+}
+
 export interface AgentService {
   name: string;
   exposed: boolean;
@@ -47,6 +58,8 @@ export interface AgentService {
   health: string | null;
   restarts: number | null;
   last_exit_code: number | null;
+  /** Resident memory of the service and its children while the Box runs; absent from an older control plane. */
+  memory_bytes?: number | null;
 }
 
 export interface AgentSchedule {
@@ -201,7 +214,44 @@ export function contextFindings(c: Omit<AgentContext, 'next_actions'>): Finding[
     out.push({ id: `build_${w.id}`, severity: w.id === 'npm_audit' && /high|critical/i.test(w.title) ? 'warn' : 'info', title: w.title, fix: w.fix, evidence: w.evidence });
   }
 
+  for (const f of usageFindings(c)) out.push(f);
+
   if (c.box?.state === 'stopped') out.push({ id: 'box_asleep', severity: 'info', title: 'the app is asleep (it stops after 15 min without traffic)', fix: 'nothing to do: the next request wakes it in a few seconds' });
   if (c.access.level === 'public' && !c.auth.enabled) out.push({ id: 'public_anonymous', severity: 'info', title: 'the app is public and has no sign-in: anyone with the URL can use it', fix: 'keep it only if the user asked for a public site; otherwise `boxlite-app app access set private`' });
   return rankFindings(out);
+}
+
+/** Below this share free, the Box is close enough to its memory or disk limit to say so. */
+export const LOW_FREE_SHARE = 0.1;
+
+/** The Box near its memory or disk limit, with the service using the most memory and what to change. */
+function usageFindings(c: Omit<AgentContext, 'next_actions'>): Finding[] {
+  const u = c.box?.usage;
+  if (!u) return [];
+  const out: Finding[] = [];
+  if (u.memory_total_bytes > 0 && u.memory_available_bytes < u.memory_total_bytes * LOW_FREE_SHARE) {
+    const top = [...c.services].filter((s) => s.memory_bytes != null).sort((a, b) => b.memory_bytes! - a.memory_bytes!)[0];
+    const sizes = Object.keys(SIZES) as Size[];
+    const size = c.runtime?.size as Size | undefined;
+    const bigger = size ? sizes[sizes.indexOf(size) + 1] : undefined;
+    out.push({
+      id: 'memory_low',
+      severity: 'warn',
+      title: `the Box is nearly out of memory: ${formatBytes(u.memory_available_bytes)} free of ${formatBytes(u.memory_total_bytes)}${top ? `; ${top.name} uses ${formatBytes(top.memory_bytes!)}` : ''}`,
+      fix: bigger
+        ? `set \`size = "${bigger}"\` under [runtime] in boxlite.toml (${SIZES[bigger].memory_mib} MiB), then \`boxlite-app deploy\`; or lower the memory use of ${top?.name ?? 'the app'}`
+        : `lower the memory use of ${top?.name ?? 'the app'} (${size ?? 'this'} is the largest size): cache less in process, stream large files, cap worker counts`,
+      detail: 'a service that runs out of memory is killed (exit 137) and restarted',
+    });
+  }
+  if (u.disk_total_bytes > 0 && u.disk_free_bytes < u.disk_total_bytes * LOW_FREE_SHARE) {
+    out.push({
+      id: 'disk_low',
+      severity: 'warn',
+      title: `the Box disk is nearly full: ${formatBytes(u.disk_free_bytes)} free of ${formatBytes(u.disk_total_bytes)}`,
+      fix: '`boxlite-app app volume ls <volume>` lists the files with their sizes; delete what is not needed with `boxlite-app app volume rm <volume>:<path> --yes`, and stop the code that fills it (temporary files, logs written to disk)',
+      detail: 'writes fail once it is full; volumes and the last 3 releases share this disk',
+    });
+  }
+  return out;
 }

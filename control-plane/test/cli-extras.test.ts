@@ -132,6 +132,20 @@ test('context covers services, schedules, volumes, variables, deployments and ne
   assert.ok(!JSON.stringify(c).includes(env().forward_secret));
 });
 
+test('a running Box reports its memory and disk; near the limit, context says what to change', async () => {
+  await deploy(TOML);
+  const MiB = 1048576;
+  h.supervisor.memory = { web: 1900 * MiB };
+  h.supervisor.box = { memory_total_bytes: 2048 * MiB, memory_available_bytes: 60 * MiB, disk_total_bytes: 10240 * MiB, disk_free_bytes: 6000 * MiB };
+  const c = (await (await get('/envs/main/context')).json()) as Record<string, any>;
+  assert.deepEqual(c.box.usage, h.supervisor.box);
+  assert.equal(c.services[0].memory_bytes, 1900 * MiB);
+  assert.deepEqual(c.next_actions.map((f: any) => f.id), ['memory_low']);
+  assert.match(c.next_actions[0].title, /60\.0 MB free of 2\.00 GB; web uses 1\.86 GB/);
+  const services = (await (await get('/envs/main/services')).json()) as Record<string, any>[];
+  assert.equal(services[0]!.memory_bytes, 1900 * MiB);
+});
+
 test('a failed deployment shows up as a classified next action', async () => {
   h.supervisor.failStart = true;
   await deploy(TOML);

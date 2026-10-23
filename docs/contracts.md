@@ -102,7 +102,7 @@ GET    /v1/apps/{app}/envs/{env}/deployments/{n}      → Deployment incl. steps
 GET    /v1/apps/{app}/envs/{env}/deployments/{n}/events   SSE: event: step|log|done, data: JSON
 POST   /v1/apps/{app}/envs/{env}/deployments/{n}/cancel
 GET    /v1/apps/{app}/envs/{env}/deployments/{n}/source   → tar.gz of the snapshot
-GET    /v1/apps/{app}/envs/{env}/services              → [{name, state, restarts, last_exit_code, health, pid}]
+GET    /v1/apps/{app}/envs/{env}/services              → [{name, state, restarts, last_exit_code, health, pid, memory_bytes}]   memory_bytes: live only, null while the Box sleeps
 POST   /v1/apps/{app}/envs/{env}/services/{name}/restart
 POST   /v1/apps/{app}/envs/{env}/schedules/{name}/run
 GET    /v1/apps/{app}/envs/{env}/logs?source=&since=&limit=&follow=1   (follow → SSE event: log)
@@ -235,11 +235,12 @@ Every request needs the right one; otherwise `403 {"error":"gateway"}`, which is
 The CP builds both header sets in one place, `control-plane/src/supervisor.ts` (`controlHeaders(env)`, `forwardHeaders(env)`).
 
 ```
-GET  /.boxlite/sv/health            → {"version":2,"build":"…","root":true,"sudo_locked":true,"ok":true,"deployment":N,"spec_version":v,"services":[{name,state,pid,restarts,last_exit_code,health,port}]}
+GET  /.boxlite/sv/health            → {"version":2,"build":"…","root":true,"sudo_locked":true,"ok":true,"deployment":N,"spec_version":v,"services":[{name,state,pid,restarts,last_exit_code,health,port,memory_bytes}],"box":{memory_total_bytes,memory_available_bytes,disk_total_bytes,disk_free_bytes}}
                                       version = wire protocol: 2 = this section (split secrets, root supervisor). A supervisor reporting an
                                       older protocol fails the deploy (4.1 "Supervisor wire").
                                       state ∈ running|starting|restarting|stopped|failed; health ∈ healthy|unhealthy|starting|none.
                                       ok = a release is live. pid, port and last_exit_code are null when not applicable (static service, never exited).
+                                      memory_bytes = resident memory of the service's process group (its children too); box = /proc/meminfo and the disk holding the releases (volumes share it); both null where unreadable.
 POST /.boxlite/sv/deploy            {"deployment":N} → 202; runs steps 1–3 of 2.4 (fetch spec, extract, build) and reports `building` then
                                       `built` via /sv/v1/status; the live release keeps serving. N already built → 202, `built` is re-reported, nothing is rebuilt.
 POST /.boxlite/sv/activate          {"deployment":N} → 202; runs steps 4–5 of 2.4 (re-fetch spec, start, health gate, flip, stop old, current, prune)

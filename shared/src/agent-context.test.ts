@@ -107,3 +107,22 @@ test('build warnings of the live deployment are findings next to a healthy app, 
   const f = contextFindings(c);
   assert.deepEqual(f.filter((x) => x.id.startsWith('build_')).map((x) => [x.id, x.severity]), [['build_npm_audit', 'warn'], ['build_large_bundle', 'info'], ['build_deprecated_packages', 'info']]);
 });
+
+test('a Box near its memory limit names the hungriest service and the next size; a nearly full disk names the cleanup', () => {
+  const GiB = 1073741824;
+  const c = base();
+  c.services.push({ ...c.services[0]!, name: 'worker', exposed: false, memory_bytes: 300 * 1048576 });
+  c.services[0]!.memory_bytes = 1500 * 1048576;
+  c.box = { id: 'b1', state: 'running', usage: { memory_total_bytes: 2 * GiB, memory_available_bytes: 100 * 1048576, disk_total_bytes: 10 * GiB, disk_free_bytes: 0.5 * GiB } };
+  const f = contextFindings(c);
+  assert.deepEqual(f.map((x) => x.id), ['memory_low', 'disk_low']);
+  assert.equal(f[0]!.title, 'the Box is nearly out of memory: 100.0 MB free of 2.00 GB; web uses 1.46 GB');
+  assert.match(f[0]!.fix, /size = "medium"` under \[runtime\]/);
+  assert.equal(f[1]!.title, 'the Box disk is nearly full: 512.0 MB free of 10.00 GB');
+
+  // At the largest size there is no bigger Box to suggest; with room to spare, nothing is said.
+  c.runtime = { image: 'node', size: 'large', build: [] };
+  assert.doesNotMatch(contextFindings(c)[0]!.fix, /size =/);
+  c.box.usage = { memory_total_bytes: 2 * GiB, memory_available_bytes: GiB, disk_total_bytes: 10 * GiB, disk_free_bytes: 5 * GiB };
+  assert.deepEqual(contextFindings(c), []);
+});

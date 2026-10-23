@@ -1,4 +1,5 @@
 import type { EnvRow } from './db.js';
+import type { BoxUsage } from '@microcloud/shared';
 import { requestJson } from './http.js';
 
 export interface ServiceState {
@@ -9,6 +10,8 @@ export interface ServiceState {
   last_exit_code?: number | null;
   health?: string;
   port?: number | null;
+  /** Resident memory of the service and its children (supervisors from 2026-10-24 on). */
+  memory_bytes?: number | null;
 }
 
 /** What the supervisor reports on POST /sv/v1/status. */
@@ -33,6 +36,8 @@ export interface SupervisorHealth {
   deployment: number | null;
   spec_version?: number | null;
   services: ServiceState[];
+  /** Memory and disk of the whole Box; absent from an older supervisor, null where unreadable. */
+  box?: BoxUsage | null;
 }
 
 /**

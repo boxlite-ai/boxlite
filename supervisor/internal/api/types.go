@@ -246,6 +246,8 @@ type ServiceStatus struct {
 	LastExitCode *int   `json:"last_exit_code"`
 	Health       string `json:"health"`
 	Port         *int   `json:"port"`
+	// MemoryBytes is the resident memory of the service and its children.
+	MemoryBytes *int64 `json:"memory_bytes"`
 }
 
 // HealthResponse is the body of GET /.boxlite/sv/health (contracts.md 2.3).
@@ -260,4 +262,15 @@ type HealthResponse struct {
 	Deployment  int             `json:"deployment"`
 	SpecVersion int             `json:"spec_version"`
 	Services    []ServiceStatus `json:"services"`
+	// Box is the memory and disk of the whole Box; null where unreadable.
+	Box *Box `json:"box"`
+}
+
+// Box is the memory and disk of the whole Box. The disk is the one holding
+// the releases; volumes are directories on it too.
+type Box struct {
+	MemoryTotalBytes     int64 `json:"memory_total_bytes"`
+	MemoryAvailableBytes int64 `json:"memory_available_bytes"`
+	DiskTotalBytes       int64 `json:"disk_total_bytes"`
+	DiskFreeBytes        int64 `json:"disk_free_bytes"`
 }

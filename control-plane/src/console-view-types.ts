@@ -55,6 +55,8 @@ export interface ServiceView {
   restarts: number;
   lastExitCode?: number;
   health: string;
+  /** Resident memory of the service and its children, while the Box runs. */
+  memoryBytes?: number;
   /** The service's last error lines, when it is crashing, restarting or unhealthy. */
   recentErrors: string[];
 }
@@ -125,6 +127,13 @@ export interface SecretRefView {
   present: boolean;
 }
 
+export interface BoxUsageView {
+  memoryTotalBytes: number;
+  memoryAvailableBytes: number;
+  diskTotalBytes: number;
+  diskFreeBytes: number;
+}
+
 export interface ProblemView {
   summary: string;
   detail: string;
@@ -143,7 +152,8 @@ export interface AppDetailView extends Omit<AppSummaryView, 'environments'> {
   environment: string;
   createdFrom: string | null;
   runtime: { image: string; size: string; cpus: number | null; memoryMib: number | null } | null;
-  box: { id: string; state: string } | null;
+  /** `usage` is read from the running Box; null while it sleeps or does not answer. */
+  box: { id: string; state: string; usage: BoxUsageView | null } | null;
   services: ServiceView[];
   activeRelease: string | null;
   releases: ReleaseView[];

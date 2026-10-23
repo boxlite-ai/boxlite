@@ -37,6 +37,7 @@ import (
 	"github.com/boxlite-ai/microcloud/supervisor/internal/logs"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/proc"
 	"github.com/boxlite-ai/microcloud/supervisor/internal/state"
+	"github.com/boxlite-ai/microcloud/supervisor/internal/usage"
 )
 
 // Switcher is the gateway as seen from here.
@@ -137,6 +138,7 @@ func (m *Manager) Health() api.HealthResponse {
 		h.OK = true
 		h.Services = m.live.Statuses()
 	}
+	h.Box = usage.ReadBox(m.o.Store.ReleasesDir())
 	return h
 }
 

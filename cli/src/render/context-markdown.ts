@@ -1,4 +1,4 @@
-import type { AgentContext } from '@microcloud/shared';
+import { formatBytes, type AgentContext } from '@microcloud/shared';
 
 const cell = (v: unknown): string => (v === null || v === undefined || v === '' ? '—' : String(v).replace(/\|/g, '\\|').replace(/\n/g, ' '));
 
@@ -13,7 +13,11 @@ export function contextMarkdown(c: AgentContext): string {
   out.push(`- URL: ${c.urls.app}`);
   if (c.urls.health) out.push(`- Health: ${c.urls.health}`);
   out.push(`- Access: ${c.access.level}${c.access.source === 'online' ? ' (set online; overrides boxlite.toml)' : ''}`);
-  if (c.box) out.push(`- Box: ${c.box.state}${c.box.state === 'stopped' ? ' (asleep; the next request wakes it)' : ''}`);
+  if (c.box) {
+    const u = c.box.usage;
+    const usage = u ? `; memory ${formatBytes(u.memory_total_bytes - u.memory_available_bytes)} used of ${formatBytes(u.memory_total_bytes)}, disk ${formatBytes(u.disk_total_bytes - u.disk_free_bytes)} used of ${formatBytes(u.disk_total_bytes)}` : '';
+    out.push(`- Box: ${c.box.state}${c.box.state === 'stopped' ? ' (asleep; the next request wakes it)' : usage}`);
+  }
   if (c.runtime) out.push(`- Runtime: ${c.runtime.image}/${c.runtime.size}; build: ${c.runtime.build.length ? `\`${c.runtime.build.join(' && ')}\`` : 'none'}`);
   out.push(`- Control plane: ${c.control_plane}`);
   if (c.environments.length > 1) out.push(`- Environments: ${c.environments.map((e) => `${e.name} (${e.status})`).join(', ')}`);
@@ -29,7 +33,7 @@ export function contextMarkdown(c: AgentContext): string {
 
   out.push('## Services', '');
   if (!c.services.length) out.push('No services declared yet.');
-  else out.push(...tableMd(['service', 'exposed', 'runs', 'health path', 'state', 'health', 'restarts', 'last exit'], c.services.map((s) => [s.name, s.exposed ? 'yes' : '', s.command ?? (s.static ? `static ${s.static}` : ''), s.health_path, s.state, s.health, s.restarts, s.last_exit_code])));
+  else out.push(...tableMd(['service', 'exposed', 'runs', 'health path', 'state', 'health', 'restarts', 'last exit', 'memory'], c.services.map((s) => [s.name, s.exposed ? 'yes' : '', s.command ?? (s.static ? `static ${s.static}` : ''), s.health_path, s.state, s.health, s.restarts, s.last_exit_code, s.memory_bytes != null ? formatBytes(s.memory_bytes) : null])));
   out.push('');
 
   if (c.schedules.length) {

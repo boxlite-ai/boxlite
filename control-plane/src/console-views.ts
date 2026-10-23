@@ -1,6 +1,6 @@
 /** Builds the console's app summary and detail views from real CP state. */
 import { secretValue } from './orgs.js';
-import { errorFocus, missingVariableIn } from '@microcloud/shared';
+import { errorFocus, formatBytes, LOW_FREE_SHARE, missingVariableIn, type BoxUsage } from '@microcloud/shared';
 import type { AppRow, Deployment, EnvRow } from './db.js';
 import { ACTIVE_STATUSES, now } from './db.js';
 import type { Ctx } from './ctx.js';
@@ -11,7 +11,7 @@ import { failureView } from './console-deployment.js';
 import { endUserAuth } from './console-enduser.js';
 import { currentKey, handoffPrompt, maskKey } from './console-prompt.js';
 import { lastDeploy, releaseId, releaseViews, runningOf } from './console-releases.js';
-import type { AppDetailView, AppSummaryView, ConsoleStatus, DatabaseSummaryView, EnvironmentSummaryView, ProblemView, ServiceView, VolumeView } from './console-view-types.js';
+import type { AppDetailView, AppSummaryView, BoxUsageView, ConsoleStatus, DatabaseSummaryView, EnvironmentSummaryView, ProblemView, ServiceView, VolumeView } from './console-view-types.js';
 import type { VolumeInfo } from './boxlite.js';
 import { BOX_SIZES } from './platform.js';
 import { storedServices } from './resources.js';
@@ -87,16 +87,18 @@ export async function volumeViews(ctx: Pick<Ctx, 'boxlite'>, app: AppRow, env: E
 export interface LiveState {
   box: string | null;
   services: ServiceState[];
+  /** Only from a probe of a running Box. */
+  usage: BoxUsage | null;
 }
 
 /** BoxLite status of the env's Box (cached by Resources) and its services: probed when asked, else the last report. */
 async function liveState(ctx: Ctx, env: EnvRow, opts: { probe?: boolean } = {}): Promise<LiveState> {
   if (opts.probe) {
-    const { box, services } = await ctx.resources.liveServices(env);
-    return { box, services };
+    const { box, services, usage } = await ctx.resources.liveServices(env);
+    return { box, services, usage };
   }
   const box = env.box_id ? await ctx.resources.boxStatus(env.box_id).catch(() => 'unknown') : null;
-  return { box, services: storedServices(env) };
+  return { box, services: storedServices(env), usage: null };
 }
 
 export async function summaryView(ctx: Ctx, app: AppRow): Promise<AppSummaryView> {
@@ -181,9 +183,34 @@ function serviceViews(ctx: Pick<Ctx, 'store'>, env: EnvRow, spec: Spec | undefin
       restarts: r?.restarts ?? 0,
       ...(r?.last_exit_code !== undefined && r?.last_exit_code !== null ? { lastExitCode: r.last_exit_code } : {}),
       health: r?.health ?? 'none',
+      ...(r?.memory_bytes != null ? { memoryBytes: r.memory_bytes } : {}),
       recentErrors: troubled(r) ? recentErrors(ctx, env, name) : [],
     };
   });
+}
+
+/** The Box near its memory or disk limit, said plainly; the agent gets the commands in fixPrompt. */
+function usageProblems(app: AppRow, env: EnvRow, usage: BoxUsage | null, services: ServiceView[]): ProblemView[] {
+  if (!usage) return [];
+  const out: ProblemView[] = [];
+  const where = `the BoxLite app "${app.name}" (environment ${env.name})`;
+  if (usage.memory_total_bytes > 0 && usage.memory_available_bytes < usage.memory_total_bytes * LOW_FREE_SHARE) {
+    const top = services.filter((s) => s.memoryBytes !== undefined).sort((a, b) => b.memoryBytes! - a.memoryBytes!)[0];
+    const uses = top ? `; ${top.name} uses ${formatBytes(top.memoryBytes!)}` : '';
+    out.push({
+      summary: 'Running low on memory',
+      detail: `${formatBytes(usage.memory_available_bytes)} free of ${formatBytes(usage.memory_total_bytes)}${uses}. A service that runs out of memory is stopped and restarted.`,
+      fixPrompt: `${where} is nearly out of memory: ${formatBytes(usage.memory_available_bytes)} free of ${formatBytes(usage.memory_total_bytes)}${uses}.\nRead \`boxlite-app app context\` (next_actions names the fix), then either lower the memory use or choose a larger [runtime].size in boxlite.toml, and deploy again.`,
+    });
+  }
+  if (usage.disk_total_bytes > 0 && usage.disk_free_bytes < usage.disk_total_bytes * LOW_FREE_SHARE) {
+    out.push({
+      summary: 'The disk is nearly full',
+      detail: `${formatBytes(usage.disk_free_bytes)} free of ${formatBytes(usage.disk_total_bytes)}. Saving files fails once it is full.`,
+      fixPrompt: `${where} has ${formatBytes(usage.disk_free_bytes)} of disk left of ${formatBytes(usage.disk_total_bytes)}.\nFind large files with \`boxlite-app app volume ls <volume>\`, delete what is not needed with \`boxlite-app app volume rm <volume>:<path> --yes\`, and stop the code that keeps filling the disk.`,
+    });
+  }
+  return out;
 }
 
 function problemsOf(ctx: Pick<Ctx, 'store'>, app: AppRow, env: EnvRow, latest: Deployment | undefined, services: ServiceView[], reportedAny: boolean): ProblemView[] {
@@ -219,6 +246,9 @@ function problemsOf(ctx: Pick<Ctx, 'store'>, app: AppRow, env: EnvRow, latest: D
   }
   return out;
 }
+
+const usageView = (u: BoxUsage | null): BoxUsageView | null =>
+  u ? { memoryTotalBytes: u.memory_total_bytes, memoryAvailableBytes: u.memory_available_bytes, diskTotalBytes: u.disk_total_bytes, diskFreeBytes: u.disk_free_bytes } : null;
 
 export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: EnvRow): Promise<AppDetailView> {
   const state = await liveState(ctx, env, { probe: true });
@@ -285,7 +315,7 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
     environment: fresh.name,
     createdFrom: fresh.from_env,
     runtime: current ? { image: current.runtime.image, size: current.runtime.size, cpus: size?.cpus ?? null, memoryMib: size?.memory_mib ?? null } : null,
-    box: fresh.box_id ? { id: fresh.box_id, state: state.box ?? 'unknown' } : null,
+    box: fresh.box_id ? { id: fresh.box_id, state: state.box ?? 'unknown', usage: state.box === 'running' ? usageView(state.usage) : null } : null,
     services,
     activeRelease: fresh.live_deployment && fresh.box_id ? releaseId(fresh.live_deployment) : null,
     releases: releaseViews(ctx, app, fresh),
@@ -301,7 +331,7 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
     })),
     variables: spec ? { ...spec.variables } : null,
     platformVariables,
-    problems: problemsOf(ctx, app, fresh, latest, services, state.services.length > 0),
+    problems: [...problemsOf(ctx, app, fresh, latest, services, state.services.length > 0), ...usageProblems(app, fresh, state.box === 'running' ? state.usage : null, services)],
     deploying: active
       ? { id: releaseId(active.number), number: active.number, step: running?.name ?? null, detail: running?.detail ?? null, since: active.started_at ?? active.created_at }
       : null,
