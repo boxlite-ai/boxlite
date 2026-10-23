@@ -20,7 +20,7 @@ const CHARTS: Record<View, { label: string; config: ChartConfig }> = {
   requests: {
     label: 'Requests',
     config: {
-      ok: { label: 'Answered', color: 'hsl(var(--brand))' },
+      requests: { label: 'Requests', color: 'hsl(var(--brand))' },
       errors: { label: 'Errors (5xx)', color: 'hsl(var(--destructive))' },
     },
   },
@@ -53,7 +53,7 @@ export function TrafficPanel({ metrics: m }: { metrics: AppMetrics }) {
     () =>
       m.requests.map((requests, i) => ({
         hour: hourOf(i, m.requests.length),
-        ok: Math.max(0, requests - (m.errors[i] ?? 0)),
+        requests,
         errors: m.errors[i] ?? 0,
         p95: m.p95Ms[i],
         users: m.activeUsers[i] ?? 0,
@@ -177,7 +177,6 @@ export function TrafficPanel({ metrics: m }: { metrics: AppMetrics }) {
                   key={key}
                   dataKey={key}
                   type="monotoneX"
-                  stackId={view === 'requests' ? 'a' : undefined}
                   connectNulls={view === 'latency'}
                   stroke={`var(--color-${key})`}
                   fill={`url(#traffic-${key})`}

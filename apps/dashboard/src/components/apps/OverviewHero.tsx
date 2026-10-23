@@ -49,8 +49,9 @@ export function LiveCard({
   const preview = app.preview && !failing ? { ...app.preview, src: downloadUrl(app.preview.src) } : null
   const asleep = app.status === 'sleeping'
   return (
-    <section className="grid gap-x-10 gap-y-6 lg:grid-cols-[minmax(0,520px)_minmax(0,1fr)]">
-      <figure className="min-w-0 border border-border bg-card">
+    // One card: the app as visitors see it on the left, what is live and its facts on the right.
+    <section className="grid border border-border bg-card lg:grid-cols-[minmax(0,500px)_minmax(0,1fr)]">
+      <figure className="min-w-0 border-b border-border lg:border-b-0 lg:border-r">
         {/* The browser frame: the address once, here, with copy and open. */}
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           <span className="flex gap-[5px]" aria-hidden="true">
@@ -95,7 +96,7 @@ export function LiveCard({
         )}
       </figure>
 
-      <div className="flex min-w-0 flex-col justify-center gap-4">
+      <div className="flex min-w-0 flex-col gap-3 px-7 py-6">
         <span className="font-mono text-[10px] uppercase tracking-[2px] text-muted-foreground">
           <span className={failing ? 'text-destructive' : 'text-brand'}>▸</span>{' '}
           {failing ? 'Live · not healthy' : asleep ? 'Live · asleep until the next visit' : 'Live now'}
@@ -105,7 +106,7 @@ export function LiveCard({
             <button
               type="button"
               onClick={() => onGoTo('deployments', undefined, { deployment: String(active.number) })}
-              className="text-left font-display text-[24px] font-semibold leading-tight tracking-[-0.5px] text-foreground hover:underline"
+              className="line-clamp-2 text-left font-display text-[20px] font-semibold leading-snug tracking-[-0.3px] text-foreground hover:underline"
             >
               {active.summary}
             </button>
@@ -166,7 +167,6 @@ function MetaGrid({ app }: { app: AppDetail }) {
     },
     { label: 'Created', value: relTime(app.createdAt), title: new Date(app.createdAt).toLocaleString() },
     ...(runtime ? [{ label: 'Runtime', value: runtime }] : []),
-    ...(app.box ? [{ label: 'Box', value: `${app.box.id} · ${app.box.state}` }] : []),
     ...(services.length
       ? [
           {
@@ -187,7 +187,7 @@ function MetaGrid({ app }: { app: AppDetail }) {
     ...(app.database ? [{ label: 'Database', value: app.database.engine }] : []),
   ]
   return (
-    <dl className="mt-2 grid grid-cols-2 gap-x-8 gap-y-3 border-t border-border/60 pt-4 font-mono">
+    <dl className="mt-auto grid grid-cols-2 gap-x-8 gap-y-4 border-t border-border/60 pt-5 font-mono">
       {rows.map((r) => (
         <div key={r.label} className="flex min-w-0 flex-col gap-0.5">
           <dt className="text-[10px] uppercase tracking-[1.5px] text-muted-foreground">{r.label}</dt>
