@@ -211,7 +211,7 @@ export interface AppDatabaseDetail {
   tables?: AppTable[] | null
   migrations?: AppMigration[] | null
   backups?: AppBackup[] | null
-  /** How far back a restore can reach (Neon's history window). */
+  /** How far back a restore can reach (the database's history window). */
   restoreWindowHours?: number
   errors?: string[]
 }

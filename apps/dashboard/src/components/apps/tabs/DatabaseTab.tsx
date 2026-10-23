@@ -28,7 +28,6 @@ import { useAppAction } from '../useAppAction'
 import {
   CopyIconButton,
   copyText,
-  Disclosure,
   downloadCsv,
   EmptyNote,
   GridHeader,
@@ -36,12 +35,11 @@ import {
   HoverActions,
   SearchField,
   PromptBlock,
-  SpecRow,
   StatusBadge,
 } from '../spec'
 import { FilterChip, Screen, ToolButton, Workbench } from '../SubNav'
 
-// The environment's Postgres (a Neon branch), read through the control plane:
+// The environment's Postgres, read through the control plane:
 // its tables, a SQL console (read-only unless a write is confirmed; schema
 // changes on main go through migrations), migration history from
 // boxlite_migrations, backups (named restore points) and the connection the app
@@ -149,8 +147,9 @@ function Connection({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
         <div className="flex flex-col gap-5 px-[22px] py-[18px]">
           <div className="flex flex-col gap-1">
             <Label>Connection string</Label>
-            <span className="flex items-start gap-2">
-              <code className="min-w-0 break-all text-body text-foreground">{connection}</code>
+            {/* The real string is copied; the page shows its shape only (the password never leaves BoxLite). */}
+            <span className="flex items-center gap-2">
+              <code className="min-w-0 truncate text-body text-foreground">postgresql://•••••••••••••••• </code>
               <CopyIconButton text={connection} title="Copy connection string" />
             </span>
           </div>
@@ -168,14 +167,6 @@ function Connection({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
               </span>
             </div>
           </div>
-          <Disclosure>
-            <div className="max-w-[640px]">
-              <SpecRow label="Host">{db.host}</SpecRow>
-              <SpecRow label="Database">{db.name}</SpecRow>
-              <SpecRow label="User">{db.user}</SpecRow>
-              {db.branch && <SpecRow label="Branch">{db.branch}</SpecRow>}
-            </div>
-          </Disclosure>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 border-t border-border px-[22px] py-3 text-[12px] text-muted-foreground">
@@ -563,7 +554,7 @@ function Backups({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
   const [restoring, setRestoring] = useState<string | null>(null)
   const backups = db.backups ?? []
   const windowHours = db.restoreWindowHours ?? 6
-  // Restoring rewinds the Neon branch through its history, which only reaches this far back.
+  // Restoring rewinds the database through its history, which only reaches this far back.
   const restorable = (ts: string) => Date.now() - Date.parse(ts) < windowHours * 3_600_000
   const restore = async (id: string, at: string) => {
     const when = new Date(at).toLocaleString()
@@ -572,7 +563,7 @@ function Backups({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
       body: (
         <>
           Every row written in {app.environment} since then is replaced by the state at that time. Code, files and other
-          environments are not touched. The current state is kept as a separate Neon branch, so this can be undone.
+          environments are not touched. The current state is kept aside first, so this can be undone.
         </>
       ),
       confirmLabel: 'Restore',
@@ -606,9 +597,9 @@ function Backups({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
       padded={false}
     >
       <p className="pb-3 text-[12px] text-muted-foreground" data-testid="restore-window">
-        A backup names a point in the database&apos;s history; restoring rewinds {app.environment}&apos;s Neon branch to
-        it. Neon keeps {windowHours} hours of history on this plan, so a backup can be restored for {windowHours} hours
-        after it was taken. Every deployment that runs migrations records its own restore point too.
+        A backup names a point in the database&apos;s history; restoring rewinds {app.environment}&apos;s database to
+        it. The database keeps {windowHours} hours of history, so a backup can be restored for {windowHours} hours after
+        it was taken. Every deployment that runs migrations records its own restore point too.
       </p>
       {db.backups === null ? (
         <EmptyNote title="Backups could not be read">{db.errors?.join(' · ')}</EmptyNote>
@@ -632,7 +623,7 @@ function Backups({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
                 ) : (
                   <span
                     className="text-[12px] text-muted-foreground"
-                    title={`Older than Neon's ${windowHours}-hour history`}
+                    title={`Older than the database's ${windowHours}-hour history`}
                   >
                     outside the {windowHours} h window
                   </span>
@@ -805,7 +796,7 @@ export function DatabaseTab({
           </EmptyNote>
         ) : (
           <div className="flex items-center gap-2 py-8 text-[13px] text-muted-foreground">
-            <Spinner className="size-4" /> Connecting to the database (a sleeping Neon compute takes a few seconds)…
+            <Spinner className="size-4" /> Connecting to the database (a sleeping database takes a few seconds)…
           </div>
         )}
       </Screen>
