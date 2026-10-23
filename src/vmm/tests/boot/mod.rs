@@ -181,6 +181,8 @@ const LINUX_CMDLINE: &str = "earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 re
 const CONSOLE_CMDLINE: &str = "console=ttyS0 panic=-1 reboot=k";
 /// How long a real-kernel boot may take before the watchdog ends it.
 const BOOT_TIMEOUT: Duration = Duration::from_secs(30);
+/// The time the CMOS RTC reports, 2026-01-02T03:04:05Z, in nanoseconds.
+const CMOS_TIME: i64 = 1_767_323_045_000_000_000;
 
 /// `vcpu_count` vCPUs and 256 MiB of RAM for `kernel` and `initramfs`,
 /// booted with `cmdline`.
@@ -326,7 +328,8 @@ struct LinuxVm {
 }
 
 /// Builds a KVM VM for `config` with the legacy devices, COM1 writing to
-/// `console`. With `deliver_irqs` off, every device interrupt is dropped.
+/// `console` and the CMOS RTC stopped at `CMOS_TIME`. With `deliver_irqs`
+/// off, every device interrupt is dropped.
 fn linux_vm(config: &VmConfig, deliver_irqs: bool, console: Console) -> LinuxVm {
     let (writer, console) = ConsoleWorker::spawn(console.sink, console.capacity).unwrap();
     let gsi_4_edges = Arc::new(AtomicUsize::new(0));
@@ -346,7 +349,7 @@ fn linux_vm(config: &VmConfig, deliver_irqs: bool, console: Console) -> LinuxVm 
             zero_page = Some(ram.memory().read_obj(address).unwrap());
             Ok(setup.boot_regs)
         },
-        |chipset| add_legacy_devices(chipset, writer),
+        |chipset| add_legacy_devices(chipset, writer, Box::new(|| CMOS_TIME)),
     )
     .expect("create the KVM VM");
     LinuxVm {
@@ -370,6 +373,9 @@ struct LinuxRun {
     console: ConsoleWorker,
     /// How long the guest ran.
     elapsed: Duration,
+    /// The port and the MMIO reads and writes no device claimed.
+    unclaimed_ports: (u64, u64),
+    unclaimed_mmio: (u64, u64),
 }
 
 /// Boots `config` through `Vm::run` on the legacy devices, with the serial
@@ -401,12 +407,15 @@ fn run_linux(
     let elapsed = started.elapsed();
     drop(finished);
     watchdog.join().unwrap();
+    let buses = vm.chipset().buses();
     LinuxRun {
         zero_page,
         exit,
         gsi_4_edges: gsi_4_edges.load(Ordering::Relaxed),
         console,
         elapsed,
+        unclaimed_ports: buses.pio.unclaimed(),
+        unclaimed_mmio: buses.mmio.unclaimed(),
     }
 }
 
@@ -420,9 +429,11 @@ fn assert_reset(run: &LinuxRun, log: &str) {
         run.elapsed
     );
     eprintln!(
-        "boot: {:?}, {} GSI 4 edges, {} console bytes dropped",
+        "boot: {:?}, {} GSI 4 edges, unclaimed ports {:?} and MMIO {:?}, {} console bytes dropped",
         run.elapsed,
         run.gsi_4_edges,
+        run.unclaimed_ports,
+        run.unclaimed_mmio,
         run.console.dropped_bytes()
     );
 }
@@ -678,8 +689,10 @@ const INIT_MARKER: &str = "INIT-MARKER-0123456789ABCDEF";
 
 /// Boots the kernel named by `VMM_KERNEL` with its console on the 8250 driver
 /// and an `/init` that prints `INIT_MARKER` and restarts the machine. Linux
-/// must find a 16550A on IRQ 4, `/init`'s line must leave through the tty,
-/// and the restart must end the run with the i8042 reset.
+/// must find a 16550A on IRQ 4 and set its clock from the CMOS RTC, `/init`'s
+/// line must leave through the tty, and the restart must end the run with
+/// the i8042 reset. The only access no device claims is one port read,
+/// Linux's probe of the ISA DMA page register at 0x87.
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm and VMM_KERNEL naming an x86_64 vmlinux"]
 fn boots_linux_on_the_legacy_devices_until_init_restarts() {
@@ -701,6 +714,7 @@ fn boots_linux_on_the_legacy_devices_until_init_restarts() {
         &log,
         &[
             &serial_probe_line(),
+            "rtc_cmos rtc_cmos: setting system clock to 2026-01-02T03:04:05 UTC (1767323045)",
             INIT_MARKER,
             "reboot: Restarting system",
         ],
@@ -708,6 +722,8 @@ fn boots_linux_on_the_legacy_devices_until_init_restarts() {
     assert!(!log.contains("Kernel panic"), "{log}");
     assert!(run.gsi_4_edges > 0);
     assert_eq!(run.console.dropped_bytes(), 0);
+    assert_eq!(run.unclaimed_ports, (1, 0), "{log}");
+    assert_eq!(run.unclaimed_mmio, (0, 0));
 }
 
 /// The line Linux prints when it finds COM1 at its port and GSI.

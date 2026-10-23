@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The legacy platform under a real KVM vCPU, without a kernel: a flat
-//! 32-bit guest writes COM1, reads what no device holds, and resets
-//! through the i8042.
+//! 32-bit guest writes COM1, reads the CMOS seconds and what no device
+//! holds, and resets through the i8042.
 
 use std::{
     io::{self, Write},
@@ -22,6 +22,8 @@ use crate::{
 /// Where the guest stores what it read, and the byte it must never reach.
 const RESULTS: u64 = 0x2000;
 const AFTER_RESET: usize = 0xc;
+/// The CMOS RTC reports 2026-01-02T03:04:05Z.
+const CMOS_TIME: i64 = 1_767_323_045_000_000_000;
 
 /// Guest serial output, shared with the test.
 #[derive(Clone, Default)]
@@ -49,6 +51,11 @@ const PROGRAM: &[u8] = &[
     0xba, 0x80, 0x00, 0x00, 0x00,       // mov edx, 0x80: nobody's port
     0xec,                               // in al, dx
     0xa2, 0x00, 0x20, 0x00, 0x00,       // mov [0x2000], al
+    0xba, 0x70, 0x00, 0x00, 0x00,       // mov edx, 0x70
+    0xb0, 0x00, 0xee,                   // mov al, 0; out dx, al: CMOS seconds
+    0xba, 0x71, 0x00, 0x00, 0x00,       // mov edx, 0x71
+    0xec,                               // in al, dx
+    0xa2, 0x01, 0x20, 0x00, 0x00,       // mov [0x2001], al
     0xa1, 0x00, 0x00, 0x00, 0xd0,       // mov eax, [0xd0000000]: nobody's MMIO
     0xa3, 0x08, 0x20, 0x00, 0x00,       // mov [0x2008], eax
     0xc7, 0x05, 0x00, 0x00, 0x00, 0xd0, 0x78, 0x56, 0x34, 0x12, // mov dword [0xd0000000], 0x12345678
@@ -66,7 +73,7 @@ fn a_flat_guest_drives_the_legacy_platform_until_its_reset() {
     let (writer, mut console) = ConsoleWorker::spawn(Box::new(output.clone()), 1024).unwrap();
     let mut events = EventLoop::new().unwrap();
     let mut builder = ChipsetBuilder::new(guest.vm().clone(), events.sender());
-    add_legacy_devices(&mut builder, writer).unwrap();
+    add_legacy_devices(&mut builder, writer, Box::new(|| CMOS_TIME)).unwrap();
     let chipset = builder.build().unwrap();
 
     // The run stops at the first event, so the guest runs no instruction
@@ -86,6 +93,7 @@ fn a_flat_guest_drives_the_legacy_platform_until_its_reset() {
     let mut results = [0u8; 0x10];
     guest.read(RESULTS, &mut results);
     assert_eq!(results[0], 0xff, "nobody's port reads all ones");
+    assert_eq!(results[1], 0x05, "CMOS seconds, in BCD, from the clock");
     assert_eq!(&results[6..8], [0xff, 0xff], "a wide UART read is declined");
     assert_eq!(&results[8..12], [0xff; 4], "nobody's MMIO reads all ones");
     assert_eq!(
@@ -98,7 +106,7 @@ fn a_flat_guest_drives_the_legacy_platform_until_its_reset() {
         (1, 1),
         "the MMIO read and write"
     );
-    // 'O', 'K', the wide read, port 0x80, the MMIO read and write, and the
-    // reset.
-    assert_eq!(exits, 7);
+    // 'O', 'K', the wide read, port 0x80, the CMOS index and data, the MMIO
+    // read and write, and the reset.
+    assert_eq!(exits, 9);
 }

@@ -4,24 +4,33 @@
 //! The x86_64 legacy platform: the PC ports Linux expects at boot, and
 //! the windows KVM's in-kernel PIC, PIT and APICs serve.
 
-use super::{console::ConsoleWriter, i8042::I8042, serial::Serial8250};
+use super::{
+    cmos::{Clock, CmosRtc},
+    console::ConsoleWriter,
+    i8042::I8042,
+    serial::Serial8250,
+};
 use crate::{
     chipset::{BusKind, ChipsetBuilder},
     error::Result,
 };
 
-// COM1, the interrupt line (GSI) it raises, then the i8042 data and command ports.
+// COM1 and the interrupt line (GSI) it raises, the CMOS index port, whose
+// data port follows it, then the i8042 data and command ports.
 pub(crate) const COM1: u64 = 0x3f8;
 pub(crate) const COM1_GSI: u32 = 4;
+pub(crate) const CMOS: u64 = 0x70;
 pub(crate) const I8042_DATA: u64 = 0x60;
 pub(crate) const I8042_COMMAND: u64 = 0x64;
 
 /// Reserves the windows the host serves in the kernel, so a device placed
-/// there fails the build, then adds COM1 on GSI 4, writing to `console`, and
-/// the i8042, whose reset ends the VM.
+/// there fails the build, then adds COM1 on GSI 4, writing to `console`, the
+/// CMOS RTC, which reads the time from `clock`, and the i8042, whose reset
+/// ends the VM.
 pub(crate) fn add_legacy_devices(
     builder: &mut ChipsetBuilder,
     console: ConsoleWriter,
+    clock: Clock,
 ) -> Result<()> {
     for (base, len, owner) in [
         (0x20, 2, "in-kernel PIC"),
@@ -38,6 +47,10 @@ pub(crate) fn add_legacy_devices(
     builder.add("com1", |r| {
         r.pio(COM1, 8);
         Ok(Serial8250::new(r.line(COM1_GSI), console, r.event_sender()))
+    })?;
+    builder.add("cmos", |r| {
+        r.pio(CMOS, 2);
+        Ok(CmosRtc::new(clock))
     })?;
     builder.add("i8042", |r| {
         r.pio(I8042_DATA, 1);

@@ -143,6 +143,12 @@ impl<H: HostVm> Vm<H> {
     pub fn stop_handle(&self) -> StopHandle {
         StopHandle(self.sender.clone())
     }
+
+    /// The chipset, for tests that read its counters after a run.
+    #[cfg(test)]
+    pub(crate) fn chipset(&self) -> &Chipset {
+        &self.chipset
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
