@@ -361,9 +361,12 @@ const TEST = process.env['BOXLITE_E2E_NODE_TEST'] || 'all';
         fs.writeFileSync(src, 'persist-me\n');
         await b.copyIn(src, '/workspace/marker.txt');
         await b.stop();
-        await new Promise((r) => setTimeout(r, 1000));
+        const deadline = Date.now() + 60_000;
+        while ((await rt.getInfo(b.id))?.state.status !== 'stopped') {
+          if (Date.now() >= deadline) die('box never reached stopped before restart');
+          await new Promise((r) => setTimeout(r, 1000));
+        }
         await b.start();
-        await new Promise((r) => setTimeout(r, 2000));
         await b.copyOut('/workspace/marker.txt', dst);
         if (fs.readFileSync(dst, 'utf-8') !== 'persist-me\n') die(`rootfs data lost across stop/start`);
         console.log('LIFECYCLE_STOP_START=ok');

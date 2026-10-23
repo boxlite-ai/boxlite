@@ -11,7 +11,7 @@ import asyncio
 import boxlite
 import pytest
 
-from conftest import drain
+from conftest import drain, wait_for_box_status
 
 
 @pytest.mark.asyncio
@@ -41,9 +41,12 @@ async def test_wait_resolves_after_box_stop(rt, image):
 async def test_exec_on_stopped_box_is_typed_error(rt, image):
     """Trying to exec on a stopped box must return a typed client
     error (not 5xx). Catches API/runner mapping regressions."""
-    box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=False))
+    box = await rt.create(boxlite.BoxOptions(
+        image=image, auto_remove=False, auto_resume=False,
+    ))
     try:
         await box.stop()
+        await wait_for_box_status(rt, box.id, "stopped")
         # Now try to exec — should fail with a clean client error
         with pytest.raises(Exception) as exc_info:
             ex = await box.exec("sh", ["-c", "echo nope"], None)

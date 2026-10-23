@@ -190,9 +190,9 @@ permissions:
 # now bound that damage rather than one: every box the pytest cases create
 # carries auto_stop/auto_delete (apps/e2e/cases/conftest.py), so the stage
 # reclaims it within minutes; and the sweep step below clears what an older
-# run left behind. Boxes from the polyglot drivers and the CLI have neither —
-# they rely on their own teardown, and apps/e2e/README.md says what that
-# leaves open. Note this still bounds rather than eliminates: GitHub retains
+# run left behind. Detached CLI boxes have idle-stop bounds and sweepable names;
+# polyglot drivers rely on their own teardown. apps/e2e/README.md explains the
+# remaining cleanup gaps. Note this still bounds rather than eliminates: GitHub retains
 # only the newest *pending* run per group, so intermediate queued runs are
 # superseded before they ever start.
 #
