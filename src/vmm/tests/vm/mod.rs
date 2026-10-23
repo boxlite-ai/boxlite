@@ -121,6 +121,10 @@ fn a_rejected_mapping_returns_the_hypervisor_error_and_keeps_no_registration() {
 /// A chipset conflict fails the build before any RAM is registered, so the
 /// failed VM leaves nothing mapped and leaks no guest RAM.
 #[test]
+#[cfg_attr(
+    not(target_arch = "x86_64"),
+    expect(clippy::unit_arg, reason = "arm64 has no boot registers yet.")
+)]
 fn a_chipset_conflict_fails_before_any_ram_is_registered() {
     struct Idle;
 
