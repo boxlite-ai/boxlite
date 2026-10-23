@@ -1,6 +1,7 @@
 // Exercises every platform contract the e2e checks: PORT, health, DATABASE_URL, volumes, identity
-// headers, schedules, variables, secrets, logs, SIGTERM and the path prefix.
+// headers, schedules, variables, secrets, logs, SIGTERM, the path prefix and WebSocket upgrades.
 import http from 'node:http'
+import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs'
 import { join, extname } from 'node:path'
 import pg from 'pg'
@@ -55,6 +56,14 @@ const server = http.createServer(async (req, res) => {
     console.error(e.stack)
     json(res, 500, { error: e.message })
   }
+})
+// A minimal WebSocket server (no dependency): one text frame naming who connected, then close.
+server.on('upgrade', (req, socket) => {
+  if (new URL(req.url, 'http://x').pathname !== '/ws') return socket.destroy()
+  const accept = createHash('sha1').update(`${req.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64')
+  socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`)
+  const msg = Buffer.from(`hello over websocket; authorization ${req.headers.authorization ? 'present' : 'none'}`)
+  socket.write(Buffer.concat([Buffer.from([0x81, msg.length]), msg]))
 })
 server.listen(Number(process.env.PORT), '0.0.0.0', () => console.log(`listening on ${process.env.PORT}`))
 process.on('SIGTERM', () => { console.log('SIGTERM, closing'); server.close(() => process.exit(0)) })

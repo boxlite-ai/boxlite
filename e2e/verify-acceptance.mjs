@@ -27,6 +27,8 @@ const EXPECT = {
   m2: { page: [/type=["']?file/i], needs: ['volume'] },
   m3: { page: [/\.boxlite\/auth\/login|github/i], needs: ['database', 'auth'] },
   m4: { page: [/\.boxlite\/auth\/login|github/i], needs: ['database', 'auth', 'volume', 'schedule', 'test env'] },
+  m5: { page: [/<form|<input|\.boxlite\/auth\/login|github/i], needs: ['database'] },
+  m6: { page: [], needs: ['database', 'public'] },
 }
 
 /** The app's page; a sleeping app first answers 503 with the platform's wake-up page, so wait for it. */
@@ -60,6 +62,7 @@ for (const f of readdirSync(DIR).filter((n) => n.endsWith('.app.json'))) {
   if (exp.needs.includes('volume')) check('declared a volume', spec?.volumes?.length, JSON.stringify(spec?.volumes?.map((v) => v.mount)))
   if (exp.needs.includes('auth')) check('declared GitHub sign-in', spec?.auth?.providers?.includes('github'), JSON.stringify(spec?.auth))
   if (exp.needs.includes('schedule')) check('declared a weekly schedule', spec?.schedules?.length, JSON.stringify(spec?.schedules?.map((x) => x.cron)))
+  if (exp.needs.includes('public')) check('opened it to anyone with the link, as asked', status.envs?.find((e) => e.name === ENV)?.access === 'public' || /public/.test(JSON.stringify(spec?.access ?? '')), JSON.stringify(spec?.access))
   if (exp.needs.includes('test env')) check('tried it in a test environment first', status.envs?.some((e) => e.name !== 'main'), JSON.stringify(status.envs?.map((e) => `${e.name}:${e.status}`)))
 
   // Console side: the same calls the console pages make.

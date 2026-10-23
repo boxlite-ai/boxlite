@@ -183,6 +183,23 @@ async function main() {
     assert(other.status === 401, `wrong key accepted: ${other.status}`)
     return 'ok'
   })
+  await check('a WebSocket opens through the app URL with the App key, and the app never sees the key', async () => {
+    const ws = new WebSocket(`${APP_URL.replace(/^http/, 'ws').replace(/\/+$/, '')}/ws`, { headers: { authorization: `Bearer ${KEY}` } })
+    const text = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('no message within 15 s')), 15_000)
+      ws.onmessage = (e) => { clearTimeout(t); resolve(String(e.data)) }
+      ws.onerror = (e) => { clearTimeout(t); reject(new Error(`websocket error: ${e.message ?? e.type}`)) }
+    })
+    ws.close()
+    assert(text === 'hello over websocket; authorization none', `got "${text}"`)
+    const anon = await new Promise((resolve) => {
+      const w = new WebSocket(`${APP_URL.replace(/^http/, 'ws').replace(/\/+$/, '')}/ws`)
+      w.onopen = () => { w.close(); resolve('opened') }
+      w.onerror = () => resolve('refused')
+    })
+    assert(anon === 'refused', 'an anonymous WebSocket reached the private app')
+    return text
+  })
   await check('the app never sees the App key', async () => {
     const e = await (await app('/api/headers')).json()
     assert(!JSON.stringify(e).includes(KEY), 'App key reached the app')
