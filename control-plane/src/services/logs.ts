@@ -25,11 +25,6 @@ export function storedLevelsAtLeast(min: 'warn' | 'error'): string[] {
   return min === 'error' ? [...ERROR_LEVELS] : [...WARN_LEVELS, ...ERROR_LEVELS];
 }
 
-/**
- * A deployment's log lines, oldest first, at most `limit`. CP lines carry the deployment number,
- * supervisor lines the release it was told to run; for apply and rollback those differ, so the
- * release's lines inside the deployment's time window are merged in.
- */
 /** Lines a little after a deployment finished still belong to it: the settle window, the first requests. */
 const AFTER_FINISH_MS = 30_000;
 
@@ -44,6 +39,22 @@ export function deploymentLogs(store: Pick<Store, 'logs'>, envId: string, d: Dep
   const release =
     d.release && d.release !== d.number ? store.logs(envId, { deployment: d.release, since: d.started_at ?? d.created_at, ...(until ? { until } : {}), limit }) : [];
   return [...own, ...release].sort((a, b) => (a.id ?? 0) - (b.id ?? 0)).slice(-limit);
+}
+
+/**
+ * What the Logs tab shows for one deployment (`?deployment=N`): every line tagged with it and, for
+ * an apply or rollback, the output of the release it restarted, from its start until a later
+ * deployment went live. Unlike deploymentLogs this keeps the runtime output, not just the rollout:
+ * the process an apply restarts logs under its release's number, not the apply's.
+ */
+export function linesOfDeployment(store: Pick<Store, 'logs' | 'deploymentsWhere'>, envId: string, d: Deployment, opts: { since: string; limit: number }): LogLine[] {
+  const own = store.logs(envId, { deployment: d.number, since: opts.since, limit: opts.limit });
+  if (!d.release || d.release === d.number) return own;
+  const next = store.deploymentsWhere('env_id = ? AND number > ? AND live_at IS NOT NULL ORDER BY number LIMIT 1', envId, d.number)[0];
+  const start = d.started_at ?? d.created_at;
+  const until = next ? (next.started_at ?? next.created_at) : undefined;
+  const release = store.logs(envId, { deployment: d.release, since: start > opts.since ? start : opts.since, ...(until ? { until } : {}), limit: opts.limit });
+  return [...own, ...release].sort((a, b) => (a.id ?? 0) - (b.id ?? 0)).slice(-opts.limit);
 }
 
 /** `<ts> [<source>] <line>`: the log tail of a deployment, and what the failure classifier reads. */

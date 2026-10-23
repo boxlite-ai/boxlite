@@ -532,6 +532,7 @@ POST /apps/{app}/schedules/{name}/run?env=          → {name, status, ms, start
 GET  /apps/{app}/volumes/{name}/files?env=&path=    → directory JSON or file bytes (attachment); proxies /v1 …/volumes/{name}/files
 PUT  /apps/{app}/volumes/{name}/files?env=&path=&overwrite=1   body = bytes → {volume, path, bytes, replaced}
 GET  /apps/{app}/logs?env=&since=&limit=&deployment=N          deployment filter (visitor `access` lines are left out then)
+                                                              for an apply or rollback also the output of the release it restarted, until a later deployment went live
 ```
 
 `AppDetail` gains `deploying {id, number, step, detail, since}`, `schedules[]` (cron, target, nextRun, lastRun, lastStatus), `liveVariables`, per-service `recentErrors[]`, per-release `startedAt`, `running {name, detail, since}` and `cause`; problems carry `deployment` and `serving`. `AppSummary` gains `progress` ("Deploying #4 · build"). Activity rows carry `actorKind` (agent | console | admin | system) and `link {tab, section?, deployment?}`. Auth carries `events[]` (the env's `auth` log source) and each sign-in method its `redirectUri`. Database tables carry exact row counts; table rows carry `types[]`; the summary carries `restoreWindowHours` (6). A name of a soft-deleted app is refused on create with `conflict` until it is purged or restored.

@@ -358,6 +358,25 @@ test('open-ticket opens a private app on its own origin; requests there feed acc
   assert.equal(app.metrics.requests.length, 24);
 });
 
+test('the Logs filter for an apply shows the output of the release it restarted, until the next deployment', async () => {
+  const { key } = await createViaConsole();
+  await deploy(key, TOML);
+  const env = mainEnv();
+  const first = h.ctx.store.deployment(env.id, 1)!;
+  const at = (s: number) => new Date(Date.now() + s * 1000).toISOString();
+  const apply = h.ctx.store.insertDeployment({ ...first, kind: 'apply', release: 1, created_at: at(1), started_at: at(1), finished_at: at(2), live_at: at(2), idempotency_key: null }, env.id);
+  const log = (s: number, line: string, deployment: number) => ({ ts: at(s), source: 'web', level: 'info', line, deployment });
+  h.ctx.store.appendLogs(env.id, [log(0, 'before the apply', 1), log(3, 'after the restart', 1), log(3, 'apply applied', apply.number)]);
+  const next = h.ctx.store.insertDeployment({ ...first, kind: 'deploy', release: null, created_at: at(4), started_at: at(4), finished_at: at(5), live_at: at(5), idempotency_key: null }, env.id);
+  h.ctx.store.appendLogs(env.id, [log(6, 'after the next deploy', 1)]);
+
+  const lines = (await api(`/apps/crm/logs?since=1h&deployment=${apply.number}`)).body.map((l: any) => l.line);
+  assert.ok(lines.includes('after the restart') && lines.includes('apply applied'), JSON.stringify(lines));
+  assert.ok(!lines.includes('before the apply') && !lines.includes('after the next deploy'), JSON.stringify(lines));
+  assert.ok(next.number > apply.number);
+  assert.deepEqual((await api('/apps/crm/logs?since=1h&deployment=99')).body, []);
+});
+
 test('sleep stops the Box and is recorded; delete is soft, restorable, then purged with its Box', async () => {
   const { key } = await createViaConsole();
   await deploy(key, TOML);
