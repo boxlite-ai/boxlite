@@ -36,23 +36,8 @@ pub(in crate::commands::serve) async fn create_box(
         );
     }
 
-    let volumes = match state
-        .host_paths
-        .resolve(req.volumes.as_deref().unwrap_or_default())
-    {
-        Ok(volumes) => volumes,
-        Err(e) => {
-            return error_response(
-                StatusCode::BAD_REQUEST,
-                e.to_string(),
-                "InvalidArgumentError",
-                "invalid_argument",
-            );
-        }
-    };
-
     let options = match build_box_options(&req) {
-        Ok(options) => boxlite::BoxOptions { volumes, ..options },
+        Ok(options) => options,
         Err(e) => {
             return error_response(
                 StatusCode::BAD_REQUEST,

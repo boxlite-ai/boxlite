@@ -125,19 +125,6 @@ permissive (accepts any/no bearer) — the zero-config local-dev default. A
 permissive server only binds to loopback: `serve` refuses to start on any
 other `--host` (e.g. `0.0.0.0`) unless an API key is set.
 
-**Host paths.** A create may bind a directory of the machine running `serve`,
-for example an agent workspace:
-`"volumes": [{"host_path": "/srv/agents/a1", "guest_path": "/workspace", "read_only": false}]`.
-It is accepted only when `serve` was started with `--host-path-root <DIR>`
-(repeatable) and the path, with `..` and symlinks resolved, is a direct entry of
-one of those directories; otherwise the create returns `400`. The root itself and
-anything deeper are refused, and roots may not nest, because the runtime resolves
-the path again at every boot: a box writing inside its own bind could otherwise
-turn a deeper bind of another box into a symlink to `/` before that box restarts.
-Without the flag every host path is refused. `managed_volume` entries are always
-refused, since `serve` has no volume backend. boxlite's own REST client does not
-send host paths, so only raw HTTP callers can use them.
-
 ### Box CRUD & Lifecycle
 
 | Method | Path                                  | Handler             | Description                    |
@@ -446,7 +433,6 @@ sets `reaping_kill` under one lock acquisition.
 |----------|-----------|--------------------------|
 | `--port` | `8100`    | TCP port to listen on    |
 | `--host` | `127.0.0.1` | Address to bind; non-loopback requires `--api-key` |
-| `--host-path-root` | unset | Directory whose direct entries `volumes[].host_path` may bind; repeatable, never nested. Unset refuses every host path. |
 
 ### Internal Constants
 

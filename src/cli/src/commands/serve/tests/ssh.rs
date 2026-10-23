@@ -389,7 +389,6 @@ async fn serve_over(
         api_key: api_key.map(str::to_string),
         lifecycle: RwLock::new(HashMap::new()),
         last_activity: RwLock::new(HashMap::new()),
-        host_paths: Default::default(),
     });
     let (base, server) = serve_router(Arc::clone(&state)).await;
     (base, state, server)

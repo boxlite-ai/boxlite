@@ -4,11 +4,9 @@
 //! over HTTP so that `Boxlite.rest()` clients can connect.
 
 mod handlers;
-mod host_paths;
 mod types;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -35,7 +33,6 @@ use boxlite::{
 use crate::cli::GlobalFlags;
 use crate::defaults::{LOCAL_SERVE_HOST, LOCAL_SERVE_PORT};
 
-use self::host_paths::HostPathPolicy;
 use self::types::{
     BoxResponse, CreateBoxRequest, ErrorBody, ErrorDetail, ExecRequest, NetworkInfoResponse,
 };
@@ -73,11 +70,6 @@ pub struct ServeArgs {
         value_parser = parse_api_key
     )]
     pub api_key: Option<String>,
-
-    /// Directory whose direct entries a create may bind as `volumes[].host_path`
-    /// from this machine; repeatable, never nested. Unset refuses every host path.
-    #[arg(long = "host-path-root", value_name = "DIR")]
-    pub host_path_roots: Vec<PathBuf>,
 }
 
 // ============================================================================
@@ -95,8 +87,6 @@ struct AppState {
     /// Optional expected API key (`--api-key` / `$BOXLITE_SERVE_API_KEY`).
     /// `None` ⇒ permissive (no auth enforced).
     api_key: Option<String>,
-    /// Directories `volumes[].host_path` may bind from (`--host-path-root`).
-    host_paths: HostPathPolicy,
     /// Lifecycle deadlines per box, in seconds.
     ///
     /// Held here rather than in `BoxOptions` because the engine accepts neither
@@ -1141,9 +1131,6 @@ fn volume_info_to_response(info: &boxlite::runtime::types::VolumeInfo) -> types:
     }
 }
 
-/// Turn a create request into box options. `req.volumes` is left out: what
-/// the server may bind is policy, so the create handler resolves it against
-/// `HostPathPolicy` and sets `volumes` itself.
 fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::BoxliteError> {
     let rootfs = if let Some(ref path) = req.rootfs_path {
         RootfsSpec::RootfsPath(path.clone())
@@ -1207,6 +1194,14 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
     // the default-flip (jailer + seccomp on for Linux/macOS) applies
     // uniformly. Operators who want a different policy run the
     // server with a different default; clients cannot relax it.
+
+    if let Some(volumes) = &req.volumes
+        && !volumes.is_empty()
+    {
+        return Err(boxlite::BoxliteError::InvalidArgument(
+            "managed volumes are not supported by boxlite serve".into(),
+        ));
+    }
 
     // An empty name or value can never substitute anything. Reject at the
     // boundary so this server agrees with the Cloud API's IsNotEmpty and the
@@ -1960,7 +1955,6 @@ fn build_router(state: Arc<AppState>) -> Router {
 
 pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     check_bind_auth(&args.host, args.api_key.as_deref())?;
-    let host_paths = HostPathPolicy::from_roots(&args.host_path_roots)?;
 
     // A server owns an embedded runtime. Client connection settings must not
     // turn it into a proxy merely because a credential profile or REST URL is
@@ -1973,7 +1967,6 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
         boxes: RwLock::new(HashMap::new()),
         executions: RwLock::new(HashMap::new()),
         api_key: args.api_key.clone(),
-        host_paths,
         lifecycle: RwLock::new(HashMap::new()),
         last_activity: RwLock::new(HashMap::new()),
     });
@@ -2010,7 +2003,6 @@ mod tests {
     use boxlite::runtime::options::NetworkSpec;
     use std::time::Duration;
 
-    mod host_paths;
     mod ssh;
 
     // --- API-key auth decision (pure; no runtime/network needed) ---
@@ -2217,36 +2209,17 @@ mod tests {
     }
 
     #[test]
-    /// The #942 request shape: an agent workspace on this machine, bound at
-    /// `/workspace`, once the operator has allowed its parent directory.
-    fn build_box_options_binds_a_host_path_volume_under_a_root() {
-        let root = tempfile::tempdir().unwrap();
-        let workspace = root.path().join("agent-1");
-        std::fs::create_dir(&workspace).unwrap();
-        let body = serde_json::json!({
-            "image": "alpine:latest",
-            "volumes": [{
-                "host_path": workspace,
-                "guest_path": "/workspace",
-                "read_only": true,
-            }],
-        });
-        let req: super::types::CreateBoxRequest = serde_json::from_value(body).unwrap();
-        let host_paths = HostPathPolicy::from_roots(&[root.path().to_path_buf()]).unwrap();
-        let opts = BoxOptions {
-            volumes: host_paths
-                .resolve(req.volumes.as_deref().unwrap_or_default())
-                .expect("a host path under a root binds"),
-            ..build_box_options(&req).expect("build")
-        };
+    fn build_box_options_rejects_nonempty_volumes() {
+        let req: super::types::CreateBoxRequest = serde_json::from_str(
+            r#"{"image":"alpine:latest","volumes":[{"managed_volume":"v1","guest_path":"/data"}]}"#,
+        )
+        .expect("body with volumes must deserialize (accepted, then rejected)");
 
-        assert_eq!(opts.volumes.len(), 1);
-        assert_eq!(
-            std::path::Path::new(&opts.volumes[0].host_path),
-            workspace.canonicalize().unwrap()
+        let err = build_box_options(&req).expect_err("non-empty volumes must be rejected");
+        assert!(
+            matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("managed volumes")),
+            "unexpected error: {err}"
         );
-        assert_eq!(opts.volumes[0].guest_path, "/workspace");
-        assert!(opts.volumes[0].read_only);
     }
 
     #[test]
@@ -2321,7 +2294,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         }
@@ -3102,7 +3074,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         });
@@ -3174,51 +3145,6 @@ mod tests {
             "volume mounts",
         )
         .await;
-    }
-
-    /// The create handler is where host paths are checked: without a
-    /// `--host-path-root` a bind is refused before any box exists.
-    #[tokio::test]
-    async fn create_box_refuses_a_host_path_without_a_root_before_provisioning() {
-        let home = tempfile::tempdir().expect("runtime home");
-        let runtime = BoxliteRuntime::new_for_test(boxlite::BoxliteOptions {
-            home_dir: home.path().join("boxlite"),
-            ..Default::default()
-        })
-        .expect("local runtime");
-        let state = Arc::new(AppState {
-            runtime: runtime.clone(),
-            boxes: RwLock::new(HashMap::new()),
-            executions: RwLock::new(HashMap::new()),
-            api_key: None,
-            host_paths: Default::default(),
-            lifecycle: RwLock::new(HashMap::new()),
-            last_activity: RwLock::new(HashMap::new()),
-        });
-        let req: types::CreateBoxRequest = serde_json::from_value(serde_json::json!({
-            "image": "alpine:latest",
-            "volumes": [{"host_path": home.path(), "guest_path": "/workspace"}],
-        }))
-        .expect("request");
-
-        let response = handlers::boxes::create_box(State(state), axum::Json(req)).await;
-
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body");
-        let error: serde_json::Value = serde_json::from_slice(&body).expect("JSON response");
-        assert!(
-            error["error"]["message"]
-                .as_str()
-                .is_some_and(|message| message.contains("--host-path-root")),
-            "{error}"
-        );
-        assert!(
-            runtime.list_info().await.expect("list boxes").is_empty(),
-            "a refused host path must not provision a box"
-        );
-        runtime.shutdown(Some(1)).await.expect("shutdown runtime");
     }
 
     /// Build an `ActiveExecution` backed by a stub `Execution` whose
@@ -3549,7 +3475,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         });
@@ -3617,7 +3542,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         });
@@ -3683,7 +3607,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         });
@@ -3741,7 +3664,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         };
@@ -3786,7 +3708,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         });
@@ -3840,7 +3761,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         });
@@ -3903,7 +3823,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         });
@@ -4014,7 +3933,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         });
@@ -4060,7 +3978,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         };
@@ -4103,7 +4020,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         };
@@ -4146,7 +4062,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         };
@@ -4197,7 +4112,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         });
@@ -4256,7 +4170,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: Some("expected-key".to_string()),
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         });
@@ -4304,7 +4217,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         });
@@ -4589,7 +4501,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         };

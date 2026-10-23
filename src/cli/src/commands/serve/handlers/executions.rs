@@ -858,7 +858,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         });
@@ -944,7 +943,6 @@ mod tests {
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
             api_key: None,
-            host_paths: Default::default(),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
         });

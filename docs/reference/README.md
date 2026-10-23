@@ -42,12 +42,6 @@ implementation currently serves all 32 paths:
 | `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | registries, `network/tunnel`, `network/inbound`. Volume routes are registered but every operation answers `400 UnsupportedError`, as do `images/usage` and both alias write routes |
 | reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, and `DELETE …/executions/{exec_id}` (kill) |
 
-`boxlite serve` also goes beyond the contract in one place: started with
-`--host-path-root`, its `POST /v1/boxes` accepts `volumes[].host_path`, a
-directory of the serving machine that the spec's `VolumeSpec` does not define.
-The [serve README](../../src/cli/src/commands/serve/README.md#auth--config)
-describes which paths it binds.
-
 Read each server's routes rather than either README — both under-report.
 `GET /config` does not close this gap: its feature flags (`tty_enabled`,
 `streaming_enabled`, `snapshots_enabled`, `clone_enabled`, `export_enabled`,

@@ -58,11 +58,12 @@ pub(super) struct CreateBoxRequest {
     /// `build_box_options`, matching the Go SDK's own default.
     #[serde(default)]
     pub secrets: Option<Vec<SecretSpecRequest>>,
-    /// Host directories to bind, allowed only under an operator's
-    /// `--host-path-root` (see `host_paths`). Managed volumes deserialize so
-    /// they are refused by name: `serve` has no volume backend.
+    /// Managed volumes are not supported by `boxlite serve` (no volume
+    /// backend). Accepted here only so a combined secrets+volumes request does
+    /// not fail deserialization on an unrelated field; rejected explicitly in
+    /// `build_box_options` when non-empty.
     #[serde(default)]
-    pub volumes: Option<Vec<VolumeSpecRequest>>,
+    pub volumes: Option<Vec<serde_json::Value>>,
     // `security` / `security_settings` are intentionally absent from
     // the REST wire schema. Sandbox security is the operator's
     // policy, set server-side. Because the struct carries
@@ -71,19 +72,6 @@ pub(super) struct CreateBoxRequest {
     // serde_json::from_str — there is no quiet fall-through. See
     // `build_box_options_rejects_client_supplied_security_*` tests
     // below for the wire-shape pin.
-}
-
-/// One entry of `volumes`: exactly one of `managed_volume` or `host_path`.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct VolumeSpecRequest {
-    #[serde(default)]
-    pub managed_volume: Option<String>,
-    #[serde(default)]
-    pub host_path: Option<String>,
-    pub guest_path: String,
-    #[serde(default)]
-    pub read_only: bool,
 }
 
 #[derive(Deserialize)]
