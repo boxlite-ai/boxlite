@@ -309,9 +309,12 @@ Usage: `boxlite-app app curl <path> [options]`
 | `--as <email>` | act as this signed-in end user (a 15 minute test session) |  |
 | `--role <role>` | with --as: owner (someone who manages the App in the console) or user (default); the app sees it as X-BoxLite-User-Role |  |
 | `--fail` | exit 1 (code http_error) when the status is 400 or above |  |
+| `--expect <statuses>` | exit 1 (code http_unexpected) unless the status is one of these, e.g. 302 or 200,201 |  |
+| `--body` | print only the response body (with --json, the parsed JSON) |  |
+| `--raw-headers` | show Set-Cookie values (redacted by default) |  |
 
 - Network: talks to the control plane
-- `--json`: `{ url, method, status, ok, ms, headers: Record<string, string | string[]>, body: string, body_json?: unknown, truncated: boolean, as: { email, role, expires_at } | null }`
+- `--json`: `{ url, method, status, ok (2xx or 3xx), redirect: string | null, expected?, as_expected?, ms, timing: { test_session_ms, request_ms }, headers (Set-Cookie values redacted), body_json (a JSON body) | body (text), truncated: boolean, as: { email, role, expires_at } | null }; --body: the body alone`
 - Exit codes: 0, 1, 2, 3, 4, 6
 
 ```sh
@@ -319,6 +322,8 @@ boxlite-app app curl /healthz
 boxlite-app app curl /api/items -X POST -d '{"title":"x"}' --as qa@example.com --json
 boxlite-app app curl /app --fail
 boxlite-app app curl /admin --as owner@example.com --role owner
+boxlite-app app curl /.boxlite/auth/login --expect 302
+boxlite-app app curl /api/leaderboard --body --json
 ```
 
 ### `boxlite-app app open`

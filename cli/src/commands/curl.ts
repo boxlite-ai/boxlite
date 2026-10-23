@@ -20,6 +20,27 @@ export interface CurlOptions {
   as?: string;
   role?: string;
   fail?: boolean;
+  /** Comma-separated statuses that count as success, e.g. "302" or "200,201"; any other exits 1. */
+  expect?: string;
+  /** Print only the response body (with --json: the parsed body when it is JSON). */
+  body?: boolean;
+  /** Show Set-Cookie values; by default they are redacted (session material stays out of agent logs). */
+  rawHeaders?: boolean;
+}
+
+/** `name=<redacted>; Path=/; HttpOnly`: what a Set-Cookie does, without the session it carries. */
+export function redactSetCookie(cookie: string): string {
+  const [pair = '', ...attrs] = cookie.split(';');
+  const name = pair.split('=')[0]?.trim() ?? '';
+  return [`${name}=<redacted>`, ...attrs.map((a) => a.trim())].join('; ');
+}
+
+/** `--expect 302` / `200,201`: the statuses that count as success. */
+function expected(value: string | undefined): number[] | null {
+  if (!value) return null;
+  const codes = value.split(',').map((s) => Number(s.trim()));
+  if (codes.some((c) => !Number.isInteger(c) || c < 100 || c > 599)) throw new MicrocloudError('usage', `--expect takes HTTP statuses like 200 or 302,303 (got "${value}")`, '`boxlite-app app curl /path --expect 200`');
+  return codes;
 }
 
 /** Appends `path` to the environment URL the control plane returned, whatever its shape. */
@@ -81,6 +102,8 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
     }
     headers['content-type'] = json ? 'application/json' : 'text/plain; charset=utf-8';
   }
+  const expect = expected(opts.expect);
+  const sessionStarted = Date.now();
   let as: { email: string; role: EndUserRole; expires_at?: string } | null = null;
   const role = roleOption(opts.role);
   if (role && !opts.as) throw new MicrocloudError('usage', '--role needs --as <email>', `\`boxlite-app app curl <path> --as owner@example.com --role ${role}\``);
@@ -89,6 +112,7 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
     headers.cookie = headers.cookie ? `${headers.cookie}; ${s.cookie}` : s.cookie;
     as = { email: s.user?.email ?? opts.as, role: s.role ?? role ?? 'user', expires_at: s.expires_at };
   }
+  const sessionMs = as ? Date.now() - sessionStarted : 0;
   const method = (opts.request ?? (body !== undefined ? 'POST' : 'GET')).toUpperCase();
   const started = Date.now();
   const send = () =>
@@ -123,7 +147,7 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
   const ms = Date.now() - started;
   const text = await res.text();
   const respHeaders = Object.fromEntries([...res.headers.entries()].filter(([k]) => k !== 'set-cookie'));
-  const setCookie = res.headers.getSetCookie();
+  const setCookie = opts.rawHeaders ? res.headers.getSetCookie() : res.headers.getSetCookie().map(redactSetCookie);
   let bodyJson: unknown;
   if ((res.headers.get('content-type') ?? '').includes('json')) {
     try {
@@ -132,20 +156,33 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
       bodyJson = undefined;
     }
   }
+  const redirect = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
   const result = {
     url: url.href,
     method,
     status: res.status,
-    ok: res.ok,
+    // The request worked and the app answered without an error: 2xx, or a redirect (see `redirect`).
+    ok: res.status < 400,
+    redirect,
+    ...(expect ? { expected: expect, as_expected: expect.includes(res.status) } : {}),
     ms,
+    timing: { test_session_ms: sessionMs, request_ms: ms },
     headers: { ...respHeaders, ...(setCookie.length ? { 'set-cookie': setCookie } : {}) },
-    body: text.slice(0, BODY_MAX_JSON),
-    ...(bodyJson !== undefined ? { body_json: bodyJson } : {}),
+    // A JSON body is given once, parsed; any other body as text.
+    ...(bodyJson !== undefined ? { body_json: bodyJson } : { body: text.slice(0, BODY_MAX_JSON) }),
     truncated: text.length > BODY_MAX_JSON,
     as,
   };
+  if (expect && !expect.includes(res.status)) {
+    throw new MicrocloudError('http_unexpected', `${method} ${url.pathname} answered ${res.status}, expected ${expect.join(' or ')}`, res.status >= 500 ? '`boxlite-app app logs --since 5m --level error` shows what the app printed' : res.status === 401 || res.status === 403 ? 'add `--as qa@example.com` to act as a signed-in user' : 'rerun without --expect to see the whole response', { status: res.status, url: url.href, redirect, body: text.slice(0, 2000) });
+  }
   if (opts.fail && res.status >= 400) {
     throw new MicrocloudError('http_error', `${method} ${url.pathname} answered ${res.status}`, `\`boxlite-app app logs --since 5m --level error\` shows what the app printed`, { status: res.status, url: url.href, body: text.slice(0, 2000) });
+  }
+  if (opts.body) {
+    if (ctx.json) ctx.out.data(bodyJson !== undefined ? bodyJson : text);
+    else ctx.out.line(text);
+    return;
   }
   ctx.out.data(result);
   ctx.out.line(`HTTP ${res.status} ${res.statusText}  ${method} ${url.href}  ${ms} ms${as ? `  as ${as.email}${as.role === 'owner' ? ' (owner)' : ''}` : ''}`);
@@ -198,12 +235,15 @@ export function registerCurl(app: Command, make: MakeCtx): void {
       .option('--as <email>', 'act as this signed-in end user (a 15 minute test session)')
       .option('--role <role>', 'with --as: owner (someone who manages the App in the console) or user (default); the app sees it as X-BoxLite-User-Role')
       .option('--fail', 'exit 1 (code http_error) when the status is 400 or above')
+      .option('--expect <statuses>', 'exit 1 (code http_unexpected) unless the status is one of these, e.g. 302 or 200,201')
+      .option('--body', 'print only the response body (with --json, the parsed JSON)')
+      .option('--raw-headers', 'show Set-Cookie values (redacted by default)')
       .action(async (path: string, opts: CurlOptions, cmd: Command) => curl(await make(cmd), path, opts)),
     {
-      json: '{ url, method, status, ok, ms, headers: Record<string, string | string[]>, body: string, body_json?: unknown, truncated: boolean, as: { email, role, expires_at } | null }',
+      json: '{ url, method, status, ok (2xx or 3xx), redirect: string | null, expected?, as_expected?, ms, timing: { test_session_ms, request_ms }, headers (Set-Cookie values redacted), body_json (a JSON body) | body (text), truncated: boolean, as: { email, role, expires_at } | null }; --body: the body alone',
       exits: [2, 3, 4, 6],
       online: true,
-      examples: ['boxlite-app app curl /healthz', 'boxlite-app app curl /api/items -X POST -d \'{"title":"x"}\' --as qa@example.com --json', 'boxlite-app app curl /app --fail', 'boxlite-app app curl /admin --as owner@example.com --role owner'],
+      examples: ['boxlite-app app curl /healthz', 'boxlite-app app curl /api/items -X POST -d \'{"title":"x"}\' --as qa@example.com --json', 'boxlite-app app curl /app --fail', 'boxlite-app app curl /admin --as owner@example.com --role owner', 'boxlite-app app curl /.boxlite/auth/login --expect 302', 'boxlite-app app curl /api/leaderboard --body --json'],
     },
   );
   describe(

@@ -162,7 +162,7 @@ test('app curl sends the App key to the app URL only, adds a test session with -
   const dir = await linked();
   const { agent, pool } = mockApi();
   const app = agent.get('https://app.test');
-  pool.intercept({ path: E, method: 'GET' }).reply(200, { name: 'main', url: 'https://app.test/crm' }, { headers: JSON_HEADERS }).times(4);
+  pool.intercept({ path: E, method: 'GET' }).reply(200, { name: 'main', url: 'https://app.test/crm' }, { headers: JSON_HEADERS }).times(8);
   let seen: Record<string, string> = {};
   app.intercept({ path: '/crm/healthz', method: 'GET', headers: (h) => ((seen = h as Record<string, string>), true) }).reply(200, 'ok', { headers: { 'content-type': 'text/plain' } });
   const res = await cli(['app', 'curl', '/healthz'], { cwd: dir, dispatcher: agent });
@@ -180,6 +180,7 @@ test('app curl sends the App key to the app URL only, adds a test session with -
   assert.equal(post.code, 0, post.stderr);
   const out = JSON.parse(post.stdout);
   assert.deepEqual([out.method, out.status, out.body_json, out.as.email], ['POST', 201, { id: 7 }, 'qa@example.com']);
+  assert.equal(out.body, undefined, 'a JSON body is given once, parsed');
   assert.equal(cookie, 'bxl_s_crm=tok');
   assert.equal(body, '{"title":"x"}');
 
@@ -187,6 +188,21 @@ test('app curl sends the App key to the app URL only, adds a test session with -
   const redirect = await cli(['app', 'curl', '/app'], { cwd: dir, dispatcher: agent });
   assert.match(redirect.lines[0] ?? '', /^HTTP 302/);
   assert.match(redirect.lines.at(-1) ?? '', /^next: follow it: `boxlite-app app curl \/crm\/\.boxlite\/auth\/login\?next=\/app`/);
+
+  // A sign-in redirect is a success with a redirect, its session cookie redacted; --expect asserts it.
+  const login = { location: 'https://cp.test/auth/start?app=crm', 'set-cookie': '__Host-bxl_login=secret-nonce; Path=/; HttpOnly; SameSite=Lax' };
+  app.intercept({ path: '/crm/.boxlite/auth/login', method: 'GET' }).reply(302, '', { headers: login }).times(2);
+  const ok = JSON.parse((await cli(['app', 'curl', '/.boxlite/auth/login', '--expect', '302', '--json'], { cwd: dir, dispatcher: agent })).stdout);
+  assert.deepEqual([ok.ok, ok.redirect, ok.as_expected], [true, 'https://cp.test/auth/start?app=crm', true]);
+  assert.deepEqual(ok.headers['set-cookie'], ['__Host-bxl_login=<redacted>; Path=/; HttpOnly; SameSite=Lax']);
+  const wrong = await cli(['app', 'curl', '/.boxlite/auth/login', '--expect', '200', '--json'], { cwd: dir, dispatcher: agent });
+  assert.equal(wrong.code, 1);
+  assert.equal(JSON.parse(wrong.stderr).error.code, 'http_unexpected');
+  assert.ok(!wrong.stderr.includes('secret-nonce') && !wrong.stdout.includes('secret-nonce'));
+
+  app.intercept({ path: '/crm/api/board', method: 'GET' }).reply(200, { top: ['ann'] }, { headers: { 'content-type': 'application/json' } });
+  const only = await cli(['app', 'curl', '/api/board', '--body', '--json'], { cwd: dir, dispatcher: agent });
+  assert.deepEqual(JSON.parse(only.stdout), { top: ['ann'] }, '--body is the body alone');
 
   const foreign = await cli(['app', 'curl', 'https://evil.test/steal', '--json'], { cwd: dir, dispatcher: agent });
   assert.equal(foreign.code, 1);
