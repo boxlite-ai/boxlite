@@ -335,10 +335,17 @@ Usage: `boxlite-app app open [options]`
 | option | description | default |
 |---|---|---|
 | `--print-url` | print the link instead of opening a browser |  |
+| `--as <email>` | open it signed in as this test user (a 15-minute test session, like app curl --as): for checking signed-in pages in a browser |  |
+| `--role <role>` | with --as: owner or user (default) |  |
+| `--path <path>` | where the link lands, e.g. /app/select (default /) |  |
 
 - Network: talks to the control plane
-- `--json`: `{ url: string, expires_at: string | null, opened: boolean }`
+- `--json`: `{ url: string, expires_at: string | null, opened: boolean, as: { email, role } | null }`
 - Exit codes: 0, 1, 2, 3
+
+```sh
+boxlite-app app open --print-url --as qa@example.com --path /app --json
+```
 
 ### `boxlite-app app services`
 

@@ -215,7 +215,14 @@ test('app open asks for a one-time ticket and prints it without a terminal', asy
   pool.intercept({ path: `${E}/open-ticket`, method: 'POST' }).reply(200, { url: 'https://app.test/crm/?ticket=t1', expires_at: '2026-10-21T10:05:00Z' }, { headers: JSON_HEADERS });
   const res = await cli(['app', 'open', '--json'], { cwd: dir, dispatcher: agent });
   assert.equal(res.code, 0, res.stderr);
-  assert.deepEqual(JSON.parse(res.stdout), { url: 'https://app.test/crm/?ticket=t1', expires_at: '2026-10-21T10:05:00Z', opened: false });
+  assert.deepEqual(JSON.parse(res.stdout), { url: 'https://app.test/crm/?ticket=t1', expires_at: '2026-10-21T10:05:00Z', opened: false, as: null });
+  // Signed in as a test user, for checking signed-in pages in a browser.
+  let sent: Record<string, unknown> = {};
+  pool.intercept({ path: `${E}/open-ticket`, method: 'POST', body: (b) => ((sent = JSON.parse(b)), true) }).reply(200, { url: 'https://app.test/crm/?ticket=t2' }, { headers: JSON_HEADERS });
+  const as = await cli(['app', 'open', '--as', 'qa@example.com', '--role', 'owner', '--path', '/app', '--json'], { cwd: dir, dispatcher: agent });
+  assert.equal(as.code, 0, as.stderr);
+  assert.deepEqual(sent, { next: '/app', as: 'qa@example.com', role: 'owner' });
+  assert.deepEqual(JSON.parse(as.stdout).as, { email: 'qa@example.com', role: 'owner' });
   pool.intercept({ path: `${E}/open-ticket`, method: 'POST' }).reply(404, { error: { code: 'not_found', message: 'no route' } }, { headers: JSON_HEADERS });
   const old = await cli(['app', 'open', '--print-url', '--json'], { cwd: dir, dispatcher: agent });
   assert.equal(JSON.parse(old.stderr).error.code, 'not_supported_yet');

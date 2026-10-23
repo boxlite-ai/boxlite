@@ -351,8 +351,8 @@ export class Api {
   }
 
   /** One-time sign-in link for a person (the console's "Open app"); never carries the App key. */
-  openTicket(): Promise<{ url: string; expires_at?: string }> {
-    return this.json('POST', `${this.envPath}/open-ticket`, { body: {} });
+  openTicket(opts: { next?: string; as?: string; role?: EndUserRole } = {}): Promise<{ url: string; expires_at?: string }> {
+    return this.json('POST', `${this.envPath}/open-ticket`, { body: opts });
   }
 
   probe(path?: string): Promise<Probe> {

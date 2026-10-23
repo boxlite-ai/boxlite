@@ -11,8 +11,11 @@ export function openTicketRoutes(ctx: Ctx) {
   const r = new Hono<{ Variables: Vars }>();
   r.post('/envs/:env/open-ticket', async (c) => {
     const env = envOf(ctx, c);
-    const b = c.req.header('content-type')?.includes('json') ? await body(c, z.object({ next: z.string().max(2000).optional() })) : {};
-    return c.json(createOpenTicket(ctx, c.get('app'), env, b.next ?? c.req.query('next'), c.get('actor')), 201);
+    const b = c.req.header('content-type')?.includes('json')
+      ? await body(c, z.object({ next: z.string().max(2000).optional(), as: z.string().regex(/^[^\s@]+@[^\s@]+$/, 'must be an email address').max(254).optional(), role: z.enum(['owner', 'user']).optional() }))
+      : {};
+    const as = b.as ? { email: b.as, role: b.role ?? ('user' as const) } : undefined;
+    return c.json(createOpenTicket(ctx, c.get('app'), env, b.next ?? c.req.query('next'), c.get('actor'), as), 201);
   });
   return r;
 }

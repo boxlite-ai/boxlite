@@ -677,3 +677,20 @@ test('test sessions take a role, so an agent can check both sides of an owner-on
   assert.equal(seen[0]!.headers['x-boxlite-user-role'], 'user', 'a new session without a role is a plain user again');
   assert.equal((await h.request('/v1/apps/crm/envs/main/auth/test-sessions', { method: 'POST', key, json: { email: 'a@b.c', role: 'admin' } })).status, 400);
 });
+
+test('app open --as: a one-time link opens the app in a browser already signed in as a test user', async () => {
+  const { key } = await setup({ access: 'private' });
+  const res = await h.request('/v1/apps/crm/envs/main/open-ticket', { method: 'POST', key, json: { next: '/app/select', as: 'qa@example.com', role: 'owner' } });
+  assert.equal(res.status, 201, await res.clone().text());
+  const link = new URL(((await res.json()) as { url: string }).url);
+  assert.ok(!link.search.includes('qa@example.com'), 'the link names no user and carries no session');
+  const opened = await h.appRequest(link.pathname + link.search);
+  assert.equal(opened.status, 302);
+  assert.equal(opened.headers.get('location'), '/app/select');
+  const cookies = opened.headers.getSetCookie().map(cookiePair);
+  assert.equal(cookies.length, 2, 'the access cookie and the test session');
+  seen = [];
+  assert.equal((await h.appRequest('/app/select', { headers: { cookie: cookies.join('; ') } })).status, 200);
+  assert.deepEqual([seen[0]!.headers['x-boxlite-user-email'], seen[0]!.headers['x-boxlite-user-role']], ['qa@example.com', 'owner']);
+  assert.equal((await h.appRequest(link.pathname + link.search)).status, 401, 'it works once');
+});

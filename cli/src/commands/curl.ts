@@ -202,11 +202,13 @@ function opener(): { cmd: string; args: (url: string) => string[] } {
 }
 
 /** A one-time link that opens the app in a browser (never the App key in a URL); opens it on a terminal. */
-async function open(ctx: Ctx, opts: { printUrl?: boolean }): Promise<void> {
+async function open(ctx: Ctx, opts: { printUrl?: boolean; as?: string; role?: string; path?: string }): Promise<void> {
   const api = await ctx.appApi();
+  const role = roleOption(opts.role);
+  if (role && !opts.as) throw new MicrocloudError('usage', '--role needs --as <email>', '`boxlite-app app open --as qa@example.com --role owner`');
   let ticket: { url: string; expires_at?: string };
   try {
-    ticket = await api.openTicket();
+    ticket = await api.openTicket({ ...(opts.path ? { next: opts.path } : {}), ...(opts.as ? { as: opts.as, ...(role ? { role } : {}) } : {}) });
   } catch (e) {
     if (e instanceof MicrocloudError && (e.code === 'not_found' || e.code === 'http_404')) {
       throw new MicrocloudError('not_supported_yet', 'this control plane cannot issue open tickets yet', '`boxlite-app app status` shows the URL; open it and sign in through the console');
@@ -218,7 +220,7 @@ async function open(ctx: Ctx, opts: { printUrl?: boolean }): Promise<void> {
     const o = opener();
     spawn(o.cmd, o.args(ticket.url), { detached: true, stdio: 'ignore' }).on('error', () => undefined).unref();
   }
-  ctx.out.data({ url: ticket.url, expires_at: ticket.expires_at ?? null, opened: launch });
+  ctx.out.data({ url: ticket.url, expires_at: ticket.expires_at ?? null, opened: launch, as: opts.as ? { email: opts.as, role: role ?? 'user' } : null });
   ctx.out.line(launch ? `opened ${ticket.url}` : ticket.url);
   // The link works once and expires a minute after it is made: never hand it to a person in a message.
   if (!launch) ctx.out.next('open it yourself now if you need a browser session; for the user, report `url` from `boxlite-app app status --json` and tell them to use Open app in the BoxLite console');
@@ -251,8 +253,16 @@ export function registerCurl(app: Command, make: MakeCtx): void {
       .command('open')
       .description('open the app in a browser through a one-time link (works once, expires after 60 s; never hand it to the user): opens the browser on a terminal, else prints it')
       .option('--print-url', 'print the link instead of opening a browser')
-      .action(async (opts: { printUrl?: boolean }, cmd: Command) => open(await make(cmd), opts)),
-    { json: '{ url: string, expires_at: string | null, opened: boolean }', exits: [2, 3], online: true },
+      .option('--as <email>', 'open it signed in as this test user (a 15-minute test session, like app curl --as): for checking signed-in pages in a browser')
+      .option('--role <role>', 'with --as: owner or user (default)')
+      .option('--path <path>', 'where the link lands, e.g. /app/select (default /)')
+      .action(async (opts: { printUrl?: boolean; as?: string; role?: string; path?: string }, cmd: Command) => open(await make(cmd), opts)),
+    {
+      json: '{ url: string, expires_at: string | null, opened: boolean, as: { email, role } | null }',
+      exits: [2, 3],
+      online: true,
+      examples: ['boxlite-app app open --print-url --as qa@example.com --path /app --json'],
+    },
   );
 }
 

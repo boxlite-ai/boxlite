@@ -371,6 +371,12 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     const columns = (db.prepare('PRAGMA table_info(app_users)').all() as { name: string }[]).map((c) => c.name);
     if (!columns.includes('test_role')) db.exec('ALTER TABLE app_users ADD COLUMN test_role TEXT');
   },
+  // A one-time link may sign the browser in as a test user (`app open --as`): who, and with which role.
+  (db) => {
+    const columns = (db.prepare('PRAGMA table_info(open_tickets)').all() as { name: string }[]).map((c) => c.name);
+    if (!columns.includes('as_email')) db.exec('ALTER TABLE open_tickets ADD COLUMN as_email TEXT');
+    if (!columns.includes('as_role')) db.exec('ALTER TABLE open_tickets ADD COLUMN as_role TEXT');
+  },
   // An App's own secret values (orgs.ts secretValue): set by its agent or in the console, referenced as app/<name>.
   `
   CREATE TABLE IF NOT EXISTS app_secrets (

@@ -12,6 +12,9 @@ import { escapeHtml } from '../http/html.js';
 import { isResponse } from '../http/response.js';
 import { signExpiring, verifyExpiring } from '../http/signed-token.js';
 import { jsonError, page } from './pages.js';
+import { TEST_SESSION_TTL_S } from '../enduser/config.js';
+import { createTestSession } from '../enduser/management.js';
+import type { EndUserRole } from '../enduser/role.js';
 
 /**
  * The access gate of an app origin, for private/org envs (security review F7, no App key in URLs):
@@ -37,29 +40,37 @@ function verifyAccess(secret: string, value: string | undefined, envId: string):
   return verifyExpiring(secret, 'app-access', value, '.') === envId;
 }
 
-/** A one-time link into the env's origin that sets its access cookie. Stored hashed, 60 s. */
-export function createOpenTicket(ctx: Ctx, app: AppRow, env: EnvRow, next: string | null | undefined, actor: string): { url: string; expires_at: string } {
+/**
+ * A one-time link into the env's origin that sets its access cookie. Stored hashed, 60 s. With `as`,
+ * opening it also signs the browser in as that test user (a 15-minute test session, made when the
+ * link is opened, so no session token is ever stored or put in the link).
+ */
+export function createOpenTicket(ctx: Ctx, app: AppRow, env: EnvRow, next: string | null | undefined, actor: string, as?: { email: string; role: EndUserRole }): { url: string; expires_at: string } {
   const path = safeNext(next);
   if (path === null) throw fail('invalid_request', '`next` must be a path inside the app, like /deals?x=1');
   const ticket = randomBytes(24).toString('base64url');
   const expiresAt = new Date(Date.now() + TICKET_TTL_S * 1000).toISOString();
   ctx.store.run('DELETE FROM open_tickets WHERE expires_at < ?', now());
-  ctx.store.run('INSERT INTO open_tickets (hash, env_id, next, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)', sha256hex(ticket), env.id, path, actor, now(), expiresAt);
+  if (as && !ctx.resources.currentSpec(env)?.auth) throw fail('conflict', `sign-in is not enabled for ${app.name}/${env.name}`, 'add [auth] to boxlite.toml and deploy, or open without --as');
+  ctx.store.run('INSERT INTO open_tickets (hash, env_id, next, created_by, created_at, expires_at, as_email, as_role) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', sha256hex(ticket), env.id, path, actor, now(), expiresAt, as?.email ?? null, as?.role ?? null);
   return { url: `${ctx.resources.appUrl(app.name, env.name)}/.boxlite/open?t=${ticket}&next=${encodeURIComponent(path)}`, expires_at: expiresAt };
 }
 
-/** True once per ticket: the UPDATE only matches an unused, unexpired ticket of this env. */
-function consumeTicket(ctx: Ctx, env: EnvRow, ticket: string): boolean {
-  if (!ticket) return false;
+/** Once per ticket: the UPDATE only matches an unused, unexpired ticket of this env. Null when it did not. */
+function consumeTicket(ctx: Ctx, env: EnvRow, ticket: string): { as_email: string | null; as_role: string | null; created_by: string } | null {
+  if (!ticket) return null;
   const ts = now();
-  return Number(ctx.store.run('UPDATE open_tickets SET used_at = ? WHERE hash = ? AND env_id = ? AND used_at IS NULL AND expires_at > ?', ts, sha256hex(ticket), env.id, ts).changes) === 1;
+  const hash = sha256hex(ticket);
+  if (Number(ctx.store.run('UPDATE open_tickets SET used_at = ? WHERE hash = ? AND env_id = ? AND used_at IS NULL AND expires_at > ?', ts, hash, env.id, ts).changes) !== 1) return null;
+  return ctx.store.get('SELECT as_email, as_role, created_by FROM open_tickets WHERE hash = ?', hash) ?? null;
 }
 
-export /** `/.boxlite/open?t=…`: a valid ticket sets the access cookie and redirects to `next`. */
-function openWithTicket(ctx: Ctx, app: AppRow, env: EnvRow, url: URL): Response {
+export /** `/.boxlite/open?t=…`: a valid ticket sets the access cookie (and a test session, with --as) and redirects to `next`. */
+async function openWithTicket(ctx: Ctx, app: AppRow, env: EnvRow, url: URL): Promise<Response> {
   const next = safeNext(url.searchParams.get('next')) ?? '/';
   const noRef = { 'referrer-policy': 'no-referrer' };
-  if (!consumeTicket(ctx, env, url.searchParams.get('t') ?? '')) {
+  const ticket = consumeTicket(ctx, env, url.searchParams.get('t') ?? '');
+  if (!ticket) {
     return page(
       'Link expired',
       `<h1>This link has expired</h1><p>Links like this work once, within a minute. <a href="${escapeHtml(`${ctx.origins.consoleUrl()}/console/dashboard/apps/${encodeURIComponent(app.name)}`)}">Open it again from your dashboard</a>.</p>`,
@@ -67,8 +78,14 @@ function openWithTicket(ctx: Ctx, app: AppRow, env: EnvRow, url: URL): Response 
       noRef,
     );
   }
-  const cookie = setCookieValue(isSecureUrl(ctx.resources.appUrl(app.name, env.name)), accessName(ctx, app, env), signAccess(ctx.config.sessionSecret, env.id), '/', ACCESS_TTL_S);
-  return new Response(null, { status: 302, headers: { location: next, 'set-cookie': cookie, 'cache-control': 'no-store', ...noRef } });
+  const secure = isSecureUrl(ctx.resources.appUrl(app.name, env.name));
+  const headers = new Headers({ location: next, 'cache-control': 'no-store', ...noRef });
+  headers.append('set-cookie', setCookieValue(secure, accessName(ctx, app, env), signAccess(ctx.config.sessionSecret, env.id), '/', ACCESS_TTL_S));
+  if (ticket.as_email) {
+    const s = await createTestSession(ctx, app, env, ticket.as_email, ticket.created_by, ticket.as_role === 'owner' ? 'owner' : 'user');
+    headers.append('set-cookie', setCookieValue(secure, s.cookie_name, s.cookie.slice(s.cookie_name.length + 1), '/', TEST_SESSION_TTL_S));
+  }
+  return new Response(null, { status: 302, headers });
 }
 
 // ---- the gate --------------------------------------------------------------------
