@@ -91,6 +91,7 @@ const Apps: React.FC = () => {
 
       <AppTable
         apps={visible}
+        filter={filter.trim() && apps.length > 0 ? filter.trim() : undefined}
         loading={isLoading}
         error={error ? errorText(error) : null}
         onRetry={() => refetch()}

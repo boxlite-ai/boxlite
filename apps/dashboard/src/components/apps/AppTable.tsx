@@ -27,6 +27,7 @@ function shortHost(url: string): string {
 
 export function AppTable({
   apps,
+  filter,
   loading,
   error,
   onRetry,
@@ -35,6 +36,8 @@ export function AppTable({
   onCreate,
 }: {
   apps: AppSummary[]
+  /** Set when the list is filtered: an empty result then means "no match", not "no apps". */
+  filter?: string
   loading: boolean
   /** The control plane's message when the list could not be read. */
   error: string | null
@@ -63,6 +66,10 @@ export function AppTable({
           >
             Retry
           </button>
+        </div>
+      ) : apps.length === 0 && filter ? (
+        <div className="px-6 py-14 text-center font-mono text-meta text-muted-foreground">
+          No app matches &ldquo;{filter}&rdquo;.
         </div>
       ) : apps.length === 0 ? (
         <div className="flex flex-col items-center justify-center px-6 py-20 text-center">

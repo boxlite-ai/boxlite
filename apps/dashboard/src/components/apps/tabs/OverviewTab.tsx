@@ -180,7 +180,8 @@ export function OverviewTab({
         />
       )}
 
-      <LiveCard app={app} active={active} failing={failing.length > 0} onGoTo={onGoTo} />
+      {/* A failed deployment while the previous one keeps serving is not an app that is down. */}
+      <LiveCard app={app} active={active} failing={failing.some((p) => !p.serving)} onGoTo={onGoTo} />
 
       {/* From the app proxy's access log and the sign-in sessions; hidden until there is either. */}
       {m && <TrafficPanel metrics={m} />}

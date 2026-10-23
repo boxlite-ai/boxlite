@@ -45,11 +45,12 @@ export function AgentHandoffPanel({ app }: { app: AppDetail }) {
       {open && (
         <div className="flex flex-col gap-2">
           <HandoffSteps last="Tell it what to change. It deploys the new version." />
-          <PromptBlock text={fresh ?? app.handoffPrompt} compact />
+          {/* The key stays masked on screen; Copy hands over a working one, like Copy prompt. */}
+          <PromptBlock text={app.handoffPrompt} compact onCopy={copy} />
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-meta text-muted-foreground">
             <span>
               {fresh
-                ? 'The App key in it is shown only in this tab.'
+                ? 'The App key is masked here; Copy prompt hands over the working one this tab was given.'
                 : 'The App key is masked here. Each Copy prompt issues one more key (up to 10) and agents already set up keep theirs; Rotate key retires them all.'}
             </span>
             <ToolButton loading={flow.pending} onClick={() => void flow.start()}>

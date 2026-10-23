@@ -5,7 +5,7 @@
 
 import { useRunSchedule } from '@/hooks/mutations/useAppMutations'
 import { describeCron } from '@/lib/apps/cron'
-import { relTime, STATUS, utcAndLocal } from '@/lib/apps/format'
+import { relTime, STATUS, utcAndLocal, relFuture } from '@/lib/apps/format'
 import type { AppDetail } from '@/lib/apps/types'
 import { handleApiError } from '@/lib/error-handling'
 import { useState } from 'react'
@@ -60,7 +60,7 @@ export function SchedulesTable({ app }: { app: AppDetail }) {
               {describeCron(s.cron)}
             </span>
             <span className="truncate text-muted-foreground" title={s.nextRun ? utcAndLocal(s.nextRun) : undefined}>
-              {s.nextRun ? relTime(s.nextRun) : 'when a deployment is live'}
+              {s.nextRun ? relFuture(s.nextRun) : 'when a deployment is live'}
             </span>
             <span className="flex min-w-0 items-center gap-2" title={s.lastRun ? utcAndLocal(s.lastRun) : undefined}>
               <StatusBadge label={last.label} color={last.color} caps />

@@ -83,6 +83,7 @@ function InlineEditor({
   initialName,
   initialValue,
   lockName,
+  taken,
   busy,
   onSave,
   onCancel,
@@ -90,6 +91,8 @@ function InlineEditor({
   initialName?: string
   initialValue?: string
   lockName?: boolean
+  /** Names already in use (a new variable only): adding one again would silently replace it. */
+  taken?: string[]
   busy: boolean
   onSave: (name: string, value: string) => void
   onCancel: () => void
@@ -100,8 +103,10 @@ function InlineEditor({
     name && !NAME_RE.test(name)
       ? 'Use upper-case letters, digits and _ (like LOG_LEVEL)'
       : name && PLATFORM_RE.test(name)
-        ? 'Set by BoxLite'
-        : null
+        ? 'BOXLITE_ names, PORT and DATABASE_URL are reserved for the platform'
+        : name && taken?.includes(name)
+          ? `${name} already exists: edit it in the list`
+          : null
   const blocked = !name || !!nameError || busy || (lockName && value === initialValue)
   const keys = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !blocked) onSave(name, value)
@@ -491,6 +496,7 @@ export function VariablesTab({ app }: { app: AppDetail }) {
           {adding && (
             <InlineEditor
               initialName={prefill}
+              taken={rows.map((r) => r.name)}
               busy={pending?.startsWith('set:') ?? false}
               onSave={(name, value) => void save(name, value)}
               onCancel={() => {

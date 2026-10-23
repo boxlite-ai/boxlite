@@ -30,7 +30,17 @@ export function actorName(by: string, { short = false }: { short?: boolean } = {
   return by
 }
 
+/**
+ * When something happened. The server's clock and the browser's differ a little, so an event of a
+ * moment ago can look up to a minute or two ahead ("in 1m"): that is "just now".
+ */
 export function relTime(timestamp: string | undefined | null): string {
+  if (timestamp && Date.parse(timestamp) > Date.now() && Date.parse(timestamp) - Date.now() < 120_000) return 'just now'
+  return getRelativeTimeString(timestamp).relativeTimeString
+}
+
+/** When something is due (the next schedule run, the end of a grace period): never clamped. */
+export function relFuture(timestamp: string | undefined | null): string {
   return getRelativeTimeString(timestamp).relativeTimeString
 }
 

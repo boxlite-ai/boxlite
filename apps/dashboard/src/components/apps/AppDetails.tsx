@@ -30,7 +30,7 @@ import {
 } from '@/components/ui/icon'
 import { RoutePath } from '@/enums/RoutePath'
 import { useAppMutation, useRestoreApp } from '@/hooks/mutations/useAppMutations'
-import { useAppEnv, useAppQuery, useRefreshOnDeployDone } from '@/hooks/queries/useAppsQuery'
+import { APPS_SCOPE, useAppEnv, useAppQuery, useRefreshOnDeployDone } from '@/hooks/queries/useAppsQuery'
 import { errorText, httpStatusOf } from '@/lib/apps/client'
 import { appStatusOf, capitalize, VISIBILITY_LABEL, VISIBILITY_ORDER } from '@/lib/apps/format'
 import { openApp } from '@/lib/apps/open'
@@ -55,6 +55,8 @@ import { LogsTab } from './tabs/LogsTab'
 import { OverviewTab } from './tabs/OverviewTab'
 import { VariablesTab } from './tabs/VariablesTab'
 import { VolumesTab } from './tabs/VolumesTab'
+import { queryKeys } from '@/hooks/queries/queryKeys'
+import { useQueryClient } from '@tanstack/react-query'
 
 // Each tab carries the console's pixel glyph for what it holds, so the strip can be scanned by shape.
 const TABS: { id: AppTab; label: string; icon: LucideIcon }[] = [
@@ -94,6 +96,7 @@ export default function AppDetails() {
   const [inFlight, setInFlight] = useState<string | null>(null)
   const [restarting, setRestarting] = useState<string | null>(null)
   const [rollingBack, setRollingBack] = useState<string | null>(null)
+  const queryClient = useQueryClient()
 
   const env = useAppEnv()
   // Switching environment keeps the tab; the screen inside it starts fresh.
@@ -213,6 +216,7 @@ export default function AppDetails() {
     try {
       await mutation.mutateAsync({ kind: 'delete', appId: app.id })
       toastDeleted(app.name, (name) => restoreApp.mutateAsync(name))
+      queryClient.removeQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, app.id) })
       navigate(RoutePath.APPS)
     } catch (err) {
       handleApiError(err, 'Failed to delete')
@@ -229,14 +233,18 @@ export default function AppDetails() {
       typeToConfirm: app.environment,
     })
     if (!ok) return
+    const gone = app.environment
     if (
       await run(
-        { kind: 'deleteEnvironment', appId: app.id, name: app.environment },
-        `${app.environment} deleted`,
+        { kind: 'deleteEnvironment', appId: app.id, name: gone },
+        `${gone} deleted`,
         'Failed to delete the environment',
       )
-    )
+    ) {
       switchEnv('main')
+      // Nothing may keep asking for what no longer exists (each refetch would be a 404).
+      queryClient.removeQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, app.id, gone) })
+    }
   }
 
   const isNotFound = isError && httpStatusOf(error) === 404
@@ -291,7 +299,10 @@ export default function AppDetails() {
             onSleep={() =>
               run(
                 { kind: 'sleep', appId: app.id },
-                `${app.environment} is asleep`,
+                // A schedule is a request too: it wakes the app when it is due.
+                app.schedules.length
+                  ? `${app.environment} is asleep until the next visit or its next scheduled job`
+                  : `${app.environment} is asleep`,
                 'Failed to sleep',
                 'Going to sleep…',
               )

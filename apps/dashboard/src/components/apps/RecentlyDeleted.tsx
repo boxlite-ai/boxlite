@@ -5,7 +5,7 @@
 
 import { useRestoreApp } from '@/hooks/mutations/useAppMutations'
 import { useDeletedApps } from '@/hooks/queries/useAppsQuery'
-import { relTime } from '@/lib/apps/format'
+import { relTime, relFuture } from '@/lib/apps/format'
 import { handleApiError } from '@/lib/error-handling'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -45,7 +45,7 @@ export function RecentlyDeleted() {
           </span>
           <span className="text-foreground" title={app.purgeAfter}>
             {new Date(app.purgeAfter).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })} ·{' '}
-            {relTime(app.purgeAfter)}
+            {relFuture(app.purgeAfter)}
           </span>
           <HoverActions>
             <ToolButton loading={busy === app.name} label={`Restore ${app.name}`} onClick={() => void run(app.name)}>

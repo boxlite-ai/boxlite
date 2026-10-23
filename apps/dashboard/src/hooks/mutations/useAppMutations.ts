@@ -102,11 +102,15 @@ export function useCreateApp() {
 /** A new App key and prompt; the old key stops working at once. */
 export function useRotateKey() {
   const queryClient = useQueryClient()
+  // The prompt names the environment being viewed (other than main), so the agent works there.
+  const env = useAppEnv()
   return useMutation({
     mutationFn: async (appId: string) => {
       const out = (
         await appsClient.post<{ key: string; prompt: string; last4: string }>(
           `/apps/${encodeURIComponent(appId)}/key/rotate`,
+          undefined,
+          { params: { env } },
         )
       ).data
       rememberPrompt(appId, out.prompt)
@@ -119,11 +123,14 @@ export function useRotateKey() {
 /** One more App key and its prompt, next to the keys already in use (another agent or machine). */
 export function useIssueKey() {
   const queryClient = useQueryClient()
+  const env = useAppEnv()
   return useMutation({
     mutationFn: async (appId: string) => {
       const out = (
         await appsClient.post<{ key: string; prompt: string; last4: string }>(
           `/apps/${encodeURIComponent(appId)}/key/issue`,
+          undefined,
+          { params: { env } },
         )
       ).data
       rememberPrompt(appId, out.prompt)

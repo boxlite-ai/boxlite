@@ -35,6 +35,11 @@ export function CreateAppDialog({
   const mutation = useCreateApp()
   const { data: session } = useConsoleSession()
   const [name, setName] = useState('')
+  // Closing it, however, starts the next one empty.
+  const close = (next: boolean) => {
+    if (!next) setName('')
+    onOpenChange(next)
+  }
   const problem = name ? nameProblem(name, session?.reservedNames) : null
   const valid = !!name && !problem
 
@@ -51,7 +56,7 @@ export function CreateAppDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={close}>
       <DialogContent className={cn(DIALOG_FRAME, 'max-w-[520px] font-mono text-body')}>
         <DialogHeader>
           <DialogTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">New app</DialogTitle>
@@ -83,7 +88,7 @@ export function CreateAppDialog({
         </div>
 
         <DialogFooter className="gap-2">
-          <FlatButton onClick={() => onOpenChange(false)}>Cancel</FlatButton>
+          <FlatButton onClick={() => close(false)}>Cancel</FlatButton>
           <FlatButton variant="primary" onClick={submit} disabled={!valid || mutation.isPending}>
             {mutation.isPending ? 'Creating…' : 'Start building'}
           </FlatButton>
