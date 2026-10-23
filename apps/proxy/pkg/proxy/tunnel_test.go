@@ -132,8 +132,8 @@ func TestTunnelConnectRenewsBoxActivityBeforeStreaming(t *testing.T) {
 
 	renewed := make(chan string, 1)
 	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/preview/"+boxID+"/tunnels/3000" {
-			writer.WriteHeader(http.StatusOK)
+		if request.URL.Path == "/preview/"+boxID+"/tunnels/3000/access" {
+			_, _ = writer.Write([]byte(`{"id":"tunnel-1","boxId":"AbCdEf123456","port":3000,"isPublic":true,"authGeneration":1}`))
 			return
 		}
 		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/last-activity") {

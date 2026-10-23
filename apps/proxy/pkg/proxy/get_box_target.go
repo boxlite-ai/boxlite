@@ -6,6 +6,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -34,9 +35,8 @@ const (
 	// Only rejections are cached. A cached acceptance is what a revoked credential
 	// rides on: nothing evicts these entries, and with config.Redis unset the cache
 	// is in-process and out of the API's reach entirely, so any TTL at all is a
-	// window in which a deleted key still reaches the box. The API absorbs the
-	// revalidation traffic in Redis (preview:access), so the cost is
-	// a round trip per request, not a database lookup per request.
+	// window in which a deleted key still reaches the box. The API rechecks the
+	// credential's organization, current membership and resource permissions.
 	//
 	// A rejection is not what a revoked credential rides on, so shortening it
 	// alongside the acceptance would only send repeated bad credentials back to the
@@ -75,25 +75,20 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 	}
 
 	if !*inboundEnabled {
-		var didRedirect bool
-		boxId, didRedirect, err = p.Authenticate(ctx, boxId)
-		if err != nil {
-			if !didRedirect {
-				ctx.Error(err)
+		err := common_errors.NewCustomError(http.StatusForbidden, "box inbound access is disabled", "FORBIDDEN")
+		ctx.Error(err)
+		return nil, err
+	}
+	ctx.Request = ctx.Request.WithContext(context.WithValue(ctx.Request.Context(), clientIPContextKey{}, ctx.ClientIP()))
+	if authErr := p.authorizeTunnel(ctx.Writer, ctx.Request, boxId, targetPort); authErr != nil {
+		if authErr.message == "private tunnel requires an API key, JWT, or access token" && ctx.Request.Method == http.MethodGet && strings.Contains(ctx.Request.Header.Get("Accept"), "text/html") && p.config.Oidc.ClientId != "" {
+			if location, err := p.getAuthUrl(ctx, boxId); err == nil {
+				ctx.Redirect(http.StatusFound, location)
+				return nil, authErr
 			}
-			return nil, err
 		}
-	}
-	allowed, err := p.hasPublicTunnelAccess(ctx.Request.Context(), boxId, targetPort)
-	if err != nil {
-		wrappedErr := fmt.Errorf("check tunnel access: %w", err)
-		ctx.Error(common_errors.NewCustomError(http.StatusBadGateway, wrappedErr.Error(), "BAD_GATEWAY"))
-		return nil, wrappedErr
-	}
-	if !allowed {
-		wrappedErr := errors.New("tunnel not found")
-		ctx.Error(common_errors.NewNotFoundError(wrappedErr))
-		return nil, wrappedErr
+		ctx.Error(common_errors.NewCustomError(authErr.status, authErr.message, "TUNNEL_ACCESS_DENIED"))
+		return nil, authErr
 	}
 
 	// Stamp the API's span vocabulary (boxlite.* — see the API's
@@ -135,7 +130,7 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 		URL:       target,
 		Host:      forwardedHost,
 		Headers:   headers,
-		Transport: p.guestPortTransport,
+		Transport: guestCookieTransport{next: p.guestPortTransport},
 		ErrorHandler: func(writer http.ResponseWriter, _ *http.Request, err error) {
 			ctx.Error(guestDialFailure(writer.Header(), err))
 		},
@@ -282,7 +277,7 @@ func (p *Proxy) validateAndCache(
 	authKey string,
 	apiValidation func() (bool, error),
 ) (*bool, error) {
-	cacheKey := fmt.Sprintf("%s:%s", boxId, authKey)
+	cacheKey := fmt.Sprintf("%s:%x", boxId, sha256.Sum256([]byte(authKey)))
 	authKeyValidCache, err := p.boxAuthKeyValidCache.Get(ctx, cacheKey)
 	if err == nil {
 		return authKeyValidCache, nil

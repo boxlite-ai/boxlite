@@ -5,9 +5,11 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -26,6 +28,11 @@ func newTunnelProxy(t *testing.T, accessStatus int) *Proxy {
 	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if strings.HasPrefix(request.URL.Path, "/api/preview/AbCdEf123456/tunnels/") {
 			writer.WriteHeader(accessStatus)
+			parts := strings.Split(request.URL.Path, "/")
+			port, _ := strconv.Atoi(parts[len(parts)-2])
+			if accessStatus == http.StatusOK {
+				_ = json.NewEncoder(writer).Encode(tunnelGrant{ID: "tunnel-1", BoxID: "AbCdEf123456", Port: uint16(port), IsPublic: true, Generation: 1})
+			}
 			return
 		}
 		writer.WriteHeader(http.StatusNotFound)
@@ -113,15 +120,45 @@ func TestDeclaredTunnelAllowsHTTP(t *testing.T) {
 	}
 }
 
+func TestPrivateTunnelPlatformCookiesNeverReachPublicGuest(t *testing.T) {
+	proxy := newTunnelProxy(t, http.StatusOK)
+	request := httptest.NewRequest(http.MethodGet, "http://3000-d-416243644566313233343536.proxy.test/", nil)
+	request.Header.Set("Cookie", "app_session=keep; boxlite-box-auth-OtherBox1234=secret; pkce_verifier=verifier; __Host-boxlite-tunnel-session=session")
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = request
+	target, err := proxy.GetProxyTarget(ctx)
+	defer stopActivityPoll(ctx)
+	if err != nil || target == nil {
+		t.Fatalf("public guest was rejected: %v", err)
+	}
+	if cookies := ctx.Request.Header.Get("Cookie"); cookies != "app_session=keep" {
+		t.Fatalf("platform credentials reached guest request: %q", cookies)
+	}
+}
+
+func TestPrivateTunnelInboundDisabledRejectsSignedInBrowser(t *testing.T) {
+	proxy := newTunnelProxy(t, http.StatusOK)
+	legacyCodec := securecookie.New([]byte("test-cookie-signing-key-with-32-bytes"), nil)
+	if err := proxy.boxInboundCache.Set(context.Background(), "AbCdEf123456", false, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	value, err := legacyCodec.Encode(BOX_AUTH_COOKIE_NAME+"AbCdEf123456", "AbCdEf123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://3000-d-416243644566313233343536.proxy.test/", nil)
+	request.AddCookie(&http.Cookie{Name: BOX_AUTH_COOKIE_NAME + "AbCdEf123456", Value: value})
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = request
+	target, err := proxy.GetProxyTarget(ctx)
+	defer stopActivityPoll(ctx)
+	if err == nil || target != nil {
+		t.Fatal("signed-in browser bypassed the inbound disable switch")
+	}
+}
+
 func TestAuthenticatedPrivateServicePreviewIsDenied(t *testing.T) {
 	proxy := newTunnelProxy(t, http.StatusNotFound)
-	ctx := context.Background()
-	if err := proxy.boxInboundCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
-		t.Fatal(err)
-	}
-	if err := proxy.boxAuthKeyValidCache.Set(ctx, "AbCdEf123456:owner-key", true, time.Minute); err != nil {
-		t.Fatal(err)
-	}
 	request := httptest.NewRequest(http.MethodGet, "http://3000-d-416243644566313233343536.proxy.test/", nil)
 	request.Header.Set("Authorization", "Bearer owner-key")
 	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -130,7 +167,7 @@ func TestAuthenticatedPrivateServicePreviewIsDenied(t *testing.T) {
 	target, err := proxy.GetProxyTarget(ginCtx)
 	stopActivityPoll(ginCtx)
 	if err == nil || target != nil {
-		t.Fatalf("private service preview reached guest port: target=%v err=%v", target, err)
+		t.Fatalf("credential opened an undeclared port: target=%v err=%v", target, err)
 	}
 }
 
@@ -145,12 +182,8 @@ func TestSignInCookieServicePreviewRequiresTunnel(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			proxy := newTunnelProxy(t, test.accessStatus)
-			proxy.config = &config.Config{}
-			proxy.secureCookie = securecookie.New([]byte("test-cookie-signing-key-with-32-bytes"), nil)
-			if err := proxy.boxInboundCache.Set(context.Background(), "AbCdEf123456", false, time.Minute); err != nil {
-				t.Fatal(err)
-			}
-			cookieValue, err := proxy.secureCookie.Encode(BOX_AUTH_COOKIE_NAME+"AbCdEf123456", "AbCdEf123456")
+			legacyCodec := securecookie.New([]byte("test-cookie-signing-key-with-32-bytes"), nil)
+			cookieValue, err := legacyCodec.Encode(BOX_AUTH_COOKIE_NAME+"AbCdEf123456", "AbCdEf123456")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -170,13 +203,6 @@ func TestSignInCookieServicePreviewRequiresTunnel(t *testing.T) {
 
 func TestPrivatePort22222IsDeniedLikeAnyPort(t *testing.T) {
 	proxy := newTunnelProxy(t, http.StatusNotFound)
-	ctx := context.Background()
-	if err := proxy.boxInboundCache.Set(ctx, "AbCdEf123456", false, time.Minute); err != nil {
-		t.Fatal(err)
-	}
-	if err := proxy.boxAuthKeyValidCache.Set(ctx, "AbCdEf123456:owner-key", true, time.Minute); err != nil {
-		t.Fatal(err)
-	}
 	request := httptest.NewRequest(http.MethodGet, "http://22222-AbCdEf123456.proxy.test/", nil)
 	request.Header.Set("Authorization", "Bearer owner-key")
 	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -185,7 +211,7 @@ func TestPrivatePort22222IsDeniedLikeAnyPort(t *testing.T) {
 	target, err := proxy.GetProxyTarget(ginCtx)
 	stopActivityPoll(ginCtx)
 	if err == nil || target != nil {
-		t.Fatalf("private port 22222 reached a target: target=%v err=%v", target, err)
+		t.Fatalf("undeclared port 22222 reached a target: target=%v err=%v", target, err)
 	}
 }
 
@@ -258,19 +284,22 @@ func TestProxyDoesNotCacheTunnelAccess(t *testing.T) {
 	status.Store(http.StatusOK)
 	api := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(int(status.Load()))
+		if status.Load() == http.StatusOK {
+			_ = json.NewEncoder(writer).Encode(tunnelGrant{ID: "tunnel-1", BoxID: "AbCdEf123456", Port: 3000, IsPublic: true, Generation: 1})
+		}
 	}))
 	defer api.Close()
 	config := apiclient.NewConfiguration()
 	config.Servers[0].URL = api.URL + "/api"
 	proxy := &Proxy{apiclient: apiclient.NewAPIClient(config)}
 
-	allowed, err := proxy.hasPublicTunnelAccess(context.Background(), "AbCdEf123456", 3000)
-	if err != nil || !allowed {
+	allowed, err := proxy.tunnelAccess(context.Background(), "AbCdEf123456", 3000, nil)
+	if err != nil || allowed == nil {
 		t.Fatalf("declared port rejected: allowed=%v err=%v", allowed, err)
 	}
 	status.Store(http.StatusNotFound)
-	allowed, err = proxy.hasPublicTunnelAccess(context.Background(), "AbCdEf123456", 3000)
-	if err != nil || allowed {
+	allowed, err = proxy.tunnelAccess(context.Background(), "AbCdEf123456", 3000, nil)
+	if err == nil || err.status != http.StatusNotFound || allowed != nil {
 		t.Fatalf("revoked port remained authorized: allowed=%v err=%v", allowed, err)
 	}
 }
