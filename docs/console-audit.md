@@ -122,7 +122,7 @@ action really happens (verified in CP state) · **IF** matches the best comparab
 | # | State | Control | Shows | CP | L/E/E | Copy | Kbd | Does | IF | Gap → fix | Status |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | V1 | none | page | prompt block | ✔ | ✔ | ✖ | – | – | – | → exact `[[volume]]` snippet + `boxlite-app deploy` | fixed |
-| V2 | declared | panel | mount, BoxLite volume, id; "Files: not browsable here yet" | ✔ | – | ✔ | – | – | ✖ | no file browser → list, open folders, download, upload via `…/volumes/:name/files` (CLI extras); gated on a supervisor that has it | fixed (upload verified only against the local stand-in) |
+| V2 | declared | panel | mount, BoxLite volume, id; "Files: not browsable here yet" | ✔ | – | ✔ | – | – | ✖ | no file browser → list, open folders, download, upload via `…/volumes/:name/files` (CLI extras); gated on a supervisor that has it ; delete a file or folder (confirm, Activity) since 2026-10-24 | fixed (console e2e uploads and deletes through the panel on a real Box) |
 
 ## Variables
 
