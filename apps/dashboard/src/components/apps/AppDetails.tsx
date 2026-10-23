@@ -309,7 +309,13 @@ export default function AppDetails() {
           <Tabs value={tab} onValueChange={(next) => goTo(next as AppTab)} className="mb-7 gap-0">
             <TabsList variant="segmented" className="max-w-full overflow-x-auto">
               {TABS.map((candidate) => (
-                <TabsTrigger key={candidate.id} value={candidate.id} className="font-mono">
+                <TabsTrigger
+                  key={candidate.id}
+                  value={candidate.id}
+                  className="font-mono"
+                  // The tab already open goes back to its top level (from a deployment, to the list).
+                  onClick={() => candidate.id === tab && goTo(tab)}
+                >
                   <candidate.icon className="size-4 shrink-0" aria-hidden />
                   {candidate.label}
                 </TabsTrigger>
@@ -415,11 +421,7 @@ function Header({
         {environment}
         {/* Before the first release the progress line says it all. */}
         {(app.activeRelease || !app.deploying) && (
-          <StatusBadge
-            className="ml-1"
-            color={runtime.color}
-            label={runtime.label}
-          />
+          <StatusBadge className="ml-1" color={runtime.color} label={runtime.label} />
         )}
         {app.deploying && <DeployProgress deploying={app.deploying} />}
         {inFlight && (
