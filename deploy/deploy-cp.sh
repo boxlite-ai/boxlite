@@ -100,7 +100,8 @@ CLEAN="rm -rf cp/control-plane/dist"; [ "$CP_ONLY" = 1 ] || CLEAN="$CLEAN cp/con
 bl exec "$BOX" -- sh -c "mkdir -p /home/boxlite/cp/data && cd /home/boxlite && $CLEAN && tar xzf bundle.tgz && chmod 600 cp/cp.env && pkill -f '^node dist/server.mjs' || true" || true
 rm -rf "$STAGE"
 # Dev only: the SMTP sink the email sign-in e2e reads codes from (started once; it survives CP restarts).
-bl exec "$BOX" -- sh -c 'pgrep -f smtp-sink.mjs >/dev/null || setsid nohup node /home/boxlite/cp/smtp-sink.mjs >> /home/boxlite/cp/smtp-sink.log 2>&1 < /dev/null &' || echo "   smtp sink not started; email sign-in e2e will fail"
+# Anchored: an unanchored pattern matches this very sh -c line and never starts it.
+bl exec "$BOX" -- sh -c "pgrep -f '^node /home/boxlite/cp/smtp-sink.mjs' >/dev/null || setsid nohup node /home/boxlite/cp/smtp-sink.mjs >> /home/boxlite/cp/smtp-sink.log 2>&1 < /dev/null &" || echo "   smtp sink not started; email sign-in e2e will fail"
 
 # The console's app screenshots (preview.ts) render in Debian's Chromium; installed once per Box.
 [ "$CP_ONLY" = 1 ] || bl exec "$BOX" -- sh -c 'command -v chromium >/dev/null || { sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq chromium fonts-noto-core fonts-noto-cjk >/dev/null; }' || echo "   chromium not installed; app screenshots stay off"
