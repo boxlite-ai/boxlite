@@ -11,6 +11,7 @@ export type FailureCause =
   | 'module_not_found'
   | 'build_timeout'
   | 'build_command_failed'
+  | 'command_not_found'
   | 'port_binding'
   | 'health_404'
   | 'health_failed'
@@ -142,6 +143,8 @@ function buildDiagnosis(input: FailureInput, message: string, tail: readonly str
   }
   const mod = moduleNotFound(all);
   if (mod) return mod;
+  const notFound = commandNotFound(all);
+  if (notFound) return notFound;
   const cmd = /build step \d+ \((.*)\) exited with code (\d+)/.exec(message);
   const buildCmd = cmd?.[1] ?? ((input.build ?? []).join(' && ') || 'the build');
   return {
@@ -150,6 +153,24 @@ function buildDiagnosis(input: FailureInput, message: string, tail: readonly str
     fix: `run \`${buildCmd}\` locally, fix the first error shown in the log lines, then \`boxlite-app deploy\``,
     evidence: grab(tail, /error|ERR!|failed|fatal/i).length ? grab(tail, /error|ERR!|failed|fatal/i) : tail.slice(-MAX_EVIDENCE),
   };
+}
+
+/** The shell's own words (`sh: 1: gunicorn: not found`, `/bin/sh: line 1: next: command not found`): a program nothing installed. */
+const NOT_FOUND_RE = /(?:^|\s|\])(?:\/bin\/)?(?:ba|z)?sh:\s*(?:line\s*)?(?:\d+:\s*)?([\w.+@/-]+): (?:command )?not found\s*$/;
+
+function commandNotFound(lines: readonly string[]): Diagnosis | null {
+  for (const l of lines) {
+    const m = NOT_FOUND_RE.exec(l.trim());
+    if (!m) continue;
+    const name = m[1]!;
+    return {
+      cause: 'command_not_found',
+      summary: `\`${name}\` is not installed in the Box (exit 127)`,
+      fix: `add the package that provides \`${name}\` to the app's dependencies (package.json for npm, requirements.txt for pip) and make sure [runtime].build installs them; what the build installs runs by its bare name (node_modules/.bin and ~/.local/bin are on PATH). Then \`boxlite-app deploy\``,
+      evidence: grab(lines, /not found|exited with code 127/),
+    };
+  }
+  return null;
 }
 
 function moduleNotFound(lines: readonly string[]): Diagnosis | null {
@@ -254,6 +275,9 @@ function startDiagnosis(input: FailureInput, message: string, tail: readonly str
       evidence: stderr.length ? stderr : grab(all, /exited|error|Error/),
     };
   }
+
+  const notFound = exited ? commandNotFound(all) : null;
+  if (notFound) return notFound;
 
   if (exited) {
     const code = exited[2];

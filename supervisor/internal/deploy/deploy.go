@@ -388,7 +388,7 @@ func (m *Manager) build(ctx context.Context, n int) bool {
 	hub.Systemf(n, api.LevelInfo, "deploy #%d: snapshot %s extracted to %s", n, resp.Snapshot.ID, dir)
 
 	rel := state.Release{Deployment: n, SpecVersion: resp.Spec.Version, Spec: resp.Spec, Env: resp.Env, BuiltAt: time.Now().UTC()}
-	env := m.serviceEnv(rel, "", 0)
+	env := m.serviceEnv(rel, dir, "", 0)
 	steps := resp.Spec.Runtime.Build
 	for i, cmd := range steps {
 		hub.Systemf(n, api.LevelInfo, "deploy #%d: build step %d/%d: %s", n, i+1, len(steps), cmd)
@@ -602,7 +602,7 @@ func (m *Manager) startGroup(rel state.Release, excludePort int) (*proc.Group, e
 				cfg.Port = port
 				cfg.Health = normalizePath(svc.HealthPath())
 			}
-			cfg.Env = m.serviceEnv(rel, svc.Name, port)
+			cfg.Env = m.serviceEnv(rel, dir, svc.Name, port)
 		}
 		s := proc.New(cfg, m.o.Hub, m.o.Reaper)
 		if err := s.Start(); err != nil {
@@ -615,10 +615,11 @@ func (m *Manager) startGroup(rel state.Release, excludePort int) (*proc.Group, e
 }
 
 // serviceEnv builds the environment for a service (or for build steps when
-// name is empty): the filtered supervisor environment, then the spec env from
-// the control plane, then BOXLITE_ENV (if the spec env lacks it),
+// name is empty) running in the release directory dir: the filtered
+// supervisor environment with the tool paths, then the spec env from the
+// control plane, then BOXLITE_ENV (if the spec env lacks it),
 // BOXLITE_SERVICE and, for the exposed command service, PORT.
-func (m *Manager) serviceEnv(rel state.Release, name string, port int) []string {
+func (m *Manager) serviceEnv(rel state.Release, dir, name string, port int) []string {
 	env := map[string]string{}
 	for _, kv := range m.o.BaseEnv {
 		k, v, _ := strings.Cut(kv, "=")
@@ -629,6 +630,7 @@ func (m *Manager) serviceEnv(rel state.Release, name string, port int) []string 
 	if u := m.o.RunAs; u != nil {
 		env["HOME"], env["USER"], env["LOGNAME"] = u.Home, u.Name, u.Name
 	}
+	addToolPaths(env, dir)
 	for k, v := range rel.Env {
 		env[k] = v
 	}
@@ -653,6 +655,37 @@ func (m *Manager) serviceEnv(rel state.Release, name string, port int) []string 
 		out = append(out, k+"="+env[k])
 	}
 	return out
+}
+
+// caBundles are where Linux images keep the system CA certificates.
+var caBundles = []string{"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/cert.pem"}
+
+// addToolPaths lets a build step or service run what the build installed by
+// its bare name: the project's node_modules/.bin (`next start`) and pip's
+// user scripts in ~/.local/bin (`gunicorn app:app`) come before the image's
+// PATH. It also points libpq at the system CA certificates: DATABASE_URL asks
+// for sslmode=verify-full, which libpq (psycopg, psql) cannot check without a
+// root certificate file; node-postgres ignores PGSSLROOTCERT.
+func addToolPaths(env map[string]string, dir string) {
+	var first []string
+	if dir != "" {
+		first = append(first, filepath.Join(dir, "node_modules", ".bin"))
+	}
+	if home := env["HOME"]; home != "" {
+		first = append(first, filepath.Join(home, ".local", "bin"))
+	}
+	if path := env["PATH"]; path != "" {
+		first = append(first, path)
+	}
+	env["PATH"] = strings.Join(first, ":")
+	if _, ok := env["PGSSLROOTCERT"]; !ok {
+		for _, f := range caBundles {
+			if _, err := os.Stat(f); err == nil {
+				env["PGSSLROOTCERT"] = f
+				break
+			}
+		}
+	}
 }
 
 func (m *Manager) targetFor(group *proc.Group, rel state.Release) (int, string) {

@@ -745,11 +745,34 @@ func TestBootWithoutControlPlaneThenReconcile(t *testing.T) {
 	}
 }
 
+// What the build installed runs by its bare name, and libpq finds the system
+// CA certificates; the app's own variables still win.
+func TestServiceEnvToolPathsAndCA(t *testing.T) {
+	ca := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(ca, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	saved := caBundles
+	caBundles = []string{"/nonexistent/ca.crt", ca}
+	t.Cleanup(func() { caBundles = saved })
+	m := New(Options{BaseEnv: []string{"PATH=/usr/bin:/bin"}, RunAs: &proc.Cred{Home: "/home/boxlite", Name: "boxlite"}})
+	env := strings.Join(m.serviceEnv(state.Release{Deployment: 4}, "/rel/4", "web", 0), "\n")
+	for _, want := range []string{"PATH=/rel/4/node_modules/.bin:/home/boxlite/.local/bin:/usr/bin:/bin", "PGSSLROOTCERT=" + ca} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("missing %s in\n%s", want, env)
+		}
+	}
+	own := strings.Join(m.serviceEnv(state.Release{Deployment: 4, Env: map[string]string{"PGSSLROOTCERT": "/app/ca.pem"}}, "/rel/4", "web", 0), "\n")
+	if !strings.Contains(own, "PGSSLROOTCERT=/app/ca.pem") {
+		t.Fatalf("the app's PGSSLROOTCERT must win:\n%s", own)
+	}
+}
+
 func TestServiceEnvComposition(t *testing.T) {
 	m := New(Options{BaseEnv: []string{"PATH=/bin", "PORT=9", "HOME=/h"}})
 	rel := state.Release{Deployment: 3, Spec: api.Spec{Environment: "staging"}, Env: map[string]string{"DATABASE_URL": "x", "HOME": "/override"}}
-	got := strings.Join(m.serviceEnv(rel, "web", 20001), "\n")
-	for _, want := range []string{"BOXLITE_ENV=staging", "BOXLITE_SERVICE=web", "DATABASE_URL=x", "HOME=/override", "PATH=/bin", "PORT=20001"} {
+	got := strings.Join(m.serviceEnv(rel, "/r/3", "web", 20001), "\n")
+	for _, want := range []string{"BOXLITE_ENV=staging", "BOXLITE_SERVICE=web", "DATABASE_URL=x", "HOME=/override", "PATH=/r/3/node_modules/.bin:/h/.local/bin:/bin", "PORT=20001"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %s in\n%s", want, got)
 		}
@@ -757,7 +780,7 @@ func TestServiceEnvComposition(t *testing.T) {
 	if strings.Contains(got, "PORT=9") {
 		t.Fatal("inherited PORT must not leak")
 	}
-	build := strings.Join(m.serviceEnv(rel, "", 0), "\n")
+	build := strings.Join(m.serviceEnv(rel, "/r/3", "", 0), "\n")
 	if strings.Contains(build, "PORT=") || strings.Contains(build, "BOXLITE_SERVICE=") {
 		t.Fatalf("build env must have no PORT/BOXLITE_SERVICE:\n%s", build)
 	}

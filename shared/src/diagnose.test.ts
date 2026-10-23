@@ -131,3 +131,25 @@ test('a service listening on its own fixed port is a port problem even after the
   assert.equal(d.cause, 'port_binding');
   assert.match(d.summary, /port 3000, but the platform sets PORT=20001/);
 });
+
+test('a program nothing installed is named, at start and at build; an app saying "not found" is not', () => {
+  const start = classifyFailure({
+    step: 'start',
+    message: 'service web failed its health check within 1m0s',
+    service: { name: 'web', command: 'gunicorn app:app' },
+    log_tail: [`${TS} [web] sh: 1: gunicorn: not found`, `${TS} [system] service web exited with code 127 after 5ms; restarting in 1s`],
+  });
+  assert.equal(start.cause, 'command_not_found');
+  assert.equal(start.summary, '`gunicorn` is not installed in the Box (exit 127)');
+  assert.match(start.fix, /requirements\.txt/);
+  const build = classifyFailure({ step: 'build', message: 'build step 2 (next build) exited with code 127', log_tail: [`${TS} [build] /bin/sh: line 1: next: command not found`] });
+  assert.equal(build.cause, 'command_not_found');
+  assert.match(build.summary, /`next`/);
+  const app = classifyFailure({
+    step: 'start',
+    message: 'service web failed its health check within 1m0s',
+    service: { name: 'web', command: 'node server.js' },
+    log_tail: [`${TS} [web] Error: not found`, `${TS} [system] service web exited with code 1 after 120ms; restarting in 1s`],
+  });
+  assert.equal(app.cause, 'crash_on_start');
+});
