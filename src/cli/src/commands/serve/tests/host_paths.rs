@@ -2,8 +2,13 @@
 //! bind, and which roots stop the server. Run by `make test:unit:cli`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use super::super::handlers::config::server_config;
+use axum::Json;
+use axum::extract::State;
+
+use super::super::AppState;
+use super::super::handlers::config::get_config;
 use super::super::host_paths::HostPathPolicy;
 use super::super::types::VolumeSpecRequest;
 
@@ -219,15 +224,27 @@ fn a_missing_root_stops_the_server() {
 
 /// SDK clients send a host path only to a server whose `GET /v1/config` says
 /// it binds one, so the flag must follow `--host-path-root` exactly.
-#[test]
-fn config_advertises_host_paths_only_when_a_root_is_set() {
+#[tokio::test]
+async fn config_advertises_host_paths_only_when_a_root_is_set() {
     let root = tempfile::tempdir().unwrap();
-    let advertised = |policy: &HostPathPolicy| {
-        serde_json::to_value(server_config(policy)).unwrap()["capabilities"]
-            ["host_path_volumes_enabled"]
-            .clone()
-    };
 
-    assert_eq!(advertised(&policy(root.path())), true);
-    assert_eq!(advertised(&HostPathPolicy::default()), false);
+    assert_eq!(advertised(policy(root.path())).await, true);
+    assert_eq!(advertised(HostPathPolicy::default()).await, false);
+}
+
+async fn advertised(host_paths: HostPathPolicy) -> serde_json::Value {
+    let state = AppState {
+        runtime: boxlite::BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+            "http://127.0.0.1:1".to_string(),
+        ))
+        .expect("rest runtime"),
+        boxes: Default::default(),
+        executions: Default::default(),
+        api_key: None,
+        host_paths,
+        lifecycle: Default::default(),
+        last_activity: Default::default(),
+    };
+    let Json(config) = get_config(State(Arc::new(state))).await;
+    serde_json::to_value(config).unwrap()["capabilities"]["host_path_volumes_enabled"].clone()
 }

@@ -257,7 +257,7 @@ volumes: [
 
 Setting both origins, or neither, is rejected. Over REST a host path is a
 path on the server, so only `boxlite serve --host-path-root` accepts one;
-other REST runtimes refuse it before any request.
+against other REST runtimes it is refused before the create request.
 
 #### `JsPortSpec`
 

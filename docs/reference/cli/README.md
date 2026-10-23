@@ -950,8 +950,8 @@ has no volume backend and rejects them at create. Host binds name a path on the
 machine running the box. Against a REST server (`--url`, `BOXLITE_REST_URL`, or
 a stored profile) that is the server, so
 a bind is sent only to one that advertises host-path support
-([`boxlite serve --host-path-root`](#boxlite-serve)); others refuse it before
-any request. In that mode the path must be absolute and is sent as written:
+([`boxlite serve --host-path-root`](#boxlite-serve)); against others the bind
+is refused before the create request. In that mode the path must be absolute and is sent as written:
 a relative path or an anonymous volume would be resolved on this machine, so
 both are refused. Manage volumes with [`boxlite volume`](#boxlite-volume).
 

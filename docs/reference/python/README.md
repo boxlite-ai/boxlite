@@ -283,8 +283,8 @@ volumes=[
 
 Managed volumes require a REST runtime. A host bind names a path on the machine
 running the box: locally that is this machine; over REST it is the server, and
-only `boxlite serve --host-path-root` accepts one, so other servers are refused
-before any request.
+only `boxlite serve --host-path-root` accepts one, so against other servers it
+is refused before the create request.
 Either may set `"read_only": True`; a managed volume is then bound read-only
 on the runner.
 

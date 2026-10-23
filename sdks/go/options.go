@@ -247,7 +247,8 @@ type boxConfig struct {
 }
 
 // volumeEntry is one mount. Exactly one origin is set: managedVolume for a
-// server-side managed volume, hostPath for a bind from the local filesystem.
+// server-side managed volume, hostPath for a bind of a path on the host running
+// the box (the server, over REST).
 type volumeEntry struct {
 	managedVolume string
 	hostPath      string

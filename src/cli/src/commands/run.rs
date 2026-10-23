@@ -253,6 +253,40 @@ mod tests {
     use crate::cli::{Cli, Commands};
     use clap::Parser;
 
+    /// `--url` makes `-v` name the server's filesystem, so `run` must carry
+    /// remote mode into its volume flags: a relative path is refused before
+    /// any request instead of being resolved on this machine.
+    #[tokio::test]
+    async fn run_against_a_remote_server_refuses_a_relative_volume() {
+        let home = tempfile::tempdir().unwrap();
+        let cli = Cli::try_parse_from([
+            "boxlite",
+            "--url",
+            "http://127.0.0.1:1",
+            "--home",
+            home.path().to_str().unwrap(),
+            "run",
+            "-v",
+            ".:/data",
+            "alpine:latest",
+        ])
+        .expect("run --url -v should parse");
+        let Commands::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+        let (rootfs, command_args) = args.rootfs_and_command().expect("rootfs resolves");
+        let command_args = command_args.to_vec();
+
+        let runner = BoxRunner::new(args, &cli.global).expect("a REST runtime needs no server");
+        let error = runner
+            .create_box(rootfs, &command_args)
+            .await
+            .err()
+            .expect("a relative path must be refused against a remote server");
+
+        assert!(error.to_string().contains("remote server"), "{error}");
+    }
+
     /// The second consuming boundary. `run -d` clears the `--rm` encoding
     /// after `apply_to` has run, so it can clobber an explicit deadline exactly
     /// as `create` could — and this pairing is what the CLI reference promises:
