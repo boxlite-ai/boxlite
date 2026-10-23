@@ -2,7 +2,11 @@
 # Build everything and put the control plane into the dev Box "microcloud-cp".
 # First run creates the Box (4 CPU / 8 GB, never auto-stops) and its public tunnel;
 # later runs only replace the bundle and restart the process. The URL stays the same.
+# CP_ONLY=1 builds and ships only the control plane (and agent docs), keeping the console, CLI
+# and supervisor binaries already on the Box: about a minute for a CP-side change.
 set -eu
+CP_ONLY=${CP_ONLY:-}
+[ "$CP_ONLY" = 1 ] && { SKIP_CLI=1; SKIP_CONSOLE=1; }
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BOX=microcloud-cp
 REST=https://api.dev.boxlite.ai/v1
@@ -15,13 +19,14 @@ AUTH="Authorization: Bearer $BOXLITE_API_KEY"
 bl() { boxlite --url "$CLI_URL" "$@"; }
 
 echo "== build"
-( cd "$ROOT/supervisor" && make build >/dev/null )
+[ "$CP_ONLY" = 1 ] || ( cd "$ROOT/supervisor" && make build >/dev/null )
 # SKIP_CLI=1 ships the last built CLI bundle (useful while the CLI is mid-change).
 ( cd "$ROOT" && pnpm --filter @microcloud/shared --filter @microcloud/control-plane build >/dev/null )
 [ "${SKIP_CLI:-}" = 1 ] || ( cd "$ROOT" && pnpm --filter @microcloud/cli build >/dev/null )
 [ "${SKIP_CONSOLE:-}" = 1 ] || "$ROOT/deploy/build-console.sh" >/dev/null
 # The CLI is a single bundled file; ship it as a dependency-free npm package so
 # `npm install -g <url>` works without the workspace.
+if [ "$CP_ONLY" != 1 ]; then
 PKG=$(mktemp -d)/package
 mkdir -p "$PKG/dist"
 cp "$ROOT/cli/dist/boxlite-app.cjs" "$PKG/dist/"
@@ -30,6 +35,7 @@ cat > "$PKG/package.json" <<EOF
 {"name":"boxlite-app","version":"$CLI_VERSION","bin":{"boxlite-app":"./dist/boxlite-app.cjs"},"engines":{"node":">=20"}}
 EOF
 ( cd "$PKG/.." && COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "$ROOT/cli/boxlite-app.tgz" package )
+fi
 
 echo "== box"
 if ! curl -fsS -H "$AUTH" "$REST/boxes/$BOX" >/dev/null 2>&1; then
@@ -48,12 +54,14 @@ echo "== bundle"
 STAGE=$(mktemp -d)
 mkdir -p "$STAGE/cp/control-plane/dist" "$STAGE/cp/control-plane/node_modules" "$STAGE/cp/supervisor/bin" "$STAGE/cp/agent" "$STAGE/cp/cli" "$STAGE/cp/console-dist"
 cp -R "$ROOT/control-plane/dist/." "$STAGE/cp/control-plane/dist/"
-# App screenshots (preview.ts): playwright-core is not bundled; it has no dependencies of its own.
-cp -RL "$ROOT/control-plane/node_modules/playwright-core" "$STAGE/cp/control-plane/node_modules/"
-cp "$ROOT/supervisor/bin/"supervisor-linux-* "$STAGE/cp/supervisor/bin/"
 cp "$ROOT/agent/SKILL.md" "$ROOT/agent/prompt-template.md" "$STAGE/cp/agent/"
-cp "$ROOT/cli/boxlite-app.tgz" "$STAGE/cp/cli/"
-cp -R "$ROOT/console-dist/." "$STAGE/cp/console-dist/"
+if [ "$CP_ONLY" != 1 ]; then
+  # App screenshots (preview.ts): playwright-core is not bundled; it has no dependencies of its own.
+  cp -RL "$ROOT/control-plane/node_modules/playwright-core" "$STAGE/cp/control-plane/node_modules/"
+  cp "$ROOT/supervisor/bin/"supervisor-linux-* "$STAGE/cp/supervisor/bin/"
+  cp "$ROOT/cli/boxlite-app.tgz" "$STAGE/cp/cli/"
+  cp -R "$ROOT/console-dist/." "$STAGE/cp/console-dist/"
+fi
 [ -f "$ROOT/.cp-admin-token" ] || head -c 24 /dev/urandom | base64 | tr -d '/+=' > "$ROOT/.cp-admin-token"
 [ -f "$ROOT/.cp-session-secret" ] || head -c 32 /dev/urandom | base64 | tr -d '/+=' > "$ROOT/.cp-session-secret"
 umask 077
@@ -82,11 +90,13 @@ EOF
 ( cd "$STAGE" && COPYFILE_DISABLE=1 tar --no-mac-metadata -czf bundle.tgz cp )
 bl cp "$STAGE/bundle.tgz" "$BOX:/home/boxlite/bundle.tgz"
 # Keep data/ across deploys; replace everything else, then restart the server process.
-bl exec "$BOX" -- sh -c 'mkdir -p /home/boxlite/cp/data && cd /home/boxlite && rm -rf cp/console-dist && tar xzf bundle.tgz && chmod 600 cp/cp.env && pkill -f "^node dist/server.mjs" || true' || true
+# The control plane's dist is replaced whole (no stale chunks); with CP_ONLY the console stays.
+CLEAN="rm -rf cp/control-plane/dist"; [ "$CP_ONLY" = 1 ] || CLEAN="$CLEAN cp/console-dist"
+bl exec "$BOX" -- sh -c "mkdir -p /home/boxlite/cp/data && cd /home/boxlite && $CLEAN && tar xzf bundle.tgz && chmod 600 cp/cp.env && pkill -f '^node dist/server.mjs' || true" || true
 rm -rf "$STAGE"
 
 # The console's app screenshots (preview.ts) render in Debian's Chromium; installed once per Box.
-bl exec "$BOX" -- sh -c 'command -v chromium >/dev/null || { sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq chromium fonts-noto-core fonts-noto-cjk >/dev/null; }' || echo "   chromium not installed; app screenshots stay off"
+[ "$CP_ONLY" = 1 ] || bl exec "$BOX" -- sh -c 'command -v chromium >/dev/null || { sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq chromium fonts-noto-core fonts-noto-cjk >/dev/null; }' || echo "   chromium not installed; app screenshots stay off"
 
 echo "== wait"
 i=0; until curl -fsS "$URL/healthz" >/dev/null 2>&1; do i=$((i+1)); [ $i -gt 30 ] && { echo "CP did not come up"; bl exec "$BOX" -- tail -40 /home/boxlite/cp/cp.log; exit 1; }; sleep 2; done
