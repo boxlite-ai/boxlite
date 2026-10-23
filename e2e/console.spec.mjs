@@ -189,10 +189,11 @@ async function main() {
       return line
     })
 
-    await step('the first deployment goes live and the header says #1 · Running', async () => {
+    await step('the first deployment goes live and the header says Running', async () => {
       const r = await deploy
       assert(r.code === 0, `deploy exit ${r.code}: ${r.out.slice(-400)}`)
-      await until(async () => /#1 · Running/.test(await text(page.locator('h1').first().locator('..'))) || null, { timeoutMs: 30_000, what: '#1 · Running' })
+      // The header states only the app's state; which deployment is live is the Deployments row's job.
+      await until(async () => /\bRunning\b/.test(await text(page.locator('h1').first().locator('..'))) || null, { timeoutMs: 30_000, what: 'Running' })
       await until(async () => /LIVE/.test(await text(page.getByTestId('deployment-row-1'))) || null, { timeoutMs: 15_000, what: 'row #1 live' })
       return '#1 live'
     })
@@ -209,7 +210,8 @@ async function main() {
       await dialog.getByRole('button', { name: 'Copy prompt' }).click()
       const issued = /bxl_app_[a-z2-7]{32}/.exec(await page.evaluate(() => navigator.clipboard.readText()))?.[0]
       assert(issued && issued !== KEY, 'Copy instructions did not hand over a new key')
-      await dialog.getByRole('button', { name: 'Close' }).click()
+      await page.keyboard.press('Escape')
+      await dialog.waitFor({ state: 'hidden' })
       for (const key of [KEY, issued]) {
         const r = await fetch(`${CP}/v1/apps/${APP}/whoami`, { headers: { authorization: `Bearer ${key}` } })
         assert(r.status === 200, `key …${key.slice(-4)} → ${r.status}`)
@@ -218,6 +220,7 @@ async function main() {
     })
 
     await step('deployment detail is a full timeline matching the CP', async () => {
+      await tab('Deployments')
       await page.getByTestId('deployment-row-1').click()
       await page.getByTestId('deployment-detail').waitFor()
       const truth = await cpApi('/envs/main/deployments/1/timeline')
@@ -237,10 +240,9 @@ async function main() {
     })
 
     await step('services and schedules (Deployments › Services) match the CP', async () => {
-      await tab('Overview')
-      // The Overview says whether everything runs; the services themselves are under Deployments.
-      await page.getByRole('button', { name: /Services →/ }).click()
-      await page.getByRole('tab', { name: /^Services/ }).waitFor()
+      // The Overview lists the services by name; their processes are under Deployments › Services.
+      await tab('Deployments')
+      await page.getByRole('tab', { name: /^Services/ }).click()
       const services = await cpApi('/envs/main/services')
       for (const s of services) {
         // The process details (pid, port, restarts) are in the row's expanded part.
@@ -299,7 +301,7 @@ async function main() {
       await page.getByRole('menuitem', { name: 'Copy redirect URI' }).click()
       const uri = await page.evaluate(() => navigator.clipboard.readText())
       assert(/\/auth\/callback\/github/.test(uri), `redirect URI copied: ${uri}`)
-      assert(/set up Google sign-in/i.test(await text(page.getByTestId('method-google'))), 'Google not explained')
+      assert(/your own Google OAuth app/i.test(await text(page.getByTestId('method-google'))), 'Google not explained')
       await shot('auth')
     })
 
