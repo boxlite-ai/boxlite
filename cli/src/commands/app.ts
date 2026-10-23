@@ -26,15 +26,16 @@ import { registerVolume } from './volume.js';
 async function status(ctx: Ctx): Promise<void> {
   const api = await ctx.appApi();
   const info = await api.getApp(await ctx.appName());
-  ctx.out.data(info);
-  ctx.out.line(`App ${info.name}`);
   const envs = info.envs ?? [];
+  const current = envs.find((e) => e.name === ctx.envName);
+  // `url` is the selected environment's (--env, main by default): the one to hand to the user.
+  ctx.out.data({ ...info, env: ctx.envName, url: current?.url ?? info.url });
+  ctx.out.line(`App ${info.name}`);
   const rows = envs.map((e) => {
     const d = e.latest_deployment;
     return [e.name, e.status ?? '', e.url ?? '', d ? `#${d.number} ${d.status}` : 'no deployments', e.spec_version != null ? `spec v${e.spec_version}` : ''];
   });
   for (const line of table(rows, '  ')) ctx.out.line(line);
-  const current = envs.find((e) => e.name === ctx.envName);
   const latest = current?.latest_deployment;
   if (!latest) ctx.out.next('`boxlite-app check`, then `boxlite-app deploy -m "first version"`');
   else if (latest.status === 'failed') ctx.out.next(`\`boxlite-app app deployment ${latest.number} --logs\` shows why #${latest.number} failed`);
@@ -201,7 +202,7 @@ export function registerApp(program: Command, make: MakeCtx): Command {
   const app = program.command('app').description('inspect and operate the App (linked directory, BOXLITE_APP, or the key’s own App)');
 
   describe(app.command('status').description('environments, URLs and latest deployments').action(async (_o: unknown, cmd: Command) => status(await make(cmd))), {
-    json: '{ name: string, created_at: string, url: string, envs: EnvSummary[] }',
+    json: '{ name: string, created_at: string, env: string, url: string (of env), envs: EnvSummary[] }',
     exits: [2, 3, 6],
     online: true,
   });

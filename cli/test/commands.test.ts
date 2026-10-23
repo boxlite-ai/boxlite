@@ -513,3 +513,24 @@ test('a DELETE retried after a dropped connection that finds nothing left is don
   const res = await cli(['app', 'volume', 'rm', 'uploads:/old.png', '--yes', '--json'], { cwd: dir, dispatcher: agent });
   assert.equal(res.code, 0, res.stderr);
 });
+
+test('app status --env names the environment and gives its URL, not main\'s', async () => {
+  const { agent, pool } = mockApi();
+  const body = {
+    name: 'crm',
+    url: 'https://10118-cp.test/',
+    envs: [
+      { name: 'main', status: 'new', url: 'https://10118-cp.test/' },
+      { name: 'beta', status: 'live', url: 'https://10120-cp.test/', latest_deployment: { number: 1, status: 'live' } },
+    ],
+  };
+  pool.intercept({ path: '/v1/apps/crm', method: 'GET' }).reply(200, body, { headers: JSON_HEADERS }).times(2);
+  const dir = await project(root, { '.boxlite/link.json': linkJson() });
+  const beta = await cli(['app', 'status', '--env', 'beta', '--json'], { cwd: dir, dispatcher: agent });
+  assert.equal(beta.code, 0, beta.stderr);
+  const data = JSON.parse(beta.stdout);
+  assert.equal(data.env, 'beta');
+  assert.equal(data.url, 'https://10120-cp.test/');
+  const main = JSON.parse((await cli(['app', 'status', '--json'], { cwd: dir, dispatcher: agent })).stdout);
+  assert.deepEqual([main.env, main.url], ['main', 'https://10118-cp.test/']);
+});

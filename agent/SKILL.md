@@ -171,7 +171,7 @@ boxlite-app app curl / --expect 200
 
 One short message:
 
-- The app's permanent URL (`url` in `boxlite-app app status --json`). Never hand over a one-time link from `app open --print-url`: it expires a minute after you create it and works once, so it is dead by the time the user reads your message. A private app opens for its owner with **Open app** in the BoxLite console, and its URL shows a page that says so; tell the user that in one sentence. Never put the App key in a link.
+- The app's permanent URL (`url` in `boxlite-app app status --json`; add `--env <name>` for a test version you hand over). Never hand over a one-time link from `app open --print-url`: it expires a minute after you create it and works once, so it is dead by the time the user reads your message. A private app opens for its owner with **Open app** in the BoxLite console, and its URL shows a page that says so; tell the user that in one sentence. Never put the App key in a link.
 - What you built, in their words, and what you verified (list).
 - Anything only they can decide, phrased as a question: making the app public when their request did not say who may open it (until then nobody but the owner can use it, signed in or not), having an admin add a third-party key, a custom domain.
 
