@@ -111,8 +111,8 @@ function loginPage(error: string | null, next: string, github: boolean): string 
 :root{color-scheme:dark;--bg:hsl(218 17% 7%);--mute:hsl(221 7% 58%);--line:hsl(221 16% 16%)}
 *{box-sizing:border-box}html,body{height:100%;margin:0}
 body{background:var(--bg);color:#fff;font:13px/1.6 'IBM Plex Mono',ui-monospace,'SFMono-Regular','SF Mono',Menlo,monospace;display:grid;grid-template-columns:minmax(0,1fr) 440px}
-@media (max-width:900px){body{grid-template-columns:1fr}.stage{display:none}}
 .stage{position:relative;border-right:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden}
+@media (max-width:900px){body{grid-template-columns:1fr;grid-template-rows:260px minmax(0,1fr)}.stage{border-right:0;border-bottom:1px solid var(--line)}.door{padding:24px 28px}}
 ascii-art{display:block}
 .door{display:flex;flex-direction:column;padding:32px 48px}
 .brand{display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:.2px}.brand svg{width:18px;height:20px}

@@ -4,7 +4,6 @@
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { Context } from 'hono';
 
 const TYPES: Record<string, string> = {
@@ -32,8 +31,8 @@ export function staticHandler(c: Context, consoleDir: string | undefined): Respo
   return serve(c, resolve(consoleDir ?? '../console-dist'), '/console/', true);
 }
 
-/** control-plane/vendor, next to dist/ and src/ alike. */
-export const VENDOR_DIR = fileURLToPath(new URL('../../../vendor', import.meta.url));
+/** control-plane/vendor, from the working directory like console-dist (the server runs in control-plane/). */
+export const VENDOR_DIR = resolve('vendor');
 
 /** Third-party files the console and its sign-in page load (vendor/README.md in each); public, like the sign-in page. */
 export function vendorHandler(c: Context): Response {
