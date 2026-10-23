@@ -65,11 +65,21 @@ impl<H: X86Vm> Workers<'_, H> {
     /// whose lock an earlier panic poisoned, ends the VM with
     /// [`Error::VcpuPanicked`] instead of leaving the thread.
     pub(crate) fn run(&self, id: u8) {
-        let vcpu = catch_panic(id, || self.configure(id));
+        let vcpu = match catch_panic(id, || self.configure(id)) {
+            Ok(vcpu) => Some(vcpu),
+            Err(error) => {
+                // Sent before arriving, so the latch is set before any vCPU
+                // leaves the gate and none enters the guest.
+                self.sender.send(Event::VcpuFailed(error));
+                None
+            }
+        };
         // A failed vCPU still arrives, so the others are never left waiting.
         self.gate.arrive_and_wait(self.vcpu_count);
-        let outcome = vcpu.and_then(|mut vcpu| catch_panic(id, || self.run_guest(&mut vcpu, id)));
-        match outcome {
+        let Some(mut vcpu) = vcpu else {
+            return;
+        };
+        match catch_panic(id, || self.run_guest(&mut vcpu, id)) {
             Ok(Some(event)) => self.sender.send(event),
             Ok(None) => {}
             Err(error) => self.sender.send(Event::VcpuFailed(error)),

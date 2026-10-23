@@ -553,6 +553,38 @@ mod lifecycle {
         );
     }
 
+    /// A vCPU that fails setup reports it before the start gate opens, so no
+    /// vCPU enters the guest and the setup error, not a guest exit, ends the
+    /// run. The two sends race, so the run repeats.
+    #[test]
+    fn a_setup_failure_ends_the_vm_before_any_vcpu_enters_the_guest() {
+        for _ in 0..100 {
+            // vCPU 1 spawns last, so it opens the gate and runs at once while
+            // vCPU 0, whose setup failed, still wakes from the gate.
+            let backend =
+                MockVm::with_scripts(vec![vec![], vec![Step::Reset]]).and_failing_setup_of(0);
+            let entries = backend.entries();
+
+            let (exit, _) = run(mock(2, backend));
+
+            assert!(
+                matches!(
+                    exit,
+                    Err(Error::Hypervisor(HypervisorError::ConfigureVcpu {
+                        id: 0,
+                        ..
+                    }))
+                ),
+                "{exit:?}"
+            );
+            assert_eq!(
+                *entries.lock().unwrap(),
+                [0u32; 0],
+                "a vCPU entered the guest"
+            );
+        }
+    }
+
     #[test]
     fn a_vcpu_that_fails_setup_ends_the_vm_without_a_deadlock() {
         let (exit, _) = run(mock(3, MockVm::failing_setup_of(1)));

@@ -216,8 +216,9 @@ nothing mapped.
 1. It starts one scoped thread per vCPU, named `vcpuN`. Each creates its vCPU,
    sets its CPUID from `vcpu_cpuid` and the boot MSRs, and on vCPU 0 the entry
    registers, then waits at a start gate until every vCPU is configured. A
-   vCPU that fails setup still arrives, and a thread that fails to start
-   aborts the gate, so no worker waits forever.
+   vCPU that fails setup sends `VcpuFailed` before it arrives, so the latch
+   keeps every vCPU out of the guest, and a thread that fails to start aborts
+   the gate, so no worker waits forever.
 2. Each worker then loops: check the stop latch, run, and hand the exit to
    `Chipset::dispatch`. `Shutdown` sends `GuestShutdown` and `Reset` sends
    `GuestReset`; a run error, any other exit, such as `Halted`, which KVM never

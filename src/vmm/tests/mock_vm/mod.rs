@@ -88,6 +88,8 @@ pub(crate) struct MockVm {
     scripts: Vec<Vec<Step>>,
     /// The vCPU whose `set_cpu_features` fails.
     fail_setup: Option<u32>,
+    /// The id of each vCPU entry into the guest, in order.
+    entries: Arc<Mutex<Vec<u32>>>,
 }
 
 impl MockVm {
@@ -114,6 +116,19 @@ impl MockVm {
             fail_setup: Some(id),
             ..Self::default()
         }
+    }
+
+    /// Also fails the setup of vCPU `id`, on top of the scripts.
+    pub(crate) fn and_failing_setup_of(self, id: u32) -> Self {
+        Self {
+            fail_setup: Some(id),
+            ..self
+        }
+    }
+
+    /// Every guest entry, which outlives the backend like the call log.
+    pub(crate) fn entries(&self) -> Arc<Mutex<Vec<u32>>> {
+        Arc::clone(&self.entries)
     }
 
     /// The call log, which outlives the backend so tests can read it after a drop.
@@ -174,6 +189,7 @@ impl Vm for MockVm {
             steps: steps.into(),
             log: Arc::clone(&self.log),
             fail_setup: self.fail_setup == Some(id),
+            entries: Arc::clone(&self.entries),
             kick: Arc::default(),
             data: [0],
         })
@@ -189,6 +205,7 @@ pub(crate) struct MockVcpu {
     steps: VecDeque<Step>,
     log: Arc<Mutex<Vec<Call>>>,
     fail_setup: bool,
+    entries: Arc<Mutex<Vec<u32>>>,
     kick: Arc<Kick>,
     data: [u8; 1],
 }
@@ -228,6 +245,7 @@ impl Vcpu for MockVcpu {
 
     fn run(&mut self) -> Result<VcpuExit<'_>> {
         let id = self.id;
+        self.entries.lock().unwrap().push(id);
         Ok(match self.steps.pop_front() {
             Some(Step::Write { addr, byte }) => {
                 self.data = [byte];
