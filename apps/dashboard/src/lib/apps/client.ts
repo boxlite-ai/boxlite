@@ -32,7 +32,8 @@ appsClient.interceptors.response.use(
       }
       const e = body?.error
       if (e?.message) {
-        throw BoxliteError.fromString(e.next ? `${e.message}. Next: ${e.next}` : e.message, {
+        const next = forPeople(e.next)
+        throw BoxliteError.fromString(next ? `${e.message}. ${next}` : e.message, {
           cause: error,
           code: e.code,
         })
@@ -41,6 +42,15 @@ appsClient.interceptors.response.use(
     throw error
   },
 )
+
+/**
+ * The control plane writes `next` for agents as well as people. A hint that is a command to run
+ * (backticks, `boxlite-app …`) means nothing in the console, so people get only plain-language hints.
+ */
+function forPeople(next: string | undefined): string | undefined {
+  if (!next || /`|boxlite-app\b/.test(next)) return undefined
+  return next.charAt(0).toUpperCase() + next.slice(1)
+}
 
 /** The control plane's words for a failed call (message, then what to do next), for inline errors. */
 export function errorText(error: unknown): string {
