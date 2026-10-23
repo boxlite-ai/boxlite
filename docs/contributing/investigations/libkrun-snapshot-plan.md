@@ -103,9 +103,9 @@
 ### 4. virtio-net 快照
 
 - **现有实现：** [NetWorker][net]持有 RX/TX 队列、deferred frame 缓冲和宿主网络后端；线程启动后没有用于快照的暂停/回收接口。BoxLite 将网络 socket 路径和 MAC 传入 libkrun。
-- **改动范围：** 保存公共 virtio 状态、MAC/设备配置及已取出描述符对应的缓冲进度；为 worker 增加确认式冻结。恢复时重建 gvproxy/TAP/Unix socket 后端和网络策略。旧宿主 TCP/NAT 状态不迁移，网络边界允许丢包和重连，但不得破坏 ring 进度。
+- **改动范围：** 首版只做 Linux x86_64/KVM、单网卡、UnixStream 后端、私有 `RamSnapshotVm`。保存公共 virtio 状态、MAC/attach features/设备配置、MMIO transport 与 RX/TX 队列游标；为 worker 增加确认式冻结（落在完整描述符边界）。worker 私有缓冲（deferred RX、半帧 RX、未写完的 TX）不保存、不迁移：源端保留原后端和缓冲继续运行；恢复端连接一个新启动的兼容后端。恢复时把切点前未消费的 TX 链全部以长度 0 完成（不发给新后端），已 used 的请求不重放，RX 描述符保留。旧宿主 TCP/NAT 状态、帧和半帧都不迁移；guest 驱动/设备/队列状态保留，guest socket 靠自身错误与超时恢复。
 - **前置依赖：** 阶段 3 的公共机制、阶段 1–2；固定首版网络后端与地址配置，明确后端重建和 guest 网络重新可用的流程。
-- **验收标准：** 在 RX/TX 活跃及 deferred frame 状态恢复；旧连接允许断开，新 DNS 查询和 TCP 连接成功，队列继续推进且不会因丢失事件永久卡住。
+- **验收标准：** 在 RX/TX 活跃、TX 背压与 deferred frame 状态下保存并恢复；旧连接允许断开，旧包不进入新后端、used 环无重复项；新 DNS 查询和 TCP 连接成功，队列不依赖旧 eventfd kick 继续推进。
 
 ### 5. virtio-vsock 快照
 
@@ -346,6 +346,31 @@ krun-devices 单测（无 KVM）：队列状态未激活/协商中/激活、游�
 - vmm 侧 `ram_snapshot/blk/`（cfg feature `blk`）：`attach_disk` 仅 vCPU 启动前、拒绝非普通文件/不可用 owner/MMIO 窗口与 RAM 重叠（调用方前置条件：源盘文件及其整条 backing 链在挂载生命周期内不得有本私有 owner 之外的写入者，一致切点假设独占所有权，实现不取任何锁），任何失败 poison owner 并回滚已注册 ioeventfd/irqfd；`register_device` 需要 `&mut` owner（Bus::insert），先 ioevent 后 irqfd 后入 bus，失败全回滚。保存：pause → freeze 全部（active 走 worker，inactive 直接 flush）→ 静默边界按受控克隆数做 RAM 别名探测 → 逐盘 DEASSIGN+drain → 捕获（活动 ring 一致性用 guest RAM 校验）→ 分段拷贝 → sync → 独立依次重赋 irqfd / Resume 全部设备 / Resume 全部 CPU（聚合失败、poison、不发布）。恢复：metadata-only 校验（窗口/唯一性/重叠/config 与 image id 长度/容量乘法/transport 状态/结构 features/offered features 契约/DRIVER_OK⇔activated）在创建任何资源前；read_ram 后校验活动 ring；`ImportedDir` 创建守卫独占 0700 目录、逐文件 create_new 0600 并在创建时记录路径，Drop 只删除自己创建的文件与目录（预存在目录报错且永不触碰，有 sentinel 回归测试）；owner 在任何 worker 启动前接管守卫；`resume` 设备先行，任一失败即 join 全部 CPU 再 join 全部 worker 并 poison；Drop 顺序 CPU → worker → 守卫。
 - KRUNVM v1/KRUNRAM v1 语义不变；`restore_full` 对 v2 明确报错；带盘 `save_full` 即 v2；RAM-only `save` 对已挂盘 owner 明确拒绝。guest fixture 由测试内字节 emitter 生成（GDTR@0x500→GDT@0x520、16 位代码段 D=0 G=1 与 4 GiB 数据段的 unreal mode 设置，返回实模式后不重载 DS/ES；三描述符链 header/data/status、状态哨兵 0xEE、0x41+计数写模式、读校验 0xC7、FLUSH 轮转、IOAPIC GSI16/x2APIC 中断；第 BARRIER_REQUEST-1=10 号请求提交前先 cli（该号为 WRITE 相位），完成计数达到 BARRIER_REQUEST=11 后驻留屏障并置字节标记，释放后 sti 并以独立 post-STI 标记证明 pending IRQ 在没有任何新请求的情况下送达；普通测试预置释放字节不驻留），阶段 2 fixture 与测试保持不动；worker 侧用按队列 eventfd 键控的一次性 RAII 请求门（键控 map，等待前移除条目，互不干扰、panic 安全）确定性覆盖 IN/OUT/FLUSH 三种 held 请求。Makefile snapshot 目标启用 `blk` feature 并纳入 krun-devices 测试（按 `snapshot` 名称过滤）；snapshot-fmt 覆盖全部新文件。libkrun README 增补 stage 3 行为。
 
-### 阶段 3 未验证事项（全部 UNVERIFIED）
+### 阶段 3 未验证事项（原记录：全部 UNVERIFIED）
+
+以下为阶段 3 提交时的原始记录；阶段 4 实施时的实际执行结果见“阶段 4 实际验证”。
 
 遵照任务要求未运行任何格式检查、构建、测试、KVM 验收或 `git diff --check`；仅做源码阅读与逐项核对。因此：测试内字节 emitter 生成的 unreal-mode guest 程序（含全部编码与标签 fixup）、手工 qcow2 v3+backing 头部布局、irqfd DEASSIGN/drain 时序、屏障 pending 中断跨切点保存与恢复、导入目录权限/守卫清理、以及全部单测/集成测试的可编译性与通过性均未经执行验证。阶段 2 遗留的 musl/GNU 交叉链接限制对新增代码同样适用。下一执行环境应在 Linux x86_64/KVM 主机上先运行 `make snapshot-check`、`make snapshot-fmt`、`make snapshot-test`，再跑 blk KVM 验收；真实 guest 续跑断言依赖 emitter 编码正确性，首次执行需按失败现场逐条核对指令编码。
+
+## 阶段 4 virtio-net 快照（2026-10-23）
+
+### 契约
+
+- 范围：Linux x86_64/KVM、单网卡、UnixStream（4 字节大端长度前缀帧）后端，仅私有 `RamSnapshotVm`（cargo feature `blk` + `net`），不接入普通 `Vmm`、C ABI、SDK、CLI。
+- `attach_net(socket_path, mac, features)`：vCPU 启动前挂载；固定 MMIO 0xd0008000、GSI 23（占用磁盘窗口最后一个 GSI，带网卡时最多 7 个磁盘，无网卡仍为 8 个）；`features` 只接受 libkrun `NET_FEATURE_*` offload 位。后端在设备激活时同步连接：未激活网卡（包括恢复时）从不连接；连接失败则激活失败、不启动 worker。
+- 后端 I/O：socket 非阻塞；前缀/帧体跨多次读取拼接；空帧跳过；超过 64 KiB 缓冲的帧丢弃；EOF 只报告一次，半帧丢弃不投递；每次读最多花 256 KiB 或 64 次 recv 后交还控制（含 EINTR）。TX 背压：未写出的链留在 avail 环（undo_pop），部分写出的帧余量留在 worker；`send` 返回 0 视为后端断开。无法发送的 guest TX 链（只有头、设备可写、超长、后端已失败）以长度 0 完成，不卡住队列。worker 每方向每轮最多 64 帧，剩余工作经自唤醒 eventfd 继续，每个描述符链前检查控制命令。
+- 冻结：确认时所有已取出的链已进入 used 环且中断已发出；确认后不再写 guest RAM、ring、中断，也不做后端 I/O，直到 resume 或 stop。resume 主动重查后端和两个队列，冻结期间被吸收的 kick/readiness 不会导致卡死。`stop_worker` 在冻结状态下也能停止并 join 线程、关闭后端连接；`Net` drop 同样 join。
+- 保存（KRUNVM v3）：pause 全部 vCPU → 冻结全部磁盘再冻结网卡 → 一次 RAM 别名探测（全部 worker 已冻结，无临时映射克隆）→ 逐设备 DEASSIGN irqfd 并 drain → 捕获设备/CPU/KVM/RAM/磁盘 → sync → 重赋 irqfd、恢复全部设备、恢复全部 CPU（各自独立尝试）→ 全部成功才写有效 magic。v3 = v2 布局（JSON、RAM、可选有序磁盘段）+ 网卡 metadata（MAC、attach features、设备 config、transport 寄存器、协商 features、RX/TX 队列状态）。无网卡 owner 仍写 v1/v2；`restore_full`、`restore_full_with_disks` 对 v3 明确报错。
+- 恢复 `restore_full_with_net(path, disk_destination, socket_path)`：先做 metadata-only 校验（固定槽位、磁盘数、offered features 与 attach features 一致、config 字节与 MAC 一致、transport 状态机、队列结构），读 RAM 后校验两个 ring 及每个切点 TX head，之后才创建目录、socket、线程；有磁盘时按阶段 3 导入（无磁盘不创建目录）；磁盘与网卡都在 vCPU 线程创建前挂上；连接新后端失败即恢复失败并清理；返回暂停 owner。切点前未消费的 TX 在恢复后的 worker 存在之前以长度 0 完成，因此旧帧不可能到达新后端；丢弃只使用已校验的 avail 环 head 索引，不解析旧描述符，数量在开始时固定；对应中断在 KVM irqchip 状态恢复之后、任何 vCPU 运行之前发出（否则载入 irqchip 状态会覆盖之前的注入）。`resume` 先恢复磁盘和网卡，任一设备失败则不恢复任何 vCPU；清理顺序为 CPU → worker（关闭后端）→ 自有导入文件。
+- 设计依据：沿用阶段 3 已核对的 Firecracker persist 结构与 Linux v6.12 irqfd DEASSIGN 语义；未新增依赖。阶段 3 的冻结/采集函数拆分为“冻结全部磁盘 / drain / 采集”，与网卡共享同一次别名探测与 drain。
+
+### 阶段 4 实际验证
+
+环境：macOS arm64 本机，x86_64 Linux 交叉目标。交叉 C 工具链由 Makefile 现有 sysroot 规则生成 Debian amd64 sysroot（额外 `libgcc-s1`，`lib64` 动态链接器绝对软链改相对），clang + lld。执行容器：本机 OrbStack `rust:1-bookworm`（linux/amd64，无 `/dev/kvm`），通过 Makefile 新增的 `SNAPSHOT_RUNNER`（cargo target runner）运行。
+
+- 阶段 3 基线（未改动的 HEAD 38f72ef）：`make snapshot-check` 编译失败（3 处：block worker 测试门的 `std::os::unix::fd` 路径、vm-memory 0.17 的 `VolatileSlice::new` 签名、blk 测试移动非 Copy 的 `ImageType`）；`make snapshot-fmt` 会重排 8 个阶段 3 文件。三处已做最小修复并格式化。Linux 执行还暴露阶段 3 persist 测试夹具错误（ack EVENT_IDX 但未 offer、未设置队列标志），已修夹具，未放宽生产校验。
+- 通过：`make snapshot-fmt`、`snapshot-check`、`snapshot-build`、`snapshot-test --no-run`；`make snapshot-net-host-test`（macOS 原生）；容器内全部 `krun-devices` snapshot 测试（块/网 worker、UnixStream 后端、persist）以及全部不打开 KVM 的 krun-vmm 测试（网卡 metadata/ring/丢弃校验、镜像版本分派）。
+- 先红后绿：对 HEAD 的网络代码，半个前缀与半帧 EOF 让读取永久阻塞（看门狗 SIGALRM）、超长帧切片越界 panic、只有头的 TX 链使 worker 线程断言 panic、deferred RX 投递后不发中断；对修订前的后端，空帧洪泛使单次读取不受限并在 worker 层饿死 TX（20 s 内 TX used 停在 0）。现均通过。
+- 无 KVM 设备层恢复测试（复制 RAM、按切点游标重建队列、生产丢弃原语、新后端双向流量、无 kick 推进；两种切点：半帧 RX+剩余 RX buffer，以及 deferred RX+部分写出的 TX+event index+u16 环绕）在 macOS 通过，前者也在 Linux 容器通过；去掉丢弃步骤时前者失败（新 worker 重放旧 TX）。丢弃改为只读 head 后，旧的基于 pop 的实现对“head 合法但旧描述符体非法”的链报 `InvalidDescriptorIndex`（先红后绿）。Linux 执行还暴露测试时序问题：ET 读唤醒同时报告可写，worker 会合法地检查 TX，测试改为等待该唤醒结束后再放入切点 TX。
+- KVM 测试（`nic/kvm_tests.rs`：测试代码经 owner 的 MMIO 总线扮演 virtio-net 驱动，阶段 2 计数 guest 证明 CPU 续跑；覆盖活跃流量+半帧+未消费 TX 时保存、源端在原后端继续、新后端恢复后旧 TX 丢弃与中断状态、暂停 CPU、resume 后双向流量、未激活网卡+磁盘、后端失败与旧入口清理、保存失败恢复、GSI 共享上限）只编译通过。没有测试让 guest 自己经 MMIO 读取恢复后的网卡或在恢复后接收 pending 网卡中断；该项按用户要求精简测试，作为 UNVERIFIED 验收项记录在 libkrun README。
+- **UNVERIFIED**：所有需要 KVM 的测试在容器中均因无法打开 `/dev/kvm` 失败；阶段 3 块设备续跑与上述阶段 4 KVM 测试均未在 Linux KVM 主机上执行。真实 DNS/TCP 验收无法在当前私有 harness 中执行（`start_vcpus` 只启动实模式 fixture，不启动 Linux guest）；验收步骤见 libkrun README（需能启动 Linux guest 的 harness 扩展、`virtio_mmio.device=4K@0xd0008000:23`、passt/gvproxy 的 QEMU stream 模式后端、保存后换新后端恢复，期望旧 TCP 断开、新 DNS/TCP 成功）。
