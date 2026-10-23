@@ -1,5 +1,6 @@
 PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm test\:vmm\:boot
+PHONY_TARGETS += test\:apps\:runner
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -284,7 +285,7 @@ test\:integration\:vmm\:kvm: _ensure-kvm
 	@cargo test -p boxlite-hypervisor -p boxlite-vmm --lib --no-run
 	@status=0; \
 	timeout 60s cargo test -p boxlite-hypervisor --lib kvm::vm::tests:: -- --ignored --test-threads=1 || status=1; \
-	timeout 60s cargo test -p boxlite-vmm --lib vm::tests:: -- --ignored --test-threads=1 || status=1; \
+	timeout 60s cargo test -p boxlite-vmm --lib -- --ignored --test-threads=1 vm::tests:: tests::kvm:: || status=1; \
 	exit $$status
 
 # make vmm:boot produces this kernel by default.
@@ -297,7 +298,8 @@ test\:integration\:vmm\:elf: _ensure-kvm
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout 60s cargo test -p boxlite-vmm --lib boot::elf::tests:: -- --ignored --test-threads=1
 
-# Boot the real kernel on KVM up to its root-mount panic, with a serial stub and no devices.
+# Boot the real kernel on KVM with a serial stub and no devices: up to its root-mount panic,
+# and with a generated initramfs up to the panic when its init exits.
 test\:integration\:vmm\:linux: _ensure-kvm
 	@test -r "$(VMM_KERNEL)" || { echo "VMM_KERNEL=$(VMM_KERNEL) is not readable; run make vmm:boot or set VMM_KERNEL" >&2; exit 1; }
 	@cargo test -p boxlite-vmm --lib --no-run
@@ -579,6 +581,10 @@ test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 test\:apps\:api: _ensure-apps-deps
 	@echo "🧪 Running API unit tests..."
 	@cd apps && yarn nx run api:test --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',)
+
+test\:apps\:runner: dev\:go
+	@echo "🧪 Running runner Go tests..."
+	@cd apps/runner && go test -tags boxlite_dev ./... $(GOTEST_FILTER)
 
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."

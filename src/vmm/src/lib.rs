@@ -15,7 +15,13 @@
     expect(dead_code, reason = "Vm::new does not load the kernel yet.")
 )]
 mod boot;
+#[cfg_attr(not(test), expect(dead_code, reason = "No device sits on a bus yet."))]
 mod bus;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "No platform builds a chipset yet.")
+)]
+mod chipset;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "Only the unwired Vm::new uses it.")
@@ -28,6 +34,9 @@ mod config;
 )]
 mod cpu_features;
 mod error;
+#[cfg_attr(not(test), expect(dead_code, reason = "No device sends an event yet."))]
+mod events;
+#[cfg_attr(not(test), expect(dead_code, reason = "No device raises a line yet."))]
 mod irq;
 #[cfg_attr(
     not(test),
@@ -46,3 +55,9 @@ mod vm;
 #[cfg(test)]
 #[path = "../tests/mock_vm/mod.rs"]
 mod mock_vm;
+
+/// A flat 32-bit guest on a KVM vCPU, shared by the KVM tests that drive the
+/// buses without a kernel.
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "../tests/flat_guest/mod.rs"]
+mod flat_guest;

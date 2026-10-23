@@ -65,6 +65,10 @@ class SyncBox:
         """Establish a native tunnel handle for a service port."""
         return self._sync(self._box.network.tunnel(port))
 
+    def _revoke_tunnel(self, port: int) -> None:
+        """Withdraw public access to a service port."""
+        self._sync(self._box.network.revoke_tunnel(port))
+
     @property
     def id(self) -> str:
         """Get the box ID."""

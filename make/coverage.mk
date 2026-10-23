@@ -72,7 +72,7 @@ codecov: coverage\:lcov
 coverage\:vmm\:kvm: _ensure-kvm
 	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 \
 		-p boxlite-hypervisor -p boxlite-vmm --lib --run-ignored only --test-threads=1 \
-		-E 'test(vm::tests::)'
+		-E 'test(vm::tests::) | test(tests::kvm::)'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
 
 # Go's reports include every package, including packages with no tests.

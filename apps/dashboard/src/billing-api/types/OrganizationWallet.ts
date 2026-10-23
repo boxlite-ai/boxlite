@@ -13,6 +13,13 @@ export interface OrganizationWallet {
   automaticTopUp?: AutomaticTopUp
   creditGrantedCents?: number
   creditRemainingCents?: number
+  /**
+   * The organization's top-up discount as 4-decimal text in (0, 1]:
+   * `'1.0000'` is none, and below it top-ups are discounted by (1 − m), so
+   * `'0.7000'` is 30% off. That holds only for a billing API that prices
+   * top-ups at this multiplier. Absent reads as no discount.
+   */
+  usageChargeMultiplier?: string
 }
 
 export type AutomaticTopUp = {

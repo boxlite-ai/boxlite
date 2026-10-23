@@ -17,6 +17,13 @@ func TestNetworkTunnelRejectsClosedHandle(t *testing.T) {
 	}
 }
 
+func TestNetworkRevokeTunnelRejectsClosedHandle(t *testing.T) {
+	var network *Network
+	if err := network.RevokeTunnel(context.Background(), 3000); !errors.Is(err, ErrRuntimeClosed) {
+		t.Fatalf("RevokeTunnel() error = %v, want ErrRuntimeClosed", err)
+	}
+}
+
 func TestTunnelForwardRejectsClosedHandle(t *testing.T) {
 	var tunnel *BoxTunnel
 	listen, err := TCPListenAddress("", 0)

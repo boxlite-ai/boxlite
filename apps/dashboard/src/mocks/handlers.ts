@@ -512,6 +512,7 @@ export const handlers = [
       automaticTopUp: undefined,
       creditGrantedCents: 10_000,
       creditRemainingCents: 1_000,
+      usageChargeMultiplier: '1.0000',
     })
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/payment-methods`, async ({ request }) => {

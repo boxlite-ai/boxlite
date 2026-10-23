@@ -31,6 +31,8 @@ pub(crate) struct VmConfig {
     pub(crate) kernel: PathBuf,
     /// The kernel command line: printable ASCII, under `MAX_CMDLINE_BYTES`.
     pub(crate) cmdline: String,
+    /// The uncompressed newc archive to load as the initramfs, if any.
+    pub(crate) initramfs: Option<PathBuf>,
 }
 
 impl VmConfig {
@@ -72,6 +74,7 @@ mod tests {
             memory_mib,
             kernel: "vmlinux".into(),
             cmdline: "console=ttyS0".into(),
+            initramfs: None,
         }
     }
 

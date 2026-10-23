@@ -195,7 +195,7 @@ successfully completed access is not completed again.
 | --- | --- | --- | --- | --- |
 | `MmioRead`, `MmioWrite` | Access to an emulated device | HVF data abort: `HV_EXIT_REASON_EXCEPTION` with a data-abort syndrome | `KVM_EXIT_MMIO` | `WHvRunVpExitReasonMemoryAccess` |
 | `IoIn`, `IoOut` (x86_64 only) | One port access to the 8250 serial, CMOS RTC or i8042; string port I/O is `Error::UnhandledExit` | none | `KVM_EXIT_IO` | `WHvRunVpExitReasonX64IoPortAccess`, which also carries the ports of the userspace PIC and PIT (M10) |
-| `Interrupted` | A kick | `HV_EXIT_REASON_CANCELED`, after `hv_vcpus_exit` | `KVM_RUN` returning `EINTR` | `WHvRunVpExitReasonCanceled` |
+| `Interrupted` | A kick | `HV_EXIT_REASON_CANCELED`, after `hv_vcpus_exit` | `KVM_RUN` returning `EINTR`; also `EAGAIN`, which a waiting secondary vCPU returns once it accepts INIT or SIPI | `WHvRunVpExitReasonCanceled` |
 | `Halted` | The vCPU waits for an interrupt | HVF traps `WFI` | KVM with the in-kernel irqchip waits in the kernel, and the backend still maps `KVM_EXIT_HLT`, which only a VM without one returns (as the probe VM in `src/boxlite/src/system_check.rs` does) | with local APIC emulation, `HLT` waits inside `WHvRunVirtualProcessor`; QEMU handles `WHvRunVpExitReasonX64Halt` only without it (`target/i386/whpx/whpx-all.c:2337-2342`) |
 | `Shutdown` | The guest powered off | PSCI `SYSTEM_OFF`, decoded by the HVF backend | `KVM_EXIT_SYSTEM_EVENT` | the i8042 reset below |
 | `Reset` | The guest reset | PSCI `SYSTEM_RESET`, decoded by the HVF backend | a `KVM_EXIT_SYSTEM_EVENT` reset on arm64; an x86 triple fault (`KVM_EXIT_SHUTDOWN`) | the i8042 reset below |
@@ -289,9 +289,10 @@ On x86_64 the layout uses the values most surveyed VMMs share.
 | below `0x8FF0` | boot stack | Firecracker |
 | `0x9000`–`0xE000` | identity page tables: PML4, PDPT and one 2 MiB-page directory per GiB of RAM below the hole | Firecracker, which maps 1 GiB |
 | `0x2_0000` | kernel command line | five of six |
-| `0x9_FC00` | MP table, in the last KiB below 640 KiB | Firecracker, libkrun |
+| `0x9_FC00` | MP table, 284 bytes plus 20 per vCPU (1564 at 64), inside the reserved `[0x9_FC00, 1 MiB)` | Firecracker, libkrun |
 | `0x10_0000` | `bzImage` load address; an ELF `vmlinux` loads where its headers say | four of six |
 | below `0xC000_0000`, and above 4 GiB | RAM, split around the 32-bit MMIO hole | Firecracker, cloud-hypervisor, dragonball |
+| top of the RAM below `0xC000_0000` | initramfs, in the highest 4 KiB-aligned slot | Firecracker, cloud-hypervisor |
 | `0xC000_0000`–`0xD000_0000` | 32-bit PCI BAR window, reserved for M9 | Firecracker, cloud-hypervisor and alioth give PCI BARs space in the hole |
 | `0xD000_0000`–`0xE000_0000` | virtio-mmio devices, 4 KiB each, with interrupts from GSI 5 | device window: libkrun, crosvm; GSI 5: Firecracker, libkrun, dragonball |
 | `0xE000_0000`–`0xF000_0000` | PCI ECAM, reserved for M9 | alioth |
@@ -311,23 +312,38 @@ today.
   `write(&mut self, offset: u64, data: &[u8])`. These are the most common
   shapes among seven surveyed VMMs: `Bus` in six, `BusDevice` in four, and
   offset-based access in all seven.
-- **Registration.** `insert` rejects overlapping ranges with `Overlap`.
-  Devices register while the VM is built; M6 and M7 change the guest without
-  adding bus devices.
+- **Registration.** Devices register through `chipset::ChipsetBuilder`, the
+  one registry of port ranges, MMIO ranges and interrupt lines, as in
+  OpenVMM's chipset builder. Platform code reserves the windows the host
+  serves in the kernel and adds each device by name with the ranges and lines
+  it claims. `build` reports every conflict at once, naming the claimant and
+  the owner, or returns an immutable `Chipset` that owns the devices. Devices register while
+  the VM is built; M6 and M7 change the guest without adding bus devices.
+- **Dispatch.** `Buses::dispatch` serves MMIO and port exits and returns every
+  other exit to the vCPU loop. An access must lie entirely inside one range,
+  as in Firecracker's bus. Any other access reads `0xFF`, drops its write and
+  is counted, as on a PC bus with nothing driving it. A claimed read reaches
+  the device zero-filled, so stale `kvm_run` bytes never leak to the guest.
 - **Locking.** A vCPU thread holds a device's lock for one register access and
-  hands anything that can block to the device's worker.
+  hands anything that can block to the device's worker. A lock that an
+  earlier panic poisoned stops the next access too, as Firecracker and
+  cloud-hypervisor do: the panic was a VMM bug, never guest input.
 
 ### Interrupts
 
 - **No emulated controller.** HVF and KVM provide in-kernel interrupt
   controllers, so the VMM emulates none. WHP (M10) emulates only local APICs.
 - **Line assignment.** The VMM gives each device a line when it builds the
-  machine. It declares virtio-mmio interrupts edge-triggered, as Firecracker,
+  machine, and the chipset builder rejects a second claim of a line. It declares virtio-mmio interrupts edge-triggered, as Firecracker,
   libkrun and dragonball do.
 - **Raising an interrupt.** Devices raise their lines from their own threads
   through the VMM's interrupt path, which calls `Vm::set_irq_line` and then
   unparks halted vCPUs.
-- **Naming.** M1 names the type devices hold. The survey found no dominant
+- **Naming.** Devices hold an `IrqLine`, which is not `Clone`, so a device
+  cannot share its line. `pulse` raises an edge and `set_level` holds a level,
+  skipping a repeated one; as with OpenVMM's `LineInterrupt`, dropping a line
+  held high lowers it. It calls the object-safe `IrqChip` trait, which every
+  host VM implements through `Vm::set_irq_line`. The survey found no dominant
   name: `VirtioInterrupt`, `InterruptSourceGroup` and `IrqSender` each appear
   once or twice.
 
@@ -525,7 +541,7 @@ protocols require (`Documentation/arch/arm64/booting.rst`,
 | Describe the machine | a device tree in the last 2 MiB of RAM: memory, each CPU with the `psci` enable method, a `psci` node with the HVC conduit, the GIC, the timer, the `apb_pclk` clock the PL011 and PL031 name, the PL011, the PL031, each device as `virtio,mmio`, and the command line as `bootargs`; Firecracker writes the same nodes, with an `ns16550a` UART in place of the PL011 ([Firecracker `src/vmm/src/arch/aarch64/fdt.rs:351–397`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/aarch64/fdt.rs#L351-L397)) | `boot_params` at `0x7000`: the setup header, which a `bzImage` carries at offset `0x1f1` and the VMM fills in for a `vmlinux`, the e820 memory map, and `cmd_line_ptr` to the command line at `0x2_0000`, which names each `virtio_mmio.device=` (`boot.rst:1371-1376`); an MP table at `0x9_FC00` that lists each vCPU, the IOAPIC and its interrupt sources |
 | CPU state at entry | MMU off, interrupts masked in `PSTATE.DAIF`, at EL1 (`booting.rst:169-176`) | 64-bit mode with paging on: identity-mapped page tables and a GDT with flat `__BOOT_CS` and `__BOOT_DS`, interrupts off (`boot.rst:1394-1402`) |
 | Boot vCPU registers | PC at the `Image`'s first instruction, X0 at the device tree, X1 to X3 zero (`booting.rst:162-165`, `:423-424`) | RIP at the 64-bit entry, which for a `bzImage` is the load address plus `0x200`; RSI at `boot_params` (`boot.rst:1390-1392`, `:1401-1402`) |
-| Other vCPUs | powered off until the kernel calls PSCI `CPU_ON` (`booting.rst:447-453`) | waiting for the boot vCPU's INIT and SIPI to each one the MP table lists; KVM's in-kernel local APIC holds them in `KVM_MP_STATE_UNINITIALIZED` (`KVM_GET_MP_STATE` in the KVM API) |
+| Other vCPUs | powered off until the kernel calls PSCI `CPU_ON` (`booting.rst:447-453`) | waiting for the boot vCPU's INIT and SIPI to each one the MP table lists; KVM's in-kernel local APIC holds them in `KVM_MP_STATE_UNINITIALIZED` (`KVM_GET_MP_STATE` in the KVM API), where `KVM_RUN` blocks and returns `EAGAIN` once INIT or SIPI arrives (`arch/x86/kvm/x86.c:11487-11518`) |
 
 Firecracker sets the same state. On arm64 every vCPU gets PSTATE at EL1h with
 DAIF masked, and only vCPU 0 gets PC and X0

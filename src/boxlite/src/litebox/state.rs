@@ -208,6 +208,10 @@ impl std::fmt::Display for BoxStatus {
 /// State transitions are validated before applying.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxState {
+    /// Last applied runtime outbound policy. Creation options still determine
+    /// whether the VM has a NIC; an override never adds or removes the device.
+    #[serde(default)]
+    pub outbound_policy: Option<crate::runtime::options::OutboundNetworkConfig>,
     /// Current lifecycle status.
     pub status: BoxStatus,
     pub pid: Option<u32>,
@@ -359,6 +363,7 @@ impl BoxState {
     pub fn new() -> Self {
         Self {
             status: BoxStatus::Configured,
+            outbound_policy: None,
             pid: None,
             container_id: None,
             last_updated: Utc::now(),

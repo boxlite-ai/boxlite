@@ -10,6 +10,8 @@ description = "Virtual machine lifecycle and device model for BoxLite"
 
 [dependencies]
 boxlite-hypervisor.workspace = true
+mio = { version = "1.2.0", default-features = false, features = ["os-poll"] }
+tracing = "0.1"
 vm-memory = { version = "0.18.0", features = ["backend-mmap"] }
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]

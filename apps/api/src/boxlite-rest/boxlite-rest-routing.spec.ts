@@ -5,6 +5,7 @@
  */
 
 import { PATH_METADATA } from '@nestjs/common/constants'
+import { Reflector } from '@nestjs/core'
 import { Test } from '@nestjs/testing'
 import { ValidationPipe, type INestApplication } from '@nestjs/common'
 import type { AddressInfo } from 'net'
@@ -23,6 +24,7 @@ import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { BoxliteRegistryController } from './boxlite-registry.controller'
 import { RegistriesService } from '../registry/services/registries.service'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
+import { AUDIT_CONTEXT_KEY, AuditContext } from '../audit/decorators/audit.decorator'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -36,9 +38,16 @@ jest.mock('uuid', () => ({
 describe('BoxLite REST routing', () => {
   let app: INestApplication
   let updateInboundEnabled: jest.Mock
+  let setOutboundNetwork: jest.Mock
 
   async function startRoutingTestApp() {
     updateInboundEnabled = jest.fn((_boxId: string, inboundEnabled: boolean) => Promise.resolve({ inboundEnabled }))
+    setOutboundNetwork = jest.fn((_id, policy) =>
+      Promise.resolve({
+        outboundEnabled: policy.mode === 'enabled',
+        outboundAllowNet: policy.allow_net,
+      }),
+    )
     await startApp(
       // The module's order, with the proxy controller's catch-all routes
       // present, so one that shadowed PUT network/inbound would fail below.
@@ -50,6 +59,7 @@ describe('BoxLite REST routing', () => {
             findAllDeprecated: jest.fn().mockResolvedValue([]),
             toBoxDtos: jest.fn().mockResolvedValue([]),
             updateInboundEnabled,
+            setOutboundNetwork,
           },
         },
         {
@@ -140,6 +150,47 @@ describe('BoxLite REST routing', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ mode })
     expect(updateInboundEnabled).toHaveBeenCalledWith('box-1', mode === 'enabled', 'org-123')
+  })
+
+  it('routes outbound replacements ahead of the proxy catch-all', async () => {
+    await startRoutingTestApp()
+    for (const path of ['/api/v1/boxes/box-1/network/outbound', '/api/v1/default/boxes/box-1/network/outbound']) {
+      const response = await put(path, { mode: 'enabled' })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ mode: 'enabled', allow_net: [] })
+      expect(setOutboundNetwork).toHaveBeenLastCalledWith('box-1', { mode: 'enabled', allow_net: [] }, 'org-123')
+    }
+  })
+
+  it('reports a stored empty outbound allowlist as an empty list', async () => {
+    await startRoutingTestApp()
+    setOutboundNetwork.mockResolvedValueOnce({ outboundEnabled: false, outboundAllowNet: null })
+    const response = await put('/api/v1/boxes/box-1/network/outbound', { mode: 'disabled' })
+    expect(await response.json()).toEqual({ mode: 'disabled', allow_net: [] })
+  })
+
+  it('audits only the outbound policy fields', () => {
+    const audit = new Reflector().get<AuditContext>(
+      AUDIT_CONTEXT_KEY,
+      BoxliteBoxController.prototype.updateOutboundNetwork,
+    )
+    const recorded = audit.requestMetadata?.body?.({
+      body: { mode: 'enabled', allow_net: ['a.com'], extra: 'x' },
+    } as never)
+    expect(recorded).toEqual({ mode: 'enabled', allow_net: ['a.com'] })
+  })
+
+  it.each([
+    {},
+    { mode: 'off' },
+    { mode: 'enabled', allow_net: [''] },
+    { mode: 'enabled', allow_net: ['a.com,b.com'] },
+    { mode: 'enabled', unknown: true },
+  ])('rejects invalid outbound request %j', async (body) => {
+    await startRoutingTestApp()
+    const response = await put('/api/v1/boxes/box-1/network/outbound', body)
+    expect(response.status).toBe(400)
+    expect(setOutboundNetwork).not.toHaveBeenCalled()
   })
 
   it.each([

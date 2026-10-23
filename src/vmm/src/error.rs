@@ -17,7 +17,7 @@ pub(crate) type Result<T> = std::result::Result<T, Error>;
     not(test),
     expect(
         dead_code,
-        reason = "Only the unwired Vm::new and boot::prepare build these."
+        reason = "Only the unwired Vm::new, boot::prepare and the chipset build these."
     )
 )]
 pub(crate) enum Error {
@@ -31,12 +31,23 @@ pub(crate) enum Error {
     Hypervisor(boxlite_hypervisor::Error),
     /// The kernel command line is too long or not printable ASCII.
     InvalidCommandLine(&'static str),
+    /// Devices claimed resources the chipset cannot give them.
+    ChipsetConflicts(Vec<crate::chipset::Conflict>),
+    /// A device constructor raised interrupt `line` before the chipset was
+    /// built.
+    LineNotArmed(u32),
     /// Opening or loading the kernel image failed.
     #[cfg_attr(
         all(test, not(all(target_os = "linux", target_arch = "x86_64"))),
         expect(dead_code, reason = "Only the Linux x86_64 boot module builds it.")
     )]
     LoadKernel { path: PathBuf, source: io::Error },
+    /// Opening or loading the initramfs failed.
+    #[cfg_attr(
+        all(test, not(all(target_os = "linux", target_arch = "x86_64"))),
+        expect(dead_code, reason = "Only the Linux x86_64 boot module builds it.")
+    )]
+    LoadInitramfs { path: PathBuf, source: io::Error },
     /// Writing boot data into guest RAM failed.
     #[cfg_attr(
         all(test, not(all(target_os = "linux", target_arch = "x86_64"))),
@@ -60,8 +71,24 @@ impl fmt::Display for Error {
             Self::InvalidCommandLine(reason) => {
                 write!(f, "invalid kernel command line: {reason}")
             }
+            Self::ChipsetConflicts(conflicts) => {
+                write!(f, "{} chipset conflict(s):", conflicts.len())?;
+                for conflict in conflicts {
+                    write!(f, " {conflict};")?;
+                }
+                Ok(())
+            }
+            Self::LineNotArmed(line) => {
+                write!(
+                    f,
+                    "interrupt line {line} raised before the chipset is built"
+                )
+            }
             Self::LoadKernel { path, .. } => {
                 write!(f, "failed to load the kernel {}", path.display())
+            }
+            Self::LoadInitramfs { path, .. } => {
+                write!(f, "failed to load the initramfs {}", path.display())
             }
             Self::WriteBootData { what, .. } => {
                 write!(f, "failed to write the {what} into guest RAM")
@@ -75,9 +102,12 @@ impl error::Error for Error {
         match self {
             Self::InvalidVcpuCount(_)
             | Self::InvalidMemorySize(_)
-            | Self::InvalidCommandLine(_) => None,
+            | Self::InvalidCommandLine(_)
+            | Self::ChipsetConflicts(_)
+            | Self::LineNotArmed(_) => None,
             Self::AllocateMemory { source, .. }
             | Self::LoadKernel { source, .. }
+            | Self::LoadInitramfs { source, .. }
             | Self::WriteBootData { source, .. } => Some(source),
             Self::Hypervisor(source) => Some(source),
         }

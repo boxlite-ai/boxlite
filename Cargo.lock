@@ -610,6 +610,8 @@ dependencies = [
  "boxlite",
  "cbindgen",
  "futures",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]
@@ -785,6 +787,8 @@ version = "0.10.7"
 dependencies = [
  "boxlite-hypervisor",
  "linux-loader",
+ "mio 1.2.0",
+ "tracing",
  "vm-memory 0.18.0",
 ]
 

@@ -329,6 +329,41 @@ fn bind_conflict_error(context: &str, status: u16, body: &str) -> BoxliteError {
 
 #[async_trait]
 impl NetworkBackend for GvproxyBackend {
+    async fn set_outbound(
+        &self,
+        config: &crate::runtime::options::OutboundNetworkConfig,
+    ) -> BoxliteResult<()> {
+        let body =
+            serde_json::to_string(config).map_err(|e| BoxliteError::Internal(e.to_string()))?;
+        let (status, body) = self
+            .request(Method::PUT, "/network/outbound", Some(body))
+            .await?;
+        match status {
+            200..=299 => Ok(()),
+            404 | 405 => Err(BoxliteError::Unsupported(
+                "gvproxy does not support policy updates; restart with an updated runtime".into(),
+            )),
+            _ => Err(BoxliteError::Network(format!(
+                "outbound policy update returned {status}: {body}"
+            ))),
+        }
+    }
+
+    async fn outbound(&self) -> BoxliteResult<crate::runtime::options::OutboundNetworkConfig> {
+        let (status, body) = self.request(Method::GET, "/network/outbound", None).await?;
+        match status {
+            200..=299 => serde_json::from_str(&body).map_err(|e| {
+                BoxliteError::Network(format!("invalid outbound policy response: {e}"))
+            }),
+            404 | 405 => Err(BoxliteError::Unsupported(
+                "gvproxy does not support policy updates; restart with an updated runtime".into(),
+            )),
+            _ => Err(BoxliteError::Network(format!(
+                "read outbound policy returned {status}: {body}"
+            ))),
+        }
+    }
+
     fn name(&self) -> &'static str {
         "gvisor-tap-vsock"
     }
@@ -336,6 +371,7 @@ impl NetworkBackend for GvproxyBackend {
     fn spec(&self) -> NetworkBackendSpec {
         let cfg = &self.config;
         let mut spec = NetworkBackendSpec {
+            outbound_disabled: cfg.outbound_disabled,
             socket_path: cfg.socket_path.clone(),
             allow_net: cfg.allow_net.clone(),
             secrets: cfg.secrets.clone(),
@@ -629,6 +665,7 @@ mod tests {
         // `spec()` turns the held config into the wire spec. Without secrets it
         // copies the fields through and mints no CA (never touching `ca_dir`).
         let config = NetworkBackendConfig {
+            outbound_disabled: false,
             socket_path: PathBuf::from("/tmp/bl-box/net.sock"),
             allow_net: vec!["example.com".to_string()],
             secrets: Vec::new(),
@@ -706,6 +743,7 @@ mod tests {
     ) -> (GvproxyBackend, std::path::PathBuf, NetworkBackendConfig) {
         let net_sock = dir.path().join("net.sock");
         let config = NetworkBackendConfig {
+            outbound_disabled: false,
             socket_path: net_sock.clone(),
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -806,6 +844,7 @@ mod tests {
         // and threads the PEMs (and the secrets) onto the wire spec.
         let ca_dir = tempfile::tempdir().unwrap();
         let config = NetworkBackendConfig {
+            outbound_disabled: false,
             socket_path: PathBuf::from("/tmp/bl-box/net.sock"),
             allow_net: Vec::new(),
             secrets: vec![test_secret()],
@@ -838,6 +877,7 @@ mod tests {
         let ca_dir = dir.path().join("ca-dir-is-a-file");
         std::fs::write(&ca_dir, "not a directory").unwrap();
         let config = NetworkBackendConfig {
+            outbound_disabled: false,
             socket_path: PathBuf::from("/tmp/bl-box/net.sock"),
             allow_net: Vec::new(),
             secrets: vec![test_secret()],
@@ -1350,6 +1390,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn network_policy_control_rejects_old_backends_and_failed_updates() {
+        let dir = tempfile::Builder::new()
+            .prefix("bl-policy-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (backend, ctl, _) = test_backend(&dir);
+        let policy = crate::runtime::options::OutboundNetworkConfig::default();
+        for status in [404, 405] {
+            let server = spawn_services_responses(
+                &ctl,
+                vec![
+                    (status, "old backend".into()),
+                    (status, "old backend".into()),
+                ],
+            );
+            assert!(matches!(
+                backend.outbound().await,
+                Err(BoxliteError::Unsupported(_))
+            ));
+            assert!(matches!(
+                backend.set_outbound(&policy).await,
+                Err(BoxliteError::Unsupported(_))
+            ));
+            let requests = server.await.unwrap();
+            assert_eq!(requests[0].request_line, "GET /network/outbound HTTP/1.1");
+            assert_eq!(requests[1].request_line, "PUT /network/outbound HTTP/1.1");
+            let sent: serde_json::Value = serde_json::from_str(&requests[1].body).unwrap();
+            assert_eq!(
+                sent,
+                serde_json::json!({"mode": "enabled", "allow_net": []})
+            );
+        }
+        let server = spawn_services_response(&ctl, 500, "apply failed");
+        assert!(
+            backend
+                .set_outbound(&policy)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("apply failed")
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn non_success_control_response_includes_path_status_and_body() {
         let dir = tempfile::Builder::new()
             .prefix("bl-svctest-")
@@ -1451,6 +1536,7 @@ mod tests {
         });
 
         let config = NetworkBackendConfig {
+            outbound_disabled: false,
             socket_path: net_sock,
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -1501,6 +1587,7 @@ mod tests {
         });
 
         let config = NetworkBackendConfig {
+            outbound_disabled: false,
             socket_path: net_sock,
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -1549,6 +1636,7 @@ mod tests {
         });
 
         let config = NetworkBackendConfig {
+            outbound_disabled: false,
             socket_path: net_sock,
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -1593,6 +1681,7 @@ mod tests {
         .expect("create gvproxy instance");
 
         let config = NetworkBackendConfig {
+            outbound_disabled: false,
             socket_path: net_sock.clone(),
             allow_net: Vec::new(),
             secrets: Vec::new(),
@@ -1654,6 +1743,7 @@ mod tests {
         .expect("create gvproxy instance");
 
         let config = NetworkBackendConfig {
+            outbound_disabled: false,
             socket_path: net_sock.clone(),
             allow_net: Vec::new(),
             secrets: Vec::new(),

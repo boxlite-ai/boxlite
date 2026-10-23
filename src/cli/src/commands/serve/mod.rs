@@ -1798,7 +1798,8 @@ async fn get_or_attach_main_session(
 
 fn build_router(state: Arc<AppState>) -> Router {
     use handlers::{
-        advanced, boxes, config, executions, files, images, me, metrics, snapshots, ssh, volumes,
+        advanced, boxes, config, executions, files, images, me, metrics, network, snapshots, ssh,
+        volumes,
     };
 
     Router::new()
@@ -1841,6 +1842,8 @@ fn build_router(state: Arc<AppState>) -> Router {
                 .head(boxes::head_box),
         )
         // Box lifecycle
+        .route("/v1/boxes/{box_id}/network/inbound", put(network::set_inbound))
+        .route("/v1/boxes/{box_id}/network/outbound", put(network::set_outbound))
         .route(
             "/v1/boxes/{box_id}/start",
             post(boxes::start_box),
@@ -4201,7 +4204,7 @@ mod tests {
     // was never registered proves the opposite (404). Neither reaches a
     // handler, so no box or VM is touched.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn container_attach_route_is_registered() {
+    async fn control_routes_are_registered_and_policy_json_is_validated() {
         // A REST-backed runtime keeps AppState cheap: no local runtime
         // dirs, no embedded-runtime extraction. Routing is decided before
         // any handler runs, so the runtime is never called.
@@ -4225,6 +4228,19 @@ mod tests {
         });
 
         let http = reqwest::Client::new();
+        for direction in ["inbound", "outbound"] {
+            let invalid = http
+                .put(format!(
+                    "http://127.0.0.1:{port}/v1/boxes/box1/network/{direction}"
+                ))
+                .json(&serde_json::json!({"mode": "invalid"}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+            let body: serde_json::Value = invalid.json().await.unwrap();
+            assert_eq!(body["error"]["code"], "invalid_argument");
+        }
         let attached = http
             .post(format!("http://127.0.0.1:{port}/v1/boxes/box1/attach"))
             .send()

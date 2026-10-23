@@ -8,7 +8,9 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use crate::options::{JsInboundNetworkSpec, JsOutboundNetworkSpec};
 use crate::util::map_err;
+use boxlite::runtime::options::{InboundNetworkConfig, OutboundNetworkConfig};
 
 type ConnectionReader = boxlite::BoxReader;
 type ConnectionWriter = boxlite::BoxWriter;
@@ -126,6 +128,30 @@ pub struct JsBoxConnection {
 #[napi]
 impl JsNetworkHandle {
     #[napi]
+    pub async fn update_inbound(&self, spec: JsInboundNetworkSpec) -> Result<()> {
+        self.handle
+            .network()
+            .update_inbound(InboundNetworkConfig {
+                mode: spec.mode.parse().map_err(map_err)?,
+                allow_net: spec.allow_net.unwrap_or_default(),
+            })
+            .await
+            .map_err(map_err)
+    }
+
+    #[napi]
+    pub async fn update_outbound(&self, spec: JsOutboundNetworkSpec) -> Result<()> {
+        self.handle
+            .network()
+            .update_outbound(OutboundNetworkConfig {
+                mode: spec.mode.parse().map_err(map_err)?,
+                allow_net: spec.allow_net.unwrap_or_default(),
+            })
+            .await
+            .map_err(map_err)
+    }
+
+    #[napi]
     pub async fn tunnel(&self, port: u16) -> Result<JsBoxTunnel> {
         if port == 0 {
             return Err(Error::from_reason("tunnel port must be non-zero"));
@@ -142,6 +168,15 @@ impl JsNetworkHandle {
         Ok(JsBoxTunnel {
             handle: Mutex::new(Some(tunnel)),
         })
+    }
+
+    #[napi]
+    pub async fn revoke_tunnel(&self, port: u16) -> Result<()> {
+        self.handle
+            .network()
+            .revoke_tunnel(port)
+            .await
+            .map_err(map_err)
     }
 }
 

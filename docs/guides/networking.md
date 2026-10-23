@@ -1,13 +1,136 @@
-# Configuring networking
+## TL;DR
 
-BoxLite provides full internet access and port forwarding through gvproxy.
+Create boxes with a network policy, then replace either direction through `box.network` or the CLI.
+
+## Details
+
+### Updating a running box
+
+Each `update_*` method replaces one complete direction; it never patches. The other direction is unchanged.
+Enabled outbound with an empty allowlist removes restrictions; disabled stops
+network traffic and replaces the list with an empty list. Omitted outbound rules
+use the default empty list; update methods do not merge or restore earlier rules.
+An inbound allowlist is unsupported.
+
+```python
+await box.network.update_inbound(boxlite.InboundNetworkSpec(mode="enabled"))
+await box.network.update_outbound(
+    boxlite.OutboundNetworkSpec(mode="enabled", allow_net=["*.example.com"])
+)
+await box.network.update_outbound(boxlite.OutboundNetworkSpec(mode="enabled"))  # default empty list
+```
+
+Python's synchronous API uses the same methods without `await`. Node uses
+`box.network.updateInbound(spec)` and `updateOutbound(spec)`, with `allowNet`.
+Rust uses `box.network().update_outbound(OutboundNetworkConfig { ... }).await`.
+
+| SDK | Inbound parameter | Outbound parameter | Empty outbound list |
+| --- | --- | --- | --- |
+| Python | `InboundNetworkSpec` | `OutboundNetworkSpec` | Omit `allow_net` or pass `[]` |
+| Node | `InboundNetworkSpec` | `OutboundNetworkSpec` | Omit `allowNet` or pass `[]` |
+| Rust | `InboundNetworkConfig` | `OutboundNetworkConfig` | `allow_net: vec![]` |
+| Go | `InboundNetworkSpec` | `OutboundNetworkSpec` | `AllowNet: nil` or `[]string{}` |
+| C/REST | JSON direction object | JSON direction object | Omit `allow_net` or pass `[]` |
+
+Rust keeps `allow_net: Vec<String>` in `OutboundNetworkConfig`.
+To re-enable with restrictions, supply the complete desired list again:
+
+```rust
+box_handle.network().update_outbound(OutboundNetworkConfig {
+    mode: NetworkMode::Enabled,
+    allow_net: vec!["example.com".into()],
+}).await?;
+```
+
+```go
+network, err := box.Network()
+if err != nil { return err }
+defer network.Close()
+err = network.UpdateOutbound(ctx, boxlite.OutboundNetworkSpec{
+    Mode: boxlite.NetworkModeEnabled, AllowNet: []string{"example.com"},
+})
+```
+
+The C SDK exposes blocking `boxlite_network_update_inbound` and
+`boxlite_network_update_outbound` on `CBoxNetworkHandle`. Pass a JSON direction
+object such as `{"mode":"enabled","allow_net":["example.com"]}`.
+
+```bash
+boxlite network inbound mybox enabled
+boxlite network outbound mybox enabled --allow-net '*.example.com' --allow-net 10.0.0.0/8
+boxlite network outbound mybox enabled  # default empty list: unrestricted
+boxlite network outbound mybox disabled
+boxlite inspect mybox
+```
+
+| Contract | Behavior |
+| --- | --- |
+| Replacement | No implicit append; repeat `--allow-net` once per rule. |
+| Default list | Omit `--allow-net` to replace with an empty list. |
+| Rules | Exact hostname, wildcard hostname, IPv4 or IPv4 CIDR; no CSV. |
+| Invalid combinations | Reject inbound allowlists, disabled outbound with any `--allow-net`, and empty rules such as `''`. |
+| Local/serve outbound | Requires a running box created with networking enabled. |
+| Local inbound | Unsupported; inbound visibility is enforced by the cloud proxy. |
+| No NIC, old backend | Explicit error; no implicit start, restart or hot-plug. |
+| Allowlist changes | New TCP/UDP flows use the new policy; existing flows retain theirs. |
+| Runtime disabled | Suspends the NIC, including DNS and inbound traffic; control and exec remain available. |
+| Re-enable | Uses the supplied complete policy on the existing NIC. Existing connections may have timed out. |
+| Persistence | Successful outbound updates survive reattachment and normal stop/start. |
+| Clone/export | Copies inherit the latest persisted outbound policy. |
+| Inbound timing | Cloud proxy cache expiry governs new connections; existing connections stay open. |
+
+An update returns after application and persistence. On persistence failure,
+BoxLite attempts to restore the previous policy. A timeout, lost response, or
+failed rollback can leave live and stored state different: retry the complete
+policy. `inspect` reports the last persisted policy, not an independent traffic probe.
+
+Persisting the replacement does not retain a separate list for later re-enabling.
+Normal restart uses the latest saved policy. Defaults here mean an empty outbound
+allowlist, not a lookup of earlier, organization, or system configuration.
+
+### Creating with an allowlist
+
+Creation uses the same repeated-rule syntax:
+
+```bash
+boxlite create --name mybox --allow-net '10.0.0.0/16' --allow-net 'openai.com' alpine:latest
+boxlite start mybox
+```
+
+`--allow-net` implies enabled networking. Creation defaults remain enabled
+outbound with an empty list and disabled inbound. Creation with `--network
+disabled` cannot include rules because it provisions no NIC.
+
+Creation and updates accept the same rules: hostnames, `*.` wildcard hostnames,
+IPv4 addresses and IPv4 CIDRs, with surrounding spaces trimmed. Both reject
+anything else, such as `''`, `example.com:443` or `a.com,b.com`, so every saved
+list can be re-sent as an update. Start and import do not recheck rules, so boxes and archives saved by
+older releases keep working; replace such a list with a valid one before
+updating it.
+
+### Update paths
+
+| Path | Application and persistence |
+| --- | --- |
+| Local outbound | SDK/CLI → Rust validation → BoxImpl → gvproxy control socket → network handlers/NIC → local persistence |
+| Serve outbound | REST PUT → local outbound path |
+| Cloud outbound | REST PUT → authorization and row lock → runner → Go/C/Rust local path → cloud persistence |
+| Cloud inbound | REST PUT → saved inbound mode → proxy access checks |
+
+The previous policy is read for rollback if persistence fails; it is not merged
+into the requested replacement.
+
+Existing secret-host exceptions and DNS behavior under an enabled allowlist
+remain unchanged. Hostname rules inspect HTTP Host/TLS SNI; UDP needs an IP/CIDR rule.
 
 ## Network modes
 
-BoxLite uses gvproxy for NAT networking by default. All boxes can:
-- Access the internet
-- Resolve DNS
-- Make outbound connections
+Enabled networking uses gvproxy for NAT and DNS. A box created with outbound
+`disabled` has no NIC or gvproxy. While that box is running, setting outbound to
+`enabled` returns `Unsupported`.
+
+Only boxes created with a NIC can restore traffic after runtime disabling.
+Runtime `disabled` pauses the existing NIC without removing it.
 
 ## Port publication
 

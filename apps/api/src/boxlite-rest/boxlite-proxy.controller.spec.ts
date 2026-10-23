@@ -5,7 +5,8 @@
  */
 
 import { EventEmitter } from 'node:events'
-import { ForbiddenException } from '@nestjs/common'
+import { ForbiddenException, HttpStatus, NotFoundException, RequestMethod } from '@nestjs/common'
+import { HTTP_CODE_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
 import { Reflector } from '@nestjs/core'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
@@ -43,6 +44,7 @@ function makeHarness() {
   const autoResume = { ensureReady: jest.fn().mockResolvedValue(undefined) }
   const tunnelService = {
     declarePublic: jest.fn().mockResolvedValue(undefined),
+    revoke: jest.fn().mockResolvedValue(undefined),
   }
   const controller = new (BoxliteProxyController as any)(
     boxService,
@@ -62,6 +64,44 @@ describe('BoxliteProxyController', () => {
     expect(
       reflector.get(RequiredOrganizationResourcePermissions, BoxliteProxyController.prototype.proxyNetworkTunnel),
     ).toEqual([OrganizationResourcePermission.WRITE_BOXES])
+  })
+
+  it('revokes a public port with DELETE, answering 204, under box write permission', () => {
+    const reflector = new Reflector()
+    const handler = BoxliteProxyController.prototype.revokeNetworkTunnel
+
+    expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(RequestMethod.DELETE)
+    expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(':boxId/network/tunnel')
+    expect(Reflect.getMetadata(HTTP_CODE_METADATA, handler)).toBe(HttpStatus.NO_CONTENT)
+    expect(reflector.get(RequiredOrganizationResourcePermissions, handler)).toEqual([
+      OrganizationResourcePermission.WRITE_BOXES,
+    ])
+  })
+
+  it('revokes the port of the box the caller names, whatever its inbound mode or state', async () => {
+    const { controller, boxService, tunnelService } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: false,
+      state: 'stopped',
+      inboundEnabled: false,
+    })
+
+    await controller.revokeNetworkTunnel(activeAuth as never, 'public-box', 3000)
+
+    expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
+    expect(tunnelService.revoke).toHaveBeenCalledWith('box-uuid', 3000)
+  })
+
+  it('does not revoke anything for a box outside the organization', async () => {
+    const { controller, boxService, tunnelService } = makeHarness()
+    boxService.findOneByIdOrName.mockRejectedValue(new NotFoundException('Box public-box not found'))
+
+    await expect(controller.revokeNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
+      status: 404,
+    })
+    expect(tunnelService.revoke).not.toHaveBeenCalled()
   })
 
   it('rewrites public box ids to internal box ids before proxying exec', async () => {
