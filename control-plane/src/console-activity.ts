@@ -46,6 +46,12 @@ const RULES: Rule[] = [
   [/^app\.delete$/, () => 'deleted the app'],
   [/^app\.restore$/, () => 'restored the app', { tab: 'overview' }],
   [/^key\.rotate$/, () => 'rotated the App key', { tab: 'overview' }],
+  [/^key\.issue$/, () => 'issued another App key', { tab: 'overview' }],
+  [/^secret\.set$/, () => 'stored a secret', { tab: 'variables' }],
+  [/^secret\.update$/, () => 'replaced a secret', { tab: 'variables' }],
+  [/^secret\.delete$/, () => 'deleted a secret', { tab: 'variables' }],
+  [/^volume\.delete$/, () => 'deleted a file on a volume', { tab: 'volumes' }],
+  [/^auth\.purge_test_users$/, () => 'removed the test users', { tab: 'auth' }],
   [/^box\.sleep$/, () => 'put the Box to sleep', { tab: 'overview' }],
   [/^auth\.user\.signout$/, () => 'signed a user out', { tab: 'auth' }],
   [/^auth\.user\.block$/, () => 'blocked a user', { tab: 'auth' }],
@@ -63,13 +69,13 @@ const RULES: Rule[] = [
   [/^POST \/envs\/[^/]+\/plan$/, () => 'planned a change'],
   [/^POST \/uploads$/, () => 'uploaded the project', { tab: 'deployments' }],
   [/^PUT \/envs\/[^/]+\/access$/, () => 'changed access', { tab: 'overview' }],
-  [/^POST \/envs\/[^/]+\/services\/([^/]+)\/restart$/, (m) => (m[1] === 'all' ? 'restarted all services' : `restarted ${m[1]}`), { tab: 'overview' }],
+  [/^POST \/envs\/[^/]+\/services\/([^/]+)\/restart$/, (m) => (m[1] === 'all' ? 'restarted all services' : `restarted ${m[1]}`), { tab: 'deployments', section: 'services' }],
   [/^POST \/envs$/, () => 'created an environment'],
   [/^DELETE \/envs\/([^/]+)$/, (m) => `deleted environment ${m[1]}`],
   [/^POST \/envs\/[^/]+\/db\/snapshots$/, () => 'took a database backup', { tab: 'database', section: 'backups' }],
   [/^POST \/envs\/[^/]+\/db\/restore$/, () => 'restored the database', { tab: 'database', section: 'backups' }],
   [/^POST \/envs\/[^/]+\/db\/reset$/, () => 'reset the database', { tab: 'database' }],
-  [/^POST \/envs\/[^/]+\/schedules\/([^/]+)\/run$/, (m) => `ran schedule ${m[1]}`, { tab: 'overview' }],
+  [/^POST \/envs\/[^/]+\/schedules\/([^/]+)\/run$/, (m) => `ran schedule ${m[1]}`, { tab: 'deployments', section: 'services' }],
 ];
 
 /** Per-file upload calls are plumbing of one upload; reads through POST /db/sql change nothing (writes are db.sql.write). */

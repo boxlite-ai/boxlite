@@ -39,7 +39,11 @@ export async function runDeploy(job: Job, sv: SupervisorLink): Promise<number> {
   const env = await job.step(
     'box',
     () => resources.ensureBox(job.app, job.envId, { image: manifest.runtime.image, size: manifest.runtime.size, volumes: manifest.volumes }, job.dep.number, (l) => job.log(l)),
-    { detail: `${manifest.runtime.image}/${manifest.runtime.size}${size ? ` (${size.cpus} CPU, ${size.memory_mib / 1024} GB)` : ''}`, done: (e) => `${e.box_id} ${e.box_url ?? ''}`.trim() },
+    {
+      detail: `${manifest.runtime.image}/${manifest.runtime.size}${size ? ` (${size.cpus} CPU, ${size.memory_mib / 1024} GB)` : ''}`,
+      // The Box id and its tunnel are in the step's log lines; the summary people read says what runs.
+      done: () => `${manifest.runtime.image} · ${manifest.runtime.size} ready`,
+    },
   );
   const spec = writeSpec(job, manifest, db, migrations);
   job.log(`spec v${spec.version} written`);

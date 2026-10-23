@@ -19,8 +19,13 @@ function promptTemplate(ctx: Pick<Ctx, 'config'>): string {
 }
 
 /** agent/prompt-template.md filled in. Without a request the "What I want" line is left for the user to finish in their agent. */
-export function handoffPrompt(ctx: Pick<Ctx, 'config'>, app: string, key: string, request?: string): string {
+/**
+ * The prompt a person pastes into their agent. `env` other than main is named in it: the agent works
+ * there (every command with --env), not on main.
+ */
+export function handoffPrompt(ctx: Pick<Ctx, 'config'>, app: string, key: string, request?: string, env = 'main'): string {
   let text = promptTemplate(ctx).replaceAll('{{CP_URL}}', ctx.config.publicUrl).replaceAll('{{APP_KEY}}', key).replaceAll('{{APP}}', app);
+  if (env !== 'main') text = text.replace(/^(App: .*)$/m, `$1\nEnvironment: ${env} (run every boxlite-app command with --env ${env}; leave main alone)`);
   if (request?.trim()) text = text.replaceAll('{{REQUEST}}', request.trim());
   else text = text.replace(/^.*\{\{REQUEST\}\}.*$/m, 'What I want: (tell your agent here)');
   return text.trimEnd() + '\n';

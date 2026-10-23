@@ -78,14 +78,14 @@ export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
   api.post('/apps/:id/key/issue', (c) => {
     const app = appOf(c);
     const key = issueKey(ctx, app, actorOf(viewer(c)));
-    return c.json({ key, prompt: handoffPrompt(ctx, app.name, key), last4: key.slice(-4) });
+    return c.json({ key, prompt: handoffPrompt(ctx, app.name, key, undefined, envOf(c, app).name), last4: key.slice(-4) });
   });
 
   /** New App key; the old one stops working now. Returns the new prompt once. */
   api.post('/apps/:id/key/rotate', (c) => {
     const app = appOf(c);
     const key = rotateKey(ctx, app, actorOf(viewer(c)));
-    return c.json({ key, prompt: handoffPrompt(ctx, app.name, key), last4: key.slice(-4) });
+    return c.json({ key, prompt: handoffPrompt(ctx, app.name, key, undefined, envOf(c, app).name), last4: key.slice(-4) });
   });
 
   /**

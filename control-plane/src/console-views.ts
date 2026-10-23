@@ -312,7 +312,7 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
       ? { src: `/apps/${encodeURIComponent(app.name)}/preview?env=${encodeURIComponent(fresh.name)}&v=${encodeURIComponent(shot.capturedAt)}`, capturedAt: shot.capturedAt, releaseId: releaseId(shot.deployment) }
       : null,
     previewAttempt: previewAttempt(fresh.id),
-    handoffPrompt: handoffPrompt(ctx, app.name, key ? maskKey(key.last4) : '<rotate the key to get a new one>'),
+    handoffPrompt: handoffPrompt(ctx, app.name, key ? maskKey(key.last4) : '<rotate the key to get a new one>', undefined, fresh.name),
     key,
     specVersion: spec?.version ?? null,
     auth: endUserAuth.authStatus(ctx, app, fresh),

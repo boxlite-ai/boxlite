@@ -17,7 +17,9 @@ export function createApp(ctx: Ctx, name: string, actor = 'admin', orgId = PLATF
   if (deleted?.deleted_at) {
     // App names are one namespace (they are URLs); another org's deleted App is just a taken name.
     if (deleted.org_id !== orgId) throw fail('conflict', `the name "${name}" is taken`, 'pick another name');
-    throw fail('conflict', `"${name}" belongs to a deleted app that is kept until ${deleted.purge_after}`, 'restore it from Recently deleted, or pick another name');
+    // A date people read (the console shows this message as is); the exact time stays in Recently deleted.
+    const until = deleted.purge_after ? new Date(deleted.purge_after).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : 'its purge';
+    throw fail('conflict', `"${name}" belongs to a deleted app that is kept until ${until}`, 'restore it from Recently deleted, or pick another name');
   }
   const key = newAppKey();
   const appId = newId('app');

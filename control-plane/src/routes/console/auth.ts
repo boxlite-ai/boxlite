@@ -49,9 +49,10 @@ export function consoleAuthRoutes(api: Hono, k: ConsoleKit): void {
           clientId: z.string().trim().min(4).max(200),
           clientSecret: z.string().trim().min(4).max(400).optional(),
           // Apple: the .p8 key is the secret; its Team ID and Key ID go with it.
-          teamId: z.string().trim().min(4).max(40).optional(),
-          keyId: z.string().trim().min(4).max(40).optional(),
-          privateKey: z.string().trim().min(40).max(4000).optional(),
+          // Lengths are checked by appleSecret, in words a person can act on.
+          teamId: z.string().trim().min(1).max(40).optional(),
+          keyId: z.string().trim().min(1).max(40).optional(),
+          privateKey: z.string().trim().min(1).max(4000).optional(),
         }),
       ]),
     );

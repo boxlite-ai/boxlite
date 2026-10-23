@@ -598,3 +598,11 @@ test('a new App key from the console works next to the existing one; rotating re
   assert.equal((await whoami(issued.body.key)).status, 401);
   assert.equal((await whoami(rotated.body.key)).status, 200);
 });
+
+test('a prompt copied from another environment names it, so the agent does not work on main', async () => {
+  await createViaConsole();
+  h.ctx.store.run("INSERT INTO envs (id, app_id, name, created_at, forward_secret) SELECT 'env_staging', app_id, 'staging', created_at, 'g2' FROM envs WHERE name = 'main'");
+  const issued = await api('/apps/crm/key/issue?env=staging', { method: 'POST' });
+  assert.match(issued.body.prompt, /^Environment: staging \(run every boxlite-app command with --env staging; leave main alone\)$/m);
+  assert.doesNotMatch((await api('/apps/crm/key/issue', { method: 'POST' })).body.prompt, /Environment:/, 'main needs no line');
+});
