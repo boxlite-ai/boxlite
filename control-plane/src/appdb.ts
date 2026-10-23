@@ -1,6 +1,7 @@
 import type { Readable } from 'node:stream';
 import pg from 'pg';
 import Cursor from 'pg-cursor';
+import { sqlErrorNext, type PgErrorFields } from './sql-hints.js';
 import { fail } from './errors.js';
 import type { MigrationFile } from './db.js';
 import { authFailure, type ReaderSource } from './dbreader.js';
@@ -311,14 +312,11 @@ class NoRetry extends Error {
 
 function sqlError(err: unknown): never {
   if ((err as { name?: string }).name === 'HttpError') throw err;
-  const e = err as { message?: string; position?: string; code?: string };
+  const e = err as PgErrorFields & { position?: string };
   if (connectionFailure(sqlstateOf(err))) {
     throw fail('unavailable', `the connection to the app database failed: ${e.message ?? String(err)}`, 'wait 30 s and rerun (the database starts on first connection); `boxlite-app doctor` checks it');
   }
-  // 25006: read_only_sql_transaction. The guard catches plain DML first; this covers the rest
-  // (functions that write, writable CTEs the parser classifies as reads).
-  const next = e.code === '25006' ? 'this statement writes; rerun it with --write' : undefined;
-  throw fail('sql_error', e.message ?? String(err), next, { sqlstate: e.code, position: e.position ? Number(e.position) : undefined });
+  throw fail('sql_error', e.message ?? String(err), sqlErrorNext(e), { sqlstate: e.code, position: e.position ? Number(e.position) : undefined });
 }
 
 function rowBytes(row: unknown): number {
