@@ -6,7 +6,7 @@ import type { Readable, Writable } from 'node:stream';
 import type { Dispatcher } from 'undici';
 import { Api } from './api.js';
 import { Output } from './output.js';
-import { savedKey } from './credentials.js';
+import { savedApps, savedKey } from './credentials.js';
 
 export interface Io {
   stdout: Writable;
@@ -109,6 +109,7 @@ export class Ctx {
   /** The argv this command was invoked with (without node/script), for "rerun with" hints. */
   readonly argv: readonly string[];
   private apiInstance: Api | undefined;
+  private named: string | undefined;
 
   constructor(run: RunOptions, opts: GlobalOpts, link: Link | null, argv: readonly string[] = [], out?: Output) {
     this.cwd = run.cwd;
@@ -132,9 +133,14 @@ export class Ctx {
     return this.env.BOXLITE_API_URL || this.link?.api_url || savedKey(this.env, undefined, this.app)?.api_url || undefined;
   }
 
-  /** The App known locally (link.json, then BOXLITE_APP); undefined until resolved from the key. */
+  /** The App known locally (`init --app`, link.json, then BOXLITE_APP); undefined until resolved from the key. */
   get app(): string | undefined {
-    return this.link?.app ?? (this.env.BOXLITE_APP || undefined);
+    return this.named ?? this.link?.app ?? (this.env.BOXLITE_APP || undefined);
+  }
+
+  /** A command that names the App itself (`init --app`): its saved key is the one to use. */
+  nameApp(app: string): void {
+    this.named = app;
   }
 
   /** Spec version the local manifest is based on (0 = none yet). */
@@ -151,6 +157,10 @@ export class Ctx {
   api(): Api {
     if (this.apiInstance) return this.apiInstance;
     const key = this.apiKey;
+    const saved = key ? [] : savedApps(this.env, this.env.BOXLITE_API_URL || this.link?.api_url);
+    if (!key && !this.app && saved.length > 1) {
+      throw new MicrocloudError('usage', `keys of several Apps are saved (${saved.join(', ')}) and nothing here says which App`, 'run it in the App\'s project folder (link it once with `boxlite-app init --app <name>`), or set BOXLITE_APP=<name>; the name is the "App:" line of the App prompt');
+    }
     if (!key) throw new MicrocloudError('unauthenticated', 'no App key: BOXLITE_API_KEY is not set and none is saved', 'save the key from the App prompt once: `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login` (later shells need neither), then `boxlite-app whoami`');
     const url = this.apiUrl;
     if (!url) throw new MicrocloudError('missing_api_url', 'BOXLITE_API_URL is not set and .boxlite/link.json has no api_url', 'export BOXLITE_API_URL=https://<control plane> (from the App prompt), then `boxlite-app whoami`');

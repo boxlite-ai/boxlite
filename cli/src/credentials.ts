@@ -2,6 +2,7 @@
  * Saved App keys (`boxlite-app login`), so an agent hands the CLI the key once instead of exporting
  * it in every shell: ~/.config/boxlite-app/credentials.json ($BOXLITE_CONFIG_DIR or
  * $XDG_CONFIG_HOME/boxlite-app), readable by the user only. BOXLITE_API_KEY, when set, still wins.
+ * Several agents may share the file: a key is only picked for the App the folder or command names.
  */
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -16,8 +17,6 @@ export interface SavedKey {
 interface CredentialsFile {
   /** By `<api_url>|<app>`. */
   profiles: Record<string, SavedKey>;
-  /** The profile `login` saved last: used when nothing names an App or control plane. */
-  last: string | null;
 }
 
 /** From the environment the CLI runs with only (no HOME: no saved keys), so a test's env never reads the real file. */
@@ -30,12 +29,12 @@ const id = (apiUrl: string, app: string) => `${apiUrl.replace(/\/+$/, '')}|${app
 
 function read(env: NodeJS.ProcessEnv): CredentialsFile {
   const path = credentialsPath(env);
-  if (!path) return { profiles: {}, last: null };
+  if (!path) return { profiles: {} };
   try {
     const f = JSON.parse(readFileSync(path, 'utf8')) as Partial<CredentialsFile>;
-    return { profiles: f.profiles ?? {}, last: f.last ?? null };
+    return { profiles: f.profiles ?? {} };
   } catch {
-    return { profiles: {}, last: null };
+    return { profiles: {} };
   }
 }
 
@@ -48,20 +47,30 @@ function write(env: NodeJS.ProcessEnv, f: CredentialsFile): string {
   return path;
 }
 
-/** The saved key for this App on this control plane; without either, the one saved last. */
+const matching = (f: CredentialsFile, apiUrl: string | undefined, app: string | undefined) =>
+  Object.values(f.profiles).filter((p) => (!apiUrl || id(apiUrl, p.app) === id(p.api_url, p.app)) && (!app || p.app === app));
+
+/**
+ * The saved key for this App on this control plane. Without an App only a single saved key
+ * qualifies: with several, guessing (say, the last login) would let one agent act on another
+ * agent's App, so the caller has to name it (savedApps lists the choices).
+ */
 export function savedKey(env: NodeJS.ProcessEnv, apiUrl: string | undefined, app: string | undefined): SavedKey | undefined {
   const f = read(env);
   if (apiUrl && app) return f.profiles[id(apiUrl, app)];
-  const candidates = Object.values(f.profiles).filter((p) => (!apiUrl || id(apiUrl, p.app) === id(p.api_url, p.app)) && (!app || p.app === app));
-  if (candidates.length === 1) return candidates[0];
-  return f.last ? candidates.find((p) => id(p.api_url, p.app) === f.last) : undefined;
+  const candidates = matching(f, apiUrl, app);
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+/** The Apps with a saved key (on this control plane, when given). */
+export function savedApps(env: NodeJS.ProcessEnv, apiUrl: string | undefined): string[] {
+  return matching(read(env), apiUrl, undefined).map((p) => p.app).sort();
 }
 
 export function saveKey(env: NodeJS.ProcessEnv, k: Omit<SavedKey, 'saved_at'>): string {
   const f = read(env);
   const pid = id(k.api_url, k.app);
   f.profiles[pid] = { ...k, api_url: k.api_url.replace(/\/+$/, ''), saved_at: new Date().toISOString() };
-  f.last = pid;
   return write(env, f);
 }
 
@@ -77,7 +86,6 @@ export function forgetKey(env: NodeJS.ProcessEnv, apiUrl: string | undefined, ap
   for (const [pid, p] of Object.entries(f.profiles)) {
     if ((!apiUrl || id(apiUrl, p.app) === pid) && (!app || p.app === app)) delete f.profiles[pid];
   }
-  if (f.last && !f.profiles[f.last]) f.last = null;
   write(env, f);
   return Object.keys(f.profiles).length < before;
 }

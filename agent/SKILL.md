@@ -51,7 +51,7 @@ Pick the stack you are best at that fits in one directory. Defaults that work we
 
 ```sh
 mkdir -p <app> && cd <app>
-boxlite-app init          # writes boxlite.toml (only if missing) + .boxlite/link.json; adds its lines to an existing .gitignore and keeps a BoxLite block in AGENTS.md
+boxlite-app init --app <app>   # <app> is the prompt's "App:" line; writes boxlite.toml (only if missing) + .boxlite/link.json; adds its lines to an existing .gitignore and keeps a BoxLite block in AGENTS.md
 ```
 
 Edit `boxlite.toml`. A complete example:

@@ -23,11 +23,11 @@ async function login(ctx: Ctx, opts: { stdin?: boolean }): Promise<void> {
   const path = saveKey(ctx.env, { api_url: url, app: me.app, key });
   ctx.out.data({ app: me.app, api_url: url.replace(/\/+$/, ''), key_last4: key.slice(-4), saved_to: path });
   ctx.out.line(`saved the key …${key.slice(-4)} for ${me.app} on ${url.replace(/\/+$/, '')} (${path}, readable by you only)`);
-  ctx.out.next('later commands in any shell use it: no need to export BOXLITE_API_KEY again; `boxlite-app whoami` checks');
+  ctx.out.next(`later shells need no BOXLITE_API_KEY: in the project folder run \`boxlite-app init --app ${me.app}\` once, and every command there uses this key`);
 }
 
 async function logout(ctx: Ctx, opts: { all?: boolean }): Promise<void> {
-  // One App: this project's, or the only (or last) key saved for this control plane; never several by accident.
+  // One App: this project's, or the only key saved for this control plane; never several by accident.
   const app = opts.all ? undefined : (ctx.app ?? savedKey(ctx.env, ctx.apiUrl, undefined)?.app);
   if (!opts.all && !app) throw new MicrocloudError('usage', 'which App? none is linked here and several keys are saved', 'run it in the App\'s project, set BOXLITE_APP=<name>, or pass --all');
   const removed = forgetKey(ctx.env, opts.all ? undefined : ctx.apiUrl, app);

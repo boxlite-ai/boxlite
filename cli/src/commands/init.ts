@@ -100,6 +100,7 @@ async function exists(path: string): Promise<boolean> {
 }
 
 async function init(ctx: Ctx, opts: { app?: string; agentsMd?: boolean }): Promise<void> {
+  if (opts.app) ctx.nameApp(opts.app);
   const api = ctx.api();
   const requested = opts.app ?? ctx.app;
   let info;

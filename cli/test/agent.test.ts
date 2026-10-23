@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, beforeEach, test } from 'node:test';
 import type { AgentContext } from '@microcloud/shared';
 import { clearResolvedApps } from '../src/context.js';
-import { mkdtemp, stat } from 'node:fs/promises';
+import { mkdtemp, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { API, BASE_TOML, cleanup, cli, JSON_HEADERS, KEY, linkJson, mockApi, project, tempDir } from './helpers.js';
@@ -62,11 +62,11 @@ test('whoami: app, key scope, env, control plane, and a newer CLI', async () => 
     `App crm · environment main · key …${KEY.slice(-4)} (scope: this App only)`,
     'Control plane https://cp.test (via http://cp.test)',
     'Environments main live',
-    'CLI 0.3.7 (latest 0.9.0)',
+    'CLI 0.3.8 (latest 0.9.0)',
     'next: update the CLI: `npm install -g http://cp.test/cli/boxlite-app.tgz`',
   ]);
   const json = JSON.parse((await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent })).stdout);
-  assert.deepEqual(json.cli, { version: '0.3.7', latest_version: '0.9.0', update_available: true, update_command: 'npm install -g http://cp.test/cli/boxlite-app.tgz' });
+  assert.deepEqual(json.cli, { version: '0.3.8', latest_version: '0.9.0', update_available: true, update_command: 'npm install -g http://cp.test/cli/boxlite-app.tgz' });
   assert.deepEqual(json.linked, { link_file: true, app: 'crm', matches_key: true });
 });
 
@@ -166,7 +166,7 @@ test('doctor runs local and online checks and ranks the problems with fixes', as
   assert.equal(checks.database, 'ok');
 
   const human = await cli(['doctor'], { cwd: dir, dispatcher: agent });
-  assert.equal(human.lines[0], 'Doctor · crm/main · CLI 0.3.7');
+  assert.equal(human.lines[0], 'Doctor · crm/main · CLI 0.3.8');
   assert.match(human.lines[1] ?? '', /^x error deployment #3 failed at start: web answers 404 on its health path \/healthz/);
   assert.match(human.lines.at(-1) ?? '', /^next: add a route GET \/healthz/);
 });
@@ -202,4 +202,28 @@ test('login saves the key once; later commands without BOXLITE_API_KEY use it; l
   assert.equal((await cli(['logout'], { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } })).code, 0);
   const after = await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } });
   assert.equal(JSON.parse(after.stderr).error.code, 'unauthenticated', 'nothing saved any more');
+});
+
+test('with keys of two Apps saved, a folder that names no App never borrows the other App\'s key', async () => {
+  const dir = await project(root, {});
+  const config = await mkdtemp(join(tmpdir(), 'blcfg-'));
+  const OTHER = 'bxl_app_other_0123456789abcdef';
+  const profile = (app: string, key: string) => ({ api_url: API, app, key, saved_at: '2026-10-24T00:00:00.000Z' });
+  // ledger logged in last, from another agent's session on the same machine.
+  await writeFile(join(config, 'credentials.json'), JSON.stringify({ profiles: { [`${API}|crm`]: profile('crm', KEY), [`${API}|ledger`]: profile('ledger', OTHER) }, last: `${API}|ledger` }));
+  const { agent, pool } = mockApi();
+  pool.intercept({ path: '/v1/apps/crm/whoami', method: 'GET', headers: { authorization: `Bearer ${KEY}` } }).reply(200, WHOAMI, { headers: JSON_HEADERS });
+  pool.intercept({ path: '/v1/apps/crm', method: 'GET', headers: { authorization: `Bearer ${KEY}` } }).reply(200, { name: 'crm', envs: [{ name: 'main', status: 'new' }] }, { headers: JSON_HEADERS });
+
+  const unnamed = await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } });
+  assert.equal(unnamed.code, 1, unnamed.stderr);
+  const err = JSON.parse(unnamed.stderr).error;
+  assert.equal(err.code, 'usage');
+  assert.match(err.message, /crm, ledger/);
+  assert.match(err.next, /BOXLITE_APP=<name>/);
+
+  const named = await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config, BOXLITE_APP: 'crm' } });
+  assert.equal(JSON.parse(named.stdout).app, 'crm', named.stderr);
+  const init = await cli(['init', '--app', 'crm', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } });
+  assert.equal(init.code, 0, init.stderr);
 });
