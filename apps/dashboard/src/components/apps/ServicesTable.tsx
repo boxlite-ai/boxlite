@@ -100,7 +100,9 @@ function ServiceRow({
             <SpecRow label="Process">{process}</SpecRow>
             {service.exposed && <SpecRow label="Serves">the app&apos;s URL</SpecRow>}
             {service.healthPath && <SpecRow label="Health path">{service.healthPath}</SpecRow>}
-            {service.lastExitCode !== undefined && <SpecRow label="Last exit">code {service.lastExitCode}</SpecRow>}
+            {service.lastExitCode !== undefined && (
+              <SpecRow label="Last exit">{exitMeaning(service.lastExitCode)}</SpecRow>
+            )}
           </div>
           {troubled && (
             <pre className="max-h-[180px] overflow-auto bg-destructive/[0.05] px-3 py-2 font-mono text-[12px] leading-[1.6] text-destructive">
@@ -138,4 +140,13 @@ export function ServicesTable({
       ))}
     </div>
   )
+}
+
+/** An exit code in words: 143 and 130 are the stop signal of a restart or a deploy, not a crash; 137 is a kill (often memory). */
+function exitMeaning(code: number | null): string {
+  if (code === null) return '—'
+  if (code === 0) return 'code 0 (it ended normally)'
+  if (code === 143 || code === 130) return `code ${code} (stopped by a restart or deploy)`
+  if (code === 137) return 'code 137 (killed, often for running out of memory)'
+  return `code ${code} (it crashed)`
 }

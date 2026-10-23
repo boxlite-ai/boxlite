@@ -599,7 +599,8 @@ function Backups({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
       <p className="pb-3 text-[12px] text-muted-foreground" data-testid="restore-window">
         A backup names a point in the database&apos;s history; restoring rewinds {app.environment}&apos;s database to
         it. The database keeps {windowHours} hours of history, so a backup can be restored for {windowHours} hours after
-        it was taken. Every deployment that runs migrations records its own restore point too.
+        it was taken. Deployments that run migrations also mark the point before them, for rolling a deployment back
+        with its data (Deployments); those marks are not listed here.
       </p>
       {db.backups === null ? (
         <EmptyNote title="Backups could not be read">{db.errors?.join(' · ')}</EmptyNote>
