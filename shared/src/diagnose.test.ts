@@ -116,3 +116,18 @@ test('a hard-coded port that is already taken is a port problem, not a plain cra
   assert.match(d.summary, /port 3000, which is already taken/);
   assert.match(d.fix, /process\.env\.PORT/);
 });
+
+test('a service listening on its own fixed port is a port problem even after the platform stops it', () => {
+  const d = classifyFailure({
+    step: 'start',
+    message: 'web exited with code 143 before it became healthy',
+    log_tail: [
+      '[web] listening on port 3000',
+      '[system] health check for web (http://127.0.0.1:20001/healthz): unhealthy after 1m0s (40 attempt(s), last: dial tcp 127.0.0.1:20001: connect: connection refused)',
+      '[system] service web exited with code 143 after 60.2s; restarting in 1s',
+    ],
+    service: { name: 'web', command: 'node server.js', health: '/healthz' },
+  });
+  assert.equal(d.cause, 'port_binding');
+  assert.match(d.summary, /port 3000, but the platform sets PORT=20001/);
+});

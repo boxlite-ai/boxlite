@@ -184,7 +184,8 @@ function moduleNotFound(lines: readonly string[]): Diagnosis | null {
 
 /** "health check for web (http://127.0.0.1:20001/healthz): unhealthy after 1m0s (…, last: HTTP 404)" */
 const HEALTH_RE = /health check for ([\w-]+) \(https?:\/\/[^:/]+:(\d+)(\/[^)]*)?\): unhealthy.*last: (.*)\)\s*$/;
-const LISTEN_RE = /(?:listen|listening|started|running|server|ready)[^\n]{0,60}?(?:(localhost|127\.0\.0\.1|\[::1\]|::1|0\.0\.0\.0)?:)(\d{2,5})\b/i;
+// `listening on 0.0.0.0:3000`, `ready on :3000`, and the plain `listening on port 3000`.
+const LISTEN_RE = /(?:listen|listening|started|running|server|ready)[^\n]{0,60}?(?:(?:(localhost|127\.0\.0\.1|\[::1\]|::1|0\.0\.0\.0)?:)|\bport\s+)(\d{2,5})\b/i;
 const LOOPBACK_RE = /\b(localhost|127\.0\.0\.1|\[::1\]):(\d{2,5})\b/;
 
 function startDiagnosis(input: FailureInput, message: string, tail: readonly string[]): Diagnosis {
@@ -218,8 +219,10 @@ function startDiagnosis(input: FailureInput, message: string, tail: readonly str
   const appLines = tail.filter((l) => !l.includes('[system]') && !l.includes('health check for'));
   const listen = appLines.map((l) => LISTEN_RE.exec(l)).find((m) => m !== null);
   const loopback = appLines.map((l) => LOOPBACK_RE.exec(l)).find((m) => m !== null);
-  if (!exited && (refused || listen)) {
-    const wrongPort = listen && probePort && listen[2] !== probePort ? listen[2] : undefined;
+  // An app that announced another port than PORT is a port problem even when it then exited: the
+  // platform stops a service that never answered, and that exit is not the cause.
+  const wrongPort = listen && probePort && listen[2] !== probePort ? listen[2] : undefined;
+  if ((!exited && (refused || listen)) || wrongPort) {
     const host = loopback?.[1] ?? (listen?.[1] && listen[1] !== '0.0.0.0' ? listen[1] : undefined);
     const why = wrongPort ? `it listens on port ${wrongPort}, but the platform sets PORT=${probePort}` : host ? `it listens on ${host}, which the platform cannot reach` : `nothing answered on PORT${probePort ? ` (${probePort})` : ''}`;
     return {

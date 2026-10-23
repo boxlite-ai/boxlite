@@ -70,7 +70,7 @@ async function brokenDeploy({ cause, evidence, fixMentions }) {
   const e = r.out?.error ?? {}
   const summary = `exit ${r.code} · cause ${e.cause} · fix: ${(e.fix ?? '').slice(0, 140)}`
   assert(r.code === 8, `expected exit 8, got ${r.code}: ${(r.stderr || r.stdout).slice(-300)}`)
-  assert(e.cause === cause, `cause ${e.cause}, expected ${cause}. ${summary}`)
+  assert(e.cause === cause, `cause ${e.cause}, expected ${cause}. ${summary} · evidence: ${JSON.stringify(e.evidence ?? [])} · tail: ${JSON.stringify((e.log_tail ?? []).slice(-8))}`)
   assert(e.fix && /boxlite-app|\.toml|\.sql|\.js|package/.test(e.fix), `fix names no command or file: ${e.fix}`)
   const shown = [...(e.evidence ?? []), ...(e.log_tail ?? [])].join('\n')
   assert(evidence.test(shown), `the app's own error is not in evidence/log_tail: ${shown.slice(-300)}`)
