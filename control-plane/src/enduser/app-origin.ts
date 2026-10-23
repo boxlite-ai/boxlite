@@ -30,7 +30,7 @@ export function identityFor(ctx: Ctx, req: ProxyRequest, app: AppRow, env: EnvRo
   const path = req.url.pathname || '/';
   const auth = ctx.resources.currentSpec(env)?.auth ?? null;
   if (path.startsWith('/.boxlite/auth/')) {
-    if (!auth) return htmlPage('Sign-in is off', `<h1>Sign-in is not enabled for ${escapeHtml(app.name)}</h1><p>Add <code>[auth]</code> to <code>boxlite.toml</code> and deploy.</p>`, 404);
+    if (!auth) return htmlPage('Sign-in is off', '<h1>This site has no sign-in</h1>', 404);
     return authRoute(ctx, req, app, env, path.slice('/.boxlite/auth'.length), auth.providers);
   }
   // The supervisor serves its control API (/.boxlite/sv/*) to the CP, so no end-user request may
@@ -69,7 +69,7 @@ function authRoute(ctx: Ctx, req: ProxyRequest, app: AppRow, env: EnvRow, route:
   }
   if (route === '/complete') return complete(ctx, req, app, env);
   const next = safeNext(q.get('next'));
-  if (next === null) return htmlPage('Bad sign-in link', '<h1>This sign-in link is not valid</h1><p><code>next</code> must be a path inside the app.</p>', 400);
+  if (next === null) return htmlPage('Bad sign-in link', '<h1>This sign-in link is not valid</h1><p>Go back to the site and sign in again.</p>', 400);
   if (route === '/logout') {
     const token = readCookie(req.headers, hostCookieName(SESSION_COOKIE_NAME, secure));
     if (token) ctx.store.run('UPDATE app_sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL', now(), sha256hex(token));
@@ -80,16 +80,16 @@ function authRoute(ctx: Ctx, req: ProxyRequest, app: AppRow, env: EnvRow, route:
   if (sessionUser(ctx, env, readCookie(req.headers, hostCookieName(SESSION_COOKIE_NAME, secure)))) return redirect(next);
   const ready = providers.filter((p) => oauthClientFor(ctx, app, p));
   if (!ready.length) {
-    return htmlPage('Sign-in unavailable', `<h1>Sign-in is not available yet</h1><p>None of this app's sign-in providers (${escapeHtml(providers.join(', '))}) is configured on this platform yet.</p>`, 503);
+    return htmlPage('Sign-in unavailable', '<h1>Sign-in is not available yet</h1><p>The site owner has not finished setting it up.</p>', 503);
   }
   const asked = q.get('provider');
-  if (asked !== null && !ready.includes(asked)) return htmlPage('Unknown provider', `<h1>${escapeHtml(asked)} sign-in is not available for ${escapeHtml(app.name)}</h1>`, 400);
+  if (asked !== null && !ready.includes(asked)) return htmlPage('Unknown provider', `<h1>${escapeHtml(OAUTH_PROVIDERS[asked]?.label ?? asked)} sign-in is not available on this site</h1>`, 400);
   const provider = asked ?? (ready.length === 1 ? ready[0]! : null);
   if (!provider) {
     const buttons = ready
       .map((p) => `<a class="btn" href="${escapeHtml(`/.boxlite/auth/login?provider=${p}&next=${encodeURIComponent(next)}`)}">Continue with ${escapeHtml(OAUTH_PROVIDERS[p]!.label)}</a>`)
       .join('');
-    return htmlPage(`Sign in to ${app.name}`, `<h1>Sign in to ${escapeHtml(app.name)}</h1>${buttons}`, 200);
+    return htmlPage('Sign in', `<h1>Sign in to continue</h1>${buttons}`, 200);
   }
   // The provider's registered callback is on the API origin, so the PKCE verifier has to be set there.
   const nonce = randomBytes(24).toString('base64url');
@@ -113,7 +113,7 @@ async function complete(ctx: Ctx, req: ProxyRequest, app: AppRow, env: EnvRow): 
   }
   const user = ctx.store.get<AppUser>('SELECT * FROM app_users WHERE id = ? AND env_id = ?', row.user_id, env.id);
   if (!user) return htmlPage('Sign-in failed', '<h1>Sign-in failed</h1><p>The account is gone. Sign in again.</p>', 400);
-  if (user.blocked) return noAccessPage(app.name, clear);
+  if (user.blocked) return noAccessPage(clear);
   const { token } = createSession(ctx, user, 'oauth', SESSION_TTL_S);
   // Path=/: the cookie covers the whole origin (without a Path it would default to /.boxlite/auth).
   clear.append('set-cookie', setCookieValue(secure, hostCookieName(SESSION_COOKIE_NAME, secure), token, '/', SESSION_COOKIE_MAX_AGE_S));

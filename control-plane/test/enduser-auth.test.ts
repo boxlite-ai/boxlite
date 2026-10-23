@@ -291,7 +291,7 @@ async function signInUntilCallback(): Promise<{ location: string; nonce: string 
 }
 
 test('callback refuses a forged state, a missing verifier cookie and a bad code', async () => {
-  await setup();
+  const { env } = await setup();
   const gh = fakeGithub(octo);
   h.ctx.oauthFetch = gh.fetchImpl;
   const start = await h.request(`/auth/start?app=crm&env=main&provider=github&next=/app&bh=${'0'.repeat(64)}`);
@@ -304,7 +304,10 @@ test('callback refuses a forged state, a missing verifier cookie and a bad code'
   const bad = await h.request(`/auth/callback/github?code=bad&state=${encodeURIComponent(state)}`, { headers: { cookie: verifierCookie } });
   assert.equal(bad.status, 502);
   const text = await bad.text();
-  assert.match(text, /bad_verification_code/);
+  // The visitor gets plain words; the provider's answer goes to the env's auth log for its owner.
+  assert.match(text, /GitHub sign-in failed/);
+  assert.ok(!text.includes('bad_verification_code'), 'no provider internals on the page');
+  assert.ok(h.ctx.store.logs(env.id, { source: 'auth', limit: 10 }).some((l) => l.line.includes('bad_verification_code')));
   assert.ok(text.includes(`href="${APP_URL}/.boxlite/auth/login?next=%2Fapp"`), 'Try again goes back to the app origin');
   const cancelled = await h.request(`/auth/callback/github?error=access_denied&state=${encodeURIComponent(state)}`, { headers: { cookie: verifierCookie } });
   assert.equal(cancelled.status, 400);
@@ -396,7 +399,7 @@ test('blocking a user revokes their sessions and the next sign-in gets the no-ac
 
   const again = await signIn(fakeGithub(octo));
   assert.equal(again.callback.status, 403);
-  assert.match(await again.callback.text(), /You don't have access to crm/);
+  assert.match(await again.callback.text(), /You don&#39;t have access to this site|You don't have access to this site/);
   assert.equal(again.cookie, '');
 
   assert.equal((await h.request(`/v1/apps/crm/envs/main/auth/users/${user.id}/unblock`, { method: 'POST', key })).status, 200);

@@ -162,10 +162,12 @@ test('a private app answers 401 with what happened and how to get in; ?__key= no
   const html = await h.appRequest('/page', { headers: { accept: 'text/html' } });
   assert.equal(html.status, 401);
   const text = await html.text();
-  assert.match(text, /crm is private/);
-  assert.match(text, /open it from the BoxLite console/);
+  assert.match(text, /This site is private/);
+  // Visitors see no App, environment or key; its owner gets one link to the console.
+  assert.ok(!/\bcrm\b[^/?]/.test(text.replace(/href="[^"]*"/g, '')), 'the App name stays off the page');
+  assert.ok(!text.includes('Authorization'), 'no agent instructions for visitors');
   assert.match(text, /href="https:\/\/8081-cp\.test\/console\/dashboard\/apps\/crm\?tab=overview"/);
-  assert.match(text, /Authorization: Bearer/);
+  assert.match(text, /Hosted on/);
   const json = await h.appRequest('/api/x');
   assert.equal(json.status, 401);
   assert.equal(((await json.json()) as { error: { code: string } }).error.code, 'unauthenticated');
@@ -277,7 +279,7 @@ test('a stopped Box is started and the visitor gets a Starting page', async () =
   assert.equal(res.status, 503);
   assert.equal(res.headers.get('retry-after'), '3');
   const html = await res.text();
-  assert.match(html, /Waking up crm/);
+  assert.match(html, /Just a moment/);
   assert.match(html, /http-equiv="refresh" content="3"/);
   await new Promise((r) => setTimeout(r, 10));
   assert.ok(h.boxlite.calls.includes(`start ${env().box_id}`));

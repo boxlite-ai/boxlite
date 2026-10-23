@@ -63,18 +63,18 @@ function start(ctx: Ctx, req: Request): Response {
   const q = new URL(req.url).searchParams;
   const app = ctx.store.appByName(q.get('app') ?? '');
   const env = app ? ctx.store.envByName(app.id, q.get('env') || 'main') : undefined;
-  if (!app || !env) return htmlPage('Not found', '<h1>This app does not exist</h1>', 404);
+  if (!app || !env) return htmlPage('Not found', '<h1>There is no site here</h1>', 404);
   const auth = ctx.resources.currentSpec(env)?.auth;
   const providerName = q.get('provider') ?? '';
   const provider = OAUTH_PROVIDERS[providerName];
   const creds = oauthClientFor(ctx, app, providerName);
   if (!auth || !provider || !creds || !(auth.providers as string[]).includes(providerName)) {
-    return htmlPage('Sign-in unavailable', `<h1>That sign-in method is not available for ${escapeHtml(app.name)}</h1>`, 400);
+    return htmlPage('Sign-in unavailable', '<h1>That sign-in method is not available on this site</h1>', 400);
   }
   const next = safeNext(q.get('next'));
-  if (next === null) return htmlPage('Bad sign-in link', '<h1>This sign-in link is not valid</h1><p><code>next</code> must be a path inside the app.</p>', 400);
+  if (next === null) return htmlPage('Bad sign-in link', '<h1>This sign-in link is not valid</h1><p>Go back to the site and sign in again.</p>', 400);
   const bh = q.get('bh') ?? '';
-  if (!/^[0-9a-f]{64}$/.test(bh)) return htmlPage('Bad sign-in link', `<h1>Start the sign-in from ${escapeHtml(app.name)}</h1>`, 400);
+  if (!/^[0-9a-f]{64}$/.test(bh)) return htmlPage('Bad sign-in link', '<h1>Start the sign-in from the site</h1>', 400);
   const verifier = randomBytes(32).toString('base64url');
   const state = signState(ctx.config.sessionSecret, { app: app.name, env: env.name, next, provider: providerName, vh: sha256hex(verifier), bh });
   const location = provider.authorizeUrl({ creds, redirectUri: redirectUri(ctx, providerName), state, codeChallenge: createHash('sha256').update(verifier).digest('base64url') });
@@ -86,13 +86,13 @@ async function callback(ctx: Ctx, providerName: string, req: Request): Promise<R
   const provider = OAUTH_PROVIDERS[providerName];
   const st = verifyState(ctx.config.sessionSecret, url.searchParams.get('state'));
   if (!provider || !st || st.provider !== providerName) {
-    return htmlPage('Sign-in expired', '<h1>This sign-in link has expired</h1><p>Go back to the app and sign in again.</p>', 400);
+    return htmlPage('Sign-in expired', '<h1>This sign-in link has expired</h1><p>Go back to the site and sign in again.</p>', 400);
   }
   // The console's own sign-in shares the one registered callback.
   if (st.purpose === 'console') return consoleCallback(ctx, st, req);
   const app = ctx.store.appByName(st.app);
   const env = app ? ctx.store.envByName(app.id, st.env) : undefined;
-  if (!app || !env) return htmlPage('Not found', '<h1>This app no longer exists</h1>', 404);
+  if (!app || !env) return htmlPage('Not found', '<h1>This site no longer exists</h1>', 404);
   const appUrl = ctx.resources.appUrl(app.name, env.name);
   const retry = `<p><a href="${escapeHtml(`${appUrl}/.boxlite/auth/login?next=${encodeURIComponent(st.next)}`)}">Try again</a></p>`;
   const headers = new Headers({ 'cache-control': 'no-store' });
@@ -107,9 +107,9 @@ async function callback(ctx: Ctx, providerName: string, req: Request): Promise<R
   if (!verifier || !safeEqual(sha256hex(verifier), st.vh)) return htmlPage('Sign-in expired', `<h1>Start the sign-in again</h1><p>This browser did not start this sign-in, or it took longer than 10 minutes.</p>${retry}`, 400, headers);
   const creds = oauthClientFor(ctx, app, providerName);
   const auth = ctx.resources.currentSpec(env)?.auth;
-  if (!creds || !(auth?.providers as string[] | undefined)?.includes(providerName)) return htmlPage('Sign-in unavailable', `<h1>${escapeHtml(provider.label)} sign-in is not enabled for ${escapeHtml(app.name)}</h1>`, 400, headers);
+  if (!creds || !(auth?.providers as string[] | undefined)?.includes(providerName)) return htmlPage('Sign-in unavailable', `<h1>${escapeHtml(provider.label)} sign-in is not available on this site</h1>`, 400, headers);
   const code = url.searchParams.get('code');
-  if (!code) return htmlPage('Sign-in failed', `<h1>Sign-in failed</h1><p>${escapeHtml(provider.label)} sent no code.</p>${retry}`, 400, headers);
+  if (!code) return htmlPage('Sign-in failed', `<h1>Sign-in failed</h1><p>${escapeHtml(provider.label)} did not finish the sign-in.</p>${retry}`, 400, headers);
 
   let profile: OAuthProfile;
   try {
@@ -117,13 +117,13 @@ async function callback(ctx: Ctx, providerName: string, req: Request): Promise<R
   } catch (err) {
     console.error(`[auth] ${providerName} sign-in for ${app.name}/${env.name}: ${(err as Error).message}`);
     authLog(ctx, env, 'error', `${providerName} sign-in failed: ${(err as Error).message}`);
-    return htmlPage('Sign-in failed', `<h1>${escapeHtml(provider.label)} sign-in failed</h1><p>${escapeHtml((err as Error).message)}</p>${retry}`, 502, headers);
+    return htmlPage('Sign-in failed', `<h1>${escapeHtml(provider.label)} sign-in failed</h1><p>Please try again. If it keeps failing, tell the site owner.</p>${retry}`, 502, headers);
   }
   const user = upsertUser(ctx, app, env, providerName, profile);
   if (user.blocked) {
     authLog(ctx, env, 'warn', `blocked user ${user.email} tried to sign in with ${providerName}`);
     revokeSessions(ctx, user.id);
-    return noAccessPage(app.name, headers);
+    return noAccessPage(headers);
   }
   await mirrorUser(ctx, env.id, user);
   authLog(ctx, env, 'info', `${user.email} signed in with ${providerName} → ${st.next}`);

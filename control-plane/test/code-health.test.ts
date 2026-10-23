@@ -276,7 +276,7 @@ test('a Box that cannot be woken gets an error page and a system log line, not "
   const second = await h.appRequest('/', { headers: { accept: 'text/html' } });
   assert.equal(second.status, 503);
   assert.equal(second.headers.get('x-boxlite-starting'), null);
-  assert.match(await second.text(), /could not be started just now/);
+  assert.match(await second.text(), /temporarily unavailable/);
   // A program gets the same answer as JSON, with what to do.
   const api = (await (await h.appRequest('/api')).json()) as { error: { code: string; next: string } };
   assert.equal(api.error.code, 'unavailable');
@@ -290,7 +290,7 @@ test('a Box BoxLite no longer has gets a "not running" page', async () => {
   const res = await h.appRequest('/', { headers: { accept: 'text/html' } });
   assert.equal(res.status, 503);
   assert.equal(res.headers.get('x-boxlite-starting'), null);
-  assert.match(await res.text(), /crm is not available right now/);
+  assert.match(await res.text(), /This site is temporarily unavailable/);
 });
 
 // ---- reserved names -------------------------------------------------------------------------

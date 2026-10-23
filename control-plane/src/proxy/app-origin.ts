@@ -5,7 +5,6 @@ import { identityFor } from '../enduser/app-origin.js';
 import type { EnvRow } from '../db.js';
 import type { Ctx } from '../ctx.js';
 import { jwks } from '../enduser/identity.js';
-import { escapeHtml } from '../http/html.js';
 import { isResponse } from '../http/response.js';
 import { RETENTION_DAYS } from '../lifecycle.js';
 import { forward } from './forward.js';
@@ -26,9 +25,9 @@ import { gatePage, page } from './pages.js';
 export async function serveAppOrigin(ctx: Ctx, c: Context, env: EnvRow): Promise<Response> {
   const url = new URL(c.req.url);
   const app = ctx.store.appById(env.app_id);
-  if (!app) return page('Not found', '<h1>There is no app here</h1><p>Check the address. If you followed a link, the app may have been removed.</p>', 404);
+  if (!app) return page('Not found', '<h1>There is no site here</h1><p>Check the address. If you followed a link, the site may have been removed.</p>', 404);
   if (app.deleted_at) {
-    return page('App deleted', `<h1>${escapeHtml(app.name)} has been deleted</h1><p>It is offline. Its owner can restore it from the BoxLite console within ${RETENTION_DAYS} days of deleting it.</p>`, 410);
+    return page('App deleted', '<h1>This site is no longer available</h1><p>It has been taken offline by its owner.</p>', 410);
   }
   const path = url.pathname;
   // Public: app servers fetch the key from their own (maybe private) origin.

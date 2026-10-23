@@ -61,7 +61,7 @@ function openWithTicket(ctx: Ctx, app: AppRow, env: EnvRow, url: URL): Response 
   if (!consumeTicket(ctx, env, url.searchParams.get('t') ?? '')) {
     return page(
       'Link expired',
-      `<h1>This link has expired</h1><p>Links that open ${escapeHtml(app.name)} work once, within a minute. Open the app again from the <a href="${escapeHtml(`${ctx.origins.consoleUrl()}/console/dashboard/apps/${encodeURIComponent(app.name)}`)}">BoxLite console</a>.</p>`,
+      `<h1>This link has expired</h1><p>Links like this work once, within a minute. <a href="${escapeHtml(`${ctx.origins.consoleUrl()}/console/dashboard/apps/${encodeURIComponent(app.name)}`)}">Open it again from your dashboard</a>.</p>`,
       401,
       noRef,
     );

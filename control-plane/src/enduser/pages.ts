@@ -1,6 +1,5 @@
 /** The HTML pages, redirects and JSON 401 that sign-in answers with. */
 import { brandPage } from '../http/brand-page.js';
-import { escapeHtml } from '../http/html.js';
 
 export function htmlPage(title: string, body: string, status: number, headers: Headers = new Headers()): Response {
   // The BoxLite look of every CP page (http/brand-page.ts); `body` is the caller's escaped markup.
@@ -14,8 +13,8 @@ export function unauthenticated(): Response {
   return new Response(JSON.stringify({ error: { code: 'unauthenticated', message: 'sign in required', next } }), { status: 401, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 }
 
-export const noAccessPage = (app: string, headers?: Headers) =>
-  htmlPage('No access', `<h1>You don't have access to ${escapeHtml(app)}</h1><p>The owner of this app has blocked your account.</p>`, 403, headers);
+export const noAccessPage = (headers?: Headers) =>
+  htmlPage('No access', "<h1>You don't have access to this site</h1><p>The site's owner has blocked your account.</p>", 403, headers);
 
 export const redirect = (location: string, headers: Headers = new Headers()) => {
   headers.set('location', location);
