@@ -41,10 +41,20 @@ for (const path of ['sdks/go/README.md', 'sdks/python/README.md', 'sdks/node/REA
   })
 }
 
+for (const path of ['sdks/python/tests/README.md', 'tests/scripts/README.md']) {
+  test(`SDK test documentation does not rebuild SDKs: ${path}`, () => {
+    assert.deepEqual(testSuites([path]), [])
+  })
+}
+
 for (const [path, expected] of [
   ['sdks/go/options.go', ['go']],
   ['apps/runner/cmd/runner/main.go', ['go']],
-  ['sdks/python/boxlite/options.py', ['python']],
+  ['sdks/python/boxlite/options.py', ['rust', 'python']],
+  ['sdks/python/boxlite/sync_api/_ssh.py', ['rust', 'python']],
+  ['sdks/python/tests/test_ssh_native_rest.py', ['rust', 'python']],
+  ['scripts/test/coverage-bindings.sh', ['rust']],
+  ['tests/scripts/test_native_coverage.py', ['rust']],
   ['sdks/node/lib/options.ts', ['node']],
   ['src/cli/src/main.rs', ['rust']],
   ['make/coverage.mk', ['rust', 'python', 'node', 'go']],
@@ -60,6 +70,14 @@ for (const [path, expected] of [
 // the filter, or a push to main changes the suite's inputs and tests nothing.
 for (const path of ['apps/runner/cmd/runner/main.go', 'apps/go.work', 'apps/go.work.sum']) {
   test(`a push that selects the go suite reaches the Test workflow: ${path}`, () => {
+    assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
+  })
+}
+
+// The rust job runs the external coverage collector; its inputs must also
+// reach the workflow on push, or a main-branch change tests nothing.
+for (const path of ['scripts/test/coverage-bindings.sh', 'tests/scripts/test_native_coverage.py']) {
+  test(`a push that selects the rust suite reaches the Test workflow: ${path}`, () => {
     assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
   })
 }

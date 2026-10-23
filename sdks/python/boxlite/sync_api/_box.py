@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     from ._boxlite import SyncBoxlite
     from ._execution import SyncExecution
     from ._network import SyncNetworkHandle
+    from ._ssh import SyncSshHandle
+
 
 __all__ = ["SyncBox"]
 
@@ -56,6 +58,7 @@ class SyncBox:
         # Create a SyncBase helper for _sync() method
         self._sync_helper = SyncBase(box, runtime.loop, runtime.dispatcher_fiber)
         self._network = None
+        self._ssh = None
 
     def _sync(self, coro):
         """Run async operation synchronously."""
@@ -139,6 +142,15 @@ class SyncBox:
 
             self._network = SyncNetworkHandle(self)
         return self._network
+
+    @property
+    def ssh(self) -> "SyncSshHandle":
+        """Get the box's SSH control handle."""
+        from ._ssh import SyncSshHandle
+
+        if self._ssh is None:
+            self._ssh = SyncSshHandle(self)
+        return self._ssh
 
     def tunnel(self, port: int):
         """Prepare a one-shot tunnel for a port inside this box."""

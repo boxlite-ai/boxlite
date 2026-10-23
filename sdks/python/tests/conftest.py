@@ -9,9 +9,26 @@ runtime instance.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 import boxlite
+
+# BOXLITE_REQUIRE_NATIVE=1 (set by scripts/test/coverage-bindings.sh after
+# it builds the extension): importing the module proves it loads, and the
+# names prove the SSH surface exists — an absent or broken module, or a
+# missing type, fails collection instead of silently skipping native tests.
+if os.environ.get("BOXLITE_REQUIRE_NATIVE") == "1":
+    from boxlite.boxlite import (  # noqa: F401 - imported for the check
+        Box,
+        Boxlite,
+        SshAccount,
+        SshCaConfig,
+        SshConfig,
+        SshHandle,
+        SshStatus,
+    )
 
 
 def _test_registries() -> list:

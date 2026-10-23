@@ -43,6 +43,27 @@ Key test entry points:
 - `make test:apps:runner FILTER=NetworkPolicy` - runner Go tests with the local C/Go SDK
 - `make fmt:apps FILES='api/src/path.ts'` - format selected files relative to `apps/`
 
+Python SDK tests run in two environments. Without the native extension
+(`make test:unit:python`, `make coverage:python` — the shape of the CI unit
+job, which never builds it), extension-dependent tests skip and everything
+else — pure-Python wrappers, sync wrappers over a stand-in native module,
+and SDK export checks — must pass. After `make dev:python` (or
+`make coverage:python:integration`), the same suite also exercises the
+native classes; there an extension that exists but cannot load, or that
+lacks an expected type, fails instead of skipping. Run both before
+shipping Python SDK changes.
+
+`BOXLITE_REQUIRE_NATIVE=1` makes the second environment mandatory for a
+single run: the shared pytest configuration then imports the extension
+module directly and fails collection when it is absent, unloadable, or
+missing SSH types, instead of letting native tests skip. After
+`make dev:python`, run the gated suite with
+`BOXLITE_REQUIRE_NATIVE=1 make coverage:python` — the same invocation
+`scripts/test/coverage-bindings.sh` (the external coverage collector, run by
+the Test workflow's Rust job) uses after building the extension, so the
+coverage it attributes to the Rust bindings always comes from a suite that
+really ran them.
+
 ### Coverage
 
 `make codecov` collects fresh Rust coverage. Codecov requires **90% coverage
