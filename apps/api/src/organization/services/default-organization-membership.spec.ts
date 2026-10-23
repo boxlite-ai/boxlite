@@ -5,6 +5,7 @@
  */
 
 import { ForbiddenException } from '@nestjs/common'
+import { ConfigService } from '@nestjs/config'
 import { OrganizationInvitationService } from './organization-invitation.service'
 import { OrganizationService } from './organization.service'
 import { OrganizationUserService } from './organization-user.service'
@@ -138,7 +139,7 @@ describe('default organization membership semantics', () => {
         emit: jest.fn(),
       } as never,
       {} as never,
-      {} as never,
+      new ConfigService({ organizationInvitation: { ttlSeconds: 604800 } }),
     )
 
     await expect(
@@ -159,7 +160,14 @@ describe('default organization membership semantics', () => {
 
   it('creates accepted invitation memberships as non-default memberships', async () => {
     const { entityManager } = createEntityManager()
-    const service = new OrganizationUserService({} as never, {} as never, {} as never, {} as never, {} as never)
+    const service = new OrganizationUserService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    )
 
     await expect(
       service.handleOrganizationInvitationAcceptedEvent(
@@ -191,16 +199,48 @@ describe('default organization membership semantics', () => {
         remove: jest.fn(),
       },
     }
+    const dataSource = {
+      transaction: async (work: (em: unknown) => unknown) => work(organizationUserRepository.manager),
+    }
     const service = new OrganizationUserService(
       organizationUserRepository as never,
       {} as never,
       {} as never,
       {} as never,
+      dataSource as never,
       {} as never,
     )
 
     await expect(service.delete('org-1', 'user-1')).rejects.toBeInstanceOf(ForbiddenException)
     expect(organizationUserRepository.manager.remove).not.toHaveBeenCalled()
+  })
+
+  it('refuses to demote a user in their default organization', async () => {
+    const organizationUserRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        organizationId: 'org-1',
+        userId: 'user-1',
+        role: OrganizationMemberRole.OWNER,
+        assignedRoles: [],
+        isDefaultForUser: true,
+      }),
+      // A second owner, so the last-owner rule does not refuse the demotion first.
+      count: jest.fn().mockResolvedValue(2),
+    }
+    const entityManager = { save: jest.fn(async (entity) => entity) }
+    const service = new OrganizationUserService(
+      organizationUserRepository as never,
+      { findByIds: jest.fn().mockResolvedValue([]) } as never,
+      { findOne: jest.fn().mockResolvedValue({ id: 'user-1', name: 'User', email: 'user-1@example.com' }) } as never,
+      { emitAsync: jest.fn() } as never,
+      { transaction: async (work: (em: unknown) => unknown) => work(entityManager) } as never,
+      {} as never,
+    )
+
+    await expect(service.updateAccess('org-1', 'user-1', OrganizationMemberRole.MEMBER, [])).rejects.toBeInstanceOf(
+      ForbiddenException,
+    )
+    expect(entityManager.save).not.toHaveBeenCalled()
   })
 
   it('does not delete a default organization that still has other members when its creator is deleted', async () => {

@@ -8,7 +8,7 @@ import type { IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { createProxyMiddleware, type RequestHandler } from 'http-proxy-middleware'
 import { ApiKeyService } from '../api-key/api-key.service'
-import { JwtStrategy } from '../auth/jwt.strategy'
+import { JwtStrategy, jwtUserId } from '../auth/jwt.strategy'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { OrganizationService } from '../organization/services/organization.service'
 import { Organization } from '../organization/entities/organization.entity'
@@ -189,11 +189,10 @@ export class BoxliteWsProxyService {
    * `upgrade` caller can't leak a hung socket.
    *
    * API key: the bearer must be a non-expired API key. A non-admin user must
-   * still be a member of the key's organization — this check is critical, since
-   * removing a user from an org deletes the OrganizationUser row but does not
-   * cascade to ApiKey rows, so without it a removed member's surviving key could
-   * still attach — and must carry write:boxes; a system admin is admitted without
-   * either. The URL tenant is ignored (key is scoped).
+   * still be a member of the key's organization and carry write:boxes; a system
+   * admin is admitted without either. Member removal and user deletion revoke
+   * the affected keys; the membership check also rejects keys left behind by
+   * older deletion paths. The URL tenant is ignored (key is scoped).
    *
    * JWT (OIDC): when the bearer is not an API key, verify it via `JwtStrategy`
    * (same JWKS/issuer/audience as the HTTP path). A JWT carries no org, so the
@@ -232,11 +231,7 @@ export class BoxliteWsProxyService {
       // 2. JWT (OIDC) — org comes from the URL tenant; authorized per authorizeAttach.
       if (!this.jwtStrategy) return null
       if (!urlTenant || urlTenant === 'default') return null
-      const payload = await this.jwtStrategy.verifyToken(token)
-      // Mirror JwtStrategy.validate's sub/uid handling (OKTA carries userId in `uid`).
-      const claims = payload as { sub?: string; cid?: unknown; uid?: string }
-      let userId = claims.sub
-      if (claims.cid && claims.uid) userId = claims.uid
+      const userId = jwtUserId(await this.jwtStrategy.verifyToken(token))
       if (!userId) return null
 
       const user = await this.userService.findOne(userId)
@@ -257,10 +252,9 @@ export class BoxliteWsProxyService {
    * Authorize an attach upgrade with OrganizationResourceActionGuard's policy,
    * which the WS upgrade never reaches. A system admin is not organization-scoped
    * and is admitted without membership, exactly as OrganizationAccessGuard admits
-   * it on the HTTP path. Everyone else must be a current member — removing a user
-   * from an org drops the OrganizationUser row but not their API keys, so the check
-   * is critical — and must carry write:boxes (an org owner without an API key is
-   * exempt). Attach streams to an execution's stdin, i.e. interactive exec.
+   * it on the HTTP path. Everyone else must be a current member and must carry
+   * write:boxes (an org owner without an API key is exempt). Attach streams to an
+   * execution's stdin, i.e. interactive exec.
    */
   private async authorizeAttach(user: User, organizationId: string, apiKey?: ApiKey): Promise<boolean> {
     if (user.role === SystemRole.ADMIN) return true

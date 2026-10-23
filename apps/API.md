@@ -120,15 +120,15 @@ serves and the events it emits are catalogued below alongside its routes.
 | `DELETE` | `/api/organizations/{organizationId}`                                    | Deletes an organization.                                 |
 | `PATCH`  | `/api/organizations/{organizationId}/name`                               | Changes an organization's name.                          |
 | `PATCH`  | `/api/organizations/{organizationId}/default-region`                     | Sets the organization's default region.                  |
-| `POST`   | `/api/organizations/{organizationId}/leave`                              | Removes the caller from the organization.                |
+| `POST`   | `/api/organizations/{organizationId}/leave`                              | Removes the caller and revokes their API keys here.      |
 | `POST`   | `/api/organizations/{organizationId}/suspend`                            | Suspends the organization.                               |
 | `POST`   | `/api/organizations/{organizationId}/unsuspend`                          | Restores a suspended organization.                       |
 | `GET`    | `/api/organizations/by-box-id/{boxId}`                                   | Resolves the organization that owns a box.               |
 | `POST`   | `/api/organizations/{organizationId}/box-default-limited-network-egress` | Changes the default limited-egress policy for new boxes. |
 | `PUT`    | `/api/organizations/{organizationId}/experimental-config`                | Replaces the organization's experimental configuration.  |
 | `GET`    | `/api/organizations/{organizationId}/users`                              | Lists organization members.                              |
-| `POST`   | `/api/organizations/{organizationId}/users/{userId}/access`              | Changes a member's organization access.                  |
-| `DELETE` | `/api/organizations/{organizationId}/users/{userId}`                     | Removes a member from the organization.                  |
+| `POST`   | `/api/organizations/{organizationId}/users/{userId}/access`              | Changes access; refuses to demote a default-org creator. |
+| `DELETE` | `/api/organizations/{organizationId}/users/{userId}`                     | Removes a member and revokes their API keys here.        |
 | `GET`    | `/api/organizations/invitations`                                         | Lists invitations addressed to the caller.               |
 | `GET`    | `/api/organizations/invitations/count`                                   | Counts invitations addressed to the caller.              |
 | `POST`   | `/api/organizations/invitations/{invitationId}/accept`                   | Accepts an organization invitation.                      |
@@ -340,7 +340,7 @@ release fetched over HTTPS.
 
 | Protocol                 | Path, topic, or event          | What it does                                                                                                                           |
 | ------------------------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Socket.IO over WebSocket | `/api/socket.io/`              | Authenticates a JWT or API key, joins user and organization rooms, and streams resource notifications.                                 |
+| Socket.IO over WebSocket | `/api/socket.io/`              | Authenticates a JWT or API key and joins the user room, plus the organization room for members only; removal ejects the member. |
 | Socket.IO event          | `box.created`                  | Notifies an organization that a box was created.                                                                                       |
 | Socket.IO event          | `box.state.updated`            | Notifies an organization that a box's observed state changed.                                                                          |
 | Socket.IO event          | `box.desired-state.updated`    | Notifies an organization that a box's desired state changed.                                                                           |

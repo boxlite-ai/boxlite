@@ -87,6 +87,14 @@ export class OrganizationAccessGuard implements CanActivate {
       return true
     }
 
+    // Machine credentials (runner, proxy, health check, ...) carry no user, and TypeORM
+    // drops a where condition whose value is undefined: looking up their membership
+    // would return an arbitrary member of the organization.
+    if (!authContext.userId) {
+      this.logger.warn(`No user in the request context. Organization ID: ${organizationId}`)
+      return false
+    }
+
     const organizationUser = await this.getCachedOrganizationUser(organizationId, authContext.userId)
 
     if (!organizationUser) {
@@ -132,19 +140,15 @@ export class OrganizationAccessGuard implements CanActivate {
   }
 
   private async getCachedOrganizationUser(organizationId: string, userId: string): Promise<OrganizationUser | null> {
+    const cacheKey = OrganizationUserService.membershipCacheKey(organizationId, userId)
     try {
-      const cachedOrganizationUser = await this.redis.get(`organization-user:${organizationId}:${userId}`)
+      const cachedOrganizationUser = await this.redis.get(cacheKey)
       if (cachedOrganizationUser) {
         return JSON.parse(cachedOrganizationUser)
       }
       const organizationUser = await this.organizationUserService.findOne(organizationId, userId)
       if (organizationUser) {
-        await this.redis.set(
-          `organization-user:${organizationId}:${userId}`,
-          JSON.stringify(organizationUser),
-          'EX',
-          10,
-        )
+        await this.redis.set(cacheKey, JSON.stringify(organizationUser), 'EX', 10)
         return organizationUser
       }
       return null
