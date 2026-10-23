@@ -93,9 +93,10 @@ function Failure({ detail, f }: { detail: Detail; f: NonNullable<Detail['failure
         className="text-body font-semibold"
       />
       <div className="mt-2 flex flex-col gap-1 pl-[15px] text-[13px]">
+        {/* The fix itself is written for the agent (commands, config fields): it is in the instructions below. */}
         <span className="text-foreground">
           <span className="text-muted-foreground">Fix · </span>
-          {f.fix}
+          your coding agent can fix this: copy the instructions below and paste them to it
         </span>
         {f.file && (
           <span className="text-muted-foreground">

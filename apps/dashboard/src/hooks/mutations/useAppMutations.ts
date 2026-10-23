@@ -116,7 +116,11 @@ export function useRotateKey() {
       rememberPrompt(appId, out.prompt)
       return out
     },
-    onSuccess: (_data, appId) => queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, appId) }),
+    onSuccess: (_data, appId) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, appId) })
+      // The active-key list (AppKeys) changes with every issued or rotated key.
+      void queryClient.invalidateQueries({ queryKey: [...queryKeys.apps.all, APPS_SCOPE, 'keys', appId] })
+    },
   })
 }
 
@@ -136,7 +140,11 @@ export function useIssueKey() {
       rememberPrompt(appId, out.prompt)
       return out
     },
-    onSuccess: (_data, appId) => queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, appId) }),
+    onSuccess: (_data, appId) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, appId) })
+      // The active-key list (AppKeys) changes with every issued or rotated key.
+      void queryClient.invalidateQueries({ queryKey: [...queryKeys.apps.all, APPS_SCOPE, 'keys', appId] })
+    },
   })
 }
 

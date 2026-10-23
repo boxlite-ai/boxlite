@@ -9,6 +9,7 @@ import type { AppDetail } from '@/lib/apps/types'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { AgentLogos } from './AgentLogos'
+import { AppKeys } from './AppKeys'
 import { HandoffSteps, useRotateKeyFlow } from './HandoffToAgent'
 import { copyText, PromptBlock, SectionTitle } from './spec'
 import { ToolButton } from './SubNav'
@@ -57,6 +58,7 @@ export function AgentHandoffPanel({ app }: { app: AppDetail }) {
               Rotate key
             </ToolButton>
           </div>
+          <AppKeys app={app} />
         </div>
       )}
       {flow.element}
