@@ -123,6 +123,7 @@ export async function summaryView(ctx: Ctx, app: AppRow): Promise<AppSummaryView
     resources: { database: !!main.db_url, storage: spec?.volumes.length ?? 0, users: null },
     createdAt: app.created_at,
     environments: envs.length,
+    liveIn: envs.filter((e) => e.id !== main.id && e.live_deployment).map((e) => e.name),
     ...(attention ? { attention } : {}),
     ...(step ? { progress: `Deploying ${releaseId(latest!.number)} · ${step}` } : {}),
   };

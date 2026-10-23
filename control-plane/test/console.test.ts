@@ -153,6 +153,12 @@ test('create returns the key and the filled-in prompt once; detail shows a draft
     { id: list.body[0].id, url: list.body[0].url, status: list.body[0].status, environments: list.body[0].environments, lastDeploy: list.body[0].lastDeploy },
     { id: 'crm', url: 'https://10001-cp.test/', status: 'draft', environments: 1, lastDeploy: null },
   );
+  assert.deepEqual(list.body[0].liveIn, []);
+  // An agent asked for a test version first deploys to another environment: the row says where the app runs.
+  h.ctx.store.run("INSERT INTO envs (id, app_id, name, created_at, forward_secret, live_deployment) SELECT 'env_preview', app_id, 'preview', created_at, 'g2', 1 FROM envs WHERE name = 'main'");
+  const withPreview = (await api('/apps')).body[0];
+  assert.deepEqual([withPreview.status, withPreview.environments, withPreview.liveIn], ['draft', 2, ['preview']]);
+  h.ctx.store.run("DELETE FROM envs WHERE id = 'env_preview'");
   const activity = (await api('/apps/crm')).body.activity;
   assert.deepEqual(activity.map((a: any) => `${a.actor} ${a.action}`), ['console created the app']);
 });

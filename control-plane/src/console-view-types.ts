@@ -30,6 +30,8 @@ export interface AppSummaryView {
   progress?: string;
   /** main's last screenshot, for the App list (null until one is taken). */
   previewSrc?: string | null;
+  /** Other environments with a live deployment, so a list row whose main has none can say where it runs. */
+  liveIn?: string[];
 }
 
 export interface EnvironmentSummaryView {
