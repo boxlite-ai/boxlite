@@ -371,7 +371,13 @@ async function main() {
       assert(d.message === 'Set GREETING', `latest deployment is "${d.message}"`)
       const after = (await cpApi('/envs/main/vars')).find((v) => v.name === 'GREETING')
       assert(after.value === 'hello from the console', `CP has ${after.value}`)
-      return `#${d.number} live`
+      // The restart logs under the release's number; Logs filtered to this change still shows it.
+      const restarted = await until(async () => {
+        const res = await page.request.get(`${CONSOLE}/console/api/apps/${APP}/logs?since=1h&deployment=${d.number}`)
+        const lines = await res.json()
+        return lines.find((l) => l.line.startsWith('listening on') && l.deployment === d.release) ?? null
+      }, { timeoutMs: 30_000, what: `the restart's output under Logs filtered to #${d.number}` })
+      return `#${d.number} live; its Logs filter shows "${restarted.line}" from release #${d.release}`
     })
 
     await step('rollback to #1 is a new deployment that goes live', async () => {
