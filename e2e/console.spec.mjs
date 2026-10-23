@@ -8,7 +8,7 @@
 // CONSOLE_URL defaults to the console origin derived from CP_URL (port + 1). CLI defaults to
 // cli/dist/boxlite-app.cjs. Screenshots go to docs/console-shots/v2/. KEEP=1 skips the purge.
 import { spawn, spawnSync } from 'node:child_process'
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -117,6 +117,8 @@ const tab = async (name) => {
 
 async function main() {
   mkdirSync(SHOTS, { recursive: true })
+  // The folder holds this run's pictures only: numbers shift when steps are added.
+  for (const f of readdirSync(SHOTS)) if (f.endsWith('.png')) rmSync(join(SHOTS, f))
   console.log(`Console e2e · CP ${CP} · console ${CONSOLE} · app ${APP}`)
   const browser = await chromium.launch()
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
@@ -251,13 +253,22 @@ async function main() {
         const row = await text(page.getByTestId(`service-${s.name}`))
         assert(/RUNNING/i.test(row) === (s.state === 'running'), `service ${s.name}: screen "${row}" vs CP ${s.state}`)
         if (s.pid) assert(row.includes(String(s.pid)), `pid ${s.pid} missing`)
+        if (s.memory_bytes) assert(/\d+(\.\d)? MB memory/.test(row), `service ${s.name}: no memory in "${row}"`)
       }
+      // The Overview says how much of the Box's memory and disk is used.
+      await tab('Overview')
+      const memory = await text(page.locator('dt', { hasText: /^Memory$/ }).locator('..'))
+      const disk = await text(page.locator('dt', { hasText: /^Disk$/ }).locator('..'))
+      assert(/of .* used/.test(memory) && /of .* used/.test(disk), `Overview: "${memory}" / "${disk}"`)
+      await shot('overview-usage')
+      await tab('Deployments')
+      await page.getByRole('tab', { name: /^Services/ }).click()
       const schedules = await cpApi('/envs/main/schedules')
       // The table says the schedule in words; the raw cron is on hover.
       for (const s of schedules) await page.locator(`[title="${s.cron}"]`).first().waitFor()
       await page.getByText('every minute').first().waitFor()
       await shot('services')
-      return `${services.length} service(s), ${schedules.length} schedule(s)`
+      return `${services.length} service(s), ${schedules.length} schedule(s); ${memory.replace(/\s+/g, ' ')}; ${disk.replace(/\s+/g, ' ')}`
     })
 
     await step('logs show the CP lines, filterable by deployment', async () => {

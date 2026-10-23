@@ -7,7 +7,7 @@
 //   3. record what the agent did (time, turns, cost, tool calls, final report).
 // Independent verification of the result is done afterwards (verify-acceptance.mjs).
 //
-//   node e2e/agent-acceptance.mjs <case-id>...      cases: m1 m2 m3 (default: all, in parallel)
+//   node e2e/agent-acceptance.mjs <case-id>...      cases: m1 m2 m3 m4 (default: all, in parallel)
 import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -24,6 +24,7 @@ export const CASES = {
   m1: { app: `site-${STAMP}`, ask: '做一个公司官网落地页，带联系表单，提交的内容要保存下来，我能在一个后台页面看到所有提交' },
   m2: { app: `photos-${STAMP}`, ask: '做一个图片墙，可以上传照片，刷新后照片还在' },
   m3: { app: `todo-${STAMP}`, ask: '做一个带 GitHub 登录的待办应用，每个人只看到自己的待办' },
+  m4: { app: `weekly-${STAMP}`, ask: '做一个团队周报工具：大家用 GitHub 登录写周报，可以附上文件；每周一早上 9 点自动把上周所有人的周报汇总成一页给我看。先给我一个测试版看看，没问题再上正式版' },
 }
 
 async function consoleSession() {

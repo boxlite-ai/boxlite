@@ -26,6 +26,7 @@ const EXPECT = {
   m1: { page: [/<form/i], needs: ['database'] },
   m2: { page: [/type=["']?file/i], needs: ['volume'] },
   m3: { page: [/\.boxlite\/auth\/login|github/i], needs: ['database', 'auth'] },
+  m4: { page: [/\.boxlite\/auth\/login|github/i], needs: ['database', 'auth', 'volume', 'schedule', 'test env'] },
 }
 
 const rows = []
@@ -47,6 +48,8 @@ for (const f of readdirSync(DIR).filter((n) => n.endsWith('.app.json'))) {
   if (exp.needs.includes('database')) check('declared a database', spec?.database, '')
   if (exp.needs.includes('volume')) check('declared a volume', spec?.volumes?.length, JSON.stringify(spec?.volumes?.map((v) => v.mount)))
   if (exp.needs.includes('auth')) check('declared GitHub sign-in', spec?.auth?.providers?.includes('github'), JSON.stringify(spec?.auth))
+  if (exp.needs.includes('schedule')) check('declared a weekly schedule', spec?.schedules?.length, JSON.stringify(spec?.schedules?.map((x) => x.cron)))
+  if (exp.needs.includes('test env')) check('tried it in a test environment first', status.envs?.some((e) => e.name !== 'main'), JSON.stringify(status.envs?.map((e) => `${e.name}:${e.status}`)))
 
   // Console side: the same calls the console pages make.
   const d = await consoleApi(`/apps/${c.app}?env=main`)

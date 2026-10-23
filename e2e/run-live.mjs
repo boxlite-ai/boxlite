@@ -398,6 +398,17 @@ async function main() {
     assert(!r.out.includes('s3cr3t-value') && !r.out.includes('npg_'), 'context leaks a secret')
     return `${r.out.length} chars`
   })
+
+  await check('the running Box reports service memory and its own memory and disk', async () => {
+    const c = cli(['app', 'context']).json
+    const web = c.services.find((s) => s.name === 'web')
+    const u = c.box?.usage
+    assert(web?.memory_bytes > 1_000_000, `web memory_bytes ${web?.memory_bytes}`)
+    assert(u && u.memory_total_bytes > u.memory_available_bytes && u.memory_available_bytes > 0, `box.usage ${JSON.stringify(u)}`)
+    assert(u.disk_total_bytes > u.disk_free_bytes && u.disk_free_bytes > 0, `disk ${JSON.stringify(u)}`)
+    const mb = (n) => `${Math.round(n / 1048576)} MB`
+    return `web ${mb(web.memory_bytes)} · Box memory ${mb(u.memory_total_bytes - u.memory_available_bytes)}/${mb(u.memory_total_bytes)} · disk ${mb(u.disk_total_bytes - u.disk_free_bytes)}/${mb(u.disk_total_bytes)}`
+  })
 }
 
 async function cleanup() {
