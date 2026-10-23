@@ -7,6 +7,7 @@ import type { ServiceState } from './supervisor.js';
 import { authStatus } from './enduser/management.js';
 import type { Spec } from './spec.js';
 import { envStatus } from './views.js';
+import { buildLineLevel } from './console-logs.js';
 import { storedLevelsAtLeast } from './services/logs.js';
 
 const ERROR_LEVELS = storedLevelsAtLeast('error');
@@ -99,6 +100,7 @@ async function databaseOf(ctx: Ctx, env: EnvRow, spec: Spec | undefined): Promis
   }
 }
 
+/** Error lines of the last 24 h, newest last; a build tool's notices and warnings on stderr are not errors. */
 function recentErrors(ctx: Ctx, env: EnvRow, at: number): AgentContext['recent_errors'] {
   const since = new Date(at - ERROR_WINDOW_MS).toISOString();
   return ctx.store
@@ -107,8 +109,10 @@ function recentErrors(ctx: Ctx, env: EnvRow, at: number): AgentContext['recent_e
       env.id,
       ...ERROR_LEVELS,
       since,
-      RECENT_ERRORS,
+      RECENT_ERRORS * 5,
     )
+    .filter((l) => l.source !== 'build' || buildLineLevel(l.line) === 'error')
+    .slice(0, RECENT_ERRORS)
     .reverse();
 }
 

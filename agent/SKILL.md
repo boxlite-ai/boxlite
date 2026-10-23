@@ -36,7 +36,7 @@ Read the user's sentence and decide, before writing code:
 |---|---|---|
 | stores anything that must survive a restart (records, accounts, settings) | `[database]` + `migrations/` | Postgres. Never install a database inside the app. |
 | stores user-uploaded files or generated files | `[[volume]]` | A directory mounted into the app. Never keep uploads on local disk. |
-| has "my", "only me", per-user data, an admin, or anything private | keep `[auth]` (it is on by default) | Platform Google/GitHub login, zero setup. Remove `[auth]` only for a fully anonymous site. Sign-in does not let other people in: access is `private` by default (`org` behaves the same), so only the owner (console **Open app**) and you (the App key) get through, signed in or not. Others reach the app only once access is `public`; ask the user (§6). |
+| has "my", "only me", per-user data, an admin, or anything private | keep `[auth]` (it is on by default) | Platform Google/GitHub login, zero setup. Remove `[auth]` only for a fully anonymous site. Sign-in does not let other people in: access is `private` by default (`org` behaves the same), so only the owner (console **Open app**) and you (the App key) get through, signed in or not. Others reach the app only once access is `public`: set it when their request says people who are not signed in may open it, otherwise ask (§6). |
 | runs something on a timer ("every morning", "daily digest") | `[[schedule]]` | Sends `POST <path>` (header `X-BoxLite-Schedule: <name>`) to your web service, so the handler must accept POST; it wakes the app. |
 | is only a frontend (no server logic, no database) | one `[[service]]` with `static = "dist/"` | No server needed; the platform serves the files. |
 | needs a third-party API key the user mentioned | `[secrets]` reference, e.g. `OPENAI_API_KEY = "org/openai"` | Ask the user to have a platform admin create that org secret (the console lists secrets but cannot set them); never put secret values in files. |
@@ -160,14 +160,14 @@ One short message:
 
 - The app's permanent URL (`url` in `boxlite-app app status --json`). Never hand over a one-time link from `app open --print-url`: it expires a minute after you create it and works once, so it is dead by the time the user reads your message. A private app opens for its owner with **Open app** in the BoxLite console, and its URL shows a page that says so; tell the user that in one sentence. Never put the App key in a link.
 - What you built, in their words, and what you verified (list).
-- Anything only they can decide, phrased as a question: making the app public (`boxlite-app app access set public --yes` — only when they say "public"; until then nobody but the owner can use it, signed in or not), having an admin add a third-party key, a custom domain.
+- Anything only they can decide, phrased as a question: making the app public when their request did not say who may open it (until then nobody but the owner can use it, signed in or not), having an admin add a third-party key, a custom domain.
 
 Do not mention internal steps, retries, or platform terms (Spec, Release, Box, tunnel).
 
 ## Rules
 
 - Never print, log, commit, or echo `BOXLITE_API_KEY`, `DATABASE_URL`, or any secret. Never pass them as command-line arguments. (The CLI masks them in its own output, but your shell commands are yours.)
-- Never change the access level to `public` unless the user said so.
+- Make the app `public` (`boxlite-app app access set public --yes`) only when the user said so. A request that people who are not signed in, or anyone with the link, can open or browse the app is them saying so: set it public as part of the build and name it in your report. Otherwise leave it private and ask.
 - Never delete an environment, database, or volume unless the user asked.
-- Destructive commands (`app env delete`, `app db restore`, `app db reset`, `app rollback --with-database`, `app access set public`) refuse without `--yes` and print exactly what they would destroy. Show that list to the user and rerun with `--yes` only after they agree.
+- Destructive commands (`app env delete`, `app db restore`, `app db reset`, `app rollback --with-database`) refuse without `--yes` and print exactly what they would destroy. Show that list to the user and rerun with `--yes` only after they agree. `app access set public` also asks for `--yes`; the rule above says when the user's request already gave it.
 - Stay inside this App; do not try other BoxLite APIs.

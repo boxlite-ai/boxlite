@@ -318,3 +318,15 @@ test('a schema-only environment inherits the migrations ledger, so its first dep
   await h.request('/v1/apps/crm/envs', { method: 'POST', key, json: { name: 'copy', with_data: true } });
   assert.equal(h.appdb.ledgerCopies.length, 1);
 });
+
+test("context's recent errors leave out a build tool's notices and warnings on stderr", async () => {
+  await deploy(TOML);
+  const ts = new Date().toISOString();
+  h.ctx.store.appendLogs(env().id, [
+    { ts, source: 'build', level: 'error', line: 'npm notice New major version of npm available! 10.9.8 -> 12.2.1', deployment: 1 },
+    { ts, source: 'build', level: 'error', line: 'npm warn deprecated inflight@1.0.6', deployment: 1 },
+    { ts, source: 'build', level: 'error', line: 'npm ERR! code ERESOLVE', deployment: 1 },
+  ]);
+  const c = (await (await get('/envs/main/context')).json()) as Record<string, any>;
+  assert.deepEqual(c.recent_errors.map((e: any) => e.line), ['npm ERR! code ERESOLVE']);
+});

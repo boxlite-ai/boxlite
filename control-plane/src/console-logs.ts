@@ -49,6 +49,16 @@ const BUILD_WARN_RE = /^\s*(?:npm warn\b|warn(?:ing)?\b[:\s]|\[warn(?:ing)?\])/i
 /** A build line on stderr is an error only when it says so. */
 const BUILD_ERROR_RE = /\b(error|failed|fatal|exception|cannot find|not found)\b|\bERR!/i;
 
+/**
+ * What a build line on stderr really is: build tools print progress and notices there. A warning
+ * marker wins over the error words it may contain (`npm warn … not found`). The console's logs
+ * and the agent's recent errors (agent-context.ts) both read build lines through this.
+ */
+export function buildLineLevel(line: string): 'error' | 'warn' | 'info' {
+  if (BUILD_WARN_RE.test(line)) return 'warn';
+  return BUILD_ERROR_RE.test(line) ? 'error' : 'info';
+}
+
 function seconds(ms: number): string {
   return ms < 10_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`;
 }
@@ -107,10 +117,8 @@ export function presentLogLines(lines: RawLogLine[], deployment: (n: number) => 
         // SIGTERM comes from a planned stop (sleep, redeploy, restart), not from the app failing.
         level = 'info';
       }
-    } else if (l.source === 'build' && level === 'error' && BUILD_WARN_RE.test(l.line)) {
-      level = 'warn';
-    } else if (l.source === 'build' && level === 'error' && !BUILD_ERROR_RE.test(l.line)) {
-      level = 'info';
+    } else if (l.source === 'build' && level === 'error') {
+      level = buildLineLevel(l.line);
     }
 
     // Warnings and errors of the platform stay in view, except a build tool's warnings (read with
