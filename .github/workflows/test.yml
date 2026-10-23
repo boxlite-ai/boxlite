@@ -213,6 +213,7 @@ jobs:
             api:
               - 'apps/api/**/!(*.md)'
               - 'openapi/box.openapi.yaml'
+              - 'openapi/admin.openapi.yaml'
               - 'apps/package.json'
               - 'apps/yarn.lock'
               - 'apps/nx.json'

@@ -14,8 +14,8 @@ The inventory is implementation-grounded:
   prefix applied in [`main.ts`](./api/src/main.ts).
 - Hosted BoxLite-compatible routes come from the controllers in
   [`boxlite-rest`](./api/src/boxlite-rest/). They are excluded from the product
-  OpenAPI document because their portable contract lives in
-  [`openapi/box.openapi.yaml`](../openapi/box.openapi.yaml).
+  OpenAPI document because their contracts live in [`openapi/box.openapi.yaml`](../openapi/box.openapi.yaml)
+  and, for cloud-only members and invitations, [`openapi/admin.openapi.yaml`](../openapi/admin.openapi.yaml).
 - The registry proxy's runner credential lookup is an internal service route.
   It is excluded from the Cloud OpenAPI document and generated customer clients;
   the proxy owns its request and response handling.
@@ -522,9 +522,71 @@ registry host, then matches each box in memory using the longest repository pref
 
 </details>
 
-## Admin API contract
+<details>
+<summary><b>Members and invitations</b> · 5 routes</summary>
 
-[`openapi/admin.openapi.yaml`](../openapi/admin.openapi.yaml) defines cloud organization users and invitations separately from the portable Box API. Its user email field accepts null; lists use opaque page tokens and ascending resource IDs. Operations declare independent member read/write scopes. Shared authentication, pagination parameters, and errors reference the Box contract. Invitation creation requires the owner role and defines a 24-hour retry window.
+Contract: [`openapi/admin.openapi.yaml`](../openapi/admin.openapi.yaml). This cloud-only
+Admin API manages an organization's users and invitations. Ordinary scoped API keys
+and user JWTs can call it; a platform administrator account is not required.
+Dedicated Admin SDK methods are not yet available. Existing Cloud API SDK methods
+continue to manage organizations and invitations.
+
+| Method | Path | Required API-key scope | Membership rule |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/organizations/users` | `read:members` | Member |
+| `DELETE` | `/api/v1/organizations/users/{user_id}` | `write:members` | Owner |
+| `GET` | `/api/v1/organizations/invites` | `read:members` | Member |
+| `POST` | `/api/v1/organizations/invites` | `write:members` | Owner |
+| `DELETE` | `/api/v1/organizations/invites/{invite_id}` | `write:members` | Owner |
+
+The key selects its organization. JWT callers select an organization with
+`X-BoxLite-Organization-ID`, or use their default organization. Read and write
+scopes are independent; owner and platform-admin keys still need the declared
+scope. For example, create a restricted key through the Cloud API/SDK with
+`{"name":"member-reader","permissions":["read:members"]}`. It can list users and
+invites but cannot invite users or delegate a key with `write:members`.
+Console owner-created keys default to both member scopes.
+
+The unmerged Tenant routes and scope names are replaced directly. Previously
+stored tenant grants migrate to the equivalent member grants; keys without those
+grants do not gain them. Removing a user revokes their organization keys. The last
+owner and a user's personal/default organization membership remain protected.
+
+Both lists accept `pageSize` (1–1000, default 100) and `pageToken`. Responses contain
+`users` or `invites`, plus `next_page_token` when more records exist. Treat tokens
+as opaque and return them unchanged; they are bound to the organization and
+resource and never grant access. Lists use ascending resource IDs.
+
+Users have `type: "user"`, `id` (the same as `/v1/me`'s `sub`), `email`, `name`,
+`role`, and `added_at`. Email is `null` when absent or the user record is unavailable.
+Invites have `type: "invite"`, `id`, `email`, `role`, `status`, `added_at`, and
+`expires_at`. Lists include every state; pending invitations past their deadline
+appear as `expired`. Expired pending invitations can be cancelled but not accepted.
+
+Create an invitation with `{"email":"teammate@example.com","role":"owner"}`.
+The role is required and currently only `owner` is accepted. Optional `expires_at`
+must be in the future on initial creation; omission uses
+`ORGANIZATION_INVITATION_TTL_SECONDS`, default seven days. Unknown request fields
+are rejected. Clients should tolerate additional response fields.
+
+An optional UUID `Idempotency-Key` makes create-invite retries return the original
+201 response for 24 hours, scoped to the organization and acting user. A different
+payload with the same key returns 422; a concurrent in-progress request returns
+409 and may be retried. Replay works after cancellation or expiry and does not
+send another email. This guarantee applies to create-invite only; it does not
+change Box `/v1/config` capabilities. The email event is not a transactional outbox:
+a process crash after commit can still lose notification delivery.
+
+Admin errors use the shared Box shape, for example
+`{"error":{"message":"Forbidden resource","type":"AuthError","code":"permission_denied"}}`.
+All operations may return 429; respect `Retry-After` when present. Console Cloud
+API errors retain their existing flat shape.
+
+Invitees accept through the JWT-only Console endpoint
+`/api/organizations/invitations/{invitationId}/accept`. Acceptance requires the
+invited email and does not require member scopes or prior membership.
+
+</details>
 
 ## Runner API
 

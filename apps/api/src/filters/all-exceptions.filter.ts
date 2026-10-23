@@ -20,6 +20,18 @@ import {
 import { ThrottlerException } from '@nestjs/throttler'
 import { FailedAuthTrackerService } from '../auth/failed-auth-tracker.service'
 
+const ADMIN_ERRORS: Record<number, [string, string]> = {
+  400: ['InvalidArgumentError', 'invalid_argument'],
+  401: ['AuthError', 'unauthenticated'],
+  403: ['AuthError', 'permission_denied'],
+  404: ['NotFoundError', 'not_found'],
+  409: ['InvalidStateError', 'invalid_state'],
+  422: ['InvalidArgumentError', 'invalid_argument'],
+  429: ['ResourceExhaustedError', 'resource_exhausted'],
+  502: ['UpstreamUnavailableError', 'upstream_unavailable'],
+  503: ['UpstreamUnavailableError', 'upstream_unavailable'],
+}
+
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name)
@@ -30,6 +42,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const ctx = host.switchToHttp()
     const response = ctx.getResponse<Response>()
     const request = ctx.getRequest<Request>()
+    const isAdminApi = /^\/(?:api\/)?v1\/organizations(?:\/|$)/.test(request.path)
 
     let statusCode: number
     let error: string
@@ -41,7 +54,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let progress: Record<string, unknown> | undefined
 
     // If the exception is a NotFoundException and the request path is not an API request, serve the dashboard index.html file
-    if (exception instanceof NotFoundException && !request.path.startsWith('/api/')) {
+    if (exception instanceof NotFoundException && !request.path.startsWith('/api/') && !isAdminApi) {
       const response = ctx.getResponse()
       response.sendFile(join(__dirname, '..', 'dashboard', 'index.html'))
       return
@@ -89,6 +102,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
       error = STATUS_CODES[HttpStatus.INTERNAL_SERVER_ERROR]
       message = 'An unexpected error occurred.'
       statusCode = HttpStatus.INTERNAL_SERVER_ERROR
+    }
+
+    if (isAdminApi) {
+      const [type, code] = ADMIN_ERRORS[statusCode] ?? ['InternalError', 'internal']
+      const requestId = response.getHeader('X-Request-Id')
+      response
+        .status(statusCode)
+        .json({ error: { message, type, code, ...(typeof requestId === 'string' ? { request_id: requestId } : {}) } })
+      return
     }
 
     response.status(statusCode).json({

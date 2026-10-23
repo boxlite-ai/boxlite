@@ -87,7 +87,11 @@
       }
     },
     "test": {
-      "inputs": ["default", "^default", { "runtime": "git hash-object ../openapi/box.openapi.yaml" }],
+      "inputs": [
+        "default",
+        "^default",
+        { "runtime": "git hash-object ../openapi/box.openapi.yaml ../openapi/admin.openapi.yaml" }
+      ],
       "options": {
         "passWithNoTests": true
       }
