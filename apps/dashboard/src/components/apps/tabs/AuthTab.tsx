@@ -43,7 +43,14 @@ type Section = 'users' | 'methods'
 const SECTIONS: Section[] = ['users', 'methods']
 
 const USER_GRID = 'grid-cols-[1.8fr_0.8fr_1fr_1fr_0.6fr_120px] gap-x-3'
-const PROVIDER_LABEL: Record<string, string> = { github: 'GitHub', google: 'Google' }
+const PROVIDER_LABEL: Record<string, string> = {
+  github: 'GitHub',
+  google: 'Google',
+  microsoft: 'Microsoft',
+  apple: 'Apple',
+  x: 'X',
+  facebook: 'Facebook',
+}
 const providerLabel = (provider: string) => PROVIDER_LABEL[provider] ?? capitalize(provider)
 
 /** `/api/*` → `/api/…`: the pages behind sign-in, said without glob syntax. */
@@ -300,9 +307,7 @@ function MethodRow({
           <ProviderLogo provider={method.provider} />
         </span>
         <span>{label}</span>
-        <span className="truncate text-[12px]">
-          BoxLite hasn&apos;t set up {label} sign-in here yet. Use your own {label} OAuth app to offer it.
-        </span>
+        <span className="truncate text-[12px]">Needs your own {label} OAuth app.</span>
         <span className="ml-auto flex shrink-0 items-center gap-3" {...stop}>
           <ToolButton onClick={onEdit}>Set up</ToolButton>
           <MethodMenu items={[copyUri]} onEdit={onEdit} />

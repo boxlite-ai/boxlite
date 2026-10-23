@@ -200,6 +200,16 @@ export function useEndUserAction() {
 }
 
 /** Whose OAuth app signs users in for one provider: BoxLite's, or the App's own (all environments). */
+/** The App's own OAuth app; Apple's secret is its .p8 key with the Team ID and Key ID. Left-out secrets keep the saved ones. */
+export type OwnOAuthClient = {
+  keys: 'own'
+  clientId: string
+  clientSecret?: string
+  teamId?: string
+  keyId?: string
+  privateKey?: string
+}
+
 export function useSetOAuthClient() {
   const queryClient = useQueryClient()
   const env = useAppEnv()
@@ -211,7 +221,7 @@ export function useSetOAuthClient() {
     }: {
       appId: string
       provider: string
-      body: { keys: 'shared' } | { keys: 'own'; clientId: string; clientSecret?: string }
+      body: { keys: 'shared' } | OwnOAuthClient
     }) =>
       (
         await appsClient.put<AppAuthDetail>(

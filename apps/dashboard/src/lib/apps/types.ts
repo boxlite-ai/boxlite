@@ -264,6 +264,8 @@ export type AppTab = 'overview' | 'deployments' | 'logs' | 'domains' | 'auth' | 
 
 export interface AppSignInMethod {
   provider: string
+  /** How people know it: GitHub, Microsoft, X… */
+  label: string
   /** ready: an OAuth app signs users in for it (the App's own, or BoxLite's); not_configured: none. */
   status: 'ready' | 'not_configured'
   /** This environment's [auth] lists it. */
