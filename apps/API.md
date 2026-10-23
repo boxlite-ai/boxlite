@@ -584,7 +584,9 @@ API errors retain their existing flat shape.
 
 Invitees accept through the JWT-only Console endpoint
 `/api/organizations/invitations/{invitationId}/accept`. Acceptance requires the
-invited email and does not require member scopes or prior membership.
+invited email and does not require member scopes or prior membership. Email links
+resolve `/dashboard/user/invitations` against `DASHBOARD_URL` and accept after
+sign-in. See [invitation link lifetime](./infra/docs/configuration.md#invitation-link-lifetime).
 
 </details>
 

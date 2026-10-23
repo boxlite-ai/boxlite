@@ -89,7 +89,8 @@ npm run mstage env set -- ORGANIZATION_INVITATION_TTL_SECONDS=86400 --stage dev
 The API group delivers this setting on both AWS and GCP. It defaults to `604800`
 (seven days); values must be positive whole seconds that produce a valid expiry date.
 Invalid values stop API startup. Existing invitations retain their stored deadlines,
-and explicit API `expiresAt` / `expires_at` values override the default.
+and explicit API `expiresAt` / `expires_at` values override the default. Emails show
+the exact deadline in UTC. Opening the link joins after sign-in with the invited email.
 
 ## Built-in images
 

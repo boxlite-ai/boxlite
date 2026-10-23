@@ -48,13 +48,13 @@ const Images = React.lazy(() => import('./pages/ImagesPage'))
 const ImageDetails = React.lazy(() => import('./pages/ImageDetails'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
+const UserOrganizationInvitations = React.lazy(() => import('@/pages/UserOrganizationInvitations'))
 const BoxDetails = React.lazy(() => import('./components/boxes').then((m) => ({ default: m.BoxDetails })))
 const BoxTerminalFullscreen = React.lazy(() =>
   import('./components/boxes').then((m) => ({ default: m.BoxTerminalFullscreen })),
 )
 
 const HIDDEN_DASHBOARD_ROUTES = [
-  RoutePath.MEMBERS,
   RoutePath.ROLES,
   RoutePath.AUDIT_LOGS,
   RoutePath.REGIONS,
@@ -156,10 +156,6 @@ function App() {
         element={<Navigate to={`${RoutePath.BOXES}${location.search}`} replace />}
       />
       <Route
-        path={RoutePath.USER_INVITATIONS}
-        element={<Navigate to={`${RoutePath.BOXES}${location.search}`} replace />}
-      />
-      <Route
         path={RoutePath.DASHBOARD}
         element={
           <Suspense fallback={<LoadingFallback />}>
@@ -228,6 +224,11 @@ function App() {
         ))}
         <Route path={getRouteSubPath(RoutePath.EMAIL_VERIFY)} element={<EmailVerify />} />
         <Route path={getRouteSubPath(RoutePath.SETTINGS)} element={<OrganizationSettings />} />
+        <Route
+          path={getRouteSubPath(RoutePath.MEMBERS)}
+          element={<Navigate to={`${RoutePath.SETTINGS}?tab=member`} replace />}
+        />
+        <Route path={getRouteSubPath(RoutePath.USER_INVITATIONS)} element={<UserOrganizationInvitations />} />
         <Route
           path={getRouteSubPath(RoutePath.ONBOARDING)}
           element={<Navigate to={`${RoutePath.BOXES}?onboarding=1`} replace />}
