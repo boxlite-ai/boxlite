@@ -571,3 +571,10 @@ test('a sign-in method can use the App own OAuth app; its secret never comes bac
   // Own keys without ever giving a secret are refused.
   assert.equal((await api('/apps/crm/auth/methods/github', { method: 'PUT', json: { keys: 'own', clientId: 'gh-id' } })).status, 400);
 });
+
+test('the console can ask for a new screenshot of what is live, and only of something live', async () => {
+  const { key } = await createViaConsole();
+  assert.equal((await api('/apps/crm/preview', { method: 'POST' })).status, 409, 'nothing live yet');
+  await deploy(key, TOML);
+  assert.equal((await api('/apps/crm/preview', { method: 'POST' })).status, 202);
+});

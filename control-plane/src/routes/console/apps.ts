@@ -5,7 +5,7 @@ import { environmentViews, summaryView } from '../../console-views.js';
 import { handoffPrompt } from '../../console-prompt.js';
 import { fail } from '../../errors.js';
 import { deleteApp, restoreApp } from '../../lifecycle.js';
-import { previewImage } from '../../preview.js';
+import { capturePreview, previewImage } from '../../preview.js';
 import { createOpenTicket } from '../../proxy/gate.js';
 import { createApp, rotateKey } from '../../services/apps.js';
 import { assertCanCreate, canSee, orgIdFor, type Viewer } from '../../orgs.js';
@@ -60,6 +60,15 @@ export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
     const image = previewImage(ctx, env.id);
     if (!image) throw fail('not_found', `no screenshot of ${app.name} · ${env.name} yet`, 'one is taken when a deployment goes live');
     return c.body(new Uint8Array(image), 200, { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=86400' });
+  });
+
+  /** A new screenshot now (it wakes a sleeping app, as a visitor would); taken in the background. */
+  api.post('/apps/:id/preview', (c) => {
+    const app = appOf(c);
+    const env = envOf(c, app);
+    if (!env.live_deployment) throw fail('conflict', `${app.name} · ${env.name} has nothing live to take a picture of`);
+    capturePreview(ctx, app.id, env.id, env.live_deployment);
+    return c.json({ capturing: true }, 202);
   });
 
   /** Delete is the soft delete of PRD 3.13; the purger removes the resources later. */
