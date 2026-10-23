@@ -19,8 +19,9 @@ Decision:
   environment that applied the earlier, unreleased revision drops its two
   activation triggers and functions manually.
 - After `BoxRepository.insert`, `update` or `updateWhere` commits, the repository
-  compares the previous and committed Box and runs one autocommit `UPDATE` that
-  uses `GREATEST` and matches only when a value advances.
+  compares the previous and committed Box. In its own short transaction it sets
+  a one-second `lock_timeout`, then runs one `UPDATE` that uses `GREATEST` and
+  matches only when a value advances.
 - Organization creation inserts the facts row in its own transaction. The reader
   and API contract are unchanged.
 
@@ -45,7 +46,7 @@ unless deletion was requested, and both cleanup crons delete only such Boxes
 
 | Situation | Result |
 | --- | --- |
-| Facts row locked | The Box commits; only the follow-up update waits. |
+| Facts row locked | The Box commits; the follow-up waits at most one second (`lock_timeout`), then is logged and dropped. |
 | Box transaction rolls back | No facts update runs. |
 | Concurrent or late updates | Read Committed rechecks `WHERE` on the newest row; times never regress. |
 | Update fails, or the process exits after commit | That advance is lost and logged; the Box result stands. |
@@ -61,6 +62,11 @@ are released at transaction end, which is why the trigger serialized Box commits
 [Read Committed §13.2.1](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED)
 re-evaluates the `WHERE` clause on the updated row version, so concurrent
 `GREATEST` updates cannot move a time backwards.
+[`lock_timeout`](https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-LOCK-TIMEOUT)
+aborts a statement that waits longer for a row or other lock, and
+[`SET LOCAL`](https://www.postgresql.org/docs/current/sql-set.html) lasts only until
+the transaction ends, so the bound never leaks to other users of the pooled
+connection. `conditionalStartForProxy` in the same repository uses this pattern.
 
 Rejected alternatives:
 
@@ -86,8 +92,9 @@ Rollout and rollback:
 
 Validation, on real PostgreSQL:
 
-- [x] A Box start commits while another transaction holds the facts row; facts
-  advance after release. With production reverted, the start blocks.
+- [x] A Box start commits and returns while another transaction holds the facts
+  row; the update times out, logs, and the next start records. Without the
+  timeout, the call waits for the holder; with the trigger, the start blocks.
 - [x] Rolled-back Box writes leave facts unchanged; a delayed older update does
   not replace a newer time.
 - [x] A failed update keeps the Box result and logs; the next start recovers.
@@ -97,7 +104,9 @@ Validation, on real PostgreSQL:
   previous revision inserts during installation stay unrecorded or incomplete.
 
 With every non-test file restored to the trigger revision, the lock test failed
-with "The Box start did not commit while the facts row was locked".
+with "The Box start did not commit while the facts row was locked". After review
+asked to bound the follow-up wait, the same test against the untimed update failed
+with "The Box start did not return while the facts row was locked".
 
 Nine other cases failed as well. Five compare times, and the trigger records
 statement time rather than the write time. The delayed-update case timed out, and
@@ -109,9 +118,10 @@ That full run also exposed an activity calculation that threw after a committed
 warm claim, failing an existing creation-admission test. It now runs inside the
 logged `try`.
 
-A local pgbench run sent the follow-up `UPDATE` from eight clients, 2,000 times
-each: 0.827 ms average latency on one organization row and 0.310 ms across eight.
-This is synthetic container data, not production capacity.
+A local pgbench run sent the bare follow-up `UPDATE` from eight clients, 2,000
+times each: 0.827 ms average latency on one organization row and 0.310 ms across
+eight. The bounded update adds `BEGIN`, `SET LOCAL` and `COMMIT` round trips that
+this run did not measure. This is synthetic container data, not production capacity.
 
 ### Review follow-up: migration availability
 
@@ -317,9 +327,11 @@ starts and first deletion requests advance the modification maximum. Repeated
 writes, stops, label changes, deletion completion and cleanup leave it unchanged.
 Pool-only activity is ignored; real-organization transfers mark the destination incomplete.
 
-The follow-up `UPDATE` runs in its own autocommit transaction and never reads or
+The follow-up `UPDATE` runs in its own short transaction and never reads or
 locks Boxes or organizations. Box transactions therefore hold no facts lock, and
-concurrent facts updates serialize only for one statement. The read uses one SQL statement.
+concurrent facts updates serialize only for one statement. A wait past the
+one-second `lock_timeout` aborts the update, which is logged and dropped. The read
+uses one SQL statement.
 
 ### Validation
 

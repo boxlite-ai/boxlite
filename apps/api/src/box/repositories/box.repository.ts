@@ -56,6 +56,11 @@ const CREATION_ADMISSION_LOCK_TIMEOUT_MS = 5000
 export const CREATION_ADMISSION_LOCK_NAMESPACE = 0x424f5841 // 'BOXA'
 const CREATION_ADMISSION_RETRY_AFTER_SECONDS = 5
 
+// Facts updates hold an organization's facts row for one short statement, so a
+// longer wait means something else holds it. The Box write has already
+// committed; give up on the best-effort update rather than delay its response.
+const ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS = 1000
+
 const BOX_CREATION_LIMIT_EXCLUDED_STATES = [
   BoxState.ERROR,
   BoxState.DESTROYING,
@@ -546,7 +551,8 @@ export class BoxRepository extends BaseRepository<Box> {
    * It runs outside the Box transaction, so same-organization writes never queue
    * on the facts row. The update is optimistic: it matches only when a value
    * advances, and Read Committed rechecks that against the newest row, so late or
-   * concurrent updates cannot move a time backwards. A failure is logged and
+   * concurrent updates cannot move a time backwards. A failure, including a
+   * facts-row lock wait past ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS, is logged and
    * dropped: the Box write stands, and a later event supersedes the lost maximum.
    */
   private async recordOrganizationActivity(box: Box, previousBox?: OrganizationActivitySource): Promise<void> {
@@ -555,18 +561,22 @@ export class BoxRepository extends BaseRepository<Box> {
       if (!activity) {
         return
       }
-      await this.dataSource.query(
-        `UPDATE organization_activation_facts
-         SET "lastBoxCreatedAt" = GREATEST("lastBoxCreatedAt", $2::timestamptz),
-           "lastBoxModifiedAt" = GREATEST("lastBoxModifiedAt", $3::timestamptz),
-           "boxHistoryComplete" = "boxHistoryComplete" AND NOT $4::boolean
-         WHERE "organizationId" = $1::uuid AND (
-           "lastBoxCreatedAt" IS DISTINCT FROM GREATEST("lastBoxCreatedAt", $2::timestamptz)
-           OR "lastBoxModifiedAt" IS DISTINCT FROM GREATEST("lastBoxModifiedAt", $3::timestamptz)
-           OR ("boxHistoryComplete" AND $4::boolean)
-         )`,
-        [box.organizationId, activity.createdAt, activity.modifiedAt, activity.historyIncomplete],
-      )
+      await this.manager.transaction(async (entityManager) => {
+        // SET takes a literal, so the constant is interpolated rather than bound.
+        await entityManager.query(`SET LOCAL lock_timeout = '${ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS}ms'`)
+        await entityManager.query(
+          `UPDATE organization_activation_facts
+           SET "lastBoxCreatedAt" = GREATEST("lastBoxCreatedAt", $2::timestamptz),
+             "lastBoxModifiedAt" = GREATEST("lastBoxModifiedAt", $3::timestamptz),
+             "boxHistoryComplete" = "boxHistoryComplete" AND NOT $4::boolean
+           WHERE "organizationId" = $1::uuid AND (
+             "lastBoxCreatedAt" IS DISTINCT FROM GREATEST("lastBoxCreatedAt", $2::timestamptz)
+             OR "lastBoxModifiedAt" IS DISTINCT FROM GREATEST("lastBoxModifiedAt", $3::timestamptz)
+             OR ("boxHistoryComplete" AND $4::boolean)
+           )`,
+          [box.organizationId, activity.createdAt, activity.modifiedAt, activity.historyIncomplete],
+        )
+      })
     } catch (error) {
       this.logger.warn(
         `Failed to record activity of box ${box.id} for organization ${box.organizationId}: ${error instanceof Error ? error.message : String(error)}`,

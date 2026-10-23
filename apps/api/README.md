@@ -232,7 +232,8 @@ Automatic lifecycle actions also count.
 
 `BoxRepository` records these times after the Box write commits, with one
 conditional `UPDATE` that only moves a time forward. Box transactions never wait
-on the facts row. The update is best effort: a failure, or a process exit right
+on the facts row, and the follow-up waits at most one second for it before giving
+up. The update is best effort: a failure, or a process exit right
 after the commit, loses that advance and only logs it. A later event of the same
 kind repairs it. Writes that bypass `BoxRepository`, such as raw SQL, are not recorded.
 

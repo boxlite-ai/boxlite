@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common'
 import { randomUUID } from 'node:crypto'
-import { DataSource } from 'typeorm'
+import { DataSource, EntityManager } from 'typeorm'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
 import { Box } from '../../box/entities/box.entity'
 import { BoxLastActivity } from '../../box/entities/box-last-activity.entity'
@@ -137,29 +137,40 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
   })
   afterEach(() => jest.restoreAllMocks())
 
-  it('commits a Box start while another transaction holds the facts row', async () => {
+  it('returns a committed Box start while another transaction holds the facts row', async () => {
     const id = await organization()
     const boxId = await box(id)
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
     const holder = dataSource.createQueryRunner()
     await holder.connect()
     await holder.startTransaction()
     let pending: Promise<Box> | undefined
+    let deadline: NodeJS.Timeout | undefined
     try {
       await holder.query('SELECT 1 FROM organization_activation_facts WHERE "organizationId" = $1 FOR UPDATE', [id])
       pending = transition(boxId, BoxState.STARTED)
-      await waitFor(async () => {
-        const [row] = await dataSource.query('SELECT state FROM box WHERE id = $1', [boxId])
-        return row.state === BoxState.STARTED
-      }, 'The Box start did not commit while the facts row was locked')
+      const started = await Promise.race([
+        pending,
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(
+            () => reject(new Error('The Box start did not return while the facts row was locked')),
+            3000,
+          )
+        }),
+      ])
+      const [row] = await dataSource.query('SELECT state FROM box WHERE id = $1', [boxId])
+      expect([started.state, row.state]).toEqual([BoxState.STARTED, BoxState.STARTED])
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`Failed to record activity of box ${boxId}`))
       expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: null })
-      await holder.commitTransaction()
-      const started = await pending
-      expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: at(started) })
     } finally {
+      clearTimeout(deadline)
       if (holder.isTransactionActive) await holder.rollbackTransaction()
       if (pending) await pending.catch(() => undefined)
       await holder.release()
     }
+    await transition(boxId, BoxState.STOPPED, BoxDesiredState.STOPPED)
+    const restarted = await transition(boxId, BoxState.STARTED, BoxDesiredState.STARTED)
+    expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: at(restarted) })
   })
 
   it('initializes complete facts, keeps them after Box deletion and never recreates them', async () => {
@@ -262,20 +273,31 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
     const id = await organization()
     const first = await box(id)
     const second = await box(id)
-    const query = dataSource.query.bind(dataSource)
+    const transaction = dataSource.manager.transaction.bind(dataSource.manager) as (
+      ...args: unknown[]
+    ) => Promise<unknown>
     let reachDelay!: () => void
     let releaseDelay!: () => void
     const delayReached = new Promise<void>((resolve) => (reachDelay = resolve))
     const delayReleased = new Promise<void>((resolve) => (releaseDelay = resolve))
     let delayed = false
-    jest.spyOn(dataSource, 'query').mockImplementation(async (sql: string, parameters?: unknown[]) => {
-      if (!delayed && sql.startsWith(factsUpdate)) {
-        delayed = true
-        reachDelay()
-        await delayReleased
-      }
-      return query(sql, parameters)
-    })
+    // Pauses the first facts update inside its own transaction, as a slow process would.
+    jest.spyOn(dataSource.manager, 'transaction').mockImplementation(((...args: unknown[]) => {
+      const isolation = typeof args[0] === 'string' ? [args[0]] : []
+      const run = args.find((arg) => typeof arg === 'function') as (manager: EntityManager) => Promise<unknown>
+      return transaction(...isolation, async (manager: EntityManager) => {
+        const query = manager.query.bind(manager)
+        manager.query = async (sql: string, parameters?: unknown[]) => {
+          if (!delayed && sql.startsWith(factsUpdate)) {
+            delayed = true
+            reachDelay()
+            await delayReleased
+          }
+          return query(sql, parameters)
+        }
+        return run(manager)
+      })
+    }) as never)
 
     const late = transition(first, BoxState.STARTED)
     await delayReached
