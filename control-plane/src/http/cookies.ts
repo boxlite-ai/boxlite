@@ -11,9 +11,13 @@ export const isSecureUrl = (url: string) => url.startsWith('https:');
  */
 export const hostCookieName = (base: string, secure: boolean) => (secure ? `__Host-${base}` : base);
 
-/** A `Set-Cookie` value: host-only (no Domain), HttpOnly, SameSite=Lax; Secure when the origin that sets it is https. */
-export function setCookieValue(secure: boolean, name: string, value: string, path: string, maxAge: number): string {
-  const parts = [`${name}=${value}`, `Path=${path}`, 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAge}`];
+/**
+ * A `Set-Cookie` value: host-only (no Domain), HttpOnly, SameSite=Lax; Secure when the origin that
+ * sets it is https. `crossSitePost` makes it SameSite=None (https only), for a callback a provider
+ * POSTs from its own site.
+ */
+export function setCookieValue(secure: boolean, name: string, value: string, path: string, maxAge: number, crossSitePost = false): string {
+  const parts = [`${name}=${value}`, `Path=${path}`, 'HttpOnly', `SameSite=${crossSitePost && secure ? 'None' : 'Lax'}`, `Max-Age=${maxAge}`];
   if (secure) parts.push('Secure');
   return parts.join('; ');
 }

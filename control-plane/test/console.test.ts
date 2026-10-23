@@ -273,7 +273,7 @@ test('the Auth tab maps end-user sign-in: methods, users, and user actions as ac
   assert.equal(auth.status.enforced, false);
   assert.deepEqual(
     auth.status.methods.map((m: any) => [m.provider, m.status, m.declared]).sort(),
-    [['github', 'not_configured', true], ['google', 'not_configured', false]],
+    [['apple', 'not_configured', false], ['facebook', 'not_configured', false], ['github', 'not_configured', true], ['google', 'not_configured', false], ['microsoft', 'not_configured', false], ['x', 'not_configured', false]],
   );
   assert.deepEqual(auth.users, []);
   assert.equal((await api('/apps/crm')).body.auth.declared, true);

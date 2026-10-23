@@ -41,6 +41,16 @@ export function mountEndUserAuth(root: Hono, ctx: Ctx): void {
   root.get('/auth/jwks.json', () => jwksResponse(ctx));
   root.get('/auth/start', (c) => start(ctx, c.req.raw));
   root.get('/auth/callback/:provider', (c) => callback(ctx, c.req.param('provider'), c.req.raw));
+  // Apple answers with a form POST (response_mode=form_post); the fields are those of the GET.
+  root.post('/auth/callback/:provider', async (c) => {
+    const url = new URL(c.req.url);
+    const form = await c.req.raw.formData().catch(() => null);
+    for (const k of ['code', 'state', 'error']) {
+      const v = form?.get(k);
+      if (typeof v === 'string') url.searchParams.set(k, v);
+    }
+    return callback(ctx, c.req.param('provider'), new Request(url, { headers: c.req.raw.headers }));
+  });
 }
 
 /** Every sign-in outcome lands in the env's `auth` log so `app logs --source auth` explains what users saw. */
@@ -68,7 +78,7 @@ function start(ctx: Ctx, req: Request): Response {
   const verifier = randomBytes(32).toString('base64url');
   const state = signState(ctx.config.sessionSecret, { app: app.name, env: env.name, next, provider: providerName, vh: sha256hex(verifier), bh });
   const location = provider.authorizeUrl({ creds, redirectUri: redirectUri(ctx, providerName), state, codeChallenge: createHash('sha256').update(verifier).digest('base64url') });
-  return redirect(location, new Headers({ 'set-cookie': setCookieValue(apiSecure(ctx), verifierCookieName(env.id), verifier, AUTH_PATH, STATE_TTL_S) }));
+  return redirect(location, new Headers({ 'set-cookie': setCookieValue(apiSecure(ctx), verifierCookieName(env.id), verifier, AUTH_PATH, STATE_TTL_S, provider.formPost) }));
 }
 
 async function callback(ctx: Ctx, providerName: string, req: Request): Promise<Response> {
@@ -88,7 +98,7 @@ async function callback(ctx: Ctx, providerName: string, req: Request): Promise<R
   const headers = new Headers({ 'cache-control': 'no-store' });
   const verifierName = verifierCookieName(env.id);
   const verifier = readCookie(req.headers, verifierName);
-  headers.append('set-cookie', setCookieValue(apiSecure(ctx), verifierName, '', AUTH_PATH, 0));
+  headers.append('set-cookie', setCookieValue(apiSecure(ctx), verifierName, '', AUTH_PATH, 0, provider?.formPost));
 
   if (url.searchParams.get('error')) authLog(ctx, env, 'warn', `${providerName} sign-in cancelled by the user (${url.searchParams.get('error')})`);
   if (url.searchParams.get('error')) return htmlPage('Sign-in cancelled', `<h1>Sign-in was cancelled</h1>${retry}`, 400, headers);

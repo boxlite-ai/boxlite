@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
-import { createHash, createPublicKey, verify, type JsonWebKey } from 'node:crypto';
+import { createHash, createPublicKey, generateKeyPairSync, verify, type JsonWebKey } from 'node:crypto';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, afterEach, before, test } from 'node:test';
 import { isProtected, safeNext } from '../src/enduser/paths.js';
 import { signState, verifyState } from '../src/enduser/state.js';
+import { oauthClientFor } from '../src/enduser/config.js';
+import { signConsoleSession } from '../src/console-auth.js';
+import { OAUTH_PROVIDERS } from '../src/oauth-providers.js';
 import { ADMIN, createApp, harness, TOML, type Harness } from './helpers.js';
 
 // ---- pure helpers ---------------------------------------------------------------
@@ -495,6 +498,7 @@ test('status, redirect URIs, users, search, sign-out and CSV export', async () =
   assert.deepEqual(await (await h.request('/v1/apps/crm/envs/main/auth/redirect-uris', { key })).json(), [
     { provider: 'github', redirect_uri: 'https://cp.test/auth/callback/github', status: 'ready' },
     { provider: 'google', redirect_uri: 'https://cp.test/auth/callback/google', status: 'not_configured' },
+    ...['microsoft', 'apple', 'x', 'facebook'].map((p) => ({ provider: p, redirect_uri: `https://cp.test/auth/callback/${p}`, status: 'not_configured' })),
   ]);
 
   const found = (await (await h.request('/v1/apps/crm/envs/main/auth/users?search=mona', { key })).json()) as { id: string; email: string; active_sessions: number }[];
@@ -545,4 +549,91 @@ test('the supervisor control API under /.boxlite/ is never reachable on an app o
   await setup();
   for (const path of ['/.boxlite/auth/../sv/deploy', '/.boxlite/auth/%2e%2e/sv/deploy', '/.boxlite/authx']) assert.equal((await h.appRequest(path, { method: 'POST' })).status, 404, path);
   assert.equal(seen.length, 0);
+});
+
+// ---- providers that need the App's own OAuth app --------------------------------
+
+const idToken = (claims: object) => `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.sig`;
+
+test('Apple signs in through its form POST callback, with an ES256 client secret signed by the App key', async () => {
+  const { app, env } = await setup({ auth: { providers: ['apple'], protect: [] } });
+  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const key = { teamId: 'TEAM123456', keyId: 'KEY1234567', privateKey: privateKey.export({ type: 'pkcs8', format: 'pem' }) as string };
+  h.ctx.store.run("INSERT INTO app_oauth_clients (app_id, provider, client_id, client_secret, updated_at) VALUES (?, 'apple', 'com.example.web', ?, '')", app.id, JSON.stringify(key));
+  let secretChecked = false;
+  h.ctx.oauthFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    assert.equal(String(input), 'https://appleid.apple.com/auth/token');
+    const body = new URLSearchParams(String(init!.body));
+    assert.equal(body.get('code'), 'apple-code');
+    const [head, claims, sig] = body.get('client_secret')!.split('.');
+    assert.ok(verify('sha256', Buffer.from(`${head}.${claims}`), { key: publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(sig!, 'base64url')), 'signed with the App key');
+    const c = JSON.parse(Buffer.from(claims!, 'base64url').toString());
+    assert.deepEqual({ iss: c.iss, sub: c.sub, aud: c.aud, kid: JSON.parse(Buffer.from(head!, 'base64url').toString()).kid }, { iss: 'TEAM123456', sub: 'com.example.web', aud: 'https://appleid.apple.com', kid: 'KEY1234567' });
+    secretChecked = true;
+    return new Response(JSON.stringify({ id_token: idToken({ sub: '001234.abc', email: 'ann@privaterelay.appleid.com', email_verified: 'true' }) }));
+  }) as typeof fetch;
+
+  const login = await h.appRequest('/.boxlite/auth/login?provider=apple&next=/app');
+  const nonce = cookiePair(login.headers.get('set-cookie')!);
+  const startUrl = new URL(login.headers.get('location')!);
+  const start = await h.request(startUrl.pathname + startUrl.search);
+  const authorize = new URL(start.headers.get('location')!);
+  assert.equal(authorize.origin + authorize.pathname, 'https://appleid.apple.com/auth/authorize');
+  assert.equal(authorize.searchParams.get('response_mode'), 'form_post');
+  const verifier = start.headers.get('set-cookie')!;
+  // Apple POSTs back from its own site: a Lax cookie would not come with it.
+  assert.match(verifier, /SameSite=None/);
+
+  const callback = await h.request('/auth/callback/apple', {
+    method: 'POST',
+    headers: { cookie: cookiePair(verifier), 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ code: 'apple-code', state: authorize.searchParams.get('state')! }).toString(),
+  });
+  assert.equal(callback.status, 302, await callback.clone().text());
+  assert.ok(secretChecked);
+  const complete = await h.appRequest(local(callback.headers.get('location')!), { headers: { cookie: nonce } });
+  assert.ok(complete.headers.getSetCookie().some((c) => c.startsWith('__Host-bxl_session=')), 'signed in');
+  const user = h.ctx.store.get<{ provider: string; email: string }>('SELECT provider, email FROM app_users WHERE env_id = ?', env.id)!;
+  assert.deepEqual({ ...user }, { provider: 'apple', email: 'ann@privaterelay.appleid.com' });
+});
+
+test('Microsoft, X and Facebook map their accounts to a user; only verified or provider-confirmed email is kept', async () => {
+  h = harness();
+  const creds = { clientId: 'cid', clientSecret: 'csecret' };
+  const replies: Record<string, unknown> = {
+    'https://login.microsoftonline.com/common/oauth2/v2.0/token': { id_token: idToken({ sub: 'ms-sub', email: 'ann@contoso.com', name: 'Ann' }) },
+    'https://api.x.com/2/oauth2/token': { access_token: 'xt' },
+    'https://api.x.com/2/users/me?user.fields=profile_image_url': { data: { id: '42', name: 'Ann', username: 'ann', profile_image_url: 'https://pbs.twimg.com/a.jpg' } },
+    'https://graph.facebook.com/v21.0/oauth/access_token': { access_token: 'ft' },
+    'https://graph.facebook.com/v21.0/me': { id: 'fb1', name: 'Ann', email: 'ann@example.com', picture: { data: { url: 'https://fb/a.jpg' } } },
+  };
+  const calls: { url: string; init?: RequestInit }[] = [];
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init });
+    const hit = Object.keys(replies).find((k) => url === k || url.startsWith(`${k}?`));
+    return new Response(JSON.stringify(hit ? replies[hit] : { error: 'unexpected' }), { status: hit ? 200 : 404 });
+  }) as typeof fetch;
+  const run = (name: string) => OAUTH_PROVIDERS[name]!.signIn({ creds, redirectUri: `https://cp.test/auth/callback/${name}`, code: 'c', codeVerifier: 'v', fetch: fetchImpl });
+  assert.deepEqual(await run('microsoft'), { id: 'ms-sub', email: 'ann@contoso.com', name: 'Ann', avatarUrl: null });
+  assert.deepEqual(await run('x'), { id: '42', email: null, name: 'Ann', avatarUrl: 'https://pbs.twimg.com/a.jpg', login: 'ann' });
+  assert.match(String(calls.find((c) => c.url.startsWith('https://api.x.com/2/oauth2/token'))!.init!.headers && (calls.find((c) => c.url.startsWith('https://api.x.com/2/oauth2/token'))!.init!.headers as Record<string, string>).authorization), /^Basic /, 'X takes the client secret as Basic auth');
+  assert.deepEqual(await run('facebook'), { id: 'fb1', email: 'ann@example.com', name: 'Ann', avatarUrl: 'https://fb/a.jpg' });
+});
+
+test('providers BoxLite runs no OAuth app for take only the App\'s own, from the console', async () => {
+  const { app } = await setup({ oauth: { github: GH, microsoft: { clientId: 'platform', clientSecret: 'platform' } } });
+  assert.equal(oauthClientFor(h.ctx, app, 'microsoft'), undefined, 'a platform-wide Microsoft app is never used');
+  const cookie = `__Host-bxl_console=${signConsoleSession('test-session-secret')}`;
+  const put = (provider: string, json: unknown) =>
+    h.request(`/console/api/apps/crm/auth/methods/${provider}`, { method: 'PUT', json, headers: { cookie, 'x-boxlite-console': '1' } });
+  const shared = await put('apple', { keys: 'shared' });
+  assert.equal(shared.status, 400, await shared.clone().text());
+  const missing = await put('apple', { keys: 'own', clientId: 'com.example.web', teamId: 'TEAM123456' });
+  assert.equal(missing.status, 400);
+  assert.match((await missing.json()).error.message, /Key ID and the private key/);
+  const ok = await put('microsoft', { keys: 'own', clientId: 'my-ms-app', clientSecret: 'my-ms-secret' });
+  assert.equal(ok.status, 200, await ok.clone().text());
+  const method = (await ok.json()).status.methods.find((m: { provider: string }) => m.provider === 'microsoft');
+  assert.deepEqual({ label: method.label, status: method.status, keys: method.keys, managed: method.managedAvailable }, { label: 'Microsoft', status: 'ready', keys: 'own', managed: false });
 });

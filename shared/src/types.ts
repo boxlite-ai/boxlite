@@ -1,7 +1,7 @@
 export type Image = 'base' | 'python' | 'node';
 export type Size = 'nano' | 'small' | 'medium' | 'large';
 export type Access = 'private' | 'org' | 'public';
-export type AuthProvider = 'google' | 'github';
+export type AuthProvider = 'google' | 'github' | 'microsoft' | 'apple' | 'x' | 'facebook';
 export type VolumeMode = 'rw' | 'ro';
 
 export const IMAGES: readonly Image[] = ['base', 'python', 'node'];
@@ -12,7 +12,7 @@ export const SIZES: Record<Size, { cpus: number; memory_mib: number }> = {
   large: { cpus: 4, memory_mib: 8192 },
 };
 export const ACCESS_LEVELS: readonly Access[] = ['private', 'org', 'public'];
-export const AUTH_PROVIDERS: readonly AuthProvider[] = ['google', 'github'];
+export const AUTH_PROVIDERS: readonly AuthProvider[] = ['google', 'github', 'microsoft', 'apple', 'x', 'facebook'];
 
 export const APP_NAME_RE = /^[a-z][a-z0-9-]{1,30}$/;
 export const SERVICE_NAME_RE = /^[a-z][a-z0-9-]{0,30}$/;

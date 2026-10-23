@@ -41,7 +41,7 @@ const CALLBACK_PATH = '/auth/callback/';
 
 /** Providers BoxLite runs its own OAuth app for (the "BoxLite-managed keys"). */
 export function configuredProviders(ctx: Pick<Ctx, 'config'>): string[] {
-  return Object.keys(OAUTH_PROVIDERS).filter((n) => ctx.config.oauth?.[n]);
+  return Object.keys(OAUTH_PROVIDERS).filter((n) => !OAUTH_PROVIDERS[n]!.ownKeysOnly && ctx.config.oauth?.[n]);
 }
 
 export interface OAuthClient {
@@ -53,10 +53,11 @@ export interface OAuthClient {
 
 /** The OAuth client an App's end-user sign-in uses for `provider`: the App's own, else BoxLite's. */
 export function oauthClientFor(ctx: Pick<Ctx, 'store' | 'config'>, app: AppRow, provider: string): OAuthClient | undefined {
-  if (!OAUTH_PROVIDERS[provider]) return undefined;
+  const p = OAUTH_PROVIDERS[provider];
+  if (!p) return undefined;
   const own = ctx.store.get<{ client_id: string; client_secret: string }>('SELECT client_id, client_secret FROM app_oauth_clients WHERE app_id = ? AND provider = ?', app.id, provider);
   if (own) return { clientId: own.client_id, clientSecret: own.client_secret, own: true };
-  const shared = ctx.config.oauth?.[provider];
+  const shared = p.ownKeysOnly ? undefined : ctx.config.oauth?.[provider];
   return shared ? { ...shared, own: false } : undefined;
 }
 

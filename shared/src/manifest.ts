@@ -321,9 +321,9 @@ export function parseManifest(toml: string, env = 'main'): ParseResult {
   if (authT) {
     v.unknownKeys(authT, MANIFEST_SCHEMA.auth, ['auth']);
     const providers = v.stringArray(authT.providers, ['auth', 'providers']) ?? [];
-    if (authT.providers === undefined || providers.length === 0) v.error(['auth', 'providers'], 'invalid_auth', 'auth.providers must list at least one of google, github');
+    if (authT.providers === undefined || providers.length === 0) v.error(['auth', 'providers'], 'invalid_auth', `auth.providers must list at least one of ${AUTH_PROVIDERS.join(', ')}`);
     for (const prov of providers) {
-      if (!(AUTH_PROVIDERS as readonly string[]).includes(prov)) v.error(['auth', 'providers'], 'invalid_auth', `unknown auth provider "${prov}" (google, github)`);
+      if (!(AUTH_PROVIDERS as readonly string[]).includes(prov)) v.error(['auth', 'providers'], 'invalid_auth', `unknown auth provider "${prov}" (${AUTH_PROVIDERS.join(', ')})`);
     }
     const protect = v.stringArray(authT.protect, ['auth', 'protect']) ?? [];
     for (const pat of protect) {

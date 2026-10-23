@@ -195,7 +195,7 @@ export function onlineChecks(m: Manifest, ctx: OnlineCheckContext): { errors: Ch
   if (!IMAGE_REFS[m.runtime.image]) err('image_not_allowed', `[runtime].image "${m.runtime.image}" is not available; use one of ${Object.keys(IMAGE_REFS).join(', ')}`);
   if (!BOX_SIZES[m.runtime.size]) err('size_not_allowed', `[runtime].size "${m.runtime.size}" is not available; use one of ${Object.keys(BOX_SIZES).join(', ')}`);
   for (const p of m.auth?.providers ?? []) {
-    if (!SUPPORTED_AUTH_PROVIDERS.includes(p)) err('invalid_auth', `[auth] provider "${p}" is unknown; use ${SUPPORTED_AUTH_PROVIDERS.join(' or ')}`);
+    if (!SUPPORTED_AUTH_PROVIDERS.includes(p)) err('invalid_auth', `[auth] provider "${p}" is unknown; use one of ${SUPPORTED_AUTH_PROVIDERS.join(', ')}`);
     else if (!(ctx.configuredProviders ?? []).includes(p)) warnings.push({ rule: 'auth_provider_not_configured', message: `${p}: not configured on this platform yet` });
   }
   for (const v of m.volumes) {

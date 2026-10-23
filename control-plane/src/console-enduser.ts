@@ -3,6 +3,7 @@ import type { AppRow, EnvRow } from './db.js';
 import type { Ctx } from './ctx.js';
 import * as enduser from './enduser/management.js';
 import type { UserView } from './enduser/sessions.js';
+import { OAUTH_PROVIDERS } from './oauth-providers.js';
 
 /**
  * The console's view of end-user sign-in (the Auth tab), mapped from src/enduser/management.ts. User
@@ -22,6 +23,7 @@ export interface EndUserView {
 
 export interface SignInMethodView {
   provider: string;
+  label: string;
   /** ready: an OAuth app signs users in for it (the App's own, or BoxLite's); not_configured: none. */
   status: 'ready' | 'not_configured';
   /** This environment's [auth] lists it. */
@@ -64,6 +66,7 @@ export const endUserAuth = {
       const client = oauthClientFor(ctx, app, r.provider);
       return {
         provider: r.provider,
+        label: OAUTH_PROVIDERS[r.provider]!.label,
         status: client ? 'ready' : 'not_configured',
         declared: declared.has(r.provider),
         redirectUri: r.redirect_uri,
@@ -82,7 +85,7 @@ export const endUserAuth = {
       methods,
       loginUrl: s.login_url,
       users: s.users,
-      note: s.enabled && missing.length ? `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not configured on this control plane yet` : null,
+      note: s.enabled && missing.length ? `${missing.map((p) => OAUTH_PROVIDERS[p]?.label ?? p).join(', ')} ${missing.length === 1 ? 'needs' : 'need'} an OAuth app before anyone can sign in with ${missing.length === 1 ? 'it' : 'them'}` : null,
     };
   },
   async listUsers(ctx: Ctx, app: AppRow, env: EnvRow, search?: string): Promise<EndUserView[]> {

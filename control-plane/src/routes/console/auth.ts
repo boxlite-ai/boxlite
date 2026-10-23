@@ -6,7 +6,7 @@ import { logLevel } from '../../services/logs.js';
 import { z } from 'zod';
 import { now } from '../../db.js';
 import { fail } from '../../errors.js';
-import { OAUTH_PROVIDERS } from '../../oauth-providers.js';
+import { OAUTH_PROVIDERS, appleKeyOf } from '../../oauth-providers.js';
 import type { ConsoleKit } from './kit.js';
 
 export function consoleAuthRoutes(api: Hono, k: ConsoleKit): void {
@@ -44,14 +44,25 @@ export function consoleAuthRoutes(api: Hono, k: ConsoleKit): void {
       c,
       z.discriminatedUnion('keys', [
         z.object({ keys: z.literal('shared') }),
-        z.object({ keys: z.literal('own'), clientId: z.string().trim().min(4).max(200), clientSecret: z.string().trim().min(4).max(400).optional() }),
+        z.object({
+          keys: z.literal('own'),
+          clientId: z.string().trim().min(4).max(200),
+          clientSecret: z.string().trim().min(4).max(400).optional(),
+          // Apple: the .p8 key is the secret; its Team ID and Key ID go with it.
+          teamId: z.string().trim().min(4).max(40).optional(),
+          keyId: z.string().trim().min(4).max(40).optional(),
+          privateKey: z.string().trim().min(40).max(4000).optional(),
+        }),
       ]),
     );
+    if (b.keys === 'shared' && OAUTH_PROVIDERS[provider]!.ownKeysOnly) {
+      throw fail('invalid_request', `BoxLite runs no ${OAUTH_PROVIDERS[provider]!.label} OAuth app`, 'add your own OAuth app, or turn the method off');
+    }
     if (b.keys === 'shared') {
       store.run('DELETE FROM app_oauth_clients WHERE app_id = ? AND provider = ?', app.id, provider);
     } else {
       const saved = store.get<{ client_secret: string }>('SELECT client_secret FROM app_oauth_clients WHERE app_id = ? AND provider = ?', app.id, provider);
-      const secret = b.clientSecret ?? saved?.client_secret;
+      const secret = provider === 'apple' ? appleSecret(b, saved?.client_secret) : (b.clientSecret ?? saved?.client_secret);
       if (!secret) throw fail('invalid_request', 'the client secret is required', `paste the client secret of your ${provider} OAuth app`);
       store.run(
         'INSERT INTO app_oauth_clients (app_id, provider, client_id, client_secret, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(app_id, provider) DO UPDATE SET client_id = excluded.client_id, client_secret = excluded.client_secret, updated_at = excluded.updated_at',
@@ -84,4 +95,13 @@ export function consoleAuthRoutes(api: Hono, k: ConsoleKit): void {
     else await endUserAuth.unblockUser(ctx, app, env, uid);
     return c.json(await authView(app, env));
   });
+}
+
+/** Apple's three values, stored as one secret; any left out keeps its saved value. */
+function appleSecret(b: { teamId?: string; keyId?: string; privateKey?: string }, saved: string | undefined): string | undefined {
+  const old = saved ? appleKeyOf(saved) : null;
+  const key = { teamId: b.teamId ?? old?.teamId, keyId: b.keyId ?? old?.keyId, privateKey: b.privateKey ?? old?.privateKey };
+  if (!key.teamId || !key.keyId || !key.privateKey) throw fail('invalid_request', 'Apple needs the Team ID, the Key ID and the private key (.p8)', 'all three are in your Apple Developer account, under Certificates, Identifiers & Profiles › Keys');
+  if (!/-----BEGIN PRIVATE KEY-----[\s\S]+-----END PRIVATE KEY-----/.test(key.privateKey)) throw fail('invalid_request', 'the private key is not a .p8 file', 'paste the whole file, BEGIN and END lines included');
+  return JSON.stringify(key);
 }
