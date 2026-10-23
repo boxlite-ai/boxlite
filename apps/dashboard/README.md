@@ -218,7 +218,7 @@ can be removed but not given another role. The member whose personal
 organization this is has no remove action, because the API refuses that
 removal.
 
-Organization Settings opens two tabs. General shows the editable
+The profile menu's Organization entry opens two tabs. General shows the editable
 name and copyable ID. Member combines members and outgoing invitations in one
 table, with Member, Invited, and Expired statuses. Owners can invite, remove members,
 and cancel invitations. Expired invitations offer Remove (with confirmation) and
@@ -226,6 +226,13 @@ Resend. Resending creates a new invitation with the same permissions and the cur
 default lifetime, then removes the expired record. Creation failure preserves the
 old row; cleanup failure reports that the new invitation exists and refreshes both
 rows, so the owner can remove the expired one. The old link remains unusable.
-The page shows the current organization's name.
+The page shows the current organization's name; switching stays in the profile menu.
 The Member tab can be bookmarked at
 `/dashboard/settings?tab=member`.
+
+## The organization you pick is the one you come back to
+
+A user in more than one organization switches between them from the profile
+menu, which marks the personal one. The pick is kept in `localStorage`, so the
+next login opens the same organization; if the user was removed from it in the
+meantime, the console falls back to their personal organization.

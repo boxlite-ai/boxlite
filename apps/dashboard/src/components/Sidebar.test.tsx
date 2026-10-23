@@ -31,8 +31,18 @@ vi.mock('@/assets/Logo', () => ({ LogoText: () => <span>BoxLite</span> }))
 vi.mock('@/contexts/ThemeContext', () => ({
   useTheme: () => ({ theme: 'dark', setTheme: vi.fn() }),
 }))
+const organizationState = vi.hoisted(() => {
+  const personal = { id: 'org-1', name: 'Default Organization', isDefaultForAuthenticatedUser: true }
+  return { personal, organizations: [personal], onSelectOrganization: vi.fn(async () => true) }
+})
 vi.mock('@/hooks/useSelectedOrganization', () => ({
-  useSelectedOrganization: () => ({ selectedOrganization: { id: 'org-1' } }),
+  useSelectedOrganization: () => ({
+    selectedOrganization: { id: 'org-1' },
+    onSelectOrganization: organizationState.onSelectOrganization,
+  }),
+}))
+vi.mock('@/hooks/useOrganizations', () => ({
+  useOrganizations: () => ({ organizations: organizationState.organizations }),
 }))
 
 describe('Sidebar primary navigation', () => {
@@ -46,6 +56,8 @@ describe('Sidebar primary navigation', () => {
     act(() => root?.unmount())
     root = null
     document.body.innerHTML = ''
+    // A test that adds organizations must not leak them into the next one.
+    organizationState.organizations = [organizationState.personal]
   })
 
   it('keeps Volumes in primary navigation', () => {
@@ -67,5 +79,81 @@ describe('Sidebar primary navigation', () => {
 
     expect(volumeLinks.length).toBeGreaterThan(0)
     expect(volumeLinks.every((link) => link.textContent === 'Volumes')).toBe(true)
+  })
+
+  it('groups organization management under one profile entry', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    act(() => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter initialEntries={['/dashboard/boxes']}>
+          <Sidebar isBannerVisible={false} version="test" />
+        </MemoryRouter>,
+      )
+    })
+
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="Open profile menu"]')
+    // Radix opens menus on pointerdown; jsdom has no PointerEvent, and React reads only `button`.
+    await act(async () =>
+      trigger?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 })),
+    )
+
+    const entries = [...document.querySelectorAll<HTMLAnchorElement>('a[role="menuitem"]')]
+    expect(entries.find((item) => item.textContent === 'Organization')?.getAttribute('href')).toBe(
+      '/dashboard/settings',
+    )
+    expect(entries.find((item) => item.textContent === 'Members')).toBeUndefined()
+  })
+
+  it('omits the personal invitations entry from the profile menu', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    act(() => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter initialEntries={['/dashboard/boxes']}>
+          <Sidebar isBannerVisible={false} version="test" />
+        </MemoryRouter>,
+      )
+    })
+
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="Open profile menu"]')
+    // Radix opens menus on pointerdown; jsdom has no PointerEvent, and React reads only `button`.
+    await act(async () =>
+      trigger?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 })),
+    )
+
+    const invitations = document.querySelector('a[role="menuitem"][href="/dashboard/user/invitations"]')
+    expect(invitations).toBeNull()
+  })
+
+  it('lets a user in several organizations switch to another one from the profile menu', async () => {
+    organizationState.organizations = [
+      { id: 'org-1', name: 'Default Organization', isDefaultForAuthenticatedUser: true },
+      { id: 'org-2', name: 'Acme', isDefaultForAuthenticatedUser: false },
+    ]
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    act(() => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter initialEntries={['/dashboard/boxes']}>
+          <Sidebar isBannerVisible={false} version="test" />
+        </MemoryRouter>,
+      )
+    })
+
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="Open profile menu"]')
+    // Radix opens menus on pointerdown; jsdom has no PointerEvent, and React reads only `button`.
+    await act(async () =>
+      trigger?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 })),
+    )
+
+    const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+    expect(items.find((item) => item.textContent?.includes('Default Organization'))?.textContent).toContain('Personal')
+
+    await act(async () => items.find((item) => item.textContent?.includes('Acme'))?.click())
+    expect(organizationState.onSelectOrganization).toHaveBeenCalledWith('org-2')
   })
 })
