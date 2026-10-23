@@ -985,7 +985,7 @@ async function bootstrapAwsRole({ region, stage, repo, accountId }: any): Promis
  * before any AWS access exists — which rules out a store that AWS credentials decrypt. Only the
  * account id is genuinely unknown, though: the role name is githubDeployRoleName(stage), so the
  * workflows compose the ARN from AWS_ACCOUNT_ID rather than storing the whole ARN.
- * Same shape e2e-local.yml:89 already uses. The region is written alongside it: the workflows carry
+ * The region is written alongside it: the workflows carry
  * DEFAULT_AWS_REGION as a literal default, which is only right for a stage in that region, so a stage
  * bootstrapped elsewhere needs the variable to say so.
  *

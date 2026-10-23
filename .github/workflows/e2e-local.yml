@@ -1,23 +1,26 @@
-# Run VM-based E2E integration tests on a persistent AWS EC2 runner.
+# Run VM-based E2E integration tests on a persistent GCP VM runner.
 #
 # Full-runtime tests use persistent KVM capacity and cached native builds.
-# This workflow starts a pre-configured EC2 instance, runs integration tests,
-# then stops it. The instance is never terminated — build caches persist.
+# This workflow starts a pre-configured VM, runs integration tests, then
+# stops it. The VM is never deleted — build caches persist on its disk.
 #
 # Architecture:
 #   start-runner (ubuntu-latest)  →  e2e-tests (self-hosted)  →  stop-runner (ubuntu-latest)
-#     Start stopped EC2               Build + run tests             Stop EC2
+#     Start stopped VM                Build + run tests             Stop VM
 #     Wait for runner online           50-min timeout               if: always()
 #
-# Concurrency: only ONE e2e run at a time (single persistent instance).
+# Concurrency: only ONE e2e run at a time (single persistent VM).
 # A newer push queues behind the in-progress run instead of cancelling it.
 #
-# Cost: c8i.4xlarge on-demand rate only while running + ~$4/mo EBS storage.
-# Subsequent runs skip setup/compilation (cached) → ~5-10 min → ~$0.03/run.
-#
 # Authentication:
-#   AWS: GitHub OIDC → AWS STS (no stored AWS credentials)
+#   GCP: GitHub OIDC → workload identity pool ci-gha-e2e → service account
+#        ci-gha-e2e-ctl, which can only get/start/stop/set metadata on the VM
 #   GitHub: GitHub App → short-lived installation token (no PAT)
+#
+# Registration: every start hands the VM a fresh runner registration token
+# through instance metadata (scripts/ci/gcp-e2e-vm.sh), and the VM's startup
+# script (scripts/ci/gcp-e2e-startup.sh) re-registers with it, so a
+# registration GitHub deleted heals on the next run.
 #
 # Fork PRs: plain `pull_request` withholds secrets AND repo variables from
 # fork runs, so start-runner cannot authenticate. The PR trigger is
@@ -26,10 +29,9 @@
 # label. For forks the approval is per-push: only the labeling event runs,
 # pinned to the head SHA the maintainer approved — a new push needs a
 # re-label. Untrusted code runs only in e2e-tests, which holds no secrets
-# and a read-only token; the runner's instance profile can only terminate
-# the runner itself (see scripts/ci/setup-ci-runner.sh).
+# and a read-only token; the VM has no service account, so that code gets
+# no cloud credentials either.
 #
-# Setup:   ./scripts/ci/setup-ci-runner.sh
 # Runbook: docs/contributing/development/e2e-local.md
 name: E2E local
 
@@ -72,7 +74,7 @@ on:
         default: false
 
 # Single global concurrency group — only one e2e run at a time (the
-# persistent instance can only serve one job). A newer push queues behind
+# persistent VM can only serve one job). A newer push queues behind
 # the in-progress run instead of cancelling it, so an in-flight run keeps
 # its VM work and the earlier commit still gets a result. GitHub keeps only
 # the newest pending run, so intermediate queued pushes are superseded.
@@ -87,15 +89,12 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: us-east-1
-  AWS_ROLE_ARN: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-e2e-github-actions
-  EC2_INSTANCE_ID: ${{ vars.EC2_E2E_INSTANCE_ID }}
-  EC2_INSTANCE_TYPE: c8i.4xlarge
-  EC2_AMI_ID: ami-05cf1e9f73fbad2e2
-  EC2_SUBNET_IDS: ${{ vars.AWS_SUBNET_IDS || vars.AWS_SUBNET_ID }}
-  EC2_SECURITY_GROUP_ID: ${{ vars.AWS_SECURITY_GROUP_ID }}
-  RUNNER_VERSION: '2.334.0'
-  RUNNER_LABEL: boxlite-e2e
+  GCP_PROJECT: boxlite-dev-project
+  GCP_ZONE: us-east5-a
+  GCP_INSTANCE: ci-gha-e2e-1
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/929248348760/locations/global/workloadIdentityPools/ci-gha-e2e/providers/github
+  GCP_SERVICE_ACCOUNT: ci-gha-e2e-ctl@boxlite-dev-project.iam.gserviceaccount.com
+  RUNNER_LABEL: gcp-e2e
 
 jobs:
   # =========================================================================
@@ -135,7 +134,7 @@ jobs:
           fi
 
   # =========================================================================
-  # Job 1: Start the persistent EC2 instance and wait for runner
+  # Job 1: Start the persistent VM and wait for runner
   # =========================================================================
   start-runner:
     name: Start E2E Runner
@@ -146,7 +145,7 @@ jobs:
       id-token: write
       contents: read
     outputs:
-      instance-id: ${{ steps.ensure-instance.outputs.instance-id }}
+      instance: ${{ steps.start.outputs.instance }}
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -155,159 +154,39 @@ jobs:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           # Least privilege: the registration-token and list-runners calls need
-          # repo Administration; `gh variable set EC2_E2E_INSTANCE_ID` needs
-          # Variables. Scope the token so it does not inherit other installation
-          # permissions.
+          # repo Administration. Scope the token so it does not inherit other
+          # installation permissions.
           permission-administration: write
-          permission-variables: write
 
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+      # google-github-actions/auth writes its credentials file under
+      # $GITHUB_WORKSPACE, so checkout comes first. Under pull_request_target
+      # this is main's tree; no PR code runs in this job.
+      - uses: actions/checkout@v5
         with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: e2e-start-${{ github.run_id }}
+          persist-credentials: false
 
-      - name: Start or create EC2 instance
-        id: ensure-instance
-        run: |
-          INSTANCE_ID="${{ env.EC2_INSTANCE_ID }}"
+      - name: Federate a GCP identity
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
 
-          # Fallback: discover by tag if variable is empty
-          if [ -z "$INSTANCE_ID" ]; then
-            INSTANCE_ID=$(aws ec2 describe-instances \
-              --filters "Name=tag:Name,Values=boxlite-e2e" "Name=instance-state-name,Values=running,stopped,stopping,pending" \
-              --query "Reservations[0].Instances[0].InstanceId" --output text 2>/dev/null || echo "")
-            [ "$INSTANCE_ID" = "None" ] && INSTANCE_ID=""
-          fi
-
-          # Check if instance exists and get its state
-          if [ -n "$INSTANCE_ID" ]; then
-            STATE=$(aws ec2 describe-instances \
-              --instance-ids "$INSTANCE_ID" \
-              --query "Reservations[0].Instances[0].State.Name" --output text 2>/dev/null || echo "not-found")
-          else
-            STATE="not-found"
-          fi
-
-          if [ "$STATE" = "running" ]; then
-            echo "Instance already running"
-            echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
-
-          elif [ "$STATE" = "stopped" ]; then
-            echo "Starting instance..."
-            aws ec2 start-instances --instance-ids "$INSTANCE_ID"
-            aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
-            echo "Instance started"
-            echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
-
-          elif [ "$STATE" = "stopping" ] || [ "$STATE" = "pending" ]; then
-            echo "Instance in transitional state ($STATE), waiting..."
-            aws ec2 wait instance-stopped --instance-ids "$INSTANCE_ID" 2>/dev/null || \
-              aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" 2>/dev/null || true
-            # Re-check and start if stopped
-            STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
-              --query "Reservations[0].Instances[0].State.Name" --output text)
-            if [ "$STATE" = "stopped" ]; then
-              aws ec2 start-instances --instance-ids "$INSTANCE_ID"
-              aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
-            elif [ "$STATE" != "running" ]; then
-              echo "::error::Instance stuck in state: $STATE"
-              exit 1
-            fi
-            echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
-
-          else
-            echo "Instance not found or terminated. Creating new one..."
-
-            # Generate runner registration token for user-data
-            REG_TOKEN=$(curl -sf -X POST \
-              -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/runners/registration-token" \
-              | jq -r .token)
-
-            # Build user-data
-            cat > /tmp/user-data.sh << 'USERDATA'
-          #!/bin/bash
-          set -euo pipefail
-          export HOME=/root
-          modprobe kvm_intel 2>/dev/null || modprobe kvm_amd 2>/dev/null || true
-          chmod 666 /dev/kvm 2>/dev/null || true
-          usermod -aG kvm root 2>/dev/null || true
-          # User-data only installs the actions-runner. Build deps
-          # (apt + rustup + cargo-nextest) are installed by the
-          # e2e-tests job's "Install build dependencies" step so they
-          # stream to the GitHub Actions log and don't race the
-          # runner-online poll.
-          apt-get update -qq && apt-get install -y -qq curl jq tar
-          RUNNER_VERSION="__RUNNER_VERSION__"
-          mkdir -p /opt/actions-runner && cd /opt/actions-runner
-          if [ ! -f ./config.sh ]; then
-            curl -fsSL "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" | tar xz
-          fi
-          RUNNER_ALLOW_RUNASROOT=1 ./config.sh \
-            --url "https://github.com/__REPO__" \
-            --token "__REG_TOKEN__" \
-            --name "boxlite-e2e" \
-            --labels "self-hosted,linux,x64,kvm,boxlite-e2e" \
-            --unattended --disableupdate --replace || true
-          ./svc.sh install root || true
-          ./svc.sh start || true
-          USERDATA
-
-            sed -i "s|__REPO__|${{ github.repository }}|g" /tmp/user-data.sh
-            sed -i "s|__RUNNER_VERSION__|${{ env.RUNNER_VERSION }}|g" /tmp/user-data.sh
-            sed -i "s|__REG_TOKEN__|${REG_TOKEN}|g" /tmp/user-data.sh
-
-            # Launch instance — try each subnet (AZ) until one has capacity
-            INSTANCE_ID=""
-            IFS=',' read -ra SUBNET_LIST <<< "${{ env.EC2_SUBNET_IDS }}"
-            for SUBNET in "${SUBNET_LIST[@]}"; do
-              SUBNET=$(echo "$SUBNET" | xargs)
-              echo "Attempting launch in subnet $SUBNET..."
-              if RESULT=$(aws ec2 run-instances \
-                --instance-type "${{ env.EC2_INSTANCE_TYPE }}" \
-                --image-id "${{ env.EC2_AMI_ID }}" \
-                --subnet-id "$SUBNET" \
-                --security-group-ids "${{ env.EC2_SECURITY_GROUP_ID }}" \
-                --iam-instance-profile Name=boxlite-e2e-runner \
-                --cpu-options "NestedVirtualization=enabled" \
-                --user-data file:///tmp/user-data.sh \
-                --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":50,"VolumeType":"gp3","DeleteOnTermination":false}}]' \
-                --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=boxlite-e2e},{Key=Purpose,Value=boxlite-e2e}]" \
-                --metadata-options "HttpTokens=required,HttpEndpoint=enabled" \
-                --query "Instances[0].InstanceId" --output text 2>&1); then
-                INSTANCE_ID="$RESULT"
-                echo "Launched $INSTANCE_ID in subnet $SUBNET"
-                break
-              else
-                echo "::warning::Subnet $SUBNET unavailable: $RESULT"
-              fi
-            done
-
-            if [ -z "$INSTANCE_ID" ]; then
-              echo "::error::Failed to launch instance in any availability zone"
-              exit 1
-            fi
-
-            echo "Created instance: $INSTANCE_ID"
-            aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
-            echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
-
-            # Try to save instance ID for faster lookup on the next run.
-            # Best-effort: tag-based fallback (Name=boxlite-e2e) handles rediscovery
-            # if this fails (e.g., the auth token lacks variables:write).
-            if ! gh variable set EC2_E2E_INSTANCE_ID --body "$INSTANCE_ID" -R "${{ github.repository }}"; then
-              echo "::warning::Could not persist EC2_E2E_INSTANCE_ID. Future runs will rediscover by tag."
-            fi
-          fi
+      - name: Start the VM with a fresh runner registration
+        id: start
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Set first, so stop-runner still stops a VM this step left booting.
+          echo "instance=$GCP_INSTANCE" >> "$GITHUB_OUTPUT"
+          scripts/ci/gcp-e2e-vm.sh start
 
       - name: Wait for runner to come online
         run: |
-          TIMEOUT=180
+          # A boot re-registers the runner; the very first boot also
+          # installs it (~1 min).
+          TIMEOUT=300
           ELAPSED=0
           INTERVAL=10
 
@@ -334,6 +213,15 @@ jobs:
           echo "::error::Runner did not come online within ${TIMEOUT}s"
           exit 1
 
+      # A registration token stays valid for an hour; remove it so the tests'
+      # code cannot read it from the metadata server and register its own
+      # runner.
+      - name: Remove the registration token from VM metadata
+        if: always() && steps.auth.outcome == 'success'
+        env:
+          REPO: ${{ github.repository }}
+        run: scripts/ci/gcp-e2e-vm.sh clear-token
+
   # =========================================================================
   # Job 2: Run integration tests on the persistent runner
   # =========================================================================
@@ -342,7 +230,7 @@ jobs:
     needs: start-runner
     runs-on:
       - self-hosted
-      - boxlite-e2e
+      - gcp-e2e
     timeout-minutes: 50
     env:
       CARGO_TERM_COLOR: always
@@ -433,9 +321,9 @@ jobs:
 
       - name: Install build dependencies (make setup)
         run: |
-          # First run on a fresh instance: ~5–10 min (apt + rustup +
+          # First run on a fresh VM: ~5–10 min (apt + rustup +
           # cargo-nextest; CI=true so prek install is skipped).
-          # Subsequent runs reuse the persistent EBS volume and are
+          # Subsequent runs reuse the persistent disk and are
           # idempotent fast-paths (~10–30 s).
           bash scripts/setup/setup-ubuntu.sh
 
@@ -493,7 +381,7 @@ jobs:
             exit 1
           fi
 
-      # The runner is a reused, tagged instance, so its hardware is not implied
+      # The runner is a reused VM, so its hardware is not implied
       # by this workflow. Enable the nested-KVM test only where the loaded KVM
       # module actually reports nesting; warn loudly otherwise, because a silent
       # skip is indistinguishable from a pass.
@@ -547,7 +435,7 @@ jobs:
           timeout-minutes: 30
 
   # =========================================================================
-  # Job 3: Stop the instance (always runs)
+  # Job 3: Stop the VM (always runs)
   # =========================================================================
   stop-runner:
     name: Stop E2E Runner
@@ -556,23 +444,27 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    if: always() && needs.start-runner.outputs.instance-id != ''
+    if: always() && needs.start-runner.outputs.instance != ''
     steps:
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@v5
         with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: e2e-stop-${{ github.run_id }}
+          persist-credentials: false
 
-      - name: Stop EC2 instance
+      - name: Federate a GCP identity
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
+
+      - name: Stop the VM
         if: ${{ !(needs.e2e-tests.result == 'failure' && inputs.debug) }}
+        env:
+          REPO: ${{ github.repository }}
         run: |
-          echo "Stopping instance ${{ needs.start-runner.outputs.instance-id }}..."
-          aws ec2 stop-instances --instance-ids "${{ needs.start-runner.outputs.instance-id }}" \
-            && echo "Instance stopping" \
-            || echo "::warning::Failed to stop instance"
+          scripts/ci/gcp-e2e-vm.sh stop \
+            && echo "VM stopping" \
+            || echo "::warning::Failed to stop the VM"
 
       - name: Skip stop (debug mode — tests failed with SSH active)
         if: ${{ needs.e2e-tests.result == 'failure' && inputs.debug }}
-        run: echo "::warning::Instance left running for SSH debug session. Will auto-stop after 30 min idle."
+        run: echo "::warning::VM left running for the SSH debug session. The next run reuses it; stop it from the GCP console when done."
