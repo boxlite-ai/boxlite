@@ -113,6 +113,10 @@ export async function summaryView(ctx: Ctx, app: AppRow): Promise<AppSummaryView
     name: app.name,
     slug: app.name,
     url: ctx.resources.appUrl(app.name, main.name) + '/',
+    previewSrc: (() => {
+      const shot = main.live_deployment ? previewMeta(ctx, main.id) : null;
+      return shot ? `/apps/${encodeURIComponent(app.name)}/preview?env=main&v=${encodeURIComponent(shot.capturedAt)}` : null;
+    })(),
     visibility: ctx.resources.effectiveAccess(main),
     status,
     lastDeploy: lastDeploy(latest),

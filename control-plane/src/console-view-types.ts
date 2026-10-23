@@ -28,6 +28,8 @@ export interface AppSummaryView {
   attention?: string;
   /** While main deploys: "Deploying #4 · build". */
   progress?: string;
+  /** main's last screenshot, for the App list (null until one is taken). */
+  previewSrc?: string | null;
 }
 
 export interface EnvironmentSummaryView {
