@@ -6,7 +6,7 @@
 import { ChevronRight } from '@/components/ui/icon'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
-import { useUploadFile } from '@/hooks/mutations/useAppMutations'
+import { useDeleteFile, useUploadFile } from '@/hooks/mutations/useAppMutations'
 import { useVolumeListing } from '@/hooks/queries/useAppsQuery'
 import { downloadUrl, errorBody, errorText } from '@/lib/apps/client'
 import { formatBytes, relTime } from '@/lib/apps/format'
@@ -19,8 +19,8 @@ import { EmptyNote, HoverActions } from './spec'
 import { ToolButton } from './SubNav'
 
 // The files of one volume in a side panel, read through the environment's Box (the same route
-// `boxlite-app app volume ls|cp` uses). Folders open in place, files download, and uploads land
-// in the open folder.
+// `boxlite-app app volume ls|cp|rm` uses). Folders open in place, files download, uploads land
+// in the open folder, and a file or folder can be deleted after a confirmation.
 
 const MAX_UPLOAD = 50 * 1024 * 1024
 
@@ -114,6 +114,37 @@ export function VolumeFilesSheet({
     }
   }
 
+  const remove = useDeleteFile()
+  const del = async (entry: VolumeEntry) => {
+    const folder = entry.type === 'dir'
+    const target = join(path, entry.name)
+    const ok = await confirm({
+      title: `Delete ${entry.name}${folder ? ' and everything in it' : ''}?`,
+      body: (
+        <>
+          {volume.name}:{target} is removed from the volume and the app can no longer read it. This cannot be undone.
+        </>
+      ),
+      confirmLabel: 'Delete',
+      danger: true,
+    })
+    if (!ok) return
+    try {
+      await remove.mutateAsync({ appId: app.id, volume: volume.name, path: target, folder })
+      toast.success(`Deleted ${entry.name}`, { description: `${volume.name}:${target}` })
+    } catch (err) {
+      handleApiError(err, `Could not delete ${entry.name}`)
+    }
+  }
+  // Inside a folder row, which opens on click: the button must not open it too.
+  const deleteButton = (entry: VolumeEntry) => (
+    <span onClick={(e) => e.stopPropagation()}>
+      <ToolButton danger loading={remove.isPending && remove.variables?.path === join(path, entry.name)} onClick={() => void del(entry)}>
+        Delete
+      </ToolButton>
+    </span>
+  )
+
   const fileUrl = (entry: VolumeEntry) =>
     downloadUrl(
       `/apps/${encodeURIComponent(app.id)}/volumes/${encodeURIComponent(volume.name)}/files?env=${encodeURIComponent(app.environment)}&path=${encodeURIComponent(join(path, entry.name))}`,
@@ -192,7 +223,10 @@ export function VolumeFilesSheet({
                     {folder ? `${entry.name}/` : entry.name}
                   </span>
                   {folder ? (
-                    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                    <>
+                      <HoverActions className="hidden group-hover:flex">{deleteButton(entry)}</HoverActions>
+                      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                    </>
                   ) : (
                     <>
                       <span
@@ -209,6 +243,7 @@ export function VolumeFilesSheet({
                         >
                           Download
                         </a>
+                        {deleteButton(entry)}
                       </HoverActions>
                     </>
                   )}

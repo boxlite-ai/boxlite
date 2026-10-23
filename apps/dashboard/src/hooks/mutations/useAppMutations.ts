@@ -312,3 +312,20 @@ export function useUploadFile() {
       queryClient.invalidateQueries({ queryKey: [...queryKeys.apps.detail(APPS_SCOPE, appId, env), 'volume', volume] }),
   })
 }
+
+/** Deletes a file, or a folder with everything in it, on a volume. */
+export function useDeleteFile() {
+  const queryClient = useQueryClient()
+  const env = useAppEnv()
+  return useMutation({
+    mutationFn: async ({ appId, volume, path, folder }: { appId: string; volume: string; path: string; folder: boolean }) =>
+      (
+        await appsClient.delete<{ volume: string; path: string; removed: 'file' | 'directory' }>(
+          `/apps/${encodeURIComponent(appId)}/volumes/${encodeURIComponent(volume)}/files`,
+          { params: { env, path, ...(folder ? { recursive: 1 } : {}) } },
+        )
+      ).data,
+    onSuccess: (_d, { appId, volume }) =>
+      queryClient.invalidateQueries({ queryKey: [...queryKeys.apps.detail(APPS_SCOPE, appId, env), 'volume', volume] }),
+  })
+}
