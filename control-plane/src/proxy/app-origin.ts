@@ -27,7 +27,7 @@ export async function serveAppOrigin(ctx: Ctx, c: Context, env: EnvRow): Promise
   const app = ctx.store.appById(env.app_id);
   if (!app) return page('Not found', '<h1>There is no site here</h1><p>Check the address. If you followed a link, the site may have been removed.</p>', 404);
   if (app.deleted_at) {
-    return page('App deleted', '<h1>This site is no longer available</h1><p>It has been taken offline by its owner.</p>', 410);
+    return page('No longer available', '<h1>This site is no longer available</h1><p>It has been taken offline by its owner.</p>', 410);
   }
   const path = url.pathname;
   // Public: app servers fetch the key from their own (maybe private) origin.

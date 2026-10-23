@@ -83,7 +83,7 @@ function authRoute(ctx: Ctx, req: ProxyRequest, app: AppRow, env: EnvRow, route:
     return htmlPage('Sign-in unavailable', '<h1>Sign-in is not available yet</h1><p>The site owner has not finished setting it up.</p>', 503);
   }
   const asked = q.get('provider');
-  if (asked !== null && !ready.includes(asked)) return htmlPage('Unknown provider', `<h1>${escapeHtml(OAUTH_PROVIDERS[asked]?.label ?? asked)} sign-in is not available on this site</h1>`, 400);
+  if (asked !== null && !ready.includes(asked)) return htmlPage('Sign-in unavailable', `<h1>${escapeHtml(OAUTH_PROVIDERS[asked]?.label ?? asked)} sign-in is not available on this site</h1>`, 400);
   const provider = asked ?? (ready.length === 1 ? ready[0]! : null);
   if (!provider) {
     const buttons = ready
