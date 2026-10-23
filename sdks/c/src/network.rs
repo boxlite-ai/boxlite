@@ -140,6 +140,10 @@ pub struct BoxTunnelHandle {
     handle: Mutex<Option<CoreBoxTunnel>>,
     tokio_rt: Arc<TokioRuntime>,
     queue: Arc<EventQueue>,
+    // Kept apart from the tunnel so they stay readable after it is consumed.
+    uri: Option<String>,
+    is_public: bool,
+    token: Option<String>,
 }
 
 impl BoxTunnelHandle {
@@ -364,6 +368,20 @@ pub unsafe extern "C" fn boxlite_network_tunnel(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     unsafe {
+        boxlite_network_tunnel_with_options(network, port, ptr::null(), out_tunnel, out_error)
+    }
+}
+
+/// Prepare a tunnel with JSON options (`{"isPublic":false}`); NULL defaults to public.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_network_tunnel_with_options(
+    network: *mut CBoxNetworkHandle,
+    port: u16,
+    options_json: *const c_char,
+    out_tunnel: *mut *mut CBoxTunnelHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
         if network.is_null() {
             write_error(out_error, null_pointer_error("network"));
             return BoxliteErrorCode::InvalidArgument;
@@ -373,6 +391,17 @@ pub unsafe extern "C" fn boxlite_network_tunnel(
             return BoxliteErrorCode::InvalidArgument;
         }
         *out_tunnel = ptr::null_mut();
+        let options: boxlite::TunnelOptions = if options_json.is_null() {
+            Default::default()
+        } else {
+            match parse_policy(options_json) {
+                Ok(options) => options,
+                Err(error) => {
+                    write_error(out_error, error);
+                    return BoxliteErrorCode::InvalidArgument;
+                }
+            }
+        };
         if port == 0 {
             write_error(
                 out_error,
@@ -396,10 +425,13 @@ pub unsafe extern "C" fn boxlite_network_tunnel(
         let network_ref = &*network;
         match network_ref
             .tokio_rt
-            .block_on(network_ref.handle.tunnel(target))
+            .block_on(network_ref.handle.tunnel_with_options(target, options))
         {
             Ok(handle) => {
                 *out_tunnel = Box::into_raw(Box::new(BoxTunnelHandle {
+                    uri: handle.uri().map(str::to_owned),
+                    is_public: handle.is_public(),
+                    token: handle.token().map(str::to_owned),
                     handle: Mutex::new(Some(handle)),
                     tokio_rt: network_ref.tokio_rt.clone(),
                     queue: network_ref.queue.clone(),
@@ -415,7 +447,7 @@ pub unsafe extern "C" fn boxlite_network_tunnel(
     }
 }
 
-/// Withdraw public access to `port` in the box.
+/// Revoke the tunnel for `port` in the box.
 ///
 /// Safe to repeat. Connections already open are not closed. Returns
 /// `InvalidArgument` for a null network pointer or port zero.
@@ -454,6 +486,7 @@ pub unsafe extern "C" fn boxlite_tunnel_free(tunnel: *mut CBoxTunnelHandle) {
 }
 
 /// Read the public URL of a remotely served tunnel, without consuming it.
+/// It stays readable after connect or forward consumes the tunnel.
 ///
 /// On success `*out_uri` is an allocated string the caller must release with
 /// `boxlite_free_string`, or NULL for a local tunnel — a local descriptor is
@@ -466,6 +499,36 @@ pub unsafe extern "C" fn boxlite_tunnel_uri(
     out_uri: *mut *mut c_char,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
+    unsafe { tunnel_string(tunnel, out_uri, out_error, |handle| handle.uri.clone()) }
+}
+
+/// Read JSON containing uri, isPublic, and token (full on creation, masked later).
+/// It stays readable after connect or forward consumes the tunnel.
+/// Release the result with boxlite_free_string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_tunnel_descriptor(
+    tunnel: *mut CBoxTunnelHandle,
+    out_json: *mut *mut c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        tunnel_string(tunnel, out_json, out_error, |handle| {
+            Some(
+                serde_json::json!({
+                    "uri": handle.uri, "isPublic": handle.is_public, "token": handle.token,
+                })
+                .to_string(),
+            )
+        })
+    }
+}
+
+unsafe fn tunnel_string(
+    tunnel: *mut CBoxTunnelHandle,
+    out_uri: *mut *mut c_char,
+    out_error: *mut CBoxliteError,
+    read: impl FnOnce(&BoxTunnelHandle) -> Option<String>,
+) -> BoxliteErrorCode {
     unsafe {
         if tunnel.is_null() {
             write_error(out_error, null_pointer_error("tunnel"));
@@ -477,22 +540,7 @@ pub unsafe extern "C" fn boxlite_tunnel_uri(
         }
         *out_uri = ptr::null_mut();
 
-        let tunnel_ref = &*tunnel;
-        let guard = match tunnel_ref.handle.lock() {
-            Ok(guard) => guard,
-            Err(_) => {
-                let error = BoxliteError::Internal("tunnel lock poisoned".into());
-                write_error(out_error, error);
-                return BoxliteErrorCode::Internal;
-            }
-        };
-        let Some(handle) = guard.as_ref() else {
-            let error =
-                BoxliteError::InvalidState("tunnel connection has already been consumed".into());
-            write_error(out_error, error);
-            return BoxliteErrorCode::InvalidState;
-        };
-        match handle.uri() {
+        match read(&*tunnel) {
             Some(uri) => match CString::new(uri) {
                 Ok(uri) => {
                     *out_uri = uri.into_raw();
@@ -674,5 +722,172 @@ mod tests {
                 .to_string()
                 .contains("unknown tunnel listener address kind")
         );
+    }
+
+    /// Fakes the cloud API for one box on a loopback port and returns each
+    /// tunnel prepare body. CONNECT is accepted and held open, so a tunnel
+    /// whose URI names this server can be consumed.
+    fn tunnel_cloud() -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (bodies, received) = std::sync::mpsc::channel();
+        let server_url = url.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let (mut stream, bodies, url) =
+                    (stream.unwrap(), bodies.clone(), server_url.clone());
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let (mut head, mut line) = (String::new(), String::new());
+                    while reader.read_line(&mut line).unwrap() > 2 {
+                        head.push_str(&line);
+                        line.clear();
+                    }
+                    if head.starts_with("CONNECT ") {
+                        stream
+                            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                            .unwrap();
+                        let _ = std::io::copy(&mut reader, &mut std::io::sink());
+                        return;
+                    }
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            line.to_lowercase()
+                                .strip_prefix("content-length: ")?
+                                .parse()
+                                .ok()
+                        })
+                        .unwrap_or(0);
+                    let mut body = vec![0; length];
+                    reader.read_exact(&mut body).unwrap();
+                    let body = String::from_utf8(body).unwrap();
+                    let reply = if head.starts_with("GET /v1/boxes/box1 ") {
+                        r#"{"box_id":"box1","status":"running","created_at":"2026-07-14T00:00:00Z","updated_at":"2026-07-14T00:00:00Z","image":"alpine","cpus":1,"memory_mib":256}"#.to_string()
+                    } else if head.starts_with("GET /v1/config ") {
+                        r#"{"capabilities":{"private_tunnels_enabled":true}}"#.to_string()
+                    } else if head.starts_with("POST /v1/boxes/box1/network/tunnel?port=3000 ") {
+                        let private = body.contains(r#""isPublic":false"#);
+                        bodies.send(body).unwrap();
+                        if private {
+                            format!(
+                                r#"{{"uri":"{url}","isPublic":false,"token":"blt_created_token"}}"#
+                            )
+                        } else {
+                            format!(r#"{{"uri":"{url}","isPublic":true,"token":null}}"#)
+                        }
+                    } else {
+                        panic!("unexpected request: {head}");
+                    };
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    )
+                    .unwrap();
+                });
+            }
+        });
+        (url, received)
+    }
+
+    /// A network handle for box1 on a REST runtime, built as
+    /// `boxlite_box_network` builds it from a box handle.
+    fn network_at(url: &str) -> (boxlite::BoxliteRuntime, BoxNetworkHandle) {
+        let tokio_rt = Arc::new(TokioRuntime::new().unwrap());
+        let runtime =
+            boxlite::BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(url.to_string()))
+                .unwrap();
+        let litebox = tokio_rt.block_on(runtime.get("box1")).unwrap().unwrap();
+        let network = BoxNetworkHandle {
+            handle: litebox.network(),
+            tokio_rt,
+            queue: Arc::new(EventQueue::new()),
+        };
+        (runtime, network)
+    }
+
+    /// `isPublic` is a new optional request field: omitted or at its default
+    /// it stays off the wire; only a private tunnel sends it.
+    #[test]
+    fn tunnel_options_send_is_public_only_when_private() {
+        let (url, bodies) = tunnel_cloud();
+        let (_runtime, mut network) = network_at(&url);
+        for (options, expected) in [
+            (None, ""),
+            (Some(r#"{"isPublic":true}"#), ""),
+            (Some(r#"{"isPublic":false}"#), r#"{"isPublic":false}"#),
+        ] {
+            let options = options.map(|options| CString::new(options).unwrap());
+            let mut tunnel = ptr::null_mut();
+            let mut error = CBoxliteError::default();
+            let code = unsafe {
+                boxlite_network_tunnel_with_options(
+                    &mut network,
+                    3000,
+                    options
+                        .as_ref()
+                        .map_or(ptr::null(), |options| options.as_ptr()),
+                    &mut tunnel,
+                    &mut error,
+                )
+            };
+            assert_eq!(code, BoxliteErrorCode::Ok, "options {options:?}");
+            let body = bodies
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+            assert_eq!(body, expected, "options {options:?}");
+            unsafe { boxlite_tunnel_free(tunnel) };
+        }
+    }
+
+    /// The token is shown once; it must stay readable after connect consumes
+    /// the tunnel, as it does in the Python and Node SDKs.
+    #[test]
+    fn consumed_tunnel_still_reports_its_descriptor() {
+        use std::os::fd::FromRawFd;
+        let (url, bodies) = tunnel_cloud();
+        let (_runtime, mut network) = network_at(&url);
+        let options = CString::new(r#"{"isPublic":false}"#).unwrap();
+        let mut tunnel = ptr::null_mut();
+        let mut error = CBoxliteError::default();
+        let code = unsafe {
+            boxlite_network_tunnel_with_options(
+                &mut network,
+                3000,
+                options.as_ptr(),
+                &mut tunnel,
+                &mut error,
+            )
+        };
+        assert_eq!(code, BoxliteErrorCode::Ok);
+        bodies
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+
+        let mut fd = -1;
+        let code = unsafe { boxlite_tunnel_connect(tunnel, &mut fd, &mut error) };
+        assert_eq!(code, BoxliteErrorCode::Ok);
+        let _connection = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
+        let mut again = -1;
+        let code = unsafe { boxlite_tunnel_connect(tunnel, &mut again, &mut error) };
+        assert_ne!(
+            code,
+            BoxliteErrorCode::Ok,
+            "tunnel was not consumed by connect"
+        );
+
+        let mut json: *mut c_char = ptr::null_mut();
+        let code = unsafe { boxlite_tunnel_descriptor(tunnel, &mut json, &mut error) };
+        assert_eq!(code, BoxliteErrorCode::Ok);
+        let descriptor: serde_json::Value =
+            serde_json::from_str(unsafe { CStr::from_ptr(json) }.to_str().unwrap()).unwrap();
+        unsafe { drop(CString::from_raw(json)) };
+        assert_eq!(
+            descriptor,
+            serde_json::json!({"uri": url, "isPublic": false, "token": "blt_created_token"})
+        );
+        unsafe { boxlite_tunnel_free(tunnel) };
     }
 }

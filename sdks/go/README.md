@@ -212,7 +212,7 @@ password field, and `NewRegistryCredential` prints `Password:[redacted]` with
 
 - `WithNetwork(boxlite.NetworkSpec{Outbound: boxlite.OutboundNetworkSpec{Mode: boxlite.NetworkModeEnabled, AllowNet: []string{"api.openai.com"}}})` restricts outbound traffic while keeping networking enabled.
 - `WithNetwork(boxlite.NetworkSpec{Outbound: boxlite.OutboundNetworkSpec{Mode: boxlite.NetworkModeDisabled}})` disables the guest network interface entirely.
-- `WithNetwork(boxlite.NetworkSpec{Inbound: boxlite.InboundNetworkSpec{Mode: boxlite.NetworkModeEnabled}})` lets the services the box exposes be reached through the remote proxy without sign-in. Inbound access is disabled by default, including when `Inbound.Mode` is unset. The two directions are independent.
+- `WithNetwork(boxlite.NetworkSpec{Inbound: boxlite.InboundNetworkSpec{Mode: boxlite.NetworkModeEnabled}})` permits proxy access subject to each tunnel's policy. Inbound access is disabled by default, including when `Inbound.Mode` is unset. The two directions are independent.
 - The deprecated flat fields `NetworkSpec{Mode, AllowNet}` still configure the outbound direction. Setting them together with `Outbound` is rejected when the options are built. `NetworkInfo.Mode` and `NetworkInfo.AllowNet` likewise remain readable as views onto `NetworkInfo.Outbound`.
 - `WithPort(boxlite.PortSpec{Guest: 3000})` publishes TCP locally on an OS-selected host port; after checking `BoxInfo.Network != nil`, read the concrete binding from `Network.PublishedPorts`.
 - A nil `PublishedPorts` slice means the current handle does not know the bindings; a non-nil empty slice means there are no active publications. `Box.Info`, `Runtime.GetInfo`, and `Runtime.ListInfo` use callback-backed runtime operations and honor context cancellation.
@@ -239,8 +239,9 @@ OCI `EXPOSE` metadata does not publish ports.
 The same route workflow works with local and remote runtimes:
 
 - `box.Network() (*Network, error)` returns box-scoped network operations.
-- `network.Tunnel(ctx, port) (*BoxTunnel, error)` prepares a one-shot tunnel.
-- `network.RevokeTunnel(ctx, port) error` withdraws the port's public URL. It
+- `network.Tunnel(ctx, port, opts...) (*BoxTunnel, error)` prepares a tunnel; it is public by default, and `boxlite.WithTunnelPublic(false)` requests private cloud access. `tunnel.URI()` and `tunnel.Descriptor()` stay readable after `Connect` or `Forward`.
+- `tunnel.Descriptor()` returns `URI`, `IsPublic`, and `Token` (full once, masked on later preparations).
+- `network.RevokeTunnel(ctx, port) error` withdraws the port's tunnel. It
   is safe to repeat and leaves open connections running.
 - `TCPListenAddress(host, port)` and `UnixListenAddress(path)` return validated
   standard `net.Addr` values for `tunnel.Forward(ctx, addr)`. The returned
@@ -249,8 +250,10 @@ The same route workflow works with local and remote runtimes:
 - `tunnel.URI() (string, error)` returns the public URL of a remotely served tunnel, or an empty string for a local one.
 - `tunnel.Connect(ctx) (net.Conn, error)` consumes the prepared tunnel and opens its connection.
 
-Choose `Connect` or `Forward`; a forwarder prepares fresh tunnels for later
-clients. This differs from `WithPort`, which creates a persistent,
+Choose `Connect` or `Forward`; a forwarder reuses the prepared declaration and
+opens a fresh authenticated connection per client. It cannot undo revocation.
+See [private tunnel usage](../../docs/concepts/networking.md#private-cloud-tunnels).
+This differs from `WithPort`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 
 ## Guest SSH

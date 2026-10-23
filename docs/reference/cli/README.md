@@ -681,7 +681,7 @@ contract. See [runtime behavior and persistence](../../guides/networking.md#upda
 
 ### `boxlite network tunnel`
 
-**Synopsis:** `boxlite network tunnel BOX GUEST_PORT [--listen ADDRESS | --revoke]`
+**Synopsis:** `boxlite network tunnel BOX GUEST_PORT [--private] [--listen ADDRESS | --revoke]`
 
 Without `--listen`, print the public URL supplied by a remote REST service;
 local boxes have no public URL. With `--listen`, bind a local listener and
@@ -704,7 +704,24 @@ addresses, and Unix socket paths must be absolute.
 A remote box needs inbound access enabled before it can be tunneled: create it
 with `--inbound enabled`.
 
-`--revoke` withdraws the port's public URL instead. New requests to it get
+For a private cloud tunnel, use the profile's API key or JWT:
+
+```bash
+boxlite --profile cloud network tunnel mybox 3000 --private
+boxlite --profile cloud network tunnel mybox 3000 --private --listen 8080
+```
+
+Private creation prints one JSON line containing `uri`, `isPublic`, and `token`.
+Only creation returns the complete token; repeating the same command returns its
+mask. An existing public tunnel must be revoked before recreating it as private.
+With `--listen`, the descriptor is printed and flushed **before** binding, followed
+by the bound address on the next line. A bind failure leaves the created tunnel
+and its already-printed token available; Ctrl-C closes only the local forwarder.
+Each accepted client opens an authenticated CONNECT without preparing again.
+There is no `--token` option: external visitors use the URL query or HTTP header,
+while CLI traffic uses the configured organization credential.
+
+`--revoke` withdraws the port's public or private tunnel instead, without `--private`. New requests to it get
 `404` within 3 seconds; connections already open are not closed. It is safe to
 repeat, and running the command again without `--revoke` reopens the same URL:
 

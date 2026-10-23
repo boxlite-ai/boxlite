@@ -164,7 +164,7 @@ pub unsafe extern "C" fn boxlite_options_add_network_allow(
     options_add_network_allow(opts, host)
 }
 
-/// Marks services the box exposes as reachable without sign-in.
+/// Enables exposed services subject to each tunnel's access policy.
 /// Mirrors `boxlite_options_set_network_enabled` for the inbound direction.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_network_inbound_enabled(opts: *mut CBoxliteOptions) {

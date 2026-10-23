@@ -28,6 +28,12 @@ class _FakeTunnel:
     def uri(self) -> str | None:
         return self.uri_value
 
+    def is_public(self) -> bool:
+        return self.is_public_value
+
+    def token(self) -> str | None:
+        return None if self.is_public_value else "blt_service-issued-secret"
+
     async def connect(self) -> _FakeConnection:
         return self.connections.pop(0)
 
@@ -41,8 +47,9 @@ class _FakeNetwork:
         self.ports: list[int] = []
         self.revoked: list[int] = []
 
-    async def tunnel(self, port: int) -> _FakeTunnel:
+    async def tunnel(self, port: int, is_public: bool = True) -> _FakeTunnel:
         self.ports.append(port)
+        self.tunnel_value.is_public_value = is_public
         return self.tunnel_value
 
     async def revoke_tunnel(self, port: int) -> None:
@@ -128,6 +135,19 @@ async def test_uri_is_none_for_a_local_tunnel():
 
 
 @pytest.mark.asyncio
+async def test_private_tunnel_preserves_policy_and_returned_metadata():
+    box = SimpleBox.__new__(SimpleBox)
+    box._started = True
+    box._box = _FakeBox(_FakeTunnel([], "https://private.proxy.test"))
+    tunnel = await box.tunnel(3000, is_public=False)
+    assert tunnel.is_public() is False
+    assert tunnel.token() == "blt_service-issued-secret"
+    assert box._box.network.ports == [3000]
+    await tunnel.forward("test-listener")
+    assert box._box.network.ports == [3000]
+
+
+@pytest.mark.asyncio
 async def test_connect_consumes_tunnel_once():
     first_connection = _FakeConnection()
     box = SimpleBox.__new__(SimpleBox)
@@ -177,7 +197,7 @@ def test_sync_tunnel_rejects_invalid_ports(port):
     from boxlite.sync_api._network import SyncNetworkHandle
 
     class Owner:
-        def _create_tunnel(self, _port):
+        def _create_tunnel(self, _port, is_public=True):
             raise AssertionError("native tunnel creation should not be called")
 
     with pytest.raises(ValueError, match="integer between 1 and 65535"):

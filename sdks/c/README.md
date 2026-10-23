@@ -602,6 +602,13 @@ Each `CBoxTunnelHandle` is one-shot. Choose `boxlite_tunnel_connect()` or
 an allocated string the caller frees with `boxlite_free_string()`. It writes NULL
 for a local tunnel.
 
+For private cloud access, use `boxlite_network_tunnel_with_options(network, port,
+"{\"isPublic\":false}", &tunnel, &error)`. Read `uri`, `isPublic`, and `token`
+with `boxlite_tunnel_descriptor()`, before or after connect/forward consumes the
+handle, freeing its JSON with `boxlite_free_string()`. Only creation returns a full token; later preparations
+return a mask. Forwarding reuses the declaration and authenticates CONNECT with
+the runtime's API key or JWT; it never recreates a revoked tunnel.
+
 This differs from `boxlite_options_add_port()`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 

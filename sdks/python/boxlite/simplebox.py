@@ -45,6 +45,13 @@ class BoxTunnel:
         """Return the public URL of a remote tunnel, or ``None`` for a local one."""
         return self._tunnel.uri()
 
+    def is_public(self) -> bool:
+        return self._tunnel.is_public()
+
+    def token(self) -> str | None:
+        """Full token on creation, masked token on subsequent preparations."""
+        return self._tunnel.token()
+
     async def forward(self, listen) -> "TunnelForwarder":
         return await self._tunnel.forward(listen)
 
@@ -67,17 +74,17 @@ class NetworkHandle:
             raise RuntimeError("Box not started; call await box.start() first.")
         await self._owner._box.network.update_outbound(spec)
 
-    async def tunnel(self, port: int) -> BoxTunnel:
+    async def tunnel(self, port: int, is_public: bool = True) -> BoxTunnel:
         """Prepare a one-shot tunnel for a port inside the box."""
         if not self._owner._started:
             raise RuntimeError(
                 "Box not started. Use 'async with SimpleBox(...) as box:' "
                 "or call 'await box.start()' first."
             )
-        return BoxTunnel(await self._owner._create_tunnel(port))
+        return BoxTunnel(await self._owner._create_tunnel(port, is_public))
 
     async def revoke_tunnel(self, port: int) -> None:
-        """Withdraw public access to a port; open connections are not closed."""
+        """Revoke the tunnel for a port; open connections are not closed."""
         await self._owner._revoke_tunnel(port)
 
 
@@ -160,16 +167,16 @@ class SimpleBox:
         self._created: bool | None = None
         self._network = NetworkHandle(self)
 
-    async def _create_tunnel(self, port: int):
+    async def _create_tunnel(self, port: int, is_public: bool = True):
         """Establish a native tunnel handle for a service port."""
         if self._box is None:
             raise RuntimeError("Box not created")
         if not isinstance(port, int) or not 1 <= port <= 65535:
             raise ValueError("port must be an integer between 1 and 65535")
-        return await self._box.network.tunnel(port)
+        return await self._box.network.tunnel(port, is_public)
 
     async def _revoke_tunnel(self, port: int) -> None:
-        """Withdraw public access to a service port."""
+        """Revoke the tunnel for a service port."""
         if self._box is None:
             raise RuntimeError("Box not created")
         if not isinstance(port, int) or not 1 <= port <= 65535:
@@ -371,9 +378,9 @@ class SimpleBox:
             error_message=error_message,
         )
 
-    async def tunnel(self, port: int) -> BoxTunnel:
+    async def tunnel(self, port: int, is_public: bool = True) -> BoxTunnel:
         """Prepare a one-shot tunnel for a port inside this box."""
-        return await self.network.tunnel(port)
+        return await self.network.tunnel(port, is_public)
 
     async def metrics(self):
         """Get box metrics (CPU, memory usage)."""

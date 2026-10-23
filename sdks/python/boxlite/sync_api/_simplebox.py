@@ -251,13 +251,13 @@ class SyncSimpleBox:
 
         return self._runtime._sync(_exec_and_collect())
 
-    def tunnel(self, port: int):
+    def tunnel(self, port: int, is_public: bool = True):
         """Prepare a one-shot tunnel for a port inside this box."""
         if self._box is None:
             raise RuntimeError(
                 "Box not started. Use 'with SyncSimpleBox(...) as box:' first."
             )
-        return self.network.tunnel(port)
+        return self.network.tunnel(port, is_public)
 
     @property
     def network(self):

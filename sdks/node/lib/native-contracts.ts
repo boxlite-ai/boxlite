@@ -259,7 +259,7 @@ export interface JsOutboundNetworkSpec {
 }
 
 export interface JsInboundNetworkSpec {
-  /** Inbound mode: "enabled" (reachable without sign-in) or "disabled" (unreachable from outside). */
+  /** Inbound mode: "enabled" (subject to the tunnel policy) or "disabled" (unreachable from outside). */
   mode: "enabled" | "disabled";
   /**
    * Not supported yet: a non-empty value is rejected. Exists for shape
@@ -592,8 +592,8 @@ export interface JsNetworkHandle {
     allowNet?: string[];
   }): Promise<void>;
   /** Prepare a one-shot tunnel to a service port inside the box. */
-  tunnel(port: number): Promise<NativeBoxTunnel>;
-  /** Withdraw public access to a service port; open connections stay open. */
+  tunnel(port: number, isPublic?: boolean): Promise<NativeBoxTunnel>;
+  /** Revoke the tunnel for a service port; open connections stay open. */
   revokeTunnel(port: number): Promise<void>;
 }
 
@@ -610,6 +610,8 @@ export interface NativeTunnelForwarder {
 export interface NativeBoxTunnel {
   /** Public URL of a remotely served tunnel, or null for a local one. */
   uri(): string | null;
+  isPublic(): boolean;
+  token(): string | null;
   /** Consume the tunnel and return its bidirectional byte stream. */
   connect(): Promise<NativeBoxConnection>;
   forward(listen: SocketAddress): Promise<NativeTunnelForwarder>;
