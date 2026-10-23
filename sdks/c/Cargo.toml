@@ -24,6 +24,8 @@ tracing = "0.1"
 
 [dev-dependencies]
 boxlite = { workspace = true, features = ["rest", "test-support"] }
+# Server side of the loopback attach tests; the same release the REST client uses.
+tungstenite = "0.24"
 
 [build-dependencies]
 cbindgen = "0.29"

@@ -107,8 +107,9 @@ impl PyBox {
     ///   id. Raises if the server reports the session is no longer
     ///   attachable.
     /// - `stdin=False` → read-only attach (docker's `--no-stdin`). The
-    ///   returned execution has no stdin, and the server refuses writes on
-    ///   the socket rather than trusting the client.
+    ///   returned execution has no stdin, and the attach asks the server to
+    ///   refuse writes on the socket: `boxlite serve` does, the hosted
+    ///   platform does not.
     #[pyo3(signature = (execution_id=None, stdin=true))]
     fn attach<'a>(
         &self,

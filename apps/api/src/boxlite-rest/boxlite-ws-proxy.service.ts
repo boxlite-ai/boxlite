@@ -29,29 +29,42 @@ type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunnerBoxId?: string
 }
 
-// Matches /api/v1/boxes/<id>/executions/<id>/attach and the
-// /api/v1/<tenant>/boxes/<id>/executions/<id>/attach shape with optional query string.
-// Named groups: `tenant` (optional org id / path prefix), `boxId` and `execId`.
+// The two attach shapes, each with an optional `<tenant>` path prefix and an
+// optional query string:
+//
+//   /api/v1/[<tenant>/]boxes/<id>/attach
+//   /api/v1/[<tenant>/]boxes/<id>/executions/<id>/attach
+//
+// The first is the box's main session — its init, which `boxlite run` follows —
+// and carries no execution id. An upgrade this does not match reaches
+// `socket.destroy()` in main.ts, which closes the connection with no HTTP
+// response at all; the caller is left reading a 503 from the frontend that names
+// neither this file nor the path.
+//
+// Named groups: `tenant` (optional org id / path prefix), `boxId`, and `execId`,
+// absent for the main session.
 const ATTACH_PATH =
-  /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)\/executions\/(?<execId>[^/?]+)\/attach(?:\?.*)?$/
+  /^\/api\/v1\/(?:(?<tenant>[^/]+)\/)?boxes\/(?<boxId>[^/]+)(?:\/executions\/(?<execId>[^/?]+))?\/attach(?:\?.*)?$/
 
-type AttachMatch = { boxId: string; execId: string; tenant?: string }
+type AttachMatch = { boxId: string; execId?: string; tenant?: string; isMainSession: boolean }
 type AttachAuth = { organization: Organization; ticketBoxId?: string }
 
-// `/attach` streams to an execution's stdin — interactive exec — so a WS upgrade
-// needs the same box-write permission the HTTP exec routes now require.
+// `/attach` streams to a session's stdin — an execution's or the box init's — so a
+// WS upgrade needs the same box-write permission the HTTP exec routes now require.
 const ATTACH_REQUIRED_PERMISSIONS = [OrganizationResourcePermission.WRITE_BOXES]
 
 /**
- * Singleton WebSocket proxy for `/attach` upgrades.
+ * Singleton WebSocket proxy for `/attach` upgrades: the box's main session and
+ * one execution — see `ATTACH_PATH`.
  *
- * Express middleware/guards don't run on Node's `upgrade` event, so the
- * NestJS controller `@Get(':boxId/executions/:execId/attach')` route never
- * fires for actual WS upgrade requests — it's HTTP-only and gets bypassed.
- * Main.ts registers `server.on('upgrade', wsProxy.upgrade)` and routes
- * matching paths through this service, which mirrors the API-key half of
- * CombinedAuthGuard inline, resolves the runner, and hands off to a
- * shared `createProxyMiddleware({ ws: true, ... })` instance.
+ * Express middleware and guards don't run on Node's `upgrade` event, so a
+ * NestJS controller route cannot serve one: it would only ever see the plain
+ * HTTP GETs that forgot the Upgrade headers, which is why
+ * `boxlite-proxy.controller.ts` declares no attach route at all. Main.ts
+ * registers `server.on('upgrade', wsProxy.upgrade)` and routes matching paths
+ * through this service, which mirrors the API-key half of CombinedAuthGuard
+ * inline, resolves the runner, and hands off to a shared
+ * `createProxyMiddleware({ ws: true, ... })` instance.
  */
 @Injectable()
 export class BoxliteWsProxyService {
@@ -104,14 +117,20 @@ export class BoxliteWsProxyService {
 
   /**
    * Box, execution and optional tenant/org id when the URL is an `/attach` WS
-   * upgrade. The tenant is the organization for JWT and ticket auth (an API key
-   * carries its own org).
+   * upgrade, and whether it targets the box's main session rather than an
+   * execution. The tenant is the organization for JWT and ticket auth (an API
+   * key carries its own org).
    */
   matchAttachPath(url: string | undefined): AttachMatch | null {
     if (!url) return null
-    const groups = url.match(ATTACH_PATH)?.groups as AttachMatch | undefined
+    const groups = url.match(ATTACH_PATH)?.groups as Omit<AttachMatch, 'isMainSession'> | undefined
     if (!groups) return null
-    return { boxId: groups.boxId, execId: groups.execId, tenant: groups.tenant }
+    return {
+      boxId: groups.boxId,
+      execId: groups.execId,
+      tenant: groups.tenant,
+      isMainSession: groups.execId === undefined,
+    }
   }
 
   /**
@@ -148,7 +167,10 @@ export class BoxliteWsProxyService {
         this.respondAndClose(socket, 401, 'Unauthorized')
         return
       }
-      if (box.autoResume) {
+      // A main-session attach never wakes the box. Its init is the user's
+      // command, so resuming a stopped box to attach to it would run the job
+      // again; the runner refuses a stopped box instead, as `boxlite serve` does.
+      if (box.autoResume && !match.isMainSession) {
         await this.autoResume.ensureReady(box.id, auth.organization)
       }
       // Mirror legacy toolbox path — opening a WS attach is user activity,
@@ -179,8 +201,8 @@ export class BoxliteWsProxyService {
    * Inline authentication + authorization for WS upgrades, mirroring the API-key
    * + JWT halves of CombinedAuthGuard. Browsers, which cannot send the header,
    * use `authenticateTicket` instead. Beyond org membership it requires the
-   * box-write permission: `/attach` streams to an execution's stdin (interactive
-   * exec), so it is gated like the HTTP exec routes on `BoxliteProxyController`,
+   * box-write permission: `/attach` streams to a session's stdin (an execution's
+   * or the box init's), so it is gated like the HTTP exec routes on `BoxliteProxyController`,
    * which now carry `write:boxes`. It applies the same policy as
    * OrganizationResourceActionGuard — a system admin and an interactive owner
    * without an API key are exempt — so the user's system role is resolved here
@@ -253,8 +275,8 @@ export class BoxliteWsProxyService {
    * which the WS upgrade never reaches. A system admin is not organization-scoped
    * and is admitted without membership, exactly as OrganizationAccessGuard admits
    * it on the HTTP path. Everyone else must be a current member and must carry
-   * write:boxes (an org owner without an API key is exempt). Attach streams to an
-   * execution's stdin, i.e. interactive exec.
+   * write:boxes (an org owner without an API key is exempt). Attach streams to a
+   * session's stdin, an execution's or the box init's.
    */
   private async authorizeAttach(user: User, organizationId: string, apiKey?: ApiKey): Promise<boolean> {
     if (user.role === SystemRole.ADMIN) return true
@@ -268,8 +290,9 @@ export class BoxliteWsProxyService {
 
   /**
    * Ticket auth for browsers (see `AttachTicketService`). The ticket is spent
-   * on first use whatever the outcome, must name this execution and, when the
-   * URL names one, the URL's organization (a prefix-less or `default` URL was
+   * on first use whatever the outcome, must name this execution (so it never
+   * opens a main-session attach, whose URL names none) and, when the URL names
+   * one, the URL's organization (a prefix-less or `default` URL was
    * resolved to the grant's org when the ticket was issued). Its credential
    * must still pass `authorizeAttach`: the API key that bought it, which must
    * still exist and be unexpired, or else the user, as on the JWT path.

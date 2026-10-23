@@ -597,6 +597,10 @@ export interface JsBox {
     timeoutSecs?: number | null,
     workingDir?: string | null,
   ): Promise<JsExecution>;
+  attach(
+    executionId?: string | null,
+    stdin?: boolean | null,
+  ): Promise<JsExecution>;
   readonly snapshot: JsSnapshotHandle;
   readonly network: JsNetworkHandle;
   cloneBox(

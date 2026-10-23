@@ -1,5 +1,7 @@
 //! Command execution for the BoxLite C SDK.
 
+#[cfg(test)]
+mod attach_tests;
 mod command;
 mod execution;
 mod simple;

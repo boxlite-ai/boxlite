@@ -73,8 +73,8 @@ components when their path-filtered jobs are skipped.
 | `make coverage:bindings:external` | `native-sdk/lcov.info` and `python/coverage.xml` | Rust LLVM tools, Python, Node.js, CMake |
 
 The external binding collector rebuilds the native libraries with Rust
-instrumentation, then runs the C unit suite, Python unit tests and Node image
-catalog/registry loopback tests against them. It uses a separate
+instrumentation, then runs the C unit suite, Python unit tests and the Node
+image catalog, registry and attach loopback tests against them. It uses a separate
 `target/native-sdk-coverage` build directory by default; CMake receives that
 library directory explicitly. CI uploads its Rust report alongside the core
 report. These tests establish SDK conversion, error and callback behavior;

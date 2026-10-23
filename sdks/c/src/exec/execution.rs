@@ -11,7 +11,7 @@
 //! channel inside `ExecStdin::write` and never block on a Tokio worker.
 
 use futures::StreamExt;
-use std::os::raw::{c_int, c_void};
+use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -41,6 +41,7 @@ use crate::event_queue::{
     CExecutionKillCb, CExecutionResizeCb, CExecutionSignalCb, CExecutionWaitCb, EventQueue,
     RuntimeEvent, push_event,
 };
+use crate::util::c_str_to_string;
 use crate::{CBoxHandle, CBoxliteError, CExecutionHandle};
 
 /// Opaque handle to a running command execution.
@@ -92,6 +93,12 @@ pub struct ExecutionHandle {
     /// claimer pushes Exit. Both `execution_free` and `exit_pump`
     /// race for it; the loser silently no-ops.
     exit_dispatched: Arc<AtomicBool>,
+    /// Whether `_free` may end the process. An exec's handle owns the process
+    /// it started, so `_free` kills one still running rather than leak it in
+    /// the guest. An attach joins a session someone else owns — the box's
+    /// main command, or another client's exec — so `_free` only lets go:
+    /// killing there would end the box's command when a client detaches.
+    owns_process: bool,
 }
 
 #[unsafe(no_mangle)]
@@ -102,6 +109,45 @@ pub unsafe extern "C" fn boxlite_box_exec(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     box_exec(handle, cmd, out_execution, out_error)
+}
+
+/// Attach to a session in the box: its main command — the container's init —
+/// when `execution_id` is NULL, or the exec session with that id.
+///
+/// `run IMAGE COMMAND` runs COMMAND *as* init (docker semantics), so following
+/// it is an attach rather than an exec: there is no command to pass, only a
+/// session to join. Reattaching to an exec by id is served by a REST runtime
+/// only; a local box offers its main session alone. A non-zero `read_only`
+/// attaches without stdin — docker's `--no-stdin`.
+///
+/// The handle that comes back is an ordinary `CExecutionHandle` — the same
+/// stdout/stderr/exit callbacks, stdin, wait, signal, kill and resize all apply.
+/// Freeing it is the one difference: it detaches without killing the session,
+/// where freeing an exec's handle kills a process still running. A writable
+/// attach still closes the session's stdin on the way out, as every SDK's
+/// does (#2045), so attach read-only to leave a command that reads stdin
+/// undisturbed. The connection stays open until the session ends or the
+/// runtime is freed.
+///
+/// Attaching to the main session boots the box and creates its container but
+/// does NOT run init; `boxlite_start_box` does. Callers therefore go
+/// create -> attach -> start, so a command that finishes instantly cannot
+/// outrun the stream and take its output and exit code with it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_attach(
+    handle: *mut CBoxHandle,
+    execution_id: *const c_char,
+    read_only: c_int,
+    out_execution: *mut *mut CExecutionHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    box_attach(
+        handle,
+        execution_id,
+        read_only != 0,
+        out_execution,
+        out_error,
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -248,26 +294,9 @@ unsafe fn box_exec(
         let result = handle_ref.tokio_rt.block_on(lite.exec(command));
 
         match result {
-            Ok(mut execution) => {
-                let stdin = execution.stdin();
-                let stdout = execution.stdout();
-                let stderr = execution.stderr();
-
-                let exec_handle = ExecutionHandle {
-                    execution: Arc::new(Mutex::new(Some(execution))),
-                    stdin,
-                    pending_stdout: stdout,
-                    pending_stderr: stderr,
-                    pumps: Mutex::new(Vec::new()),
-                    exit_pump_handle: Mutex::new(None),
-                    stream_done_rx: Mutex::new(Vec::new()),
-                    exit_dispatch: Mutex::new(None),
-                    queue: handle_ref.queue.clone(),
-                    tokio_rt: handle_ref.tokio_rt.clone(),
-                    process_completed: Arc::new(AtomicBool::new(false)),
-                    exit_dispatched: Arc::new(AtomicBool::new(false)),
-                };
-                *out_execution = Box::into_raw(Box::new(exec_handle));
+            Ok(execution) => {
+                *out_execution =
+                    Box::into_raw(Box::new(wrap_execution(handle_ref, execution, true)));
                 BoxliteErrorCode::Ok
             }
             Err(e) => {
@@ -276,6 +305,94 @@ unsafe fn box_exec(
                 code
             }
         }
+    }
+}
+
+unsafe fn box_attach(
+    handle: *mut BoxHandle,
+    execution_id: *const c_char,
+    read_only: bool,
+    out_execution: *mut *mut ExecutionHandle,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if out_execution.is_null() {
+            write_error(out_error, null_pointer_error("out_execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        *out_execution = ptr::null_mut();
+
+        let mut options = if execution_id.is_null() {
+            boxlite::AttachOptions::main()
+        } else {
+            match c_str_to_string(execution_id) {
+                Ok(id) => boxlite::AttachOptions::execution(id),
+                Err(e) => {
+                    write_error(out_error, e);
+                    return BoxliteErrorCode::InvalidArgument;
+                }
+            }
+        };
+        if read_only {
+            options = options.read_only();
+        }
+
+        let handle_ref = &*handle;
+
+        // Synchronous, like box_exec: attach only subscribes to the session's
+        // streams. It does boot a cold box first, which is unbounded (the image
+        // may still need pulling), so this blocks the calling thread for as long
+        // as that takes.
+        let lite = handle_ref.handle.clone();
+        let result = handle_ref.tokio_rt.block_on(lite.attach(options));
+
+        match result {
+            Ok(execution) => {
+                *out_execution =
+                    Box::into_raw(Box::new(wrap_execution(handle_ref, execution, false)));
+                BoxliteErrorCode::Ok
+            }
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
+/// Wrap a freshly created `Execution` in the FFI handle.
+///
+/// Shared by exec and attach: both hand back the same `Execution`, so both get
+/// the same pumps and callbacks. Teardown differs only in `owns_process`:
+/// freeing an exec ends a process still running, freeing an attach lets go.
+fn wrap_execution(
+    handle_ref: &BoxHandle,
+    mut execution: Execution,
+    owns_process: bool,
+) -> ExecutionHandle {
+    let stdin = execution.stdin();
+    let stdout = execution.stdout();
+    let stderr = execution.stderr();
+
+    ExecutionHandle {
+        execution: Arc::new(Mutex::new(Some(execution))),
+        stdin,
+        pending_stdout: stdout,
+        pending_stderr: stderr,
+        pumps: Mutex::new(Vec::new()),
+        exit_pump_handle: Mutex::new(None),
+        stream_done_rx: Mutex::new(Vec::new()),
+        exit_dispatch: Mutex::new(None),
+        queue: handle_ref.queue.clone(),
+        tokio_rt: handle_ref.tokio_rt.clone(),
+        process_completed: Arc::new(AtomicBool::new(false)),
+        exit_dispatched: Arc::new(AtomicBool::new(false)),
+        owns_process,
     }
 }
 
@@ -630,6 +747,10 @@ unsafe fn execution_resize_tty(
     }
 }
 
+/// How long `_free` waits for aborted stream pumps to stop. A pump parked on
+/// its stream or the queue stops at once; the bound only caps a stuck one.
+const PUMP_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 unsafe fn execution_free(execution: *mut ExecutionHandle) {
     if execution.is_null() {
         return;
@@ -637,15 +758,18 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
     unsafe {
         let mut exec_box = Box::from_raw(execution);
 
-        // Close stdin (drops the sender, signalling EOF).
+        // Close stdin (drops the sender, signalling EOF). An attach does so
+        // too, as every SDK's attach does when released (#2045).
         if let Some(mut stdin) = exec_box.stdin.take() {
             stdin.close();
         }
 
         // If the process never observed completion, kill + wait inside a
-        // best-effort block_on so we don't leak the guest-side process.
+        // best-effort block_on so we don't leak the guest-side process. Only
+        // a handle that owns its process does; an attach lets go of a
+        // session that goes on running (see `owns_process`).
         let process_completed = exec_box.process_completed.load(Ordering::Acquire);
-        if !process_completed {
+        if !process_completed && exec_box.owns_process {
             let exec_arc = exec_box.execution.clone();
             let _ = exec_box.tokio_rt.block_on(async move {
                 let _ = kill_on_clone(&exec_arc).await;
@@ -668,6 +792,12 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
         for pump in &pumps {
             pump.abort();
         }
+        // abort() lands at a pump's next yield, so one mid-poll on another
+        // worker can still push output. Wait for every pump to stop before the
+        // Exit below: an attach is freed while its session still streams.
+        let _ = exec_box.tokio_rt.block_on(async move {
+            tokio::time::timeout(PUMP_STOP_WAIT, futures::future::join_all(pumps)).await
+        });
 
         // Race exit dispatch with `exit_pump`. Two outcomes:
         //
@@ -873,6 +1003,7 @@ mod tests {
             tokio_rt: runtime,
             process_completed: Arc::new(AtomicBool::new(false)),
             exit_dispatched: Arc::new(AtomicBool::new(false)),
+            owns_process: true,
         }
     }
 
@@ -897,6 +1028,27 @@ mod tests {
             boxlite_box_exec(
                 ptr::null_mut(),
                 &cmd as *const _,
+                &mut execution as *mut _,
+                &mut error as *mut _,
+            )
+        };
+
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(execution.is_null());
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    #[test]
+    fn box_attach_rejects_null_handle() {
+        let mut execution: *mut ExecutionHandle = ptr::null_mut();
+        let mut error = FFIError::default();
+
+        let code = unsafe {
+            boxlite_box_attach(
+                ptr::null_mut(),
+                ptr::null(),
+                0,
                 &mut execution as *mut _,
                 &mut error as *mut _,
             )
@@ -1437,4 +1589,62 @@ mod tests {
     // Success-case wait coverage lives in boxlite/src/litebox/exec.rs::tests
     // (requires a stub ExecBackend that can produce Ok results, and
     // `Execution::new`/`ExecBackend` are pub(crate) in the boxlite crate).
+
+    /// `_free` aborts the stream pumps before it pushes the synthetic Exit,
+    /// but abort lands only at a pump's next yield. One mid-poll on another
+    /// worker would push its output after the Exit, by which point Go's exit
+    /// callback has deleted the handle that output reaches. Freeing an attach
+    /// skips the kill and wait, so its session is usually still streaming.
+    #[test]
+    fn free_lets_a_running_pump_push_before_the_exit() {
+        use crate::event_queue::{RuntimeEvent, push_event};
+
+        extern "C" fn noop_exit(_: c_int, _: *mut c_void) {}
+
+        let mut handle = empty_handle();
+        handle.owns_process = false;
+        *handle.exit_dispatch.lock().unwrap() = Some((noop_exit, 0));
+        let queue = handle.queue.clone();
+        let runtime = handle.tokio_rt.clone();
+
+        // A pump caught mid-poll: it holds its worker, then pushes output.
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (pushed_tx, pushed_rx) = std::sync::mpsc::channel();
+        let pump_queue = queue.clone();
+        let pump = runtime.spawn(async move {
+            entered_tx.send(()).expect("signal entry");
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let late = RuntimeEvent::Stdout {
+                cb: noop_stdout,
+                user_data: 0,
+                data: b"late".to_vec(),
+            };
+            push_event(&pump_queue, late).await;
+            pushed_tx.send(()).expect("signal push");
+        });
+        handle.pumps.lock().unwrap().push(pump);
+        entered_rx.recv().expect("pump entered its poll");
+
+        unsafe { execution_free(Box::into_raw(Box::new(handle))) };
+
+        pushed_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the pump pushed its output");
+        let order: Vec<&str> = queue
+            .inner
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|event| match event {
+                RuntimeEvent::Stdout { .. } => "stdout",
+                RuntimeEvent::Exit { .. } => "exit",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            order,
+            ["stdout", "exit"],
+            "output must never follow the exit"
+        );
+    }
 }

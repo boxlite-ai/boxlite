@@ -123,6 +123,32 @@ class SyncBox:
         execution = self._sync(self._box.exec(cmd, args, env, tty))
         return SyncExecution(self._runtime, execution)
 
+    def attach(
+        self,
+        execution_id: str | None = None,
+        stdin: bool = True,
+    ) -> "SyncExecution":
+        """
+        Attach to a session in the box.
+
+        With no execution_id this joins the box's main command — the
+        container init, which `run IMAGE COMMAND` starts. Attaching boots the
+        box without running init, so attach before start() to see all of its
+        output.
+
+        Args:
+            execution_id: Rejoin this exec session instead; only a REST
+                runtime serves it
+            stdin: False attaches read-only, docker's --no-stdin
+
+        Returns:
+            SyncExecution handle for streaming output and waiting for completion.
+        """
+        from ._execution import SyncExecution
+
+        execution = self._sync(self._box.attach(execution_id, stdin))
+        return SyncExecution(self._runtime, execution)
+
     def stop(self) -> None:
         """Stop the box (preserves state for potential restart)."""
         self._sync(self._box.stop())

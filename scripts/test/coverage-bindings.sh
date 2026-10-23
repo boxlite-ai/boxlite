@@ -22,7 +22,7 @@ make dev:python dev:node
 make test:unit:c
 make coverage:python
 # These suites use loopback HTTP and an empty local cache; they never boot a VM.
-make test:integration:node FILTER='image catalog|registry logins'
+make test:integration:node FILTER='image catalog|registry logins|box attach'
 
 mkdir -p "$root/target/coverage/native-sdk"
 # napi builds under the explicit host triple; also scan it alongside debug/.

@@ -126,37 +126,40 @@ def test_cli_run_exec_chain(cli):
 # `run` without `-d` is a different code path, not a nicer spelling of the
 # same one: it is create → WS `/boxes/{id}/attach` → `POST /start`
 # (src/boxlite/src/rest/litebox.rs:209-235), so the box's main process is
-# streamed over a socket the detached form never opens. On a cloud stage that
-# upgrade is answered with a bare 503, every time:
+# streamed over a socket the detached form never opens. On a cloud stage it
+# fails, for one reason and then another:
 #
-#   network error: upstream returned HTTP 503 Service Unavailable ...
-#   upstream connect error or disconnect/reset before headers
+# - Until #1611 the API matched only the execution attach, so main.ts destroyed
+#   this upgrade without a response, and the load balancer in front of it
+#   reported that as a bare 503 (`upstream connect error or disconnect/reset
+#   before headers`). The runner had no such route either (#1609).
+# - With #1611 the upgrade reaches the runner, but a cloud create waits for the
+#   box to start (apps/api/src/boxlite-rest/boxlite-box.controller.ts:138-140),
+#   and the runner's create starts init (apps/runner/pkg/boxlite/client.go:497).
+#   `echo` can finish before the client attaches, taking its output and exit
+#   code with it (src/guest/src/container/lifecycle.rs:246-249): the attach is
+#   then refused with 409, or joins a session with nothing left to stream.
 #
-# The body is an envelope the API never produces, so the refusal comes from the
-# load balancing in front of it — a global LB plus a regional internal one on
-# GCP (apps/infra/mdeploy/stack/providers/gcp/api.ts:2), an ALB on AWS
-# (apps/infra/docs/networking.md:40). Which of those hops drops the upgrade is
-# not established; only that the API is not what answered.
+# The mark comes off when a cloud create stops running init before the attach.
 #
 # The create lands first, so a failed run still leaves a box behind — which is
 # why this case names its box and removes it by name afterwards.
 #
-# Hence the condition: a local stack reaches boxlite-api on :3000 with no load
-# balancer in front of it, so nothing there plays that role — its own proxy on
-# :3001 (apps/e2e/bootstrap.sh:166-169) serves box previews, not API ingress.
-# An unconditional strict xfail would turn a local pass into an XPASS failure
-# and take `make test:e2e` red with it. What a local stack actually does with
-# the attached form is untested, and this mark claims nothing about it.
-FOREGROUND_RUN_ATTACH_503 = (
-    "attached `boxlite run` cannot reach a cloud stage: the WS upgrade to "
-    "/boxes/{id}/attach (src/boxlite/src/rest/litebox.rs:235) is refused with "
-    "a bare 503 by the load balancing in front of the API, after the box has "
-    "already been created"
+# Hence the condition: a local stack runs the same API and runner, so it should
+# fail the same way, but no one has run this case against one. An
+# unconditional strict xfail would turn an unseen local pass into an XPASS
+# failure and take `make test:e2e` red with it; this mark claims nothing about
+# a local stack.
+FOREGROUND_RUN_ATTACH_XFAIL = (
+    "attached `boxlite run` cannot stream a fast command from a cloud stage: "
+    "the API destroyed the box-level attach upgrade until #1611 (a bare 503), "
+    "and a cloud create starts init before the client attaches, so the command "
+    "can finish first"
 )
 
 
 @pytest.mark.xfail(
-    condition=STAGE_IS_REMOTE, strict=True, reason=FOREGROUND_RUN_ATTACH_503
+    condition=STAGE_IS_REMOTE, strict=True, reason=FOREGROUND_RUN_ATTACH_XFAIL
 )
 def test_cli_run_foreground_streams_command_output(cli):
     """`boxlite run <image> <cmd>` must stream the command's stdout and

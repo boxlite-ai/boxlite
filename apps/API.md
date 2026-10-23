@@ -430,11 +430,15 @@ are not permission-bounded; every API key is bounded by the permissions it
 carries. The WebSocket `/attach` upgrade enforces `write:boxes` inline — an
 upgrade never passes through the organization guard — using the same admin and
 owner exemptions, so it resolves the caller's system role just as the HTTP path
-does. A browser, which cannot set `Authorization` on a WebSocket, instead sends a
+does. An execution attach wakes an AutoResume box first; the box-level attach does
+not, because the box's init is the user's command and waking a stopped box would
+run it again, so the runner refuses a stopped box instead.
+A browser, which cannot set `Authorization` on a WebSocket, instead sends a
 `?ticket=` bought from `POST /api/box/{boxIdOrName}/attach-tickets`. Spending it
 re-checks the ticket's credential the same way:
 the API key that bought it, which must still exist and be unexpired, or else
 its user. The attach URL may omit `{prefix}`; the ticket already names the organization.
+A ticket names one execution, so it never opens the box-level attach.
 `GET /api/v1/me` can return `path_prefix: null` for an authenticated user with no
 organization membership.
 
@@ -464,13 +468,14 @@ organization membership.
 </details>
 
 <details>
-<summary><b>Execution, files, metrics, and networking</b> · 11 routes</summary>
+<summary><b>Execution, files, metrics, and networking</b> · 12 routes</summary>
 
 | Method   | Path                                                          | What it does                                            |
 | -------- | ------------------------------------------------------------- | ------------------------------------------------------- |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/exec`                       | Starts a command execution through the assigned runner. |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}`        | Gets execution status and exit information.             |
 | `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}`        | Kills an execution.                                     |
+| `WS`     | `/api/v1[/{prefix}]/boxes/{boxId}/attach`                     | Attaches a WebSocket to the box's main session (init).  |
 | `WS`     | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}/attach` | Attaches a bidirectional WebSocket to an execution; a browser authenticates with `?ticket=`. |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}/signal` | Sends a signal to an execution.                         |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}/resize` | Resizes an execution's terminal.                        |
@@ -644,13 +649,14 @@ runtime and its microVMs.
 </details>
 
 <details>
-<summary><b>Embedded BoxLite operations</b> · 10 routes</summary>
+<summary><b>Embedded BoxLite operations</b> · 11 routes</summary>
 
 | Method    | Path                                           | What it does                                          |
 | --------- | ---------------------------------------------- | ----------------------------------------------------- |
 | `POST`    | `/v1/boxes/{boxId}/exec`                       | Starts a command inside the local box.                |
 | `GET`     | `/v1/boxes/{boxId}/executions/{execId}`        | Gets local execution status.                          |
 | `DELETE`  | `/v1/boxes/{boxId}/executions/{execId}`        | Kills a local execution.                              |
+| `WS`      | `/v1/boxes/{boxId}/attach`                     | Attaches a WebSocket to the local box's main session. |
 | `WS`      | `/v1/boxes/{boxId}/executions/{execId}/attach` | Attaches a WebSocket to local execution I/O.          |
 | `POST`    | `/v1/boxes/{boxId}/executions/{execId}/signal` | Sends a signal to a local execution.                  |
 | `POST`    | `/v1/boxes/{boxId}/executions/{execId}/resize` | Resizes a local execution's terminal.                 |

@@ -166,11 +166,11 @@ export class BoxliteProxyController {
     )
   }
 
-  // /executions/:execId/attach is a WebSocket-only route. Real WS upgrades
-  // bypass Express entirely and are handled by BoxliteWsProxyService via the
-  // `server.on('upgrade', ...)` hook registered in main.ts. Plain HTTP GETs
-  // to this path (callers that forgot the Upgrade headers) fall through to
-  // a NestJS 404, which is the correct answer.
+  // :boxId/attach and :boxId/executions/:execId/attach are WebSocket-only
+  // routes. Real WS upgrades bypass Express entirely and are handled by
+  // BoxliteWsProxyService via the `server.on('upgrade', ...)` hook registered
+  // in main.ts. Plain HTTP GETs to either path (callers that forgot the
+  // Upgrade headers) fall through to a NestJS 404, which is the correct answer.
 
   @All(':boxId/files')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])

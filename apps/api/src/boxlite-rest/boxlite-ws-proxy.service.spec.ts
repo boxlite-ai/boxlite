@@ -124,6 +124,42 @@ describe('BoxliteWsProxyService', () => {
     expect(pathRewrite('/api/v1/default/boxes/public-box/executions/exec-1/attach?x=1', req)).toBe(
       '/v1/boxes/box-uuid/executions/exec-1/attach?x=1',
     )
+    expect(pathRewrite('/api/v1/boxes/public-box/attach', req)).toBe('/v1/boxes/box-uuid/attach')
+    expect(pathRewrite('/api/v1/default/boxes/public-box/attach?stdin=0', req)).toBe(
+      '/v1/boxes/box-uuid/attach?stdin=0',
+    )
+  })
+
+  // The box's init is the user's command, so resuming a stopped box to attach
+  // to it would run the job again. The runner refuses a stopped box instead,
+  // the way `boxlite serve` does.
+  it('proxies a main-session attach without resuming the box', async () => {
+    const harness = buildAuthHarness()
+    const { service, apiKeyService, organizationUserService, autoResume } = harness
+    apiKeyService.getApiKeyByValue.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      expiresAt: null,
+      permissions: [OrganizationResourcePermission.WRITE_BOXES],
+    })
+    organizationUserService.findOne.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' })
+    harness.boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+    })
+    const socket = { write: jest.fn(), destroy: jest.fn() }
+    const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
+
+    await (service as unknown as BoxliteWsProxyService).upgrade(
+      authRequest('blk_live_test', '/api/v1/org-1/boxes/public-box/attach'),
+      socket as never,
+      Buffer.alloc(0),
+    )
+
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
+    expect(proxyHandler.upgrade).toHaveBeenCalled()
+    expect(socket.destroy).not.toHaveBeenCalled()
   })
 
   it('does not upgrade the websocket when strict AutoResume fails', async () => {
