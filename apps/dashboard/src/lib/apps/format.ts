@@ -126,7 +126,7 @@ export function formatDuration(ms: number): string {
 export function utcAndLocal(iso: string): string {
   const d = new Date(iso)
   const utc = d.toISOString().slice(11, 16)
-  const local = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+  const local = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
   const day =
     d.toDateString() === new Date().toDateString()
       ? ''

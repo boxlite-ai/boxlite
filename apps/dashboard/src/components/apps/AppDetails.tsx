@@ -300,9 +300,16 @@ export default function AppDetails() {
             onDeleteEnvironment={deleteEnvironment}
             inFlight={inFlight}
             onRefresh={() => refetch()}
-            environment={<EnvironmentSwitcher appId={app.id} appName={app.name} current={env} onSwitch={switchEnv} />}
+            environment={
+              <EnvironmentSwitcher
+                appId={app.id}
+                appName={app.name}
+                current={env}
+                onSwitch={switchEnv}
+                onDelete={deleteEnvironment}
+              />
+            }
             // Each tab has its own primary action; Open app leads only on Overview.
-            primaryOpen={tab === 'overview'}
           />
 
           {/* The console's segmented tabs (as on Billing and Images). */}
@@ -392,7 +399,6 @@ function Header({
   onDeleteEnvironment,
   onRefresh,
   environment,
-  primaryOpen,
   inFlight,
 }: {
   app: AppDetail
@@ -404,7 +410,6 @@ function Header({
   onDeleteEnvironment: () => void
   onRefresh: () => void
   environment: ReactNode
-  primaryOpen: boolean
   /** What the console asked for right now (restarting, changing access…), shown next to the status. */
   inFlight: string | null
 }) {
@@ -466,7 +471,7 @@ function Header({
                 className="cursor-pointer text-destructive focus:text-destructive"
                 onClick={onDeleteEnvironment}
               >
-                Delete {app.environment}
+                Delete environment {app.environment}
               </DropdownMenuItem>
             )}
             <DropdownMenuSeparator />
@@ -481,12 +486,8 @@ function Header({
           <button
             type="button"
             onClick={() => void openApp(app.id, app.environment)}
-            className={cn(
-              // Other tabs have their own primary action.
-              !primaryOpen
-                ? HEADER_BUTTON
-                : 'inline-flex h-[34px] items-center gap-2 bg-primary px-[15px] font-mono text-[13px] font-semibold text-primary-foreground outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-brand/35',
-            )}
+            // The same primary button on every tab: opening the app is always one click.
+            className="inline-flex h-[34px] items-center gap-2 bg-primary px-[15px] font-mono text-[13px] font-semibold text-primary-foreground outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-brand/35"
           >
             Open app <ArrowUpRight className="size-3.5" />
           </button>

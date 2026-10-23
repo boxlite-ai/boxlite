@@ -85,7 +85,7 @@ export function CreateAppDialog({
         <DialogFooter className="gap-2">
           <FlatButton onClick={() => onOpenChange(false)}>Cancel</FlatButton>
           <FlatButton variant="primary" onClick={submit} disabled={!valid || mutation.isPending}>
-            {mutation.isPending ? 'Creating…' : 'Create app'}
+            {mutation.isPending ? 'Creating…' : 'Start building'}
           </FlatButton>
         </DialogFooter>
       </DialogContent>

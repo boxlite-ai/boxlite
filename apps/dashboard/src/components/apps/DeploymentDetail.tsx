@@ -66,7 +66,7 @@ function StepRow({ step }: { step: TimelineStep }) {
         <StatusBadge label={state.label} color={state.color} caps />
       )}
       <span className="tabular-nums text-muted-foreground" title={step.startedAt ?? undefined}>
-        {step.startedAt ? new Date(step.startedAt).toLocaleTimeString([], { hour12: false }) : '—'}
+        {step.startedAt ? new Date(step.startedAt).toLocaleTimeString('en-US', { hour12: false }) : '—'}
       </span>
       <span className="tabular-nums text-muted-foreground">
         {running ? (elapsed ?? '…') : step.ms !== null ? formatDuration(step.ms) : '—'}
@@ -196,7 +196,9 @@ function Log({ detail }: { detail: Detail }) {
             l.level === 'error' ? 'text-destructive' : l.level === 'warn' ? 'text-warning' : 'text-muted-foreground',
           )}
         >
-          <span className="text-muted-foreground/60">{new Date(l.ts).toLocaleTimeString([], { hour12: false })}</span>{' '}
+          <span className="text-muted-foreground/60">
+            {new Date(l.ts).toLocaleTimeString('en-US', { hour12: false })}
+          </span>{' '}
           <span className="text-muted-foreground">[{l.source}]</span> {l.line}
         </div>
       ))}
@@ -284,7 +286,7 @@ export function DeploymentDetail({
           <div className="flex flex-col gap-5 px-[22px] py-[18px] font-mono">
             <span className="text-[13px] text-muted-foreground">
               {detail.rollbackTo !== null ? `Rolled back to #${detail.rollbackTo}` : 'Deployed'}{' '}
-              <span title={new Date(detail.createdAt).toLocaleString()}>{relTime(detail.createdAt)}</span> by{' '}
+              <span title={new Date(detail.createdAt).toLocaleString('en-US')}>{relTime(detail.createdAt)}</span> by{' '}
               {actorName(detail.by, { short: true })}
               {took ? ` · ${detail.finishedAt ? 'took' : 'running for'} ${took}` : ''}
             </span>
@@ -325,7 +327,7 @@ export function DeploymentDetail({
 
       <Disclosure label="Details">
         <div className="max-w-[640px]">
-          <SpecRow label="Created">{new Date(detail.createdAt).toLocaleString()}</SpecRow>
+          <SpecRow label="Created">{new Date(detail.createdAt).toLocaleString('en-US')}</SpecRow>
           <SpecRow label="Started by">{detail.by}</SpecRow>
           <SpecRow label="Configuration">
             {detail.specVersion !== null ? `version ${detail.specVersion}` : 'not written yet'}
@@ -337,7 +339,7 @@ export function DeploymentDetail({
             </SpecRow>
           )}
           {detail.restorePoint && (
-            <SpecRow label="Database restore point">{new Date(detail.restorePoint).toLocaleString()}</SpecRow>
+            <SpecRow label="Database restore point">{new Date(detail.restorePoint).toLocaleString('en-US')}</SpecRow>
           )}
           {!detail.current && !detail.rollback.possible && detail.rollback.reason && (
             <SpecRow label="Rollback">{detail.rollback.reason}</SpecRow>

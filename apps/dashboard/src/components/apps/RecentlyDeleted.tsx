@@ -40,11 +40,11 @@ export function RecentlyDeleted() {
       {deleted.map((app) => (
         <GridRow key={app.name} grid={GRID}>
           <span className="truncate text-muted-foreground">{app.name}</span>
-          <span className="text-muted-foreground" title={new Date(app.deletedAt).toLocaleString()}>
+          <span className="text-muted-foreground" title={new Date(app.deletedAt).toLocaleString('en-US')}>
             {relTime(app.deletedAt)}
           </span>
           <span className="text-foreground" title={app.purgeAfter}>
-            {new Date(app.purgeAfter).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} ·{' '}
+            {new Date(app.purgeAfter).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })} ·{' '}
             {relTime(app.purgeAfter)}
           </span>
           <HoverActions>

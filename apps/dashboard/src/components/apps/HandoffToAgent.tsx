@@ -120,7 +120,7 @@ export function HandoffToAgent({ app }: { app: AppDetail }) {
     <div className="flex flex-col">
       <section className="flex flex-col">
         <SectionTitle
-          title="Hand off to your agent"
+          title="Start building with your agent"
           right={
             <>
               <AgentLogos className="mr-3" />
@@ -131,15 +131,32 @@ export function HandoffToAgent({ app }: { app: AppDetail }) {
             </>
           }
         />
+        <HandoffSteps last="Tell it what to build. It sets up everything and deploys." />
         <pre className="whitespace-pre-wrap break-words border border-border bg-[hsl(var(--code-background))] px-[22px] py-[18px] font-mono text-meta leading-[1.75] text-foreground">
           {app.handoffPrompt}
         </pre>
         <p className="mt-3 font-mono text-meta text-muted-foreground">
-          Paste it into Claude Code, Codex, Cursor or any coding agent, then tell it what to build. The key in it can
-          manage only this app{fresh ? '' : '; copying issues a new one'}.
+          The key in it can manage only this app{fresh ? '' : '; copying issues a new one'}.
         </p>
       </section>
       {flow.element}
     </div>
+  )
+}
+
+/** The hand-off as three steps a person can follow without knowing what an agent prompt is. */
+export function HandoffSteps({ last }: { last: string }) {
+  const steps = ['Copy the prompt', 'Paste it into Claude Code, Codex, Cursor or another coding agent', last]
+  return (
+    <ol className="mb-3 flex flex-col gap-1.5 font-mono text-[13px] text-foreground md:flex-row md:gap-6">
+      {steps.map((step, i) => (
+        <li key={step} className="flex items-baseline gap-2">
+          <span className="flex size-[18px] shrink-0 items-center justify-center border border-border text-[11px] text-muted-foreground">
+            {i + 1}
+          </span>
+          {step}
+        </li>
+      ))}
+    </ol>
   )
 }

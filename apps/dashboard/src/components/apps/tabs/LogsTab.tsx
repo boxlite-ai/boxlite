@@ -334,7 +334,7 @@ function RuntimeLogs({
                       )}
                     >
                       <span className="tabular-nums text-muted-foreground">
-                        {line.at.toLocaleTimeString([], { hour12: false })}
+                        {line.at.toLocaleTimeString('en-US', { hour12: false })}
                       </span>
                       <span className="truncate text-muted-foreground">{line.source}</span>
                       <span
@@ -455,7 +455,7 @@ function Activity({ app, onGoTo }: { app: AppDetail; onGoTo: (link: ActivityLink
             data-testid="activity-row"
             className={`grid ${ACTIVITY_GRID} min-h-[44px] items-center border-b border-border/60 px-2`}
           >
-            <span className="text-muted-foreground" title={new Date(entry.at).toLocaleString()}>
+            <span className="text-muted-foreground" title={new Date(entry.at).toLocaleString('en-US')}>
               {relTime(entry.at)}
             </span>
             <span className={cn('truncate', ACTOR_TONE[entry.actorKind])} title={entry.actorKind}>

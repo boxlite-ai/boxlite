@@ -118,7 +118,7 @@ export function LiveCard({
             </button>
             <span className="font-mono text-[13px] text-muted-foreground">
               {active.id} · deployed{' '}
-              <span title={new Date(active.createdAt).toLocaleString()}>{relTime(active.createdAt)}</span> by{' '}
+              <span title={new Date(active.createdAt).toLocaleString('en-US')}>{relTime(active.createdAt)}</span> by{' '}
               {actorName(active.by)}
             </span>
           </>
@@ -176,7 +176,7 @@ function MetaGrid({ app }: { app: AppDetail }) {
         </span>
       ),
     },
-    { label: 'Created', value: relTime(app.createdAt), title: new Date(app.createdAt).toLocaleString() },
+    { label: 'Created', value: relTime(app.createdAt), title: new Date(app.createdAt).toLocaleString('en-US') },
     ...(runtime ? [{ label: 'Runtime', value: runtime }] : []),
     ...(services.length
       ? [

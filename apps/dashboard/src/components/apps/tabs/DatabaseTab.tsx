@@ -557,7 +557,7 @@ function Backups({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
   // Restoring rewinds the database through its history, which only reaches this far back.
   const restorable = (ts: string) => Date.now() - Date.parse(ts) < windowHours * 3_600_000
   const restore = async (id: string, at: string) => {
-    const when = new Date(at).toLocaleString()
+    const when = new Date(at).toLocaleString('en-US')
     const ok = await confirm({
       title: `Restore ${app.environment}'s database to ${when}?`,
       body: (
@@ -611,7 +611,7 @@ function Backups({ app, db }: { app: AppDetail; db: AppDatabaseDetail }) {
           {backups.map((backup) => (
             <GridRow key={backup.id} grid={GRID}>
               <span className="text-foreground" title={backup.ts}>
-                {new Date(backup.ts).toLocaleString()}
+                {new Date(backup.ts).toLocaleString('en-US')}
               </span>
               <span className="truncate text-muted-foreground">{backup.message ?? '—'}</span>
               <span className="text-muted-foreground">{backup.by}</span>

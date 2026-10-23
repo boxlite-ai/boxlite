@@ -11,7 +11,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Check, ChevronDown, GitBranch, Plus } from '@/components/ui/icon'
+import { Check, ChevronDown, GitBranch, Plus, Trash2 } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
 import { useAppMutation } from '@/hooks/mutations/useAppMutations'
 import { useAppEnvironments, useConsoleSession } from '@/hooks/queries/useAppsQuery'
@@ -34,11 +34,14 @@ export function EnvironmentSwitcher({
   appName,
   current,
   onSwitch,
+  onDelete,
 }: {
   appId: string
   appName: string
   current: string
   onSwitch: (env: string) => void
+  /** Deletes the current environment (asks first); main is deleted only with the App. */
+  onDelete: () => void
 }) {
   const { data: envs = [] } = useAppEnvironments(appId)
   const [creating, setCreating] = useState(false)
@@ -90,6 +93,19 @@ export function EnvironmentSwitcher({
             </span>
             New environment
           </DropdownMenuItem>
+          {current === 'main' ? (
+            <div className="px-2 py-1.5 pl-9 text-[12px] text-muted-foreground">main is deleted only with the app</div>
+          ) : (
+            <DropdownMenuItem
+              className="cursor-pointer gap-3 text-destructive focus:text-destructive"
+              onClick={onDelete}
+            >
+              <span className="w-4">
+                <Trash2 className="size-4" />
+              </span>
+              Delete {current}…
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
       {creating && (

@@ -94,7 +94,7 @@ function DeploymentRow({
       <span className="truncate text-muted-foreground" title={release.by}>
         {actorName(release.by, { short: true })}
       </span>
-      <span className="text-muted-foreground" title={new Date(release.createdAt).toLocaleString()}>
+      <span className="text-muted-foreground" title={new Date(release.createdAt).toLocaleString('en-US')}>
         {relTime(release.createdAt)}
       </span>
       <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} className="flex justify-end">
