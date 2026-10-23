@@ -50,7 +50,7 @@ export function AgentHandoffPanel({ app }: { app: AppDetail }) {
             <span>
               {fresh
                 ? 'The App key in it is shown only in this tab.'
-                : 'The App key is masked here. Copy prompt issues a new one for the agent; agents already set up keep theirs.'}
+                : 'The App key is masked here. Each Copy prompt issues one more key (up to 10) and agents already set up keep theirs; Rotate key retires them all.'}
             </span>
             <ToolButton loading={flow.pending} onClick={() => void flow.start()}>
               Rotate key

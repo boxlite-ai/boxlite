@@ -322,6 +322,7 @@ function SecretDialog({
               className={cn(TEXT_INPUT, 'h-10')}
             />
             <span className="text-[12px] text-muted-foreground">
+              {/* The control plane stores it under the same name (shared secretNameFor). */}
               Kept for this app only{name ? ` as app/${name.toLowerCase().replace(/_/g, '-')}` : ''}. It cannot be
               viewed after saving.
             </span>
