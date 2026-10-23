@@ -314,6 +314,26 @@ async function main() {
       assert(/\/auth\/callback\/github/.test(uri), `redirect URI copied: ${uri}`)
       assert(/your own Google OAuth app/i.test(await text(page.getByTestId('method-google'))), 'Google not explained')
       await shot('auth')
+      // Email code: set the App's mail sender (the dev SMTP sink), send a test, and the CP agrees.
+      assert(/Needs your mail sender/.test(await text(page.getByTestId('method-email'))), 'email row without a sender')
+      await page.getByTestId('method-email').getByRole('button', { name: 'Set up' }).click()
+      const dialog = page.getByTestId('email-sender-dialog')
+      await dialog.getByPlaceholder('smtp.sendgrid.net').fill('127.0.0.1')
+      await dialog.getByRole('textbox').nth(1).fill('2525')
+      await dialog.getByPlaceholder('apikey').fill('sink')
+      await dialog.locator('input[type=password]').fill('sink-password')
+      await dialog.getByPlaceholder('Your App <no-reply@yourdomain.com>').fill('Console E2E <no-reply@e2e.test>')
+      await dialog.getByRole('button', { name: 'Save' }).click()
+      await page.getByText('Email sender saved').waitFor()
+      await dialog.getByPlaceholder('you@example.com').fill('console-owner@e2e.test')
+      await dialog.getByRole('button', { name: 'Send test' }).click()
+      await page.getByText('Test email sent to console-owner@e2e.test').waitFor({ timeout: 30_000 })
+      await shot('auth-email-sender')
+      await page.keyboard.press('Escape')
+      const sender = await cpApi('/auth/email')
+      assert(sender.configured && sender.host === '127.0.0.1' && sender.port === 2525 && sender.password_set, `CP sender ${JSON.stringify(sender)}`)
+      assert(/Your mail sender · ready/i.test(await text(page.getByTestId('method-email'))), 'email row after setup')
+      return 'email sender set and tested from the console'
     })
 
     await step('database tables and row counts match the CP', async () => {
