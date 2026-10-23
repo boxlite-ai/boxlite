@@ -491,3 +491,16 @@ test('a control-plane 500 does not suggest BOXLITE_DEBUG, which only prints clie
   assert.doesNotMatch(err.next, /BOXLITE_DEBUG/);
   assert.match(err.next, /boxlite-app doctor/);
 });
+
+test('a reset connection is retried for writes that are safe to repeat, with the same idempotency key', async () => {
+  const dir = await project(root, { '.boxlite/link.json': linkJson(1) });
+  const { agent, pool } = mockApi();
+  const keys: string[] = [];
+  pool.intercept({ path: '/v1/apps/crm/envs/main/deployments', method: 'POST', headers: (h) => (keys.push(String((h as Record<string, string>)['idempotency-key'])), true) }).replyWithError(Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }));
+  pool.intercept({ path: '/v1/apps/crm/envs/main/deployments', method: 'POST', headers: (h) => (keys.push(String((h as Record<string, string>)['idempotency-key'])), true) }).reply(202, { number: 4, kind: 'rollback', status: 'queued' }, { headers: JSON_HEADERS });
+  pool.intercept({ path: '/v1/apps/crm/envs/main/deployments/4/events', method: 'GET' }).reply(200, sse([{ event: 'done', data: { status: 'live', deployment: { number: 4, kind: 'rollback', status: 'live' } } }]), { headers: SSE_HEADERS });
+  const res = await cli(['app', 'rollback', '2', '--json'], { cwd: dir, dispatcher: agent });
+  assert.equal(res.code, 0, res.stderr);
+  const unique = [...new Set(keys)];
+  assert.equal(unique.length, 1, `one idempotency key across the retry: ${keys.join(', ')}`);
+});

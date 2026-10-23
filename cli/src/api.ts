@@ -178,6 +178,8 @@ interface RequestOptions {
   accept?: string;
   signal?: AbortSignal;
   noRetry?: boolean;
+  /** Safe to send again (read-only, or harmless to repeat), so a reset connection is retried. */
+  idempotent?: boolean;
 }
 
 const RATE_LIMIT_RETRIES = 3;
@@ -256,8 +258,10 @@ export class Api {
       body = JSON.stringify(opts.body);
       headers['content-type'] = 'application/json';
     }
-    // Reads are retried on network errors and 502/503/504; writes never are (not idempotent).
-    const attempts = method === 'GET' && !opts.noRetry ? RETRIES + 1 : 1;
+    // Retried on network errors and 502/503/504: reads, PUT/DELETE, a request with an idempotency
+    // key (the control plane runs it once), and calls marked idempotent. A streamed body never is.
+    const repeatable = method === 'GET' || method === 'PUT' || method === 'DELETE' || !!headers['idempotency-key'] || opts.idempotent === true;
+    const attempts = repeatable && !opts.noRetry && !stream ? RETRIES + 1 : 1;
     // A 429 is refused before the control plane does anything, so every method may wait and retry.
     let rateLimited = 0;
     for (let attempt = 1; ; attempt++) {
@@ -395,11 +399,12 @@ export class Api {
   }
 
   plan(body: PlanRequest): Promise<PlanResponse> {
-    return this.json('POST', `${this.envPath}/plan`, { body });
+    return this.json('POST', `${this.envPath}/plan`, { body, idempotent: true });
   }
 
   createUpload(manifest: UploadFile[]): Promise<{ upload_id: string; missing: string[] }> {
-    return this.json('POST', `/v1/apps/${this.app}/uploads`, { body: { manifest } });
+    // A retried upload session is just an unused one; it expires.
+    return this.json('POST', `/v1/apps/${this.app}/uploads`, { body: { manifest }, idempotent: true });
   }
 
   async putFile(uploadId: string, sha256: string, bytes: Buffer): Promise<void> {
