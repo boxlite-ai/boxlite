@@ -63,3 +63,13 @@ test('online checks: unsupported volume source and unknown secret', () => {
   assert.ok(rules.includes('secret_not_found'), JSON.stringify(errors));
   assert.ok(rules.includes('not_supported_yet'), JSON.stringify(errors));
 });
+
+test('online checks: a custom domain is refused until the platform can serve it, saying where the app is', () => {
+  const m = manifest(TOML + '\n[domains]\ncustom = ["crm.acme.com"]\n');
+  const { errors } = onlineChecks(m, { appName: 'crm', envName: 'main', secretExists: () => true });
+  const e = errors.find((x) => x.rule === 'not_supported_yet');
+  assert.ok(e, JSON.stringify(errors));
+  assert.match(e.message, /crm\.acme\.com/);
+  assert.match(e.message, /remove \[domains\]/);
+  assert.deepEqual(onlineChecks(manifest(TOML), { appName: 'crm', envName: 'main', secretExists: () => true }).errors, []);
+});

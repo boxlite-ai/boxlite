@@ -207,6 +207,10 @@ export function onlineChecks(m: Manifest, ctx: OnlineCheckContext): { errors: Ch
     if (v.from) err('not_supported_yet', `[[volume]] "${v.name}": from = "${v.from}" is not supported yet`);
     else if (v.mode === 'ro') err('not_supported_yet', `[[volume]] "${v.name}": mode = "ro" is not supported yet (read-only mounts are rejected by the platform)`);
   }
+  // Nothing routes or certifies an outside hostname yet: deploying it would look done and serve nothing.
+  if (m.domains.custom.length) {
+    err('not_supported_yet', `[domains] custom = ${JSON.stringify(m.domains.custom)}: bringing your own domain is not available on this platform yet; remove [domains] and give the user the app's BoxLite URL (\`boxlite-app app status --json\`)`);
+  }
   for (const [name, ref] of Object.entries(m.secrets)) {
     if (!ctx.secretExists(ref)) err('secret_not_found', ref.startsWith('app/') ? `[secrets] ${name} = "${ref}": no such App secret; store it with \`printf %s "$VALUE" | boxlite-app app secrets set ${ref.slice(4)}\`` : `[secrets] ${name} = "${ref}": no such org secret; an org admin must set it first, or store it as an App secret and reference app/<name>`);
   }
