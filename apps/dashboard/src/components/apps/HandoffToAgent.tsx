@@ -5,7 +5,7 @@
 
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Check, Copy } from '@/components/ui/icon'
-import { useRotateKey } from '@/hooks/mutations/useAppMutations'
+import { useIssueKey, useRotateKey } from '@/hooks/mutations/useAppMutations'
 import { freshPrompt } from '@/lib/apps/handoff'
 import type { AppDetail } from '@/lib/apps/types'
 import { handleApiError } from '@/lib/error-handling'
@@ -20,14 +20,18 @@ import { ToolButton } from './SubNav'
 // What a new (not yet deployed) environment shows instead of the live overview:
 // the control plane's prompt for the agent, marked with the agents it works in.
 // The App key inside it is shown in full only once (when the app is created, or
-// right after a rotation): the page shows it masked, and Copy prompt copies the
-// working prompt while this tab still holds it, or issues a new key first.
+// right after a new key): the page shows it masked, and Copy prompt copies the
+// working prompt while this tab still holds it, or issues one more key first.
 
-/** Rotate key: confirm, call the control plane, show the new prompt once. */
+/**
+ * The App key flows, each ending in the new prompt shown once: issue (one more key, the others
+ * keep working) and rotate (confirm, then one new key replaces them all).
+ */
 export function useRotateKeyFlow(app: AppDetail) {
   const rotate = useRotateKey()
+  const issueKey = useIssueKey()
   const [confirm, confirmElement] = useConfirm()
-  const [shown, setShown] = useState<string | null>(null)
+  const [shown, setShown] = useState<{ prompt: string; last4: string } | null>(null)
   const [copied, setCopied] = useState(false)
 
   const start = async () => {
@@ -35,8 +39,8 @@ export function useRotateKeyFlow(app: AppDetail) {
       title: `Rotate the App key of ${app.name}?`,
       body: (
         <>
-          A new key and prompt are shown once. The current key (…{app.key?.last4 ?? '????'}) stops working now, so an
-          agent still using it has to be given the new prompt.
+          Every App key of {app.name} stops working now, and one new key and prompt are shown once. Each agent still
+          using an old key has to be given the new prompt.
         </>
       ),
       confirmLabel: 'Rotate key',
@@ -46,9 +50,19 @@ export function useRotateKeyFlow(app: AppDetail) {
     try {
       const out = await rotate.mutateAsync(app.id)
       setCopied(false)
-      setShown(out.prompt)
+      setShown(out)
     } catch (error) {
       handleApiError(error, 'Could not rotate the key')
+    }
+  }
+
+  const issue = async () => {
+    try {
+      const out = await issueKey.mutateAsync(app.id)
+      setCopied(false)
+      setShown(out)
+    } catch (error) {
+      handleApiError(error, 'Could not issue a key')
     }
   }
 
@@ -63,10 +77,10 @@ export function useRotateKeyFlow(app: AppDetail) {
             </DialogTitle>
           </DialogHeader>
           <pre className="whitespace-pre-wrap break-words border border-border bg-[hsl(var(--code-background))] px-[18px] py-[14px] font-mono text-meta leading-[1.75] text-foreground">
-            {shown}
+            {shown?.prompt}
           </pre>
           <p className="text-meta text-muted-foreground">
-            The new key is shown only now. Copy the prompt before closing.
+            Its App key (…{shown?.last4}) is shown only now. Copy the prompt before closing.
           </p>
           <DialogFooter className="gap-2">
             <FlatButton onClick={() => setShown(null)}>Close</FlatButton>
@@ -74,7 +88,7 @@ export function useRotateKeyFlow(app: AppDetail) {
               variant="primary"
               onClick={() => {
                 if (!shown) return
-                copyText(shown)
+                copyText(shown.prompt)
                 setCopied(true)
                 toast.success('Copied. Paste it into your coding agent.')
               }}
@@ -87,7 +101,7 @@ export function useRotateKeyFlow(app: AppDetail) {
       </Dialog>
     </>
   )
-  return { start, pending: rotate.isPending, element }
+  return { start, issue, pending: rotate.isPending, issuing: issueKey.isPending, element }
 }
 
 export function HandoffToAgent({ app }: { app: AppDetail }) {
@@ -96,7 +110,7 @@ export function HandoffToAgent({ app }: { app: AppDetail }) {
   const fresh = freshPrompt(app.id)
   // The prompt with its working key is known right after creation; later only a new key can make one.
   const copy = () => {
-    if (!fresh) return void flow.start()
+    if (!fresh) return void flow.issue()
     copyText(fresh)
     setCopied(true)
     setTimeout(() => setCopied(false), 1600)
@@ -110,7 +124,7 @@ export function HandoffToAgent({ app }: { app: AppDetail }) {
           right={
             <>
               <AgentLogos className="mr-3" />
-              <ToolButton primary loading={flow.pending} onClick={copy}>
+              <ToolButton primary loading={flow.issuing} onClick={copy}>
                 {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
                 {copied ? 'Copied' : 'Copy prompt'}
               </ToolButton>
@@ -122,7 +136,7 @@ export function HandoffToAgent({ app }: { app: AppDetail }) {
         </pre>
         <p className="mt-3 font-mono text-meta text-muted-foreground">
           Paste it into Claude Code, Codex, Cursor or any coding agent, then tell it what to build. The key in it can
-          manage only this app{fresh ? '' : '; copying gives a new key and retires the old one'}.
+          manage only this app{fresh ? '' : '; copying issues a new one'}.
         </p>
       </section>
       {flow.element}

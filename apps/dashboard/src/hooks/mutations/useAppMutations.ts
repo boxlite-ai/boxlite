@@ -116,6 +116,23 @@ export function useRotateKey() {
   })
 }
 
+/** One more App key and its prompt, next to the keys already in use (another agent or machine). */
+export function useIssueKey() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (appId: string) => {
+      const out = (
+        await appsClient.post<{ key: string; prompt: string; last4: string }>(
+          `/apps/${encodeURIComponent(appId)}/key/issue`,
+        )
+      ).data
+      rememberPrompt(appId, out.prompt)
+      return out
+    },
+    onSuccess: (_data, appId) => queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, appId) }),
+  })
+}
+
 export function useAppSql() {
   const env = useAppEnv()
   return useMutation({
