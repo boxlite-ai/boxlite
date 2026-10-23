@@ -164,6 +164,8 @@ export interface AppDetailView extends Omit<AppSummaryView, 'environments'> {
   metrics: ConsoleMetrics | null;
   /** The last screenshot of the live URL (preview.ts); `src` is relative to the console API. */
   preview: { src: string; capturedAt: string; releaseId: string } | null;
+  /** A new picture being taken, or why the last attempt failed (the picture above stays the old one). */
+  previewAttempt: { taking: boolean; failed: { at: string; reason: string } | null } | null;
   handoffPrompt: string;
   key: { last4: string; createdAt: string } | null;
   accessSource: 'manifest' | 'online';

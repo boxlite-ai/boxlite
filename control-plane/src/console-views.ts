@@ -20,7 +20,7 @@ import { dbCoordinates } from './services/db.js';
 import type { Spec } from './spec.js';
 import type { ServiceState } from './supervisor.js';
 import { logLevel } from './services/logs.js';
-import { previewMeta, refreshPreviewIfStale } from './preview.js';
+import { previewAttempt, previewMeta, refreshPreviewIfStale } from './preview.js';
 
 /**
  * Builds the console's view objects (the shapes of the dashboard's lib/apps/types.ts) from real CP
@@ -311,6 +311,7 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
     preview: shot
       ? { src: `/apps/${encodeURIComponent(app.name)}/preview?env=${encodeURIComponent(fresh.name)}&v=${encodeURIComponent(shot.capturedAt)}`, capturedAt: shot.capturedAt, releaseId: releaseId(shot.deployment) }
       : null,
+    previewAttempt: previewAttempt(fresh.id),
     handoffPrompt: handoffPrompt(ctx, app.name, key ? maskKey(key.last4) : '<rotate the key to get a new one>'),
     key,
     specVersion: spec?.version ?? null,
