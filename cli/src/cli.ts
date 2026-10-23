@@ -17,6 +17,7 @@ import { refineError, usageError } from './guidance.js';
 import { checkLines, Output } from './output.js';
 import { redacting } from './redact-stream.js';
 import { VERSION } from './version.js';
+import { registerLogin } from './commands/login.js';
 
 export type MakeCtx = (cmd: Command) => Promise<Ctx>;
 
@@ -44,6 +45,7 @@ export function buildProgram(run: RunOptions, argv: readonly string[] = [], out:
   registerApply(program, make);
   registerDeploy(program, make);
   registerBuild(program, make);
+  registerLogin(program, make);
   registerWhoami(program, make);
   registerDoctor(program, make);
   registerDocs(program, make);

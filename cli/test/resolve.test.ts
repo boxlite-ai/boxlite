@@ -38,7 +38,7 @@ test('an unlinked directory with a bad key fails as unauthenticated (exit 2) wit
 
   const noKey = await cli(['app', 'status'], { cwd: dir, dispatcher: agent, env: { BOXLITE_API_URL: API } });
   assert.equal(noKey.code, 2);
-  assert.match(noKey.stderr, /next: export BOXLITE_API_KEY=bxl_app_… with the App key from the App prompt, then `boxlite-app whoami`|next: export BOXLITE_API_KEY=bxl_app_… \(the App key from the App prompt\), then `boxlite-app whoami`/);
+  assert.match(noKey.stderr, /next: save the key from the App prompt once: `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login`/);
 });
 
 test('BOXLITE_APP still wins over the key lookup', async () => {

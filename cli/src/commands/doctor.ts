@@ -46,7 +46,7 @@ const describeError = (e: unknown): string => (e instanceof MicrocloudError ? `$
 
 /** link.json, boxlite.toml, lockfile and secret files: everything that needs no network. */
 async function localChecks(ctx: Ctx, r: Report): Promise<Awaited<ReturnType<typeof checkProject>> | null> {
-  if (!ctx.apiKey) r.problem('api_key', { severity: 'error', title: 'BOXLITE_API_KEY is not set', fix: 'export BOXLITE_API_KEY=bxl_app_… with the App key from the App prompt' });
+  if (!ctx.apiKey) r.problem('api_key', { severity: 'error', title: 'no App key: BOXLITE_API_KEY is not set and none is saved', fix: 'save the key from the App prompt once: `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login`' });
   if (!ctx.apiUrl) r.problem('api_url', { severity: 'error', title: 'BOXLITE_API_URL is not set and .boxlite/link.json has no api_url', fix: 'export BOXLITE_API_URL=https://<control plane> from the App prompt' });
   if (ctx.link) {
     if (ctx.env.BOXLITE_API_URL && ctx.link.api_url && ctx.link.api_url.replace(/\/+$/, '') !== ctx.env.BOXLITE_API_URL.replace(/\/+$/, '')) {
@@ -140,7 +140,7 @@ export async function runDoctor(ctx: Ctx): Promise<DoctorReport> {
       r.problem('key', {
         severity: 'error',
         title: code === 'unauthenticated' ? 'the control plane does not accept BOXLITE_API_KEY' : `cannot reach the control plane: ${describeError(e)}`,
-        fix: code === 'unauthenticated' ? 'export BOXLITE_API_KEY with the App key from the App prompt (keys are shown once; the console can issue a new one)' : (e instanceof MicrocloudError && e.next) || 'check BOXLITE_API_URL',
+        fix: code === 'unauthenticated' ? 'save a working key: `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login` with the key from the App prompt (Copy prompt in the console issues a new one)' : (e instanceof MicrocloudError && e.next) || 'check BOXLITE_API_URL',
       });
     }
   }

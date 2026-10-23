@@ -1,6 +1,6 @@
 # boxlite-app CLI reference
 
-Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.2); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
+Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.3); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
 
 ## Conventions
 
@@ -126,6 +126,38 @@ boxlite-app deploy -m "add deals board"
 boxlite-app deploy --dry-run --json
 boxlite-app deploy --verbose
 ```
+
+### `boxlite-app login`
+
+save the App key once so later shells need no BOXLITE_API_KEY: from BOXLITE_API_KEY, or a pipe with --stdin (never an argument)
+
+Usage: `boxlite-app login [options]`
+
+| option | description | default |
+|---|---|---|
+| `--stdin` | read the key from stdin |  |
+
+- Network: talks to the control plane
+- `--json`: `{ app, api_url, key_last4, saved_to }`
+- Exit codes: 0, 1, 2, 3, 6
+
+```sh
+BOXLITE_API_URL=https://cp.example BOXLITE_API_KEY=bxl_app_… boxlite-app login
+```
+
+### `boxlite-app logout`
+
+forget the saved key of this App (--all: every saved key)
+
+Usage: `boxlite-app logout [options]`
+
+| option | description | default |
+|---|---|---|
+| `--all` | forget every saved key |  |
+
+- Network: local only
+- `--json`: `{ removed: boolean }`
+- Exit codes: 0, 1
 
 ### `boxlite-app whoami`
 

@@ -6,6 +6,7 @@ import type { Readable, Writable } from 'node:stream';
 import type { Dispatcher } from 'undici';
 import { Api } from './api.js';
 import { Output } from './output.js';
+import { savedKey } from './credentials.js';
 
 export interface Io {
   stdout: Writable;
@@ -122,12 +123,13 @@ export class Ctx {
     this.argv = argv;
   }
 
+  /** BOXLITE_API_KEY, else the key `boxlite-app login` saved for this App (credentials.ts). */
   get apiKey(): string | undefined {
-    return this.env.BOXLITE_API_KEY || undefined;
+    return this.env.BOXLITE_API_KEY || savedKey(this.env, this.apiUrl, this.app)?.key || undefined;
   }
 
   get apiUrl(): string | undefined {
-    return this.env.BOXLITE_API_URL || this.link?.api_url || undefined;
+    return this.env.BOXLITE_API_URL || this.link?.api_url || savedKey(this.env, undefined, this.app)?.api_url || undefined;
   }
 
   /** The App known locally (link.json, then BOXLITE_APP); undefined until resolved from the key. */
@@ -149,7 +151,7 @@ export class Ctx {
   api(): Api {
     if (this.apiInstance) return this.apiInstance;
     const key = this.apiKey;
-    if (!key) throw new MicrocloudError('unauthenticated', 'BOXLITE_API_KEY is not set', 'export BOXLITE_API_KEY=bxl_app_… (the App key from the App prompt), then `boxlite-app whoami`');
+    if (!key) throw new MicrocloudError('unauthenticated', 'no App key: BOXLITE_API_KEY is not set and none is saved', 'save the key from the App prompt once: `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login` (later shells need neither), then `boxlite-app whoami`');
     const url = this.apiUrl;
     if (!url) throw new MicrocloudError('missing_api_url', 'BOXLITE_API_URL is not set and .boxlite/link.json has no api_url', 'export BOXLITE_API_URL=https://<control plane> (from the App prompt), then `boxlite-app whoami`');
     this.apiInstance = new Api({ baseUrl: url, key, app: this.app, env: this.envName, dispatcher: this.dispatcher });

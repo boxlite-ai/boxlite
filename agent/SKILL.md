@@ -5,12 +5,7 @@ description: Build a complete web app from the user's one-line request and run i
 
 # Build an app on BoxLite Cloud
 
-The user created an **App** in the BoxLite console and pasted you its prompt. That prompt gave you two values; export them in every shell you use and never print the key back:
-
-```sh
-export BOXLITE_API_URL=…   # from the prompt
-export BOXLITE_API_KEY=…   # bxl_app_…, scoped to this one App
-```
+The user created an **App** in the BoxLite console and pasted you its prompt. That prompt gave you two values, `BOXLITE_API_URL` and `BOXLITE_API_KEY` (`bxl_app_…`, scoped to this one App). Hand them to the CLI once, right after installing it (§0), and never print the key back or put it in a command again.
 
 The key can only touch this App. You do not need any other BoxLite credential, Docker, Git, or a cloud account. You talk to the platform only through the `boxlite-app` CLI.
 
@@ -19,8 +14,9 @@ Your job is finished when the app the user asked for is **live at its URL and yo
 ## 0. Install and orient (once per session)
 
 ```sh
-npm install -g "$BOXLITE_API_URL/cli/boxlite-app.tgz"   # or: npx -y "$BOXLITE_API_URL/cli/boxlite-app.tgz" …
-boxlite-app whoami            # the App this key belongs to, its environments, and whether the CLI is current
+npm install -g "<BOXLITE_API_URL>/cli/boxlite-app.tgz"
+BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login   # once: saves the key (readable by you only); later shells need neither
+boxlite-app whoami            # the App this key belongs to, its environments, sign-in that works, and whether the CLI is current
 boxlite-app app context       # services, schema, migrations, variables, recent deploys and errors, and what to do next
 ```
 

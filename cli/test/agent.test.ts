@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { after, before, beforeEach, test } from 'node:test';
 import type { AgentContext } from '@microcloud/shared';
 import { clearResolvedApps } from '../src/context.js';
-import { BASE_TOML, cleanup, cli, JSON_HEADERS, KEY, linkJson, mockApi, project, tempDir } from './helpers.js';
+import { mkdtemp, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { API, BASE_TOML, cleanup, cli, JSON_HEADERS, KEY, linkJson, mockApi, project, tempDir } from './helpers.js';
 
 let root: string;
 before(async () => {
@@ -59,11 +62,11 @@ test('whoami: app, key scope, env, control plane, and a newer CLI', async () => 
     `App crm · environment main · key …${KEY.slice(-4)} (scope: this App only)`,
     'Control plane https://cp.test (via http://cp.test)',
     'Environments main live',
-    'CLI 0.3.2 (latest 0.9.0)',
+    'CLI 0.3.3 (latest 0.9.0)',
     'next: update the CLI: `npm install -g http://cp.test/cli/boxlite-app.tgz`',
   ]);
   const json = JSON.parse((await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent })).stdout);
-  assert.deepEqual(json.cli, { version: '0.3.2', latest_version: '0.9.0', update_available: true, update_command: 'npm install -g http://cp.test/cli/boxlite-app.tgz' });
+  assert.deepEqual(json.cli, { version: '0.3.3', latest_version: '0.9.0', update_available: true, update_command: 'npm install -g http://cp.test/cli/boxlite-app.tgz' });
   assert.deepEqual(json.linked, { link_file: true, app: 'crm', matches_key: true });
 });
 
@@ -163,7 +166,7 @@ test('doctor runs local and online checks and ranks the problems with fixes', as
   assert.equal(checks.database, 'ok');
 
   const human = await cli(['doctor'], { cwd: dir, dispatcher: agent });
-  assert.equal(human.lines[0], 'Doctor · crm/main · CLI 0.3.2');
+  assert.equal(human.lines[0], 'Doctor · crm/main · CLI 0.3.3');
   assert.match(human.lines[1] ?? '', /^x error deployment #3 failed at start: web answers 404 on its health path \/healthz/);
   assert.match(human.lines.at(-1) ?? '', /^next: add a route GET \/healthz/);
 });
@@ -178,4 +181,25 @@ test('doctor with a rejected key reports it first and skips the online checks', 
   assert.deepEqual(report.problems.map((p: { id: string }) => p.id), ['key']);
   assert.match(report.problems[0].fix, /BOXLITE_API_KEY/);
   assert.ok(report.checks.some((c: { id: string; status: string }) => c.id === 'online' && c.status === 'skipped'));
+});
+
+test('login saves the key once; later commands without BOXLITE_API_KEY use it; logout forgets it', async () => {
+  const dir = await project(root, {});
+  const config = await mkdtemp(join(tmpdir(), 'blcfg-'));
+  const { agent, pool } = mockApi();
+  pool.intercept({ path: '/v1/apps/me/whoami', method: 'GET', headers: { authorization: `Bearer ${KEY}` } }).reply(200, WHOAMI, { headers: JSON_HEADERS }).times(3);
+  const login = await cli(['login', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_API_URL: API, BOXLITE_API_KEY: KEY, BOXLITE_CONFIG_DIR: config } });
+  assert.equal(login.code, 0, login.stderr);
+  assert.ok(!login.stdout.includes(KEY), 'the key is never printed');
+  const saved = join(config, 'credentials.json');
+  assert.equal((await stat(saved)).mode & 0o777, 0o600, 'readable by the user only');
+
+  // A new shell: no key, no URL in the environment.
+  const later = await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } });
+  assert.equal(later.code, 0, later.stderr);
+  assert.equal(JSON.parse(later.stdout).app, 'crm');
+
+  assert.equal((await cli(['logout'], { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } })).code, 0);
+  const after = await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } });
+  assert.equal(JSON.parse(after.stderr).error.code, 'unauthenticated', 'nothing saved any more');
 });
