@@ -400,3 +400,34 @@ func TestServiceThatExitsBeforeHealthFailsTheGate(t *testing.T) {
 		t.Fatalf("a service that exited before answering passed the health gate: %+v", s.Status())
 	}
 }
+
+// A service that prints why it fails and exits at once: the deploy reads the log tail the moment
+// the health gate fails (AwaitHealth returns), so that last line must already be in the log then.
+func TestServiceExitIsRecordedAfterItsLastOutput(t *testing.T) {
+	for i := 0; i < 30; i++ {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		free := l.Addr().(*net.TCPAddr).Port
+		l.Close()
+		hub := logs.NewHub()
+		cmd := `i=0; while [ $i -lt 300 ]; do echo "starting $i"; i=$((i+1)); done; echo "Error: REPORT_REGION is not set" 1>&2; exit 1`
+		s := New(Config{Name: "web", Command: cmd, Dir: t.TempDir(), Env: baseEnv(), Port: free, Exposed: true, Health: "/healthz",
+			HealthBudget: 10 * time.Second, HealthInterval: 20 * time.Millisecond}, hub, testReaper(t))
+		if err := s.Start(); err != nil {
+			t.Fatal(err)
+		}
+		if s.AwaitHealth(context.Background()) {
+			t.Fatal("a crashing service passed the health gate")
+		}
+		found := false
+		for _, l := range hub.Tail("web", 0) {
+			found = found || l.Line == "Error: REPORT_REGION is not set"
+		}
+		s.Stop(time.Second)
+		if !found {
+			t.Fatalf("run %d: the health gate failed before the service's last line was read", i)
+		}
+	}
+}

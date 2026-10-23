@@ -28,6 +28,8 @@ const (
 	// After SIGKILL the group should vanish at once; this only bounds Stop()
 	// when a process is stuck in uninterruptible sleep.
 	killWait = 5 * time.Second
+	// How long an exit waits for the service's last output to be read (see supervise).
+	drainWait = 500 * time.Millisecond
 )
 
 // Config describes one service instance of one release.
@@ -59,7 +61,8 @@ type Service struct {
 	proc        *os.Process
 	pid         int
 	exitCh      <-chan syscall.WaitStatus
-	gen         int // bumped per spawn so late probe results cannot touch a newer instance
+	drained     chan struct{} // closed once the instance's stdout and stderr have been read to the end
+	gen         int           // bumped per spawn so late probe results cannot touch a newer instance
 	startedAt   time.Time
 	state       string
 	health      string
@@ -140,6 +143,7 @@ func (s *Service) supervise() {
 	for {
 		s.mu.Lock()
 		exitCh := s.exitCh
+		drained := s.drained
 		started := s.startedAt
 		s.mu.Unlock()
 
@@ -151,6 +155,13 @@ func (s *Service) supervise() {
 			backoff = min(backoff*2, maxBackoff)
 		} else {
 			ws := <-exitCh
+			// The last lines a crashing service prints (often the reason) are still in its pipes:
+			// read them before the exit is reported, so the failure's log tail includes them. A
+			// child it left behind may hold the pipes open, so the wait is bounded.
+			select {
+			case <-drained:
+			case <-time.After(drainWait):
+			}
 			code := ExitCode(ws)
 			s.mu.Lock()
 			_ = s.proc.Release()
@@ -270,8 +281,13 @@ func (s *Service) spawn() error {
 		close(s.healthDone)
 		cancel()
 	}
-	go pump(outR, s.hub, s.cfg.Name, api.LevelInfo, s.cfg.Deployment)
-	go pump(errR, s.hub, s.cfg.Name, api.LevelError, s.cfg.Deployment)
+	drained := make(chan struct{})
+	var pumps sync.WaitGroup
+	pumps.Add(2)
+	go func() { defer pumps.Done(); pump(outR, s.hub, s.cfg.Name, api.LevelInfo, s.cfg.Deployment) }()
+	go func() { defer pumps.Done(); pump(errR, s.hub, s.cfg.Name, api.LevelError, s.cfg.Deployment) }()
+	go func() { pumps.Wait(); close(drained) }()
+	s.drained = drained
 	s.mu.Unlock()
 
 	portInfo := ""
