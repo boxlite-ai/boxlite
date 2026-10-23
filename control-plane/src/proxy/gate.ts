@@ -4,7 +4,8 @@ import { appForKey, bearer, safeEqual, sha256hex } from '../auth.js';
 import type { AppRow, EnvRow } from '../db.js';
 import { now } from '../db.js';
 import type { Ctx } from '../ctx.js';
-import { safeNext } from '../enduser/paths.js';
+// The same decoding, normalising matcher as [auth].protect, so an encoded `..` cannot slip past it.
+import { isProtected as matchesPaths, safeNext } from '../enduser/paths.js';
 import { fail } from '../errors.js';
 import { hostCookieName, isSecureUrl, readCookie, setCookieValue } from '../http/cookies.js';
 import { escapeHtml } from '../http/html.js';
@@ -87,13 +88,15 @@ type Gate = { ok: true; stripAuthorization: boolean } | { ok: false; refusal: Re
 
 /**
  * The access gate of an app origin (F7), for HTTP and WebSocket alike: this app's key (or the
- * admin token) passes and is stripped; otherwise a public env, or the access cookie of a ticket.
+ * admin token) passes and is stripped; otherwise a public env, one of its `public_paths` (a
+ * webhook), or the access cookie of a ticket.
  */
-export function accessGate(ctx: Ctx, app: AppRow, env: EnvRow, headers: Headers): Gate {
+export function accessGate(ctx: Ctx, app: AppRow, env: EnvRow, headers: Headers, path: string): Gate {
   const key = keyGate(ctx, app, headers);
   if (isResponse(key)) return { ok: false, refusal: key, access: 'private' };
   if (key === 'ok') return { ok: true, stripAuthorization: true };
   const access = ctx.resources.effectiveAccess(env);
+  if (matchesPaths(ctx.resources.currentSpec(env)?.public_paths ?? [], path)) return { ok: true, stripAuthorization: false };
   if (access === 'public' || verifyAccess(ctx.config.sessionSecret, readCookie(headers, accessName(ctx, app, env)), env.id)) return { ok: true, stripAuthorization: false };
   return { ok: false, refusal: null, access };
 }

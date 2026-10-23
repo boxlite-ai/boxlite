@@ -167,6 +167,13 @@ async function main() {
     assert(r.status === 401 || r.status === 302, `got ${r.status}`)
     return `${r.status}`
   })
+  await check('a webhook path in public_paths is reachable without a key; the rest stays private', async () => {
+    const hook = await app('/webhooks/ping', { anonymous: true, method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })
+    assert(hook.status === 200, `webhook ${hook.status}`)
+    const other = await app('/api/env', { anonymous: true })
+    assert(other.status === 401, `the rest of the app answered ${other.status}`)
+    return 'POST /webhooks/ping 200, /api/env 401'
+  })
   await check('the App key as a Bearer header opens the private app; a key in the URL does not', async () => {
     const page = await app('/')
     assert(page.status === 200 && (await page.text()).includes('Kitchen sink'), `page ${page.status}`)

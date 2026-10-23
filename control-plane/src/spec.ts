@@ -50,6 +50,7 @@ export function buildSpec(args: {
     domains: m.domains,
     // An online `access` change (PUT /access) wins over the manifest until it is cleared.
     access: (args.accessOverride as Manifest['access'] | null) ?? m.access,
+    public_paths: m.public_paths,
     variables: m.variables,
     secrets: m.secrets,
     assigned: args.assigned,
@@ -72,6 +73,8 @@ export function specToManifest(spec: Spec): Manifest {
     auth: spec.auth,
     domains: spec.domains,
     access: spec.access,
+    // Specs from before public_paths existed have none.
+    public_paths: spec.public_paths ?? [],
     variables: spec.variables,
     secrets: spec.secrets,
   };
@@ -150,6 +153,7 @@ export function diffSpecs(prev: Spec | undefined, next: Manifest, opts: { access
     out.push({ kind: '~', path: 'access', from: before.access, to: next.access });
   }
 
+  if (!same(before?.public_paths ?? [], next.public_paths)) out.push({ kind: '~', path: 'public_paths', from: before?.public_paths ?? [], to: next.public_paths });
   diffMap('variables', before?.variables ?? {}, next.variables, out);
   diffMap('secrets', before?.secrets ?? {}, next.secrets, out);
   return out;

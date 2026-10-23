@@ -39,6 +39,7 @@ Read the user's sentence and decide, before writing code:
 | has "my", "only me", per-user data, an admin, or anything private | keep `[auth]` (it is on by default) | Platform Google/GitHub login, zero setup. Remove `[auth]` only for a fully anonymous site. Sign-in does not let other people in: access is `private` by default (`org` behaves the same), so only the owner (console **Open app**) and you (the App key) get through, signed in or not. Others reach the app only once access is `public`: set it when their request says people who are not signed in may open it, otherwise ask (§6). |
 | runs something on a timer ("every morning", "daily digest") | `[[schedule]]` | Sends `POST <path>` (header `X-BoxLite-Schedule: <name>`) to your web service, so the handler must accept POST; it wakes the app. |
 | is only a frontend (no server logic, no database) | one `[[service]]` with `static = "dist/"` | No server needed; the platform serves the files. |
+| receives webhooks (Stripe, GitHub, …) | `public_paths = ["/webhooks/*"]` at the top of `boxlite.toml` | The app stays private; only those paths are open. Check the provider's signature in the handler; never open `/` or `/*` this way (that is `access = "public"`, which needs the user's say-so). |
 | needs a third-party API key the user mentioned | an App secret plus a `[secrets]` reference | If the user gave you the value: `printf %s "$VALUE" \| boxlite-app app secrets set stripe` (stdin only), then `boxlite-app app secrets ref STRIPE_SECRET_KEY app/stripe`. Otherwise ask the user for it, and say why. An existing org secret is referenced as `org/<name>`. Never put a secret value in a file, a variable or a command argument. |
 
 Pick the stack you are best at that fits in one directory. Defaults that work well here: **Node 22 + a small server (Express/Hono/Fastify) serving a built frontend**, or plain server-rendered pages. Python 3.12 works too (`image = "python"`).
@@ -53,6 +54,8 @@ boxlite-app init          # writes boxlite.toml (only if missing) + .boxlite/lin
 Edit `boxlite.toml`. A complete example:
 
 ```toml
+public_paths = ["/webhooks/*"]    # optional, before any [table]: paths anyone may reach even when the app is private (a payment provider's or GitHub's webhook). Verify the provider's signature there.
+
 [app]
 name = "crm"
 

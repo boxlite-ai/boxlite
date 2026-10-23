@@ -21,6 +21,7 @@ const server = http.createServer(async (req, res) => {
       has_secret: Boolean(process.env.E2E_SECRET), app_secret_length: (process.env.E2E_APP_SECRET ?? '').length, prefix: req.headers['x-forwarded-prefix'] ?? null,
       build: existsSync('dist/build.json') ? JSON.parse(readFileSync('dist/build.json', 'utf8')) : null,
     })
+    if (url.pathname === '/webhooks/ping') return json(res, 200, { received: true })
     if (url.pathname === '/api/headers') return json(res, 200, req.headers)
     if (url.pathname === '/api/me') return user(req) ? json(res, 200, user(req)) : json(res, 401, { error: 'anonymous' })
     if (url.pathname === '/api/items' && req.method === 'POST') {

@@ -45,6 +45,7 @@ const MANIFEST_KEYS: Record<string, string> = {
   auth: 'auth',
   domains: 'domains',
   access: 'access',
+  public_paths: 'public_paths',
   variables: 'variables',
   secrets: 'secrets',
 };

@@ -56,6 +56,8 @@ export function specToToml(spec: Record<string, unknown>): string {
   const domains = spec.domains as Record<string, unknown> | undefined;
   const custom = (domains?.custom as string[] | undefined) ?? [];
   if (custom.length) doc.domains = { custom };
+  const publicPaths = (spec.public_paths as string[] | undefined) ?? [];
+  if (publicPaths.length) doc.public_paths = publicPaths;
   const variables = spec.variables as Record<string, string> | undefined;
   if (variables && Object.keys(variables).length) doc.variables = variables;
   const secrets = spec.secrets as Record<string, string> | undefined;

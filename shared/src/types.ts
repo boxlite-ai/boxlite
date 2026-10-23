@@ -77,14 +77,16 @@ export interface Manifest {
   auth: AuthSpec | null;
   domains: DomainsSpec;
   access: Access;
+  /** Paths anyone may reach even when `access` is private or org, e.g. a payment provider's webhook. */
+  public_paths: string[];
   variables: Record<string, string>;
   secrets: Record<string, string>;
 }
 
 /** Keys accepted at each level of boxlite.toml. Anything else is an `unknown_field` error. */
 export const MANIFEST_SCHEMA = {
-  top: ['app', 'name', 'runtime', 'service', 'schedule', 'database', 'volume', 'auth', 'domains', 'access', 'variables', 'secrets', 'env'],
-  envOverride: ['runtime', 'service', 'schedule', 'database', 'volume', 'auth', 'domains', 'access', 'variables', 'secrets'],
+  top: ['app', 'name', 'runtime', 'service', 'schedule', 'database', 'volume', 'auth', 'domains', 'access', 'public_paths', 'variables', 'secrets', 'env'],
+  envOverride: ['runtime', 'service', 'schedule', 'database', 'volume', 'auth', 'domains', 'access', 'public_paths', 'variables', 'secrets'],
   app: ['name'],
   runtime: ['image', 'size', 'build', 'output'],
   service: ['name', 'command', 'port', 'health', 'static'],

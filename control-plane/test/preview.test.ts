@@ -34,6 +34,8 @@ test('a page that keeps polling and holds a request open still gets its picture'
     assert.equal(previewAttempt(env.id)?.failed ?? null, null, JSON.stringify(previewAttempt(env.id)));
     assert.equal(previewMeta(h.ctx, env.id)?.deployment, 1);
     assert.ok(Date.now() - t0 < 15_000, 'it does not wait for an idle network that never comes');
+    // The picture is written before the browser closes; the next capture may start only after that.
+    while (previewAttempt(env.id)?.taking) await new Promise((r) => setTimeout(r, 100));
   } finally {
     server.closeAllConnections();
     server.close();

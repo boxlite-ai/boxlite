@@ -26,7 +26,7 @@ export async function handleUpgrade(ctx: Ctx, req: IncomingMessage, socket: Dupl
   if (!app || app.deleted_at || !env.box_url) return reject(404, 'Not Found');
   const url = new URL(req.url ?? '/', 'http://app.local');
   const incoming = new Headers(Object.entries(req.headers).flatMap(([k, v]): [string, string][] => (v === undefined ? [] : [[k, Array.isArray(v) ? v.join(', ') : v]])));
-  const gate = accessGate(ctx, app, env, incoming);
+  const gate = accessGate(ctx, app, env, incoming, url.pathname);
   if (!gate.ok) return reject(401, 'Unauthorized');
   if (normalisePath(url.pathname).toLowerCase().startsWith('/.boxlite')) return reject(404, 'Not Found');
   const identity = await identityFor(ctx, { method: req.method ?? 'GET', url, headers: incoming }, app, env);

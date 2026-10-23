@@ -1,4 +1,5 @@
 name = "e2e"
+public_paths = ["/webhooks/*"]
 
 [runtime]
 image = "node"

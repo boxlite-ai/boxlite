@@ -35,7 +35,7 @@ export async function serveAppOrigin(ctx: Ctx, c: Context, env: EnvRow): Promise
   if (path === '/.boxlite/open') return openWithTicket(ctx, app, env, url);
 
   const headers = new Headers(c.req.raw.headers);
-  const gate = accessGate(ctx, app, env, headers);
+  const gate = accessGate(ctx, app, env, headers, path);
   if (!gate.ok) return gate.refusal ?? gatePage(ctx, app, env, gate.access, headers);
   if (gate.stripAuthorization) headers.delete('authorization');
 

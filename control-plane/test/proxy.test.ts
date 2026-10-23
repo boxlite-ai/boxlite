@@ -157,6 +157,24 @@ test('F9: an app cannot set platform cookies or cookies with a Domain', async ()
 
 // ---- access gate -----------------------------------------------------------------------
 
+test('public_paths let a webhook into a private app; nothing else gets in, however the path is spelled', async () => {
+  const e = env();
+  h.ctx.store.updateEnv(e.id, { access_override: 'private' });
+  h.ctx.store.insertSpec(e.id, {
+    app: 'crm', environment: 'main', version: 1, deployment: 1, base_version: 0,
+    runtime: { image: 'node', size: 'small', build: [], output: null },
+    services: [{ name: 'web', command: 'node s.js', port: 3000 }], schedules: [],
+    database: null, volumes: [], auth: null, domains: { builtin: 'crm', custom: [] }, access: 'private', public_paths: ['/webhooks/*'], variables: {}, secrets: {},
+    assigned: { box_id: e.box_id, box_url: e.box_url, db_host: null, db_branch: null, app_url: h.appUrl() },
+  } as never);
+  const hook = await h.appRequest('/webhooks/stripe', { method: 'POST', body: '{"type":"checkout.session.completed"}', headers: { 'content-type': 'application/json' } });
+  assert.equal(hook.status, 200, 'the provider reaches the webhook without a key or cookie');
+  assert.equal(seen.at(-1)?.url, '/webhooks/stripe');
+  for (const p of ['/admin', '/webhooks/../admin', '/webhooks/%2e%2e/admin', '/x/webhooks/stripe']) {
+    assert.equal((await h.appRequest(p)).status, 401, `${p} stays private`);
+  }
+});
+
 test('a private app answers 401 with what happened and how to get in; ?__key= no longer opens it', async () => {
   h.ctx.store.updateEnv(env().id, { access_override: 'private' });
   const html = await h.appRequest('/page', { headers: { accept: 'text/html' } });

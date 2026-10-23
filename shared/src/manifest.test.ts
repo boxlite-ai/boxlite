@@ -297,3 +297,14 @@ BOXLITE_ENV = "prod"
   assert.deepEqual(ok.errors, []);
   assert.deepEqual(ok.manifest?.variables, { PORTAL: 'ok' });
 });
+
+test('public_paths open single paths of a private app; the whole app only through access', () => {
+  const toml = (paths: string) => `public_paths = [${paths}]\n[app]\nname = "crm"\n[runtime]\nimage = "node"\n[[service]]\nname = "web"\ncommand = "node s.js"\nport = 3000\n`;
+  const ok = parseManifest(toml('"/webhooks/*"'));
+  assert.deepEqual(ok.errors, []);
+  assert.deepEqual(ok.manifest?.public_paths, ['/webhooks/*']);
+  for (const bad of ['"/*"', '"/"', '"webhooks/*"']) {
+    const r = parseManifest(toml(bad));
+    assert.ok(r.errors.some((e) => String(e.path ?? e.message).includes('public_paths') || e.message.includes('public_paths')), `${bad}: ${JSON.stringify(r.errors)}`);
+  }
+});
