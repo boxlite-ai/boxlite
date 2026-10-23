@@ -45,13 +45,8 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 		http.Error(writer, "box inbound access is disabled", http.StatusForbidden)
 		return
 	}
-	allowed, err := p.hasPublicTunnelAccess(request.Context(), boxID, port)
-	if err != nil {
-		http.Error(writer, "tunnel access unavailable", http.StatusBadGateway)
-		return
-	}
-	if !allowed {
-		http.Error(writer, "tunnel not found", http.StatusNotFound)
+	if authErr := p.authorizeTunnel(writer, request, boxID, port); authErr != nil {
+		http.Error(writer, authErr.message, authErr.status)
 		return
 	}
 
