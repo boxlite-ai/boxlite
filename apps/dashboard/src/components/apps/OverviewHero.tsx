@@ -9,6 +9,7 @@ import { actorName, relTime, STATUS } from '@/lib/apps/format'
 import { openApp } from '@/lib/apps/open'
 import type { AppDetail, AppRelease, AppTab } from '@/lib/apps/types'
 import { cn } from '@/lib/utils'
+import type { ReactNode } from 'react'
 import { DeployProgress } from './DeployProgress'
 import { CopyIconButton } from './spec'
 
@@ -127,7 +128,74 @@ export function LiveCard({
             Picture from {preview.releaseId}, captured {relTime(preview.capturedAt)}
           </span>
         )}
+        <MetaGrid app={app} />
       </div>
     </section>
+  )
+}
+
+/** The app's basic facts, compact: label over value, two columns. */
+function MetaGrid({ app }: { app: AppDetail }) {
+  const runtime = app.runtime
+    ? `${app.runtime.image} · ${app.runtime.size}${
+        app.runtime.cpus !== null && app.runtime.memoryMib !== null
+          ? ` (${app.runtime.cpus} CPU, ${app.runtime.memoryMib / 1024} GB)`
+          : ''
+      }`
+    : null
+  const services = app.services.map((s) => ({
+    name: s.name,
+    color:
+      s.state === 'asleep'
+        ? STATUS.stopped
+        : s.state === 'running' && s.health !== 'unhealthy'
+          ? STATUS.running
+          : s.state === 'failed' || s.health === 'unhealthy'
+            ? STATUS.error
+            : STATUS.idle,
+  }))
+  const rows: { label: string; value: ReactNode; title?: string }[] = [
+    {
+      label: 'App id',
+      value: (
+        <span className="inline-flex items-center gap-1.5">
+          {app.appId}
+          <CopyIconButton text={app.appId} title="Copy app id" />
+        </span>
+      ),
+    },
+    { label: 'Created', value: relTime(app.createdAt), title: new Date(app.createdAt).toLocaleString() },
+    ...(runtime ? [{ label: 'Runtime', value: runtime }] : []),
+    ...(app.box ? [{ label: 'Box', value: `${app.box.id} · ${app.box.state}` }] : []),
+    ...(services.length
+      ? [
+          {
+            label: 'Services',
+            value: (
+              <span className="inline-flex flex-wrap gap-x-3">
+                {services.map((s) => (
+                  <span key={s.name} className="inline-flex items-center gap-1.5">
+                    <span className="size-[6px]" style={{ background: s.color }} />
+                    {s.name}
+                  </span>
+                ))}
+              </span>
+            ),
+          },
+        ]
+      : []),
+    ...(app.database ? [{ label: 'Database', value: app.database.engine }] : []),
+  ]
+  return (
+    <dl className="mt-2 grid grid-cols-2 gap-x-8 gap-y-3 border-t border-border/60 pt-4 font-mono">
+      {rows.map((r) => (
+        <div key={r.label} className="flex min-w-0 flex-col gap-0.5">
+          <dt className="text-[10px] uppercase tracking-[1.5px] text-muted-foreground">{r.label}</dt>
+          <dd className="min-w-0 truncate text-[13px] text-foreground" title={r.title}>
+            {r.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
   )
 }
