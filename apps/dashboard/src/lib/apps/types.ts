@@ -434,6 +434,7 @@ export type AppActionInput =
   | { type: 'removeVariable'; name: string }
   | { type: 'importVariables'; values: Record<string, string> }
   | { type: 'referenceSecret'; name: string; from: string }
+  | { type: 'addSecret'; name: string; value: string }
   | { type: 'removeSecret'; name: string }
   | { type: 'createBackup'; message?: string }
 

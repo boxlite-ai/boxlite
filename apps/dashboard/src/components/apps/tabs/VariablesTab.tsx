@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { ChevronDown } from '@/components/ui/icon'
 import { useAppMutation } from '@/hooks/mutations/useAppMutations'
-import { useAppEnvironments, useOrgSecrets } from '@/hooks/queries/useAppsQuery'
+import { useAppEnvironments, useAppSecrets } from '@/hooks/queries/useAppsQuery'
 import type { AppDetail } from '@/lib/apps/types'
 import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
@@ -248,25 +248,35 @@ function ImportDialog({
   )
 }
 
+type SecretInput =
+  | { type: 'addSecret'; name: string; value: string }
+  | { type: 'referenceSecret'; name: string; from: string }
+
+/** Adds a secret variable: a new value (kept as an App secret, never shown again) or one already stored. */
 function SecretDialog({
+  appId,
   busy,
   onSave,
   onClose,
 }: {
+  appId: string
   busy: boolean
-  onSave: (input: { name: string; from: string }) => void
+  onSave: (input: SecretInput) => void
   onClose: () => void
 }) {
-  const { data: orgSecrets = [], isLoading } = useOrgSecrets(true)
+  const { data: stored = [], isLoading } = useAppSecrets(appId)
+  const [mode, setMode] = useState<'new' | 'stored'>('new')
   const [name, setName] = useState('')
+  const [value, setValue] = useState('')
   const [from, setFrom] = useState('')
-  const chosen = from || orgSecrets[0]?.name || ''
-  const blocked = !NAME_RE.test(name) || PLATFORM_RE.test(name) || !chosen
+  const chosen = from || stored[0]?.name || ''
+  const nameOk = NAME_RE.test(name) && !PLATFORM_RE.test(name)
+  const blocked = !nameOk || (mode === 'new' ? !value : !chosen)
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className={cn(DIALOG_FRAME, 'max-w-[540px] font-mono text-body')}>
         <DialogHeader>
-          <DialogTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">Reference a secret</DialogTitle>
+          <DialogTitle className="font-mono text-[18px] font-bold tracking-[-0.3px]">Add a secret</DialogTitle>
         </DialogHeader>
         <label className="flex flex-col gap-1.5">
           <span className="text-[13px] text-muted-foreground">Variable name</span>
@@ -274,30 +284,68 @@ function SecretDialog({
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'))}
-            placeholder="OPENAI_API_KEY"
+            placeholder="STRIPE_SECRET_KEY"
             className={cn(TEXT_INPUT, 'h-10')}
           />
         </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-[13px] text-muted-foreground">Secret in the org&apos;s store</span>
-          {orgSecrets.length === 0 ? (
-            <span className="text-[13px] text-muted-foreground">
-              {isLoading
-                ? 'Loading…'
-                : 'No org secrets yet. An admin adds one on the control plane (PUT /admin/secrets/org/<name>).'}
+        <div className="flex">
+          {(
+            [
+              ['new', 'New value'],
+              ['stored', 'Stored secret'],
+            ] as const
+          ).map(([m, label]) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              className={cn(
+                '-ml-px border border-border px-3 py-1.5 text-[12px] transition-colors first:ml-0',
+                mode === m
+                  ? 'relative z-10 border-foreground/45 bg-background font-semibold text-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {mode === 'new' ? (
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[13px] text-muted-foreground">Value</span>
+            <input
+              type="password"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="Paste the key"
+              autoComplete="off"
+              className={cn(TEXT_INPUT, 'h-10')}
+            />
+            <span className="text-[12px] text-muted-foreground">
+              Kept for this app only{name ? ` as app/${name.toLowerCase().replace(/_/g, '-')}` : ''}. It cannot be
+              viewed after saving.
             </span>
-          ) : (
-            <select value={chosen} onChange={(e) => setFrom(e.target.value)} className={cn(TEXT_INPUT, 'h-10')}>
-              {orgSecrets.map((secret) => (
-                <option key={secret.name} value={secret.name}>
-                  {secret.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </label>
+          </label>
+        ) : (
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[13px] text-muted-foreground">Secret</span>
+            {stored.length === 0 ? (
+              <span className="text-[13px] text-muted-foreground">
+                {isLoading ? 'Loading…' : 'Nothing stored yet. Add it as a new value instead.'}
+              </span>
+            ) : (
+              <select value={chosen} onChange={(e) => setFrom(e.target.value)} className={cn(TEXT_INPUT, 'h-10')}>
+                {stored.map((secret) => (
+                  <option key={secret.name} value={secret.name}>
+                    {secret.name.startsWith('app/') ? `${secret.name} · this app` : `${secret.name} · organization`}
+                  </option>
+                ))}
+              </select>
+            )}
+          </label>
+        )}
         <span className="text-[12px] text-muted-foreground">
-          The app reads it from its environment. The value itself is never shown here.
+          The app reads it from its environment as {name || 'the name above'}.
         </span>
         <DialogFooter className="gap-1">
           <FlatButton onClick={onClose}>Cancel</FlatButton>
@@ -305,9 +353,13 @@ function SecretDialog({
             variant="primary"
             disabled={blocked}
             loading={busy}
-            onClick={() => onSave({ name, from: chosen })}
+            onClick={() =>
+              onSave(
+                mode === 'new' ? { type: 'addSecret', name, value } : { type: 'referenceSecret', name, from: chosen },
+              )
+            }
           >
-            Add reference and deploy
+            Save and deploy
           </FlatButton>
         </DialogFooter>
       </DialogContent>
@@ -398,7 +450,7 @@ export function VariablesTab({ app }: { app: AppDetail }) {
           <>
             <CopyFrom app={app} />
             <ToolButton onClick={() => setDialog('import')}>Import .env</ToolButton>
-            <ToolButton onClick={() => setDialog('secret')}>Reference a secret</ToolButton>
+            <ToolButton onClick={() => setDialog('secret')}>Add a secret</ToolButton>
             <ToolButton primary onClick={() => setAdding(true)} disabled={adding}>
               Add variable
             </ToolButton>
@@ -553,13 +605,15 @@ export function VariablesTab({ app }: { app: AppDetail }) {
       )}
       {dialog === 'secret' && (
         <SecretDialog
-          busy={pending === 'referenceSecret'}
+          appId={app.id}
+          busy={pending === 'referenceSecret' || pending === 'addSecret'}
           onClose={() => setDialog(null)}
           onSave={async (input) => {
             if (
-              await run(
-                { type: 'referenceSecret', ...input },
-                (next) => `${input.name} references ${input.from}${deployingNote(next)}`,
+              await run(input, (next) =>
+                input.type === 'addSecret'
+                  ? `${input.name} saved${deployingNote(next)}`
+                  : `${input.name} references ${input.from}${deployingNote(next)}`,
               )
             )
               setDialog(null)

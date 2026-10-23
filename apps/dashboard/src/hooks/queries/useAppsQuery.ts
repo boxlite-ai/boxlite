@@ -183,12 +183,12 @@ export function useTableRows(appId: string, table: string, search: string, limit
   })
 }
 
-/** The org secrets a variable may reference (names only). */
-export function useOrgSecrets(enabled: boolean) {
+/** The secrets a variable of this App may reference, names only: its own (app/…) and its organization's (org/…). */
+export function useAppSecrets(appId: string) {
   return useQuery<{ name: string; updated_at: string }[]>({
-    queryKey: [...queryKeys.apps.all, APPS_SCOPE, 'secrets'],
-    queryFn: async () => (await appsClient.get<{ name: string; updated_at: string }[]>('/secrets')).data,
-    enabled,
+    queryKey: [...queryKeys.apps.all, APPS_SCOPE, 'secrets', appId],
+    queryFn: async () =>
+      (await appsClient.get<{ name: string; updated_at: string }[]>(`/apps/${encodeURIComponent(appId)}/secrets`)).data,
   })
 }
 
