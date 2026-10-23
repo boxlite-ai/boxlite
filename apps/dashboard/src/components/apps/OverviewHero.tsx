@@ -3,13 +3,17 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ArrowUpRight } from '@/components/ui/icon'
-import { downloadUrl } from '@/lib/apps/client'
+import { ArrowUpRight, RefreshCw } from '@/components/ui/icon'
+import { APPS_SCOPE } from '@/hooks/queries/useAppsQuery'
+import { queryKeys } from '@/hooks/queries/queryKeys'
+import { appsClient, downloadUrl } from '@/lib/apps/client'
+import { handleApiError } from '@/lib/error-handling'
+import { useQueryClient } from '@tanstack/react-query'
 import { actorName, relTime, STATUS } from '@/lib/apps/format'
 import { openApp } from '@/lib/apps/open'
 import type { AppDetail, AppRelease, AppTab } from '@/lib/apps/types'
 import { cn } from '@/lib/utils'
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { DeployProgress } from './DeployProgress'
 import { CopyIconButton } from './spec'
 
@@ -66,6 +70,7 @@ export function LiveCard({
             </span>
           </span>
           <CopyIconButton text={app.url} title="Copy URL" />
+          {app.activeRelease && <RetakeButton app={app} />}
           {app.activeRelease && (
             <button
               type="button"
@@ -197,5 +202,48 @@ function MetaGrid({ app }: { app: AppDetail }) {
         </div>
       ))}
     </dl>
+  )
+}
+
+/** Takes a new picture of what is live (wakes a sleeping app), then shows it once it arrives. */
+function RetakeButton({ app }: { app: AppDetail }) {
+  const queryClient = useQueryClient()
+  const [since, setSince] = useState<string | null>(null)
+  const busy = since !== null
+  // Done once the picture is newer than the one shown when asked; give up after 45 s.
+  useEffect(() => {
+    if (!since) return
+    if (app.preview && app.preview.capturedAt > since) return setSince(null)
+    const poll = window.setInterval(
+      () => queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, app.id, app.environment) }),
+      3000,
+    )
+    const stop = window.setTimeout(() => setSince(null), 45_000)
+    return () => {
+      window.clearInterval(poll)
+      window.clearTimeout(stop)
+    }
+  }, [since, app.preview, app.id, app.environment, queryClient])
+  const retake = async () => {
+    try {
+      await appsClient.post(`/apps/${encodeURIComponent(app.id)}/preview`, undefined, {
+        params: { env: app.environment },
+      })
+      setSince(app.preview?.capturedAt ?? new Date(0).toISOString())
+    } catch (error) {
+      handleApiError(error, 'Could not take a new picture')
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => void retake()}
+      disabled={busy}
+      title={busy ? 'Taking a new picture…' : 'Take a new picture'}
+      aria-label="Take a new picture"
+      className="text-muted-foreground transition-colors hover:text-foreground disabled:cursor-wait"
+    >
+      <RefreshCw className={cn('size-3.5', busy && 'animate-spin')} />
+    </button>
   )
 }
