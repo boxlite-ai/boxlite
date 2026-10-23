@@ -343,7 +343,7 @@ export function parseManifest(toml: string, env = 'main'): ParseResult {
   const variables = stringMap(v, merged.variables, 'variables', (k) => (VARIABLE_NAME_RE.test(k) ? null : `variable "${k}" must match ${VARIABLE_NAME_RE}`), 'invalid_variable');
   const secrets = stringMap(v, merged.secrets, 'secrets', (k, val) => {
     if (!VARIABLE_NAME_RE.test(k)) return `secret "${k}" must match ${VARIABLE_NAME_RE}`;
-    if (!SECRET_REF_RE.test(val)) return `secret "${k}" must reference "org/path" (got "${val}")`;
+    if (!SECRET_REF_RE.test(val)) return `secret "${k}" must reference "app/<name>" or "org/<name>" (got "${val}")`;
     return null;
   }, 'invalid_secret_ref');
   for (const k of Object.keys(secrets)) {

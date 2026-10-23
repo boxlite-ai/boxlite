@@ -66,3 +66,10 @@ export function parseInteger(text: string, what: string): number {
   if (!/^\d+$/.test(text)) throw new MicrocloudError('usage', `${what} must be a number (got "${text}")`, `pass a whole number, e.g. ${what.startsWith('-') ? `${what} 20` : '7'}`);
   return Number(text);
 }
+
+/** Everything piped in on stdin, as text. */
+export async function readStdin(ctx: Ctx): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const c of ctx.io.stdin) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c)));
+  return Buffer.concat(chunks).toString('utf8');
+}

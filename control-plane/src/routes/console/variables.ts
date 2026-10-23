@@ -1,5 +1,5 @@
 /** Console API: variable and secret-reference edits (each save is one apply deployment), copying variables, backups, the org secret list. */
-import { PLATFORM_ORG, orgSecret, orgSecretNames } from '../../orgs.js';
+import { PLATFORM_ORG, appSecretNames, orgSecretNames, secretValue, setAppSecret } from '../../orgs.js';
 import { buffer } from 'node:stream/consumers';
 import type { Manifest } from '@microcloud/shared';
 import type { Hono } from 'hono';
@@ -8,7 +8,7 @@ import type { AppRow, Deployment, EnvRow, MigrationFile } from '../../db.js';
 import { fail } from '../../errors.js';
 import { specToManifest, type Spec } from '../../spec.js';
 import { readManifest } from '../util.js';
-import type { ConsoleKit } from './kit.js';
+import { actorOf, type ConsoleKit } from './kit.js';
 
 export function consoleVariableRoutes(api: Hono, k: ConsoleKit): void {
   const { ctx, cp, appOf, envOf, v1, detail, json } = k;
@@ -68,6 +68,8 @@ export function consoleVariableRoutes(api: Hono, k: ConsoleKit): void {
     z.object({ type: z.literal('removeVariable'), name: z.string() }),
     z.object({ type: z.literal('importVariables'), values: z.record(z.string(), z.string()) }),
     z.object({ type: z.literal('referenceSecret'), name: z.string(), from: z.string() }),
+    // A new App secret and its reference in one step: the value is stored as app/<name>, never in the config.
+    z.object({ type: z.literal('addSecret'), name: z.string(), value: z.string() }),
     z.object({ type: z.literal('removeSecret'), name: z.string() }),
     z.object({ type: z.literal('createBackup'), message: z.string().max(500).optional() }),
   ]);
@@ -101,12 +103,20 @@ export function consoleVariableRoutes(api: Hono, k: ConsoleKit): void {
         break;
       }
       case 'referenceSecret':
-        if (orgSecret(ctx, app, a.from) === undefined) throw fail('not_found', `no org secret "${a.from}" in this App's organization`, 'an org admin sets it first (PUT /admin/secrets/…)');
+        if (secretValue(ctx, app, a.from) === undefined) throw fail('not_found', `no secret "${a.from}" for this App`, 'set an App secret first, or have an org admin create the org secret');
         await applyConfig(app, env, `Reference ${a.from} as ${a.name}`, (m) => {
           delete m.variables[a.name];
           m.secrets[a.name] = a.from;
         });
         break;
+      case 'addSecret': {
+        const stored = setAppSecret(ctx, app, a.name.toLowerCase().replace(/_/g, '-'), a.value, actorOf(k.viewer(c)));
+        await applyConfig(app, env, `Add secret ${a.name}`, (m) => {
+          delete m.variables[a.name];
+          m.secrets[a.name] = stored.name;
+        });
+        break;
+      }
       case 'removeSecret':
         await applyConfig(app, env, `Remove secret ${a.name}`, (m) => {
           if (!(a.name in m.secrets)) throw fail('not_found', `no secret reference ${a.name}`);
@@ -135,9 +145,9 @@ export function consoleVariableRoutes(api: Hono, k: ConsoleKit): void {
     return c.json(await detail(app, env));
   });
 
-  /** The secrets of the viewer's organization (orgs.ts), for "Reference a secret". */
-  api.get('/secrets', (c) => {
-    const v = k.viewer(c);
-    return c.json(orgSecretNames(ctx, v.kind === 'admin' ? PLATFORM_ORG : v.org.id));
+  /** The App's own secrets (names only) and its org's, for "Add a secret" › "Stored secret". */
+  api.get('/apps/:id/secrets', (c) => {
+    const app = appOf(c);
+    return c.json([...appSecretNames(ctx, app.id), ...orgSecretNames(ctx, app.org_id ?? PLATFORM_ORG)]);
   });
 }

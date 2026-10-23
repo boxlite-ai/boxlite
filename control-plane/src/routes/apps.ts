@@ -6,7 +6,7 @@ import { now } from '../db.js';
 import type { Ctx } from '../ctx.js';
 import { fail } from '../errors.js';
 import { listFeedback } from '../feedback.js';
-import { PLATFORM_ORG, orgSecretNames } from '../orgs.js';
+import { PLATFORM_ORG, appSecretNames, deleteAppSecret, orgSecretNames, setAppSecret } from '../orgs.js';
 import { createApp } from '../services/apps.js';
 import { envSummary } from '../views.js';
 import { body, type C } from './util.js';
@@ -54,6 +54,21 @@ export function appRoutes(ctx: Ctx) {
   r.get('/', (c) => {
     const app = c.get('app');
     return c.json({ name: app.name, created_at: app.created_at, url: ctx.resources.appUrl(app.name, 'main'), envs: ctx.store.envs(app.id).map((e) => envSummary(ctx, app, e)) });
+  });
+
+  // ---- the App's own secrets (orgs.ts): values go in, never come back out ----
+  /** Names only: the App's own (`app/…`) and its organization's, each usable as a [secrets] reference. */
+  r.get('/secrets', (c) => {
+    const app = c.get('app');
+    return c.json({ app: appSecretNames(ctx, app.id), org: orgSecretNames(ctx, app.org_id ?? PLATFORM_ORG) });
+  });
+  r.put('/secrets/:name{.+}', async (c) => {
+    const b = await body(c as unknown as C, z.object({ value: z.string() }));
+    return c.json(setAppSecret(ctx, c.get('app'), c.req.param('name'), b.value, c.get('actor')));
+  });
+  r.delete('/secrets/:name{.+}', (c) => {
+    deleteAppSecret(ctx, c.get('app'), c.req.param('name'), c.get('actor'));
+    return c.body(null, 204);
   });
 
   r.get('/activity', (c) => {

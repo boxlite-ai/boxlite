@@ -8,11 +8,8 @@ import { deleteApp, restoreApp } from '../../lifecycle.js';
 import { capturePreview, previewImage } from '../../preview.js';
 import { createOpenTicket } from '../../proxy/gate.js';
 import { createApp, issueKey, rotateKey } from '../../services/apps.js';
-import { assertCanCreate, canSee, orgIdFor, type Viewer } from '../../orgs.js';
-import { ACTOR, type ConsoleKit } from './kit.js';
-
-/** Activity's actor for what a console user does directly: their GitHub login (`console` for the admin). */
-const actorOf = (v: Viewer) => (v.kind === 'admin' ? ACTOR : (v.user.login ?? v.user.email ?? v.user.id));
+import { assertCanCreate, canSee, orgIdFor } from '../../orgs.js';
+import { actorOf, type ConsoleKit } from './kit.js';
 
 export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
   const { ctx, cp, appOf, viewer, envOf, v1, detail, json } = k;

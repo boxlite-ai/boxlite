@@ -204,7 +204,7 @@ export function onlineChecks(m: Manifest, ctx: OnlineCheckContext): { errors: Ch
     else if (v.mode === 'ro') err('not_supported_yet', `[[volume]] "${v.name}": mode = "ro" is not supported yet (read-only mounts are rejected by the platform)`);
   }
   for (const [name, ref] of Object.entries(m.secrets)) {
-    if (!ctx.secretExists(ref)) err('secret_not_found', `[secrets] ${name} = "${ref}": no such org secret; an org admin must set it first`);
+    if (!ctx.secretExists(ref)) err('secret_not_found', ref.startsWith('app/') ? `[secrets] ${name} = "${ref}": no such App secret; store it with \`printf %s "$VALUE" | boxlite-app app secrets set ${ref.slice(4)}\`` : `[secrets] ${name} = "${ref}": no such org secret; an org admin must set it first, or store it as an App secret and reference app/<name>`);
   }
   if (ctx.uploadBytes !== undefined && ctx.uploadBytes > MAX_SNAPSHOT_BYTES) {
     err('upload_too_large', `upload is ${ctx.uploadBytes} bytes; the limit is ${MAX_SNAPSHOT_BYTES} bytes`);

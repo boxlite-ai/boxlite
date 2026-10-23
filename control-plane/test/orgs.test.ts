@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { PLATFORM_ORG, UNVERIFIED_EMAIL_REASON, assertCanCreate, canSee, orgIdFor, orgSecret, signInConsoleUser, viewerOf, type Viewer } from '../src/orgs.js';
+import { PLATFORM_ORG, UNVERIFIED_EMAIL_REASON, assertCanCreate, canSee, orgIdFor, secretValue, signInConsoleUser, viewerOf, type Viewer } from '../src/orgs.js';
 import { createApp } from '../src/services/apps.js';
 import { harness, type Harness } from './helpers.js';
 
@@ -54,8 +54,8 @@ test('an org secret resolves only for Apps of its org', () => {
   h.ctx.store.run('INSERT INTO org_secrets (org_id, name, value, updated_at) VALUES (?, ?, ?, ?)', PLATFORM_ORG, 'org/openai', 'sk-platform', new Date().toISOString());
   const mine = h.ctx.store.appByName('legacy-app')!;
   const theirs = h.ctx.store.appByName('anns-app')!;
-  assert.equal(orgSecret(h.ctx, mine, 'org/openai'), 'sk-platform');
-  assert.equal(orgSecret(h.ctx, theirs, 'org/openai'), undefined);
+  assert.equal(secretValue(h.ctx, mine, 'org/openai'), 'sk-platform');
+  assert.equal(secretValue(h.ctx, theirs, 'org/openai'), undefined);
 });
 
 test('a new org holds at most 3 Apps; an account without a verified email is suspended until it has one', () => {

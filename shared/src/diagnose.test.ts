@@ -96,7 +96,7 @@ test('a service that exits because a variable is missing names it, with the comm
   assert.equal(token.cause, 'missing_variable');
   assert.match(token.summary, /web needs SLACK_TOKEN/);
   // A credential comes from the org's secret store, never from a value the agent makes up.
-  assert.match(token.fix, /boxlite-app app secrets ref SLACK_TOKEN org\/slack-token/);
+  assert.match(token.fix, /boxlite-app app secrets set slack-token`, then `boxlite-app app secrets ref SLACK_TOKEN app\/slack-token/);
   assert.match(token.fix, /ask the user/);
   const plain = classifyFailure({ step: 'start', message: 'x', service: { name: 'web', command: 'node server.js' }, log_tail: tail('LOG_LEVEL is required') });
   assert.equal(plain.cause, 'missing_variable');

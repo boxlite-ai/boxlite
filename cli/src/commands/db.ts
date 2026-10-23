@@ -13,7 +13,7 @@ import { localDatabaseUrl, startDbBridge, type BridgeSocket, type DbBridge } fro
 import { abortOnSigint } from '../follow.js';
 import { describe } from '../meta.js';
 import { formatAgo, formatBytes, formatValue, table } from '../output.js';
-import { parseInteger } from './common.js';
+import { parseInteger, readStdin } from './common.js';
 
 /** Widest a cell gets in a human table; JSON output is never truncated. */
 const CELL_MAX = 60;
@@ -37,11 +37,6 @@ function printResult(ctx: Ctx, result: SqlResult & { truncated?: boolean }): voi
   ctx.out.line(`${result.row_count ?? result.rows?.length ?? 0} row${result.row_count === 1 ? '' : 's'} · ${result.elapsed_ms ?? 0} ms${result.truncated ? ' · truncated to 1000 rows' : ''}`);
 }
 
-async function readStdin(ctx: Ctx): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const c of ctx.io.stdin) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c)));
-  return Buffer.concat(chunks).toString('utf8');
-}
 
 /** The SQL text from the argument, `--file`, or stdin when the query is `-` (never implicitly: a silent pipe would hang). */
 async function sqlText(ctx: Ctx, query: string | undefined, file: string | undefined): Promise<string> {

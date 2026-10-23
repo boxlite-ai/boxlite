@@ -70,7 +70,7 @@ export interface AgentVariable {
   secret: boolean;
   /** `boxlite.toml`, `secret org/openai`, or `platform`. */
   source: string;
-  /** False when a `[secrets]` reference names an org secret that does not exist. */
+  /** False when a `[secrets]` reference names a secret (App or org) that does not exist. */
   resolved: boolean;
 }
 
@@ -172,7 +172,7 @@ export function contextFindings(c: Omit<AgentContext, 'next_actions'>): Finding[
 
   const unresolved = c.variables.filter((v) => v.secret && !v.resolved);
   if (unresolved.length) {
-    out.push({ id: 'secret_missing', severity: 'error', title: `secret(s) not set on the platform: ${unresolved.map((v) => `${v.name} (${v.source})`).join(', ')}`, fix: 'ask the user to have a platform admin create the org secret each one references (in parentheses; the console can list secrets but not set them), then `boxlite-app deploy`; never put the value in boxlite.toml or the code' });
+    out.push({ id: 'secret_missing', severity: 'error', title: `secret(s) not set on the platform: ${unresolved.map((v) => `${v.name} (${v.source})`).join(', ')}`, fix: 'for an app/<name> reference, store the value the user gave you with `printf %s "$VALUE" | boxlite-app app secrets set <name>` (ask the user if you do not have it); an org/<name> reference needs an org admin; then `boxlite-app deploy`; never put the value in boxlite.toml or the code' });
   }
 
   // Advisor: a credential kept as a plain variable is readable by anyone who can open the console or the CLI.

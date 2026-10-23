@@ -16,6 +16,9 @@ export type Raw = (method: string, path: string, body?: ArrayBuffer) => Promise<
 /** Activity names console actions `console`; `admin` is left for the admin token used directly. */
 export const ACTOR = 'console';
 
+/** Activity's actor for what a console user does directly: their GitHub login (`console` for the admin). */
+export const actorOf = (v: Viewer) => (v.kind === 'admin' ? ACTOR : (v.user.login ?? v.user.email ?? v.user.id));
+
 /** Calls a CP route in-process with the admin token, as actor `console`; a CP error is re-thrown unchanged. */
 function cpClient(root: Hono, ctx: Ctx): { call: Cp; raw: Raw } {
   const request = (method: string, path: string, body: string | ArrayBuffer | undefined, type: string | undefined) =>

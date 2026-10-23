@@ -364,6 +364,19 @@ export class Api {
     return this.json('POST', `/v1/apps/${this.app}/envs`, { body });
   }
 
+  /** The App's own secret names (`app/…`) and its organization's; never values. */
+  secrets(): Promise<{ app: SecretName[]; org: SecretName[] }> {
+    return this.json('GET', `/v1/apps/${this.app}/secrets`);
+  }
+
+  setSecret(name: string, value: string): Promise<{ name: string; updated_at: string; created: boolean }> {
+    return this.json('PUT', `/v1/apps/${this.app}/secrets/${encodeURIComponent(name)}`, { body: { value } });
+  }
+
+  deleteSecret(name: string): Promise<void> {
+    return this.json('DELETE', `/v1/apps/${this.app}/secrets/${encodeURIComponent(name)}`);
+  }
+
   deleteEnv(name: string): Promise<void> {
     return this.json('DELETE', `/v1/apps/${this.app}/envs/${encodeURIComponent(name)}`);
   }
@@ -598,6 +611,12 @@ export interface AuthUser {
 
 /** `owner`: manages the App in the BoxLite console (X-BoxLite-User-Role); `user`: anyone else. */
 export type EndUserRole = 'owner' | 'user';
+
+export interface SecretName {
+  /** As a [secrets] reference: `app/stripe` or `org/openai`. */
+  name: string;
+  updated_at: string;
+}
 
 export interface TestSession {
   cookie: string;

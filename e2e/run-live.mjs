@@ -297,14 +297,23 @@ async function main() {
 
   // ---- change, fail, roll back ----------------------------------------------------
   let good = 0
-  await check('second deploy with a changed variable rebuilds', async () => {
+  await check('second deploy with a changed variable and an App secret the agent stored', async () => {
+    // What an agent does with a key the user pasted: store it (stdin, never an argument), reference it, deploy.
+    const set = spawnSync('node', [CLI, 'app', 'secrets', 'set', 'e2e-pay', '--json'], { cwd: DIR, input: 'sk_e2e_0123456789\n', encoding: 'utf8', env: { ...process.env, BOXLITE_API_URL: CP, BOXLITE_API_KEY: KEY } })
+    assert(set.status === 0, `secrets set exit ${set.status}: ${set.stderr}`)
+    assert(!set.stdout.includes('sk_e2e'), 'the value is never echoed')
+    const ref = cli(['app', 'secrets', 'ref', 'E2E_APP_SECRET', 'app/e2e-pay'])
+    assert(ref.code === 0, `secrets ref exit ${ref.code}: ${ref.err}`)
     setToml((s) => s.replace('GREETING = "hello"', 'GREETING = "hello"\nAPP_VERSION = "v2"'))
     const r = cli(['deploy', '-m', 'e2e v2'])
     assert(r.code === 0, `exit ${r.code} ${(r.err || r.out).slice(-400)}`)
     good = r.json?.deployment?.number ?? r.json?.number
     const e = await (await app('/api/env')).json()
     assert(e.build?.version === 'v2', `build ${JSON.stringify(e.build)}`)
-    return `#${good}`
+    assert(e.app_secret_length === 'sk_e2e_0123456789'.length, `App secret not injected as stored: ${e.app_secret_length}`)
+    const listed = cli(['app', 'secrets', 'list'])
+    assert(JSON.stringify(listed.json).includes('app/e2e-pay') && !JSON.stringify(listed.json).includes('sk_e2e'), 'list shows the name, never the value')
+    return `#${good}, app/e2e-pay injected`
   })
   await check('a broken deploy fails with a classified cause and the old version keeps serving', async () => {
     setToml((s) => s.replace('health = "/healthz"', 'health = "/nope"'))

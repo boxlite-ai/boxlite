@@ -371,6 +371,16 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     const columns = (db.prepare('PRAGMA table_info(app_users)').all() as { name: string }[]).map((c) => c.name);
     if (!columns.includes('test_role')) db.exec('ALTER TABLE app_users ADD COLUMN test_role TEXT');
   },
+  // An App's own secret values (orgs.ts secretValue): set by its agent or in the console, referenced as app/<name>.
+  `
+  CREATE TABLE IF NOT EXISTS app_secrets (
+    app_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (app_id, name)
+  );
+  `,
 ];
 
 export const LOG_RING_SIZE = 20_000;

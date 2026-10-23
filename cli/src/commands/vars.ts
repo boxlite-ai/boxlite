@@ -7,7 +7,7 @@ import type { Ctx } from '../context.js';
 import { describe } from '../meta.js';
 import { table } from '../output.js';
 import { editToml, ensureTable, type TomlDoc } from '../toml-edit.js';
-import { readLocalProject } from './common.js';
+import { readLocalProject, readStdin } from './common.js';
 
 /** `[variables]` for main, `[env.<name>.variables]` otherwise — same for `secrets`. */
 function tablePath(ctx: Ctx, table: 'variables' | 'secrets'): string[] {
@@ -120,13 +120,45 @@ async function varsImport(ctx: Ctx, file: string, opts: { dryRun?: boolean }): P
 
 async function secretsRef(ctx: Ctx, name: string, ref: string): Promise<void> {
   assertName(name);
-  if (!SECRET_REF_RE.test(ref)) throw new MicrocloudError('invalid_secret_ref', `"${ref}" must look like org/path`, `\`boxlite-app app secrets ref ${name} org/${ref.replace(/^\/+/, '') || 'name'}\``);
+  if (!SECRET_REF_RE.test(ref)) throw new MicrocloudError('invalid_secret_ref', `"${ref}" must look like app/<name> or org/<name>`, `\`boxlite-app app secrets ref ${name} app/${ref.replace(/^\/+/, '') || 'name'}\``);
   const dropped = await rewrite(ctx, (doc) => {
     ensureTable(doc, tablePath(ctx, 'secrets'))[name] = ref;
   });
   ctx.out.line(`secret ${name} → ${ref}`);
   ctx.out.data({ file: MANIFEST_FILE, env: ctx.envName, secrets: { [name]: ref }, comments_dropped: dropped });
-  ctx.out.next(`the user adds the value of ${ref} in the console; then ${PUBLISH}`);
+  ctx.out.next(ref.startsWith('app/') ? `if it is not stored yet: \`printf %s "$VALUE" | boxlite-app app secrets set ${ref.slice(4)}\`; then ${PUBLISH}` : `an org admin sets ${ref}; then ${PUBLISH}`);
+}
+
+/** Stores an App secret from stdin: a value never travels as an argument (shell history, process list). */
+async function secretsSet(ctx: Ctx, name: string): Promise<void> {
+  const short = name.replace(/^app\//, '');
+  if ((ctx.io.stdin as { isTTY?: boolean }).isTTY) {
+    throw new MicrocloudError('usage', 'pipe the value in on stdin; it is never taken as an argument', `\`printf %s "$VALUE" | boxlite-app app secrets set ${short}\``);
+  }
+  // A single trailing newline is what `echo` adds, not part of the secret.
+  const value = (await readStdin(ctx)).replace(/\r?\n$/, '');
+  if (!value) throw new MicrocloudError('usage', 'nothing came in on stdin', `\`printf %s "$VALUE" | boxlite-app app secrets set ${short}\``);
+  const r = await (await ctx.appApi()).setSecret(short, value);
+  ctx.out.line(`${r.created ? 'stored' : 'updated'} ${r.name} (${value.length} characters; the value is never shown again)`);
+  ctx.out.data(r);
+  ctx.out.next(`reference it: \`boxlite-app app secrets ref <ENV_NAME> ${r.name}\`, then ${PUBLISH}${r.created ? '' : '; running services see the new value after the next deploy'}`);
+}
+
+async function secretsList(ctx: Ctx): Promise<void> {
+  const s = await (await ctx.appApi()).secrets();
+  ctx.out.data(s);
+  const rows = [...s.app.map((x) => [x.name, 'this App', x.updated_at]), ...s.org.map((x) => [x.name, 'organization', x.updated_at])];
+  if (!rows.length) ctx.out.line('no secrets yet');
+  else for (const l of table([['NAME', 'SCOPE', 'UPDATED'], ...rows])) ctx.out.line(l);
+  ctx.out.next('store one: `printf %s "$VALUE" | boxlite-app app secrets set <name>`; use one: `boxlite-app app secrets ref <ENV_NAME> app/<name>`');
+}
+
+async function secretsRm(ctx: Ctx, name: string): Promise<void> {
+  const short = name.replace(/^app\//, '');
+  if (!(await ctx.confirmDestructive({ action: `delete the App secret app/${short}`, destroys: [`its value`, `[secrets] that reference app/${short} stop resolving on the next deploy`], undo: 'store it again with `app secrets set`' }))) return;
+  await (await ctx.appApi()).deleteSecret(short);
+  ctx.out.line(`deleted app/${short}`);
+  ctx.out.data({ deleted: `app/${short}` });
 }
 
 export function registerVars(app: Command, make: MakeCtx): void {
@@ -159,11 +191,30 @@ export function registerVars(app: Command, make: MakeCtx): void {
     { json: '{ file, env, set | would_set: Record<string, string>, comments_dropped?: boolean }', online: false },
   );
 
-  const secrets = app.command('secrets').description('edit [secrets] references in boxlite.toml (local only; values live in the console)');
+  const secrets = app.command('secrets').description('App secrets (values stored on the platform, never shown again) and [secrets] references in boxlite.toml');
+  describe(
+    secrets
+      .command('set <name>')
+      .description('store an App secret from stdin, e.g. printf %s "$KEY" | boxlite-app app secrets set stripe (referenced as app/stripe)')
+      .action(async (name: string, _o: unknown, cmd: Command) => secretsSet(await make(cmd), name)),
+    { json: '{ name: "app/<name>", updated_at, created: boolean }', exits: [2, 3, 4], online: true, examples: ['printf %s "$STRIPE_SECRET_KEY" | boxlite-app app secrets set stripe'] },
+  );
+  describe(
+    secrets.command('list').description('secret names usable as references: the App\'s own (app/…) and its organization\'s (org/…); never values').action(async (_o: unknown, cmd: Command) => secretsList(await make(cmd))),
+    { json: '{ app: { name, updated_at }[], org: { name, updated_at }[] }', exits: [2, 3], online: true },
+  );
+  describe(
+    secrets
+      .command('rm <name>')
+      .description('delete an App secret')
+      .option('-y, --yes', 'skip the confirmation')
+      .action(async (name: string, _o: unknown, cmd: Command) => secretsRm(await make(cmd), name)),
+    { json: '{ deleted: "app/<name>" }', exits: [2, 3, 4], online: true },
+  );
   describe(
     secrets
       .command('ref <name> <ref>')
-      .description('map NAME to an org secret, e.g. OPENAI_API_KEY org/openai')
+      .description('map NAME to a secret in boxlite.toml, e.g. STRIPE_SECRET_KEY app/stripe (or org/openai)')
       .action(async (name: string, ref: string, _o: unknown, cmd: Command) => secretsRef(await make(cmd), name, ref)),
     { json: '{ file, env, secrets: Record<string, string>, comments_dropped: boolean }', online: false },
   );

@@ -112,9 +112,49 @@ export function assertCanCreate(ctx: Pick<Ctx, 'store'>, viewer: Viewer): void {
   }
 }
 
-/** A secret of the App's org, by name (`org/openai`): other orgs' secrets never resolve. */
-export function orgSecret(ctx: Pick<Ctx, 'store'>, app: AppRow, ref: string): string | undefined {
+/**
+ * The value a `[secrets]` reference names: `app/<name>` is the App's own secret, anything else a
+ * secret of the App's org (`org/openai`). Other Apps' and other orgs' secrets never resolve.
+ */
+export function secretValue(ctx: Pick<Ctx, 'store'>, app: AppRow, ref: string): string | undefined {
+  if (ref.startsWith(APP_SECRET_SCOPE)) return ctx.store.get<{ value: string }>('SELECT value FROM app_secrets WHERE app_id = ? AND name = ?', app.id, ref.slice(APP_SECRET_SCOPE.length))?.value;
   return ctx.store.get<{ value: string }>('SELECT value FROM org_secrets WHERE org_id = ? AND name = ?', app.org_id ?? PLATFORM_ORG, ref)?.value;
+}
+
+/** `app/<name>` references the App's own secret (set by its agent or in the console); any other scope, its organization's. */
+export const APP_SECRET_SCOPE = 'app/';
+/** The part after `app/`: what an App secret may be called. */
+export const APP_SECRET_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+
+/** Stores the App's own secret `app/<name>` (accepts the name with or without `app/`); the value is never logged. */
+export function setAppSecret(ctx: Pick<Ctx, 'store'>, app: AppRow, raw: string, value: string, actor: string): { name: string; updated_at: string; created: boolean } {
+  const name = appSecretName(raw);
+  if (!value) throw fail('invalid_request', 'the value is empty');
+  if (value.length > 65_536) throw fail('invalid_request', 'the value is longer than 64 KB');
+  const created = !ctx.store.get('SELECT 1 FROM app_secrets WHERE app_id = ? AND name = ?', app.id, name);
+  const at = now();
+  ctx.store.run('INSERT INTO app_secrets (app_id, name, value, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(app_id, name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at', app.id, name, value, at);
+  ctx.store.recordActivity(app.id, null, actor, created ? 'secret.set' : 'secret.update', { name: APP_SECRET_SCOPE + name });
+  return { name: APP_SECRET_SCOPE + name, updated_at: at, created };
+}
+
+export function deleteAppSecret(ctx: Pick<Ctx, 'store'>, app: AppRow, raw: string, actor: string): void {
+  const name = appSecretName(raw);
+  if (!ctx.store.run('DELETE FROM app_secrets WHERE app_id = ? AND name = ?', app.id, name).changes) {
+    throw fail('not_found', `no App secret ${APP_SECRET_SCOPE}${name}`, '`boxlite-app app secrets list` shows the names');
+  }
+  ctx.store.recordActivity(app.id, null, actor, 'secret.delete', { name: APP_SECRET_SCOPE + name });
+}
+
+function appSecretName(raw: string): string {
+  const name = raw.startsWith(APP_SECRET_SCOPE) ? raw.slice(APP_SECRET_SCOPE.length) : raw;
+  if (!APP_SECRET_NAME_RE.test(name)) throw fail('invalid_request', `"${raw}" is not a secret name`, 'use letters, digits, ".", "_" or "-", e.g. `stripe` (referenced as app/stripe)');
+  return name;
+}
+
+/** The App's own secret names (never values), as `app/<name>` references. */
+export function appSecretNames(ctx: Pick<Ctx, 'store'>, appId: string): { name: string; updated_at: string }[] {
+  return ctx.store.all<{ name: string; updated_at: string }>('SELECT name, updated_at FROM app_secrets WHERE app_id = ? ORDER BY name', appId).map((r) => ({ name: APP_SECRET_SCOPE + r.name, updated_at: r.updated_at }));
 }
 
 /** The secret names of one org, for the console's "Reference a secret". */

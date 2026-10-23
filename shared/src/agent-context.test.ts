@@ -87,5 +87,5 @@ test('a credential kept as a plain variable is pointed out, with the secret-stor
   assert.deepEqual(f.map((x) => [x.id, x.severity]), [['plain_credential', 'info']]);
   assert.match(f[0]!.title, /SLACK_TOKEN/);
   assert.doesNotMatch(f[0]!.title, /LOG_LEVEL|OPENAI/);
-  assert.match(f[0]!.fix, /secrets ref SLACK_TOKEN org\/slack-token/);
+  assert.match(f[0]!.fix, /secrets set slack-token`, then `boxlite-app app secrets ref SLACK_TOKEN app\/slack-token/);
 });

@@ -18,7 +18,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/healthz') return res.end('ok')
     if (url.pathname === '/api/env') return json(res, 200, {
       app_url: process.env.BOXLITE_APP_URL, env: process.env.BOXLITE_ENV, greeting: process.env.GREETING ?? null,
-      has_secret: Boolean(process.env.E2E_SECRET), prefix: req.headers['x-forwarded-prefix'] ?? null,
+      has_secret: Boolean(process.env.E2E_SECRET), app_secret_length: (process.env.E2E_APP_SECRET ?? '').length, prefix: req.headers['x-forwarded-prefix'] ?? null,
       build: existsSync('dist/build.json') ? JSON.parse(readFileSync('dist/build.json', 'utf8')) : null,
     })
     if (url.pathname === '/api/headers') return json(res, 200, req.headers)

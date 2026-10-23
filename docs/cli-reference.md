@@ -708,9 +708,47 @@ Usage: `boxlite-app app vars import <file> [options]`
 - `--json`: `{ file, env, set | would_set: Record<string, string>, comments_dropped?: boolean }`
 - Exit codes: 0, 1
 
+### `boxlite-app app secrets set`
+
+store an App secret from stdin, e.g. printf %s "$KEY" | boxlite-app app secrets set stripe (referenced as app/stripe)
+
+Usage: `boxlite-app app secrets set <name>`
+
+- Network: talks to the control plane
+- `--json`: `{ name: "app/<name>", updated_at, created: boolean }`
+- Exit codes: 0, 1, 2, 3, 4
+
+```sh
+printf %s "$STRIPE_SECRET_KEY" | boxlite-app app secrets set stripe
+```
+
+### `boxlite-app app secrets list`
+
+secret names usable as references: the App's own (app/…) and its organization's (org/…); never values
+
+Usage: `boxlite-app app secrets list`
+
+- Network: talks to the control plane
+- `--json`: `{ app: { name, updated_at }[], org: { name, updated_at }[] }`
+- Exit codes: 0, 1, 2, 3
+
+### `boxlite-app app secrets rm`
+
+delete an App secret
+
+Usage: `boxlite-app app secrets rm <name> [options]`
+
+| option | description | default |
+|---|---|---|
+| `-y, --yes` | skip the confirmation |  |
+
+- Network: talks to the control plane
+- `--json`: `{ deleted: "app/<name>" }`
+- Exit codes: 0, 1, 2, 3, 4
+
 ### `boxlite-app app secrets ref`
 
-map NAME to an org secret, e.g. OPENAI_API_KEY org/openai
+map NAME to a secret in boxlite.toml, e.g. STRIPE_SECRET_KEY app/stripe (or org/openai)
 
 Usage: `boxlite-app app secrets ref <name> <ref>`
 

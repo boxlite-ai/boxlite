@@ -1,5 +1,5 @@
 /** An env's platform resources behind one object (`ctx.resources`): URLs, current spec and runtime env here; Box, database, volumes and wake in resources/. */
-import { orgSecret } from './orgs.js';
+import { secretValue } from './orgs.js';
 import type { VolumeSpec } from '@microcloud/shared';
 import { now, type AppRow, type EnvRow } from './db.js';
 import type { Ctx } from './ctx.js';
@@ -65,7 +65,7 @@ export class Resources {
     if (spec?.database && env.db_url) out.DATABASE_URL = env.db_url;
     Object.assign(out, spec?.variables ?? {});
     for (const [name, ref] of Object.entries(spec?.secrets ?? {})) {
-      const value = orgSecret(this.ctx, app, ref);
+      const value = secretValue(this.ctx, app, ref);
       if (value !== undefined) out[name] = value;
     }
     return out;
