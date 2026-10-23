@@ -119,6 +119,7 @@ export function ToolButton({
   primary,
   danger,
   title,
+  label,
   loading,
 }: {
   children: ReactNode
@@ -127,6 +128,8 @@ export function ToolButton({
   primary?: boolean
   danger?: boolean
   title?: string
+  /** The accessible name, when the visible text alone is ambiguous (one of several "Restore"). */
+  label?: string
   /** Shows a spinner and blocks repeat clicks while the action runs. */
   loading?: boolean
 }) {
@@ -134,6 +137,7 @@ export function ToolButton({
     <button
       type="button"
       title={title}
+      aria-label={label}
       disabled={disabled || loading}
       onClick={onClick}
       className={cn(

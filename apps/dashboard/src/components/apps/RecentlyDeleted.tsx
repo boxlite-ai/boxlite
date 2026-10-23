@@ -48,7 +48,7 @@ export function RecentlyDeleted() {
             {relTime(app.purgeAfter)}
           </span>
           <HoverActions>
-            <ToolButton loading={busy === app.name} onClick={() => void run(app.name)}>
+            <ToolButton loading={busy === app.name} label={`Restore ${app.name}`} onClick={() => void run(app.name)}>
               Restore
             </ToolButton>
           </HoverActions>
