@@ -29,6 +29,15 @@ const EXPECT = {
   m4: { page: [/\.boxlite\/auth\/login|github/i], needs: ['database', 'auth', 'volume', 'schedule', 'test env'] },
 }
 
+/** The app's page; a sleeping app first answers 503 with the platform's wake-up page, so wait for it. */
+async function openPage(url, key) {
+  for (let i = 0; ; i++) {
+    const r = await fetch(url, { headers: { authorization: `Bearer ${key}`, accept: 'text/html' }, redirect: 'manual' })
+    if (r.status !== 503 || !r.headers.get('x-boxlite-page') || i >= 30) return r
+    await new Promise((res) => setTimeout(res, 2000))
+  }
+}
+
 const rows = []
 for (const f of readdirSync(DIR).filter((n) => n.endsWith('.app.json'))) {
   const c = JSON.parse(readFileSync(join(DIR, f), 'utf8'))
@@ -36,15 +45,17 @@ for (const f of readdirSync(DIR).filter((n) => n.endsWith('.app.json'))) {
   const checks = []
   const check = (name, ok, detail = '') => checks.push({ name, ok: Boolean(ok), detail })
   const status = await (await fetch(`${CP}/v1/apps/${c.app}`, { headers: { authorization: `Bearer ${c.key}` } })).json()
-  const main = status.envs?.find((e) => e.name === 'main')
-  check('app is live', main?.status?.startsWith('live'), main?.status)
+  // Asked for a test version first, the agent rightly leaves main alone until the user agrees: check the test one.
+  const ENV = exp.needs.includes('test env') ? (status.envs?.find((e) => e.name !== 'main' && e.status?.startsWith('live'))?.name ?? 'main') : 'main'
+  const main = status.envs?.find((e) => e.name === ENV)
+  check(`app is live (${ENV})`, main?.status?.startsWith('live'), main?.status)
   const url = main?.url
-  const page = url ? await fetch(url, { headers: { authorization: `Bearer ${c.key}`, accept: 'text/html' }, redirect: 'manual' }) : null
+  const page = url ? await openPage(url, c.key) : null
   const html = page ? await page.text() : ''
   const pageOk = page?.status === 200 || (c.id === 'm3' && page?.status === 302)
   check('app URL answers with a real page', pageOk, `${page?.status} ${html.length} bytes`)
   for (const re of exp.page) check(`page shows ${re}`, re.test(html) || (page?.status === 302 && /login/.test(page.headers.get('location') ?? '')), '')
-  const spec = await (await fetch(`${CP}/v1/apps/${c.app}/envs/main/spec`, { headers: { authorization: `Bearer ${c.key}` } })).json()
+  const spec = await (await fetch(`${CP}/v1/apps/${c.app}/envs/${ENV}/spec`, { headers: { authorization: `Bearer ${c.key}` } })).json()
   if (exp.needs.includes('database')) check('declared a database', spec?.database, '')
   if (exp.needs.includes('volume')) check('declared a volume', spec?.volumes?.length, JSON.stringify(spec?.volumes?.map((v) => v.mount)))
   if (exp.needs.includes('auth')) check('declared GitHub sign-in', spec?.auth?.providers?.includes('github'), JSON.stringify(spec?.auth))
@@ -52,22 +63,22 @@ for (const f of readdirSync(DIR).filter((n) => n.endsWith('.app.json'))) {
   if (exp.needs.includes('test env')) check('tried it in a test environment first', status.envs?.some((e) => e.name !== 'main'), JSON.stringify(status.envs?.map((e) => `${e.name}:${e.status}`)))
 
   // Console side: the same calls the console pages make.
-  const d = await consoleApi(`/apps/${c.app}?env=main`)
-  check('console shows the app Running', d.status === 200 && /live|running/i.test(JSON.stringify(d.body?.status ?? '')), d.body?.status)
+  const d = await consoleApi(`/apps/${c.app}?env=${ENV}`)
+  check('console shows the app Running', d.status === 200 && /live|running|sleeping/i.test(JSON.stringify(d.body?.status ?? '')), d.body?.status)
   check('console lists a live deployment', (d.body?.releases ?? []).some((r) => /active|live|current/i.test(JSON.stringify(r))), `${d.body?.releases?.length ?? 0} deployments`)
   if (spec?.database) {
-    const db = await consoleApi(`/apps/${c.app}/database?env=main`)
+    const db = await consoleApi(`/apps/${c.app}/database?env=${ENV}`)
     const tables = (db.body?.tables ?? db.body?.database?.tables ?? []).filter((t) => !/boxlite/.test(t.name ?? t.schema ?? ''))
     check('console database shows the app tables', tables.length > 0, tables.map((t) => `${t.name}(${t.rows})`).join(', '))
-    const sql = await consoleApi(`/apps/${c.app}/sql?env=main`, { method: 'POST', body: JSON.stringify({ query: 'select 1 as ok' }) })
+    const sql = await consoleApi(`/apps/${c.app}/sql?env=${ENV}`, { method: 'POST', body: JSON.stringify({ query: 'select 1 as ok' }) })
     check('console SQL console runs a query', sql.status === 200, JSON.stringify(sql.body).slice(0, 80))
   }
   if (spec?.volumes?.length) check('console shows the volume', (d.body?.storages ?? []).length > 0, (d.body?.storages ?? []).map((s) => s.name).join(','))
   if (spec?.auth) {
-    const a = await consoleApi(`/apps/${c.app}/auth?env=main`)
+    const a = await consoleApi(`/apps/${c.app}/auth?env=${ENV}`)
     check('console auth shows GitHub ready', JSON.stringify(a.body).includes('github'), '')
   }
-  const logs = await consoleApi(`/apps/${c.app}/logs?env=main`)
+  const logs = await consoleApi(`/apps/${c.app}/logs?env=${ENV}`)
   check('console logs show the app output', JSON.stringify(logs.body ?? '').length > 200, '')
   rows.push({ id: c.id, app: c.app, url, ask: c.ask, checks })
 }
