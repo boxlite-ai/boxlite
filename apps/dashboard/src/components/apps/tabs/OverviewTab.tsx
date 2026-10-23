@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { STATUS } from '@/lib/apps/format'
+import { ArrowRightIcon, GitBranch } from '@/components/ui/icon'
+import { useAppEnvironments } from '@/hooks/queries/useAppsQuery'
+import { appStatusOf, relTime, STATUS } from '@/lib/apps/format'
 import type { AppDetail, AppProblem, AppRelease, AppTab } from '@/lib/apps/types'
 import { toast } from 'sonner'
 import { AgentHandoffPanel } from '../AgentHandoffPanel'
@@ -94,18 +96,60 @@ function FailurePanel({
   )
 }
 
-/** A new environment is not a broken one: nothing red, one task, one action. */
+/**
+ * An environment with nothing deployed, while others of the App are live (an agent tried things
+ * in a test environment first): say where the app runs now, one click away.
+ */
+function LiveElsewhere({ app, onSwitchEnv }: { app: AppDetail; onSwitchEnv: (env: string) => void }) {
+  const { data: envs = [] } = useAppEnvironments(app.id)
+  const live = envs.filter((e) => e.name !== app.environment && e.lastDeploy)
+  if (!live.length) return null
+  return (
+    <section className="flex flex-col border border-border bg-card font-mono">
+      <div className="border-b border-border px-5 py-3 text-[13px] text-muted-foreground">
+        Nothing is deployed to {app.environment} yet. {app.name} runs in{' '}
+        {live.length === 1 ? 'another environment' : `${live.length} other environments`}:
+      </div>
+      {live.map((e) => {
+        const status = appStatusOf(e.status)
+        return (
+          <button
+            key={e.name}
+            type="button"
+            onClick={() => onSwitchEnv(e.name)}
+            className="group flex items-center gap-4 border-b border-border/60 px-5 py-3 text-left last:border-b-0 hover:bg-background/40"
+          >
+            <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="font-semibold text-foreground">{e.name}</span>
+            <span className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
+              <span className="size-[6px]" style={{ background: status.color }} />
+              {status.label}
+            </span>
+            <span className="text-[12px] text-muted-foreground">
+              {e.lastDeploy!.releaseId} · deployed {relTime(e.lastDeploy!.at)}
+            </span>
+            <span className="ml-auto inline-flex items-center gap-1 text-[12px] text-foreground group-hover:underline">
+              Go to {e.name} <ArrowRightIcon className="size-3.5" />
+            </span>
+          </button>
+        )
+      })}
+    </section>
+  )
+}
 
 export function OverviewTab({
   app,
   onGoTo,
   onRollback,
   onOpenDeployment,
+  onSwitchEnv,
 }: {
   app: AppDetail
   onGoTo: (tab: AppTab, section?: string, extra?: Record<string, string>) => void
   onRollback: (release: AppRelease) => void
   onOpenDeployment: (n: number) => void
+  onSwitchEnv: (env: string) => void
 }) {
   const active = app.releases.find((r) => r.id === app.activeRelease) ?? null
   // The newest earlier deployment that can still go live again.
@@ -114,7 +158,12 @@ export function OverviewTab({
   const m = app.metrics
 
   if (app.status === 'draft') {
-    return <HandoffToAgent app={app} />
+    return (
+      <div className="flex flex-col gap-8">
+        <LiveElsewhere app={app} onSwitchEnv={onSwitchEnv} />
+        <HandoffToAgent app={app} />
+      </div>
+    )
   }
 
   return (
@@ -132,7 +181,6 @@ export function OverviewTab({
       )}
 
       <LiveCard app={app} active={active} failing={failing.length > 0} onGoTo={onGoTo} />
-
 
       {/* From the app proxy's access log and the sign-in sessions; hidden until there is either. */}
       {m && <TrafficPanel metrics={m} />}

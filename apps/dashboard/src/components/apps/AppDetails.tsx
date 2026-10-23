@@ -329,6 +329,7 @@ export default function AppDetails() {
               onGoTo={goTo}
               onRollback={rollback}
               onOpenDeployment={(n) => goTo('deployments', undefined, { deployment: String(n) })}
+              onSwitchEnv={switchEnv}
             />
           )}
           {tab === 'deployments' && (
