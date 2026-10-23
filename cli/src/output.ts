@@ -29,6 +29,13 @@ export class Output {
     this.result = { value: obj };
   }
 
+  /** Adds fields to the object already given to data() (a command that learns more after it). */
+  extend(fields: Record<string, unknown>): void {
+    if (!this.json) return;
+    const prev = this.result?.value;
+    this.result = { value: prev && typeof prev === 'object' && !Array.isArray(prev) ? { ...(prev as Record<string, unknown>), ...fields } : fields };
+  }
+
   /** One NDJSON line, written immediately (`--json` only). */
   stream(obj: unknown): void {
     if (!this.json) return;

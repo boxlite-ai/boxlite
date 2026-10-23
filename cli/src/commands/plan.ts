@@ -33,7 +33,7 @@ export async function runPlan(ctx: Ctx, force: boolean): Promise<PlanOutcome> {
   ctx.out.line(`App ${app} · environment ${ctx.envName} · based on v${ctx.baseVersion} (latest v${plan.latest_version})${plan.stale ? ' · stale' : ''}`);
   for (const c of plan.changes ?? []) ctx.out.line(formatChange(c));
   if ((plan.changes ?? []).length === 0) ctx.out.line('  (no changes)');
-  ctx.out.line(`  ${pad('snapshot', 18)}${uploadSummary(checked)} (everything a deploy contains)`);
+  ctx.out.line(`  ${pad('snapshot', 18)}${uploadSummary(checked, ' (everything a deploy contains)')}`);
   for (const w of plan.warnings ?? []) ctx.out.line(`  warning  ${w.rule}  ${w.message}`);
   if (plan.errors?.length) {
     const result = { ok: false, errors: plan.errors, warnings: plan.warnings ?? [] };
@@ -55,7 +55,7 @@ export function registerPlan(program: Command, make: MakeCtx): void {
         const { checked, plan } = await runPlan(ctx, opts.force === true);
         // Configuration and code are separate questions: what changes online, and what a deploy uploads.
         const code = await codeDiff(ctx, checked);
-        ctx.out.data({ code });
+        ctx.out.extend({ code });
         ctx.out.line(`  ${pad('code', 18)}${code.new_files ? `${code.new_files} of ${code.files} files new or changed · ${formatBytes(code.new_bytes)} to upload` : 'nothing new to upload'}`);
         const real = (plan.changes ?? []).filter((c) => c.kind !== 'online_only');
         const resources = real.some((c) => !c.path.startsWith('migrations/') && ['database', 'volume', 'auth', 'variables', 'secrets', 'access'].some((p) => c.path.startsWith(p)));

@@ -107,6 +107,8 @@ test('plan prints the PRD layout, exits 9 when stale, and --force proceeds', asy
     .intercept({ path: '/v1/apps/crm/envs/main/plan', method: 'POST', body: (b) => ((body = JSON.parse(b)), true) })
     .reply(200, planResponse, { headers: JSON_HEADERS });
 
+  // Code is a separate question: the platform says which files it does not have yet.
+  pool.intercept({ path: '/v1/apps/crm/uploads', method: 'POST' }).reply(201, { upload_id: 'u1', missing: [sha('{}')] }, { headers: JSON_HEADERS }).times(2);
   const res = await cli(['plan'], { cwd: dir, dispatcher: agent });
   assert.equal(res.code, 0, res.stderr);
   assert.deepEqual(res.lines, [
@@ -114,8 +116,9 @@ test('plan prints the PRD layout, exits 9 when stale, and --force proceeds', asy
     '  + database        neon branch main, run migrations/0001_init.sql',
     '  ~ variables       LOG_LEVEL: (none) → info',
     '  ! online only     domains.custom: crm.acme.com   (run `boxlite-app app pull`)',
-    '  files to upload   4 files, 200 B · warning: .env.local looks like a secret file (excluded)',
-    'next: `boxlite-app apply --yes` provisions these now (no code upload), or `boxlite-app deploy` does it with the code',
+    '  snapshot          4 files, 200 B (everything a deploy contains) · warning: .env.local looks like a secret file (excluded)',
+    '  code              2 of 4 files new or changed · 2 B to upload',
+    'next: `boxlite-app deploy -m "<what changed>"` makes these changes and ships the code',
   ]);
   assert.ok(body);
   assert.equal(body.base_version, 1);

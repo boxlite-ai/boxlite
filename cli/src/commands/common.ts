@@ -71,9 +71,9 @@ export async function codeDiff(ctx: Ctx, checked: CheckedProject): Promise<CodeD
   return { files: checked.upload.files.length, bytes: checked.upload.bytes, new_files: fresh.length, new_bytes: newBytes };
 }
 
-export function uploadSummary(checked: CheckedProject): string {
+export function uploadSummary(checked: CheckedProject, note = ''): string {
   const secrets = checked.result.warnings.filter((w) => w.rule === 'secret_file').map((w) => w.message);
-  let text = `${checked.upload.files.length} files, ${formatBytes(checked.upload.bytes)}`;
+  let text = `${checked.upload.files.length} files, ${formatBytes(checked.upload.bytes)}${note}`;
   for (const s of secrets) text += ` · warning: ${s}`;
   return text;
 }

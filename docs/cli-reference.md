@@ -83,7 +83,7 @@ Usage: `boxlite-app plan [options]`
 | `--force` | plan even when the local base version is behind the environment (the online changes would be overwritten) |  |
 
 - Network: talks to the control plane
-- `--json`: `{ app, environment, base_version, latest_version, stale, changes: { kind: "+"|"~"|"-"|"online_only", path, from?, to? }[], errors: CheckError[], warnings: CheckWarning[], upload: { files, bytes } }`
+- `--json`: `{ app, environment, base_version, latest_version, stale, changes (configuration): { kind: "+"|"~"|"-"|"online_only", path, from?, to? }[], errors: CheckError[], warnings: CheckWarning[], upload: { files, bytes } (the whole snapshot), code: { files, bytes, new_files, new_bytes } (what a deploy would upload) }`
 - Exit codes: 0, 1, 2, 3, 6, 7, 9
 
 ### `boxlite-app apply`
