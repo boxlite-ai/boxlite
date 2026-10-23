@@ -6,7 +6,9 @@
 // One vocabulary for both directions of a box's network policy, matching the
 // `mode` values of the `/v1` NetworkSpec and the CLI's --network / --inbound
 // flags. Inbound `enabled` means the services the box exposes are reachable
-// through the proxy without signing in; outbound `disabled` means no egress.
+// through the proxy under each tunnel's access policy (public tunnels need no
+// sign-in, private ones need their token or membership); outbound `disabled`
+// means no egress.
 export enum NetworkMode {
   ENABLED = 'enabled',
   DISABLED = 'disabled',

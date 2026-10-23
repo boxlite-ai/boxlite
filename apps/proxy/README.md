@@ -173,6 +173,8 @@ query/header and a Referer containing it; private responses use no-store and no-
 All platform cookies, including other boxes' legacy cookies, are removed before reaching the guest.
 Guest Set-Cookie values using reserved platform names are discarded; application cookies remain.
 Cookie-authenticated cross-origin fetches, writes and WebSocket upgrades are rejected.
+Without an `Origin`, a cookie request passes only as a top-level `GET`/`HEAD` document
+navigation, with `Sec-Fetch-Site` of `same-origin` or `none`, or with no Fetch Metadata at all.
 Safe top-level navigation remains allowed, including the OIDC return redirect.
 
 A long-lived WebSocket has no HTTP responses on which to renew a cookie. It remains connected after

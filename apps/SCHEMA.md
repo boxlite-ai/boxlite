@@ -388,7 +388,7 @@ or `archived`.
 | `env` | `jsonb` | default `{}` |
 | `labels` | `jsonb` | nullable |
 | `volumes` | `jsonb` | array of `{ volumeId, mountPath }` |
-| `inboundEnabled` | `boolean` | default `false`; `true` lets the proxy serve exposed services without sign-in |
+| `inboundEnabled` | `boolean` | default `false`; `true` lets the proxy serve exposed services under each tunnel's access policy (public: no sign-in; private: tunnel token or member) |
 | `outboundEnabled` | `boolean` | default `true`; `false` blocks all egress |
 | `outboundAllowNet` | `text[]` | nullable egress allowlist (hosts, wildcards, IPv4, CIDRs); null = full egress |
 | `authToken` | `character varying` | `nanoid(32)`, lowercased |

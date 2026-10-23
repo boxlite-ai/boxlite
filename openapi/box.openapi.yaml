@@ -2541,8 +2541,9 @@ components:
           description: |
             Optional inbound service access policy. Omission means
             `mode=disabled`, including for legacy flat network requests.
-            Send `mode=enabled` to let exposed services be reached without
-            sign-in.
+            Send `mode=enabled` to let exposed services be reached through the
+            proxy under each tunnel's access policy: public tunnels need no
+            sign-in, private ones need their token or organization membership.
           default:
             mode: disabled
         mode:
