@@ -3,7 +3,16 @@
 
 package storage
 
-import "testing"
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+)
 
 // The runner reaches minio in development over plain HTTP and S3 in production
 // over TLS, and minio-go wants a bare host — not a URL — plus a separate secure
@@ -119,6 +128,81 @@ func TestResolveArcPath(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The control plane picks the backend per archive through the URI scheme, so a
+// gs:// snapshot on a runner that also serves S3 migrations must reach Cloud
+// Storage, and a missing backend must fail the one job that needs it.
+func TestSchemeArchiveStoreRoutesByScheme(t *testing.T) {
+	gcsStore, s3Store := &recordingStore{}, &recordingStore{}
+	store := &SchemeArchiveStore{GCS: gcsStore, S3: s3Store}
+
+	for _, arcPath := range []string{"gs://snapshots/org/snap.boxlite", "s3://archives/box.boxlite", "box-migrations/box.boxlite"} {
+		if err := store.Remove(context.Background(), arcPath); err != nil {
+			t.Fatalf("Remove(%q) error = %v", arcPath, err)
+		}
+	}
+
+	if want := []string{"gs://snapshots/org/snap.boxlite"}; !slices.Equal(gcsStore.removed, want) {
+		t.Fatalf("Cloud Storage received %v, want %v", gcsStore.removed, want)
+	}
+	if want := []string{"s3://archives/box.boxlite", "box-migrations/box.boxlite"}; !slices.Equal(s3Store.removed, want) {
+		t.Fatalf("S3 received %v, want %v", s3Store.removed, want)
+	}
+
+	onlyGCS := &SchemeArchiveStore{GCS: gcsStore}
+	if err := onlyGCS.Remove(context.Background(), "box-migrations/box.boxlite"); err == nil ||
+		!strings.Contains(err.Error(), "AWS_DEFAULT_BUCKET") {
+		t.Fatalf("Remove on a runner without S3 = %v, want the configuration hint", err)
+	}
+}
+
+func TestParseGCSURI(t *testing.T) {
+	bucket, key, err := parseGCSURI("gs://snapshots/box-snapshots/org-1/snap-1.boxlite")
+	if err != nil || bucket != "snapshots" || key != "box-snapshots/org-1/snap-1.boxlite" {
+		t.Fatalf("parseGCSURI = (%q, %q, %v)", bucket, key, err)
+	}
+
+	for _, arcPath := range []string{"", "snapshots/key", "gs://", "gs://bucket", "gs://bucket/", "gs:///key"} {
+		if _, _, err := parseGCSURI(arcPath); err == nil {
+			t.Fatalf("parseGCSURI(%q) accepted an invalid URI", arcPath)
+		}
+	}
+}
+
+// Close commits whatever a Cloud Storage writer was given, so an upload whose
+// local read fails has to be cancelled rather than closed, or it leaves a
+// truncated archive at the URI the control plane recorded.
+func TestGCSArchiveStoreUploadLeavesNothingWhenTheReadFails(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"bucket":"snapshots","name":"snap-1.boxlite"}`)
+	}))
+	defer server.Close()
+	t.Setenv("STORAGE_EMULATOR_HOST", server.URL)
+
+	// Reading a directory fails the copy, as a disk error partway through would.
+	err := (&GCSArchiveStore{}).Upload(context.Background(), "gs://snapshots/snap-1.boxlite", t.TempDir())
+
+	if err == nil {
+		t.Fatal("Upload of an unreadable file succeeded")
+	}
+	if n := requests.Load(); n != 0 {
+		t.Fatalf("a failed upload reached Cloud Storage %d time(s), want none", n)
+	}
+}
+
+type recordingStore struct {
+	removed []string
+}
+
+func (r *recordingStore) Upload(context.Context, string, string) error   { return nil }
+func (r *recordingStore) Download(context.Context, string, string) error { return nil }
+func (r *recordingStore) Remove(_ context.Context, arcPath string) error {
+	r.removed = append(r.removed, arcPath)
+	return nil
 }
 
 // A runner with no bucket configured must say so at construction, not hand back

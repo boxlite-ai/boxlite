@@ -142,7 +142,8 @@ const bundle = ({
   clickhouse = true,
   registryCredentials = true,
   registryProxy = true,
-}: { clickhouse?: boolean; registryCredentials?: boolean; registryProxy?: boolean } = {}) => {
+  snapshots = false,
+}: { clickhouse?: boolean; registryCredentials?: boolean; registryProxy?: boolean; snapshots?: boolean } = {}) => {
   const seen: Record<string, any> = {}
   const order: string[] = []
   const record = (name: string, value: any) => {
@@ -158,6 +159,13 @@ const bundle = ({
   const storage = {
     name: out('boxlite-dev-storage'),
     binding: { cloud: 'aws' as const, credentialVending: { roleName: 'r', roleArn: out('arn:role') } },
+    snapshots: snapshots
+      ? {
+          active: true,
+          bucket: out('boxlite-dev-snapshots'),
+          archivePrefix: out('gs://boxlite-dev-snapshots/box-snapshots/'),
+        }
+      : { active: false },
     ready: [],
   }
   const database = {
@@ -511,6 +519,44 @@ test('the API is granted exactly the capabilities its storage supports', () => {
       'write-registry-credentials',
     ],
   )
+})
+
+test('the snapshot archive grant comes after every grant an existing stage already holds', () => {
+  // Providers name each grant by its index; a grant inserted ahead of others
+  // would move them to new resources, and on GCP that deletes the bindings.
+  const kinds = (deployed: ReturnType<typeof bundle>) =>
+    deployed.seen.api.request.capabilities.map((capability: any) => capability.kind)
+  const before = bundle()
+  deployStack({ providers: before.providers, config, inputs: inputs() })
+  const after = bundle({ snapshots: true })
+  deployStack({ providers: after.providers, config, inputs: inputs() })
+
+  assert.deepEqual(kinds(after), [...kinds(before), 'manage-snapshot-archives'])
+})
+
+test('snapshots are on only where storage keeps a bucket for them, for the API and the hosts alike', () => {
+  const kept = bundle({ snapshots: true })
+  deployStack({ providers: kept.providers, config, inputs: inputs() })
+  assert.equal(kept.seen.api.request.environment.BOX_SNAPSHOT_ARCHIVE_PREFIX, kept.seen.storage.snapshots.archivePrefix)
+  const grant = kept.seen.api.request.capabilities.find(
+    (capability: any) => capability.kind === 'manage-snapshot-archives',
+  )
+  assert.equal(grant?.snapshots.bucket, kept.seen.storage.snapshots.bucket)
+  // The hosts write the archives the API deletes, so they are handed the same bucket.
+  assert.equal(kept.seen.runners.request.snapshotBucket, kept.seen.storage.snapshots.bucket)
+
+  /*
+   * A cloud with no snapshot store (AWS, reserved) gets no variable, no grant
+   * and no bucket for its hosts; the API then reports snapshots off.
+   */
+  const none = bundle()
+  deployStack({ providers: none.providers, config, inputs: inputs() })
+  assert.equal('BOX_SNAPSHOT_ARCHIVE_PREFIX' in none.seen.api.request.environment, false)
+  assert.equal(
+    none.seen.api.request.capabilities.some((capability: any) => capability.kind === 'manage-snapshot-archives'),
+    false,
+  )
+  assert.equal(none.seen.runners.request.snapshotBucket, null)
 })
 
 test('the API writes registry passwords only where a store keeps them, and is told which store', () => {

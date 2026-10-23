@@ -65,6 +65,25 @@ func (c *Client) ImportBox(ctx context.Context, boxId, archivePath string) error
 	return nil
 }
 
+// RestoreBoxFromArchive replaces the disk of a stopped box with the archive's.
+// The runtime validates the whole archive before it touches the box, and
+// swaps the disk in with a single rename, so a failure leaves the box as it
+// was. The box keeps its configuration: the archive's options are not applied.
+func (c *Client) RestoreBoxFromArchive(ctx context.Context, boxId, archivePath string) error {
+	bx, err := c.getOrFetchBox(ctx, boxId)
+	if err != nil {
+		return err
+	}
+
+	if err := bx.RestoreFromArchive(ctx, archivePath); err != nil {
+		return fmt.Errorf("failed to restore box %s from %s: %w", boxId, archivePath, err)
+	}
+
+	c.logger.InfoContext(ctx, "restored box disk from archive", "box", boxId, "archive", archivePath)
+
+	return nil
+}
+
 // boxPresent reports whether the runtime still holds a record for the box. It
 // reads through the runtime rather than the handle cache so it sees boxes this
 // process never created — an imported box after a runner restart, for one.

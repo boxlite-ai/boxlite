@@ -19,6 +19,7 @@ import { ResourceType } from '../enums/resource-type.enum'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { BoxMigrationJobReceiver, isMigrationJobType } from './box-migration-job-receiver.service'
+import { BoxSnapshotSettler, isSnapshotJobType } from './box-snapshot-settler.service'
 import { ImagePullFailureService } from '../../image/services/image-pull-failure.service'
 
 /**
@@ -34,6 +35,7 @@ export class JobStateHandlerService {
     private readonly redisLockProvider: RedisLockProvider,
     private readonly boxMigrationJobReceiver: BoxMigrationJobReceiver,
     private readonly imagePullFailureService: ImagePullFailureService,
+    private readonly boxSnapshotSettler: BoxSnapshotSettler,
   ) {}
 
   /**
@@ -55,6 +57,13 @@ export class JobStateHandlerService {
     // concurrent start or stop of the same box is holding.
     if (isMigrationJobType(job.type)) {
       await this.boxMigrationJobReceiver.handleJobCompletion(job)
+      return
+    }
+
+    // A snapshot job holds no Redis lock either: its operation's row and the
+    // box's EXPORTING or IMPORTING state are what keep other work out.
+    if (isSnapshotJobType(job.type)) {
+      await this.boxSnapshotSettler.settle(job)
       return
     }
 

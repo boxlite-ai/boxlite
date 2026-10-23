@@ -320,6 +320,55 @@ const S3_URI_SCHEME = 's3://'
 // a leading or doubled slash — along with ".", ".." and anything whitespace.
 const ARCHIVE_PREFIX_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 
+// A Cloud Storage location, gs://<bucket>/<prefix>.
+const GCS_URI_SCHEME = 'gs://'
+
+// Cloud Storage's naming rule for a bucket name of 3 to 63 characters, dots
+// included. The longer dotted names it allows for domain-named buckets, up to
+// 222 characters, are refused here.
+const GCS_BUCKET_NAME = /^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$/
+
+const DEFAULT_SNAPSHOTS_PER_ORGANIZATION = 10
+
+/**
+ * Where box snapshots are written, and how many an organization may keep.
+ *
+ * Snapshots are on only while BOX_SNAPSHOT_ARCHIVE_PREFIX is set. Unlike a
+ * migration's prefix it must name its bucket: the control plane writes each
+ * archive's full URI into the job and deletes the object itself, so there is
+ * no runner bucket to fall back on. Cloud Storage is the one backend so far.
+ * An s3:// prefix is reserved for the S3 backend and refused at boot, rather
+ * than accepted and failed one snapshot at a time.
+ *
+ * Exported so its rules can be tested without reading the process environment.
+ */
+export function boxSnapshotConfig(env: NodeJS.ProcessEnv = process.env) {
+  const rawLimit = env.BOX_SNAPSHOT_MAX_PER_ORGANIZATION?.trim()
+  const maxPerOrganization = rawLimit ? Number(rawLimit) : DEFAULT_SNAPSHOTS_PER_ORGANIZATION
+  if (!Number.isInteger(maxPerOrganization) || maxPerOrganization < 1) {
+    throw new Error(`BOX_SNAPSHOT_MAX_PER_ORGANIZATION must be a positive integer, got "${rawLimit}"`)
+  }
+
+  const raw = env.BOX_SNAPSHOT_ARCHIVE_PREFIX?.trim()
+  if (!raw) {
+    return { archivePrefix: undefined as string | undefined, maxPerOrganization }
+  }
+  if (raw.startsWith(S3_URI_SCHEME)) {
+    throw new Error('BOX_SNAPSHOT_ARCHIVE_PREFIX: S3 snapshot storage is reserved and not implemented yet; use gs://')
+  }
+
+  const [bucket, ...segments] = raw.slice(GCS_URI_SCHEME.length).replace(/\/+$/, '').split('/')
+  if (
+    !raw.startsWith(GCS_URI_SCHEME) ||
+    !GCS_BUCKET_NAME.test(bucket) ||
+    !segments.every((segment) => ARCHIVE_PREFIX_SEGMENT.test(segment))
+  ) {
+    throw new Error(`BOX_SNAPSHOT_ARCHIVE_PREFIX must be gs://<bucket>/<prefix>, got "${raw}"`)
+  }
+
+  return { archivePrefix: `${GCS_URI_SCHEME}${[bucket, ...segments].join('/')}/`, maxPerOrganization }
+}
+
 /**
  * The login-time account link, merging a person's logins into one account.
  *
@@ -699,6 +748,7 @@ const configuration = {
     flushBatchSize: parseInt(process.env.BOX_ACTIVITY_FLUSH_BATCH_SIZE || '1000', 10),
   },
   boxMigration: boxMigrationConfig(),
+  boxSnapshot: boxSnapshotConfig(),
   boxSync: {
     // How long a claimed startup job may sit without completing before a
     // runner reporting the box as started is allowed to close it out. This is

@@ -123,6 +123,17 @@ describe('BoxLite lifecycle policy mapper', () => {
 
     expect(response.auto_resume).toBe(true)
   })
+
+  // The contract names a stopped box a snapshot job holds, rather than folding
+  // it into stopped: only deletion is accepted until the job settles.
+  it.each([
+    [BoxState.EXPORTING, 'exporting'],
+    [BoxState.IMPORTING, 'importing'],
+  ])('reports a %s box as %s', (state, status) => {
+    const response = boxToBoxResponse({ id: 'box-1', name: 'demo', state, labels: {} } as any)
+
+    expect(response.status).toBe(status)
+  })
 })
 
 // These four validated, were audit-logged, and were then dropped on the floor

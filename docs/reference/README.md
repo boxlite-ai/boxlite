@@ -30,16 +30,16 @@ Complete API documentation for each SDK:
 
 | Surface | Documentation | Description |
 |---------|---------------|-------------|
-| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 32 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images, registries |
+| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 37 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images, registries |
 | **Reference server** | [`openapi/reference-server/`](../../openapi/reference-server/README.md) | A partial implementation used as a client test fixture, not a conformance target |
 
 The spec is the contract, not an inventory of any one server, and no
-implementation currently serves all 32 paths:
+implementation currently serves all 37 paths:
 
 | Server | Serves | Does not serve |
 |--------|--------|----------------|
-| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | registries, `network/tunnel`, `network/inbound`. Volume routes are registered but every operation answers `400 UnsupportedError`, as do `images/usage` and both alias write routes |
-| reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, and `DELETE …/executions/{exec_id}` (kill) |
+| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | registries, `network/tunnel`, `network/inbound`, `restores/{restore_id}`, the top-level `snapshots` routes. Volume routes are registered but every operation answers `400 UnsupportedError`, as do `images/usage` and both alias write routes |
+| reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, `DELETE …/executions/{exec_id}` (kill), `restores/{restore_id}`, and the top-level `snapshots` routes |
 
 Read each server's routes rather than either README — both under-report.
 `GET /config` does not close this gap: its feature flags (`tty_enabled`,

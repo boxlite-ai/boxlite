@@ -27,7 +27,7 @@ import type { ClickHouse } from './clickhouse.ts'
 import type { Database } from './database.ts'
 import type { Placement } from './network.ts'
 import type { RegistryCredentialStore } from './registry-credentials.ts'
-import type { Storage } from './storage.ts'
+import type { SnapshotArchives, Storage } from './storage.ts'
 import type { WorkloadHost } from './cluster.ts'
 
 /**
@@ -41,6 +41,8 @@ export type ApiCapability =
   | { kind: 'list-own-bucket'; storage: Storage }
   | { kind: 'manage-volume-buckets'; storage: Storage }
   | { kind: 'vend-volume-credentials'; storage: Storage }
+  // Delete snapshot archives; the runners write and read them.
+  | { kind: 'manage-snapshot-archives'; snapshots: Extract<SnapshotArchives, { active: true }> }
   | { kind: 'read-telemetry'; clickhouse: ClickHouse }
   | { kind: 'read-secret'; ref: $util.Output<string> }
   | { kind: 'write-registry-credentials'; store: Extract<RegistryCredentialStore, { active: true }> }

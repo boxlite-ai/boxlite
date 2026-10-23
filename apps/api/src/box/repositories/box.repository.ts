@@ -31,7 +31,7 @@ import { OutboundPolicy } from '../runner-adapter/network-policy'
 
 // SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
 // acquire a lock.
-const PG_LOCK_TIMEOUT_CODE = '55P03'
+export const PG_LOCK_TIMEOUT_CODE = '55P03'
 
 // Cap how long the proxy auto-start UPDATE waits to acquire the box row's
 // write lock. Concurrent start/stop/sync go through updateWhere(), which holds
@@ -302,6 +302,8 @@ export class BoxRepository extends BaseRepository<Box> {
    * @param id - The ID of the box to update.
    * @param params.updateData - The partial data to update.
    * @param params.whereCondition - The where condition to use for the update.
+   * @param transaction - A transaction to join instead of opening one, for a
+   *   caller whose other writes must commit or roll back with the box's.
    *
    * @throws {BoxConflictError} if the box was modified by another operation
    */
@@ -311,10 +313,11 @@ export class BoxRepository extends BaseRepository<Box> {
       updateData: Partial<Box>
       whereCondition: FindOptionsWhere<Box>
     },
+    transaction?: EntityManager,
   ): Promise<Box> {
     const { updateData, whereCondition } = params
 
-    return this.manager.transaction(async (entityManager) => {
+    const update = async (entityManager: EntityManager) => {
       const whereClause = {
         ...whereCondition,
         id,
@@ -348,7 +351,9 @@ export class BoxRepository extends BaseRepository<Box> {
       this.invalidateLookupCacheOnUpdate(box, previousBox)
 
       return box
-    })
+    }
+
+    return transaction ? update(transaction) : this.manager.transaction(update)
   }
 
   /**

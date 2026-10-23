@@ -34,7 +34,7 @@ use super::exec::RestExecControl;
 use super::types::{
     BoxMetricsResponse, BoxResponse, CloneBoxRequest, CreateSnapshotRequest, ExecRequest,
     ExecResponse, ExecutionStatusResponse, ExportBoxRequest, ListSnapshotsResponse,
-    SnapshotResponse,
+    SnapshotResponse, SnapshotRestoreResponse,
 };
 
 /// REST-backed box handle.
@@ -632,6 +632,42 @@ impl RestBox {
     }
 }
 
+/// How a snapshot or restore a server finishes after replying is followed:
+/// polled with backoff, and given up on after a bound no real export reaches.
+#[cfg(not(test))]
+const SNAPSHOT_POLL_FIRST: std::time::Duration = std::time::Duration::from_secs(1);
+#[cfg(test)]
+const SNAPSHOT_POLL_FIRST: std::time::Duration = std::time::Duration::from_millis(10);
+const SNAPSHOT_POLL_MAX: std::time::Duration = std::time::Duration::from_secs(5);
+const SNAPSHOT_WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60);
+
+/// Paces the polling of one asynchronous snapshot operation.
+struct OperationPoll {
+    delay: std::time::Duration,
+    deadline: std::time::Instant,
+}
+
+impl OperationPoll {
+    fn new() -> Self {
+        Self {
+            delay: SNAPSHOT_POLL_FIRST,
+            deadline: std::time::Instant::now() + SNAPSHOT_WAIT_LIMIT,
+        }
+    }
+
+    async fn wait(&mut self, operation: &str) -> BoxliteResult<()> {
+        if std::time::Instant::now() >= self.deadline {
+            return Err(BoxliteError::Internal(format!(
+                "{operation} did not finish within {} minutes",
+                SNAPSHOT_WAIT_LIMIT.as_secs() / 60
+            )));
+        }
+        tokio::time::sleep(self.delay).await;
+        self.delay = (self.delay * 2).min(SNAPSHOT_POLL_MAX);
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl SnapshotBackend for RestBox {
     async fn create(&self, options: SnapshotOptions, name: &str) -> BoxliteResult<SnapshotInfo> {
@@ -640,7 +676,25 @@ impl SnapshotBackend for RestBox {
         let box_id = self.box_id_str();
         let path = format!("/boxes/{}/snapshots", box_id);
         let req = CreateSnapshotRequest::from_options(&options, name);
-        let resp: SnapshotResponse = self.client.post(&path, &req).await?;
+        let mut resp: SnapshotResponse = self.client.post(&path, &req).await?;
+
+        // A server that exports after replying hands back a snapshot still
+        // being created. Waiting for it keeps create() what it is locally: it
+        // returns a snapshot that can be restored, or the reason there is none.
+        // Polled by name, which the contract guarantees; an ID only may work.
+        let poll_path = format!("{}/{}", path, urlencoding::encode(name));
+        let mut poll = OperationPoll::new();
+        while resp.status.as_deref() == Some("creating") {
+            poll.wait(&format!("snapshot '{name}'")).await?;
+            resp = self.client.get(&poll_path).await?;
+        }
+        if resp.status.as_deref() == Some("failed") {
+            return Err(BoxliteError::Storage(format!(
+                "snapshot '{}' failed: {}",
+                name,
+                resp.error.as_deref().unwrap_or("no reason given")
+            )));
+        }
         Ok(resp.to_snapshot_info())
     }
 
@@ -685,7 +739,35 @@ impl SnapshotBackend for RestBox {
         let box_id = self.box_id_str();
         let encoded_name = urlencoding::encode(name);
         let path = format!("/boxes/{}/snapshots/{}/restore", box_id, encoded_name);
-        self.client.post_empty_no_content(&path).await
+        // No body: the server restored the box before replying. A body is the
+        // record of a restore still running, polled until it ends — the box is
+        // stopped either way, so only the record says whether it worked.
+        let Some(mut restore) = self
+            .client
+            .post_empty_for_optional_json::<SnapshotRestoreResponse>(&path)
+            .await?
+        else {
+            return Ok(());
+        };
+
+        let poll_path = format!(
+            "/boxes/{}/restores/{}",
+            box_id,
+            urlencoding::encode(&restore.id)
+        );
+        let mut poll = OperationPoll::new();
+        while restore.status == "pending" {
+            poll.wait(&format!("restore of snapshot '{name}'")).await?;
+            restore = self.client.get(&poll_path).await?;
+        }
+        if restore.status != "succeeded" {
+            return Err(BoxliteError::Storage(format!(
+                "restoring snapshot '{}' failed: {}",
+                name,
+                restore.error.as_deref().unwrap_or("no reason given")
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -2696,6 +2778,130 @@ mod tests {
             let _ = stream.write_all(resp.as_bytes()).await;
             let _ = stream.shutdown().await;
         }
+    }
+
+    /// Answer one connection per `(status, body)`, in order, recording each
+    /// request line. A `204` is sent without a body.
+    async fn scripted_server(
+        replies: Vec<(u16, &'static str)>,
+    ) -> (u16, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for (status, body) in replies {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let head = String::from_utf8(read_request_head(&mut socket).await).unwrap();
+                requests.push(head.lines().next().unwrap_or_default().to_string());
+                let response = if status == 204 {
+                    "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".to_string()
+                } else {
+                    format!(
+                        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                };
+                socket.write_all(response.as_bytes()).await.unwrap();
+                let _ = socket.shutdown().await;
+            }
+            requests
+        });
+        (port, server)
+    }
+
+    const SNAPSHOTS_ENABLED: &str = r#"{"capabilities":{"snapshots_enabled":true}}"#;
+
+    /// A server that exports after replying answers with a snapshot still
+    /// being created; create() must wait it out, so what it returns can be
+    /// restored straight away, as a local snapshot can.
+    #[tokio::test]
+    async fn create_waits_for_an_asynchronous_snapshot_to_be_ready() {
+        let snapshot = |status: &str| {
+            format!(
+                r#"{{"id":"snap-1","box_id":"box1","name":"golden","status":"{status}","created_at":1,"guest_disk_bytes":0,"container_disk_bytes":10,"size_bytes":4}}"#
+            )
+        };
+        let creating: &'static str = Box::leak(snapshot("creating").into_boxed_str());
+        let ready: &'static str = Box::leak(snapshot("ready").into_boxed_str());
+        let (port, server) = scripted_server(vec![
+            (200, SNAPSHOTS_ENABLED),
+            (201, creating),
+            (200, creating),
+            (200, ready),
+        ])
+        .await;
+
+        let info = rest_box_for(port, "box1")
+            .create(SnapshotOptions::default(), "golden")
+            .await
+            .expect("a snapshot that becomes ready is a successful create");
+
+        assert_eq!(info.disk_info.size_bytes, 4);
+        let requests = server.await.unwrap();
+        assert!(requests[1].starts_with("POST ") && requests[1].contains("/boxes/box1/snapshots "));
+        assert!(
+            requests[3].starts_with("GET ")
+                && requests[3].contains("/boxes/box1/snapshots/golden ")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_reports_why_an_asynchronous_snapshot_failed() {
+        let (port, server) = scripted_server(vec![
+            (200, SNAPSHOTS_ENABLED),
+            (
+                201,
+                r#"{"id":"snap-1","box_id":"box1","name":"golden","status":"failed","error":"The box was deleted while it was being exported","created_at":1,"guest_disk_bytes":0,"container_disk_bytes":10,"size_bytes":0}"#,
+            ),
+        ])
+        .await;
+
+        let error = rest_box_for(port, "box1")
+            .create(SnapshotOptions::default(), "golden")
+            .await
+            .expect_err("a failed snapshot must not read as created");
+
+        assert!(
+            error
+                .to_string()
+                .contains("deleted while it was being exported"),
+            "{error}"
+        );
+        server.await.unwrap();
+    }
+
+    /// The box ends up stopped whether the restore worked or not, so the
+    /// record is the only place the outcome can come from.
+    #[tokio::test]
+    async fn restore_follows_the_restore_record_to_its_outcome() {
+        let (port, server) = scripted_server(vec![
+            (200, SNAPSHOTS_ENABLED),
+            (202, r#"{"id":"restore-1","status":"pending"}"#),
+            (200, r#"{"id":"restore-1","status":"pending"}"#),
+            (200, r#"{"id":"restore-1","status":"failed","error":"container disk checksum mismatch"}"#),
+        ])
+        .await;
+
+        let error = rest_box_for(port, "box1")
+            .restore("golden")
+            .await
+            .expect_err("a failed restore must not read as success");
+
+        assert!(error.to_string().contains("checksum mismatch"), "{error}");
+        let requests = server.await.unwrap();
+        assert!(requests[3].contains("/boxes/box1/restores/restore-1 "));
+    }
+
+    #[tokio::test]
+    async fn restore_on_a_synchronous_server_returns_at_once() {
+        let (port, server) = scripted_server(vec![(200, SNAPSHOTS_ENABLED), (204, "")]).await;
+
+        rest_box_for(port, "box1")
+            .restore("golden")
+            .await
+            .expect("a 204 is a finished restore");
+
+        assert_eq!(server.await.unwrap().len(), 2);
     }
 
     /// A refusal the server states plainly must not reach the caller as a

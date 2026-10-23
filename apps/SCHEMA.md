@@ -50,6 +50,8 @@ flowchart LR
         t_box["box"]
         t_activity["box_last_activity"]
         t_migration["box_migration"]
+        t_snapshot["box_snapshot"]
+        t_restore["box_snapshot_restore"]
         t_tunnel["tunnel"]
         t_runner["runner"]
         t_region["region"]
@@ -78,6 +80,8 @@ flowchart LR
     t_assigninv ==>|"roleId"| t_role
     t_activity ==>|"boxId"| t_box
     t_migration ==>|"boxId"| t_box
+    t_restore ==>|"boxId"| t_box
+    t_restore ==>|"snapshotId"| t_snapshot
     t_tunnel ==>|"box_id"| t_box
     t_imgver ==>|"imageId"| t_image
     t_imgtag ==>|"imageId"| t_image
@@ -94,6 +98,8 @@ flowchart LR
     t_box -.->|"runnerId"| t_runner
     t_box -.->|"volumes[].volumeId"| t_volume
     t_volume -.->|"organizationId"| t_org
+    t_snapshot -.->|"organizationId"| t_org
+    t_snapshot -.->|"sourceBoxId"| t_box
     t_regcred -.->|"organizationId"| t_org
     t_job -.->|"resourceId"| t_box
     t_job -.->|"runnerId"| t_runner
@@ -132,6 +138,8 @@ that no longer resolves.
 | `organization_role_assignment_invitation`| `roleId`                     | `organization_role.id`         | foreign key | `NO ACTION` |
 | `box_last_activity`                      | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
 | `box_migration`                          | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
+| `box_snapshot_restore`                   | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
+| `box_snapshot_restore`                   | `snapshotId`                 | `box_snapshot.id`              | foreign key | `CASCADE` |
 | `tunnel`                                 | `box_id`                     | `box.id`                       | foreign key | `CASCADE` |
 | `image_version`                          | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
 | `image_tag`                              | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
@@ -153,6 +161,8 @@ that no longer resolves.
 | `box`                                    | `runnerId`, `prevRunnerId`   | `runner.id`                    | application | nulled on destroy/archive |
 | `box`                                    | `volumes[].volumeId`         | `volume.id`                    | application | jsonb array, GIN-indexed |
 | `box_migration`                          | `runnerId`                   | `runner.id`                    | application | the migration's second runner |
+| `box_snapshot`                           | `organizationId`             | `organization.id`              | application | the snapshot belongs to the organization |
+| `box_snapshot`                           | `sourceBoxId`                | `box.id`                       | application | outlives the box it was taken from |
 | `runner`                                 | `region`                     | `region.id`                    | application | — |
 | `job`                                    | `runnerId`                   | `runner.id`                    | application | — |
 | `job`                                    | `resourceType`, `resourceId` | `box.id`                       | application | polymorphic across resource types |
@@ -161,9 +171,9 @@ that no longer resolves.
 
 ### Invariants held by partial unique indexes
 
-Four correctness properties are enforced by the database rather than by
+Five correctness properties are enforced by the database rather than by
 application locking. The per-box Redis locks are advisory and expire, so an
-interleaved pair of handlers could otherwise violate all four.
+interleaved pair of handlers could otherwise violate all five.
 
 | Index                                          | Table               | Definition                                              |
 | ---------------------------------------------- | ------------------- | ------------------------------------------------------- |
@@ -171,6 +181,7 @@ interleaved pair of handlers could otherwise violate all four.
 | `IDX_UNIQUE_INCOMPLETE_JOB`                    | `job`               | unique `("resourceType","resourceId","runnerId")` where `"completedAt" IS NULL` |
 | `organization_user_default_user_unique`        | `organization_user` | unique `("userId")` where `"isDefaultForUser" = true`   |
 | `image_org_name_active_unique`                 | `image`             | unique `("organizationId","name")` where `"deletedAt" IS NULL` |
+| `box_snapshot_organization_name_unique`        | `box_snapshot`      | unique `("organizationId","name")` where `"state" <> 'deleting'` |
 
 ## Tenancy, access and audit
 
@@ -372,7 +383,7 @@ or `archived`.
 | `runnerId` | `uuid` | nullable |
 | `prevRunnerId` | `uuid` | nullable; the runner to revert to if reassignment fails |
 | `class` | `enum` | `small` \| `medium` \| `large`, default `small` |
-| `state` | `enum` | 13 values, default `unknown` |
+| `state` | `enum` | 15 values, default `unknown` |
 | `desiredState` | `enum` | `started` \| `stopped` \| `destroyed` \| `resized` |
 | `pending` | `boolean` | default `false` |
 | `recoverable` | `boolean` | default `false` |
@@ -629,7 +640,7 @@ A unit of work handed to exactly one runner. Optimistic-locked through
 | ------ | ---- | ----- |
 | `id` | `uuid` | primary key |
 | `version` | `integer` | TypeORM `@VersionColumn` |
-| `type` | `character varying` | 9 values; see below |
+| `type` | `character varying` | 11 values; see below |
 | `status` | `enum` | `PENDING` \| `IN_PROGRESS` \| `COMPLETED` \| `FAILED` |
 | `runnerId` | `character varying` | |
 | `resourceType` | `enum` | `BOX` \| `ARTIFACT` \| `BACKUP` |
@@ -644,7 +655,15 @@ A unit of work handed to exactly one runner. Optimistic-locked through
 
 Job types: `CREATE_BOX`, `START_BOX`, `STOP_BOX`, `DESTROY_BOX`, `EXPORT_BOX`,
 `IMPORT_BOX`, `ROLLBACK_EXPORT_BOX`, `ROLLBACK_IMPORT_BOX`,
-`DISCARD_EXPORTED_BOX`.
+`DISCARD_EXPORTED_BOX`, `CREATE_SNAPSHOT`, `RESTORE_SNAPSHOT`. The two snapshot
+jobs, like a migration's, take the `BACKUP` slot keyed by the box, so a box's
+`DESTROY_BOX` can run beside them.
+
+A running job reporting `IN_PROGRESS` again refreshes `updatedAt`, which is
+how a long snapshot job stays clear of the ten-minute stale-job sweep. A
+snapshot job still `PENDING` ten minutes after it was queued has no runner
+coming for it: the snapshot reconcile fails it, which settles its snapshot or
+restore and returns the box to `stopped`.
 
 **Partial unique:** `(resourceType, resourceId, runnerId)` where
 `completedAt IS NULL` — history accumulates freely, but at most one job per
@@ -677,6 +696,58 @@ type deliberately matches `box.updatedAt`: narrower precision would round the
 copy and fail the comparison it exists for.
 
 **Index:** `(state)`.
+
+### `box_snapshot`
+
+A box's disk exported to object storage, owned by the organization rather than
+the box: it outlives its source box and restores into any stopped box of the
+organization with the same disk size and region.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `organizationId` | `uuid` | not null |
+| `name` | `character varying` | unique per organization among rows not `deleting` |
+| `sourceBoxId` | `character varying(12)` | the box it was taken from; not an FK, the box may be gone |
+| `region` | `character varying` | a restore target must be in the same region |
+| `diskGb` | `integer` | the source disk's size; a restore target must match it |
+| `state` | `enum` | `creating` \| `ready` \| `failed` \| `deleting` |
+| `archiveUri` | `character varying` | default `''`; the archive's full URI, fixed at creation, emptied once reclaimed |
+| `jobId` | `uuid` | nullable; the `CREATE_SNAPSHOT` job |
+| `sizeBytes` | `bigint` | default `0`; the archive's size once ready |
+| `errorReason` | `text` | nullable; why a `failed` snapshot failed |
+| `createdAt` / `updatedAt` | `timestamptz` | |
+
+The request that creates a snapshot also inserts its job and moves the box to
+`exporting`, in one transaction; the job's settlement makes it `ready` or
+`failed`. A retry under a failed snapshot's name moves that row to `deleting`.
+A reaper deletes the archive of every `deleting` row and then the row, and the
+archive of every `failed` one. There is no FK to the box, because box rows are
+hard-deleted a day after the box is destroyed.
+
+**Unique:** `(organizationId, name)` where `state <> 'deleting'`.
+**Indexes:** `(organizationId, sourceBoxId)` · `(state)` · `(jobId)`.
+
+### `box_snapshot_restore`
+
+One restore of a snapshot into a box, the record a caller polls: the box ends
+up stopped whether the restore worked or not.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `organizationId` | `uuid` | not null |
+| `boxId` | `character varying(12)` | FK → `box.id`, cascades |
+| `snapshotId` | `uuid` | FK → `box_snapshot.id`, cascades |
+| `state` | `enum` | `pending` \| `succeeded` \| `failed` |
+| `jobId` | `uuid` | nullable; the `RESTORE_SNAPSHOT` job |
+| `errorReason` | `text` | nullable |
+| `createdAt` | `timestamptz` | |
+| `completedAt` | `timestamptz` | nullable |
+
+A snapshot with a `pending` restore cannot be deleted.
+
+**Indexes:** `(snapshotId, state)` · `(boxId)` · `(state)` · `(jobId)`.
 
 ### `tunnel`
 

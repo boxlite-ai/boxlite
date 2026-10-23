@@ -13,7 +13,9 @@ use tokio::runtime::Runtime as TokioRuntime;
 
 use crate::box_handle::BoxHandle;
 use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
-use crate::event_queue::{CBoxExportCb, CRuntimeImportCb, OwnedFfiPtr, RuntimeEvent, push_event};
+use crate::event_queue::{
+    CBoxExportCb, CBoxRestoreArchiveCb, CRuntimeImportCb, OwnedFfiPtr, RuntimeEvent, push_event,
+};
 use crate::runtime::RuntimeHandle;
 use crate::{CBoxHandle, CBoxliteError, CBoxliteRuntime};
 
@@ -56,6 +58,22 @@ pub unsafe extern "C" fn boxlite_box_export(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     unsafe { export_box(handle, dest, cb, user_data, out_error) }
+}
+
+/// Submit a restore of a stopped box's container disk from an archive.
+///
+/// The box keeps its identity and configuration; a failure leaves its
+/// original disk in place. The caller retains ownership of the archive file;
+/// this bridge never removes it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_restore_from_archive(
+    handle: *mut CBoxHandle,
+    archive_path: *const c_char,
+    cb: CBoxRestoreArchiveCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe { restore_box_from_archive(handle, archive_path, cb, user_data, out_error) }
 }
 
 /// Submit a trusted archive import.
@@ -119,6 +137,52 @@ unsafe fn export_box(
             push_event(
                 &queue,
                 RuntimeEvent::BoxExport {
+                    cb,
+                    user_data,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
+    }
+}
+
+unsafe fn restore_box_from_archive(
+    handle: *mut BoxHandle,
+    archive_path: *const c_char,
+    cb: CBoxRestoreArchiveCb,
+    user_data: *mut c_void,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let archive_path = match parse_required_path(archive_path, "archive_path") {
+            Ok(archive_path) => archive_path,
+            Err(error) => {
+                let code = error_to_code(&error);
+                write_error(out_error, error);
+                return code;
+            }
+        };
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
+
+        let handle_ref = &*handle;
+        let lite = handle_ref.handle.clone();
+        let queue = handle_ref.queue.clone();
+        let user_data = user_data as usize;
+
+        handle_ref.tokio_rt.spawn(async move {
+            let result = lite
+                .restore_from_archive(BoxArchive::new(archive_path))
+                .await;
+            push_event(
+                &queue,
+                RuntimeEvent::BoxRestoreArchive {
                     cb,
                     user_data,
                     result,
@@ -311,6 +375,51 @@ mod tests {
             boxlite_box_export(
                 dangling_handle,
                 dest.as_ptr(),
+                None,
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        assert_invalid_argument(code, &mut error, "cb");
+    }
+
+    extern "C" fn noop_restore_cb(_error: *mut CBoxliteError, _user_data: *mut c_void) {}
+
+    #[test]
+    fn restore_rejects_invalid_arguments_synchronously() {
+        let archive_path = CString::new("/tmp/restore.boxlite").unwrap();
+        let empty = CString::new("").unwrap();
+        let dangling_handle = ptr::NonNull::<BoxHandle>::dangling().as_ptr();
+        let mut error = FFIError::default();
+
+        let code = unsafe {
+            boxlite_box_restore_from_archive(
+                ptr::null_mut(),
+                archive_path.as_ptr(),
+                Some(noop_restore_cb),
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        assert_invalid_argument(code, &mut error, "handle");
+
+        for missing in [ptr::null(), empty.as_ptr()] {
+            let code = unsafe {
+                boxlite_box_restore_from_archive(
+                    dangling_handle,
+                    missing,
+                    Some(noop_restore_cb),
+                    ptr::null_mut(),
+                    &mut error,
+                )
+            };
+            assert_invalid_argument(code, &mut error, "archive_path");
+        }
+
+        let code = unsafe {
+            boxlite_box_restore_from_archive(
+                dangling_handle,
+                archive_path.as_ptr(),
                 None,
                 ptr::null_mut(),
                 &mut error,

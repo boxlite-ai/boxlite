@@ -766,6 +766,22 @@ pub(crate) struct SnapshotResponse {
     pub created_at: i64,
     pub container_disk_bytes: u64,
     pub size_bytes: u64,
+    /// `creating`, `ready` or `failed`. A server that creates snapshots before
+    /// answering leaves it out, which means ready.
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// The record a server hands back for a restore it finishes asynchronously.
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct SnapshotRestoreResponse {
+    pub id: String,
+    /// `pending`, `succeeded` or `failed`.
+    pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 impl SnapshotResponse {
@@ -937,6 +953,9 @@ fn parse_box_status(status: &str) -> BoxStatus {
         "stopped" => BoxStatus::Stopped,
         "paused" => BoxStatus::Paused,
         "failed" => BoxStatus::Failed,
+        // A stopped box whose disk a snapshot job is exporting or replacing.
+        // Its VM is not running, and the job ends with the box stopped.
+        "exporting" | "importing" => BoxStatus::Stopped,
         _ => BoxStatus::Unknown,
     }
 }
@@ -1588,6 +1607,11 @@ mod tests {
         assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Unknown);
         resp.status = "paused".to_string();
         assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Paused);
+        // A box mid-snapshot on a hosted server is stopped as far as its VM goes.
+        for status in ["exporting", "importing"] {
+            resp.status = status.to_string();
+            assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Stopped);
+        }
     }
 
     #[test]
@@ -1617,6 +1641,8 @@ mod tests {
             created_at: 1_700_000_000,
             container_disk_bytes: 2048,
             size_bytes: 4096,
+            status: None,
+            error: None,
         };
 
         let info = resp.to_snapshot_info();

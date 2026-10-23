@@ -57,6 +57,12 @@ import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.s
 import { Tunnel } from './entities/tunnel.entity'
 import { TunnelService } from './services/tunnel.service'
 import { AttachTicketService } from './services/attach-ticket.service'
+import { BoxSnapshot } from './entities/box-snapshot.entity'
+import { BoxSnapshotRestore } from './entities/box-snapshot-restore.entity'
+import { BoxSnapshotService } from './services/box-snapshot.service'
+import { BoxSnapshotSettler } from './services/box-snapshot-settler.service'
+import { SNAPSHOT_ARCHIVE_STORE, createSnapshotArchiveStore } from './stores/snapshot-archive.store'
+import { TypedConfigService } from '../config/typed-config.service'
 
 @Module({
   imports: [
@@ -64,7 +70,19 @@ import { AttachTicketService } from './services/attach-ticket.service'
     OrganizationModule,
     RegionModule,
     ImageModule,
-    TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, Region, Job, BoxLastActivity, BoxMigration, Tunnel]),
+    TypeOrmModule.forFeature([
+      Box,
+      Runner,
+      WarmPool,
+      Volume,
+      Region,
+      Job,
+      BoxLastActivity,
+      BoxMigration,
+      Tunnel,
+      BoxSnapshot,
+      BoxSnapshotRestore,
+    ]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
   providers: [
@@ -91,6 +109,13 @@ import { AttachTicketService } from './services/attach-ticket.service'
     BoxMigrationService,
     BoxMigrationManager,
     BoxMigrationJobReceiver,
+    BoxSnapshotService,
+    BoxSnapshotSettler,
+    {
+      provide: SNAPSHOT_ARCHIVE_STORE,
+      inject: [TypedConfigService],
+      useFactory: createSnapshotArchiveStore,
+    },
     TunnelService,
     AttachTicketService,
     BoxAccessGuard,
@@ -121,6 +146,7 @@ import { AttachTicketService } from './services/attach-ticket.service'
     BoxActivityService,
     BoxStateWaiterService,
     BoxAutoResumeService,
+    BoxSnapshotService,
   ],
 })
 export class BoxModule {}

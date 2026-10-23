@@ -1765,6 +1765,8 @@ paths:
             - archived
             - archiving
             - resizing
+            - exporting
+            - importing
             type: string
           type: array
         style: form
@@ -5891,6 +5893,8 @@ components:
       - archived
       - archiving
       - resizing
+      - exporting
+      - importing
       type: string
     BoxDesiredState:
       description: The desired state of the box
@@ -6283,6 +6287,8 @@ components:
           - archived
           - archiving
           - resizing
+          - exporting
+          - importing
           example: started
           type: string
         errorReason:
@@ -6942,6 +6948,8 @@ components:
       - ROLLBACK_EXPORT_BOX
       - ROLLBACK_IMPORT_BOX
       - DISCARD_EXPORTED_BOX
+      - CREATE_SNAPSHOT
+      - RESTORE_SNAPSHOT
       type: string
     Job:
       example:

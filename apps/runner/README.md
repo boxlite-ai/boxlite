@@ -116,8 +116,9 @@ the in-process TTL caches under `pkg/cache/`.
    boxlite-core would — `BOXLITE_HOME_DIR`, else `$BOXLITE_HOME`, else
    `.boxlite` under `$HOME` (or the passwd home when `$HOME` is unset) —
    passes it to core explicitly, and exposes it as `HomeDir()`, so the
-   rest of the runner (migration staging under `<home>/migrate`) reads the
-   same directory as the runtime.
+   rest of the runner (migration staging under `<home>/migrate`, snapshot
+   staging under `<home>/snapshot-work`) reads the same directory as the
+   runtime.
 2. **Service singletons** are constructed and stashed on the
    `runner.GetInstance(...)` global: `BoxService`, `BackupInfoCache`,
    `ArtifactErrorCache`, `metrics.Collector`. Controllers later read them
@@ -513,8 +514,22 @@ Supported job types:
 ```
 CREATE_BOX, START_BOX, STOP_BOX, DESTROY_BOX,
 EXPORT_BOX, IMPORT_BOX,
-ROLLBACK_EXPORT_BOX, ROLLBACK_IMPORT_BOX, DISCARD_EXPORTED_BOX
+ROLLBACK_EXPORT_BOX, ROLLBACK_IMPORT_BOX, DISCARD_EXPORTED_BOX,
+CREATE_SNAPSHOT, RESTORE_SNAPSHOT
 ```
+
+`CREATE_SNAPSHOT` exports a stopped box's disk and uploads the archive to the
+URI in the job's payload; `RESTORE_SNAPSHOT` downloads one and swaps it in for
+the box's disk, keeping the original if the swap fails
+([`snapshot.go`](pkg/runner/v2/executor/snapshot.go)). Archives move through
+the store the URI's scheme picks: Cloud Storage for `gs://`, with the host's
+service account (the GCP stack grants it object access on the snapshot bucket)
+and no runner configuration, and S3 for the rest (`AWS_DEFAULT_BUCKET`). A
+snapshot job can outlast the API's ten-minute stale-job sweep, so it reports
+`IN_PROGRESS` every two minutes to stay live. `DESTROY_BOX` cancels the box's
+snapshot job, if one is running, and waits up to five minutes for the runtime
+to let go of the disk before removing the box: the runtime cannot stop an
+export or restore it has begun.
 
 After the handler returns, `updateJobStatus` reports `COMPLETED` or
 `FAILED` to the API with exponential backoff. W3C trace context is

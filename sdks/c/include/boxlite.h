@@ -186,6 +186,9 @@ typedef struct FFIError CBoxliteError;
 // Box export completion.
 typedef void (*CBoxExportCb)(char*, CBoxliteError*, void*);
 
+// Box restore-from-archive completion.
+typedef void (*CBoxRestoreArchiveCb)(CBoxliteError*, void*);
+
 typedef struct RuntimeHandle CBoxliteRuntime;
 
 // Runtime import completion.
@@ -729,6 +732,17 @@ enum BoxliteErrorCode boxlite_box_export(CBoxHandle *handle,
                                          CBoxExportCb cb,
                                          void *user_data,
                                          CBoxliteError *out_error);
+
+// Submit a restore of a stopped box's container disk from an archive.
+//
+// The box keeps its identity and configuration; a failure leaves its
+// original disk in place. The caller retains ownership of the archive file;
+// this bridge never removes it.
+enum BoxliteErrorCode boxlite_box_restore_from_archive(CBoxHandle *handle,
+                                                       const char *archive_path,
+                                                       CBoxRestoreArchiveCb cb,
+                                                       void *user_data,
+                                                       CBoxliteError *out_error);
 
 // Submit a trusted archive import.
 //

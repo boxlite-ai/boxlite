@@ -18,4 +18,8 @@ export enum BoxState {
   ARCHIVED = 'archived',
   ARCHIVING = 'archiving',
   RESIZING = 'resizing',
+  // A stopped box whose disk a snapshot job is reading or replacing. Appended,
+  // like `ALTER TYPE ... ADD VALUE`, so the two orders stay the same.
+  EXPORTING = 'exporting',
+  IMPORTING = 'importing',
 }

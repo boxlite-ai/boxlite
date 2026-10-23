@@ -95,6 +95,10 @@ pub(crate) type CBoxGetOrCreateBoxFn =
 pub type CBoxExportCb = Option<extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxExportFn = extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void);
 
+/// Box restore-from-archive completion.
+pub type CBoxRestoreArchiveCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxRestoreArchiveFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
 /// Runtime import completion.
 pub type CRuntimeImportCb =
     Option<extern "C" fn(*mut crate::CBoxHandle, *mut crate::CBoxliteError, *mut c_void)>;
@@ -385,6 +389,11 @@ pub enum RuntimeEvent {
         cb: CBoxExportFn,
         user_data: usize,
         result: Result<CString, BoxliteError>,
+    },
+    BoxRestoreArchive {
+        cb: CBoxRestoreArchiveFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
     },
     RuntimeImport {
         cb: CRuntimeImportFn,

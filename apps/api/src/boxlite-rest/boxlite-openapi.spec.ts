@@ -12,6 +12,11 @@ import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { RegistriesService } from '../registry/services/registries.service'
 import { BoxliteImageController } from './boxlite-image.controller'
 import { BoxliteRegistryController } from './boxlite-registry.controller'
+import { BoxSnapshot } from '../box/entities/box-snapshot.entity'
+import { BoxSnapshotRestore } from '../box/entities/box-snapshot-restore.entity'
+import { BoxSnapshotRestoreState } from '../box/enums/box-snapshot-restore-state.enum'
+import { BoxSnapshotState } from '../box/enums/box-snapshot-state.enum'
+import { restoreToResponse, snapshotToResponse } from './mappers/snapshot.mapper'
 
 const spec = parse(readFileSync(resolve(__dirname, '../../../../openapi/box.openapi.yaml'), 'utf8'))
 // Ajv also implements OAS 3.0 nullable. Ignore that annotation to test the
@@ -126,6 +131,54 @@ describe('Box API JSON Schema nullability', () => {
     const validate = validator('ImageDetail')
     expect(validate(detail)).toBe(true)
     expect(validate({ ...detail, versions: [{ ...detail.versions[0], size_bytes: 'unknown' }] })).toBe(false)
+  })
+
+  // The SDKs decode these two shapes to decide whether to keep polling, so the
+  // mapper's output must be exactly what the contract promises, in every state.
+  it.each([
+    [BoxSnapshotState.CREATING, null, 0],
+    [BoxSnapshotState.READY, null, 4096],
+    [BoxSnapshotState.FAILED, 'The box was deleted while it was being exported', 0],
+  ])('validates an actual %s snapshot response', (state, errorReason, sizeBytes) => {
+    const snapshot = {
+      id: '123e4567-e89b-12d3-a456-426614174000',
+      organizationId: '00000000-0000-4000-8000-0000000000ff',
+      name: 'golden',
+      sourceBoxId: 'zPt3iO94BRyD',
+      region: 'us',
+      diskGb: 10,
+      state,
+      archiveUri: 'gs://snapshots/box-snapshots/org/snap.boxlite',
+      jobId: null,
+      sizeBytes,
+      errorReason,
+      createdAt: new Date('2026-10-22T00:00:00Z'),
+      updatedAt: new Date('2026-10-22T00:00:00Z'),
+    } as BoxSnapshot
+    const response = JSON.parse(JSON.stringify(snapshotToResponse(snapshot)))
+
+    expect(validator('Snapshot')(response)).toBe(true)
+    expect(validator('ListSnapshotsResponse')({ snapshots: [response] })).toBe(true)
+  })
+
+  it.each([
+    [BoxSnapshotRestoreState.PENDING, null, null],
+    [BoxSnapshotRestoreState.FAILED, 'container disk checksum mismatch', new Date('2026-10-22T00:05:00Z')],
+  ])('validates an actual %s restore response', (state, errorReason, completedAt) => {
+    const restore = {
+      id: '123e4567-e89b-12d3-a456-426614174001',
+      organizationId: '00000000-0000-4000-8000-0000000000ff',
+      boxId: 'zPt3iO94BRyD',
+      snapshotId: '123e4567-e89b-12d3-a456-426614174000',
+      state,
+      jobId: null,
+      errorReason,
+      createdAt: new Date('2026-10-22T00:00:00Z'),
+      completedAt,
+    } as BoxSnapshotRestore
+    const response = JSON.parse(JSON.stringify(restoreToResponse(restore)))
+
+    expect(validator('SnapshotRestore')(response)).toBe(true)
   })
 
   it('validates actual registry responses without a creating user', async () => {

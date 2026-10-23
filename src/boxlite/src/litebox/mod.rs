@@ -266,6 +266,16 @@ impl LiteBox {
     pub async fn export(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive> {
         self.box_backend.export_box(options, dest).await
     }
+
+    /// Replace this stopped box's container disk with the one a `.boxlite`
+    /// archive carries.
+    ///
+    /// The box keeps its ID, name and configuration; the archive's options are
+    /// not applied. A failure leaves the original disk in place. Local runtimes
+    /// only.
+    pub async fn restore_from_archive(&self, archive: BoxArchive) -> BoxliteResult<()> {
+        self.box_backend.restore_from_archive(archive).await
+    }
 }
 
 // ============================================================================

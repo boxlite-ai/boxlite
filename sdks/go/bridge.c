@@ -14,6 +14,7 @@ extern void goBoxliteOnExit(int exit_code, void *ud);
 
 extern void goBoxliteOnCreateBox(CBoxHandle *box, CBoxliteError *err, void *ud);
 extern void goBoxliteOnBoxExport(char *archive_path, CBoxliteError *err, void *ud);
+extern void goBoxliteOnBoxRestoreArchive(CBoxliteError *err, void *ud);
 extern void goBoxliteOnRuntimeImport(CBoxHandle *box, CBoxliteError *err, void *ud);
 extern void goBoxliteOnGetOrCreateBox(CBoxHandle *box, bool created, CBoxliteError *err, void *ud);
 extern void goBoxliteOnGetBox(CBoxHandle *box, CBoxliteError *err, void *ud);
@@ -58,6 +59,9 @@ CBoxExitCb cbExit(void) { return (CBoxExitCb)goBoxliteOnExit; }
 CBoxCreateBoxCb cbCreateBox(void) { return (CBoxCreateBoxCb)goBoxliteOnCreateBox; }
 CBoxExportCb cbBoxExport(void) {
     return (CBoxExportCb)goBoxliteOnBoxExport;
+}
+CBoxRestoreArchiveCb cbBoxRestoreArchive(void) {
+    return (CBoxRestoreArchiveCb)goBoxliteOnBoxRestoreArchive;
 }
 CRuntimeImportCb cbRuntimeImport(void) {
     return (CRuntimeImportCb)goBoxliteOnRuntimeImport;

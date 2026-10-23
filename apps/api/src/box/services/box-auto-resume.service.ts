@@ -12,6 +12,7 @@ import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { Organization } from '../../organization/entities/organization.entity'
+import { assertNoSnapshotOperation } from '../utils/box-state.util'
 
 export const AUTO_RESUME_TIMEOUT_SECONDS = 30
 
@@ -40,6 +41,9 @@ export class BoxAutoResumeService {
   /** Submit or join Start and return only after the Box is actually STARTED. */
   async ensureReady(boxId: string, organization: Organization): Promise<void> {
     let box = await this.submitOrJoinStart(boxId, organization)
+    // A snapshot job holds the disk until it settles; waiting out the timeout
+    // would only delay the same refusal.
+    assertNoSnapshotOperation(box)
 
     const stopping =
       box.state === BoxState.STOPPING ||

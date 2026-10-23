@@ -66,6 +66,10 @@ function statusOf(box: Box): { label: string; color: string } {
       return { label: 'DELETING', color: STATUS.idle }
     case BoxState.RESIZING:
       return { label: 'RESIZING', color: STATUS.idle }
+    case BoxState.EXPORTING:
+      return { label: 'SNAPSHOTTING', color: STATUS.idle }
+    case BoxState.IMPORTING:
+      return { label: 'RESTORING', color: STATUS.idle }
     case BoxState.DESTROYED:
       return { label: 'DELETED', color: STATUS.dim }
     default:

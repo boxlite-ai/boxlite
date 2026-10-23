@@ -22,3 +22,14 @@ type MigrateArchivePayload struct {
 type MigrateArchiveResult struct {
 	ArcPath string `json:"arcPath"`
 }
+
+// SnapshotArchivePayload carries the full URI (gs://bucket/key) of a
+// snapshot's archive, fixed by the control plane when the snapshot was taken.
+type SnapshotArchivePayload struct {
+	ArchiveUri string `json:"archiveUri"`
+}
+
+// SnapshotArchiveResult reports how much object storage the archive takes.
+type SnapshotArchiveResult struct {
+	SizeBytes int64 `json:"sizeBytes"`
+}
