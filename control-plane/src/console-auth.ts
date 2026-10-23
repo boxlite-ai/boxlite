@@ -141,7 +141,7 @@ button{font:inherit;font-weight:600;padding:.45rem 1rem;border:0;background:#fff
 ${error ? `<p class="err">${escapeHtml(error)}</p>` : ''}
 ${github ? `<a class="gh" href="/console/login/github?next=${encodeURIComponent(next)}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="${GITHUB_MARK}"/></svg>Continue with GitHub</a><p class="note">First sign-in creates your organization. Stays signed in for 7 days on this browser.</p>` : ''}
 </main>
-<footer><span>© BoxLite</span>
+<footer><span style="white-space:nowrap">© BoxLite</span>
 <details${github ? '' : ' open'}><summary>Platform operator: sign in with the admin token</summary>
 <form method="post" action="/console/login"><input type="hidden" name="next" value="${escapeHtml(next)}"><label>Admin token<input name="token" type="password" autocomplete="current-password"${github ? '' : ' autofocus'} required></label><button type="submit">Sign in</button></form>
 </details></footer>
