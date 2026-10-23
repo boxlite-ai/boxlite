@@ -37,27 +37,20 @@ Complete API documentation for each SDK:
 | **Reference server** | [`openapi/reference-server/`](../../openapi/reference-server/README.md) | A partial implementation used as a client test fixture, not a conformance target |
 
 The spec is the contract, not an inventory of any one server, and no
-implementation currently serves all 32 paths:
+implementation currently serves all 37 paths:
 
 | Server | Serves | Does not serve |
 |--------|--------|----------------|
-| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | registries, `network/tunnel`, `network/inbound`. Volume routes are registered but every operation answers `400 UnsupportedError`, as do `images/usage` and both alias write routes |
-| reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, and `DELETE …/executions/{exec_id}` (kill) |
+| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | registries, `network/tunnel`, `network/inbound`, `restores/{restore_id}`, the top-level `snapshots` routes. Volume routes are registered but every operation answers `400 UnsupportedError`, as do `images/usage` and both alias write routes |
+| reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, `DELETE …/executions/{exec_id}` (kill), `restores/{restore_id}`, and the top-level `snapshots` routes |
 
 Read each server's routes rather than either README — both under-report.
 `GET /config` does not close this gap: its feature flags (`tty_enabled`,
 `streaming_enabled`, `snapshots_enabled`, `clone_enabled`, `export_enabled`,
-`import_enabled`, `inbound_update_enabled`, `exec_user_enabled`, `memory_snapshots_enabled`) cover only some routes, there is no
+`import_enabled`, `inbound_update_enabled`, `exec_user_enabled`) cover only some routes, there is no
 flag at all for volumes, images or tunnel, and a flag can disagree with the
 routes — the reference server advertises `streaming_enabled: true` while
 serving no attach route.
-
-`memory_snapshots_enabled` is false on all production servers. The reserved
-`memory` snapshot type and create-from-snapshot route support only the explicit
-[memory contract test](../guides/memory-snapshots.md); they do not save RAM,
-registers, devices or running processes. `snapshots_enabled` describes filesystem
-operations only. The cloud API forwards snapshot requests to the source Box's
-runner; the current runner explicitly returns Unsupported (HTTP 501).
 
 `{prefix}` is a deployment-defined routing slot, opaque to the client, published
 by a server as `Principal.path_prefix`. A single-tenant server may omit the

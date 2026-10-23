@@ -1765,6 +1765,8 @@ paths:
             - archived
             - archiving
             - resizing
+            - exporting
+            - importing
             type: string
           type: array
         style: form
@@ -6063,6 +6065,8 @@ components:
       - archived
       - archiving
       - resizing
+      - exporting
+      - importing
       type: string
     BoxDesiredState:
       description: The desired state of the box
@@ -6074,10 +6078,17 @@ components:
       type: string
     BoxVolume:
       example:
+        type: volume
         volumeId: volume123
         mountPath: /data
         subpath: users/alice
       properties:
+        type:
+          default: volume
+          enum:
+          - volume
+          - cache
+          type: string
         volumeId:
           description: The ID of the volume
           example: volume123
@@ -6142,10 +6153,12 @@ components:
         autoDelete: 604800
         autoResume: true
         volumes:
-        - volumeId: volume123
+        - type: volume
+          volumeId: volume123
           mountPath: /data
           subpath: users/alice
-        - volumeId: volume123
+        - type: volume
+          volumeId: volume123
           mountPath: /data
           subpath: users/alice
         createdAt: 2024-10-01T12:00:00Z
@@ -6341,10 +6354,12 @@ components:
           autoDelete: 604800
           autoResume: true
           volumes:
-          - volumeId: volume123
+          - type: volume
+            volumeId: volume123
             mountPath: /data
             subpath: users/alice
-          - volumeId: volume123
+          - type: volume
+            volumeId: volume123
             mountPath: /data
             subpath: users/alice
           createdAt: 2024-10-01T12:00:00Z
@@ -6379,10 +6394,12 @@ components:
           autoDelete: 604800
           autoResume: true
           volumes:
-          - volumeId: volume123
+          - type: volume
+            volumeId: volume123
             mountPath: /data
             subpath: users/alice
-          - volumeId: volume123
+          - type: volume
+            volumeId: volume123
             mountPath: /data
             subpath: users/alice
           createdAt: 2024-10-01T12:00:00Z
@@ -6455,6 +6472,8 @@ components:
           - archived
           - archiving
           - resizing
+          - exporting
+          - importing
           example: started
           type: string
         errorReason:
@@ -7114,6 +7133,8 @@ components:
       - ROLLBACK_EXPORT_BOX
       - ROLLBACK_IMPORT_BOX
       - DISCARD_EXPORTED_BOX
+      - CREATE_SNAPSHOT
+      - RESTORE_SNAPSHOT
       type: string
     Job:
       example:

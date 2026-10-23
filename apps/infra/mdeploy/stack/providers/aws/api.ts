@@ -93,6 +93,10 @@ const grantsFor = (capability: ApiCapability): $util.Input<string>[] => {
       // and the stack only asks for this where one is active. Reaching here
       // means that changed without anyone deciding what the grant is.
       throw new Error(`AWS keeps no registry credential store, but was handed one on ${capability.store.binding.cloud}`)
+    case 'manage-snapshot-archives':
+      // Snapshot storage is reserved on this cloud, and the stack asks for
+      // this only where a snapshot bucket is active.
+      throw new Error('AWS keeps no snapshot bucket yet, but was asked to grant one')
   }
 }
 

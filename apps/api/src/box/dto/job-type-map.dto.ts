@@ -46,6 +46,15 @@ export interface JobTypeMap {
   [JobType.DISCARD_EXPORTED_BOX]: {
     resourceType: [ResourceType.BACKUP]
   }
+  // Keyed by the box, like a migration's jobs: the BACKUP slot keeps them out
+  // of the box's lifecycle slot, so deleting the box can still submit its
+  // DESTROY_BOX, and admits one archive job per box at a time.
+  [JobType.CREATE_SNAPSHOT]: {
+    resourceType: [ResourceType.BACKUP]
+  }
+  [JobType.RESTORE_SNAPSHOT]: {
+    resourceType: [ResourceType.BACKUP]
+  }
 }
 
 /**

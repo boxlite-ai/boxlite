@@ -45,10 +45,8 @@ There is no automatic pressure eviction: operators collect idle entries explicit
 The idle clock starts when absence is observed, conservatively delaying collection
 after a service outage. Recreating a deleted cache initializes an empty directory.
 
-FS snapshots exclude external cache contents and absolute runner cache paths.
-Children inherit no external mounts; supply new cache mounts explicitly in
-`create_from_snapshot(..., options=BoxOptions(...))`. Multiple children need
-different cache IDs while alive on the same runner.
+Snapshots capture only the Box's own disk, never external cache contents or
+runner cache paths. Restoring a snapshot keeps the Box's existing cache mounts.
 
 ## Docker data and build-cache reuse
 
@@ -86,7 +84,7 @@ This persists the **whole daemon state**, including containers, networks and
 Swarm membership, rather than just image layers. Remove unwanted workloads and
 leave an old Swarm before reusing that data for a new cluster. No compatibility
 across Docker versions or storage profiles is promised. Use a new cache ID for
-a different configuration. FS snapshots do not capture this external image.
+a different configuration. Snapshots do not capture this external image.
 
 `make test:runner-ci:docker-cache` asserts identical image IDs after deletion and
 recreation, unique content with `--pull=never`, repeated COPY/RUN build hits,
@@ -99,4 +97,4 @@ Build with `make dev:runner-ci SETUP_DONE=1`; use
 `make test:runner-ci:infra ACTION=two-runners` and `make test:runner-ci:cache`.
 The harness uses two processes with separate runtime homes on one physical Mac,
 fixed Alpine 3.23 guests, readiness deadlines, real API scheduling and retained
-failure scenes. Successful probes delete their Boxes, snapshots and test caches.
+failure scenes. Successful probes delete their Boxes and test caches.

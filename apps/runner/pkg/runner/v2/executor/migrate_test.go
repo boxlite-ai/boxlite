@@ -22,6 +22,7 @@ import (
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/models"
+	"github.com/boxlite-ai/runner/pkg/storage"
 )
 
 const (
@@ -58,17 +59,24 @@ type fakeBackend struct {
 
 	exportedArchiveName string
 	exportErr           error
+	// exportBlock, when set, holds the runtime's export until it is closed.
+	exportBlock chan struct{}
 
 	importErr error
 	// archivePresentOnImport records whether the downloaded archive was on disk
-	// at the moment the import ran — the import is worthless without it.
+	// at the moment the import (or restore) ran — it is worthless without it.
 	archivePresentOnImport bool
+	// restoreBlock, when set, holds the runtime's restore until it is closed.
+	restoreBlock chan struct{}
 
 	destroyErr error
 }
 
-func (f *fakeBackend) ExportBox(_ context.Context, boxId, destDir string) (string, error) {
+func (f *fakeBackend) ExportBox(ctx context.Context, boxId, destDir string) (string, error) {
 	f.calls.record("export:%s", boxId)
+	if err := runtimeWork(ctx, f.exportBlock, func() { f.calls.record("exported:%s", boxId) }); err != nil {
+		return "", err
+	}
 	if f.exportErr != nil {
 		return "", f.exportErr
 	}
@@ -85,6 +93,38 @@ func (f *fakeBackend) ImportBox(_ context.Context, boxId, archivePath string) er
 	_, statErr := os.Stat(archivePath)
 	f.archivePresentOnImport = statErr == nil
 	return f.importErr
+}
+
+func (f *fakeBackend) RestoreBoxFromArchive(ctx context.Context, boxId, archivePath string) error {
+	f.calls.record("restore:%s", boxId)
+	_, statErr := os.Stat(archivePath)
+	f.archivePresentOnImport = statErr == nil
+	if err := runtimeWork(ctx, f.restoreBlock, func() { f.calls.record("restored:%s", boxId) }); err != nil {
+		return err
+	}
+	return f.importErr
+}
+
+// runtimeWork models how the SDK waits on the runtime: work held until block
+// is closed records done when it ends, but the call returns as soon as ctx is
+// cancelled and leaves the work running, as the SDK abandons a native task. A
+// nil block is work that ends at once, unrecorded.
+func runtimeWork(ctx context.Context, block chan struct{}, done func()) error {
+	if block == nil {
+		return nil
+	}
+	finished := make(chan struct{})
+	go func() {
+		<-block
+		done()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (f *fakeBackend) Create(context.Context, dto.CreateBoxDTO) (string, string, error) {
@@ -354,6 +394,21 @@ func TestExportBoxFailsBeforePackingWhenStoreIsUnconfigured(t *testing.T) {
 	assertFailedWith(t, h.lastReport(t), "archive store is not configured")
 	if calls := h.calls.snapshot(); len(calls) != 0 {
 		t.Fatalf("backend was used despite an unusable object store: %v", calls)
+	}
+}
+
+// Production always builds a store, Cloud Storage included, so the nil guard
+// above no longer fires on a runner without S3; such a runner must still refuse
+// an S3 archive before the disk is packed.
+func TestExportBoxRefusesAnArchiveItsStoreCannotReachBeforePacking(t *testing.T) {
+	h := newHarness(t, nil)
+	h.executor.archiveStore = &storage.SchemeArchiveStore{GCS: &storage.GCSArchiveStore{}}
+
+	h.executor.Execute(context.Background(), migrateJob(apiclient.JOBTYPE_EXPORT_BOX, arcPathPayload()))
+
+	assertFailedWith(t, h.lastReport(t), "AWS_DEFAULT_BUCKET")
+	if calls := h.calls.snapshot(); len(calls) != 0 {
+		t.Fatalf("backend was used despite a store that cannot reach the archive: %v", calls)
 	}
 }
 

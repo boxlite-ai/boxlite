@@ -12,10 +12,6 @@ use crate::util::map_err;
 #[pyclass(name = "SnapshotInfo")]
 pub(crate) struct PySnapshotInfo {
     #[pyo3(get)]
-    pub snapshot_type: String,
-    #[pyo3(get)]
-    pub is_mock: bool,
-    #[pyo3(get)]
     pub id: String,
     #[pyo3(get)]
     pub box_id: String,
@@ -42,8 +38,6 @@ impl PySnapshotInfo {
 impl From<SnapshotInfo> for PySnapshotInfo {
     fn from(r: SnapshotInfo) -> Self {
         Self {
-            snapshot_type: r.snapshot_type.as_str().into(),
-            is_mock: r.is_mock,
             id: r.id,
             box_id: r.box_id,
             name: r.name,
@@ -64,26 +58,6 @@ pub(crate) struct PySnapshotHandle {
 
 #[pymethods]
 impl PySnapshotHandle {
-    #[pyo3(signature = (snapshot, *, name=None))]
-    fn create_box<'py>(
-        &self,
-        py: Python<'py>,
-        snapshot: String,
-        name: Option<String>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let handle = Arc::clone(&self.handle);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let child = handle
-                .snapshots()
-                .create_box(&snapshot, name)
-                .await
-                .map_err(map_err)?;
-            Ok(crate::box_handle::PyBox {
-                handle: Arc::new(child),
-            })
-        })
-    }
-
     /// Create a snapshot of the box's current disk state.
     #[pyo3(signature = (*, options=None, name))]
     fn create<'py>(

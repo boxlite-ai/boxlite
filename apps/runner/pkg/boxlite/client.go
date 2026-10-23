@@ -8,7 +8,6 @@ package boxlite
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -504,16 +503,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// failing with "already exists", which the API would surface as a 400.
 	// The created flag (new vs adopted) is irrelevant here: either way the box
 	// now exists locally and the job can proceed, so it is discarded.
-	var bx *boxlite.Box
-	if boxDto.SnapshotID != "" {
-		bx, err = c.runtime.Get(ctx, boxDto.Id)
-		var sdkError *boxlite.Error
-		if errors.As(err, &sdkError) && sdkError.Code == boxlite.ErrNotFound {
-			bx, err = c.runtime.CreateFromSnapshot(ctx, boxDto.SnapshotID, boxDto.Image, opts...)
-		}
-	} else {
-		bx, _, err = c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
-	}
+	bx, _, err := c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
 	if err != nil {
 		if len(volumeMounts) > 0 {
 			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {

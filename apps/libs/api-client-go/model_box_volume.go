@@ -21,6 +21,7 @@ var _ MappedNullable = &BoxVolume{}
 
 // BoxVolume struct for BoxVolume
 type BoxVolume struct {
+	Type *string `json:"type,omitempty"`
 	// The ID of the volume
 	VolumeId string `json:"volumeId"`
 	// The mount path for the volume
@@ -38,6 +39,8 @@ type _BoxVolume BoxVolume
 // will change when the set of required properties is changed
 func NewBoxVolume(volumeId string, mountPath string) *BoxVolume {
 	this := BoxVolume{}
+	var type_ string = "volume"
+	this.Type = &type_
 	this.VolumeId = volumeId
 	this.MountPath = mountPath
 	return &this
@@ -48,7 +51,41 @@ func NewBoxVolume(volumeId string, mountPath string) *BoxVolume {
 // but it doesn't guarantee that properties required by API are set
 func NewBoxVolumeWithDefaults() *BoxVolume {
 	this := BoxVolume{}
+	var type_ string = "volume"
+	this.Type = &type_
 	return &this
+}
+
+// GetType returns the Type field value if set, zero value otherwise.
+func (o *BoxVolume) GetType() string {
+	if o == nil || IsNil(o.Type) {
+		var ret string
+		return ret
+	}
+	return *o.Type
+}
+
+// GetTypeOk returns a tuple with the Type field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *BoxVolume) GetTypeOk() (*string, bool) {
+	if o == nil || IsNil(o.Type) {
+		return nil, false
+	}
+	return o.Type, true
+}
+
+// HasType returns a boolean if a field has been set.
+func (o *BoxVolume) HasType() bool {
+	if o != nil && !IsNil(o.Type) {
+		return true
+	}
+
+	return false
+}
+
+// SetType gets a reference to the given string and assigns it to the Type field.
+func (o *BoxVolume) SetType(v string) {
+	o.Type = &v
 }
 
 // GetVolumeId returns the VolumeId field value
@@ -141,6 +178,9 @@ func (o BoxVolume) MarshalJSON() ([]byte, error) {
 
 func (o BoxVolume) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.Type) {
+		toSerialize["type"] = o.Type
+	}
 	toSerialize["volumeId"] = o.VolumeId
 	toSerialize["mountPath"] = o.MountPath
 	if !IsNil(o.Subpath) {
@@ -190,6 +230,7 @@ func (o *BoxVolume) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "type")
 		delete(additionalProperties, "volumeId")
 		delete(additionalProperties, "mountPath")
 		delete(additionalProperties, "subpath")

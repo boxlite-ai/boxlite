@@ -355,9 +355,6 @@ pub(super) struct ServerCapabilities {
     pub linux_capabilities_enabled: bool,
     pub privileged_enabled: bool,
     pub snapshots_enabled: bool,
-    pub create_from_snapshot_enabled: bool,
-    pub snapshot_copy_enabled: bool,
-    pub memory_snapshots_enabled: bool,
     pub clone_enabled: bool,
     pub export_enabled: bool,
     pub import_enabled: bool,
@@ -371,14 +368,10 @@ pub(super) struct ServerCapabilities {
 #[derive(Deserialize)]
 pub(super) struct CreateSnapshotRequest {
     pub name: String,
-    #[serde(default)]
-    pub snapshot_type: boxlite::SnapshotType,
 }
 
 #[derive(Serialize)]
 pub(super) struct SnapshotResponse {
-    pub snapshot_type: boxlite::SnapshotType,
-    pub is_mock: bool,
     pub id: String,
     pub box_id: String,
     pub name: String,

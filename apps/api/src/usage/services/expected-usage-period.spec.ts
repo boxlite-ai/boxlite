@@ -17,6 +17,10 @@ describe('expectedOpenPeriod', () => {
     [BoxState.STARTED, FULL_COMPUTE],
     [BoxState.STOPPING, DISK_ONLY],
     [BoxState.STOPPED, DISK_ONLY],
+    // A stopped box whose disk a snapshot job is reading or replacing still
+    // holds that disk, and a daily roll-over in the middle must not drop it.
+    [BoxState.EXPORTING, DISK_ONLY],
+    [BoxState.IMPORTING, DISK_ONLY],
     [BoxState.ERROR, null],
     [BoxState.ARCHIVED, null],
     [BoxState.DESTROYING, null],

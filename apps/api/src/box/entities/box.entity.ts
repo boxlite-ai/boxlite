@@ -17,6 +17,7 @@ import {
   DEFAULT_AUTO_STOP_SECONDS,
   DEFAULT_AUTO_RESUME,
 } from '../constants/box-lifecycle.constants'
+import { SNAPSHOT_OPERATION_STATES } from '../constants/box.constants'
 
 @Entity('box')
 @Unique(['organizationId', 'name'])
@@ -41,8 +42,6 @@ import {
 @Index('box_labels_gin_full_idx', { synchronize: false })
 @Index('idx_box_volumes_gin', { synchronize: false })
 export class Box {
-  @Column({ nullable: true })
-  snapshotId?: string
   @PrimaryColumn({ type: 'character varying', length: BOX_ID_LENGTH })
   id: string
 
@@ -276,7 +275,8 @@ export class Box {
         if (
           [BoxState.STARTED, BoxState.STOPPING, BoxState.STOPPED, BoxState.ERROR, BoxState.RESIZING].includes(
             this.state,
-          )
+          ) ||
+          SNAPSHOT_OPERATION_STATES.includes(this.state)
         ) {
           break
         }
@@ -291,7 +291,9 @@ export class Box {
             BoxState.ARCHIVED,
             BoxState.ERROR,
             BoxState.ARCHIVING,
-          ].includes(this.state)
+          ].includes(this.state) ||
+          // Deleting a box mid-snapshot is allowed, and fails the snapshot job.
+          SNAPSHOT_OPERATION_STATES.includes(this.state)
         ) {
           break
         }
@@ -313,10 +315,15 @@ export class Box {
   private getInvariantChanges(): Partial<Box> {
     const changes: Partial<Box> = {}
 
-    if (!this.pending && String(this.state) !== String(this.desiredState)) {
+    // A snapshot job, not the sync loop, ends EXPORTING and IMPORTING, so a box
+    // in either has no desired-state work pending — which is also what lets a
+    // delete request in.
+    const inSnapshotOperation =
+      SNAPSHOT_OPERATION_STATES.includes(this.state) && this.desiredState === BoxDesiredState.STOPPED
+    if (!this.pending && String(this.state) !== String(this.desiredState) && !inSnapshotOperation) {
       changes.pending = true
     }
-    if (this.pending && String(this.state) === String(this.desiredState)) {
+    if (this.pending && (String(this.state) === String(this.desiredState) || inSnapshotOperation)) {
       changes.pending = false
     }
     if (this.state === BoxState.ERROR && this.desiredState !== BoxDesiredState.DESTROYED) {

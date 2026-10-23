@@ -1,10 +1,15 @@
 # F5 cross-runner snapshot copy qualification
 
+> **Update 2026-10-23:** the F3–F5 snapshot prototype and the combined E scenario were
+> removed in favor of organization-scoped snapshots
+> ([#2087](https://github.com/boxlite-ai/boxlite/pull/2087)).
+> Their code, guides and make targets no longer exist; this report is kept as a record.
+
 The renewed F5 work reuses the existing Box migration archive implementation.
 `snapshot_copy` creates an independent snapshot on an explicitly selected runner;
 ordinary `create_from_snapshot` then schedules to that owner. See the
 [design](2026-10-22-snapshot-runner-copy-design.md) and
-[public contract](../../guides/create-from-snapshot.md).
+[public contract](https://github.com/boxlite-ai/boxlite/blob/37ab3f6eca69788a66fb2024053983ed91dc939b/docs/guides/create-from-snapshot.md).
 
 ## Environment and evidence
 

@@ -20,8 +20,11 @@ deployed environment runs code that no longer maps them.
 | `region.sshGatewayUrl`                               | same                                             | same                                                                           |
 | `region.sshGatewayApiKeyHash` (+ its unique index)   | same                                             | same                                                                           |
 | `organization.template_deactivation_timeout_minutes` | every database                                   | the image catalog, which unmapped it and deferred the drop                     |
+| table `filesystem_snapshot`                          | x_features databases that ran its F4 migration   | the removal of the F3–F5 snapshot prototype, whose migration file went with it |
+| `box.snapshotId`                                     | same                                             | same                                                                           |
 
-The SSH objects are absent from fresh databases, so their drop needs `IF EXISTS`. The
+The SSH and snapshot prototype objects are absent from fresh databases, so their drop needs
+`IF EXISTS`. The
 organization column is still created by the baseline, so a plain `DROP COLUMN` retires it
 everywhere; it is `NOT NULL DEFAULT 20160`, which is why inserts that omit it keep working until
 then.

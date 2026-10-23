@@ -256,7 +256,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   ): Promise<StartBoxResponse | undefined> {
     const response = await this.boxApiClient.create({
       id: box.id,
-      snapshotId: box.snapshotId,
       volumes: box.volumes,
       image,
       osUser: box.osUser,

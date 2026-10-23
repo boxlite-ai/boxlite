@@ -1,5 +1,10 @@
 # Combined snapshot, Swarm and cache acceptance
 
+> **Update 2026-10-23:** the F3–F5 snapshot prototype and the combined E scenario were
+> removed in favor of organization-scoped snapshots
+> ([#2087](https://github.com/boxlite-ai/boxlite/pull/2087)).
+> Their code, guides and make targets no longer exist; this report is kept as a record.
+
 ## Design
 
 F5 now supplies explicit immutable snapshot copying between runners. Reuse the

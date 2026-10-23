@@ -3,11 +3,16 @@
 F3 is implemented as an explicit memory contract and test fixture. S6 is
 MOCK_PASS. No real RAM, register, device or process capture/restore is implemented.
 
+> **Update 2026-10-23:** the F3–F5 snapshot prototype and the combined E scenario were
+> removed in favor of organization-scoped snapshots
+> ([#2087](https://github.com/boxlite-ai/boxlite/pull/2087)).
+> Their code, guides and make targets no longer exist; this report is kept as a record.
+
 ## Details
 
 Base `9a49d5a5`; macOS 27.0.1 arm64, Python 3.14.6, BoxLite 0.10.7.
 No kernel/Docker/Compose dependency is used in this no-VM qualification.
-See [public contract and usage](../../guides/memory-snapshots.md).
+See [public contract and usage](https://github.com/boxlite-ai/boxlite/blob/37ab3f6eca69788a66fb2024053983ed91dc939b/docs/guides/memory-snapshots.md).
 
 The real native Python REST SDK talks to test-only API and runner HTTP servers.
 Checks cover requested type/name, query/list state, duplicate name, missing

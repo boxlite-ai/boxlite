@@ -33,6 +33,8 @@ const (
 	BOXSTATE_ARCHIVED BoxState = "archived"
 	BOXSTATE_ARCHIVING BoxState = "archiving"
 	BOXSTATE_RESIZING BoxState = "resizing"
+	BOXSTATE_EXPORTING BoxState = "exporting"
+	BOXSTATE_IMPORTING BoxState = "importing"
 	BOXSTATE_UNKNOWN_DEFAULT_OPEN_API BoxState = "unknown_default_open_api"
 )
 
@@ -51,6 +53,8 @@ var AllowedBoxStateEnumValues = []BoxState{
 	"archived",
 	"archiving",
 	"resizing",
+	"exporting",
+	"importing",
 	"unknown_default_open_api",
 }
 

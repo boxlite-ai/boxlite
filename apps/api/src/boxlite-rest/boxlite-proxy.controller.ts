@@ -38,14 +38,16 @@ import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService, ProxyAdmission } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
-import { AUTO_RESUMABLE_STATES, BoxAutoResumeService } from '../box/services/box-auto-resume.service'
+import {
+  AUTO_RESUMABLE_STATES,
+  BoxAutoResumeService,
+} from '../box/services/box-auto-resume.service'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
-import { reportedBoxState } from '../box/utils/box-state.util'
+import { assertNoSnapshotOperation, reportedBoxState } from '../box/utils/box-state.util'
 import { Box } from '../box/entities/box.entity'
 import { TunnelService } from '../box/services/tunnel.service'
 import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
-import { SnapshotService } from './snapshot.service'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -96,7 +98,6 @@ export class BoxliteProxyController {
     private readonly runnerService: RunnerService,
     private readonly autoResume: BoxAutoResumeService,
     private readonly tunnelService: TunnelService,
-    private readonly snapshots?: SnapshotService,
   ) {}
 
   @All(':boxId/exec')
@@ -108,92 +109,14 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(authContext, boxId, (id) => `/v1/boxes/${id}/exec`, req, res, next, USER_OPERATION)
-  }
-
-  @Post(':boxId/snapshots')
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  async createSnapshot(
-    @AuthContext() auth: OrganizationAuthContext,
-    @Param('boxId') id: string,
-    @Req() req: Request,
-    @Res() res: Response,
-    @Next() next: NextFunction,
-  ) {
-    res.status(201).json(await this.snapshots.capture(auth, id, req.body))
-  }
-
-  @Get(':boxId/snapshots')
-  async listSnapshots(
-    @AuthContext() auth: OrganizationAuthContext,
-    @Param('boxId') id: string,
-    @Req() req: Request,
-    @Res() res: Response,
-    @Next() next: NextFunction,
-  ) {
-    res.json(await this.snapshots.list(auth, id))
-  }
-
-  @Get(':boxId/snapshots/:snapshot')
-  async getSnapshot(
-    @AuthContext() auth: OrganizationAuthContext,
-    @Param('boxId') id: string,
-    @Param('snapshot') snapshot: string,
-    @Req() req: Request,
-    @Res() res: Response,
-    @Next() next: NextFunction,
-  ) {
-    const record = await this.snapshots.byName(auth, id, snapshot)
-    res.json(await this.snapshots.get(auth, record.id))
-  }
-
-  @Delete(':boxId/snapshots/:snapshot')
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  async deleteSnapshot(
-    @AuthContext() auth: OrganizationAuthContext,
-    @Param('boxId') id: string,
-    @Param('snapshot') snapshot: string,
-    @Req() req: Request,
-    @Res() res: Response,
-    @Next() next: NextFunction,
-  ) {
-    const record = await this.snapshots.byName(auth, id, snapshot)
-    await this.snapshots.remove(auth, record.id)
-    res.status(204).end()
-  }
-
-  @Post(':boxId/snapshots/:snapshot/boxes')
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  async createBoxFromSnapshot(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxId') boxId: string,
-    @Param('snapshot') snapshot: string,
-    @Req() req: Request,
-    @Res() res: Response,
-    @Next() next: NextFunction,
-  ) {
-    const record = await this.snapshots.byName(authContext, boxId, snapshot)
-    res.status(201).json(await this.snapshots.createBox(authContext, record.id, req.body?.name))
-  }
-
-  @Post(':boxId/snapshots/:snapshot/restore')
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  async restoreSnapshot(
-    @AuthContext() auth: OrganizationAuthContext,
-    @Param('boxId') id: string,
-    @Param('snapshot') snapshot: string,
-    @Req() req: Request,
-    @Res() res: Response,
-    @Next() next: NextFunction,
-  ) {
     return this.proxyToRunner(
-      auth,
-      id,
-      (box) => `/v1/boxes/${box}/snapshots/${encodeURIComponent(snapshot)}/restore`,
+      authContext,
+      boxId,
+      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`,
       req,
       res,
       next,
-      OBSERVATION_ONLY,
+      USER_OPERATION,
     )
   }
 
@@ -425,7 +348,10 @@ export class BoxliteProxyController {
     // Refuse at once a box the CONNECT could never wake. A box it can wake
     // gets its URI as it is: the proxy wakes it on the CONNECT, and waits for
     // the service to listen, so waking it here would only hold the caller.
-    if (box.state !== BoxState.STARTED && (!box.autoResume || !AUTO_RESUMABLE_STATES.includes(box.state))) {
+    if (
+      box.state !== BoxState.STARTED &&
+      (!box.autoResume || !AUTO_RESUMABLE_STATES.includes(box.state))
+    ) {
       throw new ConflictException(`Box ${boxId} is not running (state: ${box.state})`)
     }
 
@@ -435,7 +361,9 @@ export class BoxliteProxyController {
   }
 
   // Revoking needs neither inbound access nor a running box: it only withdraws
-  // the declaration, so a port stays revocable after either is turned off.
+  // the declaration, so a port stays revocable after either is turned off. A
+  // box a snapshot job holds refuses it like every other change; the box is
+  // stopped meanwhile, and the port can be revoked once the job settles.
   @Delete(':boxId/network/tunnel')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -445,6 +373,7 @@ export class BoxliteProxyController {
     @Query('port', ParseIntPipe) port: number,
   ): Promise<void> {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+    assertNoSnapshotOperation(box)
     await this.tunnelService.revoke(box.id, port)
   }
 

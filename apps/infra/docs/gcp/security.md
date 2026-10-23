@@ -30,6 +30,7 @@ Follow the shared [secret-handling and resource-protection rules](../security.md
 - The collector's and registry proxy's internal ingress restrictions remain meaningful even where their invoker IAM bindings permit `allUsers`. The registry proxy checks each runner key against the control plane itself.
 - Database/cache use private connectivity. API and collector have different ClickHouse reader/writer credentials.
 - Volume access uses scoped temporary credentials and bucket-prefix permissions; stage naming alone does not isolate every volume bucket.
+- Box snapshot archives sit in one stage bucket with uniform access and public access prevention enforced. Runners upload and download archives and the API deletes them, each through `roles/storage.objectUser` bound to that bucket alone.
 - Registry passwords sit in Secret Manager under `registry-credential-*`. The API holds two custom roles: create a secret, and add or destroy versions under that prefix. It cannot read a password back. Stages sharing a project share the prefix.
 
 

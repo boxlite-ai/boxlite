@@ -1432,7 +1432,9 @@ impl BoxImpl {
         let ret = unsafe { libc::kill(pid, libc::SIGSTOP) };
         if ret != 0 {
             // If SIGSTOP fails, thaw before returning error
-            self.guest_thaw().await;
+            if frozen {
+                self.guest_thaw().await;
+            }
             return Err(BoxliteError::Internal(format!(
                 "Failed to SIGSTOP shim process (pid={}): {}",
                 pid,
@@ -1464,9 +1466,9 @@ impl BoxImpl {
 
         // Phase 5: Thaw guest I/O (always, best-effort)
         let t_thaw = Instant::now();
-        // A timed-out freeze RPC may still have frozen the guest. Always thaw,
-        // including when its response was lost or arrived after our deadline.
-        self.guest_thaw().await;
+        if frozen {
+            self.guest_thaw().await;
+        }
         let thaw_ms = t_thaw.elapsed().as_millis() as u64;
 
         tracing::info!(
@@ -1627,6 +1629,13 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         BoxImpl::export_box(self, options, dest).await
+    }
+
+    async fn restore_from_archive(
+        &self,
+        archive: crate::runtime::options::BoxArchive,
+    ) -> BoxliteResult<()> {
+        BoxImpl::restore_from_archive(self, archive).await
     }
 
     async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {

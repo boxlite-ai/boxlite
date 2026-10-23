@@ -130,6 +130,11 @@ func goBoxliteOnBoxExport(archivePath *C.char, errPtr *C.CBoxliteError, userData
 	ch <- handleResult[*C.char]{value: archivePath, err: errorFromCError(errPtr)}
 }
 
+//export goBoxliteOnBoxRestoreArchive
+func goBoxliteOnBoxRestoreArchive(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
 //export goBoxliteOnRuntimeImport
 func goBoxliteOnRuntimeImport(box *C.CBoxHandle, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)

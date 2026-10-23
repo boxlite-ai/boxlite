@@ -36,10 +36,12 @@ The inventory is implementation-grounded:
   [`local-dex-env.mjs`](./scripts/local-dex-env.mjs).
 
 `openapi/box.openapi.yaml` also describes portable capabilities that the hosted
-service does not currently register, including snapshots, clone, export,
-import, and runtime-wide metrics. They are intentionally absent below;
-`GET /api/v1/config` reports snapshots, clone, export, and import as disabled,
-and private tunnels as enabled; clients check that before every private prepare.
+service does not currently register, including clone, export, import, and
+runtime-wide metrics. They are intentionally absent below; `GET /api/v1/config`
+reports clone, export, and import as disabled. Snapshots are registered, and
+the same route reports them enabled only on a stage that configures snapshot
+storage (`BOX_SNAPSHOT_ARCHIVE_PREFIX`).
+Private tunnels are enabled; clients check support before each private prepare.
 
 ## Services at a glance
 
@@ -408,7 +410,9 @@ deployments (shared with the control-plane API)
 
 Most resource paths accept both an unprefixed form and an organization-prefixed
 form. The tables write that as `[/{prefix}]`; clients can discover their prefix
-through `GET /api/v1/me`. Except for configuration discovery, these routes use
+through `GET /api/v1/me`. A prefix is an organization ID or `default`, so an
+unprefixed path always names the collection it starts with: `/api/v1/images/boxes`
+is the image named `boxes`, never the box list. Except for configuration discovery, these routes use
 combined bearer authentication, then organization authorization.
 
 Image and registry management routes also consume the organization's authenticated
@@ -500,6 +504,44 @@ submitting a new start, the API rechecks SSH startup restrictions against the
 current box state under its lifecycle lock. The API waits for readiness before
 forwarding configuration; the runner checks that the box is running and returns
 `409 invalid_state` if that check fails.
+
+</details>
+
+<details>
+<summary><b>Snapshots</b> · 9 routes</summary>
+
+| Method   | Path                                                           | What it does                                                         |
+| -------- | -------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots`                   | Starts exporting a stopped box; answers `201` with `status: creating`. |
+| `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots`                   | Lists the snapshots taken from the box.                              |
+| `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots/{snapshot}`        | Gets one of them by name or ID.                                      |
+| `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots/{snapshot}`        | Deletes one of them.                                                 |
+| `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots/{snapshot}/restore` | Starts replacing the stopped box's disk; answers `202` with a restore record. |
+| `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/restores/{restoreId}`        | Gets a restore record.                                               |
+| `GET`    | `/api/v1[/{prefix}]/snapshots`                                 | Lists the organization's snapshots, including those of deleted boxes. |
+| `GET`    | `/api/v1[/{prefix}]/snapshots/{snapshot}`                      | Gets any snapshot of the organization by name or ID.                 |
+| `DELETE` | `/api/v1[/{prefix}]/snapshots/{snapshot}`                      | Deletes any snapshot of the organization.                            |
+
+A snapshot belongs to the organization, not to its box: names are unique per
+organization, a snapshot outlives the box it came from, and `restore` accepts
+any ready snapshot of the organization whose disk size and region match the
+target box. A name takes letters, digits, `.`, `_` and `-`, starting with a
+letter or digit, since it travels in URL paths; any other answers `400`.
+
+Creating one moves the box to `exporting` and restoring one to `importing`;
+until the runner job settles, the box accepts only deletion, which fails the
+snapshot or restore. Either way the box ends stopped, and a failed restore
+keeps the original disk. A job no runner picks up within ten minutes fails,
+which frees its box. Create and restore need `write:boxes`, deletion
+`delete:boxes`.
+
+An organization keeps at most `BOX_SNAPSHOT_MAX_PER_ORGANIZATION` (default 10)
+creating or ready snapshots; one more answers `429` (`resource_exhausted`). An
+organization's creates take turns, and one kept waiting over five seconds
+answers `503` (`upstream_unavailable`) for the caller to retry. Archives live
+in object storage under `BOX_SNAPSHOT_ARCHIVE_PREFIX` (`gs://` only; `s3://`
+is reserved and refused at boot), and the API deletes them itself. Snapshot
+storage is not billed yet.
 
 </details>
 

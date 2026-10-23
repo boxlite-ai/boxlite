@@ -35,12 +35,6 @@ const scanRoots = [
 
 const unsupportedOperations = {
   cloneBox: 'cloud REST controller does not expose clone; capability is false in /v1/config',
-  createSnapshot: 'cloud routes to runner, which returns Unsupported; memory is test-mock-only',
-  listSnapshots: 'cloud routes to runner, which returns Unsupported',
-  getSnapshot: 'cloud routes to runner, which returns Unsupported',
-  removeSnapshot: 'cloud routes to runner, which returns Unsupported',
-  createBoxFromSnapshot: 'production Unsupported; memory create-from has an explicit mock contract only',
-  restoreSnapshot: 'cloud REST controller does not expose snapshots; capability is false in /v1/config',
   exportBox: 'cloud REST controller does not expose export; capability is false in /v1/config',
   importBox: 'cloud REST controller does not expose import; capability is false in /v1/config',
   getRuntimeMetrics: 'cloud REST controller exposes per-box metrics only, not runtime-wide metrics',
@@ -68,6 +62,10 @@ const operationSignals = {
   removeSnapshot: [/removesnapshot/, /snapshots\(\)\.remove/, /snapshot\.remove/],
   getSnapshot: [/getsnapshot/, /snapshots\(\)\.get/, /snapshot\.get/],
   restoreSnapshot: [/restoresnapshot/, /snapshots\(\)\.restore/, /restore_snapshot/],
+  getSnapshotRestore: [/getsnapshotrestore/, /\/restores\//],
+  listAllSnapshots: [/listallsnapshots/, /v1\$\{prefix\}\/snapshots/],
+  getAnySnapshot: [/getanysnapshot/, /"get", ctx\.v1\(f"snapshots\//],
+  removeAnySnapshot: [/removeanysnapshot/, /"delete", ctx\.v1\(f"snapshots\//],
   startBox: [/startbox/, /\.start\(/, /test_.*start/, /start box/],
   stopBox: [/stopbox/, /\.stop\(/, /test_.*stop/, /stop box/],
   importBox: [/importbox/, /\.import\(/, /\/import\b/],

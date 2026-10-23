@@ -1,5 +1,10 @@
 # F5 create-from-snapshot verification
 
+> **Update 2026-10-23:** the F3–F5 snapshot prototype and the combined E scenario were
+> removed in favor of organization-scoped snapshots
+> ([#2087](https://github.com/boxlite-ai/boxlite/pull/2087)).
+> Their code, guides and make targets no longer exist; this report is kept as a record.
+
 This is the historical six-round report. The user's renewed F5 request later
 authorized rounds 7–9, [migration-backed cross-runner copying and real tenant
 denial checks](2026-10-22-f5-copy-qualification.md). The limits below describe
@@ -7,7 +12,7 @@ the original cutoff, not the current implementation.
 
 Implemented on parent `065085ca`; six of six rounds used. The
 [attempt log](2026-10-21-runner-ci-attempts.md#f5) records each hypothesis,
-change, command and outcome. See the [contract](../../guides/create-from-snapshot.md)
+change, command and outcome. See the [contract](https://github.com/boxlite-ai/boxlite/blob/37ab3f6eca69788a66fb2024053983ed91dc939b/docs/guides/create-from-snapshot.md)
 for storage ownership, cold boot, placement and compatibility limits.
 
 ## Real runner evidence

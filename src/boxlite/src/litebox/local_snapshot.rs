@@ -26,16 +26,14 @@ impl LocalSnapshotBackend {
     async fn snapshot_create(
         &self,
         name: &str,
-        opts: SnapshotOptions,
+        _opts: SnapshotOptions,
     ) -> BoxliteResult<SnapshotInfo> {
-        opts.require_filesystem()?;
         validate_snapshot_name(name)?;
         let t0 = Instant::now();
         let _lock = self.inner.disk_ops.lock().await;
 
         let box_id = self.inner.id().as_str();
         let snap_mgr = &self.inner.runtime.snapshot_mgr;
-        let _catalog_lock = snap_mgr.operations.lock().await;
 
         // Check if snapshot name already exists for this box.
         if snap_mgr.exists(box_id, name)? {
@@ -45,24 +43,28 @@ impl LocalSnapshotBackend {
             )));
         }
 
+        // Write crash-recovery marker before moving disks (point of no return).
         let box_home = &self.inner.config.box_home;
-        let manager = snap_mgr.clone();
-        let home = box_home.clone();
-        let snapshot_name = name.to_owned();
-        let source_id = box_id.to_owned();
-        let options = self.inner.config.options.clone();
-        // Keep blocking disk I/O off the RPC runtime. The supervisor in create()
-        // remains alive if the requesting HTTP client/SDK future is cancelled.
+        let disks_dir = box_home.join("disks");
+        let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
+        let pending_marker = box_home.join(".snapshot_pending");
+        let snapshot_dir = box_home.join("snapshots").join(name);
+        let marker_data = serde_json::json!({
+            "snapshot_dir": snapshot_dir.to_string_lossy(),
+            "container_disk": container_disk.to_string_lossy(),
+        });
+        std::fs::write(&pending_marker, marker_data.to_string()).map_err(|e| {
+            BoxliteError::Storage(format!("Failed to write snapshot marker: {}", e))
+        })?;
+
+        // Quiesce VM for point-in-time snapshot consistency.
         let result = self
             .inner
-            .with_quiesce_async(async move {
-                tokio::task::spawn_blocking(move || {
-                    manager.create(&home, &snapshot_name, &source_id, options)
-                })
-                .await
-                .map_err(|e| BoxliteError::Internal(format!("snapshot capture task: {e}")))?
-            })
+            .with_quiesce_async(async { snap_mgr.create(box_home, name, box_id) })
             .await;
+
+        // Remove marker on success.
+        let _ = std::fs::remove_file(&pending_marker);
 
         let info = result?;
 
@@ -91,7 +93,6 @@ impl LocalSnapshotBackend {
     async fn snapshot_remove(&self, name: &str) -> BoxliteResult<()> {
         validate_snapshot_name(name)?;
         let _lock = self.inner.disk_ops.lock().await;
-        let _catalog_lock = self.inner.runtime.snapshot_mgr.operations.lock().await;
 
         let box_id = self.inner.id().as_str();
         let container_disk = self
@@ -134,7 +135,6 @@ impl LocalSnapshotBackend {
 
         let box_id = self.inner.id().as_str();
         let disks_dir = self.inner.config.box_home.join("disks");
-        let _catalog_lock = self.inner.runtime.snapshot_mgr.operations.lock().await;
 
         self.inner
             .runtime
@@ -154,12 +154,7 @@ impl LocalSnapshotBackend {
 #[async_trait::async_trait]
 impl crate::runtime::backend::SnapshotBackend for LocalSnapshotBackend {
     async fn create(&self, options: SnapshotOptions, name: &str) -> BoxliteResult<SnapshotInfo> {
-        options.require_filesystem()?;
-        let backend = Self::new(Arc::clone(&self.inner));
-        let name = name.to_owned();
-        tokio::spawn(async move { backend.snapshot_create(&name, options).await })
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("snapshot supervisor: {e}")))?
+        self.snapshot_create(name, options).await
     }
 
     async fn list(&self) -> BoxliteResult<Vec<SnapshotInfo>> {
@@ -176,21 +171,6 @@ impl crate::runtime::backend::SnapshotBackend for LocalSnapshotBackend {
 
     async fn restore(&self, name: &str) -> BoxliteResult<()> {
         self.snapshot_restore(name).await
-    }
-
-    async fn create_box(
-        &self,
-        snapshot: &str,
-        name: Option<String>,
-    ) -> BoxliteResult<crate::LiteBox> {
-        let info = self
-            .snapshot_get(snapshot)
-            .await?
-            .ok_or_else(|| BoxliteError::NotFound("snapshot not found".into()))?;
-        self.inner
-            .runtime
-            .create_from_snapshot(&info.id, name, None)
-            .await
     }
 }
 

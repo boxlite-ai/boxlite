@@ -15,9 +15,8 @@ pub mod volumes;
 mod core;
 #[cfg(feature = "embedded-runtime")]
 pub(crate) mod embedded;
-mod import;
+pub(crate) mod import;
 pub(crate) mod rt_impl;
-mod snapshots;
 
 pub use auth::{AuthHandle, Principal};
 pub use core::BoxliteRuntime;

@@ -1,5 +1,10 @@
 # Local runner CI feature delivery
 
+> **Update 2026-10-23:** the F3–F5 snapshot prototype and the combined E scenario were
+> removed in favor of organization-scoped snapshots
+> ([#2087](https://github.com/boxlite-ai/boxlite/pull/2087)).
+> Their code, guides and make targets no longer exist; this report is kept as a record.
+
 **The agreed two-local-runner path is now qualified.** After the user reopened F1 without a round limit,
 [D1/D2 passed](2026-10-22-f1-dind-qualification.md). The later unlimited
 F2/F6 resumption passes [Swarm D3–D10 and both runner topologies](2026-10-22-f2-swarm-qualification.md)

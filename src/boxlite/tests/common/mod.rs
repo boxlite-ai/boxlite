@@ -35,9 +35,7 @@ pub fn non_vm_runtime(options: BoxliteOptions) -> boxlite::BoxliteResult<boxlite
 /// Default test box options: `alpine:latest`, `auto_delete=0`.
 pub fn alpine_opts() -> BoxOptions {
     BoxOptions {
-        rootfs: RootfsSpec::Image(
-            std::env::var("BOXLITE_TEST_IMAGE").unwrap_or_else(|_| "alpine:latest".into()),
-        ),
+        rootfs: RootfsSpec::Image("alpine:latest".into()),
         auto_delete: Some(0),
         ..Default::default()
     }

@@ -92,11 +92,8 @@ pub(crate) struct ServerCapabilities {
     pub privileged_enabled: Option<bool>,
     #[serde(default)]
     pub cache_volumes_enabled: bool,
-    pub memory_snapshots_enabled: Option<bool>,
     pub linux_capabilities_enabled: Option<bool>,
     pub snapshots_enabled: Option<bool>,
-    pub create_from_snapshot_enabled: Option<bool>,
-    pub snapshot_copy_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
     pub import_enabled: Option<bool>,
@@ -758,39 +755,45 @@ pub(crate) struct ListRegistriesResponse {
 #[derive(Debug, Serialize)]
 pub(crate) struct CreateSnapshotRequest {
     pub name: String,
-    pub snapshot_type: crate::SnapshotType,
 }
 
 impl CreateSnapshotRequest {
-    pub fn from_options(options: &SnapshotOptions, name: &str) -> Self {
+    pub fn from_options(_options: &SnapshotOptions, name: &str) -> Self {
         Self {
             name: name.to_string(),
-            snapshot_type: options.snapshot_type,
         }
     }
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct SnapshotResponse {
-    #[serde(default)]
-    pub snapshot_type: crate::SnapshotType,
-    #[serde(default)]
-    pub is_mock: bool,
     pub id: String,
     pub box_id: String,
     pub name: String,
     pub created_at: i64,
-    #[serde(default)]
     pub container_disk_bytes: u64,
-    #[serde(default)]
     pub size_bytes: u64,
+    /// `creating`, `ready` or `failed`. A server that creates snapshots before
+    /// answering leaves it out, which means ready.
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// The record a server hands back for a restore it finishes asynchronously.
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct SnapshotRestoreResponse {
+    pub id: String,
+    /// `pending`, `succeeded` or `failed`.
+    pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 impl SnapshotResponse {
     pub fn to_snapshot_info(&self) -> SnapshotInfo {
         SnapshotInfo {
-            snapshot_type: self.snapshot_type,
-            is_mock: self.is_mock,
             id: self.id.clone(),
             box_id: self.box_id.clone(),
             name: self.name.clone(),
@@ -960,6 +963,9 @@ fn parse_box_status(status: &str) -> BoxStatus {
         "stopped" => BoxStatus::Stopped,
         "paused" => BoxStatus::Paused,
         "failed" => BoxStatus::Failed,
+        // A stopped box whose disk a snapshot job is exporting or replacing.
+        // Its VM is not running, and the job ends with the box stopped.
+        "exporting" | "importing" => BoxStatus::Stopped,
         _ => BoxStatus::Unknown,
     }
 }
@@ -1613,6 +1619,11 @@ mod tests {
         assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Unknown);
         resp.status = "paused".to_string();
         assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Paused);
+        // A box mid-snapshot on a hosted server is stopped as far as its VM goes.
+        for status in ["exporting", "importing"] {
+            resp.status = status.to_string();
+            assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Stopped);
+        }
     }
 
     #[test]
@@ -1636,14 +1647,14 @@ mod tests {
     #[test]
     fn test_snapshot_response_to_snapshot_info() {
         let resp = SnapshotResponse {
-            snapshot_type: crate::SnapshotType::Filesystem,
-            is_mock: false,
             id: "01JABCDEF0123456789XYZABCD".to_string(),
             box_id: "01J0000000000000000000000A".to_string(),
             name: "snap1".to_string(),
             created_at: 1_700_000_000,
             container_disk_bytes: 2048,
             size_bytes: 4096,
+            status: None,
+            error: None,
         };
 
         let info = resp.to_snapshot_info();

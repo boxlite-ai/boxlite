@@ -252,42 +252,6 @@ async def probe():
             flush=True,
         )
 
-        # Snapshot captures the system disk, never the external cache or its path.
-        await run(b, "printf system-disk > /root/system-marker; sync")
-        s = await b.snapshot.create(name="cache-boundary")
-        record["snapshot"] = s.id
-        save()
-        select("a")
-        d = await runtime.create_from_snapshot(s.id, name=tag + "-no-cache")
-        record["boxes"].append({"id": d.id, "name": tag + "-no-cache"})
-        save()
-        await run(
-            d,
-            'test "$(cat /root/system-marker)" = system-disk; test ! -e /cache/marker',
-        )
-        e = await runtime.create_from_snapshot(
-            s.id, name=tag + "-new-cache", options=options(tag + "-new")
-        )
-        record["boxes"].append({"id": e.id, "name": tag + "-new-cache"})
-        save()
-        await run(
-            e,
-            'test "$(cat /root/system-marker)" = system-disk; test ! -e /cache/marker; printf replacement > /cache/marker; sync',
-        )
-        assert await run(b, "cat /cache/marker") == "runner-a"
-        # Check the actual native manifest for excluded host-path configuration.
-        manifests = list(
-            (Path(topology["a"]["home"]) / "snapshots").glob("*/manifest.json")
-        )
-        assert manifests
-        for manifest in manifests:
-            assert "cache-volumes" not in manifest.read_text(), manifest
-        await runtime.remove(d.id, force=True)
-        await remove(e, "a", cache=tag + "-new")
-        await runtime.snapshot_remove(s.id)
-        request(path("a", cache=tag + "-new"), method="DELETE")
-        print("S5 PASS: cache excluded; child mounts explicitly replaced", flush=True)
-
         # Stop guests before an orderly process restart. Leases survive even for
         # stopped Boxes, so restarting the control plane cannot admit a writer.
         for box in [b, c]:

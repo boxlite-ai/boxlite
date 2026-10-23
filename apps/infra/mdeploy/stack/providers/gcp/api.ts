@@ -145,6 +145,16 @@ const bindingsFor = ({
         }),
       ]
     }
+    case 'manage-snapshot-archives':
+      // Object access on the snapshot bucket alone: the API deletes archives
+      // and never touches the bucket itself.
+      return [
+        new gcp.storage.BucketIAMMember(`ApiCapability${index}`, {
+          bucket: capability.snapshots.bucket,
+          role: 'roles/storage.objectUser',
+          member: principal,
+        }),
+      ]
     case 'vend-volume-credentials':
       // Google's equivalent of assuming a role: the API mints a short-lived
       // token for the vending account and scopes it to one organization.

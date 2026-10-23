@@ -121,24 +121,9 @@ impl PerTestBoxHome {
 impl Drop for PerTestBoxHome {
     fn drop(&mut self) {
         if std::thread::panicking() {
-            self._temp.disable_cleanup(true);
-            if let Some(cache) = &mut self._cache {
-                cache.preserve();
-            }
-            eprintln!("Failed test scene retained at {}", self.path.display());
             return;
         }
         let leaks = live_shim_pids(&self.path.join("boxes"));
-        if !leaks.is_empty() {
-            self._temp.disable_cleanup(true);
-            if let Some(cache) = &mut self._cache {
-                cache.preserve();
-            }
-            eprintln!(
-                "Live-shim failure scene retained at {}",
-                self.path.display()
-            );
-        }
         assert!(
             leaks.is_empty(),
             "PerTestBoxHome dropped with {n} live shim(s): {leaks:?}. \

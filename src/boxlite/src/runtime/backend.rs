@@ -35,37 +35,6 @@ use super::id::BoxID;
 )]
 #[async_trait]
 pub(crate) trait RuntimeBackend: Send + Sync {
-    async fn snapshot_copy(
-        &self,
-        _id: &str,
-        _runner_id: &str,
-        _name: Option<String>,
-    ) -> BoxliteResult<SnapshotInfo> {
-        Err(BoxliteError::Unsupported(
-            "snapshot copy requires a runner-backed cloud API".into(),
-        ))
-    }
-    async fn snapshot_get(&self, _id: &str) -> BoxliteResult<SnapshotInfo> {
-        Err(BoxliteError::Unsupported(
-            "runtime snapshot lookup is not implemented".into(),
-        ))
-    }
-    async fn snapshot_remove(&self, _id: &str) -> BoxliteResult<()> {
-        Err(BoxliteError::Unsupported(
-            "runtime snapshot deletion is not implemented".into(),
-        ))
-    }
-    async fn create_from_snapshot(
-        &self,
-        _id: &str,
-        _name: Option<String>,
-        _options: Option<BoxOptions>,
-    ) -> BoxliteResult<LiteBox> {
-        Err(BoxliteError::Unsupported(
-            "create from snapshot is not implemented".into(),
-        ))
-    }
-
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox>;
 
     async fn get_or_create(
@@ -190,6 +159,14 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 
     async fn export_box(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive>;
 
+    /// Replace this stopped box's container disk with the one an archive
+    /// carries, keeping the box's identity and configuration.
+    async fn restore_from_archive(&self, _archive: BoxArchive) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "restoring a box from an archive is only supported by local runtimes".into(),
+        ))
+    }
+
     /// Replace the guest's SSH configuration (see [`crate::litebox::SshHandle`]).
     async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus>;
 
@@ -263,12 +240,6 @@ pub(crate) trait SnapshotBackend: Send + Sync {
     async fn remove(&self, name: &str) -> BoxliteResult<()>;
 
     async fn restore(&self, name: &str) -> BoxliteResult<()>;
-
-    /// Cold creation from filesystem, or reserved memory restore contract.
-    /// No backend may silently substitute clone or image creation.
-    async fn create_box(&self, _snapshot: &str, _name: Option<String>) -> BoxliteResult<LiteBox> {
-        Err(BoxliteError::Unsupported("creating a Box from a snapshot is not implemented by this backend; memory restore is not implemented".into()))
-    }
 }
 
 /// Backend abstraction for execution control (signal, kill, resize).

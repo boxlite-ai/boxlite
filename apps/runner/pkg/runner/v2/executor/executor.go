@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -30,21 +31,28 @@ type ExecutorConfig struct {
 	Backend   backend.BoxBackend
 	Collector *metrics.Collector
 	Logger    *slog.Logger
-	// ArchiveStore and MigrateWorkDir are only needed for box migration. A
-	// runner deployed without object-store credentials leaves ArchiveStore nil
-	// and fails migration jobs explicitly instead of failing to start.
-	ArchiveStore   storage.ArchiveStore
-	MigrateWorkDir string
+	// ArchiveStore moves migration and snapshot archives through object
+	// storage; the work directories are where each kind is staged on disk. A
+	// store that cannot serve an archive's scheme fails that job explicitly
+	// instead of the runner failing to start.
+	ArchiveStore    storage.ArchiveStore
+	MigrateWorkDir  string
+	SnapshotWorkDir string
 }
 
 // Executor handles job execution
 type Executor struct {
-	log            *slog.Logger
-	client         *apiclient.APIClient
-	backend        backend.BoxBackend
-	collector      *metrics.Collector
-	archiveStore   storage.ArchiveStore
-	migrateWorkDir string
+	log             *slog.Logger
+	client          *apiclient.APIClient
+	backend         backend.BoxBackend
+	collector       *metrics.Collector
+	archiveStore    storage.ArchiveStore
+	migrateWorkDir  string
+	snapshotWorkDir string
+	// boxOps tracks the snapshot job on each box, for destroyBox to cancel.
+	boxOps boxOperations
+	// heartbeatInterval overrides snapshotHeartbeatInterval in tests.
+	heartbeatInterval time.Duration
 }
 
 // NewExecutor creates a new job executor
@@ -55,12 +63,13 @@ func NewExecutor(cfg *ExecutorConfig) (*Executor, error) {
 	}
 
 	return &Executor{
-		log:            cfg.Logger.With(slog.String("component", "executor")),
-		client:         apiClient,
-		backend:        cfg.Backend,
-		collector:      cfg.Collector,
-		archiveStore:   cfg.ArchiveStore,
-		migrateWorkDir: cfg.MigrateWorkDir,
+		log:             cfg.Logger.With(slog.String("component", "executor")),
+		client:          apiClient,
+		backend:         cfg.Backend,
+		collector:       cfg.Collector,
+		archiveStore:    cfg.ArchiveStore,
+		migrateWorkDir:  cfg.MigrateWorkDir,
+		snapshotWorkDir: cfg.SnapshotWorkDir,
 	}, nil
 }
 
@@ -157,6 +166,10 @@ func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, err
 		resultMetadata, err = e.rollbackImportBox(ctx, job)
 	case apiclient.JOBTYPE_DISCARD_EXPORTED_BOX:
 		resultMetadata, err = e.discardExportedBox(ctx, job)
+	case apiclient.JOBTYPE_CREATE_SNAPSHOT:
+		resultMetadata, err = e.createSnapshot(ctx, job)
+	case apiclient.JOBTYPE_RESTORE_SNAPSHOT:
+		resultMetadata, err = e.restoreSnapshot(ctx, job)
 	default:
 		err = fmt.Errorf("unknown job type: %s", job.GetType())
 	}

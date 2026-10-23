@@ -113,6 +113,55 @@ func (b *Box) Export(ctx context.Context, dest string) (string, error) {
 	}
 }
 
+// RestoreFromArchive replaces the container disk of this stopped box with the
+// one a .boxlite archive carries.
+//
+// The box keeps its ID, name and configuration; the archive's options are not
+// applied. A failure leaves the original disk in place. Only local runtimes
+// support it.
+//
+// RestoreFromArchive never consumes or deletes archivePath.
+func (b *Box) RestoreFromArchive(ctx context.Context, archivePath string) error {
+	if err := validateArchiveArgument(archivePath, "archive path", false); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	b.runtime.ensureDrainRunning()
+
+	cArchivePath := toCString(archivePath)
+	defer C.free(unsafe.Pointer(cArchivePath))
+
+	ch := make(chan error, 1)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
+
+	var cError C.CBoxliteError
+	code := C.boxlite_box_restore_from_archive(
+		b.handle,
+		cArchivePath,
+		C.cbBoxRestoreArchive(),
+		handleToPtr(h),
+		&cError,
+	)
+	if code != C.Ok {
+		deleteHandleForDispatch(h)
+		return freeError(&cError)
+	}
+
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		abandonAsyncErr(ch, h, b.runtime.closing)
+		return ctx.Err()
+	case <-b.runtime.closing:
+		abandonAsyncErr(ch, h, b.runtime.closing)
+		return ErrRuntimeClosed
+	}
+}
+
 // Import imports a .boxlite archive and returns a new, stopped box.
 //
 // Local runtimes treat caller-provided archives as trusted and preserve their

@@ -1,8 +1,13 @@
 # F4 filesystem snapshot verification
 
+> **Update 2026-10-23:** the F3–F5 snapshot prototype and the combined E scenario were
+> removed in favor of organization-scoped snapshots
+> ([#2087](https://github.com/boxlite-ai/boxlite/pull/2087)).
+> Their code, guides and make targets no longer exist; this report is kept as a record.
+
 Implemented on parent `6fc9aec5`; four of six rounds used. See the
 [attempt log](2026-10-21-runner-ci-attempts.md#f4) and
-[contract](../../guides/filesystem-snapshots.md). F4 does not claim F5 child
+[contract](https://github.com/boxlite-ai/boxlite/blob/37ab3f6eca69788a66fb2024053983ed91dc939b/docs/guides/filesystem-snapshots.md). F4 does not claim F5 child
 creation or F6 cache-volume acceptance.
 
 ## Defect and before/after evidence

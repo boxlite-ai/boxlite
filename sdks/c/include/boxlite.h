@@ -250,6 +250,9 @@ typedef struct CAgentEventsOptions {
 // Box export completion.
 typedef void (*CBoxExportCb)(char*, CBoxliteError*, void*);
 
+// Box restore-from-archive completion.
+typedef void (*CBoxRestoreArchiveCb)(CBoxliteError*, void*);
+
 typedef struct RuntimeHandle CBoxliteRuntime;
 
 // Runtime import completion.
@@ -725,9 +728,6 @@ typedef void (*CBoxSshStatusCb)(struct CSshStatus*, CBoxliteError*, void*);
 // SSH disable completion with the same ownership contract as SSH configure.
 typedef void (*CBoxSshDisableCb)(struct CSshStatus*, CBoxliteError*, void*);
 
-// Snapshot JSON completion. Caller frees the owned result string.
-typedef void (*CBoxSnapshotCb)(char*, CBoxliteError*, void*);
-
 // C ABI representation of volume metadata.
 //
 // `id` and `created_at` are non-null, heap-owned C strings. A standalone value
@@ -984,6 +984,17 @@ enum BoxliteErrorCode boxlite_box_export(CBoxHandle *handle,
                                          CBoxExportCb cb,
                                          void *user_data,
                                          CBoxliteError *out_error);
+
+// Submit a restore of a stopped box's container disk from an archive.
+//
+// The box keeps its identity and configuration; a failure leaves its
+// original disk in place. The caller retains ownership of the archive file;
+// this bridge never removes it.
+enum BoxliteErrorCode boxlite_box_restore_from_archive(CBoxHandle *handle,
+                                                       const char *archive_path,
+                                                       CBoxRestoreArchiveCb cb,
+                                                       void *user_data,
+                                                       CBoxliteError *out_error);
 
 // Submit a trusted archive import.
 //
@@ -1886,32 +1897,6 @@ enum BoxliteErrorCode boxlite_box_ssh_disable(CBoxHandle *handle,
 // `status` must be null or a pointer from an SSH callback that has not
 // already been freed.
 void boxlite_free_ssh_status(struct CSshStatus *status);
-
-// Submit create/get/list/remove/restore using a JSON request with `operation`,
-// `name` (except list), and optional `snapshot_type` (default filesystem).
-// The callback owns the JSON result string; release with boxlite_free_string.
-// Inputs are copied before returning. Cancellation does not abort disk capture.
-enum BoxliteErrorCode boxlite_box_snapshot(CBoxHandle *handle,
-                                           const char *request_json,
-                                           CBoxSnapshotCb cb,
-                                           void *user_data,
-                                           CBoxliteError *out_error);
-
-// Runtime snapshot get/remove by opaque ID, surviving source deletion.
-enum BoxliteErrorCode boxlite_runtime_snapshot(CBoxliteRuntime *runtime,
-                                               const char *id,
-                                               bool remove,
-                                               CBoxSnapshotCb cb,
-                                               void *user_data,
-                                               CBoxliteError *out_error);
-
-// Cold-create from snapshot. Consumes opts just like boxlite_create_box.
-enum BoxliteErrorCode boxlite_create_from_snapshot(CBoxliteRuntime *runtime,
-                                                   const char *id,
-                                                   CBoxliteOptions *opts,
-                                                   CBoxCreateBoxCb cb,
-                                                   void *user_data,
-                                                   CBoxliteError *out_error);
 
 void boxlite_free_string(char *s);
 

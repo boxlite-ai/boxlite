@@ -39,9 +39,9 @@ fn disks_dir(home: &Path, box_id: &str) -> PathBuf {
     box_dir(home, box_id).join(DISKS_DIR)
 }
 
-/// Runtime-owned snapshots outlive their source Box.
-fn snapshot_dir(home: &Path, id: &str) -> PathBuf {
-    home.join(SNAPSHOTS_DIR).join(id)
+/// Return the snapshot directory path: `{home}/boxes/{box_id}/snapshots/{name}`.
+fn snapshot_dir(home: &Path, box_id: &str, name: &str) -> PathBuf {
+    box_dir(home, box_id).join(SNAPSHOTS_DIR).join(name)
 }
 
 /// Exec a command, collect stdout, assert exit code 0.
@@ -86,7 +86,7 @@ async fn create_stopped_box(runtime: &BoxliteRuntime) -> LiteBox {
 // ============================================================================
 
 #[tokio::test]
-async fn test_live_disks_exist_after_snapshot_create() {
+async fn test_cow_child_disks_exist_after_snapshot_create() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -117,20 +117,20 @@ async fn test_live_disks_exist_after_snapshot_create() {
     assert_eq!(info.name, "ckpt1");
 
     // Snapshot copies must exist in the snapshot directory.
-    // Note: only the container disk is copied into the snapshot; guest rootfs is
+    // Note: only the container disk is forked into the snapshot; guest rootfs is
     // recreated from cache on start, so it is not part of the snapshot.
-    let sdir = snapshot_dir(&home.path, &info.id);
+    let sdir = snapshot_dir(&home.path, &box_id, "ckpt1");
     assert!(
         sdir.join(CONTAINER_DISK).exists(),
         "snapshot container disk missing"
     );
 
-    // Capture must leave the live disks in place.
+    // COW child disks in the box directory must still exist.
     // Bug: create_cow_child_disk() returns Disk(persistent=false); if the caller
     // does not call .leak(), Disk::Drop deletes the newly created file.
     assert!(
         ddir.join(CONTAINER_DISK).exists(),
-        "live container disk was removed by snapshot capture"
+        "COW child disk.qcow2 deleted by Disk::Drop (missing .leak() in local_snapshot.rs)"
     );
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;

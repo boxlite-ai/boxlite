@@ -33,10 +33,6 @@ dev\:python: $(if $(SETUP_DONE),,runtime\:debug) _ensure-python-deps
 	@echo "🔨 Building wheel with maturin (embedded-runtime)..."
 	@. .venv/bin/activate && pip install -q maturin && cd sdks/python && maturin develop --uv
 
-PHONY_TARGETS += dev\:reference-server
-dev\:reference-server: _ensure-python-deps
-	@.venv/bin/python -m pip install 'fastapi>=0.115' 'uvicorn>=0.34' 'sse-starlette>=2.0' 'PyJWT>=2.8' 'python-multipart>=0.0.9' 'python-dotenv>=1.0'
-
 dev\:c: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🔨 Building C SDK (debug)..."
 	@cargo build -p boxlite-c

@@ -13,7 +13,7 @@ extern CBoxExitCb cbExit(void);
 
 extern CBoxCreateBoxCb cbCreateBox(void);
 extern CBoxExportCb cbBoxExport(void);
-extern CBoxSnapshotCb cbSnapshot(void);
+extern CBoxRestoreArchiveCb cbBoxRestoreArchive(void);
 extern CRuntimeImportCb cbRuntimeImport(void);
 extern CBoxGetOrCreateBoxCb cbGetOrCreateBox(void);
 extern CBoxGetBoxCb cbGetBox(void);

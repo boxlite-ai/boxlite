@@ -117,12 +117,8 @@ func (a *ApiServer) Start(ctx context.Context) error {
 
 	protected := a.router.Group("/")
 	protected.Use(middlewares.AuthMiddleware(a.apiToken))
-	protected.GET("/v1/snapshots/:snapshot", controllers.BoxliteRuntimeSnapshot)
-	protected.POST("/v1/snapshots/:snapshot/archive", controllers.BoxliteExportSnapshot)
-	protected.POST("/v1/snapshot-imports/:name", controllers.BoxliteImportSnapshot)
 	protected.GET("/v1/caches/:tenant/:cache", controllers.BoxliteCache)
 	protected.DELETE("/v1/caches/:tenant/:cache", controllers.BoxliteCache)
-	protected.DELETE("/v1/snapshots/:snapshot", controllers.BoxliteRuntimeSnapshot)
 
 	metricsController := protected.Group("/metrics")
 	{
@@ -163,12 +159,6 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		boxliteApi.POST("/:boxId/ssh", controllers.BoxliteSSHConfigure)
 		boxliteApi.GET("/:boxId/ssh", controllers.BoxliteSSHStatus)
 		boxliteApi.DELETE("/:boxId/ssh", controllers.BoxliteSSHDisable)
-		boxliteApi.POST("/:boxId/snapshots", controllers.BoxliteCreateSnapshot)
-		boxliteApi.GET("/:boxId/snapshots", controllers.BoxliteListSnapshots)
-		boxliteApi.GET("/:boxId/snapshots/:snapshot", controllers.BoxliteGetSnapshot)
-		boxliteApi.DELETE("/:boxId/snapshots/:snapshot", controllers.BoxliteRemoveSnapshot)
-		boxliteApi.POST("/:boxId/snapshots/:snapshot/restore", controllers.BoxliteRestoreSnapshot)
-		boxliteApi.POST("/:boxId/snapshots/:snapshot/boxes", controllers.BoxliteSnapshotOperation)
 		boxliteApi.Handle(http.MethodConnect, "/:boxId/network/tunnel", controllers.BoxliteNetworkTunnel(boxControllerLogger))
 	}
 

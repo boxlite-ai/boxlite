@@ -15,6 +15,7 @@
 
 
 export interface BoxVolume {
+    'type'?: BoxVolumeTypeEnum;
     /**
      * The ID of the volume
      */
@@ -29,3 +30,10 @@ export interface BoxVolume {
     'subpath'?: string;
 }
 
+export const BoxVolumeTypeEnum = {
+    VOLUME: 'volume',
+    CACHE: 'cache',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+
+export type BoxVolumeTypeEnum = typeof BoxVolumeTypeEnum[keyof typeof BoxVolumeTypeEnum];

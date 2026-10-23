@@ -562,12 +562,12 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 cb,
                 user_data,
                 result,
-            }
-            | RuntimeEvent::Snapshot {
+            } => dispatch_string_event(result, user_data, cb),
+            RuntimeEvent::BoxRestoreArchive {
                 cb,
                 user_data,
                 result,
-            } => dispatch_string_event(result, user_data, cb),
+            } => dispatch_unit_event(result, user_data, cb),
             RuntimeEvent::RuntimeImport {
                 cb,
                 user_data,

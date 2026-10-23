@@ -23,7 +23,6 @@ mod options;
 mod registries;
 mod rest;
 mod runtime;
-mod snapshots;
 mod ssh;
 #[cfg(test)]
 mod tests;
@@ -92,7 +91,6 @@ pub use options::*;
 pub use registries::*;
 pub use rest::*;
 pub use runtime::*;
-pub use snapshots::*;
 pub use ssh::*;
 pub use util::*;
 pub use volumes::*;

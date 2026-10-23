@@ -604,15 +604,6 @@ test\:apps\:runner: dev\:go
 test\:apps\:proxy:
 	@cd apps/proxy && go test ./... $(GOTEST_FILTER)
 
-PHONY_TARGETS += test\:apps\:runner test\:snapshot-contract
-PHONY_TARGETS += test\:unit\:reference-server
-
-test\:unit\:reference-server:
-	@.venv/bin/python -m unittest discover -s openapi/reference-server/tests -p 'test_*.py' -v $(if $(FILTER),-k '$(FILTER)',)
-
-test\:snapshot-contract:
-	@.venv/bin/python -m pytest -v sdks/python/tests/test_memory_snapshot_contract.py
-
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
 	@$(MAKE) test:apps:infra

@@ -21,7 +21,7 @@ IMAGE = "docker:27.5.1-dind@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de096830
 BASE = "busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 
 
-async def probe(topology_name, combined=False):
+async def probe(topology_name):
     import boxlite
 
     topology = two_runners()
@@ -32,9 +32,6 @@ async def probe(topology_name, combined=False):
         )
     )
     tag = "swarm-" + topology_name + "-" + uuid.uuid4().hex[:8]
-    if combined:
-        assert topology_name == "different-runners", "combined E requires two runners"
-        tag = "combined-" + tag
     record = {"tag": tag, "topology": topology, "nodes": [], "results": {}}
     path = STATE / f"{tag}.json"
     log = STATE / f"{tag}-guest.log"
@@ -76,14 +73,6 @@ async def probe(topology_name, combined=False):
                 raise TimeoutError(f"guest readiness: {command}")
             await asyncio.sleep(0.5)
 
-    scenario = None
-    if combined:
-        from .snapshot_swarm_cache import SnapshotCacheScenario
-
-        scenario = SnapshotCacheScenario(
-            runtime, topology, tenant, tag, run, ready, record, save
-        )
-
     async def create(index, runner):
         for key in ["a", "b"]:
             request(
@@ -110,10 +99,8 @@ async def probe(topology_name, combined=False):
                     auto_delete=0,
                 ),
                 name=f"{tag}-{index}",
-            )
-            if scenario is None
-            else scenario.create(index, runner),
-            300 if scenario else 180,
+            ),
+            180,
         )
         boxes.append(box)
         owner = request(f"/box/{box.id}")["runnerId"]
@@ -124,17 +111,12 @@ async def probe(topology_name, combined=False):
             box,
             "apk add --no-cache iproute2=6.11.0-r0 ipvsadm=1.31-r3 openvpn=2.6.20-r0; apk fix --no-cache iptables iptables-legacy; test -f /usr/lib/xtables/libxt_MARK.so; test -f /usr/lib/xtables/libxt_mark.so; apk info -v; uname -a; docker --version; docker compose version",
         )
-        if scenario:
-            await scenario.start(box, runner)
-        else:
-            await run(
-                box,
-                "nohup dockerd-entrypoint.sh dockerd --host=unix:///var/run/docker.sock --storage-driver=overlay2 --dns-search=. >/tmp/dockerd.log 2>&1 </dev/null &",
-            )
+        await run(
+            box,
+            "nohup dockerd-entrypoint.sh dockerd --host=unix:///var/run/docker.sock --storage-driver=overlay2 --dns-search=. >/tmp/dockerd.log 2>&1 </dev/null &",
+        )
         await ready(box, "docker info")
         await run(box, "docker pull " + BASE)
-        if scenario:
-            await scenario.seed(box, index)
         await run(
             box,
             "ip link add proof-vx type vxlan id 4210 dev eth0 dstport 4789; ip -d link show proof-vx; ip link del proof-vx; ipvsadm -A -t 10.255.254.1:9999 -s rr; ipvsadm -Ln; ipvsadm -D -t 10.255.254.1:9999; cat /proc/mounts; ip addr",
@@ -464,13 +446,7 @@ async def probe(topology_name, combined=False):
         for index in reversed(range(len(boxes))):
             box = boxes[index]
             await run(box, "docker swarm leave --force")
-            if scenario:
-                await scenario.retire(box, "a" if index == 0 else "b")
-            else:
-                await runtime.remove(box.id, force=True)
-        if scenario:
-            await scenario.finish()
-            passed("E")
+            await runtime.remove(box.id, force=True)
         record["complete"] = True
         save()
         print(f"Evidence {path}; {log}", flush=True)
@@ -585,7 +561,6 @@ if __name__ == "__main__":
     )
     parser.add_argument("--diagnose", action="store_true")
     parser.add_argument("--diagnose-transport", action="store_true")
-    parser.add_argument("--combined", action="store_true")
     parser.add_argument("--preserve-stop", action="store_true")
     args = parser.parse_args()
     asyncio.run(
@@ -593,5 +568,5 @@ if __name__ == "__main__":
         if args.preserve_stop
         else diagnose(args.diagnose_transport)
         if args.diagnose or args.diagnose_transport
-        else probe(args.topology, args.combined)
+        else probe(args.topology)
     )

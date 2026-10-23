@@ -590,106 +590,6 @@ paths:
         "409":
           description: Cache still owned by a Box, or has not reached the requested idle age
 
-  /{prefix}/snapshots/{snapshot_id}:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-      - name: snapshot_id
-        in: path
-        required: true
-        schema: { type: string }
-    get:
-      operationId: getRuntimeSnapshot
-      summary: Query an owned snapshot independently of its source Box
-      responses:
-        "200":
-          description: Immutable filesystem snapshot metadata
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Snapshot"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-    delete:
-      operationId: deleteRuntimeSnapshot
-      summary: Delete an unreferenced snapshot; independent children remain usable
-      responses:
-        "204": { description: Deleted }
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-        "409": { description: A writable disk still references the snapshot }
-
-  /{prefix}/snapshots/{snapshot_id}/copies:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-      - name: snapshot_id
-        in: path
-        required: true
-        schema: { type: string }
-    post:
-      operationId: copyRuntimeSnapshot
-      summary: Copy an immutable filesystem snapshot to another runner
-      description: Requires snapshot_copy_enabled and WRITE_BOXES. Returns a new independent snapshot ID on an available runner in the source region/class. No external mounts, caches, RAM or process state are transferred. Memory and incompatible architectures are unsupported. Creates have no automatic retry after an ambiguous response.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [runner_id]
-              additionalProperties: false
-              properties:
-                runner_id: { type: string, format: uuid }
-                name: { type: string, nullable: true, maxLength: 255, pattern: '^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*$' }
-      responses:
-        "201":
-          description: Independent snapshot copy
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Snapshot"
-        "400": { description: Invalid request or unavailable destination }
-        "403": { description: Missing write permission }
-        "404": { description: Snapshot not found in this organization }
-        "409": { description: Snapshot name already exists }
-        "413": { description: Archive exceeds 8 GiB }
-        "501": { description: Unsupported snapshot type, architecture or server capability }
-
-  /{prefix}/snapshots/{snapshot_id}/boxes:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-      - name: snapshot_id
-        in: path
-        required: true
-        schema: { type: string }
-    post:
-      operationId: createBoxFromRuntimeSnapshot
-      summary: Cold-create an independent Box on the snapshot's owning runner
-      description: Requires create_from_snapshot_enabled. No RAM or process state is restored. Omitting options inherits the sanitized source configuration without external volumes; supplying options replaces it, with mounts explicitly requested. Memory snapshots remain unsupported in production.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              properties:
-                name: { type: string, nullable: true }
-                options:
-                  allOf:
-                    - $ref: "#/components/schemas/CreateBoxRequest"
-                  nullable: true
-      responses:
-        "201":
-          description: Independent cold-started Box
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-        "409": { description: Snapshot runner unavailable or creation failed }
-        "501": { description: Incompatible snapshot format or unsupported type }
-
   /{prefix}/boxes/{box_id}/snapshots:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -700,6 +600,15 @@ paths:
       description: |
         Creates a named snapshot from the box's current stopped disk state.
         The box must be stopped.
+
+        A server may finish the snapshot after replying. It then answers with
+        `status: creating` and the box reports `exporting` until the snapshot
+        is `ready` or `failed`; poll `getSnapshot` for the outcome. Deleting
+        the box meanwhile is allowed and fails the snapshot. Every other change
+        to the box is refused with `409` until the export ends.
+
+        A `503` means the server keeps no snapshots, or that the caller's other
+        creates kept this one waiting too long; a retry may get past the latter.
       tags: [Boxes]
       requestBody:
         required: true
@@ -714,13 +623,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Snapshot"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "429":
+          description: The caller already keeps as many snapshots as the server allows
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
     get:
       operationId: listSnapshots
       summary: List box snapshots
+      description: Lists the snapshots taken from this box, newest first.
       tags: [Boxes]
       responses:
         "200":
@@ -739,6 +655,7 @@ paths:
       - name: snapshot_name
         in: path
         required: true
+        description: Name of a snapshot taken from this box; a server may also accept its ID.
         schema:
           type: string
     get:
@@ -757,6 +674,9 @@ paths:
     delete:
       operationId: removeSnapshot
       summary: Remove a snapshot
+      description: |
+        Removes the snapshot. Refused with `409` while it is still being
+        created, or while a restore is reading it.
       tags: [Boxes]
       responses:
         "204":
@@ -766,37 +686,6 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
-  /{prefix}/boxes/{box_id}/snapshots/{snapshot_name}/boxes:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-      - $ref: "#/components/parameters/boxId"
-      - name: snapshot_name
-        in: path
-        required: true
-        schema:
-          type: string
-    post:
-      operationId: createBoxFromSnapshot
-      summary: Create an independent Box from a snapshot
-      description: Cold-create from a filesystem snapshot while its source is addressable. Memory restore is only simulated by explicit test backends. Use the runtime snapshot-ID routes after source deletion; availability is declared by create_from_snapshot_enabled.
-      tags: [Boxes]
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CloneBoxRequest"
-      responses:
-        "201":
-          description: Created Box (simulated for memory in test mode)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-        "501":
-          description: Snapshot type or creation is unsupported
-
   /{prefix}/boxes/{box_id}/snapshots/{snapshot_name}/restore:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -804,16 +693,116 @@ paths:
       - name: snapshot_name
         in: path
         required: true
+        description: |
+          The snapshot to restore, by name or ID. On a server whose snapshots
+          outlive their box (see `listAllSnapshots`), it may name any ready
+          snapshot the caller can see; `box_id` is the box restored into.
         schema:
           type: string
     post:
       operationId: restoreSnapshot
       summary: Restore box from snapshot
-      description: Restores the box's stopped disks from a named snapshot.
+      description: |
+        Replaces the stopped box's disk with the snapshot's. The box keeps its
+        identity and configuration.
+
+        A server may restore before replying (`204`), or reply at once with a
+        restore record (`202`) and report `importing` for the box until the
+        record is `succeeded` or `failed`; poll `getSnapshotRestore` for the
+        outcome. A failed restore leaves the original disk in place. Deleting
+        the box meanwhile is allowed and fails the restore. A snapshot of a
+        different disk size or region is refused with `409`, and `503` means
+        the server keeps no snapshots.
+      tags: [Boxes]
+      responses:
+        "202":
+          description: Restore accepted; poll the returned record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotRestore"
+        "204":
+          description: Snapshot restored
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+
+  /{prefix}/boxes/{box_id}/restores/{restore_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - name: restore_id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getSnapshotRestore
+      summary: Get a snapshot restore
+      description: The record a `202` from `restoreSnapshot` returned, as it stands now.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Restore record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotRestore"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+  /{prefix}/snapshots:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+    get:
+      operationId: listAllSnapshots
+      summary: List all snapshots
+      description: |
+        Lists every snapshot the caller can see, newest first, including those
+        whose source box has since been removed. Offered by servers whose
+        snapshots outlive their box.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Snapshot list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSnapshotsResponse"
+
+  /{prefix}/snapshots/{snapshot}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - name: snapshot
+        in: path
+        required: true
+        description: Snapshot ID or name
+        schema:
+          type: string
+    get:
+      operationId: getAnySnapshot
+      summary: Get any snapshot
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Snapshot details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      operationId: removeAnySnapshot
+      summary: Remove any snapshot
+      description: As `removeSnapshot`, for a snapshot whatever box it came from.
       tags: [Boxes]
       responses:
         "204":
-          description: Snapshot restored
+          description: Snapshot removed
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
@@ -2103,23 +2092,11 @@ components:
               example: true
             snapshots_enabled:
               type: boolean
-              description: Whether filesystem snapshot operations are supported; does not imply memory support
+              description: Whether snapshot create/list/get/remove/restore is supported
               example: true
-            create_from_snapshot_enabled:
-              type: boolean
-              description: Whether runtime-level snapshot lookup, deletion and cold creation by ID are supported independently of the source Box. Does not imply memory restore support.
-              example: true
-            snapshot_copy_enabled:
-              type: boolean
-              default: false
-              description: Supports explicit filesystem snapshot copies between available runners.
             cache_volumes_enabled:
               type: boolean
               description: Runner-local exclusive cache volumes. Does not imply Docker storage-driver compatibility.
-            memory_snapshots_enabled:
-              type: boolean
-              description: Real memory snapshot support. False in production; test mocks never imply real memory support.
-              example: false
             clone_enabled:
               type: boolean
               description: Whether box clone is supported
@@ -2454,6 +2431,10 @@ components:
         - `paused`: VM frozen via SIGSTOP (during snapshot/export)
         - `failed`: Initialization failed; diagnostic state is retained
         - `unknown`: Error recovery state
+        - `exporting`: Stopped, while a server that snapshots after replying
+          exports the disk; only deletion is accepted until it ends
+        - `importing`: Stopped, while such a server restores a snapshot into
+          the box; only deletion is accepted until it ends
       enum:
         - configured
         - running
@@ -2462,6 +2443,8 @@ components:
         - paused
         - failed
         - unknown
+        - exporting
+        - importing
 
     CreateBoxRequest:
       type: object
@@ -2640,7 +2623,10 @@ components:
         cache_volume:
           type: string
           pattern: '^[A-Za-z0-9_-]{1,64}$'
-          description: Logical cache ID, held exclusively until the Box is deleted.
+          description: |
+            Logical cache ID, held exclusively until the Box is deleted. A cache
+            is always mounted read-write, so a create that also sets `read_only`
+            to true is refused.
         managed_volume:
           type: string
           minLength: 1
@@ -2848,12 +2834,6 @@ components:
             Placeholder string visible inside the guest.
             Defaults to `<BOXLITE_SECRET:{name}>` when omitted.
 
-    SnapshotType:
-      type: string
-      enum: [filesystem, memory]
-      default: filesystem
-      description: Memory is reserved for explicit test mocks; production does not save RAM, CPU registers or device state.
-
     Snapshot:
       type: object
       required:
@@ -2861,45 +2841,93 @@ components:
         - box_id
         - name
         - created_at
+        - guest_disk_bytes
         - container_disk_bytes
         - size_bytes
       properties:
-        snapshot_type:
-          $ref: "#/components/schemas/SnapshotType"
-        is_mock:
-          type: boolean
-          default: false
-          description: True only for a result simulated by an explicitly assembled test backend
         id:
           type: string
-          description: Snapshot ULID
+          description: Snapshot ID
         box_id:
           type: string
-          description: Owning box ULID
+          description: ID of the box the snapshot was taken from, which may since have been removed
         name:
           type: string
-          description: Snapshot name unique per box
+          description: |
+            Snapshot name. Unique per box on a server whose snapshots belong to
+            their box; unique among all of the caller's snapshots on one whose
+            snapshots outlive their box.
+        status:
+          type: string
+          enum: [creating, ready, failed]
+          description: |
+            `creating` while a server that snapshots after replying is still
+            exporting the disk; only a `ready` snapshot can be restored.
+            Absent from a server that finishes before replying, which means
+            `ready`.
+        error:
+          type: string
+          description: Why a `failed` snapshot failed
         created_at:
           type: integer
           format: int64
           description: Unix timestamp (seconds)
+        guest_disk_bytes:
+          type: integer
+          format: int64
         container_disk_bytes:
           type: integer
           format: int64
+          description: Logical size of the captured disk
         size_bytes:
           type: integer
           format: int64
+          description: Bytes the snapshot occupies in storage (0 until it is ready)
+
+    SnapshotRestore:
+      type: object
+      description: A restore a server finishes after replying to `restoreSnapshot`.
+      required: [id, box_id, snapshot_id, status, created_at]
+      properties:
+        id:
+          type: string
+        box_id:
+          type: string
+          description: The box being restored into
+        snapshot_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, succeeded, failed]
+          description: |
+            The box ends up stopped either way; a `failed` restore left its
+            original disk in place.
+        error:
+          type: string
+          description: Why a `failed` restore failed
+        created_at:
+          type: integer
+          format: int64
+          description: Unix timestamp (seconds)
+        completed_at:
+          type: integer
+          format: int64
+          description: Unix timestamp (seconds), once the restore has ended
 
     CreateSnapshotRequest:
       type: object
       required: [name]
       properties:
-        snapshot_type:
-          $ref: "#/components/schemas/SnapshotType"
         name:
           type: string
           minLength: 1
           maxLength: 128
+          description: |
+            A server refuses with `400` a name it cannot keep or address. One
+            whose snapshots belong to their box refuses a name that starts
+            with `.` or holds `/`, `\` or NUL; one whose snapshots outlive
+            their box takes only letters, digits, `.`, `_` and `-`, starting
+            with a letter or digit, since the name travels in URL paths.
 
     ListSnapshotsResponse:
       type: object

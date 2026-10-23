@@ -1,43 +1,24 @@
 //! Python bindings for snapshot, export, and clone options.
 
-use boxlite::{CloneOptions, ExportOptions, SnapshotOptions, SnapshotType};
+use boxlite::{CloneOptions, ExportOptions, SnapshotOptions};
 use pyo3::prelude::*;
 
-/// Select filesystem capture or the reserved memory contract.
+/// Options for creating a snapshot (forward-compatible placeholder).
 #[pyclass(name = "SnapshotOptions")]
 #[derive(Clone)]
-pub(crate) struct PySnapshotOptions {
-    pub snapshot_type: SnapshotType,
-}
+pub(crate) struct PySnapshotOptions {}
 
 #[pymethods]
 impl PySnapshotOptions {
     #[new]
-    #[pyo3(signature = (snapshot_type="filesystem"))]
-    fn new(snapshot_type: &str) -> PyResult<Self> {
-        let snapshot_type = match snapshot_type {
-            "filesystem" => SnapshotType::Filesystem,
-            "memory" => SnapshotType::Memory,
-            _ => {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "snapshot_type must be filesystem or memory",
-                ));
-            }
-        };
-        Ok(Self { snapshot_type })
-    }
-
-    #[getter]
-    fn snapshot_type(&self) -> &'static str {
-        self.snapshot_type.as_str()
+    fn new() -> Self {
+        Self {}
     }
 }
 
 impl From<PySnapshotOptions> for SnapshotOptions {
-    fn from(py: PySnapshotOptions) -> Self {
-        SnapshotOptions {
-            snapshot_type: py.snapshot_type,
-        }
+    fn from(_py: PySnapshotOptions) -> Self {
+        SnapshotOptions {}
     }
 }
 

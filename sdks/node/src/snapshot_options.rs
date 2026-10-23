@@ -3,27 +3,14 @@
 use boxlite::{CloneOptions, ExportOptions, SnapshotOptions};
 use napi_derive::napi;
 
-/// Select filesystem capture or the reserved memory contract.
+/// Options for creating a snapshot (forward-compatible placeholder).
 #[napi(object)]
 #[derive(Clone, Debug)]
-pub struct JsSnapshotOptions {
-    #[napi(js_name = "snapshotType")]
-    pub snapshot_type: Option<String>,
-}
+pub struct JsSnapshotOptions {}
 
-impl TryFrom<JsSnapshotOptions> for SnapshotOptions {
-    type Error = boxlite::BoxliteError;
-    fn try_from(js: JsSnapshotOptions) -> Result<Self, Self::Error> {
-        let snapshot_type = match js.snapshot_type.as_deref().unwrap_or("filesystem") {
-            "filesystem" => boxlite::SnapshotType::Filesystem,
-            "memory" => boxlite::SnapshotType::Memory,
-            _ => {
-                return Err(boxlite::BoxliteError::InvalidArgument(
-                    "snapshotType must be filesystem or memory".into(),
-                ));
-            }
-        };
-        Ok(SnapshotOptions { snapshot_type })
+impl From<JsSnapshotOptions> for SnapshotOptions {
+    fn from(_js: JsSnapshotOptions) -> Self {
+        SnapshotOptions {}
     }
 }
 
@@ -55,10 +42,8 @@ mod tests {
 
     #[test]
     fn snapshot_options_from_js() {
-        let js = JsSnapshotOptions {
-            snapshot_type: None,
-        };
-        let _opts: SnapshotOptions = js.try_into().unwrap();
+        let js = JsSnapshotOptions {};
+        let _opts: SnapshotOptions = js.into();
     }
 
     #[test]

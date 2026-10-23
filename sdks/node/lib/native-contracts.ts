@@ -530,8 +530,6 @@ export interface JsExecution {
 }
 
 export interface JsSnapshotInfo {
-  snapshotType: "filesystem" | "memory";
-  isMock: boolean;
   id: string;
   boxId: string;
   name: string;
@@ -540,12 +538,9 @@ export interface JsSnapshotInfo {
   sizeBytes: number;
 }
 
-export interface JsSnapshotOptions {
-  snapshotType?: "filesystem" | "memory";
-}
+export type JsSnapshotOptions = Record<string, never>;
 
 export interface JsSnapshotHandle {
-  createBox(snapshot: string, name?: string | null): Promise<JsBox>;
   create(
     name: string,
     options?: JsSnapshotOptions | null,
@@ -696,10 +691,6 @@ export interface JsGetOrCreateResult {
 }
 
 export interface JsBoxlite {
-  createFromSnapshot(snapshotId: string, name?: string | null, options?: JsBoxOptions | null): Promise<JsBox>;
-  snapshotGet(snapshotId: string): Promise<JsSnapshotInfo>;
-  snapshotRemove(snapshotId: string): Promise<void>;
-  snapshotCopy(snapshotId: string, runnerId: string, name?: string | null): Promise<JsSnapshotInfo>;
   importBox(archivePath: string, name?: string | null): Promise<JsBox>;
   create(options: JsBoxOptions, name?: string | null): Promise<JsBox>;
   getOrCreate(
