@@ -99,8 +99,8 @@ class StartRetryTest(unittest.TestCase):
     def test_gives_up_when_every_start_is_rejected(self):
         result, vm = self.run_start(rejected_starts=100)
         self.assertNotEqual(result.returncode, 0)
-        self.assertLess(vm["starts"], 100)
-        self.assertIn("could not start", result.stderr)
+        self.assertEqual(vm["starts"], 6)
+        self.assertIn("could not start vm after 6 attempts", result.stderr)
 
 
 if __name__ == "__main__":
