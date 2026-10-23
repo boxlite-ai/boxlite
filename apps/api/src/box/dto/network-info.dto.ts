@@ -28,7 +28,7 @@ export class OutboundNetworkResponseDto {
 @ApiSchema({ name: 'InboundNetworkSpec' })
 export class InboundNetworkResponseDto {
   @ApiProperty({
-    description: 'Whether exposed services are reachable through the proxy without sign-in',
+    description: "Whether exposed services are reachable through the proxy, subject to each tunnel's access policy",
     enum: NetworkMode,
     enumName: 'NetworkMode',
   })

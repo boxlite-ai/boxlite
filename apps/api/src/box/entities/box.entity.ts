@@ -147,7 +147,7 @@ export class Box {
 
   // Network policy, one flag per direction; true is the `/v1` NetworkSpec's
   // `enabled`. Inbound enabled lets the proxy serve the box's exposed services
-  // without sign-in; it never affects the terminal or the API.
+  // subject to each tunnel's access policy; it never affects the terminal or the API.
   @Column({ type: 'boolean', default: false })
   inboundEnabled = false
 
