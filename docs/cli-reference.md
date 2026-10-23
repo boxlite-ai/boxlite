@@ -1,6 +1,6 @@
 # boxlite-app CLI reference
 
-Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.1); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
+Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.2); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
 
 ## Conventions
 
@@ -880,13 +880,14 @@ Usage: `boxlite-app app auth redirect-uris`
 
 ### `boxlite-app app auth users`
 
-list users; or: users signout|block|unblock <email>, users export (CSV)
+list users; or: users signout|block|unblock <email>, users purge-test (remove the test users --as made), users export (CSV)
 
 Usage: `boxlite-app app auth users [action] [email] [options]`
 
 | option | description | default |
 |---|---|---|
 | `--search <text>` | filter by email or name |  |
+| `-y, --yes` | skip the confirmation (purge-test) |  |
 
 - Network: talks to the control plane
 - `--json`: `AuthUser[] ({ id, email, name, provider, first_seen, last_seen, blocked, active_sessions })`

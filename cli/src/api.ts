@@ -592,6 +592,10 @@ export class Api {
     return (await this.request('GET', `${this.envPath}/auth/users/export`, { accept: 'text/csv' })).text();
   }
 
+  purgeTestUsers(): Promise<{ removed: number; emails: string[]; mirror: string }> {
+    return this.json('DELETE', `${this.envPath}/auth/test-users`);
+  }
+
   createTestSession(email: string, role?: EndUserRole): Promise<TestSession> {
     return this.json('POST', `${this.envPath}/auth/test-sessions`, { body: { email, ...(role ? { role } : {}) } });
   }

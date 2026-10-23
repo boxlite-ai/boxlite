@@ -96,3 +96,28 @@ export async function createTestSession(ctx: Ctx, app: AppRow, env: EnvRow, emai
   const name = sessionName(ctx, app, env);
   return { cookie: `${name}=${token}`, cookie_name: name, expires_in: '15m', expires_at: expiresAt, role, user: view(ctx, user) };
 }
+
+/**
+ * Removes the env's test users (provider `test`, made by test sessions; never real sign-ins), their
+ * sessions, and their rows in the app's `boxlite.users`. Rows the app's own tables wrote for them are
+ * the app's data: a delete blocked by them is reported, not hidden.
+ */
+export async function purgeTestUsers(ctx: Ctx, app: AppRow, env: EnvRow, actor: string): Promise<{ removed: number; emails: string[]; mirror: 'removed' | 'none' | string }> {
+  const users = ctx.store.all<{ id: string; email: string | null }>("SELECT id, email FROM app_users WHERE env_id = ? AND provider = 'test'", env.id);
+  let mirror: 'removed' | 'none' | string = 'none';
+  if (users.length && env.db_url && ctx.resources.currentSpec(env)?.database) {
+    try {
+      await ctx.appdb.query(env.db_url, ["DELETE FROM boxlite.users WHERE provider = 'test'"], { write: true });
+      mirror = 'removed';
+    } catch (err) {
+      // Usually a foreign key from the app's own tables: those rows go first, or test in another environment.
+      mirror = `kept: ${(err as Error).message}`;
+    }
+  }
+  for (const u of users) {
+    ctx.store.run('DELETE FROM app_sessions WHERE user_id = ?', u.id);
+    ctx.store.run('DELETE FROM app_users WHERE id = ?', u.id);
+  }
+  ctx.store.recordActivity(app.id, env.name, actor, 'auth.purge_test_users', { removed: users.length });
+  return { removed: users.length, emails: users.map((u) => u.email ?? u.id), mirror };
+}

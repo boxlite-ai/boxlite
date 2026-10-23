@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Vars } from '../auth.js';
 import type { Ctx } from '../ctx.js';
-import { authStatus, blockUser, createTestSession, exportUsersCsv, listUsers, redirectUris, signOutUser, unblockUser } from '../enduser/management.js';
+import { authStatus, blockUser, createTestSession, exportUsersCsv, listUsers, redirectUris, signOutUser, unblockUser, purgeTestUsers } from '../enduser/management.js';
 import { body, envOf } from './util.js';
 
 /** `/v1/apps/{app}/envs/{env}/auth…`: end-user sign-in status and user management (PRD 3.8). */
@@ -29,6 +29,7 @@ export function authRoutes(ctx: Ctx) {
     });
   });
 
+  r.delete('/envs/:env/auth/test-users', async (c) => c.json(await purgeTestUsers(ctx, c.get('app'), envOf(ctx, c), c.get('actor'))));
   r.post('/envs/:env/auth/users/:id/signout', (c) => c.json(signOutUser(ctx, c.get('app'), envOf(ctx, c), c.req.param('id'), c.get('actor'))));
   r.post('/envs/:env/auth/users/:id/block', (c) => c.json(blockUser(ctx, c.get('app'), envOf(ctx, c), c.req.param('id'), c.get('actor'))));
   r.post('/envs/:env/auth/users/:id/unblock', (c) => c.json(unblockUser(ctx, c.get('app'), envOf(ctx, c), c.req.param('id'), c.get('actor'))));

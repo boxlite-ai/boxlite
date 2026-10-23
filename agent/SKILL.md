@@ -36,11 +36,18 @@ Read the user's sentence and decide, before writing code:
 |---|---|---|
 | stores anything that must survive a restart (records, accounts, settings) | `[database]` + `migrations/` | Postgres. Never install a database inside the app. |
 | stores user-uploaded files or generated files | `[[volume]]` | A directory mounted into the app. Never keep uploads on local disk. |
-| has "my", "only me", per-user data, an admin, or anything private | keep `[auth]` (it is on by default) | Platform Google/GitHub login, zero setup. Remove `[auth]` only for a fully anonymous site. Sign-in does not let other people in: access is `private` by default (`org` behaves the same), so only the owner (console **Open app**) and you (the App key) get through, signed in or not. Others reach the app only once access is `public`: set it when their request says people who are not signed in may open it, otherwise ask (§6). |
+| has "my", "only me", per-user data, an admin, or anything private | keep `[auth]` (it is on by default) | Platform login with the providers `boxlite-app whoami` lists as working (zero setup). Remove `[auth]` only for a fully anonymous site. Sign-in does not let other people in: access is `private` by default (`org` behaves the same), so only the owner (console **Open app**) and you (the App key) get through, signed in or not. Others reach the app only once access is `public`: set it when their request says people who are not signed in may open it, otherwise ask (§6). |
 | runs something on a timer ("every morning", "daily digest") | `[[schedule]]` | Sends `POST <path>` (header `X-BoxLite-Schedule: <name>`) to your web service, so the handler must accept POST; it wakes the app. |
 | is only a frontend (no server logic, no database) | one `[[service]]` with `static = "dist/"` | No server needed; the platform serves the files. |
 | receives webhooks (Stripe, GitHub, …) | `public_paths = ["/webhooks/*"]` at the top of `boxlite.toml` | The app stays private; only those paths are open. Check the provider's signature in the handler; never open `/` or `/*` this way (that is `access = "public"`, which needs the user's say-so). |
 | needs a third-party API key the user mentioned | an App secret plus a `[secrets]` reference | If the user gave you the value: `printf %s "$VALUE" \| boxlite-app app secrets set stripe` (stdin only), then `boxlite-app app secrets ref STRIPE_SECRET_KEY app/stripe`. Otherwise ask the user for it, and say why. An existing org secret is referenced as `org/<name>`. Never put a secret value in a file, a variable or a command argument. |
+
+Who may open the app and what needs signing in are two separate settings; settle both now, not after the deploy:
+
+- **Access** (`access` in `boxlite.toml`): `private` (default: only the owner and you), `org`, or `public` (anyone with the URL). Signing in never gets anyone past a private app.
+- **Sign-in** (`[auth]`, `[auth].protect`): which pages or actions need an account, once someone can open the app.
+
+If the request means other people will use it (players, customers, a team) and does not say who, ask the user in your first reply which access they want, together with anything else you need from them, so the first deploy already has it. Never set `public` without their say-so.
 
 Pick the stack you are best at that fits in one directory. Defaults that work well here: **Node 22 + a small server (Express/Hono/Fastify) serving a built frontend**, or plain server-rendered pages. Python 3.12 works too (`image = "python"`).
 
@@ -117,7 +124,7 @@ These are hard requirements. Most failed deploys break one of them.
 boxlite-app check             # local, instant: fix every error it lists (file:line, rule)
 boxlite-app plan              # what will change online
 boxlite-app apply --yes       # create database / volumes / login now (no code upload)
-boxlite-app app dev           # run locally against the real cloud database; writes .env.local (DATABASE_URL = a local proxy, no password)
+boxlite-app app dev --env qa  # run locally against a cloud database (qa's, so experiments stay out of main); writes .env.local (DATABASE_URL = a local proxy, no password)
 boxlite-app deploy -m "what changed"   # upload → cloud build → migrate → start → health → live
 ```
 
@@ -144,20 +151,25 @@ boxlite-app deploy -m "what changed"   # upload → cloud build → migrate → 
 
 ## 5. Verify before you report
 
-Never report success from the deploy exit code alone. Check what the user asked for:
+Never report success from the deploy exit code alone. Check what the user asked for, and keep test data out of the user's app: checks that create data run in a throwaway environment, which you delete afterwards.
 
 ```sh
-boxlite-app app curl /healthz --fail                       # private apps too: the CLI authenticates with the App key
-boxlite-app app curl / --json | jq -r .body | head -c 400  # the real page, not an error page
-boxlite-app app curl /api/items -X POST -d '{"title":"x"}' --as qa@example.com --json   # as a signed-in user
-boxlite-app app sql "select count(*) from <table>" --json  # data actually written
+boxlite-app app env create qa                 # its own URL, database branch (schema, no rows), volumes and users
+boxlite-app deploy --env qa -m "verify"
+boxlite-app app curl /healthz --env qa --expect 200
+boxlite-app app curl /api/items --env qa -X POST -d '{"title":"x"}' --as qa@example.com --expect 201 --body --json
+boxlite-app app sql "select count(*) from <table>" --env qa --json
+boxlite-app app env delete qa --yes            # removes everything the checks created
+boxlite-app deploy -m "what changed"           # then main; on main, only read-only checks:
+boxlite-app app curl / --expect 200
 ```
 
-- `app curl` only ever talks to this environment's own URL, shows redirects instead of following them, and prints status, headers and body (`--json`: `{status, headers, body, body_json?}`). Do not paste the App key into curl yourself.
+- `app curl` only ever talks to this environment's own URL, shows redirects instead of following them, and prints status, headers and body (`--json`: `{status, ok, redirect, headers, body_json | body}`; Set-Cookie values are redacted). `--expect 200` (or `302`, `200,201`) exits 1 on any other status, so a check fails loudly; `--body` prints just the body. Do not paste the App key into curl yourself.
 - Exercise every feature the user named, through HTTP, the way a browser would (create, list, edit, delete; upload then fetch the file; a protected page refuses an anonymous request).
 - Login-only flows: `--as qa@example.com` signs in a 15-minute test user, so your service gets that user's `X-BoxLite-User-*` headers. Without it, `boxlite-app app curl /app` on a protected page answers 401 (`app curl` does not ask for HTML); add `-H 'Accept: text/html'` to see what a browser gets, a 302 to `/.boxlite/auth/login`.
+- Anything with a screen to look at (a game, a canvas, a multi-step UI) is not verified by HTTP alone: open it in your browser tool and use it. `boxlite-app app open --print-url --as qa@example.com --path /play --json` gives a one-time link already signed in as the test user (`--role owner` for owner-only pages). Check what the user will see: layout, the flows they named, and the browser console for errors.
 - If a check fails, fix and redeploy. Report only when all pass.
-- Clean up after yourself: delete the rows and files your checks created (`boxlite-app app sql --write "delete from <table> where …"`, or your app's own delete endpoint for uploaded files), so the user starts with an empty app unless they asked for sample data.
+- If checks had to run on `main`, clean up after yourself: the rows (`boxlite-app app sql --write "delete from <table> where …"`), the files (`boxlite-app app volume rm uploads:/<file> --yes`), and the test users (`boxlite-app app auth users purge-test --yes`), so the user starts with an empty app unless they asked for sample data.
 
 ## 6. Report to the user
 

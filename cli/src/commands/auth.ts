@@ -55,8 +55,17 @@ async function users(ctx: Ctx, action: string | undefined, target: string | unde
     else ctx.out.raw(await api.authUsersCsv());
     return;
   }
+  if (action === 'purge-test') {
+    if (!(await ctx.confirmDestructive({ action: `remove every test user of ${ctx.envName}`, destroys: ['the users test sessions created (`--as`), their sessions, and their rows in boxlite.users', 'never a user who signed in for real'], undo: 'none: a later `--as` makes the user again' }))) return;
+    const r = await api.purgeTestUsers();
+    ctx.out.data(r);
+    ctx.out.line(`removed ${r.removed} test user${r.removed === 1 ? '' : 's'}${r.emails.length ? `: ${r.emails.join(', ')}` : ''}`);
+    if (r.mirror.startsWith('kept')) ctx.out.line(`boxlite.users rows ${r.mirror}`);
+    ctx.out.next(r.mirror.startsWith('kept') ? "delete the app's own rows that point at them first (`boxlite-app app sql --write`), then rerun; or test in a separate environment next time" : 'the rows your app wrote for them are its own data: delete those with `boxlite-app app sql --write`, or test in a separate environment (`boxlite-app app env create qa`) and delete it afterwards');
+    return;
+  }
   if (action !== 'signout' && action !== 'block' && action !== 'unblock') {
-    throw new MicrocloudError('usage', `unknown action "${action}"`, '`boxlite-app app auth users`, `users signout|block|unblock <email>`, `users export`, or `users --search <text>`');
+    throw new MicrocloudError('usage', `unknown action "${action}"`, '`boxlite-app app auth users`, `users signout|block|unblock <email>`, `users purge-test`, `users export`, or `users --search <text>`');
   }
   if (!target) throw new MicrocloudError('usage', `${action} needs an email or user id`, `\`boxlite-app app auth users ${action} <email>\``);
   const done: AuthUser[] = [];
@@ -92,8 +101,9 @@ export function registerAuth(app: Command, make: MakeCtx): void {
   describe(
     auth
       .command('users [action] [email]')
-      .description('list users; or: users signout|block|unblock <email>, users export (CSV)')
+      .description('list users; or: users signout|block|unblock <email>, users purge-test (remove the test users --as made), users export (CSV)')
       .option('--search <text>', 'filter by email or name')
+      .option('-y, --yes', 'skip the confirmation (purge-test)')
       .action(async (action: string | undefined, email: string | undefined, opts: { search?: string }, cmd: Command) => users(await make(cmd), action, email, opts)),
     { json: 'AuthUser[] ({ id, email, name, provider, first_seen, last_seen, blocked, active_sessions })', exits: [2, 3, 4], online: true },
   );

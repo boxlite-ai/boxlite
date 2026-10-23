@@ -694,3 +694,15 @@ test('app open --as: a one-time link opens the app in a browser already signed i
   assert.deepEqual([seen[0]!.headers['x-boxlite-user-email'], seen[0]!.headers['x-boxlite-user-role']], ['qa@example.com', 'owner']);
   assert.equal((await h.appRequest(link.pathname + link.search)).status, 401, 'it works once');
 });
+
+test('purge-test removes the test users --as made and their sessions, never real sign-ins', async () => {
+  const { key, env } = await setup();
+  await signIn(fakeGithub(octo));
+  for (const email of ['qa@example.com', 'qa2@example.com']) await h.request('/v1/apps/crm/envs/main/auth/test-sessions', { method: 'POST', key, json: { email } });
+  const res = await h.request('/v1/apps/crm/envs/main/auth/test-users', { method: 'DELETE', key });
+  assert.equal(res.status, 200, await res.clone().text());
+  const out = (await res.json()) as { removed: number; emails: string[] };
+  assert.deepEqual([out.removed, out.emails.sort()], [2, ['qa2@example.com', 'qa@example.com']]);
+  assert.deepEqual(h.ctx.store.all<{ provider: string }>('SELECT provider FROM app_users WHERE env_id = ?', env.id).map((u) => u.provider), ['github'], 'the real user stays');
+  assert.equal(h.ctx.store.all("SELECT 1 FROM app_sessions s JOIN app_users u ON u.id = s.user_id WHERE u.provider = 'test'").length, 0);
+});
