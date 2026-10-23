@@ -187,6 +187,7 @@ Configuration options for creating a box.
 | `workingDir` | `string` | `"/root"` | Working directory inside container |
 | `env` | `JsEnvVar[]` | `[]` | Environment variables |
 | `volumes` | `JsVolumeSpec[]` | `[]` | Volume mounts |
+| `mounts` | `JsMountSpec[]` | `[]` | Typed mounts; see [`JsMountSpec`](#jsmountspec) |
 | `network` | `NetworkSpec` | `{ mode: "enabled" }` | Structured network configuration |
 | `ports` | `JsPortSpec[]` | `[]` | Local TCP port mappings; omit `hostPort` for automatic allocation |
 | `secrets` | `Secret[]` | `[]` | Outbound HTTPS secret substitution rules |
@@ -258,6 +259,35 @@ volumes: [
 
 Setting both origins, or neither, is rejected. Host bind mounts are
 local-runtime only; a REST runtime refuses them.
+
+#### `JsMountSpec`
+
+A typed mount, the Node form of the Rust
+[`MountSpec`](../rust/README.md#mountspec). It states its `type` where a
+`JsVolumeSpec` implies it from which field is set:
+
+```typescript
+interface JsMountSpec {
+  type: "volume" | "bind"; // A managed volume by id or name, or a host path
+  source: string;          // The volume's id or name, or the host path
+  target: string;          // Absolute mount point inside the box
+  readOnly?: boolean;      // Default: false
+  subPath?: string;        // "volume" only: mount just that prefix
+}
+```
+
+```typescript
+mounts: [
+  { type: "volume", source: "run42", target: "/workspace", readOnly: true, subPath: "foo/bar" },
+  { type: "bind", source: "/host/config", target: "/etc/app", readOnly: true },
+];
+```
+
+Unlike a managed `JsVolumeSpec`, a `"volume"` mount may be read-only. The local
+runtime takes `"bind"` mounts and a REST runtime `"volume"` mounts; each
+refuses the other type at create. A misspelt `type` fails when the options are
+converted; a missing `source`, a relative `target`, or a `subPath` on a bind
+fails at create.
 
 #### `JsPortSpec`
 
@@ -504,6 +534,7 @@ interface SimpleBoxOptions {
   workingDir?: string;    // Working directory
   env?: Record<string, string>;  // Environment variables
   volumes?: JsVolumeSpec[]; // Volume mounts (managedVolume or hostPath)
+  mounts?: JsMountSpec[];   // Typed mounts ("volume" or "bind")
   network?: NetworkSpec;
   ports?: PortSpec[];     // Port mappings
   secrets?: Secret[];

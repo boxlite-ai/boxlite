@@ -214,6 +214,47 @@ func cPortProtocol(p PortProtocol) uint32 {
 	}
 }
 
+// MountType names what a [Mount]'s Source is, spelled as on every other
+// surface that carries a mount.
+type MountType string
+
+const (
+	// MountTypeVolume mounts a managed volume, by id or name.
+	MountTypeVolume MountType = "volume"
+	// MountTypeBind mounts a path on the host.
+	MountTypeBind MountType = "bind"
+)
+
+// Mount is a typed mount: it states its type where [WithBindMount] and
+// [WithManagedVolume] imply it.
+//
+// The local runtime takes bind mounts and a REST runtime volume mounts; each
+// refuses the other type at create. Unlike [WithManagedVolume], a volume
+// mount may be read-only and may name a SubPath.
+type Mount struct {
+	Type MountType
+	// Source is the volume's id or name, or the host path. Required.
+	Source string
+	// Target is the mount point inside the box; an absolute path.
+	Target   string
+	ReadOnly bool
+	// SubPath mounts only that prefix of a volume; "" mounts all of it.
+	SubPath string
+}
+
+// cMountType maps by explicit switch, as cPortProtocol does, and refuses a
+// type the core does not know instead of guessing one.
+func cMountType(t MountType) (uint32, error) {
+	switch t {
+	case MountTypeVolume:
+		return uint32(C.BoxliteMountTypeVolume), nil
+	case MountTypeBind:
+		return uint32(C.BoxliteMountTypeBind), nil
+	default:
+		return 0, fmt.Errorf("boxlite: unknown mount type %q; expected %q or %q", t, MountTypeVolume, MountTypeBind)
+	}
+}
+
 // Secret configures outbound HTTPS secret substitution.
 type Secret struct {
 	Name        string
@@ -230,6 +271,7 @@ type boxConfig struct {
 	rootfsPath string
 	env        [][2]string
 	volumes    []volumeEntry
+	mounts     []Mount
 	ports      []PortSpec
 	workDir    string
 	user       string
@@ -324,6 +366,15 @@ func WithBindMountReadOnly(hostPath, guestPath string) BoxOption {
 func WithManagedVolume(managedVolume, guestPath string) BoxOption {
 	return func(c *boxConfig) {
 		c.volumes = append(c.volumes, volumeEntry{managedVolume: managedVolume, guestPath: guestPath})
+	}
+}
+
+// WithMount adds a typed mount. Whether its fields fit its type is checked
+// at create: an unknown Type, an empty Source, a relative Target or a SubPath
+// on a bind fails there.
+func WithMount(mount Mount) BoxOption {
+	return func(c *boxConfig) {
+		c.mounts = append(c.mounts, mount)
 	}
 }
 
@@ -533,6 +584,12 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		}
 		C.free(unsafe.Pointer(cGuest))
 	}
+	for _, mount := range cfg.mounts {
+		if err := addCMount(cOpts, mount); err != nil {
+			C.boxlite_options_free(cOpts)
+			return nil, err
+		}
+	}
 	for _, port := range cfg.ports {
 		cPort, err := port.toCSpec()
 		if err != nil {
@@ -645,6 +702,35 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		freeCStringArray(cArgs, argc)
 	}
 	return cOpts, nil
+}
+
+// addCMount hands one mount to the C options. An empty Source or SubPath is
+// passed as NULL, which the core reads as unset: a missing source is then
+// reported at create, and an unset SubPath mounts the whole volume.
+func addCMount(cOpts *C.CBoxliteOptions, mount Mount) error {
+	mountType, err := cMountType(mount.Type)
+	if err != nil {
+		return err
+	}
+	optional := func(value string) *C.char {
+		if value == "" {
+			return nil
+		}
+		return toCString(value)
+	}
+	cSource := optional(mount.Source)
+	cSubPath := optional(mount.SubPath)
+	cTarget := toCString(mount.Target)
+	code := C.boxlite_options_add_mount(cOpts, mountType, cSource, cTarget, boolToCInt(mount.ReadOnly), cSubPath)
+	for _, value := range []*C.char{cSource, cSubPath, cTarget} {
+		if value != nil {
+			C.free(unsafe.Pointer(value))
+		}
+	}
+	if code != C.Ok {
+		return fmt.Errorf("boxlite: add mount to %q failed with code %d", mount.Target, int(code))
+	}
+	return nil
 }
 
 func validateCapabilities(option string, capabilities []string) error {

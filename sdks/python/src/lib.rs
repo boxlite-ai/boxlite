@@ -34,8 +34,8 @@ use crate::network::{
 };
 use crate::options::{
     PyAccessToken, PyApiKeyCredential, PyBoxOptions, PyBoxliteRestOptions, PyCopyOptions,
-    PyImageRegistry, PyInboundNetworkSpec, PyNetworkSpec, PyOptions, PyOutboundNetworkSpec,
-    PySecret,
+    PyImageRegistry, PyInboundNetworkSpec, PyMount, PyNetworkSpec, PyOptions,
+    PyOutboundNetworkSpec, PySecret,
 };
 use crate::registries::{PyRegistryCredential, PyRegistryHandle};
 use crate::runtime::PyBoxlite;
@@ -99,6 +99,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyApiKeyCredential>()?;
     m.add_class::<PyAccessToken>()?;
     m.add_class::<PySecret>()?;
+    m.add_class::<PyMount>()?;
 
     Ok(())
 }

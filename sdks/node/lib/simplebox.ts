@@ -15,6 +15,7 @@ import type {
   JsBox,
   JsBoxInfo,
   JsBoxOptions,
+  JsMountSpec,
   JsVolumeSpec,
   NativeBoxConnection,
   NativeBoxTunnel,
@@ -308,6 +309,9 @@ export interface SimpleBoxOptions {
   /** Volume mounts: a local hostPath, or a managedVolume by id or name. */
   volumes?: JsVolumeSpec[];
 
+  /** Typed mounts, each stating its `type`: `'bind'` or `'volume'`. */
+  mounts?: JsMountSpec[];
+
   /** Port mappings */
   ports?: Array<{
     hostPort?: number;
@@ -574,6 +578,7 @@ export class SimpleBox {
         ? Object.entries(options.env).map(([key, value]) => ({ key, value }))
         : undefined,
       volumes: options.volumes,
+      mounts: options.mounts,
       network: options.network,
       ports: options.ports,
       entrypoint: options.entrypoint,

@@ -225,6 +225,33 @@ func TestWithManagedVolumeKeepsOriginsApart(t *testing.T) {
 	}
 }
 
+// WithMount keeps every field as given; what fits a type is the core's call at
+// create, not the option's.
+func TestWithMountKeepsEveryField(t *testing.T) {
+	mount := Mount{Type: MountTypeVolume, Source: "run42", Target: "/workspace", ReadOnly: true, SubPath: "foo/bar"}
+	cfg := &boxConfig{}
+	WithMount(mount)(cfg)
+
+	if len(cfg.mounts) != 1 || cfg.mounts[0] != mount {
+		t.Fatalf("mounts: got %+v, want [%+v]", cfg.mounts, mount)
+	}
+	if err := buildAndFreeCOptions("alpine:latest", cfg); err != nil {
+		t.Fatalf("buildCOptions: %v", err)
+	}
+}
+
+// A misspelt type fails when the options are built, naming the bad value,
+// rather than reaching the C enum as some other type.
+func TestWithMountRefusesAnUnknownType(t *testing.T) {
+	cfg := &boxConfig{}
+	WithMount(Mount{Type: "volme", Source: "run42", Target: "/workspace"})(cfg)
+
+	err := buildAndFreeCOptions("alpine:latest", cfg)
+	if err == nil || !strings.Contains(err.Error(), `unknown mount type "volme"`) {
+		t.Fatalf("want an unknown mount type error, got %v", err)
+	}
+}
+
 func TestBoxOptions(t *testing.T) {
 	cfg := &boxConfig{}
 	WithName("test-box")(cfg)

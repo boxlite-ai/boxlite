@@ -1,6 +1,6 @@
 use crate::cli::{
-    CapabilityFlags, GlobalFlags, KernelFlags, NetworkFlags, PublishFlags, ResourceFlags,
-    VolumeFlags,
+    CapabilityFlags, GlobalFlags, KernelFlags, MountFlags, NetworkFlags, PublishFlags,
+    ResourceFlags, VolumeFlags,
 };
 use boxlite::{BoxOptions, RootfsSpec};
 use clap::Args;
@@ -45,6 +45,9 @@ pub struct CreateArgs {
     pub volume: VolumeFlags,
 
     #[command(flatten)]
+    pub mount: MountFlags,
+
+    #[command(flatten)]
     pub network: NetworkFlags,
 
     /// Command to run as the container's init (replaces the image CMD;
@@ -79,6 +82,7 @@ impl CreateArgs {
         self.management.apply_to(&mut options)?;
         self.publish.apply_to(&mut options)?;
         self.volume.apply_to(&mut options, global.home.as_deref())?;
+        self.mount.apply_to(&mut options)?;
         self.network.apply_to(&mut options)?;
 
         // A `create`d box is a background box: `create` then `start`/`exec` runs
@@ -163,6 +167,37 @@ mod tests {
             Some(0),
             "a detached box cannot remove on stop, so the sentinel is cleared"
         );
+    }
+
+    /// `create` hands `--mount` to `BoxOptions.mounts`, as `run` does.
+    #[test]
+    fn create_mount_flag_fills_box_options_mounts() {
+        use boxlite::runtime::options::MountSpec;
+
+        let cli = Cli::try_parse_from([
+            "boxlite",
+            "create",
+            "--mount",
+            "type=bind,source=/srv/data,target=/data,read_only=true",
+            "alpine:latest",
+        ])
+        .expect("create --mount should parse");
+        let Commands::Create(args) = cli.command else {
+            panic!("expected create command");
+        };
+
+        let opts = args
+            .to_box_options(&cli.global)
+            .expect("options should build");
+
+        assert_eq!(
+            opts.mounts,
+            vec![MountSpec {
+                read_only: true,
+                ..MountSpec::bind_mount("/srv/data", "/data")
+            }]
+        );
+        assert!(opts.volumes.is_empty());
     }
 
     #[test]

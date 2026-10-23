@@ -76,6 +76,14 @@ typedef enum BoxlitePortProtocol {
   BoxlitePortProtocolUdp = 1,
 } BoxlitePortProtocol;
 
+// What a typed mount's `source` names; see [`boxlite_options_add_mount`].
+typedef enum BoxliteMountType {
+  // A managed volume, by id or name.
+  BoxliteMountTypeVolume = 0,
+  // A path on the host.
+  BoxliteMountTypeBind = 1,
+} BoxliteMountType;
+
 typedef enum BoxliteRegistryTransport {
   BoxliteRegistryTransportHttps = 0,
   BoxliteRegistryTransportHttp = 1,
@@ -1248,6 +1256,29 @@ void boxlite_options_add_managed_volume(CBoxliteOptions *opts,
                                         const char *managed_volume,
                                         const char *guest_path,
                                         int read_only);
+
+// Add a typed mount, the C form of a Rust `MountSpec`.
+//
+// - `mount_type`: `BoxliteMountTypeVolume` or `BoxliteMountTypeBind`.
+// - `source`: the volume's id or name, or the host path; NULL leaves it unset.
+// - `target`: required; the mount point inside the box.
+// - `read_only`: nonzero mounts without write access.
+// - `sub_path`: for a volume, the prefix to mount instead of all of it;
+//   NULL mounts the whole volume.
+//
+// Whether the fields fit the type is checked at create, as for every SDK:
+// a missing `source`, a relative `target`, or a `sub_path` on a bind fails
+// there. The local runtime takes bind mounts and a REST runtime volume
+// mounts; each refuses the other type at create.
+//
+// Returns `InvalidArgument` if `opts` or `target` is NULL, or a string is not
+// valid UTF-8.
+enum BoxliteErrorCode boxlite_options_add_mount(CBoxliteOptions *opts,
+                                                enum BoxliteMountType mount_type,
+                                                const char *source,
+                                                const char *target,
+                                                int read_only,
+                                                const char *sub_path);
 
 // Forward `host_port` on the host to `guest_port` inside the box.
 //

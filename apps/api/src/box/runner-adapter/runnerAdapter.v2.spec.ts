@@ -93,4 +93,35 @@ describe('RunnerAdapterV2 createBox', () => {
     )
     expect(jobService.createJob.mock.calls[0][5]).not.toHaveProperty('networkBlockAll')
   })
+
+  it('passes a read-only volume mount through to the CREATE_BOX job payload', async () => {
+    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    await adapter.init({ id: 'runner-1' } as any)
+
+    const box = {
+      id: 'box-1',
+      image: 'base',
+      osUser: 'boxlite',
+      cpu: 1,
+      gpu: 0,
+      mem: 1,
+      disk: 3,
+      volumes: [{ volumeId: 'vol-1', mountPath: '/data', subpath: 'sets/a', readOnly: true }],
+      secrets: [],
+    } as any
+
+    await adapter.createBox(box, 'base')
+
+    expect(jobService.createJob).toHaveBeenCalledWith(
+      null,
+      JobType.CREATE_BOX,
+      'runner-1',
+      ResourceType.BOX,
+      'box-1',
+      expect.objectContaining({
+        volumes: [{ volumeId: 'vol-1', mountPath: '/data', subpath: 'sets/a', readOnly: true }],
+      }),
+    )
+  })
 })

@@ -369,6 +369,7 @@ silently restarting it, because restarting would run the command a second time.
 | `--entrypoint EXEC` | | Override the image entrypoint |
 | `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
 | `--volume VOLUME` | `-v` | Mount a volume: `name:/box` for a managed volume, `./path:/box` for a host bind, `/box` for anonymous |
+| `--mount MOUNT` | | Mount by named fields: `type=volume,source=name,target=/box[,read_only=true][,subpath=PREFIX]`, or `type=bind,source=./path,target=/box[,read_only=true]`. The local runtime takes `bind`, a remote one (`--url`) `volume`; each refuses the other |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--disk-size GB` | | Sparse rootfs disk size; smaller values than the base image are ignored |
@@ -431,6 +432,7 @@ default, and `exec` still starts it on demand.
 | `--entrypoint EXEC` | | Override the image entrypoint |
 | `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
 | `--volume VOLUME` | `-v` | Mount a volume: `name:/box` for a managed volume, `./path:/box` for a host bind, `/box` for anonymous |
+| `--mount MOUNT` | | Mount by named fields: `type=volume,source=name,target=/box[,read_only=true][,subpath=PREFIX]`, or `type=bind,source=./path,target=/box[,read_only=true]`. The local runtime takes `bind`, a remote one (`--url`) `volume`; each refuses the other |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--disk-size GB` | | Sparse rootfs disk size; smaller values than the base image are ignored |

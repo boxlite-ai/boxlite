@@ -238,6 +238,23 @@ export interface JsHostPathVolumeSpec {
   readOnly?: boolean;
 }
 
+/**
+ * A typed mount: it states its `type` where a `JsVolumeSpec` implies it. The
+ * local runtime takes `'bind'` mounts and a REST runtime `'volume'` mounts;
+ * each refuses the other type at create.
+ */
+export interface JsMountSpec {
+  /** `'volume'` mounts a managed volume by id or name, `'bind'` a host path. */
+  type: "volume" | "bind";
+  /** The volume's id or name, or the host path. Required by both types. */
+  source: string;
+  /** Mount point inside the box; an absolute path. */
+  target: string;
+  readOnly?: boolean;
+  /** For `'volume'` only: mount just that prefix of the volume. */
+  subPath?: string;
+}
+
 export interface JsNetworkSpec {
   outbound?: JsOutboundNetworkSpec;
   inbound?: JsInboundNetworkSpec;
@@ -319,6 +336,7 @@ export interface JsBoxOptions {
   workingDir?: string;
   env?: JsEnvVar[];
   volumes?: JsVolumeSpec[];
+  mounts?: JsMountSpec[];
   network?: JsNetworkSpec;
   ports?: JsPortSpec[];
   /**

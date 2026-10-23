@@ -1,7 +1,8 @@
 use std::os::raw::{c_char, c_int};
 
 use boxlite::runtime::options::{
-    BoxOptions, NetworkSpec, PortProtocol, PortSpec, RootfsSpec, Secret, VolumeSpec,
+    BoxOptions, MountSpec, MountType, NetworkSpec, PortProtocol, PortSpec, RootfsSpec, Secret,
+    VolumeSpec,
 };
 
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
@@ -106,6 +107,44 @@ pub unsafe extern "C" fn boxlite_options_add_managed_volume(
     read_only: c_int,
 ) {
     options_add_managed_volume(opts, managed_volume, guest_path, read_only)
+}
+
+/// What a typed mount's `source` names; see [`boxlite_options_add_mount`].
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoxliteMountType {
+    /// A managed volume, by id or name.
+    BoxliteMountTypeVolume = 0,
+    /// A path on the host.
+    BoxliteMountTypeBind = 1,
+}
+
+/// Add a typed mount, the C form of a Rust `MountSpec`.
+///
+/// - `mount_type`: `BoxliteMountTypeVolume` or `BoxliteMountTypeBind`.
+/// - `source`: the volume's id or name, or the host path; NULL leaves it unset.
+/// - `target`: required; the mount point inside the box.
+/// - `read_only`: nonzero mounts without write access.
+/// - `sub_path`: for a volume, the prefix to mount instead of all of it;
+///   NULL mounts the whole volume.
+///
+/// Whether the fields fit the type is checked at create, as for every SDK:
+/// a missing `source`, a relative `target`, or a `sub_path` on a bind fails
+/// there. The local runtime takes bind mounts and a REST runtime volume
+/// mounts; each refuses the other type at create.
+///
+/// Returns `InvalidArgument` if `opts` or `target` is NULL, or a string is not
+/// valid UTF-8.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_add_mount(
+    opts: *mut CBoxliteOptions,
+    mount_type: BoxliteMountType,
+    source: *const c_char,
+    target: *const c_char,
+    read_only: c_int,
+    sub_path: *const c_char,
+) -> BoxliteErrorCode {
+    options_add_mount(opts, mount_type, source, target, read_only, sub_path)
 }
 
 /// Transport protocol for a port forwarding rule.
@@ -453,6 +492,46 @@ pub unsafe fn options_add_managed_volume(
     }
 }
 
+pub unsafe fn options_add_mount(
+    handle: *mut OptionsHandle,
+    mount_type: BoxliteMountType,
+    source: *const c_char,
+    target: *const c_char,
+    read_only: c_int,
+    sub_path: *const c_char,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() || target.is_null() {
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let optional = |value: *const c_char| {
+            if value.is_null() {
+                Ok(None)
+            } else {
+                c_str_to_string(value).map(Some)
+            }
+        };
+        let (Ok(source), Ok(target), Ok(sub_path)) = (
+            optional(source),
+            c_str_to_string(target),
+            optional(sub_path),
+        ) else {
+            return BoxliteErrorCode::InvalidArgument;
+        };
+        (*handle).options.mounts.push(MountSpec {
+            mount_type: match mount_type {
+                BoxliteMountType::BoxliteMountTypeVolume => MountType::Volume,
+                BoxliteMountType::BoxliteMountTypeBind => MountType::Bind,
+            },
+            source,
+            target,
+            read_only: read_only != 0,
+            sub_path,
+        });
+        BoxliteErrorCode::Ok
+    }
+}
+
 pub unsafe fn options_add_port(
     handle: *mut OptionsHandle,
     host_port: u16,
@@ -649,4 +728,109 @@ fn parse_c_string_array(args: *const *const c_char, argc: c_int) -> Vec<String> 
     }
 
     values
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::ptr;
+
+    fn new_options() -> *mut OptionsHandle {
+        let image = CString::new("alpine:latest").unwrap();
+        let mut opts = ptr::null_mut();
+        let code = unsafe { options_new(image.as_ptr(), &mut opts, ptr::null_mut()) };
+        assert_eq!(code, BoxliteErrorCode::Ok);
+        opts
+    }
+
+    /// Every argument lands in the core `MountSpec` field of the same name, so
+    /// a C caller gets read-only and a prefix exactly as asked.
+    #[test]
+    fn add_mount_fills_every_mount_spec_field() {
+        let opts = new_options();
+        let source = CString::new("run42").unwrap();
+        let target = CString::new("/workspace").unwrap();
+        let sub_path = CString::new("foo/bar").unwrap();
+
+        let code = unsafe {
+            options_add_mount(
+                opts,
+                BoxliteMountType::BoxliteMountTypeVolume,
+                source.as_ptr(),
+                target.as_ptr(),
+                1,
+                sub_path.as_ptr(),
+            )
+        };
+
+        assert_eq!(code, BoxliteErrorCode::Ok);
+        let handle = unsafe { Box::from_raw(opts) };
+        assert_eq!(
+            handle.options.mounts,
+            vec![MountSpec {
+                read_only: true,
+                sub_path: Some("foo/bar".to_string()),
+                ..MountSpec::volume_mount("run42", "/workspace")
+            }]
+        );
+    }
+
+    /// A NULL `source` or `sub_path` means unset rather than empty, so create
+    /// reports the missing source instead of mounting a volume named "".
+    #[test]
+    fn add_mount_reads_null_optionals_as_unset() {
+        let opts = new_options();
+        let target = CString::new("/data").unwrap();
+
+        let code = unsafe {
+            options_add_mount(
+                opts,
+                BoxliteMountType::BoxliteMountTypeBind,
+                ptr::null(),
+                target.as_ptr(),
+                0,
+                ptr::null(),
+            )
+        };
+
+        assert_eq!(code, BoxliteErrorCode::Ok);
+        let handle = unsafe { Box::from_raw(opts) };
+        let mount = &handle.options.mounts[0];
+        assert_eq!(mount.mount_type, MountType::Bind);
+        assert_eq!(mount.source, None);
+        assert_eq!(mount.sub_path, None);
+        assert!(!mount.read_only);
+    }
+
+    #[test]
+    fn add_mount_refuses_a_null_handle_or_target() {
+        let target = CString::new("/data").unwrap();
+        let null_handle = unsafe {
+            options_add_mount(
+                ptr::null_mut(),
+                BoxliteMountType::BoxliteMountTypeBind,
+                ptr::null(),
+                target.as_ptr(),
+                0,
+                ptr::null(),
+            )
+        };
+        assert_eq!(null_handle, BoxliteErrorCode::InvalidArgument);
+
+        let opts = new_options();
+        let null_target = unsafe {
+            options_add_mount(
+                opts,
+                BoxliteMountType::BoxliteMountTypeBind,
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+            )
+        };
+        assert_eq!(null_target, BoxliteErrorCode::InvalidArgument);
+        let handle = unsafe { Box::from_raw(opts) };
+        assert!(handle.options.mounts.is_empty());
+    }
 }

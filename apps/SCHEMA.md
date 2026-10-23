@@ -415,7 +415,7 @@ or `archived`.
 | `osUser` | `character varying` | |
 | `env` | `jsonb` | default `{}` |
 | `labels` | `jsonb` | nullable |
-| `volumes` | `jsonb` | array of `{ volumeId, mountPath }` |
+| `volumes` | `jsonb` | array of `{ volumeId, mountPath, subpath?, readOnly? }`; `readOnly: true` binds the mount read-only in the box, omitted or `null` binds it read-write; the runner refuses an entry with any other key, so a field it does not know cannot be dropped |
 | `inboundEnabled` | `boolean` | default `false`; `true` lets the proxy serve exposed services without sign-in |
 | `outboundEnabled` | `boolean` | default `true`; `false` blocks all egress |
 | `outboundAllowNet` | `text[]` | nullable egress allowlist (hosts, wildcards, IPv4, CIDRs); null = full egress |

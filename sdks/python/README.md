@@ -694,6 +694,28 @@ boxlite.BoxOptions(
 )
 ```
 
+`mounts=` states each mount's `type` instead of inferring it. See the
+[Mount format](../../docs/reference/python/README.md#mount-format) for every field.
+The local runtime takes `"bind"` mounts and a REST runtime `"volume"` mounts;
+each refuses the other type at create.
+
+```python
+boxlite.BoxOptions(
+    mounts=[
+        # A read-only prefix of a managed volume
+        boxlite.Mount(
+            type="volume",
+            source="run42",
+            target="/workspace",
+            read_only=True,
+            sub_path="foo/bar",
+        ),
+        # A host directory
+        {"type": "bind", "source": "/host/data", "target": "/mnt/data"},
+    ]
+)
+```
+
 ### Port Forwarding
 
 ```python

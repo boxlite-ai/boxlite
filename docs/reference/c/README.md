@@ -606,6 +606,26 @@ if (boxlite_create_box(runtime, opts, &box, &error) != Ok) {
 boxlite_options_free(opts);
 ```
 
+##### Typed mounts
+
+`boxlite_options_add_mount` adds the C form of a Rust
+[`MountSpec`](../rust/README.md#mountspec): a type, a source, a target,
+read-only, and a volume prefix.
+
+```c
+/* A managed volume by id or name, read-only, only its foo/bar prefix */
+boxlite_options_add_mount(opts, BoxliteMountTypeVolume, "run42", "/workspace", 1, "foo/bar");
+/* A host path */
+boxlite_options_add_mount(opts, BoxliteMountTypeBind, "/host/config", "/etc/app", 1, NULL);
+```
+
+A NULL `source` or `sub_path` is unset; a NULL `sub_path` mounts the whole
+volume. The call returns `InvalidArgument` for a NULL `opts` or `target`, or a
+string that is not valid UTF-8. The rest is checked at create: a missing
+`source`, a relative `target`, or a `sub_path` on a bind. The local runtime
+takes bind mounts and a REST runtime volume mounts; each refuses the other
+type at create.
+
 ---
 
 #### boxlite_start_box

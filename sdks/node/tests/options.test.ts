@@ -314,6 +314,24 @@ describe("SimpleBoxOptions", () => {
     ]);
   });
 
+  test("passes typed mounts through to the native options", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const mounts = [
+      {
+        type: "volume" as const,
+        source: "run42",
+        target: "/workspace",
+        readOnly: true,
+        subPath: "foo/bar",
+      },
+      { type: "bind" as const, source: "/host/config", target: "/etc/app" },
+    ];
+    const box = new SimpleBox({ mounts });
+    const nativeOptions = (box as any)._boxOpts;
+
+    expect(nativeOptions.mounts).toEqual(mounts);
+  });
+
   test("accepts secrets", () => {
     const secret: Secret = {
       name: "openai",

@@ -50,6 +50,16 @@ static void test_mount_origin_entrypoints(void) {
       "  ok: bind-mount and managed-volume entrypoints accept a NULL handle\n");
 }
 
+/* The typed-mount entrypoint reports a NULL handle instead of dropping the
+ * mount silently, so a caller can tell the mount was not added. */
+static void test_typed_mount_rejects_null_handle(void) {
+  assert(boxlite_options_add_mount(NULL, BoxliteMountTypeVolume, "my-data",
+                                   "/data", 1, "foo/bar") == InvalidArgument);
+  assert(boxlite_options_add_mount(NULL, BoxliteMountTypeBind, "/host/data",
+                                   "/data", 0, NULL) == InvalidArgument);
+  printf("  ok: boxlite_options_add_mount rejects a NULL handle\n");
+}
+
 /* (2) The name parameter exists, and a NULL handle is still rejected
  * synchronously rather than queueing work against nothing. */
 static void test_volume_create_rejects_null_handle(void) {
@@ -73,6 +83,7 @@ int main(void) {
   printf("test_volume_ffi\n");
   test_volume_info_layout();
   test_mount_origin_entrypoints();
+  test_typed_mount_rejects_null_handle();
   test_volume_create_rejects_null_handle();
   printf("PASS\n");
   return 0;

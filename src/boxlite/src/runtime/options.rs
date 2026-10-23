@@ -882,7 +882,7 @@ impl VolumeSpec {
 /// What a [`MountSpec`]'s `source` names.
 ///
 /// Spelled `"volume"` and `"bind"` on every surface that carries a mount: the
-/// CLI(TODO), the SDK(TODO), the REST wire(TODO) and persisted box config. One spelling
+/// CLI, the SDKs, the REST wire and persisted box config. One spelling
 /// everywhere is what lets a mount written for one surface be read unchanged on another.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -943,8 +943,8 @@ impl std::str::FromStr for MountType {
 /// which field is set; a `MountSpec` states it. Build one with
 /// [`MountSpec::volume_mount`] or [`MountSpec::bind_mount`].
 ///
-/// `mount_type` is serialized under the key `type`, the spelling the CLI(TODO),
-/// the SDK(TODO) and the wire(TODO) use. `type` is a Rust keyword, hence the field name.
+/// `mount_type` is serialized under the key `type`, the spelling the CLI,
+/// the SDKs and the REST wire use. `type` is a Rust keyword, hence the field name.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MountSpec {
     #[serde(rename = "type")]
@@ -1002,7 +1002,7 @@ impl MountSpec {
     /// Reject a mount whose fields contradict its type.
     ///
     /// The constructors cannot build one, but the fields are public and the
-    /// SDKs fill them from caller input(TODO), so create runs this for every mount on
+    /// SDKs fill them from caller input, so create runs this for every mount on
     /// both runtimes, before the options reach a backend.
     pub fn validate(&self) -> BoxliteResult<()> {
         let mount_type = self.mount_type;
@@ -1467,8 +1467,8 @@ mod tests {
         }
     }
 
-    /// `MountSpec` is persisted as box config and is the shape the SDK(TODO) and
-    /// the wire(TODO) share, so its JSON is a contract: `type` rather than the
+    /// `MountSpec` is persisted as box config and is the shape the SDKs and
+    /// the REST wire share, so its JSON is a contract: `type` rather than the
     /// Rust field name, lowercase type names, and no key for an unset `sub_path`.
     #[test]
     fn mount_spec_json_uses_the_type_key_and_omits_an_unset_sub_path() {

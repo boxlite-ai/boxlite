@@ -6,9 +6,9 @@ use boxlite::runtime::advanced_options::{
 };
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, InboundNetworkConfig,
-    NetworkMode, NetworkSpec, OutboundNetworkConfig, PortProtocol, PortSpec, RegistryTransport,
-    RootfsSpec, Secret, VolumeSpec,
+    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, InboundNetworkConfig, MountSpec,
+    MountType, NetworkMode, NetworkSpec, OutboundNetworkConfig, PortProtocol, PortSpec,
+    RegistryTransport, RootfsSpec, Secret, VolumeSpec,
 };
 use napi::bindgen_prelude::Error;
 use napi_derive::napi;
@@ -192,6 +192,9 @@ pub struct JsBoxOptions {
     /// Volume mounts as array of volume specs
     pub volumes: Option<Vec<JsVolumeSpec>>,
 
+    /// Typed mounts, each stating its `type`; see [`JsMountSpec`].
+    pub mounts: Option<Vec<JsMountSpec>>,
+
     /// Structured network configuration.
     pub network: Option<JsNetworkSpec>,
 
@@ -301,6 +304,48 @@ impl TryFrom<JsVolumeSpec> for VolumeSpec {
         Ok(VolumeSpec {
             read_only: v.read_only.unwrap_or(false),
             ..spec
+        })
+    }
+}
+
+/// Typed mount specification, the JavaScript form of the core `MountSpec`.
+///
+/// States its type where a [`JsVolumeSpec`] implies it from which field is
+/// set. The local runtime takes `"bind"` mounts and a REST runtime `"volume"`
+/// mounts; each refuses the other type at create.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsMountSpec {
+    /// `"volume"` mounts a managed volume by id or name, `"bind"` a host path.
+    #[napi(js_name = "type")]
+    pub mount_type: String,
+
+    /// The volume's id or name, or the host path. Required by both types.
+    pub source: Option<String>,
+
+    /// Mount point inside the box; an absolute path.
+    pub target: String,
+
+    /// Mount without write access (default: false)
+    pub read_only: Option<bool>,
+
+    /// For `"volume"` only: mount just that prefix of the volume.
+    pub sub_path: Option<String>,
+}
+
+impl TryFrom<JsMountSpec> for MountSpec {
+    type Error = boxlite_shared::errors::BoxliteError;
+
+    fn try_from(mount: JsMountSpec) -> Result<Self, Self::Error> {
+        // Only the type is checked here, so a misspelt one fails with the
+        // core's message; whether the fields fit it is `MountSpec::validate`'s
+        // to decide, at create, as for every SDK.
+        Ok(MountSpec {
+            mount_type: mount.mount_type.parse::<MountType>()?,
+            source: mount.source,
+            target: mount.target,
+            read_only: mount.read_only.unwrap_or(false),
+            sub_path: mount.sub_path,
         })
     }
 }
@@ -496,6 +541,12 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .into_iter()
             .map(VolumeSpec::try_from)
             .collect::<Result<Vec<_>, _>>()?;
+        let mounts = js_opts
+            .mounts
+            .unwrap_or_default()
+            .into_iter()
+            .map(MountSpec::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Convert network spec — the two directions become two fields
         let (network, inbound_network) = match js_opts.network {
@@ -568,8 +619,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             env,
             rootfs,
             volumes,
-            // Typed mounts(TODO): this SDK has no field for them.
-            mounts: Vec::new(),
+            mounts,
             network,
             inbound_network,
             ports,
@@ -895,6 +945,57 @@ mod tests {
         assert!(unauthenticated.credential.is_none());
     }
 
+    fn design_mount() -> JsMountSpec {
+        JsMountSpec {
+            mount_type: "volume".into(),
+            source: Some("run42".into()),
+            target: "/workspace".into(),
+            read_only: Some(true),
+            sub_path: Some("foo/bar".into()),
+        }
+    }
+
+    /// Every field reaches the core spec of the same name, so read-only and a
+    /// prefix arrive exactly as asked.
+    #[test]
+    fn js_mount_becomes_the_core_mount_spec() {
+        let spec = MountSpec::try_from(design_mount()).unwrap();
+
+        assert_eq!(
+            spec,
+            MountSpec {
+                read_only: true,
+                sub_path: Some("foo/bar".to_string()),
+                ..MountSpec::volume_mount("run42", "/workspace")
+            }
+        );
+    }
+
+    /// An omitted `readOnly` is writable, as for `JsVolumeSpec`.
+    #[test]
+    fn js_mount_without_read_only_is_writable() {
+        let spec = MountSpec::try_from(JsMountSpec {
+            read_only: None,
+            ..design_mount()
+        })
+        .unwrap();
+
+        assert!(!spec.read_only);
+    }
+
+    /// A misspelt type fails when the options are converted, with the core's
+    /// message, rather than mounting as some other type.
+    #[test]
+    fn js_mount_refuses_an_unknown_type() {
+        let error = MountSpec::try_from(JsMountSpec {
+            mount_type: "volme".into(),
+            ..design_mount()
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unknown mount type"), "{error}");
+    }
+
     #[test]
     #[allow(deprecated)]
     fn box_options_from_js_allow_net() {
@@ -907,6 +1008,7 @@ mod tests {
             working_dir: None,
             env: None,
             volumes: None,
+            mounts: None,
             network: Some(JsNetworkSpec {
                 outbound: Some(JsOutboundNetworkSpec {
                     mode: "enabled".into(),
@@ -983,6 +1085,7 @@ mod tests {
             working_dir: None,
             env: None,
             volumes: None,
+            mounts: None,
             network: None,
             ports: None,
             auto_remove: None,

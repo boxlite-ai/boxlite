@@ -51,6 +51,10 @@ type volumeMount struct {
 	hostPath  string
 	mountPath string
 	rootPath  string
+	// readOnly makes the per-box bind read-only. The FUSE mount under rootPath
+	// is shared by every box using the volume, so the mode has to live here,
+	// on the bind, not on the mount.
+	readOnly bool
 }
 
 type boxVolumeMountRecord struct {
@@ -100,14 +104,23 @@ func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) (
 		}
 
 		c.logger.DebugContext(ctx, "binding volume subpath", "volumeId", volumeIdPrefixed, "subpath", subpathStr, "mountPath", vol.MountPath)
-		volumeMounts = append(volumeMounts, volumeMount{
-			hostPath:  bindSource,
-			mountPath: vol.MountPath,
-			rootPath:  baseMountPath,
-		})
+		volumeMounts = append(volumeMounts, newVolumeMount(vol, bindSource, baseMountPath))
 	}
 
 	return volumeMounts, nil
+}
+
+// newVolumeMount maps a volume DTO onto the bind Client.Create applies. It is
+// split out of getVolumeMounts, which needs a FUSE mount to run, so a test can
+// hold the one field that decides enforcement: a dropped readOnly binds every
+// read-only volume read-write.
+func newVolumeMount(vol dto.VolumeDTO, hostPath string, rootPath string) volumeMount {
+	return volumeMount{
+		hostPath:  hostPath,
+		mountPath: vol.MountPath,
+		rootPath:  rootPath,
+		readOnly:  vol.ReadOnly,
+	}
 }
 
 func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID string, metadata map[string]string) error {

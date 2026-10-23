@@ -40,6 +40,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite completion`](#boxlite-completion)
 - [Shared Flag Groups](#shared-flag-groups)
 - [Volume Mount Syntax](#volume-mount-syntax)
+- [Mount Syntax](#mount-syntax)
 - [Port Publish Syntax](#port-publish-syntax)
 - [Output Formats](#output-formats)
 - [Configuration File](#configuration-file)
@@ -312,7 +313,7 @@ The box's lifetime is that command's lifetime. When it exits, the box stops and
 takes the command's exit code; `boxlite ps` shows it stopped and
 `boxlite inspect -f '{{.State.ExitCode}}'` gives the code.
 
-**Options:** Uses [`ProcessFlags`](#processflags) + [`CapabilityFlags`](#capabilityflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`NetworkFlags`](#networkflags) + [`ManagementFlags`](#managementflags), plus:
+**Options:** Uses [`ProcessFlags`](#processflags) + [`CapabilityFlags`](#capabilityflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`MountFlags`](#mountflags) + [`NetworkFlags`](#networkflags) + [`ManagementFlags`](#managementflags), plus:
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -396,7 +397,7 @@ start it implicitly, because starting it runs that command. Start it deliberatel
 | `--workdir PATH` | `-w` | Working directory inside the box |
 | `--entrypoint EXEC` | — | Replace the image entrypoint with one executable |
 
-Also uses [`CapabilityFlags`](#capabilityflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`NetworkFlags`](#networkflags) + [`ManagementFlags`](#managementflags).
+Also uses [`CapabilityFlags`](#capabilityflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`MountFlags`](#mountflags) + [`NetworkFlags`](#networkflags) + [`ManagementFlags`](#managementflags).
 
 > Note: `create` accepts `--env` and `--workdir` directly rather than via `ProcessFlags` (no `-i`/`-t`/`-u` here, since no command is being executed).
 
@@ -719,6 +720,8 @@ boxlite network tunnel mybox 3000 --revoke
 
 Run a long-running REST API server. The server holds a single `BoxliteRuntime` and exposes the full REST surface for `boxlite --url ...` clients and the language SDKs' REST mode.
 
+It refuses a create request with a non-empty `mounts` list, with the error `mounts are not supported by boxlite serve`: it has no volume backend for a `volume` mount, and a `bind` would name the server's filesystem, not the caller's.
+
 **Options:**
 
 | Flag | Default | Description |
@@ -859,6 +862,14 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 |------|-------|-------------|
 | `--volume VOLUME` | `-v` | Mount a volume; repeatable (see [Volume Mount Syntax](#volume-mount-syntax)) |
 
+### `MountFlags`
+
+Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--mount MOUNT` | — | Mount by named fields, `type=volume\|bind,source=…,target=…`; repeatable (see [Mount Syntax](#mount-syntax)) |
+
 ### `NetworkFlags`
 
 Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
@@ -954,6 +965,54 @@ fails. Docker has the same limitation and rejects one-character volume names
 outright.
 
 The anonymous-volume base directory is resolved as: `--home`, else `$BOXLITE_HOME`, else `~/.boxlite`, else the system temp dir.
+
+---
+
+## Mount syntax
+
+`--mount` names every field, so nothing is inferred from a field's position or
+from the first character of a path. The local runtime takes a `bind` mount and
+a remote one (`--url`) a `volume` mount; each refuses the other type at create. The grammar is implemented in
+`src/cli/src/mountspec.rs`:
+
+```
+MOUNT := FIELD (',' FIELD)*
+FIELD := 'type=' ('volume' | 'bind')
+       | 'source=' SOURCE
+       | 'target=' BOX_PATH
+       | 'read_only=' ('true' | 'false')
+       | 'subpath=' PREFIX
+```
+
+```bash
+boxlite run --mount type=volume,source=run42,target=/workspace,read_only=true,subpath=foo/bar alpine
+boxlite run --mount type=bind,source=./data,target=/data alpine
+```
+
+| Key | Required | Meaning |
+|---|---|---|
+| `type` | yes | `volume` mounts a managed volume, `bind` a host path |
+| `source` | yes | For `volume`, the volume's id or name; for `bind`, a host path |
+| `target` | yes | Absolute mount point inside the box |
+| `read_only` | no | `true` mounts without write access; `false`, the default, is read-write |
+| `subpath` | no | For `volume` only: mount just that prefix of the volume |
+
+Fields may come in any order; each key is allowed once. An unknown key, a
+field without `=`, an empty value, or a near-miss spelling such as
+`type=Volume` or `read_only=yes` is an error rather than ignored. Docker's
+spellings (`src`, `dst`, `ro`, `readonly`, `volume-subpath`) are refused the
+same way, and unlike Docker `type` has no default.
+
+`PREFIX` must not start with `/`, contain `..` anywhere, or contain `//`. Those
+are the server's three rules, checked here in the server's words, so a bad
+prefix fails before the request is sent. A `bind` names its sub-directory in
+`source` directly, so `subpath` on one is refused. Values are split on `,`
+without quoting, so no value can contain a comma. A relative `bind` source is
+resolved against the working directory.
+
+`-v` and `--mount` fill separate lists and can be combined. Which runtime takes
+which type is in the [MountSpec reference](../rust/README.md#mountspec). Unlike
+a managed volume given to `-v`, a `volume` mount may be `read_only=true`.
 
 ---
 

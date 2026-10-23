@@ -48,6 +48,18 @@ pub(crate) fn map_err(err: BoxliteError) -> PyErr {
     }
 }
 
+/// `map_err` imports its classes from the `boxlite` package beside this
+/// crate, as the extension does from its installed package. A unit test that
+/// reads an error `map_err` raised calls this first.
+#[cfg(test)]
+pub(crate) fn put_the_package_on_the_import_path(py: Python<'_>) {
+    let path = py.import("sys").unwrap().getattr("path").unwrap();
+    let package_root = env!("CARGO_MANIFEST_DIR");
+    if !path.contains(package_root).unwrap() {
+        path.call_method1("insert", (0, package_root)).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,16 +126,6 @@ mod tests {
                 CLASSES.iter().any(|(name, _)| *name == class),
                 "{err:?} would be raised as a bare RuntimeError: no class for {class}"
             );
-        }
-    }
-
-    /// `map_err` imports its classes from the `boxlite` package beside this
-    /// crate, as the extension does from its installed package.
-    fn put_the_package_on_the_import_path(py: Python<'_>) {
-        let path = py.import("sys").unwrap().getattr("path").unwrap();
-        let package_root = env!("CARGO_MANIFEST_DIR");
-        if !path.contains(package_root).unwrap() {
-            path.call_method1("insert", (0, package_root)).unwrap();
         }
     }
 

@@ -959,19 +959,29 @@ let prefix = MountSpec {
 let bind = MountSpec::bind_mount("/tmp/data", "/data");
 ```
 
-`MountType` parses from and displays as `"volume"` and `"bind"` exactly. Only
-the Rust `BoxOptions` carries a `MountSpec`; no CLI flag, other SDK or REST
-request does yet.
+`MountType` parses from and displays as `"volume"` and `"bind"` exactly, which
+is how the REST runtime spells it on the wire. The CLI's `--mount` and the
+Python SDK's `BoxOptions(mounts=...)` carry a `MountSpec` too.
 `MountSpec::validate` refuses a relative `target`, a missing `source`,
 `sub_path` on a `Bind`, and an empty `sub_path`; create runs it for every mount.
 A runtime refuses the mounts it does not take rather than dropping them; use
-`volumes` where it takes none:
+`volumes` for what it does not take:
 
-- REST runtimes take no typed mounts yet.
+- A REST runtime sends a `Volume` mount in `mounts` and refuses a `Bind`, whose
+  path would name the server's filesystem. Unlike a managed `VolumeSpec`, a
+  `Volume` mount may be read-only and may name a `sub_path`. The hosted BoxLite
+  API stores each one as the box volume it mounts, `read_only` and `sub_path`
+  included. `boxlite serve` refuses such a create with `mounts are not
+  supported by boxlite serve`, and a server without the key fails it with an
+  unknown-field error.
 
-- The local runtime takes no typed mounts yet.
+- The local runtime shares a `Bind` mount's directory, or a single file staged
+  on its own. It has no volume backend, so it refuses a `Volume` mount: create
+  refuses one before the box is recorded, and a box imported with one fails
+  at boot.
 
-- Importing an archive that carries mounts is not supported yet.
+- Importing your own archive keeps its mounts; an untrusted upload refuses
+  them, as it refuses volumes.
 
 ### NetworkSpec
 
