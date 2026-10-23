@@ -208,8 +208,8 @@ state inline.
 
 ### `organization_activation_facts`
 
-Organization creation inserts the row. After each committed Box write, `BoxRepository`
-advances it with a best-effort conditional `UPDATE` outside the Box transaction. Organization
+After each committed Box write, `BoxRepository` upserts the row with a best-effort update
+outside the Box transaction; an organization without a recorded Box has no row. Organization
 deletion cascades to its facts; Box deletion does not. The API reads it only when activation
 is selected with include=activation on the existing organization detail.
 
@@ -217,7 +217,6 @@ is selected with include=activation on the existing organization detail.
 | --- | --- | --- |
 | `organizationId` | `uuid` | primary key; FK to organization with `ON DELETE CASCADE` |
 | `lastBoxCreatedAt` | `timestamptz` | nullable; maximum retained creation or warm-pool claim |
-| `boxHistoryComplete` | `boolean` | false for preexisting organizations and real-organization transfers |
 | `lastBoxModifiedAt` | `timestamptz` | nullable; maximum successful-start or accepted-deletion time |
 
 The [activation design](../docs/contributing/investigations/organization-activation-facts.md)

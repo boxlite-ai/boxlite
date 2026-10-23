@@ -17,15 +17,11 @@
 export interface AdminOrganizationActivation {
     'organizationId': string;
     /**
-     * Maximum retained Box creation or warm-pool claim time; survives Box deletion.
+     * Maximum retained Box creation or warm-pool claim time; survives Box deletion. Null means none was recorded; organizations older than tracking only have retained creation times.
      */
     'lastBoxCreatedAt': Date | null;
     /**
-     * Whether creation, successful start and accepted deletion tracking covers the organization lifetime.
-     */
-    'boxHistoryComplete': boolean;
-    /**
-     * Maximum observed successful-start or accepted-deletion time; cleanup, stops and label edits do not advance it.
+     * Maximum observed successful-start or accepted-deletion time; cleanup, stops and label edits do not advance it. Null means none was recorded since tracking began.
      */
     'lastBoxModifiedAt': Date | null;
     'observedAt': Date;

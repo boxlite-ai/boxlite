@@ -20,7 +20,7 @@ const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const databaseName = `activation_${process.pid}_${randomUUID().replaceAll('-', '')}`
 const earlier = '2026-10-20T01:00:00.000Z'
 const later = '2026-10-20T02:00:00.000Z'
-const factsUpdate = 'UPDATE organization_activation_facts'
+const factsWrite = 'INSERT INTO organization_activation_facts'
 
 describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, application updates)', () => {
   const connection = {
@@ -173,13 +173,10 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
     expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: at(restarted) })
   })
 
-  it('initializes complete facts, keeps them after Box deletion and never recreates them', async () => {
+  it('creates facts with the first Box, keeps them after Box deletion and never recreates them', async () => {
     const id = await organization()
-    expect(await service.get(id)).toMatchObject({
-      lastBoxCreatedAt: null,
-      lastBoxModifiedAt: null,
-      boxHistoryComplete: true,
-    })
+    expect(await factRows(id)).toEqual([])
+    expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: null, lastBoxModifiedAt: null })
     await box(id, later)
     await box(id, earlier)
     const started = await transition(await box(id, earlier), BoxState.STARTED)
@@ -187,9 +184,11 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
     expect(await dataSource.query('SELECT id FROM box')).toEqual([])
     expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: later, lastBoxModifiedAt: at(started) })
 
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
     await dataSource.getRepository(Organization).delete(id)
     const orphan = await box(id, later)
     await transition(orphan, BoxState.STARTED)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('organization_activation_facts'))
     expect(await service.get(id)).toBeNull()
     expect(await factRows(id)).toEqual([])
   })
@@ -235,18 +234,10 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
     await transition(boxId, BoxState.STARTED)
     expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: null, lastBoxModifiedAt: null })
     const claimed = await boxes.update(boxId, { updateData: { organizationId: id, createdAt: new Date(later) } })
-    expect(await service.get(id)).toMatchObject({
-      lastBoxCreatedAt: later,
-      lastBoxModifiedAt: at(claimed),
-      boxHistoryComplete: true,
-    })
+    expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: later, lastBoxModifiedAt: at(claimed) })
     const destination = await organization()
     await boxes.update(boxId, { updateData: { organizationId: destination } })
-    expect(await service.get(destination)).toMatchObject({
-      lastBoxCreatedAt: null,
-      lastBoxModifiedAt: null,
-      boxHistoryComplete: false,
-    })
+    expect(await service.get(destination)).toMatchObject({ lastBoxCreatedAt: null, lastBoxModifiedAt: null })
     expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: later })
   })
 
@@ -288,7 +279,7 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
       return transaction(...isolation, async (manager: EntityManager) => {
         const query = manager.query.bind(manager)
         manager.query = async (sql: string, parameters?: unknown[]) => {
-          if (!delayed && sql.startsWith(factsUpdate)) {
+          if (!delayed && sql.startsWith(factsWrite)) {
             delayed = true
             reachDelay()
             await delayReleased
@@ -338,12 +329,9 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
     const boxId = await box(id, earlier)
     await dataSource.query(`UPDATE box SET state = 'started' WHERE id = $1`, [boxId])
     expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: earlier, lastBoxModifiedAt: null })
-    const legacy = await legacyOrganization()
-    expect(await factRows(legacy)).toEqual([])
-    expect(await service.get(legacy)).toMatchObject({ boxHistoryComplete: false })
   })
 
-  it('backfills creation maxima only and marks preexisting or missing history incomplete', async () => {
+  it('backfills only retained creation maxima for existing organizations', async () => {
     // Without the facts table, the repository's follow-up updates fail and only log.
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
     await migrate('down')
@@ -353,27 +341,12 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
     const retained = await box(older, later)
     await transition(retained, BoxState.STARTED)
     await migrate('up')
-    expect(await service.get(older)).toMatchObject({
-      lastBoxCreatedAt: later,
-      lastBoxModifiedAt: null,
-      boxHistoryComplete: false,
-    })
-    expect(await service.get(unknown)).toMatchObject({
-      lastBoxCreatedAt: null,
-      lastBoxModifiedAt: null,
-      boxHistoryComplete: false,
-    })
-    const fresh = await organization()
-    expect(await service.get(fresh)).toMatchObject({ boxHistoryComplete: true })
-    await dataSource.query('DELETE FROM organization_activation_facts WHERE "organizationId" = $1', [fresh])
-    expect(await service.get(fresh)).toMatchObject({
-      lastBoxCreatedAt: null,
-      lastBoxModifiedAt: null,
-      boxHistoryComplete: false,
-    })
+    expect(await service.get(older)).toMatchObject({ lastBoxCreatedAt: later, lastBoxModifiedAt: null })
+    expect(await factRows(unknown)).toEqual([])
+    expect(await service.get(unknown)).toMatchObject({ lastBoxCreatedAt: null, lastBoxModifiedAt: null })
   })
 
-  it('reads an organization the previous revision inserts during installation as incomplete', async () => {
+  it('records an organization the previous revision inserts during installation from its first Box', async () => {
     await migrate('down')
     const installer = dataSource.createQueryRunner()
     const writer = dataSource.createQueryRunner()
@@ -392,7 +365,8 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
       await installer.commitTransaction()
       const id = await pending
       expect(await factRows(id)).toEqual([])
-      expect(await service.get(id)).toMatchObject({ boxHistoryComplete: false })
+      await box(id, earlier)
+      expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: earlier, lastBoxModifiedAt: null })
     } finally {
       if (installer.isTransactionActive) await installer.rollbackTransaction()
       if (pending) await pending.catch(() => undefined)

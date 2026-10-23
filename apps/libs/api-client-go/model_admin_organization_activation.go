@@ -23,11 +23,9 @@ var _ MappedNullable = &AdminOrganizationActivation{}
 // AdminOrganizationActivation struct for AdminOrganizationActivation
 type AdminOrganizationActivation struct {
 	OrganizationId string `json:"organizationId"`
-	// Maximum retained Box creation or warm-pool claim time; survives Box deletion.
+	// Maximum retained Box creation or warm-pool claim time; survives Box deletion. Null means none was recorded; organizations older than tracking only have retained creation times.
 	LastBoxCreatedAt NullableTime `json:"lastBoxCreatedAt"`
-	// Whether creation, successful start and accepted deletion tracking covers the organization lifetime.
-	BoxHistoryComplete bool `json:"boxHistoryComplete"`
-	// Maximum observed successful-start or accepted-deletion time; cleanup, stops and label edits do not advance it.
+	// Maximum observed successful-start or accepted-deletion time; cleanup, stops and label edits do not advance it. Null means none was recorded since tracking began.
 	LastBoxModifiedAt NullableTime `json:"lastBoxModifiedAt"`
 	ObservedAt time.Time `json:"observedAt"`
 	AdditionalProperties map[string]interface{}
@@ -39,11 +37,10 @@ type _AdminOrganizationActivation AdminOrganizationActivation
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewAdminOrganizationActivation(organizationId string, lastBoxCreatedAt NullableTime, boxHistoryComplete bool, lastBoxModifiedAt NullableTime, observedAt time.Time) *AdminOrganizationActivation {
+func NewAdminOrganizationActivation(organizationId string, lastBoxCreatedAt NullableTime, lastBoxModifiedAt NullableTime, observedAt time.Time) *AdminOrganizationActivation {
 	this := AdminOrganizationActivation{}
 	this.OrganizationId = organizationId
 	this.LastBoxCreatedAt = lastBoxCreatedAt
-	this.BoxHistoryComplete = boxHistoryComplete
 	this.LastBoxModifiedAt = lastBoxModifiedAt
 	this.ObservedAt = observedAt
 	return &this
@@ -105,30 +102,6 @@ func (o *AdminOrganizationActivation) GetLastBoxCreatedAtOk() (*time.Time, bool)
 // SetLastBoxCreatedAt sets field value
 func (o *AdminOrganizationActivation) SetLastBoxCreatedAt(v time.Time) {
 	o.LastBoxCreatedAt.Set(&v)
-}
-
-// GetBoxHistoryComplete returns the BoxHistoryComplete field value
-func (o *AdminOrganizationActivation) GetBoxHistoryComplete() bool {
-	if o == nil {
-		var ret bool
-		return ret
-	}
-
-	return o.BoxHistoryComplete
-}
-
-// GetBoxHistoryCompleteOk returns a tuple with the BoxHistoryComplete field value
-// and a boolean to check if the value has been set.
-func (o *AdminOrganizationActivation) GetBoxHistoryCompleteOk() (*bool, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.BoxHistoryComplete, true
-}
-
-// SetBoxHistoryComplete sets field value
-func (o *AdminOrganizationActivation) SetBoxHistoryComplete(v bool) {
-	o.BoxHistoryComplete = v
 }
 
 // GetLastBoxModifiedAt returns the LastBoxModifiedAt field value
@@ -193,7 +166,6 @@ func (o AdminOrganizationActivation) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["organizationId"] = o.OrganizationId
 	toSerialize["lastBoxCreatedAt"] = o.LastBoxCreatedAt.Get()
-	toSerialize["boxHistoryComplete"] = o.BoxHistoryComplete
 	toSerialize["lastBoxModifiedAt"] = o.LastBoxModifiedAt.Get()
 	toSerialize["observedAt"] = o.ObservedAt
 
@@ -211,7 +183,6 @@ func (o *AdminOrganizationActivation) UnmarshalJSON(data []byte) (err error) {
 	requiredProperties := []string{
 		"organizationId",
 		"lastBoxCreatedAt",
-		"boxHistoryComplete",
 		"lastBoxModifiedAt",
 		"observedAt",
 	}
@@ -245,7 +216,6 @@ func (o *AdminOrganizationActivation) UnmarshalJSON(data []byte) (err error) {
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "organizationId")
 		delete(additionalProperties, "lastBoxCreatedAt")
-		delete(additionalProperties, "boxHistoryComplete")
 		delete(additionalProperties, "lastBoxModifiedAt")
 		delete(additionalProperties, "observedAt")
 		o.AdditionalProperties = additionalProperties

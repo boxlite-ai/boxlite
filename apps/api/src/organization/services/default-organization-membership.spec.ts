@@ -22,7 +22,6 @@ function createEntityManager() {
   const entityManager = {
     count: jest.fn().mockResolvedValue(0),
     findOne: jest.fn().mockResolvedValue(null),
-    query: jest.fn().mockResolvedValue([]),
     remove: jest.fn().mockResolvedValue(undefined),
     save: jest.fn(async (entity) => {
       saved.push(entity)

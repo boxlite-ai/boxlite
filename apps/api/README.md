@@ -215,7 +215,6 @@ returns 404. Omitting this selection avoids the facts query and field.
   "activation": {
     "organizationId": "de80ad96-daa5-48a6-ad18-fb58aff3bbbf",
     "lastBoxCreatedAt": "2026-10-20T01:00:00.000Z",
-    "boxHistoryComplete": false,
     "lastBoxModifiedAt": "2026-10-20T01:00:01.000Z",
     "observedAt": "2026-10-20T02:00:00.000Z"
   }
@@ -231,26 +230,26 @@ running Boxes; timestamps do not measure ongoing execution or user interaction.
 Automatic lifecycle actions also count.
 
 `BoxRepository` records these times after the Box write commits, with one
-conditional `UPDATE` that only moves a time forward. Box transactions never wait
+upsert that only moves a time forward. Box transactions never wait
 on the facts row, and the follow-up waits at most one second for it before giving
 up. The update is best effort: a failure, or a process exit right
 after the commit, loses that advance and only logs it. A later event of the same
 kind repairs it. Writes that bypass `BoxRepository`, such as raw SQL, are not recorded.
 
-Facts survive Box deletion and are removed with the organization. Preexisting
-organizations only backfill maximum retained creation time; past start/delete
-history is unavailable and remains null. `boxHistoryComplete` is false for them
-and for organizations receiving transferred Boxes. Null with incomplete history
-means unknown. For organizations created later, `true` means tracking began at
-creation, not that every best-effort update landed.
+Facts survive Box deletion and are removed with the organization; a deleted
+organization's foreign key rejects new writes. Preexisting organizations only
+backfill maximum retained creation time; past start/delete history is unavailable
+and remains null. Null therefore means none was recorded, not proof of inactivity:
+compare the organization's `createdAt` with the tracking start, which is when the
+facts migration ran in that environment. Box transfers
+between real organizations do not move times to the destination.
 
 The pre-deploy migration creates the facts table and backfills retained Box
 creation evidence; it installs no triggers. It requires a transaction, limits lock
 waits to five seconds and individual statements to sixty seconds, and rolls back
 if either limit is exceeded; organization writes wait until the backfill commits.
-During a rolling deploy, instances on the previous revision write no facts.
-Organizations they create get no row, so even later events are not recorded and
-they read as incomplete.
-Production migration duration is unmeasured. Metadata validation rules and administrator authorization
+During a rolling deploy, instances on the previous revision write no facts; the
+next recorded creation, start or deletion request creates any missing row. Production migration
+duration is unmeasured. Metadata validation rules and administrator authorization
 apply to this selection. See the [activation design](../../docs/contributing/investigations/organization-activation-facts.md#review-follow-up-optimistic-updates-outside-box-transactions)
 for the source evidence, concurrency model and verification boundaries.

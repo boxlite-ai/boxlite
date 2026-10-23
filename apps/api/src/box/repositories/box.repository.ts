@@ -74,7 +74,7 @@ type ParkedBox = { id: string; updatedAt: Date }
 
 // The fields of a Box before a write that decide its organization's activity.
 type OrganizationActivitySource = Pick<Box, 'organizationId' | 'state' | 'desiredState' | 'createdAt'>
-type OrganizationActivity = { createdAt: Date | null; modifiedAt: Date | null; historyIncomplete: boolean }
+type OrganizationActivity = { createdAt: Date | null; modifiedAt: Date | null }
 
 @Injectable()
 export class BoxRepository extends BaseRepository<Box> {
@@ -549,11 +549,12 @@ export class BoxRepository extends BaseRepository<Box> {
    * Advances the organization's activation facts after a Box write has committed.
    *
    * It runs outside the Box transaction, so same-organization writes never queue
-   * on the facts row. The update is optimistic: it matches only when a value
-   * advances, and Read Committed rechecks that against the newest row, so late or
-   * concurrent updates cannot move a time backwards. A failure, including a
-   * facts-row lock wait past ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS, is logged and
-   * dropped: the Box write stands, and a later event supersedes the lost maximum.
+   * on the facts row. The upsert is optimistic: it only moves a time forward, and
+   * Read Committed rechecks that against the newest row, so late or concurrent
+   * updates cannot move a time backwards. The foreign key rejects a deleted
+   * organization, so its facts are not recreated. A failure, including a facts-row
+   * lock wait past ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS, is logged and dropped:
+   * the Box write stands, and a later event supersedes the lost maximum.
    */
   private async recordOrganizationActivity(box: Box, previousBox?: OrganizationActivitySource): Promise<void> {
     try {
@@ -565,16 +566,14 @@ export class BoxRepository extends BaseRepository<Box> {
         // SET takes a literal, so the constant is interpolated rather than bound.
         await entityManager.query(`SET LOCAL lock_timeout = '${ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS}ms'`)
         await entityManager.query(
-          `UPDATE organization_activation_facts
-           SET "lastBoxCreatedAt" = GREATEST("lastBoxCreatedAt", $2::timestamptz),
-             "lastBoxModifiedAt" = GREATEST("lastBoxModifiedAt", $3::timestamptz),
-             "boxHistoryComplete" = "boxHistoryComplete" AND NOT $4::boolean
-           WHERE "organizationId" = $1::uuid AND (
-             "lastBoxCreatedAt" IS DISTINCT FROM GREATEST("lastBoxCreatedAt", $2::timestamptz)
-             OR "lastBoxModifiedAt" IS DISTINCT FROM GREATEST("lastBoxModifiedAt", $3::timestamptz)
-             OR ("boxHistoryComplete" AND $4::boolean)
-           )`,
-          [box.organizationId, activity.createdAt, activity.modifiedAt, activity.historyIncomplete],
+          `INSERT INTO organization_activation_facts AS facts ("organizationId", "lastBoxCreatedAt", "lastBoxModifiedAt")
+           VALUES ($1::uuid, $2::timestamptz, $3::timestamptz)
+           ON CONFLICT ("organizationId") DO UPDATE
+           SET "lastBoxCreatedAt" = GREATEST(facts."lastBoxCreatedAt", EXCLUDED."lastBoxCreatedAt"),
+             "lastBoxModifiedAt" = GREATEST(facts."lastBoxModifiedAt", EXCLUDED."lastBoxModifiedAt")
+           WHERE facts."lastBoxCreatedAt" IS DISTINCT FROM GREATEST(facts."lastBoxCreatedAt", EXCLUDED."lastBoxCreatedAt")
+             OR facts."lastBoxModifiedAt" IS DISTINCT FROM GREATEST(facts."lastBoxModifiedAt", EXCLUDED."lastBoxModifiedAt")`,
+          [box.organizationId, activity.createdAt, activity.modifiedAt],
         )
       })
     } catch (error) {
@@ -590,33 +589,29 @@ export class BoxRepository extends BaseRepository<Box> {
    * Creation counts inserts and warm-pool claims; modification counts entering
    * `started` and the first deletion request. Stops, label edits, repeated
    * states, deletion completion and cleanup contribute nothing. Lifecycle times
-   * moved between real organizations stay with the source, which leaves the
-   * destination's history incomplete.
+   * moved between real organizations stay with the source.
    */
   private organizationActivityOf(box: Box, previousBox?: OrganizationActivitySource): OrganizationActivity | null {
     if (box.organizationId === BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
       return null
     }
     if (!previousBox) {
-      return { createdAt: box.createdAt, modifiedAt: null, historyIncomplete: false }
+      return { createdAt: box.createdAt, modifiedAt: null }
     }
     if (previousBox.organizationId === BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
       const claimKeptPoolCreation = box.createdAt.getTime() === previousBox.createdAt.getTime()
       return {
         createdAt: claimKeptPoolCreation ? box.updatedAt : box.createdAt,
         modifiedAt: box.state === BoxState.STARTED ? box.updatedAt : null,
-        historyIncomplete: false,
       }
     }
     if (previousBox.organizationId !== box.organizationId) {
-      return { createdAt: null, modifiedAt: null, historyIncomplete: true }
+      return null
     }
     const started = box.state === BoxState.STARTED && previousBox.state !== BoxState.STARTED
     const deletionRequested =
       box.desiredState === BoxDesiredState.DESTROYED && previousBox.desiredState !== BoxDesiredState.DESTROYED
-    return started || deletionRequested
-      ? { createdAt: null, modifiedAt: box.updatedAt, historyIncomplete: false }
-      : null
+    return started || deletionRequested ? { createdAt: null, modifiedAt: box.updatedAt } : null
   }
 
   /**

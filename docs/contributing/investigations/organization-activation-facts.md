@@ -16,20 +16,22 @@ Decision:
 
 - The pre-deploy migration only creates `organization_activation_facts` and
   backfills it; it installs no triggers, and no later migration removes any. An
-  environment that applied the earlier, unreleased revision drops its two
-  activation triggers and functions manually.
+  environment that applied an earlier, unreleased revision drops its two
+  activation triggers and functions, and the `boxHistoryComplete` column, manually;
+  otherwise the column's `NOT NULL` makes every upsert fail.
 - After `BoxRepository.insert`, `update` or `updateWhere` commits, the repository
   compares the previous and committed Box. In its own short transaction it sets
-  a one-second `lock_timeout`, then runs one `UPDATE` that uses `GREATEST` and
-  matches only when a value advances.
-- Organization creation inserts the facts row in its own transaction. The reader
-  and API contract are unchanged.
+  a one-second `lock_timeout`, then upserts the row with `GREATEST`, updating only
+  when a value advances. An organization without a recorded Box has no row.
+- A later review removed `boxHistoryComplete`. Updates are best effort, so the flag
+  never proved a complete history; consumers compare organization creation with
+  the tracking start instead.
 
 | Application Box write | Facts effect |
 | --- | --- |
 | Insert into a real organization | Creation is `createdAt`. |
 | Warm-pool claim | Creation is the claim `createdAt` (the write time if unchanged); modification if already `started`. |
-| Transfer between real organizations | Destination history becomes incomplete. |
+| Transfer between real organizations | None; times stay with the source. |
 | Enter `started`; first `desiredState=destroyed` | Modification is the write time. |
 | Stop, labels, repeated state, completion, cleanup | None. |
 
@@ -50,18 +52,20 @@ unless deletion was requested, and both cleanup crons delete only such Boxes
 | Box transaction rolls back | No facts update runs. |
 | Concurrent or late updates | Read Committed rechecks `WHERE` on the newest row; times never regress. |
 | Update fails, or the process exits after commit | That advance is lost and logged; the Box result stands. |
-| Organization deleted | The `UPDATE` matches nothing; facts are not recreated. |
-| Raw SQL, or instances on the previous revision | Not recorded; organizations they create get no row and stay incomplete. |
+| Organization deleted | The foreign key rejects the upsert; facts are not recreated. |
+| Raw SQL, or instances on the previous revision | Not recorded; the next recorded event creates any missing row. |
 
 There is no retry, outbox or backlog. A lost advance is repaired only by a later
-event of the same kind for that organization. `boxHistoryComplete` now means
-tracking began at organization creation, not that every update landed.
+event of the same kind for that organization. A null time therefore means none
+was recorded, not proof of inactivity.
 
 [Row-level locks §13.3.2](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS)
 are released at transaction end, which is why the trigger serialized Box commits.
 [Read Committed §13.2.1](https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED)
 re-evaluates the `WHERE` clause on the updated row version, so concurrent
 `GREATEST` updates cannot move a time backwards.
+[`INSERT ON CONFLICT`](https://www.postgresql.org/docs/current/sql-insert.html#SQL-ON-CONFLICT)
+guarantees an atomic insert-or-update outcome under concurrency.
 [`lock_timeout`](https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-LOCK-TIMEOUT)
 aborts a statement that waits longer for a row or other lock, and
 [`SET LOCAL`](https://www.postgresql.org/docs/current/sql-set.html) lasts only until
@@ -77,7 +81,7 @@ Rejected alternatives:
   the previous desired state.
 - A Redis buffer like `BoxActivityService` adds a dependency with the same loss window.
 - A stage flag: without triggers the cost is one primary-key `UPDATE` per
-  lifecycle event, and a disabled period would break history completeness.
+  lifecycle event, and a disabled period would silently miss events.
 
 Rollout and rollback:
 
@@ -86,8 +90,8 @@ Rollout and rollback:
   organization writes wait until the backfill commits; the lock wait is capped
   at five seconds and each statement at sixty.
 - During a rolling deploy, instances on the previous revision write no facts:
-  their Box events are lost. Organizations they create get no row, so their later
-  events are never recorded either, and they read as incomplete.
+  their Box events are lost. The next creation, start or deletion request recorded
+  by a new instance creates any missing row.
 - Rolling the API back leaves the table unused; reverting the migration drops it.
 
 Validation, on real PostgreSQL:
@@ -100,8 +104,9 @@ Validation, on real PostgreSQL:
 - [x] A failed update keeps the Box result and logs; the next start recovers.
 - [x] Box deletion keeps facts; organization deletion is not undone; the event
   table above holds.
-- [x] The migration installs no triggers; raw SQL writes and organizations the
-  previous revision inserts during installation stay unrecorded or incomplete.
+- [x] The migration installs no triggers, so raw SQL writes stay unrecorded; an
+  organization the previous revision inserts during installation gets its row
+  from its first Box write.
 
 With every non-test file restored to the trigger revision, the lock test failed
 with "The Box start did not commit while the facts row was locked". After review
@@ -188,8 +193,8 @@ short; no trigger SQL or lifecycle semantics changed for this measurement.
 
 Replace first-activation milestones with `lastBoxCreatedAt = max(createdAt)` and
 `lastBoxModifiedAt = max(startAt, deleteAt)` in the existing `include=activation`
-section. Keep `boxHistoryComplete` and `observedAt`; remove compute milestones
-and their coverage flag. Current Box state answers whether a Box is running.
+section. Keep `observedAt`; remove compute milestones and their coverage flag
+(the optimistic follow-up also removed `boxHistoryComplete`). Current Box state answers whether a Box is running.
 
 Inspection at `13ed02038` found no `startAt` or `deleteAt` on `Box`
 (`apps/api/src/box/entities/box.entity.ts`). Start means a committed transition
@@ -205,9 +210,8 @@ Store
 only organization maxima, independent of Box retention; no per-Box event ledger,
 new route, usage query, or continuous-activity inference. Warm-pool claims count
 as creation, and as start if already running; transfers between real organizations
-are not creation/start and make destination history incomplete. Backfill only
-the maximum retained `createdAt`; old start/delete history is unknown, so leave
-modification null and history incomplete. Missing facts also report incomplete.
+are not creation/start. Backfill only the maximum retained `createdAt`; old
+start/delete history is unknown, so leave modification null.
 
 [Conditional expressions §9.18.4](https://www.postgresql.org/docs/current/functions-conditional.html#FUNCTIONS-GREATEST-LEAST)
 defines null-aware `GREATEST`, suitable for monotonic maxima under row locking.
@@ -285,10 +289,9 @@ current-month usage must explicitly request it. Rollback order is consumer then 
 | --- | --- |
 | `lastBoxCreatedAt` | Maximum retained Box creation or warm-pool claim time. |
 | `lastBoxModifiedAt` | Maximum observed successful-start or accepted-deletion time; see the event definition above. |
-| `boxHistoryComplete` | Creation/start/delete tracking covers the organization lifetime; false for preexisting or transferred history. |
 | `observedAt` | Database observation time for this response. |
 
-Null with incomplete history is unknown. Current Box state, available through the
+Null means none was recorded, not inactivity. Current Box state, available through the
 existing Box/detail queries, answers whether a Box is running. Recent start/delete
 time is not proof of user interaction, CPU utilization, or retention. Automatic
 starts/deletions also count. Facts survive Box deletion and disappear with the organization.
@@ -313,22 +316,23 @@ avoids altering existing responses that serialize organizations.
 
 An additive, transactional pre-deploy migration creates `organization_activation_facts`
 and backfills the maximum retained Box creation time. Organizations already present
-have incomplete lifecycle history. The migration installs no triggers. The table
+keep only retained creation times. The migration installs no triggers. The table
 references organizations with cascade deletion, but never references Boxes.
 
 Migration lock acquisition is limited to five seconds and individual statements to
 sixty seconds; contention or excessive data causes rollback, not partial
 installation. Production data volume has not been measured.
 
-Organization creation inserts a complete facts row in its own transaction. After
-`BoxRepository` commits an insert or update, it applies the event table in the
+After `BoxRepository` commits an insert or update, it applies the event table in the
 optimistic follow-up: inserts and claims advance the creation maximum; successful
 starts and first deletion requests advance the modification maximum. Repeated
 writes, stops, label changes, deletion completion and cleanup leave it unchanged.
-Pool-only activity is ignored; real-organization transfers mark the destination incomplete.
+Pool-only activity and transfers between real organizations are ignored.
 
-The follow-up `UPDATE` runs in its own short transaction and never reads or
-locks Boxes or organizations. Box transactions therefore hold no facts lock, and
+The follow-up upsert runs in its own short transaction and never touches Boxes.
+Its insert path checks the foreign key with a `FOR KEY SHARE` lock on the
+organization row, which waits only behind that row's deletion or another `FOR
+UPDATE` lock, within the same timeout. Box transactions therefore hold no facts lock, and
 concurrent facts updates serialize only for one statement. A wait past the
 one-second `lock_timeout` aborts the update, which is logged and dropped. The read
 uses one SQL statement.

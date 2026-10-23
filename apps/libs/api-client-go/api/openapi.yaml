@@ -8722,17 +8722,15 @@ components:
           type: string
         lastBoxCreatedAt:
           description: Maximum retained Box creation or warm-pool claim time; survives
-            Box deletion.
+            Box deletion. Null means none was recorded; organizations older than tracking
+            only have retained creation times.
           format: date-time
           nullable: true
           type: string
-        boxHistoryComplete:
-          description: "Whether creation, successful start and accepted deletion tracking\
-            \ covers the organization lifetime."
-          type: boolean
         lastBoxModifiedAt:
           description: "Maximum observed successful-start or accepted-deletion time;\
-            \ cleanup, stops and label edits do not advance it."
+            \ cleanup, stops and label edits do not advance it. Null means none was\
+            \ recorded since tracking began."
           format: date-time
           nullable: true
           type: string
@@ -8740,7 +8738,6 @@ components:
           format: date-time
           type: string
       required:
-      - boxHistoryComplete
       - lastBoxCreatedAt
       - lastBoxModifiedAt
       - observedAt
