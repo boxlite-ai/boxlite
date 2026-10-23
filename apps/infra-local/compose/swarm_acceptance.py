@@ -13,10 +13,11 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from .acceptance import ADMIN_KEY, API, STATE, request, two_runners
+from .acceptance import ADMIN_KEY, API, STATE, download_env, request, two_runners
 from .orchestrator import exec_collect
+from .provision import create_ready
 
-IMAGE = "docker:27.5.1-dind@sha256:ad9e28ccfdf76cf44248258090e07d8353b9628725d8a716bab176bd71200d7d"
+IMAGE = "docker:27.5.1-dind@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
 BASE = "busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 
 
@@ -50,13 +51,13 @@ async def probe(topology_name, combined=False):
         save()
 
     async def run(box, command, check=True, timeout=120, private=False):
+        with log.open("a") as stream:
+            stream.write(f"\n{box.id} $ {'[private setup]' if private else command}\n")
         rc, out, err = await asyncio.wait_for(
             exec_collect(box, "sh", ["-c", "set -eu; " + command]), timeout
         )
         with log.open("a") as stream:
-            stream.write(
-                f"\n{box.id} $ {'[private setup]' if private else command}\nexit={rc}\n"
-            )
+            stream.write(f"exit={rc}\n")
             if not private:
                 stream.write(out + "\n" + err + "\n")
         if check:
@@ -91,13 +92,15 @@ async def probe(topology_name, combined=False):
                 method="PATCH",
             )
         box = await asyncio.wait_for(
-            runtime.create(
+            create_ready(
+                runtime,
                 boxlite.BoxOptions(
                     image=IMAGE,
                     cpus=2,
                     memory_mib=1536,
                     disk_size_gb=5,
                     advanced=boxlite.AdvancedBoxOptions(privileged=True),
+                    env=download_env(),
                     network=boxlite.NetworkSpec(
                         inbound=boxlite.InboundNetworkSpec(mode="enabled")
                     ),
@@ -279,6 +282,13 @@ async def probe(topology_name, combined=False):
                 f"docker ps -q --filter label=com.docker.swarm.service.name=client-{mode}-{source}",
             )
             assert client_id and "\n" not in client_id
+            await run(
+                box,
+                f"docker exec {client_id} sh -c "
+                + shlex.quote(
+                    'test -z "${http_proxy:-}${https_proxy:-}${HTTP_PROXY:-}${HTTPS_PROXY:-}"'
+                ),
+            )
             for target in range(len(boxes)):
                 if len(boxes) > 1 and target == source:
                     continue
@@ -431,13 +441,20 @@ async def probe(topology_name, combined=False):
                 a, "docker inspect --format '{{.HostConfig.NetworkMode}}' host-proof"
             )
             assert mode == "host"
+            await run(
+                a,
+                "p=$(docker inspect --format '{{.State.Pid}}' host-proof); "
+                'test "$(readlink /proc/$p/ns/net)" = "$(readlink /proc/self/ns/net)"; '
+                "readlink /proc/$p/ns/net; readlink /proc/self/ns/net",
+            )
             await outside(a, 18082, marker)
             await run(a, "docker rm -f host-proof")
             passed("D9")
         for box in boxes:
             await run(
                 box,
-                "docker node ls || true; docker network inspect ingress; ip -s addr; cat /tmp/dockerd.log",
+                "docker node ls || true; docker network inspect ingress; ip -s addr; "
+                "ss -lntup; iptables-save; cat /tmp/dockerd.log",
             )
         if len(boxes) > 1:
             passed("M6")

@@ -12,6 +12,10 @@ PHONY_TARGETS += kernel\:dind
 kernel\:dind:
 	@PYTHONUNBUFFERED=1 PYTHONPATH=apps/infra-local .venv/bin/python -m compose.kernel
 
+PHONY_TARGETS += kernel\:swarm
+kernel\:swarm:
+	@scripts/build/build-linux-swarm-kernel.sh
+
 dev\:runner-ci: dev\:go dev\:python dev\:runner-ci\:proxy
 	@PYTHONPATH=apps/infra-local .venv/bin/python -m compose.acceptance build
 
@@ -64,12 +68,14 @@ test\:runner-ci\:fs:
 	@PYTHONUNBUFFERED=1 PYTHONPATH=apps/infra-local .venv/bin/python -m compose.snapshot_acceptance --runner
 
 fmt\:runner-ci: fmt\:swarm
+	@.venv/bin/ruff format apps/infra-local/compose/provision.py tests/scripts/test_runner_provision.py tests/scripts/test_linux_firmware_source.py
 	@.venv/bin/ruff format apps/infra-local/compose/acceptance.py apps/infra-local/compose/kernel.py apps/infra-local/compose/snapshot_acceptance.py apps/infra-local/compose/snapshot_children_acceptance.py apps/infra-local/compose/cache_acceptance.py apps/infra-local/compose/docker_cache_acceptance.py
 	@.venv/bin/ruff format sdks/python/tests/test_cache_volume_contract.py
 	@gofmt -w apps/runner/pkg/boxlite/caches.go apps/runner/pkg/boxlite/caches_test.go apps/runner/pkg/boxlite/client.go apps/runner/pkg/boxlite/volumes.go apps/runner/pkg/api/controllers/boxlite_cache.go apps/runner/pkg/api/dto/volume.go apps/runner/pkg/api/server.go
 
 PHONY_TARGETS += lint\:runner-ci
 lint\:runner-ci: lint\:swarm
+	@.venv/bin/ruff check apps/infra-local/compose/acceptance.py apps/infra-local/compose/kernel.py apps/infra-local/compose/provision.py tests/scripts/test_runner_provision.py tests/scripts/test_linux_firmware_source.py
 	@.venv/bin/ruff check apps/infra-local/compose/docker_cache_acceptance.py
 	@sh -n apps/infra-local/fixtures/docker-cache.sh
 

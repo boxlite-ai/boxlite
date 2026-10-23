@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from dataclasses import replace
 import json
 import os
-from pathlib import Path
 import re
 import shlex
 import signal
@@ -16,9 +14,11 @@ import subprocess
 import time
 import urllib.request
 import uuid
+from dataclasses import replace
 
-from .config import InfraConfig, worktree_home
 from . import native, orchestrator
+from .config import InfraConfig, worktree_home
+from .provision import create_ready
 from .services import SPEC_PG, SPEC_REDIS
 
 ROOT = InfraConfig.load().repo_root
@@ -32,6 +32,20 @@ RUNNER_KEY = "local-acceptance-runner-only"
 RUNNER_B_KEY = "local-acceptance-runner-b-only"
 API = f"http://127.0.0.1:{API_PORT}/api"
 IMAGE = "docker:27.5.1-dind"
+
+
+def download_env():
+    """Optional guest package/registry egress; service containers inherit none."""
+    proxy = os.environ.get("BOXLITE_ACCEPTANCE_DOWNLOAD_PROXY")
+    if not proxy:
+        return []
+    return [
+        (key, proxy)
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
+    ] + [
+        (key, "localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16")
+        for key in ("NO_PROXY", "no_proxy")
+    ]
 
 
 def request(path, body=None, method=None):
@@ -93,9 +107,17 @@ async def dependencies():
     orchestrator.ensure_home_env(cfg)
     specs = {
         "postgres": replace(
-            SPEC_PG, image="postgres:17.9-alpine", ports=[(35432, 5432)]
+            SPEC_PG,
+            image="postgres:17.9-alpine",
+            ports=[(35432, 5432)],
+            volumes=lambda cfg: [],
         ),
-        "redis": replace(SPEC_REDIS, image="redis:7.4.2-alpine", ports=[(36379, 6379)]),
+        "redis": replace(
+            SPEC_REDIS,
+            image="redis:7.4.2-alpine",
+            ports=[(36379, 6379)],
+            volumes=lambda cfg: [],
+        ),
     }
     for spec in specs.values():
         for port, _ in spec.ports:
@@ -352,14 +374,15 @@ async def dind():
         )
     )
     marker = "dind-" + uuid.uuid4().hex
-    box = await runtime.create(
+    box = await create_ready(
+        runtime,
         boxlite.BoxOptions(
             image=IMAGE,
             cpus=2,
             memory_mib=2048,
             disk_size_gb=10,
             advanced=boxlite.AdvancedBoxOptions(privileged=True),
-            env=[("DOCKER_TLS_CERTDIR", "")],
+            env=[("DOCKER_TLS_CERTDIR", ""), *download_env()],
             entrypoint=["sh", "-c"],
             cmd=[
                 "dockerd-entrypoint.sh --storage-driver=overlay2 --data-root=/var/lib/docker >/tmp/dockerd.log 2>&1 & exec tail -f /dev/null"
@@ -376,11 +399,13 @@ async def dind():
     async def run(command, check=True, timeout=180):
         if check:
             command = "set -eu; " + command
+        with (STATE / "dind-guest.log").open("a") as log:
+            log.write(f"\n$ {command}\n")
         result = await asyncio.wait_for(
             orchestrator.exec_collect(box, "sh", ["-c", command]), timeout=timeout
         )
         with (STATE / "dind-guest.log").open("a") as log:
-            log.write(f"\n$ {command}\nexit={result[0]}\n{result[1]}\n{result[2]}\n")
+            log.write(f"exit={result[0]}\n{result[1]}\n{result[2]}\n")
         if check and result[0] != 0:
             raise AssertionError(
                 f"guest command failed ({result[0]}): {command}; see dind-guest.log"
@@ -408,7 +433,8 @@ async def dind():
         'test -z "${DOCKER_HOST:-}"; '
         'test "$(basename "$(readlink /proc/$(pidof dockerd)/exe)")" = dockerd; '
         "if grep -q ' /var/run/docker.sock ' /proc/mounts; then exit 1; fi; "
-        "uname -r; zcat /proc/config.gz; cat /proc/mounts; cat /proc/self/status; "
+        "uname -r; if test -r /proc/config.gz; then zcat /proc/config.gz; fi; "
+        "cat /proc/mounts; cat /proc/self/status; "
         "iptables -t nat -S; iptables -S; ip addr"
     )
     await run(
@@ -440,6 +466,12 @@ async def dind():
         "printf %s "
         + shlex.quote(compose)
         + " > /tmp/compose.yaml; docker compose -f /tmp/compose.yaml up -d"
+    )
+    await run(
+        "docker compose -f /tmp/compose.yaml exec -T client sh -c "
+        + shlex.quote(
+            'test -z "${http_proxy:-}${https_proxy:-}${HTTP_PROXY:-}${HTTPS_PROXY:-}"'
+        )
     )
     deadline = time.monotonic() + 30
     while True:

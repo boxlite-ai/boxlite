@@ -5,7 +5,12 @@ networking features; the runner's host sandbox remains enabled.
 
 ## Build the runtime
 
-The DinD firmware build currently targets Apple Silicon macOS. It uses a pinned
+On Linux x86_64, `make kernel:dind` prepares the checksum-pinned
+[`v5.4.0` DinD ELF release](https://github.com/boxlite-ai/libkrunfw/releases/tag/v5.4.0)
+with the vendored firmware ABI generator. Run `make _ensure-python-deps` first.
+This packages the downloaded kernel without rebuilding or modifying it.
+
+On Apple Silicon macOS, the DinD firmware build uses a pinned
 Ubuntu builder image, checksum-verified Linux 6.12.87 and the vendored libkrunfw
 patches. Netfilter, bridge, cgroups and overlay support are built into the kernel;
 the guest does not need a host module directory. The ordinary prebuilt firmware
@@ -23,10 +28,13 @@ Keep `BOXLITE_LIBKRUNFW_SOURCE` set for subsequent native builds and regression
 tests. The native build compiles that directory's kernel.c into libkrunfw and
 packages it through the normal runtime build. Removing the override selects the
 ordinary prebuilt firmware again. `SHA256SUMS` identifies the generated inputs.
-The actual guest reports `6.12.87-boxlite-dind`; verify that identity before
-qualifying Docker. This does not enable user-supplied kernel paths in REST.
+The macOS-built guest reports `6.12.87-boxlite-dind`; the published x86_64
+kernel reports `6.12.87`. Verify the packaged kernel's checksum and runtime
+behavior before qualifying Docker. The published DinD profile does not itself
+establish IPVS/VXLAN support; Swarm requires separate runtime checks.
+This does not enable user-supplied kernel paths in REST.
 
-The builder explicitly starts its Box, bounds execution, retains failed disks
+The macOS builder explicitly starts its Box, bounds execution, retains failed disks
 and streams build diagnostics. A successful build removes its builder Box.
 
 ## Create a Docker guest
@@ -78,13 +86,32 @@ For Swarm kernel requirements and cross-Box overlay setup, use the separate
 ## Real acceptance
 
 Run each command separately. The isolated stack uses API port 13001 and runner
-ports 13003/13004; both local runners reside on the same physical Mac.
+ports 13003/13004; both local runners reside on the same physical host.
 
 ```sh
 make test:runner-ci:infra
 # If this stack already exists, use ACTION=restart instead of starting again.
 make test:runner-ci:dind
 ```
+
+On rootless Linux, start the isolated stack from a delegated user scope:
+`systemd-run --user --scope --quiet make test:runner-ci:infra`
+(add `ACTION=restart` for an existing stack). A writable target cgroup alone
+does not establish migration permission from a login-session cgroup. Confirm
+the actual VM PID belongs to its Box cgroup. On the validated host, launching
+from the login session left orphan VMs after force removal; the delegated
+scope avoids that condition. The runtime's silent handling of migration errors
+is a remaining defect, documented in the
+[Linux investigation](../contributing/investigations/2026-10-22-linux-dind-swarm-validation.md).
+
+If this machine requires a proxy for registry/package downloads, set
+`BOXLITE_ACCEPTANCE_DOWNLOAD_PROXY` to a proxy URL reachable from the guest.
+The harness explicitly passes it to guest package tools and dockerd; Compose
+and Swarm service containers do not inherit it, and their HTTP tests assert
+that proxy variables are absent. This does not provide overlay connectivity.
+The isolated PostgreSQL/Redis fixtures keep their data on guest disks, avoiding
+host shared-directory ownership requirements; deleting those fixtures resets
+their state.
 
 D1 asserts guest dockerd, `docker info`, pinned-image pull, a build containing a
 unique marker and execution with `--pull=never`. D2 starts a two-service Compose
@@ -93,3 +120,8 @@ Readiness has deadlines. Normal completion removes the Compose application and
 Box; failure retains the Box, daemon log and guest command log under
 `.apps-local/runner-acceptance/`. These logs can contain private runtime details;
 publish only a reviewed, redacted summary.
+
+A cold image can exceed the API's 30-second synchronous startup wait while
+creation continues in the runner. The acceptance helper recognizes that exact
+timeout, retrieves the accepted Box by its unique name, verifies the returned
+ID and waits within its overall deadline. It never repeats the create request.

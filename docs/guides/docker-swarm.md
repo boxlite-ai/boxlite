@@ -1,7 +1,28 @@
 # Docker Swarm in runner-managed guests
 
-Use the [DinD firmware build](docker-in-docker.md) and a privileged guest for
-each Docker Engine. The Swarm build includes IPVS TCP/UDP and schedulers,
+Use a privileged guest for each Docker Engine. The published Linux x86_64
+DinD kernel supports Docker but fails actual IPVS service and VXLAN device
+creation. For Swarm on Linux x86_64, build the public DinD recipe with this
+branch's additional kernel features, then package it through the normal runtime:
+
+```sh
+make kernel:swarm
+export BOXLITE_LIBKRUNFW_SOURCE="$PWD/.apps-local/runner-acceptance/firmware-swarm"
+make dev:runner-ci
+```
+
+This is a local derivative of the pinned public DinD recipe, not the published
+release binary. It uses Linux 6.12.87, vendored libkrunfw patches and
+`scripts/build/dind-kernel.config`. The builder defaults to two jobs and checks
+download hashes, effective Kconfig options and the embedded config. Preserve
+the generated `SHA256SUMS` and `build-info.txt` with runtime evidence.
+It requires the normal Linux compiler/binutils, make, bc, bison, flex,
+libelf headers, patch, xz, curl, flock and project Python with pyelftools.
+`BOXLITE_KERNEL_BUILD_DIR`, `BOXLITE_KERNEL_OUTPUT`, `BOXLITE_KERNEL_DOWNLOADS`
+and `BOXLITE_KERNEL_JOBS` override its directories and parallelism.
+Apple Silicon uses the [DinD firmware builder](docker-in-docker.md).
+
+The Swarm build includes IPVS TCP/UDP and schedulers,
 conntrack netlink, xtables IPVS/u32 and VXLAN in the kernel actually packaged
 with the runtime. The ordinary prebuilt firmware is not interchangeable.
 The guest must also contain iproute2, ipvsadm and complete iptables extensions.
@@ -35,7 +56,7 @@ proxy or published service port carries those internal requests.
 This is an explicit deployment setup, not automatic BoxLite mesh networking.
 The forwarding SDK client must remain alive and reachable from the peer guest.
 The fixture uses the runner-host alias `192.168.127.254` because both runners
-are on one physical Mac. A deployment on different physical hosts must provide
+are on one physical host. A deployment on different physical hosts must provide
 its own reachable forwarding endpoint and validate that topology separately.
 Keys are generated per test and kept out of the committed evidence. The example
 is two-node only; it does not provision a general multi-peer VPN or certificate

@@ -36,6 +36,7 @@ Issues = "https://github.com/boxlite-ai/boxlite/issues"
 # supports Python 3.10+ — declare the backport explicitly so we don't
 # silently rely on `maturin`/`pytest` pulling it in transitively.
 dev = [
+    "pyelftools>=0.32",
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "pytest-cov>=6.0",
@@ -47,6 +48,7 @@ orchestration = ["cloudpickle>=3.0"]
 
 [dependency-groups]
 dev = [
+    "pyelftools>=0.32",
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "pytest-cov>=6.0",
