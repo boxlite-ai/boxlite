@@ -522,6 +522,10 @@ registry host, then matches each box in memory using the longest repository pref
 
 </details>
 
+## Admin API contract
+
+[`openapi/admin.openapi.yaml`](../openapi/admin.openapi.yaml) defines cloud organization users and invitations separately from the portable Box API. Its user email field accepts null; lists use opaque page tokens and ascending resource IDs. Operations declare independent member read/write scopes. Shared authentication, pagination parameters, and errors reference the Box contract. Invitation creation requires the owner role and defines a 24-hour retry window.
+
 ## Runner API
 
 **Service:** `apps/runner` · **Base path:** `/` · **Port:** `3003` in

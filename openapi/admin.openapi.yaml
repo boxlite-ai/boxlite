@@ -1,0 +1,396 @@
+# Copyright 2024-2026 BoxLite Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+openapi: 3.1.1
+info:
+  title: BoxLite Admin API
+  version: 0.1.0
+  description: |
+    Organization administration for the hosted BoxLite service. Members can
+    list users and invitations; owners can invite users, cancel invitations,
+    and remove users. Admin identifies this API surface, not a platform role.
+
+    API keys select their own organization and require the operation's
+    read:members or write:members scope. Write does not imply read. User JWTs
+    select an organization with X-BoxLite-Organization-ID and follow the same
+    membership and owner rules without API-key scopes. Invitation acceptance
+    remains in the JWT-only Console Cloud API.
+
+    Authentication, pagination parameters, and error schemas are shared with
+    the Box API. This cloud-only API is not served by the local Box runtime.
+    Dedicated Admin SDK methods are not yet provided; callers may use HTTP.
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  contact:
+    name: BoxLite
+    url: https://github.com/boxlite-ai/boxlite
+
+servers:
+  - url: "{scheme}://{host}{basePath}/v1"
+    description: BoxLite Admin API v1
+    variables:
+      scheme:
+        default: https
+        enum: [https, http]
+      host:
+        default: api.boxlite.ai
+      basePath:
+        description: Deployment prefix; use /api for legacy cloud client configurations.
+        default: ""
+
+tags:
+  - name: Users
+    description: Organization membership
+  - name: Invites
+    description: Organization invitations
+
+paths:
+  /organizations/users:
+    get:
+      operationId: listUsers
+      tags: [Users]
+      summary: List organization users
+      description: |
+        Lists members of the authenticated organization, ordered by user ID.
+        Page tokens are bound to this organization and resource. They do not
+        grant access; every page requires authentication and membership.
+      security:
+        - BearerAuth: ["read:members"]
+      parameters:
+        - $ref: "#/components/parameters/organizationHeader"
+        - $ref: "./box.openapi.yaml#/components/parameters/pageSize"
+        - $ref: "./box.openapi.yaml#/components/parameters/pageToken"
+      responses:
+        "200":
+          description: A page of organization users
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserList"
+        "400":
+          $ref: "./box.openapi.yaml#/components/responses/BadRequestError"
+        "401":
+          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "429":
+          $ref: "#/components/responses/RateLimitError"
+
+  /organizations/users/{user_id}:
+    delete:
+      operationId: removeUser
+      tags: [Users]
+      summary: Remove an organization user
+      description: |
+        Requires an owner. Removes membership and revokes the user's API keys
+        in this organization. The last owner and a user's personal/default
+        organization membership cannot be removed.
+      security:
+        - BearerAuth: ["write:members"]
+      parameters:
+        - $ref: "#/components/parameters/organizationHeader"
+        - name: user_id
+          in: path
+          required: true
+          description: User ID; the same value as Principal.sub from GET /v1/me.
+          schema:
+            type: string
+            minLength: 1
+          example: auth0|owner-123
+      responses:
+        "204":
+          description: User removed and their organization keys revoked; no response body
+        "401":
+          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "./box.openapi.yaml#/components/responses/NotFoundError"
+        "429":
+          $ref: "#/components/responses/RateLimitError"
+
+  /organizations/invites:
+    get:
+      operationId: listInvites
+      tags: [Invites]
+      summary: List organization invitations
+      description: |
+        Lists invitations in every state, including expired invitations,
+        ordered by invitation ID. Page tokens are organization/resource bound.
+      security:
+        - BearerAuth: ["read:members"]
+      parameters:
+        - $ref: "#/components/parameters/organizationHeader"
+        - $ref: "./box.openapi.yaml#/components/parameters/pageSize"
+        - $ref: "./box.openapi.yaml#/components/parameters/pageToken"
+      responses:
+        "200":
+          description: A page of invitations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InviteList"
+        "400":
+          $ref: "./box.openapi.yaml#/components/responses/BadRequestError"
+        "401":
+          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "429":
+          $ref: "#/components/responses/RateLimitError"
+    post:
+      operationId: createInvite
+      tags: [Invites]
+      summary: Invite a user to the organization
+      description: |
+        Requires an owner and an explicit role. Only owner is currently
+        supported. Sends an invitation email on initial creation; a replay
+        returns the original creation snapshot without another notification.
+      security:
+        - BearerAuth: ["write:members"]
+      parameters:
+        - $ref: "#/components/parameters/organizationHeader"
+        - $ref: "./box.openapi.yaml#/components/parameters/idempotencyKey"
+          description: |
+            Optional UUID for retrying this create-invite operation. Keys are
+            scoped to the organization and acting user and retained for 24 hours.
+            An identical request returns its original response. A different
+            payload returns 422; an in-progress request returns a retryable 409.
+            This Admin retention window is independent of GET /v1/config.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInviteRequest"
+      responses:
+        "201":
+          description: Created invitation, or its original idempotent response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invite"
+        "400":
+          $ref: "./box.openapi.yaml#/components/responses/BadRequestError"
+        "401":
+          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "./box.openapi.yaml#/components/responses/NotFoundError"
+        "409":
+          $ref: "./box.openapi.yaml#/components/responses/ConflictError"
+          description: Already a member, already invited, or the idempotency key is in progress.
+        "422":
+          $ref: "./box.openapi.yaml#/components/responses/UnprocessableEntityError"
+          description: The idempotency key was used with a different request payload.
+        "429":
+          $ref: "#/components/responses/RateLimitError"
+
+  /organizations/invites/{invite_id}:
+    delete:
+      operationId: cancelInvite
+      tags: [Invites]
+      summary: Cancel an invitation
+      description: |
+        Requires an owner. Pending invitations may be cancelled even after
+        expiry. Other invitation states return 409.
+      security:
+        - BearerAuth: ["write:members"]
+      parameters:
+        - $ref: "#/components/parameters/organizationHeader"
+        - name: invite_id
+          in: path
+          required: true
+          description: Invitation ID returned by createInvite or listInvites.
+          schema:
+            type: string
+            format: uuid
+          example: 6f1c2a4e-0b7d-4c3e-9a5f-2d8e1b7c4a90
+      responses:
+        "204":
+          description: Invitation cancelled; no response body
+        "401":
+          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        "404":
+          $ref: "./box.openapi.yaml#/components/responses/NotFoundError"
+        "409":
+          $ref: "./box.openapi.yaml#/components/responses/ConflictError"
+        "429":
+          $ref: "#/components/responses/RateLimitError"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      $ref: "./box.openapi.yaml#/components/securitySchemes/BearerAuth"
+  parameters:
+    organizationHeader:
+      name: X-BoxLite-Organization-ID
+      in: header
+      description: |
+        Selects the organization for user JWTs; omitted uses the user's default
+        organization. API keys always use their own organization.
+      schema:
+        type: string
+        format: uuid
+      example: c391e52c-fef2-4aae-80ec-a47b7520ce42
+  responses:
+    ForbiddenError:
+      description: Missing membership, owner role, or required API-key scope
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    RateLimitError:
+      description: Request rate limit exceeded
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying, when provided by the limiter.
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              message: Too many requests
+              type: ResourceExhaustedError
+              code: resource_exhausted
+  schemas:
+    ErrorResponse:
+      $ref: "./box.openapi.yaml#/components/schemas/ErrorResponse"
+    CreateInviteRequest:
+      type: object
+      additionalProperties: false
+      required: [email, role]
+      properties:
+        email:
+          type: string
+          format: email
+          description: Address to invite; normalized before storing and matching membership.
+          example: teammate@example.com
+        role:
+          type: string
+          enum: [owner]
+          description: Role assigned when the invitation is accepted; currently owner only.
+          example: owner
+        expires_at:
+          type: string
+          format: date-time
+          description: |
+            Future expiry for a new invitation. If omitted, uses the configured
+            invitation lifetime (seven days by default). A replay keeps its
+            original deadline and does not require it to remain in the future.
+          example: "2026-11-01T00:00:00Z"
+    User:
+      type: object
+      required: [type, id, email, name, role, added_at]
+      properties:
+        type:
+          type: string
+          const: user
+          description: Resource discriminator.
+          example: user
+        id:
+          type: string
+          description: User ID; equals Principal.sub returned by GET /v1/me.
+          example: auth0|owner-123
+        email:
+          type: [string, "null"]
+          format: email
+          description: Account email, or null when absent or the user record is unavailable.
+          example: owner@example.com
+        name:
+          type: string
+          description: Display name, or an empty string when unavailable.
+          example: Example Owner
+        role:
+          type: string
+          enum: [owner, member]
+          description: Organization membership role.
+          example: owner
+        added_at:
+          type: string
+          format: date-time
+          description: When this user joined the organization.
+          example: "2026-10-01T12:00:00Z"
+    Invite:
+      type: object
+      required: [type, id, email, role, status, added_at, expires_at]
+      properties:
+        type:
+          type: string
+          const: invite
+          description: Resource discriminator.
+          example: invite
+        id:
+          type: string
+          format: uuid
+          description: Server-assigned invitation ID.
+          example: 6f1c2a4e-0b7d-4c3e-9a5f-2d8e1b7c4a90
+        email:
+          type: string
+          format: email
+          description: Normalized invited email address.
+          example: teammate@example.com
+        role:
+          type: string
+          enum: [owner, member]
+          description: Role the invitation grants; legacy Cloud invitations may grant member.
+          example: owner
+        status:
+          type: string
+          enum: [pending, accepted, declined, cancelled, expired]
+          description: Current state; pending invitations past their deadline are expired.
+          example: pending
+        added_at:
+          type: string
+          format: date-time
+          description: When the invitation was created.
+          example: "2026-10-01T12:00:00Z"
+        expires_at:
+          type: string
+          format: date-time
+          description: Deadline after which this invitation cannot be accepted.
+          example: "2026-10-08T12:00:00Z"
+    UserList:
+      type: object
+      required: [users]
+      properties:
+        users:
+          type: array
+          description: Users in this page, ordered by ID.
+          items:
+            $ref: "#/components/schemas/User"
+        next_page_token:
+          type: string
+          description: Opaque continuation token; omitted on the final page.
+    InviteList:
+      type: object
+      required: [invites]
+      properties:
+        invites:
+          type: array
+          description: Invitations in this page, ordered by ID and including every state.
+          items:
+            $ref: "#/components/schemas/Invite"
+        next_page_token:
+          type: string
+          description: Opaque continuation token; omitted on the final page.
