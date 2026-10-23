@@ -105,7 +105,7 @@ action really happens (verified in CP state) · **IF** matches the best comparab
 | # | State | Control | Shows | CP | L/E/E | Copy | Kbd | Does | IF | Gap → fix | Status |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | B1 | none | page | prompt block | ✔ | ✔ | ✖ | – | – | ✔ | → "No database yet — add `[database]` … run `boxlite-app apply`" | fixed |
-| B2 | ready | load | "Connecting…" 4–10 s on every visit | ✔ | ✔ | ✔ | – | – | – | slow (one Neon connection per query) → the four reads run side by side and counts are one UNION ALL; still one connection per query (pooling belongs in `appdb.ts`) | partly |
+| B2 | ready | load | "Connecting…" 4–10 s on every visit | ✔ | ✔ | ✔ | – | – | – | slow (one Neon connection per query) → the four reads run side by side and counts are one UNION ALL; still one connection per query (pooling belongs in `appdb.ts`). 2026-10-24: 1.7 s end to end on dev, of which 1.4 s is the dev proxy (`/healthz` alone) | fixed |
 | B3 | ready | Tables | "Rows (est.)" from pg_stat: ticks 4 when it had more | ✖ | ✔ | ✔ | ✔ | – | ✔ | estimates → exact counts | fixed |
 | B4 | ready | Browse | paging, search, NULL | ✔ | ✔ | ✔ | ✔ | ✔ | ✖ | no column types, JSON cells as one long string → types under each header, JSON cells collapsed with expand | fixed |
 | B5 | ready | SQL write confirm | "Run a write on main?" | ✔ | – | ✖ | ✔ | ✔ (row inserted) | – | does not name the statement → "Run INSERT on main?" | fixed |
