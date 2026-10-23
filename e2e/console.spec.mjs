@@ -423,7 +423,7 @@ async function main() {
       const gone = await fetch(`${CP}/v1/apps/${APP}`, { headers: { authorization: `Bearer ${KEY}` } })
       assert(gone.status === 401 || gone.status === 404, `deleted app key still works: ${gone.status}`)
       await shot('recently-deleted')
-      await section.getByRole('button', { name: 'Restore' }).click()
+      await section.getByRole('button', { name: `Restore ${APP}` }).click()
       await page.getByRole('link', { name: `Open ${APP}` }).waitFor({ timeout: 15_000 })
       assert((await cpApi('')).name === APP, 'restored app key does not work')
     })
