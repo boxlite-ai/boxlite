@@ -219,7 +219,7 @@ async function main() {
       return `exit ${svc?.last_exit_code}; context names memory`
     })
   } finally {
-    const del = await fetch(`${CP}/v1/apps/${APP}`, { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
+    const del = await fetch(`${CP}/v1/apps/${APP}?purge=1`, { method: 'DELETE', headers: { authorization: `Bearer ${ADMIN}` } })
     console.log(`cleanup: DELETE app → ${del.status}`)
     rmSync(DIR, { recursive: true, force: true })
   }
