@@ -419,8 +419,9 @@ let exit = vm.run()?;          // VmExit::GuestShutdown, GuestReset or StopReque
 
 `run` returns once: a second call fails with `AlreadyRan`, since a VM never
 restarts. `console` is a `Box<dyn Write + Send>` that receives the guest's
-serial output through a bounded queue; `run` hands it the last byte before it
-returns.
+serial output through a bounded queue; `run` waits up to one second for the
+sink to take the rest, and bytes it never takes are counted as dropped and
+logged.
 
 - **`run` reports how the VM ended, not the box's exit code.**
   - The guest agent writes the box's exit code to `exit.json` on the SHARED

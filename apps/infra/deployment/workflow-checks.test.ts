@@ -47,7 +47,9 @@ for (const [path, expected] of [
   ['sdks/python/boxlite/options.py', ['python']],
   ['sdks/node/lib/options.ts', ['node']],
   ['src/cli/src/main.rs', ['rust']],
-  ['make/coverage.mk', ['rust', 'python', 'node', 'go']],
+  ['src/vmm/src/vm.rs', ['rust', 'vmm']],
+  ['src/vmm/boot/kernel.lock', ['rust', 'vmm']],
+  ['make/coverage.mk', ['rust', 'vmm', 'python', 'node', 'go']],
   ['make/quality.mk', ['go']],
   ['.github/workflows/lint.yml', ['go', 'infra']],
   ['openapi/box.openapi.yaml', ['rust', 'api']],
@@ -291,6 +293,26 @@ test('Linux x64 KVM hardware coverage joins unit profiles before upload', () => 
   }
   assert.equal(steps[hardwareAt]['continue-on-error'], undefined,
     'missing hardware or failed tests must fail CI')
+})
+
+test('Linux x64 builds the kernel and runs the boot tests only for vmm changes, before upload', () => {
+  const steps = workflow('test.yml').jobs.rust.steps
+  const kernelAt = steps.findIndex((step: any) => step.id === 'vmm-kernel')
+  const bootAt = steps.findIndex((step: any) => step.run === 'make coverage:vmm:boot')
+  const uploadAt = steps.findIndex((step: any) => step.uses?.startsWith('codecov/codecov-action'))
+  assert.ok(kernelAt >= 0 && kernelAt < bootAt && bootAt < uploadAt,
+    'the kernel must be restored before the boot tests, which must add coverage before upload')
+  for (const at of [kernelAt, bootAt]) {
+    for (const target of ['linux-x64-gnu', 'linux-arm64-gnu', 'darwin-arm64']) {
+      for (const vmm of ['true', 'false']) {
+        const expression = steps[at].if.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+        const context = { matrix: { platform: { target } }, needs: { changes: { outputs: { vmm } } } }
+        assert.equal(runInNewContext(expression, context), target === 'linux-x64-gnu' && vmm === 'true',
+          `${steps[at].name} on ${target} with vmm=${vmm}`)
+      }
+    }
+  }
+  assert.equal(steps[bootAt]['continue-on-error'], undefined, 'failed boot tests must fail CI')
 })
 
 // The check below only guards the ignore list if editing that list runs it.

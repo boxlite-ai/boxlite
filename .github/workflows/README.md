@@ -114,9 +114,11 @@ root once, so Python and Node builds share the report's object directory.
 
 Linux x64 also runs the native KVM hardware tests and adds their profiles before
 the Rust coverage upload. Missing `/dev/kvm` access fails this qualification.
-These include the VMM's real-kernel boot tests: the job restores the pinned
-`vmlinux` from the Actions cache, keyed on the kernel pins and build script, or
-builds it with `make vmm:boot:host` on a miss.
+When a change matches the `vmm` filter (the VMM and hypervisor crates, the kernel
+build and its Make recipes), and on the weekly and manual runs, the job also runs
+the VMM's real-kernel boot tests with `make coverage:vmm:boot`. It restores the
+pinned `vmlinux` from the Actions cache, keyed on the kernel pins and build
+script, or builds it with `make vmm:boot:host` on a miss.
 
 `Dashboard Tests` runs the dashboard's vitest suite on one Linux runner and
 uploads v8 coverage under the `dashboard` flag. `@nx/vite` infers the project's

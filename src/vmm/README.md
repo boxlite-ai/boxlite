@@ -425,9 +425,10 @@ port bus at its register offset, and an `IrqLine` sets GSI 4 and 5 through
 and an unclaimed port of a built chipset, and the device's line, armed by the
 build, reaches KVM. A third runs on the [legacy devices](#legacy-devices-and-the-console):
 it prints `OK` on COM1, reads an unclaimed port and unmapped MMIO as all
-ones, and runs no instruction after its i8042 reset. CI runs the same tests,
-and the [boot tests](#boot-tests) on the kernel it builds with
-`make vmm:boot:host`, through `make coverage:vmm:kvm`, which needs
+ones, and runs no instruction after its i8042 reset. CI runs the same tests
+through `make coverage:vmm:kvm`. When a change matches its `vmm` path filter,
+and weekly, it also runs the [boot tests](#boot-tests) on the kernel it builds
+with `make vmm:boot:host`, through `make coverage:vmm:boot`, which needs
 `VMM_KERNEL` like `make test:integration:vmm:linux`.
 
 With the corresponding Rust targets installed, the crate can also be compiled

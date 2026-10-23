@@ -109,6 +109,8 @@ jobs:
       plugins: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.plugins == 'true' }}
       setup: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.setup == 'true' }}
       infra: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.infra == 'true' }}
+      # The real-kernel boot tests; the weekly run also refreshes main's kernel cache.
+      vmm: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.vmm == 'true' }}
       # Not weekly: flake.lock and rust-toolchain.toml pin every input, so an
       # unchanged tree only repeats the last build.
       nix: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.nix == 'true' }}
@@ -191,6 +193,23 @@ jobs:
               - 'rust-toolchain.toml'
               - '.cargo/**/!(*.md)'
               - '.github/actions/sccache/**/!(*.md)'
+              - '.github/workflows/test.yml'
+            # vmm selects the kernel build and the real-kernel boot tests inside
+            # the rust job, so rust must match every path listed here.
+            vmm:
+              - 'src/vmm/**/!(*.md)'
+              - 'src/hypervisor/**/!(*.md)'
+              - 'scripts/build/build-vmm-boot.sh'
+              - 'Makefile'
+              - 'make/vars.mk'
+              - 'make/build.mk'
+              - 'make/test.mk'
+              - 'make/coverage.mk'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**/!(*.md)'
+              - '.config/nextest.toml'
               - '.github/workflows/test.yml'
             python:
               - 'sdks/python/**/!(*.md)'
@@ -359,14 +378,14 @@ jobs:
       # when its pins or build script change.
       - name: Restore the VMM boot kernel
         id: vmm-kernel
-        if: matrix.platform.target == 'linux-x64-gnu'
+        if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.vmm == 'true'
         uses: actions/cache@v4
         with:
           path: target/vmm/boot/x86_64
           key: vmm-kernel-${{ hashFiles('src/vmm/boot/kernel.lock', 'src/vmm/boot/kernel.config', 'scripts/build/build-vmm-boot.sh') }}
 
       - name: Build the VMM boot kernel
-        if: matrix.platform.target == 'linux-x64-gnu' && steps.vmm-kernel.outputs.cache-hit != 'true'
+        if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.vmm == 'true' && steps.vmm-kernel.outputs.cache-hit != 'true'
         timeout-minutes: 20
         run: |
           sudo apt-get install -y build-essential bc bison flex curl xz-utils libelf-dev \
@@ -381,6 +400,11 @@ jobs:
         if: matrix.platform.target == 'linux-x64-gnu'
         timeout-minutes: 5
         run: make coverage:vmm:kvm
+
+      - name: Run real-kernel boot tests with coverage
+        if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.vmm == 'true'
+        timeout-minutes: 5
+        run: make coverage:vmm:boot
 
       - uses: actions/setup-node@v4
         if: matrix.platform.target == 'linux-x64-gnu'

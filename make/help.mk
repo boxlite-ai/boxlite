@@ -58,6 +58,7 @@ help:
 	@echo "    make test:integration:vmm:linux - Boot VMM_KERNEL on KVM and the legacy devices"
 	@echo "    make test:integration:vmm:kvm - Qualify KVM VMs, RAM mapping and the buses on KVM (Linux x86_64)"
 	@echo "    make coverage:vmm:kvm      - Add KVM hardware coverage to existing unit profiles"
+	@echo "    make coverage:vmm:boot     - Add real-kernel boot coverage of VMM_KERNEL to existing profiles"
 	@echo "    make test:guest-perms       - Run guest ownership tests (privileged cases use sudo)"
 	@echo "    make test:guest-artifacts   - Build and qualify the standalone guest artifacts"
 	@echo "    make test:warm-cache:rust   - Pre-warm Rust integration image cache"
