@@ -349,6 +349,8 @@ export interface AppSummary {
   attention?: string
   /** While main deploys: "Deploying #4 · build". */
   progress?: string
+  /** main's last screenshot (console API path), for the App list. */
+  previewSrc?: string | null
 }
 
 /**

@@ -28,20 +28,19 @@ import {
   GridRow,
   HoverActions,
   MoreButton,
-  Panel,
   SearchField,
 } from '../spec'
 import { Screen, ToolButton, Workbench } from '../SubNav'
 import { Tag } from '../viz'
 
 // Sign-in of this environment, laid out as the approved mock: a rail of Users,
-// Sign-in methods and Email delivery, one screen on the right. What the control
+// Sign-in methods, one screen on the right. What the control
 // plane runs is shown as it is: the methods are BoxLite's own OAuth apps, which
 // the app's boxlite.toml turns on, so adding a method or changing settings is the
 // agent's job and the console offers instructions for it rather than switches.
 
-type Section = 'users' | 'methods' | 'email'
-const SECTIONS: Section[] = ['users', 'methods', 'email']
+type Section = 'users' | 'methods'
+const SECTIONS: Section[] = ['users', 'methods']
 
 const USER_GRID = 'grid-cols-[1.8fr_0.8fr_1fr_1fr_0.6fr_120px] gap-x-3'
 const PROVIDER_LABEL: Record<string, string> = { github: 'GitHub', google: 'Google' }
@@ -173,7 +172,7 @@ function Users({
   const shown = users.filter((u) => !needle || `${u.email ?? ''} ${u.name ?? ''}`.toLowerCase().includes(needle))
   return (
     <Screen
-      title={`Users of ${app.environment}`}
+      title="Users"
       actions={
         <>
           <ToolButton onClick={onOpenLog} title="Sign-ins, sign-outs and refusals in Logs">
@@ -238,13 +237,16 @@ function Users({
   )
 }
 
-function MethodMenu({ items }: { items: { label: string; text: string; done: string }[] }) {
+function MethodMenu({ items, onEdit }: { items: { label: string; text: string; done: string }[]; onEdit: () => void }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <MoreButton />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[14rem] font-mono">
+        <DropdownMenuItem className="cursor-pointer" onClick={onEdit}>
+          Edit OAuth app…
+        </DropdownMenuItem>
         {items.map((item) => (
           <DropdownMenuItem
             key={item.label}
@@ -303,7 +305,7 @@ function MethodRow({
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-3" {...stop}>
           <ToolButton onClick={onEdit}>Set up</ToolButton>
-          <MethodMenu items={[copyUri]} />
+          <MethodMenu items={[copyUri]} onEdit={onEdit} />
         </span>
       </div>
     )
@@ -328,6 +330,7 @@ function MethodRow({
       <span className="ml-auto flex shrink-0 items-center gap-3" {...stop}>
         <Tag tone={method.declared ? 'good' : 'neutral'}>{keys} · ready</Tag>
         <MethodMenu
+          onEdit={onEdit}
           items={
             method.declared
               ? [copyUri]
@@ -403,18 +406,6 @@ function Methods({ app, status, onSettings }: { app: AppDetail; status: AppAuthS
         ))}
       </div>
       {editing && <OAuthClientDialog app={app} method={editing} onClose={() => setEditing(null)} />}
-    </Screen>
-  )
-}
-
-function EmailDelivery({ status, onSettings }: { status: AppAuthStatus; onSettings: () => void }) {
-  const names = working(status).map((m) => providerLabel(m.provider))
-  return (
-    <Screen title="Email delivery" actions={<GearButton onClick={onSettings} />}>
-      <Panel className="px-4 py-3 text-muted-foreground">
-        BoxLite sends no email for this app: people sign in with {names.length ? names.join(' or ') : 'GitHub'}, so
-        there are no codes or links to deliver.
-      </Panel>
     </Screen>
   )
 }
@@ -498,7 +489,6 @@ export function AuthTab({ app }: { app: AppDetail }) {
       items={[
         { id: 'users', label: 'Users', count: userCount, disabled: off && userCount === 0 },
         { id: 'methods', label: 'Sign-in methods', count: off ? 'off' : working(status).length },
-        { id: 'email', label: 'Email delivery', disabled: off },
       ]}
       value={current}
       onChange={(section) => go({ tab: 'auth', section })}
@@ -512,10 +502,8 @@ export function AuthTab({ app }: { app: AppDetail }) {
           onSettings={openSettings}
           onOpenLog={() => go({ tab: 'logs', section: 'runtime', source: 'auth' })}
         />
-      ) : current === 'methods' ? (
-        <Methods app={app} status={status} onSettings={openSettings} />
       ) : (
-        <EmailDelivery status={status} onSettings={openSettings} />
+        <Methods app={app} status={status} onSettings={openSettings} />
       )}
       {settingsOpen && <AuthSettingsDialog app={app} status={status} onClose={() => setSettingsOpen(false)} />}
     </Workbench>

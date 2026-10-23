@@ -11,7 +11,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Check, ChevronDown, Plus } from '@/components/ui/icon'
+import { Check, ChevronDown, GitBranch, Plus } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
 import { useAppMutation } from '@/hooks/mutations/useAppMutations'
 import { useAppEnvironments, useConsoleSession } from '@/hooks/queries/useAppsQuery'
@@ -50,6 +50,7 @@ export function EnvironmentSwitcher({
             type="button"
             className="inline-flex h-[30px] items-center gap-1.5 border border-dashed border-border px-[10px] font-mono text-body text-muted-foreground transition-colors hover:border-brand hover:text-foreground data-[state=open]:border-brand data-[state=open]:text-foreground"
           >
+            <GitBranch className="size-3.5 shrink-0" />
             {current}
             <ChevronDown className="size-4" />
           </button>

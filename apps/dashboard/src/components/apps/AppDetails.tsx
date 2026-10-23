@@ -418,7 +418,7 @@ function Header({
           <StatusBadge
             className="ml-1"
             color={runtime.color}
-            label={app.activeRelease ? `${app.activeRelease} · ${runtime.label}` : runtime.label}
+            label={runtime.label}
           />
         )}
         {app.deploying && <DeployProgress deploying={app.deploying} />}

@@ -392,7 +392,7 @@ export function VariablesTab({ app }: { app: AppDetail }) {
 
   return (
     <Screen
-      title={`Variables in ${app.environment}`}
+      title="Variables"
       actions={
         configured ? (
           <>

@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BoxCube } from '@/components/BoxCube'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { ArrowUpRight, Trash2 } from '@/components/ui/icon'
+import { AgentApp, ArrowUpRight, Trash2 } from '@/components/ui/icon'
 import { actorName, appStatusOf, capitalize, relTime, VISIBILITY_LABEL } from '@/lib/apps/format'
 import { openApp } from '@/lib/apps/open'
+import { downloadUrl } from '@/lib/apps/client'
 import type { AppSummary } from '@/lib/apps/types'
+import { cn } from '@/lib/utils'
 import { GridHeader, HoverActions, MoreButton, StatusBadge } from './spec'
 
 const GRID = 'grid-cols-[1.5fr_1.8fr_1.4fr_1.4fr_96px] gap-3'
@@ -64,7 +65,7 @@ export function AppTable({
         </div>
       ) : apps.length === 0 ? (
         <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
-          <BoxCube state="empty" size={56} className="mb-4 text-muted-foreground" />
+          <AgentApp className="mb-4 size-14 text-muted-foreground" />
           <div className="font-mono text-body font-semibold text-foreground">No apps yet</div>
           <div className="mt-2 max-w-sm font-mono text-meta text-muted-foreground">
             Create one with a name, then paste its prompt into your coding agent. The agent builds and deploys it.
@@ -93,21 +94,7 @@ export function AppTable({
               className={`group grid ${GRID} cursor-pointer items-center border-b border-border/60 px-2 py-[13px] text-body outline-none transition-colors hover:bg-card/50 focus-visible:bg-card/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/35`}
             >
               <span className="inline-flex min-w-0 items-center gap-3">
-                <BoxCube
-                  state={
-                    app.status === 'failed'
-                      ? 'error'
-                      : app.status === 'draft'
-                        ? 'empty'
-                        : app.status === 'sleeping'
-                          ? 'stopped'
-                          : app.visibility === 'public'
-                            ? 'public'
-                            : 'persistent'
-                  }
-                  size={28}
-                  className="shrink-0 text-muted-foreground"
-                />
+                <AppIcon app={app} />
                 <span className="truncate font-mono font-medium text-foreground">{app.name}</span>
                 {app.environments > 1 && (
                   <span className="shrink-0 font-mono text-[11px] text-muted-foreground" title="The row shows main">
@@ -192,5 +179,26 @@ export function AppTable({
         </div>
       )}
     </div>
+  )
+}
+
+/** The App as people recognise it: its last screenshot, or the agent-app glyph before it has one. */
+function AppIcon({ app }: { app: AppSummary }) {
+  const tone =
+    app.status === 'failed' ? 'text-destructive' : app.status === 'live' ? 'text-brand' : 'text-muted-foreground'
+  return app.previewSrc ? (
+    <img
+      src={downloadUrl(app.previewSrc)}
+      alt=""
+      loading="lazy"
+      className={cn(
+        'h-[28px] w-[44px] shrink-0 border border-border object-cover object-top',
+        app.status === 'sleeping' && 'opacity-60 grayscale-[35%]',
+      )}
+    />
+  ) : (
+    <span className="flex h-[28px] w-[44px] shrink-0 items-center justify-center border border-border/60">
+      <AgentApp className={cn('size-[18px]', tone)} />
+    </span>
   )
 }

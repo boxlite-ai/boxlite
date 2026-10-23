@@ -23,7 +23,7 @@ export function DomainsTab({ app }: { app: AppDetail }) {
   return (
     <div className="flex flex-col gap-10">
       <section>
-        <SectionTitle title="BoxLite domain" count={app.environment} />
+        <SectionTitle title="BoxLite domain" />
         <div className="flex min-h-[48px] items-center gap-3 border-b border-border/60 px-2 font-mono text-body">
           <span className="inline-flex min-w-0 items-center gap-2">
             {app.activeRelease ? (

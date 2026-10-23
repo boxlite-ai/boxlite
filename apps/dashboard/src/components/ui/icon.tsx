@@ -131,6 +131,10 @@ export const EyeIcon = makeIcon('eye')
 export const EyeOff = makeIcon('eye-off')
 export const FileText = makeIcon('file-text')
 export const Github = makeIcon('github')
+/** An environment: a branch of the app. */
+export const GitBranch = makeIcon('git-branch')
+/** An App: an app window an agent built (not a Box). */
+export const AgentApp = makeIcon('ai-app-mac')
 export const HardDrive = makeIcon('database')
 export const HardDriveIcon = makeIcon('database')
 export const Home = makeIcon('home')

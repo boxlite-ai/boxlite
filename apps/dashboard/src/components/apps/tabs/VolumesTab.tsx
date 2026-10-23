@@ -17,7 +17,7 @@ import { VolumeFilesSheet } from '../VolumeFiles'
 export function VolumesTab({ app }: { app: AppDetail }) {
   const [browsing, setBrowsing] = useState<AppStorage | null>(null)
   return (
-    <Screen title={`Volumes in ${app.environment}`}>
+    <Screen title="Volumes">
       {app.storages.length === 0 ? (
         <EmptyNote
           title="No volume in this environment"

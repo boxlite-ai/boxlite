@@ -219,7 +219,7 @@ function History({
     return !search || haystack.includes(search.toLowerCase())
   })
   return (
-    <Screen title={`Deployments to ${app.environment}`} padded={false}>
+    <Screen title="Deployments" padded={false}>
       <div className="flex flex-wrap items-center gap-3 pb-3">
         <SearchField value={search} onChange={setSearch} placeholder="Filter deployments…" />
         <FilterGroup>
