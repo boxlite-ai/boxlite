@@ -127,6 +127,10 @@ async function init(ctx: Ctx, opts: { app?: string; agentsMd?: boolean }): Promi
       await appendFile(gitignorePath, `${text.endsWith('\n') || text === '' ? '' : '\n'}${missing.join('\n')}\n`);
       created.push(`.gitignore (+${missing.join(', ')})`);
     } else unchanged.push('.gitignore');
+  } else {
+    // A new project has none yet; without it the first `git add .` would take .env.local's live values.
+    await writeFile(gitignorePath, `${GITIGNORE_LINES.join('\n')}\n`);
+    created.push('.gitignore');
   }
 
   if (opts.agentsMd !== false) {

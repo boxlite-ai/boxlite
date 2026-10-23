@@ -13,6 +13,16 @@ after(async () => cleanup(root));
 
 const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
 
+test('init in a new project creates .gitignore so .env.local is never committed', async () => {
+  const { agent, pool } = mockApi();
+  pool.intercept({ path: '/v1/apps/me', method: 'GET' }).reply(200, { name: 'crm', envs: [{ name: 'main', status: 'live', spec_version: 2 }] }, { headers: JSON_HEADERS });
+  const dir = await project(root, {});
+  const r = await cli(['init', '--json'], { cwd: dir, dispatcher: agent });
+  assert.equal(r.code, 0, r.stderr);
+  assert.ok(JSON.parse(r.stdout).created.includes('.gitignore'));
+  assert.equal(await readFile(join(dir, '.gitignore'), 'utf8'), '.boxlite/\n.env.local\n');
+});
+
 test('init writes boxlite.toml, link.json and .gitignore entries, and is idempotent', async () => {
   const { agent, pool } = mockApi();
   pool
