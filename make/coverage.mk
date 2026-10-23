@@ -69,9 +69,10 @@ codecov: coverage\:lcov
 
 # Add real KVM execution, including the real-kernel boots of VMM_KERNEL, to the
 # unit profiles before the CI upload. The CI profile bounds each test; disabling
-# retries preserves the first failure.
+# retries preserves the first failure. Every passing test is listed by name, so
+# the CI log shows which hardware tests ran.
 coverage\:vmm\:kvm: _ensure-kvm _ensure-vmm-kernel
-	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 \
+	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 --status-level pass \
 		-p boxlite-hypervisor -p boxlite-vmm --lib --run-ignored only --test-threads=1 \
 		-E 'test(vm::tests::) | test(tests::kvm::) | test(boot::tests::)'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
