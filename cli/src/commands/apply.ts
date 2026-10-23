@@ -47,19 +47,22 @@ async function apply(ctx: Ctx, opts: { force?: boolean; message?: string }): Pro
   }
 
   const final = result.deployment;
+  // An apply readies resources; the app serves only once a deploy has shipped code. Say which.
+  const env = result.status === 'live' ? await api.getEnv().catch(() => null) : null;
+  const serving = Boolean((env?.live_deployment as { release?: number | null } | null | undefined)?.release);
   const added = applicable.filter((c) => c.kind === '+').map((c) => c.path);
   const summary = added.length > 0 ? `Provision ${added.join(', ')}` : `Apply ${applicable.map((c) => c.path).join(', ')}`;
-  const status = result.status === 'live' ? 'done' : result.status;
+  const status = result.status === 'live' ? 'applied' : result.status;
   const specText = final.spec_version !== undefined ? ` · spec v${final.spec_version}` : '';
   ctx.out.line(`#${final.number}  ${pad(summary, 50)}${status}${specText}`);
-  if (final.url && result.status === 'live') ctx.out.line(`url: ${final.url}`);
+  if (result.status === 'live') ctx.out.line(serving ? `serving: ${final.url ?? 'the app URL'} (the code deployed before keeps running)` : 'not serving yet: resources are ready, but no code is deployed, so the URL shows "not live yet"');
   if (result.status === 'failed') {
     const full = await api.getDeployment(final.number).catch(() => final);
     throw deployFailedError({ ...final, ...full, error: full.error ?? final.error }, failureHints(checked));
   }
-  ctx.out.data(final);
+  ctx.out.data({ ...final, applied: true, serving });
   if (final.spec_version != null) await updateLink(ctx.cwd, { base_version: final.spec_version });
-  ctx.out.next('`boxlite-app app dev` runs the app locally against these resources, or `boxlite-app deploy` ships the code');
+  ctx.out.next(serving ? '`boxlite-app deploy` ships code changes' : 'the app is not live until you `boxlite-app deploy` the code (`boxlite-app app dev` runs it locally against these resources first)');
 }
 
 export function registerApply(program: Command, make: MakeCtx): void {
@@ -71,6 +74,6 @@ export function registerApply(program: Command, make: MakeCtx): void {
       .option('--force', 'apply even when the local base version is behind the environment: overwrites changes made online; only when the user asks')
       .option('-m, --message <text>', 'description shown in the deployment list')
       .action(async (opts: { force?: boolean; message?: string }, cmd: Command) => apply(await make(cmd), opts)),
-    { json: 'Deployment (kind "apply"); nothing to do: { applied: false, changes: [] }', exits: [2, 3, 6, 7, 8, 9, 10], online: true },
+    { json: 'Deployment (kind "apply", status "live" = applied) & { applied: true, serving: boolean (false until a deploy has shipped code) }; nothing to do: { applied: false, changes: [] }', exits: [2, 3, 6, 7, 8, 9, 10], online: true },
   );
 }

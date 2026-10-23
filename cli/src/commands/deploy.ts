@@ -7,7 +7,7 @@ import { abortOnSigint, deployFailedError, FAILURE_TAIL, followDeployment, type 
 import { describe } from '../meta.js';
 import { stepLabel, stepLine } from '../output.js';
 import { uploadSnapshot } from '../upload.js';
-import { requireCheck, type CheckedProject } from './common.js';
+import { requireCheck, type CheckedProject, codeDiff } from './common.js';
 import { runPlan } from './plan.js';
 
 /** Human detail for a step when the event carries none; derived from the local manifest. */
@@ -97,12 +97,7 @@ export async function finishDeployment(ctx: Ctx, api: Api, result: FollowResult,
 /** check + plan + upload size, without uploading or deploying. */
 async function dryRun(ctx: Ctx, opts: { force?: boolean }): Promise<void> {
   const { checked, plan } = await runPlan(ctx, opts.force === true);
-  const api = await ctx.appApi();
-  const { missing } = await api.createUpload(checked.upload.files);
-  const need = new Set(missing);
-  const fresh = checked.upload.files.filter((f) => need.has(f.sha256));
-  const freshBytes = [...new Map(fresh.map((f) => [f.sha256, f.size])).values()].reduce((n, b) => n + b, 0);
-  const upload = { files: checked.upload.files.length, bytes: checked.upload.bytes, new_files: fresh.length, new_bytes: freshBytes };
+  const upload = await codeDiff(ctx, checked);
   ctx.out.data({ dry_run: true, app: await ctx.appName(), environment: ctx.envName, base_version: ctx.baseVersion, ...plan, upload, warnings: [...checked.result.warnings, ...(plan.warnings ?? [])] });
   ctx.out.line(`  upload            ${upload.new_files} of ${upload.files} files are new (${formatBytes(upload.new_bytes)} of ${formatBytes(upload.bytes)})`);
   ctx.out.line('dry run: nothing was uploaded or deployed');

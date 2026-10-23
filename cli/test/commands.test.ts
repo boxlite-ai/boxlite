@@ -265,10 +265,13 @@ test('apply confirms, posts kind=apply with migrations and prints the provision 
   assert.equal(refused.code, 10);
   assert.match(refused.stderr, /refusing to apply without --yes\n  next: rerun as `boxlite-app apply --yes`/);
 
+  // The first apply readies resources only: nothing is deployed, so it must not read as live.
+  pool.intercept({ path: '/v1/apps/crm/envs/main', method: 'GET' }).reply(200, { name: 'main', live_deployment: null }, { headers: JSON_HEADERS });
   const res = await cli(['apply', '--yes'], { cwd: dir, dispatcher: agent });
   assert.equal(res.code, 0, res.stderr);
-  assert.equal(res.lines.at(-2), '#1  Provision database, volumes.uploads               done · spec v2');
-  assert.match(res.lines.at(-1) ?? '', /^next: /);
+  assert.equal(res.lines.at(-3), '#1  Provision database, volumes.uploads               applied · spec v2');
+  assert.match(res.lines.at(-2) ?? '', /^not serving yet: resources are ready, but no code is deployed/);
+  assert.match(res.lines.at(-1) ?? '', /^next: the app is not live until you `boxlite-app deploy`/);
   assert.equal(body?.kind, 'apply');
   assert.equal((body?.migrations as unknown[]).length, 1);
   assert.equal(JSON.parse(await readFile(join(dir, '.boxlite/link.json'), 'utf8')).base_version, 2);
