@@ -12,7 +12,7 @@ from .config import worktree_home
 
 IMAGE = "ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55"
 LINUX_KERNEL = "libkrunfw-kernel-dind-x86_64.bin"
-LINUX_SHA256 = "d6686ee95c855e42fe0a1fd89442d3a6cefbc0c762b981a3b45aefd5b788fc75"
+LINUX_SHA256 = "3c6cfc8015a1ba05cebabecd37967d665f2a0f81424b69f8d43d6e87feaceb92"
 
 
 def prepare_linux():
