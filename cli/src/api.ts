@@ -1,7 +1,7 @@
 import { MicrocloudError, type AgentContext, type CheckError, type CheckWarning, type Manifest, type MigrationFile, type UploadFile } from '@microcloud/shared';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
-import { fetch, WebSocket, type Dispatcher, type Response } from 'undici';
+import { fetch, Response, WebSocket, type Dispatcher } from 'undici';
 import type { Readable } from 'node:stream';
 import type { PlanChange } from './output.js';
 import { parseJsonData, parseSse, type SseEvent } from './sse.js';
@@ -264,6 +264,9 @@ export class Api {
     const attempts = repeatable && !opts.noRetry && !stream ? RETRIES + 1 : 1;
     // A 429 is refused before the control plane does anything, so every method may wait and retry.
     let rateLimited = 0;
+    // After a dropped connection the first attempt may have done its work: a DELETE that then finds
+    // nothing is done, not failed.
+    let afterNetworkError = false;
     for (let attempt = 1; ; attempt++) {
       let res: Response;
       try {
@@ -271,12 +274,17 @@ export class Api {
       } catch (e) {
         if ((e as Error).name === 'AbortError') throw e;
         if (attempt < attempts) {
+          afterNetworkError = true;
           await sleep(RETRY_DELAY_MS * attempt);
           continue;
         }
         throw networkError(e as Error, url);
       }
       if (res.ok) return res;
+      if (afterNetworkError && method === 'DELETE' && res.status === 404) {
+        await res.body?.cancel().catch(() => undefined);
+        return new Response(null, { status: 204 });
+      }
       if (res.status === 429 && rateLimited < RATE_LIMIT_RETRIES) {
         rateLimited++;
         attempt--;
@@ -494,7 +502,8 @@ export class Api {
   }
 
   async volumePut(volume: string, path: string, bytes: Buffer, overwrite: boolean): Promise<VolumeWrite> {
-    const res = await this.request('PUT', `${this.envPath}/volumes/${encodeURIComponent(volume)}/files`, { query: { path, overwrite: overwrite ? 1 : undefined }, raw: bytes });
+    // Without overwrite, a repeat after a dropped connection would answer "exists" for its own write: not retried.
+    const res = await this.request('PUT', `${this.envPath}/volumes/${encodeURIComponent(volume)}/files`, { query: { path, overwrite: overwrite ? 1 : undefined }, raw: bytes, noRetry: !overwrite });
     return (await res.json()) as VolumeWrite;
   }
 

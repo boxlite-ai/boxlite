@@ -504,3 +504,12 @@ test('a reset connection is retried for writes that are safe to repeat, with the
   const unique = [...new Set(keys)];
   assert.equal(unique.length, 1, `one idempotency key across the retry: ${keys.join(', ')}`);
 });
+
+test('a DELETE retried after a dropped connection that finds nothing left is done', async () => {
+  const dir = await project(root, { '.boxlite/link.json': linkJson(1) });
+  const { agent, pool } = mockApi();
+  pool.intercept({ path: '/v1/apps/crm/envs/main/volumes/uploads/files?path=%2Fold.png', method: 'DELETE' }).replyWithError(Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }));
+  pool.intercept({ path: '/v1/apps/crm/envs/main/volumes/uploads/files?path=%2Fold.png', method: 'DELETE' }).reply(404, { error: { code: 'not_found', message: 'uploads:/old.png does not exist' } }, { headers: JSON_HEADERS });
+  const res = await cli(['app', 'volume', 'rm', 'uploads:/old.png', '--yes', '--json'], { cwd: dir, dispatcher: agent });
+  assert.equal(res.code, 0, res.stderr);
+});

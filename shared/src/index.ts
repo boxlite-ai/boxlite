@@ -8,6 +8,7 @@ export { buildUploadManifest, sha256File, isSecretFileName } from './upload.js';
 export { readMigrations, nextMigrationName, type MigrationFile, type MigrationsRead } from './migrations.js';
 export { redact, MASKED } from './redact.js';
 export { buildWarnings, type BuildWarning } from './build-warnings.js';
+export { secretNameFor } from './diagnose.js';
 export { classifyFailure, lineOfPosition, lineOfToken, missingVariableIn, errorFocus, type Diagnosis, type FailureCause, type FailureInput } from './diagnose.js';
 export {
   contextFindings,

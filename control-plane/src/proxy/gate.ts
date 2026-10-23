@@ -4,8 +4,7 @@ import { appForKey, bearer, safeEqual, sha256hex } from '../auth.js';
 import type { AppRow, EnvRow } from '../db.js';
 import { now } from '../db.js';
 import type { Ctx } from '../ctx.js';
-// The same decoding, normalising matcher as [auth].protect, so an encoded `..` cannot slip past it.
-import { isProtected as matchesPaths, safeNext } from '../enduser/paths.js';
+import { isPublicPath, safeNext } from '../enduser/paths.js';
 import { fail } from '../errors.js';
 import { hostCookieName, isSecureUrl, readCookie, setCookieValue } from '../http/cookies.js';
 import { escapeHtml } from '../http/html.js';
@@ -113,7 +112,7 @@ export function accessGate(ctx: Ctx, app: AppRow, env: EnvRow, headers: Headers,
   if (isResponse(key)) return { ok: false, refusal: key, access: 'private' };
   if (key === 'ok') return { ok: true, stripAuthorization: true };
   const access = ctx.resources.effectiveAccess(env);
-  if (matchesPaths(ctx.resources.currentSpec(env)?.public_paths ?? [], path)) return { ok: true, stripAuthorization: false };
+  if (isPublicPath(ctx.resources.currentSpec(env)?.public_paths ?? [], path)) return { ok: true, stripAuthorization: false };
   if (access === 'public' || verifyAccess(ctx.config.sessionSecret, readCookie(headers, accessName(ctx, app, env)), env.id)) return { ok: true, stripAuthorization: false };
   return { ok: false, refusal: null, access };
 }

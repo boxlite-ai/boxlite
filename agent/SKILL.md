@@ -5,7 +5,7 @@ description: Build a complete web app from the user's one-line request and run i
 
 # Build an app on BoxLite Cloud
 
-The user created an **App** in the BoxLite console and pasted you its prompt. That prompt gave you two values, `BOXLITE_API_URL` and `BOXLITE_API_KEY` (`bxl_app_…`, scoped to this one App). Hand them to the CLI once, right after installing it (§0), and never print the key back or put it in a command again.
+The user created an **App** in the BoxLite console and pasted you its prompt. That prompt gave you two values, `BOXLITE_API_URL` and `BOXLITE_API_KEY` (`bxl_app_…`, scoped to this one App). Hand them to the CLI once with `boxlite-app login`, right after installing it (§0): that is the only command the key ever appears in. Never print it back or put it in a command, file or variable afterwards.
 
 The key can only touch this App. You do not need any other BoxLite credential, Docker, Git, or a cloud account. You talk to the platform only through the `boxlite-app` CLI.
 
@@ -181,6 +181,6 @@ Do not mention internal steps, retries, or platform terms (Spec, Release, Box, t
 
 - Never print, log, commit, or echo `BOXLITE_API_KEY`, `DATABASE_URL`, or any secret. Never pass them as command-line arguments. (The CLI masks them in its own output, but your shell commands are yours.)
 - Make the app `public` (`boxlite-app app access set public --yes`) only when the user said so. A request that people who are not signed in, or anyone with the link, can open or browse the app is them saying so: set it public as part of the build and name it in your report. Otherwise leave it private and ask.
-- Never delete an environment, database, or volume unless the user asked.
-- Destructive commands (`app env delete`, `app db restore`, `app db reset`, `app rollback --with-database`) refuse without `--yes` and print exactly what they would destroy. Show that list to the user and rerun with `--yes` only after they agree. `app access set public` also asks for `--yes`; the rule above says when the user's request already gave it.
+- Never delete an environment, database, or volume unless the user asked. The one exception is an environment you created yourself for verification (§5), which you delete when your checks are done.
+- Destructive commands (`app env delete`, `app db restore`, `app db reset`, `app rollback --with-database`) refuse without `--yes` and print exactly what they would destroy. Show that list to the user and rerun with `--yes` only after they agree; deleting your own verification environment (§5) needs no question. `app access set public` also asks for `--yes`; the rule above says when the user's request already gave it.
 - Stay inside this App; do not try other BoxLite APIs.

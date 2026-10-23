@@ -61,8 +61,8 @@ async function users(ctx: Ctx, action: string | undefined, target: string | unde
     const r = await api.purgeTestUsers();
     await forgetSessions(ctx.cwd, ctx.envName);
     ctx.out.data(r);
-    ctx.out.line(`removed ${r.removed} test user${r.removed === 1 ? '' : 's'}${r.emails.length ? `: ${r.emails.join(', ')}` : ''}`);
-    if (r.mirror.startsWith('kept')) ctx.out.line(`boxlite.users rows ${r.mirror}`);
+    if (r.mirror.startsWith('kept')) ctx.out.line(`kept ${r.emails.length} test user${r.emails.length === 1 ? '' : 's'} (${r.emails.join(', ')}): the database refused to delete their boxlite.users rows (${r.mirror.slice('kept: '.length)})`);
+    else ctx.out.line(`removed ${r.removed} test user${r.removed === 1 ? '' : 's'}${r.emails.length ? `: ${r.emails.join(', ')}` : ''}`);
     ctx.out.next(r.mirror.startsWith('kept') ? "delete the app's own rows that point at them first (`boxlite-app app sql --write`), then rerun; or test in a separate environment next time" : 'the rows your app wrote for them are its own data: delete those with `boxlite-app app sql --write`, or test in a separate environment (`boxlite-app app env create qa`) and delete it afterwards');
     return;
   }

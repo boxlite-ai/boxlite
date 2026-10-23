@@ -46,3 +46,21 @@ export function isProtected(patterns: string[], path: string): boolean {
     return re.test(raw) || re.test(normal);
   });
 }
+
+/**
+ * `public_paths` globs, which open paths of a private app, so stricter than `isProtected`: the raw
+ * path and its decoded, normalised form must both match, and a path with an encoded slash, a
+ * backslash or a dot segment is never public (an app router that decodes `%2F` or resolves `..`
+ * could otherwise serve `/admin` for `/webhooks/..%2Fadmin`).
+ */
+export function isPublicPath(patterns: string[], path: string): boolean {
+  if (!patterns.length) return false;
+  const raw = path.split('?')[0] || '/';
+  if (/%2f|%5c|\\/i.test(raw)) return false;
+  if (raw.split('/').some((seg) => ['.', '..'].includes(seg.replace(/%2e/gi, '.')))) return false;
+  const normal = normalisePath(raw);
+  return patterns.some((pat) => {
+    const re = globRe(pat);
+    return re.test(raw) && re.test(normal);
+  });
+}

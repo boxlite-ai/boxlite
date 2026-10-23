@@ -170,7 +170,7 @@ test('public_paths let a webhook into a private app; nothing else gets in, howev
   const hook = await h.appRequest('/webhooks/stripe', { method: 'POST', body: '{"type":"checkout.session.completed"}', headers: { 'content-type': 'application/json' } });
   assert.equal(hook.status, 200, 'the provider reaches the webhook without a key or cookie');
   assert.equal(seen.at(-1)?.url, '/webhooks/stripe');
-  for (const p of ['/admin', '/webhooks/../admin', '/webhooks/%2e%2e/admin', '/x/webhooks/stripe']) {
+  for (const p of ['/admin', '/webhooks/../admin', '/webhooks/%2e%2e/admin', '/webhooks/..%2Fadmin', '/webhooks/x%2F..%2F..%2Fadmin', '/webhooks/%5C..%5Cadmin', '/x/webhooks/stripe']) {
     assert.equal((await h.appRequest(p)).status, 401, `${p} stays private`);
   }
 });

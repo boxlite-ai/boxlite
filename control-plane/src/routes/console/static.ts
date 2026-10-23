@@ -49,7 +49,9 @@ function serve(c: Context, dir: string, prefix: string, spa: boolean): Response 
   if (!target || !existsSync(target)) {
     return c.text(target ? `The console is not built. Run deploy/build-console.sh (looked in ${dir}).` : 'not found', 404);
   }
-  const hashed = target.includes(`${sep}assets${sep}`) || !spa;
+  // Only the build's assets/ carry a content hash in their names; anything else (index.html, the
+  // vendor runtime files) must be revalidated, or browsers keep an old copy for a year.
+  const hashed = spa && target.includes(`${sep}assets${sep}`);
   return new Response(readFileSync(target), {
     headers: {
       'content-type': TYPES[extname(target).toLowerCase()] ?? 'application/octet-stream',

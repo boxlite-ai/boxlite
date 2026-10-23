@@ -343,7 +343,7 @@ export function parseManifest(toml: string, env = 'main'): ParseResult {
   for (const pat of publicPaths) {
     if (!pat.startsWith('/')) v.error(['public_paths'], 'invalid_path', `public_paths entries must start with / (got "${pat}")`);
     // The whole app open to anyone is an access level, said once, not hidden in a path list.
-    else if (pat === '/' || pat === '/*') v.error(['public_paths'], 'invalid_path', `public_paths "${pat}" would open the whole app; set access = "public" instead`);
+    else if (pat === '/' || /^\/\*/.test(pat)) v.error(['public_paths'], 'invalid_path', `public_paths "${pat}" would open the whole app; name the paths (e.g. "/webhooks/*") or set access = "public"`);
   }
 
   const variables = stringMap(v, merged.variables, 'variables', (k) => (VARIABLE_NAME_RE.test(k) ? null : `variable "${k}" must match ${VARIABLE_NAME_RE}`), 'invalid_variable');

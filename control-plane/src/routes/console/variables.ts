@@ -1,7 +1,7 @@
 /** Console API: variable and secret-reference edits (each save is one apply deployment), copying variables, backups, the org secret list. */
 import { PLATFORM_ORG, appSecretNames, orgSecretNames, secretValue, setAppSecret } from '../../orgs.js';
 import { buffer } from 'node:stream/consumers';
-import type { Manifest } from '@microcloud/shared';
+import { secretNameFor, type Manifest } from '@microcloud/shared';
 import type { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppRow, Deployment, EnvRow, MigrationFile } from '../../db.js';
@@ -110,7 +110,12 @@ export function consoleVariableRoutes(api: Hono, k: ConsoleKit): void {
         });
         break;
       case 'addSecret': {
-        const stored = setAppSecret(ctx, app, a.name.toLowerCase().replace(/_/g, '-'), a.value, actorOf(k.viewer(c)));
+        // App secrets are shared by every environment: adding one never replaces another environment's value.
+        const name = secretNameFor(a.name);
+        if (secretValue(ctx, app, `app/${name}`) !== undefined) {
+          throw fail('conflict', `app/${name} already exists and every environment of ${app.name} can use it`, 'pick it under "Stored secret" to use it here, or store this value under another variable name');
+        }
+        const stored = setAppSecret(ctx, app, name, a.value, actorOf(k.viewer(c)));
         await applyConfig(app, env, `Add secret ${a.name}`, (m) => {
           delete m.variables[a.name];
           m.secrets[a.name] = stored.name;

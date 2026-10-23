@@ -12,7 +12,8 @@ export interface BuildWarning {
 
 export function buildWarnings(lines: readonly string[]): BuildWarning[] {
   const out: BuildWarning[] = [];
-  const audit = lines.filter((l) => /\b\d+\s+(?:low|moderate|high|critical)\s+severity vulnerabilit/i.test(l) || /found \d+ vulnerabilit/i.test(l));
+  // A clean install prints "found 0 vulnerabilities": only a non-zero count is a warning.
+  const audit = lines.filter((l) => /\b[1-9]\d*\s+(?:low|moderate|high|critical)\s+severity vulnerabilit/i.test(l) || /found [1-9]\d* vulnerabilit/i.test(l));
   const serious = audit.find((l) => /\b(high|critical)\b/i.test(l));
   if (audit.length) {
     out.push({

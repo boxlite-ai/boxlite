@@ -36,7 +36,6 @@ function insertKey(ctx: Ctx, appId: string, key: string): void {
   ctx.store.run('INSERT INTO keys (id, app_id, hash, last4, created_at) VALUES (?, ?, ?, ?, ?)', newId('key'), appId, sha256hex(key), key.slice(-4), now());
 }
 
-/** A new App key; the old one stops working at once. The new key exists in clear text only in the return value. */
 /** Active App keys an App may hold at once (one per agent setup, roughly). */
 export const MAX_ACTIVE_KEYS = 10;
 
@@ -55,6 +54,7 @@ export function issueKey(ctx: Ctx, app: AppRow, actor: string): string {
   return key;
 }
 
+/** A new App key; every other key stops working at once. The new key exists in clear text only in the return value. */
 export function rotateKey(ctx: Ctx, app: AppRow, actor: string): string {
   const key = newAppKey();
   ctx.store.tx(() => {

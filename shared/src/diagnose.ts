@@ -308,9 +308,14 @@ export function looksLikeCredential(name: string): boolean {
   return CREDENTIAL_RE.test(name);
 }
 
+/** The App secret a variable's value is kept as: STRIPE_SECRET_KEY → stripe-secret-key (referenced as app/stripe-secret-key). */
+export function secretNameFor(variable: string): string {
+  return variable.toLowerCase().replace(/_/g, '-');
+}
+
 /** How to keep credential `name` as an App secret and reference it: the steps an agent can take. */
 export function secretRefFix(name: string): string {
-  const secret = name.toLowerCase().replace(/_/g, '-');
+  const secret = secretNameFor(name);
   return `store the value the user gave you: \`printf %s "$VALUE" | boxlite-app app secrets set ${secret}\`, then \`boxlite-app app secrets ref ${name} app/${secret}\` and \`boxlite-app deploy\`; if you do not have the value, ask the user for it; never invent it or write it into a file`;
 }
 

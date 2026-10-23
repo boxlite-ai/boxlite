@@ -88,8 +88,7 @@ export async function createTestSession(ctx: Ctx, app: AppRow, env: EnvRow, emai
   const normal = email.trim().toLowerCase();
   const user = upsertUser(ctx, app, env, 'test', { id: normal, email: normal, name: normal.split('@')[0] ?? normal, avatarUrl: null });
   if (user.blocked) throw fail('forbidden', `${normal} is blocked in ${env.name}`, 'unblock it with `boxlite-app app auth users unblock <email>`');
-  ctx.store.run('UPDATE app_users SET test_role = ? WHERE id = ?', role, user.id);
-  const { token, expiresAt } = createSession(ctx, user, 'test', TEST_SESSION_TTL_S);
+  const { token, expiresAt } = createSession(ctx, user, 'test', TEST_SESSION_TTL_S, role);
   await mirrorUser(ctx, env.id, user);
   ctx.store.recordActivity(app.id, env.name, actor, 'auth.test_session', { user: user.id, email: normal, role });
   // For the app's own origin (BOXLITE_APP_URL); host-only there, like a real sign-in.
@@ -105,13 +104,16 @@ export async function createTestSession(ctx: Ctx, app: AppRow, env: EnvRow, emai
 export async function purgeTestUsers(ctx: Ctx, app: AppRow, env: EnvRow, actor: string): Promise<{ removed: number; emails: string[]; mirror: 'removed' | 'none' | string }> {
   const users = ctx.store.all<{ id: string; email: string | null }>("SELECT id, email FROM app_users WHERE env_id = ? AND provider = 'test'", env.id);
   let mirror: 'removed' | 'none' | string = 'none';
-  if (users.length && env.db_url && ctx.resources.currentSpec(env)?.database) {
+  // Tried even when no test user is left here: a rerun after a refused delete must still clean the mirror.
+  if (env.db_url && ctx.resources.currentSpec(env)?.database) {
     try {
       await ctx.appdb.query(env.db_url, ["DELETE FROM boxlite.users WHERE provider = 'test'"], { write: true });
       mirror = 'removed';
     } catch (err) {
       // Usually a foreign key from the app's own tables: those rows go first, or test in another environment.
       mirror = `kept: ${(err as Error).message}`;
+      // Keep the platform's rows too, so the next try finds the same users and retries the mirror.
+      return { removed: 0, emails: users.map((u) => u.email ?? u.id), mirror };
     }
   }
   for (const u of users) {

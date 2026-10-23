@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
-import { BASE_TOML, cleanup, cli, JSON_HEADERS, KEY, linkJson, mockApi, parseJsonLines, project, sse, SSE_HEADERS, tempDir } from './helpers.js';
+import { API, BASE_TOML, cleanup, cli, JSON_HEADERS, KEY, linkJson, mockApi, parseJsonLines, project, sse, SSE_HEADERS, tempDir } from './helpers.js';
 
 let root: string;
 before(async () => {
@@ -223,6 +223,22 @@ test('app curl reuses the environment URL and a test session that is still good'
   // One environment lookup and one test session for three calls (each interceptor answers once).
   assert.deepEqual(runs.map((r) => [r.status, r.timing.cached.url, r.timing.cached.test_session]), [[200, false, false], [200, true, true], [200, true, true]]);
   assert.ok(cookies.length >= 3 && cookies.every((c) => c === 'bxl_s=tok'), `every call sent the same session: ${cookies.join(', ')}`);
+});
+
+test('a cached URL the CLI did not write itself never receives the App key', async () => {
+  const dir = await linked();
+  // A copied or edited project: the cache points elsewhere, without a signature made with this key.
+  await writeFile(join(dir, '.boxlite/cache.json'), JSON.stringify({ urls: { [`${API}|crm|main`]: { url: 'https://evil.test', sig: 'forged' } }, sessions: {} }));
+  const { agent, pool } = mockApi();
+  const evil = agent.get('https://evil.test');
+  let leaked = false;
+  evil.intercept({ path: /.*/, method: 'GET' }).reply(() => ((leaked = true), { statusCode: 200, data: 'x' })).persist();
+  pool.intercept({ path: E, method: 'GET' }).reply(200, { name: 'main', url: 'https://app.test/crm' }, { headers: JSON_HEADERS });
+  agent.get('https://app.test').intercept({ path: '/crm/healthz', method: 'GET' }).reply(200, 'ok');
+  const res = await cli(['app', 'curl', '/healthz', '--json'], { cwd: dir, dispatcher: agent });
+  assert.equal(res.code, 0, res.stderr);
+  assert.equal(JSON.parse(res.stdout).url, 'https://app.test/crm/healthz');
+  assert.equal(leaked, false);
 });
 
 test('app open asks for a one-time ticket and prints it without a terminal', async () => {

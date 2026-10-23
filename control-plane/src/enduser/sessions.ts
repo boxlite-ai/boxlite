@@ -20,7 +20,7 @@ export interface AppUser {
   first_seen: string;
   last_seen: string;
   blocked: number;
-  /** Test users only: the role they were created with (role.ts). */
+  /** Test users only: the role of the session this user came in with (sessionUser; role.ts). */
   test_role?: string | null;
 }
 
@@ -56,12 +56,13 @@ export function upsertUser(ctx: Ctx, app: AppRow, env: EnvRow, provider: string,
   return ctx.store.get<AppUser>('SELECT * FROM app_users WHERE env_id = ? AND provider = ? AND provider_user_id = ?', env.id, provider, p.id)!;
 }
 
-export function createSession(ctx: Ctx, user: AppUser, kind: 'oauth' | 'test', ttlSeconds: number): { token: string; expiresAt: string } {
+/** `role`: what a test session acts as (role.ts); a real sign-in has none (its role comes from org membership). */
+export function createSession(ctx: Ctx, user: AppUser, kind: 'oauth' | 'test', ttlSeconds: number, role: string | null = null): { token: string; expiresAt: string } {
   const token = randomBytes(32).toString('base64url');
   const ts = now();
   const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
   ctx.store.run(
-    'INSERT INTO app_sessions (token_hash, user_id, app_id, env_id, kind, created_at, last_seen, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO app_sessions (token_hash, user_id, app_id, env_id, kind, created_at, last_seen, expires_at, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     sha256hex(token),
     user.id,
     user.app_id,
@@ -70,6 +71,7 @@ export function createSession(ctx: Ctx, user: AppUser, kind: 'oauth' | 'test', t
     ts,
     ts,
     expiresAt,
+    role,
   );
   return { token, expiresAt };
 }
@@ -81,8 +83,8 @@ export function revokeSessions(ctx: Ctx, userId: string): number {
 /** The signed-in user for a session token, sliding the expiry; blocked users lose their sessions. */
 export function sessionUser(ctx: Ctx, env: EnvRow, token: string | undefined): AppUser | null {
   if (!token) return null;
-  const row = ctx.store.get<AppUser & { token_hash: string; kind: string; s_last_seen: string }>(
-    `SELECT u.*, s.token_hash, s.kind, s.last_seen AS s_last_seen FROM app_sessions s JOIN app_users u ON u.id = s.user_id
+  const row = ctx.store.get<AppUser & { token_hash: string; kind: string; s_last_seen: string; s_role: string | null }>(
+    `SELECT u.*, s.token_hash, s.kind, s.last_seen AS s_last_seen, s.role AS s_role FROM app_sessions s JOIN app_users u ON u.id = s.user_id
      WHERE s.token_hash = ? AND s.env_id = ? AND s.revoked_at IS NULL AND s.expires_at > ?`,
     sha256hex(token),
     env.id,
@@ -100,8 +102,9 @@ export function sessionUser(ctx: Ctx, env: EnvRow, token: string | undefined): A
     else ctx.store.run('UPDATE app_sessions SET last_seen = ?, expires_at = ? WHERE token_hash = ?', ts, new Date(Date.now() + SESSION_TTL_S * 1000).toISOString(), row.token_hash);
     ctx.store.run('UPDATE app_users SET last_seen = ? WHERE id = ?', ts, row.id);
   }
-  const { token_hash: _t, kind: _k, s_last_seen: _s, ...user } = row;
-  return user;
+  const { token_hash: _t, kind: _k, s_last_seen: _s, s_role, ...user } = row;
+  // A test user's role is the session's, so two sessions of one test email can act as different roles.
+  return { ...user, test_role: s_role };
 }
 
 export function userById(ctx: Ctx, env: EnvRow, id: string): AppUser {

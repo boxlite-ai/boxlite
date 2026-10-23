@@ -89,12 +89,13 @@ async function bodyOf(ctx: Ctx, data: string | undefined): Promise<string | unde
 async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
   const api = await ctx.appApi();
   // The environment's URL changes only when it is recreated: cached per project, dropped on a connection failure.
-  let envUrl = await cachedUrl(ctx.cwd, ctx.envName);
+  const scope = { apiUrl: api.baseUrl, app: await ctx.appName(), env: ctx.envName, key: ctx.apiKey ?? '' };
+  let envUrl = await cachedUrl(ctx.cwd, scope);
   const urlCached = envUrl !== undefined;
   if (!envUrl) {
     envUrl = (await api.getEnv()).url;
     if (!envUrl) throw new MicrocloudError('not_found', `${ctx.envName} has no URL yet`, '`boxlite-app deploy` first');
-    await rememberUrl(ctx.cwd, ctx.envName, envUrl);
+    await rememberUrl(ctx.cwd, scope, envUrl);
   }
   const url = appUrlFor(envUrl, path);
   const headers: Record<string, string> = { 'user-agent': 'boxlite-app-curl', accept: '*/*', ...parseHeaders(opts.header) };
@@ -149,7 +150,7 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
     const reset = /ECONNRESET|UND_ERR_SOCKET|EPIPE/.test(code);
     if (!reset || (method !== 'GET' && method !== 'HEAD')) {
       // The cached URL may be stale (the environment was recreated): the next call looks it up again.
-      if (urlCached) await rememberUrl(ctx.cwd, ctx.envName, '');
+      if (urlCached) await rememberUrl(ctx.cwd, scope, null);
       const cause = (e as Error & { cause?: Error }).cause;
       throw new MicrocloudError('unavailable', `${method} ${url.href} failed: ${cause?.message ?? (e as Error).message}`, '`boxlite-app app services` and `boxlite-app doctor` show whether the app is up');
     }

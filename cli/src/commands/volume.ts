@@ -112,7 +112,8 @@ async function rm(ctx: Ctx, target: string, opts: { recursive?: boolean }): Prom
   }
   const what = `${remote.volume}:${remote.path}`;
   if (!(await ctx.confirmDestructive({ action: `delete ${what} in ${ctx.envName}`, destroys: [opts.recursive ? `${what} and everything in it` : what], undo: `none: copy it out first if you may need it: \`boxlite-app app volume cp ${what} ./\`` }))) return;
-  const out = await (await ctx.appApi()).volumeRemove(remote.volume, remote.path, opts.recursive === true);
+  // No body: a retry after a dropped connection found it already gone (our first attempt deleted it).
+  const out = (await (await ctx.appApi()).volumeRemove(remote.volume, remote.path, opts.recursive === true)) ?? { volume: remote.volume, path: remote.path, removed: opts.recursive ? 'directory' : 'file' };
   ctx.out.line(`deleted ${out.removed === 'directory' ? 'folder ' : ''}${what}`);
   ctx.out.data(out);
 }

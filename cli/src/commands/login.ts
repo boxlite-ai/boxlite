@@ -3,7 +3,7 @@ import type { Command } from 'commander';
 import { Api } from '../api.js';
 import type { MakeCtx } from '../cli.js';
 import type { Ctx } from '../context.js';
-import { forgetKey, saveKey } from '../credentials.js';
+import { forgetKey, saveKey, savedKey } from '../credentials.js';
 import { describe } from '../meta.js';
 import { readStdin } from './common.js';
 
@@ -27,7 +27,10 @@ async function login(ctx: Ctx, opts: { stdin?: boolean }): Promise<void> {
 }
 
 async function logout(ctx: Ctx, opts: { all?: boolean }): Promise<void> {
-  const removed = forgetKey(ctx.env, opts.all ? undefined : ctx.apiUrl, opts.all ? undefined : ctx.app);
+  // One App: this project's, or the only (or last) key saved for this control plane; never several by accident.
+  const app = opts.all ? undefined : (ctx.app ?? savedKey(ctx.env, ctx.apiUrl, undefined)?.app);
+  if (!opts.all && !app) throw new MicrocloudError('usage', 'which App? none is linked here and several keys are saved', 'run it in the App\'s project, set BOXLITE_APP=<name>, or pass --all');
+  const removed = forgetKey(ctx.env, opts.all ? undefined : ctx.apiUrl, app);
   ctx.out.data({ removed });
   ctx.out.line(removed ? 'forgot the saved key' : 'no saved key to forget');
 }

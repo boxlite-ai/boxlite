@@ -604,7 +604,7 @@ test('Microsoft, X and Facebook map their accounts to a user; only verified or p
   h = harness();
   const creds = { clientId: 'cid', clientSecret: 'csecret' };
   const replies: Record<string, unknown> = {
-    'https://login.microsoftonline.com/common/oauth2/v2.0/token': { id_token: idToken({ sub: 'ms-sub', email: 'ann@contoso.com', name: 'Ann' }) },
+    'https://login.microsoftonline.com/common/oauth2/v2.0/token': { id_token: idToken({ sub: 'ms-sub', email: 'ann@contoso.com', name: 'Ann', xms_edov: true }) },
     'https://api.x.com/2/oauth2/token': { access_token: 'xt' },
     'https://api.x.com/2/users/me?user.fields=profile_image_url': { data: { id: '42', name: 'Ann', username: 'ann', profile_image_url: 'https://pbs.twimg.com/a.jpg' } },
     'https://graph.facebook.com/v21.0/oauth/access_token': { access_token: 'ft' },
@@ -619,6 +619,9 @@ test('Microsoft, X and Facebook map their accounts to a user; only verified or p
   }) as typeof fetch;
   const run = (name: string) => OAUTH_PROVIDERS[name]!.signIn({ creds, redirectUri: `https://cp.test/auth/callback/${name}`, code: 'c', codeVerifier: 'v', fetch: fetchImpl });
   assert.deepEqual(await run('microsoft'), { id: 'ms-sub', email: 'ann@contoso.com', name: 'Ann', avatarUrl: null });
+  // A work account whose tenant set an email Microsoft did not verify signs in without one.
+  replies['https://login.microsoftonline.com/common/oauth2/v2.0/token'] = { id_token: idToken({ sub: 'ms-2', email: 'ceo@bank.example', name: 'Mallory', tid: 'some-tenant' }) };
+  assert.equal((await run('microsoft')).email, null);
   assert.deepEqual(await run('x'), { id: '42', email: null, name: 'Ann', avatarUrl: 'https://pbs.twimg.com/a.jpg', login: 'ann' });
   assert.match(String(calls.find((c) => c.url.startsWith('https://api.x.com/2/oauth2/token'))!.init!.headers && (calls.find((c) => c.url.startsWith('https://api.x.com/2/oauth2/token'))!.init!.headers as Record<string, string>).authorization), /^Basic /, 'X takes the client secret as Basic auth');
   assert.deepEqual(await run('facebook'), { id: 'fb1', email: 'ann@example.com', name: 'Ann', avatarUrl: 'https://fb/a.jpg' });
@@ -705,4 +708,18 @@ test('purge-test removes the test users --as made and their sessions, never real
   assert.deepEqual([out.removed, out.emails.sort()], [2, ['qa2@example.com', 'qa@example.com']]);
   assert.deepEqual(h.ctx.store.all<{ provider: string }>('SELECT provider FROM app_users WHERE env_id = ?', env.id).map((u) => u.provider), ['github'], 'the real user stays');
   assert.equal(h.ctx.store.all("SELECT 1 FROM app_sessions s JOIN app_users u ON u.id = s.user_id WHERE u.provider = 'test'").length, 0);
+});
+
+test('two test sessions of one email keep their own roles', async () => {
+  const { key } = await setup();
+  const session = async (role?: string) => ((await (await h.request('/v1/apps/crm/envs/main/auth/test-sessions', { method: 'POST', key, json: { email: 'qa@example.com', ...(role ? { role } : {}) } })).json()) as { cookie: string }).cookie;
+  const owner = await session('owner');
+  const plain = await session();
+  const roleWith = async (cookie: string) => {
+    seen = [];
+    await h.appRequest('/app/x', { headers: { cookie } });
+    return seen[0]!.headers['x-boxlite-user-role'];
+  };
+  assert.equal(await roleWith(owner), 'owner', 'a later plain session does not demote the owner session');
+  assert.equal(await roleWith(plain), 'user');
 });

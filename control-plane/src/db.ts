@@ -366,7 +366,8 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     PRIMARY KEY (app_id, provider)
   );
   `,
-  // The role a test user signs in with (enduser/role.ts); real users' roles come from org membership.
+  // Superseded by app_sessions.role (below): a role belongs to one test session, not to the user. Kept so
+  // databases that ran it still replay; nothing reads app_users.test_role.
   (db) => {
     const columns = (db.prepare('PRAGMA table_info(app_users)').all() as { name: string }[]).map((c) => c.name);
     if (!columns.includes('test_role')) db.exec('ALTER TABLE app_users ADD COLUMN test_role TEXT');
@@ -376,6 +377,11 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     const columns = (db.prepare('PRAGMA table_info(open_tickets)').all() as { name: string }[]).map((c) => c.name);
     if (!columns.includes('as_email')) db.exec('ALTER TABLE open_tickets ADD COLUMN as_email TEXT');
     if (!columns.includes('as_role')) db.exec('ALTER TABLE open_tickets ADD COLUMN as_role TEXT');
+  },
+  // The role a test session signs in with (enduser/role.ts); real users' roles come from org membership.
+  (db) => {
+    const columns = (db.prepare('PRAGMA table_info(app_sessions)').all() as { name: string }[]).map((c) => c.name);
+    if (!columns.includes('role')) db.exec('ALTER TABLE app_sessions ADD COLUMN role TEXT');
   },
   // An App's own secret values (orgs.ts secretValue): set by its agent or in the console, referenced as app/<name>.
   `

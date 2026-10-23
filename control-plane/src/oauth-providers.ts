@@ -134,6 +134,9 @@ function idTokenClaims(idToken: string | undefined, what: string): Record<string
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
 
+/** The tenant of personal Microsoft accounts (outlook.com, hotmail.com, …). */
+const MICROSOFT_CONSUMER_TENANT = '9188040d-6c67-4c5b-b112-36a304b66dad';
+
 const microsoft: OAuthProvider = {
   name: 'microsoft',
   label: 'Microsoft',
@@ -163,7 +166,10 @@ const microsoft: OAuthProvider = {
     );
     const c = idTokenClaims(tok.id_token, 'Microsoft token exchange');
     if (!str(c.sub)) throw new OAuthError('Microsoft token exchange: id_token has no subject');
-    return { id: str(c.sub)!, email: str(c.email), name: str(c.name), avatarUrl: null };
+    // Any tenant's admin can set a work account's `email`, so it counts only when Microsoft vouches
+    // for it: a personal account (Microsoft verifies those), or xms_edov (email domain verified).
+    const verified = c.tid === MICROSOFT_CONSUMER_TENANT || c.xms_edov === true || c.xms_edov === 'true' || c.xms_edov === 1;
+    return { id: str(c.sub)!, email: verified ? str(c.email) : null, name: str(c.name), avatarUrl: null };
   },
 };
 

@@ -10,7 +10,6 @@ const BY_RULE: Record<string, (e: CheckError) => string> = {
     `put ${e.file} back exactly as it was applied (e.g. \`git checkout -- ${e.file}\`) and move your change into a new migration: \`boxlite-app app db migration new <name>\`; then \`boxlite-app deploy\``,
   stale_base: () => 'the environment changed since your last deploy: `boxlite-app app pull` brings boxlite.toml up to date (your file is kept as boxlite.toml.bak); merge your edits, then `boxlite-app deploy`',
   secret_not_found: (e) => `${e.message}; then \`boxlite-app deploy\``,
-  auth_provider_not_configured: (e) => `${e.message}; or drop that provider from [auth].providers`,
 };
 
 export function checkFailedNext(errors: readonly CheckError[]): string {

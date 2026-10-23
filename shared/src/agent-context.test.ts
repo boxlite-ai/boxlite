@@ -100,6 +100,7 @@ test('build warnings of the live deployment are findings next to a healthy app, 
   ];
   const ws = buildWarnings(lines);
   assert.deepEqual(ws.map((w) => w.id), ['npm_audit', 'large_bundle', 'deprecated_packages']);
+  assert.deepEqual(buildWarnings(['added 212 packages, and audited 213 packages in 9s', 'found 0 vulnerabilities']), [], 'a clean install warns about nothing');
   assert.match(ws[0]!.title, /1 high severity vulnerability/);
   const c = base();
   c.build_warnings = ws;

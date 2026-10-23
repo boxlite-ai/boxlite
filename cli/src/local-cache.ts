@@ -3,12 +3,14 @@
  * the control plane the same things on every call: an environment's URL, and a test session while
  * it is still good. Written only in a linked project; anything unreadable is simply a miss.
  */
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 interface Cache {
-  urls: Record<string, string>;
+  /** By `<api url>|<app>|<env>`; `sig` ties the URL to the App key, so a planted file never receives the key. */
+  urls: Record<string, { url: string; sig: string }>;
   sessions: Record<string, { cookie: string; email: string; expires_at: string }>;
 }
 
@@ -28,13 +30,27 @@ async function save(cwd: string, c: Cache): Promise<void> {
   await writeFile(file(cwd), `${JSON.stringify(c, null, 2)}\n`, { mode: 0o600 });
 }
 
-export async function cachedUrl(cwd: string, env: string): Promise<string | undefined> {
-  return (await load(cwd)).urls[env] || undefined;
+export interface UrlScope {
+  apiUrl: string;
+  app: string;
+  env: string;
+  /** The App key: only a URL cached with it is trusted with it. */
+  key: string;
 }
 
-export async function rememberUrl(cwd: string, env: string, url: string): Promise<void> {
+const urlId = (s: UrlScope) => `${s.apiUrl.replace(/\/+$/, '')}|${s.app}|${s.env}`;
+const urlSig = (s: UrlScope, url: string) => createHash('sha256').update(`${s.key}|${urlId(s)}|${url}`).digest('hex');
+
+/** The environment URL cached for this control plane, App and key; anything else is a miss. */
+export async function cachedUrl(cwd: string, scope: UrlScope): Promise<string | undefined> {
+  const e = (await load(cwd)).urls[urlId(scope)];
+  return e && typeof e === 'object' && e.url && e.sig === urlSig(scope, e.url) ? e.url : undefined;
+}
+
+export async function rememberUrl(cwd: string, scope: UrlScope, url: string | null): Promise<void> {
   const c = await load(cwd);
-  c.urls[env] = url;
+  if (url) c.urls[urlId(scope)] = { url, sig: urlSig(scope, url) };
+  else delete c.urls[urlId(scope)];
   await save(cwd, c);
 }
 

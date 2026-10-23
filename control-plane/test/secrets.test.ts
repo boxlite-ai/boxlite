@@ -49,3 +49,14 @@ test('in the console, adding a secret stores the value as an App secret and refe
   assert.equal(secretValue(h.ctx, shop, 'app/openai-api-key'), 'sk-console-1', 'stored as app/openai-api-key');
   assert.ok(((await (await api('/apps/shop/secrets')).json()) as { name: string }[]).some((s) => s.name === 'app/openai-api-key'), 'listed for "Reference a secret"');
 });
+
+test('adding a secret in the console never replaces a value other environments use', async () => {
+  const { signConsoleSession } = await import('../src/console-auth.js');
+  const cookie = `__Host-bxl_console=${signConsoleSession('test-session-secret')}`;
+  const shop = h.ctx.store.appByName('shop')!;
+  const before = secretValue(h.ctx, shop, 'app/openai-api-key');
+  const res = await h.request('/console/api/apps/shop/actions', { method: 'POST', json: { type: 'addSecret', name: 'OPENAI_API_KEY', value: 'sk-from-qa' }, headers: { cookie, 'x-boxlite-console': '1' } });
+  assert.equal(res.status, 409, await res.clone().text());
+  assert.match(((await res.json()) as { error: { next: string } }).error.next, /Stored secret/);
+  assert.equal(secretValue(h.ctx, shop, 'app/openai-api-key'), before, 'the stored value is untouched');
+});

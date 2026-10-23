@@ -1,6 +1,6 @@
 # boxlite-app CLI reference
 
-Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.5); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
+Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.6); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
 
 ## Conventions
 
@@ -99,7 +99,7 @@ Usage: `boxlite-app apply [options]`
 | `-m, --message <text>` | description shown in the deployment list |  |
 
 - Network: talks to the control plane
-- `--json`: `Deployment (kind "apply", status "live" = applied) & { applied: true, serving: boolean (false until a deploy has shipped code) }; nothing to do: { applied: false, changes: [] }`
+- `--json`: `Deployment (kind "apply", status "live" = applied) & { applied: true, serving: boolean | null (false until a deploy has shipped code; null when it could not be checked) }; nothing to do: { applied: false, changes: [] }`
 - Exit codes: 0, 1, 2, 3, 6, 7, 8, 9, 10
 
 ### `boxlite-app deploy`
