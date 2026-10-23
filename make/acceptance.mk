@@ -54,6 +54,7 @@ test\:runner-ci\:dind-diagnose:
 	@PYTHONUNBUFFERED=1 PYTHONPATH=apps/infra-local .venv/bin/python -m compose.acceptance diagnose-dind
 
 fmt\:runner-ci: fmt\:swarm
+	@.venv/bin/ruff format scripts/build/prepare_dind_firmware.py tests/scripts/test_runner_artifact_firmware.py
 	@.venv/bin/ruff format apps/infra-local/compose/provision.py tests/scripts/test_runner_provision.py tests/scripts/test_linux_firmware_source.py
 	@.venv/bin/ruff format apps/infra-local/compose/acceptance.py apps/infra-local/compose/kernel.py apps/infra-local/compose/cache_acceptance.py apps/infra-local/compose/docker_cache_acceptance.py
 	@.venv/bin/ruff format sdks/python/tests/test_cache_volume_contract.py
@@ -61,6 +62,7 @@ fmt\:runner-ci: fmt\:swarm
 
 PHONY_TARGETS += lint\:runner-ci
 lint\:runner-ci: lint\:swarm
+	@.venv/bin/ruff check scripts/build/prepare_dind_firmware.py tests/scripts/test_runner_artifact_firmware.py
 	@.venv/bin/ruff check apps/infra-local/compose/acceptance.py apps/infra-local/compose/kernel.py apps/infra-local/compose/provision.py tests/scripts/test_runner_provision.py tests/scripts/test_linux_firmware_source.py
 	@.venv/bin/ruff check apps/infra-local/compose/docker_cache_acceptance.py
 	@sh -n apps/infra-local/fixtures/docker-cache.sh

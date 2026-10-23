@@ -45,6 +45,30 @@ To select a staged runner in a local deployment, set `RUNNER_ARTIFACT_SOURCE=bui
 `RUNNER_ARTIFACT_REF=<full-sha>` alongside a valid `BOXLITE_IMAGE_TAG`, then preview with mdeploy.
 The [one-dispatch workflow](deployment.md#deploy-through-github-actions) prepares these values for you.
 
+### Development firmware
+
+`runner:build` uses `apps/runner/packaging/dev-artifact.Dockerfile` to embed the
+checksum-pinned v5.4.0 DinD kernel. The shared
+`scripts/build/prepare_dind_firmware.py` verifies both downloaded and cached
+ELF bytes, packages them with the vendored ABI generator, and writes
+`SHA256SUMS`. Local Linux acceptance uses the same helper and pin.
+
+The Dockerfile keeps `BOXLITE_LIBKRUNFW_SOURCE` set through both runtime and
+C SDK builds; a command-scoped override would let the second build restore
+ordinary firmware. This choice is committed with the artifact identity, so
+changing firmware requires a new commit rather than a deployment flag.
+
+For dev, dispatch `mdeploy-all` from branch `x_features` with the `ref` input
+empty. Do not enter `x_features` in `ref`: that input accepts a commit SHA,
+PR number or release tag, and rejects branch names.
+
+Every Box on the updated runner uses the DinD kernel on its next start.
+Restart running Boxes after rollout; they retain their old kernel until then.
+The runtime cache includes a hash of its embedded contents, so hosts need no
+cache cleanup. Follow the [DinD guide](../../../docs/guides/docker-in-docker.md)
+for guest options and acceptance checks. The published release runner still
+links the prebuilt C SDK and keeps its existing firmware selection.
+
 ## Upgrade or roll back a release
 
 ```bash

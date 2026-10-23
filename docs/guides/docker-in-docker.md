@@ -3,6 +3,18 @@
 Run Docker inside a privileged Box guest using firmware built with Docker's
 networking features; the runner's host sandbox remains enabled.
 
+## Development runner artifacts
+
+Development runner artifacts embed the checksum-pinned v5.4.0 DinD firmware.
+Every Box started on that runner uses this kernel, including non-privileged
+Boxes; Docker still requires the privileged guest option below. After upgrading
+the runner, restart running Boxes to use the new kernel. The published release
+runner and SDK/wheel firmware defaults are unchanged.
+
+See [runner operations](../../apps/infra/docs/runners.md#development-firmware)
+for the build and deployment procedure. Local native builds still use the
+explicit firmware selection below.
+
 ## Build the runtime
 
 On Linux x86_64, `make kernel:dind` prepares the checksum-pinned

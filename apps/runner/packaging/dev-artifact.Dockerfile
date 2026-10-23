@@ -41,6 +41,9 @@ RUN test -f src/deps/libkrun-sys/vendor/libkrun/Cargo.toml \
   && git init -q
 
 RUN make setup:build guest
+RUN python3 scripts/build/prepare_dind_firmware.py /work/.firmware/dind
+# Both native builds must keep the override; unsetting it restores ordinary firmware.
+ENV BOXLITE_LIBKRUNFW_SOURCE=/work/.firmware/dind
 RUN SKIP_GUEST_BUILD=1 make runtime \
   && cargo build --release -p boxlite-c \
   && bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a \
