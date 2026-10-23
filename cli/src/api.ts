@@ -638,6 +638,7 @@ export interface WhoAmI {
   scope: string;
   environments: { name: string; status: string; url: string }[];
   control_plane: string;
+  sign_in_providers?: string[];
   cli: { latest_version: string | null; download_url: string };
 }
 

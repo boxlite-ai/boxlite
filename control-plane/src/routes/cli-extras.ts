@@ -14,6 +14,7 @@ import { deploymentView, envStatus } from '../views.js';
 import { readVolume, removeVolume, VOLUME_FILE_MAX, volumePath, writeVolume } from '../volume-files.js';
 import { forward } from '../proxy/forward.js';
 import { body, envOf, intParam, type C } from './util.js';
+import { appProviders } from '../enduser/config.js';
 
 /**
  * Endpoints for the agent-facing CLI (contracts §4.1 "CLI extras"): discovery (whoami, context,
@@ -66,6 +67,7 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
       scope: `app:${a.name}`,
       environments: ctx.store.envs(a.id).map((e) => ({ name: e.name, status: envStatus(ctx, e), url: ctx.resources.appUrl(a.name, e.name) })),
       control_plane: ctx.config.publicUrl,
+      sign_in_providers: appProviders(ctx, a),
       cli: { latest_version: await latestCli(ctx), download_url: `${ctx.config.publicUrl}/cli/boxlite-app.tgz` },
     });
   });

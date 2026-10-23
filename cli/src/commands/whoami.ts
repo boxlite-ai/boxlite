@@ -15,6 +15,8 @@ export interface WhoAmIResult {
   control_plane: string;
   api_url: string;
   environments: WhoAmI['environments'];
+  /** Sign-in providers that work for this App now (null from an older control plane). */
+  sign_in_providers: string[] | null;
   linked: { link_file: boolean; app: string | null; matches_key: boolean | null };
   cli: { version: string; latest_version: string | null; update_available: boolean; update_command: string | null };
 }
@@ -46,6 +48,7 @@ export async function whoamiData(ctx: Ctx): Promise<WhoAmIResult> {
     control_plane: me.control_plane,
     api_url: api.baseUrl,
     environments: me.environments,
+    sign_in_providers: me.sign_in_providers ?? null,
     linked: { link_file: ctx.link !== null, app: ctx.link?.app ?? null, matches_key: ctx.link ? ctx.link.app === me.app : null },
     cli: cliInfo(api.baseUrl, latest),
   };
@@ -57,6 +60,7 @@ async function whoami(ctx: Ctx): Promise<void> {
   ctx.out.line(`App ${w.app} · environment ${w.env} · key ${w.key ? `…${w.key.last4}` : w.actor} (scope: ${w.scope === `app:${w.app}` ? 'this App only' : w.scope})`);
   ctx.out.line(`Control plane ${w.control_plane}${w.control_plane !== w.api_url ? ` (via ${w.api_url})` : ''}`);
   ctx.out.line(`Environments ${w.environments.map((e) => `${e.name} ${e.status}`).join(' · ') || '(none)'}`);
+  if (w.sign_in_providers) ctx.out.line(`Sign-in that works here ${w.sign_in_providers.join(', ') || '(none yet: the owner adds one in the console)'}`);
   ctx.out.line(`CLI ${w.cli.version}${w.cli.latest_version ? ` (latest ${w.cli.latest_version})` : ''}`);
   if (w.linked.matches_key === false) {
     ctx.out.line(`warning: .boxlite/link.json is linked to "${w.linked.app}", but this key belongs to "${w.app}"`);

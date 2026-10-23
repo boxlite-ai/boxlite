@@ -8,7 +8,22 @@ import { describe } from '../meta.js';
 
 const GITIGNORE_LINES = ['.boxlite/', '.env.local'];
 
-export function manifestSkeleton(app: string): string {
+/** `[auth]` with the providers that work for this App now; commented out when none does. */
+function authBlock(providers: readonly string[] | undefined): string {
+  if (providers && providers.length === 0) {
+    return `# No sign-in provider works for this App yet (its owner adds one in the console under Auth).
+# [auth]
+# providers = ["github"]
+# protect = ["/app/*"]`;
+  }
+  const list = (providers ?? ['github']).map((p) => `"${p}"`).join(', ');
+  return `# Only providers that work for this App are listed (\`boxlite-app whoami\` shows them).
+[auth]
+providers = [${list}]
+# protect = ["/app/*"]`;
+}
+
+export function manifestSkeleton(app: string, providers?: readonly string[]): string {
   return `# boxlite.toml — manifest for the BoxLite Micro-cloud App "${app}".
 # Edit, then run \`boxlite-app check\`; \`boxlite-app docs manifest\` explains every field.
 [app]
@@ -28,21 +43,19 @@ health = "/"              # must answer 2xx within 60 s after start
 # End-user sign-in, hosted by the platform: send users to .boxlite/auth/login and read
 # X-BoxLite-User-* headers. \`protect\` paths require login. Remove [auth] for an anonymous site.
 # Sign-in does not open a private app to others: that is the access level (\`boxlite-app app access\`).
-[auth]
-providers = ["github", "google"]
-# protect = ["/app/*"]
+${authBlock(providers)}
 
-# Postgres (Neon). Uncomment to provision a database; files in migrations/ named
+# Postgres. Uncomment to provision a database; files in migrations/ named
 # NNNN_name.sql run in order on every deploy. DATABASE_URL is injected.
 # [database]
 # migrations = "migrations/"
 
-# Plain configuration (visible in the console). Secrets reference org secrets, whose values a
-# platform admin sets (the console only lists them):
+# Plain configuration (visible in the console). A secret's value is stored on the platform, never
+# here: \`printf %s "$KEY" | boxlite-app app secrets set openai\`, then reference it:
 # [variables]
 # LOG_LEVEL = "info"
 # [secrets]
-# OPENAI_API_KEY = "org/openai"
+# OPENAI_API_KEY = "app/openai"
 `;
 }
 
@@ -108,7 +121,8 @@ async function init(ctx: Ctx, opts: { app?: string; agentsMd?: boolean }): Promi
   const tomlPath = join(ctx.cwd, MANIFEST_FILE);
   if (await exists(tomlPath)) unchanged.push(MANIFEST_FILE);
   else {
-    await writeFile(tomlPath, manifestSkeleton(app));
+    const providers = Array.isArray(info.sign_in_providers) ? (info.sign_in_providers as string[]) : undefined;
+    await writeFile(tomlPath, manifestSkeleton(app, providers));
     created.push(MANIFEST_FILE);
   }
 

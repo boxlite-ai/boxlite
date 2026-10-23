@@ -78,7 +78,7 @@ name  = "uploads"
 mount = "/data/uploads"
 
 [auth]                            # on by default; delete it for a fully anonymous site. Sign-in only: who may reach the app at all is the access level (private by default)
-providers = ["github", "google"]
+providers = ["github"]          # only providers `boxlite-app whoami` lists as working here
 protect   = ["/app/*"]            # optional: paths that require login
 
 [[schedule]]
@@ -102,7 +102,7 @@ These are hard requirements. Most failed deploys break one of them.
 6. **Persistent data only in the database or a volume path.** Local disk is wiped on every deploy and rebuild.
 7. **Database:** connect with `process.env.DATABASE_URL` (SSL is in the URL; with `pg` use `new Pool({ connectionString: process.env.DATABASE_URL })`). Change tables only by adding a new numbered file in `migrations/`; never edit an applied migration. `boxlite-app app sql` runs read-only unless you pass `--write`, and on `main` it refuses DDL even then.
 8. **Login** (`[auth]`, on by default): link to `/.boxlite/auth/login?next=/app` and `/.boxlite/auth/logout?next=/` (`next` is a path inside the app). The platform handles OAuth: the browser briefly leaves your origin for the provider and comes back to `next` signed in. Never implement callbacks or sessions yourself, and never set cookies whose name starts with `bxl_` or that carry a `Domain` attribute (the platform drops them).
-   - Providers: `github` and `google` work right away; `microsoft`, `apple`, `x` and `facebook` work once the user adds their own OAuth app for it in the console (Authentication › Sign-in methods). List only what the user asked for; if you list one of the four, tell the user that step. X never shares an email address and Apple or Facebook users may withhold it, so key users by id, never by email.
+   - Providers: list only those `boxlite-app whoami` shows under "Sign-in that works here" (`init` writes exactly those), and build the login page with only those buttons. Any other provider (`google`, `microsoft`, `apple`, `x`, `facebook`) works once the user adds their own OAuth app for it in the console (Auth › Sign-in methods); if the user wants one, say so instead of listing it. X never shares an email address and Apple or Facebook users may withhold it, so key users by id, never by email.
    - Signed-in requests carry `X-BoxLite-User-Id` (uuid), `X-BoxLite-User-Email` (URI-encoded when it is not plain ASCII), `X-BoxLite-User-Name` (always URI-encoded) and `X-BoxLite-User-Provider`; read the email and name with `decodeURIComponent`. No header = anonymous. The platform strips these from what browsers send, so trust them. Scope every per-user query by the user id.
    - `X-BoxLite-User-Role` is `owner` when the visitor manages this App in the BoxLite console (the user who asked you for the app, and their teammates), else `user`; `/.boxlite/auth/me` returns it as `role`. Gate an admin or back-office area on it: never ask the user for their account name, never hardcode an email or id. Check both sides with `boxlite-app app curl /admin --as owner@example.com --role owner` and `--as someone@example.com`.
    - `[auth].protect` paths need login: a `GET` that accepts `text/html` (a browser) is redirected (302) to `/.boxlite/auth/login`, everything else gets 401 JSON. For other pages decide yourself, and use `/.boxlite/auth/me` (JSON or 401) from the frontend.

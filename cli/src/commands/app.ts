@@ -11,7 +11,7 @@ import { updateLink, writeLink, type Ctx } from '../context.js';
 import { describe } from '../meta.js';
 import { table } from '../output.js';
 import { contextMarkdown } from '../render/context-markdown.js';
-import { specToToml } from '../toml-edit.js';
+import { editToml, ensureTable, specToToml } from '../toml-edit.js';
 import { parseInteger } from './common.js';
 import { registerCurl } from './curl.js';
 import { registerDb } from './db.js';
@@ -106,8 +106,29 @@ async function access(ctx: Ctx, action?: string, value?: string): Promise<void> 
     }
   }
   const updated = await api.setAccess(value);
-  ctx.out.data(updated);
-  ctx.out.line(`access ${updated.access ?? value}`);
+  // Write the same level into boxlite.toml, so the next deploy matches what is live instead of
+  // every later plan reporting an online-only difference.
+  const synced = await syncAccessToToml(ctx, value);
+  ctx.out.data({ ...updated, toml_updated: synced });
+  ctx.out.line(`access ${updated.access ?? value} (live now)${synced ? '; boxlite.toml updated to match' : ''}`);
+}
+
+/** Sets `access` (or `[env.<name>].access`) in this directory's boxlite.toml; false when there is none. */
+async function syncAccessToToml(ctx: Ctx, value: string): Promise<boolean> {
+  const path = join(ctx.cwd, MANIFEST_FILE);
+  let source: string;
+  try {
+    source = await readFile(path, 'utf8');
+  } catch {
+    return false;
+  }
+  const edit = editToml(source, (doc) => {
+    if (ctx.envName === 'main') doc.access = value;
+    else ensureTable(doc, ['env', ctx.envName]).access = value;
+  });
+  await writeFile(path, edit.text);
+  if (edit.droppedComments) ctx.out.note('note: boxlite.toml was rewritten; its comments were dropped');
+  return true;
 }
 
 async function pull(ctx: Ctx): Promise<void> {

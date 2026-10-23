@@ -12,7 +12,7 @@ async function status(ctx: Ctx): Promise<void> {
   ctx.out.data(s);
   if (!s.enabled) {
     ctx.out.line('sign-in off (no [auth] in boxlite.toml)');
-    ctx.out.next('add [auth] providers = ["github", "google"] to boxlite.toml, then `boxlite-app apply --yes`');
+    ctx.out.next('add [auth] with the providers `boxlite-app whoami` lists as working, e.g. providers = ["github"], then `boxlite-app apply --yes`');
     return;
   }
   ctx.out.line(`sign-in on · ${s.providers.map((p) => `${p.name} ${p.status === 'ready' ? 'ready' : 'not configured on this platform yet'}`).join(' · ')}`);

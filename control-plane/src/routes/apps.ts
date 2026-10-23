@@ -10,6 +10,7 @@ import { PLATFORM_ORG, appSecretNames, deleteAppSecret, orgSecretNames, setAppSe
 import { createApp } from '../services/apps.js';
 import { envSummary } from '../views.js';
 import { body, type C } from './util.js';
+import { appProviders } from '../enduser/config.js';
 
 export function adminRoutes(ctx: Ctx) {
   const r = new Hono();
@@ -53,7 +54,15 @@ export function appRoutes(ctx: Ctx) {
 
   r.get('/', (c) => {
     const app = c.get('app');
-    return c.json({ name: app.name, created_at: app.created_at, url: ctx.resources.appUrl(app.name, 'main'), envs: ctx.store.envs(app.id).map((e) => envSummary(ctx, app, e)) });
+    return c.json({
+      name: app.name,
+      created_at: app.created_at,
+      url: ctx.resources.appUrl(app.name, 'main'),
+      envs: ctx.store.envs(app.id).map((e) => envSummary(ctx, app, e)),
+      // What [auth].providers may list and actually work for this App right now (BoxLite's own
+      // OAuth apps plus the App's own, set in the console); `init` writes these.
+      sign_in_providers: appProviders(ctx, app),
+    });
   });
 
   // ---- the App's own secrets (orgs.ts): values go in, never come back out ----

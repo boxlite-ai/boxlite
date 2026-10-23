@@ -486,6 +486,26 @@ boxlite-app app sql --file q.sql --json
 cat q.sql | boxlite-app app sql -
 ```
 
+### `boxlite-app app db sql`
+
+the same as `app sql`: run SQL (read-only unless --write); query, --file, or stdin (`-`)
+
+Usage: `boxlite-app app db sql [query] [options]`
+
+| option | description | default |
+|---|---|---|
+| `-f, --file <path>` | read the SQL from a file |  |
+| `--write` | allow statements that modify data (DDL only on non-main environments) |  |
+| `--explain` | return the query plan instead of rows |  |
+
+- Network: talks to the control plane
+- `--json`: `{ columns: string[], rows: unknown[][], row_count: number, elapsed_ms: number, truncated: boolean }`
+- Exit codes: 0, 1, 2, 3, 4, 5
+
+```sh
+boxlite-app app db query "select count(*) from deals"
+```
+
 ### `boxlite-app app db info`
 
 connection and size summary (no password)

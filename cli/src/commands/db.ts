@@ -384,6 +384,23 @@ export function registerDb(app: Command, make: MakeCtx): void {
   );
 
   const db = app.command('db').description('database info, schema, rows, local proxy, export, import, migrations, snapshots, restore, reset');
+  // Where an agent looks first for SQL: the same command as `app sql`, also as `app db query`.
+  describe(
+    db
+      .command('sql [query]')
+      .alias('query')
+      .description('the same as `app sql`: run SQL (read-only unless --write); query, --file, or stdin (`-`)')
+      .option('-f, --file <path>', 'read the SQL from a file')
+      .option('--write', 'allow statements that modify data (DDL only on non-main environments)')
+      .option('--explain', 'return the query plan instead of rows')
+      .action(async (query: string | undefined, opts: { write?: boolean; explain?: boolean; file?: string }, cmd: Command) => sql(await make(cmd), query, opts)),
+    {
+      json: '{ columns: string[], rows: unknown[][], row_count: number, elapsed_ms: number, truncated: boolean }',
+      exits: [2, 3, 4, 5],
+      online: true,
+      examples: ['boxlite-app app db query "select count(*) from deals"'],
+    },
+  );
   describe(db.command('info').description('connection and size summary (no password)').action(async (_o: unknown, cmd: Command) => info(await make(cmd))), {
     json: '{ status: "ready" | "unknown" | "none", host?, database?, user?, branch?, size_bytes? }',
     exits: [2, 3],

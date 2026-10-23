@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { API, BASE_TOML, cleanup, cli, JSON_HEADERS, KEY, linkJson, mockApi, parseJsonLines, project, sse, SSE_HEADERS, tempDir } from './helpers.js';
@@ -332,9 +332,12 @@ test('app access refuses public without --yes and sets otherwise; app status ren
   assert.match(refusal.destroys[0], /anyone on the internet/);
 
   pool.intercept({ path: '/v1/apps/crm/envs/main/access', method: 'PUT', body: JSON.stringify({ access: 'public' }) }).reply(200, { access: 'public' }, { headers: JSON_HEADERS });
+  // The project's boxlite.toml gets the same level, so later plans do not report an online-only difference.
+  await writeFile(join(dir, 'boxlite.toml'), 'access = "private"\n\n[app]\nname = "crm"\n');
   const ok = await cli(['app', 'access', 'set', 'public', '--yes'], { cwd: dir, dispatcher: agent });
   assert.equal(ok.code, 0, ok.stderr);
-  assert.deepEqual(ok.lines, ['access public']);
+  assert.deepEqual(ok.lines, ['access public (live now); boxlite.toml updated to match']);
+  assert.match(await readFile(join(dir, 'boxlite.toml'), 'utf8'), /^access = "public"$/m);
   assert.match(ok.stderr, /^This will make crm\/main public:/);
 
   pool.intercept({ path: '/v1/apps/crm', method: 'GET' }).reply(200, { name: 'crm', envs: [{ name: 'main', status: 'live', url: 'https://cp.test/crm', latest_deployment: { number: 7, status: 'live' }, spec_version: 3 }] }, { headers: JSON_HEADERS });
