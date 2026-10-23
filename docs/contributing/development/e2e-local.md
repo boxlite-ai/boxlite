@@ -11,7 +11,7 @@ real microVMs through libkrun — only run on hardware that allows nested virtua
 workflow keeps a single **persistent** VM for this: it is started before a run, runs the
 tests, then is **stopped** (never deleted) so its build and image caches survive on its
 disk. Because there is exactly one VM, only one e2e run executes at a time — a newer run
-queues behind the one in progress.
+queues behind the one in progress, and GitHub keeps only the newest pending run.
 
 ## How it runs
 
@@ -31,7 +31,8 @@ flowchart LR
   come online. It then removes the token from the metadata, whether or not the runner came up.
 - **e2e-tests** — runs on the self-hosted runner (`gcp-e2e` label, 50-minute timeout):
   verifies `/dev/kvm`, installs build dependencies, then runs `make test:integration`.
-- **stop-runner** — always runs at the end and stops the VM so it stops costing money.
+- **stop-runner** — always runs at the end and stops the VM so it stops costing money,
+  except when a `debug` dispatch fails and leaves the VM running for the SSH session.
 
 ### Runner registration
 
@@ -134,7 +135,8 @@ gcloud iam service-accounts add-iam-policy-binding ci-gha-e2e-ctl@$P.iam.gservic
 The organization policy `compute.vmExternalIpAccess` forbids external IPs in this project,
 which is why egress goes through Cloud NAT. After editing `scripts/ci/gcp-e2e-startup.sh`,
 copy it into the VM's metadata with `gcloud compute instances add-metadata` (the command is
-in the script's header).
+in the script's header). The new script runs on the next boot; a VM left running (for
+example, after a debug session) keeps the old behavior until it is stopped.
 
 When setup finishes, trigger a run with:
 

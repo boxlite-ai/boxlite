@@ -58,9 +58,26 @@ set_token() {
             "https://compute.googleapis.com/compute/v1/projects/$GCP_PROJECT/zones/$GCP_ZONE/instances/$GCP_INSTANCE/setMetadata"
 }
 
-has_token() {
-    vm describe --format=json |
-        jq -e --arg key "$TOKEN_KEY" 'any(.metadata.items[]?; .key == $key)' >/dev/null
+# stored_token: print the stored token, or "" when absent; fails when metadata cannot be read.
+stored_token() {
+    local instance
+    instance=$(vm describe --format=json) || return 1
+    jq -er --arg key "$TOKEN_KEY" \
+        '[.metadata.items[]? | select(.key == $key) | .value] | first // ""' <<<"$instance"
+}
+
+# wait_token VALUE: setMetadata is asynchronous; wait until the stored token is
+# VALUE ("" = absent). A failed read never counts as a match.
+wait_token() {
+    local current
+    for _ in $(seq 30); do
+        if current=$(stored_token) && [ "$current" = "$1" ]; then
+            return 0
+        fi
+        sleep 2
+    done
+    echo "::error::the registration token in VM metadata did not reach the expected state" >&2
+    return 1
 }
 
 start() {
@@ -79,12 +96,8 @@ start() {
     token=$(gh api -X POST "repos/$REPO/actions/runners/registration-token" --jq .token)
     echo "::add-mask::$token"
     set_token "$token"
-    # setMetadata is asynchronous; boot only once the startup script can read the token.
-    for _ in $(seq 30); do
-        has_token && break
-        sleep 2
-    done
-    has_token || { echo "::error::the registration token never reached the VM metadata" >&2; return 1; }
+    # Boot only once the startup script can read this token, not a stale one.
+    wait_token "$token"
 
     vm start --async
     wait_status RUNNING
@@ -93,6 +106,7 @@ start() {
 case "${1:-}" in
     start) start ;;
     stop) vm stop --async ;;
-    clear-token) set_token "" ;;
+    # e2e-tests runs PR code on the VM next, so confirm the token is gone.
+    clear-token) set_token "" && wait_token "" ;;
     *) echo "usage: $0 start|stop|clear-token" >&2; exit 2 ;;
 esac
