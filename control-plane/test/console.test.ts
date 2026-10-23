@@ -578,3 +578,17 @@ test('the console can ask for a new screenshot of what is live, and only of some
   await deploy(key, TOML);
   assert.equal((await api('/apps/crm/preview', { method: 'POST' })).status, 202);
 });
+
+test('a new App key from the console works next to the existing one; rotating retires both', async () => {
+  const { key } = await createViaConsole();
+  const issued = await api('/apps/crm/key/issue', { method: 'POST' });
+  assert.equal(issued.status, 200, JSON.stringify(issued.body));
+  assert.ok(issued.body.prompt.includes(issued.body.key), 'the prompt carries the new key');
+  const whoami = (k: string) => h.request('/v1/apps/crm/whoami', { key: k });
+  assert.equal((await whoami(key)).status, 200, 'the first key keeps working');
+  assert.equal((await whoami(issued.body.key)).status, 200, 'the new key works');
+  const rotated = await api('/apps/crm/key/rotate', { method: 'POST' });
+  assert.equal((await whoami(key)).status, 401);
+  assert.equal((await whoami(issued.body.key)).status, 401);
+  assert.equal((await whoami(rotated.body.key)).status, 200);
+});

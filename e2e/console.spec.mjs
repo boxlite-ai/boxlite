@@ -197,6 +197,26 @@ async function main() {
       return '#1 live'
     })
 
+    await step('in a new session, Copy instructions issues one more working key; the first keeps working', async () => {
+      // A reload drops the prompt this tab was given at creation, like opening the console elsewhere.
+      await page.goto(`${CONSOLE}/console/dashboard/apps/${APP}?tab=overview`)
+      await page.getByText('Hand off to your agent').first().waitFor()
+      assert(!/bxl_app_[a-z2-7]{32}/.test(await text(page.locator('pre').first())), 'the overview shows a full App key')
+      await page.getByRole('button', { name: 'Copy instructions' }).click()
+      const dialog = page.getByRole('dialog')
+      await dialog.getByText(`New prompt for ${APP}`).waitFor()
+      await shot('issued-prompt')
+      await dialog.getByRole('button', { name: 'Copy prompt' }).click()
+      const issued = /bxl_app_[a-z2-7]{32}/.exec(await page.evaluate(() => navigator.clipboard.readText()))?.[0]
+      assert(issued && issued !== KEY, 'Copy instructions did not hand over a new key')
+      await dialog.getByRole('button', { name: 'Close' }).click()
+      for (const key of [KEY, issued]) {
+        const r = await fetch(`${CP}/v1/apps/${APP}/whoami`, { headers: { authorization: `Bearer ${key}` } })
+        assert(r.status === 200, `key …${key.slice(-4)} → ${r.status}`)
+      }
+      return `issued …${issued.slice(-4)}; …${KEY.slice(-4)} still works`
+    })
+
     await step('deployment detail is a full timeline matching the CP', async () => {
       await page.getByTestId('deployment-row-1').click()
       await page.getByTestId('deployment-detail').waitFor()

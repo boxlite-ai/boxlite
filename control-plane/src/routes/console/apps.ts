@@ -7,7 +7,7 @@ import { fail } from '../../errors.js';
 import { deleteApp, restoreApp } from '../../lifecycle.js';
 import { capturePreview, previewImage } from '../../preview.js';
 import { createOpenTicket } from '../../proxy/gate.js';
-import { createApp, rotateKey } from '../../services/apps.js';
+import { createApp, issueKey, rotateKey } from '../../services/apps.js';
 import { assertCanCreate, canSee, orgIdFor, type Viewer } from '../../orgs.js';
 import { ACTOR, type ConsoleKit } from './kit.js';
 
@@ -75,6 +75,13 @@ export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
   api.delete('/apps/:id', async (c) => {
     await deleteApp(ctx, appOf(c), actorOf(viewer(c)));
     return c.body(null, 204);
+  });
+
+  /** One more App key next to the active ones (another agent or machine); returns its prompt once. */
+  api.post('/apps/:id/key/issue', (c) => {
+    const app = appOf(c);
+    const key = issueKey(ctx, app, actorOf(viewer(c)));
+    return c.json({ key, prompt: handoffPrompt(ctx, app.name, key), last4: key.slice(-4) });
   });
 
   /** New App key; the old one stops working now. Returns the new prompt once. */

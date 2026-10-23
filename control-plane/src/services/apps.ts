@@ -37,6 +37,24 @@ function insertKey(ctx: Ctx, appId: string, key: string): void {
 }
 
 /** A new App key; the old one stops working at once. The new key exists in clear text only in the return value. */
+/** Active App keys an App may hold at once (one per agent setup, roughly). */
+export const MAX_ACTIVE_KEYS = 10;
+
+/**
+ * One more App key, alongside the active ones: for another agent session or machine, so whoever
+ * already works on the App keeps working. The key is shown once; the CP keeps its sha256.
+ */
+export function issueKey(ctx: Ctx, app: AppRow, actor: string): string {
+  const active = ctx.store.get<{ n: number }>('SELECT count(*) AS n FROM keys WHERE app_id = ? AND revoked_at IS NULL', app.id)!.n;
+  if (active >= MAX_ACTIVE_KEYS) {
+    throw fail('conflict', `${app.name} already has ${active} active App keys`, 'rotate the key instead: that retires every key and issues one new one');
+  }
+  const key = newAppKey();
+  insertKey(ctx, app.id, key);
+  ctx.store.recordActivity(app.id, null, actor, 'key.issue');
+  return key;
+}
+
 export function rotateKey(ctx: Ctx, app: AppRow, actor: string): string {
   const key = newAppKey();
   ctx.store.tx(() => {
