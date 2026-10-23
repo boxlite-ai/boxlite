@@ -249,33 +249,42 @@ func (g *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	owner := ownerOf(root)
-	dir := filepath.Dir(name)
-	if err := mkdirAllOwned(root, dir, owner); err != nil {
-		rootError(w, clean, err)
+	// Every write below happens as the volume owner (fsowner_linux.go): the
+	// volume is idmapped and refuses files created by root.
+	var n int64
+	failStatus, failCode, failMsg := 0, "", ""
+	err = asOwner(owner, func() error {
+		dir := filepath.Dir(name)
+		if err := mkdirAllOwned(root, dir, owner); err != nil {
+			return err
+		}
+		tmpName := filepath.Join(dir, fmt.Sprintf(".boxlite-upload-%d", time.Now().UnixNano()))
+		tmp, err := root.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = root.Remove(tmpName) }() // no-op after the rename
+		n, err = io.Copy(tmp, http.MaxBytesReader(w, r.Body, maxUpload))
+		if cerr := tmp.Close(); err == nil {
+			err = cerr
+		}
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			failStatus, failCode, failMsg = http.StatusRequestEntityTooLarge, "too_large", fmt.Sprintf("file is larger than %d bytes", maxUpload)
+			return nil
+		}
+		if err != nil {
+			failStatus, failCode, failMsg = http.StatusInternalServerError, "internal", err.Error()
+			return nil
+		}
+		owner.apply(root, tmpName)
+		return root.Rename(tmpName, name)
+	})
+	if failStatus != 0 {
+		fileError(w, failStatus, failCode, failMsg)
 		return
 	}
-	tmpName := filepath.Join(dir, fmt.Sprintf(".boxlite-upload-%d", time.Now().UnixNano()))
-	tmp, err := root.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
-		rootError(w, clean, err)
-		return
-	}
-	defer func() { _ = root.Remove(tmpName) }() // no-op after the rename
-	n, err := io.Copy(tmp, http.MaxBytesReader(w, r.Body, maxUpload))
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	var tooLarge *http.MaxBytesError
-	if errors.As(err, &tooLarge) {
-		fileError(w, http.StatusRequestEntityTooLarge, "too_large", fmt.Sprintf("file is larger than %d bytes", maxUpload))
-		return
-	}
-	if err != nil {
-		fileError(w, http.StatusInternalServerError, "internal", err.Error())
-		return
-	}
-	owner.apply(root, tmpName)
-	if err := root.Rename(tmpName, name); err != nil {
 		rootError(w, clean, err)
 		return
 	}
