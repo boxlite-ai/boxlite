@@ -10,6 +10,7 @@ import { openApp } from '@/lib/apps/open'
 import { downloadUrl } from '@/lib/apps/client'
 import type { AppSummary } from '@/lib/apps/types'
 import { cn } from '@/lib/utils'
+import { useState } from 'react'
 import { GridHeader, HoverActions, MoreButton, StatusBadge } from './spec'
 
 const GRID = 'grid-cols-[1.5fr_1.8fr_1.4fr_1.4fr_96px] gap-3'
@@ -126,6 +127,11 @@ export function AppTable({
                     {app.attention}
                   </span>
                 )}
+                {app.status === 'draft' && !!app.liveIn?.length && (
+                  <span className="truncate pl-[15px] font-mono text-[11px] text-muted-foreground">
+                    Running in {app.liveIn.join(', ')}
+                  </span>
+                )}
               </span>
               <span className="truncate font-mono text-[12px] text-muted-foreground">
                 {app.lastDeploy ? (
@@ -186,11 +192,14 @@ export function AppTable({
 function AppIcon({ app }: { app: AppSummary }) {
   const tone =
     app.status === 'failed' ? 'text-destructive' : app.status === 'live' ? 'text-brand' : 'text-muted-foreground'
-  return app.previewSrc ? (
+  // A picture that does not load falls back to the glyph, never an empty frame.
+  const [broken, setBroken] = useState(false)
+  return app.previewSrc && !broken ? (
     <img
       src={downloadUrl(app.previewSrc)}
       alt=""
       loading="lazy"
+      onError={() => setBroken(true)}
       className={cn(
         'h-[28px] w-[44px] shrink-0 border border-border object-cover object-top',
         app.status === 'sleeping' && 'opacity-60 grayscale-[35%]',

@@ -353,6 +353,8 @@ export interface AppSummary {
   progress?: string
   /** main's last screenshot (console API path), for the App list. */
   previewSrc?: string | null
+  /** Other environments with a live deployment (main may have none yet). */
+  liveIn?: string[]
 }
 
 /**
