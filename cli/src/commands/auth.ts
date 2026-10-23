@@ -5,6 +5,7 @@ import type { MakeCtx } from '../cli.js';
 import type { Ctx } from '../context.js';
 import { describe } from '../meta.js';
 import { roleOption } from './curl.js';
+import { forgetSessions } from '../local-cache.js';
 import { formatAgo, table } from '../output.js';
 
 async function status(ctx: Ctx): Promise<void> {
@@ -58,6 +59,7 @@ async function users(ctx: Ctx, action: string | undefined, target: string | unde
   if (action === 'purge-test') {
     if (!(await ctx.confirmDestructive({ action: `remove every test user of ${ctx.envName}`, destroys: ['the users test sessions created (`--as`), their sessions, and their rows in boxlite.users', 'never a user who signed in for real'], undo: 'none: a later `--as` makes the user again' }))) return;
     const r = await api.purgeTestUsers();
+    await forgetSessions(ctx.cwd, ctx.envName);
     ctx.out.data(r);
     ctx.out.line(`removed ${r.removed} test user${r.removed === 1 ? '' : 's'}${r.emails.length ? `: ${r.emails.join(', ')}` : ''}`);
     if (r.mirror.startsWith('kept')) ctx.out.line(`boxlite.users rows ${r.mirror}`);

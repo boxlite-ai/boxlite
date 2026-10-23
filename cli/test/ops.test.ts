@@ -209,6 +209,22 @@ test('app curl sends the App key to the app URL only, adds a test session with -
   assert.match(JSON.parse(foreign.stderr).error.message, /evil\.test is not this environment's URL/);
 });
 
+test('app curl reuses the environment URL and a test session that is still good', async () => {
+  const dir = await linked();
+  const { agent, pool } = mockApi();
+  const app = agent.get('https://app.test');
+  pool.intercept({ path: E, method: 'GET' }).reply(200, { name: 'main', url: 'https://app.test/crm' }, { headers: JSON_HEADERS }).times(1);
+  const later = new Date(Date.now() + 15 * 60_000).toISOString();
+  pool.intercept({ path: `${E}/auth/test-sessions`, method: 'POST' }).reply(201, { cookie: 'bxl_s=tok', expires_in: '15m', expires_at: later, user: { email: 'qa@example.com' } }, { headers: JSON_HEADERS }).times(1);
+  const cookies: string[] = [];
+  app.intercept({ path: '/crm/api/me', method: 'GET', headers: (h) => (cookies.push(String((h as Record<string, string>).cookie)), true) }).reply(200, { ok: 1 }, { headers: { 'content-type': 'application/json' } }).times(3);
+  const runs = [];
+  for (let i = 0; i < 3; i++) runs.push(JSON.parse((await cli(['app', 'curl', '/api/me', '--as', 'qa@example.com', '--json'], { cwd: dir, dispatcher: agent })).stdout));
+  // One environment lookup and one test session for three calls (each interceptor answers once).
+  assert.deepEqual(runs.map((r) => [r.status, r.timing.cached.url, r.timing.cached.test_session]), [[200, false, false], [200, true, true], [200, true, true]]);
+  assert.ok(cookies.length >= 3 && cookies.every((c) => c === 'bxl_s=tok'), `every call sent the same session: ${cookies.join(', ')}`);
+});
+
 test('app open asks for a one-time ticket and prints it without a terminal', async () => {
   const dir = await linked();
   const { agent, pool } = mockApi();

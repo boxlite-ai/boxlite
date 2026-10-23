@@ -8,6 +8,7 @@ import type { EndUserRole } from '../api.js';
 import type { MakeCtx } from '../cli.js';
 import type { Ctx } from '../context.js';
 import { describe } from '../meta.js';
+import { cachedSession, cachedUrl, rememberSession, rememberUrl } from '../local-cache.js';
 
 /** Bodies longer than this are cut in human output; JSON carries up to BODY_MAX_JSON. */
 const BODY_MAX_HUMAN = 64 * 1024;
@@ -87,9 +88,15 @@ async function bodyOf(ctx: Ctx, data: string | undefined): Promise<string | unde
  */
 async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
   const api = await ctx.appApi();
-  const env = await api.getEnv();
-  if (!env.url) throw new MicrocloudError('not_found', `${ctx.envName} has no URL yet`, '`boxlite-app deploy` first');
-  const url = appUrlFor(env.url, path);
+  // The environment's URL changes only when it is recreated: cached per project, dropped on a connection failure.
+  let envUrl = await cachedUrl(ctx.cwd, ctx.envName);
+  const urlCached = envUrl !== undefined;
+  if (!envUrl) {
+    envUrl = (await api.getEnv()).url;
+    if (!envUrl) throw new MicrocloudError('not_found', `${ctx.envName} has no URL yet`, '`boxlite-app deploy` first');
+    await rememberUrl(ctx.cwd, ctx.envName, envUrl);
+  }
+  const url = appUrlFor(envUrl, path);
   const headers: Record<string, string> = { 'user-agent': 'boxlite-app-curl', accept: '*/*', ...parseHeaders(opts.header) };
   const body = await bodyOf(ctx, opts.data);
   if (body !== undefined && !headers['content-type']) {
@@ -107,10 +114,17 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
   let as: { email: string; role: EndUserRole; expires_at?: string } | null = null;
   const role = roleOption(opts.role);
   if (role && !opts.as) throw new MicrocloudError('usage', '--role needs --as <email>', `\`boxlite-app app curl <path> --as owner@example.com --role ${role}\``);
+  let sessionCached = false;
   if (opts.as) {
-    const s = await api.createTestSession(opts.as, role);
+    // A test session lasts 15 minutes: reuse it while it has more than a minute left.
+    const reuse = await cachedSession(ctx.cwd, ctx.envName, opts.as, role ?? 'user');
+    const s = reuse ?? (await api.createTestSession(opts.as, role));
+    sessionCached = reuse !== undefined;
+    const fresh = s as { cookie: string; expires_at?: string; user?: { email?: string }; role?: EndUserRole };
+    const email = reuse?.email ?? fresh.user?.email ?? opts.as;
+    if (!reuse && fresh.expires_at) await rememberSession(ctx.cwd, ctx.envName, opts.as, role ?? 'user', { cookie: fresh.cookie, email, expires_at: fresh.expires_at });
     headers.cookie = headers.cookie ? `${headers.cookie}; ${s.cookie}` : s.cookie;
-    as = { email: s.user?.email ?? opts.as, role: s.role ?? role ?? 'user', expires_at: s.expires_at };
+    as = { email, role: fresh.role ?? role ?? 'user', expires_at: s.expires_at };
   }
   const sessionMs = as ? Date.now() - sessionStarted : 0;
   const method = (opts.request ?? (body !== undefined ? 'POST' : 'GET')).toUpperCase();
@@ -134,6 +148,8 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
     const code = ((e as Error & { cause?: { code?: string } }).cause?.code ?? '') as string;
     const reset = /ECONNRESET|UND_ERR_SOCKET|EPIPE/.test(code);
     if (!reset || (method !== 'GET' && method !== 'HEAD')) {
+      // The cached URL may be stale (the environment was recreated): the next call looks it up again.
+      if (urlCached) await rememberUrl(ctx.cwd, ctx.envName, '');
       const cause = (e as Error & { cause?: Error }).cause;
       throw new MicrocloudError('unavailable', `${method} ${url.href} failed: ${cause?.message ?? (e as Error).message}`, '`boxlite-app app services` and `boxlite-app doctor` show whether the app is up');
     }
@@ -166,7 +182,7 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
     redirect,
     ...(expect ? { expected: expect, as_expected: expect.includes(res.status) } : {}),
     ms,
-    timing: { test_session_ms: sessionMs, request_ms: ms },
+    timing: { test_session_ms: sessionMs, request_ms: ms, cached: { url: urlCached, test_session: sessionCached } },
     headers: { ...respHeaders, ...(setCookie.length ? { 'set-cookie': setCookie } : {}) },
     // A JSON body is given once, parsed; any other body as text.
     ...(bodyJson !== undefined ? { body_json: bodyJson } : { body: text.slice(0, BODY_MAX_JSON) }),
