@@ -208,3 +208,14 @@ Create restricted keys through the API or SDK by supplying an explicit
 The scopes are independent, and an API key can only create keys with the same
 or fewer permissions. Invitation acceptance in the console continues to use
 the signed-in user's JWT.
+
+## Every invitee joins as an owner
+
+An organization has no finer roles yet, so inviting asks only for an email
+address: a role picker would offer choices the product does not have. For the
+same reason a pending invitation can be cancelled but not edited, and a member
+can be removed but not given another role. The member whose personal
+organization this is has no remove action, because the API refuses that
+removal.
+
+The member view combines members and outgoing invitations in one table, with Member, Invited, and Expired statuses. Owners can remove members and cancel invitations. Resend first creates a replacement invitation with the current default lifetime, then cancels the expired record; creation failure preserves the old row and cleanup failure reports both records.
