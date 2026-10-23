@@ -220,6 +220,18 @@ async function main() {
     const l = await (await app('/api/files')).json()
     assert(l.includes('hello.txt'), `list ${JSON.stringify(l)}`)
   })
+  await check('volume: a file uploaded by the platform (console, app volume cp) lands and the app sees it', async () => {
+    // The platform writes through the supervisor (root) on an idmapped volume: the write must
+    // happen as the volume owner, or the kernel refuses it.
+    writeFileSync(join(DIR, 'from-agent.txt'), 'uploaded by the agent')
+    const cp = cli(['app', 'volume', 'cp', 'from-agent.txt', 'uploads:/from-agent.txt'])
+    assert(cp.code === 0, `volume cp exit ${cp.code}: ${(cp.err || cp.out).slice(0, 300)}`)
+    const ls = cli(['app', 'volume', 'ls', 'uploads:/'])
+    assert(JSON.stringify(ls.json).includes('from-agent.txt'), `ls ${JSON.stringify(ls.json).slice(0, 200)}`)
+    const l = await (await app('/api/files')).json()
+    assert(l.includes('from-agent.txt'), `the app does not see it: ${JSON.stringify(l)}`)
+    return 'written as the volume owner'
+  })
 
   // ---- sign-in ---------------------------------------------------------------------
   await check('protected path asks anonymous browsers to sign in', async () => {
@@ -237,8 +249,15 @@ async function main() {
     const me = await app('/api/me', { headers: { cookie: t.json.cookie } })
     const b = await me.json()
     assert(b.email === 'e2e@example.com', `me ${JSON.stringify(b)}`)
+    assert(b.role === 'user', `a test user is a plain user unless asked: ${JSON.stringify(b)}`)
     const u = cli(['app', 'sql', "select email from boxlite.users where email = 'e2e@example.com'"])
     assert(JSON.stringify(u.json).includes('e2e@example.com'), 'not mirrored')
+  })
+  await check('an owner test session reaches the app as role owner', async () => {
+    const r = cli(['app', 'curl', '/api/me', '--as', 'boss@example.com', '--role', 'owner'])
+    assert(r.code === 0, `exit ${r.code} ${r.err}`)
+    assert(r.json?.body_json?.role === 'owner', `me ${JSON.stringify(r.json?.body_json)}`)
+    return 'X-BoxLite-User-Role: owner'
   })
   await check('forged identity headers are stripped', async () => {
     const r = await app('/api/me', { headers: { 'x-boxlite-user-id': 'evil', 'x-boxlite-user-email': 'evil@x', 'x-boxlite-identity': 'forged' } })

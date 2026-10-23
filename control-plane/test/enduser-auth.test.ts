@@ -243,7 +243,7 @@ test('callback upserts and mirrors the user, then a one-time handoff code sets a
 
   const me = await h.appRequest('/.boxlite/auth/me', { headers: { cookie } });
   assert.equal(me.status, 200);
-  assert.deepEqual(await me.json(), { id: users[0]!.id, email: 'mona@example.com', name: 'Mona Lisa Octocat', provider: 'github', avatar_url: 'https://avatars.test/1' });
+  assert.deepEqual(await me.json(), { id: users[0]!.id, email: 'mona@example.com', name: 'Mona Lisa Octocat', provider: 'github', role: 'user', avatar_url: 'https://avatars.test/1' });
   assert.equal((await h.appRequest('/.boxlite/auth/me')).status, 401);
 
   // Signing in again is the same user.
@@ -471,7 +471,7 @@ test('X-BoxLite-Identity is an RS256 JWT bound to the app origin (aud) that veri
   assert.ok(verify('sha256', Buffer.from(`${h64}.${p64}`), createPublicKey({ key: jwk, format: 'jwk' }), Buffer.from(s64, 'base64url')));
   assert.ok(!verify('sha256', Buffer.from(`${h64}.${p64}x`), createPublicKey({ key: jwk, format: 'jwk' }), Buffer.from(s64, 'base64url')));
   const user = h.ctx.store.get<{ id: string }>('SELECT id FROM app_users')!;
-  assert.deepEqual({ ...claims, iat: 0, exp: claims.exp - claims.iat }, { iss: 'https://cp.test/auth', aud: APP_URL, sub: user.id, email: 'qa@example.com', name: 'qa', provider: 'test', app: 'crm', env: 'main', iat: 0, exp: 300 });
+  assert.deepEqual({ ...claims, iat: 0, exp: claims.exp - claims.iat }, { iss: 'https://cp.test/auth', aud: APP_URL, sub: user.id, email: 'qa@example.com', name: 'qa', provider: 'test', role: 'user', app: 'crm', env: 'main', iat: 0, exp: 300 });
 
   // F4: app crm's token is valid for crm and refused by any other app that checks aud.
   assert.ok(verifyIdentity(jwt, set.keys, h.ctx.resources.runtimeEnv(h.ctx.store.appByName('crm')!, h.ctx.store.envByName(h.ctx.store.appByName('crm')!.id, 'main')!, undefined).BOXLITE_APP_URL!));
@@ -636,4 +636,41 @@ test('providers BoxLite runs no OAuth app for take only the App\'s own, from the
   assert.equal(ok.status, 200, await ok.clone().text());
   const method = (await ok.json()).status.methods.find((m: { provider: string }) => m.provider === 'microsoft');
   assert.deepEqual({ label: method.label, status: method.status, keys: method.keys, managed: method.managedAvailable }, { label: 'Microsoft', status: 'ready', keys: 'own', managed: false });
+});
+
+// ---- the visitor's role -----------------------------------------------------------
+
+test('a visitor is owner when the same GitHub account manages the App in the console; a forged role is dropped', async () => {
+  const { app } = await setup();
+  const { cookie } = await signIn(fakeGithub(octo));
+  const roleNow = async () => {
+    seen = [];
+    await h.appRequest('/api/items', { headers: { cookie, 'x-boxlite-user-role': 'owner' } });
+    const me = (await (await h.appRequest('/.boxlite/auth/me', { headers: { cookie } })).json()) as { role: string };
+    const jwt = JSON.parse(Buffer.from(String(seen[0]!.headers['x-boxlite-identity']).split('.')[1]!, 'base64url').toString());
+    return [seen[0]!.headers['x-boxlite-user-role'], me.role, jwt.role];
+  };
+  assert.deepEqual(await roleNow(), ['user', 'user', 'user'], 'a stranger, whatever header the browser sends');
+
+  // The same GitHub account (numeric id) signs in to the console and is in the App's organization.
+  h.ctx.store.run("INSERT INTO console_users (id, provider, provider_id, login, created_at, last_login_at) VALUES ('cu_1', 'github', ?, 'octocat', '', '')", String(octo.id));
+  h.ctx.store.run("INSERT INTO org_members (org_id, user_id, role, created_at) VALUES ('org_other', 'cu_1', 'owner', '')");
+  assert.deepEqual(await roleNow(), ['user', 'user', 'user'], 'a member of another organization is not');
+  h.ctx.store.run("INSERT INTO org_members (org_id, user_id, role, created_at) VALUES (?, 'cu_1', 'member', '')", app.org_id ?? 'org_platform');
+  assert.deepEqual(await roleNow(), ['owner', 'owner', 'owner']);
+});
+
+test('test sessions take a role, so an agent can check both sides of an owner-only page', async () => {
+  const { key } = await setup();
+  const session = async (json: object) => (await h.request('/v1/apps/crm/envs/main/auth/test-sessions', { method: 'POST', key, json })).json() as Promise<{ cookie: string; role: string }>;
+  const owner = await session({ email: 'boss@example.com', role: 'owner' });
+  assert.equal(owner.role, 'owner');
+  seen = [];
+  await h.appRequest('/admin', { headers: { cookie: owner.cookie } });
+  assert.equal(seen[0]!.headers['x-boxlite-user-role'], 'owner');
+  const plain = await session({ email: 'boss@example.com' });
+  seen = [];
+  await h.appRequest('/admin', { headers: { cookie: plain.cookie } });
+  assert.equal(seen[0]!.headers['x-boxlite-user-role'], 'user', 'a new session without a role is a plain user again');
+  assert.equal((await h.request('/v1/apps/crm/envs/main/auth/test-sessions', { method: 'POST', key, json: { email: 'a@b.c', role: 'admin' } })).status, 400);
 });

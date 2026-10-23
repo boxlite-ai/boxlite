@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fetch } from 'undici';
+import type { EndUserRole } from '../api.js';
 import type { MakeCtx } from '../cli.js';
 import type { Ctx } from '../context.js';
 import { describe } from '../meta.js';
@@ -17,6 +18,7 @@ export interface CurlOptions {
   data?: string;
   header?: string[];
   as?: string;
+  role?: string;
   fail?: boolean;
 }
 
@@ -79,11 +81,13 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
     }
     headers['content-type'] = json ? 'application/json' : 'text/plain; charset=utf-8';
   }
-  let as: { email: string; expires_at?: string } | null = null;
+  let as: { email: string; role: EndUserRole; expires_at?: string } | null = null;
+  const role = roleOption(opts.role);
+  if (role && !opts.as) throw new MicrocloudError('usage', '--role needs --as <email>', `\`boxlite-app app curl <path> --as owner@example.com --role ${role}\``);
   if (opts.as) {
-    const s = await api.createTestSession(opts.as);
+    const s = await api.createTestSession(opts.as, role);
     headers.cookie = headers.cookie ? `${headers.cookie}; ${s.cookie}` : s.cookie;
-    as = { email: s.user?.email ?? opts.as, expires_at: s.expires_at };
+    as = { email: s.user?.email ?? opts.as, role: s.role ?? role ?? 'user', expires_at: s.expires_at };
   }
   const method = (opts.request ?? (body !== undefined ? 'POST' : 'GET')).toUpperCase();
   const started = Date.now();
@@ -144,7 +148,7 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
     throw new MicrocloudError('http_error', `${method} ${url.pathname} answered ${res.status}`, `\`boxlite-app app logs --since 5m --level error\` shows what the app printed`, { status: res.status, url: url.href, body: text.slice(0, 2000) });
   }
   ctx.out.data(result);
-  ctx.out.line(`HTTP ${res.status} ${res.statusText}  ${method} ${url.href}  ${ms} ms${as ? `  as ${as.email}` : ''}`);
+  ctx.out.line(`HTTP ${res.status} ${res.statusText}  ${method} ${url.href}  ${ms} ms${as ? `  as ${as.email}${as.role === 'owner' ? ' (owner)' : ''}` : ''}`);
   for (const [k, v] of Object.entries(respHeaders)) ctx.out.line(`${k}: ${v}`);
   for (const c of setCookie) ctx.out.line(`set-cookie: ${c}`);
   ctx.out.line('');
@@ -192,13 +196,14 @@ export function registerCurl(app: Command, make: MakeCtx): void {
       .option('-d, --data <body>', 'request body; @file reads it from a file; JSON bodies get Content-Type: application/json')
       .option('-H, --header <header>', 'extra request header "Name: value" (repeatable)', (v: string, prev: string[] = []) => [...prev, v])
       .option('--as <email>', 'act as this signed-in end user (a 15 minute test session)')
+      .option('--role <role>', 'with --as: owner (someone who manages the App in the console) or user (default); the app sees it as X-BoxLite-User-Role')
       .option('--fail', 'exit 1 (code http_error) when the status is 400 or above')
       .action(async (path: string, opts: CurlOptions, cmd: Command) => curl(await make(cmd), path, opts)),
     {
-      json: '{ url, method, status, ok, ms, headers: Record<string, string | string[]>, body: string, body_json?: unknown, truncated: boolean, as: { email, expires_at } | null }',
+      json: '{ url, method, status, ok, ms, headers: Record<string, string | string[]>, body: string, body_json?: unknown, truncated: boolean, as: { email, role, expires_at } | null }',
       exits: [2, 3, 4, 6],
       online: true,
-      examples: ['boxlite-app app curl /healthz', 'boxlite-app app curl /api/items -X POST -d \'{"title":"x"}\' --as qa@example.com --json', 'boxlite-app app curl /app --fail'],
+      examples: ['boxlite-app app curl /healthz', 'boxlite-app app curl /api/items -X POST -d \'{"title":"x"}\' --as qa@example.com --json', 'boxlite-app app curl /app --fail', 'boxlite-app app curl /admin --as owner@example.com --role owner'],
     },
   );
   describe(
@@ -209,4 +214,11 @@ export function registerCurl(app: Command, make: MakeCtx): void {
       .action(async (opts: { printUrl?: boolean }, cmd: Command) => open(await make(cmd), opts)),
     { json: '{ url: string, expires_at: string | null, opened: boolean }', exits: [2, 3], online: true },
   );
+}
+
+/** `--role`, checked: owner or user (undefined when not given). */
+export function roleOption(value: string | undefined): EndUserRole | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'owner' || value === 'user') return value;
+  throw new MicrocloudError('usage', `--role must be owner or user, not "${value}"`, '`--role owner` acts as someone who manages the App in the console');
 }

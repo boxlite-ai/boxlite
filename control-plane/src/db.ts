@@ -366,6 +366,11 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     PRIMARY KEY (app_id, provider)
   );
   `,
+  // The role a test user signs in with (enduser/role.ts); real users' roles come from org membership.
+  (db) => {
+    const columns = (db.prepare('PRAGMA table_info(app_users)').all() as { name: string }[]).map((c) => c.name);
+    if (!columns.includes('test_role')) db.exec('ALTER TABLE app_users ADD COLUMN test_role TEXT');
+  },
 ];
 
 export const LOG_RING_SIZE = 20_000;

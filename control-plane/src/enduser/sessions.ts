@@ -20,6 +20,8 @@ export interface AppUser {
   first_seen: string;
   last_seen: string;
   blocked: number;
+  /** Test users only: the role they were created with (role.ts). */
+  test_role?: string | null;
 }
 
 export interface UserView {

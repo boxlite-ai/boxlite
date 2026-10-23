@@ -4,6 +4,7 @@ import type { AuthUser } from '../api.js';
 import type { MakeCtx } from '../cli.js';
 import type { Ctx } from '../context.js';
 import { describe } from '../meta.js';
+import { roleOption } from './curl.js';
 import { formatAgo, table } from '../output.js';
 
 async function status(ctx: Ctx): Promise<void> {
@@ -68,10 +69,10 @@ async function users(ctx: Ctx, action: string | undefined, target: string | unde
   ctx.out.data(done);
 }
 
-async function testSession(ctx: Ctx, opts: { email: string }): Promise<void> {
-  const s = await (await ctx.appApi()).createTestSession(opts.email);
+async function testSession(ctx: Ctx, opts: { email: string; role?: string }): Promise<void> {
+  const s = await (await ctx.appApi()).createTestSession(opts.email, roleOption(opts.role));
   ctx.out.data(s);
-  ctx.out.line(`test user ${s.user?.email ?? opts.email} · expires in ${s.expires_in}`);
+  ctx.out.line(`test user ${s.user?.email ?? opts.email}${s.role === 'owner' ? ' (owner)' : ''} · expires in ${s.expires_in}`);
   ctx.out.line(`cookie: ${s.cookie}`);
   ctx.out.next(`curl -H 'Cookie: ${s.cookie}' "<app url>/<protected path>"`);
 }
@@ -101,7 +102,8 @@ export function registerAuth(app: Command, make: MakeCtx): void {
       .command('test-session')
       .description('sign in a test user for 15 minutes and print its cookie (for curl checks)')
       .requiredOption('--email <email>', 'test user email, e.g. qa@example.com')
-      .action(async (opts: { email: string }, cmd: Command) => testSession(await make(cmd), opts)),
-    { json: '{ cookie, cookie_name, expires_in: "15m", expires_at, user }', exits: [2, 3], online: true },
+      .option('--role <role>', 'owner (manages the App in the console) or user (default); sent as X-BoxLite-User-Role')
+      .action(async (opts: { email: string; role?: string }, cmd: Command) => testSession(await make(cmd), opts)),
+    { json: '{ cookie, cookie_name, expires_in: "15m", expires_at, role: "owner" | "user", user }', exits: [2, 3], online: true },
   );
 }

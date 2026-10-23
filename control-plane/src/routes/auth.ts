@@ -35,8 +35,8 @@ export function authRoutes(ctx: Ctx) {
 
   r.post('/envs/:env/auth/test-sessions', async (c) => {
     const env = envOf(ctx, c);
-    const b = await body(c, z.object({ email: z.string().regex(/^[^\s@]+@[^\s@]+$/, 'must be an email address').max(254) }));
-    return c.json(await createTestSession(ctx, c.get('app'), env, b.email, c.get('actor')), 201);
+    const b = await body(c, z.object({ email: z.string().regex(/^[^\s@]+@[^\s@]+$/, 'must be an email address').max(254), role: z.enum(['owner', 'user']).optional() }));
+    return c.json(await createTestSession(ctx, c.get('app'), env, b.email, c.get('actor'), b.role), 201);
   });
 
   return r;

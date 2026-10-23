@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Ctx } from '../ctx.js';
 import { IDENTITY_TTL_S, identityIssuer } from './config.js';
+import type { EndUserRole } from './role.js';
 import type { AppUser } from './sessions.js';
 
 interface SigningKey {
@@ -43,7 +44,7 @@ export function jwks(ctx: Pick<Ctx, 'config'>): { keys: JsonWebKey[] } {
  * RS256 identity JWT for one app env (security review F4): `aud` is that env's origin URL, which
  * the app has as BOXLITE_APP_URL, so a token captured by app A does not verify at app B.
  */
-export function identityToken(ctx: Pick<Ctx, 'config' | 'resources'>, user: AppUser, app: string, env: string, nowMs = Date.now()): string {
+export function identityToken(ctx: Pick<Ctx, 'config' | 'resources'>, user: AppUser, app: string, env: string, role: EndUserRole, nowMs = Date.now()): string {
   const k = signingKey(ctx);
   const iat = Math.floor(nowMs / 1000);
   const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -54,6 +55,7 @@ export function identityToken(ctx: Pick<Ctx, 'config' | 'resources'>, user: AppU
     email: user.email,
     name: user.name,
     provider: user.provider,
+    role,
     app,
     env,
     iat,

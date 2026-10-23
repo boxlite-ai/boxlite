@@ -572,8 +572,8 @@ export class Api {
     return (await this.request('GET', `${this.envPath}/auth/users/export`, { accept: 'text/csv' })).text();
   }
 
-  createTestSession(email: string): Promise<TestSession> {
-    return this.json('POST', `${this.envPath}/auth/test-sessions`, { body: { email } });
+  createTestSession(email: string, role?: EndUserRole): Promise<TestSession> {
+    return this.json('POST', `${this.envPath}/auth/test-sessions`, { body: { email, ...(role ? { role } : {}) } });
   }
 }
 
@@ -596,11 +596,15 @@ export interface AuthUser {
   active_sessions?: number;
 }
 
+/** `owner`: manages the App in the BoxLite console (X-BoxLite-User-Role); `user`: anyone else. */
+export type EndUserRole = 'owner' | 'user';
+
 export interface TestSession {
   cookie: string;
   cookie_name?: string;
   expires_in: string;
   expires_at?: string;
+  role?: EndUserRole;
   user?: AuthUser;
 }
 

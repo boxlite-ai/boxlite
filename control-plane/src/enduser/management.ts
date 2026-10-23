@@ -5,6 +5,7 @@ import { fail } from '../errors.js';
 import { OAUTH_PROVIDERS } from '../oauth-providers.js';
 import { TEST_SESSION_TTL_S, appProviders, configuredProviders, redirectUri, sessionName } from './config.js';
 import { mirrorUser } from './mirror.js';
+import type { EndUserRole } from './role.js';
 import { createSession, revokeSessions, upsertUser, userById, view, type AppUser, type UserView } from './sessions.js';
 
 export interface AuthStatus {
@@ -82,15 +83,16 @@ export function exportUsersCsv(ctx: Ctx, app: AppRow, env: EnvRow): string {
 }
 
 /** A signed-in session for a `test` user, so an agent can exercise login-only pages with curl. */
-export async function createTestSession(ctx: Ctx, app: AppRow, env: EnvRow, email: string, actor: string): Promise<{ cookie: string; cookie_name: string; expires_in: string; expires_at: string; user: UserView }> {
+export async function createTestSession(ctx: Ctx, app: AppRow, env: EnvRow, email: string, actor: string, role: EndUserRole = 'user'): Promise<{ cookie: string; cookie_name: string; expires_in: string; expires_at: string; role: EndUserRole; user: UserView }> {
   if (!ctx.resources.currentSpec(env)?.auth) throw fail('conflict', `sign-in is not enabled for ${app.name}/${env.name}`, 'add [auth] to boxlite.toml, then `boxlite-app apply --yes`');
   const normal = email.trim().toLowerCase();
   const user = upsertUser(ctx, app, env, 'test', { id: normal, email: normal, name: normal.split('@')[0] ?? normal, avatarUrl: null });
   if (user.blocked) throw fail('forbidden', `${normal} is blocked in ${env.name}`, 'unblock it with `boxlite-app app auth users unblock <email>`');
+  ctx.store.run('UPDATE app_users SET test_role = ? WHERE id = ?', role, user.id);
   const { token, expiresAt } = createSession(ctx, user, 'test', TEST_SESSION_TTL_S);
   await mirrorUser(ctx, env.id, user);
-  ctx.store.recordActivity(app.id, env.name, actor, 'auth.test_session', { user: user.id, email: normal });
+  ctx.store.recordActivity(app.id, env.name, actor, 'auth.test_session', { user: user.id, email: normal, role });
   // For the app's own origin (BOXLITE_APP_URL); host-only there, like a real sign-in.
   const name = sessionName(ctx, app, env);
-  return { cookie: `${name}=${token}`, cookie_name: name, expires_in: '15m', expires_at: expiresAt, user: view(ctx, user) };
+  return { cookie: `${name}=${token}`, cookie_name: name, expires_in: '15m', expires_at: expiresAt, role, user: view(ctx, user) };
 }

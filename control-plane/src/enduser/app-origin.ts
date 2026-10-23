@@ -12,6 +12,7 @@ import { identityToken, jwksResponse } from './identity.js';
 import { authLog } from './oauth-flow.js';
 import { htmlPage, noAccessPage, redirect, unauthenticated, wantsHtml } from './pages.js';
 import { isProtected, normalisePath, safeNext } from './paths.js';
+import { roleOf } from './role.js';
 import { createSession, sessionUser, type AppUser } from './sessions.js';
 
 export interface ProxyRequest {
@@ -38,10 +39,12 @@ export function identityFor(ctx: Ctx, req: ProxyRequest, app: AppRow, env: EnvRo
   if (!auth) return { headers: {} };
   const user = sessionUser(ctx, env, readCookie(req.headers, sessionName(ctx, app, env)));
   if (user) {
+    const role = roleOf(ctx, app, user);
     const headers: Record<string, string> = {
       'x-boxlite-user-id': user.id,
       'x-boxlite-user-provider': user.provider,
-      'x-boxlite-identity': identityToken(ctx, user, app.name, env.name),
+      'x-boxlite-user-role': role,
+      'x-boxlite-identity': identityToken(ctx, user, app.name, env.name, role),
     };
     // Header values are bytes; names (and rarely emails) are not ASCII, so they travel URI-encoded.
     if (user.email) headers['x-boxlite-user-email'] = /^[\x20-\x7e]*$/.test(user.email) ? user.email : encodeURIComponent(user.email);
@@ -62,7 +65,7 @@ function authRoute(ctx: Ctx, req: ProxyRequest, app: AppRow, env: EnvRow, route:
   if (route === '/me') {
     const user = sessionUser(ctx, env, readCookie(req.headers, hostCookieName(SESSION_COOKIE_NAME, secure)));
     if (!user) return unauthenticated();
-    return Response.json({ id: user.id, email: user.email, name: user.name, provider: user.provider, avatar_url: user.avatar_url }, { headers: { 'cache-control': 'no-store' } });
+    return Response.json({ id: user.id, email: user.email, name: user.name, provider: user.provider, role: roleOf(ctx, app, user), avatar_url: user.avatar_url }, { headers: { 'cache-control': 'no-store' } });
   }
   if (route === '/complete') return complete(ctx, req, app, env);
   const next = safeNext(q.get('next'));

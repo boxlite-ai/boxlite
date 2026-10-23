@@ -9,7 +9,7 @@ const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL })
 const UPLOADS = '/data/uploads'
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json' }
 const json = (res, code, body) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
-const user = (req) => req.headers['x-boxlite-user-id'] ? { id: req.headers['x-boxlite-user-id'], email: req.headers['x-boxlite-user-email'] } : null
+const user = (req) => req.headers['x-boxlite-user-id'] ? { id: req.headers['x-boxlite-user-id'], email: req.headers['x-boxlite-user-email'], role: req.headers['x-boxlite-user-role'] } : null
 const body = async (req) => { let b = ''; for await (const c of req) b += c; return b }
 
 const server = http.createServer(async (req, res) => {

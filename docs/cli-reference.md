@@ -307,16 +307,18 @@ Usage: `boxlite-app app curl <path> [options]`
 | `-d, --data <body>` | request body; @file reads it from a file; JSON bodies get Content-Type: application/json |  |
 | `-H, --header <header>` | extra request header "Name: value" (repeatable) |  |
 | `--as <email>` | act as this signed-in end user (a 15 minute test session) |  |
+| `--role <role>` | with --as: owner (someone who manages the App in the console) or user (default); the app sees it as X-BoxLite-User-Role |  |
 | `--fail` | exit 1 (code http_error) when the status is 400 or above |  |
 
 - Network: talks to the control plane
-- `--json`: `{ url, method, status, ok, ms, headers: Record<string, string | string[]>, body: string, body_json?: unknown, truncated: boolean, as: { email, expires_at } | null }`
+- `--json`: `{ url, method, status, ok, ms, headers: Record<string, string | string[]>, body: string, body_json?: unknown, truncated: boolean, as: { email, role, expires_at } | null }`
 - Exit codes: 0, 1, 2, 3, 4, 6
 
 ```sh
 boxlite-app app curl /healthz
 boxlite-app app curl /api/items -X POST -d '{"title":"x"}' --as qa@example.com --json
 boxlite-app app curl /app --fail
+boxlite-app app curl /admin --as owner@example.com --role owner
 ```
 
 ### `boxlite-app app open`
@@ -809,7 +811,8 @@ Usage: `boxlite-app app auth test-session [options]`
 | option | description | default |
 |---|---|---|
 | `--email <email>` | test user email, e.g. qa@example.com |  |
+| `--role <role>` | owner (manages the App in the console) or user (default); sent as X-BoxLite-User-Role |  |
 
 - Network: talks to the control plane
-- `--json`: `{ cookie, cookie_name, expires_in: "15m", expires_at, user }`
+- `--json`: `{ cookie, cookie_name, expires_in: "15m", expires_at, role: "owner" | "user", user }`
 - Exit codes: 0, 1, 2, 3
