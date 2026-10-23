@@ -142,8 +142,8 @@ async function main() {
     await step('create the app; the page masks the key and Copy prompt hands over the working one', async () => {
       await page.getByRole('button', { name: 'New App' }).first().click()
       await page.keyboard.type(APP)
-      await page.getByRole('button', { name: 'Create app' }).click()
-      await page.getByText('Hand off to your agent', { exact: false }).first().waitFor()
+      await page.getByRole('button', { name: 'Start building' }).click()
+      await page.getByText('Start building with your agent').first().waitFor()
       const shown = await text(page.locator('pre').first())
       assert(!/bxl_app_[a-z2-7]{32}/.test(shown), 'the page shows the full App key')
       await shot('created-prompt')
@@ -198,18 +198,18 @@ async function main() {
       return '#1 live'
     })
 
-    await step('in a new session, Copy instructions issues one more working key; the first keeps working', async () => {
+    await step('in a new session, Copy prompt issues one more working key; the first keeps working', async () => {
       // A reload drops the prompt this tab was given at creation, like opening the console elsewhere.
       await page.goto(`${CONSOLE}/console/dashboard/apps/${APP}?tab=overview`)
-      await page.getByText('Hand off to your agent').first().waitFor()
+      await page.getByText('Keep building with your agent').first().waitFor()
       assert(!/bxl_app_[a-z2-7]{32}/.test(await text(page.locator('pre').first())), 'the overview shows a full App key')
-      await page.getByRole('button', { name: 'Copy instructions' }).click()
+      await page.getByRole('button', { name: 'Copy prompt' }).click()
       const dialog = page.getByRole('dialog')
       await dialog.getByText(`New prompt for ${APP}`).waitFor()
       await shot('issued-prompt')
       await dialog.getByRole('button', { name: 'Copy prompt' }).click()
       const issued = /bxl_app_[a-z2-7]{32}/.exec(await page.evaluate(() => navigator.clipboard.readText()))?.[0]
-      assert(issued && issued !== KEY, 'Copy instructions did not hand over a new key')
+      assert(issued && issued !== KEY, 'Copy prompt did not hand over a new key')
       await page.keyboard.press('Escape')
       await dialog.waitFor({ state: 'hidden' })
       for (const key of [KEY, issued]) {
