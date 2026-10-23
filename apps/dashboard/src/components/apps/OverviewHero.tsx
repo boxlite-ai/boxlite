@@ -5,21 +5,16 @@
 
 import { ArrowUpRight } from '@/components/ui/icon'
 import { downloadUrl } from '@/lib/apps/client'
-import { actorName, capitalize, relTime, STATUS, VISIBILITY_LABEL } from '@/lib/apps/format'
+import { actorName, relTime, STATUS } from '@/lib/apps/format'
 import { openApp } from '@/lib/apps/open'
 import type { AppDetail, AppRelease, AppTab } from '@/lib/apps/types'
 import { cn } from '@/lib/utils'
-import type { ReactNode } from 'react'
 import { DeployProgress } from './DeployProgress'
 import { CopyIconButton } from './spec'
 
-// The top of the Overview: what is live (the app as visitors see it, in a browser frame with its
-// address, and the deployment that put it there) and what the agent built behind it, drawn the
-// way boxlite.ai draws infrastructure: visitors reach an address, the address a Box running the
-// app's services, the Box its database, files and sign-in. Each part shows its state and opens
-// its tab. Every fact appears once; the header already says the app's state.
-
-const PROVIDER_NAME: Record<string, string> = { github: 'GitHub', google: 'Google' }
+// The top of the Overview: what is live, the app as visitors see it in a browser frame with its
+// address, next to the deployment that put it there. Every fact appears once; the header already
+// says the app's state.
 
 const host = (url: string) => url.replace(/^https?:\/\//, '').replace(/\/$/, '')
 
@@ -132,176 +127,6 @@ export function LiveCard({
             Picture from {preview.releaseId}, captured {relTime(preview.capturedAt)}
           </span>
         )}
-      </div>
-    </section>
-  )
-}
-
-type Tone = 'good' | 'idle' | 'bad' | 'off'
-const DOT: Record<Tone, string> = { good: STATUS.running, idle: STATUS.idle, bad: STATUS.error, off: STATUS.stopped }
-
-function Node({
-  label,
-  title,
-  detail,
-  tone,
-  icon,
-  onClick,
-  children,
-}: {
-  label: string
-  title: string
-  detail?: string
-  tone: Tone
-  icon?: ReactNode
-  onClick?: () => void
-  children?: ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group flex min-w-0 flex-col gap-2 border border-border bg-card px-4 py-3 text-left transition-colors hover:border-brand/70"
-    >
-      <span className="flex items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
-        {label}
-        <span className="size-[6px]" style={{ background: DOT[tone] }} />
-      </span>
-      <span className="flex min-w-0 items-center gap-2">
-        {icon}
-        <span className="min-w-0 truncate font-display text-[15px] font-semibold text-foreground">{title}</span>
-      </span>
-      {detail && <span className="truncate font-mono text-[11px] text-muted-foreground">{detail}</span>}
-      {children}
-    </button>
-  )
-}
-
-/** A dashed connector with an arrowhead, as on boxlite.ai's diagrams. */
-const Link = () => (
-  <span aria-hidden="true" className="hidden items-center md:flex">
-    <span className="h-px flex-1 border-t border-dashed border-brand/50" />
-    <span className="-ml-[3px] text-[10px] leading-none text-brand/70">▶</span>
-  </span>
-)
-
-/** What the agent built: visitors → address → Box → database, files, sign-in, schedules. */
-export function StackDiagram({ app, onGoTo }: { app: AppDetail; onGoTo: (tab: AppTab, section?: string) => void }) {
-  const asleep = app.status === 'sleeping'
-  const up = app.services.filter((s) => s.state === 'running' && s.health !== 'unhealthy').length
-  const all = app.services.length
-  const boxTone: Tone = asleep ? 'off' : all === 0 ? 'off' : up === all ? 'good' : 'idle'
-  const backing: ReactNode[] = []
-  if (app.database)
-    backing.push(
-      <Node
-        key="db"
-        label="Database"
-        title={app.database.engine}
-        detail={`as DATABASE_URL in ${app.database.injectedInto.join(', ') || 'no service yet'}`}
-        tone={asleep ? 'off' : 'good'}
-        onClick={() => onGoTo('database')}
-      />,
-    )
-  if (app.storages.length)
-    backing.push(
-      <Node
-        key="files"
-        label="Files"
-        title={app.storages.map((v) => v.name).join(', ')}
-        detail={app.storages.map((v) => v.mountPath).join(', ')}
-        tone={asleep ? 'off' : 'good'}
-        onClick={() => onGoTo('volumes')}
-      />,
-    )
-  if (app.auth.declared)
-    backing.push(
-      <Node
-        key="auth"
-        label="Sign-in"
-        title={app.auth.providers.map((p) => PROVIDER_NAME[p] ?? p).join(' · ') || 'Sign-in'}
-        detail={`${app.auth.users} user${app.auth.users === 1 ? '' : 's'}`}
-        tone={app.auth.enforced ? 'good' : 'idle'}
-        onClick={() => onGoTo('auth')}
-      />,
-    )
-  if (app.schedules.length)
-    backing.push(
-      <Node
-        key="jobs"
-        label="Schedules"
-        title={`${app.schedules.length} job${app.schedules.length === 1 ? '' : 's'}`}
-        detail={app.schedules.map((s) => s.name).join(', ')}
-        tone={asleep ? 'off' : 'good'}
-        onClick={() => onGoTo('deployments', 'services')}
-      />,
-    )
-
-  return (
-    <section className="flex flex-col gap-3">
-      <span className="font-mono text-[10px] uppercase tracking-[2px] text-muted-foreground">
-        <span className="text-brand">▸</span> What your agent built
-      </span>
-      <div className="relative border border-border bg-[linear-gradient(hsl(var(--border)/0.35)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--border)/0.35)_1px,transparent_1px)] bg-[size:40px_40px] p-5">
-        <div
-          className={cn(
-            'grid items-center gap-3',
-            backing.length > 0
-              ? 'md:grid-cols-[minmax(0,1fr)_28px_minmax(0,1fr)_28px_minmax(0,1.25fr)_28px_minmax(0,1.15fr)]'
-              : 'md:grid-cols-[minmax(0,1fr)_28px_minmax(0,1fr)_28px_minmax(0,1.25fr)]',
-          )}
-        >
-          <Node
-            label="Visitors"
-            title={app.visibility === 'public' ? 'Anyone' : capitalize(VISIBILITY_LABEL[app.visibility])}
-            detail={app.visibility === 'public' ? 'no sign-in to open it' : 'others see a private page'}
-            tone="good"
-            onClick={() => onGoTo('domains')}
-          />
-          <Link />
-          <Node
-            label="Address"
-            title={app.name}
-            detail={host(app.url)}
-            tone={app.activeRelease ? 'good' : 'off'}
-            onClick={() => onGoTo('domains')}
-          />
-          <Link />
-          <Node
-            label="Box"
-            title={app.runtime ? `${app.runtime.image} · ${app.runtime.size}` : 'Box'}
-            icon={<IsoCube size={16} tone={boxTone === 'good' ? 'brand' : 'muted'} />}
-            tone={boxTone}
-            onClick={() => onGoTo('deployments', 'services')}
-          >
-            <span className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
-              {asleep ? (
-                <span>asleep · wakes on the next visit</span>
-              ) : all === 0 ? (
-                <span>no services yet</span>
-              ) : (
-                app.services.map((s) => (
-                  <span key={s.name} className="inline-flex items-center gap-1.5">
-                    <span
-                      className="size-[5px]"
-                      style={{
-                        background:
-                          s.state === 'running' && s.health !== 'unhealthy'
-                            ? STATUS.running
-                            : s.state === 'failed' || s.health === 'unhealthy'
-                              ? STATUS.error
-                              : STATUS.idle,
-                      }}
-                    />
-                    {s.name}
-                  </span>
-                ))
-              )}
-            </span>
-          </Node>
-          {backing.length > 0 && <Link />}
-          {backing.length > 0 && <div className="flex min-w-0 flex-col gap-3">{backing}</div>}
-        </div>
       </div>
     </section>
   )

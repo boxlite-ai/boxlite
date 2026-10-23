@@ -8,13 +8,12 @@ import type { AppDetail, AppProblem, AppRelease, AppTab } from '@/lib/apps/types
 import { toast } from 'sonner'
 import { AgentHandoffPanel } from '../AgentHandoffPanel'
 import { HandoffToAgent } from '../HandoffToAgent'
-import { LiveCard, StackDiagram } from '../OverviewHero'
+import { LiveCard } from '../OverviewHero'
 import { copyText, Disclosure, FlatButton, PromptBlock, StatusBadge } from '../spec'
 import { TrafficPanel } from '../TrafficPanel'
 
 // Overview answers three things, in this order: does anything need you, what
-// is live right now and what the agent built behind it (OverviewHero.tsx), and
-// how it is doing. Process ids and exit codes live inside each
+// is live right now (OverviewHero.tsx), and how it is doing. Process ids and exit codes live inside each
 // service row. One primary action per state: open the app when healthy, copy
 // the fix when broken, hand the app to the agent when nothing is deployed.
 
@@ -134,7 +133,6 @@ export function OverviewTab({
 
       <LiveCard app={app} active={active} failing={failing.length > 0} onGoTo={onGoTo} />
 
-      <StackDiagram app={app} onGoTo={onGoTo} />
 
       {/* From the app proxy's access log and the sign-in sessions; hidden until there is either. */}
       {m && <TrafficPanel metrics={m} />}
