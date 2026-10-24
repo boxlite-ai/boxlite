@@ -220,13 +220,18 @@ func (p *Proxy) loginAPI(ctx context.Context, method, path string, body any, bea
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return err
+	// A nil body is sent as no body: the API's strict JSON parser rejects `null`.
+	var payload io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		payload = bytes.NewReader(encoded)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	r, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(payload))
+	r, err := http.NewRequestWithContext(ctx, method, endpoint, payload)
 	if err != nil {
 		return err
 	}
@@ -235,7 +240,9 @@ func (p *Proxy) loginAPI(ctx context.Context, method, path string, body any, bea
 		authorization = "Bearer " + bearer
 	}
 	r.Header.Set("Authorization", authorization)
-	r.Header.Set("Content-Type", "application/json")
+	if payload != nil {
+		r.Header.Set("Content-Type", "application/json")
+	}
 	client := cfg.HTTPClient
 	if client == nil {
 		client = http.DefaultClient

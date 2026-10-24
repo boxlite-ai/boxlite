@@ -766,7 +766,7 @@ Forwarding opens connections against the existing declaration and cannot undo re
 an allocated string the caller frees with `boxlite_free_string()`. It writes NULL
 for a local tunnel.
 
-`boxlite_network_revoke_tunnel()` withdraws the public URL of `port`. It is
+`boxlite_network_revoke_tunnel()` withdraws the public or private tunnel of `port`. It is
 safe to repeat, leaves open connections running, and does nothing for a local
 box.
 

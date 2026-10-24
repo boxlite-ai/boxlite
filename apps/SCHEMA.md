@@ -680,16 +680,18 @@ copy and fail the comparison it exists for.
 
 ### `tunnel`
 
-One access declaration per box port. Only public access is enabled; private
-mode and `token_hash` are reserved for later.
+One access declaration per box port, public or private. A private tunnel stores
+only its token's hash and a display mask; the full token is returned once.
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
 | `id` | `uuid` | primary key |
 | `box_id` | `character varying(12)` | FK → `box.id`, cascades on hard deletion |
 | `port` | `integer` | 1–65535 |
-| `access_mode` | `character varying` | `public` or reserved `private` |
+| `access_mode` | `character varying` | `public` or `private` |
 | `token_hash` | `character varying` | null for public; non-null for private |
+| `token_mask` | `character varying` | nullable; display mask of a private token |
+| `auth_generation` | `integer` | default `1`; incremented on revoke and on redeclaring after revoke, invalidating browser sessions |
 | `created_at` | `timestamptz` | creation time |
 | `revoked_at` | `timestamptz` | null while active |
 
