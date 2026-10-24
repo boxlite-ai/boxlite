@@ -3,9 +3,10 @@
 Host backends for BoxLite's VMM: HVF on macOS arm64 and KVM on Linux x86_64
 and arm64, with WHP on Windows x86_64 reserved for M10. The `Vm`, `Vcpu` and
 `VcpuHandle` traits, with `VcpuExit`, `MemoryRegion` and `Error`, are the
-current shared contract; M1 adds the vCPU register access and HVF `CPU_ON`
-exit that boot needs, and the HVF and KVM backends themselves. The rules each
-backend keeps are in the
+shared contract. Each architecture extends it with the register access boot
+needs: `X86Vm` and `X86Vcpu` on x86_64, `Arm64Vcpu` on arm64, where
+`VcpuExit::CpuOn` also carries the PSCI `CPU_ON` that HVF leaves to the VMM.
+The rules each backend keeps are in the
 [VMM design](../../docs/contributing/architecture/vmm/README.md#hypervisor-backend-interface).
 
 This crate owns host VM/vCPU handles, memory registration, interrupt
@@ -19,7 +20,8 @@ machine layout and device emulation belong to `boxlite-vmm`.
 | `exit` | `VcpuExit`: decoded exits and the I/O completion contract |
 | `memory` | `MemoryRegion`: host memory mapped into the guest |
 | `error` | `Error`: the failed operation, its resource, and the host cause |
-| `hvf` / `hvf::syndrome` | HVF operations and ARM exception decoding (not implemented yet) |
+| `arm64` | `Arm64Vcpu`, `Arm64BootRegisters` and `CpuOnResult`: the arm64 boot registers and the VMM's answer to `CPU_ON` |
+| `hvf` | macOS arm64: the VM and its in-kernel GICv3, memory, vCPU execution and kicks, with `syndrome` decoding exceptions and emulating trapped system registers, and `psci` serving PSCI 0.2 |
 | `kvm` | x86_64 VM creation, memory slots, registers, CPUID/MSRs, execution, kicks and pending-I/O completion; arm64 follows |
 | `whp` / `whp::emulator` | WHP operations and x86 instruction decoding for memory-access exits (reserved for M10) |
 
@@ -62,7 +64,39 @@ discovery is a ceiling, not permission to add unsupported instructions.
 These three methods form the x86_64 extension traits `X86Vm`
 (`supported_cpuid`) and `X86Vcpu` (`set_cpu_features`, `set_boot_registers`),
 which `KvmVm` and `KvmVcpu` implement, so the VMM's vCPU workers and its mock
-backend use one interface. arm64 adds its own extension trait with its boot path.
+backend use one interface. On arm64, `Arm64Vcpu` sets MPIDR_EL1 (`set_mpidr`) and
+the entry PC, X0 and PSTATE (`set_boot_registers`).
+
+macOS arm64 exports `HvfVm` and thread-bound `HvfVcpu`, which implement `Vm`,
+`Vcpu` and `Arm64Vcpu` on Hypervisor.framework with the in-kernel GICv3 of
+macOS 15. Design and research: [#2103](https://github.com/boxlite-ai/boxlite/issues/2103).
+
+- **One VM per process.** `HvfVm::new` creates the VM, then the GIC at the
+  distributor and redistributor bases the VMM picks, after checking them
+  against the alignment and region sizes HVF reports. A second VM fails with
+  `ResourceBusy`; a missing hypervisor entitlement with `PermissionDenied`;
+  macOS 12 to 14, which lack the in-kernel GIC, with `Unsupported`, a path no
+  tested host exercises. The GIC calls are looked up at run time, so a binary
+  that links the backend imports none of them; a unit test checks its own
+  binary with `nm -u`.
+- **Exits.** `run` decodes the exception syndrome itself:
+  - data aborts with a valid syndrome become `MmioRead` and `MmioWrite`. The
+    next `run` or `complete_pending_io` writes a read's value, sign- or
+    zero-extended by the syndrome, and moves PC past the access. Register 31
+    is XZR, never HVF's PC. A cache-maintenance abort is skipped, as in QEMU;
+  - HVC is PSCI 0.2. The backend answers `VERSION` and `MIGRATE_INFO_TYPE`
+    itself, and any other call it does not act on with `NOT_SUPPORTED`, without
+    an exit. `SYSTEM_OFF` and `SYSTEM_RESET` end the VM, and `CPU_ON` becomes
+    `VcpuExit::CpuOn`, whose `result` the guest reads back;
+  - trapped system registers are emulated as QEMU does: the OS lock that
+    Linux clears at boot, the other debug registers and the reserved ID space
+    as zero;
+  - SMC, a data abort without a usable syndrome or from a stage-1 table walk,
+    and any other exception are `UnhandledExit`, with the guest PC.
+- **Waiting and kicks.** HVF waits out WFI itself and wakes the vCPU for its
+  timer and for SPIs set from any thread, so no host thread parks.
+  `HvfVcpuHandle::kick` calls `hv_vcpus_exit`, which HVF holds until the next
+  `run`. Dropping the vCPU clears the ID a handle kicks before HVF can reuse it.
 
 `KvmVcpu::handle()` can kick a worker before or during guest entry. Cloned handles
 become inert when the vCPU is dropped or its worker exits, even if safe code
@@ -86,10 +120,20 @@ through KVM to verify long-mode segments, entry addresses, and floating-point st
 Linux x64 CI runs these tests with `make coverage:vmm:kvm`, adding their coverage
 to the unit profiles before upload; missing KVM access is a failure.
 
+On macOS arm64, `make test:integration:vmm:hvf` runs the HVF hardware tests:
+tiny machine-code guests that check MMIO widths and extension, PSCI, the OS
+lock, MPIDR, WFI woken by an SPI from another thread, and kicks. Its runner
+signs the test binary with `com.apple.security.hypervisor`, which
+Hypervisor.framework requires, and the tests run one at a time because a
+process holds one VM. Hosted macOS runners cannot nest virtualization, so these
+tests run on a developer Mac.
+
 M1 proceeds in boot order: create the VM and map RAM, create/run vCPUs, load
 the kernel and boot metadata, attach legacy devices, then reach a test `/init`
-and return the guest's reset to the caller. The full M1 still includes Linux
-arm64 and macOS arm64 after the initial Linux x86_64 path.
+and return the guest's reset to the caller. Linux x86_64 boots that way; for
+macOS arm64 the backend is in place and the arm64 machine and first boot
+follow ([#2103](https://github.com/boxlite-ai/boxlite/issues/2103)). Linux
+arm64 comes later.
 
 References for this step:
 

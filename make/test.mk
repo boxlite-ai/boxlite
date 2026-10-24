@@ -1,5 +1,6 @@
 PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm _ensure-vmm-kernel test\:vmm\:boot
+PHONY_TARGETS += test\:integration\:vmm\:hvf _ensure-hvf
 PHONY_TARGETS += test\:apps\:runner
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
@@ -306,6 +307,17 @@ test\:integration\:vmm\:elf: _ensure-kvm _ensure-vmm-kernel
 test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout 60s cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1
+
+# A host without Hypervisor.framework must fail HVF qualification, not report skipped tests as a pass.
+_ensure-hvf:
+	@test "$$(uname -s -m)" = "Darwin arm64" || { echo "macOS arm64 is required" >&2; exit 1; }
+	@test "$$(sysctl -n kern.hv_support 2>/dev/null)" = 1 || { echo "Hypervisor.framework is unavailable on this host" >&2; exit 1; }
+
+# Run the ignored HVF hardware tests one at a time, since a process holds one HVF VM; the
+# runner signs each test binary with the hypervisor entitlement and bounds a stalled guest.
+test\:integration\:vmm\:hvf: export CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER := $(SCRIPT_DIR)/test/hvf-runner.sh
+test\:integration\:vmm\:hvf: _ensure-hvf
+	@cargo test -p boxlite-hypervisor --lib hvf::tests:: -- --ignored --test-threads=1
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
 # excluded from test:unit:rust because the zygote suite forks real processes.

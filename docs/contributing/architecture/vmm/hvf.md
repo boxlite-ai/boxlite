@@ -2,8 +2,8 @@
 
 A visual introduction to HVF on Apple silicon, using BoxLite's
 [planned native VMM](README.md). This design targets macOS 15+ for HVF's
-interrupt controller. The native backend is still a stub; boxes currently use
-libkrun.
+interrupt controller. The HVF backend lives in `src/hypervisor/src/hvf/`; boxes
+still use libkrun until the VMM's engine adapter lands in M2.
 
 ## 1. Architecture
 
@@ -198,9 +198,8 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-  box VMM · completion and wake-up
+  box VMM · completion
     participant worker as I/O worker
-    participant thread0 as Thread T0
   end
   box Host · macOS API and interrupt controller
     participant hvf as Hypervisor.framework
@@ -214,13 +213,7 @@ sequenceDiagram
   worker->>hvf: VMM interrupt path calls hv_gic_set_spi
   %% edge:io_pending
   hvf->>gic: Set disk IRQ<br/>pending
-  %% edge:io_unpark
-  worker->>thread0: VMM also unparks<br/>halted vCPU threads
-  opt vCPU 0 had parked after WFI: wait for interrupt
-    %% edge:io_reenter_parked
-    thread0->>hvf: Wake and re-enter<br/>hv_vcpu_run
-  end
-  Note over thread0,kernel: Here Linux routes this interrupt to vCPU 0<br/>Setting the IRQ line alone does not wake a parked host thread
+  Note over hvf,kernel: Here Linux routes this interrupt to vCPU 0<br/>If vCPU 0 waits in WFI, HVF wakes it inside hv_vcpu_run
   %% edge:io_interrupt
   gic->>kernel: Deliver IRQ<br/>when accepted
 ```
@@ -256,11 +249,7 @@ sequenceDiagram
   %% edge:stop_flag
   coordinator->>coordinator: Receive stop request<br/>and set stop flag
   %% edge:stop_kick
-  coordinator->>hvf: hv_vcpus_exit: kick both vCPUs out of guest execution
-  %% edge:stop_unpark0
-  coordinator->>thread0: Unpark if waiting
-  %% edge:stop_unpark1
-  coordinator->>thread1: Unpark if waiting
+  coordinator->>hvf: hv_vcpus_exit: kick both vCPUs out of guest execution, WFI included
   Note over thread0,hvf: Each owner completes any pending device access before destruction<br/>without executing another guest instruction
   %% edge:stop_destroy0
   thread0->>hvf: hv_vcpu_destroy on T0

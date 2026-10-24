@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Host hypervisor backends. The [`Vm`] and [`Vcpu`] traits are the contract
-//! every backend implements. KVM x86_64 currently provides VM creation and
-//! memory registration, registers and CPU features, vCPU execution and kicks;
-//! HVF and WHP are not implemented yet.
+//! every backend implements. KVM x86_64 and HVF on macOS arm64 provide VM
+//! creation and memory registration, boot registers, vCPU execution and kicks;
+//! WHP is reserved for M10.
 //!
 //! This crate owns host-specific mechanisms; `boxlite-vmm` owns the guest
 //! machine configuration, memory backing, execution policy, and devices.
@@ -17,6 +17,11 @@ mod exit;
 mod memory;
 mod vcpu;
 mod vm;
+
+#[cfg(target_arch = "aarch64")]
+mod arm64;
+#[cfg(target_arch = "aarch64")]
+pub use arm64::{Arm64BootRegisters, Arm64Vcpu, CpuOnResult};
 
 #[cfg(target_arch = "x86_64")]
 mod x86;
@@ -31,6 +36,9 @@ pub use vm::Vm;
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod hvf;
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub use hvf::{HvfVcpu, HvfVcpuHandle, HvfVm};
 
 #[cfg(all(
     target_os = "linux",

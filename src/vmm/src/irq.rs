@@ -13,7 +13,7 @@ use std::sync::{
 use crate::error::Result;
 
 /// The host interrupt controller as devices see it. Every host VM is one; a
-/// wrapper can add behaviour, such as counting or waking parked vCPUs.
+/// wrapper can add behaviour, such as counting.
 pub(crate) trait IrqChip: Send + Sync {
     /// Sets interrupt `line`, a GSI on x86_64 or an SPI on arm64, to `level`.
     fn set_line(&self, line: u32, level: bool) -> Result<()>;

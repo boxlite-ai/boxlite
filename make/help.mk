@@ -57,6 +57,7 @@ help:
 	@echo "    make test:integration:vmm:elf - Load VMM_KERNEL into guest RAM and verify through KVM"
 	@echo "    make test:integration:vmm:linux - Boot VMM_KERNEL on KVM and the legacy devices"
 	@echo "    make test:integration:vmm:kvm - Qualify KVM VMs, RAM mapping and the buses on KVM (Linux x86_64)"
+	@echo "    make test:integration:vmm:hvf - Qualify the HVF backend on Hypervisor.framework (macOS arm64)"
 	@echo "    make coverage:vmm:kvm      - Add KVM hardware coverage to existing unit profiles"
 	@echo "    make coverage:vmm:boot     - Add real-kernel boot coverage of VMM_KERNEL to existing profiles"
 	@echo "    make test:guest-perms       - Run guest ownership tests (privileged cases use sudo)"

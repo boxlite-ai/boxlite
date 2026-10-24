@@ -49,6 +49,21 @@ pub enum VcpuExit<'a> {
         /// Borrowed guest data, unchanged by device handling.
         bytes: &'a [u8],
     },
+    /// The guest asked to start a powered-off vCPU with PSCI `CPU_ON`, which
+    /// HVF leaves to the VMM; set `result` before re-entry, and the guest
+    /// reads it as the call's return value.
+    #[cfg(target_arch = "aarch64")]
+    CpuOn {
+        /// The MPIDR_EL1 affinity of the vCPU to start.
+        target: u64,
+        /// Where the started vCPU begins.
+        entry: u64,
+        /// The started vCPU's X0.
+        context_id: u64,
+        /// Borrowed storage for the VMM's answer, initially
+        /// [`CpuOnResult::InternalFailure`](crate::CpuOnResult::InternalFailure).
+        result: &'a mut crate::CpuOnResult,
+    },
     /// Host interruption, or on KVM a waiting secondary vCPU that accepted INIT
     /// or SIPI; recheck control requests before re-entry.
     Interrupted,

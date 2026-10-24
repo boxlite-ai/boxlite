@@ -200,7 +200,8 @@ successfully completed access is not completed again.
 | `MmioRead`, `MmioWrite` | Access to an emulated device | HVF data abort: `HV_EXIT_REASON_EXCEPTION` with a data-abort syndrome | `KVM_EXIT_MMIO` | `WHvRunVpExitReasonMemoryAccess` |
 | `IoIn`, `IoOut` (x86_64 only) | One port access to the 8250 serial, CMOS RTC or i8042; string port I/O is `Error::UnhandledExit` | none | `KVM_EXIT_IO` | `WHvRunVpExitReasonX64IoPortAccess`, which also carries the ports of the userspace PIC and PIT (M10) |
 | `Interrupted` | A kick | `HV_EXIT_REASON_CANCELED`, after `hv_vcpus_exit` | `KVM_RUN` returning `EINTR`; also `EAGAIN`, which a waiting secondary vCPU returns once it accepts INIT or SIPI | `WHvRunVpExitReasonCanceled` |
-| `Halted` | The vCPU waits for an interrupt | HVF traps `WFI` | KVM with the in-kernel irqchip waits in the kernel, and the backend still maps `KVM_EXIT_HLT`, which only a VM without one returns (as the probe VM in `src/boxlite/src/system_check.rs` does) | with local APIC emulation, `HLT` waits inside `WHvRunVirtualProcessor`; QEMU handles `WHvRunVpExitReasonX64Halt` only without it (`target/i386/whpx/whpx-all.c:2337-2342`) |
+| `CpuOn` (arm64 only) | PSCI `CPU_ON`: start a powered-off vCPU, with the VMM's answer in a borrowed result | the HVF backend decodes it from HVC | none: the kernel handles PSCI | none |
+| `Halted` | The vCPU waits for an interrupt | none: with the in-kernel GIC, HVF waits out `WFI` inside `hv_vcpu_run` and wakes for the vtimer and for SPIs; a trapped `WFI` or `WFE` is a spurious wake the backend steps over | KVM with the in-kernel irqchip waits in the kernel, and the backend still maps `KVM_EXIT_HLT`, which only a VM without one returns (as the probe VM in `src/boxlite/src/system_check.rs` does) | with local APIC emulation, `HLT` waits inside `WHvRunVirtualProcessor`; QEMU handles `WHvRunVpExitReasonX64Halt` only without it (`target/i386/whpx/whpx-all.c:2337-2342`) |
 | `Shutdown` | The guest powered off | PSCI `SYSTEM_OFF`, decoded by the HVF backend | `KVM_EXIT_SYSTEM_EVENT` | the i8042 reset below |
 | `Reset` | The guest reset | PSCI `SYSTEM_RESET`, decoded by the HVF backend | a `KVM_EXIT_SYSTEM_EVENT` reset on arm64; an x86 triple fault (`KVM_EXIT_SHUTDOWN`) | the i8042 reset below |
 
@@ -208,24 +209,26 @@ On x86_64 the guest resets through the i8042 port. That reset arrives as an
 `IoOut`, and the VMM's i8042 device sends `GuestReset` to the event loop,
 which ends the VM.
 
-KVM handles PSCI `CPU_ON` for secondary vCPUs in the kernel. M1 extends the
-current M0 `VcpuExit` enum with an HVF CPU-start request alongside the boot
-register API; neither is implemented by the current HVF stub. That request
-must carry the target MPIDR affinity, entry address and context ID, and let the
-VMM supply the guest-visible PSCI result. The VMM validates the target and its
-startup state, sends the entry/context to the target's owning thread, and
-returns success or the PSCI failure before the caller resumes. On arm64 only
-the boot vCPU starts at the kernel's entry point; each secondary
-starts powered off until `CPU_ON` gives it one. An HVF secondary waits parked,
-so the stop path's unpark also wakes one the guest never started.
+KVM handles PSCI `CPU_ON` for secondary vCPUs in the kernel; HVF leaves it to
+the VMM. The HVF backend returns `VcpuExit::CpuOn { target, entry, context_id,
+result }`: the target's MPIDR affinity, its entry address and its X0. The VMM
+validates the target and its startup state, sends the entry and context to the
+target's owning thread, and writes `CpuOnResult` into `result`; the next `run`
+returns it to the guest as the PSCI code, and `result` starts as
+`InternalFailure` so an unanswered call fails. On arm64 only the boot vCPU
+starts at the kernel's entry point, through `Arm64Vcpu::set_boot_registers`;
+each secondary starts powered off until `CPU_ON` gives it one. An HVF secondary
+waits parked, so the stop path's unpark also wakes one the guest never started.
 
 How each host completes an access on the next `run`:
 
 - **HVF.** The backend decodes a data abort itself: the syndrome gives the
-  access size (SAS), direction (WnR) and register (SRT), and
-  `physical_address` the guest address. On the next `run` it writes the
-  register for a read and advances PC by 4, as libkrun does
-  (`libkrun/src/hvf/src/lib.rs:554-576`, `:615-650`).
+  access size (SAS), direction (WnR), register (SRT) and the load's sign (SSE)
+  and width (SF), and `physical_address` the guest address. On the next `run`
+  it writes the register for a read, extended as SSE and SF say, and advances
+  PC by 4, as libkrun does (`libkrun/src/hvf/src/lib.rs:554-576`, `:615-650`);
+  HVF leaves the extension to the VMM. Register 31 is XZR, while HVF numbers
+  PC as register 31.
 - **KVM.** The kernel completes the access on the next `KVM_RUN`, from the
   data the VMM leaves in `kvm_run`.
 - **WHP.** A memory-access exit carries the instruction bytes, so
@@ -255,9 +258,11 @@ without a `VcpuExit`, before it enters the guest again:
   emulates the OS lock as QEMU does: a write to `OSLAR_EL1` sets the lock that
   `OSLSR_EL1` reports, and `OSDLR_EL1` is a dummy register
   (`hvf.c:1746-1750`, `:2044-2046`, `:2056-2058`). libkrun ignores writes to
-  both (`vcpu.rs:258-260`).
-- **WFE.** HVF traps it like `WFI`, but the backend only advances PC, as QEMU
-  does (`hvf.c:2493-2497`).
+  both (`vcpu.rs:258-260`). The other debug registers HVF traps, such as
+  `MDCCSR_EL0`, read as zero and ignore writes.
+- **WFI and WFE.** With the in-kernel GIC neither reaches the VMM on the
+  hosts tested so far. If one traps, the backend advances PC, as QEMU does
+  (`hvf.c:2493-2497`), and the guest sees a spurious wake.
 
 ## Device model
 
@@ -343,8 +348,8 @@ today.
   declares virtio-mmio interrupts edge-triggered, as Firecracker, libkrun and
   dragonball do.
 - **Raising an interrupt.** Devices raise their lines from their own threads
-  through the VMM's interrupt path, which calls `Vm::set_irq_line` and then
-  unparks halted vCPUs.
+  through the VMM's interrupt path, which calls `Vm::set_irq_line`. The host's
+  in-kernel controller wakes a vCPU waiting for it, so the VMM wakes no thread.
 - **Naming.** Devices hold an `IrqLine`, which is not `Clone`, so a device
   cannot share its line. `pulse` raises an edge and `set_level` holds a level,
   skipping a repeated one; as with OpenVMM's `LineInterrupt`, dropping a line
@@ -376,16 +381,15 @@ today.
     vCPU and waits at a start gate until every vCPU is configured; a thread
     that fails to start aborts the gate.
   - It then loops: run, dispatch the exit through the chipset, run again.
-  - On `Halted`, which in practice only HVF returns, it parks until the guest timer's
-    deadline, an interrupt, or a stop.
-  - The VMM's interrupt path unparks halted vCPUs after it sets a line;
-    `Vm::set_irq_line` itself wakes no thread. M1 decides how an IPI from
-    another vCPU wakes a parked one.
-  - With the in-kernel GIC, `WFI` still traps (`target/arm/hvf/hvf.c:2493-2497`),
-    but QEMU then arms no timer of its own and leaves vtimer wake-ups to HVF
-    (`:1496-1499`, `:2670-2671`). libkrun instead parks until the deadline in
-    `CNTV_CVAL_EL0` (`libkrun/src/hvf/src/lib.rs:705-721`). M1 confirms which
-    of the two wakes a parked vCPU on time.
+  - An idle vCPU waits inside the host, never in a VMM thread. KVM's in-kernel
+    irqchip waits out `HLT`; with the in-kernel GIC, HVF waits out `WFI` inside
+    `hv_vcpu_run` and wakes the vCPU for its vtimer and for SPIs set from any
+    thread, as an M5 Pro on macOS 27 showed
+    ([#2103](https://github.com/boxlite-ai/boxlite/issues/2103)). QEMU relies
+    on the same: with the in-kernel GIC it arms no wake-up timer of its own
+    (`target/arm/hvf/hvf.c:2273-2306`). libkrun, written for a userspace GIC,
+    parks until the deadline in `CNTV_CVAL_EL0`
+    (`libkrun/src/hvf/src/lib.rs:705-721`).
 - **Device workers.**
   - Each virtio device owns its worker threads.
   - A vCPU's queue-notify write wakes the worker through an event.
