@@ -91,6 +91,9 @@ GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
 GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
 # This script deploys the dev CP: an App's mail sender may be its SMTP sink (deploy/smtp-sink.mjs), and no other private address.
 SMTP_DEV_SINK=127.0.0.1:2525
+# Custom domains (docs/custom-domains.md): off unless both are given to this script.
+CUSTOM_DOMAIN_TARGET=${CUSTOM_DOMAIN_TARGET:-}
+CUSTOM_HOST_RESOLVER_TOKEN=${CUSTOM_HOST_RESOLVER_TOKEN:-}
 EOF
 ( cd "$STAGE" && COPYFILE_DISABLE=1 tar --no-mac-metadata -czf bundle.tgz cp )
 bl cp "$STAGE/bundle.tgz" "$BOX:/home/boxlite/bundle.tgz"
