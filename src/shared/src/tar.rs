@@ -271,15 +271,19 @@ fn unpack_blocking(tar_path: &Path, dest: &Path, opts: &UnpackContext) -> Boxlit
     let tar_file = std::fs::File::open(tar_path).map_err(|e| {
         BoxliteError::Storage(format!("failed to open tar {}: {}", tar_path.display(), e))
     })?;
-    extract_from_reader(tar_file, dest, opts, mode, None)
+    extract_from_reader(tar_file, dest, opts, mode, false, None)
 }
 
 /// Extract a tar archive read from `reader` to `dest` using the given `mode`.
+///
+/// `root_becomes_dest` lands a directory archive bound for a missing `dest`
+/// the way `docker cp` does (see [`Landing`]). Only the streamed path sets it.
 fn extract_from_reader<R: Read>(
     reader: R,
     dest: &Path,
     opts: &UnpackContext,
     mode: ExtractionMode,
+    root_becomes_dest: bool,
     mut report: Option<&mut UnpackReport>,
 ) -> BoxliteResult<()> {
     let mut seen = HashSet::new();
@@ -334,7 +338,8 @@ fn extract_from_reader<R: Read>(
             Ok(())
         }
         ExtractionMode::IntoDirectory => {
-            if !dest.exists() {
+            let creates_dest = !dest.exists();
+            if creates_dest {
                 if opts.mkdir_parents {
                     std::fs::create_dir_all(dest).map_err(|e| {
                         BoxliteError::Storage(format!(
@@ -350,7 +355,8 @@ fn extract_from_reader<R: Read>(
                     )));
                 }
             }
-            if dest.exists() && !opts.overwrite {
+            // A destination this copy creates holds nothing to overwrite.
+            if !creates_dest && !opts.overwrite {
                 return Err(BoxliteError::Storage(format!(
                     "destination {} exists and overwrite=false",
                     dest.display()
@@ -363,6 +369,10 @@ fn extract_from_reader<R: Read>(
             // the box user and refuse entries the mounts shadow — without
             // consuming the one-shot stream twice. Directory entries are
             // delayed and sorted the way tar-rs does it (permissions).
+            let mut landing = Landing {
+                creates_dest: root_becomes_dest && creates_dest,
+                root: None,
+            };
             let mut directories = Vec::new();
             for entry in archive
                 .entries()
@@ -371,7 +381,7 @@ fn extract_from_reader<R: Read>(
                 let mut file = entry.map_err(|e| {
                     BoxliteError::Storage(format!("failed to read tar entry: {}", e))
                 })?;
-                let Some(landed) = landed(&file) else {
+                let Some(landed) = landing.place(&file)? else {
                     continue;
                 };
                 record(&landed.name, Some(dest));
@@ -386,6 +396,7 @@ fn extract_from_reader<R: Read>(
                     })?;
                 }
             }
+            // A root landing as `dest` sorts last, so its mode comes last.
             directories.sort_by(|(_, a), (_, b)| b.name.cmp(&a.name));
             for (mut dir, landed) in directories {
                 unpack_at(&mut dir, dest, &landed).map_err(|e| {
@@ -397,34 +408,99 @@ fn extract_from_reader<R: Read>(
     }
 }
 
+/// Unpack `reader` to `dest` the way `docker cp` lands a copy (see
+/// [`Landing`]), writing straight into `dest`: a failed copy keeps what it
+/// wrote.
+fn land<R: Read>(
+    reader: &mut R,
+    dest: &Path,
+    opts: &UnpackContext,
+    mode: ExtractionMode,
+    report: Option<&mut UnpackReport>,
+) -> BoxliteResult<()> {
+    extract_from_reader(&mut *reader, dest, opts, mode, true, report)?;
+    // Extraction can finish before the byte stream ends: FileToFile stops
+    // after one entry, and tar-rs stops at the archive end marker. Drain the
+    // raw stream so a terminal producer error cannot become success.
+    io::copy(reader, &mut io::sink())
+        .map_err(|e| BoxliteError::Storage(format!("failed to drain tar stream: {}", e)))?;
+    Ok(())
+}
+
 /// Where an archive entry lands, relative to the destination.
 struct Landed {
+    /// Empty for the archive root, which becomes the destination.
     name: PathBuf,
     /// A hard link's target, relative to the destination.
     link: Option<PathBuf>,
 }
 
-/// Where `entry` lands, or `None` for what extraction skips: records about
-/// other entries, which `Entry::unpack` skips too, and names that are empty
-/// or climb out with `..`.
-fn landed<R: Read>(entry: &tar::Entry<'_, R>) -> Option<Landed> {
-    let kind = entry.header().entry_type();
-    if kind.is_pax_global_extensions()
-        || kind.is_pax_local_extensions()
-        || kind.is_gnu_longname()
-        || kind.is_gnu_longlink()
-    {
-        return None;
-    }
-    let name = sanitize_entry_path(&entry.path().ok()?)?;
-    // A hard link without a target is tar-rs's error to report.
-    let link = match entry.link_name() {
-        Ok(Some(target)) if kind.is_hard_link() && !target.as_os_str().is_empty() => {
-            Some(target.into_owned())
+/// Where one archive's entries land, as `docker cp` lands a copy. When the
+/// copy creates the destination and the archive leads with a directory `X/`,
+/// the destination becomes `X`: `X/a` lands as `a`. A leading `./` (`SRC/.`)
+/// roots nothing. Entries are written as they are read, so the first entry
+/// decides, and a later entry outside `X/` fails the copy.
+struct Landing {
+    creates_dest: bool,
+    /// `None` until the first entry decides it.
+    root: Option<Option<PathBuf>>,
+}
+
+impl Landing {
+    /// Where `entry` lands, or `None` for what extraction skips: records about
+    /// other entries, which `Entry::unpack` skips too, and names that are
+    /// empty or climb out with `..`.
+    fn place<R: Read>(&mut self, entry: &tar::Entry<'_, R>) -> BoxliteResult<Option<Landed>> {
+        let kind = entry.header().entry_type();
+        if kind.is_pax_global_extensions()
+            || kind.is_pax_local_extensions()
+            || kind.is_gnu_longname()
+            || kind.is_gnu_longlink()
+        {
+            return Ok(None);
         }
-        _ => None,
-    };
-    Some(Landed { name, link })
+        let name = entry
+            .path()
+            .ok()
+            .and_then(|path| sanitize_entry_path(&path));
+        let creates_dest = self.creates_dest;
+        let root = self.root.get_or_insert_with(|| {
+            name.clone()
+                .filter(|name| creates_dest && kind.is_dir() && name.components().count() == 1)
+        });
+        let Some(name) = name else {
+            return Ok(None);
+        };
+        // A hard link without a target is tar-rs's error to report.
+        let link = match entry.link_name() {
+            Ok(Some(target)) if kind.is_hard_link() && !target.as_os_str().is_empty() => {
+                Some(target.into_owned())
+            }
+            _ => None,
+        };
+        let Some(root) = root.as_deref() else {
+            return Ok(Some(Landed { name, link }));
+        };
+        // Only a directory may land as the destination itself.
+        let under_root = |path: &Path, dir: bool| {
+            sanitize_entry_path(path)
+                .and_then(|path| Some(path.strip_prefix(root).ok()?.to_path_buf()))
+                .filter(|rest| dir || !rest.as_os_str().is_empty())
+                .ok_or_else(|| {
+                    BoxliteError::InvalidArgument(format!(
+                        "archive entry {} is outside {}/, the directory the archive starts \
+                         with: a copy to a missing destination lands only that directory's \
+                         contents; copy into an existing directory to keep the layout",
+                        path.display(),
+                        root.display()
+                    ))
+                })
+        };
+        Ok(Some(Landed {
+            name: under_root(&name, kind.is_dir())?,
+            link: link.map(|target| under_root(&target, false)).transpose()?,
+        }))
+    }
 }
 
 /// Unpack `entry` where `landed` says, after the checks
@@ -436,6 +512,9 @@ fn unpack_at<R: Read>(
     dest: &Path,
     landed: &Landed,
 ) -> io::Result<()> {
+    if landed.name.as_os_str().is_empty() {
+        return entry.unpack(dest).map(drop);
+    }
     let path = dest.join(&landed.name);
     let parent = path.parent().unwrap_or(dest);
     create_dirs_inside(dest, parent)?;
@@ -569,9 +648,13 @@ fn entry_paths_blocking(tar_path: &Path) -> Vec<PathBuf> {
     // through each file inside it.
     let mut created = Vec::new();
     let mut seen = HashSet::new();
+    let mut landing = Landing {
+        creates_dest: false,
+        root: None,
+    };
     for landed in entries
         .filter_map(|entry| entry.ok())
-        .filter_map(|entry| landed(&entry))
+        .filter_map(|entry| landing.place(&entry).ok().flatten())
     {
         for step in implied_dirs_then_self(&landed.name) {
             if seen.insert(step.clone()) {
@@ -652,7 +735,8 @@ impl Read for PipeReader {
     }
 }
 
-/// Unpack a tar byte stream to `dest`.
+/// Unpack a tar byte stream to `dest`, landing a directory the way
+/// `docker cp` does (see [`land`]).
 ///
 /// Unlike the file-based [`unpack`], there is no archive peek — the extraction
 /// shape is taken authoritatively from `opts.force_directory` (`true` →
@@ -685,12 +769,7 @@ pub async fn unpack_stream(
             ExtractionMode::FileToFile
         };
         let mut report = UnpackReport::default();
-        extract_from_reader(&mut reader, &dest, &opts, mode, Some(&mut report))?;
-        // Extraction can finish before the byte stream ends: FileToFile stops
-        // after one entry, and tar-rs stops at the archive end marker. Drain
-        // the raw stream so a terminal producer error cannot become success.
-        io::copy(&mut reader, &mut io::sink())
-            .map_err(|e| BoxliteError::Storage(format!("failed to drain tar stream: {}", e)))?;
+        land(&mut reader, &dest, &opts, mode, Some(&mut report))?;
         Ok(report)
     });
     let result = unpack.await;
@@ -1897,8 +1976,10 @@ mod tests {
         );
     }
 
+    /// POL-593: a directory streamed to a missing destination becomes it, as
+    /// `docker cp SRC DEST` lands it, and the report names where entries landed.
     #[tokio::test]
-    async fn stream_roundtrip_dir_tree() {
+    async fn stream_dir_to_a_missing_dest_becomes_it() {
         let tmp = TempDir::new().unwrap();
         let src_dir = tmp.path().join("s");
         std::fs::create_dir_all(src_dir.join("sub")).unwrap();
@@ -1920,15 +2001,12 @@ mod tests {
         let report = unpack_stream(stream, dest.clone(), uc(true, true, true))
             .await
             .unwrap();
+        assert_eq!(std::fs::read_to_string(dest.join("a.txt")).unwrap(), "aaa");
         assert_eq!(
-            std::fs::read_to_string(dest.join("s").join("a.txt")).unwrap(),
-            "aaa"
-        );
-        assert_eq!(
-            std::fs::read_to_string(dest.join("s").join("sub").join("b.txt")).unwrap(),
+            std::fs::read_to_string(dest.join("sub").join("b.txt")).unwrap(),
             "bbb"
         );
-        for expected in ["s", "s/a.txt", "s/sub", "s/sub/b.txt"] {
+        for expected in ["a.txt", "sub", "sub/b.txt"] {
             assert!(
                 report.entry_paths.contains(&PathBuf::from(expected)),
                 "created paths missing {expected}: {:?}",
@@ -2082,5 +2160,201 @@ mod tests {
         let landed = std::fs::metadata(dest.join("disk.img")).unwrap();
         assert_eq!(landed.len(), 1 << 20);
         assert_eq!(landed.blocks(), 0, "the hole must not be written out");
+    }
+
+    // ── streaming landing: docker cp's rule ──────────────────────
+
+    /// `parent/s/sub/b.txt`: the contents are one directory, so only the
+    /// leading `./` of `SRC/.` keeps `sub` from passing for the archive root.
+    fn source_tree(parent: &Path) -> PathBuf {
+        let src = parent.join("s");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("sub").join("b.txt"), "b").unwrap();
+        src
+    }
+
+    /// Stream `src` as a copy does, `SRC` or (`contents`) `SRC/.`, to `dest`.
+    async fn stream_copy(src: &Path, contents: bool, dest: &Path) -> BoxliteResult<UnpackReport> {
+        let opts = PackContext {
+            follow_symlinks: false,
+            include_parent: !contents,
+        };
+        let (_, stream) = pack_stream(src.to_path_buf(), opts).await?;
+        unpack_stream(stream, dest.to_path_buf(), uc(true, true, true)).await
+    }
+
+    /// Paths under `root`, relative to it and sorted, read off the disk.
+    fn landed(root: &Path) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = extracted_paths(root)
+            .iter()
+            .map(|path| path.strip_prefix(root).unwrap().to_path_buf())
+            .collect();
+        found.sort();
+        found
+    }
+
+    fn paths(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
+    /// The rest of docker cp's table: an existing destination keeps `SRC`
+    /// under its own name, and `SRC/.` lands the contents either way. The
+    /// report matches the disk.
+    #[tokio::test]
+    async fn stream_dirs_land_the_way_docker_cp_does() {
+        // (`SRC/.`, destination exists, what lands in the destination)
+        let cases: [(bool, bool, &[&str]); 3] = [
+            (false, true, &["s", "s/sub", "s/sub/b.txt"]),
+            (true, false, &["sub", "sub/b.txt"]),
+            (true, true, &["sub", "sub/b.txt"]),
+        ];
+        for (contents, exists, expected) in cases {
+            let tmp = TempDir::new().unwrap();
+            let dest = tmp.path().join("out");
+            if exists {
+                std::fs::create_dir(&dest).unwrap();
+            }
+
+            let report = stream_copy(&source_tree(tmp.path()), contents, &dest)
+                .await
+                .unwrap();
+
+            let case = format!("contents={contents} exists={exists}");
+            let mut reported = report.entry_paths;
+            reported.sort();
+            assert_eq!(landed(&dest), paths(expected), "{case}");
+            assert_eq!(reported, paths(expected), "{case}");
+        }
+    }
+
+    /// `overwrite=false` refuses an existing destination only: one the copy
+    /// creates holds nothing to overwrite.
+    #[tokio::test]
+    async fn a_missing_dest_needs_no_overwrite() {
+        let tmp = TempDir::new().unwrap();
+        let src = source_tree(tmp.path());
+        let (_, stream) = pack_stream(src.clone(), default_pack()).await.unwrap();
+        unpack_stream(stream, tmp.path().join("streamed"), uc(false, true, true))
+            .await
+            .unwrap();
+
+        let tar_path = tmp.path().join("s.tar");
+        pack(src, tar_path.clone(), default_pack()).await.unwrap();
+        unpack(tar_path, tmp.path().join("unpacked"), uc(false, true, true))
+            .await
+            .unwrap();
+    }
+
+    /// What a rooted archive lands in a new destination. A PAX global header
+    /// (`git archive --prefix=X/` leads with one) describes the archive, so
+    /// `X` is still the root; a hard link's target is re-rooted with it.
+    #[tokio::test]
+    async fn rooted_archives_land_their_contents() {
+        use tar::EntryType::{Directory, Link, Regular, XGlobalHeader};
+        let cases: [(&[(&str, tar::EntryType, &str)], &[&str]); 2] = [
+            (
+                &[
+                    ("pax_global_header", XGlobalHeader, ""),
+                    ("X/", Directory, ""),
+                    ("X/a", Regular, ""),
+                ],
+                &["a"],
+            ),
+            (
+                &[
+                    ("X/", Directory, ""),
+                    ("X/a", Regular, ""),
+                    ("X/h", Link, "X/a"),
+                ],
+                &["a", "h"],
+            ),
+        ];
+        for (entries, expected) in cases {
+            let tmp = TempDir::new().unwrap();
+            let dest = tmp.path().join("out");
+
+            let report = unpack_stream(archive_of(entries), dest.clone(), uc(true, true, true))
+                .await
+                .unwrap();
+
+            assert_eq!(landed(&dest), paths(expected));
+            assert_eq!(report.entry_paths, paths(expected));
+        }
+    }
+
+    /// Once an archive led by `b/` has landed `b`'s contents in a new
+    /// destination, an entry outside `b/` cannot land: the copy fails as the
+    /// caller's error and keeps what it wrote.
+    #[tokio::test]
+    async fn entries_outside_the_root_fail_a_copy_to_a_missing_dest() {
+        use tar::EntryType::{Directory, Link, Regular};
+        let led = [("b/", Directory, ""), ("b/c.txt", Regular, "")];
+        let outside = [
+            ("a.txt", Regular, ""),
+            // `bx` starts with `b` but is not under it.
+            ("bx/y", Regular, ""),
+            ("b/h", Link, "a.txt"),
+        ];
+        for last in outside {
+            let tmp = TempDir::new().unwrap();
+            let dest = tmp.path().join("out");
+
+            let archive = archive_of(&[led[0], led[1], last]);
+            let err = unpack_stream(archive, dest.clone(), uc(true, true, true))
+                .await
+                .unwrap_err();
+
+            assert!(matches!(err, BoxliteError::InvalidArgument(_)), "{err}");
+            assert_eq!(landed(&dest), paths(&["c.txt"]), "{last:?}");
+        }
+    }
+
+    /// Entries land straight in the destination, so a stream that fails
+    /// mid-archive keeps what it wrote.
+    #[tokio::test]
+    async fn a_failed_copy_keeps_what_it_wrote() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("s.tar");
+        pack(source_tree(tmp.path()), tar_path.clone(), default_pack())
+            .await
+            .unwrap();
+        let mut archive = std::fs::read(&tar_path).unwrap();
+        // `s/`, `s/sub/`, then `s/sub/b.txt`: a header and one data block.
+        archive.truncate(4 * 512);
+        let severed: BoxByteStream = Box::pin(futures::stream::iter([
+            Ok(archive),
+            Err(io::Error::other("connection reset")),
+        ]));
+        let dest = tmp.path().join("out");
+
+        let result = unpack_stream(severed, dest.clone(), uc(true, true, true)).await;
+
+        assert!(result.is_err());
+        assert_eq!(landed(&dest), paths(&["sub", "sub/b.txt"]));
+    }
+
+    /// The root's mode lands on the destination after everything inside it,
+    /// so a read-only source root still lands whole.
+    #[tokio::test]
+    async fn stream_read_only_dir_to_a_missing_dest_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let set_mode = |path: &Path, mode: u32| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        };
+        let tmp = TempDir::new().unwrap();
+        let src = source_tree(tmp.path());
+        let dest = tmp.path().join("out");
+        set_mode(&src, 0o555).unwrap();
+
+        let result = stream_copy(&src, false, &dest).await;
+        let mode = std::fs::metadata(&dest).map(|meta| meta.permissions().mode() & 0o777);
+        // Writable again, so `TempDir` can clean up.
+        for dir in [&src, &dest] {
+            let _ = set_mode(dir, 0o755);
+        }
+
+        result.unwrap();
+        assert_eq!(mode.unwrap(), 0o555);
+        assert_eq!(landed(&dest), paths(&["sub", "sub/b.txt"]));
     }
 }
