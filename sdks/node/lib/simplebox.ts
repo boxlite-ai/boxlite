@@ -15,6 +15,10 @@ import type {
   JsBox,
   JsBoxInfo,
   JsBoxOptions,
+  JsSshAccount,
+  JsSshCaConfig,
+  JsSshConfig,
+  JsSshStatus,
   JsVolumeSpec,
   NativeBoxConnection,
   NativeBoxTunnel,
@@ -25,6 +29,11 @@ import type {
 } from "./native-contracts.js";
 
 export type { SocketAddress } from "./native-contracts.js";
+
+export type SshCaConfig = JsSshCaConfig;
+export type SshAccount = JsSshAccount;
+export type SshConfig = JsSshConfig;
+export type SshStatus = JsSshStatus;
 
 type BoxLike = Omit<JsBox, "network"> & {
   readonly network: {
@@ -437,6 +446,35 @@ function validateNetworkReplacement(
   }
 }
 
+/**
+ * Box-scoped guest SSH control for a SimpleBox.
+ *
+ * Only `configure` may start the box; `status` and `disable` never start the
+ * VM or its main command. Status results carry no credentials.
+ */
+export class SshHandle {
+  /** @internal */
+  constructor(private readonly ensureBox: () => Promise<BoxLike>) {}
+
+  /** Validate and replace the SSH configuration, disconnecting clients. */
+  async configure(config: SshConfig): Promise<SshStatus> {
+    const box = await this.ensureBox();
+    return box.ssh.configure(config);
+  }
+
+  /** Query SSH state without starting the VM or its main command. */
+  async status(): Promise<SshStatus> {
+    const box = await this.ensureBox();
+    return box.ssh.status();
+  }
+
+  /** Stop SSH and disconnect clients; repeated calls are supported. */
+  async disable(): Promise<SshStatus> {
+    const box = await this.ensureBox();
+    return box.ssh.disable();
+  }
+}
+
 export class TunnelForwarder {
   constructor(private readonly forwarder: NativeTunnelForwarder) {}
 
@@ -519,6 +557,7 @@ export class SimpleBox {
   protected _reuseExisting: boolean;
   protected _created: boolean | null = null;
   readonly network: NetworkHandle;
+  readonly ssh: SshHandle;
 
   /**
    * Create a new SimpleBox.
@@ -606,6 +645,7 @@ export class SimpleBox {
         return this._box;
       },
     );
+    this.ssh = new SshHandle(() => this._ensureBox());
   }
 
   /**

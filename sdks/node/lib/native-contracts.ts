@@ -540,6 +540,48 @@ export interface JsSnapshotHandle {
   restore(name: string): Promise<void>;
 }
 
+/** Certificate authority and required certificate principal for one login. */
+export interface JsSshCaConfig {
+  publicKey: string;
+  principal: string;
+}
+
+/** Credentials accepted for one SSH login (not a container OS identity). */
+export interface JsSshAccount {
+  login: string;
+  authorizedKeys?: string[];
+  ca?: JsSshCaConfig;
+}
+
+/** Complete guest SSH configuration. Keys are never persisted by the runtime. */
+export interface JsSshConfig {
+  listenAddress: string;
+  hostPrivateKey: string;
+  accounts: JsSshAccount[];
+}
+
+/** Guest listener state and public host identity; contains no credentials. */
+export interface JsSshStatus {
+  enabled: boolean;
+  /** Increments on each successful listener start. `bigint` keeps the full
+   *  64-bit generation exactly. */
+  generation: bigint;
+  listenAddress: string;
+  hostPublicKey: string;
+  hostKeyFingerprint: string;
+}
+
+/** Internal contract implemented by the native N-API SSH binding. */
+export interface JsSshHandle {
+  /** Validate and replace the configuration; the only operation that may
+   *  start the box. */
+  configure(config: JsSshConfig): Promise<JsSshStatus>;
+  /** Observe SSH state without starting the VM or its main command. */
+  status(): Promise<JsSshStatus>;
+  /** Stop SSH idempotently without starting the VM or its main command. */
+  disable(): Promise<JsSshStatus>;
+}
+
 export interface JsNetworkHandle {
   updateInbound(spec: {
     mode: "enabled" | "disabled";
@@ -599,6 +641,7 @@ export interface JsBox {
   ): Promise<JsExecution>;
   readonly snapshot: JsSnapshotHandle;
   readonly network: JsNetworkHandle;
+  readonly ssh: JsSshHandle;
   cloneBox(
     options?: JsCloneOptions | null,
     name?: string | null,

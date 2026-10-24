@@ -18,6 +18,7 @@ mod registries;
 mod runtime;
 mod snapshot_options;
 mod snapshots;
+mod ssh;
 mod util;
 mod volumes;
 
@@ -44,4 +45,5 @@ pub use registries::{JsNewRegistryCredential, JsRegistryCredential, JsRegistryHa
 pub use runtime::JsBoxlite; // re-export for dist bundling
 pub use snapshot_options::{JsCloneOptions, JsExportOptions, JsSnapshotOptions};
 pub use snapshots::{JsSnapshotHandle, JsSnapshotInfo};
+pub use ssh::{JsSshAccount, JsSshCaConfig, JsSshConfig, JsSshHandle, JsSshStatus};
 pub use volumes::{JsVolumeHandle, JsVolumeInfo};
