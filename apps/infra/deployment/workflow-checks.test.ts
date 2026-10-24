@@ -315,6 +315,18 @@ test('Linux x64 builds the kernel and runs the boot tests only for vmm changes, 
   assert.equal(steps[bootAt]['continue-on-error'], undefined, 'failed boot tests must fail CI')
 })
 
+// tests/scripts drives these scripts through fakes; the infra job runs it.
+for (const path of ['scripts/ci/gcp-e2e-vm.sh', 'scripts/test/coverage-bindings.sh', 'tests/scripts/test_gcp_e2e_vm.py']) {
+  test(`a change to a script under tests/scripts runs those tests: ${path}`, () => {
+    assert.ok(testSuites([path]).includes('infra'))
+    assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
+  })
+}
+
+test('the infra job runs the script tests', () => {
+  assert.ok(workflow('test.yml').jobs.infra.steps.some((step: any) => step.run === 'make test:unit:scripts'))
+})
+
 // The check below only guards the ignore list if editing that list runs it.
 test('a change to codecov.yml selects the suite that checks codecov.yml', () => {
   assert.ok(testSuites(['codecov.yml']).includes('infra'))
