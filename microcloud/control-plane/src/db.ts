@@ -449,6 +449,17 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
     PRIMARY KEY (env_id, finding_id)
   );
   `,
+  // Custom domains of an environment (services/domains.ts): routed only once their TXT proves ownership.
+  `
+  CREATE TABLE IF NOT EXISTS app_domains (
+    host TEXT PRIMARY KEY,
+    app_id TEXT NOT NULL,
+    env_id TEXT NOT NULL,
+    token TEXT NOT NULL,
+    verified_at TEXT,
+    created_at TEXT NOT NULL
+  );
+  `,
 ];
 
 export const LOG_RING_SIZE = 20_000;

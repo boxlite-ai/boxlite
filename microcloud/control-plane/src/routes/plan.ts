@@ -40,7 +40,7 @@ export function prepare(
   }
   if (!manifest) return { manifest, errors, warnings, migrations, changes: [], latest, stale };
 
-  const online = onlineChecks(manifest, { appName: app.name, envName: env.name, secretExists: (ref) => secretValue(ctx, app, ref) !== undefined, uploadBytes: input.uploadBytes, configuredProviders: appProviders(ctx, app) });
+  const online = onlineChecks(manifest, { appName: app.name, envName: env.name, secretExists: (ref) => secretValue(ctx, app, ref) !== undefined, uploadBytes: input.uploadBytes, configuredProviders: appProviders(ctx, app), customDomains: !!ctx.config.customDomains });
   errors.push(...online.errors);
   warnings.push(...online.warnings);
 

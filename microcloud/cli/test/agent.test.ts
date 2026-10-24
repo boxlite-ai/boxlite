@@ -62,11 +62,11 @@ test('whoami: app, key scope, env, control plane, and a newer CLI', async () => 
     `App crm · environment main · key …${KEY.slice(-4)} (scope: this App only)`,
     'Control plane https://cp.test (via http://cp.test)',
     'Environments main live',
-    'CLI 0.3.13 (latest 0.9.0)',
+    'CLI 0.3.14 (latest 0.9.0)',
     'next: update the CLI: `npm install -g http://cp.test/cli/boxlite-app.tgz`',
   ]);
   const json = JSON.parse((await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent })).stdout);
-  assert.deepEqual(json.cli, { version: '0.3.13', latest_version: '0.9.0', update_available: true, update_command: 'npm install -g http://cp.test/cli/boxlite-app.tgz' });
+  assert.deepEqual(json.cli, { version: '0.3.14', latest_version: '0.9.0', update_available: true, update_command: 'npm install -g http://cp.test/cli/boxlite-app.tgz' });
   assert.deepEqual(json.linked, { link_file: true, app: 'crm', matches_key: true });
 });
 
@@ -166,7 +166,7 @@ test('doctor runs local and online checks and ranks the problems with fixes', as
   assert.equal(checks.database, 'ok');
 
   const human = await cli(['doctor'], { cwd: dir, dispatcher: agent });
-  assert.equal(human.lines[0], 'Doctor · crm/main · CLI 0.3.13');
+  assert.equal(human.lines[0], 'Doctor · crm/main · CLI 0.3.14');
   assert.match(human.lines[1] ?? '', /^x error deployment #3 failed at start: web answers 404 on its health path \/healthz/);
   assert.match(human.lines.at(-1) ?? '', /^next: add a route GET \/healthz/);
 });
@@ -285,4 +285,18 @@ test('app ack sends the reason; app unack brings the finding back', async () => 
   assert.match(r.stdout, /acknowledged public_anonymous in main: the user asked for it/);
   pool.intercept({ path: '/v1/apps/crm/envs/main/findings/public_anonymous/ack', method: 'DELETE' }).reply(200, { unacknowledged: 'public_anonymous' }, { headers: JSON_HEADERS });
   assert.match((await cli(['app', 'unack', 'public_anonymous'], { cwd: dir, dispatcher: agent })).stdout, /public_anonymous is back in next_actions/);
+});
+
+test('app domains add prints the DNS records the user adds; verify says when the CNAME is not there yet', async () => {
+  const dir = await project(root, { '.boxlite/link.json': linkJson(1) });
+  const { agent, pool } = mockApi();
+  const view = { host: 'shop.acme.com', env: 'main', status: 'pending_dns', verified_at: null, records: [{ type: 'TXT', name: '_boxlite-challenge.shop.acme.com', value: 'boxlite-verify=abc' }, { type: 'CNAME', name: 'shop.acme.com', value: 'domains.proxy.test' }] };
+  pool.intercept({ path: '/v1/apps/crm/envs/main/domains', method: 'POST' }).reply(201, view, { headers: JSON_HEADERS });
+  const added = await cli(['app', 'domains', 'add', 'shop.acme.com'], { cwd: dir, dispatcher: agent });
+  assert.equal(added.code, 0, added.stderr);
+  assert.deepEqual(added.lines.slice(0, 3), ['shop.acme.com added to main; the user adds these records at their DNS provider:', '  TXT   _boxlite-challenge.shop.acme.com  →  boxlite-verify=abc', '  CNAME shop.acme.com  →  domains.proxy.test']);
+  pool.intercept({ path: '/v1/apps/crm/envs/main/domains/shop.acme.com/verify', method: 'POST' }).reply(200, { ...view, status: 'active', cname: null, cname_ok: false }, { headers: JSON_HEADERS });
+  const v = await cli(['app', 'domains', 'verify', 'shop.acme.com'], { cwd: dir, dispatcher: agent });
+  assert.match(v.stdout, /shop\.acme\.com verified: it serves main/);
+  assert.match(v.stdout, /CNAME does not point at domains\.proxy\.test yet/);
 });

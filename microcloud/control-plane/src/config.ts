@@ -32,6 +32,12 @@ export interface Config {
   promptTemplatePath?: string;
   /** End-user sign-in: OAuth client credentials per provider; a provider without them is skipped. */
   oauth?: Partial<Record<string, { clientId: string; clientSecret: string }>>;
+  /**
+   * Custom domains (docs/custom-domains.md), on only when the BoxLite proxy in front asks this CP
+   * which Box serves a host: `target` is the name customers point a CNAME at (CUSTOM_DOMAIN_TARGET),
+   * `resolverToken` what the proxy sends to /proxy/hosts (CUSTOM_HOST_RESOLVER_TOKEN).
+   */
+  customDomains?: { target: string; resolverToken: string };
   /** SMTP_DEV_SINK=127.0.0.1:2525: the one private address:port an App's mail sender may use (a development CP's sink). */
   smtpDevSink?: string;
   /** Console users and organizations (orgs.ts). Absent fields take the defaults there. */
@@ -110,6 +116,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.PROMPT_TEMPLATE_PATH ? { promptTemplatePath: resolve(env.PROMPT_TEMPLATE_PATH) } : {}),
     oauth: oauthFromEnv(env),
     ...(env.SMTP_DEV_SINK ? { smtpDevSink: env.SMTP_DEV_SINK.trim() } : {}),
+    ...(env.CUSTOM_DOMAIN_TARGET && env.CUSTOM_HOST_RESOLVER_TOKEN ? { customDomains: { target: env.CUSTOM_DOMAIN_TARGET.trim(), resolverToken: env.CUSTOM_HOST_RESOLVER_TOKEN.trim() } } : {}),
     orgs: {
       ...(env.CONSOLE_LEGACY_OWNER ? { legacyOwnerEmail: env.CONSOLE_LEGACY_OWNER.trim().toLowerCase() } : {}),
       ...(env.NEW_ORG_APP_LIMIT ? { newOrgAppLimit: Number(env.NEW_ORG_APP_LIMIT) } : {}),
