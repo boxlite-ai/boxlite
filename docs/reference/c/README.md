@@ -94,9 +94,13 @@ int main() {
 #include <stdio.h>
 #include "boxlite.h"
 
-void output_callback(const char* text, int is_stderr, void* user_data) {
-    FILE* stream = is_stderr ? stderr : stdout;
-    fprintf(stream, "%s", text);
+static void on_stdout(const uint8_t* data, size_t len, void* user_data) {
+    (void)user_data;
+    fwrite(data, 1, len, stdout);
+}
+
+static void on_exit(int exit_code, void* user_data) {
+    *(int*)user_data = exit_code;
 }
 
 int main() {
@@ -147,15 +151,17 @@ int main() {
     boxlite_options_free(opts);
 
     // Start command with streaming output, then wait for completion
-    int exit_code = 0;
+    int exit_code = -1;
     const char* args[] = {"-la", "/"};
     BoxliteCommand cmd = {.command = "/bin/ls", .args = args, .argc = 2};
     CExecutionHandle* execution = NULL;
 
-    if (boxlite_execute(box, &cmd, output_callback, NULL, &execution, &error) == Ok) {
-        if (boxlite_execution_wait(execution, &exit_code, &error) == Ok) {
-            printf("\nExit code: %d\n", exit_code);
+    if (boxlite_box_exec(box, &cmd, &execution, &error) == Ok) {
+        boxlite_execution_on_stdout(execution, on_stdout, NULL, &error);
+        boxlite_execution_on_exit(execution, on_exit, &exit_code, &error);
+        while (exit_code < 0 && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
         }
+        printf("\nExit code: %d\n", exit_code);
         boxlite_execution_free(execution);
     }
     if (error.code != Ok) {
@@ -775,28 +781,26 @@ local-only host listener that accepts repeated connections.
 
 ### Command execution
 
-#### boxlite_execute
+#### boxlite_box_exec
 
-Start a command with optional streaming output and return an execution handle.
+Start a command execution inside a box, returning an execution handle. Streaming output, exit, and lifecycle events are routed through callbacks on the execution handle and dispatched via `boxlite_runtime_drain`.
 
 ```c
 typedef struct BoxliteCommand {
-    const char* command;      // Required: command to execute
-    const char* const* args;  // Argument array, or NULL
-    int argc;                 // Number of entries in args
+    const char* command;          // Required: command to execute
+    const char* const* args;      // Argument array, or NULL
+    int argc;                     // Number of entries in args
     const char* const* env_pairs; // [key0, value0, key1, value1, ...], or NULL
-    int env_count;            // Number of strings in env_pairs
-    const char* workdir;      // Working directory, or NULL
-    const char* user;         // User spec (e.g., "nobody", "1000:1000"), or NULL
-    double timeout_secs;      // Timeout in seconds (0.0 = no timeout)
-    int tty;                  // 0 = no TTY, non-zero = TTY
+    int env_count;                // Number of strings in env_pairs
+    const char* workdir;          // Working directory, or NULL
+    const char* user;             // User spec (e.g., "nobody", "1000:1000"), or NULL
+    double timeout_secs;          // Timeout in seconds (0.0 = no timeout)
+    int tty;                      // 0 = no TTY, non-zero = TTY
 } BoxliteCommand;
 
-BoxliteErrorCode boxlite_execute(
+BoxliteErrorCode boxlite_box_exec(
     CBoxHandle* handle,
     const BoxliteCommand* cmd,
-    void (*callback)(const char* text, int is_stderr, void* user_data),
-    void* user_data,
     CExecutionHandle** out_execution,
     CBoxliteError* out_error
 );
@@ -808,50 +812,69 @@ BoxliteErrorCode boxlite_execute(
 |-----------|------|-------------|
 | `handle` | `CBoxHandle*` | Box handle |
 | `cmd` | `const BoxliteCommand*` | Command descriptor |
-| `callback` | function pointer | Optional streaming output callback |
-| `user_data` | `void*` | User data passed to callback |
 | `out_execution` | `CExecutionHandle**` | Output: execution handle |
 | `out_error` | `CBoxliteError*` | Output: error information |
 
-#### Callback signature
+#### Streaming callbacks
+
+Callbacks are registered on `CExecutionHandle*` and invoked during `boxlite_runtime_drain`:
 
 ```c
-void callback(const char* text, int is_stderr, void* user_data);
+BoxliteErrorCode boxlite_execution_on_stdout(
+    CExecutionHandle* execution,
+    CBoxStdoutCb cb,
+    void* user_data,
+    CBoxliteError* out_error
+);
+
+BoxliteErrorCode boxlite_execution_on_stderr(
+    CExecutionHandle* execution,
+    CBoxStderrCb cb,
+    void* user_data,
+    CBoxliteError* out_error
+);
+
+BoxliteErrorCode boxlite_execution_on_exit(
+    CExecutionHandle* execution,
+    CBoxExitCb cb,
+    void* user_data,
+    CBoxliteError* out_error
+);
 ```
 
-| Parameter | Description |
-|-----------|-------------|
-| `text` | Output text chunk |
-| `is_stderr` | `0` for stdout, `1` for stderr |
-| `user_data` | User data from `boxlite_execute` |
+Callback signatures:
+
+```c
+typedef void (*CBoxStdoutCb)(const uint8_t* data, size_t len, void* user_data);
+typedef void (*CBoxStderrCb)(const uint8_t* data, size_t len, void* user_data);
+typedef void (*CBoxExitCb)(int exit_code, void* user_data);
+```
 
 #### Example
 
 ```c
-void output_handler(const char* text, int is_stderr, void* data) {
-    FILE* stream = is_stderr ? stderr : stdout;
-    fprintf(stream, "%s", text);
+static void on_stdout(const uint8_t* data, size_t len, void* user_data) {
+    (void)user_data;
+    fwrite(data, 1, len, stdout);
 }
 
-int exit_code = 0;
+static void on_exit(int exit_code, void* user_data) {
+    *(int*)user_data = exit_code;
+}
+
+int exit_code = -1;
 const char* args[] = {"-c", "print('hello')"};
 BoxliteCommand cmd = {.command = "python", .args = args, .argc = 2};
 CExecutionHandle* execution = NULL;
-BoxliteErrorCode code = boxlite_execute(
-    box,
-    &cmd,
-    output_handler,
-    NULL,
-    &execution,
-    &error
-);
 
+BoxliteErrorCode code = boxlite_box_exec(box, &cmd, &execution, &error);
 if (code == Ok) {
-    code = boxlite_execution_wait(execution, &exit_code, &error);
-    boxlite_execution_free(execution);
-}
-if (code == Ok) {
+    boxlite_execution_on_stdout(execution, on_stdout, NULL, &error);
+    boxlite_execution_on_exit(execution, on_exit, &exit_code, &error);
+    while (exit_code < 0 && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
+    }
     printf("Exit code: %d\n", exit_code);
+    boxlite_execution_free(execution);
 }
 ```
 
@@ -860,10 +883,12 @@ if (code == Ok) {
 #### Execution control
 
 ```c
-BoxliteErrorCode boxlite_execution_write(CExecutionHandle* execution, const char* data, int len, CBoxliteError* out_error);
-BoxliteErrorCode boxlite_execution_wait(CExecutionHandle* execution, int* out_exit_code, CBoxliteError* out_error);
-BoxliteErrorCode boxlite_execution_kill(CExecutionHandle* execution, CBoxliteError* out_error);
-BoxliteErrorCode boxlite_execution_resize_tty(CExecutionHandle* execution, int rows, int cols, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_stdin_write(CExecutionHandle* execution, const uint8_t* data, size_t len, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_stdin_close(CExecutionHandle* execution, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_wait(CExecutionHandle* execution, CExecutionWaitCb cb, void* user_data, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_kill(CExecutionHandle* execution, CExecutionKillCb cb, void* user_data, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_signal(CExecutionHandle* execution, int sig, CExecutionSignalCb cb, void* user_data, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_tty_resize(CExecutionHandle* execution, int rows, int cols, CExecutionResizeCb cb, void* user_data, CBoxliteError* out_error);
 void boxlite_execution_free(CExecutionHandle* execution);
 ```
 
@@ -883,12 +908,13 @@ BoxliteCommand cmd = {
     .timeout_secs = 30.0,
 };
 
-int exit_code = 0;
+int exit_code = -1;
 CExecutionHandle* execution = NULL;
-BoxliteErrorCode code =
-    boxlite_execute(box, &cmd, output_handler, NULL, &execution, &error);
+BoxliteErrorCode code = boxlite_box_exec(box, &cmd, &execution, &error);
 if (code == Ok) {
-    code = boxlite_execution_wait(execution, &exit_code, &error);
+    boxlite_execution_on_exit(execution, on_exit, &exit_code, &error);
+    while (exit_code < 0 && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
+    }
     boxlite_execution_free(execution);
 }
 ```
@@ -1381,14 +1407,15 @@ if (exit_code < 0) {
 
 **v0.2.0:**
 ```c
-int exit_code = 0;
+int exit_code = -1;
 const char* args[] = {"hello"};
 BoxliteCommand cmd = {.command = "echo", .args = args, .argc = 1};
 CExecutionHandle* execution = NULL;
-BoxliteErrorCode code =
-    boxlite_execute(box, &cmd, callback, NULL, &execution, &error);
+BoxliteErrorCode code = boxlite_box_exec(box, &cmd, &execution, &error);
 if (code == Ok) {
-    code = boxlite_execution_wait(execution, &exit_code, &error);
+    boxlite_execution_on_exit(execution, on_exit, &exit_code, &error);
+    while (exit_code < 0 && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
+    }
     boxlite_execution_free(execution);
 }
 if (code != Ok) {
@@ -1426,7 +1453,7 @@ if (code != Ok) {
 | `boxlite_box_free()` | Free box handle |
 | `boxlite_box_info()` | Queue box info lookup |
 | `boxlite_box_metrics()` | Get box metrics |
-| `boxlite_execute()` | Execute command |
+| `boxlite_box_exec()` | Execute command |
 | `boxlite_list_info()` | Queue box list lookup |
 | `boxlite_get_info()` | Queue box info lookup by ID |
 | `boxlite_runtime_images()` | Get the image handle |
@@ -1460,17 +1487,24 @@ if (code != Ok) {
 ### Streaming output
 
 ```c
-void output_callback(const char* text, int is_stderr, void* user_data) {
-    FILE* stream = is_stderr ? stderr : stdout;
-    fprintf(stream, "%s", text);
+static void on_stdout(const uint8_t* data, size_t len, void* user_data) {
+    (void)user_data;
+    fwrite(data, 1, len, stdout);
 }
 
-int exit_code = 0;
+static void on_exit(int exit_code, void* user_data) {
+    *(int*)user_data = exit_code;
+}
+
+int exit_code = -1;
 const char* args[] = {"-c", "print('hello')"};
 BoxliteCommand cmd = {.command = "python", .args = args, .argc = 2};
 CExecutionHandle* execution = NULL;
-if (boxlite_execute(box, &cmd, output_callback, NULL, &execution, &error) == Ok) {
-    boxlite_execution_wait(execution, &exit_code, &error);
+if (boxlite_box_exec(box, &cmd, &execution, &error) == Ok) {
+    boxlite_execution_on_stdout(execution, on_stdout, NULL, &error);
+    boxlite_execution_on_exit(execution, on_exit, &exit_code, &error);
+    while (exit_code < 0 && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
+    }
     boxlite_execution_free(execution);
 }
 ```

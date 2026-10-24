@@ -121,9 +121,13 @@ Create a file `native.c`:
 #include <stdio.h>
 #include "boxlite.h"
 
-void output_callback(const char* text, int is_stderr, void* user_data) {
-    FILE* stream = is_stderr ? stderr : stdout;
-    fprintf(stream, "%s", text);
+static void on_stdout(const uint8_t* data, size_t len, void* user_data) {
+    (void)user_data;
+    fwrite(data, 1, len, stdout);
+}
+
+static void on_exit(int exit_code, void* user_data) {
+    *(int*)user_data = exit_code;
 }
 
 int main() {
@@ -162,16 +166,18 @@ int main() {
     boxlite_options_free(opts);
 
     // Execute commands with streaming output
-    int exit_code = 0;
+    int exit_code = -1;
     const char* args[] = {"-la", "/"};
     BoxliteCommand cmd = {.command = "/bin/ls", .args = args, .argc = 2};
     CExecutionHandle* execution = NULL;
 
     printf("\n--- Running: ls -la / ---\n");
-    if (boxlite_execute(box, &cmd, output_callback, NULL, &execution, &error) == Ok) {
-        if (boxlite_execution_wait(execution, &exit_code, &error) == Ok) {
-            printf("\nExit code: %d\n", exit_code);
+    if (boxlite_box_exec(box, &cmd, &execution, &error) == Ok) {
+        boxlite_execution_on_stdout(execution, on_stdout, NULL, &error);
+        boxlite_execution_on_exit(execution, on_exit, &exit_code, &error);
+        while (exit_code < 0 && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
         }
+        printf("\nExit code: %d\n", exit_code);
         boxlite_execution_free(execution);
     }
     if (error.code != Ok) {

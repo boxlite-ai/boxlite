@@ -183,7 +183,7 @@ For complete C API documentation, see **[C API Reference](c/README.md)**.
 |----------|-------------|
 | `boxlite_runtime_new` | Create runtime instance |
 | `boxlite_create_box` | Create a new box |
-| `boxlite_execute` | Run command with streaming |
+| `boxlite_box_exec` | Run command with streaming callbacks |
 | `boxlite_stop_box` | Stop and free box |
 
 ### CLI

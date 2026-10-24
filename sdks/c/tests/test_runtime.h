@@ -5,6 +5,8 @@
 #include <assert.h>
 #include <ftw.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -98,26 +100,75 @@ static CBoxHandle *create_test_box(CBoxliteRuntime *runtime,
   return create_box_with_options(runtime, opts, error);
 }
 
+struct TestExecContext {
+  void (*callback)(const char *, int, void *);
+  void *user_data;
+  int exit_code;
+};
+
+static void test_on_stdout(const uint8_t *data, size_t len, void *user_data) {
+  struct TestExecContext *ctx = (struct TestExecContext *)user_data;
+  if (ctx != NULL && ctx->callback != NULL && data != NULL) {
+    char *buf = (char *)malloc(len + 1);
+    if (buf != NULL) {
+      memcpy(buf, data, len);
+      buf[len] = '\0';
+      ctx->callback(buf, 0, ctx->user_data);
+      free(buf);
+    }
+  }
+}
+
+/**
+ * Process exit callback for test execution.
+ */
+static void test_on_exit(int exit_code, void *user_data) {
+  struct TestExecContext *ctx = (struct TestExecContext *)user_data;
+  if (ctx != NULL) {
+    ctx->exit_code = exit_code;
+  }
+}
+
+/**
+ * Execute a command on the test box using modern boxlite_box_exec.
+ */
 static BoxliteErrorCode
-test_execute_cmd(CBoxHandle *box, const BoxliteCommand *cmd,
+test_execute_cmd(CBoxliteRuntime *runtime, CBoxHandle *box,
+                 const BoxliteCommand *cmd,
                  void (*callback)(const char *, int, void *), void *user_data,
                  int *out_exit_code, CBoxliteError *error) {
   CExecutionHandle *execution = NULL;
-  BoxliteErrorCode code =
-      boxlite_execute(box, cmd, callback, user_data, &execution, error);
+  BoxliteErrorCode code = boxlite_box_exec(box, cmd, &execution, error);
   if (code != Ok) {
     return code;
   }
 
-  code = boxlite_execution_wait(execution, out_exit_code, error);
+  struct TestExecContext ctx = {
+      .callback = callback,
+      .user_data = user_data,
+      .exit_code = -1,
+  };
+
+  if (callback != NULL) {
+    boxlite_execution_on_stdout(execution, test_on_stdout, &ctx, error);
+  }
+  code = boxlite_execution_on_exit(execution, test_on_exit, &ctx, error);
+  if (code == Ok && runtime != NULL) {
+    while (ctx.exit_code < 0 && boxlite_runtime_drain(runtime, -1, error) >= 0) {
+    }
+  }
+  if (out_exit_code != NULL) {
+    *out_exit_code = ctx.exit_code;
+  }
   boxlite_execution_free(execution);
   return code;
 }
 
 static BoxliteErrorCode
-test_execute(CBoxHandle *box, const char *command, const char *const *args,
-             int argc, void (*callback)(const char *, int, void *),
-             void *user_data, int *out_exit_code, CBoxliteError *error) {
+test_execute(CBoxliteRuntime *runtime, CBoxHandle *box, const char *command,
+             const char *const *args, int argc,
+             void (*callback)(const char *, int, void *), void *user_data,
+             int *out_exit_code, CBoxliteError *error) {
   BoxliteCommand cmd = {.command = command,
                         .args = args,
                         .argc = argc,
@@ -127,7 +178,8 @@ test_execute(CBoxHandle *box, const char *command, const char *const *args,
                         .user = NULL,
                         .timeout_secs = 0.0,
                         .tty = 0};
-  return test_execute_cmd(box, &cmd, callback, user_data, out_exit_code, error);
+  return test_execute_cmd(runtime, box, &cmd, callback, user_data,
+                          out_exit_code, error);
 }
 
 #endif
