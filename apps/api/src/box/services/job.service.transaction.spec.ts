@@ -44,7 +44,7 @@ function makeService(transactionalJob: Job) {
       return Promise.resolve()
     }),
   }
-  const service = new JobService(jobRepository as any, {} as any, jobStateHandlerService as any)
+  const service = new JobService(jobRepository as any, {} as any, jobStateHandlerService as any, {} as any)
   return { entityManager, jobRepository, jobStateHandlerService, service }
 }
 

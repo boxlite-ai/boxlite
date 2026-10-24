@@ -17,6 +17,8 @@ import { Cron, CronExpression } from '@nestjs/schedule'
 import { JobStateHandlerService } from './job-state-handler.service'
 import { propagation, context as otelContext } from '@opentelemetry/api'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
+import { Box } from '../entities/box.entity'
+import { BoxMigrationJobReceiver, isMigrationJobType } from './box-migration-job-receiver.service'
 
 const REDIS_BLOCKING_COMMAND_TIMEOUT_BUFFER_MS = 3_000
 
@@ -32,6 +34,7 @@ export class JobService {
     private readonly jobRepository: Repository<Job>,
     @InjectRedis() private readonly redis: Redis,
     private readonly jobStateHandlerService: JobStateHandlerService,
+    private readonly boxMigrationJobReceiver: BoxMigrationJobReceiver,
   ) {}
 
   /**
@@ -227,7 +230,20 @@ export class JobService {
     errorMessage?: string,
     resultMetadata?: string,
   ): Promise<Job> {
+    const terminal = status === JobStatus.COMPLETED || status === JobStatus.FAILED
+    let afterCommit: (() => Promise<void>) | undefined
     const updatedJob = await this.jobRepository.manager.transaction(async (manager) => {
+      if (terminal) {
+        const identity = await manager.findOne(Job, { where: { id: jobId }, select: ['type', 'resourceId'] })
+        if (identity && isMigrationJobType(identity.type)) {
+          // Submission locks Box before inserting Job. Use the same order here.
+          await manager.findOne(Box, {
+            where: { id: identity.resourceId },
+            lock: { mode: 'pessimistic_write' },
+            loadEagerRelations: false,
+          })
+        }
+      }
       const job = await manager.findOne(Job, {
         where: { id: jobId },
         lock: { mode: 'pessimistic_write' },
@@ -238,6 +254,11 @@ export class JobService {
 
       if (!this.isValidStatusTransition(job.status, status)) {
         throw new ConflictException(`Invalid job status transition from ${job.status} to ${status} for job ${jobId}`)
+      }
+
+      // A replay must not rewrite the accepted result or release a later job's lock.
+      if (terminal && isMigrationJobType(job.type) && job.status === status) {
+        return job
       }
 
       job.status = status
@@ -257,12 +278,23 @@ export class JobService {
         job.resultMetadata = resultMetadata
       }
 
-      return manager.save(Job, job)
+      const saved = await manager.save(Job, job)
+      if (terminal && isMigrationJobType(saved.type)) {
+        afterCommit = await this.boxMigrationJobReceiver.handleJobCompletion(saved, manager)
+      }
+      return saved
     })
     this.logger.debug(`Updated job ${jobId} status to ${status}`)
 
-    // Handle job completion for v2 runners - update box, artifact, or backup state.
-    if (status === JobStatus.COMPLETED || status === JobStatus.FAILED) {
+    if (afterCommit) {
+      // Redis cleanup must not delay an already-committed result.
+      void afterCommit().catch((error) => {
+        this.logger.error(`Error after committing migration job ${jobId}:`, error)
+      })
+    }
+
+    // Lifecycle results retain their existing asynchronous completion path.
+    if (terminal && !isMigrationJobType(updatedJob.type)) {
       // Fire and forget - don't block the response
       this.jobStateHandlerService.handleJobCompletion(updatedJob).catch((error) => {
         this.logger.error(`Error handling job completion for job ${jobId}:`, error)

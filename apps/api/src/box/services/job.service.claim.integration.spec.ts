@@ -59,7 +59,7 @@ describeIfDatabase('JobService.claimPendingJobs (integration, real Postgres)', (
     ownsSchema = true
     await dataSource.synchronize()
     repository = dataSource.getRepository(Job)
-    service = new JobService(repository, {} as any, {} as any)
+    service = new JobService(repository, {} as any, {} as any, {} as any)
   })
 
   afterAll(async () => {

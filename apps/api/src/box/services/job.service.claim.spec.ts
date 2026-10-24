@@ -34,7 +34,7 @@ function makeService(pendingJobs: Job[], claimMatches: (id: string) => boolean) 
     save: jest.fn(),
   }
 
-  const service = new JobService(jobRepository as any, {} as any, {} as any)
+  const service = new JobService(jobRepository as any, {} as any, {} as any, {} as any)
   return { service, jobRepository }
 }
 

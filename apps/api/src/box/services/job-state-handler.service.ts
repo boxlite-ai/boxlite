@@ -18,7 +18,7 @@ import { RedisLockProvider } from '../common/redis-lock.provider'
 import { ResourceType } from '../enums/resource-type.enum'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
-import { BoxMigrationJobReceiver, isMigrationJobType } from './box-migration-job-receiver.service'
+import { isMigrationJobType } from './box-migration-job-receiver.service'
 import { ImagePullFailureService } from '../../image/services/image-pull-failure.service'
 
 /**
@@ -32,7 +32,6 @@ export class JobStateHandlerService {
   constructor(
     private readonly boxRepository: BoxRepository,
     private readonly redisLockProvider: RedisLockProvider,
-    private readonly boxMigrationJobReceiver: BoxMigrationJobReceiver,
     private readonly imagePullFailureService: ImagePullFailureService,
   ) {}
 
@@ -49,12 +48,9 @@ export class JobStateHandlerService {
       return
     }
 
-    // A migration job carries its own lock — taken by the loop that submitted
-    // it, released by the receiver below — and never the box's state-change
-    // lock. Handing it to the tail of this method would delete a lock a
-    // concurrent start or stop of the same box is holding.
+    // JobService applies migration results in its transaction. They never own
+    // the lifecycle lock released below.
     if (isMigrationJobType(job.type)) {
-      await this.boxMigrationJobReceiver.handleJobCompletion(job)
       return
     }
 

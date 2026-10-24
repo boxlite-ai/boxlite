@@ -56,7 +56,7 @@ describeIfDatabase('JobService.createJob resource namespaces (integration, real 
     repository = dataSource.getRepository(Job)
     // Redis only carries the "new job" nudge, and createJob already treats a
     // failed nudge as harmless: the runner polls for what it missed.
-    service = new JobService(repository, {} as any, {} as any)
+    service = new JobService(repository, {} as any, {} as any, {} as any)
   })
 
   afterAll(async () => {
