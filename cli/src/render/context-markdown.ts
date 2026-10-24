@@ -35,6 +35,10 @@ export function contextMarkdown(c: AgentContext): string {
   }
   out.push('');
 
+  if (c.acknowledged?.length) {
+    out.push('Acknowledged on purpose (`boxlite-app app unack <id>` brings one back):', '', ...c.acknowledged.map((a) => `- ${a.id}: ${a.title} (${a.reason})`), '');
+  }
+
   out.push('## Services', '');
   if (!c.services.length) out.push('No services declared yet.');
   else out.push(...tableMd(['service', 'exposed', 'runs', 'health path', 'state', 'health', 'restarts', 'last exit', 'memory'], c.services.map((s) => [s.name, s.exposed ? 'yes' : '', s.command ?? (s.static ? `static ${s.static}` : ''), s.health_path, s.state, s.health, s.restarts, s.last_exit_code, s.memory_bytes != null ? formatBytes(s.memory_bytes) : null])));

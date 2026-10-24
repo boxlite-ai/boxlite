@@ -1,6 +1,6 @@
 # boxlite-app CLI reference
 
-Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.12); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
+Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.13); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
 
 ## Conventions
 
@@ -418,6 +418,30 @@ Usage: `boxlite-app app access [action] [value] [options]`
 boxlite-app app access
 boxlite-app app access set public --yes
 ```
+
+### `boxlite-app app ack`
+
+acknowledge an info finding of app context on purpose (e.g. a public site the user asked for); it returns if it changes
+
+Usage: `boxlite-app app ack <finding> <reason...>`
+
+- Network: talks to the control plane
+- `--json`: `{ id, title, reason, by, at }`
+- Exit codes: 0, 1, 2, 3, 4
+
+```sh
+boxlite-app app ack public_anonymous "the user asked for a public site"
+```
+
+### `boxlite-app app unack`
+
+bring an acknowledged finding back into next_actions
+
+Usage: `boxlite-app app unack <finding>`
+
+- Network: talks to the control plane
+- `--json`: `{ unacknowledged: id }`
+- Exit codes: 0, 1, 2, 3, 4
 
 ### `boxlite-app app remember`
 

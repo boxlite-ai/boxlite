@@ -398,3 +398,32 @@ test('notes carry facts and decisions to the next session: kept, searched, in co
   assert.equal((await h.request(`/v1/apps/crm/notes/${all[0]!.id}`, { method: 'DELETE', key })).status, 200);
   assert.equal(((await (await get('/notes')).json()) as unknown[]).length, 1);
 });
+
+test('an info finding can be acknowledged on purpose; it comes back when it changes, and warnings cannot be', async () => {
+  await deploy(`${TOML}\n[variables]\nSTRIPE_PUBLISHABLE_KEY = "pk_test_123"\n`);
+  const ctxNow = async () => (await (await get('/envs/main/context')).json()) as { next_actions: { id: string; severity: string }[]; acknowledged: { id: string; reason: string }[] };
+  const ack = (id: string, reason: string) => h.request(`/v1/apps/crm/envs/main/findings/${id}/ack`, { method: 'POST', key, json: { reason } });
+  assert.ok((await ctxNow()).next_actions.some((f) => f.id === 'plain_credential'));
+
+  const ok = await ack('plain_credential', 'a publishable key is meant to be public');
+  assert.equal(ok.status, 200, await ok.clone().text());
+  let c = await ctxNow();
+  assert.ok(!c.next_actions.some((f) => f.id === 'plain_credential'));
+  assert.deepEqual(c.acknowledged.map((a) => [a.id, a.reason]), [['plain_credential', 'a publishable key is meant to be public']]);
+
+  h.ctx.store.appendLogs(env().id, [{ ts: new Date().toISOString(), source: 'web', level: 'error', line: 'TypeError: boom', deployment: 1 }]);
+  const warn = await ack('recent_errors', 'not now');
+  assert.equal(warn.status, 400);
+  assert.match(((await warn.json()) as { error: { message: string } }).error.message, /only info findings/);
+  assert.equal((await ack('nope', 'x')).status, 404);
+  assert.equal((await ack('plain_credential', '  ')).status, 400);
+
+  // Another credential-looking variable: the finding says something new, so it is back.
+  await deploy(`${TOML}\n[variables]\nSTRIPE_PUBLISHABLE_KEY = "pk_test_123"\nSENDGRID_API_KEY = "x"\n`);
+  c = await ctxNow();
+  assert.ok(c.next_actions.some((f) => f.id === 'plain_credential'), 'a changed finding resurfaces');
+  assert.deepEqual(c.acknowledged, []);
+
+  assert.equal((await h.request('/v1/apps/crm/envs/main/findings/plain_credential/ack', { method: 'DELETE', key })).status, 200);
+  assert.equal((await h.request('/v1/apps/crm/envs/main/findings/plain_credential/ack', { method: 'DELETE', key })).status, 404);
+});

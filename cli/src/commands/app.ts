@@ -69,6 +69,19 @@ async function forget(ctx: Ctx, id: string): Promise<void> {
   ctx.out.line(`forgot note ${r.forgotten}`);
 }
 
+async function ack(ctx: Ctx, id: string, reason: string[]): Promise<void> {
+  const a = await (await ctx.appApi()).ackFinding(id, reason.join(' '));
+  ctx.out.data(a);
+  ctx.out.line(`acknowledged ${a.id} in ${ctx.envName}: ${a.reason}`);
+  ctx.out.next(`it stays out of next_actions while it says the same; \`boxlite-app app unack ${a.id}\` brings it back`);
+}
+
+async function unack(ctx: Ctx, id: string): Promise<void> {
+  const r = await (await ctx.appApi()).unackFinding(id);
+  ctx.out.data(r);
+  ctx.out.line(`${r.unacknowledged} is back in next_actions`);
+}
+
 async function context(ctx: Ctx, opts: { format?: string }): Promise<void> {
   if (opts.format && opts.format !== 'json' && opts.format !== 'markdown') throw new MicrocloudError('usage', `--format must be markdown or json (got "${opts.format}")`, 'use `boxlite-app app context --format markdown` or `--json`');
   const data = await (await ctx.appApi()).envContext();
@@ -263,6 +276,20 @@ export function registerApp(program: Command, make: MakeCtx): Command {
       .option('-y, --yes', 'required to set public')
       .action(async (action: string | undefined, value: string | undefined, _o: unknown, cmd: Command) => access(await make(cmd), action, value)),
     { json: '{ access: "private"|"org"|"public", source: "manifest"|"online" }', exits: [2, 3, 10], destructive: true, online: true, examples: ['boxlite-app app access', 'boxlite-app app access set public --yes'] },
+  );
+  describe(
+    app
+      .command('ack <finding> <reason...>')
+      .description('acknowledge an info finding of app context on purpose (e.g. a public site the user asked for); it returns if it changes')
+      .action(async (finding: string, reason: string[], _o: unknown, cmd: Command) => ack(await make(cmd), finding, reason)),
+    { json: '{ id, title, reason, by, at }', exits: [1, 2, 3, 4], online: true, examples: ['boxlite-app app ack public_anonymous "the user asked for a public site"'] },
+  );
+  describe(
+    app
+      .command('unack <finding>')
+      .description('bring an acknowledged finding back into next_actions')
+      .action(async (finding: string, _o: unknown, cmd: Command) => unack(await make(cmd), finding)),
+    { json: '{ unacknowledged: id }', exits: [2, 3, 4], online: true },
   );
   describe(
     app

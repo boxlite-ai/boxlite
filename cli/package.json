@@ -1,6 +1,6 @@
 {
   "name": "@microcloud/cli",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "private": true,
   "type": "module",
   "bin": {

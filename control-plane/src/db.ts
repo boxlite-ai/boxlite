@@ -437,6 +437,18 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
   );
   CREATE INDEX IF NOT EXISTS app_notes_by_app ON app_notes (app_id, id);
   `,
+  // Info findings an agent or owner acknowledged on purpose (services/acks.ts): hidden from next_actions while unchanged.
+  `
+  CREATE TABLE IF NOT EXISTS finding_acks (
+    env_id TEXT NOT NULL,
+    finding_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (env_id, finding_id)
+  );
+  `,
 ];
 
 export const LOG_RING_SIZE = 20_000;

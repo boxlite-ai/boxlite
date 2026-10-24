@@ -1,4 +1,4 @@
-import { MicrocloudError, type AgentContext, type AppNote, type CheckError, type CheckWarning, type Manifest, type MigrationFile, type UploadFile } from '@microcloud/shared';
+import { MicrocloudError, type AcknowledgedFinding, type AgentContext, type AppNote, type CheckError, type CheckWarning, type Manifest, type MigrationFile, type UploadFile } from '@microcloud/shared';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { fetch, Response, WebSocket, type Dispatcher } from 'undici';
@@ -610,6 +610,15 @@ export class Api {
 
   purgeTestUsers(): Promise<{ removed: number; emails: string[]; mirror: string }> {
     return this.json('DELETE', `${this.envPath}/auth/test-users`);
+  }
+
+  /** Acknowledge an info finding of this environment on purpose, or bring it back. */
+  ackFinding(id: string, reason: string): Promise<AcknowledgedFinding> {
+    return this.json('POST', `${this.envPath}/findings/${encodeURIComponent(id)}/ack`, { body: { reason } });
+  }
+
+  unackFinding(id: string): Promise<{ unacknowledged: string }> {
+    return this.json('DELETE', `${this.envPath}/findings/${encodeURIComponent(id)}/ack`);
   }
 
   /** Notes for the next session on this App (App-wide). */

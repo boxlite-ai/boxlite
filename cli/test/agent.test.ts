@@ -62,11 +62,11 @@ test('whoami: app, key scope, env, control plane, and a newer CLI', async () => 
     `App crm · environment main · key …${KEY.slice(-4)} (scope: this App only)`,
     'Control plane https://cp.test (via http://cp.test)',
     'Environments main live',
-    'CLI 0.3.12 (latest 0.9.0)',
+    'CLI 0.3.13 (latest 0.9.0)',
     'next: update the CLI: `npm install -g http://cp.test/cli/boxlite-app.tgz`',
   ]);
   const json = JSON.parse((await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent })).stdout);
-  assert.deepEqual(json.cli, { version: '0.3.12', latest_version: '0.9.0', update_available: true, update_command: 'npm install -g http://cp.test/cli/boxlite-app.tgz' });
+  assert.deepEqual(json.cli, { version: '0.3.13', latest_version: '0.9.0', update_available: true, update_command: 'npm install -g http://cp.test/cli/boxlite-app.tgz' });
   assert.deepEqual(json.linked, { link_file: true, app: 'crm', matches_key: true });
 });
 
@@ -166,7 +166,7 @@ test('doctor runs local and online checks and ranks the problems with fixes', as
   assert.equal(checks.database, 'ok');
 
   const human = await cli(['doctor'], { cwd: dir, dispatcher: agent });
-  assert.equal(human.lines[0], 'Doctor · crm/main · CLI 0.3.12');
+  assert.equal(human.lines[0], 'Doctor · crm/main · CLI 0.3.13');
   assert.match(human.lines[1] ?? '', /^x error deployment #3 failed at start: web answers 404 on its health path \/healthz/);
   assert.match(human.lines.at(-1) ?? '', /^next: add a route GET \/healthz/);
 });
@@ -269,4 +269,20 @@ test('app remember, recall and forget keep notes for the next session', async ()
   pool.intercept({ path: '/v1/apps/crm/notes/7', method: 'DELETE' }).reply(200, { forgotten: 7 }, { headers: JSON_HEADERS });
   assert.equal((await cli(['app', 'forget', '7'], { cwd: dir, dispatcher: agent })).code, 0);
   assert.equal(JSON.parse((await cli(['app', 'forget', 'x', '--json'], { cwd: dir, dispatcher: agent })).stderr).error.code, 'usage');
+});
+
+test('app ack sends the reason; app unack brings the finding back', async () => {
+  const dir = await project(root, { '.boxlite/link.json': linkJson(1) });
+  const { agent, pool } = mockApi();
+  let sent: Record<string, unknown> = {};
+  pool.intercept({ path: '/v1/apps/crm/envs/main/findings/public_anonymous/ack', method: 'POST' }).reply(200, (opts) => {
+    sent = JSON.parse(String(opts.body));
+    return { id: 'public_anonymous', title: 'the app is public and has no sign-in', reason: String(sent.reason), by: 'key:…aaaa', at: '2026-10-24T10:00:00.000Z' };
+  }, { headers: JSON_HEADERS });
+  const r = await cli(['app', 'ack', 'public_anonymous', 'the', 'user', 'asked', 'for', 'it'], { cwd: dir, dispatcher: agent });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(sent, { reason: 'the user asked for it' });
+  assert.match(r.stdout, /acknowledged public_anonymous in main: the user asked for it/);
+  pool.intercept({ path: '/v1/apps/crm/envs/main/findings/public_anonymous/ack', method: 'DELETE' }).reply(200, { unacknowledged: 'public_anonymous' }, { headers: JSON_HEADERS });
+  assert.match((await cli(['app', 'unack', 'public_anonymous'], { cwd: dir, dispatcher: agent })).stdout, /public_anonymous is back in next_actions/);
 });

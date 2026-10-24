@@ -36,6 +36,8 @@ export interface AgentContext {
   build_warnings?: BuildWarning[];
   /** What earlier sessions on this App wrote down for the next one (`app remember "<fact>"`), newest first, at most 20. Absent from an older control plane. */
   notes?: AppNote[];
+  /** Info findings acknowledged on purpose (`app ack`): out of next_actions while they stay the same. Absent from an older control plane. */
+  acknowledged?: AcknowledgedFinding[];
   /** Ranked problems with fixes, worst first; empty when everything looks fine. */
   next_actions: Finding[];
   cli: { latest_version: string | null };
@@ -55,6 +57,14 @@ export interface AppNote {
   text: string;
   by: string;
   created_at: string;
+}
+
+export interface AcknowledgedFinding {
+  id: string;
+  title: string;
+  reason: string;
+  by: string;
+  at: string;
 }
 
 export interface AgentService {

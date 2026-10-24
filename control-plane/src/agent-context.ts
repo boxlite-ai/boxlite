@@ -9,6 +9,7 @@ import type { Spec } from './spec.js';
 import { deploymentBuildWarnings, envStatus } from './views.js';
 import { buildLineLevel } from './console-logs.js';
 import { listNotes } from './services/notes.js';
+import { applyAcks } from './services/acks.js';
 import { storedLevelsAtLeast } from './services/logs.js';
 
 const ERROR_LEVELS = storedLevelsAtLeast('error');
@@ -156,5 +157,5 @@ export async function buildAgentContext(ctx: Ctx, app: AppRow, env: EnvRow, late
     build_warnings: liveBuild ? deploymentBuildWarnings(ctx, env, liveBuild) : [],
     cli: { latest_version: latestCli },
   };
-  return { ...base, next_actions: contextFindings(base) };
+  return { ...base, ...applyAcks(ctx, env, contextFindings(base)) };
 }

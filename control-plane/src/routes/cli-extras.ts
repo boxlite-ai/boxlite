@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { SQLInputValue } from 'node:sqlite';
 import { buildAgentContext, schedulesOf, variablesOf } from '../agent-context.js';
+import { ackFinding, unackFinding } from '../services/acks.js';
 import { newId, requireAppKey, type Vars } from '../auth.js';
 import { cliPackage } from '../cli-version.js';
 import type { Ctx } from '../ctx.js';
@@ -83,6 +84,14 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
   });
 
   r.get('/envs/:env/context', async (c) => c.json(await buildAgentContext(ctx, c.get('app'), envOf(ctx, c), await latestCli(ctx))));
+  r.post('/envs/:env/findings/:id/ack', async (c) => {
+    const app = c.get('app');
+    const env = envOf(ctx, c);
+    const b = await body(c, z.object({ reason: z.string().max(1000) }));
+    const current = await buildAgentContext(ctx, app, env, await latestCli(ctx));
+    return c.json(ackFinding(ctx, app, env, current, c.req.param('id'), b.reason, c.get('actor')));
+  });
+  r.delete('/envs/:env/findings/:id/ack', (c) => c.json(unackFinding(ctx, c.get('app'), envOf(ctx, c), c.req.param('id'), c.get('actor'))));
   // The app-level context is the main env's: one AgentContext shape, rendered as markdown by the
   // CLI only (`boxlite-app app context`). Its old markdown renderer here still described path prefixes.
   r.get('/context', async (c) => {

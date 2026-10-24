@@ -158,7 +158,8 @@ export async function runDoctor(ctx: Ctx): Promise<DoctorReport> {
     if (c) {
       const localMigrations = await migrationChecks(api, checked, c, r);
       // The control plane only knows the migrations of its last deployment; the local diff is fresher.
-      const online = (c.next_actions.length ? c.next_actions : contextFindings(c)).filter((f) => !(localMigrations && (f.id === 'pending_migrations' || f.id === 'migration_changed')));
+      // An older control plane sends no next_actions of its own; a current one may send none because all were acknowledged.
+      const online = (c.next_actions.length || c.acknowledged ? c.next_actions : contextFindings(c)).filter((f) => !(localMigrations && (f.id === 'pending_migrations' || f.id === 'migration_changed')));
       for (const f of online) r.problem(f.id, f);
       if (!online.some((f) => f.id === 'deploy_failed')) r.ok('last_deployment', c.deployments[0] ? `#${c.deployments[0].number} ${c.deployments[0].status}` : 'no deployments');
       if (!online.some((f) => f.id === 'crash_loop' || f.id === 'service_down')) r.ok('services', c.services.length ? c.services.map((s) => `${s.name} ${s.state ?? 'not started'}`).join(', ') : 'none yet');

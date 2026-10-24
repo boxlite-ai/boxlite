@@ -21,6 +21,7 @@ export {
   type AgentService,
   type AgentVariable,
   type AppNote,
+  type AcknowledgedFinding,
   type BoxUsage,
   type Finding,
   type Severity,
