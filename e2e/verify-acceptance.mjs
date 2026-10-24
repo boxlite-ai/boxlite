@@ -31,6 +31,7 @@ const EXPECT = {
   m6: { page: [], needs: ['database', 'public'] },
   m7: { page: [], needs: ['database', 'public', 'email sign-in'] },
   m8: { page: [], needs: ['database', 'public', 'owner-only admin'] },
+  m9: { page: [], needs: ['database', 'public'] },
 }
 
 /** The app's page; a sleeping app first answers 503 with the platform's wake-up page, so wait for it. */
