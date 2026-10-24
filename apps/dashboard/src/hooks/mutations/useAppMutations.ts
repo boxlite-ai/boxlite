@@ -8,6 +8,7 @@ import { appsClient } from '@/lib/apps/client'
 import type {
   AppActionInput,
   AppAuthDetail,
+  AppDomain,
   AppDetail,
   AppVisibility,
   CreateAppInput,
@@ -354,4 +355,29 @@ export function useEmailSender() {
       (await appsClient.post<{ sent: boolean; to: string; ms: number }>(`/apps/${encodeURIComponent(appId)}/auth/email/test`, { to }, { params: { env } })).data,
   })
   return { save, remove, test }
+}
+
+/** An environment's custom domains: add (returns the DNS records), verify, remove. */
+export function useDomains() {
+  const queryClient = useQueryClient()
+  const env = useAppEnv()
+  const refresh = (appId: string) => queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(APPS_SCOPE, appId, env) })
+  const path = (appId: string, host?: string) =>
+    `/apps/${encodeURIComponent(appId)}/domains${host ? `/${encodeURIComponent(host)}` : ''}`
+  const add = useMutation({
+    mutationFn: async ({ appId, host }: { appId: string; host: string }) =>
+      (await appsClient.post<AppDomain>(path(appId), { host }, { params: { env } })).data,
+    onSuccess: (_d, { appId }) => refresh(appId),
+  })
+  const verify = useMutation({
+    mutationFn: async ({ appId, host }: { appId: string; host: string }) =>
+      (await appsClient.post<AppDomain & { cname: string | null; cname_ok: boolean }>(`${path(appId, host)}/verify`, {}, { params: { env } })).data,
+    onSuccess: (_d, { appId }) => refresh(appId),
+  })
+  const remove = useMutation({
+    mutationFn: async ({ appId, host }: { appId: string; host: string }) =>
+      (await appsClient.delete<{ removed: string }>(path(appId, host), { params: { env } })).data,
+    onSuccess: (_d, { appId }) => refresh(appId),
+  })
+  return { add, verify, remove }
 }

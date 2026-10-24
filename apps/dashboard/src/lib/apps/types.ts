@@ -46,6 +46,15 @@ export interface BoxUsage {
   diskFreeBytes: number
 }
 
+export interface AppDomain {
+  host: string
+  env: string
+  status: 'pending_dns' | 'active'
+  /** The DNS records the owner adds at their DNS provider. */
+  records: { type: 'TXT' | 'CNAME'; name: string; value: string }[]
+  verified_at: string | null
+}
+
 export interface AppSchedule {
   name: string
   cron: string
@@ -445,6 +454,8 @@ export interface AppDetail extends Omit<AppSummary, 'environments'> {
   accessSource: 'manifest' | 'online'
   specVersion: number | null
   auth: AppAuthStatus
+  /** Custom domains of this environment; absent from an older control plane. */
+  domains?: { supported: boolean; target: string | null; list: AppDomain[] }
 }
 
 /**
