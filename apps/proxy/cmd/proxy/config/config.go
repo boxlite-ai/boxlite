@@ -38,7 +38,11 @@ type Config struct {
 	OtelEndpoint          string             `envconfig:"OTEL_EXPORTER_OTLP_ENDPOINT"`
 	OtelHeaders           string             `envconfig:"OTEL_EXPORTER_OTLP_HEADERS"`
 	Environment           string             `envconfig:"ENVIRONMENT"`
-	ApiClient             *apiclient.APIClient
+	// CustomHostResolverUrl, when set, routes host names that are not tunnel names
+	// (custom domains) to the Box and port it answers for them; see custom_hosts.go.
+	CustomHostResolverUrl   string `envconfig:"CUSTOM_HOST_RESOLVER_URL"`
+	CustomHostResolverToken string `envconfig:"CUSTOM_HOST_RESOLVER_TOKEN"`
+	ApiClient               *apiclient.APIClient
 }
 
 type OidcConfig struct {

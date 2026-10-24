@@ -76,6 +76,8 @@ type Proxy struct {
 	// wakeDeadlines maps a box being woken to the end of its wake budget, so
 	// requests that arrive mid-wake join it.
 	wakeDeadlines sync.Map
+	// customHosts routes custom domains (custom_hosts.go); nil when not configured.
+	customHosts *customHosts
 }
 
 func StartProxy(ctx context.Context, config *config.Config) error {
@@ -90,6 +92,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 	}
 
 	proxy.apiclient = config.ApiClient
+	proxy.customHosts = newCustomHosts(config.CustomHostResolverUrl, config.CustomHostResolverToken)
 	proxy.guestPortTransport = proxy.newGuestPortTransport()
 
 	if config.Redis != nil {

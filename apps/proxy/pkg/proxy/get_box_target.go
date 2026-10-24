@@ -314,6 +314,22 @@ func (p *Proxy) validateAndCache(
 // parseHost returns the target port as a number, so every caller compares one
 // canonical form: a label like "03000" is port 3000.
 func (p *Proxy) parseHost(host string) (targetPort uint16, boxId string, baseHost string, err error) {
+	targetPort, boxId, baseHost, err = parseTunnelHost(host)
+	if err == nil || p.customHosts == nil || host == "" {
+		return targetPort, boxId, baseHost, err
+	}
+	// Not a tunnel name: a custom domain, if the resolver knows it.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	port, id, rerr := p.customHosts.resolve(ctx, host)
+	if rerr != nil {
+		return 0, "", "", err
+	}
+	return port, id, "", nil
+}
+
+// parseTunnelHost reads the port and Box of a tunnel host name.
+func parseTunnelHost(host string) (targetPort uint16, boxId string, baseHost string, err error) {
 	// Extract port and box ID from the host header
 	// Expected format: 1234-some-id-uuid.proxy.domain
 	if host == "" {
