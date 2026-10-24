@@ -14,6 +14,7 @@ import { consoleLogRoutes } from './logs.js';
 import { staticHandler, vendorHandler } from './static.js';
 import { consoleVariableRoutes } from './variables.js';
 import { consoleVolumeRoutes } from './volumes.js';
+import { consoleDomainRoutes } from './domains.js';
 
 /**
  * The console API (/console/api) and the console's static files (/console/). The API speaks the
@@ -59,6 +60,7 @@ function consoleApi(root: Hono, ctx: Ctx) {
   consoleAppRoutes(api, k);
   consoleDeploymentRoutes(api, k);
   consoleVolumeRoutes(api, k);
+  consoleDomainRoutes(api, k);
   consoleVariableRoutes(api, k);
   consoleAuthRoutes(api, k);
   consoleLogRoutes(api, k);

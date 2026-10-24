@@ -870,6 +870,10 @@ test('email sign-in refuses other origins, rate-limits codes, and explains SMTP 
 
     assert.equal((await put({ host: '127.0.0.1', port: smtp.port, username: 'mailer', from: 'no-reply@crm.test', password: 'm4il' })).status, 200);
     assert.equal((await post('/.boxlite/auth/email/start', browser(), { email: 'bob@example.com', next: '/' }, 'https://evil.test')).status, 403, 'another site cannot start a sign-in');
+    const env = h.ctx.store.envByName(h.ctx.store.appByName('crm')!.id, 'main')!;
+    h.ctx.store.run("INSERT INTO app_domains (host, app_id, env_id, token, verified_at, created_at) VALUES ('shop.acme.com', ?, ?, 't', ?, ?)", env.app_id, env.id, new Date().toISOString(), new Date().toISOString());
+    assert.equal((await post('/.boxlite/auth/email/start', browser(), { email: 'erin@example.com', next: '/' }, 'https://shop.acme.com')).status, 200, "the env's verified custom domain may");
+    assert.equal((await post('/.boxlite/auth/email/start', browser(), { email: 'erin@example.com', next: '/' }, 'http://shop.acme.com')).status, 403, 'but only over HTTPS');
     for (let i = 0; i < 5; i++) assert.equal((await post('/.boxlite/auth/email/start', browser(), { email: 'bob@example.com', next: '/' })).status, 200);
     assert.equal((await post('/.boxlite/auth/email/start', browser(), { email: 'bob@example.com', next: '/' })).status, 429, 'five codes per address per hour');
     // Requests in parallel cannot slip past the limit, and failed sends count.
@@ -897,4 +901,26 @@ test('email sign-in refuses other origins, rate-limits codes, and explains SMTP 
   } finally {
     smtp.close();
   }
+});
+
+test('a sign-in begun on a verified custom domain comes back to it; a forged host is refused', async () => {
+  const { env } = await setup({ auth: { providers: ['github'], protect: ['/app/*'] } });
+  h.ctx.store.run("INSERT INTO app_domains (host, app_id, env_id, token, verified_at, created_at) VALUES ('shop.acme.com', ?, ?, 't', ?, ?)", env.app_id, env.id, new Date().toISOString(), new Date().toISOString());
+  const gh = fakeGithub(octo);
+  h.ctx.oauthFetch = gh.fetchImpl;
+  const login = await h.appRequest('/.boxlite/auth/login?provider=github&next=/app', { headers: { 'x-forwarded-host': 'Shop.Acme.com' } });
+  const startUrl = new URL(login.headers.get('location')!);
+  assert.equal(startUrl.searchParams.get('host'), 'shop.acme.com');
+  const start = await h.request(startUrl.pathname + startUrl.search);
+  const authorize = new URL(start.headers.get('location')!);
+  gh.setChallenge(authorize.searchParams.get('code_challenge')!);
+  const callback = await h.request(`/auth/callback/github?code=good-code&state=${encodeURIComponent(authorize.searchParams.get('state')!)}`, { headers: { cookie: cookiePair(start.headers.get('set-cookie')!) } });
+  assert.equal(callback.status, 302, await callback.clone().text());
+  assert.match(callback.headers.get('location')!, /^https:\/\/shop\.acme\.com\/\.boxlite\/auth\/complete\?code=/);
+
+  // A host that is not a verified domain of this env never gets the hand-off.
+  startUrl.searchParams.set('host', 'evil.example.com');
+  assert.equal((await h.request(startUrl.pathname + startUrl.search)).status, 400);
+  const plain = await h.appRequest('/.boxlite/auth/login?provider=github&next=/app', { headers: { 'x-forwarded-host': 'other.example.com' } });
+  assert.equal(new URL(plain.headers.get('location')!).searchParams.get('host'), null, 'an unverified host is ignored');
 });

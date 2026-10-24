@@ -56,8 +56,13 @@ rejects, under a certificate that does not name it. Nothing on the App platform 
   checks the TXT (the CNAME is reported, not required), `domains rm` removes it, and
   `GET /proxy/hosts?host=` answers the proxy for verified domains of live Apps only. Domains are
   managed online for now; `[domains] custom` in boxlite.toml points to `app domains add`.
-- **Not yet:** sign-in callbacks still return to the BoxLite URL, the console's Domains tab has no
-  Add button, and nothing is verified end to end until a proxy with the resolver runs in front.
+- **Sign-in on the domain:** an OAuth sign-in begun on a verified custom domain returns there (the
+  host travels in the signed state and is checked again at every hop), and email code sign-in
+  accepts the domain's HTTPS origin.
+- **Console:** where the platform routes custom domains, the Domains tab adds a domain, shows the
+  two records to copy, verifies and removes; elsewhere Add domain stays disabled and says why.
+- **Not yet:** nothing is verified end to end until a proxy with the resolver runs in front, with
+  certificates for the customer domains at its TLS terminator.
 
 Without that configuration the platform keeps refusing custom domains, so no agent reports a
 domain that serves nothing.

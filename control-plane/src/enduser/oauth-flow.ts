@@ -15,6 +15,7 @@ import { mirrorUser } from './mirror.js';
 import { htmlPage, noAccessPage, redirect } from './pages.js';
 import { safeNext } from './paths.js';
 import { revokeSessions, upsertUser } from './sessions.js';
+import { verifiedDomainOf } from '../services/domains.js';
 import { signState, verifyState } from './state.js';
 import { consoleCallback } from '../console-signin.js';
 
@@ -76,7 +77,10 @@ function start(ctx: Ctx, req: Request): Response {
   const bh = q.get('bh') ?? '';
   if (!/^[0-9a-f]{64}$/.test(bh)) return htmlPage('Bad sign-in link', '<h1>Start the sign-in from the site</h1>', 400);
   const verifier = randomBytes(32).toString('base64url');
-  const state = signState(ctx.config.sessionSecret, { app: app.name, env: env.name, next, provider: providerName, vh: sha256hex(verifier), bh });
+  const asked = q.get('host');
+  const host = asked ? verifiedDomainOf(ctx, env, asked) : null;
+  if (asked && !host) return htmlPage('Bad sign-in link', '<h1>Start the sign-in from the site</h1>', 400);
+  const state = signState(ctx.config.sessionSecret, { app: app.name, env: env.name, next, provider: providerName, vh: sha256hex(verifier), bh, ...(host ? { host } : {}) });
   const location = provider.authorizeUrl({ creds, redirectUri: redirectUri(ctx, providerName), state, codeChallenge: createHash('sha256').update(verifier).digest('base64url') });
   return redirect(location, new Headers({ 'set-cookie': setCookieValue(apiSecure(ctx), verifierCookieName(env.id), verifier, AUTH_PATH, STATE_TTL_S, provider.formPost) }));
 }
@@ -93,7 +97,9 @@ async function callback(ctx: Ctx, providerName: string, req: Request): Promise<R
   const app = ctx.store.appByName(st.app);
   const env = app ? ctx.store.envByName(app.id, st.env) : undefined;
   if (!app || !env) return htmlPage('Not found', '<h1>This site no longer exists</h1>', 404);
-  const appUrl = ctx.resources.appUrl(app.name, env.name);
+  // Back to the custom domain the sign-in began on, if it is still a verified domain of this env.
+  const custom = st.host ? verifiedDomainOf(ctx, env, st.host) : null;
+  const appUrl = custom ? `https://${custom}` : ctx.resources.appUrl(app.name, env.name);
   const retry = `<p><a href="${escapeHtml(`${appUrl}/.boxlite/auth/login?next=${encodeURIComponent(st.next)}`)}">Try again</a></p>`;
   const headers = new Headers({ 'cache-control': 'no-store' });
   const verifierName = verifierCookieName(env.id);

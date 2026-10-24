@@ -3,6 +3,7 @@ import type { ConsoleMetrics } from './console-access.js';
 import type { ActivityView } from './console-activity.js';
 import type { AuthStatusView } from './console-enduser.js';
 import type { Deployment } from './db.js';
+import type { DomainView } from './services/domains.js';
 
 export type ConsoleStatus = 'draft' | 'building' | 'live' | 'degraded' | 'sleeping' | 'failed';
 export type Access = 'private' | 'org' | 'public';
@@ -181,4 +182,6 @@ export interface AppDetailView extends Omit<AppSummaryView, 'environments'> {
   accessSource: 'manifest' | 'online';
   specVersion: number | null;
   auth: AuthStatusView;
+  /** Custom domains of this env; `supported` is false where the platform does not route them (docs/custom-domains.md). */
+  domains: { supported: boolean; target: string | null; list: DomainView[] };
 }

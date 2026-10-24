@@ -20,6 +20,7 @@ import { dbCoordinates } from './services/db.js';
 import type { Spec } from './spec.js';
 import type { ServiceState } from './supervisor.js';
 import { logLevel } from './services/logs.js';
+import { listDomains } from './services/domains.js';
 import { previewAttempt, previewMeta, refreshPreviewIfStale } from './preview.js';
 
 /**
@@ -346,5 +347,6 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
     key,
     specVersion: spec?.version ?? null,
     auth: endUserAuth.authStatus(ctx, app, fresh),
+    domains: { supported: !!ctx.config.customDomains, target: ctx.config.customDomains?.target ?? null, list: listDomains(ctx, app, fresh) },
   };
 }

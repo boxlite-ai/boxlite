@@ -19,6 +19,7 @@ import { authLog } from './oauth-flow.js';
 import { htmlPage, noAccessPage, redirect } from './pages.js';
 import { safeNext } from './paths.js';
 import { createSession, upsertUser } from './sessions.js';
+import { verifiedDomainOf } from '../services/domains.js';
 
 const CODE_TTL_S = 10 * 60;
 const MAX_TRIES = 5;
@@ -50,7 +51,10 @@ function codeForm(email: string, next: string, note: string): string {
 function sameOrigin(ctx: Ctx, app: AppRow, env: EnvRow, headers: Headers): boolean {
   const origin = headers.get('origin');
   if (!origin) return (headers.get('sec-fetch-site') ?? 'same-origin') === 'same-origin';
-  return origin === new URL(ctx.resources.appUrl(app.name, env.name)).origin;
+  if (origin === new URL(ctx.resources.appUrl(app.name, env.name)).origin) return true;
+  // Or one of the env's verified custom domains, over HTTPS (services/domains.ts).
+  const u = URL.canParse(origin) ? new URL(origin) : null;
+  return !!u && u.protocol === 'https:' && verifiedDomainOf(ctx, env, u.host) === u.hostname;
 }
 
 const count = (ctx: Ctx, sql: string, ...args: (string | number)[]) => ctx.store.get<{ n: number }>(sql, ...args)?.n ?? 0;
