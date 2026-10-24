@@ -4,9 +4,11 @@
 package proxy
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -58,6 +60,13 @@ func TestPrivateTunnelOIDCUsesHostOnlySingleUseBrowserBoundHandoff(t *testing.T)
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case strings.HasSuffix(r.URL.Path, "/session"):
+					// Like the API's strict JSON parser: a body that is not an
+					// object or array (such as `null`) is rejected before the handler.
+					if body, _ := io.ReadAll(r.Body); len(bytes.TrimSpace(body)) > 0 &&
+						!bytes.HasPrefix(bytes.TrimSpace(body), []byte("{")) && !bytes.HasPrefix(bytes.TrimSpace(body), []byte("[")) {
+						w.WriteHeader(400)
+						return
+					}
 					if r.Header.Get("Authorization") != "Bearer owner-key" {
 						w.WriteHeader(401)
 						return
