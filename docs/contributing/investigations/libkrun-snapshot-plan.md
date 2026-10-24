@@ -1,6 +1,6 @@
 # libkrun 分阶段快照计划
 
-2026-10-23 · **当前状态**：私有 `RamSnapshotVm` 在既有 virtio-blk、virtio-net 快照之外新增五类设备快照：virtio-rng、virtio-balloon、UART、CMOS、i8042；全部设备统一使用 KRUNVM v4，契约与验证见文末“完整快照统一契约”；非 KVM 测试在 amd64 容器中通过，全部 KVM 运行验收仍为 **UNVERIFIED**；完整 BoxLite box 闭环仍属后续阶段。文末阶段 1–4 各节是当时的历史记录，其中 KRUNVM v1–v3、`restore_full_with_disks`/`restore_full_with_net` 等版本与入口已被 v4 取代。
+2026-10-24 · **当前状态**：阶段 1–12 已在私有 `RamSnapshotVm` 中实现并经审查：RAM、CPU/KVM、virtio-blk、virtio-net、virtio-vsock、virtio-console、virtio-rng、virtio-balloon、UART、CMOS、i8042 与最多七个 virtio-fs 共享（独立文件副本），全部设备统一使用 KRUNVM v7 和显式 `pause` → `export`（保持暂停，可重复）→ `resume` 生命周期，契约见文末“完整快照统一契约（v7）”。非 KVM 测试在 amd64 容器中通过；全部 KVM 运行验收仍为 **UNVERIFIED**；没有公共 C ABI/SDK/CLI 入口，也没有真实 BoxLite/shim 恢复，阶段 13 单文件集成仍为后续工作。文末阶段 1–4 各节及 v4 契约验证是当时的历史记录，其中 KRUNVM v1–v6、`save_full`/`restore_full`/`restore_full_with_disks`/`restore_full_with_net` 等版本与入口已被 v7 取代。
 
 ## 目标与范围
 
@@ -15,7 +15,7 @@
 
 ## 固定源码基线与取舍
 
-以下阶段条目中的“现有实现”均描述这些固定研究基线；各阶段实施记录见文末（阶段 1–4 为历史记录，当前契约见“完整快照统一契约”），virtio-vsock/console/fs、单文件集成和全部 KVM 运行验收仍为后续工作：
+以下阶段条目中的“现有实现”均描述这些固定研究基线；各阶段实施记录见文末（阶段 1–4 为历史记录，当前契约见“完整快照统一契约（v7）”）；virtio-vsock/console/fs 已在私有 owner 中实现，单文件集成（阶段 13）和全部 KVM 运行验收仍为后续工作：
 
 | 项目 | 固定版本 | 作用 |
 | --- | --- | --- |
@@ -40,7 +40,7 @@
 
 逐一登记 guest root、容器根目录、引导文件及内部/用户共享对应的设备与后端，按阶段 12 保存设备运行状态和所需文件内容；恢复时重建到新 box 自有目录，不依赖原宿主路径，也不重新执行 init/guest agent 初始化。
 共享目录复制期间必须停止 guest 与宿主外部写入者，或使用已建立一致切点的后端快照；无法保证一致性时拒绝导出。恢复后的共享是切点上的独立副本，不自动重新绑定原目录或保持与原宿主的实时共享。
-验收必须同时检查 guest 挂载和 VMM 实际设备清单；切换根目录或卸载共享并不等于设备不存在。virtio-fs 实现及验收完成前，现有私有快照入口仍不支持此设备。
+验收必须同时检查 guest 挂载和 VMM 实际设备清单；切换根目录或卸载共享并不等于设备不存在。私有 `RamSnapshotVm` 已通过 `attach_fs` 支持此设备（阶段 12，KVM 运行 **UNVERIFIED**）；BoxLite 启动路径中的内部 `/dev/root` 共享尚未接入，属于阶段 13。
 
 ### 冻结与恢复边界
 
@@ -50,8 +50,8 @@
 1. 阻止新的管理变更和外部输入；请求所有 vCPU 暂停并等待逐个确认，完成挂起的 KVM I/O/MMIO 退出语义。
 2. 各设备停止接收新工作，在完整请求边界处理已取出的描述符；等待 worker、event loop 和 muxer 确认不再修改 RAM、队列或中断状态。
 3. 刷新磁盘与 virtio-fs 文件后端，固定共享目录及 DAX 映射的一致切点，先 drain/save 设备，再保存 CPU、KVM 和 RAM，并处理计时器及 pending interrupt 的运行时迁移语义。只暂停 vCPU 不足以冻结用户态设备或宿主共享目录写入者。
-4. 文件内容写入并同步后，先恢复全部源 vCPU 并确认，再写有效标记。任何保存或恢复失败均不发布有效快照；尽可能恢复全部源 CPU，不能可靠恢复则保留明确失败状态，不报告成功。
-5. 导入先校验文件及兼容性，再创建暂停的 VM。重建内存映射、磁盘、virtio-fs 文件及映射、设备拓扑及宿主资源，恢复状态后统一放行设备和 vCPU。
+4. 写入、同步并发布镜像（整个文件 sync 后才写有效标记）期间，源 VM 始终保持暂停；导出从不恢复源。成功后保持暂停，可重复导出；普通失败删除半成品、不发布有效快照，同样保持暂停可重试；不确定或致命的控制状态禁用 owner 并停止、join 全部线程，不报告成功。源是否继续运行由调用方另行显式 `resume`（重挂 irqfd，先恢复全部设备，最后恢复 vCPU）。
+5. 导入先校验文件、兼容性及恢复资源，再创建暂停的 VM。重建内存映射、磁盘、virtio-fs 文件及映射、设备拓扑及宿主资源并载入状态，返回与源 pause 后相同的暂停状态（可先再次导出）；调用方显式 `resume` 后才统一放行设备和 vCPU。
 
 恢复路径不得执行覆盖 RAM 的冷启动初始化，不得再次运行 guest/container 初始化来替代恢复。
 阶段 2 使用 `clock_realtime=false`，不向恢复的时钟添加快照存储期间的墙钟时间；按运行时迁移语义处理 PIT/LAPIC/deadline，不逐 tick 重放。暂停源 vCPU 不代表硬件时钟停止。TSC 频率需匹配或成功缩放，多核 offset 同步必须成功。
@@ -78,7 +78,7 @@
 
 阶段可分别交付和验收，但中间阶段不宣称支持任意运行中 box。
 阶段 1–2 使用受控的最小 VM 验证基础状态；完整设备集通过阶段 3–12 后，阶段 13 才提供用户闭环。
-2026-10-23 范围调整：新增阶段 12 virtio-fs，原单文件集成顺延为阶段 13；此调整仅更新计划，不表示 virtio-fs 快照已实现。
+2026-10-23 范围调整：新增阶段 12 virtio-fs，原单文件集成顺延为阶段 13（当时仅更新计划）。实施结果（2026-10-24）：阶段 1–12 已在私有 owner 中实现，见文末 v7 契约；以下各阶段条目保留原始研究与计划，其中“现有实现”指固定研究基线。libkrun README 的阶段编号按实施顺序（vsock 为 stage 7、console 为 stage 8），与本计划编号不同。
 
 ### 1. 内存快照
 
@@ -188,7 +188,7 @@
 
 ## 本次文档检查范围
 
-本次核对固定版本源码和依赖 API，并检查 Markdown、Rust 格式及 `git diff --check`。已编写阶段 1 实现与测试，但遵照任务要求不构建、不运行任何测试；条件编译、Linux KVM 行为及全部运行时验收尚未验证。
+原始记录（阶段 1 时）：本次核对固定版本源码和依赖 API，并检查 Markdown、Rust 格式及 `git diff --check`。已编写阶段 1 实现与测试，但遵照任务要求不构建、不运行任何测试；条件编译、Linux KVM 行为及全部运行时验收尚未验证。后续各阶段的验证见文末各节。
 
 [boxlite]: https://github.com/boxlite-ai/boxlite/tree/2794df3f4ee38738b5d3c2dc73b1d566a82f94cd
 [libkrun]: https://github.com/boxlite-ai/libkrun/tree/e12b9b3780ffa8df9f3e1797b217d13453479167
@@ -214,7 +214,7 @@
 [i8042]: https://github.com/boxlite-ai/libkrun/blob/e12b9b3780ffa8df9f3e1797b217d13453479167/src/devices/src/legacy/i8042.rs#L73-L114
 [legacy]: https://github.com/boxlite-ai/libkrun/blob/e12b9b3780ffa8df9f3e1797b217d13453479167/src/vmm/src/device_manager/legacy.rs#L38-L147
 
-> 以下阶段 1–4 各节保留当时的设计与验证记录；其中“当前实现”“KRUNVM v1–v3”及旧恢复入口的表述已被“完整快照统一契约（2026-10-23）”取代。
+> 以下阶段 1–4 各节保留当时的设计与验证记录；其中“当前实现”“KRUNVM v1–v3”及旧恢复入口的表述已被“完整快照统一契约（v7）”取代。
 
 ## 阶段 1 本地实施设计（2026-10-22）
 
@@ -387,29 +387,35 @@ krun-devices 单测（无 KVM）：队列状态未激活/协商中/激活、游�
 - KVM 测试（`nic/kvm_tests.rs`：测试代码经 owner 的 MMIO 总线扮演 virtio-net 驱动，阶段 2 计数 guest 证明 CPU 续跑；覆盖活跃流量+半帧+未消费 TX 时保存、源端在原后端继续、新后端恢复后旧 TX 丢弃与中断状态、暂停 CPU、resume 后双向流量、未激活网卡+磁盘、后端失败与旧入口清理、保存失败恢复、GSI 共享上限）只编译通过。没有测试让 guest 自己经 MMIO 读取恢复后的网卡或在恢复后接收 pending 网卡中断；该项按用户要求精简测试，作为 UNVERIFIED 验收项记录在 libkrun README。
 - **UNVERIFIED**：所有需要 KVM 的测试在容器中均因无法打开 `/dev/kvm` 失败；阶段 3 块设备续跑与上述阶段 4 KVM 测试均未在 Linux KVM 主机上执行。真实 DNS/TCP 验收无法在当前私有 harness 中执行（`start_vcpus` 只启动实模式 fixture，不启动 Linux guest）；验收步骤见 libkrun README（需能启动 Linux guest 的 harness 扩展、`virtio_mmio.device=4K@0xd0008000:23`、passt/gvproxy 的 QEMU stream 模式后端、保存后换新后端恢复，期望旧 TCP 断开、新 DNS/TCP 成功）。
 
-## 完整快照统一契约（2026-10-23）
+## 完整快照统一契约（v7）
 
 ### TL;DR
 
-私有 `RamSnapshotVm` 以唯一的 KRUNVM v4 保存/恢复 RAM、CPU/KVM 与既有 virtio-blk、virtio-net 及新增五类设备 virtio-rng、virtio-balloon、UART、CMOS、i8042；目标资源由 `RestoreResources` 提供，guest 复位/vCPU 退出由事件线程统一停止全部 vCPU。KVM 运行验收仍 **UNVERIFIED**。
+私有 `RamSnapshotVm` 以唯一的 KRUNVM v7 导出/导入 RAM、CPU/KVM 与 virtio-blk、virtio-net、virtio-vsock、virtio-console、virtio-rng、virtio-balloon、UART、CMOS、i8042 及最多七个 virtio-fs 共享；生命周期为显式 `pause` → `export`（保持暂停，可重复）→ `resume`，导入返回同样的暂停状态。目标资源由 `RestoreResources` 提供，每项当且仅当镜像含对应设备时提供。virtio-fs 导出一份独立文件副本，恢复不依赖源目录。KVM 运行验收仍 **UNVERIFIED**。详细契约以 libkrun `README.md`“Internal minimal VM checkpoints”及 `docs/phase12-virtio-fs-snapshot.md` 为准。
 
 ### 契约
 
 | 项 | 当前行为 |
 |---|---|
-| 范围 | 仅 Linux x86_64/KVM 私有 `RamSnapshotVm`；不接入普通 `Vmm`、C ABI、SDK、CLI；无通用设备框架 |
-| 格式 | 只有 KRUNVM v4：头、≤16 MiB JSON（CPU/KVM/RAM、有序磁盘表、可选 NIC/RNG/balloon/legacy 段）、RAM、磁盘段；v1–v3 明确拒绝，旧 full 恢复入口已删除 |
-| 恢复资源 | `RestoreResources { disk_dir, nic_socket, serial: Option<[Option<UnixStream>; 4]> }`，每项当且仅当镜像含对应设备时提供；资源匹配与串口非阻塞校验先于磁盘导入和目标 VM 创建 |
-| 布局 | 无网卡最多 8 盘、有网卡 7 盘（网卡 0xd0008000/GSI 23）；RNG 0xd0009000/GSI 5；balloon 0xd000a000/GSI 6；COM1–4 端口 0x3f8/0x2f8/0x3e8/0x2e8、IRQ 4/3/4/3；CMOS 0x70；i8042 0x60/IRQ 1 |
-| RNG/balloon | 均由事件线程运行，每回调最多完成 64 条链，余下自唤醒继续；仅 RNG 单链最多写 64 KiB 并按实际写入 guest RAM 的字节完成；balloon 先校验整条报告（NEXT 链、直接描述符、页对齐、位于单个 guest RAM region），之后才对自有私有匿名、页对齐 RAM discard，畸形报告不 discard 即完成 |
-| UART | 仅接受调用方已设为非阻塞的 `UnixStream`，只检查不修改 fd 标志；`MSG_NOSIGNAL` 发送，无迁移输出队列，满/断开时丢弃并计数（目标从 0 开始），guest 发送与 THR 中断照常完成；私有输入上限 4 KiB，超出置 overrun；HUP/EOF 有界 drain（超容量尾部也置 overrun）后注销输入，无忙等、无空读 data-ready；普通 VMM 输入不设上限 |
-| 状态 | UART 全部寄存器+未读输入；CMOS index+128 字节，容量字段须与 RAM 布局一致；i8042 寄存器、最后命令、按读出顺序的缓冲，游标重建 |
-| 中断 | MMIO 与 legacy 共用 irqfd 接线：每个 eventfd 一个 irqfd（COM1/3、COM2/4 共享 GSI），保存时 DEASSIGN+drain 后重赋；已注入中断在 KVM 状态中，不重放 |
-| 退出 | i8042 reset 与每个 vCPU 退出写同一 owner exit eventfd；事件线程（无设备时也存在）锁存 `exiting` 并主动停止全部 vCPU（vCPU 线程创建后、首次运行前交付命令发送端+线程 ID 的 stop handle，JoinHandle 仅 owner 持有）；冻结时 exit 保持未读，owner 在冻结确认后同时检查锁存与未读 eventfd；`save`/`save_full`/`resume`/`restore_full` 拒绝退出状态，目标不重放 reset |
-| 保存顺序 | 暂停全部 CPU → 冻结全部设备与 UART 输入 → 检查退出 → RAM 归属探测 → irqfd 解除+drain → 捕获 → 源端尝试全部恢复（退出中的源保持 CPU 暂停由事件线程停止）→ 保存与全部源恢复都成功后才写有效 magic |
-| 清理顺序 | 停止/join 事件线程 → join vCPU → join 磁盘/网卡 worker → 释放自有资源；启动、恢复、resume 失败均走同一路径 |
+| 范围 | 仅 Linux x86_64/KVM 私有 `RamSnapshotVm`；不接入普通 `Vmm`、C ABI、SDK、CLI；无通用设备框架；BoxLite/shim 未接入（阶段 13） |
+| 生命周期 | `declare_host_writers_stopped`（运行、可用、未暂停时；pause 保留，resume 与禁用清除；含共享的导出必须先声明）→ `pause`（暂停并确认全部 vCPU，冻结全部设备 worker 与事件线程，解除并 drain irqfd）→ `export(path)`（捕获同一切点，不恢复任何东西，可重复；失败删除半成品，保持暂停可重试）→ `resume`（清除声明，重挂 irqfd，先恢复全部设备，最后恢复 vCPU）。`import(path, resources)` 返回与 pause 后源相同的暂停状态，可先再次导出；导入的共享视为已声明。不确定的控制禁用 owner 并停止、join 全部线程 |
+| 格式 | 只有 KRUNVM v7：16 字节头、≤16 MiB JSON（CPU/KVM/RAM、有序磁盘表、可选 NIC/RNG/balloon/vsock/console/legacy/virtio-fs 段）、RAM、磁盘段，然后 virtio-fs 文件字节、去重 init.krun 字节、非零 4 KiB DAX 页；先校验 RAM 区域再校验设备段，所有长度以 checked 加法核对精确文件长度；v1–v6 明确拒绝，RAM-only `KRUNRAM` 仍为 v1 |
+| 恢复资源 | `RestoreResources { disk_dir, nic_socket, serial, vsock_ports, console_ports, fs_dir }`，每项当且仅当镜像含对应设备时提供；`fs_dir` 须为不含 NUL 的绝对路径，0700 独占创建，成功后保留（guest 数据）；资源匹配先于创建 RAM、目录、socket 或线程 |
+| 布局 | 无网卡最多 8 盘、有网卡 7 盘（网卡 0xd0008000/GSI 23）；RNG 0xd0009000/GSI 5；balloon 0xd000a000/GSI 6；vsock 0xd000b000/GSI 7；console 0xd000c000/GSI 8；virtio-fs 共享 i 在 0xd000d000 + i×0x1000/GSI 9+i；COM1–4 端口 0x3f8/0x2f8/0x3e8/0x2e8、IRQ 4/3/4/3；CMOS 0x70；i8042 0x60/IRQ 1。DAX 窗口为 owner 映射的额外 memslot，不与 RAM、MMIO 槽、其他窗口及 KVM 自身地址重叠 |
+| vsock | 仅 Unix IPC（无 TSI）；连接与 RPC 不跨 pause 保留，guest 监听保留；恢复时投递 transport reset 后重开后端 |
+| console | 多端口；保存控制状态、端口握手、未交付控制消息与在途数据；已交付宿主的输出不回放；恢复绑定新端口 |
+| virtio-fs | 导出一次归档全部共享（独立文件副本：对象跨共享去重，硬链接、孤儿对象、xattr 保留），需要初始 user namespace 中的 CAP_SYS_ADMIN；保存 FUSE session、node/handle、目录游标、inode 投影与 DAX 窗口 ledger；带 DAX 窗口的 owner 以执行屏障保证重映射期间无 vCPU 运行，宿主映射失败为致命，可能失去所有权的范围保留至进程结束 |
+| RNG/balloon/UART/CMOS/i8042 | 与 v4 时相同：RNG/balloon 由事件线程运行，每回调最多 64 条链，balloon 先校验整条报告再 discard；UART 仅接受非阻塞 `UnixStream`，不迁移输出队列，满/断开时丢弃并计数，输入上限 4 KiB；CMOS 容量字段须与 RAM 布局一致；i8042 缓冲按读出顺序保存（细节见 libkrun README stage 5/6） |
+| 中断 | MMIO 与 legacy 共用 irqfd 接线；pause 时 DEASSIGN+drain，resume 时重挂；已注入中断在 KVM 状态中，不重放 |
+| 退出 | i8042 reset 与每个 vCPU 退出写同一 owner exit eventfd，事件线程锁存并停止全部 vCPU；`pause`、`export`、`resume` 与 RAM-only `save` 拒绝退出状态，目标不重放 reset |
+| 清理顺序 | 关闭 vsock 闸门 → 停止/join 事件线程 → retire 执行屏障 → join vCPU → 磁盘、网卡、vsock、console worker → retire 并 join fs 共享 → 释放自有资源（DAX 窗口晚于 VM fd）；启动、导入、resume 失败均走同一路径 |
 
-### 实际验证
+### v7 验证（2026-10-24，阶段 12 最终）
+
+- amd64 `rust:1-bookworm` 离线容器（`--cap-add SYS_ADMIN --tmpfs /tmp:rw,exec`，无 `/dev/kvm`）：`snapshot-check`（含无 feature 的 `krun-vmm`、`krun-devices`）、`snapshot-build` 通过；`krun-devices` snapshot 132/132；`krun-vmm` 59 通过、54 失败，全部为打开 `/dev/kvm` 失败（原有 48 + 6 个 `snapshot_fs_kvm`）；无 feature `krun-vmm` 55 通过、41 失败，原因相同。macOS `snapshot-fmt`、`krun-devices` check 及原生 console/net/vsock 26/26、20/20、16/16 通过。
+- **UNVERIFIED**：全部 KVM 测试与需要 VM 的 owner 路径、Linux guest 的 virtiofs/DAX 驱动、真实 BoxLite/shim 恢复。KVM 测试为失败，不是跳过或通过。
+
+### v4 实际验证（2026-10-23，历史记录）
 
 - 通过：`make snapshot-fmt`；`CC_x86_64_unknown_linux_gnu=… make snapshot-check CC_LINUX=…`（仅既有基线告警）；无 feature 的 `krun-vmm --tests` Linux 检查。
 - amd64 `rust:1-bookworm` 容器（无 `/dev/kvm`）内 `make snapshot-test SNAPSHOT_FILTER=…` 通过：UART 端点（阻塞拒绝且不改标志、满/断开丢弃计数且有 THR、4 KiB 上限与 overrun、EOF 空/短/恰好 4 KiB/超容量尾部均 drain 并注销且不忙等）、UART/CMOS/i8042 状态往返、legacy metadata 与端点校验、无设备事件线程的退出停止与冻结竞态、既有事件线程冻结/恢复测试；批次 1 的 RNG/balloon/版本/资源与 NIC 非 KVM 测试见其记录。
