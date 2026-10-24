@@ -379,8 +379,9 @@ def _tar_of(entries: dict[str, bytes | None]) -> bytes:
 class UploadSourceTests(unittest.IsolatedAsyncioTestCase):
     """What `upload_files` hands `copy_in` after extracting an upload.
 
-    The SDK copies a directory under its own name unless the source ends in
-    `/.`, so the server must not hand it the extraction directory itself.
+    Into an existing destination the SDK copies a directory under its own
+    name unless the source ends in `/.`, so the server must not hand it the
+    extraction directory itself.
     """
 
     async def asyncSetUp(self) -> None:
