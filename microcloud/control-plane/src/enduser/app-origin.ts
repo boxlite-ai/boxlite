@@ -15,6 +15,7 @@ import { isProtected, normalisePath, safeNext } from './paths.js';
 import { roleOf } from './role.js';
 import { createSession, sessionUser, type AppUser } from './sessions.js';
 import { emailForm, emailReady, startEmail, verifyEmail } from './email-code.js';
+import { verifiedDomainOf } from '../services/domains.js';
 
 export interface ProxyRequest {
   method: string;
@@ -105,6 +106,9 @@ function authRoute(ctx: Ctx, req: ProxyRequest, app: AppRow, env: EnvRow, route:
   // The provider's registered callback is on the API origin, so the PKCE verifier has to be set there.
   const nonce = randomBytes(24).toString('base64url');
   const start = new URLSearchParams({ app: app.name, env: env.name, provider, next, bh: sha256hex(nonce) });
+  // Begun on the env's own domain: the hand-off must come back to it, where this nonce cookie lives.
+  const custom = verifiedDomainOf(ctx, env, req.headers.get('x-forwarded-host'));
+  if (custom) start.set('host', custom);
   return redirect(`${ctx.config.publicUrl}${AUTH_PATH}start?${start}`, new Headers({ 'set-cookie': setCookieValue(secure, loginNonceName(secure), nonce, '/', STATE_TTL_S) }));
 }
 

@@ -12,6 +12,8 @@ export interface OAuthState {
   vh: string;
   /** sha256 of the app-origin login nonce (`bxl_login`), checked again by /.boxlite/auth/complete. */
   bh?: string;
+  /** The verified custom domain the sign-in began on (services/domains.ts); the hand-off returns there. */
+  host?: string;
   /** `console`: a console sign-in (console-signin.ts); `app` and `env` are empty then. */
   purpose?: 'console';
   exp: number;

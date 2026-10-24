@@ -122,3 +122,10 @@ export function resolveHost(ctx: Ctx, rawHost: string): { box_id: string; port: 
   const m = /^https?:\/\/(\d+)-([^.]+)\./.exec(url);
   return m ? { box_id: m[2]!, port: Number(m[1]) } : null;
 }
+
+/** `host` (any case, with or without a port) when it is a verified custom domain of `env`, else null. */
+export function verifiedDomainOf(ctx: Pick<Ctx, 'store'>, env: EnvRow, rawHost: string | null | undefined): string | null {
+  const host = (rawHost ?? '').trim().toLowerCase().replace(/\.$/, '').split(':')[0]!;
+  if (!host) return null;
+  return ctx.store.get<{ host: string }>('SELECT host FROM app_domains WHERE host = ? AND env_id = ? AND verified_at IS NOT NULL', host, env.id)?.host ?? null;
+}
