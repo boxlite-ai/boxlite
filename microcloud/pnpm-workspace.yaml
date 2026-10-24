@@ -1,0 +1,7 @@
+packages:
+  - shared
+  - control-plane
+  - cli
+  - e2e
+onlyBuiltDependencies:
+  - esbuild

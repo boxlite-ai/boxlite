@@ -1,0 +1,11 @@
+{
+  "name": "@microcloud/e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "console": "node console.spec.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.62.1"
+  }
+}

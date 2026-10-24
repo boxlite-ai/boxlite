@@ -1,0 +1,14 @@
+.env.local
+.env
+node_modules/
+dist/
+*.log
+/data/
+supervisor/bin/
+console-dist/
+.cp-admin-token
+.cp-session-secret
+e2e/report.md
+e2e/node_modules/
+e2e/acceptance*/
+cli/boxlite-app.tgz

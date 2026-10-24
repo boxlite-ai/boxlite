@@ -1,0 +1,76 @@
+/** The entry point for every request on an app env's own origin: deleted app, tickets, access gate, sign-in, then forward. */
+import type { IncomingMessage } from 'node:http';
+import type { Context } from 'hono';
+import { identityFor } from '../enduser/app-origin.js';
+import type { EnvRow } from '../db.js';
+import type { Ctx } from '../ctx.js';
+import { jwks } from '../enduser/identity.js';
+import { isResponse } from '../http/response.js';
+import { RETENTION_DAYS } from '../lifecycle.js';
+import { forward } from './forward.js';
+import { accessGate, openWithTicket } from './gate.js';
+import { gatePage, page } from './pages.js';
+
+/**
+ * End-user traffic. Every app env has its own origin (origins.ts) and the app lives at its `/`:
+ * no prefix, nothing rewritten except a Location that points at the Box tunnel. On an app origin the
+ * CP itself answers only `/.boxlite/open` (one-time tickets) and `/.boxlite/auth/*`; every other
+ * `/.boxlite/*` is a 404 and the rest is forwarded to the env's supervisor gateway.
+ *
+ * Order per request: deleted app → JWKS and tickets (public) → access gate (gate.ts) → end-user
+ * sign-in (enduser/app-origin.ts) → forward (forward.ts). WebSocket upgrades: upgrade.ts.
+ */
+
+/** Every request that arrives on an env's own port (server.ts dispatches by local port). */
+/** A sign-in form post: a few fields, so anything over 8 KB is refused unread. */
+async function signInForm(req: Request): Promise<URLSearchParams> {
+  const limit = 8192;
+  if (!req.body || Number(req.headers.get('content-length') ?? 0) > limit) return new URLSearchParams();
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      return new URLSearchParams();
+    }
+    chunks.push(value);
+  }
+  return new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+}
+
+export async function serveAppOrigin(ctx: Ctx, c: Context, env: EnvRow): Promise<Response> {
+  const url = new URL(c.req.url);
+  const app = ctx.store.appById(env.app_id);
+  if (!app) return page('Not found', '<h1>There is no site here</h1><p>Check the address. If you followed a link, the site may have been removed.</p>', 404);
+  if (app.deleted_at) {
+    return page('No longer available', '<h1>This site is no longer available</h1><p>It has been taken offline by its owner.</p>', 410);
+  }
+  const path = url.pathname;
+  // Public: app servers fetch the key from their own (maybe private) origin.
+  if (path === '/.boxlite/auth/jwks.json') return Response.json(jwks(ctx), { headers: { 'cache-control': 'public, max-age=300' } });
+  if (path === '/.boxlite/open') return openWithTicket(ctx, app, env, url);
+
+  const headers = new Headers(c.req.raw.headers);
+  const gate = accessGate(ctx, app, env, headers, path);
+  if (!gate.ok) return gate.refusal ?? gatePage(ctx, app, env, gate.access, headers);
+  if (gate.stripAuthorization) headers.delete('authorization');
+
+  const identity = await identityFor(ctx, { method: c.req.method, url, headers, form: () => signInForm(c.req.raw) }, app, env);
+  if (isResponse(identity)) return identity;
+
+  const incoming = (c.env as { incoming?: IncomingMessage } | undefined)?.incoming;
+  return forward(ctx, app, env, {
+    method: c.req.method,
+    path: path + url.search,
+    headers,
+    body: c.req.raw.body,
+    publicHost: c.req.header('x-forwarded-host') ?? c.req.header('host'),
+    publicProto: c.req.header('x-forwarded-proto'),
+    clientIp: incoming?.socket.remoteAddress,
+    identity: identity.headers,
+  });
+}

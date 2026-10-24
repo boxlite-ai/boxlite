@@ -1,0 +1,15 @@
+name = "python"
+
+[runtime]
+image = "python"
+size = "small"
+build = ["pip install -r requirements.txt"]
+
+[[service]]
+name = "web"
+command = "gunicorn -b 0.0.0.0:$PORT app:app"
+port = 8000
+health = "/healthz"
+
+[database]
+migrations = "migrations/"

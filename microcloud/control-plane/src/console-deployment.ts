@@ -1,0 +1,192 @@
+import { classifyFailure, exposedService, type Diagnosis } from '@microcloud/shared';
+import type { AppRow, Change, Deployment, EnvRow, SnapshotFile } from './db.js';
+import type { Ctx } from './ctx.js';
+import { deploymentLogs, formatLogLine } from './services/logs.js';
+
+/**
+ * The console's deployment detail: a traceable timeline of one deployment (steps with start and
+ * duration, every log line), what it changed (infrastructure and configuration from the CP's diff,
+ * code as file counts against the previous upload) and, for a failure, the classified cause from
+ * shared/diagnose.ts with instructions an agent can act on.
+ */
+
+export interface TimelineStep {
+  name: string;
+  status: string;
+  ms?: number;
+  detail?: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface TimelineLog {
+  id: number;
+  ts: string;
+  source: string;
+  level: string;
+  line: string;
+  deployment: number | null;
+}
+
+/** GET /v1/…/deployments/:n/timeline (routes/cli-extras.ts). */
+export interface Timeline {
+  steps: TimelineStep[];
+  logs: TimelineLog[];
+  truncated: boolean;
+}
+
+export interface CodeChanges {
+  added: number;
+  changed: number;
+  removed: number;
+  files: number;
+  /** The deployment whose upload this one is compared with; null for the first upload. */
+  comparedWith: number | null;
+}
+
+export interface DeploymentChanges {
+  infrastructure: string[];
+  configuration: string[];
+  code: CodeChanges | null;
+}
+
+export interface FailureView {
+  step: string;
+  message: string;
+  diagnosis: Diagnosis;
+  /** Self-contained instructions to paste into the agent. */
+  fixPrompt: string;
+}
+
+/** CP diff paths that describe what the app runs on; the rest is configuration. */
+const INFRASTRUCTURE = /^(runtime|service|services|schedule|schedules|volume|volumes|database|migrations|auth|domains)\b/;
+
+export function changeText(c: Change): string {
+  const v = (x: unknown) => (typeof x === 'string' ? x : JSON.stringify(x));
+  if (c.kind === '~' && c.from !== undefined && c.to !== undefined) return `~ ${c.path}: ${v(c.from)} → ${v(c.to)}`;
+  if (c.kind === '+' && c.to !== undefined && typeof c.to !== 'object') return `+ ${c.path} = ${v(c.to)}`;
+  if (c.kind === 'online_only') return `online ${c.path}: ${v(c.to)}`;
+  return `${c.kind} ${c.path}`;
+}
+
+/** One change of a deployment, as a sentence for the console (the CLI's `plan` keeps `changeText`). */
+/** Config fields in the words of the console. */
+const FIELD_NAMES: Record<string, string> = { command: 'start command', port: 'port', health: 'health check path', static: 'static files folder', cron: 'schedule', target: 'what it calls', mount: 'folder', mode: 'access mode' };
+
+export function humanChange(c: Change): string {
+  const [head, name, field] = c.path.split('.');
+  const added = c.kind === '+';
+  const removed = c.kind === '-';
+  const verb = (thing: string) => (added ? `New ${thing}` : removed ? `Removed ${thing}` : `Changed ${thing}`);
+  const migration = /^migrations\/(.+)$/.exec(c.path);
+  if (migration) return added ? `New migration ${migration[1]}` : removed ? `Migration ${migration[1]} removed` : `Migration ${migration[1]} changed`;
+  const fromTo = (label: string) => `${label}: ${String(c.from)} → ${String(c.to)}`;
+  switch (head) {
+    case 'service':
+    case 'services':
+    case 'schedule':
+    case 'schedules':
+    case 'volume':
+    case 'volumes': {
+      const kind = head.replace(/s$/, '');
+      if (name && field) return `${name}: ${FIELD_NAMES[field] ?? field} changed`;
+      return verb(`${kind} ${name ?? ''}`.trim());
+    }
+    case 'public_paths': {
+      const paths = (c.to as string[] | undefined) ?? [];
+      return paths.length ? `Open without signing in (webhooks): ${paths.join(', ')}` : 'No paths open without signing in';
+    }
+    case 'database':
+      if (name === 'migrations') return 'Migrations folder changed';
+      return added ? 'Added a database' : removed ? 'Removed the database' : 'Database changed';
+    case 'variables':
+      return verb(`variable ${name}`);
+    case 'secrets':
+      return removed ? `Removed secret ${name}` : `${name} now comes from ${String(c.to)}`;
+    case 'auth':
+      return added ? 'Sign-in turned on' : removed ? 'Sign-in turned off' : 'Sign-in settings changed';
+    case 'access':
+      return c.kind === '~' ? fromTo('Access') : `Access: ${String(c.to)}`;
+    case 'runtime':
+      if (name === 'size') return fromTo('Box size');
+      if (name === 'image') return fromTo('Image');
+      if (name === 'build') return 'Build commands changed';
+      return added ? `Runtime: ${String(c.to)}` : 'Runtime changed';
+    case 'domains':
+      return 'Custom domains changed';
+    default:
+      return changeText(c);
+  }
+}
+
+function codeChanges(ctx: Pick<Ctx, 'store'>, app: AppRow, env: EnvRow, d: Deployment): CodeChanges | null {
+  // An apply records the snapshot of the release it restarts; it never changes code.
+  if (!d.snapshot_id || d.kind === 'apply') return null;
+  const snap = ctx.store.snapshot(app.id, d.snapshot_id);
+  if (!snap) return null;
+  const prev = ctx.store.deploymentsWhere('env_id = ? AND number < ? AND snapshot_id IS NOT NULL ORDER BY number DESC LIMIT 1', env.id, d.number)[0];
+  const before = new Map<string, string>((prev?.snapshot_id ? (ctx.store.snapshot(app.id, prev.snapshot_id)?.manifest ?? []) : []).map((f: SnapshotFile) => [f.path, f.sha256]));
+  let added = 0;
+  let changed = 0;
+  for (const f of snap.manifest) {
+    const old = before.get(f.path);
+    if (old === undefined) added++;
+    else if (old !== f.sha256) changed++;
+    before.delete(f.path);
+  }
+  return { added, changed, removed: before.size, files: snap.files, comparedWith: prev?.number ?? null };
+}
+
+export function deploymentChanges(ctx: Pick<Ctx, 'store'>, app: AppRow, env: EnvRow, d: Deployment): DeploymentChanges {
+  const infrastructure: string[] = [];
+  const configuration: string[] = [];
+  for (const c of d.changes) (INFRASTRUCTURE.test(c.path) ? infrastructure : configuration).push(humanChange(c));
+  return { infrastructure, configuration, code: codeChanges(ctx, app, env, d) };
+}
+
+/** Log lines of a deployment in the form the classifier reads (`<ts> [<source>] <line>`). */
+function logLines(ctx: Pick<Ctx, 'store'>, env: EnvRow, d: Deployment): string[] {
+  return deploymentLogs(ctx.store, env.id, d, 800).map(formatLogLine);
+}
+
+function fixPrompt(app: AppRow, env: EnvRow, d: Deployment, step: string, diagnosis: Diagnosis): string {
+  const lines = [
+    `Deployment #${d.number} of the BoxLite app "${app.name}" (environment ${env.name}) failed at step "${step}".`,
+    `Cause: ${diagnosis.summary}`,
+    `Fix: ${diagnosis.fix}`,
+  ];
+  if (diagnosis.file) lines.push(`File: ${diagnosis.file}${diagnosis.line !== undefined ? `:${diagnosis.line}` : ''}`);
+  if (diagnosis.evidence.length) lines.push('Log lines:', ...diagnosis.evidence.map((l) => `  ${l}`));
+  lines.push(`Full timeline: \`boxlite-app app deployment ${d.number} --logs${env.name === 'main' ? '' : ` --env ${env.name}`}\`.`);
+  return lines.join('\n');
+}
+
+/** null unless the deployment failed. */
+export function failureView(ctx: Pick<Ctx, 'store'>, app: AppRow, env: EnvRow, d: Deployment): FailureView | null {
+  if (d.status !== 'failed' || !d.error) return null;
+  const manifest = d.request.manifest;
+  const exposed = manifest ? exposedService(manifest) : undefined;
+  const diagnosis = classifyFailure({
+    step: d.error.step,
+    message: d.error.message,
+    log_tail: [...(d.error.log_tail ?? []), ...logLines(ctx, env, d)],
+    deployment: d.number,
+    ...(exposed ? { service: { name: exposed.name, ...(exposed.command ? { command: exposed.command } : {}), ...(exposed.health ? { health: exposed.health } : {}) } } : {}),
+    ...(d.request.migrations ? { migrations: d.request.migrations } : {}),
+    ...(manifest?.database ? { migrationsDir: manifest.database.migrations } : {}),
+    ...(manifest ? { build: manifest.runtime.build } : {}),
+  });
+  return { step: d.error.step, message: d.error.message, diagnosis, fixPrompt: fixPrompt(app, env, d, d.error.step, diagnosis) };
+}
+
+/** When the step running now began, from the stored step events. */
+export function runningStepStartedAt(ctx: Pick<Ctx, 'store'>, env: EnvRow, d: Deployment): string | null {
+  const running = d.steps.find((s) => s.status === 'running');
+  if (!running) return null;
+  const rows = ctx.store.all<{ data: string; ts: string }>("SELECT data, ts FROM deployment_events WHERE env_id = ? AND number = ? AND event = 'step' ORDER BY seq DESC", env.id, d.number);
+  for (const r of rows) {
+    const ev = JSON.parse(r.data) as { name: string; status: string };
+    if (ev.name === running.name && ev.status === 'running') return r.ts;
+  }
+  return null;
+}
