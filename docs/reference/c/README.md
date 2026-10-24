@@ -46,6 +46,7 @@ The SDK provides two API styles:
   - [Discovery & Introspection](#discovery--introspection)
   - [Images](#images)
   - [Registries](#registries)
+  - [Guest SSH Control](#guest-ssh-control)
   - [Metrics](#metrics)
 - [Memory Management](#memory-management)
 - [Thread Safety](#thread-safety)
@@ -1203,6 +1204,40 @@ Registry strings are non-null, except `created_by` when unknown. If any
 server-returned field contains an interior NUL byte, create and list callbacks
 receive `Internal` and no result. The SDK rejects the response without changing
 credential IDs; list conversion frees any entries already converted.
+
+---
+
+### Guest SSH control
+
+These operations take a `CBoxHandle*` and follow the existing Native API
+callback convention.
+
+| Function | Additional input | Callback |
+|----------|------------------|----------|
+| `boxlite_box_ssh_configure` | `const char* config_json` | `CBoxSshConfigureCb` |
+| `boxlite_box_ssh_status` | None | `CBoxSshStatusCb` |
+| `boxlite_box_ssh_disable` | None | `CBoxSshDisableCb` |
+
+All three callbacks receive `CSshStatus*`. Its corresponding release function
+is `boxlite_free_ssh_status()`; the existing [memory management rules](#memory-management)
+apply.
+
+| `CSshStatus` field | C type |
+|-------------------|--------|
+| `enabled` | `int` (non-zero when enabled) |
+| `generation` | `uint64_t` |
+| `listen_address` | `char*` |
+| `host_public_key` | `char*` |
+| `host_key_fingerprint` | `char*` |
+
+`config_json` must be UTF-8 JSON and only needs to remain valid for the call.
+Malformed JSON or non-UTF-8 input returns `InvalidArgument` with
+`invalid SSH configuration`, without echoing rejected values. Operation
+failures are reported through the callback.
+
+The configuration fields are `listen_address`, `host_private_key`, and
+`accounts` of `login`, `authorized_keys`, and optional `ca` with `public_key`
+and `principal`.
 
 ---
 

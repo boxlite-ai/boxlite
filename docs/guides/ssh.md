@@ -20,7 +20,9 @@ before `start()` and after runtime recovery. Other lifecycle states return
 
 Creating the handle alone does not start anything. Deployments without SSH
 control answer `404` or reject with `Unsupported`; there is no capability
-negotiation. The CLI and the other language SDKs expose no SSH control API.
+negotiation. See the [SDK API references](../reference/README.md#sdk-api-references)
+for language-specific control APIs.
+
 SSH does not publish a host port; configure network forwarding separately when
 needed. For component diagrams and implementation details, see
 [Guest SSH architecture](../../src/guest/src/service/ssh/README.md).

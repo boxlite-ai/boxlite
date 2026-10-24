@@ -357,6 +357,13 @@ if (boxlite_image_registries(runtime, &registries, &error) == Ok) {
 
 See [Registries in the C reference](../../docs/reference/c/README.md#registries).
 
+### Guest SSH Control
+
+`boxlite_box_ssh_configure()`, `boxlite_box_ssh_status()`, and
+`boxlite_box_ssh_disable()` configure, query, and disable guest SSH through
+the Native API. See the [C SSH reference](../../docs/reference/c/README.md#guest-ssh-control)
+for configuration fields, callbacks, and `CSshStatus`.
+
 ---
 
 ## API Overview

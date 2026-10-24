@@ -204,6 +204,25 @@ pub(crate) type CBoxRegistryRemoveFn = extern "C" fn(*mut crate::CBoxliteError, 
 pub type CBoxCopyCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxCopyFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
+/// SSH configure completion. A successful callback owns the status and must
+/// release it with `boxlite_free_ssh_status`; on failure it is null.
+pub type CBoxSshConfigureCb =
+    Option<extern "C" fn(*mut crate::ssh::CSshStatus, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxSshConfigureFn =
+    extern "C" fn(*mut crate::ssh::CSshStatus, *mut crate::CBoxliteError, *mut c_void);
+
+/// SSH status completion with the same ownership contract as SSH configure.
+pub type CBoxSshStatusCb =
+    Option<extern "C" fn(*mut crate::ssh::CSshStatus, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxSshStatusFn =
+    extern "C" fn(*mut crate::ssh::CSshStatus, *mut crate::CBoxliteError, *mut c_void);
+
+/// SSH disable completion with the same ownership contract as SSH configure.
+pub type CBoxSshDisableCb =
+    Option<extern "C" fn(*mut crate::ssh::CSshStatus, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxSshDisableFn =
+    extern "C" fn(*mut crate::ssh::CSshStatus, *mut crate::CBoxliteError, *mut c_void);
+
 /// Box info completion. On success the callback owns the non-null metadata and
 /// must release it with `boxlite_free_box_info`. The error pointer is borrowed
 /// for callback dispatch only; on failure the metadata pointer is null.
@@ -475,6 +494,21 @@ pub enum RuntimeEvent {
         cb: CBoxCopyFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
+    },
+    SshConfigure {
+        cb: CBoxSshConfigureFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<crate::ssh::CSshStatus>, BoxliteError>,
+    },
+    SshStatus {
+        cb: CBoxSshStatusFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<crate::ssh::CSshStatus>, BoxliteError>,
+    },
+    SshDisable {
+        cb: CBoxSshDisableFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<crate::ssh::CSshStatus>, BoxliteError>,
     },
     Info {
         cb: CBoxInfoFn,
