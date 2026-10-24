@@ -19,15 +19,11 @@ describe('JobStateHandlerService migration job routing', () => {
     const redisLockProvider = {
       unlock: jest.fn().mockResolvedValue(undefined),
     } as any
-    const boxMigrationJobReceiver = {
-      handleJobCompletion: jest.fn().mockResolvedValue(undefined),
-    } as any
     return {
-      service: new JobStateHandlerService(boxRepository, redisLockProvider, boxMigrationJobReceiver, {
+      service: new JobStateHandlerService(boxRepository, redisLockProvider, {
         reasonFor: jest.fn(async (_box: unknown, reason: string) => reason),
       } as any),
       redisLockProvider,
-      boxMigrationJobReceiver,
     }
   }
 
@@ -40,7 +36,7 @@ describe('JobStateHandlerService migration job routing', () => {
     JobType.ROLLBACK_EXPORT_BOX,
     JobType.ROLLBACK_IMPORT_BOX,
     JobType.DISCARD_EXPORTED_BOX,
-  ])('hands %s to the migration receiver and leaves the box state-change lock alone', async (type) => {
+  ])('leaves %s and its locks to the transactional migration path', async (type) => {
     const h = makeService()
     const job = new Job({
       id: 'job-1',
@@ -53,7 +49,6 @@ describe('JobStateHandlerService migration job routing', () => {
 
     await h.service.handleJobCompletion(job)
 
-    expect(h.boxMigrationJobReceiver.handleJobCompletion).toHaveBeenCalledWith(job)
     expect(h.redisLockProvider.unlock).not.toHaveBeenCalledWith(getStateChangeLockKey('box-1'))
   })
 
@@ -70,7 +65,6 @@ describe('JobStateHandlerService migration job routing', () => {
 
     await h.service.handleJobCompletion(job)
 
-    expect(h.boxMigrationJobReceiver.handleJobCompletion).not.toHaveBeenCalled()
     expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getStateChangeLockKey('box-1'))
   })
 })
@@ -89,7 +83,6 @@ describe('JobStateHandlerService failed pulls', () => {
     const service = new JobStateHandlerService(
       boxRepository,
       { unlock: jest.fn().mockResolvedValue(undefined) } as any,
-      { handleJobCompletion: jest.fn() } as any,
       imagePullFailureService as any,
     )
     return { service, boxRepository, imagePullFailureService }

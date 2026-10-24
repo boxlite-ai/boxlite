@@ -134,10 +134,6 @@ function makeHarness(row?: { box?: Box | null; migration?: BoxMigration | null; 
     }),
     createQueryBuilder,
   }
-  const dataSource = {
-    transaction: jest.fn().mockImplementation((run: any) => run(entityManager)),
-    manager: entityManager,
-  } as any
   const redisLockProvider = {
     unlock: jest.fn().mockResolvedValue(undefined),
   } as any
@@ -145,8 +141,12 @@ function makeHarness(row?: { box?: Box | null; migration?: BoxMigration | null; 
     invalidate: jest.fn(),
   } as any
 
+  const receiver = new BoxMigrationJobReceiver(redisLockProvider, boxLookupCacheInvalidationService)
   return {
-    receiver: new BoxMigrationJobReceiver(dataSource, redisLockProvider, boxLookupCacheInvalidationService),
+    async complete(job: Job) {
+      const afterCommit = await receiver.handleJobCompletion(job, entityManager as any)
+      await afterCommit()
+    },
     writes,
     deletes,
     redisLockProvider,
@@ -169,7 +169,7 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
     const job = makeExportJob()
     job.resultMetadata = JSON.stringify({ arcPath: ARC_PATH })
 
-    await h.receiver.handleJobCompletion(job)
+    await h.complete(job)
 
     expect(h.writes).toEqual([
       {
@@ -191,7 +191,7 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
     const job = makeExportJob()
     job.resultMetadata = JSON.stringify({ arcPath: ARC_PATH })
 
-    await h.receiver.handleJobCompletion(job)
+    await h.complete(job)
 
     expect(h.writes).toEqual([
       {
@@ -210,7 +210,7 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
     const job = makeExportJob()
     job.resultMetadata = JSON.stringify({ arcPath: ARC_PATH })
 
-    await h.receiver.handleJobCompletion(job)
+    await h.complete(job)
 
     expect(h.writes).toEqual([
       {
@@ -228,7 +228,7 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
     const job = makeExportJob()
     job.resultMetadata = JSON.stringify({ arcPath: 's3://other-tenant/secrets.boxlite' })
 
-    await h.receiver.handleJobCompletion(job)
+    await h.complete(job)
 
     expect(h.writes[0].values).toEqual({ state: BoxMigrationState.PENDING_IMPORT, arcPath: ARC_PATH })
   })
@@ -238,7 +238,7 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
     const job = makeExportJob({ payload: undefined })
     job.resultMetadata = JSON.stringify({ arcPath: ARC_PATH })
 
-    await h.receiver.handleJobCompletion(job)
+    await h.complete(job)
 
     expect(h.writes[0].values).toEqual({ state: BoxMigrationState.PENDING_IMPORT, arcPath: '' })
   })
@@ -251,7 +251,7 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
     const h = makeHarness()
     const job = makeExportJob({ status: JobStatus.FAILED, errorMessage: 'upload timed out' })
 
-    await h.receiver.handleJobCompletion(job)
+    await h.complete(job)
 
     expect(h.writes).toHaveLength(0)
     expect(h.deletes).toEqual([
@@ -266,7 +266,7 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
     const job = makeExportJob()
     job.resultMetadata = JSON.stringify({ arcPath: ARC_PATH })
 
-    await h.receiver.handleJobCompletion(job)
+    await h.complete(job)
 
     expect(h.writes).toHaveLength(0)
   })
@@ -276,7 +276,7 @@ describe('BoxMigrationJobReceiver IMPORT_BOX', () => {
   it('moves ownership to the target runner and leaves the source to be discarded', async () => {
     const h = makeHarness({ migration: makeMigration(BoxMigrationState.PENDING_IMPORT, { arcPath: ARC_PATH }) })
 
-    await h.receiver.handleJobCompletion(makeJob(JobType.IMPORT_BOX))
+    await h.complete(makeJob(JobType.IMPORT_BOX))
 
     expect(h.writes).toEqual([
       {
@@ -296,7 +296,7 @@ describe('BoxMigrationJobReceiver IMPORT_BOX', () => {
   it('invalidates the cached box, which still names the runner that gave it up', async () => {
     const h = makeHarness({ migration: makeMigration(BoxMigrationState.PENDING_IMPORT, { arcPath: ARC_PATH }) })
 
-    await h.receiver.handleJobCompletion(makeJob(JobType.IMPORT_BOX))
+    await h.complete(makeJob(JobType.IMPORT_BOX))
 
     expect(h.boxLookupCacheInvalidationService.invalidate).toHaveBeenCalledWith({
       id: BOX_ID,
@@ -310,9 +310,7 @@ describe('BoxMigrationJobReceiver IMPORT_BOX', () => {
   it('leaves the state alone when the import failed, so the submitter retries', async () => {
     const h = makeHarness({ migration: makeMigration(BoxMigrationState.PENDING_IMPORT, { arcPath: ARC_PATH }) })
 
-    await h.receiver.handleJobCompletion(
-      makeJob(JobType.IMPORT_BOX, { status: JobStatus.FAILED, errorMessage: 'restore timed out' }),
-    )
+    await h.complete(makeJob(JobType.IMPORT_BOX, { status: JobStatus.FAILED, errorMessage: 'restore timed out' }))
 
     expect(h.writes).toHaveLength(0)
     expect(h.deletes).toHaveLength(0)
@@ -325,7 +323,7 @@ describe('BoxMigrationJobReceiver IMPORT_BOX', () => {
       migration: makeMigration(BoxMigrationState.PENDING_IMPORT, { arcPath: ARC_PATH }),
     })
 
-    await h.receiver.handleJobCompletion(makeJob(JobType.IMPORT_BOX))
+    await h.complete(makeJob(JobType.IMPORT_BOX))
 
     // The box keeps its runner: ownership only moves on the validated branch.
     expect(h.writes).toEqual([
@@ -347,7 +345,7 @@ describe('BoxMigrationJobReceiver IMPORT_BOX', () => {
       sourceDraining: false,
     })
 
-    await h.receiver.handleJobCompletion(makeJob(JobType.IMPORT_BOX))
+    await h.complete(makeJob(JobType.IMPORT_BOX))
 
     expect(h.writes).toEqual([
       {
@@ -369,7 +367,7 @@ describe('BoxMigrationJobReceiver reclaim jobs', () => {
   it('clears the archive once the rollback deleted it', async () => {
     const h = makeHarness({ migration: makeMigration(BoxMigrationState.PENDING_ROLLBACK, { arcPath: ARC_PATH }) })
 
-    await h.receiver.handleJobCompletion(makeJob(JobType.ROLLBACK_EXPORT_BOX, { runnerId: SOURCE_RUNNER }))
+    await h.complete(makeJob(JobType.ROLLBACK_EXPORT_BOX, { runnerId: SOURCE_RUNNER }))
 
     expect(h.writes).toEqual([
       {
@@ -384,7 +382,7 @@ describe('BoxMigrationJobReceiver reclaim jobs', () => {
   it('clears the second runner once the rollback destroyed the copy on it', async () => {
     const h = makeHarness({ migration: makeMigration(BoxMigrationState.PENDING_ROLLBACK, { runnerId: TARGET_RUNNER }) })
 
-    await h.receiver.handleJobCompletion(makeJob(JobType.ROLLBACK_IMPORT_BOX))
+    await h.complete(makeJob(JobType.ROLLBACK_IMPORT_BOX))
 
     expect(h.writes).toEqual([
       {
@@ -403,7 +401,7 @@ describe('BoxMigrationJobReceiver reclaim jobs', () => {
       }),
     })
 
-    await h.receiver.handleJobCompletion(makeJob(JobType.DISCARD_EXPORTED_BOX, { runnerId: SOURCE_RUNNER }))
+    await h.complete(makeJob(JobType.DISCARD_EXPORTED_BOX, { runnerId: SOURCE_RUNNER }))
 
     expect(h.writes).toEqual([
       {
