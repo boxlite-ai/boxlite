@@ -46,7 +46,7 @@ rejects, under a certificate that does not name it. Nothing on the App platform 
 
 ## Status
 
-- **Proxy (prototype, branch `proxy-custom-hosts` of boxlite, not merged):** `apps/proxy` asks
+- **Proxy (prototype, branch `proxy-custom-hosts` on boxlite-ai/boxlite, not merged):** `apps/proxy` asks
   `CUSTOM_HOST_RESOLVER_URL?host=<host>` (bearer `CUSTOM_HOST_RESOLVER_TOKEN`) when a host is not
   a tunnel name, and routes it to the Box and port answered, through the same gates as that
   port's tunnel URL. Answers and misses are cached for a minute. Unset, nothing changes.
