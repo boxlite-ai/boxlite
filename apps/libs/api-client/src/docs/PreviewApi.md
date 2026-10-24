@@ -53,7 +53,7 @@ No authorization required
 ### HTTP response details
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
-|**200** | Inbound mode of the box: &#x60;enabled&#x60; means the proxy may serve its services without sign-in |  -  |
+|**200** | Inbound mode of the box: &#x60;enabled&#x60; permits access subject to each tunnel policy; &#x60;disabled&#x60; rejects all callers |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

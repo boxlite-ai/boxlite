@@ -1119,9 +1119,13 @@ paths:
       operationId: prepareTunnel
       summary: Prepare a box service tunnel
       description: |
-        Returns the public URI for a TCP service inside the box.
+        Returns the URI and access policy for a TCP service inside the box.
         Safe to repeat: the server may provision tunnel routing on
         first call and returns the current descriptor thereafter.
+        isPublic defaults to true. A private tunnel returns its complete token
+        only when created, and a masked token on later calls. Stop/resume does
+        not rotate it; revoke followed by prepare does. Changing the mode of an
+        active tunnel requires revoke first (otherwise 409).
 
         HTTP services are reachable directly at the URI. For a raw
         TCP byte stream to the service port, clients connect to the
@@ -1129,6 +1133,9 @@ paths:
         host upgrades each accepted `CONNECT` into one connection to
         the in-box service. `CONNECT` is a transport handshake on the
         URI's host, not an operation of this API.
+        SDKs send API-key/JWT credentials in X-BoxLite-Authorization on CONNECT.
+        External visitors may use X-BoxLite-Access-Token or boxlite-access-token
+        in the URL query. Inbound disabled blocks both public and private tunnels.
 
         Returns 409 while the box's inbound access is `disabled`. Enable it
         with `network.inbound.mode` at create, or later with
@@ -1144,6 +1151,17 @@ paths:
             minimum: 1
             maximum: 65535
           example: 3000
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                isPublic:
+                  type: boolean
+                  default: true
+              additionalProperties: false
       responses:
         "200":
           description: Service tunnel descriptor
@@ -1161,7 +1179,7 @@ paths:
       operationId: revokeTunnel
       summary: Revoke a box service tunnel
       description: |
-        Withdraws public access to one box port that `prepareTunnel`
+        Withdraws access to one public or private box port that `prepareTunnel`
         opened. New requests and `CONNECT`s to its URI get `404` within
         3 seconds; connections already open run until they close. Other
         ports of the box are unaffected.
@@ -1181,7 +1199,7 @@ paths:
           example: 3000
       responses:
         "204":
-          description: The port is no longer public
+          description: The tunnel declaration is revoked
         "400":
           $ref: "#/components/responses/BadRequestError"
         "404":
@@ -1196,9 +1214,9 @@ paths:
       summary: Change a box's inbound access
       description: |
         Enables or disables inbound access to an existing box, the policy
-        `network.inbound` sets at create. `enabled` makes the box's
-        services reachable through the remote proxy without
-        authentication. `prepareTunnel` follows the new mode at once; the
+        `network.inbound` sets at create. `enabled` permits access through
+        the proxy subject to each tunnel's policy; `disabled` blocks all
+        callers. `prepareTunnel` follows the new mode at once; the
         proxy applies it to new connections once its visibility cache
         expires, and does not close connections already open.
 
@@ -1915,6 +1933,10 @@ components:
               type: boolean
               description: Whether `PUT /{prefix}/boxes/{box_id}/network/inbound` is supported
               example: true
+            private_tunnels_enabled:
+              type: boolean
+              description: Whether prepareTunnel honors a private `isPublic` of false; clients check it before every private prepare
+              example: true
             idempotency_key_lifetime:
               type: string
               description: How long idempotency keys are retained (ISO 8601 duration)
@@ -2520,8 +2542,9 @@ components:
           description: |
             Optional inbound service access policy. Omission means
             `mode=disabled`, including for legacy flat network requests.
-            Send `mode=enabled` to let exposed services be reached without
-            sign-in.
+            Send `mode=enabled` to let exposed services be reached through the
+            proxy under each tunnel's access policy: public tunnels need no
+            sign-in, private ones need their token or organization membership.
           default:
             mode: disabled
         mode:
@@ -2577,7 +2600,7 @@ components:
           enum: [enabled, disabled]
           description: |
             `enabled` means service endpoints exposed from the box are
-            reachable through the remote proxy without sign-in. `disabled`
+            reachable through the proxy subject to the tunnel's access policy. `disabled`
             makes them unreachable through the proxy, even with a credential.
         allow_net:
           type: array
@@ -2882,8 +2905,8 @@ components:
     # =======================================================================
     TunnelDescriptor:
       type: object
-      description: Public descriptor for a box service tunnel.
-      required: [uri]
+      description: Service tunnel descriptor. A complete private token is returned only on creation.
+      required: [uri, isPublic, token]
       properties:
         uri:
           type: string
@@ -2892,6 +2915,11 @@ components:
             Public URI for the box service. Clients MUST treat the
             value as opaque — its shape is deployment-defined.
           example: "https://3000-01hjk4tnrpqsxyz8wm6ncvt9r5.proxy.example.test"
+        isPublic:
+          type: boolean
+        token:
+          type: [string, "null"]
+          description: Null for public tunnels; complete on private creation, masked on subsequent calls.
 
     # =======================================================================
     # Metrics

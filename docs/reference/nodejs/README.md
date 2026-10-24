@@ -376,8 +376,9 @@ live binding data yet, so box, get, or list info may report
 
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
-| Tunnel | `await box.network.tunnel(port)` | Prepare a one-shot `JsBoxTunnel` or `BoxTunnel` |
-| Revoke | `await box.network.revokeTunnel(port)` | Withdraw the port's public URL; open connections stay open |
+| Tunnel | `await box.network.tunnel(port, isPublic = true)` | Prepare a `JsBoxTunnel` or `BoxTunnel`; pass `false` for a private cloud tunnel |
+| Token | `tunnel.token(): string \| null` | Full on creation, masked on later preparations; `isPublic()` reports the mode |
+| Revoke | `await box.network.revokeTunnel(port)` | Withdraw the port's tunnel; open connections stay open |
 | Forward | `await tunnel.forward(listen)` | Return a listener-backed `TunnelForwarder` |
 | Inspect | `tunnel.uri(): string \| null` | Read the prepared public URL; `null` for a local box |
 | Connect | `await tunnel.connect()` | Consume the prepared tunnel into its connection |
@@ -389,7 +390,8 @@ live binding data yet, so box, get, or list info may report
 and repeatable `close()`.
 
 Each tunnel is one-shot. Choose `connect()` or `forward()`; a forwarder opens
-fresh tunnels for additional clients. This differs from `ports`, which
+fresh connections against the prepared declaration without preparing again.
+It cannot undo revocation. This differs from `ports`, which
 creates a persistent, local-only host listener that accepts repeated
 connections from ordinary host applications.
 

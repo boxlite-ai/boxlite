@@ -386,7 +386,7 @@ pub struct JsOutboundNetworkSpec {
 }
 
 /// Aligned field-for-field with `JsOutboundNetworkSpec`: `mode="enabled"`
-/// means services the box exposes are reachable without sign-in;
+/// means exposed services follow each tunnel's access policy;
 /// `mode="disabled"` means unreachable from outside. `allowNet` exists for
 /// shape symmetry only — no layer enforces an inbound allowlist yet, so a
 /// non-empty value is rejected.

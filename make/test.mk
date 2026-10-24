@@ -1,6 +1,7 @@
 PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm _ensure-vmm-kernel test\:vmm\:boot
 PHONY_TARGETS += test\:apps\:runner
+PHONY_TARGETS += test\:apps\:proxy
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -587,6 +588,9 @@ test\:apps\:api: _ensure-apps-deps
 test\:apps\:runner: dev\:go
 	@echo "🧪 Running runner Go tests..."
 	@cd apps/runner && go test -tags boxlite_dev ./... $(GOTEST_FILTER)
+
+test\:apps\:proxy:
+	@cd apps/proxy && go test ./... $(GOTEST_FILTER)
 
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."

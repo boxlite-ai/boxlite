@@ -756,11 +756,17 @@ void boxlite_tunnel_forwarder_free(CTunnelForwarderHandle* forwarder);
 
 Each `CBoxTunnelHandle` is one-shot. Choose `boxlite_tunnel_connect()` or
 `boxlite_tunnel_forward()`; either consumes the prepared tunnel.
+Private cloud tunnels use `boxlite_network_tunnel_with_options()` with JSON
+`{"isPublic":false}`. Read `uri`, `isPublic`, and `token` with
+`boxlite_tunnel_descriptor()`, before or after connect/forward consumes the tunnel,
+freeing the result with `boxlite_free_string()`.
+Only creation returns the full token; later preparations return a mask.
+Forwarding opens connections against the existing declaration and cannot undo revocation.
 `boxlite_tunnel_uri()` reports where a remotely served tunnel can be reached, as
 an allocated string the caller frees with `boxlite_free_string()`. It writes NULL
 for a local tunnel.
 
-`boxlite_network_revoke_tunnel()` withdraws the public URL of `port`. It is
+`boxlite_network_revoke_tunnel()` withdraws the public or private tunnel of `port`. It is
 safe to repeat, leaves open connections running, and does nothing for a local
 box.
 

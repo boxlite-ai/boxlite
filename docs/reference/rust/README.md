@@ -550,7 +550,9 @@ pub struct BoxState {
 | Update inbound | `NetworkHandle::update_inbound(InboundNetworkConfig).await -> BoxliteResult<()>` | Replace inbound mode; cloud only |
 | Update outbound | `NetworkHandle::update_outbound(OutboundNetworkConfig).await -> BoxliteResult<()>` | Replace outbound mode and allowlist |
 | Tunnel | `async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>` | Prepare a one-shot tunnel to one guest TCP service |
-| Revoke | `async fn revoke_tunnel(&self, port: u16) -> BoxliteResult<()>` | Withdraw the port's public URL; a no-op on a local box |
+| Private tunnel | `tunnel_with_options(target, TunnelOptions { is_public: false }).await` | Prepare a private cloud tunnel; default is public |
+| Token | `BoxTunnel::token(&self) -> Option<&str>` | Full on creation, masked on later preparations; `is_public()` reports the mode |
+| Revoke | `async fn revoke_tunnel(&self, port: u16) -> BoxliteResult<()>` | Withdraw the port's tunnel; a no-op on a local box |
 | Forward | `async fn BoxTunnel::forward(self, listen: SocketAddress) -> BoxliteResult<TunnelForwarder>` | Consume the tunnel into a TCP or Unix listener |
 | Inspect | `BoxTunnel::uri(&self) -> Option<&str>` | Read the prepared public URL; `None` for a local box |
 | Descriptor | `BoxConnection::raw_fd(&self) -> Option<RawFd>` | Borrowed fd; `None` for a remotely served connection |
@@ -560,7 +562,8 @@ pub struct BoxState {
 | Half-close | `BoxWriter::shutdown(&mut self) -> BoxliteResult<()>` | Signal EOF; a peer that already hung up is success, not an error |
 
 `BoxTunnel` remains one-shot: choose either `connect()` or `forward()`. A
-forwarder privately prepares a fresh tunnel for each later accepted client.
+forwarder opens fresh connections against the prepared declaration and never
+prepares again, so connecting cannot reopen a revoked tunnel.
 This differs from `BoxOptions.ports`, which publishes a local port for
 the lifetime of the box.
 

@@ -268,7 +268,7 @@ pub(crate) struct PyOutboundNetworkSpec {
 /// Inbound network policy.
 ///
 /// Aligned field-for-field with `NetworkSpec`: `mode` accepts
-/// `"enabled"` (services the box exposes are reachable without sign-in) or
+/// `"enabled"` (exposed services follow each tunnel's access policy) or
 /// `"disabled"` (unreachable from outside). `allow_net` exists for shape
 /// symmetry only — no layer enforces an inbound allowlist yet, so a
 /// non-empty value is rejected.

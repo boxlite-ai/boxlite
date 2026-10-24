@@ -95,7 +95,7 @@ export class CreateBoxDto {
   labels?: { [key: string]: string }
 
   @ApiPropertyOptional({
-    description: 'Whether inbound access is enabled: the proxy serves exposed services without sign-in',
+    description: "Whether inbound access is enabled, subject to each exposed tunnel's access policy",
     default: false,
   })
   @IsOptional()

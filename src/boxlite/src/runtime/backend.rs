@@ -198,7 +198,20 @@ pub(crate) trait BoxNetworkBackend: Send + Sync {
     /// it on `connect()`, so a port nothing listens on fails there.
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
 
-    /// Withdraw any public access `tunnel()` granted to `port`.
+    async fn tunnel_with_options(
+        &self,
+        target: SocketAddr,
+        options: crate::litebox::TunnelOptions,
+    ) -> BoxliteResult<BoxTunnel> {
+        if !options.is_public {
+            return Err(BoxliteError::Unsupported(
+                "private tunnels require a cloud runtime".into(),
+            ));
+        }
+        self.tunnel(target).await
+    }
+
+    /// Withdraw the tunnel declaration `tunnel()` made for `port`.
     ///
     /// A backend that publishes nothing, like the local one, has nothing to
     /// withdraw. Connections already open are not closed.

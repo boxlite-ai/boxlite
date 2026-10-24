@@ -38,7 +38,8 @@ The inventory is implementation-grounded:
 `openapi/box.openapi.yaml` also describes portable capabilities that the hosted
 service does not currently register, including snapshots, clone, export,
 import, and runtime-wide metrics. They are intentionally absent below;
-`GET /api/v1/config` reports snapshots, clone, export, and import as disabled.
+`GET /api/v1/config` reports snapshots, clone, export, and import as disabled,
+and private tunnels as enabled; clients check that before every private prepare.
 
 ## Services at a glance
 
@@ -188,7 +189,7 @@ organization boundaries.
 </details>
 
 <details>
-<summary><b>Boxes and preview access</b> · 16 routes</summary>
+<summary><b>Boxes and preview access</b> · 19 routes</summary>
 
 | Method | Path                                                                    | What it does                                          |
 | ------ | ----------------------------------------------------------------------- | ----------------------------------------------------- |
@@ -206,6 +207,9 @@ organization boundaries.
 | `POST` | `/api/box/{boxIdOrName}/attach-tickets`                                 | Issues a 30-second, single-use ticket for one `/v1` attach upgrade. |
 | `GET`  | `/api/preview/{boxId}/inbound`                                          | Reports a box's inbound mode (`enabled` or `disabled`) to the proxy. |
 | `GET`  | `/api/preview/{boxId}/tunnels/{port}`                                   | Checks an active public tunnel for the proxy.          |
+| `POST` | `/api/preview/{boxId}/tunnels/{port}/access`                            | Proxy-only active tunnel policy, token verification and browser-user revalidation; returns no token verifier. |
+| `GET`  | `/api/preview/{boxId}/tunnels/{port}/session`                            | Checks a user JWT and returns the tunnel grant and user ID for browser login. |
+| `POST` | `/api/preview/tunnel-handoff`                                          | Proxy-only issue or single-use consumption of a 30-second browser login handoff. |
 | `POST` | `/api/preview/{boxId}/ensure-ready`                                     | Wakes a stopped box for the proxy, by auto-resume rules. |
 | `GET`  | `/api/preview/{boxId}/access`                                           | Checks whether the caller may preview a box.          |
 
@@ -464,7 +468,7 @@ organization membership.
 </details>
 
 <details>
-<summary><b>Execution, files, metrics, and networking</b> · 11 routes</summary>
+<summary><b>Execution, files, metrics, and networking</b> · 12 routes</summary>
 
 | Method   | Path                                                          | What it does                                            |
 | -------- | ------------------------------------------------------------- | ------------------------------------------------------- |
@@ -477,8 +481,8 @@ organization membership.
 | `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/files?path={path}`          | Uploads a tar stream into a box path.                   |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/files?path={path}`          | Downloads a box path as a tar stream.                   |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/metrics`                    | Returns metrics for one box without marking it active.  |
-| `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Returns the runner tunnel URI for a guest TCP port.     |
-| `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Revokes a port's public declaration; `204`, idempotent. |
+| `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Prepares a tunnel with optional `isPublic` (default true); returns `uri`, `isPublic`, `token`. Private tokens are complete once, then masked. |
+| `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Revokes either access mode; `204`, idempotent. |
 | `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Enables or disables a box's inbound access.             |
 
 The exec, signal, resize, files, and metrics handlers are registered as
@@ -677,15 +681,17 @@ routing, so it works on every host. How the proxy authenticates these requests
 and tunnels them to guest ports is in [`proxy/README.md`](./proxy/README.md).
 
 <details>
-<summary><b>Proxy routes</b> · 5 routes</summary>
+<summary><b>Proxy routes</b> · 7 routes</summary>
 
 | Method    | Host and path                                              | What it does                                                                                     |
 | --------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `GET`     | `proxy.<domain>/health`                                    | Reports proxy health and version.                                                                |
+| `GET`     | `proxy.<domain>/login`                                     | Starts OIDC login with a host-only PKCE cookie and signed target state. |
 | `GET`     | `proxy.<domain>/callback`                                  | Completes the OIDC preview authentication flow.                                                  |
-| `POST`    | `<any host>/accept-boxlite-preview-warning?redirect={url}` | Records preview-warning acceptance and redirects the browser.                                    |
+| `GET`     | `<port>-<box>.proxy.<domain>/__boxlite/auth/callback`       | Consumes the login handoff and issues a host-only tunnel session cookie. |
+| `POST`    | `<any host>/accept-boxlite-preview-warning`                | Records preview-warning acceptance and redirects to the `redirect` form field (the query form is still accepted). |
 | `ANY`     | `<port>-<box>.proxy.<domain>/{path...}`                    | Reverse-proxies HTTP and WebSocket traffic to the selected box port after preview access checks. |
-| `CONNECT` | `<port>-<box>.proxy.<domain>`                              | Opens a bidirectional TCP tunnel through the runner; allowed only with inbound enabled.               |
+| `CONNECT` | `<port>-<box>.proxy.<domain>`                              | Opens a TCP stream after inbound and tunnel authorization; SDK/CLI sends its organization bearer. |
 
 </details>
 

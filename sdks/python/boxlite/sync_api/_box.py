@@ -61,12 +61,12 @@ class SyncBox:
         """Run async operation synchronously."""
         return self._sync_helper._sync(coro)
 
-    def _create_tunnel(self, port: int):
+    def _create_tunnel(self, port: int, is_public: bool = True):
         """Establish a native tunnel handle for a service port."""
-        return self._sync(self._box.network.tunnel(port))
+        return self._sync(self._box.network.tunnel(port, is_public))
 
     def _revoke_tunnel(self, port: int) -> None:
-        """Withdraw public access to a service port."""
+        """Revoke the tunnel for a service port."""
         self._sync(self._box.network.revoke_tunnel(port))
 
     @property
@@ -140,9 +140,9 @@ class SyncBox:
             self._network = SyncNetworkHandle(self)
         return self._network
 
-    def tunnel(self, port: int):
+    def tunnel(self, port: int, is_public: bool = True):
         """Prepare a one-shot tunnel for a port inside this box."""
-        return self.network.tunnel(port)
+        return self.network.tunnel(port, is_public)
 
     # Context manager support
     def __enter__(self) -> "SyncBox":  # noqa: PYI034 - typing.Self needs 3.11+; project supports 3.10+

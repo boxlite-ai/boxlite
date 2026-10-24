@@ -1,4 +1,4 @@
-PHONY_TARGETS += fmt lint clippy clippy\:vmm lint\:apps fmt\:apps fmt\:check\:apps
+PHONY_TARGETS += fmt lint clippy clippy\:vmm lint\:apps fmt\:apps fmt\:check\:apps fmt\:apps\:proxy
 
 clippy\:vmm:
 	@cargo clippy -p boxlite-hypervisor -p boxlite-vmm --all-targets -- -D warnings
@@ -102,6 +102,9 @@ ifneq ($(FILES),)
 else
 	@cd apps && yarn format
 endif
+
+fmt\:apps\:proxy:
+	@cd apps/proxy && gofmt -w .
 
 # apps/ has no `format:check` script; prettier --check over the same TS globs
 # `lint:ts` uses is the check counterpart.

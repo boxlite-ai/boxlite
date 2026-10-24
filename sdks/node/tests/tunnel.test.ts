@@ -10,6 +10,23 @@ vi.mock("../lib/native.js", () => ({
 }));
 
 describe("SimpleBox", () => {
+  test("private tunnel passes its access policy and exposes the issued metadata", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const nativeTunnel = {
+      uri: () => "https://private.proxy.test",
+      isPublic: () => false,
+      token: () => "blt_service-issued-secret",
+    };
+    const prepare = vi.fn(async () => nativeTunnel);
+    const box = new SimpleBox({ image: "alpine" }) as SimpleBox & {
+      _box: { network: { tunnel: typeof prepare } };
+    };
+    box._box = { network: { tunnel: prepare } };
+    const tunnel = await box.tunnel(3000, false);
+    expect(prepare).toHaveBeenCalledWith(3000, false);
+    expect(tunnel.isPublic()).toBe(false);
+    expect(tunnel.token()).toBe("blt_service-issued-secret");
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -27,7 +44,7 @@ describe("SimpleBox", () => {
 
     const tunnel = await box.network.tunnel(3000);
     expect(tunnel.uri()).toBe("https://3000-box.proxy.example.test");
-    expect(tunnelNative).toHaveBeenCalledWith(3000);
+    expect(tunnelNative).toHaveBeenCalledWith(3000, true);
     expect(nativeTunnel.connect).not.toHaveBeenCalled();
 
     // Reading the address must leave the tunnel usable, not consume it.
