@@ -336,6 +336,36 @@ async function main() {
       return 'email sender set and tested from the console'
     })
 
+    await step('domains: where the platform routes them, add one, see its DNS records, verify says what is missing, remove', async () => {
+      await tab('Domains')
+      const detail = await (await page.request.get(`${CONSOLE}/console/api/apps/${APP}`)).json()
+      if (!detail.domains?.supported) {
+        assert(await page.getByRole('button', { name: 'Add domain' }).isDisabled(), 'Add domain must be disabled where domains are not routed')
+        return 'not routed on this platform: Add domain disabled'
+      }
+      const host = `${APP}.example.com`
+      await page.getByRole('button', { name: 'Add domain' }).click()
+      const dialog = page.getByTestId('add-domain-dialog')
+      await dialog.getByPlaceholder('shop.example.com').fill(host)
+      await dialog.getByRole('button', { name: 'Add', exact: true }).click()
+      await dialog.getByText(`_boxlite-challenge.${host}`).waitFor()
+      await dialog.getByText(detail.domains.target).waitFor()
+      await shot('domains-add')
+      await dialog.getByRole('button', { name: 'Verify', exact: true }).click()
+      await page.getByText(/has no TXT record/).first().waitFor({ timeout: 30_000 })
+      await page.keyboard.press('Escape')
+      const row = page.getByTestId(`domain-${host}`)
+      assert(/waiting for dns/i.test(await text(row)), 'the row shows the domain waiting for DNS')
+      const cp = await cpApi('/envs/main/domains')
+      assert(cp.some((d) => d.host === host && d.status === 'pending_dns'), `CP domains ${JSON.stringify(cp)}`)
+      await row.hover()
+      await row.getByRole('button', { name: 'Remove' }).click()
+      await page.getByRole('button', { name: 'Remove', exact: true }).last().click()
+      await row.waitFor({ state: 'detached', timeout: 15_000 })
+      assert(!(await cpApi('/envs/main/domains')).length, 'removed on the CP')
+      return `${host}: records shown, verify explained, removed`
+    })
+
     await step('database tables and row counts match the CP', async () => {
       await tab('Database')
       const schema = await cpApi('/envs/main/db/schema')
