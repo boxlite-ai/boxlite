@@ -28,8 +28,9 @@ flowchart LR
   request runs only when a maintainer adds the `e2e-local` label.
 - **start-runner** — authenticates to GCP through OIDC, writes a fresh runner registration
   token into the VM's metadata, boots the VM, and waits up to 5 minutes for the runner to
-  come online. When the zone rejects the boot for lack of capacity, the VM stays `TERMINATED`;
-  after a minute in that state the job retries the start, up to 6 attempts a minute apart. It then removes the token from the metadata, whether or not the runner came up.
+  come online. It then removes the token from the metadata, whether or not the runner came up.
+  When the zone rejects the boot for lack of capacity, the VM stays `TERMINATED`; after a
+  minute in that state the job retries the start, up to 6 attempts a minute apart.
 - **e2e-tests** — runs on the self-hosted runner (`gcp-e2e` label, 50-minute timeout):
   verifies `/dev/kvm`, installs build dependencies, then runs `make test:integration`.
 - **stop-runner** — always runs at the end and stops the VM so it stops costing money,
