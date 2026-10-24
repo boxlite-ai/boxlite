@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import * as tar from 'tar';
 import type { MakeCtx } from '../cli.js';
-import type { Deployment, EnvSummary } from '../api.js';
+import type { Deployment, DomainView, EnvSummary } from '../api.js';
 import { updateLink, writeLink, type Ctx } from '../context.js';
 import { describe } from '../meta.js';
 import { formatBytes, table } from '../output.js';
@@ -67,6 +67,41 @@ async function forget(ctx: Ctx, id: string): Promise<void> {
   const r = await (await ctx.appApi()).forgetNote(Number(id));
   ctx.out.data(r);
   ctx.out.line(`forgot note ${r.forgotten}`);
+}
+
+async function domains(ctx: Ctx, action: string | undefined, host: string | undefined): Promise<void> {
+  const api = await ctx.appApi();
+  const records = (d: DomainView) => d.records.map((r) => `  ${r.type.padEnd(5)} ${r.name}  →  ${r.value}`);
+  if (!action) {
+    const list = await api.domains();
+    ctx.out.data(list);
+    if (!list.length) ctx.out.line(`no custom domains on ${ctx.envName}`);
+    for (const d of list) ctx.out.line(`${d.host}  ${d.status === 'active' ? 'active' : 'waiting for DNS'}`);
+    return;
+  }
+  if (!host) throw new MicrocloudError('usage', `${action} needs a domain`, `\`boxlite-app app domains ${action} shop.example.com\``);
+  if (action === 'add') {
+    const d = await api.addDomain(host);
+    ctx.out.data(d);
+    ctx.out.line(`${d.host} added to ${d.env}; the user adds these records at their DNS provider:`);
+    for (const l of records(d)) ctx.out.line(l);
+    ctx.out.next(`once they are in, \`boxlite-app app domains verify ${d.host}\``);
+    return;
+  }
+  if (action === 'verify') {
+    const d = await api.verifyDomain(host);
+    ctx.out.data(d);
+    ctx.out.line(`${d.host} verified: it serves ${d.env}`);
+    if (!d.cname_ok) ctx.out.next(`the CNAME does not point at ${d.records.find((r) => r.type === 'CNAME')?.value ?? 'the platform'} yet${d.cname ? ` (it points at ${d.cname})` : ''}: visitors arrive once it does`);
+    return;
+  }
+  if (action === 'rm') {
+    const r = await api.removeDomain(host);
+    ctx.out.data(r);
+    ctx.out.line(`removed ${r.removed}; it no longer serves the app`);
+    return;
+  }
+  throw new MicrocloudError('usage', `unknown action "${action}"`, 'use `app domains`, `domains add <host>`, `domains verify <host>` or `domains rm <host>`');
 }
 
 async function ack(ctx: Ctx, id: string, reason: string[]): Promise<void> {
@@ -276,6 +311,13 @@ export function registerApp(program: Command, make: MakeCtx): Command {
       .option('-y, --yes', 'required to set public')
       .action(async (action: string | undefined, value: string | undefined, _o: unknown, cmd: Command) => access(await make(cmd), action, value)),
     { json: '{ access: "private"|"org"|"public", source: "manifest"|"online" }', exits: [2, 3, 10], destructive: true, online: true, examples: ['boxlite-app app access', 'boxlite-app app access set public --yes'] },
+  );
+  describe(
+    app
+      .command('domains [action] [host]')
+      .description('custom domains of the environment: list; add <host> (prints the DNS records); verify <host>; rm <host>')
+      .action(async (action: string | undefined, host: string | undefined, _o: unknown, cmd: Command) => domains(await make(cmd), action, host)),
+    { json: 'DomainView[] (list) · DomainView (add) · DomainView & { cname, cname_ok } (verify) · { removed } (rm)', exits: [1, 2, 3, 4], online: true, examples: ['boxlite-app app domains add shop.example.com', 'boxlite-app app domains verify shop.example.com'] },
   );
   describe(
     app

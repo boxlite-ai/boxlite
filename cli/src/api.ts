@@ -612,6 +612,23 @@ export class Api {
     return this.json('DELETE', `${this.envPath}/auth/test-users`);
   }
 
+  /** Custom domains of this environment (off unless the platform routes them). */
+  domains(): Promise<DomainView[]> {
+    return this.json('GET', `${this.envPath}/domains`);
+  }
+
+  addDomain(host: string): Promise<DomainView> {
+    return this.json('POST', `${this.envPath}/domains`, { body: { host } });
+  }
+
+  verifyDomain(host: string): Promise<DomainView & { cname: string | null; cname_ok: boolean }> {
+    return this.json('POST', `${this.envPath}/domains/${encodeURIComponent(host)}/verify`, { body: {}, noRetry: true });
+  }
+
+  removeDomain(host: string): Promise<{ removed: string }> {
+    return this.json('DELETE', `${this.envPath}/domains/${encodeURIComponent(host)}`);
+  }
+
   /** Acknowledge an info finding of this environment on purpose, or bring it back. */
   ackFinding(id: string, reason: string): Promise<AcknowledgedFinding> {
     return this.json('POST', `${this.envPath}/findings/${encodeURIComponent(id)}/ack`, { body: { reason } });
@@ -654,6 +671,14 @@ export class Api {
   createTestSession(email: string, role?: EndUserRole): Promise<TestSession> {
     return this.json('POST', `${this.envPath}/auth/test-sessions`, { body: { email, ...(role ? { role } : {}) } });
   }
+}
+
+export interface DomainView {
+  host: string;
+  env: string;
+  status: 'pending_dns' | 'active';
+  records: { type: 'TXT' | 'CNAME'; name: string; value: string }[];
+  verified_at: string | null;
 }
 
 export interface EmailSender {

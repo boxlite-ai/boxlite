@@ -1,6 +1,6 @@
 # boxlite-app CLI reference
 
-Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.13); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
+Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.14); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
 
 ## Conventions
 
@@ -417,6 +417,21 @@ Usage: `boxlite-app app access [action] [value] [options]`
 ```sh
 boxlite-app app access
 boxlite-app app access set public --yes
+```
+
+### `boxlite-app app domains`
+
+custom domains of the environment: list; add <host> (prints the DNS records); verify <host>; rm <host>
+
+Usage: `boxlite-app app domains [action] [host]`
+
+- Network: talks to the control plane
+- `--json`: `DomainView[] (list) · DomainView (add) · DomainView & { cname, cname_ok } (verify) · { removed } (rm)`
+- Exit codes: 0, 1, 2, 3, 4
+
+```sh
+boxlite-app app domains add shop.example.com
+boxlite-app app domains verify shop.example.com
 ```
 
 ### `boxlite-app app ack`

@@ -11,7 +11,7 @@ export type ActorKind = 'agent' | 'console' | 'admin' | 'system';
 
 /** Where an Activity row's object lives in the console. */
 export interface ActivityLink {
-  tab: 'overview' | 'deployments' | 'logs' | 'auth' | 'database' | 'volumes' | 'variables';
+  tab: 'overview' | 'deployments' | 'logs' | 'auth' | 'database' | 'volumes' | 'variables' | 'domains';
   section?: string;
   deployment?: number;
 }
@@ -53,6 +53,9 @@ const RULES: Rule[] = [
   [/^secret\.delete$/, () => 'deleted a secret', { tab: 'variables' }],
   [/^volume\.delete$/, () => 'deleted a file on a volume', { tab: 'volumes' }],
   [/^auth\.purge_test_users$/, () => 'removed the test users', { tab: 'auth' }],
+  [/^domain\.add$/, () => 'added a custom domain', { tab: 'domains' }],
+  [/^domain\.verify$/, () => 'verified a custom domain', { tab: 'domains' }],
+  [/^domain\.remove$/, () => 'removed a custom domain', { tab: 'domains' }],
   [/^finding\.ack$/, () => 'acknowledged a finding as intended', { tab: 'overview' }],
   [/^finding\.unack$/, () => 'brought back an acknowledged finding', { tab: 'overview' }],
   [/^note\.add$/, () => 'kept a note for the next session', { tab: 'overview' }],

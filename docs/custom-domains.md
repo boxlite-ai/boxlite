@@ -44,7 +44,20 @@ rejects, under a certificate that does not name it. Nothing on the App platform 
 - **The manifest stays the source.** `[domains] custom` in boxlite.toml drives it; console changes
   land in the spec like other online changes (`app pull`).
 
-## Until then
+## Status
 
-The refusal stays, so no agent reports a domain that serves nothing. The Domains tab shows the
-BoxLite address and says that bringing your own domain is not available yet.
+- **Proxy (prototype, branch `proxy-custom-hosts` of boxlite, not merged):** `apps/proxy` asks
+  `CUSTOM_HOST_RESOLVER_URL?host=<host>` (bearer `CUSTOM_HOST_RESOLVER_TOKEN`) when a host is not
+  a tunnel name, and routes it to the Box and port answered, through the same gates as that
+  port's tunnel URL. Answers and misses are cached for a minute. Unset, nothing changes.
+  Certificates for those hosts stay with the TLS terminator in front of the proxy.
+- **App platform (this repository):** with `CUSTOM_DOMAIN_TARGET` and `CUSTOM_HOST_RESOLVER_TOKEN`
+  set, `boxlite-app app domains add <host>` prints the TXT and CNAME records, `domains verify`
+  checks the TXT (the CNAME is reported, not required), `domains rm` removes it, and
+  `GET /proxy/hosts?host=` answers the proxy for verified domains of live Apps only. Domains are
+  managed online for now; `[domains] custom` in boxlite.toml points to `app domains add`.
+- **Not yet:** sign-in callbacks still return to the BoxLite URL, the console's Domains tab has no
+  Add button, and nothing is verified end to end until a proxy with the resolver runs in front.
+
+Without that configuration the platform keeps refusing custom domains, so no agent reports a
+domain that serves nothing.

@@ -21,6 +21,7 @@ import { Origins, localPortOf } from './origins.js';
 import { AccessLog, withAccessLog } from './console-access.js';
 import { Resources } from './resources.js';
 import { adminRoutes, adminSecretRoutes, appRoutes } from './routes/apps.js';
+import { domainRoutes, proxyHostRoute } from './routes/domains.js';
 import { authRoutes } from './routes/auth.js';
 import { mountCliExtras } from './routes/cli-extras.js';
 import { dbRoutes } from './routes/db.js';
@@ -172,9 +173,12 @@ export function createServer(ctx: Ctx): Hono {
     const env = /^\/envs\/([^/]+)/.exec(rest)?.[1] ?? null;
     ctx.store.recordActivity(c.get('app').id, env, c.get('actor'), action);
   });
-  for (const sub of [appRoutes, envRoutes, planRoutes, uploadRoutes, deploymentRoutes, serviceRoutes, logRoutes, dbRoutes, authRoutes, openTicketRoutes]) api.route('/', sub(ctx));
+  for (const sub of [appRoutes, envRoutes, planRoutes, uploadRoutes, deploymentRoutes, serviceRoutes, logRoutes, dbRoutes, authRoutes, openTicketRoutes, domainRoutes]) api.route('/', sub(ctx));
   app.route('/v1/apps/:app', api);
   mountCliExtras(app, ctx);
+
+  // ---- the BoxLite proxy asks which Box serves a custom domain (docs/custom-domains.md) ----
+  app.route('/proxy', proxyHostRoute(ctx));
 
   // ---- supervisor wire ---------------------------------------------------
   app.route('/sv', svRoutes(ctx));
