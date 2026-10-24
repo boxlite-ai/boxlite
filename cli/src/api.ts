@@ -1,4 +1,4 @@
-import { MicrocloudError, type AgentContext, type CheckError, type CheckWarning, type Manifest, type MigrationFile, type UploadFile } from '@microcloud/shared';
+import { MicrocloudError, type AgentContext, type AppNote, type CheckError, type CheckWarning, type Manifest, type MigrationFile, type UploadFile } from '@microcloud/shared';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { fetch, Response, WebSocket, type Dispatcher } from 'undici';
@@ -610,6 +610,19 @@ export class Api {
 
   purgeTestUsers(): Promise<{ removed: number; emails: string[]; mirror: string }> {
     return this.json('DELETE', `${this.envPath}/auth/test-users`);
+  }
+
+  /** Notes for the next session on this App (App-wide). */
+  notes(query?: string): Promise<AppNote[]> {
+    return this.json('GET', `/v1/apps/${this.app}/notes`, { query: { q: query } });
+  }
+
+  addNote(text: string): Promise<AppNote> {
+    return this.json('POST', `/v1/apps/${this.app}/notes`, { body: { text } });
+  }
+
+  forgetNote(id: number): Promise<{ forgotten: number }> {
+    return this.json('DELETE', `/v1/apps/${this.app}/notes/${id}`);
   }
 
   /** The App's mail sender for email code sign-in (App-wide, not per environment). */

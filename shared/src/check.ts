@@ -3,14 +3,9 @@ import { join } from 'node:path';
 import { exposedService, parseManifest } from './manifest.js';
 import { readMigrations, type MigrationFile, type MigrationsRead } from './migrations.js';
 import { MANIFEST_FILE, UPLOAD_MAX_BYTES, UPLOAD_WARN_BYTES, type CheckError, type CheckResult, type CheckWarning, type Manifest, type UploadManifest } from './types.js';
+import { UPLOAD_SECRETS } from './redact.js';
 import { buildUploadManifest } from './upload.js';
 
-const SECRET_CONTENT_RES: [RegExp, string][] = [
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'a private key'],
-  [/AKIA[0-9A-Z]{16}/, 'an AWS access key id'],
-  [/sk-[A-Za-z0-9]{20,}/, 'an API secret key'],
-  [/bxl_app_/, 'a BoxLite App key'],
-];
 const SCAN_MAX_SIZE = 1024 * 1024;
 const SCAN_HEAD = 64 * 1024;
 const NODE_LOCKFILES = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock'];
@@ -48,7 +43,7 @@ async function looksSecret(path: string, size: number): Promise<string | null> {
     const head = buf.subarray(0, bytesRead);
     if (head.includes(0)) return null;
     const text = head.toString('utf8');
-    for (const [re, what] of SECRET_CONTENT_RES) if (re.test(text)) return what;
+    for (const [re, what] of UPLOAD_SECRETS) if (re.test(text)) return what;
     return null;
   } finally {
     await fh.close();

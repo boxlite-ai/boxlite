@@ -23,6 +23,10 @@ export function contextMarkdown(c: AgentContext): string {
   if (c.environments.length > 1) out.push(`- Environments: ${c.environments.map((e) => `${e.name} (${e.status})`).join(', ')}`);
   out.push('');
 
+  if (c.notes?.length) {
+    out.push('## Notes from earlier sessions', '', ...c.notes.map((n) => `- ${n.text} (${n.created_at.slice(0, 10)}, #${n.id})`), '');
+  }
+
   out.push('## Next actions', '');
   if (!c.next_actions.length) out.push('Nothing needs attention.');
   for (const f of c.next_actions) {

@@ -1,6 +1,6 @@
 # boxlite-app CLI reference
 
-Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.11); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
+Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.3.12); do not edit by hand. Offline: `boxlite-app docs reference [command…]`.
 
 ## Conventions
 
@@ -418,6 +418,40 @@ Usage: `boxlite-app app access [action] [value] [options]`
 boxlite-app app access
 boxlite-app app access set public --yes
 ```
+
+### `boxlite-app app remember`
+
+keep a fact or decision for the next session on this App (owner preferences, why the code is as it is); never a secret
+
+Usage: `boxlite-app app remember <text...>`
+
+- Network: talks to the control plane
+- `--json`: `{ id, text, by, created_at }`
+- Exit codes: 0, 1, 2, 3
+
+```sh
+boxlite-app app remember "the owner wants prices in CNY with no decimals"
+```
+
+### `boxlite-app app recall`
+
+the notes earlier sessions kept, newest first; words filter them
+
+Usage: `boxlite-app app recall [query...]`
+
+- Network: talks to the control plane
+- `--json`: `{ id, text, by, created_at }[]`
+- Exit codes: 0, 1, 2, 3
+
+### `boxlite-app app forget`
+
+remove a note that no longer holds
+
+Usage: `boxlite-app app forget <id>`
+
+- Network: talks to the control plane
+- `--json`: `{ forgotten: id }`
+- Exit codes: 0, 1, 2, 3, 4
 
 ### `boxlite-app app pull`
 

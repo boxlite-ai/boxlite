@@ -8,6 +8,7 @@ import { authStatus } from './enduser/management.js';
 import type { Spec } from './spec.js';
 import { deploymentBuildWarnings, envStatus } from './views.js';
 import { buildLineLevel } from './console-logs.js';
+import { listNotes } from './services/notes.js';
 import { storedLevelsAtLeast } from './services/logs.js';
 
 const ERROR_LEVELS = storedLevelsAtLeast('error');
@@ -150,6 +151,7 @@ export async function buildAgentContext(ctx: Ctx, app: AppRow, env: EnvRow, late
     variables: variablesOf(ctx, app, env, spec),
     deployments: ctx.store.deployments(env.id, 5).map((d) => ({ number: d.number, kind: d.kind, status: d.status, message: d.message, created_at: d.created_at, finished_at: d.finished_at, spec_version: d.spec_version, error: d.error })),
     recent_errors: recentErrors(ctx, env, at.getTime()),
+    notes: listNotes(ctx, app, { limit: 20 }),
     // The build that produced what is live: the release's deploy, which may be older than a later apply.
     build_warnings: liveBuild ? deploymentBuildWarnings(ctx, env, liveBuild) : [],
     cli: { latest_version: latestCli },

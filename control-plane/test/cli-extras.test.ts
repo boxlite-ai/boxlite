@@ -369,3 +369,32 @@ test('a live deployment whose build warned shows the warning in context and in i
   const d = (await (await get('/envs/main/deployments/1')).json()) as Record<string, any>;
   assert.deepEqual(d.build_warnings.map((w: any) => w.id), ['npm_audit', 'large_bundle']);
 });
+
+test('notes carry facts and decisions to the next session: kept, searched, in context, never a credential', async () => {
+  const note = (text: string) => h.request('/v1/apps/crm/notes', { method: 'POST', key, json: { text } });
+  const first = await note('The owner wants prices in CNY with no decimals.');
+  assert.equal(first.status, 201, await first.clone().text());
+  assert.equal((await note('Orders page sorts newest first; the owner asked for it on 10-24.')).status, 201);
+  const leaked = await note('db is postgresql://app:hunter2@db.example.com/shop');
+  assert.equal(leaked.status, 400);
+  assert.match(((await leaked.json()) as { error: { message: string } }).error.message, /database URL with its password/);
+  assert.equal((await note('   ')).status, 400);
+
+  const all = (await (await get('/notes')).json()) as { id: number; text: string; by: string }[];
+  assert.deepEqual(all.map((n) => n.text), ['Orders page sorts newest first; the owner asked for it on 10-24.', 'The owner wants prices in CNY with no decimals.']);
+  assert.match(all[0]!.by, /^key:/);
+  const found = (await (await get('/notes?q=cny%20prices')).json()) as { text: string }[];
+  assert.deepEqual(found.map((n) => n.text), ['The owner wants prices in CNY with no decimals.']);
+
+  await deploy(TOML);
+  const c = (await (await get('/envs/main/context')).json()) as { notes: { text: string }[] };
+  assert.equal(c.notes.length, 2);
+
+  // Another App's key sees none of them.
+  const otherKey = await createApp(h, 'other');
+  assert.deepEqual(await (await h.request('/v1/apps/other/notes', { key: otherKey })).json(), []);
+  assert.equal((await h.request(`/v1/apps/other/notes/${all[0]!.id}`, { method: 'DELETE', key: otherKey })).status, 404);
+
+  assert.equal((await h.request(`/v1/apps/crm/notes/${all[0]!.id}`, { method: 'DELETE', key })).status, 200);
+  assert.equal(((await (await get('/notes')).json()) as unknown[]).length, 1);
+});

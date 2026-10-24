@@ -170,6 +170,8 @@ boxlite-app app curl / --expect 200
 - If a check fails, fix and redeploy. Report only when all pass.
 - If checks had to run on `main`, clean up after yourself: the rows (`boxlite-app app sql --write "delete from <table> where …"`), the files (`boxlite-app app volume rm uploads:/<file> --yes`), and the test users (`boxlite-app app auth users purge-test --yes`), so the user starts with an empty app unless they asked for sample data.
 
+Before you report, keep what the next session on this App must know and cannot read from the code: the owner's preferences and answers, why something is built the way it is, what is left to do. `boxlite-app app remember "<one fact or decision>"` (never a secret: it is refused); the next agent sees them in `boxlite-app app context`, and `boxlite-app app recall <words>` searches them.
+
 ## 6. Report to the user
 
 One short message:

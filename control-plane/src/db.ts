@@ -426,6 +426,17 @@ const MIGRATIONS: (string | ((db: DatabaseSync) => void))[] = [
   );
   CREATE INDEX IF NOT EXISTS auth_email_codes_by_email ON auth_email_codes (env_id, email, created_at);
   `,
+  // Notes an agent keeps for the next session on the App (`app remember`, services/notes.ts).
+  `
+  CREATE TABLE IF NOT EXISTS app_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS app_notes_by_app ON app_notes (app_id, id);
+  `,
 ];
 
 export const LOG_RING_SIZE = 20_000;

@@ -42,6 +42,33 @@ async function status(ctx: Ctx): Promise<void> {
   else ctx.out.next('`boxlite-app app context` for services, schema, variables and recent errors');
 }
 
+async function remember(ctx: Ctx, words: string[]): Promise<void> {
+  const text = words.join(' ').trim();
+  if (!text) throw new MicrocloudError('usage', 'say what to remember', '`boxlite-app app remember "the owner wants prices in CNY with no decimals"`');
+  const n = await (await ctx.appApi()).addNote(text);
+  ctx.out.data(n);
+  ctx.out.line(`kept note ${n.id}: ${n.text}`);
+  ctx.out.next('the next session sees it in `boxlite-app app context`; `boxlite-app app recall` lists them all');
+}
+
+async function recall(ctx: Ctx, query: string[]): Promise<void> {
+  const notes = await (await ctx.appApi()).notes(query.join(' ') || undefined);
+  ctx.out.data(notes);
+  if (!notes.length) {
+    ctx.out.line(query.length ? `no note mentions "${query.join(' ')}"` : 'no notes yet');
+    ctx.out.next('keep what the next session must know (owner preferences, why the code is as it is): `boxlite-app app remember "<fact>"`');
+    return;
+  }
+  for (const n of notes) ctx.out.line(`${String(n.id).padStart(4)}  ${n.created_at.slice(0, 10)}  ${n.text}`);
+}
+
+async function forget(ctx: Ctx, id: string): Promise<void> {
+  if (!/^\d+$/.test(id)) throw new MicrocloudError('usage', `"${id}" is not a note id`, '`boxlite-app app recall` lists the notes with their ids');
+  const r = await (await ctx.appApi()).forgetNote(Number(id));
+  ctx.out.data(r);
+  ctx.out.line(`forgot note ${r.forgotten}`);
+}
+
 async function context(ctx: Ctx, opts: { format?: string }): Promise<void> {
   if (opts.format && opts.format !== 'json' && opts.format !== 'markdown') throw new MicrocloudError('usage', `--format must be markdown or json (got "${opts.format}")`, 'use `boxlite-app app context --format markdown` or `--json`');
   const data = await (await ctx.appApi()).envContext();
@@ -236,6 +263,27 @@ export function registerApp(program: Command, make: MakeCtx): Command {
       .option('-y, --yes', 'required to set public')
       .action(async (action: string | undefined, value: string | undefined, _o: unknown, cmd: Command) => access(await make(cmd), action, value)),
     { json: '{ access: "private"|"org"|"public", source: "manifest"|"online" }', exits: [2, 3, 10], destructive: true, online: true, examples: ['boxlite-app app access', 'boxlite-app app access set public --yes'] },
+  );
+  describe(
+    app
+      .command('remember <text...>')
+      .description('keep a fact or decision for the next session on this App (owner preferences, why the code is as it is); never a secret')
+      .action(async (words: string[], _o: unknown, cmd: Command) => remember(await make(cmd), words)),
+    { json: '{ id, text, by, created_at }', exits: [1, 2, 3], online: true, examples: ['boxlite-app app remember "the owner wants prices in CNY with no decimals"'] },
+  );
+  describe(
+    app
+      .command('recall [query...]')
+      .description('the notes earlier sessions kept, newest first; words filter them')
+      .action(async (query: string[], _o: unknown, cmd: Command) => recall(await make(cmd), query ?? [])),
+    { json: '{ id, text, by, created_at }[]', exits: [2, 3], online: true },
+  );
+  describe(
+    app
+      .command('forget <id>')
+      .description('remove a note that no longer holds')
+      .action(async (id: string, _o: unknown, cmd: Command) => forget(await make(cmd), id)),
+    { json: '{ forgotten: id }', exits: [1, 2, 3, 4], online: true },
   );
   describe(app.command('pull').description('rewrite boxlite.toml from the environment spec (old file kept as boxlite.toml.bak)').action(async (_o: unknown, cmd: Command) => pull(await make(cmd))), {
     json: '{ file: "boxlite.toml", version: number, backup: string | null }',

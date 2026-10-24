@@ -6,7 +6,7 @@ export { checkLocal, checkProject, formatBytes, type CheckLocalOptions, type Pro
 export { DEFAULT_IGNORES, IGNORE_FILES, createIgnore, loadIgnore, type IgnoreMatcher } from './ignore.js';
 export { buildUploadManifest, sha256File, isSecretFileName } from './upload.js';
 export { readMigrations, nextMigrationName, type MigrationFile, type MigrationsRead } from './migrations.js';
-export { redact, MASKED } from './redact.js';
+export { redact, MASKED, secretKindIn } from './redact.js';
 export { buildWarnings, type BuildWarning } from './build-warnings.js';
 export { secretNameFor } from './diagnose.js';
 export { classifyFailure, lineOfPosition, lineOfToken, missingVariableIn, errorFocus, type Diagnosis, type FailureCause, type FailureInput } from './diagnose.js';
@@ -20,6 +20,7 @@ export {
   type AgentSchedule,
   type AgentService,
   type AgentVariable,
+  type AppNote,
   type BoxUsage,
   type Finding,
   type Severity,

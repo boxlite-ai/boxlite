@@ -34,6 +34,8 @@ export interface AgentContext {
   recent_errors: { ts: string; source: string; line: string; deployment: number | null }[];
   /** What the live deployment's build warned about (npm audit, bundle size, deprecated packages). Absent from an older control plane. */
   build_warnings?: BuildWarning[];
+  /** What earlier sessions on this App wrote down for the next one (`app remember "<fact>"`), newest first, at most 20. Absent from an older control plane. */
+  notes?: AppNote[];
   /** Ranked problems with fixes, worst first; empty when everything looks fine. */
   next_actions: Finding[];
   cli: { latest_version: string | null };
@@ -45,6 +47,14 @@ export interface BoxUsage {
   memory_available_bytes: number;
   disk_total_bytes: number;
   disk_free_bytes: number;
+}
+
+/** A fact or decision an agent kept for the next session (`boxlite-app app remember "<fact>"`). */
+export interface AppNote {
+  id: number;
+  text: string;
+  by: string;
+  created_at: string;
 }
 
 export interface AgentService {

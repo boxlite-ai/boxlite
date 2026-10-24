@@ -1,5 +1,6 @@
 import { SECRET_REF_RE } from '@microcloud/shared';
 import { Hono } from 'hono';
+import { addNote, forgetNote, listNotes, MAX_NOTE_CHARS } from '../services/notes.js';
 import { z } from 'zod';
 import type { Vars } from '../auth.js';
 import { now } from '../db.js';
@@ -79,6 +80,14 @@ export function appRoutes(ctx: Ctx) {
     deleteAppSecret(ctx, c.get('app'), c.req.param('name'), c.get('actor'));
     return c.body(null, 204);
   });
+
+  // ---- notes for the next session (services/notes.ts) ----
+  r.get('/notes', (c) => c.json(listNotes(ctx, c.get('app'), { query: c.req.query('q') || undefined, limit: Number(c.req.query('limit')) || undefined })));
+  r.post('/notes', async (c) => {
+    const b = await body(c as unknown as C, z.object({ text: z.string().max(MAX_NOTE_CHARS * 2) }));
+    return c.json(addNote(ctx, c.get('app'), b.text, c.get('actor')), 201);
+  });
+  r.delete('/notes/:id{[0-9]+}', (c) => c.json(forgetNote(ctx, c.get('app'), Number(c.req.param('id')), c.get('actor'))));
 
   r.get('/activity', (c) => {
     const app = c.get('app');
