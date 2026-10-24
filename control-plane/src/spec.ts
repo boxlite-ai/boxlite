@@ -207,7 +207,7 @@ export function onlineChecks(m: Manifest, ctx: OnlineCheckContext): { errors: Ch
     if (v.from) err('not_supported_yet', `[[volume]] "${v.name}": from = "${v.from}" is not supported yet`);
     else if (v.mode === 'ro') err('not_supported_yet', `[[volume]] "${v.name}": mode = "ro" is not supported yet (read-only mounts are rejected by the platform)`);
   }
-  // Nothing routes or certifies an outside hostname yet: deploying it would look done and serve nothing.
+  // Nothing routes or certifies an outside hostname yet (docs/custom-domains.md): deploying it would look done and serve nothing.
   if (m.domains.custom.length) {
     err('not_supported_yet', `[domains] custom = ${JSON.stringify(m.domains.custom)}: bringing your own domain is not available on this platform yet; remove [domains] and give the user the app's BoxLite URL (\`boxlite-app app status --json\`)`);
   }
