@@ -563,8 +563,8 @@ mod tests {
     use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
     use crate::runtime::id::{BoxID, BoxIDMint};
     use crate::runtime::options::{
-        BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, RootfsSpec, SnapshotOptions,
-        VolumeSpec,
+        BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, RootfsSpec,
+        SnapshotOptions, VolumeSpec,
     };
     use crate::runtime::rt_impl::{RuntimeImpl, SharedRuntimeImpl};
     use crate::runtime::types::{BoxState, ContainerID};
@@ -965,7 +965,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn checkpoint_boxes_refuse_disk_snapshot_clone_and_export() {
+    async fn checkpoint_boxes_refuse_disk_snapshot_clone_export_and_archive_restore() {
         let fx = Fixture::new(BoxStatus::Stopped, BoxOptions::default(), None);
         let litebox = fx.litebox().await;
         let unsupported = |result: BoxliteResult<()>| {
@@ -993,6 +993,12 @@ mod tests {
                 .export(ExportOptions::default(), fx._home.path())
                 .await
                 .map(drop),
+        );
+        // Replacing the container disk would bypass the checkpoint's disks.
+        unsupported(
+            litebox
+                .restore_from_archive(BoxArchive::new(fx._home.path().join("box.boxlite")))
+                .await,
         );
     }
 

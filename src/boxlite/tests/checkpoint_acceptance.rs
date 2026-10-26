@@ -281,12 +281,10 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
     let mut options = BoxOptions {
         rootfs: RootfsSpec::Image("alpine:latest".into()),
         auto_delete: Some(0),
-        volumes: vec![VolumeSpec {
-            managed_volume: None,
-            host_path: share_path.to_str().expect("utf-8 share").to_owned(),
-            guest_path: SHARE_GUEST.into(),
-            read_only: false,
-        }],
+        volumes: vec![VolumeSpec::bind_mount(
+            share_path.to_str().expect("utf-8 share"),
+            SHARE_GUEST,
+        )],
         ..Default::default()
     };
     options.advanced.checkpoint_enabled = true;

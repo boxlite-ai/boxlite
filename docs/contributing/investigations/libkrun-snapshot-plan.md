@@ -533,3 +533,28 @@ CLI 提供 `create`/`run --enable-checkpoint`、`pause [--host-writers-stopped]`
 - Linux x86_64 clippy（同一镜像，stub）：`boxlite`、`boxlite-shim`、`libkrun-sys`（含 `--all-features`）、`boxlite-cli`、`boxlite-guest` 与验收测试均无警告。
 - 验收：`make test:checkpoint:acceptance:build` 在 amd64 容器中编译并链接辅助程序与测试；直接运行时因缺 `/dev/kvm` 失败，make 目标在 `_ensure-kvm` 处失败。
 - **UNVERIFIED**：验收测试的真实运行，包括进程延续、DAX 映射、guest 内核 FUSE DAX 与 x86_64 seccomp 实际运行。
+
+## 迁移到 x_features（2026-10-26）
+
+### TL;DR
+
+十个快照提交按原顺序迁移到 BoxLite `x_features`（`f8938463`），只适配目标 API；libkrun 来源恢复为 boxlite-ai，并拒绝目标新增的 `restore_from_archive`。KVM 运行仍 **UNVERIFIED**。设计见 [#2111](https://github.com/boxlite-ai/boxlite/issues/2111)。
+
+### 适配
+
+| 项 | 变化 |
+|---|---|
+| 冲突 | `make/test.mk` 的 PHONY 列表与 Node `privileged`/`checkpointEnabled` 选项两边都保留；目标新增的 `JsAdvancedBoxOptions.privileged` 补入检查点测试 |
+| `VolumeSpec.cache_volume` | 目标新增字段使仅 Linux 编译的验收测试无法编译；改用 `VolumeSpec::bind_mount` |
+| `restore_from_archive` | 目标新增的磁盘归档恢复会替换检查点不跟踪的容器盘；检查点盒返回 `Unsupported`，与磁盘快照、克隆、磁盘导出一致 |
+| cache/managed 卷 | 本地运行时本就拒绝（`resolve_user_volumes`），检查点仅限本地，无需新边界 |
+| libkrun 来源 | `.gitmodules`、初始化白名单与测试 fixture 恢复 boxlite-ai；gitlink 仍为 `f684459`，可从 boxlite-ai/libkrun 按 SHA 获取（其 `x_features` Draft PR 的 `refs/pull/3/head`） |
+| 文档 | 检查点指南新增“只运行一次”（同一状态运行多次会重复随机数、ID 与令牌）与可信输入说明 |
+
+### 验证（2026-10-26，新结果）
+
+- 先红后绿：只加测试、不加守卫时 `checkpoint_boxes_refuse_disk_snapshot_clone_export_and_archive_restore` 失败（`Err(Storage("Failed to open archive …"))`，即进入了磁盘替换）；加守卫后通过。
+- 宿主 macOS（`BOXLITE_DEPS_STUB=1`）：`make test:unit:rust FILTER=checkpoint` core 37/37、REST 39/39；`make test:unit:cli` 322/322；`make test:unit:node` vitest 106/106、Rust 38/38；`make test:setup:submodules` 通过；`make fmt:check:rust`、`make fmt:check:c` 通过。
+- amd64 `boxlite-phase13-guest-x86` 镜像（stub，无 KVM）：`make test:unit:rust FILTER=checkpoint` core 46/46、REST 48/48；clippy（`boxlite`、`boxlite-shim`、`libkrun-sys`、`boxlite-cli`、`boxlite-guest`，`--all-targets --all-features -D warnings`）通过；修复前 clippy 在验收测试处报 E0063。
+- 基线问题（未修改的目标文件）：`make fmt:check:node` 只在 `sdks/node/lib/native-contracts.ts` 报格式问题；pre-commit `lint:fix` 在 `apps/infra/mdeploy` 报 3 个 eslint 错误；API 兼容检查以 `origin/main` 为基线误报 `openapi/admin.openapi.yaml`，以 `origin/x_features` 为基线通过。
+- **UNVERIFIED**：同上一节；`make test:shim:linkage` 与验收测试构建本次未重跑。

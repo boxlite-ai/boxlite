@@ -12,7 +12,7 @@ boxlite create --enable-checkpoint --name web -v /srv/data:/data alpine:latest \
 boxlite start web
 boxlite pause --host-writers-stopped web     # stop every host writer of /srv/data first
 boxlite checkpoint export web web.boxckpt    # the box stays paused
-boxlite stop web                             # or resume it; the file is self-contained
+boxlite stop web                             # the file is self-contained; see "Run each checkpoint once"
 boxlite checkpoint import --name web2 web.boxckpt   # prints the new box ID; paused
 boxlite resume web2                          # the same guest processes continue
 ```
@@ -81,6 +81,23 @@ Directories the box owns itself are coordinated by the runtime.
 
   `trusted.*` attributes hidden from the unprivileged runtime are not captured. Export never drops
   something it cannot restore; it fails instead.
+- **Trusted input.** Import only checkpoints you or a party you trust wrote. The file is checked
+  for structure and size limits, not for its origin; it carries the guest's whole memory.
+
+## Run each checkpoint once
+
+A checkpoint is a moment of a running guest. Every copy that runs from it starts with the same
+memory, so random-number state, generated IDs, session tokens and keys are repeated in each copy.
+BoxLite does not reseed the guest.
+
+| Use | Result |
+|---|---|
+| Export, `stop` the source, import once, resume | one guest continues |
+| Export, then `resume` the source **and** import | two guests share that state |
+| Import the same file twice | two guests share that state |
+
+To move a box, stop the source after export and import the file once. Once the source resumes, any
+later import of that file repeats state the source already used.
 
 ## Support
 
@@ -91,7 +108,7 @@ Directories the box owns itself are coordinated by the runtime.
 | Isolation | default sandbox (`--security enable`) | `--security disable`, `advanced.isolate_mounts` |
 | Network | gvproxy network or `--network disabled` | TSI networking |
 | Options | up to 5 directory volumes, up to 128 vCPUs | custom kernel, nested virtualization, secrets, single-file volumes |
-| Old disk operations | — | disk snapshots, `clone_box` and the disk `export` on a checkpoint-enabled box; importing a legacy `.boxlite` archive whose options enable checkpoints |
+| Old disk operations | — | disk snapshots, `clone_box`, the disk `export` and `restore_from_archive` on a checkpoint-enabled box; importing a legacy `.boxlite` archive whose options enable checkpoints |
 
 Boxes without `--enable-checkpoint` are unchanged.
 

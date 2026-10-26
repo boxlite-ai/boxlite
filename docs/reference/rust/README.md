@@ -867,7 +867,7 @@ pub struct AdvancedBoxOptions {
 | `isolate_mounts` | `bool` | `false` | Enable bind mount isolation (requires CAP_SYS_ADMIN on Linux) |
 | `health_check` | `Option<HealthCheckOptions>` | `None` | Optional guest-agent health monitoring |
 | `network_rate_limit` | `NetworkRateLimit` | Unlimited | Per-direction rate limit for the box's interface, in kilobits/sec. Local runtime only; see [NetworkRateLimit](#networkratelimit) |
-| `checkpoint_enabled` | `bool` | `false` | Allow pause, checkpoint export and import. Local runtime on Linux x86_64/KVM with the default sandbox; refused elsewhere, by REST runtimes and with the options the [checkpoints guide](../../guides/checkpoints.md#support) lists. Such a box refuses disk snapshots, clone and the disk export |
+| `checkpoint_enabled` | `bool` | `false` | Allow pause, checkpoint export and import. Local runtime on Linux x86_64/KVM with the default sandbox; refused elsewhere, by REST runtimes and with the options the [checkpoints guide](../../guides/checkpoints.md#support) lists. Such a box refuses disk snapshots, clone, the disk export and `restore_from_archive` |
 
 ### RootfsSpec
 

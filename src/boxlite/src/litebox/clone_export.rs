@@ -255,6 +255,7 @@ impl BoxImpl {
         &self,
         archive: crate::runtime::options::BoxArchive,
     ) -> BoxliteResult<()> {
+        self.refuse_for_checkpoint("restoring from an archive")?;
         let t0 = Instant::now();
         let _lock = self.disk_ops.lock().await;
 
