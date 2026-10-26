@@ -16,6 +16,8 @@ Each guide walks through one task. How the underlying pieces work is in
 - [Image registry configuration](image-registry-configuration.md): pull images from private or
   mirrored registries.
 - [Guest SSH control](ssh.md): turn the in-guest SSH server on and off.
+- [Checkpoints](checkpoints.md): pause a running box, export it to one file, and resume it as a
+  new box (Linux x86_64 with KVM).
 
 ## Building with BoxLite
 

@@ -67,6 +67,19 @@ pub(crate) trait RuntimeBackend: Send + Sync {
         ))
     }
 
+    /// Import a BoxCheckpoint file as a new, paused box. Local runtimes
+    /// only: a checkpoint needs this host's KVM and jailer.
+    async fn import_checkpoint(
+        &self,
+        _path: &Path,
+        _options: crate::runtime::options::CheckpointImportOptions,
+    ) -> BoxliteResult<LiteBox> {
+        Err(BoxliteError::Unsupported(
+            "checkpoint import is only supported for local runtimes (not REST backends)"
+                .to_string(),
+        ))
+    }
+
     /// Synchronous shutdown for atexit/Drop contexts.
     /// Default no-op (REST backend doesn't manage local processes).
     fn shutdown_sync(&self) {}

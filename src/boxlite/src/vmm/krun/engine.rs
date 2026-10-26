@@ -1,20 +1,30 @@
 //! Krun - VMM implementation using libkrun.
 
+use super::checkpoint::KrunCheckpoint;
 use super::context::KrunContext;
 use crate::experimental::custom_kernel::KernelFormat;
 use crate::runtime::constants::network;
 use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
+use crate::vmm::checkpoint::{CheckpointOwner, CheckpointStart, ImportLaunch};
 use crate::vmm::{InstanceSpec, Vmm, VmmConfig, VmmInstance, engine::VmmInstanceImpl};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use std::sync::Arc;
 
 /// Libkrun-specific VMM instance implementation.
 struct KrunVmmInstance {
     context: KrunContext,
     probe: Box<dyn crate::system_check::HypervisorProbe>,
+    /// Set for a checkpointing context.
+    checkpoint: Option<KrunCheckpoint>,
 }
 
 impl VmmInstanceImpl for KrunVmmInstance {
-    fn enter(self: Box<Self>) -> BoxliteResult<()> {
+    fn checkpoint_owner(&self) -> Option<Arc<dyn CheckpointOwner>> {
+        self.checkpoint
+            .map(|checkpoint| Arc::new(checkpoint) as Arc<dyn CheckpointOwner>)
+    }
+
+    fn enter(self: Box<Self>) -> BoxliteResult<Option<i32>> {
         // Actually start the VM - following microsandbox pattern
         // In libkrun:
         // - Success: krun_start_enter never returns (process becomes VM)
@@ -28,6 +38,12 @@ impl VmmInstanceImpl for KrunVmmInstance {
         // 3. libkrunfw must be available in system library paths for successful VM creation
         let status = unsafe { self.context.start_enter() };
 
+        // A checkpointing VM returns here instead of exiting the process, with
+        // the guest's exit code in its final state.
+        if let Some(checkpoint) = self.checkpoint {
+            return crate::vmm::checkpoint::enter_result(status, checkpoint.state());
+        }
+
         // If we reach here, either:
         // 1. VM failed to start (negative status)
         // 2. VM started and guest exited (non-negative status) - this is success
@@ -39,7 +55,7 @@ impl VmmInstanceImpl for KrunVmmInstance {
             Err(self.probe.diagnose_create_failure(err))
         } else {
             // VM started and guest exited successfully (status is guest exit code)
-            Ok(())
+            Ok(None)
         }
     }
 }
@@ -191,6 +207,82 @@ impl Krun {
         Ok(())
     }
 
+    /// Attach shares, disks and the guest root filesystem for a cold boot.
+    fn configure_storage(config: &InstanceSpec, ctx: &KrunContext) -> BoxliteResult<()> {
+        // SAFETY: `ctx` is a live context that has not been started.
+        unsafe {
+            // Add filesystem shares via virtiofs
+            tracing::info!("Adding filesystem shares via virtiofs:");
+            for share in config.fs_shares.shares() {
+                let path_str = share.host_path.to_str().ok_or_else(|| {
+                    BoxliteError::Engine(format!("Invalid path: {}", share.host_path.display()))
+                })?;
+
+                tracing::info!(
+                    "  {} → {} ({})",
+                    share.tag,
+                    share.host_path.display(),
+                    if share.read_only { "ro" } else { "rw" }
+                );
+                ctx.add_virtiofs(&share.tag, path_str, share.read_only, share.dax_window)?;
+            }
+
+            // Attach disk images via virtio-blk
+            if !config.block_devices.devices().is_empty() {
+                tracing::info!("Attaching block devices:");
+                for disk in config.block_devices.devices() {
+                    let path_str = disk.disk_path.to_str().ok_or_else(|| {
+                        BoxliteError::Engine(format!(
+                            "Invalid disk path: {}",
+                            disk.disk_path.display()
+                        ))
+                    })?;
+
+                    tracing::info!(
+                        "  {} → {} ({}, {})",
+                        disk.block_id,
+                        disk.disk_path.display(),
+                        disk.format.as_str(),
+                        if disk.read_only {
+                            "read-only"
+                        } else {
+                            "read-write"
+                        }
+                    );
+
+                    ctx.add_disk_with_format(
+                        &disk.block_id,
+                        path_str,
+                        disk.read_only,
+                        disk.format.as_str(),
+                    )?;
+                }
+            }
+
+            // Configure root filesystem based on guest rootfs strategy
+            if let crate::rootfs::guest::Strategy::Disk {
+                device_path: Some(device_path),
+                ..
+            } = &config.guest_rootfs.strategy
+            {
+                // Disk-based boot: use set_root_disk_remount, mounting read-only.
+                tracing::info!("Configuring guest rootfs disk remount: {}", device_path);
+                ctx.set_root_disk_remount(device_path, Some("ext4"), Some("ro"))?;
+            } else {
+                // Virtiofs-based boot: use set_rootfs
+                let rootfs_str = config.guest_rootfs.path.to_str().ok_or_else(|| {
+                    BoxliteError::Engine(format!(
+                        "Invalid rootfs path: {}",
+                        config.guest_rootfs.path.display()
+                    ))
+                })?;
+                tracing::debug!("Setting box root filesystem (virtiofs): {}", rootfs_str);
+                ctx.set_rootfs(rootfs_str)?;
+            }
+        }
+        Ok(())
+    }
+
     fn set_kernel(config: &InstanceSpec, ctx: &KrunContext) -> BoxliteResult<()> {
         let Some(kernel) = &config.kernel else {
             return Ok(());
@@ -285,6 +377,17 @@ impl Vmm for Krun {
             );
         }
 
+        // An import restores disks, shares, kernel and guest setup from the
+        // image; only endpoints come from this spec.
+        let import: Option<&ImportLaunch> = match config
+            .checkpoint
+            .as_ref()
+            .map(|checkpoint| &checkpoint.start)
+        {
+            Some(CheckpointStart::Import(import)) => Some(import),
+            _ => None,
+        };
+
         // Create and configure libkrun context
         let ctx = unsafe {
             tracing::debug!("Initializing libkrun logging system");
@@ -294,6 +397,20 @@ impl Vmm for Krun {
 
             tracing::debug!("Creating libkrun context");
             let mut ctx = KrunContext::create()?;
+
+            // Checkpointing must be switched on before any device is
+            // configured: the owner keeps device configurations unopened.
+            if config.checkpoint.is_some() {
+                ctx.snapshot_enable()?;
+            }
+            if let Some(import) = import {
+                tracing::info!(image = %import.image.display(), "Importing checkpoint image");
+                ctx.snapshot_import(
+                    &import.image,
+                    import.disk_dir.as_deref(),
+                    import.fs_dir.as_deref(),
+                )?;
+            }
 
             tracing::debug!(
                 cpus = config.cpus.unwrap_or(DEFAULT_CPUS),
@@ -305,7 +422,9 @@ impl Vmm for Krun {
                 config.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
             )?;
 
-            Self::set_kernel(&config, &ctx)?;
+            if import.is_none() {
+                Self::set_kernel(&config, &ctx)?;
+            }
             if config.nested_virtualization {
                 ctx.enable_nested_virtualization()?;
             }
@@ -360,16 +479,19 @@ impl Vmm for Krun {
                         tracing::debug!("Successfully configured Unix socket net");
                     }
                 }
-            } else if config.disable_network {
+            }
+            if config.disable_network || config.checkpoint.is_some() {
                 // Replace the implicit vsock (which has TSI hijacking) with an
                 // explicit one that has zero TSI features. Vsock IPC ports still
                 // work for host-guest gRPC, but guest AF_INET/AF_UNIX sockets
-                // are no longer transparently forwarded through the host.
+                // are no longer transparently forwarded through the host. A
+                // checkpointing VM always needs this: TSI's sockets live on the
+                // host, outside anything a checkpoint captures.
                 use crate::vmm::krun::constants::TsiFeatures;
                 ctx.disable_implicit_vsock()?;
                 ctx.add_vsock(TsiFeatures::None)?;
-                tracing::info!("Network disabled: vsock with TSI disabled");
-            } else {
+                tracing::info!("vsock with TSI disabled");
+            } else if config.network_backend_endpoint.is_none() {
                 // No network connection specified - use libkrun's built-in TSI net
                 tracing::debug!("No network backend - using libkrun's built-in TSI net");
             }
@@ -406,73 +528,9 @@ impl Vmm for Krun {
             tracing::debug!("Configuring guest rlimits: {:?}", rlimits);
             ctx.set_rlimits(&rlimits)?;
 
-            // Add filesystem shares via virtiofs
-            tracing::info!("Adding filesystem shares via virtiofs:");
-            for share in config.fs_shares.shares() {
-                let path_str = share.host_path.to_str().ok_or_else(|| {
-                    BoxliteError::Engine(format!("Invalid path: {}", share.host_path.display()))
-                })?;
-
-                tracing::info!(
-                    "  {} → {} ({})",
-                    share.tag,
-                    share.host_path.display(),
-                    if share.read_only { "ro" } else { "rw" }
-                );
-                ctx.add_virtiofs(&share.tag, path_str, share.read_only)?;
-            }
-
-            // Attach disk images via virtio-blk
-            if !config.block_devices.devices().is_empty() {
-                tracing::info!("Attaching block devices:");
-                for disk in config.block_devices.devices() {
-                    let path_str = disk.disk_path.to_str().ok_or_else(|| {
-                        BoxliteError::Engine(format!(
-                            "Invalid disk path: {}",
-                            disk.disk_path.display()
-                        ))
-                    })?;
-
-                    tracing::info!(
-                        "  {} → {} ({}, {})",
-                        disk.block_id,
-                        disk.disk_path.display(),
-                        disk.format.as_str(),
-                        if disk.read_only {
-                            "read-only"
-                        } else {
-                            "read-write"
-                        }
-                    );
-
-                    ctx.add_disk_with_format(
-                        &disk.block_id,
-                        path_str,
-                        disk.read_only,
-                        disk.format.as_str(),
-                    )?;
-                }
-            }
-
-            // Configure root filesystem based on guest rootfs strategy
-            if let crate::rootfs::guest::Strategy::Disk {
-                device_path: Some(device_path),
-                ..
-            } = &config.guest_rootfs.strategy
-            {
-                // Disk-based boot: use set_root_disk_remount, mounting read-only.
-                tracing::info!("Configuring guest rootfs disk remount: {}", device_path);
-                ctx.set_root_disk_remount(device_path, Some("ext4"), Some("ro"))?;
-            } else {
-                // Virtiofs-based boot: use set_rootfs
-                let rootfs_str = config.guest_rootfs.path.to_str().ok_or_else(|| {
-                    BoxliteError::Engine(format!(
-                        "Invalid rootfs path: {}",
-                        config.guest_rootfs.path.display()
-                    ))
-                })?;
-                tracing::debug!("Setting box root filesystem (virtiofs): {}", rootfs_str);
-                ctx.set_rootfs(rootfs_str)?;
+            // An import brings its own disks, shares and root filesystem.
+            if import.is_none() {
+                Self::configure_storage(&config, &ctx)?;
             }
 
             tracing::debug!("Setting working directory to /");
@@ -519,8 +577,13 @@ impl Vmm for Krun {
             );
             ctx.add_vsock_port(network::GUEST_READY_PORT, ready_socket_path, false)?;
 
-            // Configure console output redirection if specified
-            if let Some(console_path) = &config.console_output {
+            // Configure console output redirection if specified. An import
+            // writes a new log the owner creates, never the source's.
+            let console_output = match import {
+                Some(import) => Some(&import.console_output),
+                None => config.console_output.as_ref(),
+            };
+            if let Some(console_path) = console_output {
                 let console_path_str = console_path.to_str().ok_or_else(|| {
                     BoxliteError::Engine(format!(
                         "Invalid console output path: {}",
@@ -536,9 +599,14 @@ impl Vmm for Krun {
 
         // Return a VmmInstance that wraps the configured context
         // The actual VM start will happen when enter() is called
+        let checkpoint = config
+            .checkpoint
+            .is_some()
+            .then(|| KrunCheckpoint::new(ctx.id()));
         let instance = KrunVmmInstance {
             context: ctx,
             probe: crate::system_check::hypervisor_probe(),
+            checkpoint,
         };
         Ok(VmmInstance::new(Box::new(instance)))
     }

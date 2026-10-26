@@ -18,6 +18,7 @@ use crate::runtime::options::{BoxOptions, NetworkSpec};
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::ContainerID;
 use crate::util::find_binary;
+use crate::vmm::checkpoint::{CheckpointLaunch, CheckpointStart, ImportLaunch};
 use crate::vmm::controller::{ShimController, VmmController, VmmHandler};
 use crate::vmm::{Entrypoint, InstanceSpec, PreparedKernel, VmmKind};
 use crate::volumes::{
@@ -37,6 +38,9 @@ struct VmmSpawnInputs {
     container_image_config: ContainerImageConfig,
     prepared_kernel: Option<PreparedKernel>,
     container_disk_path: PathBuf,
+    container_disk_format: DiskFormat,
+    /// An imported box's own guest rootfs copy, used instead of the cache.
+    restored_guest_disk: Option<PathBuf>,
     container_id: ContainerID,
     runtime: SharedRuntimeImpl,
     reuse_rootfs: bool,
@@ -58,12 +62,14 @@ impl VmmSpawnInputs {
             .ok_or_else(|| BoxliteError::Internal("boot assets task must run first".into()))?
             .kernel
             .clone();
-        let container_disk_path = ctx
+        let container_disk = ctx
             .container_disk
             .as_ref()
-            .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?
-            .path()
-            .to_path_buf();
+            .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?;
+        let restored_guest_disk = match &ctx.restored {
+            Some(restored) => Some(restored.guest_disk()?.path.clone()),
+            None => None,
+        };
 
         Ok(Self {
             outbound_policy: ctx.outbound_policy.clone(),
@@ -71,7 +77,9 @@ impl VmmSpawnInputs {
             layout,
             container_image_config,
             prepared_kernel,
-            container_disk_path,
+            container_disk_path: container_disk.path().to_path_buf(),
+            container_disk_format: container_disk.format(),
+            restored_guest_disk,
             container_id: ctx.config.container.id.clone(),
             runtime: ctx.runtime.clone(),
             reuse_rootfs: ctx.reuse_rootfs,
@@ -122,6 +130,22 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
     }
 }
 
+/// Cold-boot checkpoint settings for a checkpoint-enabled box.
+fn checkpoint_launch(
+    options: &BoxOptions,
+    layout: &BoxFilesystemLayout,
+) -> BoxliteResult<Option<CheckpointLaunch>> {
+    if !options.advanced.checkpoint_enabled {
+        return Ok(None);
+    }
+    let export_dir = layout.prepare_checkpoint_dir()?;
+    Ok(Some(CheckpointLaunch {
+        control_socket: layout.control_socket_path(),
+        export_dir,
+        start: CheckpointStart::Cold,
+    }))
+}
+
 /// Build VMM config from prepared rootfs outputs.
 async fn build_config(
     box_id: &BoxID,
@@ -140,6 +164,8 @@ async fn build_config(
         container_image_config,
         prepared_kernel,
         container_disk_path,
+        container_disk_format,
+        restored_guest_disk,
         container_id,
         runtime,
         reuse_rootfs,
@@ -150,6 +176,17 @@ async fn build_config(
     let ready_transport = BoxTransport::unix(layout.ready_socket_path());
 
     let user_volumes = resolve_user_volumes(&options.volumes)?;
+    // Create-time validation refuses these; a file can replace a directory
+    // since, and its staged copy would alias the box's own `shared/` tree.
+    if options.advanced.checkpoint_enabled
+        && let Some(volume) = user_volumes.iter().find(|volume| volume.subpath.is_some())
+    {
+        return Err(BoxliteError::Unsupported(format!(
+            "advanced.checkpoint_enabled: volume {} is a single file; only directory volumes \
+             are supported",
+            volume.host_path.display()
+        )));
+    }
 
     // Prepare container directories (image/, rw/, rootfs/)
     let container_layout = layout.shared_layout().container(container_id.as_str());
@@ -157,6 +194,11 @@ async fn build_config(
 
     // Create GuestVolumeManager and configure volumes
     let mut volume_mgr = GuestVolumeManager::new();
+    // A checkpoint carries the guest's DAX mappings: checkpoint-enabled boxes
+    // mount every share with a fixed DAX window, ordinary boxes without.
+    if options.advanced.checkpoint_enabled {
+        volume_mgr.set_dax_window(crate::vmm::checkpoint::DAX_WINDOW_BYTES);
+    }
 
     // SHARED virtiofs - needed by all strategies
     volume_mgr.add_fs_share(mount_tags::SHARED, layout.shared_dir(), None, false, None);
@@ -169,10 +211,12 @@ async fn build_config(
     // 3. Guest mount: Only resize on fresh start, not restart
     //    - Fresh start with custom size: resize2fs expands filesystem
     //    - Restart: filesystem already at correct size, skip resize
-    let need_resize = options.disk_size_gb.is_some() && !reuse_rootfs;
+    //    - Restored: the disk already has its size
+    let need_resize =
+        options.disk_size_gb.is_some() && !reuse_rootfs && restored_guest_disk.is_none();
     let rootfs_device = volume_mgr.add_block_device(
         container_disk_path,
-        DiskFormat::Qcow2,
+        *container_disk_format,
         false,
         None,
         false,       // need_format: COW child inherits formatted base
@@ -214,12 +258,25 @@ async fn build_config(
     }
     let container_mounts = container_mgr.build_container_mounts();
 
-    // Get guest rootfs from runtime cache and configure with disk
-    let guest_rootfs = runtime
-        .guest_rootfs
-        .get()
-        .ok_or_else(|| BoxliteError::Internal("guest_rootfs not initialized".into()))?
-        .clone();
+    // Get guest rootfs from runtime cache (an imported box: its own restored
+    // copy) and configure with disk
+    let guest_rootfs = match restored_guest_disk {
+        Some(disk_path) => GuestRootfs::new(
+            disk_path.clone(),
+            Strategy::Disk {
+                disk_path: disk_path.clone(),
+                device_path: None,
+            },
+            None,
+            None,
+            Vec::new(),
+        )?,
+        None => runtime
+            .guest_rootfs
+            .get()
+            .ok_or_else(|| BoxliteError::Internal("guest_rootfs not initialized".into()))?
+            .clone(),
+    };
 
     let guest_rootfs = configure_guest_rootfs(guest_rootfs, &mut volume_mgr)?;
 
@@ -263,7 +320,9 @@ async fn build_config(
         console_output: Some(layout.console_output_path()),
         exit_file: layout.exit_file_path(),
         detach: options.detach,
+        checkpoint: checkpoint_launch(options, layout)?,
     };
+    crate::vmm::checkpoint::support::validate_spec(&instance_spec)?;
 
     Ok((
         instance_spec,
@@ -272,6 +331,63 @@ async fn build_config(
         container_mounts,
         network_backend,
     ))
+}
+
+/// Spec for a shim that restores a checkpoint image paused instead of
+/// booting. Disks, shares, kernel and guest setup all come from the image;
+/// the box supplies only new endpoints: its guest sockets, a new gvproxy
+/// socket, the console log and checkpoint control. Returns the box's network
+/// backend with it, as [`build_config`] does.
+pub(crate) fn checkpoint_import_spec(
+    box_id: &BoxID,
+    options: &BoxOptions,
+    layout: &BoxFilesystemLayout,
+    runtime: &SharedRuntimeImpl,
+    outbound_policy: Option<&crate::runtime::options::OutboundNetworkConfig>,
+    import: ImportLaunch,
+) -> BoxliteResult<(InstanceSpec, Option<Box<dyn NetworkBackend>>)> {
+    let network_backend = build_network_backend(options, layout, runtime, outbound_policy)?;
+    let spec = InstanceSpec {
+        engine: VmmKind::Libkrun,
+        box_id: box_id.to_string(),
+        security: options.advanced.security.clone(),
+        nested_virtualization: options.advanced.nested_virtualization,
+        cpus: options.cpus,
+        memory_mib: options.memory_mib,
+        kernel: None,
+        fs_shares: Default::default(),
+        block_devices: Default::default(),
+        // Unused: the guest agent already runs inside the image.
+        guest_entrypoint: Entrypoint {
+            executable: format!("{}/boxlite-guest", guest_paths::BIN_DIR),
+            args: Vec::new(),
+            env: Vec::new(),
+        },
+        transport: BoxTransport::unix(layout.socket_path()),
+        ready_transport: BoxTransport::unix(layout.ready_socket_path()),
+        // Unused: the image restores the guest's root.
+        guest_rootfs: GuestRootfs {
+            path: PathBuf::new(),
+            strategy: Strategy::Direct,
+            kernel: None,
+            initrd: None,
+            env: Vec::new(),
+        },
+        network_backend_spec: network_backend.as_ref().map(|backend| backend.spec()),
+        network_backend_endpoint: None,
+        disable_network: matches!(options.network, NetworkSpec::Disabled),
+        home_dir: runtime.layout.home_dir().to_path_buf(),
+        console_output: Some(import.console_output.clone()),
+        exit_file: layout.exit_file_path(),
+        detach: options.detach,
+        checkpoint: Some(CheckpointLaunch {
+            control_socket: layout.control_socket_path(),
+            export_dir: layout.prepare_checkpoint_dir()?,
+            start: CheckpointStart::Import(import),
+        }),
+    };
+    crate::vmm::checkpoint::support::validate_spec(&spec)?;
+    Ok((spec, network_backend))
 }
 
 /// Configure guest rootfs with device path from volume manager.
@@ -409,7 +525,7 @@ fn warn_unpublished_exposed_ports(image_config: &ContainerImageConfig, options: 
 }
 
 /// Spawn VM subprocess and return handler.
-async fn spawn_vm(
+pub(crate) async fn spawn_vm(
     box_id: &BoxID,
     config: &InstanceSpec,
     options: &BoxOptions,
@@ -507,5 +623,149 @@ mod tests {
             devices[0].read_only,
             "guest rootfs must attach read-only (is_disk_read_only)"
         );
+    }
+
+    /// An imported box cold-starts from its own restored RAW disks and
+    /// shares. Its image reference names nothing that could be pulled, and
+    /// the runtime's guest rootfs cache stays untouched.
+    #[tokio::test]
+    async fn restored_box_cold_start_uses_only_its_restored_storage() {
+        use crate::litebox::checkpoint::{RestoredDisk, RestoredStorage};
+        use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
+        use crate::litebox::init::types::{InitPipelineContext, PreparedBootAssets};
+        use crate::litebox::init::{ContainerRootfsTask, FilesystemTask, GuestRootfsTask};
+        use crate::runtime::options::{BoxliteOptions, RootfsSpec, VolumeSpec};
+        use crate::runtime::rt_impl::RuntimeImpl;
+        use crate::vmm::checkpoint::CheckpointStart;
+        use std::sync::Arc;
+
+        let home = tempfile::TempDir::new_in("/tmp").unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            image_registries: vec![],
+            ..Default::default()
+        })
+        .unwrap();
+        let box_id = crate::runtime::id::BoxIDMint::mint();
+        let box_home = runtime.layout.boxes_dir().join(box_id.as_str());
+        let restored = box_home.join("restored");
+        std::fs::create_dir_all(restored.join("disks")).unwrap();
+        std::fs::create_dir_all(restored.join("fs/0")).unwrap();
+        std::fs::create_dir_all(restored.join("fs/1")).unwrap();
+        let disks = [
+            restored.join("disks/disk-0.raw"),
+            restored.join("disks/disk-1.raw"),
+        ];
+        for disk in &disks {
+            std::fs::write(disk, b"raw").unwrap();
+        }
+
+        let mut options = BoxOptions {
+            rootfs: RootfsSpec::Image("registry.invalid/never:pulled".into()),
+            network: NetworkSpec::Disabled,
+            volumes: vec![VolumeSpec::bind_mount(
+                restored.join("fs/1").to_str().unwrap(),
+                "/data",
+            )],
+            ..Default::default()
+        };
+        options.advanced.checkpoint_enabled = true;
+        let config = BoxConfig {
+            id: box_id.clone(),
+            name: None,
+            created_at: chrono::Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options,
+            engine_kind: VmmKind::Libkrun,
+            box_home,
+        };
+        let mut ctx = InitPipelineContext::new(config, runtime.clone(), true, false, None);
+        ctx.restored = Some(RestoredStorage {
+            disks: disks
+                .iter()
+                .zip([false, true])
+                .map(|(path, read_only)| RestoredDisk {
+                    path: path.clone(),
+                    format: crate::vmm::DiskFormat::Raw,
+                    read_only,
+                })
+                .collect(),
+            shared_dir: restored.join("fs/0"),
+            container_image_config: ContainerImageConfig::default(),
+        });
+        let ctx = Arc::new(tokio::sync::Mutex::new(ctx));
+        Box::new(FilesystemTask).run(ctx.clone()).await.unwrap();
+        Box::new(ContainerRootfsTask)
+            .run(ctx.clone())
+            .await
+            .unwrap();
+        Box::new(GuestRootfsTask).run(ctx.clone()).await.unwrap();
+        ctx.lock().await.boot_assets = Some(PreparedBootAssets::default());
+        let inputs = VmmSpawnInputs::from_context(&*ctx.lock().await).unwrap();
+        let (spec, volume_mgr, ..) = build_config(&box_id, &inputs).await.unwrap();
+
+        assert!(
+            runtime.guest_rootfs.get().is_none(),
+            "the guest rootfs cache was used"
+        );
+        let devices: Vec<_> = spec
+            .block_devices
+            .devices()
+            .iter()
+            .map(|d| (d.disk_path.clone(), d.format, d.read_only))
+            .collect();
+        assert_eq!(
+            devices,
+            [
+                (disks[0].clone(), crate::vmm::DiskFormat::Raw, false),
+                (disks[1].clone(), crate::vmm::DiskFormat::Raw, true),
+            ]
+        );
+        let shares: Vec<_> = spec
+            .fs_shares
+            .shares()
+            .iter()
+            .map(|s| (s.tag.clone(), s.host_path.clone()))
+            .collect();
+        assert_eq!(
+            shares,
+            [
+                (mount_tags::SHARED.to_string(), restored.join("fs/0")),
+                // Volumes are shared at their canonical path.
+                (
+                    "uservol0".to_string(),
+                    restored.join("fs/1").canonicalize().unwrap()
+                ),
+            ]
+        );
+        match &spec.guest_rootfs.strategy {
+            Strategy::Disk {
+                disk_path,
+                device_path,
+            } => {
+                assert_eq!(disk_path, &disks[1]);
+                assert_eq!(device_path.as_deref(), Some("/dev/vdb"));
+            }
+            other => panic!("unexpected guest rootfs {other:?}"),
+        }
+        let checkpoint = spec.checkpoint.as_ref().unwrap();
+        assert!(matches!(checkpoint.start, CheckpointStart::Cold));
+
+        // A checkpoint-enabled box mounts every share through a DAX window.
+        assert!(
+            spec.fs_shares
+                .shares()
+                .iter()
+                .all(|share| share.dax_window == crate::vmm::checkpoint::DAX_WINDOW_BYTES)
+        );
+        let mounts = volume_mgr.build_guest_mounts();
+        assert!(!mounts.is_empty());
+        for mount in mounts {
+            if let crate::portal::interfaces::VolumeConfig::Virtiofs { tag, dax, .. } = mount {
+                assert!(dax, "{tag} mounts without DAX");
+            }
+        }
     }
 }

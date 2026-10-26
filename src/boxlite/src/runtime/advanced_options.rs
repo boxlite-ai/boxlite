@@ -837,6 +837,18 @@ pub struct AdvancedBoxOptions {
     #[serde(default)]
     pub privileged: bool,
 
+    /// Run the VM under libkrun's snapshot owner so the box can be paused,
+    /// exported as one checkpoint file and resumed as a new box.
+    ///
+    /// Opt-in and local-only: supported on Linux x86_64 with KVM, the libkrun
+    /// engine and the default jailed (rootless) isolation; anything else is
+    /// refused before launch. A checkpoint-enabled box refuses the disk-only
+    /// snapshot, clone and export operations. Omitted from the serialized form
+    /// when off, so an ordinary box's manifest keeps the shape older importers
+    /// read.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub checkpoint_enabled: bool,
+
     /// Set once `resolve_container_security` has run on this instance.
     /// `set_capabilities` refuses to change the policy afterward — a
     /// resolved request's capabilities shouldn't shift under it before the
@@ -866,6 +878,7 @@ impl Clone for AdvancedBoxOptions {
             kernel: self.kernel.clone(),
             nested_virtualization: self.nested_virtualization,
             privileged: self.privileged,
+            checkpoint_enabled: self.checkpoint_enabled,
             resolved: std::sync::atomic::AtomicBool::new(false),
         }
     }

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
 
+pub mod checkpoint;
 pub mod controller;
 pub mod engine;
 pub mod exit_info;
@@ -103,6 +104,9 @@ pub struct FsShare {
     pub host_path: PathBuf,
     /// Whether the share is read-only
     pub read_only: bool,
+    /// Size of the share's DAX window in bytes; 0 for none.
+    #[serde(default)]
+    pub dax_window: u64,
 }
 
 /// Collection of filesystem shares from host to guest.
@@ -117,10 +121,22 @@ impl FsShares {
     }
 
     pub fn add(&mut self, tag: impl Into<String>, path: PathBuf, read_only: bool) {
+        self.add_with_dax(tag, path, read_only, 0);
+    }
+
+    /// Add a share with a DAX window of `dax_window` bytes (0 for none).
+    pub fn add_with_dax(
+        &mut self,
+        tag: impl Into<String>,
+        path: PathBuf,
+        read_only: bool,
+        dax_window: u64,
+    ) {
         self.shares.push(FsShare {
             tag: tag.into(),
             host_path: path,
             read_only,
+            dax_window,
         });
     }
 
@@ -245,6 +261,9 @@ pub struct InstanceSpec {
     /// Whether the box should continue running when the parent process exits.
     /// When false, the shim detects parent death via watchdog pipe POLLHUP.
     pub detach: bool,
+    /// Checkpoint settings; `None` runs the ordinary libkrun VMM.
+    #[serde(default)]
+    pub checkpoint: Option<checkpoint::CheckpointLaunch>,
 }
 
 /// Entrypoint configuration that the guest should run.

@@ -711,6 +711,38 @@
         "comment": "libkrun: change file permissions. TODO(seccomp): likely setup-only, may be removable after audit."
       },
       {
+        "syscall": "fchownat",
+        "comment": "libkrun virtio-fs snapshot import: restore owners (passthrough/archive/host.rs chown)"
+      },
+      {
+        "syscall": "fchmodat",
+        "comment": "libkrun virtio-fs snapshot import: restore modes (passthrough/archive/host.rs chmod)"
+      },
+      {
+        "syscall": "utimensat",
+        "comment": "libkrun virtio-fs snapshot import: restore atime/mtime (passthrough/archive/host.rs set_times)"
+      },
+      {
+        "syscall": "symlinkat",
+        "comment": "libkrun virtio-fs snapshot import: recreate symlinks (passthrough/archive/host.rs symlink_at)"
+      },
+      {
+        "syscall": "mknodat",
+        "comment": "libkrun virtio-fs snapshot import: recreate overlay whiteouts, char 0:0 (passthrough/archive/host.rs whiteout_at)"
+      },
+      {
+        "syscall": "linkat",
+        "comment": "libkrun virtio-fs snapshot import: recreate hard links (passthrough/archive/host.rs link_to)"
+      },
+      {
+        "syscall": "fdatasync",
+        "comment": "libkrun virtio-fs snapshot pause: sync writable handles at the cut (passthrough/snapshot.rs sync_for_snapshot)"
+      },
+      {
+        "syscall": "getegid",
+        "comment": "libkrun virtio-fs guest-visible snapshot archive: the effective group ID it records and an import must match (passthrough/archive/host.rs effective_ids)"
+      },
+      {
         "syscall": "flock",
         "comment": "libkrun: file locking. TODO(seccomp): likely setup-only, may be removable after audit."
       },

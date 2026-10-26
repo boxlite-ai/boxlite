@@ -62,6 +62,18 @@ describe("SimpleBoxOptions", () => {
     expect(nativeOptions.advanced.capabilities).toBeUndefined();
   });
 
+  test("refuses checkpointEnabled instead of creating an ordinary box", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+
+    expect(
+      () => new SimpleBox({ advanced: { checkpointEnabled: true } } as any),
+    ).toThrow("advanced.checkpointEnabled is not supported");
+    const box = new SimpleBox({
+      advanced: { checkpointEnabled: false },
+    } as any);
+    expect((box as any)._boxOpts.advanced.checkpointEnabled).toBeUndefined();
+  });
+
   test("accepts cmd array", () => {
     const opts: SimpleBoxOptions = {
       image: "docker:dind",

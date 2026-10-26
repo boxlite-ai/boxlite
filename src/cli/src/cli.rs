@@ -242,6 +242,18 @@ const VOLUME_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
+const CHECKPOINT_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "export",
+        globals: LOCAL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "import",
+        globals: LOCAL_GLOBALS,
+        children: &[],
+    },
+];
 const COMMAND_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "run",
@@ -282,6 +294,21 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         name: "restart",
         globals: BOX_GLOBALS,
         children: &[],
+    },
+    CommandScope {
+        name: "pause",
+        globals: LOCAL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "resume",
+        globals: LOCAL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "checkpoint",
+        globals: LOCAL_GLOBALS,
+        children: CHECKPOINT_SCOPES,
     },
     CommandScope {
         name: "pull",
@@ -599,6 +626,15 @@ pub enum Commands {
 
     /// Restart one or more boxes
     Restart(crate::commands::restart::RestartArgs),
+
+    /// Pause a checkpoint-enabled box
+    Pause(crate::commands::checkpoint::PauseArgs),
+
+    /// Resume a paused box
+    Resume(crate::commands::checkpoint::ResumeArgs),
+
+    /// Export or import a paused box as one checkpoint file
+    Checkpoint(crate::commands::checkpoint::CheckpointArgs),
 
     /// Pull an image from a registry
     Pull(crate::commands::pull::PullArgs),
@@ -1541,6 +1577,25 @@ impl ManagementFlags {
     }
 }
 
+/// Opt a new box into pause, checkpoint export and checkpoint import.
+#[derive(Args, Debug, Default)]
+pub struct CheckpointFlags {
+    /// Let the box be paused and exported as one checkpoint file
+    /// (`boxlite pause`, `boxlite checkpoint export`).
+    ///
+    /// Linux x86_64 with KVM and the default sandbox only; the embedded
+    /// runtime refuses it elsewhere and servers refuse it. A checkpoint-enabled
+    /// box refuses disk snapshots, clone and the disk export.
+    #[arg(long = "enable-checkpoint")]
+    pub enable_checkpoint: bool,
+}
+
+impl CheckpointFlags {
+    pub fn apply_to(&self, opts: &mut BoxOptions) {
+        opts.advanced.checkpoint_enabled = self.enable_checkpoint;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1703,6 +1758,18 @@ mod tests {
         (&["boxlite", "images"], 1, LOCAL_WITHOUT_REGISTRY),
         (&["boxlite", "info"], 1, LOCAL_WITHOUT_REGISTRY),
         (&["boxlite", "logs", "box"], 1, LOCAL_WITHOUT_REGISTRY),
+        (&["boxlite", "pause", "box"], 1, LOCAL_WITHOUT_REGISTRY),
+        (&["boxlite", "resume", "box"], 1, LOCAL_WITHOUT_REGISTRY),
+        (
+            &["boxlite", "checkpoint", "export", "box", "box.boxckpt"],
+            2,
+            LOCAL_WITHOUT_REGISTRY,
+        ),
+        (
+            &["boxlite", "checkpoint", "import", "box.boxckpt"],
+            2,
+            LOCAL_WITHOUT_REGISTRY,
+        ),
         (&["boxlite", "pull", "alpine"], 1, LOCAL_WITH_REGISTRY),
         (&["boxlite", "serve"], 1, LOCAL_WITH_REGISTRY),
         (&["boxlite", "auth", "login"], 2, AUTH_WITH_URL),

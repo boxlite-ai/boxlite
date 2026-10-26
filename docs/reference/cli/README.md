@@ -26,6 +26,9 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite start`](#boxlite-start)
   - [`boxlite stop`](#boxlite-stop)
   - [`boxlite restart`](#boxlite-restart)
+  - [`boxlite pause`](#boxlite-pause)
+  - [`boxlite resume`](#boxlite-resume)
+  - [`boxlite checkpoint`](#boxlite-checkpoint)
   - [`boxlite pull`](#boxlite-pull)
   - [`boxlite images`](#boxlite-images)
   - [`boxlite inspect`](#boxlite-inspect)
@@ -312,7 +315,7 @@ The box's lifetime is that command's lifetime. When it exits, the box stops and
 takes the command's exit code; `boxlite ps` shows it stopped and
 `boxlite inspect -f '{{.State.ExitCode}}'` gives the code.
 
-**Options:** Uses [`ProcessFlags`](#processflags) + [`CapabilityFlags`](#capabilityflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`NetworkFlags`](#networkflags) + [`ManagementFlags`](#managementflags), plus:
+**Options:** Uses [`ProcessFlags`](#processflags) + [`CapabilityFlags`](#capabilityflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`NetworkFlags`](#networkflags) + [`ManagementFlags`](#managementflags) + [`CheckpointFlags`](#checkpointflags), plus:
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -396,7 +399,7 @@ start it implicitly, because starting it runs that command. Start it deliberatel
 | `--workdir PATH` | `-w` | Working directory inside the box |
 | `--entrypoint EXEC` | — | Replace the image entrypoint with one executable |
 
-Also uses [`CapabilityFlags`](#capabilityflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`NetworkFlags`](#networkflags) + [`ManagementFlags`](#managementflags).
+Also uses [`CapabilityFlags`](#capabilityflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`NetworkFlags`](#networkflags) + [`ManagementFlags`](#managementflags) + [`CheckpointFlags`](#checkpointflags).
 
 > Note: `create` accepts `--env` and `--workdir` directly rather than via `ProcessFlags` (no `-i`/`-t`/`-u` here, since no command is being executed).
 
@@ -483,6 +486,57 @@ Stop one or more running boxes. Same shape as `start`.
 **Synopsis:** `boxlite restart BOX [BOX...]`
 
 Stop then start one or more boxes. If `stop` fails for a box, that box is skipped (resources may still be locked) and the error is reported. After `stop`, the CLI re-fetches the box handle with `runtime.get()` because the post-stop handle is invalidated.
+
+---
+
+### `boxlite pause`
+
+**Synopsis:** `boxlite pause [--host-writers-stopped] BOX`
+
+Pause a box created with `--enable-checkpoint`. Every vCPU and device stops at one consistent cut
+(no SIGSTOP, no guest filesystem freeze). Embedded runtime only: accepts `--debug`, `--home` and
+`--config`; `--url` and `--profile` are usage errors, and a configured server profile is not used.
+
+| Flag | Description |
+|------|-------------|
+| `--host-writers-stopped` | Assert every host process that writes the box's volumes (`-v` directories or managed volumes) is stopped and stays stopped until `resume` or `stop`. Required when the box has any; without it the pause fails with `InvalidArgument` and the box keeps running |
+
+**Exit behavior:** prints `BOX` and exits `0`. Fails when the box is not checkpoint-enabled
+(`Unsupported`), not running (`InvalidState`), or missing (`No such box: BOX`).
+
+---
+
+### `boxlite resume`
+
+**Synopsis:** `boxlite resume BOX`
+
+Let a paused box run again. The runtime reconnects and checks the guest is the one that was
+paused (same container, initialized); otherwise it stops the VM and fails. Same global options as
+`pause`. Prints `BOX`.
+
+---
+
+### `boxlite checkpoint`
+
+**Synopsis:**
+
+- `boxlite checkpoint export BOX FILE`
+- `boxlite checkpoint import [--name NAME] FILE`
+
+| Subcommand | Behavior | Prints |
+|---|---|---|
+| `export` | Writes a **paused** box to the new file `FILE` (absolute or relative to the working directory). `FILE` must not exist and its directory must. The box stays paused on success and on ordinary failure; if the runtime cannot tell whether the export happened, the VM is stopped | the absolute `FILE` path |
+| `import` | Verifies `FILE` and creates a new box from it: new ID, `--name NAME` or unnamed (the source name is never reused), status `paused`. Needs no image or source box. A failed import leaves no box | the new box ID |
+
+Same global options as `pause`. Lifecycle, supported options and failure table:
+[Checkpoints guide](../../guides/checkpoints.md).
+
+```bash
+boxlite pause --host-writers-stopped web
+boxlite checkpoint export web /backups/web.boxckpt
+boxlite checkpoint import --name web2 /backups/web.boxckpt
+boxlite resume web2
+```
 
 ---
 
@@ -909,6 +963,14 @@ does not expose remove-on-stop.
 > `--rm` removes the box when it stops. Against the embedded runtime that is synchronous, at the stop itself. Against `boxlite serve` it is carried as the shortest possible deadline and swept on the same 30s tick, so removal can lag the stop by up to one tick — and, because `serve` holds that policy in memory, is skipped entirely if the server restarts in between.
 
 > `--rm` with `--detach` on `run` is silently downgraded — a detached box outlives the CLI process, so it keeps manual lifecycle control. An explicit `--auto-delete` survives detaching, which is the pairing the flag exists for. Use `boxlite rm` to clean up.
+
+### `CheckpointFlags`
+
+Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
+
+| Flag | Description |
+|------|-------------|
+| `--enable-checkpoint` | Let the box be paused and exported (`advanced.checkpoint_enabled`; default off). Embedded runtime on Linux x86_64 with KVM and the default sandbox only; elsewhere, and on REST servers, creation fails with `Unsupported`. Such a box refuses disk snapshots, clone and the disk export |
 
 ---
 

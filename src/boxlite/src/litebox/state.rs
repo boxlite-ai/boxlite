@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 /// start()   → Running (VM initialized)
 /// SIGSTOP   → Paused (VM frozen, used during export/snapshot)
 /// SIGCONT   → Running (VM resumed)
+/// pause()   → Paused (checkpoint-enabled boxes, held until resume/stop)
+/// resume()  → Running
 /// stop()    → Stopped (VM terminated, can restart)
 /// init err  → Failed (record preserved with error_reason)
 /// ```
@@ -42,9 +44,11 @@ pub enum BoxStatus {
     /// Rootfs is preserved, box can be restarted.
     Stopped,
 
-    /// Box VM is frozen via SIGSTOP (all vCPUs and virtio backends paused).
-    /// Used during export/snapshot for point-in-time consistency.
-    /// Equivalent to Docker's cgroup freezer pause.
+    /// Box VM is frozen. Ordinary boxes pass through it briefly via SIGSTOP
+    /// during a disk export/snapshot (equivalent to Docker's cgroup freezer
+    /// pause). A checkpoint-enabled box enters it through `pause()`: its
+    /// snapshot owner stopped every vCPU and device, the shim stays alive,
+    /// and it stays paused until `resume()` or `stop()`.
     Paused,
 
     /// Init pipeline failed (e.g., guest_connect timeout, vmm_spawn error).
@@ -271,6 +275,15 @@ pub struct BoxState {
     /// Serde default keeps existing DB rows readable without migration.
     #[serde(default)]
     pub resolved_image: Option<crate::images::ResolvedImage>,
+    /// The guest the last checkpoint pause cut (checkpoint-enabled boxes).
+    /// A resume or reattach checks it reached this guest; an import carries
+    /// it over; a cold start clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checkpoint_guest: Option<super::checkpoint::GuestIdentity>,
+    /// The storage an imported box runs from instead of an image. Set once,
+    /// by the import, and kept for the box's life.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) restored_storage: Option<super::checkpoint::RestoredStorage>,
 }
 
 /// Health status of a box.
@@ -373,6 +386,8 @@ impl BoxState {
             exit_code: None,
             started_at: None,
             resolved_image: None,
+            checkpoint_guest: None,
+            restored_storage: None,
         }
     }
 
@@ -386,6 +401,13 @@ impl BoxState {
         if let Some(resolved) = built_from {
             self.resolved_image = Some(resolved);
         }
+    }
+
+    /// The restored `shared/` copy an imported box runs from, if any.
+    pub(crate) fn restored_shared_dir(&self) -> Option<std::path::PathBuf> {
+        self.restored_storage
+            .as_ref()
+            .map(|restored| restored.shared_dir.clone())
     }
 
     /// Record when this box enters [`BoxStatus::Running`].

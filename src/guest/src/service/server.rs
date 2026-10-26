@@ -33,6 +33,10 @@ pub(crate) struct GuestServer {
     /// Guest initialization state (set by Guest.Init)
     pub init_state: Arc<Mutex<GuestInitState>>,
 
+    /// Random per agent start, reported by Guest.RunningState: it tells a
+    /// restored guest apart from a fresh boot of the same container.
+    pub boot_id: String,
+
     /// Container registry: container_id -> Container
     pub containers: Arc<Mutex<HashMap<String, Arc<Mutex<Container>>>>>,
 
@@ -71,6 +75,7 @@ impl GuestServer {
         Self {
             layout,
             init_state: Arc::new(Mutex::new(GuestInitState::default())),
+            boot_id: uuid::Uuid::new_v4().to_string(),
             containers: Arc::new(Mutex::new(HashMap::new())),
             registry: ExecutionRegistry::new(),
             ssh_manager: crate::service::ssh::SshManager::default(),

@@ -28,6 +28,7 @@ impl LocalSnapshotBackend {
         name: &str,
         _opts: SnapshotOptions,
     ) -> BoxliteResult<SnapshotInfo> {
+        self.inner.refuse_for_checkpoint("a disk snapshot")?;
         validate_snapshot_name(name)?;
         let t0 = Instant::now();
         let _lock = self.inner.disk_ops.lock().await;
@@ -118,6 +119,8 @@ impl LocalSnapshotBackend {
     }
 
     async fn snapshot_restore(&self, name: &str) -> BoxliteResult<()> {
+        self.inner
+            .refuse_for_checkpoint("restoring a disk snapshot")?;
         validate_snapshot_name(name)?;
 
         // Refuse restore while the box is active — disk replacement under a running

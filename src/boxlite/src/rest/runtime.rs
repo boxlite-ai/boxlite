@@ -254,6 +254,13 @@ impl BoxOptions {
             ));
         }
 
+        if self.advanced.checkpoint_enabled {
+            return Err(BoxliteError::Unsupported(
+                "checkpoints (advanced.checkpoint_enabled) are only supported by the local runtime"
+                    .to_string(),
+            ));
+        }
+
         // Mounts. `BoxOptions::sanitize` is local-only, so
         // `VolumeSpec::validate` — the "exactly one origin" invariant that C and
         // Go callers can violate by setting the fields directly — has no other
@@ -607,6 +614,25 @@ mod tests {
 
         // Should fail trying to reach the server for capability check
         assert!(result.is_err(), "Expected error when server is unreachable");
+    }
+
+    /// A checkpoint needs this host's KVM and jailer: the REST backend
+    /// refuses the import without contacting any server.
+    #[tokio::test]
+    async fn checkpoint_import_is_refused_by_rest_runtimes() {
+        let options = BoxliteRestOptions::new("http://localhost:1"); // unreachable port
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let result = RuntimeBackend::import_checkpoint(
+            &runtime,
+            std::path::Path::new("/tmp/ignored.ckpt"),
+            Default::default(),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(BoxliteError::Unsupported(_))),
+            "{:?}",
+            result.err()
+        );
     }
 
     #[tokio::test]
@@ -1179,6 +1205,26 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
         assert!(error.to_string().contains("local runtime"));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_checkpoint_enabled_in_rest_mode() {
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.checkpoint_enabled = true;
+        let box_options = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("REST checkpoints must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("checkpoint_enabled"));
     }
 
     #[tokio::test]

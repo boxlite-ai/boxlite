@@ -386,6 +386,7 @@ silently restarting it, because restarting would run the command a second time.
 | `--auto-delete DURATION` | | Delete the box this long after it stops; `0` disables |
 | `--no-auto-resume` | | Ask a REST server to refuse implicit resume after a box has run; first boot is unaffected, and the embedded runtime records but does not enforce it |
 | `--security <enable\|disable>` | | Embedded-runtime sandbox security (default `enable`; env `BOXLITE_SECURITY`); REST servers own this policy |
+| `--enable-checkpoint` | | Allow `pause` and `checkpoint export`; embedded runtime on Linux x86_64 with KVM only (see [`boxlite pause`](#boxlite-pause)) |
 
 `-p` is explicit local publication. Remote REST profiles reject it and direct
 the caller to `boxlite network tunnel`.
@@ -445,6 +446,7 @@ default, and `exec` still starts it on demand.
 | `--auto-delete DURATION` | | Delete the box this long after it stops; `0` disables; requires a REST server |
 | `--no-auto-resume` | | Ask a REST server to refuse implicit resume after a box has run; first boot is unaffected, and the embedded runtime records but does not enforce it |
 | `--security <enable\|disable>` | | Embedded-runtime sandbox security (default `enable`; env `BOXLITE_SECURITY`); REST servers own this policy |
+| `--enable-checkpoint` | | Allow `pause` and `checkpoint export`; embedded runtime on Linux x86_64 with KVM only (see [`boxlite pause`](#boxlite-pause)) |
 
 `-p` is explicit local publication. Remote REST profiles reject it and direct
 the caller to `boxlite network tunnel`.
@@ -512,6 +514,48 @@ Stop one or more running boxes.
 Restart one or more boxes.
 
 **Usage:** `boxlite restart BOX [BOX ...]`
+
+### `boxlite pause`
+
+Pause a box created with `--enable-checkpoint`: every vCPU and device stops at one consistent
+cut. While paused it refuses `exec`, `cp`, attach, metrics and network changes. Embedded runtime
+only (Linux x86_64 with KVM); `--url` and `--profile` are rejected.
+
+**Usage:** `boxlite pause [--host-writers-stopped] BOX`
+
+| Option | Description |
+|--------|-------------|
+| `--host-writers-stopped` | Assert you stopped every host process that writes the box's volumes (`-v`); required when it has any. Keep them stopped until `resume` or `stop` |
+
+### `boxlite resume`
+
+Let a paused box run again; it is checked to be the guest that was paused, or stopped.
+
+**Usage:** `boxlite resume BOX`
+
+### `boxlite checkpoint export` / `boxlite checkpoint import`
+
+`export` writes a paused box to one new file (it must not exist); the box stays paused. `import`
+creates a new, paused box from that file, on this or another host, without the source box or its
+image; `resume` it to continue the same guest processes. Prints the file path or the new box ID.
+
+**Usage:**
+
+- `boxlite checkpoint export BOX FILE`
+- `boxlite checkpoint import [--name NAME] FILE`
+
+**Example:**
+
+```bash
+boxlite create --enable-checkpoint --name web alpine:latest sh -c 'while :; do sleep 1; done'
+boxlite start web
+boxlite pause web
+boxlite checkpoint export web web.boxckpt
+boxlite checkpoint import --name web2 web.boxckpt
+boxlite resume web2
+```
+
+Requirements, refused options and failure behavior: [Checkpoints guide](../../docs/guides/checkpoints.md).
 
 ### `boxlite rm`
 

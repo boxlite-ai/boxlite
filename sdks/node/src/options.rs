@@ -494,6 +494,9 @@ impl TryFrom<JsNetworkSpec> for (NetworkSpec, NetworkSpec) {
     }
 }
 
+const CHECKPOINT_UNSUPPORTED: &str = "advanced.checkpointEnabled is not supported by the Node.js SDK: \
+     checkpoints are available only in the Rust API and the boxlite CLI on Linux x86_64 with KVM";
+
 impl TryFrom<JsBoxOptions> for BoxOptions {
     type Error = boxlite_shared::errors::BoxliteError;
 
@@ -549,6 +552,16 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .unwrap_or_default();
 
         let health_check = js_opts.health_check.map(HealthCheckOptions::from);
+        if js_opts
+            .advanced
+            .as_ref()
+            .and_then(|advanced| advanced.checkpoint_enabled)
+            == Some(true)
+        {
+            return Err(boxlite_shared::errors::BoxliteError::Unsupported(
+                CHECKPOINT_UNSUPPORTED.into(),
+            ));
+        }
         let privileged = js_opts
             .advanced
             .as_ref()
@@ -990,6 +1003,7 @@ mod tests {
                 add: Some(vec!["NET_ADMIN".into(), "SYS_PTRACE".into()]),
                 drop: Some(vec!["MKNOD".into(), "NET_RAW".into()]),
             }),
+            checkpoint_enabled: None,
         });
         let with_capabilities = BoxOptions::try_from(with_capabilities).unwrap();
         let capabilities = with_capabilities
@@ -1003,6 +1017,7 @@ mod tests {
         privileged.advanced = Some(JsAdvancedBoxOptions {
             privileged: Some(true),
             capabilities: None,
+            checkpoint_enabled: None,
         });
         let privileged = BoxOptions::try_from(privileged).unwrap();
         assert!(privileged.advanced.privileged);
@@ -1062,6 +1077,50 @@ mod tests {
         assert_eq!(opts.secrets[0].name, "openai");
         assert_eq!(opts.secrets[0].hosts, vec!["api.openai.com"]);
         assert_eq!(opts.secrets[0].placeholder, "<BOXLITE_SECRET:openai>");
+    }
+
+    /// A JavaScript caller can set `advanced.checkpointEnabled` despite the
+    /// `never` type; `true` must fail instead of creating an ordinary box.
+    #[test]
+    fn box_options_from_js_refuses_checkpoint_enabled() {
+        let js = |checkpoint_enabled| JsBoxOptions {
+            image: Some("alpine:latest".into()),
+            rootfs_path: None,
+            cpus: None,
+            memory_mib: None,
+            disk_size_gb: None,
+            working_dir: None,
+            env: None,
+            volumes: None,
+            network: None,
+            ports: None,
+            auto_remove: None,
+            auto_stop: None,
+            auto_delete: None,
+            auto_resume: None,
+            detach: None,
+            entrypoint: None,
+            cmd: None,
+            user: None,
+            advanced: Some(JsAdvancedBoxOptions {
+                privileged: None,
+                capabilities: None,
+                checkpoint_enabled,
+            }),
+            security: None,
+            health_check: None,
+            secrets: None,
+        };
+
+        let err = BoxOptions::try_from(js(Some(true))).unwrap_err();
+        assert!(
+            matches!(err, boxlite_shared::errors::BoxliteError::Unsupported(ref m) if m.contains("checkpointEnabled")),
+            "{err}"
+        );
+        for absent_or_false in [None, Some(false)] {
+            let opts = BoxOptions::try_from(js(absent_or_false)).unwrap();
+            assert!(!opts.advanced.checkpoint_enabled);
+        }
     }
 
     #[test]

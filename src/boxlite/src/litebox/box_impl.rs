@@ -105,6 +105,18 @@ impl LiveState {
             bind_mount,
         }
     }
+
+    pub(super) fn guest_session(&self) -> &GuestSession {
+        &self.guest_session
+    }
+
+    /// Stop the VM process through this lifecycle's handler.
+    pub(super) fn stop_handler(&self) -> BoxliteResult<()> {
+        match self.handler.lock() {
+            Ok(mut handler) => handler.stop(),
+            Err(_) => Err(BoxliteError::Internal("VMM handler lock poisoned".into())),
+        }
+    }
 }
 
 // ============================================================================
@@ -126,13 +138,20 @@ pub(crate) struct BoxImpl {
     /// Serializes disk-mutating snapshot/clone/export operations.
     /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
     pub(crate) disk_ops: tokio::sync::Mutex<()>,
-    network_updates: tokio::sync::Mutex<()>,
+    pub(super) network_updates: tokio::sync::Mutex<()>,
+    /// Serializes this process's pause/resume requests to the checkpoint
+    /// owner (the shim serializes across processes).
+    pub(super) checkpoint_ops: tokio::sync::Mutex<()>,
 
     /// Event listeners (from runtime options).
     pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
 
     // --- Lazily initialized ---
     live: OnceCell<LiveState>,
+
+    /// The shim an import spawned for this box, held for its watchdog
+    /// keepalive (see [`Self::hold_imported_shim`]).
+    imported_shim: std::sync::Mutex<Option<Box<dyn VmmHandler>>>,
 
     /// The box's [`BoxWatcher`](super::watcher::BoxWatcher) task. Set once, on the
     /// first arm — `arm_watcher` is called on every handle the runtime hands out
@@ -176,9 +195,8 @@ impl BoxImpl {
         let layout = runtime
             .layout
             .box_layout(config.id.as_str(), config.options.advanced.isolate_mounts)
-            .expect(
-                "box_layout is structurally infallible — only warns on isolate_mounts mismatch",
-            );
+            .expect("box_layout is structurally infallible — only warns on isolate_mounts mismatch")
+            .with_restored_shared(state.restored_shared_dir());
         Self {
             config,
             state: Arc::new(RwLock::new(state)),
@@ -187,8 +205,10 @@ impl BoxImpl {
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
             network_updates: tokio::sync::Mutex::new(()),
+            checkpoint_ops: tokio::sync::Mutex::new(()),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
+            imported_shim: std::sync::Mutex::new(None),
             watcher: std::sync::OnceLock::new(),
             container_start: Arc::new(OnceCell::new()),
             #[cfg(test)]
@@ -215,7 +235,10 @@ impl BoxImpl {
         let Some(shim_pid) = self.state.read().pid else {
             return;
         };
-        if self.state.read().status != BoxStatus::Running {
+        // A paused checkpoint box still has a shim whose exit must be seen.
+        let status = self.state.read().status;
+        let paused_checkpoint = status == BoxStatus::Paused && self.checkpoint_enabled();
+        if status != BoxStatus::Running && !paused_checkpoint {
             return;
         }
         self.spawn_watcher_once(shim_pid, health);
@@ -603,8 +626,11 @@ impl BoxImpl {
     /// then `start()`, so a command that finishes instantly cannot outrun the
     /// stream. Because attaching never runs the user's command, it needs no
     /// re-run guard (unlike `exec`/`cp`, which do start it).
+    ///
+    /// A checkpoint-enabled box also follows an exec session by ID: after a
+    /// restore, the executions the guest kept running are reachable only so.
     pub(crate) async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution> {
-        if options.execution_id().is_some() {
+        if options.execution_id().is_some() && !self.checkpoint_enabled() {
             return Err(BoxliteError::Unsupported(
                 "the local backend does not support reattaching to executions by id".into(),
             ));
@@ -634,15 +660,22 @@ impl BoxImpl {
 
         let live = self.ensure_booted().await?;
         let mut exec_interface = live.guest_session.execution().await?;
+        // The main session's ID is the container's.
+        let execution_id = options.execution_id().unwrap_or(self.container_id());
         let components = exec_interface
             .attach_existing(
-                self.container_id(),
+                execution_id,
                 options.wants_stdin(),
                 self.shutdown_token.clone(),
             )
             .await?;
 
-        let result_rx = self.exit_code_from_file_when_portal_has_none(components.result_rx);
+        // Only the main command leaves an exit record behind.
+        let result_rx = if options.execution_id().is_none() {
+            self.exit_code_from_file_when_portal_has_none(components.result_rx)
+        } else {
+            components.result_rx
+        };
 
         Ok(Execution::new(
             components.execution_id,
@@ -717,8 +750,14 @@ impl BoxImpl {
         // shim. Calling live_state() on Configured/Failed would route
         // through the restart pipeline and spawn a new VM — exactly what
         // stop() must NOT do.
-        let should_attach = self.state.read().status == BoxStatus::Running;
-        if should_attach && let Ok(live) = self.ensure_booted().await {
+        let status = self.state.read().status;
+        if self.checkpoint_enabled() && status.is_active() {
+            // The owner may be paused, by this process or another one: no
+            // guest RPC unless it runs, and no reattach pipeline.
+            self.stop_checkpoint_vm().await?;
+        } else if status == BoxStatus::Running
+            && let Ok(live) = self.ensure_booted().await
+        {
             // Recovered boxes lazy-attach here via vmm_attach (now
             // ProcessIdentity-gated). Live boxes hit the cached LiveState.
             // Either way the teardown is identical:
@@ -1132,7 +1171,8 @@ impl BoxImpl {
     /// A `Stopped` box whose cell is empty is fine: that is a fresh handle, and
     /// booting it is the restart. Only an *initialized* cell on a box that is no
     /// longer Running means the VM behind it is dead.
-    async fn ensure_booted(&self) -> BoxliteResult<&LiveState> {
+    pub(super) async fn ensure_booted(&self) -> BoxliteResult<&LiveState> {
+        self.ensure_guest_running().await?;
         if self.live.initialized() && self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
                 "Box {} is no longer running and this handle is spent — it still holds the \
@@ -1159,6 +1199,20 @@ impl BoxImpl {
         )
         .await?;
         Ok(())
+    }
+
+    /// Hold the shim an import of this box spawned: dropping its handler
+    /// would end an attached shim through its watchdog. Using the box still
+    /// goes through the ordinary reattach once it resumes.
+    pub(crate) fn hold_imported_shim(&self, handler: Box<dyn VmmHandler>) {
+        if let Ok(mut held) = self.imported_shim.lock() {
+            *held = Some(handler);
+        }
+    }
+
+    /// This lifecycle's live state, without booting anything.
+    pub(super) fn live_state_if_booted(&self) -> Option<&LiveState> {
+        self.live.get()
     }
 
     /// Owned form used by explicit `start()` so the RPC can outlive that call.
@@ -1276,6 +1330,20 @@ impl BoxImpl {
             let _ = self.container_start.set(());
         }
 
+        // Reattaching to a checkpoint VM: it must still be the guest its last
+        // pause cut, not a fresh boot of the same container. Otherwise the VM
+        // is stopped and the armed guard records the failure.
+        if adopting_running
+            && self.checkpoint_enabled()
+            && let Err(error) = self.check_guest_identity(live_state.guest_session()).await
+        {
+            if let Err(e) = live_state.stop_handler() {
+                tracing::warn!(box_id = %self.config.id, error = %e, "Failed to stop an unverified guest");
+            }
+            cleanup_guard.set_last_error(&error);
+            return Err(error);
+        }
+
         // Read PID from file (single source of truth) and update state.
         //
         // The PID file is written by pre_exec hook immediately after fork().
@@ -1316,6 +1384,8 @@ impl BoxImpl {
             // so its existing Some/None value must be preserved.
             if !adopting_running {
                 state.mark_started();
+                // A cold start boots a new guest; no pause has cut it yet.
+                state.checkpoint_guest = None;
             }
 
             // This is a fresh run of the box's main command, so the exit code
@@ -1340,7 +1410,7 @@ impl BoxImpl {
             // here and finds the watcher already armed. So it can never slip an
             // exit-only watcher in ahead of us and strand the health probe.
             let health = health_guest.map(|guest| {
-                super::watcher::HealthProbe::new(
+                let probe = super::watcher::HealthProbe::new(
                     guest,
                     self.config
                         .options
@@ -1349,7 +1419,12 @@ impl BoxImpl {
                         .clone()
                         .expect("guest is fetched only when a health check is configured"),
                     state.health_status,
-                )
+                );
+                if self.checkpoint_enabled() {
+                    probe.with_checkpoint_control(self.checkpoint_control())
+                } else {
+                    probe
+                }
             });
             self.spawn_watcher_once(pid, health);
 
@@ -1399,6 +1474,8 @@ impl BoxImpl {
     where
         Fut: Future<Output = BoxliteResult<R>>,
     {
+        // Never SIGSTOP or freeze a VM the snapshot owner controls.
+        self.refuse_for_checkpoint("a disk snapshot, clone or export")?;
         let (pid, was_running) = {
             let state = self.state.read();
             let running = state.status.is_running();

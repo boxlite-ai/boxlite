@@ -64,6 +64,8 @@ const BOX_SOCK: &str = "box.sock";
 const READY_SOCK: &str = "ready.sock";
 /// Network backend (gvproxy) socket filename.
 const NET_SOCK: &str = "net.sock";
+/// Checkpoint control socket filename (checkpoint-enabled boxes only).
+const CTL_SOCK: &str = "ctl.sock";
 
 /// Base directory for binding symlinks. Deliberately literal — see module docs.
 const SYMLINK_BASE: &str = "/tmp";
@@ -122,6 +124,12 @@ impl BoxSockets {
     /// Guest-ready notification socket (host binds the listener).
     pub fn ready_sock(&self) -> PathBuf {
         self.binding_dir().join(READY_SOCK)
+    }
+
+    /// Checkpoint control socket (the shim binds, the host dials). Answers
+    /// while the guest is paused.
+    pub fn control_sock(&self) -> PathBuf {
+        self.binding_dir().join(CTL_SOCK)
     }
 
     /// Network backend socket (gvproxy binds; libkrun derives a sibling

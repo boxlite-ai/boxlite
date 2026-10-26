@@ -244,6 +244,41 @@ impl ExecutionRegistry {
         }
     }
 
+    /// Every execution the registry still holds, read without touching
+    /// access order, expiry, output or any entry.
+    pub async fn running_state(&self) -> Vec<boxlite_shared::ExecutionRunningState> {
+        use boxlite_shared::ExecutionPhase;
+        let entries: Vec<_> = {
+            let inner = self.inner.lock().await;
+            inner
+                .entries
+                .iter()
+                .filter_map(|(id, entry)| match entry {
+                    ExecutionEntry::Live(state) => {
+                        Some((id.clone(), ExecutionPhase::Live, Some(state.clone())))
+                    }
+                    ExecutionEntry::Retained { .. } => {
+                        Some((id.clone(), ExecutionPhase::Retained, None))
+                    }
+                    ExecutionEntry::Tombstone { .. } => {
+                        Some((id.clone(), ExecutionPhase::Tombstone, None))
+                    }
+                    ExecutionEntry::Reserved { .. } => None,
+                })
+                .collect()
+        };
+        entries
+            .into_iter()
+            .map(
+                |(execution_id, phase, state)| boxlite_shared::ExecutionRunningState {
+                    execution_id,
+                    phase: phase as i32,
+                    pid: state.and_then(|state| state.running_pid()).unwrap_or(0),
+                },
+            )
+            .collect()
+    }
+
     /// Register new execution state.
     pub async fn register(&self, exec_id: String, state: ExecutionState) -> bool {
         let mut inner = self.inner.lock().await;

@@ -117,6 +117,11 @@ pub struct JsAdvancedBoxOptions {
     /// Guest-only privilege; leaves host sandbox policy unchanged.
     pub privileged: Option<bool>,
     pub capabilities: Option<JsContainerCapabilities>,
+    /// Not supported here: checkpoints are available only in the Rust API
+    /// and the `boxlite` CLI. Declared so `true` is refused rather than
+    /// silently creating an ordinary box; typed `never` for TypeScript.
+    #[napi(ts_type = "never")]
+    pub checkpoint_enabled: Option<bool>,
 }
 
 #[cfg(test)]

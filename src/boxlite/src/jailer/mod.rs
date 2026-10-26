@@ -193,6 +193,8 @@ use std::path::PathBuf;
 /// ├── shared/                     [RW]  # guest-visible virtio-fs share root
 /// ├── sockets/                    [RW]  # libkrun vsock/unix sockets
 /// ├── tmp/                        [RW]  # shim/libkrun transient temp files
+/// ├── checkpoint/                 [RW]  # raw VM exports (checkpoint-enabled boxes)
+/// ├── restored/                   [RW]  # an imported box's restored disks and shares
 /// ├── logs/                       [RW]  # shim logging + VM console output
 /// │   ├── boxlite-shim.log                # tracing_appender daily log
 /// │   └── console.log                     # libkrun serial console (krun_set_console_output)
@@ -221,7 +223,12 @@ fn build_path_access(
 
     // Writable directories (shim creates files inside these at runtime)
     // Note: mounts_dir not included — host writes before spawn, shim accesses via shared_dir
-    for dir in [layout.tmp_dir(), layout.logs_dir()] {
+    for dir in [
+        layout.tmp_dir(),
+        layout.logs_dir(),
+        layout.checkpoint_dir(),
+        layout.restored_dir(),
+    ] {
         if dir.exists() {
             paths.push(PathAccess {
                 path: dir,

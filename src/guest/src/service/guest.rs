@@ -5,9 +5,10 @@
 
 use crate::service::server::GuestServer;
 use boxlite_shared::{
-    guest_init_response, Guest as GuestService, GuestInitError, GuestInitRequest,
-    GuestInitResponse, GuestInitSuccess, PingRequest, PingResponse, QuiesceRequest,
-    QuiesceResponse, ShutdownRequest, ShutdownResponse, ThawRequest, ThawResponse,
+    guest_init_response, ContainerRunningState, Guest as GuestService, GuestInitError,
+    GuestInitRequest, GuestInitResponse, GuestInitSuccess, PingRequest, PingResponse,
+    QuiesceRequest, QuiesceResponse, RunningStateRequest, RunningStateResponse, ShutdownRequest,
+    ShutdownResponse, ThawRequest, ThawResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn};
@@ -76,6 +77,30 @@ impl GuestService for GuestServer {
         info!("✅ Guest initialized successfully");
         Ok(Response::new(GuestInitResponse {
             result: Some(guest_init_response::Result::Success(GuestInitSuccess {})),
+        }))
+    }
+
+    /// Report the boot, containers and executions; changes nothing.
+    async fn running_state(
+        &self,
+        _request: Request<RunningStateRequest>,
+    ) -> Result<Response<RunningStateResponse>, Status> {
+        let initialized = self.init_state.lock().await.initialized;
+        let mut containers = Vec::new();
+        for (container_id, container) in self.containers.lock().await.iter() {
+            let container = container.lock().await;
+            containers.push(ContainerRunningState {
+                container_id: container_id.clone(),
+                running: container.is_running(),
+                init_pid: container.init_pid().map_or(0, |pid| pid.as_raw() as u32),
+            });
+        }
+        Ok(Response::new(RunningStateResponse {
+            boot_id: self.boot_id.clone(),
+            agent_version: env!("CARGO_PKG_VERSION").to_string(),
+            initialized,
+            containers,
+            executions: self.registry.running_state().await,
         }))
     }
 

@@ -59,6 +59,8 @@ pub struct GuestVolumeManager {
     block_devices: Vec<BlockDeviceEntry>,
     next_block_index: u8,
     next_auto_tag_index: u32,
+    /// DAX window of every virtiofs share, in bytes; 0 mounts without DAX.
+    dax_window: u64,
 }
 
 #[allow(dead_code)]
@@ -70,7 +72,14 @@ impl GuestVolumeManager {
             block_devices: Vec::new(),
             next_block_index: 0,
             next_auto_tag_index: 0,
+            dax_window: 0,
         }
+    }
+
+    /// Give every virtiofs share a DAX window of `bytes` and have the guest
+    /// mount it with DAX.
+    pub fn set_dax_window(&mut self, bytes: u64) {
+        self.dax_window = bytes;
     }
 
     /// Add a virtiofs share.
@@ -154,7 +163,12 @@ impl GuestVolumeManager {
     pub fn build_vmm_config(&self) -> VmmMountConfig {
         let mut fs_shares = FsShares::new();
         for entry in &self.fs_shares {
-            fs_shares.add(&entry.tag, entry.host_path.clone(), entry.read_only);
+            fs_shares.add_with_dax(
+                &entry.tag,
+                entry.host_path.clone(),
+                entry.read_only,
+                self.dax_window,
+            );
         }
 
         let mut block_devices = BlockDevices::new();
@@ -192,6 +206,7 @@ impl GuestVolumeManager {
                 mount_point,
                 entry.read_only,
                 entry.container_id.clone(),
+                self.dax_window > 0,
             ));
         }
 
@@ -221,5 +236,42 @@ impl GuestVolumeManager {
 impl Default for GuestVolumeManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dax_of(mgr: &GuestVolumeManager) -> (Vec<u64>, Vec<bool>) {
+        let windows = mgr
+            .build_vmm_config()
+            .fs_shares
+            .shares()
+            .iter()
+            .map(|share| share.dax_window)
+            .collect();
+        let mounts = mgr
+            .build_guest_mounts()
+            .into_iter()
+            .map(|mount| match mount {
+                VolumeConfig::Virtiofs { dax, .. } => dax,
+                other => panic!("unexpected mount {other:?}"),
+            })
+            .collect();
+        (windows, mounts)
+    }
+
+    /// Shares get no DAX window and mount without DAX unless the box asks
+    /// for one; then both sides agree on every share.
+    #[test]
+    fn shares_mount_with_dax_only_when_given_a_window() {
+        let mut mgr = GuestVolumeManager::new();
+        mgr.add_fs_share("shared", PathBuf::from("/s"), None, false, None);
+        mgr.add_fs_share("uservol0", PathBuf::from("/v"), Some("/data"), true, None);
+        assert_eq!(dax_of(&mgr), (vec![0, 0], vec![false, false]));
+
+        mgr.set_dax_window(1 << 29);
+        assert_eq!(dax_of(&mgr), (vec![1 << 29, 1 << 29], vec![true, true]));
     }
 }

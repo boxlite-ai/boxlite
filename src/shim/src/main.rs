@@ -16,9 +16,11 @@
 mod crash_capture;
 
 use std::path::Path;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use boxlite::vmm::checkpoint::{CheckpointOwner, ControlServer, VmRunState};
 use boxlite::vmm::exit_info::ExitErrorKind;
 use boxlite::{
     util,
@@ -110,7 +112,7 @@ fn main() -> BoxliteResult<()> {
     let exit_file = config.exit_file.clone();
 
     // Run the shim and handle errors
-    run_shim(config, timing).inspect_err(|e| {
+    let guest_exit = run_shim(config, timing).inspect_err(|e| {
         let info = ExitInfo::Error {
             exit_code: 1,
             message: e.to_string(),
@@ -120,11 +122,20 @@ fn main() -> BoxliteResult<()> {
         if let Ok(json) = serde_json::to_string(&info) {
             let _ = std::fs::write(&exit_file, json);
         }
-    })
+    })?;
+
+    // A checkpointing VM hands the guest's exit code back instead of exiting
+    // the process; leave with it, as the ordinary VMM does.
+    if let Some(code) = guest_exit {
+        tracing::info!(exit_code = code, "Guest exited");
+        drop(_log_guard);
+        std::process::exit(code);
+    }
+    Ok(())
 }
 
 #[allow(unused_mut)]
-fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()> {
+fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<Option<i32>> {
     tracing::debug!(
         shares = ?config.fs_shares.shares(),
         "Filesystem shares configured"
@@ -150,6 +161,14 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
         // Leak to keep networking alive for VM lifetime (OS cleans up on exit)
         Box::leak(Box::new(gvproxy));
     }
+
+    // Bind the checkpoint control socket before the seccomp filter, which has
+    // no chmod; requests are served once the engine produced the owner.
+    let control = config
+        .checkpoint
+        .as_ref()
+        .map(|launch| ControlServer::bind(&launch.control_socket, &launch.export_dir))
+        .transpose()?;
 
     // Apply VMM seccomp filter with TSYNC (covers all threads including gvproxy)
     #[cfg(target_os = "linux")]
@@ -215,9 +234,18 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
 
     tracing::info!("Box instance created, handing over process control to Box");
 
+    let checkpoint_owner = instance.checkpoint_owner();
+    if let Some(control) = control {
+        let owner = checkpoint_owner.clone().ok_or_else(|| {
+            BoxliteError::Engine("checkpoint launch without a checkpoint owner".into())
+        })?;
+        tracing::info!(socket = %control.path().display(), "Serving checkpoint control");
+        control.serve(owner)?;
+    }
+
     // Install SIGTERM handler for graceful shutdown (all boxes, detached or not).
     // When SIGTERM is received: Guest.Shutdown() RPC (flush qcow2) → re-raise SIGTERM.
-    install_graceful_shutdown_handler(transport);
+    install_graceful_shutdown_handler(transport, checkpoint_owner);
 
     // Start parent watchdog if detach=false.
     // The parent holds the write end of a pipe (fd 3 in this process).
@@ -234,9 +262,9 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     // This may never return (process takeover)
     timing("entering VM (krun_start_enter)");
     match instance.enter() {
-        Ok(()) => {
+        Ok(guest_exit) => {
             tracing::info!("Box execution completed successfully");
-            Ok(())
+            Ok(guest_exit)
         }
         Err(e) => {
             tracing::error!("Box execution failed: {}", e);
@@ -251,6 +279,11 @@ const GRACEFUL_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
 /// Timeout for guest RPC shutdown (filesystem sync) in seconds.
 const GUEST_SHUTDOWN_TIMEOUT_SECS: u64 = 3;
 
+/// How long SIGTERM waits for a checkpoint owner to stop the VM. The owner
+/// queues stop behind an in-flight request, such as a long export; past this
+/// the process ends anyway, since a dead shim also ends the VM.
+const OWNER_STOP_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Install SIGTERM handler for graceful VM shutdown.
 ///
 /// Uses `signal-hook` to catch SIGTERM in a dedicated thread.
@@ -260,7 +293,13 @@ const GUEST_SHUTDOWN_TIMEOUT_SECS: u64 = 3;
 /// triggers a graceful guest shutdown with filesystem sync. Without this handler,
 /// SIGTERM would immediately kill the process, risking qcow2 COW disk buffer loss
 /// and ext4 filesystem corruption on next restart.
-fn install_graceful_shutdown_handler(transport: boxlite_shared::BoxTransport) {
+///
+/// A checkpoint VM skips the guest RPC unless it is running (a paused guest
+/// cannot answer), then stops the owner, bounded by [`OWNER_STOP_TIMEOUT`].
+fn install_graceful_shutdown_handler(
+    transport: boxlite_shared::BoxTransport,
+    checkpoint_owner: Option<Arc<dyn CheckpointOwner>>,
+) {
     use signal_hook::consts::signal::SIGTERM;
     use signal_hook::iterator::Signals;
 
@@ -281,11 +320,18 @@ fn install_graceful_shutdown_handler(transport: boxlite_shared::BoxTransport) {
             }
         }
 
+        let guest_running = checkpoint_owner
+            .as_ref()
+            .is_none_or(|owner| owner.state() == VmRunState::Running);
+
         // Guest.Shutdown() RPC — flush qcow2 buffers (critical for data integrity)
         match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
         {
+            _ if !guest_running => {
+                tracing::info!("Guest not running; skipping the shutdown RPC");
+            }
             Ok(rt) => {
                 let session = boxlite::GuestSession::new(transport);
                 let result = rt.block_on(async {
@@ -312,12 +358,33 @@ fn install_graceful_shutdown_handler(transport: boxlite_shared::BoxTransport) {
             Err(e) => tracing::warn!("Failed to build tokio runtime for guest shutdown: {e}"),
         }
 
+        if let Some(owner) = checkpoint_owner {
+            stop_checkpoint_owner(owner);
+        }
+
         // Re-raise SIGTERM with default handler for correct exit status (128+15=143)
         unsafe {
             libc::signal(libc::SIGTERM, libc::SIG_DFL);
             libc::raise(libc::SIGTERM);
         }
     });
+}
+
+/// Ask the checkpoint owner to stop the VM, giving up after
+/// [`OWNER_STOP_TIMEOUT`].
+fn stop_checkpoint_owner(owner: Arc<dyn CheckpointOwner>) {
+    let (done, finished) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = done.send(owner.stop());
+    });
+    match finished.recv_timeout(OWNER_STOP_TIMEOUT) {
+        Ok(Ok(())) => tracing::info!("Checkpoint VM stopped"),
+        Ok(Err(e)) => tracing::warn!(error = %e.message, "Checkpoint VM stop failed"),
+        Err(_) => tracing::warn!(
+            timeout_secs = OWNER_STOP_TIMEOUT.as_secs(),
+            "Checkpoint VM stop timed out; ending the process"
+        ),
+    }
 }
 
 /// Start a watchdog thread that detects parent death via pipe POLLHUP.

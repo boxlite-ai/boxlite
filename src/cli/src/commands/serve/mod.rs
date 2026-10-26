@@ -3144,6 +3144,17 @@ mod tests {
         .await;
     }
 
+    /// Checkpoints are embedded-runtime only, so an uploaded archive must not
+    /// create a checkpoint-enabled box behind the server.
+    #[tokio::test]
+    async fn serve_import_rejects_checkpoint_enabled_archive_before_provisioning() {
+        assert_uploaded_archive_rejected_before_provisioning(
+            serde_json::json!({"advanced": {"checkpoint_enabled": true}}),
+            "checkpoint",
+        )
+        .await;
+    }
+
     #[tokio::test]
     async fn serve_import_rejects_host_volume_archive_before_provisioning() {
         assert_uploaded_archive_rejected_before_provisioning(

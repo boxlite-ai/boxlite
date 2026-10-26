@@ -549,6 +549,14 @@ impl ExecutionState {
         result
     }
 
+    /// The process's PID while it still runs; checks `/proc`, so call it
+    /// outside the registry lock.
+    pub(crate) fn running_pid(&self) -> Option<u32> {
+        self.process
+            .filter(|process| process.is_current())
+            .map(|process| process.pid().as_raw() as u32)
+    }
+
     pub(crate) async fn owned_process_is_current(&self) -> bool {
         self.shutdown_managed
             && !self.inner.lock().await.released

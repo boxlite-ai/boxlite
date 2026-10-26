@@ -5,12 +5,13 @@
 pub(crate) mod archive;
 mod attach;
 pub(crate) mod box_impl;
+pub(crate) mod checkpoint;
 mod clone_export;
 pub(crate) mod config;
 pub mod copy;
 mod crash_report;
 mod exec;
-mod init;
+pub(crate) mod init;
 pub(crate) mod local_snapshot;
 mod manager;
 mod network;
@@ -22,6 +23,7 @@ mod state;
 mod watcher;
 
 pub use attach::AttachOptions;
+pub use checkpoint::PauseOptions;
 pub use copy::{CopyOptions, CopySourceKind};
 pub(crate) use crash_report::CrashReport;
 pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
@@ -222,6 +224,36 @@ impl LiteBox {
             })?;
             backend.copy_out_stream(src, opts).await
         })
+    }
+
+    /// Pause a checkpoint-enabled box: its vCPUs and devices stop at one
+    /// consistent cut (no SIGSTOP, no guest filesystem freeze). While paused
+    /// the box refuses exec, attach, copies, metrics, SSH and network changes;
+    /// [`Self::resume`] or [`Self::stop`] end the pause. Local runtime only.
+    pub async fn pause(&self, options: PauseOptions) -> BoxliteResult<()> {
+        self.local_backend("pause")?.pause(options).await
+    }
+
+    /// Let a paused checkpoint-enabled box run again. Local runtime only.
+    pub async fn resume(&self) -> BoxliteResult<()> {
+        self.local_backend("resume")?.resume().await
+    }
+
+    /// Write a paused checkpoint-enabled box to one new BoxCheckpoint file
+    /// at `path`, which must not exist yet. The box stays paused whether the
+    /// export succeeds or fails. Local runtime only.
+    pub async fn export_checkpoint(&self, path: impl AsRef<std::path::Path>) -> BoxliteResult<()> {
+        self.local_backend("export_checkpoint")?
+            .export_checkpoint(path.as_ref())
+            .await
+    }
+
+    pub(crate) fn local_backend(&self, op: &str) -> BoxliteResult<Arc<box_impl::BoxImpl>> {
+        self.box_backend
+            .clone()
+            .as_any_arc()
+            .downcast::<box_impl::BoxImpl>()
+            .map_err(|_| BoxliteError::Unsupported(format!("{op} requires the local runtime")))
     }
 
     /// Get a network handle for raw tunnel operations.

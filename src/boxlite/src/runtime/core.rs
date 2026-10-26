@@ -379,6 +379,20 @@ impl BoxliteRuntime {
         self.backend.import_box(archive, name).await
     }
 
+    /// Import a BoxCheckpoint file written by
+    /// [`LiteBox::export_checkpoint`] as a new box with a new ID, paused.
+    ///
+    /// The guest keeps its container ID, processes and execution IDs;
+    /// [`LiteBox::resume`] continues them. Local runtime on Linux x86_64 with
+    /// KVM only; elsewhere this returns `Unsupported`.
+    pub async fn import_checkpoint(
+        &self,
+        path: impl AsRef<std::path::Path>,
+        options: crate::runtime::options::CheckpointImportOptions,
+    ) -> BoxliteResult<LiteBox> {
+        self.backend.import_checkpoint(path.as_ref(), options).await
+    }
+
     // ========================================================================
     // SHUTDOWN OPERATIONS
     // ========================================================================

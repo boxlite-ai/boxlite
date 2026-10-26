@@ -33,6 +33,18 @@ pub const KRUN_KERNEL_FORMAT_IMAGE_BZ2: u32 = 3;
 pub const KRUN_KERNEL_FORMAT_IMAGE_GZ: u32 = 4;
 pub const KRUN_KERNEL_FORMAT_IMAGE_ZSTD: u32 = 5;
 
+// Checkpointing constants from libkrun.h (Linux x86_64 KVM only; elsewhere
+// every krun_snapshot_* call returns -ENOTSUP).
+pub const KRUN_SNAPSHOT_PAUSE_HOST_WRITERS_STOPPED: u32 = 1 << 0;
+
+pub const KRUN_SNAPSHOT_STATE_CONFIGURED: u32 = 0;
+pub const KRUN_SNAPSHOT_STATE_STARTING: u32 = 1;
+pub const KRUN_SNAPSHOT_STATE_RUNNING: u32 = 2;
+pub const KRUN_SNAPSHOT_STATE_PAUSED: u32 = 3;
+pub const KRUN_SNAPSHOT_STATE_EXITED: u32 = 4;
+pub const KRUN_SNAPSHOT_STATE_FAILED: u32 = 5;
+pub const KRUN_SNAPSHOT_STATE_STOPPED: u32 = 6;
+
 extern "C" {
     pub fn krun_init_log(target: i32, level: u32, style: u32, flags: u32) -> i32;
     pub fn krun_set_log_level(level: u32) -> i32;
@@ -140,5 +152,45 @@ extern "C" {
         device: *const c_char,
         fstype: *const c_char,
         options: *const c_char,
+    ) -> i32;
+
+    /// Put the context in checkpointing mode. Must precede every
+    /// `krun_add_net_*` call; `flags` must be 0.
+    pub fn krun_snapshot_enable(ctx_id: u32, flags: u32) -> i32;
+
+    /// Restore `image_path` paused at `krun_start_enter` instead of booting.
+    /// `disk_dir` / `fs_dir` are absolute, must not exist, and are given
+    /// exactly when the image has disks / shares (NULL otherwise).
+    pub fn krun_snapshot_import(
+        ctx_id: u32,
+        image_path: *const c_char,
+        disk_dir: *const c_char,
+        fs_dir: *const c_char,
+    ) -> i32;
+
+    /// RUNNING -> PAUSED. Blocks until the owner finished.
+    pub fn krun_snapshot_pause(ctx_id: u32, flags: u32) -> i32;
+
+    /// PAUSED -> RUNNING. Blocks until the owner finished.
+    pub fn krun_snapshot_resume(ctx_id: u32) -> i32;
+
+    /// Write the paused VM's image to `path` (absolute, must not exist).
+    /// No timeout; may take as long as the file I/O.
+    pub fn krun_snapshot_export(ctx_id: u32, path: *const c_char) -> i32;
+
+    /// End execution from RUNNING or PAUSED. Queued behind an in-flight request.
+    pub fn krun_snapshot_stop(ctx_id: u32) -> i32;
+
+    /// Non-blocking read of the last published state; `exit_code` is valid
+    /// when the state is `KRUN_SNAPSHOT_STATE_EXITED`. Either pointer may be NULL.
+    pub fn krun_snapshot_get_state(ctx_id: u32, state: *mut u32, exit_code: *mut i32) -> i32;
+
+    /// Root of the restored copy of share `tag`, NUL-terminated into `path`.
+    /// Returns the length without NUL, `-ERANGE` if `path_len` is too small.
+    pub fn krun_snapshot_get_restored_share(
+        ctx_id: u32,
+        tag: *const c_char,
+        path: *mut c_char,
+        path_len: usize,
     ) -> i32;
 }

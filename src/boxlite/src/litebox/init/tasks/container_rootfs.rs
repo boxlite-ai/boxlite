@@ -63,6 +63,17 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             )
         };
 
+        // An imported box runs from its restored RAW disk and the config its
+        // source booted with: no image, cache or source path is read.
+        let restored = ctx.lock().await.restored.clone();
+        if let Some(restored) = restored {
+            let disk = restored.container_disk()?;
+            let mut ctx = ctx.lock().await;
+            ctx.container_image_config = Some(restored.container_image_config.clone());
+            ctx.container_disk = Some(Disk::new(disk.path.clone(), DiskFormat::Ext4, true));
+            return Ok(());
+        }
+
         let (container_image_config, disk, resolved_image) = run_container_rootfs(
             &rootfs_spec,
             &env,
@@ -124,46 +135,21 @@ async fn run_container_rootfs(
         }
 
         let disk = Disk::new(disk_path.clone(), DiskFormat::Qcow2, true);
-
-        // Load container config
-        let image = match rootfs_spec {
-            RootfsSpec::Image(r) => {
-                image_for_restart(&runtime.image_manager, r, built_from).await?
-            }
-            RootfsSpec::RootfsPath(path) => {
-                let bundle_dir = std::path::Path::new(path);
-
-                if !bundle_dir.exists() {
-                    return Err(BoxliteError::Storage(format!(
-                        "Rootfs path does not exist: {}",
-                        path
-                    )));
-                }
-
-                runtime
-                    .image_manager
-                    .load_from_local(bundle_dir.to_path_buf(), format!("local:{}", path))
-                    .await?
-            }
-        };
-        let image_config = image.load_config().await?;
-        let mut container_image_config = ContainerImageConfig::from_oci_config(&image_config)?;
-        if !env.is_empty() {
-            container_image_config.merge_env(env.to_vec());
-        }
-        apply_user_overrides(
-            &mut container_image_config,
+        let container_image_config = restart_image_config(
+            runtime,
+            rootfs_spec,
+            env,
             entrypoint_override,
             cmd_override,
             user_override,
             working_dir_override,
-        );
+            built_from,
+        )
+        .await?;
 
-        return Ok((
-            container_image_config,
-            disk,
-            resolved_image_of(rootfs_spec, reuse_rootfs, &image),
-        ));
+        // A restart reads the image again but keeps the disk an earlier
+        // start built, so it records nothing (see `records_resolved_image`).
+        return Ok((container_image_config, disk, None));
     }
 
     // Fresh start: pull or load image
@@ -218,6 +204,54 @@ async fn run_container_rootfs(
         disk,
         resolved_image_of(rootfs_spec, reuse_rootfs, &image),
     ))
+}
+
+/// The container config a restart boots with: the image the box's disk was
+/// built from (see [`image_for_restart`]), with the box's env and overrides.
+/// A checkpoint export records the same config, so a restored box never
+/// needs the image.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn restart_image_config(
+    runtime: &SharedRuntimeImpl,
+    rootfs_spec: &RootfsSpec,
+    env: &[(String, String)],
+    entrypoint_override: Option<&[String]>,
+    cmd_override: Option<&[String]>,
+    user_override: Option<&str>,
+    working_dir_override: Option<&str>,
+    built_from: Option<&ResolvedImage>,
+) -> BoxliteResult<ContainerImageConfig> {
+    let image = match rootfs_spec {
+        RootfsSpec::Image(r) => image_for_restart(&runtime.image_manager, r, built_from).await?,
+        RootfsSpec::RootfsPath(path) => {
+            let bundle_dir = std::path::Path::new(path);
+
+            if !bundle_dir.exists() {
+                return Err(BoxliteError::Storage(format!(
+                    "Rootfs path does not exist: {}",
+                    path
+                )));
+            }
+
+            runtime
+                .image_manager
+                .load_from_local(bundle_dir.to_path_buf(), format!("local:{}", path))
+                .await?
+        }
+    };
+    let image_config = image.load_config().await?;
+    let mut container_image_config = ContainerImageConfig::from_oci_config(&image_config)?;
+    if !env.is_empty() {
+        container_image_config.merge_env(env.to_vec());
+    }
+    apply_user_overrides(
+        &mut container_image_config,
+        entrypoint_override,
+        cmd_override,
+        user_override,
+        working_dir_override,
+    );
+    Ok(container_image_config)
 }
 
 /// Create COW disk from base rootfs.

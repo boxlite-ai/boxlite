@@ -323,6 +323,9 @@ pub struct InitPipelineContext {
     /// image config from the same build. `None` for a box that has never built
     /// a disk from a registry image, and for one older than the record.
     pub built_from: Option<crate::images::ResolvedImage>,
+    /// The storage an imported box runs from; when set, the rootfs tasks
+    /// read nothing from images or the guest rootfs cache.
+    pub restored: Option<crate::litebox::checkpoint::RestoredStorage>,
     pub container_disk: Option<Disk>,
     pub guest_disk: Option<Disk>,
     pub volume_mgr: Option<GuestVolumeManager>,
@@ -364,6 +367,7 @@ impl InitPipelineContext {
             container_image_config: None,
             resolved_image: None,
             built_from,
+            restored: None,
             container_disk: None,
             guest_disk: None,
             volume_mgr: None,

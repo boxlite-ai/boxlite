@@ -1,7 +1,8 @@
 PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:guest-perms test\:guest-artifacts test\:perf\:import-export _ensure-infra-deps test\:apps\:infra test\:apps\:infra-config test\:skill\:boxlite-diagrams
 PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm test\:vmm\:boot
-PHONY_TARGETS += test\:apps\:runner
+PHONY_TARGETS += test\:apps\:runner test\:snapshot\:rootless test\:shim\:linkage
 PHONY_TARGETS += test\:apps\:dashboard
+PHONY_TARGETS += test\:checkpoint\:helper test\:checkpoint\:acceptance\:build test\:checkpoint\:acceptance _ensure-linux-x86_64
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -274,6 +275,44 @@ test\:unit\:vmm:
 test\:vmm\:boot:
 	@python3 "$(PROJECT_ROOT)/src/vmm/boot/tests/test_build.py"
 	@python3 "$(PROJECT_ROOT)/src/vmm/boot/tests/test_box_build.py"
+
+# libkrun's guest-visible virtio-fs archive tests as an unprivileged user
+# under real bwrap and the production VMM seccomp filter (Linux x86_64).
+test\:snapshot\:rootless:
+	@bash "$(PROJECT_ROOT)/scripts/test/test-snapshot-rootless.sh"
+
+# Build the real static Linux shim (no BOXLITE_DEPS_STUB) and check that the
+# libkrun checkpoint ABI and gvproxy resolve in it (Linux x86_64, no KVM).
+test\:shim\:linkage:
+	@bash "$(PROJECT_ROOT)/scripts/test/test-shim-linkage.sh"
+
+# Checkpoint acceptance (src/boxlite/tests/checkpoint_acceptance.rs): one box is
+# paused, exported, destroyed and imported into an empty runtime, and the same
+# guest process must continue. The test is #[ignore]d so ordinary suites never
+# count it; only these targets run or build it, and they fail off Linux x86_64.
+CHECKPOINT_HELPER ?= $(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/checkpoint-helper/checkpoint_helper
+# Default features: the test drives the shim as a separate process, so it links
+# neither the in-process libkrun engine (`krun`) nor libgvproxy (`gvproxy`).
+CHECKPOINT_ACCEPTANCE = cargo test -p boxlite --test checkpoint_acceptance
+
+_ensure-linux-x86_64:
+	@test "$$(uname -s -m)" = "Linux x86_64" || { echo "Linux x86_64 is required" >&2; exit 1; }
+
+# Static guest helper the acceptance test copies into the box.
+test\:checkpoint\:helper: _ensure-linux-x86_64
+	@mkdir -p "$(dir $(CHECKPOINT_HELPER))"
+	@$${CC:-cc} -static -O2 -Wall -Wextra -Werror -o "$(CHECKPOINT_HELPER)" \
+		"$(PROJECT_ROOT)/src/boxlite/tests/fixtures/checkpoint_helper.c"
+	@echo "checkpoint helper: $(CHECKPOINT_HELPER)"
+
+# Compile the helper and the acceptance test without running them (no KVM needed).
+test\:checkpoint\:acceptance\:build: test\:checkpoint\:helper
+	@$(CHECKPOINT_ACCEPTANCE) --no-run
+
+# Run it: needs /dev/kvm, the debug runtime and registry access for alpine:latest.
+test\:checkpoint\:acceptance: _ensure-kvm $(if $(SETUP_DONE),,runtime\:debug) test\:checkpoint\:helper
+	@BOXLITE_CHECKPOINT_HELPER="$(CHECKPOINT_HELPER)" $(CHECKPOINT_ACCEPTANCE) -- --ignored \
+		--exact checkpoint_continues_the_same_guest_process_in_a_new_runtime --test-threads=1 --nocapture
 
 # Missing /dev/kvm must fail hardware qualification, not report skipped tests as a pass.
 _ensure-kvm:

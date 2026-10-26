@@ -342,6 +342,7 @@ impl VmmController for ShimController {
             console_output: config.console_output.clone(),
             exit_file: config.exit_file.clone(),
             detach: config.detach,
+            checkpoint: config.checkpoint.clone(),
         };
 
         // Serialize the config for passing to subprocess

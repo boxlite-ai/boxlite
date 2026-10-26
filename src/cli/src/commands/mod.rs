@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod checkpoint;
 pub mod cp;
 pub mod create;
 pub mod exec;

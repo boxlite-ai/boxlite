@@ -55,6 +55,7 @@ impl BoxImpl {
         count: usize,
         names: Vec<String>,
     ) -> BoxliteResult<Vec<crate::LiteBox>> {
+        self.refuse_for_checkpoint("cloning")?;
         if count == 0 {
             return Ok(Vec::new());
         }
@@ -193,6 +194,7 @@ impl BoxImpl {
         _options: crate::runtime::options::ExportOptions,
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
+        self.refuse_for_checkpoint("a disk export")?;
         let t0 = Instant::now();
         let _lock = self.disk_ops.lock().await;
 

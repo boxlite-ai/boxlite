@@ -8,13 +8,16 @@ use nix::mount::{mount, MsFlags};
 pub struct VirtiofsMount;
 
 impl VirtiofsMount {
-    /// Mount virtiofs tag to mount point.
-    pub fn mount(tag: &str, mount_point: &Path, read_only: bool) -> BoxliteResult<()> {
+    /// Mount virtiofs tag to mount point; with `dax`, through the share's
+    /// DAX window. A kernel without FUSE DAX fails the mount: there is no
+    /// fallback to a mount without it.
+    pub fn mount(tag: &str, mount_point: &Path, read_only: bool, dax: bool) -> BoxliteResult<()> {
         tracing::info!(
-            "Mounting virtiofs: {} → {} ({})",
+            "Mounting virtiofs: {} → {} ({}{})",
             tag,
             mount_point.display(),
-            if read_only { "ro" } else { "rw" }
+            if read_only { "ro" } else { "rw" },
+            if dax { ", dax" } else { "" }
         );
 
         // Create mount point
@@ -36,7 +39,7 @@ impl VirtiofsMount {
             mount_point,
             Some("virtiofs"),
             flags,
-            None::<&str>,
+            dax.then_some("dax=always"),
         )
         .map_err(|e| {
             BoxliteError::Storage(format!(

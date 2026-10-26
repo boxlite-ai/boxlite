@@ -1,6 +1,6 @@
 use crate::cli::{
-    CapabilityFlags, GlobalFlags, KernelFlags, ManagementFlags, NetworkFlags, ProcessFlags,
-    PublishFlags, ResourceFlags, VolumeFlags,
+    CapabilityFlags, CheckpointFlags, GlobalFlags, KernelFlags, ManagementFlags, NetworkFlags,
+    ProcessFlags, PublishFlags, ResourceFlags, VolumeFlags,
 };
 use crate::terminal::StreamManager;
 use crate::util::to_shell_exit_code;
@@ -30,6 +30,9 @@ pub struct RunArgs {
 
     #[command(flatten)]
     pub management: ManagementFlags,
+
+    #[command(flatten)]
+    pub checkpoint: CheckpointFlags,
 
     /// Run the box in the background (detach)
     #[arg(short = 'd', long)]
@@ -102,6 +105,7 @@ fn build_options(
     args.volume.apply_to(&mut options, home)?;
     args.network.apply_to(&mut options)?;
     args.process.apply_to(&mut options)?;
+    args.checkpoint.apply_to(&mut options);
 
     options.detach = args.detach;
     if args.rm && !args.detach {
@@ -377,5 +381,26 @@ mod tests {
             .expect_err("missing source must be rejected");
 
         assert!(err.to_string().contains("IMAGE or --rootfs"));
+    }
+
+    #[test]
+    fn enable_checkpoint_is_opt_in() {
+        for (flag, expected) in [(None, false), (Some("--enable-checkpoint"), true)] {
+            let args: Vec<&str> = ["boxlite", "run", "-d"]
+                .into_iter()
+                .chain(flag)
+                .chain(["alpine:latest"])
+                .collect();
+            let cli = Cli::try_parse_from(args).expect("run should parse");
+            let Commands::Run(args) = cli.command else {
+                panic!("expected run command");
+            };
+            let (rootfs, command_args) = args.rootfs_and_command().expect("rootfs resolves");
+            let command_args = command_args.to_vec();
+
+            let opts = build_options(&args, None, rootfs, &command_args).expect("options build");
+
+            assert_eq!(opts.advanced.checkpoint_enabled, expected, "{flag:?}");
+        }
     }
 }

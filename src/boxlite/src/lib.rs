@@ -52,7 +52,7 @@ pub use litebox::archive::ArchiveManifest;
 pub use litebox::snapshot_mgr::SnapshotInfo;
 pub use litebox::{
     AttachOptions, BoxCommand, CopyOptions, CopySourceKind, ExecResult, ExecStderr, ExecStdin,
-    ExecStdout, Execution, ExecutionId, HealthState, HealthStatus,
+    ExecStdout, Execution, ExecutionId, HealthState, HealthStatus, PauseOptions,
 };
 pub use litebox::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
 pub use metrics::{BoxMetrics, RuntimeMetrics};
@@ -61,9 +61,10 @@ pub use runtime::advanced_options::{
     ResourceLimits, SecurityOptions,
 };
 pub use runtime::options::{
-    BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, ImageRegistry,
-    ImageRegistryAuth, ImageRegistryProxy, InboundNetworkConfig, NetworkMode, NetworkSpec,
-    OutboundNetworkConfig, PortProtocol, RegistryTransport, RootfsSpec, Secret, SnapshotOptions,
+    BoxArchive, BoxOptions, BoxliteOptions, CheckpointImportOptions, CloneOptions, ExportOptions,
+    ImageRegistry, ImageRegistryAuth, ImageRegistryProxy, InboundNetworkConfig, NetworkMode,
+    NetworkSpec, OutboundNetworkConfig, PortProtocol, RegistryTransport, RootfsSpec, Secret,
+    SnapshotOptions,
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

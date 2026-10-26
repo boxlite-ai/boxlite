@@ -10,8 +10,12 @@ use std::path::{Path, PathBuf};
 
 use crate::disk::constants::qcow2::{DEFAULT_DISK_SIZE_GB, FSIZE_DISK_MULTIPLIER};
 use crate::runtime::advanced_options::AdvancedBoxOptions;
+use crate::runtime::constants::vm_defaults::DEFAULT_MEMORY_MIB;
 use crate::runtime::types::Bytes;
 use std::fmt;
+
+/// Room a checkpoint export has for share payloads beyond RAM and disks.
+const CHECKPOINT_SHARES_ALLOWANCE_GIB: u64 = 4;
 
 // ============================================================================
 // Runtime Options
@@ -654,6 +658,8 @@ impl BoxOptions {
     /// - `advanced.security.network_enabled=false` is not mistaken for a
     ///   guest-networking switch (it gates host jailer grants only)
     /// - every mount in `mounts` fits its type
+    /// - `advanced.checkpoint_enabled` only on a host and configuration that
+    ///   can checkpoint (see [`crate::vmm::checkpoint::support`])
     pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
@@ -735,7 +741,10 @@ impl BoxOptions {
             mount.validate()?;
         }
 
-        Ok(())
+        crate::vmm::checkpoint::support::validate_options(
+            self,
+            crate::vmm::checkpoint::support::Host::current(),
+        )
     }
 
     /// Validate a persisted box without requiring ingestion sources to remain.
@@ -767,16 +776,31 @@ impl BoxOptions {
         // runaway-write backstop, not a capacity policy. Capacity is the qcow2
         // virtual size, where a guest that fills its disk gets a clean `ENOSPC`
         // inside the box rather than a host-side `SIGXFSZ` that kills the VM.
-        self.advanced.security.resource_limits.max_file_size = Some(
-            Bytes::from_gib(
-                self.disk_size_gb
-                    .unwrap_or(DEFAULT_DISK_SIZE_GB)
-                    .saturating_mul(FSIZE_DISK_MULTIPLIER),
-            )
-            .as_bytes(),
-        );
+        self.advanced.security.resource_limits.max_file_size = Some(self.shim_file_size_limit());
 
         Ok(())
+    }
+
+    /// The jailed shim's `RLIMIT_FSIZE` for this box (see [`Self::sanitize`]).
+    pub(crate) fn shim_file_size_limit(&self) -> u64 {
+        let disks = Bytes::from_gib(
+            self.disk_size_gb
+                .unwrap_or(DEFAULT_DISK_SIZE_GB)
+                .saturating_mul(FSIZE_DISK_MULTIPLIER),
+        )
+        .as_bytes();
+        if !self.advanced.checkpoint_enabled {
+            return disks;
+        }
+        // A checkpoint-enabled box's shim also writes the whole VM into one
+        // export file: its RAM, every disk at full size and the share payloads.
+        // The disk slack covers the disks and the guest rootfs; add the RAM and
+        // a bounded allowance for the shares. libkrun refuses an export that
+        // would still pass the limit, and the box stays paused.
+        let memory = u64::from(self.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB)) << 20;
+        disks
+            .saturating_add(memory)
+            .saturating_add(Bytes::from_gib(CHECKPOINT_SHARES_ALLOWANCE_GIB).as_bytes())
     }
 }
 
@@ -1408,6 +1432,14 @@ pub(crate) fn normalize_legacy_ports(ports: &mut Vec<PortSpec>) -> usize {
 pub(crate) enum ArchiveImportPolicy {
     Trusted,
     UntrustedRemote,
+}
+
+/// Options for [`BoxliteRuntime::import_checkpoint`](crate::BoxliteRuntime::import_checkpoint).
+#[derive(Debug, Clone, Default)]
+pub struct CheckpointImportOptions {
+    /// Name of the new box; `None` leaves it unnamed. The source box's name
+    /// is never reused.
+    pub name: Option<String>,
 }
 
 /// A portable box archive (`.boxlite` file).
@@ -3062,6 +3094,26 @@ mod tests {
             options.advanced.security.resource_limits.max_file_size,
             Some(Bytes::from_gib(40).as_bytes()),
             "a 20 GiB box gets a 40 GiB ceiling"
+        );
+    }
+
+    /// A checkpoint export holds RAM and disks in one file, so a checkpoint
+    /// box's ceiling adds its RAM and the share allowance to the disk slack.
+    /// The default 10 GiB disk alone (20 GiB) is below a 16 GiB-RAM image.
+    #[test]
+    fn checkpoint_boxes_get_room_for_their_ram_in_the_file_size_limit() {
+        let mut options = BoxOptions {
+            memory_mib: Some(16 * 1024),
+            ..BoxOptions::default()
+        };
+        assert_eq!(
+            options.shim_file_size_limit(),
+            Bytes::from_gib(20).as_bytes()
+        );
+        options.advanced.checkpoint_enabled = true;
+        assert_eq!(
+            options.shim_file_size_limit(),
+            Bytes::from_gib(20 + 16 + CHECKPOINT_SHARES_ALLOWANCE_GIB).as_bytes()
         );
     }
 

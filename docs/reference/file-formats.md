@@ -77,6 +77,21 @@ A box's disks are copy-on-write overlays on read-only ext4 images:
 
 Deleting these files while boxes exist breaks those boxes.
 
+## Checkpoint files
+
+`boxlite checkpoint export` (Rust `LiteBox::export_checkpoint`) writes one uncompressed tar with
+exactly two regular members, in order:
+
+| Member | Contents |
+|---|---|
+| `checkpoint.json` (≤ 1 MiB) | Manifest: `format: "boxlite-checkpoint"`, `version: 1`, `created_at`, `source_box_id`, `guest` (container ID, guest agent boot ID, init PID), `image` (`krunvm_version: 8`, `length`, `sha256`), `layout` (vCPUs, RAM, disks, shares with their DAX window size, NIC MAC, vsock ports), `boot` (box options, outbound policy and container image config for a later cold start) |
+| `vm.krunvm` | libkrun KRUNVM v8 image of the paused VM: RAM, devices, both disks as raw segments and every share's files |
+
+The file ends with the tar end marker (two zero blocks) right after `vm.krunvm`. Import refuses any
+other member, member type, order, version, length or checksum, appended or missing bytes, and an
+image whose device layout differs from the manifest or from the layout the box's options boot. The file holds guest memory and data: protect it
+like the box's disks. See the [checkpoints guide](../guides/checkpoints.md).
+
 ## OCI image cache
 
 BoxLite caches OCI images under `~/.boxlite/images/` at the layer level, so images that share

@@ -27,6 +27,7 @@ use super::box_impl::BoxImpl;
 use super::state::{BoxState, HealthStatus};
 use crate::portal::interfaces::GuestInterface;
 use crate::runtime::rt_impl::RuntimeImpl;
+use crate::vmm::checkpoint::ControlClient;
 use crate::{BoxID, HealthCheckOptions, HealthState};
 
 /// The optional health-probing half of a [`BoxWatcher`].
@@ -46,11 +47,18 @@ pub(crate) struct HealthProbe {
     started_at: Instant,
     /// Cache of the last persisted health status, to skip redundant DB writes.
     last: HealthStatus,
+    /// A checkpoint box's control socket. The guest is pinged only while its
+    /// owner reports it running with no pause under way, and a failed ping
+    /// counts only if it still runs unpaused afterwards: a paused guest cannot
+    /// answer, and this process's cached status may predate a pause by
+    /// another one.
+    checkpoint: Option<ControlClient>,
 }
 
 /// Outcome of a single probe.
 enum Probe {
-    /// Still inside `start_period` — not counted either way.
+    /// Not counted either way: still inside `start_period`, or a checkpoint
+    /// box's guest was not running unpaused for the whole ping.
     Skipped,
     Healthy,
     Failed,
@@ -70,7 +78,14 @@ impl HealthProbe {
             start_period: config.start_period,
             started_at: Instant::now(),
             last,
+            checkpoint: None,
         }
+    }
+
+    /// Ask `control` before every ping (checkpoint-enabled boxes).
+    pub(crate) fn with_checkpoint_control(mut self, control: ControlClient) -> Self {
+        self.checkpoint = Some(control);
+        self
     }
 
     /// Ping the guest once (after `start_period`). The shim is known alive — the
@@ -80,9 +95,25 @@ impl HealthProbe {
         if self.started_at.elapsed() < self.start_period {
             return Probe::Skipped;
         }
+        let running_since = match &self.checkpoint {
+            Some(control) => match super::checkpoint::running_since(control).await {
+                Some(mutations) => Some(mutations),
+                None => return Probe::Skipped,
+            },
+            None => None,
+        };
         match timeout(self.check_timeout, self.guest.ping()).await {
             Ok(Ok(_)) => Probe::Healthy,
-            Ok(Err(_)) | Err(_) => Probe::Failed,
+            Ok(Err(_)) | Err(_) => {
+                // A pause that overlapped the ping explains the failure, even
+                // one already resumed; it says nothing about the guest.
+                if let Some(control) = &self.checkpoint
+                    && super::checkpoint::running_since(control).await != running_since
+                {
+                    return Probe::Skipped;
+                }
+                Probe::Failed
+            }
         }
     }
 }
@@ -328,5 +359,152 @@ async fn tick(interval: Option<Duration>) {
     match interval {
         Some(interval) => tokio::time::sleep(interval).await,
         None => std::future::pending().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vmm::checkpoint::fake::{self, FakeOwner};
+    use crate::vmm::checkpoint::{ControlRequest, VmRunState};
+    use std::sync::mpsc::{Receiver, channel};
+
+    /// A guest endpoint that accepts every connection and never answers, so a
+    /// ping stays in flight until the probe's timeout. Each accept is reported.
+    fn silent_guest() -> (GuestInterface, Receiver<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (accepted, rx) = channel();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming() {
+                held.push(stream.unwrap());
+                if accepted.send(()).is_err() {
+                    break;
+                }
+            }
+        });
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://{address}"))
+            .unwrap()
+            .connect_lazy();
+        (GuestInterface::new(channel), rx)
+    }
+
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        owner: Arc<FakeOwner>,
+        control: ControlClient,
+        probe: HealthProbe,
+        accepted: Receiver<()>,
+    }
+
+    fn fixture() -> Fixture {
+        let dir = tempfile::TempDir::new_in("/tmp").unwrap();
+        let socket = dir.path().join("ctl.sock");
+        let export_dir = dir.path().join("checkpoint");
+        std::fs::create_dir(&export_dir).unwrap();
+        let owner = FakeOwner::new(VmRunState::Running);
+        fake::serve(&socket, &export_dir, owner.clone());
+        let control = ControlClient::new(&socket);
+        let (guest, accepted) = silent_guest();
+        let probe = HealthProbe::new(
+            guest,
+            HealthCheckOptions {
+                interval: Duration::from_secs(30),
+                timeout: Duration::from_secs(2),
+                retries: 1,
+                start_period: Duration::ZERO,
+            },
+            HealthStatus::new(),
+        )
+        .with_checkpoint_control(control.clone());
+        Fixture {
+            _dir: dir,
+            owner,
+            control,
+            probe,
+            accepted,
+        }
+    }
+
+    /// Wait until the probe's ping reached the guest; hand the receiver back
+    /// so the endpoint keeps holding the connection.
+    async fn wait_for_ping(accepted: Receiver<()>) -> Receiver<()> {
+        tokio::task::spawn_blocking(move || {
+            accepted.recv().unwrap();
+            accepted
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn checkpoint_health_counts_a_failed_ping_of_a_running_guest() {
+        let mut fx = fixture();
+        assert!(matches!(fx.probe.check().await, Probe::Failed));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn checkpoint_health_does_not_count_a_ping_that_a_pause_overlapped() {
+        // Paused while the ping waits.
+        let fx = fixture();
+        let mut probe = fx.probe;
+        let check = tokio::spawn(async move { probe.check().await });
+        let _accepted = wait_for_ping(fx.accepted).await;
+        let paused = fx
+            .control
+            .send(&ControlRequest::Pause {
+                host_writers_stopped: true,
+            })
+            .await
+            .unwrap();
+        assert_eq!(paused.state, VmRunState::Paused);
+        assert!(
+            matches!(check.await.unwrap(), Probe::Skipped),
+            "paused during the ping"
+        );
+
+        // Paused and resumed again while the ping waits: the owner reports
+        // running at both ends, but the guest was frozen in between.
+        let fx = fixture();
+        let mut probe = fx.probe;
+        let check = tokio::spawn(async move { probe.check().await });
+        let _accepted = wait_for_ping(fx.accepted).await;
+        for request in [
+            ControlRequest::Pause {
+                host_writers_stopped: true,
+            },
+            ControlRequest::Resume,
+        ] {
+            assert!(fx.control.send(&request).await.unwrap().error.is_none());
+        }
+        assert!(
+            matches!(check.await.unwrap(), Probe::Skipped),
+            "paused and resumed during the ping"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn checkpoint_health_does_not_ping_while_a_pause_is_in_flight() {
+        let mut fx = fixture();
+        let (entered, release) = fx.owner.hold();
+        let pausing = {
+            let control = fx.control.clone();
+            tokio::spawn(async move {
+                control
+                    .send(&ControlRequest::Pause {
+                        host_writers_stopped: true,
+                    })
+                    .await
+            })
+        };
+        tokio::task::spawn_blocking(move || entered.recv().unwrap())
+            .await
+            .unwrap();
+        // The owner still reports running until the pause completes.
+        assert!(matches!(fx.probe.check().await, Probe::Skipped));
+        assert!(fx.accepted.try_recv().is_err(), "no ping was sent");
+        release.send(()).unwrap();
+        assert_eq!(pausing.await.unwrap().unwrap().state, VmRunState::Paused);
     }
 }
