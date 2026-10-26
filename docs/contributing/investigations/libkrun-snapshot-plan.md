@@ -23,7 +23,7 @@
 | libkrun | [`e12b9b3780ffa8df9f3e1797b217d13453479167`][libkrun] | BoxLite gitlink 指定的 VMM 和设备实现 |
 | libkrunfw | `e0647fa7a3932c4570fb2c0fd483b9f7a382ebdd` | 同一 BoxLite 提交的固件 gitlink |
 
-本分支从 [lfld287/libkrun](https://github.com/lfld287/libkrun) fork 获取阶段 1 实现；`.gitmodules`、子模块初始化脚本的精确 URL 白名单和测试 fixture 同步使用该来源，保证新克隆可通过 `make setup:submodules` 获取对应 gitlink。libkrunfw 仍来自 boxlite-ai；上表及下文固定提交链接保留原始基线来源，不随 fetch URL 改写。URL 调整仅做 `bash -n` 与 `git diff --check` 静态检查，未运行初始化测试、构建或 Linux KVM 验收。
+libkrun gitlink 固定为快照实现 `f68445978447fd0fada64f74b1892835b931a767`，经 boxlite-ai/libkrun `x_features` 的 Draft PR 提供；`.gitmodules`、子模块初始化脚本的精确 URL 白名单和测试 fixture 均使用 boxlite-ai 来源（开发期间曾临时改为个人 fork，迁移到 BoxLite `x_features` 时已恢复）。上表及下文固定提交链接保留原始基线，不随 gitlink 改写；迁移的验证见文末“迁移到 x_features”。
 
 - 复用已有 KVM 状态读写：[VM 状态][vm-state]包含 PIT、clock、PIC 和 IOAPIC；[vCPU 状态][vcpu-state]包含寄存器、MSR、LAPIC 等。但保存函数未接入运行时请求，不能据此认定已有完整快照能力。
 - 复用 BoxLite 的[磁盘展平与归档][export]经验。当前导出只打包容器盘及配置，[导入][import]创建 `Stopped` box；这些机制不能恢复运行中进程。
@@ -460,7 +460,7 @@ krun-devices 单测（无 KVM）：队列状态未激活/协商中/激活、游�
 | 项 | 行为 |
 |---|---|
 | 选项与支持面 | `checkpoint_enabled` 持久化，关闭时不序列化；创建校验（`vmm::checkpoint::support`）只接受 Linux x86_64、libkrun 引擎、启用 jailer、无嵌套虚拟化、1–128 vCPU，其余平台/后端 `Unsupported`；REST 运行时拒绝。启动前再按 libkrun 限制校验 `InstanceSpec`：须 gvproxy UnixStream 网卡或禁用网络（拒绝 TSI）、冷启动共享连同引擎总会加入的 guest 根（`/dev/root`）≤7（即其余共享 ≤6；导入的共享由镜像决定，不计入）、≤8 盘（有网卡 ≤7）、须有 console 输出。不提权、不关隔离 |
-| FFI/引擎 | `libkrun-sys` 声明 `krun_snapshot_{enable,import,pause,resume,export,stop,get_state,get_restored_share}`（ABI 见 `/tmp` 合同 v1.1，导入函数名为 `krun_snapshot_import`）。Krun 引擎在任何设备配置前 `krun_snapshot_enable`；检查点模式总是替换为无 TSI 的 vsock；导入（`CheckpointStart::Import`）不配置盘、共享、根与内核，console 用新路径。`krun_start_enter` 返回后从最终状态取 guest 退出码（`enter_result`），shim 以该码退出 |
+| FFI/引擎 | `libkrun-sys` 声明 `krun_snapshot_{enable,import,pause,resume,export,stop,get_state,get_restored_share}`（ABI 见 libkrun `include/libkrun.h`，导入函数名为 `krun_snapshot_import`）。Krun 引擎在任何设备配置前 `krun_snapshot_enable`；检查点模式总是替换为无 TSI 的 vsock；导入（`CheckpointStart::Import`）不配置盘、共享、根与内核，console 用新路径。`krun_start_enter` 返回后从最终状态取 guest 退出码（`enter_result`），shim 以该码退出 |
 | 控制套接字 | `sockets/ctl.sock`（经 `/tmp/bl-{uid}/{box_id}` 短路径绑定，0600），shim 在安装 seccomp 前绑定、引擎创建后开始服务；每连接一个 JSON 行请求/回复（≤64 KiB）。状态含 configured/starting/running/paused/exited(code)/failed/stopped、在途操作及已开始的变更计数（两次回复计数相同，说明其间没有 pause/resume/导出开始）；变更互斥，并发变更回 `Busy`（确定无效果）；`State` 不排队；`Stop` 不经互斥（libkrun 内仍 FIFO）。导出只接受单个文件名，写入盒私有 `checkpoint/`（0700，jailer 可写） |
 | 链接检查 | `make test:shim:linkage`：真实静态 Linux shim 中检查点 ABI 与 gvproxy 符号可解析（见下文复审修复） |
 | 宿主规则 | 回复构建于 owner 完成之后。未送达为 `Unavailable`；送达无完整回复（超时/断开/乱码）为 `Uncertain`：宿主停止 VM，永不重放导出。导出无 30 s 设备控制截止时间；普通导出 I/O 失败保持暂停 |
