@@ -107,15 +107,6 @@ func TestTunnelMethodsRejectClosedHandle(t *testing.T) {
 	}
 }
 
-func TestTunnelOptionsDefaultToPublic(t *testing.T) {
-	if !newTunnelConfig().isPublic {
-		t.Fatal("tunnel without options is not public")
-	}
-	if newTunnelConfig(WithTunnelPublic(false)).isPublic {
-		t.Fatal("WithTunnelPublic(false) did not request a private tunnel")
-	}
-}
-
 func TestNetworkAndTunnelCloseAreIdempotent(t *testing.T) {
 	if err := (&Network{}).Close(); err != nil {
 		t.Fatalf("Network.Close() error = %v", err)

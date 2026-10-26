@@ -71,15 +71,15 @@ func TestTunnelSendsIsPublicOnlyWhenPrivate(t *testing.T) {
 	}
 	defer network.Close()
 	for _, test := range []struct {
-		name string
-		opts []TunnelOption
-		body string
+		name     string
+		isPublic []bool
+		body     string
 	}{
 		{"omitted", nil, ""},
-		{"explicit default", []TunnelOption{WithTunnelPublic(true)}, ""},
-		{"private", []TunnelOption{WithTunnelPublic(false)}, `{"isPublic":false}`},
+		{"explicit default", []bool{true}, ""},
+		{"private", []bool{false}, `{"isPublic":false}`},
 	} {
-		tunnel, err := network.Tunnel(context.Background(), 3000, test.opts...)
+		tunnel, err := network.Tunnel(context.Background(), 3000, test.isPublic...)
 		if err != nil {
 			t.Fatalf("%s: %v", test.name, err)
 		}
@@ -87,6 +87,14 @@ func TestTunnelSendsIsPublicOnlyWhenPrivate(t *testing.T) {
 			t.Fatalf("%s: prepare body = %q, want %q", test.name, body, test.body)
 		}
 		_ = tunnel.Close()
+	}
+	if _, err := network.Tunnel(context.Background(), 3000, false, true); err == nil {
+		t.Fatal("Tunnel accepted two isPublic values")
+	}
+	select {
+	case body := <-bodies:
+		t.Fatalf("rejected Tunnel call sent prepare body %q", body)
+	default:
 	}
 }
 
@@ -109,7 +117,7 @@ func TestConsumedTunnelStillReportsDescriptor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer network.Close()
-	tunnel, err := network.Tunnel(context.Background(), 3000, WithTunnelPublic(false))
+	tunnel, err := network.Tunnel(context.Background(), 3000, false)
 	if err != nil {
 		t.Fatal(err)
 	}

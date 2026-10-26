@@ -239,7 +239,7 @@ OCI `EXPOSE` metadata does not publish ports.
 The same route workflow works with local and remote runtimes:
 
 - `box.Network() (*Network, error)` returns box-scoped network operations.
-- `network.Tunnel(ctx, port, opts...) (*BoxTunnel, error)` prepares a tunnel; it is public by default, and `boxlite.WithTunnelPublic(false)` requests private cloud access. `tunnel.URI()` and `tunnel.Descriptor()` stay readable after `Connect` or `Forward`.
+- `network.Tunnel(ctx, port, isPublic...) (*BoxTunnel, error)` prepares a tunnel; `Tunnel(ctx, 3000)` and `Tunnel(ctx, 3000, true)` are public, and `Tunnel(ctx, 3000, false)` requests private cloud access. More than one `isPublic` value is an error. `tunnel.URI()` and `tunnel.Descriptor()` stay readable after `Connect` or `Forward`.
 - `tunnel.Descriptor()` returns `URI`, `IsPublic`, and `Token` (full once, masked on later preparations).
 - `network.RevokeTunnel(ctx, port) error` withdraws the port's tunnel. It
   is safe to repeat and leaves open connections running.

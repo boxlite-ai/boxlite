@@ -246,29 +246,10 @@ func (n *Network) Close() error {
 	return nil
 }
 
-// TunnelOption configures Network.Tunnel.
-type TunnelOption func(*tunnelConfig)
-
-type tunnelConfig struct {
-	isPublic bool
-}
-
-// WithTunnelPublic sets whether the tunnel is public (the default). A
-// private tunnel requires a cloud runtime and is never downgraded to public.
-func WithTunnelPublic(isPublic bool) TunnelOption {
-	return func(c *tunnelConfig) { c.isPublic = isPublic }
-}
-
-func newTunnelConfig(opts ...TunnelOption) tunnelConfig {
-	config := tunnelConfig{isPublic: true}
-	for _, opt := range opts {
-		opt(&config)
-	}
-	return config
-}
-
-// Tunnel prepares a one-shot tunnel to a service port inside the box.
-func (n *Network) Tunnel(ctx context.Context, port uint16, opts ...TunnelOption) (*BoxTunnel, error) {
+// Tunnel prepares a one-shot tunnel to a service port inside the box. The
+// tunnel is public unless isPublic is given as false; a private tunnel
+// requires a cloud runtime and is never downgraded to public.
+func (n *Network) Tunnel(ctx context.Context, port uint16, isPublic ...bool) (*BoxTunnel, error) {
 	if n == nil {
 		return nil, ErrRuntimeClosed
 	}
@@ -280,10 +261,14 @@ func (n *Network) Tunnel(ctx context.Context, port uint16, opts ...TunnelOption)
 	if port == 0 {
 		return nil, fmt.Errorf("invalid tunnel port %d", port)
 	}
+	if len(isPublic) > 1 {
+		return nil, fmt.Errorf("tunnel takes at most one isPublic value, got %d", len(isPublic))
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	options := C.CString(fmt.Sprintf(`{"isPublic":%t}`, newTunnelConfig(opts...).isPublic))
+	public := len(isPublic) == 0 || isPublic[0]
+	options := C.CString(fmt.Sprintf(`{"isPublic":%t}`, public))
 	defer C.free(unsafe.Pointer(options))
 	var cTunnel *C.CBoxTunnelHandle
 	var cerr C.CBoxliteError

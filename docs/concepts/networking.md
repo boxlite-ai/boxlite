@@ -110,7 +110,7 @@ const forwarder = await tunnel.forward({ type: "tcp", host: "127.0.0.1", port: 8
 await forwarder.wait();
 ```
 
-Go uses `network.Tunnel(ctx, 3000, boxlite.WithTunnelPublic(false))` and `tunnel.Descriptor()`; Rust uses
+Go uses `network.Tunnel(ctx, 3000, false)` and `tunnel.Descriptor()`; Rust uses
 `network.tunnel_with_options(target, TunnelOptions { is_public: false })`.
 C keeps `boxlite_network_tunnel` and adds `boxlite_network_tunnel_with_options`
 with `{"isPublic":false}` plus `boxlite_tunnel_descriptor` for the JSON result.
