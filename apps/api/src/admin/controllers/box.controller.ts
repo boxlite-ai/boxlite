@@ -15,6 +15,7 @@ import { OrganizationService } from '../../organization/services/organization.se
 import { BoxDto } from '../../box/dto/box.dto'
 import { BoxService } from '../../box/services/box.service'
 import { SystemRole } from '../../user/enums/system-role.enum'
+import { Context } from '../../common/context/context'
 
 @ApiTags('admin')
 @Controller('admin/box')
@@ -55,7 +56,7 @@ export class AdminBoxController {
     if (!organization) {
       throw new NotFoundException('Box not found')
     }
-    const recoveredBox = await this.boxService.recover(boxId, organization)
+    const recoveredBox = await this.boxService.recover(boxId, organization, Context.admin())
     return this.boxService.toBoxDto(recoveredBox)
   }
 }

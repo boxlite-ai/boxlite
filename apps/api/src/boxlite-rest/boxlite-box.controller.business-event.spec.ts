@@ -24,6 +24,8 @@ function makeController() {
   const boxService = {
     create: jest.fn().mockResolvedValue(startedBox),
     destroy: jest.fn().mockResolvedValue(startedBox),
+    findOneByIdOrName: jest.fn().mockResolvedValue({ ...startedBox, state: BoxState.STOPPED }),
+    start: jest.fn().mockResolvedValue(startedBox),
     stop: jest.fn().mockResolvedValue(startedBox),
     toBoxDto: jest.fn().mockResolvedValue(startedBox),
   }
@@ -33,15 +35,20 @@ function makeController() {
 }
 
 describe('BoxliteBoxController business event actor', () => {
-  it('creates, stops and deletes a box as the user', async () => {
+  // UserContext builds this from the request: who called, and how.
+  const ctx = Context.user({ userId: 'user-1', authMethod: 'api_key' })
+
+  it('creates, starts, stops and deletes a box as the calling user', async () => {
     const { controller, boxService } = makeController()
 
-    await controller.createBox(authContext as never, { image: 'boxlite/base' } as never)
-    await controller.stopBox(authContext as never, 'box-1')
-    await controller.removeBox(authContext as never, 'box-1')
+    await controller.createBox(authContext as never, { image: 'boxlite/base' } as never, ctx)
+    await controller.startBox(authContext as never, 'box-1', ctx)
+    await controller.stopBox(authContext as never, 'box-1', ctx)
+    await controller.removeBox(authContext as never, 'box-1', ctx)
 
-    expect(boxService.create).toHaveBeenCalledWith(expect.anything(), organization, Context.user(), expect.anything())
-    expect(boxService.stop).toHaveBeenCalledWith('box-1', organization.id, Context.user())
-    expect(boxService.destroy).toHaveBeenCalledWith('box-1', organization.id, Context.user())
+    expect(boxService.create).toHaveBeenCalledWith(expect.anything(), organization, ctx, expect.anything())
+    expect(boxService.start).toHaveBeenCalledWith('box-1', organization, ctx)
+    expect(boxService.stop).toHaveBeenCalledWith('box-1', organization.id, ctx)
+    expect(boxService.destroy).toHaveBeenCalledWith('box-1', organization.id, ctx)
   })
 })

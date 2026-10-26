@@ -141,7 +141,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
                   },
                 })
 
-                recordBoxRequested('box.stop', box.id, Context.platform(PlatformReason.AUTO_STOP))
+                recordBoxRequested('box.stop', box, Context.platform(PlatformReason.AUTO_STOP))
 
                 this.syncInstanceState(box.id).catch(this.logger.error)
               } catch (error) {
@@ -216,7 +216,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
                   },
                 })
 
-                recordBoxRequested('box.delete', box.id, Context.platform(PlatformReason.AUTO_DELETE))
+                recordBoxRequested('box.delete', box, Context.platform(PlatformReason.AUTO_DELETE))
 
                 this.syncInstanceState(box.id).catch(this.logger.error)
               } catch (error) {
