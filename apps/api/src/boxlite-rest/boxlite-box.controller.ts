@@ -33,6 +33,7 @@ import {
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
+import { UserContext } from '../common/decorators/user-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
@@ -120,6 +121,7 @@ export class BoxliteBoxController {
   async createBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Body() dto: CreateBoxDto,
+    @UserContext() ctx: Context,
     @Req() request?: Request,
   ): Promise<BoxResponseDto> {
     // Attaching a managed volume grants the box read/write access to its data,
@@ -134,7 +136,7 @@ export class BoxliteBoxController {
     const createBoxDto = createBoxToCreateBox(dto)
     const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
 
-    let box = await this.boxService.create(createBoxDto, organization, Context.user(), { maxCreatedBoxes })
+    let box = await this.boxService.create(createBoxDto, organization, ctx, { maxCreatedBoxes })
     if (request) request[AUDIT_TARGET_ID] = box.id
     if (box.state !== BoxState.STARTED) {
       box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
@@ -207,8 +209,12 @@ export class BoxliteBoxController {
     targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxId,
   })
-  async removeBox(@AuthContext() authContext: OrganizationAuthContext, @Param('boxId') boxId: string) {
-    await this.boxService.destroy(boxId, authContext.organizationId, Context.user())
+  async removeBox(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @UserContext() ctx: Context,
+  ) {
+    await this.boxService.destroy(boxId, authContext.organizationId, ctx)
   }
 
   @Post(':boxId/start')
@@ -227,6 +233,7 @@ export class BoxliteBoxController {
   async startBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
+    @UserContext() ctx: Context,
     @Req() request?: Request,
   ): Promise<BoxResponseDto> {
     let box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
@@ -237,7 +244,7 @@ export class BoxliteBoxController {
       return boxToBoxResponse(dto)
     }
 
-    box = await this.boxService.start(box.id, authContext.organization, { idOnly: true })
+    box = await this.boxService.start(box.id, authContext.organization, ctx, { idOnly: true })
     let dto = await this.boxService.toBoxDto(box)
     if (dto.state !== BoxState.STARTED) {
       dto = await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30)
@@ -261,8 +268,9 @@ export class BoxliteBoxController {
   async stopBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
+    @UserContext() ctx: Context,
   ): Promise<BoxResponseDto> {
-    const box = await this.boxService.stop(boxId, authContext.organizationId, Context.user())
+    const box = await this.boxService.stop(boxId, authContext.organizationId, ctx)
     const dto = await this.boxService.toBoxDto(box)
     return boxToBoxResponse(dto)
   }

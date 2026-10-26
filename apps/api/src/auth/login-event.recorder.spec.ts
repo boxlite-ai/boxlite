@@ -45,7 +45,7 @@ describe('LoginEventRecorder.recordFirstUse', () => {
       name: 'user.login',
       outcome: 'success',
       correlationId: 'user-1',
-      ctx: Context.user(),
+      ctx: Context.user({ userId: 'user-1', authMethod: 'jwt' }),
     })
   })
 
