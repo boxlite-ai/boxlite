@@ -8,6 +8,8 @@ import { DataSource, EntityManager, FindOptionsWhere, In, Not } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
+import { BoxSnapshot } from '../entities/box-snapshot.entity'
+import { BoxSnapshotState } from '../enums/box-snapshot-state.enum'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
@@ -147,6 +149,20 @@ export class BoxRepository extends BaseRepository<Box> {
     box.enforceInvariants()
 
     await this.withCreationAdmission(box.organizationId, maxCreatedBoxes, async (entityManager) => {
+      if (box.initialSnapshotId) {
+        const snapshot = await entityManager.findOne(BoxSnapshot, {
+          where: { id: box.initialSnapshotId, organizationId: box.organizationId },
+          lock: { mode: 'pessimistic_read' },
+        })
+        if (
+          !snapshot ||
+          snapshot.state !== BoxSnapshotState.READY ||
+          snapshot.diskGb !== box.disk ||
+          snapshot.region !== box.region
+        ) {
+          throw new ConflictException('Snapshot is no longer ready or does not match the box disk and region')
+        }
+      }
       await this.lockRegistryCredential(box, entityManager)
       await entityManager.insert(Box, box)
       await this.upsertLastActivity(entityManager, box.id, box.createdAt)

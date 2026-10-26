@@ -5,10 +5,15 @@
 
 package models
 
-import "github.com/boxlite-ai/runner/pkg/models/enums"
+import (
+	"github.com/boxlite-ai/runner/pkg/models/enums"
+	"time"
+)
 
 type BoxInfo struct {
 	BoxState enums.BoxState
+	// A first successful start proves snapshot initialization completed.
+	StartedAt time.Time
 	// ExitCode is how the box's main command ended, set once the runtime
 	// recorded it and nil otherwise. Stopping a box signals that command, so
 	// this also carries what the stop produced. A pointer rather than an int

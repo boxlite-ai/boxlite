@@ -29,6 +29,7 @@ import { AUDIT_CONTEXT_KEY, AuditContext } from '../audit/decorators/audit.decor
 import { BoxliteBoxSnapshotController } from './boxlite-box-snapshot.controller'
 import { BoxSnapshotService } from '../box/services/box-snapshot.service'
 import { BoxliteSnapshotController } from './boxlite-snapshot.controller'
+import { SnapshotBoxService } from './snapshot-box.service'
 import { BoxliteRestModule } from './boxlite-rest.module'
 import { BoxliteCacheController } from './boxlite-cache.controller'
 import { RunnerService } from '../box/services/runner.service'
@@ -76,6 +77,7 @@ describe('BoxLite REST routing', () => {
         BoxliteProxyController,
       ),
       [
+        SnapshotBoxService,
         {
           provide: BoxSnapshotService,
           useValue: { isEnabled: jest.fn().mockReturnValue(false), ...snapshotService },
@@ -91,6 +93,7 @@ describe('BoxLite REST routing', () => {
             ),
             updateInboundEnabled,
             setOutboundNetwork,
+            create: jest.fn((dto) => Promise.resolve({ id: 'new-box', ...dto, state: 'creating' })),
           },
         },
         {
@@ -99,7 +102,7 @@ describe('BoxLite REST routing', () => {
         },
         {
           provide: CommerceBoxLimitService,
-          useValue: {},
+          useValue: { resolveMaxCreatedBoxes: jest.fn().mockResolvedValue(5) },
         },
       ],
     )
@@ -286,6 +289,16 @@ describe('BoxLite REST routing', () => {
     expect((await response.json()).capabilities.snapshots_enabled).toBe(enabled)
   })
 
+  it.each([true, false])('advertises snapshot creation capabilities when storage enabled=%s', async (enabled) => {
+    await startRoutingTestApp({ isEnabled: jest.fn().mockReturnValue(enabled) })
+    const response = await get('/api/v1/config')
+    expect((await response.json()).capabilities).toMatchObject({
+      create_from_snapshot_enabled: enabled,
+      snapshot_copy_enabled: false,
+      memory_snapshots_enabled: false,
+    })
+  })
+
   it('reaches the snapshot routes with or without a routing prefix', async () => {
     const snapshot = {
       id: 'snap-1',
@@ -361,12 +374,74 @@ describe('BoxLite REST routing', () => {
     expect(snapshotService.remove).toHaveBeenCalledWith('org-123', 'golden', scope)
   })
 
+  it.each(['', '/default'])(
+    'creates a new box through the historical snapshot routes with prefix %j',
+    async (prefix) => {
+      await startRoutingTestApp({
+        isEnabled: jest.fn().mockReturnValue(true),
+        findOne: jest
+          .fn()
+          .mockResolvedValue({ id: 'snap-1', name: 'golden', state: 'ready', diskGb: 10, region: 'us' }),
+      })
+
+      for (const path of [`/snapshots/golden/boxes`, `/boxes/named-box/snapshots/golden/boxes`]) {
+        const response = await post(`/api/v1${prefix}${path}`, { name: ' worker ' })
+        expect(response.status).toBe(201)
+        expect(await response.json()).toMatchObject({ box_id: 'new-box', name: 'worker', status: 'configured' })
+      }
+      expect(app.get(BoxService).create).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'worker', disk: 10, target: 'us' }),
+        { id: 'org-123' },
+        expect.anything(),
+        { maxCreatedBoxes: 5, initialSnapshotId: 'snap-1' },
+      )
+    },
+  )
+
+  it.each([undefined, '', '   '])('delegates unnamed snapshot boxes to normal name generation for %j', async (name) => {
+    await startRoutingTestApp({
+      isEnabled: jest.fn().mockReturnValue(true),
+      findOne: jest.fn().mockResolvedValue({ id: 'snap-1', name: 'golden', state: 'ready', diskGb: 10, region: 'us' }),
+    })
+    for (const path of ['/snapshots/golden/boxes', '/boxes/named-box/snapshots/golden/boxes']) {
+      const response = await post(`/api/v1${path}`, { name })
+      expect(response.status).toBe(201)
+      expect(app.get(BoxService).create).toHaveBeenLastCalledWith(
+        expect.objectContaining({ name: undefined, disk: 10, target: 'us' }),
+        { id: 'org-123' },
+        expect.anything(),
+        { maxCreatedBoxes: 5, initialSnapshotId: 'snap-1' },
+      )
+    }
+  })
+
+  it.each([
+    ['disabled storage', false, 'ready', {}, 503],
+    ['unfinished snapshot', true, 'creating', {}, 409],
+    ['different disk size', true, 'ready', { options: { disk_size_gb: 20 } }, 409],
+    [
+      'volumes without volume permissions',
+      true,
+      'ready',
+      { options: { volumes: [{ managed_volume: 'data', guest_path: '/data' }] } },
+      403,
+    ],
+  ])('refuses snapshot box creation for %s before admitting a box', async (_reason, enabled, state, body, status) => {
+    await startRoutingTestApp({
+      isEnabled: jest.fn().mockReturnValue(enabled),
+      findOne: jest.fn().mockResolvedValue({ id: 'snap-1', name: 'golden', state, diskGb: 10, region: 'us' }),
+    })
+    const response = await post('/api/v1/snapshots/golden/boxes', body)
+    expect(response.status).toBe(status)
+    expect(app.get(BoxService).create).not.toHaveBeenCalled()
+  })
+
   // A snapshot name ends up in URL paths, so the route refuses one that would
   // not survive there before the service sees it.
   it.each([
     ['golden-1.0', 201],
     ['../escape', 400],
-    ['', 400],
+    ['', 201],
   ])('answers a create named %j with %d', async (name, status) => {
     const create = jest.fn().mockResolvedValue({
       id: 'snap-1',
@@ -385,7 +460,7 @@ describe('BoxLite REST routing', () => {
     expect(response.status).toBe(status)
     expect(create).toHaveBeenCalledTimes(status === 201 ? 1 : 0)
     if (status === 201) {
-      expect(create).toHaveBeenCalledWith('box-1', name, 'org-123')
+      expect(create).toHaveBeenCalledWith('box-1', name || undefined, 'org-123')
       expect(await response.json()).toMatchObject({ id: 'snap-1', status: 'creating' })
     }
   })

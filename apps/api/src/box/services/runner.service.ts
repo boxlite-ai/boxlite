@@ -299,6 +299,7 @@ export class RunnerService {
     if (params.boxClass !== undefined) {
       runnerFilter.class = params.boxClass
     }
+    if (params.apiVersion !== undefined) runnerFilter.apiVersion = params.apiVersion
 
     const runners = await this.runnerRepository.find({
       where: runnerFilter,
@@ -977,6 +978,7 @@ export class RunnerService {
 export const NO_AVAILABLE_RUNNERS = 'No available runners'
 
 export class GetRunnerParams {
+  apiVersion?: string
   regions?: string[]
   boxClass?: BoxClass
   excludedRunnerIds?: string[]

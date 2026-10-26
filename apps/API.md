@@ -508,25 +508,49 @@ forwarding configuration; the runner checks that the box is running and returns
 </details>
 
 <details>
-<summary><b>Snapshots</b> · 9 routes</summary>
+<summary><b>Snapshots</b> · 11 routes</summary>
 
-| Method   | Path                                                           | What it does                                                         |
-| -------- | -------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots`                   | Starts exporting a stopped box; answers `201` with `status: creating`. |
-| `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots`                   | Lists the snapshots taken from the box.                              |
-| `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots/{snapshot}`        | Gets one of them by name or ID.                                      |
-| `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots/{snapshot}`        | Deletes one of them.                                                 |
+| Method   | Path                                                            | What it does                                                                  |
+| -------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots`                    | Starts exporting a stopped box; answers `201` with `status: creating`.        |
+| `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots`                    | Lists the snapshots taken from the box.                                       |
+| `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots/{snapshot}`         | Gets one of them by name or ID.                                               |
+| `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots/{snapshot}`         | Deletes one of them.                                                          |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots/{snapshot}/restore` | Starts replacing the stopped box's disk; answers `202` with a restore record. |
-| `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/restores/{restoreId}`        | Gets a restore record.                                               |
-| `GET`    | `/api/v1[/{prefix}]/snapshots`                                 | Lists the organization's snapshots, including those of deleted boxes. |
-| `GET`    | `/api/v1[/{prefix}]/snapshots/{snapshot}`                      | Gets any snapshot of the organization by name or ID.                 |
-| `DELETE` | `/api/v1[/{prefix}]/snapshots/{snapshot}`                      | Deletes any snapshot of the organization.                            |
+| `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/restores/{restoreId}`         | Gets a restore record.                                                        |
+| `GET`    | `/api/v1[/{prefix}]/snapshots`                                  | Lists the organization's snapshots, including those of deleted boxes.         |
+| `GET`    | `/api/v1[/{prefix}]/snapshots/{snapshot}`                       | Gets any snapshot of the organization by name or ID.                          |
+| `DELETE` | `/api/v1[/{prefix}]/snapshots/{snapshot}`                       | Deletes any snapshot of the organization.                                     |
+| `POST`   | `/api/v1[/{prefix}]/snapshots/{snapshot}/boxes`                 | Creates an independent box from a ready snapshot; `201` with the new box.     |
+| `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/snapshots/{snapshot}/boxes`   | The same creation, restricted to snapshots taken from this source box.        |
 
 A snapshot belongs to the organization, not to its box: names are unique per
 organization, a snapshot outlives the box it came from, and `restore` accepts
 any ready snapshot of the organization whose disk size and region match the
 target box. A name takes letters, digits, `.`, `_` and `-`, starting with a
 letter or digit, since it travels in URL paths; any other answers `400`.
+
+Snapshot capture and box creation accept an optional `name`; omitted, empty or
+whitespace lets the server generate an adjective-animal name, such as `cozy-otter`.
+A generated-name collision adds the new resource's unique ID. Explicit names
+retain their validation and conflict behavior; they are never silently renamed.
+Creating a box accepts `{"name":"worker","options":{"cpus":2}}`.
+`options` uses the ordinary REST box-create shape. The snapshot fixes
+disk capacity and region; other settings use normal create defaults unless
+supplied. Source mounts, secrets and environment are not implicitly inherited.
+
+New boxes follow normal organization suspension, permissions and concurrent box
+quota admission, bypass the warm pool, and initialize their disk before first
+boot. Poll the new box for startup status. A source snapshot cannot be deleted
+while a child still needs its archive. Failed initialization never boots the
+default image as a substitute. Snapshots survive deletion of their source box,
+so the organization-level creation route remains usable after that deletion.
+
+`GET /api/v1/config` reports `create_from_snapshot_enabled` alongside
+`snapshots_enabled`, both following configured snapshot storage.
+`snapshot_copy_enabled` and `memory_snapshots_enabled` remain `false`: there is
+no runner-to-runner `/copies` endpoint and no memory capture. Existing in-place
+`restore` endpoints retain their current behavior.
 
 Creating one moves the box to `exporting` and restoring one to `importing`;
 until the runner job settles, the box accepts only deletion, which fails the

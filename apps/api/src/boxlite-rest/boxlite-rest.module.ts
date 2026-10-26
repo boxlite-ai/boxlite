@@ -27,6 +27,7 @@ import { BoxliteInvitationController } from './boxlite-invitation.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { BoxliteBoxSnapshotController } from './boxlite-box-snapshot.controller'
 import { BoxliteSnapshotController } from './boxlite-snapshot.controller'
+import { SnapshotBoxService } from './snapshot-box.service'
 
 /** The controller's routes again, mounted at its unprefixed path alone. */
 function unprefixed<T extends Type>(controller: T, path: string): T {
@@ -80,7 +81,7 @@ const unprefixedMounts = [
     BoxliteMemberController,
     BoxliteInvitationController,
   ],
-  providers: [BoxliteWsProxyService, CommerceBoxLimitService],
+  providers: [BoxliteWsProxyService, CommerceBoxLimitService, SnapshotBoxService],
   exports: [BoxliteWsProxyService],
 })
 export class BoxliteRestModule {}

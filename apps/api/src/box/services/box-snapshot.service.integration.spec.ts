@@ -21,6 +21,7 @@ import { JobStatus } from '../enums/job-status.enum'
 import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { BoxRepository } from '../repositories/box.repository'
+import * as boxNames from '../utils/box-name-generator'
 import { BoxSnapshotService, SNAPSHOT_ADMISSION_LOCK_NAMESPACE } from './box-snapshot.service'
 import { BoxSnapshotSettler } from './box-snapshot-settler.service'
 import { JobService } from './job.service'
@@ -51,6 +52,7 @@ describeIfDatabase('BoxSnapshotService and BoxSnapshotSettler (integration, real
   let restores: Repository<BoxSnapshotRestore>
   let jobs: Repository<Job>
   let service: BoxSnapshotService
+  let boxRepository: BoxRepository
   let settler: BoxSnapshotSettler
   let archiveStore: { delete: jest.Mock }
   let ownsSchema = false
@@ -81,7 +83,7 @@ describeIfDatabase('BoxSnapshotService and BoxSnapshotSettler (integration, real
     restores = dataSource.getRepository(BoxSnapshotRestore)
     jobs = dataSource.getRepository(Job)
 
-    const boxRepository = new BoxRepository(
+    boxRepository = new BoxRepository(
       dataSource,
       { emit: jest.fn() } as any,
       { invalidate: jest.fn(), invalidateOrgId: jest.fn() } as any,
@@ -181,6 +183,110 @@ describeIfDatabase('BoxSnapshotService and BoxSnapshotSettler (integration, real
       desiredState: BoxDesiredState.STOPPED,
       pending: false,
     })
+  })
+
+  it.each([undefined, '', '   '])('generates a snapshot name when supplied %j', async (name) => {
+    const source = await insert(stoppedBox('default-name'))
+    const snapshot = await service.create(source.id, name, organizationId)
+    expect(snapshot.name).toMatch(/^[a-z]+-[a-z]+$/)
+    expect(snapshot.name).not.toBe(source.name)
+  })
+
+  it.each([JobStatus.COMPLETED, JobStatus.FAILED])(
+    'keeps a generated name collision after %s intact',
+    async (status) => {
+      const source = await insert(stoppedBox('source'))
+      const previous = await service.create(source.id, 'cozy-otter', organizationId)
+      await finish(previous.jobId, status, { sizeBytes: 1 }, 'export failed')
+      const generate = jest.spyOn(boxNames, 'generateBoxName').mockReturnValue('cozy-otter')
+      try {
+        const created = await service.create(source.id, undefined, organizationId)
+        expect(created.name).toBe(`cozy-otter-${created.id}`)
+        expect((await snapshots.findOneByOrFail({ id: previous.id })).state).toBe(
+          status === JobStatus.COMPLETED ? BoxSnapshotState.READY : BoxSnapshotState.FAILED,
+        )
+      } finally {
+        generate.mockRestore()
+      }
+    },
+  )
+
+  async function readySnapshot() {
+    const source = await insert(stoppedBox('source'))
+    const snapshot = await service.create(source.id, 'golden', organizationId)
+    await finish(snapshot.jobId, JobStatus.COMPLETED, { sizeBytes: 1 })
+    return snapshot
+  }
+
+  function childBox(snapshotId: string, name = 'child') {
+    return stoppedBox(name, {
+      initialSnapshotId: snapshotId,
+      state: BoxState.UNKNOWN,
+      desiredState: BoxDesiredState.STARTED,
+    })
+  }
+
+  it('pins a snapshot until its child starts and then allows deletion', async () => {
+    const snapshot = await readySnapshot()
+    const child = await boxRepository.insert(childBox(snapshot.id))
+    await expect(service.remove(organizationId, snapshot.id)).rejects.toThrow(/used to create/)
+
+    await boxRepository.update(child.id, { updateData: { state: BoxState.STARTED } })
+    expect((await boxes.findOneByOrFail({ id: child.id })).initialSnapshotId).toBeNull()
+    await service.remove(organizationId, snapshot.id)
+  })
+
+  it('admits snapshot children under the ordinary concurrent box quota', async () => {
+    const snapshot = await readySnapshot()
+    const outcomes = await Promise.allSettled(
+      ['one', 'two'].map((name) => boxRepository.insert(childBox(snapshot.id, name), 2)),
+    )
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+    expect(await boxes.count()).toBe(2)
+  })
+
+  it('cannot delete a snapshot concurrently with admitting a dependent child', async () => {
+    const snapshot = await readySnapshot()
+    const child = childBox(snapshot.id)
+    const outcomes = await Promise.allSettled([
+      boxRepository.insert(child),
+      service.remove(organizationId, snapshot.id),
+    ])
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+    const persistedChild = await boxes.findOneBy({ id: child.id })
+    const persistedSnapshot = await snapshots.findOneByOrFail({ id: snapshot.id })
+    expect(persistedSnapshot.state).toBe(persistedChild ? BoxSnapshotState.READY : BoxSnapshotState.DELETING)
+  })
+
+  it.each([{ organizationId: '00000000-0000-4000-8000-000000000001' }, { region: 'eu' }, { disk: 20 }])(
+    'refuses an incompatible snapshot child %j without inserting it',
+    async (overrides) => {
+      const snapshot = await readySnapshot()
+      const child = childBox(snapshot.id)
+      Object.assign(child, overrides)
+      await expect(boxRepository.insert(child)).rejects.toThrow(ConflictException)
+      expect(await boxes.findOneBy({ id: child.id })).toBeNull()
+    },
+  )
+
+  it('releases a failed child only after its creation job is terminal', async () => {
+    const snapshot = await readySnapshot()
+    const child = await boxRepository.insert(childBox(snapshot.id))
+    const job = new Job({
+      type: JobType.CREATE_BOX,
+      runnerId,
+      resourceType: ResourceType.BOX,
+      resourceId: child.id,
+      status: JobStatus.IN_PROGRESS,
+    })
+    await jobs.save(job)
+    await boxRepository.update(child.id, { updateData: { state: BoxState.ERROR, recoverable: true } })
+    await settler.reconcile()
+    expect((await boxes.findOneByOrFail({ id: child.id })).initialSnapshotId).toBe(snapshot.id)
+
+    await jobs.update(job.id, { status: JobStatus.FAILED })
+    await settler.reconcile()
+    expect(await boxes.findOneByOrFail({ id: child.id })).toMatchObject({ initialSnapshotId: null, recoverable: false })
   })
 
   it('refuses a box that is not stopped and leaves nothing behind', async () => {

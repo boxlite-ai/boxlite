@@ -109,13 +109,16 @@ export class JobStateHandlerService {
       }
 
       if (box.desiredState !== BoxDesiredState.STARTED) {
+        if (box.initialSnapshotId && [JobStatus.COMPLETED, JobStatus.FAILED].includes(job.status)) {
+          await this.boxRepository.update(boxId, { updateData: { initialSnapshotId: null }, entity: box })
+        }
         this.logger.error(
           `Box ${boxId} is not in desired state STARTED for CREATE_BOX job ${job.id}. Desired state: ${box.desiredState}`,
         )
         return
       }
 
-      const updateData: Partial<Box> = {}
+      const updateData: Partial<Box> = box.initialSnapshotId ? { initialSnapshotId: null } : {}
 
       if (job.status === JobStatus.COMPLETED) {
         this.logger.debug(`CREATE_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
@@ -131,8 +134,9 @@ export class JobStateHandlerService {
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
         // Creating is where a box first pulls its image.
         updateData.errorReason =
-          (await this.imagePullFailureService.reasonFor(box, errorReason)) || 'Failed to create box'
-        updateData.recoverable = recoverable
+          (box.initialSnapshotId ? errorReason : await this.imagePullFailureService.reasonFor(box, errorReason)) ||
+          'Failed to create box'
+        updateData.recoverable = box.initialSnapshotId ? false : recoverable
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })

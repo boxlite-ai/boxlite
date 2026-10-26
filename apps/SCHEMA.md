@@ -163,6 +163,7 @@ that no longer resolves.
 | `box_migration`                          | `runnerId`                   | `runner.id`                    | application | the migration's second runner |
 | `box_snapshot`                           | `organizationId`             | `organization.id`              | application | the snapshot belongs to the organization |
 | `box_snapshot`                           | `sourceBoxId`                | `box.id`                       | application | outlives the box it was taken from |
+| `box` | `initialSnapshotId` | `box_snapshot.id` | application | nullable UUID; pins the archive during child creation |
 | `runner`                                 | `region`                     | `region.id`                    | application | — |
 | `job`                                    | `runnerId`                   | `runner.id`                    | application | — |
 | `job`                                    | `resourceType`, `resourceId` | `box.id`                       | application | polymorphic across resource types |
@@ -726,6 +727,14 @@ copy and fail the comparison it exists for.
 **Index:** `(state)`.
 
 ### `box_snapshot`
+
+`box.initialSnapshotId` is an internal, indexed reference for a newly creating
+box. Insertion takes a shared snapshot lock and validates ownership, readiness,
+region and disk capacity in the same transaction as normal box quota admission.
+Deletion takes an exclusive snapshot lock and rejects any remaining reference.
+Successful startup or terminal creation failure releases the reference; failed
+setup is reconciled once no creation job remains active. Destroying the child
+also releases it. This column is not part of the public box response.
 
 A box's disk exported to object storage, owned by the organization rather than
 the box: it outlives its source box and restores into any stopped box of the

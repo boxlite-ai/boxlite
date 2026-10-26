@@ -985,7 +985,7 @@ enum BoxliteErrorCode boxlite_box_export(CBoxHandle *handle,
                                          void *user_data,
                                          CBoxliteError *out_error);
 
-// Submit a restore of a stopped box's container disk from an archive.
+// Submit a restore of a stopped or never-started box's container disk from an archive.
 //
 // The box keeps its identity and configuration; a failure leaves its
 // original disk in place. The caller retains ownership of the archive file;

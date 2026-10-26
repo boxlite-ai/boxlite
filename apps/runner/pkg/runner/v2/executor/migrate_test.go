@@ -70,6 +70,8 @@ type fakeBackend struct {
 	restoreBlock chan struct{}
 
 	destroyErr error
+	createFn   func(context.Context, dto.CreateBoxDTO) (string, string, error)
+	getInfoFn  func() (models.BoxInfo, error)
 }
 
 func (f *fakeBackend) ExportBox(ctx context.Context, boxId, destDir string) (string, error) {
@@ -127,7 +129,10 @@ func runtimeWork(ctx context.Context, block chan struct{}, done func()) error {
 	}
 }
 
-func (f *fakeBackend) Create(context.Context, dto.CreateBoxDTO) (string, string, error) {
+func (f *fakeBackend) Create(ctx context.Context, request dto.CreateBoxDTO) (string, string, error) {
+	if f.createFn != nil {
+		return f.createFn(ctx, request)
+	}
 	return "", "", fmt.Errorf("Create must not be called by a migration job")
 }
 
@@ -153,6 +158,9 @@ func (f *fakeBackend) UpdateNetworkSettings(context.Context, string, dto.UpdateN
 }
 
 func (f *fakeBackend) GetBoxInfo(context.Context, string) (models.BoxInfo, error) {
+	if f.getInfoFn != nil {
+		return f.getInfoFn()
+	}
 	return models.BoxInfo{}, fmt.Errorf("GetBoxInfo must not be called by a migration job")
 }
 

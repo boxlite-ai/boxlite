@@ -113,6 +113,7 @@ const DEFAULT_BOX_GPU = 0
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
+  initialSnapshotId?: string
 }
 
 export type ProxyAdmission = (box: Box, boxId: string) => void
@@ -266,7 +267,8 @@ export class BoxService {
       // `box.image` records for a private image.
       const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
       const image = resolvedImage.ref
-      const needsFreshBox = requiresFreshBox(createBoxDto, organization, resolvedImage)
+      const needsFreshBox =
+        Boolean(options.initialSnapshotId) || requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         for (const volume of createBoxDto.volumes) {
@@ -328,6 +330,7 @@ export class BoxService {
       const box = new Box(region.id, createBoxDto.name)
 
       box.organizationId = organization.id
+      box.initialSnapshotId = options.initialSnapshotId
 
       //  TODO: make configurable
       box.class = boxClass
@@ -390,6 +393,7 @@ export class BoxService {
       // own input or placement refuses must not spend one. Only the box limit
       // and a name collision, which the insert itself settles, come after it.
       const runnerParams: GetRunnerParams = {
+        ...(options.initialSnapshotId ? { apiVersion: '2' } : {}),
         regions: [region.id],
         boxClass,
       }

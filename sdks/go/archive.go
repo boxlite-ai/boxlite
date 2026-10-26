@@ -113,12 +113,13 @@ func (b *Box) Export(ctx context.Context, dest string) (string, error) {
 	}
 }
 
-// RestoreFromArchive replaces the container disk of this stopped box with the
+// RestoreFromArchive replaces the disk of a stopped or never-started box with the
 // one a .boxlite archive carries.
 //
 // The box keeps its ID, name and configuration; the archive's options are not
 // applied. A failure leaves the original disk in place. Only local runtimes
-// support it.
+// support it. A never-started box becomes stopped without booting, so its first
+// start uses the restored disk.
 //
 // RestoreFromArchive never consumes or deletes archivePath.
 func (b *Box) RestoreFromArchive(ctx context.Context, archivePath string) error {

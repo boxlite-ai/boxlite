@@ -808,6 +808,89 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  /{prefix}/snapshots/{snapshot}/boxes:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - name: snapshot
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: createBoxFromAnySnapshot
+      summary: Create a box from an organization snapshot
+      description: |
+        Creates an independent box from a ready disk snapshot. The hosted
+        server fixes disk capacity and region from the snapshot, and uses
+        ordinary box defaults for other options. No source mounts, environment
+        or secrets are inherited. The disk is installed before first boot;
+        poll the returned box for startup progress. Requires write:boxes and
+        normal box quota admission. The source archive is pinned during creation.
+      tags: [Boxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SnapshotChildRequest"
+      responses:
+        "201":
+          description: New box admitted for creation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "429":
+          description: Organization box quota exceeded
+        "503":
+          description: Snapshot storage unavailable
+
+  /{prefix}/boxes/{box_id}/snapshots/{snapshot_name}/boxes:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - name: snapshot_name
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: createBoxFromSnapshot
+      summary: Create a box from a snapshot of a specific source box
+      description: |
+        As createBoxFromAnySnapshot, restricted to snapshots taken from box_id.
+        Use the organization route if the source box has been deleted.
+      tags: [Boxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SnapshotChildRequest"
+      responses:
+        "201":
+          description: New box admitted for creation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "429":
+          description: Organization box quota exceeded
+        "503":
+          description: Snapshot storage unavailable
+
   /{prefix}/boxes/{box_id}/clone:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -2094,6 +2177,17 @@ components:
               type: boolean
               description: Whether snapshot create/list/get/remove/restore is supported
               example: true
+            create_from_snapshot_enabled:
+              type: boolean
+              description: Whether a ready snapshot can initialize an independent box
+            snapshot_copy_enabled:
+              type: boolean
+              default: false
+              description: Runner-to-runner snapshot transfer; false for hosted object-storage snapshots
+            memory_snapshots_enabled:
+              type: boolean
+              default: false
+              description: Whether snapshots include memory; false on the hosted server
             cache_volumes_enabled:
               type: boolean
               description: Runner-local exclusive cache volumes. Does not imply Docker storage-driver compatibility.
@@ -2916,18 +3010,28 @@ components:
 
     CreateSnapshotRequest:
       type: object
-      required: [name]
       properties:
         name:
           type: string
-          minLength: 1
           maxLength: 128
           description: |
+            On the hosted server, omitted, empty or whitespace generates an
+            adjective-animal name. A collision adds the snapshot's unique ID.
             A server refuses with `400` a name it cannot keep or address. One
             whose snapshots belong to their box refuses a name that starts
             with `.` or holds `/`, `\` or NUL; one whose snapshots outlive
             their box takes only letters, digits, `.`, `_` and `-`, starting
             with a letter or digit, since the name travels in URL paths.
+
+    SnapshotChildRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: New box name; omitted or blank uses ordinary random box naming. Explicit name collisions return 409.
+        options:
+          $ref: "#/components/schemas/CreateBoxRequest"
 
     ListSnapshotsResponse:
       type: object

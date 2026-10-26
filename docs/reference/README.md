@@ -37,7 +37,7 @@ Complete API documentation for each SDK:
 | **Reference server** | [`openapi/reference-server/`](../../openapi/reference-server/README.md) | A partial implementation used as a client test fixture, not a conformance target |
 
 The spec is the contract, not an inventory of any one server, and no
-implementation currently serves all 37 paths:
+implementation currently serves all 40 paths:
 
 | Server | Serves | Does not serve |
 |--------|--------|----------------|

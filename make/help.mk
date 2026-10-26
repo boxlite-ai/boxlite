@@ -85,6 +85,7 @@ help:
 	@echo "    make test:apps:proxy        - Run proxy unit tests (FILTER=<pattern>)"
 	@echo "    make fmt:apps:proxy         - Format the proxy Go service"
 	@echo "    make test:apps:runner       - Run runner controller/runtime unit tests (FILTER=<pattern>)"
+	@echo "    make test:apps:dashboard    - Run dashboard tests (FILTER=<pattern>)"
 	@echo "    make dev:runner-ci         - Build SDK and runner for isolated local acceptance"
 	@echo "    make kernel:dind           - Prepare DinD firmware (Linux x86_64 / macOS arm64)"
 	@echo "    make kernel:swarm          - Build Linux x86_64 DinD firmware with IPVS/VXLAN"

@@ -28,6 +28,8 @@ import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { BoxService } from '../box/services/box.service'
 import { BoxSnapshotService, SnapshotScope } from '../box/services/box-snapshot.service'
 import { CreateSnapshotDto } from './dto/create-snapshot.dto'
+import { SnapshotChildDto } from './dto/snapshot-child.dto'
+import { SnapshotBoxService } from './snapshot-box.service'
 import {
   SnapshotResponse,
   SnapshotRestoreResponse,
@@ -53,7 +55,21 @@ export class BoxliteBoxSnapshotController {
   constructor(
     private readonly boxService: BoxService,
     private readonly snapshotService: BoxSnapshotService,
+    private readonly snapshotBoxes: SnapshotBoxService,
   ) {}
+
+  @Post(':boxId/snapshots/:snapshot/boxes')
+  @HttpCode(201)
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({ action: AuditAction.CREATE, targetType: AuditTarget.BOX, targetIdFromResult: (result) => result?.box_id })
+  async createBoxFromSnapshot(
+    @AuthContext() auth: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Param('snapshot') snapshot: string,
+    @Body() body: SnapshotChildDto,
+  ) {
+    return this.snapshotBoxes.create(auth, snapshot, body, await this.scopeOf(boxId, auth))
+  }
 
   @Post(':boxId/snapshots')
   @HttpCode(201)

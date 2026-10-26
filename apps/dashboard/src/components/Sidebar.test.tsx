@@ -79,6 +79,12 @@ describe('Sidebar primary navigation', () => {
 
     expect(volumeLinks.length).toBeGreaterThan(0)
     expect(volumeLinks.every((link) => link.textContent === 'Volumes')).toBe(true)
+    for (const volumeLink of volumeLinks) {
+      const links = [...volumeLink.parentElement!.querySelectorAll('a')]
+      const next = links[links.indexOf(volumeLink) + 1]
+      expect(next?.textContent).toBe('Snapshots')
+      expect(next?.getAttribute('href')).toBe('/dashboard/snapshots')
+    }
   })
 
   it('groups organization management under one profile entry', async () => {

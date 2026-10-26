@@ -3,7 +3,18 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Controller, Delete, Get, HttpCode, Param, UseGuards } from '@nestjs/common'
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  UseGuards,
+  UsePipes,
+  ValidationPipe,
+} from '@nestjs/common'
 import { ApiBearerAuth, ApiExcludeController, ApiTags } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
@@ -16,6 +27,8 @@ import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { BoxSnapshotService } from '../box/services/box-snapshot.service'
 import { SnapshotResponse, snapshotToResponse } from './mappers/snapshot.mapper'
+import { SnapshotChildDto } from './dto/snapshot-child.dto'
+import { SnapshotBoxService } from './snapshot-box.service'
 
 /**
  * Every snapshot of the organization, including those whose source box is
@@ -26,9 +39,25 @@ import { SnapshotResponse, snapshotToResponse } from './mappers/snapshot.mapper'
 @ApiTags('BoxLite REST')
 @Controller(['v1/snapshots', 'v1/:prefix/snapshots'])
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
+@UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
 @ApiBearerAuth()
 export class BoxliteSnapshotController {
-  constructor(private readonly snapshotService: BoxSnapshotService) {}
+  constructor(
+    private readonly snapshotService: BoxSnapshotService,
+    private readonly snapshotBoxes: SnapshotBoxService,
+  ) {}
+
+  @Post(':snapshot/boxes')
+  @HttpCode(201)
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({ action: AuditAction.CREATE, targetType: AuditTarget.BOX, targetIdFromResult: (result) => result?.box_id })
+  async createBoxFromAnySnapshot(
+    @AuthContext() auth: OrganizationAuthContext,
+    @Param('snapshot') snapshot: string,
+    @Body() body: SnapshotChildDto,
+  ) {
+    return this.snapshotBoxes.create(auth, snapshot, body)
+  }
 
   @Get()
   async listAllSnapshots(
