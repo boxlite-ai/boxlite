@@ -3,7 +3,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { randomUUID } from 'crypto'
 import { DataSource, EntityManager, In, Not } from 'typeorm'
@@ -23,6 +29,7 @@ import { BoxSnapshotAdmissionUnavailableError, BoxSnapshotLimitExceededError } f
 import { JobConflictError } from '../errors/job-conflict.error'
 import { BoxRepository, PG_LOCK_TIMEOUT_CODE } from '../repositories/box.repository'
 import { assertNoSnapshotOperation } from '../utils/box-state.util'
+import { generateBoxName } from '../utils/box-name-generator'
 import { BoxService } from './box.service'
 import { JobService } from './job.service'
 import { TypedConfigService } from '../../config/typed-config.service'
@@ -77,9 +84,17 @@ export class BoxSnapshotService {
     return Boolean(this.archivePrefix)
   }
 
-  async create(boxIdOrName: string, name: string, organizationId: string): Promise<BoxSnapshot> {
+  async create(boxIdOrName: string, name: string | undefined, organizationId: string): Promise<BoxSnapshot> {
     const prefix = this.requirePrefix()
-    const { id: boxId } = await this.boxService.findOneByIdOrName(boxIdOrName, organizationId)
+    const source = await this.boxService.findOneByIdOrName(boxIdOrName, organizationId)
+    const boxId = source.id
+    const requestedName = name?.trim()
+    name = requestedName || generateBoxName()
+    if (!name || name.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
+      throw new BadRequestException(
+        'Provide a snapshot name of 1–128 letters, digits, dots, underscores or hyphens, starting with a letter or digit',
+      )
+    }
     const id = randomUUID()
     // Fixed now, so a later change of the configured prefix strands nothing.
     const archiveUri = `${prefix}${organizationId}/${id}.boxlite`
@@ -93,6 +108,17 @@ export class BoxSnapshotService {
       })
       if (kept >= this.maxPerOrganization) {
         throw new BoxSnapshotLimitExceededError(kept, this.maxPerOrganization)
+      }
+
+      // The organization lock serializes this check with every snapshot insert.
+      // Choose the fallback before writing: a uniqueness error aborts the transaction.
+      if (
+        !requestedName &&
+        (await entityManager.exists(BoxSnapshot, {
+          where: { organizationId, name, state: Not(BoxSnapshotState.DELETING) },
+        }))
+      ) {
+        name = `${name}-${id}`
       }
 
       // A failed snapshot never held a usable archive. Its caller has already
@@ -239,6 +265,9 @@ export class BoxSnapshotService {
       })
       if (restoring) {
         throw new ConflictException(`Snapshot ${snapshot.name} is being restored into a box`)
+      }
+      if (await entityManager.exists(Box, { where: { initialSnapshotId: id } })) {
+        throw new ConflictException(`Snapshot ${snapshot.name} is being used to create a box`)
       }
       await entityManager.update(BoxSnapshot, { id }, { state: BoxSnapshotState.DELETING })
     })

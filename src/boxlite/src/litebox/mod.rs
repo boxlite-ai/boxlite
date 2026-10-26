@@ -267,12 +267,13 @@ impl LiteBox {
         self.box_backend.export_box(options, dest).await
     }
 
-    /// Replace this stopped box's container disk with the one a `.boxlite`
+    /// Replace this stopped or never-started box's container disk with the one a `.boxlite`
     /// archive carries.
     ///
     /// The box keeps its ID, name and configuration; the archive's options are
     /// not applied. A failure leaves the original disk in place. Local runtimes
-    /// only.
+    /// only. A never-started box becomes Stopped without booting; its next start
+    /// uses the restored disk.
     pub async fn restore_from_archive(&self, archive: BoxArchive) -> BoxliteResult<()> {
         self.box_backend.restore_from_archive(archive).await
     }

@@ -250,7 +250,47 @@ organization both on screen and for the next reload.
 
 ## The organization you pick is the one you come back to
 
+The Snapshots page uses the same organization selection; its queries and naming
+or deletion dialogs never carry across organizations.
+
 A user in more than one organization switches between them from the profile
 menu, which marks the personal one. The pick is kept in `localStorage`, so the
 next login opens the same organization; if the user was removed from it in the
 meantime, the console falls back to their personal organization.
+
+## Snapshots save disks and create new boxes
+
+Snapshots sits after Volumes in the navigation. On Boxes, an idle stopped box's
+**More → + Snapshot** opens the creation dialog; the plus icon aligns with the
+Delete icon. On Snapshots, a ready snapshot's **Create Box** opens the box naming
+dialog. Both match the Boxes creation modal's layout and controls, and label the
+field **Name**. Leaving it blank lets the server generate an adjective-animal
+name, such as `cozy-otter`. Success shows the returned name. Creation requires
+`write:boxes`, including for users without deletion permission. Explicit duplicate
+names keep the dialog open with the server's conflict reason. Generated names use
+a unique-ID suffix only when their first choice collides.
+
+The list follows Volumes: transparent rows, subtle bottom separators, compact
+monospace headings and outlined row actions.
+
+Snapshot operations use the existing `/api/v1` REST surface through the shared
+authenticated client. Creating a snapshot posts to `/boxes/{box}/snapshots`;
+creating a box posts to `/snapshots/{snapshot}/boxes`. The new box uses the
+snapshot's disk size and region, with ordinary defaults for other settings.
+Capability flags gate these actions. Memory snapshots and cross-runner snapshot
+copies remain unavailable. The [REST API contract](../API.md) describes admission
+and permissions. Deletion requires typing the snapshot's exact name.
+
+Creating snapshots refresh every five seconds until ready or failed. New boxes
+appear on Boxes, where their ordinary lifecycle shows creation progress and
+errors. Source boxes are marked deleted only after all box pages have loaded.
+A disabled environment replaces the page with an explanatory state.
+
+For an interactive preview, run `yarn start:mock` from `apps/` and open
+`/dashboard/snapshots`. The existing mock mode needs no login. It includes ready
+and failed snapshots, a deleted source, both creation flows and 409 refusals for
+duplicate names or deletion during creation. It does not copy disk
+data or verify the deployed service; reload resets the sample snapshots.
+
+Run `make test:apps:dashboard FILTER='[Ss]napshot'` for the snapshot UI, adapter
+and query tests.

@@ -6,8 +6,38 @@
 import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { RunnerAdapterV2 } from './runnerAdapter.v2'
+import { BoxSnapshot } from '../entities/box-snapshot.entity'
+import { BoxSnapshotState } from '../enums/box-snapshot-state.enum'
 
 describe('RunnerAdapterV2 createBox', () => {
+  it('resolves a child box archive from a ready snapshot in its organization', async () => {
+    const findOneByOrFail = jest.fn().mockResolvedValue({ archiveUri: 'gs://snapshots/org-1/snap-1.tar.zst' })
+    const jobs = { createJob: jest.fn() }
+    const adapter = new RunnerAdapterV2({ manager: { findOneByOrFail } } as any, {} as any, jobs as any)
+    await adapter.init({ id: 'runner-1' } as any)
+
+    await adapter.createBox({ id: 'child', organizationId: 'org-1', initialSnapshotId: 'snap-1' } as any, 'base')
+
+    expect(findOneByOrFail).toHaveBeenCalledWith(BoxSnapshot, {
+      id: 'snap-1',
+      organizationId: 'org-1',
+      state: BoxSnapshotState.READY,
+    })
+    expect(jobs.createJob.mock.calls[0][5].snapshotArchiveUri).toBe('gs://snapshots/org-1/snap-1.tar.zst')
+  })
+
+  it('does not dispatch a child box without a stored archive', async () => {
+    const jobs = { createJob: jest.fn() }
+    const repository = { manager: { findOneByOrFail: jest.fn().mockResolvedValue({ archiveUri: null }) } }
+    const adapter = new RunnerAdapterV2(repository as any, {} as any, jobs as any)
+    await adapter.init({ id: 'runner-1' } as any)
+
+    await expect(adapter.createBox({ id: 'child', initialSnapshotId: 'snap-1' } as any, 'base')).rejects.toThrow(
+      'Snapshot has no archive',
+    )
+    expect(jobs.createJob).not.toHaveBeenCalled()
+  })
+
   it('passes secrets through to the CREATE_BOX job payload', async () => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)

@@ -6,7 +6,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { InjectDataSource } from '@nestjs/typeorm'
-import { DataSource, EntityManager, In, LessThan, Not } from 'typeorm'
+import { DataSource, EntityManager, In, IsNull, LessThan, Not } from 'typeorm'
 
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { Box } from '../entities/box.entity'
@@ -96,11 +96,44 @@ export class BoxSnapshotSettler {
     try {
       await this.failUnclaimedJobs()
       await this.settleLostCompletions()
+      await this.releaseFailedChildren()
       await this.reapArchives()
     } catch (error) {
       this.logger.error('Error reconciling box snapshots', error)
     } finally {
       await this.redisLockProvider.unlock(RECONCILE_LOCK_KEY)
+    }
+  }
+
+  /** A setup error can precede job dispatch, or its terminal callback can be lost. */
+  private async releaseFailedChildren(): Promise<void> {
+    const children = await this.dataSource.getRepository(Box).find({
+      where: { initialSnapshotId: Not(IsNull()), state: BoxState.ERROR },
+      take: RECONCILE_BATCH,
+    })
+    for (const child of children) {
+      await this.dataSource.transaction(async (manager) => {
+        const box = await this.lockBox(manager, child.id)
+        if (!box?.initialSnapshotId || box.state !== BoxState.ERROR) return
+        if (
+          await manager.exists(Job, {
+            where: {
+              resourceId: box.id,
+              type: JobType.CREATE_BOX,
+              status: In([JobStatus.PENDING, JobStatus.IN_PROGRESS]),
+            },
+          })
+        )
+          return
+        await this.boxRepository.updateWhere(
+          box.id,
+          {
+            updateData: { initialSnapshotId: null, recoverable: false },
+            whereCondition: { state: BoxState.ERROR },
+          },
+          manager,
+        )
+      })
     }
   }
 

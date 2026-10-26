@@ -8,14 +8,61 @@ package executor
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"testing"
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/models"
 )
 
 const testArchiveUri = "gs://snapshots/box-snapshots/org-1/snap-1.boxlite"
+
+func TestSnapshotBoxCreationDownloadsBeforeInitializing(t *testing.T) {
+	h := newSnapshotHarness(t, nil)
+	h.backend.getInfoFn = func() (models.BoxInfo, error) { return models.BoxInfo{}, nil }
+	h.backend.createFn = func(_ context.Context, request dto.CreateBoxDTO) (string, string, error) {
+		h.calls.record("create:%s", request.Id)
+		contents, err := os.ReadFile(request.SnapshotArchivePath)
+		if err != nil || string(contents) != "archive" {
+			t.Fatalf("Create received no downloaded archive: %q, %v", contents, err)
+		}
+		return request.Id, "boxlite", nil
+	}
+	payload := fmt.Sprintf(`{"id":%q,"snapshotArchiveUri":%q}`, testBoxId, testArchiveUri)
+	h.executor.Execute(context.Background(), migrateJob(apiclient.JOBTYPE_CREATE_BOX, payload))
+	assertCompleted(t, h.lastReport(t))
+	if got := h.calls.snapshot(); !slices.Equal(got, []string{"download:" + testArchiveUri, "create:" + testBoxId}) {
+		t.Fatalf("calls = %v", got)
+	}
+	assertWorkDirEmpty(t, h.workDir)
+}
+
+func TestSnapshotBoxCreationDoesNotCreateWhenDownloadFails(t *testing.T) {
+	h := newSnapshotHarness(t, func(h *harness) { h.store.downloadErr = fmt.Errorf("object missing") })
+	h.backend.getInfoFn = func() (models.BoxInfo, error) { return models.BoxInfo{}, nil }
+	payload := fmt.Sprintf(`{"id":%q,"snapshotArchiveUri":%q}`, testBoxId, testArchiveUri)
+	h.executor.Execute(context.Background(), migrateJob(apiclient.JOBTYPE_CREATE_BOX, payload))
+	assertFailedWith(t, h.lastReport(t), "object missing")
+	if got := h.calls.snapshot(); !slices.Equal(got, []string{"download:" + testArchiveUri}) {
+		t.Fatalf("download failure touched backend: %v", got)
+	}
+	assertWorkDirEmpty(t, h.workDir)
+}
+
+func TestSnapshotBoxReplayDoesNotReadDeletedArchiveOrRestartChild(t *testing.T) {
+	h := newSnapshotHarness(t, nil)
+	h.backend.getInfoFn = func() (models.BoxInfo, error) { return models.BoxInfo{StartedAt: time.Now()}, nil }
+	h.store.downloadErr = fmt.Errorf("archive was deleted after creation")
+	payload := fmt.Sprintf(`{"id":%q,"snapshotArchiveUri":%q}`, testBoxId, testArchiveUri)
+	h.executor.Execute(context.Background(), migrateJob(apiclient.JOBTYPE_CREATE_BOX, payload))
+	assertCompleted(t, h.lastReport(t))
+	if got := h.calls.snapshot(); len(got) != 0 {
+		t.Fatalf("replay touched %v", got)
+	}
+}
 
 func newSnapshotHarness(t *testing.T, configure func(*harness)) *harness {
 	t.Helper()

@@ -60,7 +60,7 @@ pub unsafe extern "C" fn boxlite_box_export(
     unsafe { export_box(handle, dest, cb, user_data, out_error) }
 }
 
-/// Submit a restore of a stopped box's container disk from an archive.
+/// Submit a restore of a stopped or never-started box's container disk from an archive.
 ///
 /// The box keeps its identity and configuration; a failure leaves its
 /// original disk in place. The caller retains ownership of the archive file;

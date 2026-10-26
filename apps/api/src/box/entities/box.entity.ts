@@ -59,6 +59,11 @@ export class Box {
   @Column({ nullable: true })
   image?: string
 
+  /** Pins the archive until creation finishes; never exposed in public DTOs. */
+  @Index('box_initial_snapshot_idx')
+  @Column({ type: 'uuid', nullable: true })
+  initialSnapshotId?: string | null
+
   /**
    * Whether this box's image is the organization's rather than the operator's
    * curated set, decided once when the box was created.
@@ -314,6 +319,11 @@ export class Box {
 
   private getInvariantChanges(): Partial<Box> {
     const changes: Partial<Box> = {}
+
+    if (this.initialSnapshotId) {
+      if ([BoxState.STARTED, BoxState.DESTROYED].includes(this.state)) changes.initialSnapshotId = null
+      if (this.state === BoxState.ERROR) changes.recoverable = false
+    }
 
     // A snapshot job, not the sync loop, ends EXPORTING and IMPORTING, so a box
     // in either has no desired-state work pending — which is also what lets a

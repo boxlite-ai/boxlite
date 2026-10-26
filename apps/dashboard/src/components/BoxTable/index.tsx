@@ -24,6 +24,7 @@ import {
   MoreHorizontal,
   Pause,
   Play,
+  Plus,
   RotateCcw,
   Trash2,
 } from '@/components/ui/icon'
@@ -158,6 +159,7 @@ export function BoxTable({
   handleStart,
   handleStop,
   handleDelete,
+  onCreateSnapshot,
   onRowClick,
   pagination,
   pageCount,
@@ -206,6 +208,14 @@ export function BoxTable({
     const stoppable = isStoppable(box)
     const recoverable = isRecoverable(box)
     const transitioning = isTransitioning(box)
+    const canSnapshot =
+      writePermitted &&
+      onCreateSnapshot &&
+      box.state === BoxState.STOPPED &&
+      box.desiredState === 'stopped' &&
+      !transitioning &&
+      !boxIsLoading[box.id] &&
+      !boxStateIsTransitioning[box.id]
 
     return (
       <>
@@ -229,7 +239,7 @@ export function BoxTable({
             <Loader2 className={`${iconClassName} animate-spin`} strokeWidth={1.3} />
           </IconButton>
         )}
-        {deletePermitted && (
+        {(deletePermitted || canSnapshot) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -241,13 +251,21 @@ export function BoxTable({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-[12rem]">
-              <DropdownMenuItem
-                className="cursor-pointer text-destructive focus:text-destructive"
-                onClick={() => handleDelete(box.id)}
-              >
-                <Trash2 className="size-4" />
-                Delete
-              </DropdownMenuItem>
+              {canSnapshot && (
+                <DropdownMenuItem className="cursor-pointer" onClick={() => onCreateSnapshot?.(box)}>
+                  <Plus className="size-4" />
+                  Snapshot
+                </DropdownMenuItem>
+              )}
+              {deletePermitted && (
+                <DropdownMenuItem
+                  className="cursor-pointer text-destructive focus:text-destructive"
+                  onClick={() => handleDelete(box.id)}
+                >
+                  <Trash2 className="size-4" />
+                  Delete
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}

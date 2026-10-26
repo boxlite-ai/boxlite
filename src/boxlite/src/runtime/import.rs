@@ -251,6 +251,13 @@ pub(crate) fn replace_container_disk(
     ensure_within_extraction_dir(&extracted_container, temp_dir.path())?;
     validate_no_backing_references(&extracted_container)?;
 
+    std::fs::create_dir_all(disks_dir).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to create disk directory {}: {}",
+            disks_dir.display(),
+            e
+        ))
+    })?;
     let staged = disks_dir.join(RESTORE_STAGING_DISK);
     let swapped = move_file(&extracted_container, &staged).and_then(|()| {
         std::fs::rename(&staged, disks_dir.join(disk_filenames::CONTAINER_DISK)).map_err(|e| {

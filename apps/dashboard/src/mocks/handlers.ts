@@ -26,6 +26,7 @@ import {
 } from '@boxlite-ai/api-client'
 import { catalogNameOf } from '@/lib/image-ref'
 import { http, HttpResponse } from 'msw'
+import { snapshotHandlers } from './snapshots'
 import {
   MOCK_BOXES,
   MOCK_IMAGE_DETAILS,
@@ -84,6 +85,7 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
 }
 
 export const handlers = [
+  ...snapshotHandlers(API_URL),
   // Core dashboard surface — fully self-contained so `start:mock` needs no
   // backend and no login (see MockAuthProvider for the fake session).
   http.get(`${API_URL}/config`, () => HttpResponse.json(buildMockConfig(BILLING_API_URL))),

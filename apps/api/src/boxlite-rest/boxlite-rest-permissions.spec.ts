@@ -54,6 +54,8 @@ const EXPECTED: Record<string, OrganizationResourcePermission[] | null> = {
   proxyMetrics: null,
   // snapshot controllers
   createSnapshot: [WRITE_BOXES],
+  createBoxFromSnapshot: [WRITE_BOXES],
+  createBoxFromAnySnapshot: [WRITE_BOXES],
   listSnapshots: null,
   getSnapshot: null,
   removeSnapshot: [DELETE_BOXES],

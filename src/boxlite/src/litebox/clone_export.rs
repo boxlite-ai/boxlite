@@ -246,10 +246,9 @@ impl BoxImpl {
 impl BoxImpl {
     /// Replace this box's container disk with the one an archive carries.
     ///
-    /// Only a stopped box qualifies: a running VM would have its disk swapped
-    /// under it, and a box that never started gets a fresh disk from its image
-    /// on first start. The status is read under the disk lock, the same lock
-    /// export and snapshots hold, so none of them interleaves with the swap.
+    /// A stopped or never-started box qualifies. Installing the disk moves a
+    /// configured box to Stopped so its first start reuses that disk. The disk
+    /// lock excludes start, export and snapshots while it is replaced.
     pub(crate) async fn restore_from_archive(
         &self,
         archive: crate::runtime::options::BoxArchive,
@@ -258,7 +257,7 @@ impl BoxImpl {
         let _lock = self.disk_ops.lock().await;
 
         let status = self.state.read().status;
-        if status != BoxStatus::Stopped {
+        if !matches!(status, BoxStatus::Stopped | BoxStatus::Configured) {
             return Err(BoxliteError::InvalidState(format!(
                 "Cannot restore box {} from an archive while it is {}; stop it first",
                 self.config.id,
@@ -274,6 +273,15 @@ impl BoxImpl {
         })
         .await
         .map_err(|e| BoxliteError::Internal(format!("Archive restore task panicked: {}", e)))??;
+
+        if status == BoxStatus::Configured {
+            let mut restored = self.state.read().clone();
+            restored.transition_to(BoxStatus::Stopped)?;
+            self.runtime
+                .box_manager
+                .save_box(&self.config.id, &restored)?;
+            *self.state.write() = restored;
+        }
 
         tracing::info!(
             box_id = %self.config.id,
@@ -453,6 +461,7 @@ mod tests {
 
             let mut state = BoxState::new();
             state.status = status;
+            runtime.box_manager.add_box(&config, &state).unwrap();
             let box_impl = BoxImpl::new(
                 config,
                 state,
@@ -496,19 +505,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restore_refuses_a_box_that_is_not_stopped() {
-        for status in [
-            BoxStatus::Configured,
-            BoxStatus::Running,
-            BoxStatus::Stopping,
-        ] {
+    async fn restore_initializes_a_configured_box_without_starting_it() {
+        let target = RestoreTarget::new(BoxStatus::Configured);
+        std::fs::remove_dir_all(&target.disks_dir).unwrap();
+
+        target
+            .box_impl
+            .restore_from_archive(BoxArchive::new(&target.archive))
+            .await
+            .expect("a new box can receive its disk before first boot");
+
+        assert!(target.container_disk().ends_with(b"restored"));
+        let state = target.box_impl.state.read().clone();
+        assert_eq!(state.status, BoxStatus::Stopped);
+        assert!(state.started_at.is_none());
+        let persisted = target
+            .box_impl
+            .runtime
+            .box_manager
+            .update_box(&target.box_impl.config.id)
+            .unwrap();
+        assert_eq!(persisted.status, BoxStatus::Stopped);
+        assert!(persisted.started_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn restore_keeps_a_configured_box_uninitialized_on_invalid_archive() {
+        let target = RestoreTarget::new(BoxStatus::Configured);
+        std::fs::remove_dir_all(&target.disks_dir).unwrap();
+        std::fs::write(&target.archive, b"invalid archive").unwrap();
+
+        assert!(
+            target
+                .box_impl
+                .restore_from_archive(BoxArchive::new(&target.archive))
+                .await
+                .is_err()
+        );
+
+        assert!(!target.disks_dir.exists());
+        assert_eq!(target.box_impl.state.read().status, BoxStatus::Configured);
+    }
+
+    #[tokio::test]
+    async fn restore_refuses_an_active_box() {
+        for status in [BoxStatus::Running, BoxStatus::Stopping, BoxStatus::Paused] {
             let target = RestoreTarget::new(status);
 
             let error = target
                 .box_impl
                 .restore_from_archive(BoxArchive::new(&target.archive))
                 .await
-                .expect_err("only a stopped box may have its disk replaced");
+                .expect_err("an active box must not have its disk replaced");
 
             assert!(
                 matches!(error, BoxliteError::InvalidState(_)),

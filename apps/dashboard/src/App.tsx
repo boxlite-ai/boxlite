@@ -44,6 +44,7 @@ const Keys = React.lazy(() => import('./pages/Keys'))
 const Billing = React.lazy(() => import('./pages/Billing'))
 const BillingPlanChange = React.lazy(() => import('./pages/BillingPlanChange'))
 const Volumes = React.lazy(() => import('./pages/Volumes'))
+const Snapshots = React.lazy(() => import('./pages/Snapshots'))
 const Images = React.lazy(() => import('./pages/ImagesPage'))
 const ImageDetails = React.lazy(() => import('./pages/ImageDetails'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
@@ -179,6 +180,7 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.KEYS)} element={<Keys />} />
         <Route path={getRouteSubPath(RoutePath.BOXES)} element={<Boxes />} />
         <Route path={getRouteSubPath(RoutePath.VOLUMES)} element={<Volumes />} />
+        <Route path={getRouteSubPath(RoutePath.SNAPSHOTS)} element={<Snapshots />} />
         <Route path={getRouteSubPath(RoutePath.IMAGES)} element={<Images tab="images" />} />
         {/* The static segment is declared before `:idOrRef`, as the API orders its routes. */}
         <Route path={getRouteSubPath(RoutePath.IMAGE_REGISTRIES)} element={<Images tab="registries" />} />

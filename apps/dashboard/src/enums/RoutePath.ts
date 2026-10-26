@@ -26,6 +26,7 @@ export enum RoutePath {
   IMAGE_REGISTRIES = '/dashboard/images/registries',
   REGISTRIES = '/dashboard/registries',
   VOLUMES = '/dashboard/volumes',
+  SNAPSHOTS = '/dashboard/snapshots',
   LIMITS = '/dashboard/limits',
   BILLING_SPENDING = '/dashboard/billing/spending',
   /** Parent of BILLING_PLAN_CHANGE. Carries no id of its own, so it only redirects. */
