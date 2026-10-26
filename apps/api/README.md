@@ -12,14 +12,20 @@ per business event; the attributes reach OTLP through nestjs-pino, where alerts 
 | --- | --- | --- |
 | `user.registration` | `UserService.create`, through `recordOutcomes` | requested, success, exception |
 | `user.login` | `LoginEventRecorder` | success |
-| `box.create`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested |
-| `box.create`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes | success, exception |
+| `org.active` | `OrganizationActivityInterceptor`, on a person's first request in an organization each UTC hour | success |
+| `box.create`, `box.start`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested |
+| `box.create`, `box.start`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes | success, exception |
+| `box.exec`, `box.file_upload` | `BoxliteProxyController`, for `POST …/exec` and `PUT …/files` | requested, then success or exception by the response status |
+| `tunnel.create` | `BoxliteProxyController`, through `recordOutcomes` | requested, success, exception |
 
 Box events go through `src/box/utils/box-business-event.util.ts`: the request and the outcome are
-recorded in different places, so one call cannot cover both.
+recorded in different places, so one call cannot cover both. A proxied call that fails with an
+HTTP status records `http_<status>`; a client that disconnects first records `client_closed`.
 
-An event names its entity only by `correlation.id` (the user id or the box id). It carries no
-`org.id`: the box table holds a box's organization, and the organization tables a user's.
+An event names its entity by `correlation.id`: the user id for `user.*` and `org.active`, the box
+id for box and tunnel events. It also carries `organization.id`, so an organization's activity
+can be counted from the log alone. `user.login` has none, since a login spans organizations, and a
+registration carries its default organization on success only.
 
 ### Who asked: the operation context
 
@@ -33,11 +39,14 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
 
 | Context | `actor.kind` | `event.reason` |
 | --- | --- | --- |
-| `Context.user()` | `user` | — |
-| `Context.admin()` | `admin` | — |
-| `Context.platform(reason)` | `platform` | the `PlatformReason`, such as `auto_stop` or `bootstrap` |
+| `Context.user(actor?)` | `user` | — |
+| `Context.admin(actor?)` | `admin` | — |
+| `Context.platform(reason)` | `platform` | the `PlatformReason`, such as `auto_stop` or `auto_resume` |
 
 - Only the platform gives a reason; user and admin contexts have none.
+- A request handler names its caller with `@UserContext() ctx`, or `requestActor(req)` where it
+  already holds the request: `user.id`, `auth.method` (`api_key` or `jwt`) and, when the client
+  sends `X-BoxLite-Source` or `X-BoxLite-SDK-Version`, `client.source` and `sdk.version`.
 - The boot-time admin seed registers as `Context.platform(PlatformReason.BOOTSTRAP)`.
 - Job outcome events carry no context: the runner reports after the request has ended.
 - Add caller-decided fields to `Context`, not new service parameters.

@@ -7,13 +7,15 @@ import { Logger } from '@nestjs/common'
 import { UserService } from './user.service'
 import { Context } from '../common/context/context'
 import { PlatformReason } from '../common/context/platform-reason.enum'
+import { Organization } from '../organization/entities/organization.entity'
 
 describe('UserService registration events', () => {
   // Every [message, attributes] the service logged, at info or error level, in order.
   let logged: [string, Record<string, string>][]
 
-  function makeService(transaction: jest.Mock) {
-    const eventEmitter = { emitAsync: jest.fn().mockResolvedValue([]) }
+  // What the user-created listeners return; the default organization's listener returns it.
+  function makeService(transaction: jest.Mock, listenerResults: unknown[] = []) {
+    const eventEmitter = { emitAsync: jest.fn().mockResolvedValue(listenerResults) }
     const service = new UserService({} as never, eventEmitter as never, { transaction } as never)
     jest.spyOn(service as never, 'generatePrivateKey').mockResolvedValue({
       privateKey: 'private-key',
@@ -33,16 +35,28 @@ describe('UserService registration events', () => {
 
   afterEach(() => jest.restoreAllMocks())
 
-  it('records requested then success with the context actor and no organization', async () => {
-    const service = makeService(committingTransaction())
+  it('records requested then success with the context actor, and the default organization on success', async () => {
+    const organization = Object.assign(new Organization(), { id: 'org-1' })
+    const service = makeService(committingTransaction(), [undefined, organization])
 
     await service.create({ id: 'user-1', name: 'User One' } as never, Context.user())
 
     expect(logged.map(([message]) => message)).toEqual(['user.registration requested', 'user.registration success'])
     for (const [, attributes] of logged) {
       expect(attributes).toEqual(expect.objectContaining({ 'correlation.id': 'user-1', 'actor.kind': 'user' }))
-      expect(attributes).not.toHaveProperty('org.id')
     }
+    // The organization is created inside the registration, so only its success can name it.
+    expect(logged[0][1]).not.toHaveProperty('organization.id')
+    expect(logged[1][1]['organization.id']).toBe('org-1')
+  })
+
+  it('records success without an organization when no default organization was created', async () => {
+    const service = makeService(committingTransaction())
+
+    await service.create({ id: 'user-1', name: 'User One' } as never, Context.user())
+
+    expect(logged[1][0]).toBe('user.registration success')
+    expect(logged[1][1]).not.toHaveProperty('organization.id')
   })
 
   it('records a conflict as user_conflict instead of success, and rethrows', async () => {
