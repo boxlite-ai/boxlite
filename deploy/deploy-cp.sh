@@ -8,13 +8,15 @@ set -eu
 CP_ONLY=${CP_ONLY:-}
 [ "$CP_ONLY" = 1 ] && { SKIP_CLI=1; SKIP_CONSOLE=1; }
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-BOX=microcloud-cp
-REST=https://api.dev.boxlite.ai/v1
-CLI_URL=https://dev.boxlite.ai/api
 export BOXLITE_HOME=/tmp/blhome-dev
 
 # Secrets come from .env.local (gitignored). BOXLITE_API_KEY there is the dev org key.
 set -a; . "$ROOT/.env.local"; set +a
+# Which Box and which BoxLite environment (docs/deploy.md); .env.local may set them too.
+# Their own names: a shell profile's BOXLITE_* variables mean other things.
+BOX=${CP_BOX:-microcloud-cp}
+REST=${CP_BOXLITE_REST:-https://api.dev.boxlite.ai/v1}
+CLI_URL=${CP_BOXLITE_CLI_URL:-https://dev.boxlite.ai/api}
 AUTH="Authorization: Bearer $BOXLITE_API_KEY"
 bl() { boxlite --url "$CLI_URL" "$@"; }
 

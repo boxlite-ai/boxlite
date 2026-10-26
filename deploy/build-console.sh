@@ -2,8 +2,8 @@
 # Build the BoxLite dashboard as the standalone Apps console and put it in console-dist/,
 # which the control plane serves at /console/ (CONSOLE_DIR, default ../console-dist from control-plane/).
 #
-# The dashboard lives in the boxlite repo (branch micro-cloud-console). Point DASHBOARD_DIR at its
-# JS workspace root (the directory holding nx.json and dashboard/).
+# The dashboard lives in the boxlite repo (apps/dashboard). DASHBOARD_DIR is its JS workspace root
+# (the directory holding nx.json and dashboard/); see the default below.
 #
 #   VITE_APPS_API_URL     the console API the Apps screens call (the control plane's /console/api)
 #   DASHBOARD_BASE_PATH   asset base and router basename (/console/)
@@ -12,7 +12,11 @@
 #                         same-origin path that does not exist, so nothing leaks to a real API.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-DASHBOARD_DIR=${DASHBOARD_DIR:-$ROOT/../boxlite_repo/boxlite-micro-cloud-app/apps}
+# In the boxlite repo (branch micro-cloud-app) microcloud/ sits next to apps/; a standalone
+# microcloud checkout looks for the console worktree beside it.
+if [ -z "${DASHBOARD_DIR:-}" ]; then
+  if [ -f "$ROOT/../apps/nx.json" ]; then DASHBOARD_DIR=$ROOT/../apps; else DASHBOARD_DIR=$ROOT/../boxlite_repo/boxlite-micro-cloud-app/apps; fi
+fi
 DASHBOARD_DIR=$(cd "$DASHBOARD_DIR" && pwd)
 OUT=$DASHBOARD_DIR/dist/apps/dashboard
 DEST=$ROOT/console-dist
