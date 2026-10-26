@@ -71,7 +71,10 @@ describe('JwtStrategy.validate — auto-created user', () => {
 
     await strategy.validate(request, { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true })
 
-    expect(userService.create).toHaveBeenCalledWith(expect.anything(), Context.user())
+    expect(userService.create).toHaveBeenCalledWith(
+      expect.anything(),
+      Context.user({ userId: 'user-1', authMethod: 'jwt' }),
+    )
   })
 
   it('rejects an unverified Auth0 database identity before local user creation', async () => {

@@ -42,6 +42,8 @@ import { ContentTypeInterceptor } from '../../common/interceptors/content-type.i
 import { BoxAccessGuard } from '../guards/box-access.guard'
 import { CustomHeaders } from '../../common/constants/header.constants'
 import { AuthContext } from '../../common/decorators/auth-context.decorator'
+import { UserContext } from '../../common/decorators/user-context.decorator'
+import { Context } from '../../common/context/context'
 import { OrganizationAuthContext } from '../../common/interfaces/auth-context.interface'
 import { RequiredOrganizationResourcePermissions } from '../../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
@@ -314,8 +316,9 @@ export class BoxController {
   async recoverBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxIdOrName') boxIdOrName: string,
+    @UserContext() ctx: Context,
   ): Promise<BoxDto> {
-    const recoveredBox = await this.boxService.recover(boxIdOrName, authContext.organization)
+    const recoveredBox = await this.boxService.recover(boxIdOrName, authContext.organization, ctx)
     let boxDto = await this.boxService.toBoxDto(recoveredBox)
 
     if (boxDto.state !== BoxState.STARTED) {
