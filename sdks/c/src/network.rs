@@ -410,22 +410,10 @@ pub unsafe extern "C" fn boxlite_network_tunnel_with_options(
             return BoxliteErrorCode::InvalidArgument;
         }
 
-        let target: SocketAddr = match format!("{}:{port}", boxlite::net::constants::GUEST_IP)
-            .parse()
-        {
-            Ok(target) => target,
-            Err(error) => {
-                write_error(
-                    out_error,
-                    BoxliteError::Internal(format!("invalid BoxLite guest IP constant: {error}")),
-                );
-                return BoxliteErrorCode::Internal;
-            }
-        };
         let network_ref = &*network;
         match network_ref
             .tokio_rt
-            .block_on(network_ref.handle.tunnel_with_options(target, options))
+            .block_on(network_ref.handle.tunnel(port, options))
         {
             Ok(handle) => {
                 *out_tunnel = Box::into_raw(Box::new(BoxTunnelHandle {

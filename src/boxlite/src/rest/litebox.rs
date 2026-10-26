@@ -2802,8 +2802,10 @@ mod tests {
         });
 
         let network = crate::litebox::NetworkHandle::new(Arc::new(rest_box_for(port, "tun-box")));
-        let target = format!("{}:3000", crate::net::constants::GUEST_IP);
-        let tunnel = network.tunnel(target.parse().unwrap()).await.unwrap();
+        let tunnel = network
+            .tunnel(3000, TunnelOptions::default())
+            .await
+            .unwrap();
         assert_eq!(
             tunnel.uri(),
             Some(format!("http://127.0.0.1:{port}").as_str())
@@ -2866,13 +2868,10 @@ mod tests {
                 }
             });
             let network = crate::litebox::NetworkHandle::new(Arc::new(rest_box_for(port, "box1")));
-            let target = format!("{}:3000", crate::net::constants::GUEST_IP)
-                .parse()
+            network
+                .tunnel(3000, options.unwrap_or_default())
+                .await
                 .unwrap();
-            match options {
-                None => network.tunnel(target).await.unwrap(),
-                Some(options) => network.tunnel_with_options(target, options).await.unwrap(),
-            };
             let (head, body) = server.await.unwrap();
             assert!(
                 head.starts_with("POST /v1/boxes/box1/network/tunnel?port=3000 "),
@@ -2957,11 +2956,8 @@ mod tests {
         )
         .unwrap();
         let network = crate::litebox::NetworkHandle::new(Arc::new(rest_box));
-        let target = format!("{}:3000", crate::net::constants::GUEST_IP)
-            .parse()
-            .unwrap();
         let tunnel = network
-            .tunnel_with_options(target, TunnelOptions { is_public: false })
+            .tunnel(3000, TunnelOptions { is_public: false })
             .await
             .unwrap();
         assert!(!tunnel.is_public());
@@ -2994,7 +2990,7 @@ mod tests {
         assert!(!active.load(Ordering::SeqCst));
         forwarder.close().await.unwrap();
         network
-            .tunnel_with_options(target, TunnelOptions { is_public: false })
+            .tunnel(3000, TunnelOptions { is_public: false })
             .await
             .unwrap();
         assert_eq!(posts.load(Ordering::SeqCst), 2);

@@ -285,14 +285,11 @@ impl JsNetworkHandle {
         if port == 0 {
             return Err(Error::from_reason("tunnel port must be non-zero"));
         }
-        let target: SocketAddr = format!("{}:{port}", boxlite::net::constants::GUEST_IP)
-            .parse()
-            .expect("BoxLite guest IP must be a valid socket address");
         let tunnel = self
             .handle
             .network()
-            .tunnel_with_options(
-                target,
+            .tunnel(
+                port,
                 TunnelOptions {
                     is_public: is_public.unwrap_or(true),
                 },

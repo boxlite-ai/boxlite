@@ -167,14 +167,11 @@ impl PyNetworkHandle {
                 "tunnel port must be non-zero",
             ));
         }
-        let target: SocketAddr = format!("{}:{port}", boxlite::net::constants::GUEST_IP)
-            .parse()
-            .expect("BoxLite guest IP must be a valid socket address");
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let tunnel = handle
                 .network()
-                .tunnel_with_options(target, TunnelOptions { is_public })
+                .tunnel(port, TunnelOptions { is_public })
                 .await
                 .map_err(map_err)?;
             Ok(PyBoxTunnel {

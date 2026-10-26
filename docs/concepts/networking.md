@@ -111,7 +111,7 @@ await forwarder.wait();
 ```
 
 Go uses `network.Tunnel(ctx, 3000, false)` and `tunnel.Descriptor()`; Rust uses
-`network.tunnel_with_options(target, TunnelOptions { is_public: false })`.
+`network.tunnel(3000, TunnelOptions { is_public: false })`.
 C keeps `boxlite_network_tunnel` and adds `boxlite_network_tunnel_with_options`
 with `{"isPublic":false}` plus `boxlite_tunnel_descriptor` for the JSON result.
 Private mode is rejected by local runtimes.

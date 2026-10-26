@@ -71,12 +71,9 @@ pub async fn execute(args: TunnelArgs, global: &GlobalFlags) -> Result<()> {
         println!("Revoked tunnel access to {}:{}", args.target, args.port);
         return Ok(());
     }
-    let guest_ip = boxlite::net::constants::GUEST_IP
-        .parse()
-        .context("BoxLite guest IP constant is invalid")?;
     let tunnel = network
-        .tunnel_with_options(
-            SocketAddr::new(guest_ip, args.port),
+        .tunnel(
+            args.port,
             TunnelOptions {
                 is_public: !args.private,
             },
