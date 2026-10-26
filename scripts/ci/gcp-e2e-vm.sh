@@ -20,6 +20,10 @@ set -euo pipefail
 : "${GCP_PROJECT:?}" "${GCP_ZONE:?}" "${GCP_INSTANCE:?}" "${RUNNER_LABEL:?}" "${REPO:?}"
 
 TOKEN_KEY=runner-reg-token
+# A zone out of capacity (ZONE_RESOURCE_POOL_EXHAUSTED) rejects a start and
+# leaves the VM TERMINATED; capacity often returns within minutes.
+START_ATTEMPTS=6
+START_RETRY_DELAY=60
 
 vm() {
     gcloud compute instances "$1" "$GCP_INSTANCE" \
@@ -37,6 +41,41 @@ wait_status() {
     done
     echo "::error::$GCP_INSTANCE did not reach $1 within 5 minutes" >&2
     return 1
+}
+
+# boot_vm: start the VM, retrying while the zone rejects the start.
+boot_vm() {
+    local attempt
+    for attempt in $(seq "$START_ATTEMPTS"); do
+        vm start --async
+        if wait_booted; then
+            return 0
+        fi
+        echo "::warning::$GCP_INSTANCE start attempt $attempt/$START_ATTEMPTS was rejected; $GCP_ZONE may lack capacity" >&2
+        [ "$attempt" = "$START_ATTEMPTS" ] || sleep "$START_RETRY_DELAY"
+    done
+    echo "::error::could not start $GCP_INSTANCE after $START_ATTEMPTS attempts" >&2
+    return 1
+}
+
+# wait_booted: succeed once RUNNING; fail when the VM sits TERMINATED for a
+# minute, which means the start was rejected. Without
+# compute.zoneOperations.get the status is the only signal.
+wait_booted() {
+    local status terminated=0
+    for _ in $(seq 60); do
+        status=$(vm_status)
+        [ "$status" = RUNNING ] && return 0
+        if [ "$status" = TERMINATED ]; then
+            terminated=$((terminated + 1))
+            [ "$terminated" -lt 12 ] || return 1
+        else
+            terminated=0
+        fi
+        sleep 5
+    done
+    echo "::error::$GCP_INSTANCE did not reach RUNNING within 5 minutes" >&2
+    exit 1
 }
 
 runner_online() {
@@ -99,8 +138,7 @@ start() {
     # Boot only once the startup script can read this token, not a stale one.
     wait_token "$token"
 
-    vm start --async
-    wait_status RUNNING
+    boot_vm
 }
 
 case "${1:-}" in

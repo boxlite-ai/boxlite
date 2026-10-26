@@ -29,6 +29,8 @@ flowchart LR
 - **start-runner** — authenticates to GCP through OIDC, writes a fresh runner registration
   token into the VM's metadata, boots the VM, and waits up to 5 minutes for the runner to
   come online. It then removes the token from the metadata, whether or not the runner came up.
+  When the zone rejects the boot for lack of capacity, the VM stays `TERMINATED`; after a
+  minute in that state the job retries the start, up to 6 attempts a minute apart.
 - **e2e-tests** — runs on the self-hosted runner (`gcp-e2e` label, 50-minute timeout):
   verifies `/dev/kvm`, installs build dependencies, then runs `make test:integration`.
 - **stop-runner** — always runs at the end and stops the VM so it stops costing money,
@@ -67,7 +69,7 @@ online runner, `start` stops it and boots it again with a new token.
 | Property | Value |
 |---|---|
 | VM | `ci-gha-e2e-1` in `boxlite-dev-project`, zone `us-east5-a` |
-| Machine type | `n2-custom-4-8192` (4 vCPU, 8 GB), nested virtualization enabled |
+| Machine type | `c3-highcpu-4` (4 vCPU, 8 GB), nested virtualization enabled. It replaced `n2-custom-4-8192`, which `us-east5-a` repeatedly ran out of (`ZONE_RESOURCE_POOL_EXHAUSTED`). |
 | Disk / image | 100 GB `pd-balanced`, Ubuntu 24.04 LTS |
 | Runner | name `ci-gha-e2e-1`, label `gcp-e2e` |
 | Network | VPC `ci-gha-e2e`, no firewall rules (no inbound), no external IP; egress through Cloud NAT `ci-gha-e2e-nat` |
@@ -107,7 +109,7 @@ gcloud compute routers nats create ci-gha-e2e-nat --project $P --router ci-gha-e
   --region us-east5 --auto-allocate-nat-external-ips --nat-custom-subnet-ip-ranges ci-gha-e2e-us-east5
 
 gcloud compute instances create ci-gha-e2e-1 --project $P --zone us-east5-a \
-  --machine-type n2-custom-4-8192 --enable-nested-virtualization \
+  --machine-type c3-highcpu-4 --enable-nested-virtualization \
   --image-family ubuntu-2404-lts-amd64 --image-project ubuntu-os-cloud \
   --boot-disk-size 100GB --boot-disk-type pd-balanced \
   --subnet ci-gha-e2e-us-east5 --no-address --no-service-account --no-scopes \
@@ -150,6 +152,7 @@ gh workflow run e2e-local.yml
 |---|---|---|
 | `Federate a GCP identity` fails | the run's workflow is not `e2e-local.yml` in this repository, or the pool/provider changed | check the provider condition above; reusable or renamed workflows need the condition updated |
 | `start-runner` times out waiting for the runner to come online | the startup script failed | read the VM's serial port output (`gcloud compute instances get-serial-port-output ci-gha-e2e-1 --project boxlite-dev-project --zone us-east5-a`) and search for `startup-script` |
+| `start-runner` fails with `could not start ci-gha-e2e-1 after 6 attempts` | `us-east5-a` has no `c3-highcpu-4` capacity (`ZONE_RESOURCE_POOL_EXHAUSTED`) | re-run the job later; if it persists, change the VM's machine type with `gcloud compute instances set-machine-type` while it is stopped |
 | `e2e-tests` fails on low disk | `target/` build artifacts filled the disk | the job evicts caches at 80% use and refuses below 20 GB free; if it still fails, grow the disk |
 | A pull request doesn't trigger the workflow | the `e2e-local` label is missing | a maintainer adds the label (it is the cost gate) |
 | A labeled fork PR doesn't re-run after a push | fork approval is per-commit | remove and re-add the `e2e-local` label to approve the new head |

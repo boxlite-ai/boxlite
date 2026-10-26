@@ -109,7 +109,9 @@ non-VM integration tests and Linux guest tests. Codecov requires 90% coverage of
 and reports total coverage.
 
 `make coverage:bindings:external` runs `make test:unit:scripts` before collecting
-native SDK profiles. A relative `CARGO_TARGET_DIR` is resolved from the repository
+native SDK profiles. The infra job also runs `make test:unit:scripts` whenever
+`tests/scripts/` or a script it drives (`scripts/ci/`, `scripts/test/coverage-bindings.sh`)
+changes. A relative `CARGO_TARGET_DIR` is resolved from the repository
 root once, so Python and Node builds share the report's object directory.
 
 Linux x64 also runs the native KVM hardware tests and adds their profiles before
