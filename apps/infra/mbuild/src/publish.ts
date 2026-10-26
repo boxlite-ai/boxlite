@@ -36,14 +36,15 @@ export class PublishError extends Error {
   }
 }
 
-/**
- * The scan gate's refusal, which a caller must not retry.
- *
- * Every other `PublishError` is a push, a token endpoint or a registry API, all
- * of which fail transiently. A scan finding is about the image's own contents,
- * so asking again returns it again. Carried out to the exit code in
- * `bin/mbuild.ts`, because the caller that has to stop retrying is a shell.
- */
+/** Audit failures stop publication without retry, including an unavailable audit service. */
+export class AuditFailedError extends PublishError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AuditFailedError'
+  }
+}
+
+/** Image findings do not change on retry; the CLI carries this refusal to the shell. */
 export class ScanRefusedError extends PublishError {
   constructor(message: string) {
     super(message)
@@ -587,7 +588,7 @@ const assertNoHighSeverityAdvisories = async ({
   // that it could not audit at all — no lockfile, no registry — and that arrives
   // on stderr with stdout empty. Both streams, so the reason is always carried.
   const said = [audited.stdout.trim(), audited.stderr.trim()].filter((stream) => stream.length > 0).join('\n')
-  throw new PublishError(`${config.audit.manager} audit did not pass, so no image was built.\n${said}`)
+  throw new AuditFailedError(`${config.audit.manager} audit did not pass, so no image was built.\n${said}`)
 }
 
 export const publish = async ({

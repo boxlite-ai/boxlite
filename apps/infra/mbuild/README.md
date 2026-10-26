@@ -51,9 +51,28 @@ so a commit build is not interchangeable with the release build from the same SH
 | Code | Meaning | Response |
 | --- | --- | --- |
 | `0` | Requested operation succeeded | Continue to the next deployment check |
+| `65` | Dependency audit failed or could not complete | Resolve the reported cause before rerunning |
 | `66` | Required artifact is absent | Publish or promote the intended artifact |
 | `78` | Scan policy refused the artifact | Resolve the finding or review the policy |
 | Other nonzero | Command, authentication, network or input failure | Read the error; do not treat it as absence |
+
+### Dependency audit failures
+
+`publish` audits production dependencies before the first image build. Both publication
+workflows stop immediately on exit `65`, including audit service or registry errors;
+the audit's stdout and stderr remain in the failure message. Image scan refusals (`78`)
+also stop immediately, while other publication failures retain their retry policy.
+An already-published artifact needs no build or audit.
+
+For this repository, reproduce the gate from `apps/` with:
+
+```bash
+corepack yarn npm audit --severity high --environment production
+```
+
+Upgrade affected dependencies and commit both `package.json` and `yarn.lock` before
+rerunning publication. If the audit could not reach its registry, resolve connectivity
+and rerun deliberately; the workflow will not retry the failed audit automatically.
 
 ## Implementation and verification
 
