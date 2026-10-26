@@ -302,7 +302,7 @@ libkrun gitlink 固定为快照实现 `f68445978447fd0fada64f74b1892835b931a767`
 
 ### 阶段 2 实际验证与剩余缺口
 
-以下命令在 libkrun 子模块目录执行；GNU 检查/构建公共环境为 `CC_x86_64_unknown_linux_gnu=/opt/homebrew/bin/x86_64-linux-musl-gcc CARGO_TARGET_DIR=/private/tmp/boxlite-stage2-target`。`CC_LINUX` 必须作为 make 命令行参数，macOS Makefile 会覆盖同名环境变量。
+以下命令在 libkrun 子模块目录执行；GNU 检查/构建公共环境为 `CC_x86_64_unknown_linux_gnu=/opt/homebrew/bin/x86_64-linux-musl-gcc`，`CARGO_TARGET_DIR` 指向单独的临时目录。`CC_LINUX` 必须作为 make 命令行参数，macOS Makefile 会覆盖同名环境变量。
 
 | 实际 make 命令 | 结果 |
 | --- | --- |
@@ -555,6 +555,6 @@ CLI 提供 `create`/`run --enable-checkpoint`、`pause [--host-writers-stopped]`
 
 - 先红后绿：只加测试、不加守卫时 `checkpoint_boxes_refuse_disk_snapshot_clone_export_and_archive_restore` 失败（`Err(Storage("Failed to open archive …"))`，即进入了磁盘替换）；加守卫后通过。
 - 宿主 macOS（`BOXLITE_DEPS_STUB=1`）：`make test:unit:rust FILTER=checkpoint` core 37/37、REST 39/39；`make test:unit:cli` 322/322；`make test:unit:node` vitest 106/106、Rust 38/38；`make test:setup:submodules` 通过；`make fmt:check:rust`、`make fmt:check:c` 通过。
-- amd64 `boxlite-phase13-guest-x86` 镜像（stub，无 KVM）：`make test:unit:rust FILTER=checkpoint` core 46/46、REST 48/48；clippy（`boxlite`、`boxlite-shim`、`libkrun-sys`、`boxlite-cli`、`boxlite-guest`，`--all-targets --all-features -D warnings`）通过；修复前 clippy 在验收测试处报 E0063。
+- 一次性 amd64 `rust:1-bookworm` 镜像（加 protoc、libseccomp-dev、cargo-nextest、clippy；stub，无 KVM）：`make test:unit:rust FILTER=checkpoint` core 46/46、REST 48/48；clippy（`boxlite`、`boxlite-shim`、`libkrun-sys`、`boxlite-cli`、`boxlite-guest`，`--all-targets --all-features -D warnings`）通过；修复前 clippy 在验收测试处报 E0063。
 - 基线问题（未修改的目标文件）：`make fmt:check:node` 只在 `sdks/node/lib/native-contracts.ts` 报格式问题；pre-commit `lint:fix` 在 `apps/infra/mdeploy` 报 3 个 eslint 错误；API 兼容检查以 `origin/main` 为基线误报 `openapi/admin.openapi.yaml`，以 `origin/x_features` 为基线通过。
 - **UNVERIFIED**：同上一节；`make test:shim:linkage` 与验收测试构建本次未重跑。

@@ -843,7 +843,7 @@ pub struct AdvancedBoxOptions {
     /// Opt-in and local-only: supported on Linux x86_64 with KVM, the libkrun
     /// engine and the default jailed (rootless) isolation; anything else is
     /// refused before launch. A checkpoint-enabled box refuses the disk-only
-    /// snapshot, clone and export operations. Omitted from the serialized form
+    /// snapshot, clone, export and archive-restore operations. Omitted from the serialized form
     /// when off, so an ordinary box's manifest keeps the shape older importers
     /// read.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
