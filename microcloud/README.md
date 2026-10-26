@@ -14,7 +14,7 @@ public BoxLite API and running inside a BoxLite Box. Spec: Notion "PRD：Micro-c
 | `e2e/` | live suites (API, console) and real-agent acceptance | Node |
 | `console-dist/` | build output of the dashboard's console (not committed), served at `/console/` | |
 
-Start with `docs/architecture.md`. Wire formats: `docs/contracts.md`. Why: `docs/decisions.md`.
+Deploy it in a fresh environment: `docs/deploy.md`. Start reading the code with `docs/architecture.md`. Wire formats: `docs/contracts.md`. Why: `docs/decisions.md`.
 Findings from real runs and their status: `docs/polish-backlog.md`; code-level findings: `docs/code-health.md`; security findings and their fixes: `docs/security-review.md`. CLI: `docs/cli-reference.md` (generated).
 
 Live on BoxLite dev: API `https://8080-d-76416e6f374b4352547a7a68.proxy.dev.boxlite.ai`,
