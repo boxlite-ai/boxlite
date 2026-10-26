@@ -187,6 +187,10 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
       if (cached) {
         this.logger.debug('Using cached API key validation')
         const apiKey = JSON.parse(cached)
+        // Preserve the shared revocation key while old cache entries age out after the scope migration.
+        apiKey.permissions = apiKey.permissions?.map((permission: string) =>
+          permission === 'read:tenant' ? 'read:members' : permission === 'write:tenant' ? 'write:members' : permission,
+        )
         // Parse Date fields from cached data
         if (apiKey.createdAt) {
           apiKey.createdAt = new Date(apiKey.createdAt)

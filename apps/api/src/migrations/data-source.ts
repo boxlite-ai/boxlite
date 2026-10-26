@@ -20,6 +20,7 @@ export const baseDataSourceOptions: DataSourceOptions = {
   database: process.env.DB_DATABASE,
   synchronize: false,
   migrationsRun: false,
+  migrationsTransactionMode: 'each',
   logging: process.env.DB_LOGGING === 'true',
   namingStrategy: new CustomNamingStrategy(),
   entities: [join(__dirname, '../**/*.entity.ts')],

@@ -6,12 +6,15 @@
 
 import { EntityManager } from 'typeorm'
 import { OrganizationResourcePermission } from '../enums/organization-resource-permission.enum'
+import { TransactionalEvent } from '../../common/events/transactional.event'
 
-export class OrganizationResourcePermissionsUnassignedEvent {
+export class OrganizationResourcePermissionsUnassignedEvent extends TransactionalEvent {
   constructor(
-    public readonly entityManager: EntityManager,
+    entityManager: EntityManager,
     public readonly organizationId: string,
     public readonly userId: string,
     public readonly unassignedPermissions: OrganizationResourcePermission[],
-  ) {}
+  ) {
+    super(entityManager)
+  }
 }

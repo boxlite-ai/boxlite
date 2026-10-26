@@ -29,11 +29,11 @@ export function BoxNetworkSection({ box, canManage }: { box: Box; canManage: boo
       toggleInbound.mutate(
         { boxId: box.id, mode },
         {
-          // Named for what actually changed: preview reachability, not the
+          // Named for what actually changed: tunnel reachability, not the
           // box as a whole.
           onSuccess: () =>
             toast.success(
-              mode === NetworkMode.ENABLED ? 'Preview URLs are open to anyone' : 'Preview URLs require signing in',
+              mode === NetworkMode.ENABLED ? 'Tunnel URLs are open to anyone' : 'Tunnel URLs require signing in',
             ),
           onError: () => toast.error('Could not change inbound access'),
         },

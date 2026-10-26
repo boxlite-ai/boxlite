@@ -36,7 +36,9 @@ const Keys: React.FC = () => {
     const assignedPermissions = new Set(
       authenticatedUserOrganizationMember.assignedRoles.flatMap((role) => role.permissions),
     )
-    return DEFAULT_API_KEY_PERMISSIONS.filter((permission) => assignedPermissions.has(permission))
+    return DEFAULT_API_KEY_PERMISSIONS.filter(
+      (permission) => permission !== CreateApiKeyPermissionsEnum.WRITE_MEMBERS && assignedPermissions.has(permission),
+    )
   }, [authenticatedUserOrganizationMember])
 
   const handleRevoke = async (key: ApiKeyList) => {

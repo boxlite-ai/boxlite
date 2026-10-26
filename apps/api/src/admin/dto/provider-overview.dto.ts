@@ -1,8 +1,10 @@
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
+import { AdminOrganizationRegistrationDto } from './organization-metadata.dto'
+import { AdminOrganizationActivationDto } from './organization-activation.dto'
 
 type HealthState = 'critical' | 'degraded' | 'healthy' | 'unknown'
 
-class AdminCursorPageDto {
+export class AdminCursorPageDto {
   @ApiPropertyOptional({ nullable: true, description: 'Opaque cursor for the next page' })
   nextCursor: string | null
 
@@ -185,7 +187,7 @@ export class AdminComponentIdentitiesDto {
 }
 
 @ApiSchema({ name: 'AdminOrganizationOverview' })
-export class AdminOrganizationOverviewDto {
+export class AdminOrganizationOverviewDto extends AdminOrganizationRegistrationDto {
   @ApiProperty()
   organizationId: string
 
@@ -305,7 +307,7 @@ export class AdminOrganizationUsageDto {
 }
 
 @ApiSchema({ name: 'AdminOrganizationDetail' })
-export class AdminOrganizationDetailDto {
+export class AdminOrganizationDetailDto extends AdminOrganizationRegistrationDto {
   @ApiProperty()
   organizationId: string
 
@@ -323,6 +325,13 @@ export class AdminOrganizationDetailDto {
 
   @ApiPropertyOptional({ type: AdminOrganizationUsageDto })
   usage?: AdminOrganizationUsageDto
+
+  @ApiPropertyOptional({
+    type: AdminOrganizationActivationDto,
+    nullable: true,
+    description: 'Only with include=activation.',
+  })
+  activation?: AdminOrganizationActivationDto | null
 
   @ApiProperty({ format: 'date-time' })
   observedAt: string

@@ -1,7 +1,10 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Architectural values supplied by the machine's boot loader.
+//! Architectural values supplied by the machine's boot loader, and the x86
+//! backend operations that install them.
+
+use crate::{Result, Vcpu, Vm};
 
 /// One CPUID response; the VMM selects guest features and topology.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -53,4 +56,24 @@ pub struct X86BootRegisters {
     pub gdt_limit: u16,
     pub idt_base: u64,
     pub idt_limit: u16,
+}
+
+/// The x86 operations a VM offers the machine's boot loader.
+pub trait X86Vm: Vm<Vcpu: X86Vcpu> {
+    /// Host-supported CPUID values, before the VMM applies guest topology and
+    /// policy. They are a ceiling: a guest must not see features beyond them.
+    fn supported_cpuid(&self) -> &[X86CpuidEntry];
+}
+
+/// The x86 state a vCPU needs before its first guest entry.
+///
+/// Both writes are not transactional: discard the vCPU after any error.
+pub trait X86Vcpu: Vcpu {
+    /// Installs the machine's CPUID and MSR policy. Call it before
+    /// [`set_boot_registers`](Self::set_boot_registers).
+    fn set_cpu_features(&mut self, cpuid: &[X86CpuidEntry], msrs: &[X86Msr]) -> Result<()>;
+
+    /// Installs the entry registers. Only the boot vCPU needs them; the others
+    /// keep their reset state until INIT/SIPI.
+    fn set_boot_registers(&mut self, state: &X86BootRegisters) -> Result<()>;
 }

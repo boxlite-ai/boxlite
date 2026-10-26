@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { MoreHorizontal } from '@/components/ui/icon'
 import {
   ColumnDef,
@@ -15,63 +15,66 @@ import {
   SortingState,
   useReactTable,
 } from '@tanstack/react-table'
-import { OrganizationRole, OrganizationUser, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
+import { OrganizationInvitation, OrganizationUser } from '@boxlite-ai/api-client'
 import { Pagination } from '@/components/Pagination'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { TableHeader, TableRow, TableHead, TableBody, TableCell, Table } from '@/components/ui/table'
 import { RemoveOrganizationMemberDialog } from '@/components/OrganizationMembers/RemoveOrganizationMemberDialog'
-import { UpdateOrganizationMemberAccess } from '@/components/OrganizationMembers/UpdateOrganizationMemberAccessDialog'
+import { CancelOrganizationInvitationDialog } from '@/components/OrganizationMembers/CancelOrganizationInvitationDialog'
 import { capitalize } from '@/lib/utils'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { TableEmptyState } from '../TableEmptyState'
 
 interface DataTableProps {
   data: OrganizationUser[]
+  invitations: OrganizationInvitation[]
   loadingData: boolean
-  availableAssignments: OrganizationRole[]
-  loadingAvailableAssignments: boolean
-  onUpdateMemberAccess: (userId: string, role: OrganizationUserRoleEnum, assignedRoleIds: string[]) => Promise<boolean>
   onRemoveMember: (userId: string) => Promise<boolean>
   loadingMemberAction: Record<string, boolean>
   ownerMode: boolean
+  onCancelInvitation: (invitationId: string) => Promise<boolean>
+  onResendInvitation: (invitation: OrganizationInvitation) => Promise<boolean>
+  loadingInvitationAction: Record<string, boolean>
 }
+
+type MemberRow = (OrganizationUser & { kind: 'member' }) | (OrganizationInvitation & { kind: 'invitation' })
 
 export function OrganizationMemberTable({
   data,
+  invitations,
   loadingData,
-  availableAssignments,
-  loadingAvailableAssignments,
-  onUpdateMemberAccess,
   onRemoveMember,
   loadingMemberAction,
   ownerMode,
+  onCancelInvitation,
+  onResendInvitation,
+  loadingInvitationAction,
 }: DataTableProps) {
   const [sorting, setSorting] = useState<SortingState>([])
-  const [memberToUpdate, setMemberToUpdate] = useState<OrganizationUser | null>(null)
-  const [isUpdateMemberAccessDialogOpen, setIsUpdateMemberAccessDialogOpen] = useState(false)
-  const [memberToRemove, setMemberToRemove] = useState<string | null>(null)
-  const [isRemoveDialogOpen, setIsRemoveDialogOpen] = useState(false)
+  const [action, setAction] = useState<MemberRow | null>(null)
+  const rows = useMemo<MemberRow[]>(
+    () => [
+      ...data.map((member) => ({ ...member, kind: 'member' as const })),
+      ...(ownerMode ? invitations.map((invitation) => ({ ...invitation, kind: 'invitation' as const })) : []),
+    ],
+    [data, invitations, ownerMode],
+  )
+
+  const isLoading = (row: MemberRow) =>
+    row.kind === 'member' ? loadingMemberAction[row.userId] : loadingInvitationAction[row.id]
 
   const columns = getColumns({
-    onUpdateMemberRole: (member) => {
-      setMemberToUpdate(member)
-      setIsUpdateMemberAccessDialogOpen(true)
-    },
-    onUpdateAssignedRoles: (member) => {
-      setMemberToUpdate(member)
-      setIsUpdateMemberAccessDialogOpen(true)
-    },
-    onRemove: (userId: string) => {
-      setMemberToRemove(userId)
-      setIsRemoveDialogOpen(true)
-    },
+    onAction: setAction,
+    onResendInvitation,
+    isLoading,
     ownerMode,
   })
 
   const table = useReactTable({
-    data,
+    data: rows,
     columns,
+    getRowId: (row) => (row.kind === 'member' ? `member:${row.userId}` : `invitation:${row.id}`),
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     onSortingChange: setSorting,
@@ -86,28 +89,11 @@ export function OrganizationMemberTable({
     },
   })
 
-  const handleUpdateMemberAccess = async (role: OrganizationUserRoleEnum, assignedRoleIds: string[]) => {
-    if (memberToUpdate) {
-      const success = await onUpdateMemberAccess(memberToUpdate.userId, role, assignedRoleIds)
-      if (success) {
-        setMemberToUpdate(null)
-        setIsUpdateMemberAccessDialogOpen(false)
-      }
-      return success
-    }
-    return false
-  }
-
-  const handleConfirmRemove = async () => {
-    if (memberToRemove) {
-      const success = await onRemoveMember(memberToRemove)
-      if (success) {
-        setMemberToRemove(null)
-        setIsRemoveDialogOpen(false)
-      }
-      return success
-    }
-    return false
+  const handleConfirmAction = async () => {
+    if (!action) return false
+    const success = await (action.kind === 'member' ? onRemoveMember(action.userId) : onCancelInvitation(action.id))
+    if (success) setAction(null)
+    return success
   }
 
   return (
@@ -140,7 +126,7 @@ export function OrganizationMemberTable({
                   <TableRow
                     key={row.id}
                     data-state={row.getIsSelected() && 'selected'}
-                    className={`h-14 ${loadingMemberAction[row.original.userId] ? 'opacity-50 pointer-events-none' : ''}`}
+                    className={`h-14 ${isLoading(row.original) ? 'opacity-50 pointer-events-none' : ''}`}
                   >
                     {row.getVisibleCells().map((cell) => (
                       <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
@@ -148,7 +134,7 @@ export function OrganizationMemberTable({
                   </TableRow>
                 ))
               ) : (
-                <TableEmptyState colSpan={columns.length} message="No Members found." />
+                <TableEmptyState colSpan={columns.length} message="No members or invitations found." />
               )}
             </TableBody>
           </Table>
@@ -156,35 +142,25 @@ export function OrganizationMemberTable({
         <Pagination table={table} className="mt-4" entityName="Members" />
       </div>
 
-      {memberToUpdate && (
-        <UpdateOrganizationMemberAccess
-          open={isUpdateMemberAccessDialogOpen}
+      {action?.kind === 'member' && (
+        <RemoveOrganizationMemberDialog
+          open
           onOpenChange={(open) => {
-            setIsUpdateMemberAccessDialogOpen(open)
-            if (!open) {
-              setMemberToUpdate(null)
-            }
+            if (!open) setAction(null)
           }}
-          initialRole={memberToUpdate.role}
-          initialAssignments={memberToUpdate.assignedRoles}
-          availableAssignments={availableAssignments}
-          loadingAvailableAssignments={loadingAvailableAssignments}
-          onUpdateAccess={handleUpdateMemberAccess}
-          processingUpdateAccess={loadingMemberAction[memberToUpdate.userId]}
+          onRemoveMember={handleConfirmAction}
+          loading={isLoading(action)}
         />
       )}
-
-      {memberToRemove && (
-        <RemoveOrganizationMemberDialog
-          open={isRemoveDialogOpen}
+      {action?.kind === 'invitation' && (
+        <CancelOrganizationInvitationDialog
+          open
           onOpenChange={(open) => {
-            setIsRemoveDialogOpen(open)
-            if (!open) {
-              setMemberToRemove(null)
-            }
+            if (!open) setAction(null)
           }}
-          onRemoveMember={handleConfirmRemove}
-          loading={loadingMemberAction[memberToRemove]}
+          onCancelInvitation={handleConfirmAction}
+          expired={new Date(action.expiresAt) < new Date()}
+          loading={isLoading(action)}
         />
       )}
     </>
@@ -192,100 +168,91 @@ export function OrganizationMemberTable({
 }
 
 const getColumns = ({
-  onUpdateMemberRole,
-  onUpdateAssignedRoles,
-  onRemove,
+  onAction,
+  onResendInvitation,
+  isLoading,
   ownerMode,
 }: {
-  onUpdateMemberRole: (member: OrganizationUser) => void
-  onUpdateAssignedRoles: (member: OrganizationUser) => void
-  onRemove: (userId: string) => void
+  onAction: (row: MemberRow) => void
+  onResendInvitation: (invitation: OrganizationInvitation) => Promise<boolean>
+  isLoading: (row: MemberRow) => boolean
   ownerMode: boolean
-}): ColumnDef<OrganizationUser>[] => {
-  const columns: ColumnDef<OrganizationUser>[] = [
+}): ColumnDef<MemberRow>[] => {
+  const columns: ColumnDef<MemberRow>[] = [
     {
       accessorKey: 'email',
       header: 'Email',
+      cell: ({ row }) => (
+        <div>
+          <div>{row.original.email}</div>
+          {row.original.kind === 'invitation' && (
+            <div className="mt-1 text-xs text-muted-foreground">
+              Invited by {row.original.invitedBy} · Expires {new Date(row.original.expiresAt).toLocaleString()}
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      accessorFn: (row) =>
+        row.kind === 'member' ? 'Member' : new Date(row.expiresAt) < new Date() ? 'Expired' : 'Invited',
+      cell: ({ getValue }) => <span className="border border-border px-2 py-1 text-xs">{getValue<string>()}</span>,
     },
     {
       accessorKey: 'role',
       header: () => {
         return <div className="px-3 w-24">Role</div>
       },
-      cell: ({ row }) => {
-        const role = capitalize(row.original.role)
-
-        if (!ownerMode) {
-          return <div className="px-3 text-sm">{role}</div>
-        }
-
-        return (
-          <Button variant="ghost" className="w-auto px-3" onClick={() => onUpdateMemberRole(row.original)}>
-            {role}
-          </Button>
-        )
-      },
+      cell: ({ row }) => <div className="px-3 text-sm">{capitalize(row.original.role)}</div>,
     },
   ]
 
   if (ownerMode) {
-    const extraColumns: ColumnDef<OrganizationUser>[] = [
-      {
-        accessorKey: 'assignedRoles',
-        header: () => {
-          return <div className="px-3 w-32">Assignments</div>
-        },
-        cell: ({ row }) => {
-          if (row.original.role === OrganizationUserRoleEnum.OWNER) {
-            return <div className="px-3 text-sm text-muted-foreground">Full Access</div>
-          }
+    columns.push({
+      id: 'actions',
+      cell: ({ row }) => {
+        const item = row.original
+        // The API refuses to remove a user from their own personal organization.
+        if (item.kind === 'member' && item.isDefaultForUser) {
+          return null
+        }
+        const expired = item.kind === 'invitation' && new Date(item.expiresAt) < new Date()
 
-          const roleCount = row.original.assignedRoles?.length || 0
-          const roleText = roleCount === 1 ? '1 role' : `${roleCount} roles`
+        return (
+          <div className="text-right">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild disabled={isLoading(item)}>
+                <Button variant="ghost" className="h-8 w-8 p-0">
+                  <span className="sr-only">Open menu</span>
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
 
-          return (
-            <Button variant="ghost" className="w-auto px-3" onClick={() => onUpdateAssignedRoles(row.original)}>
-              {roleText}
-            </Button>
-          )
-        },
-      },
-      {
-        id: 'actions',
-        cell: ({ row }) => {
-          return (
-            <div className="text-right">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" className="h-8 w-8 p-0">
-                    <span className="sr-only">Open menu</span>
-                    <MoreHorizontal className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem className="cursor-pointer" onClick={() => onUpdateMemberRole(row.original)}>
-                    Change Role
-                  </DropdownMenuItem>
-                  {row.original.role !== OrganizationUserRoleEnum.OWNER && (
-                    <DropdownMenuItem className="cursor-pointer" onClick={() => onUpdateAssignedRoles(row.original)}>
-                      Manage Assignments
-                    </DropdownMenuItem>
-                  )}
+              <DropdownMenuContent align="end">
+                {item.kind === 'invitation' && expired && (
                   <DropdownMenuItem
-                    className="cursor-pointer text-red-600 dark:text-red-400"
-                    onClick={() => onRemove(row.original.userId)}
+                    className="cursor-pointer"
+                    disabled={isLoading(item)}
+                    onClick={() => onResendInvitation(item)}
                   >
-                    Remove
+                    Resend
                   </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          )
-        },
+                )}
+                <DropdownMenuItem
+                  disabled={isLoading(item)}
+                  className="cursor-pointer text-red-600 dark:text-red-400"
+                  onClick={() => onAction(item)}
+                >
+                  {item.kind === 'member' || expired ? 'Remove' : 'Cancel'}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )
       },
-    ]
-    columns.push(...extraColumns)
+    })
   }
 
   return columns

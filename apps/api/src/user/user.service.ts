@@ -99,10 +99,13 @@ export class UserService {
   }
 
   async remove(id: string): Promise<void> {
-    await this.dataSource.transaction(async (em) => {
+    const deletion = await this.dataSource.transaction(async (em) => {
       await em.delete(User, id)
-      await this.eventEmitter.emitAsync(UserEvents.DELETED, new UserDeletedEvent(em, id))
+      const event = new UserDeletedEvent(em, id)
+      await this.eventEmitter.emitAsync(UserEvents.DELETED, event)
+      return event
     })
+    await deletion.runAfterCommitTasks()
   }
 
   /**

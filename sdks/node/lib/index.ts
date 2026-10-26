@@ -108,13 +108,20 @@ export {
   BoxTunnel,
   TunnelForwarder,
   NetworkHandle,
+  SshHandle,
   type NetworkSpec,
+  type InboundNetworkSpec,
+  type OutboundNetworkSpec,
   type SocketAddress,
   type AdvancedBoxOptions,
   type ContainerCapabilities,
   type SimpleBoxOptions,
   type SecurityOptions,
   type Secret,
+  type SshAccount,
+  type SshCaConfig,
+  type SshConfig,
+  type SshStatus,
 } from "./simplebox.js";
 export { type ExecResult } from "./exec.js";
 export {

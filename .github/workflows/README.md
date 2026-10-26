@@ -64,7 +64,7 @@ own.
 | `mbuild.yml` | `workflow_call` | call-only | The commit line's images, for a dev rollout. Callee only: nobody publishes a commit by hand |
 | `mbuild-release.yml` | dispatch, `workflow_call` | yes | The release line's images, tagged `v<X.Y.Z>-<sha>`: publish a version into dev, or promote it to prod. One job per artifact, and a version the target already holds is refused rather than skipped |
 | `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` to publish its application images into dev |
-| `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted EC2 runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
+| `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted GCP VM runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
 | `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | The only workflow that writes to GHCR |
 
@@ -83,6 +83,15 @@ workflow (including Go formatting), CodeQL, managed Code Quality, API tests and
 setup checks retain their existing selection. Workflow and infrastructure changes
 run `make test:apps:infra` in a separate, path-filtered job whose failures block
 `Test (conclusion)`.
+The `nix` job builds the CLI in the flake dev shell, with the runner's
+environment and Rust homes dropped, and boots `alpine:latest`. It runs when the
+flake or an input of `make cli` changes (Make recipes, build scripts,
+`src/deps/`, `build.rs`, Cargo manifests, the toolchain), or on manual
+dispatch; not weekly, because `flake.lock` pins its inputs. It is not yet in
+`Test (conclusion)`, so its failures show on the PR without blocking merge; it
+becomes required once it has proven stable. It compiles through sccache but
+does not cache `/nix/store`. Ubuntu still has `/usr/lib`, so it misses
+regressions that break only on NixOS.
 Marking a PR **Ready for review** triggers the SDK matrix and both Go analyzers
 without requiring another commit. When a user returns it to draft, the new run
 cancels the prior Test run and runs the lightweight selection. The author-review bot uses `GITHUB_TOKEN`;
@@ -105,6 +114,11 @@ root once, so Python and Node builds share the report's object directory.
 
 Linux x64 also runs the native KVM hardware tests and adds their profiles before
 the Rust coverage upload. Missing `/dev/kvm` access fails this qualification.
+When a change matches the `vmm` filter (the VMM and hypervisor crates, the kernel
+build and its Make recipes), and on the weekly and manual runs, the job also runs
+the VMM's real-kernel boot tests with `make coverage:vmm:boot`. It restores the
+pinned `vmlinux` from the Actions cache, keyed on the kernel pins and build
+script, or builds it with `make vmm:boot:host` on a miss.
 
 `Dashboard Tests` runs the dashboard's vitest suite on one Linux runner and
 uploads v8 coverage under the `dashboard` flag. `@nx/vite` infers the project's
@@ -194,7 +208,7 @@ every consumer.
 | --- | --- | --- |
 | `ci-config` | 3 | config, lint, test |
 | `setup-rust` | 10 | build-c, build-node, build-runtime ×2, build-wheels, lint ×2, test ×3 |
-| `sccache` | 6 | build-c, build-node, build-runtime, build-wheels, lint, test |
+| `sccache` | 7 | build-c, build-node, build-runtime, build-wheels, lint, test ×2 |
 | `build-guest` | 4 | build-c, build-node, build-runtime, build-wheels |
 | `upload-to-release` | 5 | build-c, build-node, build-runner-binary, build-runtime, build-wheels |
 | `run-in-manylinux` | 3 | build-c, build-node, build-runtime |

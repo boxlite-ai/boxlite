@@ -28,6 +28,15 @@ function requiredCount(value: string | undefined, fallback: number, name: string
   return parsed
 }
 
+function organizationInvitationTtlSeconds(): number {
+  const name = 'ORGANIZATION_INVITATION_TTL_SECONDS'
+  const seconds = requiredCount(process.env[name], 604800, name)
+  if (Number.isNaN(new Date(Date.now() + seconds * 1000).getTime())) {
+    throw new Error(`${name} must produce a valid expiration date`)
+  }
+  return seconds
+}
+
 /**
  * How long a claimed usage-export batch stays invisible to other publishers,
  * and the TTL of the lock the publish cycle holds.
@@ -426,6 +435,9 @@ const configuration = {
     postLogoutRedirectAllowlist: process.env.OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST,
     managementApi: oidcManagementApiConfig(),
     accountLink: oidcAccountLinkConfig(),
+  },
+  organizationInvitation: {
+    ttlSeconds: organizationInvitationTtlSeconds(),
   },
   smtp: {
     host: process.env.SMTP_HOST,

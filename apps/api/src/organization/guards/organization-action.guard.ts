@@ -8,6 +8,7 @@ import { Injectable, ExecutionContext, Logger } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import { OrganizationAccessGuard } from './organization-access.guard'
 import { RequiredOrganizationMemberRole } from '../decorators/required-organization-member-role.decorator'
+import { RequiredOrganizationResourcePermissions } from '../decorators/required-organization-resource-permissions.decorator'
 import { OrganizationMemberRole } from '../enums/organization-member-role.enum'
 import { OrganizationService } from '../services/organization.service'
 import { OrganizationUserService } from '../services/organization-user.service'
@@ -34,6 +35,19 @@ export class OrganizationActionGuard extends OrganizationAccessGuard {
     const request = context.switchToHttp().getRequest()
     // TODO: initialize authContext safely
     const authContext: OrganizationAuthContext = request.user
+
+    // Role exemptions apply to users, not to the capabilities delegated to a key.
+    const requiredPermissions =
+      this.reflector.getAllAndOverride(RequiredOrganizationResourcePermissions, [
+        context.getHandler(),
+        context.getClass(),
+      ]) ?? []
+    if (
+      authContext.apiKey &&
+      !requiredPermissions.every((permission) => authContext.apiKey.permissions?.includes(permission))
+    ) {
+      return false
+    }
 
     if (authContext.role === SystemRole.ADMIN) {
       return true

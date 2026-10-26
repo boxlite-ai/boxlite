@@ -185,6 +185,18 @@ type AdminAPI interface {
 	AdminListRunnersExecute(r AdminAPIAdminListRunnersRequest) ([]AdminRunner, *http.Response, error)
 
 	/*
+	AdminQueryUsage Query recorded resource usage with fixed snapshot pagination
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return AdminAPIAdminQueryUsageRequest
+	*/
+	AdminQueryUsage(ctx context.Context) AdminAPIAdminQueryUsageRequest
+
+	// AdminQueryUsageExecute executes the request
+	//  @return AdminUsagePage
+	AdminQueryUsageExecute(r AdminAPIAdminQueryUsageRequest) (*AdminUsagePage, *http.Response, error)
+
+	/*
 	AdminRecoverBox Recover box from error state as an admin
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -736,6 +748,7 @@ type AdminAPIAdminGetOrganizationOverviewRequest struct {
 	memberCursor *string
 	boxCursor *string
 	sectionLimit *float32
+	include *string
 }
 
 // Opaque member page cursor
@@ -752,6 +765,12 @@ func (r AdminAPIAdminGetOrganizationOverviewRequest) BoxCursor(boxCursor string)
 
 func (r AdminAPIAdminGetOrganizationOverviewRequest) SectionLimit(sectionLimit float32) AdminAPIAdminGetOrganizationOverviewRequest {
 	r.sectionLimit = &sectionLimit
+	return r
+}
+
+// Comma-separated usage,activation. Omit to read neither section.
+func (r AdminAPIAdminGetOrganizationOverviewRequest) Include(include string) AdminAPIAdminGetOrganizationOverviewRequest {
+	r.include = &include
 	return r
 }
 
@@ -804,6 +823,9 @@ func (a *AdminAPIService) AdminGetOrganizationOverviewExecute(r AdminAPIAdminGet
 	}
 	if r.sectionLimit != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "sectionLimit", r.sectionLimit, "form", "")
+	}
+	if r.include != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "include", r.include, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
@@ -1299,6 +1321,8 @@ type AdminAPIAdminListOrganizationsOverviewRequest struct {
 	q *string
 	cursor *string
 	limit *float32
+	createdTo *string
+	createdFrom *string
 }
 
 // Organization ID or name
@@ -1315,6 +1339,18 @@ func (r AdminAPIAdminListOrganizationsOverviewRequest) Cursor(cursor string) Adm
 
 func (r AdminAPIAdminListOrganizationsOverviewRequest) Limit(limit float32) AdminAPIAdminListOrganizationsOverviewRequest {
 	r.limit = &limit
+	return r
+}
+
+// Exclusive RFC 3339 instant, at most milliseconds.
+func (r AdminAPIAdminListOrganizationsOverviewRequest) CreatedTo(createdTo string) AdminAPIAdminListOrganizationsOverviewRequest {
+	r.createdTo = &createdTo
+	return r
+}
+
+// Inclusive RFC 3339 instant, at most milliseconds.
+func (r AdminAPIAdminListOrganizationsOverviewRequest) CreatedFrom(createdFrom string) AdminAPIAdminListOrganizationsOverviewRequest {
+	r.createdFrom = &createdFrom
 	return r
 }
 
@@ -1364,6 +1400,12 @@ func (a *AdminAPIService) AdminListOrganizationsOverviewExecute(r AdminAPIAdminL
 	}
 	if r.limit != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", r.limit, "form", "")
+	}
+	if r.createdTo != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "createdTo", r.createdTo, "form", "")
+	}
+	if r.createdFrom != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "createdFrom", r.createdFrom, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
@@ -1626,6 +1668,252 @@ func (a *AdminAPIService) AdminListRunnersExecute(r AdminAPIAdminListRunnersRequ
 		newErr := &GenericOpenAPIError{
 			body:  localVarBody,
 			error: localVarHTTPResponse.Status,
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
+type AdminAPIAdminQueryUsageRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+	to *string
+	from *string
+	xUsageSnapshotOwner *string
+	cursor *string
+	limit *float32
+	boxId *string
+	regionId *string
+	organizationId *string
+	groupBy *string
+	metrics *string
+	granularity *string
+}
+
+// Exclusive RFC 3339 instant, no later than now.
+func (r AdminAPIAdminQueryUsageRequest) To(to string) AdminAPIAdminQueryUsageRequest {
+	r.to = &to
+	return r
+}
+
+// Inclusive RFC 3339 instant, at most milliseconds.
+func (r AdminAPIAdminQueryUsageRequest) From(from string) AdminAPIAdminQueryUsageRequest {
+	r.from = &from
+	return r
+}
+
+// Optional 64 lowercase hex caller partition; never authentication.
+func (r AdminAPIAdminQueryUsageRequest) XUsageSnapshotOwner(xUsageSnapshotOwner string) AdminAPIAdminQueryUsageRequest {
+	r.xUsageSnapshotOwner = &xUsageSnapshotOwner
+	return r
+}
+
+func (r AdminAPIAdminQueryUsageRequest) Cursor(cursor string) AdminAPIAdminQueryUsageRequest {
+	r.cursor = &cursor
+	return r
+}
+
+func (r AdminAPIAdminQueryUsageRequest) Limit(limit float32) AdminAPIAdminQueryUsageRequest {
+	r.limit = &limit
+	return r
+}
+
+func (r AdminAPIAdminQueryUsageRequest) BoxId(boxId string) AdminAPIAdminQueryUsageRequest {
+	r.boxId = &boxId
+	return r
+}
+
+func (r AdminAPIAdminQueryUsageRequest) RegionId(regionId string) AdminAPIAdminQueryUsageRequest {
+	r.regionId = &regionId
+	return r
+}
+
+func (r AdminAPIAdminQueryUsageRequest) OrganizationId(organizationId string) AdminAPIAdminQueryUsageRequest {
+	r.organizationId = &organizationId
+	return r
+}
+
+// One or two of organizationId,regionId,boxId, comma-separated.
+func (r AdminAPIAdminQueryUsageRequest) GroupBy(groupBy string) AdminAPIAdminQueryUsageRequest {
+	r.groupBy = &groupBy
+	return r
+}
+
+// Comma-separated computeVcpuSeconds,storageByteSeconds,memoryGibSeconds.
+func (r AdminAPIAdminQueryUsageRequest) Metrics(metrics string) AdminAPIAdminQueryUsageRequest {
+	r.metrics = &metrics
+	return r
+}
+
+func (r AdminAPIAdminQueryUsageRequest) Granularity(granularity string) AdminAPIAdminQueryUsageRequest {
+	r.granularity = &granularity
+	return r
+}
+
+func (r AdminAPIAdminQueryUsageRequest) Execute() (*AdminUsagePage, *http.Response, error) {
+	return r.ApiService.AdminQueryUsageExecute(r)
+}
+
+/*
+AdminQueryUsage Query recorded resource usage with fixed snapshot pagination
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @return AdminAPIAdminQueryUsageRequest
+*/
+func (a *AdminAPIService) AdminQueryUsage(ctx context.Context) AdminAPIAdminQueryUsageRequest {
+	return AdminAPIAdminQueryUsageRequest{
+		ApiService: a,
+		ctx: ctx,
+	}
+}
+
+// Execute executes the request
+//  @return AdminUsagePage
+func (a *AdminAPIService) AdminQueryUsageExecute(r AdminAPIAdminQueryUsageRequest) (*AdminUsagePage, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *AdminUsagePage
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminQueryUsage")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/usage"
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.to == nil {
+		return localVarReturnValue, nil, reportError("to is required and must be specified")
+	}
+	if r.from == nil {
+		return localVarReturnValue, nil, reportError("from is required and must be specified")
+	}
+
+	if r.cursor != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "cursor", r.cursor, "form", "")
+	}
+	if r.limit != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", r.limit, "form", "")
+	}
+	if r.boxId != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "boxId", r.boxId, "form", "")
+	}
+	if r.regionId != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "regionId", r.regionId, "form", "")
+	}
+	if r.organizationId != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "organizationId", r.organizationId, "form", "")
+	}
+	if r.groupBy != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "groupBy", r.groupBy, "form", "")
+	}
+	if r.metrics != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "metrics", r.metrics, "form", "")
+	}
+	if r.granularity != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "granularity", r.granularity, "form", "")
+	}
+	parameterAddToHeaderOrQuery(localVarQueryParams, "to", r.to, "form", "")
+	parameterAddToHeaderOrQuery(localVarQueryParams, "from", r.from, "form", "")
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	if r.xUsageSnapshotOwner != nil {
+		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-Usage-Snapshot-Owner", r.xUsageSnapshotOwner, "simple", "")
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		if localVarHTTPResponse.StatusCode == 400 {
+			var v AdminUsageError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 410 {
+			var v AdminUsageError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 422 {
+			var v AdminUsageError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 503 {
+			var v AdminUsageError
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+					newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+					newErr.model = v
 		}
 		return localVarReturnValue, localVarHTTPResponse, newErr
 	}

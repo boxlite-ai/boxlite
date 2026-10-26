@@ -194,6 +194,12 @@ impl crate::Vm for KvmVm {
     }
 }
 
+impl crate::X86Vm for KvmVm {
+    fn supported_cpuid(&self) -> &[crate::X86CpuidEntry] {
+        Self::supported_cpuid(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ptr::NonNull;

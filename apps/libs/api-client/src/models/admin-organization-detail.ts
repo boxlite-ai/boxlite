@@ -15,7 +15,13 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
+import type { AdminOrganizationActivation } from './admin-organization-activation';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { AdminOrganizationBoxPage } from './admin-organization-box-page';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { AdminOrganizationCreator } from './admin-organization-creator';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { AdminOrganizationImpact } from './admin-organization-impact';
@@ -27,12 +33,28 @@ import type { AdminOrganizationMemberPage } from './admin-organization-member-pa
 import type { AdminOrganizationUsage } from './admin-organization-usage';
 
 export interface AdminOrganizationDetail {
+    /**
+     * Organization creation time.
+     */
+    'createdAt': Date;
+    /**
+     * Stored creator ID; account linking replaces it with the primary user ID.
+     */
+    'createdBy': string;
+    /**
+     * Current creator identity.
+     */
+    'creator': AdminOrganizationCreator | null;
     'organizationId': string;
     'name': string;
     'members': AdminOrganizationMemberPage;
     'boxes': AdminOrganizationBoxPage;
     'impact': AdminOrganizationImpact;
     'usage'?: AdminOrganizationUsage;
+    /**
+     * Only with include=activation.
+     */
+    'activation'?: AdminOrganizationActivation | null;
     'observedAt': Date;
 }
 

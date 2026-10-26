@@ -17,7 +17,7 @@ const SEGMENTS: [(u64, u64, u64, u64, u32); 3] = [
     (0x10_2000, 0x200, 4, 0x10, 6),
     (0x10_3000, 0, 0, 0x80, 6),
 ];
-const ENTRY: u64 = 0x10_0000;
+pub(crate) const ENTRY: u64 = 0x10_0000;
 const RAM_SIZE: usize = 2 << 20;
 
 fn put16(image: &mut [u8], offset: usize, value: u16) {
@@ -39,7 +39,7 @@ fn header(index: usize) -> usize {
 
 /// A minimal x86_64 executable: three `PT_LOAD` segments whose virtual
 /// addresses live in the kernel's negative half, as a real `vmlinux` has.
-fn fixture() -> Vec<u8> {
+pub(crate) fn fixture() -> Vec<u8> {
     let mut image = vec![0u8; 0x204];
     image[..7].copy_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1, 1]);
     put16(&mut image, 16, 2);

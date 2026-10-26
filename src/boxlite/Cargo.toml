@@ -74,7 +74,7 @@ oci-client = { version = "0.15", default-features = false, features = ["rustls-t
 # Registry pulls also trust the system certificate store, as Docker does.
 # webpki skips the entries rustls rejects, as reqwest's native-roots loader does.
 rustls-native-certs = "0.8"
-webpki = { package = "rustls-webpki", version = "0.103", default-features = false }
+webpki = { package = "rustls-webpki", version = "0.103.16", default-features = false }
 oci-spec = "0.9"
 tar = "0.4"
 flate2 = "1.0"

@@ -20,6 +20,8 @@ import { BoxliteImageController } from './boxlite-image.controller'
 import { ImageModule } from '../image/image.module'
 import { BoxliteRegistryController } from './boxlite-registry.controller'
 import { RegistryModule } from '../registry/registry.module'
+import { BoxliteMemberController } from './boxlite-member.controller'
+import { BoxliteInvitationController } from './boxlite-invitation.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 
 @Module({
@@ -32,6 +34,8 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
     BoxliteVolumeController,
     BoxliteRegistryController,
     BoxliteImageController,
+    BoxliteMemberController,
+    BoxliteInvitationController,
   ],
   providers: [BoxliteWsProxyService, CommerceBoxLimitService],
   exports: [BoxliteWsProxyService],

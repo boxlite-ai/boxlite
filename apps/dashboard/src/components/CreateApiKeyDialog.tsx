@@ -139,7 +139,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
             <DialogHeader className="px-[26px] pb-0 pt-6">
               <DialogTitle className="text-[21px] font-bold tracking-[-0.3px]">Create New API Key</DialogTitle>
               <DialogDescription className="text-[13px] text-muted-foreground">
-                Create a key for Boxes API access.
+                Create a key with your available API permissions.
               </DialogDescription>
             </DialogHeader>
 
@@ -192,9 +192,11 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
                 <div className="flex gap-3 border border-brand/25 bg-brand/[0.06] px-[18px] py-4">
                   <Info className="mt-0.5 size-[17px] shrink-0 text-brand" strokeWidth={2} />
                   <div>
-                    <div className="text-[13px] font-semibold text-brand">Boxes API access</div>
+                    <div className="text-[13px] font-semibold text-brand">API access</div>
                     <div className="mt-[5px] text-[12.5px] leading-relaxed text-muted-foreground">
-                      This key can create and manage Boxes. Shared Linux base images are available automatically.
+                      {availablePermissions.includes(CreateApiKeyPermissionsEnum.WRITE_MEMBERS)
+                        ? 'This key includes member and invitation management. Use the API or SDK to create a key with fewer permissions.'
+                        : 'This key includes your available resource permissions. Use the API or SDK to select fewer permissions.'}
                     </div>
                   </div>
                 </div>

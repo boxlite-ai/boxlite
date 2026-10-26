@@ -44,6 +44,10 @@ import type { AdminRegionOverviewPage } from '../models';
 // @ts-ignore
 import type { AdminRunner } from '../models';
 // @ts-ignore
+import type { AdminUsageError } from '../models';
+// @ts-ignore
+import type { AdminUsagePage } from '../models';
+// @ts-ignore
 import type { Box } from '../models';
 // @ts-ignore
 import type { CreateRunnerResponse } from '../models';
@@ -265,10 +269,11 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
          * @param {string} [memberCursor] Opaque member page cursor
          * @param {string} [boxCursor] Opaque box page cursor
          * @param {number} [sectionLimit] 
+         * @param {string} [include] Comma-separated usage,activation. Omit to read neither section.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminGetOrganizationOverview: async (organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        adminGetOrganizationOverview: async (organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, include?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'organizationId' is not null or undefined
             assertParamExists('adminGetOrganizationOverview', 'organizationId', organizationId)
             const localVarPath = `/admin/organizations/{organizationId}`
@@ -300,6 +305,10 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
 
             if (sectionLimit !== undefined) {
                 localVarQueryParameter['sectionLimit'] = sectionLimit;
+            }
+
+            if (include !== undefined) {
+                localVarQueryParameter['include'] = include;
             }
 
             localVarHeaderParameter['Accept'] = 'application/json';
@@ -491,10 +500,12 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
          * @param {string} [q] Organization ID or name
          * @param {string} [cursor] Opaque cursor returned by the previous page
          * @param {number} [limit] 
+         * @param {string} [createdTo] Exclusive RFC 3339 instant, at most milliseconds.
+         * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminListOrganizationsOverview: async (q?: string, cursor?: string, limit?: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        adminListOrganizationsOverview: async (q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             const localVarPath = `/admin/organizations`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -523,6 +534,14 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
 
             if (limit !== undefined) {
                 localVarQueryParameter['limit'] = limit;
+            }
+
+            if (createdTo !== undefined) {
+                localVarQueryParameter['createdTo'] = createdTo;
+            }
+
+            if (createdFrom !== undefined) {
+                localVarQueryParameter['createdFrom'] = createdFrom;
             }
 
             localVarHeaderParameter['Accept'] = 'application/json';
@@ -614,6 +633,100 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Query recorded resource usage with fixed snapshot pagination
+         * @param {string} to Exclusive RFC 3339 instant, no later than now.
+         * @param {string} from Inclusive RFC 3339 instant, at most milliseconds.
+         * @param {string} [xUsageSnapshotOwner] Optional 64 lowercase hex caller partition; never authentication.
+         * @param {string} [cursor] 
+         * @param {number} [limit] 
+         * @param {string} [boxId] 
+         * @param {string} [regionId] 
+         * @param {string} [organizationId] 
+         * @param {string} [groupBy] One or two of organizationId,regionId,boxId, comma-separated.
+         * @param {string} [metrics] Comma-separated computeVcpuSeconds,storageByteSeconds,memoryGibSeconds.
+         * @param {AdminQueryUsageGranularityEnum} [granularity] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminQueryUsage: async (to: string, from: string, xUsageSnapshotOwner?: string, cursor?: string, limit?: number, boxId?: string, regionId?: string, organizationId?: string, groupBy?: string, metrics?: string, granularity?: AdminQueryUsageGranularityEnum, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'to' is not null or undefined
+            assertParamExists('adminQueryUsage', 'to', to)
+            // verify required parameter 'from' is not null or undefined
+            assertParamExists('adminQueryUsage', 'from', from)
+            const localVarPath = `/admin/usage`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (cursor !== undefined) {
+                localVarQueryParameter['cursor'] = cursor;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            if (boxId !== undefined) {
+                localVarQueryParameter['boxId'] = boxId;
+            }
+
+            if (regionId !== undefined) {
+                localVarQueryParameter['regionId'] = regionId;
+            }
+
+            if (organizationId !== undefined) {
+                localVarQueryParameter['organizationId'] = organizationId;
+            }
+
+            if (groupBy !== undefined) {
+                localVarQueryParameter['groupBy'] = groupBy;
+            }
+
+            if (metrics !== undefined) {
+                localVarQueryParameter['metrics'] = metrics;
+            }
+
+            if (granularity !== undefined) {
+                localVarQueryParameter['granularity'] = granularity;
+            }
+
+            if (to !== undefined) {
+                localVarQueryParameter['to'] = to;
+            }
+
+            if (from !== undefined) {
+                localVarQueryParameter['from'] = from;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xUsageSnapshotOwner != null) {
+                localVarHeaderParameter['X-Usage-Snapshot-Owner'] = String(xUsageSnapshotOwner);
+            }
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -784,11 +897,12 @@ export const AdminApiFp = function(configuration?: Configuration) {
          * @param {string} [memberCursor] Opaque member page cursor
          * @param {string} [boxCursor] Opaque box page cursor
          * @param {number} [sectionLimit] 
+         * @param {string} [include] Comma-separated usage,activation. Omit to read neither section.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationDetail>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, options);
+        async adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, include?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationDetail>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, include, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetOrganizationOverview']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -853,11 +967,13 @@ export const AdminApiFp = function(configuration?: Configuration) {
          * @param {string} [q] Organization ID or name
          * @param {string} [cursor] Opaque cursor returned by the previous page
          * @param {number} [limit] 
+         * @param {string} [createdTo] Exclusive RFC 3339 instant, at most milliseconds.
+         * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationOverviewPage>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListOrganizationsOverview(q, cursor, limit, options);
+        async adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationOverviewPage>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListOrganizationsOverview']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -887,6 +1003,29 @@ export const AdminApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.adminListRunners(regionId, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListRunners']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Query recorded resource usage with fixed snapshot pagination
+         * @param {string} to Exclusive RFC 3339 instant, no later than now.
+         * @param {string} from Inclusive RFC 3339 instant, at most milliseconds.
+         * @param {string} [xUsageSnapshotOwner] Optional 64 lowercase hex caller partition; never authentication.
+         * @param {string} [cursor] 
+         * @param {number} [limit] 
+         * @param {string} [boxId] 
+         * @param {string} [regionId] 
+         * @param {string} [organizationId] 
+         * @param {string} [groupBy] One or two of organizationId,regionId,boxId, comma-separated.
+         * @param {string} [metrics] Comma-separated computeVcpuSeconds,storageByteSeconds,memoryGibSeconds.
+         * @param {AdminQueryUsageGranularityEnum} [granularity] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminQueryUsage(to: string, from: string, xUsageSnapshotOwner?: string, cursor?: string, limit?: number, boxId?: string, regionId?: string, organizationId?: string, groupBy?: string, metrics?: string, granularity?: AdminQueryUsageGranularityEnum, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminUsagePage>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminQueryUsage(to, from, xUsageSnapshotOwner, cursor, limit, boxId, regionId, organizationId, groupBy, metrics, granularity, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminQueryUsage']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -982,11 +1121,12 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          * @param {string} [memberCursor] Opaque member page cursor
          * @param {string} [boxCursor] Opaque box page cursor
          * @param {number} [sectionLimit] 
+         * @param {string} [include] Comma-separated usage,activation. Omit to read neither section.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationDetail> {
-            return localVarFp.adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, options).then((request) => request(axios, basePath));
+        adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, include?: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationDetail> {
+            return localVarFp.adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, include, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1036,11 +1176,13 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          * @param {string} [q] Organization ID or name
          * @param {string} [cursor] Opaque cursor returned by the previous page
          * @param {number} [limit] 
+         * @param {string} [createdTo] Exclusive RFC 3339 instant, at most milliseconds.
+         * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationOverviewPage> {
-            return localVarFp.adminListOrganizationsOverview(q, cursor, limit, options).then((request) => request(axios, basePath));
+        adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationOverviewPage> {
+            return localVarFp.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1062,6 +1204,26 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          */
         adminListRunners(regionId?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<AdminRunner>> {
             return localVarFp.adminListRunners(regionId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Query recorded resource usage with fixed snapshot pagination
+         * @param {string} to Exclusive RFC 3339 instant, no later than now.
+         * @param {string} from Inclusive RFC 3339 instant, at most milliseconds.
+         * @param {string} [xUsageSnapshotOwner] Optional 64 lowercase hex caller partition; never authentication.
+         * @param {string} [cursor] 
+         * @param {number} [limit] 
+         * @param {string} [boxId] 
+         * @param {string} [regionId] 
+         * @param {string} [organizationId] 
+         * @param {string} [groupBy] One or two of organizationId,regionId,boxId, comma-separated.
+         * @param {string} [metrics] Comma-separated computeVcpuSeconds,storageByteSeconds,memoryGibSeconds.
+         * @param {AdminQueryUsageGranularityEnum} [granularity] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminQueryUsage(to: string, from: string, xUsageSnapshotOwner?: string, cursor?: string, limit?: number, boxId?: string, regionId?: string, organizationId?: string, groupBy?: string, metrics?: string, granularity?: AdminQueryUsageGranularityEnum, options?: RawAxiosRequestConfig): AxiosPromise<AdminUsagePage> {
+            return localVarFp.adminQueryUsage(to, from, xUsageSnapshotOwner, cursor, limit, boxId, regionId, organizationId, groupBy, metrics, granularity, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1153,11 +1315,12 @@ export class AdminApi extends BaseAPI {
      * @param {string} [memberCursor] Opaque member page cursor
      * @param {string} [boxCursor] Opaque box page cursor
      * @param {number} [sectionLimit] 
+     * @param {string} [include] Comma-separated usage,activation. Omit to read neither section.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, options?: RawAxiosRequestConfig) {
-        return AdminApiFp(this.configuration).adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, options).then((request) => request(this.axios, this.basePath));
+    public adminGetOrganizationOverview(organizationId: string, memberCursor?: string, boxCursor?: string, sectionLimit?: number, include?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetOrganizationOverview(organizationId, memberCursor, boxCursor, sectionLimit, include, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1212,11 +1375,13 @@ export class AdminApi extends BaseAPI {
      * @param {string} [q] Organization ID or name
      * @param {string} [cursor] Opaque cursor returned by the previous page
      * @param {number} [limit] 
+     * @param {string} [createdTo] Exclusive RFC 3339 instant, at most milliseconds.
+     * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, options?: RawAxiosRequestConfig) {
-        return AdminApiFp(this.configuration).adminListOrganizationsOverview(q, cursor, limit, options).then((request) => request(this.axios, this.basePath));
+    public adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1244,6 +1409,27 @@ export class AdminApi extends BaseAPI {
 
     /**
      * 
+     * @summary Query recorded resource usage with fixed snapshot pagination
+     * @param {string} to Exclusive RFC 3339 instant, no later than now.
+     * @param {string} from Inclusive RFC 3339 instant, at most milliseconds.
+     * @param {string} [xUsageSnapshotOwner] Optional 64 lowercase hex caller partition; never authentication.
+     * @param {string} [cursor] 
+     * @param {number} [limit] 
+     * @param {string} [boxId] 
+     * @param {string} [regionId] 
+     * @param {string} [organizationId] 
+     * @param {string} [groupBy] One or two of organizationId,regionId,boxId, comma-separated.
+     * @param {string} [metrics] Comma-separated computeVcpuSeconds,storageByteSeconds,memoryGibSeconds.
+     * @param {AdminQueryUsageGranularityEnum} [granularity] 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminQueryUsage(to: string, from: string, xUsageSnapshotOwner?: string, cursor?: string, limit?: number, boxId?: string, regionId?: string, organizationId?: string, groupBy?: string, metrics?: string, granularity?: AdminQueryUsageGranularityEnum, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminQueryUsage(to, from, xUsageSnapshotOwner, cursor, limit, boxId, regionId, organizationId, groupBy, metrics, granularity, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Recover box from error state as an admin
      * @param {string} boxId ID of the box
      * @param {*} [options] Override http request option.
@@ -1265,3 +1451,10 @@ export class AdminApi extends BaseAPI {
     }
 }
 
+export const AdminQueryUsageGranularityEnum = {
+    WINDOW: 'window',
+    HOUR: 'hour',
+    DAY: 'day',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+export type AdminQueryUsageGranularityEnum = typeof AdminQueryUsageGranularityEnum[keyof typeof AdminQueryUsageGranularityEnum];

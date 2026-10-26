@@ -230,9 +230,9 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.17.1"
+version = "1.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4342d8937fc7e5dd9b1c60292261c0670c882a2cd1719cfc11b1af41731e32ad"
+checksum = "faac5829c2b74c28f830747e7818ccfb684261b5f48a1118b1e2a13d36dfab13"
 dependencies = [
  "aws-lc-sys",
  "zeroize",
@@ -240,9 +240,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.42.0"
+version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d9ceb1da931507a12f4fccea479dccd00da1943e1b4ae72d8e502d707361444"
+checksum = "f1622d8446a2d4b2ce0c7eefc73dd43a99779028d5ee5c2dd8073a658ba8a2bc"
 dependencies = [
  "cc",
  "cmake",
@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -605,18 +605,20 @@ dependencies = [
 
 [[package]]
 name = "boxlite-c"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "boxlite",
  "cbindgen",
  "futures",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]
 
 [[package]]
 name = "boxlite-cli"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -665,7 +667,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-guest"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -698,7 +700,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-hypervisor"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "kvm-bindings",
  "kvm-ioctls",
@@ -707,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-node"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "boxlite",
  "boxlite-shared",
@@ -721,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-python"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "boxlite",
  "futures",
@@ -734,7 +736,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-shared"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "futures",
  "proptest",
@@ -752,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-shim"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "boxlite",
  "boxlite-shared",
@@ -781,11 +783,14 @@ dependencies = [
 
 [[package]]
 name = "boxlite-vmm"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "boxlite-hypervisor",
  "linux-loader",
+ "mio 1.2.0",
+ "tracing",
  "vm-memory 0.18.0",
+ "vm-superio",
 ]
 
 [[package]]
@@ -810,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "bubblewrap-sys"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "num_cpus",
 ]
@@ -1633,7 +1638,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "e2fsprogs-sys"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "num_cpus",
 ]
@@ -2510,7 +2515,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.7",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
@@ -3066,14 +3071,14 @@ dependencies = [
 
 [[package]]
 name = "libgvproxy-sys"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "libkrun-sys"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "libc",
  "num_cpus",
@@ -4981,7 +4986,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
- "webpki-roots 1.0.7",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
@@ -5360,9 +5365,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -6981,6 +6986,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "vm-superio"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "503041e3dca68fbd5425c04e4c2ad63c57a31da5b6eb13aaafbcaaf2b9cdc74f"
+
+[[package]]
 name = "vmm-sys-util"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7206,14 +7217,14 @@ version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
 dependencies = [
- "webpki-roots 1.0.7",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.7"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52f5ee44c96cf55f1b349600768e3ece3a8f26010c05265ab73f945bb1a2eb9d"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]

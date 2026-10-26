@@ -6,6 +6,7 @@ use boxlite::net::{NetworkBackendConfig, NetworkBackendSpec};
 
 fn test_config(socket_path: PathBuf) -> NetworkBackendConfig {
     NetworkBackendConfig {
+        outbound_disabled: false,
         socket_path,
         allow_net: Vec::new(),
         secrets: Vec::new(),
@@ -20,6 +21,7 @@ fn spec_carries_unique_socket_path_across_serde() {
     // boundary to the shim (guards the old gvproxy socket collision, where the
     // Go library generated /tmp/gvproxy-{id}.sock).
     let spec = NetworkBackendSpec {
+        outbound_disabled: false,
         socket_path: PathBuf::from("/boxes/box-a/sockets/net.sock"),
         allow_net: Vec::new(),
         secrets: Vec::new(),

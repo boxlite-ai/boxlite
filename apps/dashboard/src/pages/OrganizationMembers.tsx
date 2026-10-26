@@ -5,11 +5,8 @@
  */
 
 import { CreateOrganizationInvitationDialog } from '@/components/OrganizationMembers/CreateOrganizationInvitationDialog'
-import { OrganizationInvitationTable } from '@/components/OrganizationMembers/OrganizationInvitationTable'
 import { OrganizationMemberTable } from '@/components/OrganizationMembers/OrganizationMemberTable'
-import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
 import { useApi } from '@/hooks/useApi'
-import { useOrganizationRoles } from '@/hooks/useOrganizationRoles'
 import { useOrganizations } from '@/hooks/useOrganizations'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
@@ -17,9 +14,8 @@ import {
   CreateOrganizationInvitationRoleEnum,
   OrganizationInvitation,
   OrganizationUserRoleEnum,
-  UpdateOrganizationInvitationRoleEnum,
 } from '@boxlite-ai/api-client'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
 
@@ -30,8 +26,9 @@ const OrganizationMembers: React.FC = () => {
   const { refreshOrganizations } = useOrganizations()
   const { selectedOrganization, organizationMembers, refreshOrganizationMembers, authenticatedUserOrganizationMember } =
     useSelectedOrganization()
-  const { roles, loadingRoles } = useOrganizationRoles()
+  const authenticatedUserIsOwner = authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
 
+  const [loadingMembers, setLoadingMembers] = useState(true)
   const [invitations, setInvitations] = useState<OrganizationInvitation[]>([])
   const [loadingInvitations, setLoadingInvitations] = useState(true)
 
@@ -40,7 +37,9 @@ const OrganizationMembers: React.FC = () => {
 
   const fetchInvitations = useCallback(
     async (showTableLoadingState = true) => {
-      if (!selectedOrganization) {
+      if (!selectedOrganization || !authenticatedUserIsOwner) {
+        setInvitations([])
+        setLoadingInvitations(false)
         return
       }
       if (showTableLoadingState) {
@@ -55,38 +54,17 @@ const OrganizationMembers: React.FC = () => {
         setLoadingInvitations(false)
       }
     },
-    [organizationsApi, selectedOrganization],
+    [organizationsApi, selectedOrganization, authenticatedUserIsOwner],
   )
 
   useEffect(() => {
+    // A failed load already shows a toast: getOrganizationMembers calls handleApiError and
+    // rethrows, so this catch only keeps the rethrow from becoming an unhandled rejection.
     refreshOrganizationMembers()
+      .catch(() => undefined)
+      .finally(() => setLoadingMembers(false))
     fetchInvitations()
   }, [fetchInvitations, refreshOrganizationMembers])
-
-  const handleUpdateMemberAccess = async (
-    userId: string,
-    role: OrganizationUserRoleEnum,
-    assignedRoleIds: string[],
-  ): Promise<boolean> => {
-    if (!selectedOrganization) {
-      return false
-    }
-    setLoadingMemberAction((prev) => ({ ...prev, [userId]: true }))
-    try {
-      await organizationsApi.updateAccessForOrganizationMember(selectedOrganization.id, userId, {
-        role,
-        assignedRoleIds,
-      })
-      toast.success('Access updated successfully')
-      await refreshOrganizationMembers()
-      return true
-    } catch (error) {
-      handleApiError(error, 'Failed to update access')
-      return false
-    } finally {
-      setLoadingMemberAction((prev) => ({ ...prev, [userId]: false }))
-    }
-  }
 
   const handleRemoveMember = async (userId: string): Promise<boolean> => {
     if (!selectedOrganization) {
@@ -110,16 +88,17 @@ const OrganizationMembers: React.FC = () => {
     }
   }
 
-  const handleCreateInvitation = async (
-    email: string,
-    role: CreateOrganizationInvitationRoleEnum,
-    assignedRoleIds: string[],
-  ): Promise<boolean> => {
+  // Members carry no roles yet, so every invitee joins as an owner.
+  const handleCreateInvitation = async (email: string): Promise<boolean> => {
     if (!selectedOrganization) {
       return false
     }
     try {
-      await organizationsApi.createOrganizationInvitation(selectedOrganization.id, { email, role, assignedRoleIds })
+      await organizationsApi.createOrganizationInvitation(selectedOrganization.id, {
+        email,
+        role: CreateOrganizationInvitationRoleEnum.OWNER,
+        assignedRoleIds: [],
+      })
       toast.success('Invitation created successfully')
       await fetchInvitations(false)
       return true
@@ -129,28 +108,29 @@ const OrganizationMembers: React.FC = () => {
     }
   }
 
-  const handleUpdateInvitation = async (
-    invitationId: string,
-    role: UpdateOrganizationInvitationRoleEnum,
-    assignedRoleIds: string[],
-  ): Promise<boolean> => {
-    if (!selectedOrganization) {
-      return false
-    }
-    setLoadingInvitationAction((prev) => ({ ...prev, [invitationId]: true }))
+  const handleResendInvitation = async (invitation: OrganizationInvitation): Promise<boolean> => {
+    if (!selectedOrganization) return false
+    setLoadingInvitationAction((prev) => ({ ...prev, [invitation.id]: true }))
     try {
-      await organizationsApi.updateOrganizationInvitation(selectedOrganization.id, invitationId, {
-        role,
-        assignedRoleIds,
+      // Keep the expired record until its replacement exists; omit expiresAt to use the current default lifetime.
+      await organizationsApi.createOrganizationInvitation(selectedOrganization.id, {
+        email: invitation.email,
+        role: invitation.role,
+        assignedRoleIds: invitation.assignedRoles.map((role) => role.id),
       })
-      toast.success('Invitation updated successfully')
+      try {
+        await organizationsApi.cancelOrganizationInvitation(selectedOrganization.id, invitation.id)
+      } catch (error) {
+        handleApiError(error, 'New invitation created, but failed to remove the expired invitation')
+      }
+      toast.success('New invitation created')
       await fetchInvitations(false)
       return true
     } catch (error) {
-      handleApiError(error, 'Failed to update invitation')
+      handleApiError(error, 'Failed to resend invitation')
       return false
     } finally {
-      setLoadingInvitationAction((prev) => ({ ...prev, [invitationId]: false }))
+      setLoadingInvitationAction((prev) => ({ ...prev, [invitation.id]: false }))
     }
   }
 
@@ -172,55 +152,27 @@ const OrganizationMembers: React.FC = () => {
     }
   }
 
-  const authenticatedUserIsOwner = useMemo(() => {
-    return authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER
-  }, [authenticatedUserOrganizationMember])
-
   return (
-    <PageLayout>
-      <PageHeader size="full">
-        <PageTitle>Members</PageTitle>
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">Manage organization members and pending invitations.</p>
         {authenticatedUserIsOwner && (
-          <CreateOrganizationInvitationDialog
-            className="ml-auto"
-            availableRoles={roles}
-            loadingAvailableRoles={loadingRoles}
-            onCreateInvitation={handleCreateInvitation}
-          />
+          <CreateOrganizationInvitationDialog className="ml-auto" onCreateInvitation={handleCreateInvitation} />
         )}
-      </PageHeader>
+      </div>
 
-      <PageContent size="full">
-        <OrganizationMemberTable
-          data={organizationMembers}
-          loadingData={loadingRoles}
-          availableAssignments={roles}
-          loadingAvailableAssignments={loadingRoles}
-          onUpdateMemberAccess={handleUpdateMemberAccess}
-          onRemoveMember={handleRemoveMember}
-          loadingMemberAction={loadingMemberAction}
-          ownerMode={authenticatedUserIsOwner}
-        />
-
-        {authenticatedUserIsOwner && (
-          <>
-            <div className="mb-2 mt-12 flex min-h-10 items-center justify-between">
-              <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Invitations</h2>
-            </div>
-
-            <OrganizationInvitationTable
-              data={invitations}
-              loadingData={loadingInvitations}
-              availableRoles={roles}
-              loadingAvailableRoles={loadingRoles}
-              onCancelInvitation={handleCancelInvitation}
-              onUpdateInvitation={handleUpdateInvitation}
-              loadingInvitationAction={loadingInvitationAction}
-            />
-          </>
-        )}
-      </PageContent>
-    </PageLayout>
+      <OrganizationMemberTable
+        data={organizationMembers}
+        invitations={invitations}
+        loadingData={loadingMembers || (authenticatedUserIsOwner && loadingInvitations)}
+        onRemoveMember={handleRemoveMember}
+        loadingMemberAction={loadingMemberAction}
+        ownerMode={authenticatedUserIsOwner}
+        onCancelInvitation={handleCancelInvitation}
+        onResendInvitation={handleResendInvitation}
+        loadingInvitationAction={loadingInvitationAction}
+      />
+    </div>
   )
 }
 

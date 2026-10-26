@@ -77,6 +77,21 @@ An array group makes every key required. An object distinguishes `required` from
 Missing required values fail before deployment. Optional values enable features only when supplied.
 The exact key list lives in the manifest; avoid maintaining a second list in a runbook.
 
+## Invitation link lifetime
+
+Set `ORGANIZATION_INVITATION_TTL_SECONDS` in the stage store to change the default
+lifetime for new organization invitations, then redeploy the API:
+
+```bash
+npm run mstage env set -- ORGANIZATION_INVITATION_TTL_SECONDS=86400 --stage dev
+```
+
+The API group delivers this setting on both AWS and GCP. It defaults to `604800`
+(seven days); values must be positive whole seconds that produce a valid expiry date.
+Invalid values stop API startup. Existing invitations retain their stored deadlines,
+and explicit API `expiresAt` / `expires_at` values override the default. Emails show
+the exact deadline in UTC. Opening the link joins after sign-in with the invited email.
+
 ## Built-in images
 
 The curated set is the built-in `base`, `python` and `node` plus each `name=ref` entry in

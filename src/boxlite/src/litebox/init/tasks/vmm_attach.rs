@@ -33,7 +33,7 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
-        let (runtime, config_id, network) = {
+        let (runtime, config_id, network, outbound_policy) = {
             let ctx = ctx.lock().await;
             // Reattach still owns a control backend for the box's live gvproxy.
             let network = match &ctx.config.options.network {
@@ -44,7 +44,12 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
                 )),
                 NetworkSpec::Disabled => None,
             };
-            (ctx.runtime.clone(), ctx.config.id.clone(), network)
+            (
+                ctx.runtime.clone(),
+                ctx.config.id.clone(),
+                network,
+                ctx.outbound_policy.clone(),
+            )
         };
 
         let layout = runtime.layout.box_layout(config_id.as_str(), false)?;
@@ -102,8 +107,13 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
         // returned.
         let network_backend = network.and_then(|(allow_net, secrets, rate_limit)| {
             let config = NetworkBackendConfig {
+                outbound_disabled: outbound_policy.as_ref().is_some_and(|policy| {
+                    policy.mode == crate::runtime::options::NetworkMode::Disabled
+                }),
                 socket_path: layout.net_backend_socket_path(),
-                allow_net,
+                allow_net: outbound_policy
+                    .as_ref()
+                    .map_or(allow_net, |policy| policy.allow_net.clone()),
                 secrets,
                 ca_dir: layout.ca_dir(),
                 rate_limit,

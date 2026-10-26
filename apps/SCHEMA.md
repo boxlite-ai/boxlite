@@ -206,6 +206,22 @@ state inline.
 | `experimentalConfig` | `jsonb` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |
 
+### `organization_activation_facts`
+
+After each committed Box write, `BoxRepository` upserts the row with a best-effort update
+outside the Box transaction; an organization without a recorded Box has no row. Organization
+deletion cascades to its facts; Box deletion does not. The API reads it only when activation
+is selected with include=activation on the existing organization detail.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `organizationId` | `uuid` | primary key; FK to organization with `ON DELETE CASCADE` |
+| `lastBoxCreatedAt` | `timestamptz` | nullable; maximum retained creation or warm-pool claim |
+| `lastBoxModifiedAt` | `timestamptz` | nullable; maximum successful-start or accepted-deletion time |
+
+The [activation design](../docs/contributing/investigations/organization-activation-facts.md)
+describes the optimistic update, migration locking, backfill and uncertainty.
+
 ### `user`
 
 Identity, keyed by the subject the IdP issues rather than a generated uuid.
@@ -293,6 +309,18 @@ Same cascade asymmetry as `organization_role_assignment`.
 
 Machine credential. The name is part of the identity, so a key is addressed by
 `(organization, user, name)`; only the hash is stored.
+
+No foreign key ties a key to its `organization_user` row, so the application
+revokes it: removing a member, or a member leaving, deletes that member's keys
+in the organization within the same transaction as the membership
+(`OrganizationUserService.delete`). Deleting an account applies the same
+revocation to its default and invited organizations within the user-deletion
+transaction. Key and membership caches are cleared and notification sockets
+leave those organization rooms only after commit. A shared default organization
+and its other members' keys remain; the existing fallback-owner rule still applies.
+
+Removal events capture membership identifiers before deleting the entity,
+because TypeORM clears its primary columns during removal.
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
@@ -694,7 +722,8 @@ mode and `token_hash` are reserved for later.
 | `revoked_at` | `timestamptz` | null while active |
 
 **Unique:** `(box_id, port)`. Repeating an authorized tunnel request keeps the
-declaration active.
+declaration active. `DELETE …/network/tunnel?port={port}` sets `revoked_at`;
+declaring the port again clears it.
 
 The migration creates no declarations for existing boxes. Existing preview and
 tunnel hostnames become reachable only after the owner prepares that port with

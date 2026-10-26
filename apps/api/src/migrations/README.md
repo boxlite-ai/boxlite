@@ -196,13 +196,58 @@ Runs only migrations in the `post-deploy/` folder. Use this:
 - **After** the new API version is fully deployed
 - As part of your CI/CD pipeline, after the rolling update completes
 
+## Member Scopes and Invitation Retries
+
+The historical tenant-scope migration remains in the chain. The Admin migration
+renames both enum labels to `read:members` and `write:members` for API keys and
+organization roles, preserving existing grants without adding permissions to
+unscoped keys. Rollback restores the old labels. The unmerged Tenant HTTP API is
+replaced directly; no compatibility deployment with that API is required.
+
+API-key validation retains the existing Redis cache namespace. Old cached scope
+labels translate on read, so membership removal, key revocation, and identity
+linking continue to invalidate the same entries across deployment versions.
+
+A separate pre-deploy migration adds `organization_invitation_request`. Creating
+an invite and saving its replay snapshot share a transaction and an advisory lock
+scoped to organization, user, and idempotency key. Replay records expire after
+24 hours; subsequent keyed requests clean expired records for their organization.
+Deleting an organization cascades to its replay records. Rollback drops this table
+and loses retry history, so coordinate rollback with stopping Admin writes.
+
+The integration tests run actual PostgreSQL migrations and services. Set
+`DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, and `DB_DATABASE`; the migration
+suite needs permission to create temporary databases. Run
+`make coverage:api FILTER='AddTenantScopes1792497600000|Admin organization storage'`.
+The suites clean their temporary databases or schemas and run in API CI.
+
 ## Reverting Migrations
+
+CLI and application startup run pending migrations in `each` mode: each ordinary
+migration has its own transaction, while an explicit `transaction = false` allows
+operations such as concurrent index builds. A later failure leaves earlier completed
+migrations recorded; fix the failure and rerun to resume. The activation facts migration
+still creates its table and backfill atomically.
 
 ```bash
 npm run migration:revert
 ```
 
 This reverts the **last executed migration** from either folder (based on the combined migration history in the database).
+
+When that last migration is `AddAdminUsageWindowIndexes1792470000000`, use:
+
+```bash
+npm run migration:revert -- --transaction none
+```
+
+TypeORM 0.3.31 starts a transaction for `undoLastMigration` in `each` mode despite
+the migration's `transaction = false`; concurrent index drops require `none`.
+Use the default transactional command for other migrations. If a concurrent index
+build or drop is interrupted, rerun it: valid completed indexes are retained,
+invalid build leftovers are removed and rebuilt, and missing indexes are skipped on drop.
+Serialize migration runners; concurrent DDL still waits for older transactions and
+is not a production capacity guarantee.
 
 **Important behaviors:**
 

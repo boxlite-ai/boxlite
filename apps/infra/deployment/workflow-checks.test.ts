@@ -57,19 +57,23 @@ for (const [path, expected] of [
   ['tests/scripts/test_native_coverage.py', ['rust']],
   ['sdks/node/lib/options.ts', ['node']],
   ['src/cli/src/main.rs', ['rust']],
-  ['make/coverage.mk', ['rust', 'python', 'node', 'go']],
+  ['src/vmm/src/vm.rs', ['rust', 'vmm']],
+  ['src/vmm/boot/kernel.lock', ['rust', 'vmm']],
+  ['make/coverage.mk', ['rust', 'vmm', 'python', 'node', 'go']],
   ['make/quality.mk', ['go']],
   ['.github/workflows/lint.yml', ['go', 'infra']],
+  ['openapi/box.openapi.yaml', ['rust', 'api']],
+  ['openapi/admin.openapi.yaml', ['rust', 'api']],
 ] as const) {
   test(`source and shared recipes retain their tests: ${path}`, () => {
     assert.deepEqual(testSuites(['docs/README.md', path]), [...expected])
   })
 }
 
-// Anything the `go` filter selects on must also reach the workflow that runs
+// Anything a suite filter selects on must also reach the workflow that runs
 // the filter, or a push to main changes the suite's inputs and tests nothing.
-for (const path of ['apps/runner/cmd/runner/main.go', 'apps/go.work', 'apps/go.work.sum']) {
-  test(`a push that selects the go suite reaches the Test workflow: ${path}`, () => {
+for (const path of ['apps/runner/cmd/runner/main.go', 'apps/go.work', 'apps/go.work.sum', 'openapi/box.openapi.yaml', 'openapi/admin.openapi.yaml']) {
+  test(`a push that selects a suite reaches the Test workflow: ${path}`, () => {
     assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
   })
 }
@@ -81,6 +85,36 @@ for (const path of ['scripts/test/coverage-bindings.sh', 'tests/scripts/test_nat
     assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
   })
 }
+
+// The nix job rebuilds the CLI in the flake dev shell; it must follow every
+// input of `make cli` there, including on push to main, and nothing else.
+for (const path of ['flake.nix', 'flake.lock', 'src/deps/libkrun-sys/build.rs', 'src/shared/build.rs',
+  'scripts/build/build-shim.sh', 'scripts/common.sh', 'scripts/setup/setup-common.sh', 'make/build.mk',
+  'Cargo.lock', 'rust-toolchain.toml', '.github/actions/sccache/action.yml']) {
+  test(`a change to a dev shell build input runs the nix job: ${path}`, () => {
+    assert.ok(testSuites([path]).includes('nix'))
+    assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
+  })
+}
+
+for (const path of ['docs/README.md', 'make/help.mk', 'src/deps/libkrun-sys/README.md', 'sdks/go/options.go']) {
+  test(`a change outside the dev shell build skips the nix job: ${path}`, () => {
+    assert.ok(!testSuites([path]).includes('nix'))
+  })
+}
+
+test('the nix job reports without blocking the required conclusion', () => {
+  const jobs = workflow('test.yml').jobs
+  assert.equal(jobs.nix.if, "needs.changes.outputs.nix == 'true'")
+  assert.ok(!jobs['test-conclusion'].needs.includes('nix'), 'nix stays non-blocking until it proves stable')
+  // The weekly run skips it: flake.lock pins its inputs. Dispatch still runs it.
+  for (const [event, expected] of [['schedule', false], ['workflow_dispatch', true]] as const) {
+    const selected = runInNewContext(jobs.changes.outputs.nix.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), {
+      github: { event_name: event }, steps: { filter: { outputs: {} } },
+    }, { timeout: 1000 })
+    assert.equal(selected, expected, event)
+  }
+})
 
 for (const [name, events] of [
   ['codeql.yml', ['pull_request', 'push']],
@@ -277,6 +311,26 @@ test('Linux x64 KVM hardware coverage joins unit profiles before upload', () => 
   }
   assert.equal(steps[hardwareAt]['continue-on-error'], undefined,
     'missing hardware or failed tests must fail CI')
+})
+
+test('Linux x64 builds the kernel and runs the boot tests only for vmm changes, before upload', () => {
+  const steps = workflow('test.yml').jobs.rust.steps
+  const kernelAt = steps.findIndex((step: any) => step.id === 'vmm-kernel')
+  const bootAt = steps.findIndex((step: any) => step.run === 'make coverage:vmm:boot')
+  const uploadAt = steps.findIndex((step: any) => step.uses?.startsWith('codecov/codecov-action'))
+  assert.ok(kernelAt >= 0 && kernelAt < bootAt && bootAt < uploadAt,
+    'the kernel must be restored before the boot tests, which must add coverage before upload')
+  for (const at of [kernelAt, bootAt]) {
+    for (const target of ['linux-x64-gnu', 'linux-arm64-gnu', 'darwin-arm64']) {
+      for (const vmm of ['true', 'false']) {
+        const expression = steps[at].if.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+        const context = { matrix: { platform: { target } }, needs: { changes: { outputs: { vmm } } } }
+        assert.equal(runInNewContext(expression, context), target === 'linux-x64-gnu' && vmm === 'true',
+          `${steps[at].name} on ${target} with vmm=${vmm}`)
+      }
+    }
+  }
+  assert.equal(steps[bootAt]['continue-on-error'], undefined, 'failed boot tests must fail CI')
 })
 
 // The check below only guards the ignore list if editing that list runs it.

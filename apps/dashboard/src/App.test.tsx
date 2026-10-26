@@ -48,6 +48,12 @@ vi.mock('./pages/ImageDetails', () => ({
     return <p>image details page for {useParams().idOrRef}</p>
   },
 }))
+vi.mock('@/pages/OrganizationSettings', () => ({
+  default: function OrganizationMarker() {
+    const location = useLocation()
+    return <p>organization page at {location.pathname + location.search}</p>
+  },
+}))
 
 describe('App routes', () => {
   let root: Root | null = null
@@ -104,6 +110,10 @@ describe('App routes', () => {
   })
 
   it('still bounces a hidden route to the box list', async () => {
-    expect(await renderAt('/dashboard/members')).toBe('boxes page at /dashboard/boxes')
+    expect(await renderAt('/dashboard/roles')).toBe('boxes page at /dashboard/boxes')
+  })
+
+  it('redirects the legacy members route to the Organization Member tab', async () => {
+    expect(await renderAt('/dashboard/members')).toBe('organization page at /dashboard/settings?tab=member')
   })
 })

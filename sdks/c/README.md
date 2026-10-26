@@ -571,6 +571,11 @@ BoxliteErrorCode boxlite_network_tunnel(
     CBoxTunnelHandle** out_tunnel,
     CBoxliteError* out_error
 );
+BoxliteErrorCode boxlite_network_revoke_tunnel(
+    CBoxNetworkHandle* network,
+    uint16_t port,
+    CBoxliteError* out_error
+);
 BoxliteErrorCode boxlite_tunnel_uri(
     CBoxTunnelHandle* tunnel,
     char** out_uri,

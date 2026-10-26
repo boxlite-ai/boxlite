@@ -22,6 +22,12 @@ var _ MappedNullable = &AdminOrganizationOverview{}
 
 // AdminOrganizationOverview struct for AdminOrganizationOverview
 type AdminOrganizationOverview struct {
+	// Organization creation time.
+	CreatedAt time.Time `json:"createdAt"`
+	// Stored creator ID; account linking replaces it with the primary user ID.
+	CreatedBy string `json:"createdBy"`
+	// Current creator identity.
+	Creator NullableAdminOrganizationCreator `json:"creator"`
 	OrganizationId string `json:"organizationId"`
 	Name string `json:"name"`
 	MemberCount float32 `json:"memberCount"`
@@ -37,8 +43,11 @@ type _AdminOrganizationOverview AdminOrganizationOverview
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewAdminOrganizationOverview(organizationId string, name string, memberCount float32, boxCount float32, impactState string, observedAt time.Time) *AdminOrganizationOverview {
+func NewAdminOrganizationOverview(createdAt time.Time, createdBy string, creator NullableAdminOrganizationCreator, organizationId string, name string, memberCount float32, boxCount float32, impactState string, observedAt time.Time) *AdminOrganizationOverview {
 	this := AdminOrganizationOverview{}
+	this.CreatedAt = createdAt
+	this.CreatedBy = createdBy
+	this.Creator = creator
 	this.OrganizationId = organizationId
 	this.Name = name
 	this.MemberCount = memberCount
@@ -54,6 +63,80 @@ func NewAdminOrganizationOverview(organizationId string, name string, memberCoun
 func NewAdminOrganizationOverviewWithDefaults() *AdminOrganizationOverview {
 	this := AdminOrganizationOverview{}
 	return &this
+}
+
+// GetCreatedAt returns the CreatedAt field value
+func (o *AdminOrganizationOverview) GetCreatedAt() time.Time {
+	if o == nil {
+		var ret time.Time
+		return ret
+	}
+
+	return o.CreatedAt
+}
+
+// GetCreatedAtOk returns a tuple with the CreatedAt field value
+// and a boolean to check if the value has been set.
+func (o *AdminOrganizationOverview) GetCreatedAtOk() (*time.Time, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.CreatedAt, true
+}
+
+// SetCreatedAt sets field value
+func (o *AdminOrganizationOverview) SetCreatedAt(v time.Time) {
+	o.CreatedAt = v
+}
+
+// GetCreatedBy returns the CreatedBy field value
+func (o *AdminOrganizationOverview) GetCreatedBy() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.CreatedBy
+}
+
+// GetCreatedByOk returns a tuple with the CreatedBy field value
+// and a boolean to check if the value has been set.
+func (o *AdminOrganizationOverview) GetCreatedByOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.CreatedBy, true
+}
+
+// SetCreatedBy sets field value
+func (o *AdminOrganizationOverview) SetCreatedBy(v string) {
+	o.CreatedBy = v
+}
+
+// GetCreator returns the Creator field value
+// If the value is explicit nil, the zero value for AdminOrganizationCreator will be returned
+func (o *AdminOrganizationOverview) GetCreator() AdminOrganizationCreator {
+	if o == nil || o.Creator.Get() == nil {
+		var ret AdminOrganizationCreator
+		return ret
+	}
+
+	return *o.Creator.Get()
+}
+
+// GetCreatorOk returns a tuple with the Creator field value
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *AdminOrganizationOverview) GetCreatorOk() (*AdminOrganizationCreator, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.Creator.Get(), o.Creator.IsSet()
+}
+
+// SetCreator sets field value
+func (o *AdminOrganizationOverview) SetCreator(v AdminOrganizationCreator) {
+	o.Creator.Set(&v)
 }
 
 // GetOrganizationId returns the OrganizationId field value
@@ -210,6 +293,9 @@ func (o AdminOrganizationOverview) MarshalJSON() ([]byte, error) {
 
 func (o AdminOrganizationOverview) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	toSerialize["createdAt"] = o.CreatedAt
+	toSerialize["createdBy"] = o.CreatedBy
+	toSerialize["creator"] = o.Creator.Get()
 	toSerialize["organizationId"] = o.OrganizationId
 	toSerialize["name"] = o.Name
 	toSerialize["memberCount"] = o.MemberCount
@@ -229,6 +315,9 @@ func (o *AdminOrganizationOverview) UnmarshalJSON(data []byte) (err error) {
 	// by unmarshalling the object into a generic map with string keys and checking
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
+		"createdAt",
+		"createdBy",
+		"creator",
 		"organizationId",
 		"name",
 		"memberCount",
@@ -264,6 +353,9 @@ func (o *AdminOrganizationOverview) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "createdAt")
+		delete(additionalProperties, "createdBy")
+		delete(additionalProperties, "creator")
 		delete(additionalProperties, "organizationId")
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "memberCount")

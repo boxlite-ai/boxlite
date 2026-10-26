@@ -39,6 +39,7 @@ import {
 } from '../dto/provider-overview.dto'
 import { AdminOrganizationOverviewService } from '../services/organization-overview.service'
 import { AdminPlatformOverviewService } from '../services/platform-overview.service'
+import { organizationQueryError, parseOrganizationSections, parseRegistrationQuery } from '../utils/organization-query'
 
 const bounded = (value: string | undefined, fallback: number): number => {
   const parsed = value === undefined ? fallback : Number(value)
@@ -48,7 +49,12 @@ const bounded = (value: string | undefined, fallback: number): number => {
 
 const ApiCursorQueries = () =>
   applyDecorators(
-    ApiQuery({ name: 'cursor', required: false, description: 'Opaque cursor returned by the previous page' }),
+    ApiQuery({
+      name: 'cursor',
+      type: String,
+      required: false,
+      description: 'Opaque cursor returned by the previous page',
+    }),
     ApiQuery({ name: 'limit', required: false, type: Number, minimum: 1, maximum: 200, example: 50 }),
     ApiBadRequestResponse({ description: 'Invalid cursor or limit' }),
   )
@@ -167,50 +173,63 @@ export class AdminProviderController {
 
   @Get('organizations')
   @ApiOperation({ summary: 'List organization operational summaries', operationId: 'adminListOrganizationsOverview' })
-  @ApiQuery({ name: 'q', required: false, minLength: 2, maxLength: 200, description: 'Organization ID or name' })
+  @ApiQuery({
+    name: 'createdFrom',
+    type: String,
+    required: false,
+    description: 'Inclusive RFC 3339 instant, at most milliseconds.',
+  })
+  @ApiQuery({
+    name: 'createdTo',
+    type: String,
+    required: false,
+    description: 'Exclusive RFC 3339 instant, at most milliseconds.',
+  })
   @ApiCursorQueries()
+  @ApiQuery({
+    name: 'q',
+    type: String,
+    required: false,
+    minLength: 2,
+    maxLength: 200,
+    description: 'Organization ID or name',
+  })
   @ApiOkResponse({ type: AdminOrganizationOverviewPageDto })
   organizations(
-    @Query('q') query: string | undefined,
-    @Query('cursor') cursor: string | undefined,
-    @Query('limit') limit: string | undefined,
+    @Query() query: Record<string, unknown>,
     @Res({ passthrough: true }) response: Response,
   ): Promise<AdminOrganizationOverviewPageDto> {
-    if (query !== undefined && (query.trim().length < 2 || query.trim().length > 200)) {
-      throw new BadRequestException('Invalid organization query')
-    }
     response.setHeader('Cache-Control', 'private, no-store')
-    return this.organizationsService.list({
-      ...(query ? { query: query.trim() } : {}),
-      ...(cursor ? { cursor } : {}),
-      limit: bounded(limit, 50),
-    })
+    return this.organizationsService.list(parseRegistrationQuery(query))
   }
 
   @Get('organizations/:organizationId')
   @ApiOperation({ summary: 'Get organization operational detail', operationId: 'adminGetOrganizationOverview' })
   @ApiParam({ name: 'organizationId', description: 'Organization ID' })
-  @ApiQuery({ name: 'memberCursor', required: false, description: 'Opaque member page cursor' })
-  @ApiQuery({ name: 'boxCursor', required: false, description: 'Opaque box page cursor' })
+  @ApiQuery({
+    name: 'include',
+    type: String,
+    required: false,
+    description: 'Comma-separated usage,activation. Omit to read neither section.',
+  })
   @ApiQuery({ name: 'sectionLimit', required: false, type: Number, minimum: 1, maximum: 200, example: 50 })
+  @ApiQuery({ name: 'boxCursor', required: false, type: String, description: 'Opaque box page cursor' })
+  @ApiQuery({ name: 'memberCursor', required: false, type: String, description: 'Opaque member page cursor' })
   @ApiOkResponse({ type: AdminOrganizationDetailDto })
   @ApiBadRequestResponse({ description: 'Invalid cursor or section limit' })
   @ApiNotFoundResponse({ description: 'Organization not found' })
   async organization(
-    @Param('organizationId', ParseUUIDPipe) organizationId: string,
-    @Query('memberCursor') memberCursor: string | undefined,
-    @Query('boxCursor') boxCursor: string | undefined,
-    @Query('sectionLimit') sectionLimit: string | undefined,
+    @Param('organizationId') organizationId: string,
+    @Query() query: Record<string, unknown>,
     @Res({ passthrough: true }) response: Response,
   ): Promise<AdminOrganizationDetailDto> {
     response.setHeader('Cache-Control', 'private, no-store')
-    const limit = bounded(sectionLimit, 50)
-    const organization = await this.organizationsService.detail(organizationId, {
-      ...(memberCursor ? { memberCursor } : {}),
-      ...(boxCursor ? { boxCursor } : {}),
-      memberLimit: limit,
-      boxLimit: limit,
+    await new ParseUUIDPipe({ exceptionFactory: organizationQueryError }).transform(organizationId, {
+      type: 'param',
+      data: 'organizationId',
+      metatype: String,
     })
+    const organization = await this.organizationsService.detail(organizationId, parseOrganizationSections(query))
     if (!organization) throw new NotFoundException('Organization not found')
     return organization
   }

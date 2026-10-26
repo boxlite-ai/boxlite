@@ -17,6 +17,7 @@ All URIs are relative to *http://localhost:3000*
 |[**adminListOrganizationsOverview**](#adminlistorganizationsoverview) | **GET** /admin/organizations | List organization operational summaries|
 |[**adminListRegions**](#adminlistregions) | **GET** /admin/regions | List regions with capacity and health|
 |[**adminListRunners**](#adminlistrunners) | **GET** /admin/runners | List all runners|
+|[**adminQueryUsage**](#adminqueryusage) | **GET** /admin/usage | Query recorded resource usage with fixed snapshot pagination|
 |[**adminRecoverBox**](#adminrecoverbox) | **POST** /admin/box/{boxId}/recover | Recover box from error state as an admin|
 |[**adminUpdateRunnerScheduling**](#adminupdaterunnerscheduling) | **PATCH** /admin/runners/{id}/scheduling | Update runner scheduling status|
 
@@ -292,12 +293,14 @@ let organizationId: string; //Organization ID
 let memberCursor: string; //Opaque member page cursor (optional) (default to undefined)
 let boxCursor: string; //Opaque box page cursor (optional) (default to undefined)
 let sectionLimit: number; // (optional) (default to undefined)
+let include: string; //Comma-separated usage,activation. Omit to read neither section. (optional) (default to undefined)
 
 const { status, data } = await apiInstance.adminGetOrganizationOverview(
     organizationId,
     memberCursor,
     boxCursor,
-    sectionLimit
+    sectionLimit,
+    include
 );
 ```
 
@@ -309,6 +312,7 @@ const { status, data } = await apiInstance.adminGetOrganizationOverview(
 | **memberCursor** | [**string**] | Opaque member page cursor | (optional) defaults to undefined|
 | **boxCursor** | [**string**] | Opaque box page cursor | (optional) defaults to undefined|
 | **sectionLimit** | [**number**] |  | (optional) defaults to undefined|
+| **include** | [**string**] | Comma-separated usage,activation. Omit to read neither section. | (optional) defaults to undefined|
 
 
 ### Return type
@@ -561,11 +565,15 @@ const apiInstance = new AdminApi(configuration);
 let q: string; //Organization ID or name (optional) (default to undefined)
 let cursor: string; //Opaque cursor returned by the previous page (optional) (default to undefined)
 let limit: number; // (optional) (default to undefined)
+let createdTo: string; //Exclusive RFC 3339 instant, at most milliseconds. (optional) (default to undefined)
+let createdFrom: string; //Inclusive RFC 3339 instant, at most milliseconds. (optional) (default to undefined)
 
 const { status, data } = await apiInstance.adminListOrganizationsOverview(
     q,
     cursor,
-    limit
+    limit,
+    createdTo,
+    createdFrom
 );
 ```
 
@@ -576,6 +584,8 @@ const { status, data } = await apiInstance.adminListOrganizationsOverview(
 | **q** | [**string**] | Organization ID or name | (optional) defaults to undefined|
 | **cursor** | [**string**] | Opaque cursor returned by the previous page | (optional) defaults to undefined|
 | **limit** | [**number**] |  | (optional) defaults to undefined|
+| **createdTo** | [**string**] | Exclusive RFC 3339 instant, at most milliseconds. | (optional) defaults to undefined|
+| **createdFrom** | [**string**] | Inclusive RFC 3339 instant, at most milliseconds. | (optional) defaults to undefined|
 
 
 ### Return type
@@ -701,6 +711,90 @@ const { status, data } = await apiInstance.adminListRunners(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** |  |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **adminQueryUsage**
+> AdminUsagePage adminQueryUsage()
+
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+let to: string; //Exclusive RFC 3339 instant, no later than now.
+let from: string; //Inclusive RFC 3339 instant, at most milliseconds.
+let xUsageSnapshotOwner: string; //Optional 64 lowercase hex caller partition; never authentication. (optional) (default to undefined)
+let cursor: string; // (optional) (default to undefined)
+let limit: number; // (optional) (default to undefined)
+let boxId: string; // (optional) (default to undefined)
+let regionId: string; // (optional) (default to undefined)
+let organizationId: string; // (optional) (default to undefined)
+let groupBy: string; //One or two of organizationId,regionId,boxId, comma-separated. (optional) (default to undefined)
+let metrics: string; //Comma-separated computeVcpuSeconds,storageByteSeconds,memoryGibSeconds. (optional) (default to undefined)
+let granularity: 'window' | 'hour' | 'day'; // (optional) (default to undefined)
+
+const { status, data } = await apiInstance.adminQueryUsage(
+    to,
+    from,
+    xUsageSnapshotOwner,
+    cursor,
+    limit,
+    boxId,
+    regionId,
+    organizationId,
+    groupBy,
+    metrics,
+    granularity
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **to** | [**string**] | Exclusive RFC 3339 instant, no later than now. | |
+| **from** | [**string**] | Inclusive RFC 3339 instant, at most milliseconds. | |
+| **xUsageSnapshotOwner** | [**string**] | Optional 64 lowercase hex caller partition; never authentication. | (optional) defaults to undefined|
+| **cursor** | [**string**] |  | (optional) defaults to undefined|
+| **limit** | [**number**] |  | (optional) defaults to undefined|
+| **boxId** | [**string**] |  | (optional) defaults to undefined|
+| **regionId** | [**string**] |  | (optional) defaults to undefined|
+| **organizationId** | [**string**] |  | (optional) defaults to undefined|
+| **groupBy** | [**string**] | One or two of organizationId,regionId,boxId, comma-separated. | (optional) defaults to undefined|
+| **metrics** | [**string**] | Comma-separated computeVcpuSeconds,storageByteSeconds,memoryGibSeconds. | (optional) defaults to undefined|
+| **granularity** | [**&#39;window&#39; &#124; &#39;hour&#39; &#124; &#39;day&#39;**] |  | (optional) defaults to undefined|
+
+
+### Return type
+
+**AdminUsagePage**
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
+|**400** | Invalid query or cursor binding |  -  |
+|**410** | Snapshot expired; restart the complete query |  -  |
+|**422** | Query exceeds a resource limit |  -  |
+|**503** | Database or snapshot cache unavailable |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

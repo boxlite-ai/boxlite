@@ -40,6 +40,8 @@ Key test entry points:
 - `make test:integration` - all integration suites
 - `make test:all:python` - Python unit + integration suites
 - `make test:all:c` - C SDK suite via CMake/CTest
+- `make test:apps:runner FILTER=NetworkPolicy` - runner Go tests with the local C/Go SDK
+- `make fmt:apps FILES='api/src/path.ts'` - format selected files relative to `apps/`
 
 Python SDK tests run in two environments. Without the native extension
 (`make test:unit:python`, `make coverage:python` — the shape of the CI unit
@@ -92,8 +94,9 @@ components when their path-filtered jobs are skipped.
 | `make coverage:bindings:external` | `native-sdk/lcov.info` and `python/coverage.xml` | Rust LLVM tools, Python, Node.js, CMake |
 
 The external binding collector rebuilds the native libraries with Rust
-instrumentation, then runs the C unit suite, Python unit tests and Node image
-catalog/registry loopback tests against them. It uses a separate
+instrumentation, then runs the C unit suite, Python unit tests, and the Node
+image catalog/registry and SSH REST transport loopback tests against them.
+It uses a separate
 `target/native-sdk-coverage` build directory by default; CMake receives that
 library directory explicitly. CI uploads its Rust report alongside the core
 report. These tests establish SDK conversion, error and callback behavior;

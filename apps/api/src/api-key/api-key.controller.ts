@@ -145,6 +145,7 @@ export class ApiKeyController {
     targetIdFromRequest: (req) => req.params.name,
   })
   async deleteApiKey(@AuthContext() authContext: OrganizationAuthContext, @Param('name') name: string) {
+    this.validateApiKeyRevocationPermission(authContext)
     await this.apiKeyService.deleteApiKey(authContext.organizationId, authContext.userId, name)
   }
 
@@ -170,6 +171,7 @@ export class ApiKeyController {
     @Param('userId') userId: string,
     @Param('name') name: string,
   ) {
+    this.validateApiKeyRevocationPermission(authContext)
     if (
       userId !== authContext.userId &&
       authContext.role !== SystemRole.ADMIN &&
@@ -181,10 +183,27 @@ export class ApiKeyController {
     await this.apiKeyService.deleteApiKey(authContext.organizationId, userId, name)
   }
 
+  private validateApiKeyRevocationPermission(authContext: OrganizationAuthContext): void {
+    if (authContext.apiKey && !authContext.apiKey.permissions?.includes(OrganizationResourcePermission.WRITE_MEMBERS)) {
+      throw new ForbiddenException('API key requires write:members to revoke API keys')
+    }
+  }
+
   private validateRequestedApiKeyPermissions(
     authContext: OrganizationAuthContext,
     requestedPermissions: OrganizationResourcePermission[],
   ): void {
+    if (authContext.apiKey) {
+      const forbiddenPermissions = requestedPermissions.filter(
+        (permission) => !authContext.apiKey.permissions?.includes(permission),
+      )
+      if (forbiddenPermissions.length) {
+        throw new ForbiddenException(
+          `API key cannot delegate permissions it does not hold: ${forbiddenPermissions.join(', ')}`,
+        )
+      }
+    }
+
     if (authContext.role === SystemRole.ADMIN) {
       return
     }

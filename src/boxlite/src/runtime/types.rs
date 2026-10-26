@@ -547,8 +547,11 @@ impl BoxInfo {
         use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
         use crate::runtime::options::RootfsSpec;
 
-        let network_config =
+        let mut network_config =
             NetworkConfig::from_specs(&config.options.network, &config.options.inbound_network);
+        if let Some(outbound) = &state.outbound_policy {
+            network_config.outbound = outbound.clone();
+        }
 
         Self {
             id: config.id.clone(),

@@ -27,6 +27,8 @@ import { RegistryCredential } from '../../registry/entities/registry-credential.
 import { registryProxyHost } from '../../registry/utils/registry-proxy.util'
 import { matchingCredential } from '../../registry/utils/matching-credential'
 import { parseImageRef, upstreamRefOf } from '../../image/utils/image-ref.util'
+import { OutboundPolicy } from '../runner-adapter/network-policy'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 
 // SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
 // acquire a lock.
@@ -54,6 +56,11 @@ const CREATION_ADMISSION_LOCK_TIMEOUT_MS = 5000
 export const CREATION_ADMISSION_LOCK_NAMESPACE = 0x424f5841 // 'BOXA'
 const CREATION_ADMISSION_RETRY_AFTER_SECONDS = 5
 
+// Facts updates hold an organization's facts row for one short statement, so a
+// longer wait means something else holds it. The Box write has already
+// committed; give up on the best-effort update rather than delay its response.
+const ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS = 1000
+
 const BOX_CREATION_LIMIT_EXCLUDED_STATES = [
   BoxState.ERROR,
   BoxState.DESTROYING,
@@ -65,9 +72,59 @@ const BOX_CREATION_LIMIT_EXCLUDED_STATES = [
 // A box the migration marker may claim, with the stamp its claim copies.
 type ParkedBox = { id: string; updatedAt: Date }
 
+// The fields of a Box before a write that decide its organization's activity.
+type OrganizationActivitySource = Pick<Box, 'organizationId' | 'state' | 'desiredState' | 'createdAt'>
+type OrganizationActivity = { createdAt: Date | null; modifiedAt: Date | null }
+
 @Injectable()
 export class BoxRepository extends BaseRepository<Box> {
   private readonly logger = new Logger(BoxRepository.name)
+
+  /** Serialize runtime application and persistence against concurrent box writes. */
+  async replaceOutbound(
+    id: string,
+    organizationId: string,
+    policy: OutboundPolicy,
+    apply: (box: Box, policy: OutboundPolicy) => Promise<void>,
+  ): Promise<Box> {
+    const updated = await this.manager.transaction(async (manager) => {
+      await manager.query("SET LOCAL lock_timeout = '5s'")
+      const box = await manager.findOne(Box, {
+        where: { id, organizationId },
+        lock: { mode: 'pessimistic_write' },
+        loadEagerRelations: false,
+      })
+      if (!box) throw new NotFoundException('Box not found')
+      if (box.state !== BoxState.STARTED || box.desiredState !== BoxDesiredState.STARTED || !box.runnerId) {
+        throw new ConflictException('Outbound policy updates require a running box')
+      }
+      const previous: OutboundPolicy = {
+        mode: box.outboundEnabled ? 'enabled' : 'disabled',
+        allow_net: box.outboundAllowNet ?? [],
+      }
+      await apply(box, policy)
+      const update = {
+        outboundEnabled: policy.mode === 'enabled',
+        outboundAllowNet: policy.allow_net.length ? policy.allow_net : null,
+      }
+      try {
+        await manager.update(Box, id, update)
+      } catch (error) {
+        try {
+          await apply(box, previous)
+        } catch {
+          throw new ConflictException(
+            'Outbound persistence and rollback failed; live policy is uncertain, retry the complete update',
+          )
+        }
+        throw error
+      }
+      Object.assign(box, update)
+      return box
+    })
+    this.invalidateLookupCacheOnUpdate(updated, updated)
+    return updated
+  }
 
   constructor(
     @InjectDataSource() dataSource: DataSource,
@@ -96,6 +153,7 @@ export class BoxRepository extends BaseRepository<Box> {
     })
 
     this.invalidateLookupCacheOnInsert(box)
+    await this.recordOrganizationActivity(box)
 
     return box
   }
@@ -193,6 +251,7 @@ export class BoxRepository extends BaseRepository<Box> {
 
     this.emitUpdateEvents(box, previousBox)
     this.invalidateLookupCacheOnUpdate(box, previousBox)
+    await this.recordOrganizationActivity(box, previousBox)
 
     return box
   }
@@ -267,7 +326,7 @@ export class BoxRepository extends BaseRepository<Box> {
   ): Promise<Box> {
     const { updateData, whereCondition } = params
 
-    return this.manager.transaction(async (entityManager) => {
+    const [updatedBox, previousBox] = await this.manager.transaction(async (entityManager) => {
       const whereClause = {
         ...whereCondition,
         id,
@@ -300,8 +359,11 @@ export class BoxRepository extends BaseRepository<Box> {
       this.emitUpdateEvents(box, previousBox)
       this.invalidateLookupCacheOnUpdate(box, previousBox)
 
-      return box
+      return [box, previousBox] as const
     })
+
+    await this.recordOrganizationActivity(updatedBox, previousBox)
+    return updatedBox
   }
 
   /**
@@ -481,6 +543,75 @@ export class BoxRepository extends BaseRepository<Box> {
    */
   private async upsertLastActivity(entityManager: EntityManager, boxId: string, lastActivityAt: Date): Promise<void> {
     await entityManager.upsert(BoxLastActivity, { boxId, lastActivityAt }, ['boxId'])
+  }
+
+  /**
+   * Advances the organization's activation facts after a Box write has committed.
+   *
+   * It runs outside the Box transaction, so same-organization writes never queue
+   * on the facts row. The upsert is optimistic: it only moves a time forward, and
+   * Read Committed rechecks that against the newest row, so late or concurrent
+   * updates cannot move a time backwards. The foreign key rejects a deleted
+   * organization, so its facts are not recreated. A failure, including a facts-row
+   * lock wait past ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS, is logged and dropped:
+   * the Box write stands, and a later event supersedes the lost maximum.
+   */
+  private async recordOrganizationActivity(box: Box, previousBox?: OrganizationActivitySource): Promise<void> {
+    try {
+      const activity = this.organizationActivityOf(box, previousBox)
+      if (!activity) {
+        return
+      }
+      await this.manager.transaction(async (entityManager) => {
+        // SET takes a literal, so the constant is interpolated rather than bound.
+        await entityManager.query(`SET LOCAL lock_timeout = '${ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS}ms'`)
+        await entityManager.query(
+          `INSERT INTO organization_activation_facts AS facts ("organizationId", "lastBoxCreatedAt", "lastBoxModifiedAt")
+           VALUES ($1::uuid, $2::timestamptz, $3::timestamptz)
+           ON CONFLICT ("organizationId") DO UPDATE
+           SET "lastBoxCreatedAt" = GREATEST(facts."lastBoxCreatedAt", EXCLUDED."lastBoxCreatedAt"),
+             "lastBoxModifiedAt" = GREATEST(facts."lastBoxModifiedAt", EXCLUDED."lastBoxModifiedAt")
+           WHERE facts."lastBoxCreatedAt" IS DISTINCT FROM GREATEST(facts."lastBoxCreatedAt", EXCLUDED."lastBoxCreatedAt")
+             OR facts."lastBoxModifiedAt" IS DISTINCT FROM GREATEST(facts."lastBoxModifiedAt", EXCLUDED."lastBoxModifiedAt")`,
+          [box.organizationId, activity.createdAt, activity.modifiedAt],
+        )
+      })
+    } catch (error) {
+      this.logger.warn(
+        `Failed to record activity of box ${box.id} for organization ${box.organizationId}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
+  /**
+   * What a committed Box write contributes to its organization's facts, or null.
+   *
+   * Creation counts inserts and warm-pool claims; modification counts entering
+   * `started` and the first deletion request. Stops, label edits, repeated
+   * states, deletion completion and cleanup contribute nothing. Lifecycle times
+   * moved between real organizations stay with the source.
+   */
+  private organizationActivityOf(box: Box, previousBox?: OrganizationActivitySource): OrganizationActivity | null {
+    if (box.organizationId === BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
+      return null
+    }
+    if (!previousBox) {
+      return { createdAt: box.createdAt, modifiedAt: null }
+    }
+    if (previousBox.organizationId === BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
+      const claimKeptPoolCreation = box.createdAt.getTime() === previousBox.createdAt.getTime()
+      return {
+        createdAt: claimKeptPoolCreation ? box.updatedAt : box.createdAt,
+        modifiedAt: box.state === BoxState.STARTED ? box.updatedAt : null,
+      }
+    }
+    if (previousBox.organizationId !== box.organizationId) {
+      return null
+    }
+    const started = box.state === BoxState.STARTED && previousBox.state !== BoxState.STARTED
+    const deletionRequested =
+      box.desiredState === BoxDesiredState.DESTROYED && previousBox.desiredState !== BoxDesiredState.DESTROYED
+    return started || deletionRequested ? { createdAt: null, modifiedAt: box.updatedAt } : null
   }
 
   /**

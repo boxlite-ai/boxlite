@@ -10,6 +10,7 @@
 # - Go: SDK, networking bridge, the runner and the image service; API: Jest with Postgres and Redis
 # - Dashboard: vitest with jsdom, v8 coverage
 # - Plugins: Python package tests and real CLI check/dist commands
+# - Nix: the flake dev shell builds the CLI and boots a box (non-blocking)
 name: Test
 
 on:
@@ -34,10 +35,14 @@ on:
       - '.config/nextest.toml'
       - '.gitmodules'
       - 'scripts/setup/**'
+      - 'scripts/build/**'
+      - 'scripts/*.sh'
       - 'scripts/test/coverage-bindings.sh'
       - 'tests/scripts/**'
       - 'Makefile'
       - 'make/**'
+      - 'flake.nix'
+      - 'flake.lock'
       - 'rust-toolchain.toml'
       - 'sdks/**'
       - 'apps/api/**'
@@ -106,6 +111,11 @@ jobs:
       plugins: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.plugins == 'true' }}
       setup: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.setup == 'true' }}
       infra: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.infra == 'true' }}
+      # The real-kernel boot tests; the weekly run also refreshes main's kernel cache.
+      vmm: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.vmm == 'true' }}
+      # Not weekly: flake.lock and rust-toolchain.toml pin every input, so an
+      # unchanged tree only repeats the last build.
+      nix: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.nix == 'true' }}
     steps:
       - uses: actions/checkout@v5
       - name: Validate Makefile syntax
@@ -159,6 +169,8 @@ jobs:
               - 'make/dev.mk'
               - 'make/test.mk'
               - 'make/coverage.mk'
+              - 'make/build.mk'
+              - 'scripts/build/build-vmm-boot.sh'
               - 'openapi/**/!(*.md)'
               - '**/Cargo.toml'
               - 'Cargo.lock'
@@ -170,6 +182,42 @@ jobs:
               - '.github/actions/setup-python/**/!(*.md)'
               - '.github/ci-config.json'
               - '.github/actions/ci-config/**/!(*.md)'
+              - '.github/workflows/test.yml'
+            # nix matches what `make cli` reads inside the flake dev shell.
+            nix:
+              - 'flake.nix'
+              - 'flake.lock'
+              - 'src/deps/**/!(*.md)'
+              - '.gitmodules'
+              - 'Makefile'
+              - 'make/vars.mk'
+              - 'make/build.mk'
+              - 'scripts/*.sh'
+              - 'scripts/build/**'
+              - 'scripts/setup/**'
+              - '**/build.rs'
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**/!(*.md)'
+              - '.github/actions/sccache/**/!(*.md)'
+              - '.github/workflows/test.yml'
+            # vmm selects the kernel build and the real-kernel boot tests inside
+            # the rust job, so rust must match every path listed here.
+            vmm:
+              - 'src/vmm/**/!(*.md)'
+              - 'src/hypervisor/**/!(*.md)'
+              - 'scripts/build/build-vmm-boot.sh'
+              - 'Makefile'
+              - 'make/vars.mk'
+              - 'make/build.mk'
+              - 'make/test.mk'
+              - 'make/coverage.mk'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**/!(*.md)'
+              - '.config/nextest.toml'
               - '.github/workflows/test.yml'
             python:
               - 'sdks/python/**/!(*.md)'
@@ -221,6 +269,7 @@ jobs:
             api:
               - 'apps/api/**/!(*.md)'
               - 'openapi/box.openapi.yaml'
+              - 'openapi/admin.openapi.yaml'
               - 'apps/package.json'
               - 'apps/yarn.lock'
               - 'apps/nx.json'
@@ -333,6 +382,24 @@ jobs:
           BOXLITE_DEPS_STUB: "1"
         run: make coverage:lcov NEXTEST_PROFILE=ci
 
+      # The real-kernel boot tests need the pinned vmlinux; rebuild it only
+      # when its pins or build script change.
+      - name: Restore the VMM boot kernel
+        id: vmm-kernel
+        if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.vmm == 'true'
+        uses: actions/cache@v4
+        with:
+          path: target/vmm/boot/x86_64
+          key: vmm-kernel-${{ hashFiles('src/vmm/boot/kernel.lock', 'src/vmm/boot/kernel.config', 'scripts/build/build-vmm-boot.sh') }}
+
+      - name: Build the VMM boot kernel
+        if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.vmm == 'true' && steps.vmm-kernel.outputs.cache-hit != 'true'
+        timeout-minutes: 20
+        run: |
+          sudo apt-get install -y build-essential bc bison flex curl xz-utils libelf-dev \
+            gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
+          make vmm:boot:host
+
       - name: Enable KVM access for native hypervisor tests
         if: matrix.platform.target == 'linux-x64-gnu'
         run: sudo chmod a+rw /dev/kvm
@@ -341,6 +408,11 @@ jobs:
         if: matrix.platform.target == 'linux-x64-gnu'
         timeout-minutes: 5
         run: make coverage:vmm:kvm
+
+      - name: Run real-kernel boot tests with coverage
+        if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.vmm == 'true'
+        timeout-minutes: 5
+        run: make coverage:vmm:boot
 
       - uses: actions/setup-node@v4
         if: matrix.platform.target == 'linux-x64-gnu'
@@ -594,6 +666,64 @@ jobs:
 
       - name: Test worktree submodule setup
         run: make test:setup:submodules
+
+  # The flake dev shell (docs/contributing/development/building.md) breaks when
+  # the flake, Make recipes, -sys crates or the toolchain change. Ubuntu still
+  # has /usr/lib, so a NixOS-only path regression passes here. Not yet in
+  # `Test (conclusion)`: it reports on the PR without blocking merges until it
+  # has proven stable.
+  nix:
+    name: Nix flake build
+    needs: changes
+    if: needs.changes.outputs.nix == 'true'
+    runs-on: ubuntu-latest
+    # A cold build took 27 minutes on 12 local cores; the runner has 4.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      # No /nix/store cache: it comes from the cache.nixos.org CDN, and
+      # restoring 3 GB from the Actions cache would save little.
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
+
+      - uses: ./.github/actions/sccache
+
+      - name: Check the flake
+        run: nix flake check
+
+      # Drop the runner's environment so preinstalled compilers cannot mask a
+      # tool missing from flake.nix. The flake puts $CARGO_HOME/bin first on
+      # PATH, where the runner preinstalls rustup, so both Rust homes start
+      # empty. sccache goes in by absolute path; when its setup failed the
+      # wrapper is unset and the build runs uncached.
+      - name: Build the CLI in the dev shell
+        run: |
+          export CARGO_HOME="$RUNNER_TEMP/cargo" RUSTUP_HOME="$RUNNER_TEMP/rustup"
+          if [ -n "${RUSTC_WRAPPER:-}" ]; then
+            RUSTC_WRAPPER="$(command -v "$RUSTC_WRAPPER")"
+            export RUSTC_WRAPPER
+          fi
+          nix develop --ignore-environment --keep HOME --keep USER \
+            --keep CARGO_HOME --keep RUSTUP_HOME --keep RUSTC_WRAPPER \
+            --keep CARGO_INCREMENTAL --keep SCCACHE_IGNORE_SERVER_IO_ERROR \
+            -c make cli
+
+      # The jailer runs bwrap, which Ubuntu 24.04's AppArmor blocks without the
+      # bwrap profile (docs/guides/troubleshooting.md); the runner is discarded.
+      - name: Enable KVM and unprivileged user namespaces
+        run: |
+          sudo chmod a+rw /dev/kvm
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Boot a box
+        timeout-minutes: 10
+        run: ./target/debug/boxlite run --rm alpine:latest echo ok
 
   # API tests need real Redis and Postgres services for integration coverage.
   api:

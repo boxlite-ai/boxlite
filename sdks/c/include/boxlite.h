@@ -1117,6 +1117,18 @@ enum BoxliteErrorCode boxlite_runtime_metrics(CBoxliteRuntime *runtime,
                                               void *user_data,
                                               CBoxliteError *out_error);
 
+// Replace inbound policy from {"mode":"enabled","allow_net":[]}.
+// Blocks until applied or rejected. Strings are borrowed for the call.
+enum BoxliteErrorCode boxlite_network_update_inbound(CBoxNetworkHandle *network,
+                                                     const char *policy_json,
+                                                     CBoxliteError *out_error);
+
+// Replace outbound policy from {"mode":"enabled","allow_net":["example.com"]}.
+// An empty enabled allowlist clears restrictions. Blocks until applied or rejected.
+enum BoxliteErrorCode boxlite_network_update_outbound(CBoxNetworkHandle *network,
+                                                      const char *policy_json,
+                                                      CBoxliteError *out_error);
+
 // Borrow the box's network capability into a new owned handle.
 //
 // On success, `*out_network` must be released with `boxlite_network_free`.
@@ -1156,6 +1168,14 @@ enum BoxliteErrorCode boxlite_network_tunnel(CBoxNetworkHandle *network,
                                              uint16_t port,
                                              CBoxTunnelHandle **out_tunnel,
                                              CBoxliteError *out_error);
+
+// Withdraw public access to `port` in the box.
+//
+// Safe to repeat. Connections already open are not closed. Returns
+// `InvalidArgument` for a null network pointer or port zero.
+enum BoxliteErrorCode boxlite_network_revoke_tunnel(CBoxNetworkHandle *network,
+                                                    uint16_t port,
+                                                    CBoxliteError *out_error);
 
 // Release an unconsumed tunnel. Existing connections and forwarders remain alive.
 void boxlite_tunnel_free(CBoxTunnelHandle *tunnel);
@@ -1248,7 +1268,7 @@ void boxlite_options_set_network_enabled(CBoxliteOptions *opts);
 void boxlite_options_set_network_disabled(CBoxliteOptions *opts);
 
 // Adds one entry to the outbound allowlist. Patterns: exact host,
-// "*.example.com", IP, or CIDR.
+// "*.example.com", IPv4, or IPv4 CIDR; anything else fails at create.
 //
 // A non-empty allowlist restricts both TCP and UDP egress. Hostname entries
 // are enforced by TLS SNI / HTTP Host inspection, which only TCP carries, so

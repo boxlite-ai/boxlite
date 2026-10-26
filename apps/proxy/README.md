@@ -102,9 +102,11 @@ pooling reuses tunnels per box and port. Raw `CONNECT` requests skip this router
 Every new HTTP/WebSocket guest service request and raw CONNECT checks the API's public tunnel
 endpoint. It requires an unrevoked public declaration, inbound access enabled, and a box outside the
 destroying/archiving states. The API caches allowed and denied verdicts in Redis for 3 seconds;
-the proxy does not cache tunnel verdicts. Declaring a port clears its cached denial. A revoked
-tunnel or a box whose inbound access was disabled can still admit new requests until a cached allowance expires;
-existing connections continue until they close. If the tunnel check fails, both paths return
+the proxy does not cache tunnel verdicts. Declaring a port clears its cached denial, and
+`DELETE /api/v1/boxes/{boxId}/network/tunnel?port={port}` clears its cached allowance. A check that
+races the revoke, or a box whose inbound access was disabled, can still admit new requests until a
+cached allowance expires, so revocation takes effect within 3 seconds; existing connections
+continue until they close. If the tunnel check fails, both paths return
 502. Ports are parsed as numbers, so `03000` and `3000` name the same guest port.
 
 ## Waking a stopped box

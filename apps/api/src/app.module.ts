@@ -83,6 +83,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
           database: configService.getOrThrow('database.database'),
           autoLoadEntities: true,
           migrations: [join(__dirname, 'migrations/**/*-migration.{ts,js}')],
+          migrationsTransactionMode: 'each',
           migrationsRun: configService.get('runMigrations') || !configService.getOrThrow('production'),
           namingStrategy: new CustomNamingStrategy(),
           manualInitialization: configService.get('skipConnections'),

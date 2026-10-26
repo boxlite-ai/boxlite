@@ -38,8 +38,10 @@ serializes builds, so run one build per checkout at a time.
 Build identity, timestamps and source paths are normalized (`KBUILD_BUILD_*`,
 `SOURCE_DATE_EPOCH`, `-ffile-prefix-map`), so identical inputs and toolchains
 give identical bytes. `make test:vmm:boot` runs both scripts against stubbed
-tools and never compiles Linux or starts a box. Booting the kernel is a later
-slice.
+tools and never compiles Linux or starts a box. The VMM's
+[boot tests](../README.md#boot-tests) boot the kernel. When a change matches
+the `vmm` path filter, and weekly, CI builds it with `make vmm:boot:host` and
+caches it on `kernel.lock`, `kernel.config` and the build script.
 
 ## Default: building inside a BoxLite box
 
