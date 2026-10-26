@@ -31,7 +31,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define MIRROR_IMAGE "alpine:latest"
+#define MIRROR_IMAGE "alpine:3.19"
 
 typedef struct Seen {
   int done;

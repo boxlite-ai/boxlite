@@ -329,6 +329,9 @@ fn disabled_seen() -> StatusSeen {
 
 #[test]
 fn configure_status_repeated_disable_and_reconfigure_round_trip() {
+    // Each callback frees a status through the shared counter; hold the lock
+    // until `box_ssh` drops so concurrent delta readers stay exact.
+    let _counting = FREE_STR_LOCK.lock().unwrap();
     let routes: &'static [Route] = Box::leak(Box::new([
         BOX_RUNNING,
         route("POST /v1/boxes/b1/ssh HTTP/1.1", "200 OK", CONFIGURED),

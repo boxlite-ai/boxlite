@@ -57,6 +57,15 @@ pub(crate) fn owned_ssh_status(status: SshStatus) -> OwnedFfiPtr<CSshStatus> {
 }
 
 /// Reclaim a status with its strings.
+///
+/// # Safety
+///
+/// `status` must be null or a live `Box::into_raw` pointer to a `CSshStatus`,
+/// as built by [`owned_ssh_status`], that is not yet freed, uniquely owned by
+/// the caller, and not accessed concurrently; it is invalid after this call.
+/// Each of its three string fields must be null or a `CString::into_raw`
+/// allocation not previously freed, with its original NUL position preserved;
+/// they are reclaimed with it.
 pub unsafe fn free_ssh_status(status: *mut CSshStatus) {
     if !status.is_null() {
         unsafe {
@@ -163,6 +172,12 @@ enum SshOp {
 }
 
 /// Copy and deserialize the caller's JSON; errors use the constant message.
+///
+/// # Safety
+///
+/// `config_json` must be null or point to a NUL-terminated string that stays
+/// readable and unchanged for this call. The result owns its data, so nothing
+/// borrowed from `config_json` outlives the call.
 unsafe fn copy_ssh_config(config_json: *const c_char) -> Result<SshConfig, boxlite::BoxliteError> {
     if config_json.is_null() {
         return Err(null_pointer_error("config_json"));
@@ -177,6 +192,12 @@ fn invalid_config() -> boxlite::BoxliteError {
     boxlite::BoxliteError::InvalidArgument(INVALID_CONFIG.to_owned())
 }
 
+/// Queue a parsed configuration; a null `cb` is refused before `handle` is
+/// read.
+///
+/// # Safety
+///
+/// As for [`spawn_op`].
 unsafe fn spawn_configure(
     handle: *mut CBoxHandle,
     config: SshConfig,
@@ -194,6 +215,18 @@ pub(crate) type SshFn = extern "C" fn(*mut CSshStatus, *mut FFIError, *mut c_voi
 
 /// Validate the box handle, then run `op` on the box's Tokio runtime and post
 /// one completion event to the box's queue.
+///
+/// # Safety
+///
+/// `handle` must be null or point to a live `CBoxHandle` that is not freed
+/// during this call; the queued task holds its own clones, so the handle is
+/// borrowed for the call only. `out_error` must be null or writable for the
+/// duration of this call. `user_data` is never dereferenced here: it is handed
+/// back to `cb` on the thread calling `boxlite_runtime_drain`, so it, and `cb`,
+/// must stay valid until that callback completes or the event is discarded. A
+/// successful callback owns the status and releases it with
+/// `boxlite_free_ssh_status`; the error pointer is borrowed only during the
+/// callback.
 unsafe fn spawn_op(
     handle: *mut CBoxHandle,
     op: SshOp,
