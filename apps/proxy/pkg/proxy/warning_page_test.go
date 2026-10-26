@@ -61,3 +61,30 @@ func TestAccessTokenKeepsWarningAndReturnsToTokenURL(t *testing.T) {
 func unescapeHTML(value string) string {
 	return strings.NewReplacer("&amp;", "&", "&#34;", `"`, "&#39;", "'", "&lt;", "<", "&gt;", ">").Replace(value)
 }
+
+// Behind a TLS-terminating load balancer the proxy listens in plain HTTP, but
+// the browser is on HTTPS; the warning page must not send the token URL to
+// http://.
+func TestWarningPageUsesPublicSchemeBehindTLSTermination(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use((&Proxy{config: &config.Config{ProxyProtocol: "https", EnableTLS: false}}).browserWarningMiddleware())
+	handler := sanitizeTunnelRequests(engine)
+	host := "3000-d-416243644566313233343536.proxy.test"
+
+	// A server request carries only the path in its URL, as a real one does.
+	request := httptest.NewRequest(http.MethodGet, "/app?"+accessTokenQuery+"=blt_visitor", nil)
+	request.Host = host
+	request.Header.Set("User-Agent", browserUserAgent)
+	page := httptest.NewRecorder()
+	handler.ServeHTTP(page, request)
+	field := regexp.MustCompile(`name="redirect" value="([^"]*)"`).FindStringSubmatch(page.Body.String())
+	want := "https://" + host + "/app?" + accessTokenQuery + "=blt_visitor"
+	if field == nil || unescapeHTML(field[1]) != want {
+		t.Fatalf("warning page return URL = %v, want %q", field, want)
+	}
+	shown := regexp.MustCompile(`about to visit <strong>([^<]*)</strong>`).FindStringSubmatch(page.Body.String())
+	if shown == nil || !strings.HasPrefix(shown[1], "https://"+host+"/") {
+		t.Fatalf("warning page shows %v, want an https:// URL on %s", shown, host)
+	}
+}

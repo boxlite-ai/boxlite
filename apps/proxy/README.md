@@ -248,7 +248,8 @@ caches in memory unless its stage adds them.
   accept it, which sets a cookie for 1 day. Non-browser clients, WebSockets, and requests
   carrying `X-BoxLite-Skip-Preview-Warning: true` skip it. An access token does not skip it, since
   public tunnels ignore tokens; the page posts the return URL, token included, in its form body,
-  and accepting returns the browser to that token URL.
+  and accepting returns the browser to that token URL. The return URL uses the `PROXY_PROTOCOL`
+  scheme, so behind a TLS-terminating load balancer (`ENABLE_TLS` unset) it stays `https`.
 - **Shutdown** waits up to `SHUTDOWN_TIMEOUT_SEC` (default 1 hour) for open requests and tunnels. A
   second signal forces the exit.
 - **Tracing** stamps `boxlite.box_id` on the span of each proxied HTTP request. CONNECT tunnels
