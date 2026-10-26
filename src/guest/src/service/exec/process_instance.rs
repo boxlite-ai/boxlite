@@ -8,12 +8,36 @@ use nix::unistd::{getpgid, Pid};
 pub(crate) struct ProcessInstance {
     pid: Pid,
     start_time: u64,
+    /// The process group this PID led at capture, when it led one.
+    ///
+    /// Recorded here rather than re-read on demand: every later caller runs
+    /// after awaits that the reaper can win, and a `/proc` lookup then reports
+    /// "no group" for a process that did lead one -- silently degrading a group
+    /// kill to leader-only exactly when the survivors need it.
+    group: Option<Pid>,
 }
 
 impl ProcessInstance {
-    /// Capture the process start time immediately after its spawn returns.
+    /// Capture the process identity immediately after its spawn returns.
+    ///
+    /// Start time and process group are read together: both describe the
+    /// process as it exists at this instant, and they succeed or fail as one.
     pub(crate) fn capture(pid: Pid) -> Option<Self> {
-        Self::start_time_for(pid).map(|start_time| Self { pid, start_time })
+        let start_time = Self::start_time_for(pid)?;
+        // Distinguish "leads someone else's group" from a failed read. Only the
+        // former is a real answer; an error means the process is already gone,
+        // which is a failed capture, not a no-group execution. Collapsing them
+        // would make the caller's no-group diagnostic report the wrong cause.
+        let group = match getpgid(Some(pid)) {
+            Ok(group) if group == pid => Some(pid),
+            Ok(_) => None,
+            Err(_) => return None,
+        };
+        Some(Self {
+            pid,
+            start_time,
+            group,
+        })
     }
 
     /// Signal only when this PID still belongs to the process captured at spawn.
@@ -44,6 +68,15 @@ impl ProcessInstance {
         Self::start_time_for(self.pid) == Some(self.start_time)
     }
 
+    /// The process group this instance led at capture, or None when its
+    /// spawner left it in an inherited group.
+    ///
+    /// A group outlives its leader, so a caller that escalates after the leader
+    /// exits can still reach the children it left behind.
+    pub(super) fn own_process_group(&self) -> Option<Pid> {
+        self.group
+    }
+
     fn start_time_for(pid: Pid) -> Option<u64> {
         procfs::process::Process::new(pid.as_raw())
             .ok()?
@@ -60,6 +93,42 @@ impl ProcessInstance {
     #[cfg(test)]
     pub(super) fn with_start_time_for_test(self, start_time: u64) -> Self {
         Self { start_time, ..self }
+    }
+}
+
+/// Whether `group` still has any member.
+///
+/// The captured pgid names our job only while this holds: once the last member
+/// exits, the number is free to be re-allocated and a holder that keeps
+/// signalling it would reach an unrelated group.
+pub(super) fn process_group_alive(group: Pid) -> bool {
+    kill(Pid::from_raw(-group.as_raw()), None).is_ok()
+}
+
+/// Signal every member of `group`, addressed by a pgid captured while its
+/// leader was live.
+///
+/// Unlike [`ProcessInstance::signal`] this carries no start-time guard,
+/// because the leader is allowed to be gone by now — reaching the children it
+/// orphaned is the entire point.
+///
+/// The pgid is unambiguous only while the group is non-empty: the kernel keeps
+/// a PID reserved as long as some process still references it as a process
+/// group ID. Once the last member exits the number is free to be re-allocated,
+/// and a caller still holding it would signal an unrelated group.
+///
+/// There is no guard against that here, and none is cheap — an empty group
+/// already reports `ESRCH` without one, and a re-allocated pgid is
+/// indistinguishable from the original. Callers bound the exposure by how long
+/// they hold a captured pgid: `start_timeout_watcher` polls
+/// [`process_group_alive`] and retires as soon as the group empties, while
+/// `ExecutionState::signal_if_current` accepts the window because reaching
+/// orphans requires signalling without proof of identity.
+pub(super) fn signal_process_group(group: Pid, signal: Signal) -> Result<bool, Errno> {
+    match kill(Pid::from_raw(-group.as_raw()), signal) {
+        Ok(()) => Ok(true),
+        Err(Errno::ESRCH) => Ok(false),
+        Err(error) => Err(error),
     }
 }
 
@@ -98,6 +167,81 @@ mod tests {
         stat.rsplit_once(") ")
             .and_then(|(_, fields)| fields.chars().next())
             == Some('Z')
+    }
+
+    /// A pid with no process behind it captures nothing.
+    ///
+    /// Covers the reachable half of the failure handling: both reads fail, so
+    /// `capture` reports failure rather than inventing "leads no group". The
+    /// split-failure case — start time read, then the process vanishes before
+    /// the group read — needs the process to disappear between two adjacent
+    /// syscalls and cannot be staged deterministically; the `Err` arm exists so
+    /// that case is a failed capture too, not a false no-group answer.
+    #[tokio::test]
+    async fn capture_of_a_dead_pid_reports_failure() {
+        let _test_guard = crate::reaper::reap_test_guard().await;
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("spawn short-lived child");
+        let pid = Pid::from_raw(child.id() as i32);
+        tokio::task::spawn_blocking(move || {
+            let _fence = crate::reaper::reap_fence();
+            child.wait().expect("wait for child")
+        })
+        .await
+        .expect("wait task must not panic");
+
+        assert!(
+            ProcessInstance::capture(pid).is_none(),
+            "a reaped pid must not capture as an identity"
+        );
+    }
+
+    /// The captured pgid must survive the leader's `/proc` entry.
+    ///
+    /// Every consumer runs after awaits the reaper can win; re-reading the
+    /// group then would report "no group" for a process that led one, and the
+    /// survivors would silently lose their deadline.
+    #[tokio::test]
+    async fn captured_process_group_outlives_the_leaders_proc_entry() {
+        use std::os::unix::process::CommandExt;
+
+        let _test_guard = crate::reaper::reap_test_guard().await;
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", "exit 0"]);
+        // SAFETY: `setpgid` is async-signal-safe and this closure allocates and
+        // locks nothing between fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                if nix::libc::setpgid(0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().expect("spawn group leader");
+        let leader = Pid::from_raw(child.id() as i32);
+        let identity = ProcessInstance::capture(leader).expect("capture while live");
+        assert_eq!(identity.own_process_group(), Some(leader));
+
+        // Reap the leader, removing its /proc entry.
+        tokio::task::spawn_blocking(move || {
+            let _fence = crate::reaper::reap_fence();
+            child.wait().expect("wait for leader")
+        })
+        .await
+        .expect("wait task must not panic");
+        assert!(
+            !identity.is_current(),
+            "leader must be gone for this to mean anything"
+        );
+
+        assert_eq!(
+            identity.own_process_group(),
+            Some(leader),
+            "the captured group must not depend on the leader still existing"
+        );
     }
 
     #[tokio::test]
