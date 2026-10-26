@@ -1,4 +1,5 @@
 -- Reconcile the configured log reader: remove inherited roles and obsolete grants.
+-- It reads the log table and, for Backoffice customer activity, the long-lived business event copy.
 REVOKE ALL FROM __LOG_READER__;
 REVOKE ALL ON *.* FROM __LOG_READER__;
 CREATE SETTINGS PROFILE OR REPLACE __LOG_READER_PROFILE__ SETTINGS
@@ -22,3 +23,4 @@ CREATE SETTINGS PROFILE OR REPLACE __LOG_READER_PROFILE__ SETTINGS
   output_format_json_quote_64bit_integers = 1 CONST;
 ALTER USER __LOG_READER__ SETTINGS PROFILE __LOG_READER_PROFILE__;
 GRANT SELECT, SHOW COLUMNS ON otel.otel_logs TO __LOG_READER__;
+GRANT SELECT ON analytics.business_events TO __LOG_READER__;
