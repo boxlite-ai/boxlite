@@ -193,7 +193,7 @@ describe('Snapshots page', () => {
 
   it('lets the server name a new box and displays the returned name', async () => {
     await ready()
-    await click(button('Create Box'))
+    await click(button('Box'))
     expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain('(optional)')
     expect(document.querySelector('[aria-label="Box name"]')).toHaveProperty('value', '')
     await click(button('Create Box', '[role="dialog"] button'))
@@ -204,7 +204,7 @@ describe('Snapshots page', () => {
 
   it('rejects invalid custom box names before sending a request', async () => {
     await ready()
-    await click(button('Create Box'))
+    await click(button('Box'))
     await fill('Box name', 'invalid/name')
     expect(button('Create Box', '[role="dialog"] button')).toHaveProperty('disabled', true)
     await click(button('Create Box', '[role="dialog"] button'))
