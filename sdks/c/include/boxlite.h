@@ -98,6 +98,12 @@ typedef enum BoxliteCopySourceKind {
   BoxliteCopySourceKindDir = 2,
 } BoxliteCopySourceKind;
 
+// The kinds of target a domain can route to; `CDomainTarget.type` holds one.
+// `type` is an `int32_t` there because a C caller can pass any value.
+typedef enum BoxliteDomainTargetType {
+  BoxliteDomainTargetBox = 0,
+} BoxliteDomainTargetType;
+
 // Opaque handle wrapping an `AdvancedBoxOptions`. Allocated via
 // `boxlite_advanced_options_new`, freed via `boxlite_advanced_options_free`.
 typedef struct AdvancedBoxOptionsHandle AdvancedBoxOptionsHandle;
@@ -153,6 +159,10 @@ typedef struct CBoxCopyOutStream CBoxCopyOutStream;
 // behind one C type, matching the trait/interface surface in the other
 // SDKs.
 typedef struct CredentialHandle CredentialHandle;
+
+// Opaque handle to a REST runtime's domains, released with
+// `boxlite_free_domain_handle`.
+typedef struct DomainHandle DomainHandle;
 
 // Opaque handle to a running command execution.
 typedef struct ExecutionHandle ExecutionHandle;
@@ -278,6 +288,42 @@ typedef void (*CBoxStartBoxCb)(CBoxliteError*, void*);
 
 // Copy (into / out of) completion.
 typedef void (*CBoxCopyCb)(CBoxliteError*, void*);
+
+typedef struct DomainHandle CBoxliteDomainHandle;
+
+// What a domain routes to. For `BoxliteDomainTargetBox`, `box` is a box id or
+// name and `port` a guest port. Passed in, the strings are borrowed for the
+// call; inside a `CDomain`, they belong to it.
+//
+typedef struct CDomainTarget {
+  int32_t type;
+  const char *box;
+  uint16_t port;
+} CDomainTarget;
+
+// A domain the organization holds. Strings are heap-owned and non-null,
+// except `target.box`, which is null while the domain is unbound. Released
+// with `boxlite_free_domain`; list entries belong to their list.
+typedef struct CDomain {
+  // What the domain is bound by: the label of a platform name.
+  char *name;
+  char *hostname;
+  char *url;
+  struct CDomainTarget target;
+} CDomain;
+
+// `count` domains at `items` (null only when `count` is zero), with the
+// allowance they count against. Released, entries included, with
+// `boxlite_free_domain_list`.
+typedef struct CDomainList {
+  struct CDomain *items;
+  int count;
+  uint32_t limit;
+  uint32_t used;
+  uint32_t remaining;
+  // The shortest platform name a new claim may use.
+  uint32_t min_length;
+} CDomainList;
 
 // C-compatible command descriptor with all BoxCommand options.
 //
@@ -1123,6 +1169,78 @@ enum BoxliteErrorCode boxlite_copy_in_abort(struct CBoxCopyInStream *stream,
 // whenever the transfer did not complete; see CBoxCopyInStream for the
 // full sequence.
 void boxlite_copy_in_free(struct CBoxCopyInStream *stream);
+
+// Get the organization's domains from a REST runtime. A local runtime
+// answers `Unsupported`. Release the handle with `boxlite_free_domain_handle`.
+//
+// # Safety
+//
+// `runtime` and `out_handle` must be non-null; `out_error` may be null.
+enum BoxliteErrorCode boxlite_runtime_domains(CBoxliteRuntime *runtime,
+                                              CBoxliteDomainHandle **out_handle,
+                                              CBoxliteError *out_error);
+
+// List every domain the organization holds, unbound ones included, with the
+// allowance. On `Ok`, `*out_list` must be released with
+// `boxlite_free_domain_list`.
+//
+// # Safety
+//
+// `handle` and `out_list` must be non-null; `out_error` may be null.
+enum BoxliteErrorCode boxlite_domain_list(CBoxliteDomainHandle *handle,
+                                          struct CDomainList **out_list,
+                                          CBoxliteError *out_error);
+
+// Route `domain` (a platform name such as "demo", or its full hostname) to
+// `target`, claiming it if new. A domain bound elsewhere in the organization
+// moves. On `Ok`, `*out_domain` must be released with `boxlite_free_domain`.
+//
+// # Safety
+//
+// `handle`, `domain`, `target`, `target->box` and `out_domain` must be
+// non-null and the strings UTF-8; they only need to stay valid for this
+// call. `out_error` may be null.
+enum BoxliteErrorCode boxlite_domain_bind(CBoxliteDomainHandle *handle,
+                                          const char *domain,
+                                          const struct CDomainTarget *target,
+                                          struct CDomain **out_domain,
+                                          CBoxliteError *out_error);
+
+// Stop routing `domain`, keeping it for the organization. Safe to repeat; a
+// domain the organization does not hold is `NotFound`.
+//
+// # Safety
+//
+// `handle` and `domain` must be non-null; `domain` must be UTF-8 and only
+// needs to stay valid for this call. `out_error` may be null.
+enum BoxliteErrorCode boxlite_domain_unbind(CBoxliteDomainHandle *handle,
+                                            const char *domain,
+                                            CBoxliteError *out_error);
+
+// Free the local management handle returned by `boxlite_runtime_domains`.
+// Existing domain bindings are unaffected.
+//
+// # Safety
+//
+// `handle` must be null or a pointer from `boxlite_runtime_domains` that has
+// not been freed. It must not be used afterwards.
+void boxlite_free_domain_handle(CBoxliteDomainHandle *handle);
+
+// Free a domain `boxlite_domain_bind` returned.
+//
+// # Safety
+//
+// `domain` must be null or a pointer this library handed out that has not
+// been freed.
+void boxlite_free_domain(struct CDomain *domain);
+
+// Free a list `boxlite_domain_list` returned, and every domain in it.
+//
+// # Safety
+//
+// `list` must be null or a pointer this library handed out that has not been
+// freed.
+void boxlite_free_domain_list(struct CDomainList *list);
 
 void boxlite_error_free(CBoxliteError *error);
 

@@ -389,6 +389,49 @@ export function boxMigrationConfig(env: NodeJS.ProcessEnv = process.env) {
   return { archivePrefix: `${scheme}${segments.join('/')}/` }
 }
 
+export const DEFAULT_PLATFORM_SUBDOMAIN_MIN_LENGTH = 5
+/** A DNS label is at most 63 octets (RFC 1035 §2.3.4). */
+export const DNS_LABEL_MAX_LENGTH = 63
+
+/**
+ * Platform tunnel subdomains: `<name>.<appDomain>` routes to one box port.
+ *
+ * `appDomain` is unset where the deployment has no wildcard certificate and
+ * record for it; the API then refuses explicit names rather than minting URLs
+ * nothing serves. Like `PROXY_DOMAIN`, it may carry a port for a local stack
+ * whose proxy does not listen on 80/443: the port goes into the URL, never
+ * into the hostname a name is stored and resolved under (`appHost`). The
+ * minimum length bounds only the name a caller picks, not the suffix, and
+ * only new claims: a name already held stays usable.
+ *
+ * Exported so its rules can be tested directly rather than through an import
+ * whose side effect is reading the process environment.
+ */
+export function tunnelDomainConfig(env: NodeJS.ProcessEnv = process.env) {
+  const appDomain = env.PROXY_APP_DOMAIN?.trim().toLowerCase() || undefined
+  const appDomainShape =
+    /^(?<host>[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)(:(?<port>[1-9][0-9]{0,4}))?$/
+  const appDomainMatch = appDomain === undefined ? undefined : appDomainShape.exec(appDomain)
+  if (appDomain !== undefined && !appDomainMatch) {
+    throw new Error(
+      `PROXY_APP_DOMAIN must be a hostname such as "app.example.com", optionally with a port, got "${env.PROXY_APP_DOMAIN}"`,
+    )
+  }
+  const appHost = appDomainMatch?.groups?.host
+  const rawMinLength = env.PLATFORM_SUBDOMAIN_MIN_LENGTH?.trim()
+  const platformSubdomainMinLength = rawMinLength ? Number(rawMinLength) : DEFAULT_PLATFORM_SUBDOMAIN_MIN_LENGTH
+  if (
+    !Number.isInteger(platformSubdomainMinLength) ||
+    platformSubdomainMinLength < 1 ||
+    platformSubdomainMinLength > DNS_LABEL_MAX_LENGTH
+  ) {
+    throw new Error(
+      `PLATFORM_SUBDOMAIN_MIN_LENGTH must be an integer from 1 to ${DNS_LABEL_MAX_LENGTH}, got "${env.PLATFORM_SUBDOMAIN_MIN_LENGTH}"`,
+    )
+  }
+  return { appDomain, appHost, platformSubdomainMinLength }
+}
+
 const configuration = {
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
@@ -504,6 +547,7 @@ const configuration = {
       (process.env.PROXY_TOOLBOX_BASE_URL || `${process.env.PROXY_PROTOCOL}://${process.env.PROXY_DOMAIN}`) +
       '/toolbox',
   },
+  tunnelDomain: tunnelDomainConfig(),
   audit: {
     toolboxRequestsEnabled: process.env.AUDIT_TOOLBOX_REQUESTS_ENABLED === 'true',
     retentionDays: process.env.AUDIT_LOG_RETENTION_DAYS

@@ -644,6 +644,52 @@ the runtime's API key or JWT; it never recreates a revoked tunnel.
 This differs from `boxlite_options_add_port()`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 
+#### Domains
+
+On a hosted runtime the organization can route a name of its own
+(`demo.apps.example`) to a box port; see
+[Domains](../../docs/concepts/networking.md#domains). These calls block until
+the server answers.
+
+```c
+BoxliteErrorCode boxlite_runtime_domains(
+    CBoxliteRuntime* runtime,
+    CBoxliteDomainHandle** out_handle,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_domain_list(
+    CBoxliteDomainHandle* handle,
+    CDomainList** out_list,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_domain_bind(
+    CBoxliteDomainHandle* handle,
+    const char* domain,
+    const CDomainTarget* target,
+    CDomain** out_domain,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_domain_unbind(
+    CBoxliteDomainHandle* handle,
+    const char* domain,
+    CBoxliteError* out_error
+);
+void boxlite_free_domain_handle(CBoxliteDomainHandle* handle);
+void boxlite_free_domain(CDomain* domain);
+void boxlite_free_domain_list(CDomainList* list);
+```
+
+A target is `{ .type = BoxliteDomainTargetBox, .box = "web-a", .port = 3000 }`;
+`box` takes an id or name. In a returned `CDomain`, `target.box` is the box id,
+or NULL while the domain is unbound. A local runtime answers `Unsupported`.
+
+Release the management handle with `boxlite_free_domain_handle()`, the result
+of `boxlite_domain_bind()` with `boxlite_free_domain()`, and the result of
+`boxlite_domain_list()` with `boxlite_free_domain_list()`. The list owns its
+entries; do not free them individually. These functions release local SDK
+resources and leave domain bindings intact. Use `boxlite_domain_unbind()` to
+stop routing a domain.
+
 #### Discovery & Introspection
 
 ```c

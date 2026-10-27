@@ -55,6 +55,8 @@ import { BoxAutoResumeService } from './services/box-auto-resume.service'
 import { BoxMigrationService } from './services/box-migration.service'
 import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.service'
 import { Tunnel } from './entities/tunnel.entity'
+import { TunnelDomain } from './entities/tunnel-domain.entity'
+import { TunnelDomainService } from './services/tunnel-domain.service'
 import { TunnelService } from './services/tunnel.service'
 import { AttachTicketService } from './services/attach-ticket.service'
 
@@ -64,7 +66,18 @@ import { AttachTicketService } from './services/attach-ticket.service'
     OrganizationModule,
     RegionModule,
     ImageModule,
-    TypeOrmModule.forFeature([Box, Runner, WarmPool, Volume, Region, Job, BoxLastActivity, BoxMigration, Tunnel]),
+    TypeOrmModule.forFeature([
+      Box,
+      Runner,
+      WarmPool,
+      Volume,
+      Region,
+      Job,
+      BoxLastActivity,
+      BoxMigration,
+      Tunnel,
+      TunnelDomain,
+    ]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
   providers: [
@@ -92,6 +105,7 @@ import { AttachTicketService } from './services/attach-ticket.service'
     BoxMigrationManager,
     BoxMigrationJobReceiver,
     TunnelService,
+    TunnelDomainService,
     AttachTicketService,
     BoxAccessGuard,
     RunnerAccessGuard,
@@ -111,6 +125,7 @@ import { AttachTicketService } from './services/attach-ticket.service'
   exports: [
     BoxService,
     TunnelService,
+    TunnelDomainService,
     AttachTicketService,
     RunnerService,
     RedisLockProvider,

@@ -27,8 +27,10 @@ import { certificateNameFor, internalAuthorizationNameFor } from '../stack/provi
 const STAGE = { app: 'boxlite-app', stage: 'dev', project: 'boxlite-dev-project' }
 const API_HOST = 'api.dev.boxlite.ai'
 const PROXY_DOMAIN = 'proxy.dev.boxlite.ai'
+const APP_DOMAIN = 'apps.example'
 const API_NAME = internalAuthorizationNameFor({ app: STAGE.app, stage: STAGE.stage, host: API_HOST })
 const PROXY_NAME = instanceFor({ app: STAGE.app, stage: STAGE.stage, artifact: 'proxy' })
+const APP_NAME = instanceFor({ app: STAGE.app, stage: STAGE.stage, artifact: 'proxy-app' })
 
 const sourceOf = (file: string): string =>
   readFileSync(fileURLToPath(new URL(`../stack/providers/gcp/${file}.ts`, import.meta.url)), 'utf8')
@@ -40,6 +42,7 @@ const check = (held: AuthorizationsHeld) => {
       ...STAGE,
       apiHost: API_HOST,
       proxyDomain: PROXY_DOMAIN,
+      appDomain: APP_DOMAIN,
       lookup: () => held,
       log: (line) => logged.push(line),
     })
@@ -94,10 +97,26 @@ test('a stage with no proxy domain is not asked about a proxy authorization', ()
     ...STAGE,
     apiHost: API_HOST,
     proxyDomain: null,
+    appDomain: null,
     lookup: () => holding({ name: PROXY_NAME, domain: 'proxy.old.boxlite.ai' }),
     log: (line) => logged.push(line),
   })
   assert.deepEqual(logged, [])
+})
+
+test('the platform tunnel authorization follows the proxy rule, under its own stage name', () => {
+  // Same immutability, same fixed name: a stage whose domain moved holds the
+  // platform authorization under exactly the name the replacement needs.
+  const { refuse } = check(holding({ name: APP_NAME, domain: 'app.old.boxlite.ai' }))
+  assert.throws(refuse, (error: Error) => {
+    assert.ok(error instanceof DnsAuthorizationError)
+    assert.match(error.message, new RegExp(`${APP_NAME}\\b`))
+    assert.match(error.message, new RegExp(`needs it to prove ${APP_DOMAIN.replace(/\./g, '\\.')}`))
+    return true
+  })
+  // Converging, or absent, says nothing.
+  check(holding({ name: APP_NAME, domain: APP_DOMAIN })).refuse()
+  check(holding()).refuse()
 })
 
 test('a CLI that is not there is reported, not treated as an answer', () => {

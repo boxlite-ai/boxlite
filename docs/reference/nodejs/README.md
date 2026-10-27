@@ -386,6 +386,7 @@ argument to `forward()`.
 | Tunnel | `await box.network.tunnel(target, options?)` | Prepare a `JsBoxTunnel` or `BoxTunnel`; `target` is `SocketAddress` imported from `node:net` (loopback or the guest IP), `options` is `{ isPublic?: boolean }`, public by default. Bare port and boolean arguments are rejected; invalid types throw synchronously on the native `JsBox.network` handle |
 | Token | `tunnel.token(): string \| null` | Full on creation, masked on later preparations; `isPublic()` reports the mode |
 | Revoke | `await box.network.revokeTunnel(port)` | Withdraw the port's tunnel; open connections stay open |
+| Domains | `runtime.domains` | `await list()` returns held domains (`target` null while unbound) with `limit`, `used`, `remaining`, `minLength`; `await bind(domain, { type: "box", box, port })` routes a name to a box port, claiming or moving it; `await unbind(domain)` stops routing it and keeps it for the organization. Hosted runtimes only; see [Domains](../../concepts/networking.md#domains) |
 | Forward | `await tunnel.forward(listen)` | Return a listener-backed `TunnelForwarder` |
 | Inspect | `tunnel.uri(): string \| null` | Read the prepared public URL; `null` for a local box |
 | Connect | `await tunnel.connect()` | Consume the prepared tunnel into its connection |

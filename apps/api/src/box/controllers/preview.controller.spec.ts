@@ -19,6 +19,7 @@ describe('PreviewController private tunnel credential scope', () => {
       { findOne: jest.fn().mockResolvedValue({ id: 'box-org' }) } as never,
       null as never,
       null as never,
+      null as never,
     )
     return controller
   }
@@ -59,6 +60,7 @@ describe('PreviewController private tunnel credential scope', () => {
 
 describe('PreviewController public tunnel check', () => {
   const access = jest.fn()
+  const resolve = jest.fn()
   const controller = new PreviewController(
     null as never,
     null as never,
@@ -67,9 +69,22 @@ describe('PreviewController public tunnel check', () => {
     null as never,
     null as never,
     null as never,
+    { resolve } as never,
   )
 
-  beforeEach(() => access.mockReset())
+  beforeEach(() => {
+    access.mockReset()
+    resolve.mockReset()
+  })
+
+  it('keeps the domain lookup proxy-only and answers 404 for a name it will not forward', async () => {
+    expect(Reflect.getMetadata('swagger/apiExcludeEndpoint', controller.resolveTunnelDomain)).toEqual({ disable: true })
+    resolve.mockResolvedValueOnce(null).mockResolvedValueOnce({ boxId: 'box-1', port: 3000 })
+
+    await expect(controller.resolveTunnelDomain('demo.app.test')).rejects.toBeInstanceOf(NotFoundException)
+    await expect(controller.resolveTunnelDomain('demo.app.test')).resolves.toEqual({ boxId: 'box-1', port: 3000 })
+    expect(resolve).toHaveBeenCalledWith('demo.app.test')
+  })
 
   it('keeps the proxy-only endpoint out of generated API clients', () => {
     expect(Reflect.getMetadata('swagger/apiExcludeEndpoint', controller.isPublicTunnelActive)).toEqual({
@@ -99,6 +114,7 @@ describe('PreviewController browser tunnel sessions', () => {
       null as never,
       null as never,
       users as never,
+      null as never,
     )
     await expect(controller.tunnelAccess('box-1', 3000, { userId: 'user-1' })).resolves.toMatchObject({
       id: 'tunnel-1',
@@ -140,6 +156,7 @@ describe('PreviewController ensure-ready', () => {
       null as never,
       organizationService as never,
       autoResume as never,
+      null as never,
       null as never,
     )
   })

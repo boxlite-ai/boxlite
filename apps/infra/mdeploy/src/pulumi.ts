@@ -19,6 +19,7 @@
 
 import { gcpProgram, type ProgramOutputs } from '../pulumi/program.ts'
 import { publicHostsFor } from '../stack/api.ts'
+import { userDomainFrom } from './stack-env.ts'
 import {
   assertAuthorizationsConverge,
   authorizationsThroughGcloud,
@@ -240,6 +241,8 @@ export const pulumiDeploy = async ({
       project,
       apiHost: publicHostsFor({ domain, dashboardDomain: environment.DASHBOARD_DOMAIN ?? null }).api,
       proxyDomain: environment.PROXY_DOMAIN ?? null,
+      // This program is GCP's, whose edge serves the user domain's wildcard.
+      appDomain: userDomainFrom(environment)?.domain ?? null,
       lookup: lookupAuthorizations ?? authorizationsThroughGcloud(spawnWith({ ...process.env, ...credentials })),
       log,
     })

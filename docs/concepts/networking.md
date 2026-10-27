@@ -65,6 +65,65 @@ and `CONNECT`s to its URI get `404` within 3 seconds, while connections already
 open run until they close. It is safe to repeat, needs neither inbound access
 nor a running box, and preparing the port again reopens it at the same URI.
 On a local runtime nothing is published, so it does nothing.
+
+### Domains
+
+A hosted deployment can give a box port a name of its own instead of the
+generated `<port>-<box>` hostname. Domains are the organization's, not a
+box's, so they live under `/v1/domains` and a box port is only what one routes
+to:
+
+```bash
+boxlite domain bind demo --box web-a --port 3000   # PUT /v1/domains/demo/target
+boxlite domain ls                                  # GET /v1/domains
+boxlite domain unbind demo                         # DELETE /v1/domains/demo/target
+```
+
+The SDKs expose the same three calls as `runtime.domains`: `list()`,
+`bind(domain, target)` and `unbind(domain)`. A target is
+`{"type": "box", "box": <id or name>, "port": 3000}`; `type` leaves room for
+other kinds of target without changing the call. A domain is written as the
+name (`demo`) or its full hostname, `demo.<user domain>`. Each stage serves
+named apps under its own user domain, a registrable domain separate from the
+platform's (see [Deployment](../../apps/infra/docs/deployment.md#cloudflare-api-token));
+`apps.example` stands in for it here.
+
+Binding records which box port a name routes to and returns the domain's
+URL. It does not declare the port public: the name answers once the tunnel
+API has prepared the port in its default public mode and the box has inbound
+access enabled, in either order. It returns `404` for private tunnels, revoked
+ports, or disabled inbound access. A private tunnel remains accessible through
+its generated URL using its token or an authorized platform credential.
+
+For a public tunnel, HTTP, WebSocket and `CONNECT` work through the name as on
+the generated hostname, including waking a stopped box. The proxy resolves the
+name on every request and applies the same
+declaration, inbound and box-state checks, so a domain never forwards to a
+port the generated hostname would refuse. Preparing a tunnel always
+returns the port's generated URL; `domain ls` shows the names bound to it.
+
+A name belongs to the organization that claimed it. Binding it to another
+box port moves it there at once, with no window in which it answers nothing.
+A port can have several names: binding a new one leaves the others in place.
+`unbind` stops routing a name: requests that start afterwards get
+`404`, connections already open run until they close, and the port's
+generated URL stays public until the tunnel is revoked. An unbound name is
+still the organization's — nobody else can claim it, it still counts against
+the organization's domain allowance, and the same organization can bind it
+again to any of its box ports. Destroying the box unbinds its names the same
+way. Revoking the tunnel does not: the name stays bound, answers `404` while
+the port is revoked, and serves again once the port is prepared as public again.
+
+`domain ls` lists every name the organization holds with what it routes to,
+its allowance (`limit`, `used`, `remaining`) and `min_length`, the shortest
+new name allowed. A new name must be lowercase letters, digits and hyphens,
+not start or end with a hyphen, not look like `<digits>-…`, and not be one of
+the platform's own names or the API's collection names (`boxes`, `images`,
+`volumes`, `domains`); names held before `min_length` rose stay bindable.
+A box in a region served by its own proxy cannot take a platform name
+(`region_not_supported`): the app domain's wildcard record points at the
+default proxy only.
+
 The proxy accepts HTTP/WebSocket previews, including token URLs, and raw CONNECT
 only when the box has inbound access enabled and the port has an active
 declaration. Getting a preview URL alone does not declare the port. A box with

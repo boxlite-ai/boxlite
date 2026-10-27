@@ -238,6 +238,23 @@ const NETWORK_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
+const DOMAIN_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "bind",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "ls",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "unbind",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+];
 const SSH_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "configure",
@@ -412,6 +429,11 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         name: "volume",
         globals: VOLUME_GLOBALS,
         children: VOLUME_SCOPES,
+    },
+    CommandScope {
+        name: "domain",
+        globals: VOLUME_GLOBALS,
+        children: DOMAIN_SCOPES,
     },
     CommandScope {
         name: "completion",
@@ -766,6 +788,9 @@ pub enum Commands {
 
     /// Manage named volumes on a REST server
     Volume(crate::commands::volume::VolumeArgs),
+
+    /// Bind, list or unbind the organization's domains on a REST server
+    Domain(crate::commands::domain::DomainArgs),
 
     /// Generate shell completion script (hidden from help)
     #[command(hide = true)]
@@ -1925,6 +1950,15 @@ mod tests {
         (&["boxlite", "volume", "inspect", "volume"], 2, VOLUME),
         (&["boxlite", "volume", "rm", "volume"], 2, VOLUME),
         (&["boxlite", "volume", "delete", "volume"], 2, VOLUME),
+        (
+            &[
+                "boxlite", "domain", "bind", "demo", "--box", "b", "--port", "1",
+            ],
+            2,
+            VOLUME,
+        ),
+        (&["boxlite", "domain", "ls"], 2, VOLUME),
+        (&["boxlite", "domain", "unbind", "demo"], 2, VOLUME),
         (&["boxlite", "completion", "bash"], 1, ALL_GLOBALS),
     ];
 

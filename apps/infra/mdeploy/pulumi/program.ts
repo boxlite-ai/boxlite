@@ -279,6 +279,7 @@ export const gcpProgram =
         proxyTemplateUrl: stackEnvironment.proxyTemplateUrl,
         internetEgress: true,
         senderDomain: stackEnvironment.senderDomain,
+        userDomain: stackEnvironment.userDomain,
         runnerBinary,
         runnerFleet: stackEnvironment.runnerFleet,
         apiEnvironment: stackEnvironment.apiEnvironment,

@@ -56,6 +56,7 @@ const inputs = (overrides: Partial<StackInputs> = {}): StackInputs => ({
   proxyTemplateUrl: 'http://box.dev.boxlite.ai',
   internetEgress: true,
   senderDomain: 'mail.dev.boxlite.ai',
+  userDomain: { domain: 'apps.example', dnsZoneId: 'user-zone' },
   runnerBinary: {
     tarballUrl: 'https://example.invalid/runner-v0.10.0.tar.gz',
     checksumUrl: 'https://example.invalid/runner-v0.10.0.tar.gz.sha256',
@@ -142,7 +143,13 @@ const bundle = ({
   clickhouse = true,
   registryCredentials = true,
   registryProxy = true,
-}: { clickhouse?: boolean; registryCredentials?: boolean; registryProxy?: boolean } = {}) => {
+  servesUserDomain = true,
+}: {
+  clickhouse?: boolean
+  registryCredentials?: boolean
+  registryProxy?: boolean
+  servesUserDomain?: boolean
+} = {}) => {
   const seen: Record<string, any> = {}
   const order: string[] = []
   const record = (name: string, value: any) => {
@@ -217,6 +224,7 @@ const bundle = ({
       }),
     edge: (input: any) => (request: any) =>
       record('edge', { input, request, url: out('https://box.dev.boxlite.ai'), metricTarget: out('net/proxy/1'), ready: ['edge'] }),
+    servesUserDomain: () => servesUserDomain,
     registryProxy: (input: any) => (request: any) =>
       record(
         'registryProxy',
@@ -307,6 +315,32 @@ test('the API is told the origin a client composes a box URL from', () => {
   const { providers, seen } = bundle()
   deployStack({ providers, config, inputs: inputs({ proxyTemplateUrl: 'https://box.dev.boxlite.ai' }) })
   assert.equal(read(seen.api.request.environment.PROXY_TEMPLATE_URL), 'https://box.dev.boxlite.ai')
+})
+
+test('the API, the proxy and the edge are told one user domain, or none at all', () => {
+  // The API mints `demo.<userDomain>` URLs, the proxy resolves them and the edge
+  // serves the wildcard in the domain's own zone: one answer from the stage, or
+  // every half stays silent so no URL is handed out that nothing answers.
+  const served = bundle()
+  deployStack({ providers: served.providers, config, inputs: inputs() })
+  assert.equal(read(served.seen.api.request.environment.PROXY_APP_DOMAIN), 'apps.example')
+  assert.equal(read(served.seen.edge.request.environment.PROXY_APP_DOMAIN), 'apps.example')
+  assert.deepEqual(served.seen.edge.request.userDomain, { domain: 'apps.example', dnsZoneId: 'user-zone' })
+
+  const unset = bundle()
+  deployStack({ providers: unset.providers, config, inputs: inputs({ userDomain: null }) })
+  assert.ok(!('PROXY_APP_DOMAIN' in unset.seen.api.request.environment))
+  assert.ok(!('PROXY_APP_DOMAIN' in unset.seen.edge.request.environment))
+  assert.equal(unset.seen.edge.request.userDomain, null)
+})
+
+test('a user domain on a cloud whose edge serves none is refused, not dropped', () => {
+  const { providers } = bundle({ servesUserDomain: false })
+  assert.throws(
+    () => deployStack({ providers, config, inputs: inputs() }),
+    /STACK_USER_DOMAIN is apps\.example, and this cloud's edge serves no user domain/,
+  )
+  deployStack({ providers, config, inputs: inputs({ userDomain: null }) })
 })
 
 test('a name the store delivers as an address and the stack also carries is refused', () => {

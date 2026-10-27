@@ -259,6 +259,25 @@ See [private tunnel usage](../../docs/concepts/networking.md#private-cloud-tunne
 This differs from `WithPort`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 
+## Domains
+
+On a hosted runtime the organization can route a name of its own
+(`demo.apps.example`) to a box port; see
+[Domains](../../docs/concepts/networking.md#domains).
+
+- `rt.Domains() (*Domains, error)` returns the handle; a local runtime returns
+  an `ErrUnsupported` error. Release it with `Close()`.
+- `domains.Bind(ctx, "demo", boxlite.DomainTarget{Type: boxlite.DomainTargetBox, Box: "web-a", Port: 3000}) (*Domain, error)`
+  claims the name if new, or moves it from another box port. `Box` takes an
+  id or name.
+- `domains.List(ctx) (*DomainList, error)` returns every held domain
+  (`Target` nil while unbound) and the allowance.
+- `domains.Unbind(ctx, "demo") error` stops routing it; the organization
+  keeps the name.
+
+Each call is one blocking request, like `Network.Tunnel`: `ctx` is checked
+before the request is sent, not while it is in flight.
+
 ## Guest SSH
 
 `box.SSH()` configures, observes, and disables the box's guest SSH listener.

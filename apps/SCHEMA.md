@@ -51,6 +51,7 @@ flowchart LR
         t_activity["box_last_activity"]
         t_migration["box_migration"]
         t_tunnel["tunnel"]
+        t_tunneldomain["tunnel_domain"]
         t_runner["runner"]
         t_region["region"]
         t_volume["volume"]
@@ -79,6 +80,7 @@ flowchart LR
     t_activity ==>|"boxId"| t_box
     t_migration ==>|"boxId"| t_box
     t_tunnel ==>|"box_id"| t_box
+    t_tunneldomain -.->|"box_id"| t_box
     t_imgver ==>|"imageId"| t_image
     t_imgtag ==>|"imageId"| t_image
     t_imgtag ==>|"versionId"| t_imgver
@@ -133,6 +135,7 @@ that no longer resolves.
 | `box_last_activity`                      | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
 | `box_migration`                          | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
 | `tunnel`                                 | `box_id`                     | `box.id`                       | foreign key | `CASCADE` |
+| `tunnel_domain`                          | `box_id`                     | `box.id`                       | foreign key | `SET NULL` |
 | `image_version`                          | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
 | `image_tag`                              | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
 | `image_tag`                              | `versionId`                  | `image_version.id`             | foreign key | `RESTRICT` |
@@ -202,6 +205,7 @@ state inline.
 | `suspensionReason` | `character varying` | nullable |
 | `suspensionCleanupGracePeriodHours` | `integer` | default `24` |
 | `image_count_limit` | `integer` | default `20`; catalog entries an organization may keep |
+| `domain_count_limit` | `integer` | default `1`; tunnel hostnames an organization may hold, bound or released |
 | `boxLimitedNetworkEgress` | `boolean` | default `false` |
 | `experimentalConfig` | `jsonb` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |
@@ -731,6 +735,38 @@ The migration creates no declarations for existing boxes. Existing preview and
 tunnel hostnames become reachable only after the owner prepares that port with
 `POST /api/v1/boxes/{boxId}/network/tunnel?port={port}`. Rows survive box
 stop/start and proxy restart; hard deletion of a box removes its rows.
+
+### `tunnel_domain`
+
+A hostname an organization holds, and the box port it currently routes to. The
+name belongs to the organization for as long as the row exists; the binding is
+`box_id` and `port`, and `box_id` alone says whether there is one. It names the
+port, not its tunnel: a name can be bound before the port is declared public,
+and several names can route to one port.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `hostname` | `character varying(253)` | the full lowercase hostname, such as `demo.apps.example` |
+| `kind` | `character varying` | `platform` (a subdomain of the app domain) or `custom` (reserved for owned domains) |
+| `organization_id` | `uuid` | holder; no FK, like `box.organization_id` |
+| `box_id` | `character varying(12)` | FK → `box.id`, `SET NULL` on hard deletion; null while the name is held but unbound |
+| `port` | `integer` | the target port, 1–65535; required when `box_id` is set, ignored when it is null |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+**Unique:** `hostname`, so one organization holds a name. **Index:**
+`(organization_id)`; `(box_id, port)`, not unique. **Check:** `port` is set
+whenever `box_id` is.
+
+Binding runs under `SELECT … FOR UPDATE` on the organization row, which is how
+the count of held names is held against `organization.domain_count_limit`; it
+does not touch `tunnel`. Binding a name held for another of the organization's
+ports moves `box_id` and `port` to the new one and leaves other names on that
+port alone. Unbinding (by name, `DELETE /api/v1/domains/{domain}/target`) and
+destroying the box each clear both and keep the row; deleting the box row
+outright clears `box_id` through the foreign key. Revoking the tunnel changes
+nothing here: the name answers 404 until the port is declared again. A released name still counts against the limit
+and can be bound again only by the organization that holds it.
 
 ### `box_last_activity`
 

@@ -20,6 +20,7 @@ if TYPE_CHECKING:
         RuntimeMetrics,
     )
     from ._box import SyncBox
+    from ._domains import SyncDomainHandle
     from ._images import SyncImageHandle
 
 logger = logging.getLogger("boxlite.sync_boxlite")
@@ -363,6 +364,14 @@ class SyncBoxlite:
         from ._images import SyncImageHandle
 
         return SyncImageHandle(self, self._boxlite.images)
+
+    @property
+    def domains(self) -> "SyncDomainHandle":
+        """Get the organization's domain handle (REST runtimes only)."""
+        self._require_started()
+        from ._domains import SyncDomainHandle
+
+        return SyncDomainHandle(self, self._boxlite.domains)
 
     def remove(self, id_or_name: str, force: bool = False) -> None:
         """

@@ -2,6 +2,7 @@
 
 mod advanced_options;
 mod box_handle;
+mod domains;
 mod exec;
 mod images;
 mod info;
@@ -20,6 +21,7 @@ use crate::advanced_options::{
     PyAdvancedBoxOptions, PyContainerCapabilities, PyHealthCheckOptions, PySecurityOptions,
 };
 use crate::box_handle::PyBox;
+use crate::domains::{PyDomain, PyDomainHandle, PyDomainList, PyDomainTarget};
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
 use crate::images::{
     PyImageAliasEvent, PyImageDetail, PyImageHandle, PyImageInfo, PyImagePullResult, PyImageUsage,
@@ -103,6 +105,10 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyApiKeyCredential>()?;
     m.add_class::<PyAccessToken>()?;
     m.add_class::<PySecret>()?;
+    m.add_class::<PyDomainTarget>()?;
+    m.add_class::<PyDomain>()?;
+    m.add_class::<PyDomainList>()?;
+    m.add_class::<PyDomainHandle>()?;
     m.add_class::<PySshAccount>()?;
     m.add_class::<PySshCaConfig>()?;
     m.add_class::<PySshConfig>()?;

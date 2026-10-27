@@ -47,6 +47,29 @@ const (
 )
 
 func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, error) {
+	targetPath := requestEscapedPath(ctx.Request.URL, ctx.Param("path"))
+
+	// A platform subdomain carries no port or box in its name: the API says
+	// which port it routes to, and its answer already applies the tunnel,
+	// inbound and box-state checks below. Nothing here signs a user in.
+	if hostname, ok := p.appDomainHost(ctx.Request.Host); ok {
+		boxId, targetPort, err := p.resolveAppDomain(ctx.Request.Context(), hostname)
+		if errors.Is(err, errAppDomainNotFound) {
+			ctx.Error(common_errors.NewNotFoundError(err))
+			return nil, err
+		}
+		if err != nil {
+			ctx.Error(common_errors.NewCustomError(http.StatusBadGateway, err.Error(), "BAD_GATEWAY"))
+			return nil, err
+		}
+		// Named domains admit only public tunnels. Strip the same platform
+		// credentials as the generated public URL before reaching the guest.
+		ctx.Request.Header.Del(platformAuthorizationHeader)
+		ctx.Request.Header.Del(accessTokenHeader)
+		stripPlatformCookies(ctx.Request)
+		return p.forwardToGuest(ctx, boxId, targetPort, targetPath)
+	}
+
 	// Extract port and box ID from the host header.
 	// Expected format: 1234-<boxId>.proxy.domain
 	targetPort, boxId, _, err := p.parseHost(ctx.Request.Host)
@@ -54,7 +77,6 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 		ctx.Error(common_errors.NewBadRequestError(err))
 		return nil, err
 	}
-	targetPath := requestEscapedPath(ctx.Request.URL, ctx.Param("path"))
 
 	if boxId == "" {
 		ctx.Error(common_errors.NewBadRequestError(errors.New("box ID is required")))
@@ -90,7 +112,13 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 		ctx.Error(common_errors.NewCustomError(authErr.status, authErr.message, "TUNNEL_ACCESS_DENIED"))
 		return nil, authErr
 	}
+	return p.forwardToGuest(ctx, boxId, targetPort, targetPath)
+}
 
+// forwardToGuest is the tail every admitted request shares, whichever
+// hostname shape admitted it: trace stamp, activity renewal, forwarded
+// headers, and the routing key the guest transport dials.
+func (p *Proxy) forwardToGuest(ctx *gin.Context, boxId string, targetPort uint16, targetPath string) (*common_proxy.RequestTarget, error) {
 	// Stamp the API's span vocabulary (boxlite.* — see the API's
 	// ObservabilityContextInterceptor) so one key filters a box across
 	// services. Only box_id is stampable here: every proxy auth path is

@@ -481,6 +481,7 @@ Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.network`.
 | Tunnel | `await box.network.tunnel(target, options=None) -> BoxTunnel` | Prepare a tunnel; `target` is a socket address tuple `(ip, port)` (loopback or the guest IP), `options` is `TunnelOptions(is_public=False)` for a private cloud tunnel, public by default |
 | Token | `tunnel.token() -> str \| None` | Full on creation, masked on later preparations; `is_public()` reports the mode |
 | Revoke | `await box.network.revoke_tunnel(port) -> None` | Withdraw the port's tunnel; open connections stay open |
+| Domains | `runtime.domains -> DomainHandle` | `await handle.list() -> DomainList` (held domains, `target` None while unbound, with `limit`, `used`, `remaining`, `min_length`); `await handle.bind(domain, DomainTarget(type="box", box=..., port=...)) -> Domain` routes a name to a box port, claiming or moving it; `await handle.unbind(domain)` stops routing it and keeps it for the organization. The sync API's `SyncBoxlite.domains` mirrors it. Hosted runtimes only; see [Domains](../../concepts/networking.md#domains) |
 | Forward | `await tunnel.forward(listen) -> TunnelForwarder` | Bind one local listener and forward every client |
 | Inspect | `tunnel.uri() -> str \| None` | Read the prepared public URL; `None` for a local box |
 | Connect | `await tunnel.connect() -> BoxConnection` | Consume the prepared tunnel into its byte stream |

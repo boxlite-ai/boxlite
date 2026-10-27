@@ -43,7 +43,10 @@ pub use litebox::{
     TunnelOptions,
 };
 pub use portal::GuestSession;
-pub use runtime::{AuthHandle, BoxliteRuntime, ImageHandle, Principal};
+pub use runtime::{
+    AuthHandle, BoxliteRuntime, Domain, DomainHandle, DomainList, DomainTarget, ImageHandle,
+    Principal,
+};
 
 pub use boxlite_shared::BoxByteStream;
 pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};

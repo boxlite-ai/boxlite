@@ -151,6 +151,16 @@ export class Organization {
   })
   imageCountLimit: number
 
+  // How many tunnel hostnames this organization may hold, platform subdomains
+  // and later custom domains together. A held name counts whether or not it
+  // is bound to a tunnel: unbinding keeps the name for the organization.
+  @Column({
+    type: 'int',
+    default: 1,
+    name: 'domain_count_limit',
+  })
+  domainCountLimit: number
+
   @Column({
     default: false,
   })

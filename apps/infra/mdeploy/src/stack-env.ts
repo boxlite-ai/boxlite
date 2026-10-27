@@ -24,6 +24,7 @@ import { apiEnvironmentFrom } from './api-environment.ts'
 import { clickHouseRetentionHours } from '../../shared/clickhouse-retention.ts'
 import { OTEL_GROUP, PROXY_GROUP, RUNNER_GROUP, serviceSecretsFrom, splitServiceChannels, type GroupDeclaration } from './env.ts'
 import type { RunnerSlot } from '../stack/runners.ts'
+import type { UserDomain } from '../stack/hosts.ts'
 import { runnerNameFor } from '../stack/runners.ts'
 import type { Cloud } from 'mstage/config'
 import { IMAGE_TAG } from 'mbuild/address'
@@ -43,6 +44,41 @@ const required = (environment: NodeJS.ProcessEnv, key: string, why: string): str
 }
 
 const optional = (environment: NodeJS.ProcessEnv, key: string): string | null => environment[key]?.trim() || null
+
+/**
+ * The last two labels, which is the registrable domain under every suffix this
+ * platform registers in (`.ai`, `.page`, `.site`, ...). A two-label public
+ * suffix such as `co.uk` would compare stricter than browsers do; no stage uses
+ * one, and refusing is the safe direction.
+ */
+const registrableDomainOf = (domain: string): string => domain.split('.').slice(-2).join('.')
+
+/**
+ * `STACK_USER_DOMAIN`: users' named apps are served at `<name>.<domain>`, or
+ * nowhere when it is unset — there is no fallback under the stage's own domain.
+ *
+ * A separate registrable domain is the point. Under `STACK_DOMAIN` a user's page
+ * is same-site with the dashboard, can set cookies the dashboard receives, and a
+ * blocklist that flags one user's app takes the platform's domain with it. So a
+ * value under the same registrable domain as `STACK_DOMAIN` is refused rather
+ * than served — a sibling like `apps.boxlite.ai` beside `dev.boxlite.ai` too.
+ * It is a different domain, so its records go into its own Cloudflare zone.
+ */
+export const userDomainFrom = (environment: NodeJS.ProcessEnv): UserDomain | null => {
+  const domain = optional(environment, 'STACK_USER_DOMAIN')?.toLowerCase()
+  if (!domain) return null
+  const stackDomain = optional(environment, 'STACK_DOMAIN')?.toLowerCase()
+  if (stackDomain !== undefined && registrableDomainOf(domain) === registrableDomainOf(stackDomain)) {
+    throw new StackEnvError(
+      `STACK_USER_DOMAIN ${domain} shares ${registrableDomainOf(domain)} with STACK_DOMAIN ${stackDomain}; ` +
+        "users' apps need a registrable domain of their own",
+    )
+  }
+  return {
+    domain,
+    dnsZoneId: required(environment, 'CLOUDFLARE_USER_ZONE_ID', `the records for *.${domain} go into the zone that holds it`),
+  }
+}
 
 /** At most this many hosts in one fleet, which is `runner/model/inventory.ts`'s own bound. */
 const MAX_RUNNERS = 100
@@ -167,6 +203,8 @@ export type StackEnvironment = {
   proxyTemplateUrl: string
   /** The verified sender domain, or null for a stage that sends no mail. */
   senderDomain: string | null
+  /** Where users' named apps are served, or null for a stage that offers none. See `userDomainFrom`. */
+  userDomain: UserDomain | null
   runnerFleet: RunnerSlot[]
   /** A ClickHouse someone else operates, for a stage that runs none of its own. */
   managedClickHouse: { url: string; writerSecretArn: string; readerSecretArn: string } | null
@@ -311,6 +349,7 @@ export const readStackEnvironment = ({
     // `stack/mail.ts`. An empty string is the same answer, spelled by a store
     // that holds the key with nothing in it.
     senderDomain: optional(environment, 'MAIL_DOMAIN'),
+    userDomain: userDomainFrom(environment),
     runnerFleet: fleetFrom({ environment, app, stage }),
     managedClickHouse: managedClickHouseFrom(environment),
     clickHouseRetentionHours:

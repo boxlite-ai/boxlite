@@ -88,9 +88,12 @@ func (p *Proxy) browserWarningMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Skip warning for the acceptance endpoint itself or auth callbacks
+		// Skip warning for the proxy's own health and auth callback routes,
+		// which answer on a Host that names no box. Under a platform
+		// subdomain those paths are the user's service, warned like any other.
+		_, isAppDomain := p.appDomainHost(ctx.Request.Host)
 		_, _, _, err := p.parseHost(ctx.Request.Host)
-		if err != nil {
+		if err != nil && !isAppDomain {
 			switch ctx.Request.Method {
 			case "GET":
 				switch ctx.Request.URL.Path {
