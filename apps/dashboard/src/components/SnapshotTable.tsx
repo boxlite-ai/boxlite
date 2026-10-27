@@ -9,6 +9,7 @@ import { Link, generatePath } from 'react-router-dom'
 import { RoutePath } from '@/enums/RoutePath'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { formatBytes, timeAgo } from '@/lib/format'
+import { SnapshotGlyph } from './SnapshotGlyph'
 import { Database, Plus, Trash } from './ui/icon'
 import { Button } from './ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table'
@@ -90,8 +91,11 @@ export function SnapshotTable({
                 key={snapshot.id}
                 className="border-border/60 bg-transparent hover:bg-transparent [&_td]:whitespace-nowrap"
               >
-                <TableCell className="max-w-[220px] truncate font-mono text-[13px] font-medium" title={snapshot.id}>
-                  {snapshot.name}
+                <TableCell className="max-w-[220px] font-mono text-[13px] font-medium" title={snapshot.id}>
+                  <span className="flex min-w-0 items-center gap-3">
+                    <SnapshotGlyph state={snapshot.status} size={28} className="text-muted-foreground" />
+                    <span className="truncate">{snapshot.name}</span>
+                  </span>
                 </TableCell>
                 <TableCell
                   className="max-w-[240px] truncate font-mono text-xs"
