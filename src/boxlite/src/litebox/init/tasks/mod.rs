@@ -61,6 +61,7 @@ pub use container_rootfs::ContainerRootfsTask;
 pub(crate) use container_rootfs::restart_image_config;
 pub use filesystem::FilesystemTask;
 pub use guest_connect::GuestConnectTask;
+pub(crate) use guest_connect::read_tail;
 pub use guest_init::GuestInitTask;
 pub use guest_rootfs::GuestRootfsTask;
 pub use port_publish::PortPublishTask;

@@ -416,7 +416,15 @@ impl ExecutionState {
         let (tx, rx) = mpsc::channel(100);
         let execution_id = exec_id.to_owned();
         let task = tokio::spawn(async move {
-            while let Some(message) = output.next().await {
+            loop {
+                // End as soon as the consumer goes away, not at the next
+                // output: the stream holds the attach lease, and a quiet
+                // execution would keep it from every later attach.
+                let message = tokio::select! {
+                    _ = tx.closed() => break,
+                    message = output.next() => message,
+                };
+                let Some(message) = message else { break };
                 if tx.send(message).await.is_err() {
                     break;
                 }
@@ -1018,6 +1026,30 @@ mod release_tests {
         assert_eq!(diagnoses.load(Ordering::SeqCst), 1);
 
         drop((stdin_peer, stdout_peer, stderr_peer));
+    }
+
+    /// A consumer that goes away (its connection reset by a checkpoint
+    /// resume, say) must free the output for the next attach even while the
+    /// execution prints nothing.
+    #[tokio::test]
+    async fn dropped_attach_of_a_quiet_execution_releases_the_output() {
+        let (state, _tracked_fds, peers) = state_with_tracked_handle();
+
+        let first = state.attach("quiet-exec").await.unwrap();
+        drop(first);
+
+        let second = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                match state.attach("quiet-exec").await {
+                    Ok(receiver) => break receiver,
+                    Err(ExecutionError::AlreadyAttached) => tokio::task::yield_now().await,
+                    Err(error) => panic!("reattach must not fail: {error:?}"),
+                }
+            }
+        })
+        .await
+        .expect("a dropped consumer must release the output without new output");
+        drop((second, peers));
     }
 
     #[tokio::test]

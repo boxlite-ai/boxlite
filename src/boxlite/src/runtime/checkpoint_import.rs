@@ -20,7 +20,7 @@ use crate::litebox::LiteBox;
 use crate::litebox::checkpoint::archive::{self, Manifest};
 use crate::litebox::checkpoint::{RestoredDisk, RestoredStorage};
 use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
-use crate::litebox::init::{checkpoint_import_spec, spawn_vm};
+use crate::litebox::init::{checkpoint_import_spec, read_tail, spawn_vm};
 use crate::lock::LockId;
 use crate::runtime::constants::mount_tags;
 use crate::runtime::id::{BoxID, BoxIDMint};
@@ -37,6 +37,8 @@ use crate::vmm::{ExitInfo, InstanceSpec, VmmKind};
 /// read in full, so this is generous; a shim that dies ends the wait at once.
 const IMPORT_START_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const STATE_POLL: Duration = Duration::from_millis(100);
+/// How much of a dead import shim's stderr the operator log keeps.
+const SHIM_STDERR_TAIL: u64 = 16 * 1024;
 /// How long a failed attempt waits for its shim to be gone before it
 /// removes anything.
 const SHIM_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -254,6 +256,11 @@ async fn wait_paused(
     let deadline = Instant::now() + IMPORT_START_TIMEOUT;
     loop {
         if !crate::util::is_process_alive(pid) {
+            // A failed import removes the box directory and the shim's stderr
+            // with it, so its tail (libkrun's reason) goes to the operator log.
+            if let Some(tail) = read_tail(&layout.stderr_file_path(), SHIM_STDERR_TAIL) {
+                tracing::error!("checkpoint import shim stderr (tail):\n{tail}");
+            }
             let why = ExitInfo::from_file(&layout.exit_file_path())
                 .map(|info| format!(": {info:?}"))
                 .unwrap_or_default();

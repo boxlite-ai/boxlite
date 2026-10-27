@@ -12,6 +12,8 @@
 //! Run with `make test:checkpoint:acceptance`, which builds the guest helper
 //! (`tests/fixtures/checkpoint_helper.c`) and requires `/dev/kvm`, a runtime
 //! built by `make runtime:debug` and registry access for `alpine:latest`.
+//! Tracing follows `RUST_LOG`; when `BOXLITE_CHECKPOINT_LOGS` names an
+//! absolute directory, each box's logs are copied there before its home goes.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 mod common;
@@ -28,8 +30,13 @@ use boxlite::{
 };
 use boxlite_test_utils::home::{PerTestBoxHome, live_shim_pids};
 use futures::StreamExt;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::writer::TestWriter;
 
 const HELPER_ENV: &str = "BOXLITE_CHECKPOINT_HELPER";
+const LOGS_ENV: &str = "BOXLITE_CHECKPOINT_LOGS";
+/// Diagnostics a box leaves in its directory; disks, memory and keys are not.
+const BOX_LOG_FILES: [&str; 4] = ["logs", "exit", "exit.previous", "shim.stderr"];
 const HELPER_GUEST: &str = "/usr/local/bin/checkpoint_helper";
 const DISK_DIR: &str = "/root/checkpoint";
 const SHARE_GUEST: &str = "/mnt/share";
@@ -254,6 +261,74 @@ fn cut_counter(share: &Path) -> u64 {
     u64::from_le_bytes(watermark)
 }
 
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(false)
+        .with_writer(TestWriter::with_stderr)
+        .try_init();
+}
+
+/// Copies every box's logs out of one home when dropped, so a failed start
+/// still leaves its shim log, console, exit record and stderr behind after
+/// the temporary home is deleted. Declare it after its home: on a panic it
+/// then drops first. Copy errors are printed and never change the verdict.
+struct BoxLogs {
+    boxes: PathBuf,
+    dest: Option<PathBuf>,
+}
+
+impl BoxLogs {
+    fn new(home: &Path, label: &str) -> Self {
+        let dest = std::env::var_os(LOGS_ENV).map(|dir| {
+            let dir = PathBuf::from(dir);
+            assert!(dir.is_absolute(), "{LOGS_ENV} must be absolute");
+            dir.join(label)
+        });
+        Self {
+            boxes: home.join("boxes"),
+            dest,
+        }
+    }
+}
+
+impl Drop for BoxLogs {
+    fn drop(&mut self) {
+        let Some(dest) = &self.dest else { return };
+        let Ok(boxes) = std::fs::read_dir(&self.boxes) else {
+            return;
+        };
+        for entry in boxes.flatten() {
+            for name in BOX_LOG_FILES {
+                let to = dest.join(entry.file_name()).join(name);
+                if let Err(e) = copy_tree(&entry.path().join(name), &to) {
+                    eprintln!("saving {}: {e}", to.display());
+                }
+            }
+        }
+    }
+}
+
+/// Copies regular files and directories; a missing source is not an error.
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    let metadata = match std::fs::symlink_metadata(from) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        metadata => metadata?,
+    };
+    if metadata.is_dir() {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+        }
+    } else if metadata.is_file() {
+        std::fs::create_dir_all(to.parent().expect("log destination parent"))?;
+        std::fs::copy(from, to)?;
+    }
+    Ok(())
+}
+
 fn assert_absent(path: &Path) {
     assert!(!path.exists(), "{} still exists", path.display());
 }
@@ -261,12 +336,14 @@ fn assert_absent(path: &Path) {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "real KVM acceptance; run with `make test:checkpoint:acceptance`"]
 async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
+    init_tracing();
     require_kvm();
     let helper = helper_binary();
 
     // ── Source: its own home and image cache, nothing linked from outside ──
     let source_home = PerTestBoxHome::isolated();
     let source_home_path = source_home.path.clone();
+    let source_logs = BoxLogs::new(&source_home_path, "source");
     let share = tempfile::tempdir().expect("share dir");
     let share_path = share.path().to_path_buf();
     let checkpoint_dir = tempfile::tempdir().expect("checkpoint dir");
@@ -434,6 +511,7 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
     drop(source_attach);
     drop(workload);
     source.stop().await.expect("stop source");
+    drop(source_logs);
     source_rt
         .remove(source_id.as_str(), true)
         .await
@@ -456,6 +534,7 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
 
     // ── Import into a fresh, empty runtime: paused until resumed ──
     let target_home = PerTestBoxHome::isolated();
+    let target_logs = BoxLogs::new(&target_home.path, "restored");
     let target_rt = BoxliteRuntime::new(BoxliteOptions {
         home_dir: target_home.path.clone(),
         ..Default::default()
@@ -565,6 +644,7 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
     );
 
     restored.stop().await.expect("stop restored");
+    drop(target_logs);
     target_rt
         .remove(restored.id().as_str(), true)
         .await

@@ -1,0 +1,130 @@
+name: Checkpoint KVM acceptance
+
+# Real-KVM evidence for portable checkpoints on a GitHub-hosted x86_64 runner.
+# See docs/guides/checkpoints.md#run-kvm-acceptance-in-a-fork.
+on:
+  push:
+    branches: [lfld287/memory-snapshot]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checkpoint-kvm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checkpoint:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUST_BACKTRACE: '1'
+      LIBKRUN: src/deps/libkrun-sys/vendor/libkrun
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Require KVM and record host
+        run: |
+          mkdir -p acceptance-logs
+          {
+            git rev-parse HEAD
+            uname -a
+            lscpu
+            df -h .
+            test -c /dev/kvm
+            sudo chmod a+rw /dev/kvm
+            make _ensure-kvm
+          } 2>&1 | tee acceptance-logs/host.log
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: 'false'
+      - uses: ./.github/actions/sccache
+      - uses: taiki-e/install-action@nextest
+
+      - name: Install build dependencies and pinned submodules
+        run: |
+          make setup:build 2>&1 | tee acceptance-logs/setup.log
+          git submodule status | tee acceptance-logs/submodules.log
+          test "$(git -C "$LIBKRUN" rev-parse HEAD)" = 96c0ca3ce15e71eda59c64555dbfad4297d664e9
+
+      - name: Build real runtime and acceptance executable
+        id: build
+        run: |
+          test -z "${BOXLITE_DEPS_STUB:-}"
+          make runtime:debug 2>&1 | tee acceptance-logs/runtime-build.log
+          make test:checkpoint:acceptance:build 2>&1 | tee acceptance-logs/test-build.log
+
+      # Every test step below runs after a successful build even when an
+      # earlier one failed, so one run reports each defect.
+      - name: Guest agent unit tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: make test:unit:guest 2>&1 | tee acceptance-logs/guest-unit.log
+
+      # The pinned libkrun fixes' own tests (CPUID compatibility, MP table).
+      # Each filter names one test, none needing KVM or libkrunfw; every test
+      # runs and reports even after another fails. libkrun is not built with
+      # the -D warnings setup-rust sets.
+      - name: libkrun tests for the pinned fixes
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          RUSTFLAGS: ''
+        run: |
+          cargo fetch --manifest-path "$LIBKRUN/Cargo.toml"
+          {
+            rc=0
+            for test in \
+              snapshot_boot_mp_table_describes_every_announced_gsi \
+              compatibility_accepts_only_vmm_synthesized_leaf_1_bits_absent_from_the_target \
+              target_compatibility_ignores_the_calling_cpus_apic_ids_only; do
+              make -C "$LIBKRUN" snapshot-test SNAPSHOT_FILTER="$test" || rc=$?
+            done
+            exit "$rc"
+          } 2>&1 | tee acceptance-logs/libkrun-fixes.log
+
+      # libkrun's share archive export and import as this unprivileged user,
+      # under the bwrap the runtime built and embeds, and the production x86_64
+      # VMM seccomp filter. The checkpoint box above is networked, so the shim
+      # does not install that filter there.
+      - name: Rootless archive tests under seccomp
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        env:
+          RUSTFLAGS: ''
+        run: |
+          cargo fetch --manifest-path scripts/test/seccomp-bpf/Cargo.toml
+          bwrap="$(find "$PWD/target" -path '*/bubblewrap-build/bwrap' -type f -print -quit)"
+          test -x "$bwrap"
+          BOXLITE_TEST_BWRAP="$bwrap" make test:snapshot:rootless 2>&1 | tee acceptance-logs/snapshot-rootless.log
+
+      - name: Verify checkpoint continues the guest process
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 15
+        env:
+          # libkrun's env_logger reads RUST_LOG itself, so name its `krun*`
+          # crates too; plain `debug` would log registry tokens.
+          RUST_LOG: boxlite=debug,krun=debug
+          BOXLITE_CHECKPOINT_LOGS: ${{ github.workspace }}/acceptance-logs/boxes
+        run: |
+          make test:checkpoint:acceptance SETUP_DONE=1 2>&1 | tee acceptance-logs/acceptance.log
+
+      - name: Save host kernel log
+        if: always()
+        run: |
+          sudo dmesg > acceptance-logs/dmesg.log
+          test -s acceptance-logs/dmesg.log
+
+      - name: Save acceptance logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoint-kvm-logs-${{ github.run_attempt }}
+          path: acceptance-logs/
+          retention-days: 7

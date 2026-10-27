@@ -68,7 +68,7 @@ use tasks::{
     BootAssetsTask, ContainerRootfsTask, FilesystemTask, GuestConnectTask, GuestInitTask,
     GuestRootfsTask, InitCtx, VmmAttachTask, VmmSpawnTask,
 };
-pub(crate) use tasks::{checkpoint_import_spec, restart_image_config, spawn_vm};
+pub(crate) use tasks::{checkpoint_import_spec, read_tail, restart_image_config, spawn_vm};
 use types::InitPipelineContext;
 
 // ============================================================================
