@@ -33,18 +33,46 @@ import { RequiredOrganizationResourcePermissions } from '../organization/decorat
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
-import { BoxService } from '../box/services/box.service'
+import { BoxService, ProxyAdmission } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
-import {
-  AUTO_RESUMABLE_STATES,
-  BoxAutoResumeService,
-} from '../box/services/box-auto-resume.service'
+import { AUTO_RESUMABLE_STATES, BoxAutoResumeService } from '../box/services/box-auto-resume.service'
 import { BoxState } from '../box/enums/box-state.enum'
+import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
+import { Box } from '../box/entities/box.entity'
 import { TunnelService } from '../box/services/tunnel.service'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
 const OBSERVATION_ONLY: ProxyActivityPolicy = { activity: false, autoResume: false }
+
+// SSH configure may wake a box only the way auto-resume would, and only onto
+// the image's default command: a box with an explicit cmd/entrypoint must be
+// started first, as the SDKs require (openapi `configureSsh`). Joining a start
+// already in flight is fine; submitting one is not.
+function refuseImplicitSshStart(box: Box, boxId: string): void {
+  if (box.state === BoxState.STARTED && box.desiredState === BoxDesiredState.STARTED) {
+    return
+  }
+  if (!box.autoResume) {
+    throw new ConflictException(`Box ${boxId} is not running and auto-resume is disabled; start it first`)
+  }
+  if (box.state !== BoxState.STARTED && !AUTO_RESUMABLE_STATES.includes(box.state)) {
+    throw new ConflictException(`Box ${boxId} is not running (state: ${box.state})`)
+  }
+  const submitsStart =
+    box.state === BoxState.STOPPED || box.state === BoxState.STOPPING || box.desiredState === BoxDesiredState.STOPPED
+  if (submitsStart && (box.cmd?.length || box.entrypoint?.length)) {
+    throw new ConflictException(`Box ${boxId} has an explicit cmd or entrypoint; start it before configuring SSH`)
+  }
+}
+
+// SSH status and disable never start a box. The runner answers a stopped box's
+// disabled status itself; a box between states has no answer to give yet.
+function requireSshObservable(box: Box, boxId: string): void {
+  if (box.state !== BoxState.STARTED && box.state !== BoxState.STOPPED) {
+    throw new ConflictException(`Box ${boxId} is ${box.state}; SSH can be read once it is started or stopped`)
+  }
+}
 
 // Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product
 // spec: @All() expands to the SEARCH verb, which OpenAPI 3.0 cannot express.
@@ -213,6 +241,70 @@ export class BoxliteProxyController {
     )
   }
 
+  // The runner applies the configuration once; nothing on either hop retries
+  // it, because every accepted call restarts the guest listener.
+  @Post(':boxId/ssh')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  async configureSsh(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/ssh`,
+      req,
+      res,
+      next,
+      USER_OPERATION,
+      { admit: refuseImplicitSshStart },
+    )
+  }
+
+  @Get(':boxId/ssh')
+  async getSshStatus(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/ssh`,
+      req,
+      res,
+      next,
+      OBSERVATION_ONLY,
+      { admit: requireSshObservable },
+    )
+  }
+
+  @Delete(':boxId/ssh')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  async disableSsh(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/ssh`,
+      req,
+      res,
+      next,
+      OBSERVATION_ONLY,
+      { admit: requireSshObservable },
+    )
+  }
+
   @Post(':boxId/network/tunnel')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.OK)
@@ -245,10 +337,7 @@ export class BoxliteProxyController {
     // Refuse at once a box the CONNECT could never wake. A box it can wake
     // gets its URI as it is: the proxy wakes it on the CONNECT, and waits for
     // the service to listen, so waking it here would only hold the caller.
-    if (
-      box.state !== BoxState.STARTED &&
-      (!box.autoResume || !AUTO_RESUMABLE_STATES.includes(box.state))
-    ) {
+    if (box.state !== BoxState.STARTED && (!box.autoResume || !AUTO_RESUMABLE_STATES.includes(box.state))) {
       throw new ConflictException(`Box ${boxId} is not running (state: ${box.state})`)
     }
 
@@ -279,7 +368,9 @@ export class BoxliteProxyController {
     res: Response,
     next: NextFunction,
     policy: ProxyActivityPolicy,
-    opts?: { ws?: boolean; proxyTimeoutMs?: number },
+    // admit throws to refuse the request after activity is recorded and before
+    // any resume.
+    opts?: { ws?: boolean; proxyTimeoutMs?: number; admit?: ProxyAdmission },
   ) {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     if (!box) {
@@ -312,8 +403,10 @@ export class BoxliteProxyController {
       res.once('error', stop)
     }
 
+    opts?.admit?.(box, boxId)
+
     if (policy.autoResume && box.autoResume) {
-      await this.autoResume.ensureReady(box.id, authContext.organization)
+      await this.autoResume.ensureReady(box.id, authContext.organization, opts?.admit)
     }
 
     const runner = await this.runnerService.findOne(box.runnerId)

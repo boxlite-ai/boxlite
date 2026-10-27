@@ -110,6 +110,8 @@ export type BoxCreationOptions = {
   maxCreatedBoxes?: number
 }
 
+export type ProxyAdmission = (box: Box, boxId: string) => void
+
 @Injectable()
 export class BoxService {
   private readonly logger = new Logger(BoxService.name)
@@ -925,9 +927,12 @@ export class BoxService {
    * states are returned unchanged so the caller can wait and retry. Unexpected
    * database errors propagate; AutoResume must never proxy before readiness.
    */
-  async ensureStartedForProxy(boxIdOrName: string, organization: Organization): Promise<Box> {
+  async ensureStartedForProxy(boxIdOrName: string, organization: Organization, admit?: ProxyAdmission): Promise<Box> {
     this.organizationService.assertOrganizationIsNotSuspended(organization)
     const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
+
+    // Check the freshly read state inside the caller's lifecycle lock.
+    admit?.(box, boxIdOrName)
 
     if (box.state !== BoxState.STOPPED || box.desiredState !== BoxDesiredState.STOPPED || box.pending) {
       return box

@@ -47,8 +47,11 @@ const EXPECTED: Record<string, OrganizationResourcePermission[] | null> = {
   proxyFiles: [WRITE_BOXES],
   proxyNetworkTunnel: [WRITE_BOXES],
   revokeNetworkTunnel: [WRITE_BOXES],
+  configureSsh: [WRITE_BOXES],
+  disableSsh: [WRITE_BOXES],
   proxyExecStatus: null,
   proxyMetrics: null,
+  getSshStatus: null,
 }
 
 type Controller = { new (...args: never[]): unknown; name: string }

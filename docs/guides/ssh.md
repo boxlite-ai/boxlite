@@ -2,7 +2,8 @@
 
 SSH starts disabled. The Rust runtime exposes `LiteBox::ssh()` to configure,
 query, or disable it, for local boxes and for REST-backed boxes served by
-`boxlite serve` ([HTTP control](#http-control-with-boxlite-serve)). Only
+`boxlite serve` ([HTTP control](#http-control-with-boxlite-serve)) or the
+[hosted cloud API](#hosted-cloud-api). Only
 `configure()` follows the implicit-start policy of exec, metrics, and file
 copying. A `Configured` or `Stopped` box using the image's default command can
 start implicitly. If `BoxOptions.cmd` or `entrypoint` explicitly sets the main
@@ -124,6 +125,43 @@ curl -fsS -X POST "$BOXLITE_URL/v1/boxes/$BOX_ID/ssh" \
   -H 'Content-Type: application/json' \
   --data-binary @ssh-config.json
 ```
+
+## Hosted cloud API
+
+The hosted API serves the same three operations at `/v1/boxes/{box_id}/ssh` and
+`/v1/{prefix}/boxes/{box_id}/ssh`, by box ID or name, within the caller's
+organization. The API checks policy and lifecycle; the box's runner validates the
+body and calls the guest once.
+
+| Method   | Permission    | Activity | Lifecycle |
+|----------|---------------|----------|-----------|
+| `POST`   | `write:boxes` | Counts after authorization and box lookup, including lifecycle refusals | Running box: configured. `stopped` box: auto-resumed on its default command. `409` when the box is not ready and `auto_resume=false`, when it must start a box with an explicit `cmd`/`entrypoint`, or when it cannot resume (`error`, `archived`, …). |
+| `GET`    | membership    | None      | `started` or `stopped` only; a stopped box reports disabled status with generation `0`. Other states answer `409`. |
+| `DELETE` | `write:boxes` | None      | Same as `GET`; idempotent. |
+
+A box already starting (`creating`, `starting`, `restoring`) is waited for, even
+with an explicit command, because configure joins that start instead of submitting
+one. The API waits for readiness before forwarding configure; the runner also
+checks that the box is running and otherwise returns `409 invalid_state`.
+Before submitting a start, the API rechecks the SSH startup restrictions against
+the current box state under its lifecycle lock.
+
+Errors follow the [HTTP control](#http-control-with-boxlite-serve) rules, with two
+differences:
+
+- The API parses JSON before proxying. Malformed JSON returns `400` `Invalid JSON in
+  request body`. Repeated keys collapse to their last value before the runner sees
+  them; case-variant and unknown fields, and `null` values where the schema
+  requires a string or array, are still rejected. The optional `ca` may be `null`.
+- Lifecycle refusals from the API are a plain `409` with a message naming the
+  reason; SDKs read them, like the runner's `409 invalid_state`, as `InvalidState`.
+
+SSH lives in guest memory, so every stop, restart, or auto-stop disables it.
+Reconfigure after the box runs again, then reconnect: `boxlite ssh forward` fails
+on a disabled listener, and `configure-and-forward` does both. Forwarding uses the
+box's [public tunnel](#cli), which needs inbound access enabled on the box. Ending
+the local `boxlite ssh forward` leaves that tunnel open; revoke it with `boxlite
+network tunnel BOX PORT --revoke`.
 
 ## Guest protocol and lifecycle
 The internal host-only `boxlite.v1.Ssh` gRPC service remains available on

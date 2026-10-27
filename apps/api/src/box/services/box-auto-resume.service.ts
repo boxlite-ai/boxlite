@@ -4,7 +4,7 @@
  */
 
 import { Injectable, RequestTimeoutException } from '@nestjs/common'
-import { BoxService } from './box.service'
+import { BoxService, ProxyAdmission } from './box.service'
 import { BoxStateWaiterService } from './box-state-waiter.service'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
@@ -38,15 +38,15 @@ export class BoxAutoResumeService {
   ) {}
 
   /** Submit or join Start and return only after the Box is actually STARTED. */
-  async ensureReady(boxId: string, organization: Organization): Promise<void> {
-    let box = await this.submitOrJoinStart(boxId, organization)
+  async ensureReady(boxId: string, organization: Organization, admit?: ProxyAdmission): Promise<void> {
+    let box = await this.submitOrJoinStart(boxId, organization, admit)
 
     const stopping =
       box.state === BoxState.STOPPING ||
       (box.state === BoxState.STARTED && box.desiredState === BoxDesiredState.STOPPED)
     if (stopping) {
       await this.boxStateWaiter.waitForStopped(box.id, organization.id, AUTO_RESUME_TIMEOUT_SECONDS)
-      box = await this.submitOrJoinStart(box.id, organization)
+      box = await this.submitOrJoinStart(box.id, organization, admit)
     }
 
     if (box.state !== BoxState.STARTED) {
@@ -54,7 +54,7 @@ export class BoxAutoResumeService {
     }
   }
 
-  private async submitOrJoinStart(boxId: string, organization: Organization): Promise<Box> {
+  private async submitOrJoinStart(boxId: string, organization: Organization, admit?: ProxyAdmission): Promise<Box> {
     const lockKey = getStateChangeLockKey(boxId)
     const deadline = Date.now() + AUTO_RESUME_TIMEOUT_SECONDS * 1000
     while (!(await this.redisLockProvider.lock(lockKey, AUTO_RESUME_TIMEOUT_SECONDS))) {
@@ -65,7 +65,7 @@ export class BoxAutoResumeService {
     }
 
     try {
-      return await this.boxService.ensureStartedForProxy(boxId, organization)
+      return await this.boxService.ensureStartedForProxy(boxId, organization, admit)
     } finally {
       await this.redisLockProvider.unlock(lockKey)
     }

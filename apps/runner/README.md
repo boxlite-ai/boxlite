@@ -460,6 +460,30 @@ durations, and network counters. All values come from
 The Prometheus endpoint is the standard `promhttp.Handler()` and exposes
 the counters maintained in `pkg/common/` (operation counts, etc.).
 
+### 7. Guest SSH
+
+| Method | Path | Controller | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHConfigure` | Strict `SshConfig` parse → one `SSH().Configure` on a running box |
+| `GET` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHStatus` | `SshStatus`; stopped boxes answer disabled from persisted state |
+| `DELETE` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHDisable` | Idempotent disable; never boots |
+
+- **Running-state checks.** Configure on a box observed as not running answers
+  `409 invalid_state`; the API resumes a box first when its policy allows. The
+  runner checks before and after taking the handle, as for the guest tunnel.
+  The shared helper retains the tunnel's known race: after a runner restart,
+  a fresh handle can still boot a box that exits after these checks. Preventing
+  that race requires a runtime operation that cannot implicitly start a box.
+- **No handle churn.** Status and disable read a stopped or never-started box's
+  state from the runtime and answer the zero disabled status without fetching a
+  handle (see `evictBox`). Other states, such as paused, answer `409`.
+- **Strict body.** The parser matches member names exactly and rejects unknown,
+  case-variant, duplicate, missing, and `null` members (`ca` may be `null`).
+  Every rejection is the fixed `400 invalid SSH configuration`, so private key
+  material is never echoed.
+- **Once.** The guest restarts its listener on every accepted configure, so
+  nothing retries it.
+
 ---
 
 ## Background services
@@ -571,6 +595,9 @@ the Swagger UI (development only).
 | `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | Upload tar |
 | `GET` | `/v1/boxes/:boxId/files?path=<src>` | Download tar |
 | `GET` | `/v1/boxes/:boxId/metrics` | Per-box metrics |
+| `POST` | `/v1/boxes/:boxId/ssh` | Configure guest SSH once; running boxes only |
+| `GET` | `/v1/boxes/:boxId/ssh` | Guest SSH status; never boots |
+| `DELETE` | `/v1/boxes/:boxId/ssh` | Disable guest SSH; never boots |
 
 ---
 

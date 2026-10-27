@@ -9,26 +9,25 @@ import (
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 )
 
-// ErrBoxNotRunning is returned by DialGuestPort for a box that is not up.
+// ErrBoxNotRunning is returned for a box that is not up by the calls that must
+// not boot it: DialGuestPort and the SSH controls.
 var ErrBoxNotRunning = errors.New("box is not running")
 
-// DialGuestPort opens a raw TCP stream to a port inside a running box.
+// runningBox returns the handle of a running box, or ErrBoxNotRunning.
 //
-// It refuses a box that is not running instead of booting it. A fresh handle
-// boots its box on first use, so a dial used to start a stopped box behind the
-// control plane's back: the box served traffic while the API still recorded it
-// as stopped. The preview proxy answers ErrBoxNotRunning by asking the API to
-// start the box, which keeps the API the only path that wakes one.
+// A fresh handle boots its box on first use, so a guest call used to start a
+// stopped box behind the control plane's back: the box served traffic while
+// the API still recorded it as stopped.
 //
 // A stopped box is refused from the runtime's persisted state, before any
 // handle is fetched: fetching one for a stopped box evicts and leaks a handle,
 // and the proxy retries the dial every 500 ms (see evictBox). The state is then
-// checked again on the handle the tunnel uses. A handle that was attached when
+// checked again on the handle the caller uses. A handle that was attached when
 // its box stopped is spent and fails instead of booting, so a stop landing
 // between the two checks cannot restart the box. Known gap, accepted: a fresh
-// handle (first dial after a runner restart) whose box exits on its own in
-// that window is still booted by the tunnel.
-func (c *Client) DialGuestPort(ctx context.Context, boxID string, port uint16) (net.Conn, error) {
+// handle (first call after a runner restart) whose box exits on its own in
+// that window is still booted by that call.
+func (c *Client) runningBox(ctx context.Context, boxID string) (*boxlite.Box, error) {
 	info, err := c.runtime.GetInfo(ctx, boxID)
 	if err != nil {
 		return nil, fmt.Errorf("read state of box %s: %w", boxID, err)
@@ -51,6 +50,16 @@ func (c *Client) DialGuestPort(ctx context.Context, boxID string, port uint16) (
 	}
 	if !guestDialable(handleInfo.State) {
 		return nil, fmt.Errorf("%w: %s is %s", ErrBoxNotRunning, boxID, handleInfo.State)
+	}
+	return bx, nil
+}
+
+// DialGuestPort opens a raw TCP stream to a port inside a running box.
+// The proxy handles ErrBoxNotRunning by asking the API to resume the box.
+func (c *Client) DialGuestPort(ctx context.Context, boxID string, port uint16) (net.Conn, error) {
+	bx, err := c.runningBox(ctx, boxID)
+	if err != nil {
+		return nil, err
 	}
 
 	network, err := bx.Network()

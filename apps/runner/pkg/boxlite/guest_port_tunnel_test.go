@@ -29,12 +29,13 @@ func TestIntegrationDialGuestPortRefusesStoppedBoxWithoutBooting(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 
 	createDto := dto.CreateBoxDTO{
-		Id:           "dial-stopped-box",
-		Image:        "alpine:latest",
-		OsUser:       "root",
-		CpuQuota:     1,
-		MemoryQuota:  1,
-		StorageQuota: 1,
+		Id:              "dial-stopped-box",
+		Image:           "alpine:latest",
+		OsUser:          "root",
+		CpuQuota:        1,
+		MemoryQuota:     1,
+		StorageQuota:    1,
+		OutboundEnabled: new(bool),
 		// Stops itself, like a box the AutoStop sweeper has reaped.
 		Entrypoint: []string{"/bin/sh", "-c", "sleep 3"},
 	}
@@ -76,13 +77,14 @@ func TestIntegrationDialGuestPortDoesNotBootABoxStoppedAfterTheCheck(t *testing.
 	t.Cleanup(func() { _ = client.Close() })
 
 	createDto := dto.CreateBoxDTO{
-		Id:           "dial-stop-race-box",
-		Image:        "alpine:latest",
-		OsUser:       "root",
-		CpuQuota:     1,
-		MemoryQuota:  1,
-		StorageQuota: 1,
-		Entrypoint:   []string{"/bin/sh", "-c", "sleep 600"},
+		Id:              "dial-stop-race-box",
+		Image:           "alpine:latest",
+		OsUser:          "root",
+		CpuQuota:        1,
+		MemoryQuota:     1,
+		StorageQuota:    1,
+		OutboundEnabled: new(bool),
+		Entrypoint:      []string{"/bin/sh", "-c", "sleep 600"},
 	}
 	if _, _, err := client.Create(ctx, createDto); err != nil {
 		t.Skipf("create could not complete (infrastructure prerequisite): %v", err)
