@@ -280,7 +280,7 @@ export const upgradeFleetOverPolicy = ({
   project,
   zone,
   assignment,
-  deadlineSeconds = 900,
+  deadlineSeconds = 1200,
   run,
   sleep,
   log,

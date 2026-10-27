@@ -38,6 +38,7 @@
  */
 
 import { artifactFetchCommand, verifyAgainstManifest, type RunnerArtifact } from './runner-binary.ts'
+import { kernelDeployment } from '../../runner/kernel.ts'
 
 /**
  * Where the unit environment lives on a host.
@@ -184,6 +185,8 @@ ${verify}
 tar -xzf /tmp/boxlite-runner.tar.gz -C /usr/local/bin/
 rm -f /tmp/boxlite-runner.tar.gz /tmp/boxlite-runner.sha256
 chmod +x /usr/local/bin/boxlite-runner
+
+${kernelDeployment().install}
 
 ${platform.hostAddress}
 ${platform.startWrapper?.script ?? ''}
