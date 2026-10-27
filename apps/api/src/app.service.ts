@@ -179,6 +179,7 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
       BOXLITE_ADMIN_USER_ID,
       [],
       this.configService.getOrThrow('admin.apiKey'),
+      Context.platform(PlatformReason.BOOTSTRAP),
     )
     this.logger.log(
       `
