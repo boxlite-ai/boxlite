@@ -102,17 +102,20 @@ an older runner would bind the volume read-write. Until such a runner is up, tho
 
 ## Scale out
 
-`RUNNERS` controls the declared fleet count. Set it in the encrypted stage store, update the digest,
-and preview the same artifact selection you intend to deploy:
+`RUNNERS` controls the declared fleet count. Set the [creation defaults](configuration.md#runner-fleet-sizing)
+in the stage declaration and its CI copy, then increase the count in the encrypted stage store.
+For example, to add a third host:
 
 ```bash
-npm run mstage env set -- RUNNERS=2 --stage dev --digest
+npm run mstage env set -- RUNNERS=3 --stage dev --digest
 ```
 
-Review that the diff creates the additional host without replacing existing hosts. Then apply and
+Preview the same artifact selection you intend to deploy. Review that the diff creates the additional
+host without resizing or replacing existing hosts or disks. Then apply and
 check registration, target version, capacity and a test box on the new host. Extra runners have
-individual registration tokens. Machine size and root disk size come from `deploy.runners` in the stage declaration;
-a GCP host's data disk is sized by its machine size.
+individual registration tokens. `deploy.runners.size`, `rootDiskGb` and optional GCP `dataDiskGb`
+apply only to newly created hosts. Existing sizing is retained in deployment state; changing the
+defaults alone does not resize a host. Separate binary or environment updates can still restart runners.
 
 Scale-in is a separate retirement operation: reducing a count attempts to delete a protected host,
 and on GCP its protected data disk.
