@@ -20,6 +20,7 @@ test('GCP provisions the dedicated reader only with its own secret reference', (
   assert.match(script, /CREATE USER IF NOT EXISTS "otel_openapi_reader"/)
   assert.match(script, /REVOKE ALL FROM "otel_openapi_reader"/)
   assert.match(script, /GRANT SELECT, SHOW COLUMNS ON otel\.otel_logs TO "otel_openapi_reader"/)
+  assert.match(script, /GRANT SELECT ON analytics\.business_events TO "otel_openapi_reader"/)
   assert.equal((script.match(/ CONST/g) ?? []).length, 18)
   assert.doesNotMatch(script, /OR REPLACE otel_openapi_reader|clickhouse-client[^\n]*--password/)
   assert.equal(spawnSync('bash', ['-n'], { input: script }).status, 0)
@@ -28,7 +29,7 @@ test('GCP provisions the dedicated reader only with its own secret reference', (
 
 test('the supplied policy retains every grant and immutable constraint', () => {
   const policy = readFileSync(new URL('../clickhouse/openapi-log-reader.sql', import.meta.url), 'utf8').replace(/^--.*\n/gm, '')
-  assert.equal(createHash('sha256').update(policy).digest('hex'), 'c69d7dacbe342a3c3038fb53773a2063d2c540184647f8c547f772e27f802068')
+  assert.equal(createHash('sha256').update(policy).digest('hex'), '49da9a49983458f13bf9e483bdf7ba6466b591b82e88f068fbe7a356bdf7025d')
   assert.ok(renderClickHouseLogReaderSql().endsWith(policy.replaceAll('__LOG_READER__', '"otel_openapi_reader"').replaceAll('__LOG_READER_PROFILE__', '"otel_openapi_reader_limits"')))
 })
 
@@ -88,6 +89,7 @@ test('real ClickHouse preserves credentials and restrictions across reconciliati
   const check = () => {
     const reader = sql => query(sql, 'otel_openapi_reader', env.LOG_READER_TEST_PASSWORD)
     assert.equal(reader('SELECT Body FROM otel.otel_logs').stdout.trim(), 'persisted')
+    assert.equal(reader('SELECT OrganizationId FROM analytics.business_events').stdout.trim(), 'org-1')
     assert.equal(reader('DESCRIBE TABLE otel.otel_logs').status, 0)
     const policy = renderClickHouseLogReaderSql()
     for (const [, name, value] of policy.matchAll(/(\w+) = ('throw'|\d+) CONST/g)) {
@@ -100,7 +102,8 @@ test('real ClickHouse preserves credentials and restrictions across reconciliati
       assert.match(denied.stderr, /READONLY|SETTING_CONSTRAINT_VIOLATION|QUERY_IS_PROHIBITED/, name)
     }
     for (const sql of ["INSERT INTO otel.otel_logs VALUES ('denied')", 'SELECT * FROM otel.private_logs',
-      'DROP TABLE otel.otel_logs']) {
+      'DROP TABLE otel.otel_logs', "INSERT INTO analytics.business_events VALUES ('denied')",
+      'SELECT * FROM analytics.private_events']) {
       const denied = reader(sql)
       assert.notEqual(denied.status, 0, sql)
       assert.match(denied.stderr, /ACCESS_DENIED|READONLY|QUERY_IS_PROHIBITED/)
@@ -117,6 +120,10 @@ test('real ClickHouse preserves credentials and restrictions across reconciliati
 CREATE TABLE otel.otel_logs (Body String) ENGINE=MergeTree ORDER BY tuple();
 CREATE TABLE otel.private_logs (Body String) ENGINE=Memory;
 INSERT INTO otel.otel_logs VALUES ('persisted');
+CREATE DATABASE analytics;
+CREATE TABLE analytics.business_events (OrganizationId String) ENGINE=MergeTree ORDER BY tuple();
+CREATE TABLE analytics.private_events (OrganizationId String) ENGINE=Memory;
+INSERT INTO analytics.business_events VALUES ('org-1');
 CREATE USER otel_openapi_reader IDENTIFIED BY '${env.LOG_READER_TEST_PASSWORD}';
 CREATE ROLE excessive;
 GRANT SELECT, INSERT ON otel.private_logs TO excessive;

@@ -231,8 +231,9 @@ clickhouse-client --multiquery < /opt/boxlite-clickhouse/otel-schema.sql
 
 clickhouse-client --query "CREATE DATABASE IF NOT EXISTS ${database}"
 # OR REPLACE rather than IF NOT EXISTS: a rotated password has to reach the
-# account, and the grants below are reissued on every boot anyway.
-clickhouse-client --query "CREATE USER OR REPLACE ${writerUsername} IDENTIFIED WITH sha256_hash BY '$WRITER_HASH'"
+# account, and the grants below are reissued on every boot anyway. A failing
+# view over otel_logs loses its copy instead of failing the writer's insert.
+clickhouse-client --query "CREATE USER OR REPLACE ${writerUsername} IDENTIFIED WITH sha256_hash BY '$WRITER_HASH' SETTINGS materialized_views_ignore_errors = 1"
 clickhouse-client --query "CREATE USER OR REPLACE ${readerUsername} IDENTIFIED WITH sha256_hash BY '$READER_HASH'"
 # SHOW COLUMNS is not decoration, and neither is the absence of CREATE: the
 # exporter describes a table before its first insert and creates none of them,

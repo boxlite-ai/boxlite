@@ -48,6 +48,8 @@ READER_PASSWORD=$(aws secretsmanager get-secret-value --region '${region}' --sec
 CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -i -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user boxlite_admin --multiquery < /opt/boxlite-clickhouse/schema.sql
 CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -i -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user boxlite_admin --multiquery <<'SQL'
 GRANT SELECT, INSERT, SHOW COLUMNS ON otel.* TO otel_writer;
+-- A failing view over otel_logs loses its copy instead of failing the telemetry insert.
+ALTER USER otel_writer SETTINGS materialized_views_ignore_errors = 1;
 GRANT SELECT, SHOW COLUMNS ON otel.* TO otel_reader;
 ${reconcileTtl}
 SQL

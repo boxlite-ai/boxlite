@@ -44,6 +44,38 @@ Moving a GCP host off the former 72-hour bootstrap schema replaces its VM once; 
 Keep database/user settings aligned with the bundled schema and boot scripts;
 `otel`, `otel_writer` and `otel_reader` are the example's supported baseline.
 
+## Business event copy
+
+The bundled schema ends with [`business-events.sql`](../clickhouse/business-events.sql). Its
+materialized view copies each `otel.otel_logs` row that carries both `event.name` and
+`organization.id`, plus `user.login` rows even without an organization, into
+`analytics.business_events`. Logins retain `user.id` with an empty `OrganizationId`; other events
+without an organization are skipped. The copy has one column per event attribute, is ordered by
+organization and time, and is kept for 400 days. `CLICKHOUSE_RETENTION_HOURS` does not apply to it.
+Only rows inserted after the view exists are copied. The
+[API README](../../api/README.md#business-events) lists the events and attributes.
+
+Both clouds apply it with the rest of the schema: AWS on the next readiness run, GCP at boot. The
+GCP startup script changes, so the first deploy replaces the VM once; the data disk is kept. A
+managed endpoint applies the file itself. `CREATE MATERIALIZED VIEW IF NOT EXISTS` leaves an
+existing definition unchanged. If an environment already created the organization-only view,
+pause inserts into `otel.otel_logs`, run `DROP VIEW analytics.business_events_mv`, reapply
+`business-events.sql`, then resume inserts. Keep the target table `analytics.business_events`;
+its existing rows are preserved. Earlier logins are not backfilled.
+
+`otel_writer` sets `materialized_views_ignore_errors = 1`, so a failing view never fails a
+telemetry insert: ClickHouse logs a warning and the copy misses those rows, which a count against
+`otel.otel_logs` finds while they are retained. AWS readiness alters the user; GCP creates it with
+the setting at boot. A managed endpoint sets it itself.
+
+To erase one person on request, run
+`ALTER TABLE analytics.business_events DELETE WHERE UserId = '<id>' OR CorrelationId = '<id>'` as
+the administrator. This also erases that person's logins with an empty organization through
+`UserId`. It is a mutation that rewrites the parts holding those rows. A lightweight
+`DELETE FROM` only masks rows: they stay on disk until a merge rewrites their part or
+`ALTER TABLE analytics.business_events APPLY DELETED MASK` runs, and an `ALTER TABLE ... DELETE`
+issued afterwards does not remove them.
+
 ## Optional OpenAPI log reader
 
 Enable the dedicated account with the optional mstage deploy flag:
@@ -77,7 +109,8 @@ consumer discovery ambiguous. State recovery/import requires an explicit ownersh
 
 The GCP startup script or AWS SSM readiness command preserves the SQL user's identity
 and reapplies the [policy](../clickhouse/openapi-log-reader.sql), removing inherited
-roles and old grants. Only SELECT and SHOW COLUMNS on `otel.otel_logs` remain.
+roles and old grants. Only SELECT and SHOW COLUMNS on `otel.otel_logs`, and SELECT on
+`analytics.business_events`, remain.
 The `otel_openapi_reader_limits` profile replaces settings with all 18 immutable
 limits. Access data survives on the retained disk. GCP reconciles at boot; AWS
 reconciles when deployment inputs, policy SQL or managed credential versions change.

@@ -26,21 +26,25 @@ const schemaSource = [
 if (!schemaSource) throw new Error('clickhouse/otel-schema-v0.144.0.sql was not found')
 const schemaTemplate = readFileSync(schemaSource, 'utf8')
 
+/** A SQL file bundled next to the schema, wherever SST has relocated this module. */
+function readBundledSql(name: string) {
+  return readFileSync(typeof schemaSource === 'string' ? resolve(dirname(schemaSource), name) : new URL(name, schemaSource), 'utf8')
+}
+
 export const OPENAPI_READER_USERNAME = 'otel_openapi_reader'
 
 /** Preserve an existing user's identity; the host substitutes only a SHA-256 hash. */
 export function renderClickHouseLogReaderSql() {
   const username = OPENAPI_READER_USERNAME
-  const source = typeof schemaSource === 'string'
-    ? resolve(dirname(schemaSource), 'openapi-log-reader.sql')
-    : new URL('openapi-log-reader.sql', schemaSource)
   return `CREATE USER IF NOT EXISTS "${username}" IDENTIFIED WITH sha256_hash BY '__PASSWORD_SHA256__';
 ALTER USER "${username}" IDENTIFIED WITH sha256_hash BY '__PASSWORD_SHA256__';
-${readFileSync(source, 'utf8').replaceAll('__LOG_READER__', `"${username}"`).replaceAll('__LOG_READER_PROFILE__', `"${username}_limits"`)}`
+${readBundledSql('openapi-log-reader.sql').replaceAll('__LOG_READER__', `"${username}"`).replaceAll('__LOG_READER_PROFILE__', `"${username}_limits"`)}`
 }
 
+/** The telemetry tables, then the long-lived business event copy that reads from otel_logs. */
 export function renderClickHouseSchema(retentionHours = DEFAULT_CLICKHOUSE_RETENTION_HOURS) {
-  return schemaTemplate.replaceAll('__RETENTION_HOURS__', String(retentionHours))
+  return `${schemaTemplate.replaceAll('__RETENTION_HOURS__', String(retentionHours))}
+${readBundledSql('business-events.sql')}`
 }
 
 function shellLiteral(value: string) {
