@@ -213,7 +213,7 @@ impl PyNetworkHandle {
         options: Option<PyTunnelOptions>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let target = parse_tunnel_target(target)?;
-        let is_public = options.map_or(true, |options| options.is_public);
+        let is_public = options.is_none_or(|options| options.is_public);
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let tunnel = handle
