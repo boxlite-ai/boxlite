@@ -163,6 +163,27 @@ Activity does not require the optional logging ClickHouse instance.
 | `box.create`, `box.start`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes | success, exception |
 | `box.exec`, `box.file_upload` | `BoxliteProxyController`, for `POST …/exec` and `PUT …/files` | requested, then success or exception by the response status |
 | `tunnel.create` | `BoxliteProxyController`, through `recordOutcomes` | requested, success, exception |
+| `api_key.create` | `ApiKeyService`, including platform bootstrap | requested, success, exception |
+| `volume.create`, `volume.delete` | `VolumeService`, shared by REST and Dashboard | requested, success, exception |
+| `box.open` | Authenticated preview proxy through the last-activity endpoint | success (sampled anonymous presence) |
+
+Volume success means the command entered the lifecycle queue, not that backing storage is ready or deleted.
+Force-deleting a missing or already-deleting volume is a no-op and emits no event. Mutation failures carry fixed
+categories, never resource names, key material or database error messages. API-key correlation is a fresh UUID
+for the attempt; volume correlation is the volume ID.
+
+Browser presence requires an admitted GET with `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document`.
+The proxy sends `X-BoxLite-Preview-Open: 1` to the existing last-activity route; only the proxy role may trigger
+an observation. The API derives organization from the stored box and leaves user/actor unknown. Assets, iframes,
+polls and denied requests do not emit it; admission does not prove the guest rendered successfully.
+Per-box proxy singleflight and a separate 60-second cooldown bound attempts (including failed delivery), with a
+two-second request timeout. API Redis NX/EX 60 deduplicates across replicas; Redis failure suppresses the event.
+Forwarding continues on telemetry failure. Reloads collapse and delivery is best effort: this is neither a
+navigation count nor a visitor count, and it does not add to requested-operation totals.
+
+At most 1,440 preview rows per continuously active box/day add 0.15552 GB over 400 days at 270 bytes/row.
+Before production, measure seven days of preview-active minutes and actual row sizes with other new events.
+Recheck the 20% storage budget as traffic grows; provision capacity or reduce retention before exceeding it.
 
 For v0 runners, which have no START_BOX job, BoxManager records an existing start's terminal
 `box.start` outcome after its state is persisted. Returned runner errors, startup timeouts and
@@ -191,7 +212,7 @@ listeners are removed once recorded. Organization-presence Redis warnings use fi
 not raw error strings.
 
 An event names its entity by `correlation.id`: the user id for `user.*` and `org.active`, the box
-id for box and tunnel events. It also carries `organization.id`, so an organization's activity
+id for box and tunnel events (volume ID or an API-key attempt UUID for those mutations). It also carries `organization.id`, so an organization's activity
 can be counted from the log alone. `user.login` has none, since a login spans organizations, and a
 registration carries its default organization on success only.
 
