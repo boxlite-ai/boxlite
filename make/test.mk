@@ -653,6 +653,9 @@ test\:apps\:api: _ensure-apps-deps
 test\:apps\:dashboard: _ensure-apps-deps
 	@cd apps && yarn nx run dashboard:test --run $(if $(FILTER),--testNamePattern '$(FILTER)',)
 
+test\:apps\:dashboard: _ensure-apps-deps
+	@cd apps && yarn nx run dashboard:test --run $(if $(FILTER),$(FILTER),)
+
 test\:apps\:runner: dev\:go
 	@echo "🧪 Running runner Go tests..."
 	@cd apps/runner && go test -tags boxlite_dev ./... $(GOTEST_FILTER)
