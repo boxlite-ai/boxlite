@@ -97,3 +97,11 @@ scripts/
 ├── package/            # Packaging scripts
 └── common.sh           # Shared utilities
 ```
+
+## Guest CPU onlining
+
+The guest's `OnlineCpus` RPC brings pre-created CPUs online through Linux sysfs.
+A zero target queries the online count. Targets above the present topology fail
+before writes; partial failures return the observed count for host reconciliation.
+It never offlines CPUs or increases the host CPU quota. Rebuild the guest after
+changing this protocol so the host and guest use matching protobuf definitions.
