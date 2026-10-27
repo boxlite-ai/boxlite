@@ -71,6 +71,11 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
 - A request handler names its caller with `@UserContext() ctx`, or `requestActor(req)` where it
   already holds the request: `user.id`, `auth.method` (`api_key` or `jwt`) and, when the client
   sends `X-BoxLite-Source` or `X-BoxLite-SDK-Version`, `client.source` and `sdk.version`.
+- The Dashboard sends source `dashboard`. The shared native REST transport sends source
+  `sdk` and its compiled BoxLite version on HTTP and API WebSocket requests, including file
+  operations. Rust, Python, Node, C, Go and the CLI use that transport; the label identifies
+  the SDK transport, not a particular language or a verified caller. Guest tunnel traffic
+  is not labeled. Older or third-party clients may still omit these optional headers.
 - The boot-time admin seed registers as `Context.platform(PlatformReason.BOOTSTRAP)`.
 - Job outcome events carry no context: the runner reports after the request has ended.
 - Add caller-decided fields to `Context`, not new service parameters.

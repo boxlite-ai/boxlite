@@ -3,6 +3,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const config = { apiUrl: 'http://api.test/api' } as never
 
+it('sends the dashboard activity source without inventing an SDK version', async () => {
+  vi.resetModules()
+  const axios = (await import('axios')).default
+  const requests: Array<{ url?: string; headers: Record<string, unknown> }> = []
+  axios.defaults.adapter = async (request) => {
+    requests.push({ url: request.url, headers: request.headers.toJSON() })
+    return { data: [], status: 200, statusText: 'OK', headers: {}, config: request }
+  }
+  const { ApiClient } = await import('./apiClient')
+  const api = new ApiClient(config, 'test-token')
+  const cloud = await import('../lib/cloudBox')
+  await api.organizationsApi.listOrganizations()
+  await cloud.createBoxViaBoxApi(api, 'org-1', {})
+  await cloud.startBoxViaBoxApi(api, 'org-1', 'box-1')
+  await cloud.stopBoxViaBoxApi(api, 'org-1', 'box-1')
+  await cloud.deleteBoxViaBoxApi(api, 'org-1', 'box-1')
+  await api.webhookRequest('POST', '/webhooks', {})
+  expect(requests).toHaveLength(6)
+  for (const request of requests) {
+    expect(request.headers['X-BoxLite-Source'], request.url).toBe('dashboard')
+    expect(request.headers['X-BoxLite-SDK-Version']).toBeUndefined()
+    expect(request.headers.Authorization).toBe('Bearer test-token')
+  }
+})
+
 // Fresh module per test so the module-level `isHandlingUnauthorized` guard
 // doesn't leak across cases. A custom axios adapter makes every request resolve
 // to `status` with an empty body, so the response interceptor sees the 401.

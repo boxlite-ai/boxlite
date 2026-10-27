@@ -23,6 +23,21 @@ const REFRESH_LEEWAY: Duration = Duration::from_secs(60);
 const FILE_REQUEST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const TUNNEL_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The native REST transport is shared by every SDK binding and the CLI.
+fn client_identity_headers() -> reqwest::header::HeaderMap {
+    use reqwest::header::HeaderValue;
+    reqwest::header::HeaderMap::from_iter([
+        (
+            reqwest::header::HeaderName::from_static("x-boxlite-source"),
+            HeaderValue::from_static("sdk"),
+        ),
+        (
+            reqwest::header::HeaderName::from_static("x-boxlite-sdk-version"),
+            HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
+        ),
+    ])
+}
+
 /// The proxy states a refused tunnel in one short line (Go's `http.Error`).
 /// The limit is enforced while reading, not after: a peer that answers a
 /// handshake with megabytes is not stating a reason, and buffering it first
@@ -97,6 +112,7 @@ impl ApiClient {
     pub fn new(config: &BoxliteRestOptions) -> BoxliteResult<Self> {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let http = Client::builder()
+            .default_headers(client_identity_headers())
             .timeout(std::time::Duration::from_secs(300))
             .connect_timeout(std::time::Duration::from_secs(300))
             .build()
@@ -171,8 +187,8 @@ impl ApiClient {
 
     /// Add the bearer-auth header to a request builder.
     ///
-    /// Authentication is the *only* thing this client sends as a
-    /// per-request header. The routing-slot value is carried in the
+    /// Client source and native SDK version are defaults on the HTTP client.
+    /// The routing-slot value is carried in the
     /// URL path (`/v1/<prefix>/...`) per `openapi/box.openapi.yaml`.
     async fn authorize(&self, builder: RequestBuilder) -> BoxliteResult<RequestBuilder> {
         match self.current_bearer().await? {
@@ -379,6 +395,8 @@ impl ApiClient {
             .as_str()
             .into_client_request()
             .map_err(|e| BoxliteError::Internal(format!("WS request build failed: {}", e)))?;
+
+        request.headers_mut().extend(client_identity_headers());
 
         if let Some(bearer) = self.current_bearer().await? {
             let value = HeaderValue::from_str(&format!("Bearer {}", bearer))
@@ -707,6 +725,103 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn activity_client_labels_reach_http_and_file_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                while !bytes.ends_with(b"\r\n\r\n") {
+                    bytes.push(stream.read_u8().await.unwrap());
+                }
+                requests.push(String::from_utf8(bytes).unwrap().to_lowercase());
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    )
+                    .await
+                    .unwrap();
+            }
+            requests
+        });
+        let client = ApiClient::new(
+            &BoxliteRestOptions::new(format!("http://{address}"))
+                .with_api_key("test-only-key")
+                .with_path_prefix("org-1"),
+        )
+        .unwrap();
+        let _: serde_json::Value = client.get("/boxes").await.unwrap();
+        client
+            .authorized_request(Method::GET, "/boxes/box-1/files")
+            .await
+            .unwrap()
+            .send()
+            .await
+            .unwrap();
+        let requests = server.await.unwrap();
+        for request in &requests {
+            assert!(request.contains("x-boxlite-source: sdk\r\n"), "{request}");
+            assert!(
+                request.contains(&format!(
+                    "x-boxlite-sdk-version: {}\r\n",
+                    env!("CARGO_PKG_VERSION")
+                )),
+                "{request}"
+            );
+            assert!(request.contains("authorization: bearer test-only-key\r\n"));
+        }
+        assert!(requests[0].starts_with("get /v1/org-1/boxes http/1.1"));
+        assert!(requests[1].starts_with("get /v1/org-1/boxes/box-1/files http/1.1"));
+    }
+
+    #[tokio::test]
+    async fn activity_client_labels_reach_api_websocket_handshakes() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sent, received) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            tokio_tungstenite::accept_hdr_async(
+                stream,
+                move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                      response| {
+                    sent.send((request.uri().path().to_string(), request.headers().clone()))
+                        .unwrap();
+                    Ok(response)
+                },
+            )
+            .await
+            .unwrap()
+        });
+        let client = ApiClient::new(
+            &BoxliteRestOptions::new(format!("http://{address}")).with_api_key("test-only-key"),
+        )
+        .unwrap();
+        let _stream = client.connect_ws("/boxes/box-1/attach").await.unwrap();
+        let (path, headers) = received.await.unwrap();
+        let _server_stream = server.await.unwrap();
+        assert_eq!(
+            headers
+                .get("x-boxlite-source")
+                .and_then(|value| value.to_str().ok()),
+            Some("sdk")
+        );
+        assert_eq!(
+            headers
+                .get("x-boxlite-sdk-version")
+                .and_then(|value| value.to_str().ok()),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(
+            headers.get("authorization").unwrap(),
+            "Bearer test-only-key"
+        );
+        assert_eq!(path, "/v1/boxes/box-1/attach");
+    }
 
     async fn serve_response_body_on_signal(
         listener: TcpListener,
