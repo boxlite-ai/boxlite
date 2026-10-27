@@ -10,14 +10,13 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/
 import { Spinner } from '@/components/ui/spinner'
 import { RoutePath } from '@/enums/RoutePath'
 import { useBoxQuery } from '@/hooks/queries/useBoxQuery'
-import { useTerminalSessionQuery } from '@/hooks/queries/useTerminalSessionQuery'
 import { useBoxSessionContext } from '@/hooks/useBoxSessionContext'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
 import { getBoxDisplayName, getBoxPublicId } from '@/lib/box-identity'
 import { isStoppable } from '@/lib/utils/box'
-import { Container, Play, RefreshCw, TerminalSquare } from '@/components/ui/icon'
+import { Container, Play, TerminalSquare } from '@/components/ui/icon'
 import { BoxFullscreenShell } from './BoxFullscreenShell'
-import { BoxTerminalFrame } from './BoxTerminalFrame'
+import { BoxTerminal } from './BoxTerminal'
 
 export default function BoxTerminalFullscreen() {
   const { boxId } = useParams<{ boxId: string }>()
@@ -32,14 +31,6 @@ export default function BoxTerminalFullscreen() {
   useEffect(() => {
     if (boxId && isTerminalActivated(boxId)) setActivated(true)
   }, [boxId, isTerminalActivated])
-
-  const {
-    data: session,
-    isLoading: sessionLoading,
-    isError: sessionError,
-    isFetching,
-    reset,
-  } = useTerminalSessionQuery(boxId ?? '', running && activated)
 
   const handleConnect = () => {
     if (!boxId) return
@@ -103,28 +94,8 @@ export default function BoxTerminalFullscreen() {
         </Button>
       </Empty>
     )
-  } else if (sessionLoading || isFetching) {
-    body = (
-      <div className="flex-1 flex items-center justify-center gap-2 text-muted-foreground">
-        <Spinner className="size-4" />
-        <span className="text-sm">Connecting...</span>
-      </div>
-    )
-  } else if (sessionError || !session) {
-    body = (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>Failed to connect</EmptyTitle>
-          <EmptyDescription>Something went wrong while connecting to the terminal.</EmptyDescription>
-        </EmptyHeader>
-        <Button variant="outline" size="sm" onClick={() => reset()}>
-          <RefreshCw className="size-4" />
-          Retry
-        </Button>
-      </Empty>
-    )
   } else {
-    body = <BoxTerminalFrame sessionUrl={session.url} className="flex-1" />
+    body = <BoxTerminal boxId={box.id} className="flex-1" />
   }
 
   const label = box ? getBoxDisplayName(box) : boxId

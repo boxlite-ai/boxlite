@@ -14,6 +14,7 @@ async fn started_at_tracks_the_running_lifecycle() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 
@@ -78,6 +79,7 @@ async fn started_at_changes_for_a_fresh_lifecycle() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .expect("create runtime");
 
@@ -154,6 +156,7 @@ async fn started_at_is_preserved_when_adopting_the_same_running_shim() {
     let options = || BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     };
 
     let (box_id, recorded, recorded_pid) = {

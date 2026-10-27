@@ -50,10 +50,6 @@ definitions:
         additionalProperties:
           type: string
         type: object
-      networkAllowList:
-        type: string
-      networkBlockAll:
-        type: boolean
       organizationId:
         description: Nullable for backward compatibility
         type: string
@@ -61,6 +57,15 @@ definitions:
         type: string
       otelEndpoint:
         type: string
+      outboundAllowNet:
+        items:
+          type: string
+        type: array
+      outboundEnabled:
+        description: |-
+          Outbound network policy. outboundEnabled is required: a request without
+          it is rejected rather than started with a guessed policy.
+        type: boolean
       regionId:
         type: string
       registry:
@@ -86,6 +91,7 @@ definitions:
       - id
       - image
       - osUser
+      - outboundEnabled
     type: object
   ErrorResponse:
     description: Error response
@@ -145,12 +151,17 @@ definitions:
       memoryQuota:
         minimum: 1
         type: integer
-      networkAllowList:
-        type: string
-      networkBlockAll:
-        type: boolean
       osUser:
         type: string
+      outboundAllowNet:
+        items:
+          type: string
+        type: array
+      outboundEnabled:
+        description: |-
+          Outbound network policy. outboundEnabled is required: a request without
+          it is rejected rather than started with a guessed policy.
+        type: boolean
       secrets:
         items:
           $ref: '#/definitions/dto.SecretDTO'
@@ -165,6 +176,7 @@ definitions:
     required:
       - errorReason
       - osUser
+      - outboundEnabled
     type: object
   RegistryDTO:
     properties:
@@ -233,11 +245,13 @@ definitions:
     type: object
   UpdateNetworkSettingsDTO:
     properties:
-      networkAllowList:
-        type: string
-      networkBlockAll:
-        type: boolean
       networkLimitEgress:
+        type: boolean
+      outboundAllowNet:
+        items:
+          type: string
+        type: array
+      outboundEnabled:
         type: boolean
     type: object
   dto.SecretDTO:

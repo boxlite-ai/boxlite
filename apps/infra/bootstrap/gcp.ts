@@ -200,6 +200,10 @@ const DEPLOYER_ROLES = [
   // gcp.projects.IAMMember: the stack grants project-level roles to those
   // service accounts.
   'roles/resourcemanager.projectIamAdmin',
+  // gcp.projects.IAMCustomRole: the API's registry-credential roles, which no
+  // predefined role matches without also carrying the read it must not have.
+  // No wider than the line above: that one can already grant any role.
+  'roles/iam.roleAdmin',
   // The OS policy assignment that upgrades the runner fleet in place.
   'roles/osconfig.osPolicyAssignmentAdmin',
   // The log-based metrics the alert policies are built on, and the policies.
@@ -240,7 +244,7 @@ const DEPLOYER_ROLES = [
    * what lets gcloud mint a key for this identity and use sudo once it is in.
    *
    * A deploy-time channel, not an operator's back door: a runner's boot script
-   * is ignored after first boot and the instance is never replaced, so a new
+   * is fixed at create and the instance is never replaced, so a new
    * binary has no other way onto a host that already exists.
    * `mdeploy/stack/runner-upgrade.ts` records the rest of the reasoning.
    */

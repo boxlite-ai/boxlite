@@ -34,6 +34,8 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite logs`](#boxlite-logs)
   - [`boxlite stats`](#boxlite-stats)
   - [`boxlite network tunnel`](#boxlite-network-tunnel)
+  - [`boxlite network inbound / outbound`](#boxlite-network-inbound--outbound)
+  - [`boxlite ssh`](#boxlite-ssh)
   - [`boxlite serve`](#boxlite-serve)
   - [`boxlite volume`](#boxlite-volume)
   - [`boxlite completion`](#boxlite-completion)
@@ -301,7 +303,11 @@ Scopes:          box:read, box:write, box:exec
 Create a box from an image (or a prepared rootfs via `--rootfs`) and run a
 command, with docker's semantics: `COMMAND` replaces the image's `CMD`, the
 image's `ENTRYPOINT` is prepended, and the result **is** the container's init
-(PID 1). Omit it and the image's own default runs.
+(PID 1).
+
+`--entrypoint EXEC` replaces the image entrypoint and clears its default
+CMD; only an explicit `COMMAND` is appended. Omit both to run the image's defaults.
+See [startup command overrides](../../concepts/images.md#startup-command-overrides).
 
 The box's lifetime is that command's lifetime. When it exits, the box stops and
 takes the command's exit code; `boxlite ps` shows it stopped and
@@ -373,12 +379,13 @@ boxlite exec -e DEBUG=1 -w /app mybox -- pytest tests/
 Create a box without starting it. Prints the new box's ID to stdout.
 
 `COMMAND` is stored, not run — it becomes the box's main command (the container's
-init) when the box is next started, exactly as it would under `run`. Omit it and
-the image's own default is used.
+init) when the box is next started, exactly as it would under `run`.
+`--entrypoint EXEC` uses the same override rules as [`run`](#boxlite-run), including
+clearing the image CMD. Omit both `COMMAND` and `--entrypoint` to use image defaults.
 
-A box created **with** a command is a job: `exec` and `cp` will not start it
-implicitly, because starting it runs that command. Start it deliberately with
-`boxlite start`. A box created **without** one boots the image's default, and
+A box created **with** `COMMAND` or `--entrypoint` is a job: `exec` and `cp` will not
+start it implicitly, because starting it runs that command. Start it deliberately with
+`boxlite start`. A box created **without** either boots the image's default, and
 `exec` still starts it on demand.
 
 **Options:**
@@ -534,13 +541,16 @@ The Go-template engine exposes a `json` function for serializing nested values.
 format, or `null` if the start time has not been recorded or is unavailable
 over REST. `State.LastActivityAt` is when the box was last active in RFC 3339
 format — the clock AutoStop measures idleness against — or `null` for a local
-box, which records no activity.
+box, which records no activity. `Network.Outbound` and `Network.Inbound` each
+carry `Mode` (`enabled` or `disabled`) and `AllowNet`; `Network` is `null` when
+the runtime does not know the policy, such as a REST server that predates it.
 
 **Examples:**
 
 ```bash
 boxlite inspect mybox
 boxlite inspect --format '{{.State.Status}}' mybox
+boxlite inspect --format '{{.Network.Inbound.Mode}}' mybox
 boxlite inspect --format '{{.State.StartedAt}}' mybox
 boxlite inspect --format '{{.State.LastActivityAt}}' mybox
 boxlite inspect -l --format yaml
@@ -553,6 +563,8 @@ boxlite inspect -l --format yaml
 **Synopsis:** `boxlite cp [OPTIONS] SRC DST`
 
 Copy files/folders between host and box. Exactly one of `SRC` or `DST` must be a `BOX:PATH` reference.
+End a directory `SRC` with `/.` to copy its contents rather than the directory itself, as
+`docker cp` does.
 
 **Options:**
 
@@ -560,7 +572,6 @@ Copy files/folders between host and box. Exactly one of `SRC` or `DST` must be a
 |------|---------|-------------|
 | `--follow-symlinks` | `false` | Resolve symlink targets (embedded local runtime only) |
 | `--no-overwrite` | `false` | Refuse to overwrite destination files (embedded local runtime only) |
-| `--no-include-parent` | `false` | Copy directory contents without their parent (embedded local runtime only) |
 
 If a stopped box is safe to resume, it is started temporarily and restored to
 stopped state after the copy succeeds or fails. A job box whose start would run
@@ -587,6 +598,7 @@ owned by the box's exec user.
 boxlite cp ./script.py mybox:/work/script.py        # host -> box
 boxlite cp mybox:/var/log/app.log ./app.log         # box -> host
 boxlite cp --no-overwrite ./data/ mybox:/data/      # local runtime only
+boxlite cp ./dist/. mybox:/srv/www                  # the contents of ./dist
 ```
 
 ---
@@ -639,9 +651,37 @@ Display resource usage statistics for a box.
 
 ---
 
+### `boxlite network inbound / outbound`
+
+```text
+boxlite network inbound BOX MODE
+boxlite network outbound BOX MODE [--allow-net RULE]...
+```
+
+`BOX` is an ID or name; `MODE` is required and accepts `enabled` or `disabled`.
+Each invocation replaces the selected direction. `inbound` accepts no allowlist.
+
+```bash
+boxlite network inbound mybox enabled
+boxlite network outbound mybox enabled --allow-net '*.example.com' --allow-net 10.0.0.0/8
+boxlite network outbound mybox enabled  # default empty list: unrestricted
+boxlite network outbound mybox disabled
+boxlite inspect mybox
+```
+
+`--allow-net` takes one hostname, wildcard hostname, IPv4 address or CIDR.
+Repeat it for multiple rules; comma-separated values and empty rules such as
+`''` are invalid, as they are at create. Omit `--allow-net` for the default
+empty list, which removes restrictions when enabled. Disabled mode accepts no
+`--allow-net`. No previous allowlist is retained or restored.
+
+Outbound updates require a running box with an existing NIC. Local inbound
+updates are unsupported; cloud inbound uses the proxy's existing visibility
+contract. See [runtime behavior and persistence](../../guides/networking.md#updating-a-running-box).
+
 ### `boxlite network tunnel`
 
-**Synopsis:** `boxlite network tunnel BOX GUEST_PORT [--listen ADDRESS]`
+**Synopsis:** `boxlite network tunnel BOX GUEST_PORT [--listen ADDRESS | --revoke]`
 
 Without `--listen`, print the public URL supplied by a remote REST service;
 local boxes have no public URL. With `--listen`, bind a local listener and
@@ -655,9 +695,101 @@ boxlite network tunnel mybox 3000 --listen unix:/tmp/app.sock
 ```
 
 A bare port binds `127.0.0.1`; listener port `0` asks the OS to allocate a
-port. The canonical bound address is printed to stdout before clients are
-accepted. Ctrl-C closes the listener and active connections. TCP hosts must be
-numeric addresses, and Unix socket paths must be absolute.
+port. A client that connects while nothing in the box listens on `GUEST_PORT`
+is disconnected; the listener keeps running. The canonical bound address is
+printed to stdout before clients are accepted.
+Ctrl-C closes the listener and active connections. TCP hosts must be numeric
+addresses, and Unix socket paths must be absolute.
+
+A remote box needs inbound access enabled before it can be tunneled: create it
+with `--inbound enabled`.
+
+`--revoke` withdraws the port's public URL instead. New requests to it get
+`404` within 3 seconds; connections already open are not closed. It is safe to
+repeat, and running the command again without `--revoke` reopens the same URL:
+
+```bash
+boxlite network tunnel mybox 3000 --revoke
+```
+
+---
+
+### `boxlite ssh`
+
+**Synopsis:**
+
+```
+boxlite ssh configure BOX CONFIG
+boxlite ssh status BOX
+boxlite ssh disable BOX
+boxlite ssh configure-and-forward BOX CONFIG [--listen ADDRESS]
+boxlite ssh forward BOX [--listen ADDRESS]
+
+CONFIG := --ssh-config FILE
+        | --host-key FILE --login NAME --authorized-key FILE... [--guest-listen ADDRESS]
+```
+
+Control the guest SSH server of a local box or a REST box (`--url`/`--profile`).
+The CLI reads keys from files and never generates or stores them.
+
+These five CLI subcommands reuse existing SDK and HTTP operations; they add no
+server routes. Backend requirements differ:
+
+| Commands | Local backend | REST backend |
+|----------|---------------|--------------|
+| `configure`, `status`, `disable` | Existing SSH SDK operations | Requires SSH control; supported by `boxlite serve` |
+| `configure-and-forward`, `forward` | Existing local tunnel implementation | Requires both SSH control and tunnel support; unavailable through `boxlite serve` |
+
+| Subcommand | Effect | stdout |
+|------------|--------|--------|
+| `configure` | Replace the complete configuration once; disconnects existing SSH clients | `SshStatus` JSON |
+| `status` | Read state; never starts the box | `SshStatus` JSON |
+| `disable` | Stop SSH; never starts the box | `SshStatus` JSON |
+| `configure-and-forward` | `configure` once, then `forward` | Bound address |
+| `forward` | Read status; fail if disabled; forward to the port SSH actually bound | Bound address |
+
+Use `configure-and-forward` to configure SSH and start forwarding together. Every
+invocation replaces the SSH configuration and disconnects existing SSH clients. Use
+`forward` to reopen forwarding after SSH is configured; it leaves the configuration and
+generation unchanged.
+
+| Flag | Description |
+|------|-------------|
+| `--ssh-config FILE` | Complete `SshConfig` JSON ([schema](../../guides/ssh.md#http-control-with-boxlite-serve)): several accounts, authorized keys, CAs. |
+| `--host-key FILE` | Unencrypted OpenSSH host private key. Requires `--login` and `--authorized-key`. |
+| `--login NAME` | The single login accepted for `--authorized-key`. |
+| `--authorized-key FILE` | One OpenSSH public key per file; repeatable. |
+| `--guest-listen ADDRESS` | Guest listener for flag mode; default `0.0.0.0:2222`; port `0` lets the guest choose. |
+| `--listen ADDRESS` | Local listener, same syntax as [`network tunnel`](#boxlite-network-tunnel); default `127.0.0.1:0`. |
+
+`--ssh-config` conflicts with the flag-mode options. Configuration errors name the
+file and position but never print its contents. `configure` follows the SDK's
+startup rules: it may start a Configured or Stopped box that uses its image's default
+command. `configure-and-forward` and `configure` are never retried.
+
+`configure-and-forward` and `forward` print the canonical bound address to stdout, then
+the host public key, its fingerprint, and a connect hint to stderr:
+
+```bash
+$ boxlite ssh forward dev
+tcp://127.0.0.1:52811
+SSH host key: ssh-ed25519 AAAAC3Nz...
+SSH host key fingerprint: SHA256:...
+Connect: ssh -p 52811 -l LOGIN 127.0.0.1
+```
+
+The guest must listen on `0.0.0.0` or the guest IP; `configure-and-forward` checks this
+before configuring. Ctrl-C closes the listener and its connections, then exits 0; guest
+SSH stays configured. If forwarding fails after `configure-and-forward` configured SSH,
+the error says so; the configuration is not rolled back.
+
+- **Local boxes:** the foreground command holds the runtime home, so other local
+  commands on that home fail until Ctrl-C. Exiting the CLI stops running boxes that
+  are not detached, which ends their SSH; use `boxlite create` or `run -d`.
+- **REST boxes:** forwarding uses the box's public tunnel URL for the SSH port and
+  leaves it open on exit, so anyone reaching the URL can attempt SSH logins. Withdraw it
+  with `boxlite network tunnel BOX PORT --revoke`. `boxlite serve` has no tunnel
+  route, so there `configure-and-forward` and `forward` fail after the SSH step.
 
 ---
 
@@ -674,7 +806,7 @@ Run a long-running REST API server. The server holds a single `BoxliteRuntime` a
 | `--debug` | `false` | Enable debug output |
 | `--port N` | `8100` | TCP port to listen on |
 | `--home PATH` | `~/.boxlite` | Absolute runtime data directory; env `BOXLITE_HOME` |
-| `--host ADDR` | `0.0.0.0` | Bind address |
+| `--host ADDR` | `127.0.0.1` | Bind address. Any non-loopback address (e.g. `0.0.0.0`) requires `--api-key`; `serve` refuses to start otherwise. |
 | `--api-key KEY` | unset | Require this exact `Authorization: Bearer` value (constant-time match) on every route except `GET /v1/config`; env `BOXLITE_SERVE_API_KEY`. Unset is permissive. |
 | `--registry REGISTRY` | none | Image registry; repeatable and prepended to config |
 | `--config PATH` | none | JSON runtime configuration file |
@@ -683,8 +815,8 @@ Run a long-running REST API server. The server holds a single `BoxliteRuntime` a
 
 ```bash
 boxlite serve
-boxlite serve --host 127.0.0.1 --port 9000
-BOXLITE_SERVE_API_KEY="$KEY" boxlite serve --host 127.0.0.1
+boxlite serve --port 9000
+BOXLITE_SERVE_API_KEY="$KEY" boxlite serve --host 0.0.0.0
 ```
 
 ---
@@ -814,8 +946,8 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 | Flag | Description |
 |------|-------------|
 | `--network <enabled\|disabled>` | Outbound mode; default `enabled`. Disabled mode creates no network interface. |
-| `--allow-net HOST` | Restrict TCP/UDP egress to exact hosts, `*.example.com`, IPs, or CIDRs; repeatable, implies enabled networking, and is incompatible with `--network disabled`. Hostname-only rules deny UDP unless an IP/CIDR is also allowed. |
-| `--inbound <enabled\|disabled>` | Inbound mode; default `disabled` (services exposed by the box are private). |
+| `--allow-net HOST` | Restrict TCP/UDP egress to exact hosts, `*.example.com`, IPv4 addresses, or IPv4 CIDRs; repeatable, implies enabled networking, and is incompatible with `--network disabled`. Hostname-only rules deny UDP unless an IP/CIDR is also allowed. |
+| `--inbound <enabled\|disabled>` | Inbound mode; default `disabled` (services exposed by the box are unreachable from outside). |
 | `--net-tx-kbps KBPS` | Cap what the box sends (guest to internet), in kilobits/sec. `0` or unset leaves it uncapped. |
 | `--net-rx-kbps KBPS` | Cap what reaches the box (internet to guest), in kilobits/sec. `0` or unset leaves it uncapped. |
 
@@ -952,7 +1084,7 @@ Defaults:
 
 ## Configuration file
 
-`--config PATH` accepts a JSON file deserialized into `BoxliteOptions`. The primary field is `image_registries`; CLI flags like `--home` and `--registry` are layered on top after loading.
+`--config PATH` accepts a JSON file deserialized into `BoxliteOptions`. The primary field is `image_registries`; `image_registry_proxy` sets a pull proxy (see [Pull proxy](../../guides/image-registry-configuration.md#pull-proxy)). CLI flags like `--home` and `--registry` are layered on top after loading. A profile that targets a remote server ignores this file.
 
 ```json
 {

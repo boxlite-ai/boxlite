@@ -176,8 +176,8 @@ Skips must be explicit in artifacts. Current intentional skips:
 
 - `boxlite info`: reports local runtime/options, not REST-backed behavior.
 - `boxlite logs`: reads local runtime console logs, not REST-backed stdout.
-- `boxlite pull` and `boxlite images`: REST runtime does not support image
-  operations yet.
+- `boxlite pull` and `boxlite images`: these commands always use the embedded
+  runtime (see `docs/reference/cli/README.md`), so they say nothing about REST.
 - `boxlite remove`: no such command exists; `boxlite rm` is the supported
   command.
 - C/Go/Node E2E entry-point tests under `AUTH=oidc`: these SDK smoke drivers

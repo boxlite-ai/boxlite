@@ -143,6 +143,10 @@ typedef struct ImageHandle ImageHandle;
 
 typedef struct OptionsHandle OptionsHandle;
 
+// Opaque handle to a REST runtime's registry logins, released with
+// `boxlite_registry_free`.
+typedef struct RegistryHandle RegistryHandle;
+
 // Opaque REST options handle. Owns a core [`BoxliteRestOptions`] that
 // the setters mutate in place before construction.
 typedef struct RestOptionsHandle RestOptionsHandle;
@@ -302,6 +306,98 @@ typedef struct CImageInfoList {
 // Image list completion.
 typedef void (*CBoxImageListCb)(struct CImageInfoList*, CBoxliteError*, void*);
 
+// One build of an image, owned by its enclosing [`CImageDetail`].
+//
+// Sizes and times follow [`CImageInfo`]: `size_bytes` is meaningful only when
+// `has_size` is non-zero, times are in Unix seconds (UTC), and an optional
+// time is meaningful only when its `has_` flag is non-zero.
+typedef struct CImageVersion {
+  // Manifest digest, such as "sha256:…".
+  char *digest;
+  // Sum of the layer sizes the manifest declares, in bytes.
+  uint64_t size_bytes;
+  // Non-zero when `size_bytes` is known.
+  int has_size;
+  // The reference that was pulled to get this build.
+  char *source_ref;
+  // When this build was recorded, in Unix seconds.
+  int64_t recorded_at;
+  // The image's aliases that point at this build: `aliases_count` strings, null
+  // only when the count is zero.
+  char **aliases;
+  int aliases_count;
+  // When a box last started from this build.
+  int64_t last_used_at;
+  int has_last_used_at;
+  // When a pull found this build gone from its registry.
+  int64_t upstream_missing_at;
+  int has_upstream_missing_at;
+} CImageVersion;
+
+// An alias registration or historical binding change, owned by its
+// enclosing [`CImageDetail`]. Versions are named by digest.
+typedef struct CImageAliasEvent {
+  char *alias;
+  // The build the alias pointed at before; null when the alias was new.
+  char *from_digest;
+  char *to_digest;
+  // Who recorded the alias; null when a pull recorded it.
+  char *actor;
+  // When the alias moved, in Unix seconds.
+  int64_t recorded_at;
+} CImageAliasEvent;
+
+// An image name and every build of it the runtime holds.
+//
+// `aliases` points to `aliases_count` strings, `versions` to `versions_count`
+// entries, newest first, and `history` to `history_count` alias history entries, the
+// latest first; each array is null only when its count is zero. A local cache
+// leaves `history` empty. The callback that receives a detail owns it, nested
+// strings and arrays included, and releases it once with
+// `boxlite_free_image_detail`.
+typedef struct CImageDetail {
+  // Registry and repository without a tag, such as "docker.io/library/alpine".
+  char *name;
+  char **aliases;
+  int aliases_count;
+  // Non-zero when the operator provides the image rather than a box having
+  // pulled it. Only a REST runtime's catalog has these.
+  int curated;
+  struct CImageVersion *versions;
+  int versions_count;
+  struct CImageAliasEvent *history;
+  int history_count;
+} CImageDetail;
+
+// Image get completion. On success the callback owns the non-null detail and
+// must release it with `boxlite_free_image_detail`; on failure it is null. The
+// error pointer is borrowed for callback dispatch only.
+typedef void (*CBoxImageGetCb)(struct CImageDetail*, CBoxliteError*, void*);
+
+// Image remove completion. The error pointer is borrowed for callback
+// dispatch only and no result allocation is produced.
+typedef void (*CBoxImageRemoveCb)(CBoxliteError*, void*);
+
+// How much of its image allowance a REST runtime's caller holds.
+//
+// Passed to the callback by pointer, valid only during that callback; there
+// is nothing to free.
+typedef struct CImageUsage {
+  // Images held.
+  uint64_t count;
+  // Images the caller may hold.
+  uint64_t limit;
+  // Sum of the sizes the held builds' manifests declare. A layer two builds
+  // share is counted for each, so this is not the bytes stored.
+  uint64_t known_bytes;
+} CImageUsage;
+
+// Image usage completion. The usage (null on failure) and error pointers are
+// borrowed for callback dispatch only; there is nothing to free.
+typedef void (*CBoxImageUsageCb)(struct CImageUsage*, CBoxliteError*, void*);
+
+typedef struct RegistryHandle CBoxliteRegistryHandle;
+
 // A concrete host listener published to a guest port.
 //
 // `host_ip` is owned by the enclosing [`CBoxInfo`].
@@ -401,6 +497,15 @@ typedef struct CBoxInfo {
   //
   // [`free_box_info`] releases it.
   int *exit_code;
+  // Manifest digest `image` resolved to when this box's disk was built —
+  // the build the box runs. Null when unknown: a box booted from a local
+  // rootfs path, one imported from an archive, one whose disk predates the
+  // record, or a backend that does not know it. Owned and freed with the
+  // rest of this struct.
+  char *resolved_image_digest;
+  // Declared on-registry size, in bytes, of that image; `0` when
+  // [`Self::resolved_image_digest`] is null.
+  int64_t resolved_image_size;
 } CBoxInfo;
 
 // Box info completion. On success the callback owns the non-null metadata and
@@ -467,6 +572,45 @@ typedef struct BoxliteSocketAddress {
   const char *path;
 } BoxliteSocketAddress;
 
+// A registry login the server pulls private images with. It has no
+// password field: the server never returns one.
+//
+// Every string is heap-owned and non-null except `created_by`, which is null
+// when the server does not know who added the login. `created_at` is in Unix
+// seconds (UTC). A standalone value is released with
+// `boxlite_free_registry_credential`; list entries belong to their list.
+typedef struct CRegistryCredential {
+  // UUID that `boxlite_registry_remove` takes.
+  char *id;
+  char *registry_host;
+  // Whole path segments ending in "/"; empty for the whole registry.
+  char *repository_prefix;
+  char *username;
+  char *created_by;
+  int64_t created_at;
+} CRegistryCredential;
+
+// `count` logins at `items`, which is null only when `count` is zero.
+// Released, entries included, with `boxlite_free_registry_credential_list`.
+typedef struct CRegistryCredentialList {
+  struct CRegistryCredential *items;
+  int count;
+} CRegistryCredentialList;
+
+// Registry login list completion. A successful callback owns the list and
+// must release it with `boxlite_free_registry_credential_list`; the error
+// pointer is borrowed for callback dispatch only.
+typedef void (*CBoxRegistryListCb)(struct CRegistryCredentialList*, CBoxliteError*, void*);
+
+// Registry login create completion. A successful callback owns the login and
+// must release it with `boxlite_free_registry_credential`; on failure it is
+// null. The error pointer is borrowed for callback dispatch only.
+typedef void (*CBoxRegistryCreateCb)(struct CRegistryCredential*, CBoxliteError*, void*);
+
+// Registry login remove completion. The error pointer is borrowed for
+// callback dispatch only and no result allocation is produced.
+typedef void (*CBoxRegistryRemoveCb)(CBoxliteError*, void*);
+
 typedef struct CredentialHandle CBoxliteCredential;
 
 typedef struct RestOptionsHandle CBoxliteRestOptions;
@@ -485,6 +629,31 @@ typedef struct VolumeHandle CBoxliteVolumeHandle;
 
 // Runtime shutdown completion.
 typedef void (*CRuntimeShutdownCb)(CBoxliteError*, void*);
+
+// Guest SSH listener state as observed by one call; carries no credentials.
+//
+// The callback that receives it by pointer owns it, nested strings included,
+// and releases it once with `boxlite_free_ssh_status`. `enabled` is non-zero
+// while the guest listener runs. Disabling a running listener preserves its
+// generation; a never-enabled one reports zero, as Configured and Stopped
+// boxes do.
+typedef struct CSshStatus {
+  int enabled;
+  uint64_t generation;
+  char *listen_address;
+  char *host_public_key;
+  char *host_key_fingerprint;
+} CSshStatus;
+
+// SSH configure completion. A successful callback owns the status and must
+// release it with `boxlite_free_ssh_status`; on failure it is null.
+typedef void (*CBoxSshConfigureCb)(struct CSshStatus*, CBoxliteError*, void*);
+
+// SSH status completion with the same ownership contract as SSH configure.
+typedef void (*CBoxSshStatusCb)(struct CSshStatus*, CBoxliteError*, void*);
+
+// SSH disable completion with the same ownership contract as SSH configure.
+typedef void (*CBoxSshDisableCb)(struct CSshStatus*, CBoxliteError*, void*);
 
 // C ABI representation of volume metadata.
 //
@@ -827,11 +996,121 @@ enum BoxliteErrorCode boxlite_image_list(CBoxliteImageHandle *handle,
                                          void *user_data,
                                          CBoxliteError *out_error);
 
+// Queue a read of every build held under an image name, such as
+// "docker.io/library/alpine".
+//
+// `Ok` means the request was queued; the callback runs later on the thread
+// calling `boxlite_runtime_drain`. A name the runtime does not hold reaches
+// the callback as `NotFound`, and a reference with a tag or digest
+// (`"quay.io/acme/app:v1"`) as `InvalidArgument`. `user_data` is passed
+// through unchanged and must stay usable until the callback runs.
+//
+// # Safety
+//
+// `handle`, `name`, and `cb` must be non-null; `name` must be UTF-8 and only
+// needs to stay valid for this call. `out_error` may be null and otherwise
+// receives synchronous queueing failures only. A successful callback owns
+// the detail and must release it with `boxlite_free_image_detail`; the error
+// pointer is borrowed for the callback only.
+enum BoxliteErrorCode boxlite_image_get(CBoxliteImageHandle *handle,
+                                        const char *name,
+                                        CBoxImageGetCb cb,
+                                        void *user_data,
+                                        CBoxliteError *out_error);
+
+// Queue removal of an image name, every tag of it, with the same dispatch
+// and argument contract as [`boxlite_image_get`].
+//
+// The layers stay. On a local runtime a box built from the image fetches the
+// image's configuration from the registry when it next starts. A REST server
+// refuses with `InvalidState` while a box can still boot from the image.
+//
+// # Safety
+//
+// As for [`boxlite_image_get`]. The callback receives only a borrowed error
+// and has nothing to free.
+enum BoxliteErrorCode boxlite_image_remove(CBoxliteImageHandle *handle,
+                                           const char *name,
+                                           CBoxImageRemoveCb cb,
+                                           void *user_data,
+                                           CBoxliteError *out_error);
+
+// Queue a read of how many images are held against the allowance, with the
+// same dispatch contract as [`boxlite_image_get`]. REST runtimes only: on a
+// local runtime the callback receives `Unsupported`.
+//
+// # Safety
+//
+// `handle` and `cb` must be non-null; `out_error` may be null. The usage and
+// error pointers the callback receives are valid only during the callback.
+enum BoxliteErrorCode boxlite_image_usage(CBoxliteImageHandle *handle,
+                                          CBoxImageUsageCb cb,
+                                          void *user_data,
+                                          CBoxliteError *out_error);
+
+// Queue creation of a catalog alias for a ready version, with the
+// same dispatch contract as [`boxlite_image_get`]. The callback receives the
+// image as it now is. Boxes already created keep the version they have.
+//
+// `tag` must be one the OCI distribution spec accepts and `digest` a
+// `sha256:` one; either malformed reaches the callback as `InvalidArgument`
+// before anything is sent. REST runtimes only: on a local runtime, which
+// resolves a tag afresh for each new box, the callback receives
+// `Unsupported`.
+//
+// # Safety
+//
+// As for [`boxlite_image_get`], with `tag` and `digest` held to the same
+// rules as `name`.
+enum BoxliteErrorCode boxlite_image_create_alias(CBoxliteImageHandle *handle,
+                                                 const char *name,
+                                                 const char *alias,
+                                                 const char *digest,
+                                                 CBoxImageGetCb cb,
+                                                 void *user_data,
+                                                 CBoxliteError *out_error);
+
+// Queue deletion of one catalog alias. Versions and existing boxes remain.
+//
+// # Safety
+//
+// As for [`boxlite_image_remove`], with `alias` held to the same rules as `name`.
+enum BoxliteErrorCode boxlite_image_delete_alias(CBoxliteImageHandle *handle,
+                                                 const char *name,
+                                                 const char *alias,
+                                                 CBoxImageRemoveCb cb,
+                                                 void *user_data,
+                                                 CBoxliteError *out_error);
+
+// Create a handle for the registry logins a REST server pulls private images
+// with.
+//
+// On success ownership of `*out_handle` transfers to the caller, which must
+// release it with `boxlite_registry_free`. A local runtime answers
+// `Unsupported`: it pulls with the logins in its `image_registries` option.
+// `out_error` may be null and otherwise receives synchronous failures.
+//
+// # Safety
+//
+// `images` must be a live image handle and `out_handle` must be non-null
+// and writable. The returned handle must not be used after it is freed.
+enum BoxliteErrorCode boxlite_image_registries(CBoxliteImageHandle *images,
+                                               CBoxliteRegistryHandle **out_handle,
+                                               CBoxliteError *out_error);
+
 void boxlite_image_free(CBoxliteImageHandle *handle);
 
 void boxlite_free_image_info_list(struct CImageInfoList *list);
 
 void boxlite_free_image_pull_result(struct CImagePullResult *result);
+
+// Free a `CImageDetail` with its aliases, versions, and their strings.
+//
+// # Safety
+//
+// `detail` must be null or a pointer handed to a `boxlite_image_get` or
+// `boxlite_image_create_alias` callback that has not already been freed.
+void boxlite_free_image_detail(struct CImageDetail *detail);
 
 enum BoxliteErrorCode boxlite_box_info(CBoxHandle *handle,
                                        CBoxInfoCb cb,
@@ -862,6 +1141,18 @@ enum BoxliteErrorCode boxlite_runtime_metrics(CBoxliteRuntime *runtime,
                                               CRuntimeMetricsCb cb,
                                               void *user_data,
                                               CBoxliteError *out_error);
+
+// Replace inbound policy from {"mode":"enabled","allow_net":[]}.
+// Blocks until applied or rejected. Strings are borrowed for the call.
+enum BoxliteErrorCode boxlite_network_update_inbound(CBoxNetworkHandle *network,
+                                                     const char *policy_json,
+                                                     CBoxliteError *out_error);
+
+// Replace outbound policy from {"mode":"enabled","allow_net":["example.com"]}.
+// An empty enabled allowlist clears restrictions. Blocks until applied or rejected.
+enum BoxliteErrorCode boxlite_network_update_outbound(CBoxNetworkHandle *network,
+                                                      const char *policy_json,
+                                                      CBoxliteError *out_error);
 
 // Borrow the box's network capability into a new owned handle.
 //
@@ -902,6 +1193,14 @@ enum BoxliteErrorCode boxlite_network_tunnel(CBoxNetworkHandle *network,
                                              uint16_t port,
                                              CBoxTunnelHandle **out_tunnel,
                                              CBoxliteError *out_error);
+
+// Withdraw public access to `port` in the box.
+//
+// Safe to repeat. Connections already open are not closed. Returns
+// `InvalidArgument` for a null network pointer or port zero.
+enum BoxliteErrorCode boxlite_network_revoke_tunnel(CBoxNetworkHandle *network,
+                                                    uint16_t port,
+                                                    CBoxliteError *out_error);
 
 // Release an unconsumed tunnel. Existing connections and forwarders remain alive.
 void boxlite_tunnel_free(CBoxTunnelHandle *tunnel);
@@ -994,7 +1293,7 @@ void boxlite_options_set_network_enabled(CBoxliteOptions *opts);
 void boxlite_options_set_network_disabled(CBoxliteOptions *opts);
 
 // Adds one entry to the outbound allowlist. Patterns: exact host,
-// "*.example.com", IP, or CIDR.
+// "*.example.com", IPv4, or IPv4 CIDR; anything else fails at create.
 //
 // A non-empty allowlist restricts both TCP and UDP egress. Hostname entries
 // are enforced by TLS SNI / HTTP Host inspection, which only TCP carries, so
@@ -1006,12 +1305,12 @@ void boxlite_options_set_network_disabled(CBoxliteOptions *opts);
 // range is refused unless an IP or CIDR rule covers it.
 void boxlite_options_add_network_allow(CBoxliteOptions *opts, const char *host);
 
-// Marks services the box exposes as publicly reachable.
+// Marks services the box exposes as reachable without sign-in.
 // Mirrors `boxlite_options_set_network_enabled` for the inbound direction.
 void boxlite_options_set_network_inbound_enabled(CBoxliteOptions *opts);
 
-// Marks services the box exposes as private — unreachable from outside the
-// box (the default). Mirrors `boxlite_options_set_network_disabled` for the
+// Marks services the box exposes as unreachable from outside the box (the
+// default). Mirrors `boxlite_options_set_network_disabled` for the
 // inbound direction.
 void boxlite_options_set_network_inbound_disabled(CBoxliteOptions *opts);
 
@@ -1062,6 +1361,88 @@ void boxlite_options_set_entrypoint(CBoxliteOptions *opts, const char *const *ar
 void boxlite_options_set_cmd(CBoxliteOptions *opts, const char *const *args, int argc);
 
 void boxlite_options_free(CBoxliteOptions *opts);
+
+// Queue a read of every login the organization holds, oldest first.
+//
+// `Ok` means the request was queued; the callback runs later on the thread
+// calling `boxlite_runtime_drain`. `user_data` is passed through unchanged
+// and must stay usable until the callback runs.
+//
+// # Safety
+//
+// `handle` and `cb` must be non-null. `out_error` may be null and otherwise
+// receives synchronous queueing failures only. A successful callback owns the
+// list and must release it with `boxlite_free_registry_credential_list`; the
+// error pointer is borrowed for the callback only.
+enum BoxliteErrorCode boxlite_registry_list(CBoxliteRegistryHandle *handle,
+                                            CBoxRegistryListCb cb,
+                                            void *user_data,
+                                            CBoxliteError *out_error);
+
+// Queue adding a login, with the same dispatch contract as
+// [`boxlite_registry_list`].
+//
+// `repository_prefix` is whole path segments ending in "/", such as "acme/",
+// or null for the whole registry. The strings are copied before this returns;
+// the password is sent once and never returned. A login already held for the
+// same registry and prefix reaches the callback as `AlreadyExists`.
+//
+// # Safety
+//
+// `handle`, `registry_host`, `username`, `password` and `cb` must be
+// non-null and UTF-8; `repository_prefix` may be null. `out_error` may be
+// null. A successful callback owns the login and must release it with
+// `boxlite_free_registry_credential`.
+enum BoxliteErrorCode boxlite_registry_create(CBoxliteRegistryHandle *handle,
+                                              const char *registry_host,
+                                              const char *repository_prefix,
+                                              const char *username,
+                                              const char *password,
+                                              CBoxRegistryCreateCb cb,
+                                              void *user_data,
+                                              CBoxliteError *out_error);
+
+// Queue removing a login by id, with the same dispatch contract as
+// [`boxlite_registry_list`].
+//
+// An id that is not a UUID reaches the callback as `InvalidArgument` without
+// a request; a login a box still pulls through as `InvalidState`, naming the
+// boxes; an unknown id as `NotFound`.
+//
+// # Safety
+//
+// `handle`, `id` and `cb` must be non-null; `id` must be UTF-8 and only needs
+// to stay valid for this call. `out_error` may be null. The callback receives
+// only a borrowed error and has nothing to free.
+enum BoxliteErrorCode boxlite_registry_remove(CBoxliteRegistryHandle *handle,
+                                              const char *id,
+                                              CBoxRegistryRemoveCb cb,
+                                              void *user_data,
+                                              CBoxliteError *out_error);
+
+// Free a handle returned by `boxlite_image_registries`.
+//
+// # Safety
+//
+// `handle` must be null or a pointer from `boxlite_image_registries` that
+// has not been freed. It must not be used afterwards.
+void boxlite_registry_free(CBoxliteRegistryHandle *handle);
+
+// Free a login a create callback received.
+//
+// # Safety
+//
+// `credential` must be null or a pointer this library handed out that has
+// not been freed.
+void boxlite_free_registry_credential(struct CRegistryCredential *credential);
+
+// Free a list a list callback received, and every login in it.
+//
+// # Safety
+//
+// `list` must be null or a pointer this library handed out that has not been
+// freed.
+void boxlite_free_registry_credential_list(struct CRegistryCredentialList *list);
 
 // Create an API-key credential.
 //
@@ -1200,6 +1581,57 @@ void boxlite_runtime_free(CBoxliteRuntime *runtime);
 //
 // Returns the number of dispatched events, or `-1` on error.
 int boxlite_runtime_drain(CBoxliteRuntime *runtime, int timeout_ms, CBoxliteError *out_error);
+
+// Queue SSH configuration replacement. The caller's JSON is copied and
+// deserialized into the runtime's `SshConfig` at entry — a malformed or
+// non-UTF-8 body returns `InvalidArgument` with a constant message before
+// anything is queued, so key material never reaches the error. The core
+// applies its own startup policy: with an explicit main command a Configured
+// or Stopped box fails the callback with `InvalidState`.
+//
+// # Safety
+//
+// `handle`, `config_json`, and `cb` must be non-null; `config_json` must be
+// UTF-8 and only needs to stay valid for this call. A successful callback
+// owns the status and must release it with `boxlite_free_ssh_status`; the
+// error pointer is borrowed for the callback only.
+enum BoxliteErrorCode boxlite_box_ssh_configure(CBoxHandle *handle,
+                                                const char *config_json,
+                                                CBoxSshConfigureCb cb,
+                                                void *user_data,
+                                                struct FFIError *out_error);
+
+// Queue a read of SSH state. Never starts the VM or its main command: a
+// Configured or Stopped box completes with disabled status, generation zero,
+// and empty fields.
+//
+// # Safety
+//
+// `handle` and `cb` must be non-null. Ownership is as for
+// [`boxlite_box_ssh_configure`].
+enum BoxliteErrorCode boxlite_box_ssh_status(CBoxHandle *handle,
+                                             CBoxSshStatusCb cb,
+                                             void *user_data,
+                                             struct FFIError *out_error);
+
+// Queue SSH shutdown, disconnecting clients. Repeated calls are supported and
+// never start the box.
+//
+// # Safety
+//
+// As for [`boxlite_box_ssh_status`].
+enum BoxliteErrorCode boxlite_box_ssh_disable(CBoxHandle *handle,
+                                              CBoxSshDisableCb cb,
+                                              void *user_data,
+                                              struct FFIError *out_error);
+
+// Release a status handed to an SSH callback.
+//
+// # Safety
+//
+// `status` must be null or a pointer from an SSH callback that has not
+// already been freed.
+void boxlite_free_ssh_status(struct CSshStatus *status);
 
 void boxlite_free_string(char *s);
 

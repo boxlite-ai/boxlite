@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
+import { useImagesQuery } from '@/hooks/queries/useImagesQuery'
 import { useVolumesQuery } from '@/hooks/queries/useVolumesQuery'
 import { useDeleteBoxMutation } from '@/hooks/mutations/useDeleteBoxMutation'
 import { useRecoverBoxMutation } from '@/hooks/mutations/useRecoverBoxMutation'
@@ -39,6 +40,7 @@ import {
   readOnboardingProgress,
   type OnboardingProgress,
 } from '@/lib/onboarding-progress'
+import { catalogNameOf, registryHostOf } from '@/lib/image-ref'
 import { getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
 import { Box, BoxState, OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
@@ -46,7 +48,7 @@ import { isAxiosError } from 'axios'
 import { Check, Container, Copy, MoreVertical, Pause, Play, RefreshCw, RotateCcw, Trash2 } from '@/components/ui/icon'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { generatePath, Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { BoxNetworkSection } from './BoxNetworkSection'
 import { BoxCube } from '@/components/BoxCube'
@@ -171,6 +173,14 @@ export default function BoxDetails() {
 
   // Volumes this box mounts, with the stored handle resolved back to a name.
   const { data: allVolumes = [] } = useVolumesQuery()
+  // The image the box names is linked once it is in the catalog, which a
+  // first start puts it in; a built-in one is matched on its full reference.
+  const { data: images = [] } = useImagesQuery()
+  const catalogImage = box?.image
+    ? images.find((image) =>
+        image.curated ? image.curatedRef === box.image : image.name === catalogNameOf(box.image ?? ''),
+      )
+    : undefined
   const mountedVolumes = useMemo(() => {
     const mounts = (box?.volumes ?? []) as { volumeId: string; mountPath: string; subpath?: string }[]
     return mounts.map((mount) => {
@@ -465,7 +475,20 @@ export default function BoxDetails() {
                 </span>
               </SpecRow>
               <SpecRow label="image" title={box.image ?? undefined}>
-                {box.image ?? '—'}
+                {box.image ? (
+                  catalogImage ? (
+                    <Link
+                      to={generatePath(RoutePath.IMAGE_DETAILS, { idOrRef: catalogImage.id ?? catalogImage.name })}
+                      className="underline-offset-4 hover:underline"
+                    >
+                      {box.image}
+                    </Link>
+                  ) : (
+                    box.image
+                  )
+                ) : (
+                  '—'
+                )}
               </SpecRow>
               <SpecRow label="region">{(getRegionName(box.target) ?? box.target ?? '—').toUpperCase()}</SpecRow>
 
@@ -512,6 +535,16 @@ export default function BoxDetails() {
                   <p className="text-[12px] leading-relaxed" style={{ color: STATUS.error }}>
                     {box.errorReason}
                   </p>
+                  {/* The API's wording for a private pull with no credential.
+                      The fix is on the registries page, so the error carries the way there. */}
+                  {box.image && /no registry login/.test(box.errorReason) && (
+                    <Link
+                      to={`${RoutePath.IMAGE_REGISTRIES}?connect=${encodeURIComponent(registryHostOf(box.image))}`}
+                      className="mt-2 inline-block border border-border px-3 py-[6px] text-label uppercase text-foreground transition-colors hover:border-brand"
+                    >
+                      Connect a registry for {registryHostOf(box.image)} →
+                    </Link>
+                  )}
                 </>
               )}
             </div>

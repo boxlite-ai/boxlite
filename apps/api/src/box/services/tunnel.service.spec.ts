@@ -17,7 +17,12 @@ function makeService() {
     query: jest.fn().mockResolvedValue([{ id: 'tunnel-1' }]),
     createQueryBuilder: jest.fn().mockReturnValue(builder),
   }
-  return { service: new TunnelService(repository as never), repository, builder }
+  const redis = {
+    get: jest.fn().mockResolvedValue(null),
+    setex: jest.fn().mockResolvedValue('OK'),
+    del: jest.fn().mockResolvedValue(1),
+  }
+  return { service: new TunnelService(repository as never, redis as never), repository, builder, redis }
 }
 
 describe('TunnelService', () => {
@@ -38,11 +43,20 @@ describe('TunnelService', () => {
 
     await expect(service.declarePublic('AbCdEf123456', 3000)).rejects.toBeInstanceOf(ConflictException)
     await expect(service.declarePublic('AbCdEf123456', 0)).rejects.toThrow('Invalid tunnel port')
-    await expect(service.declarePublic('AbCdEf123456', 22222)).rejects.toThrow('Invalid tunnel port')
     expect(repository.query).toHaveBeenCalledTimes(1)
   })
 
-  it('requires an active public tunnel and a currently public box', async () => {
+  // 22222 was reserved for the runner's web terminal, which the dashboard no
+  // longer reaches through the proxy; it is now an ordinary guest port.
+  it('declares port 22222 like any other port', async () => {
+    const { service, repository } = makeService()
+
+    await service.declarePublic('AbCdEf123456', 22222)
+
+    expect(repository.query).toHaveBeenCalledWith(expect.any(String), ['AbCdEf123456', 22222])
+  })
+
+  it('requires an active public tunnel and a box with inbound enabled', async () => {
     const { service, builder } = makeService()
 
     await expect(service.isPublicAccessAllowed('AbCdEf123456', 3000)).resolves.toBe(true)
@@ -51,7 +65,36 @@ describe('TunnelService', () => {
     expect(builder.andWhere).toHaveBeenCalledWith('tunnel.port = :port', { port: 3000 })
     expect(builder.andWhere).toHaveBeenCalledWith('tunnel.access_mode = :mode', { mode: 'public' })
     expect(builder.andWhere).toHaveBeenCalledWith('tunnel.revoked_at IS NULL')
-    expect(builder.andWhere).toHaveBeenCalledWith('box.public = true')
+    expect(builder.andWhere).toHaveBeenCalledWith('box.inboundEnabled = true')
   })
 
+  it('caches both access verdicts briefly', async () => {
+    const { service, builder, redis } = makeService()
+    builder.getExists.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+
+    await expect(service.isPublicAccessAllowed('AbCdEf123456', 3000)).resolves.toBe(true)
+    await expect(service.isPublicAccessAllowed('AbCdEf123456', 4000)).resolves.toBe(false)
+
+    expect(redis.setex).toHaveBeenCalledWith('preview:tunnel:AbCdEf123456:3000', 3, '1')
+    expect(redis.setex).toHaveBeenCalledWith('preview:tunnel:AbCdEf123456:4000', 3, '0')
+  })
+
+  it('answers from the cache without querying the database', async () => {
+    const { service, repository, redis } = makeService()
+    redis.get.mockResolvedValueOnce('1').mockResolvedValueOnce('0')
+
+    await expect(service.isPublicAccessAllowed('AbCdEf123456', 3000)).resolves.toBe(true)
+    await expect(service.isPublicAccessAllowed('AbCdEf123456', 3000)).resolves.toBe(false)
+
+    expect(redis.get).toHaveBeenCalledWith('preview:tunnel:AbCdEf123456:3000')
+    expect(repository.createQueryBuilder).not.toHaveBeenCalled()
+  })
+
+  it('drops a cached refusal when the port is declared', async () => {
+    const { service, redis } = makeService()
+
+    await service.declarePublic('AbCdEf123456', 3000)
+
+    expect(redis.del).toHaveBeenCalledWith('preview:tunnel:AbCdEf123456:3000')
+  })
 })

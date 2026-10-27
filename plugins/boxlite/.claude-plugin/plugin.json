@@ -1,0 +1,19 @@
+{
+  "name": "boxlite",
+  "version": "0.1.0",
+  "description": "Skills for building, deploying and updating apps on BoxLite cloud.",
+  "author": {
+    "name": "BoxLite",
+    "url": "https://boxlite.ai"
+  },
+  "homepage": "https://docs.boxlite.ai",
+  "repository": "https://github.com/boxlite-ai/boxlite",
+  "license": "Apache-2.0",
+  "keywords": [
+    "boxlite",
+    "cloud",
+    "deployment",
+    "cli",
+    "skills"
+  ]
+}

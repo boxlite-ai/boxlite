@@ -13,6 +13,9 @@ import { Check, Copy } from '@/components/ui/icon'
 import React, { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useCopyToClipboard } from 'usehooks-ts'
+import { useSearchParams } from 'react-router-dom'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import OrganizationMembers from './OrganizationMembers'
 
 const DEFAULT_ORGANIZATION_DISPLAY_NAME = 'Default Organization'
 
@@ -21,7 +24,7 @@ const getOrganizationDisplayName = (name?: string) => {
   return name
 }
 
-const OrganizationSettings: React.FC = () => {
+const OrganizationGeneral: React.FC = () => {
   const { axiosInstance } = useApi()
   const { refreshOrganizations } = useOrganizations()
   const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
@@ -65,71 +68,103 @@ const OrganizationSettings: React.FC = () => {
     'w-full border border-border bg-card px-[14px] py-[11px] font-mono text-[13px] text-foreground outline-none focus:border-brand disabled:opacity-60'
 
   return (
-    <div className="px-[34px] pb-[26px] pt-[26px] lg:px-[40px]">
-      <h2 className="mb-5 font-mono text-[13px] font-medium uppercase tracking-[3px] text-muted-foreground">
-        Organization Settings
-      </h2>
+    <div className="border border-border">
+      <div className="border-b border-border px-5 py-[15px] font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">
+        Organization Details
+      </div>
 
-      <div className="border border-border">
-        <div className="border-b border-border px-5 py-[15px] font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">
-          Organization Details
+      {/* name */}
+      <div className="grid items-center gap-4 border-b border-border px-5 py-5 sm:grid-cols-2">
+        <div>
+          <label htmlFor="organization-name" className="text-[13px] font-semibold">
+            Organization Name
+          </label>
+          <p className="mt-1 text-[12px] text-muted-foreground">The public name of your organization.</p>
         </div>
-
-        {/* name */}
-        <div className="grid items-center gap-4 border-b border-border px-5 py-5 sm:grid-cols-2">
-          <div>
-            <label htmlFor="organization-name" className="text-[13px] font-semibold">
-              Organization Name
-            </label>
-            <p className="mt-1 text-[12px] text-muted-foreground">The public name of your organization.</p>
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <input
-              id="organization-name"
-              value={organizationName}
-              onChange={(e) => setOrganizationName(e.target.value)}
-              readOnly={!isOwner}
-              disabled={renamingOrganization}
-              className={inputClass}
-            />
-            {isOwner && (
-              <button
-                type="button"
-                onClick={handleRenameOrganization}
-                disabled={!organizationNameChanged || renamingOrganization}
-                className="flex-none bg-primary px-[18px] py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-45"
-              >
-                Save
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* id */}
-        <div className="grid items-center gap-4 px-5 py-5 sm:grid-cols-2">
-          <div>
-            <div className="text-[13px] font-semibold">Organization ID</div>
-            <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
-              The unique identifier of your organization. Used in CLI and API calls.
-            </p>
-          </div>
-          <div className="flex items-center border border-border bg-card pr-1">
-            <input
-              value={selectedOrganization.id}
-              readOnly
-              className="w-full bg-transparent px-[14px] py-[11px] font-mono text-[13px] text-foreground outline-none"
-            />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            id="organization-name"
+            value={organizationName}
+            onChange={(e) => setOrganizationName(e.target.value)}
+            readOnly={!isOwner}
+            disabled={renamingOrganization}
+            className={inputClass}
+          />
+          {isOwner && (
             <button
               type="button"
-              title="Copy"
-              onClick={() => copyToClipboard(selectedOrganization.id).then(() => toast.success('Copied to clipboard'))}
-              className="flex-none px-2 text-muted-foreground hover:text-foreground"
+              onClick={handleRenameOrganization}
+              disabled={!organizationNameChanged || renamingOrganization}
+              className="flex-none bg-primary px-[18px] py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-45"
             >
-              {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+              Save
             </button>
-          </div>
+          )}
         </div>
       </div>
+
+      {/* id */}
+      <div className="grid items-center gap-4 px-5 py-5 sm:grid-cols-2">
+        <div>
+          <div className="text-[13px] font-semibold">Organization ID</div>
+          <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
+            The unique identifier of your organization. Used in CLI and API calls.
+          </p>
+        </div>
+        <div className="flex items-center border border-border bg-card pr-1">
+          <input
+            value={selectedOrganization.id}
+            readOnly
+            className="w-full bg-transparent px-[14px] py-[11px] font-mono text-[13px] text-foreground outline-none"
+          />
+          <button
+            type="button"
+            title="Copy"
+            onClick={() => copyToClipboard(selectedOrganization.id).then(() => toast.success('Copied to clipboard'))}
+            className="flex-none px-2 text-muted-foreground hover:text-foreground"
+          >
+            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const OrganizationSettings: React.FC = () => {
+  const { selectedOrganization } = useSelectedOrganization()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab = searchParams.get('tab') === 'member' ? 'member' : 'general'
+
+  if (!selectedOrganization) return null
+
+  return (
+    <div className="px-4 py-6 sm:px-6 lg:px-10">
+      <h1 className="font-display text-2xl font-semibold leading-none tracking-tight">Organization</h1>
+      <p aria-label="Current organization" className="mt-2 text-sm text-muted-foreground">
+        {getOrganizationDisplayName(selectedOrganization.name)}
+      </p>
+      <Tabs
+        value={tab}
+        onValueChange={(value) => {
+          const next = new URLSearchParams(searchParams)
+          if (value === 'member') next.set('tab', 'member')
+          else next.delete('tab')
+          setSearchParams(next)
+        }}
+        className="mt-5 gap-0"
+      >
+        <TabsList variant="segmented" aria-label="Organization settings">
+          <TabsTrigger value="general">General</TabsTrigger>
+          <TabsTrigger value="member">Member</TabsTrigger>
+        </TabsList>
+        <TabsContent value="general" className="pt-6">
+          <OrganizationGeneral key={selectedOrganization.id} />
+        </TabsContent>
+        <TabsContent value="member" className="pt-6">
+          <OrganizationMembers key={selectedOrganization.id} />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

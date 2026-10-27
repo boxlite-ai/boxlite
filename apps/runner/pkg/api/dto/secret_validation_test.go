@@ -24,15 +24,17 @@ func newBoundaryValidator() *validator.Validate {
 // tags are dead and an empty name or value reaches the SDK.
 func TestSecretFieldsValidatePerElement(t *testing.T) {
 	v := newBoundaryValidator()
+	outboundEnabled := true
 
 	valid := CreateBoxDTO{
-		Id:           "box-1",
-		Image:        "alpine:latest",
-		OsUser:       "root",
-		CpuQuota:     1,
-		MemoryQuota:  1,
-		StorageQuota: 1,
-		Secrets:      []SecretDTO{{Name: "openai", Value: "sk-test"}},
+		Id:              "box-1",
+		Image:           "alpine:latest",
+		OsUser:          "root",
+		CpuQuota:        1,
+		MemoryQuota:     1,
+		StorageQuota:    1,
+		Secrets:         []SecretDTO{{Name: "openai", Value: "sk-test"}},
+		OutboundEnabled: &outboundEnabled,
 	}
 	if err := v.Struct(valid); err != nil {
 		t.Fatalf("a well-formed secret must validate, got: %v", err)
@@ -45,13 +47,14 @@ func TestSecretFieldsValidatePerElement(t *testing.T) {
 	}
 	recover := func(secret SecretDTO) RecoverBoxDTO {
 		return RecoverBoxDTO{
-			FromVolumeId: "vol-1",
-			OsUser:       "root",
-			CpuQuota:     1,
-			MemoryQuota:  1,
-			StorageQuota: 1,
-			ErrorReason:  "recover",
-			Secrets:      []SecretDTO{secret},
+			FromVolumeId:    "vol-1",
+			OsUser:          "root",
+			CpuQuota:        1,
+			MemoryQuota:     1,
+			StorageQuota:    1,
+			ErrorReason:     "recover",
+			Secrets:         []SecretDTO{secret},
+			OutboundEnabled: &outboundEnabled,
 		}
 	}
 
@@ -74,5 +77,33 @@ func TestSecretFieldsValidatePerElement(t *testing.T) {
 		if !strings.Contains(err.Error(), "Secrets[0]") {
 			t.Errorf("%s: validation failed for the wrong reason: %v", tt.name, err)
 		}
+	}
+}
+
+// The HTTP bind rejects a create or recover body without outboundEnabled, so a
+// v0 caller that omits the policy gets a 400 instead of a box with a guessed one.
+func TestOutboundEnabledIsRequiredAtTheBoundary(t *testing.T) {
+	v := newBoundaryValidator()
+	disabled := false
+
+	for _, tt := range []struct {
+		name string
+		box  any
+	}{
+		{"create", CreateBoxDTO{Id: "box-1", Image: "alpine:latest", OsUser: "root", CpuQuota: 1, MemoryQuota: 1, StorageQuota: 1}},
+		{"recover", RecoverBoxDTO{OsUser: "root", CpuQuota: 1, MemoryQuota: 1, StorageQuota: 1, ErrorReason: "recover"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := v.Struct(tt.box)
+			if err == nil || !strings.Contains(err.Error(), "OutboundEnabled") {
+				t.Fatalf("missing outboundEnabled validated: %v", err)
+			}
+		})
+	}
+
+	// false is a policy, not an absence.
+	explicit := CreateBoxDTO{Id: "box-1", Image: "alpine:latest", OsUser: "root", CpuQuota: 1, MemoryQuota: 1, StorageQuota: 1, OutboundEnabled: &disabled}
+	if err := v.Struct(explicit); err != nil {
+		t.Fatalf("outboundEnabled=false rejected: %v", err)
 	}
 }

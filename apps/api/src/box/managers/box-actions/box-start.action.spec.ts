@@ -74,6 +74,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       {} as any, // configService
       redisLockProvider as any,
       {} as any, // boxActivityService
+      {} as any, // curatedImagePins
     )
 
     const result = await (action as BoxAction).run(box, lockCode)
@@ -116,6 +117,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
       organizationService as any,
       {} as any,
       redisLockProvider as any,
+      {} as any,
       {} as any,
     )
 
@@ -164,11 +166,12 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
       {} as any,
       redisLockProvider as any,
       {} as any,
+      {} as any,
     )
 
     const result = await (action as BoxAction).run(box, lockCode)
 
-    expect(createBox).toHaveBeenCalledWith(box, expect.any(Object))
+    expect(createBox).toHaveBeenCalledWith(box, 'boxlite/base', expect.any(Object))
     expect(result).toBe(SYNC_AGAIN)
     expect(updatedFields.some((u) => u.state === BoxState.CREATING)).toBe(true)
   })
@@ -207,11 +210,62 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
       {} as any,
       redisLockProvider as any,
       {} as any,
+      {} as any,
     )
 
     await (action as BoxAction).run(box, lockCode)
 
     expect(createBox).not.toHaveBeenCalled()
     expect(updatedFields.some((u) => u.state === BoxState.ERROR)).toBe(true)
+  })
+})
+
+describe('BoxStartAction image dispatch', () => {
+  const CURATED = 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0'
+  const PINNED = `ghcr.io/boxlite-ai/boxlite-agent-base@sha256:${'a'.repeat(64)}`
+
+  async function dispatch(image: string, imageIsOrgOwned: boolean) {
+    const box = new Box('region-1', 'fresh-box')
+    box.runnerId = 'runner-1'
+    box.image = image
+    box.imageIsOrgOwned = imageIsOrgOwned
+    box.state = BoxState.UNKNOWN
+    box.desiredState = BoxDesiredState.STARTED
+
+    const createBox = jest.fn(async () => undefined)
+    const curatedImagePins = { refFor: jest.fn(async () => PINNED) }
+    const lockCode = new LockCode('lock-dispatch')
+    const action = new BoxStartAction(
+      { findOneOrFail: jest.fn(async () => ({ id: 'runner-1', state: RunnerState.READY })) } as any,
+      { create: jest.fn(async () => ({ createBox })) } as any,
+      { update: jest.fn(async () => box) } as any,
+      { findOne: jest.fn(async () => ({ boxMetadata: {} })) } as any,
+      {} as any,
+      { getCode: jest.fn(async () => lockCode) } as any,
+      {} as any,
+      curatedImagePins as any,
+    )
+
+    await (action as BoxAction).run(box, lockCode)
+    return { box, createBox, curatedImagePins }
+  }
+
+  /**
+   * A runner re-resolves a tag for every new disk. Handing it the build it
+   * already booted is what keeps a curated box on that runner's cache.
+   */
+  it('hands the runner the build it already booted for a curated tag', async () => {
+    const { box, createBox, curatedImagePins } = await dispatch(CURATED, false)
+
+    expect(curatedImagePins.refFor).toHaveBeenCalledWith('runner-1', CURATED)
+    expect(createBox).toHaveBeenCalledWith(box, PINNED, expect.any(Object))
+    expect(box.image).toBe(CURATED)
+  })
+
+  it('hands a tenant image over as the resolver left it', async () => {
+    const { box, createBox, curatedImagePins } = await dispatch('quay.io/acme/app:v1', true)
+
+    expect(curatedImagePins.refFor).not.toHaveBeenCalled()
+    expect(createBox).toHaveBeenCalledWith(box, 'quay.io/acme/app:v1', expect.any(Object))
   })
 })

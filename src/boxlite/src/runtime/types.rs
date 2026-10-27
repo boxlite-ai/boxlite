@@ -340,7 +340,8 @@ pub struct OutboundNetworkInfo {
 
 /// Network configuration for inbound (internet → guest) traffic.
 ///
-/// Records whether the guest's exposed ports/preview are publicly reachable.
+/// Records whether the guest's exposed ports/preview are reachable without
+/// sign-in.
 /// `allow_net` is always empty today — an inbound allowlist is not yet
 /// enforced by any layer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,7 +351,7 @@ pub struct InboundNetworkInfo {
     pub allow_net: Vec<String>,
 }
 
-/// Metadata that omits inbound reads as private, matching the inbound
+/// Metadata that omits inbound reads as disabled, matching the inbound
 /// default of [`BoxOptions`](crate::runtime::options::BoxOptions).
 impl Default for InboundNetworkInfo {
     fn default() -> Self {
@@ -373,7 +374,7 @@ pub struct NetworkInfo {
     pub outbound: OutboundNetworkInfo,
 
     /// External reachability: whether the box's exposed ports/preview are
-    /// public. Its `allow_net` is always empty today (see
+    /// reachable without sign-in. Its `allow_net` is always empty today (see
     /// [`InboundNetworkInfo::allow_net`]).
     pub inbound: InboundNetworkInfo,
 
@@ -529,6 +530,15 @@ pub struct BoxInfo {
     /// from an older producer readable.
     #[serde(default)]
     pub last_activity_at: Option<DateTime<Utc>>,
+    /// What `image` resolved to when this box's disk was built — the build the
+    /// box actually runs, where `image` is the reference as given. `None` for a
+    /// box booted from a local rootfs path, for one imported from an archive,
+    /// for one whose disk predates the record, and from a backend that does not
+    /// know it.
+    ///
+    /// Serde default keeps metadata from an older producer readable.
+    #[serde(default)]
+    pub resolved_image: Option<crate::images::ResolvedImage>,
 }
 
 impl BoxInfo {
@@ -537,8 +547,11 @@ impl BoxInfo {
         use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
         use crate::runtime::options::RootfsSpec;
 
-        let network_config =
+        let mut network_config =
             NetworkConfig::from_specs(&config.options.network, &config.options.inbound_network);
+        if let Some(outbound) = &state.outbound_policy {
+            network_config.outbound = outbound.clone();
+        }
 
         Self {
             id: config.id.clone(),
@@ -575,6 +588,7 @@ impl BoxInfo {
             started_at: state.started_at,
             // Activity is recorded by the control plane, not by a local box.
             last_activity_at: None,
+            resolved_image: state.resolved_image.clone(),
         }
     }
 }
@@ -594,6 +608,7 @@ impl PartialEq for BoxInfo {
             && self.auto_delete == other.auto_delete
             && self.auto_resume == other.auto_resume
             && self.health_status == other.health_status
+            && self.resolved_image == other.resolved_image
     }
 }
 
@@ -658,7 +673,8 @@ pub struct ImageInfo {
     /// Full image reference (e.g., "docker.io/library/alpine:latest")
     pub reference: String,
 
-    /// Parsed repository name (e.g. "docker.io/library/alpine")
+    /// Registry and repository, without a tag (e.g. "docker.io/library/alpine"):
+    /// the name `ImageHandle::get` and `ImageHandle::remove` take.
     pub repository: String,
 
     /// Parsed image tag (e.g. "latest")
@@ -673,6 +689,94 @@ pub struct ImageInfo {
 
     /// Image size in bytes (if available)
     pub size: Option<Bytes>,
+}
+
+/// One image name and every build of it the runtime holds.
+///
+/// Locally that is the cache's entries under the name; on a REST runtime it
+/// is the server's catalog entry, including images the operator provides.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageDetail {
+    /// Registry and repository, without a tag (e.g. "docker.io/library/alpine").
+    pub name: String,
+
+    /// Aliases held for this name.
+    pub aliases: Vec<String>,
+
+    /// Provided by the operator rather than pulled by a box. Only a catalog
+    /// has these; a local cache never does.
+    pub curated: bool,
+
+    /// Each build held under the name, newest first.
+    pub versions: Vec<ImageVersion>,
+
+    /// Where each tag has pointed, newest first. Only a catalog keeps it, and
+    /// only its most recent moves; a local cache answers it empty.
+    #[serde(default)]
+    pub history: Vec<ImageAliasEvent>,
+}
+
+/// One build of an image.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageVersion {
+    /// Manifest digest (e.g. "sha256:…").
+    pub digest: String,
+
+    /// Sum of the layer sizes the manifest declares, when known.
+    pub size_bytes: Option<u64>,
+
+    /// The reference that was pulled to get this build.
+    pub source_ref: String,
+
+    /// When this build was recorded.
+    pub recorded_at: DateTime<Utc>,
+
+    /// Aliases that point at this build now.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+
+    /// When a box last started from this build, when that is known. Only a
+    /// catalog tracks it.
+    #[serde(default)]
+    pub last_used_at: Option<DateTime<Utc>>,
+
+    /// When a pull first found this build gone from its registry. Runners
+    /// that cached it still start it. Only a catalog records it.
+    #[serde(default)]
+    pub upstream_missing_at: Option<DateTime<Utc>>,
+}
+
+/// A catalog alias registration or a historical binding change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageAliasEvent {
+    /// The alias that was recorded.
+    pub alias: String,
+
+    /// The build it pointed at before; `None` when the alias did not exist yet.
+    pub from_digest: Option<String>,
+
+    /// The build it points at from then on.
+    pub to_digest: String,
+
+    /// Who recorded it; `None` when a pull recorded it.
+    pub actor: Option<String>,
+
+    /// When the binding was recorded.
+    pub recorded_at: DateTime<Utc>,
+}
+
+/// How much of its image allowance a REST runtime's caller holds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageUsage {
+    /// Images held.
+    pub count: u64,
+
+    /// Images the caller may hold.
+    pub limit: u64,
+
+    /// Sum of the sizes the held builds' manifests declare. Not the bytes
+    /// stored: a layer two builds share is counted for each of them.
+    pub known_bytes: u64,
 }
 
 // ============================================================================
@@ -709,7 +813,7 @@ mod tests {
             network.outbound.allow_net,
             vec!["api.example.com".to_string()]
         );
-        // The direction the pre-split shape could not express reads as private.
+        // The direction the pre-split shape could not express reads as disabled.
         assert_eq!(network.inbound.mode, NetworkMode::Disabled);
         assert!(network.inbound.allow_net.is_empty());
         // And the deprecated mirrors follow outbound.
@@ -835,6 +939,36 @@ mod tests {
             published_ports(&info).is_some_and(<[PublishedPort]>::is_empty),
             "a box with no requested mappings is known-empty"
         );
+    }
+
+    /// `info()` and `list_info()` both build through `BoxInfo::new`, so this is
+    /// the one place the record reaches either of them.
+    #[test]
+    fn box_info_reports_what_the_disk_was_built_from() {
+        let config = BoxConfig {
+            id: BoxID::parse("01HJK4TNRPQSXYZ8WM6NCVT9R5").unwrap(),
+            name: None,
+            created_at: Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions::default(),
+            engine_kind: crate::vmm::VmmKind::Libkrun,
+            box_home: PathBuf::from("/tmp/box"),
+        };
+        let mut state = BoxState::new();
+        state.resolved_image = Some(crate::images::ResolvedImage {
+            manifest_digest:
+                "sha256:0a7ed0d449b9318548e66674610d757de19b7645759f74b587b610b59d6b43fd"
+                    .to_string(),
+            total_layer_size: 3_974_501,
+        });
+
+        assert_eq!(
+            BoxInfo::new(&config, &state).resolved_image,
+            state.resolved_image
+        );
+        assert_eq!(BoxInfo::new(&config, &BoxState::new()).resolved_image, None);
     }
 
     #[test]

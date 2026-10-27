@@ -46,6 +46,7 @@ pub use boxlite_shared::BoxByteStream;
 pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use disk::DiskInfo;
 pub use event_listener::{AuditEvent, AuditEventKind, AuditEventListener, EventListener};
+pub use images::ResolvedImage;
 pub use litebox::SnapshotHandle;
 pub use litebox::archive::ArchiveManifest;
 pub use litebox::snapshot_mgr::SnapshotInfo;
@@ -61,8 +62,8 @@ pub use runtime::advanced_options::{
 };
 pub use runtime::options::{
     BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, ImageRegistry,
-    ImageRegistryAuth, NetworkMode, NetworkSpec, PortProtocol, RegistryTransport, RootfsSpec,
-    Secret, SnapshotOptions,
+    ImageRegistryAuth, ImageRegistryProxy, InboundNetworkConfig, NetworkMode, NetworkSpec,
+    OutboundNetworkConfig, PortProtocol, RegistryTransport, RootfsSpec, Secret, SnapshotOptions,
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

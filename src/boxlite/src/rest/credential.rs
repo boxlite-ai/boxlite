@@ -43,6 +43,10 @@ impl Debug for AccessToken {
 /// `Send + Sync` for the async REST client. `Debug` is constrained at the
 /// trait level so [`super::options::BoxliteRestOptions`] can derive Debug;
 /// each impl is responsible for redacting its own secrets.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub trait Credential: Send + Sync + Debug {
     async fn get_token(&self) -> BoxliteResult<AccessToken>;

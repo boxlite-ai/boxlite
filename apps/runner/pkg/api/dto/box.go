@@ -10,24 +10,26 @@ package dto
 // RunAsUser is the OCI process.user override (docker `-u`), empty when the
 // caller did not ask for one so the image's own USER directive stands.
 type CreateBoxDTO struct {
-	Id               string            `json:"id" validate:"required"`
-	FromVolumeId     string            `json:"fromVolumeId,omitempty"`
-	Image            string            `json:"image" validate:"required"`
-	OsUser           string            `json:"osUser" validate:"required"`
-	CpuQuota         int64             `json:"cpuQuota" validate:"min=1"`
-	GpuQuota         int64             `json:"gpuQuota" validate:"min=0"`
-	MemoryQuota      int64             `json:"memoryQuota" validate:"min=1"`
-	StorageQuota     int64             `json:"storageQuota" validate:"min=1"`
-	Env              map[string]string `json:"env,omitempty"`
-	Registry         *RegistryDTO      `json:"registry,omitempty"`
-	Entrypoint       []string          `json:"entrypoint,omitempty"`
-	Cmd              []string          `json:"cmd,omitempty"`
-	WorkingDir       string            `json:"workingDir,omitempty"`
-	RunAsUser        string            `json:"runAsUser,omitempty"`
-	Volumes          []VolumeDTO       `json:"volumes,omitempty"`
-	Secrets          []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
-	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
-	NetworkAllowList *string           `json:"networkAllowList,omitempty"`
+	Id           string            `json:"id" validate:"required"`
+	FromVolumeId string            `json:"fromVolumeId,omitempty"`
+	Image        string            `json:"image" validate:"required"`
+	OsUser       string            `json:"osUser" validate:"required"`
+	CpuQuota     int64             `json:"cpuQuota" validate:"min=1"`
+	GpuQuota     int64             `json:"gpuQuota" validate:"min=0"`
+	MemoryQuota  int64             `json:"memoryQuota" validate:"min=1"`
+	StorageQuota int64             `json:"storageQuota" validate:"min=1"`
+	Env          map[string]string `json:"env,omitempty"`
+	Registry     *RegistryDTO      `json:"registry,omitempty"`
+	Entrypoint   []string          `json:"entrypoint,omitempty"`
+	Cmd          []string          `json:"cmd,omitempty"`
+	WorkingDir   string            `json:"workingDir,omitempty"`
+	RunAsUser    string            `json:"runAsUser,omitempty"`
+	Volumes      []VolumeDTO       `json:"volumes,omitempty"`
+	Secrets      []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
+	// Outbound network policy. outboundEnabled is required: a request without
+	// it is rejected rather than started with a guessed policy.
+	OutboundEnabled  *bool             `json:"outboundEnabled" validate:"required"`
+	OutboundAllowNet []string          `json:"outboundAllowNet,omitempty"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
 	AuthToken        *string           `json:"authToken,omitempty"`
 	OtelEndpoint     *string           `json:"otelEndpoint,omitempty"`
@@ -38,25 +40,28 @@ type CreateBoxDTO struct {
 	RegionId       *string `json:"regionId,omitempty"`
 } //	@name	CreateBoxDTO
 
+// Same outbound policy shape as CreateBoxDTO; an omitted field is left unchanged.
 type UpdateNetworkSettingsDTO struct {
-	NetworkBlockAll    *bool   `json:"networkBlockAll,omitempty"`
-	NetworkAllowList   *string `json:"networkAllowList,omitempty"`
-	NetworkLimitEgress *bool   `json:"networkLimitEgress,omitempty"`
+	OutboundEnabled    *bool    `json:"outboundEnabled,omitempty"`
+	OutboundAllowNet   []string `json:"outboundAllowNet,omitempty"`
+	NetworkLimitEgress *bool    `json:"networkLimitEgress,omitempty"`
 } //	@name	UpdateNetworkSettingsDTO
 
 type RecoverBoxDTO struct {
-	FromVolumeId     string            `json:"fromVolumeId,omitempty"`
-	OsUser           string            `json:"osUser" validate:"required"`
-	CpuQuota         int64             `json:"cpuQuota" validate:"min=1"`
-	GpuQuota         int64             `json:"gpuQuota" validate:"min=0"`
-	MemoryQuota      int64             `json:"memoryQuota" validate:"min=1"`
-	StorageQuota     int64             `json:"storageQuota" validate:"min=1"`
-	Env              map[string]string `json:"env,omitempty"`
-	Volumes          []VolumeDTO       `json:"volumes,omitempty"`
-	Secrets          []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
-	NetworkBlockAll  *bool             `json:"networkBlockAll,omitempty"`
-	NetworkAllowList *string           `json:"networkAllowList,omitempty"`
-	ErrorReason      string            `json:"errorReason" validate:"required"`
+	FromVolumeId string            `json:"fromVolumeId,omitempty"`
+	OsUser       string            `json:"osUser" validate:"required"`
+	CpuQuota     int64             `json:"cpuQuota" validate:"min=1"`
+	GpuQuota     int64             `json:"gpuQuota" validate:"min=0"`
+	MemoryQuota  int64             `json:"memoryQuota" validate:"min=1"`
+	StorageQuota int64             `json:"storageQuota" validate:"min=1"`
+	Env          map[string]string `json:"env,omitempty"`
+	Volumes      []VolumeDTO       `json:"volumes,omitempty"`
+	Secrets      []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
+	// Outbound network policy. outboundEnabled is required: a request without
+	// it is rejected rather than started with a guessed policy.
+	OutboundEnabled  *bool    `json:"outboundEnabled" validate:"required"`
+	OutboundAllowNet []string `json:"outboundAllowNet,omitempty"`
+	ErrorReason      string   `json:"errorReason" validate:"required"`
 } //	@name	RecoverBoxDTO
 
 type IsRecoverableDTO struct {

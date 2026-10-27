@@ -50,13 +50,13 @@ const INTERNAL_PORTS = [API_PORT, PROXY_PORT, RUNNER_PORT, OTLP_HTTP_PORT].map(S
 export const SUBNET_CIDR = '10.20.0.0/20'
 
 /**
- * The subnet the Cloud Run services egress from, and the source of every rule
- * that admits one to a VM.
+ * The subnet the API and the collector egress from, and the source of every
+ * rule that admits a Cloud Run service to a VM.
  *
  * Its own range rather than a share of `SUBNET_CIDR`, and that is the whole
  * point of it. A rule keyed on the workload subnet would admit every runner and
  * the telemetry host itself — the widening `InternalFirewall` argues against
- * below — whereas this one holds the serverless roles and nothing that can take
+ * below — whereas this one holds those two services and nothing that can take
  * an instance.
  *
  * What it cannot do is tell those roles apart, and that is the price of the
@@ -64,8 +64,9 @@ export const SUBNET_CIDR = '10.20.0.0/20'
  * control plane and the collector alike, so the runner's rule now also admits a
  * collector that has no reason to call it, and ClickHouse's admits both the
  * writer and the reader it already wanted. Narrowing further would need a subnet
- * per role, which is a range each and a placement each; it is worth doing the
- * day a serverless role appears that should not reach both hosts.
+ * per role, which is a range each and a placement each. A serverless role that
+ * should reach neither host needs none of that: the registry proxy egresses
+ * from the workload subnet, which no rule names as a source.
  *
  * A range because it is the only source this direction is documented to take.
  * The page that shows a Cloud Run service being given network tags — it can be,
@@ -166,6 +167,40 @@ export const MANAGED_PROXY_CIDR = '10.20.16.0/24'
 export const PSC_NAT_CIDR = '10.20.17.0/24'
 
 /**
+ * Where `*.run.app` answers inside this network: `private.googleapis.com`.
+ *
+ * Why it exists is the part worth reading twice. A `run.app` name is a
+ * *public* address — `ingress` is an ACL at Google's front end, not a private
+ * endpoint — and the API reaches it with `PRIVATE_RANGES_ONLY` egress, which
+ * sends a public destination out of Cloud Run's own path. Its OTLP arrives
+ * attributed to nobody and is refused 404, every thirty seconds, silently.
+ *
+ * These four are the documented answer. `PRIVATE_RANGES_ONLY` routes "RFC 1918
+ * and Private Google Access IPs" through direct VPC egress, both subnets have
+ * Private Google Access, and the network's default route reaches them — so the
+ * API's exports enter this network. The proxy and the runner already reach
+ * Google through Private Google Access; this changes their resolution, not
+ * their path. Sources are in `apps/infra/docs/gcp/networking.md`.
+ *
+ * `private.googleapis.com` because its row in the Private Google Access guide
+ * lists `*.run.app` by name.
+ */
+export const PRIVATE_GOOGLE_ACCESS_ADDRESSES = ['199.36.153.8', '199.36.153.9', '199.36.153.10', '199.36.153.11']
+
+/**
+ * The domain whose resolution this network overrides, with the trailing dot
+ * Cloud DNS requires.
+ *
+ * Only Cloud Run's, and every name under it: the collector is the one service
+ * in this network reached by a `run.app` name, and a zone for a wider domain
+ * would divert calls this stack does not make. What it does mean is that *any*
+ * `run.app` name resolved from this network now answers privately — including
+ * one in another project, which is a thing to know before adding a caller
+ * rather than a thing to discover from it.
+ */
+const RUN_APP_ZONE = 'run.app.'
+
+/**
  * The range reserved for Google's own managed services.
  *
  * A `/16` because Google allocates out of it per service and per region, and a
@@ -175,7 +210,7 @@ export const PSC_NAT_CIDR = '10.20.17.0/24'
 const SERVICE_RANGE_PREFIX = 16
 
 /**
- * The four identities, one per role, and the name Pulumi files each under. A
+ * The five identities, one per role, and the name Pulumi files each under. A
  * grant names one of these and never a range.
  *
  * A `Record` so a role added to `WorkloadRole` cannot silently go without an
@@ -188,6 +223,7 @@ const ACCOUNTS: Record<WorkloadRole, string> = {
   proxy: 'ProxyServiceAccount',
   'otel-collector': 'OtelServiceAccount',
   runner: 'RunnerServiceAccount',
+  'registry-proxy': 'RegistryProxyServiceAccount',
 }
 
 export const gcpNetworkProvider =
@@ -293,6 +329,71 @@ export const gcpNetworkProvider =
       service: 'servicenetworking.googleapis.com',
       reservedPeeringRanges: [serviceRange.name],
     })
+
+    /*
+     * Where `*.run.app` answers inside this network: `private.googleapis.com`.
+     *
+     * A zone and two records, and no workload change — the collector keeps its
+     * internal ingress, the API keeps `PRIVATE_RANGES_ONLY`, and the address a runner
+     * froze into its systemd unit at first boot stays the `run.app` name it
+     * always was. `api.ts` builds the same kind of zone for `api.<domain>`, and
+     * its note applies: a VM resolves through the metadata server, which is
+     * authoritative for a bound private zone and forwards nothing upstream.
+     *
+     * An apex `A` onto the four addresses and a wildcard `CNAME` onto the apex,
+     * which is the shape the Private Google Access guide prescribes for
+     * `run.app`. One place holds the addresses; the wildcard cannot drift.
+     *
+     * A zone rather than a Private Service Connect endpoint, which is also
+     * documented: an endpoint needs the Service Directory API and permissions
+     * the deployer is not granted, a 20-character alphanumeric name
+     * `instanceFor` cannot produce, and an address of its own in this network.
+     * These addresses need none of that.
+     */
+    const runAppZone = new gcp.dns.ManagedZone('RunAppZone', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'run-app' }),
+      project,
+      dnsName: RUN_APP_ZONE,
+      description: 'Cloud Run, as reached from inside the network',
+      visibility: 'private',
+      privateVisibilityConfig: { networks: [{ networkUrl: network.id }] },
+    })
+    const runAppApex = new gcp.dns.RecordSet('RunAppApexRecord', {
+      project,
+      managedZone: runAppZone.name,
+      name: RUN_APP_ZONE,
+      type: 'A',
+      /*
+       * Short, because it bounds how long a client keeps answering privately
+       * after the zone is gone.
+       *
+       * The zone is what a rollback removes, not these records. An empty zone
+       * is worse than no zone: it stays authoritative for `run.app` and answers
+       * NXDOMAIN, which silences the proxy's and the runner's exports — the two
+       * that work today. Cloud DNS will not delete a zone that still holds
+       * records, so the order is records, then zone; stopping halfway is the
+       * failure to avoid. The same state exists for the seconds between the
+       * zone's creation and this record's on the first apply.
+       */
+      ttl: 60,
+      rrdatas: PRIVATE_GOOGLE_ACCESS_ADDRESSES,
+    })
+    const runAppWildcard = new gcp.dns.RecordSet(
+      'RunAppWildcardRecord',
+      {
+        project,
+        managedZone: runAppZone.name,
+        // Every service's own name lives here: a collector is
+        // `<service>-<hash>-<region>.run.app`, and nothing in this network
+        // reaches Cloud Run by the apex itself.
+        name: `*.${RUN_APP_ZONE}`,
+        type: 'CNAME',
+        ttl: 60,
+        rrdatas: [RUN_APP_ZONE],
+      },
+      { dependsOn: [runAppApex] },
+    )
+    const runAppRecords = [runAppApex, runAppWildcard]
 
     const accounts = Object.fromEntries(
       Object.entries(ACCOUNTS).map(([role, resource]) => [
@@ -437,10 +538,10 @@ export const gcpNetworkProvider =
        */
       exposure: 'private',
       subnetwork: subnetwork.id,
-      // Offered to every role and read only by the two that are Cloud Run
-      // services. Separate from `subnetwork` because that one also places the
-      // API's internal address, which belongs beside its clients rather than in
-      // the range a firewall rule names as a source.
+      // Offered to every role and read only by the API and the collector; the
+      // registry proxy stays out of it. Separate from `subnetwork` because that
+      // one also places the API's internal address, which belongs beside its
+      // clients rather than in the range a firewall rule names as a source.
       egressSubnetwork: cloudRunEgress.id,
       serviceAccount: accounts[role].email,
     })
@@ -456,6 +557,11 @@ export const gcpNetworkProvider =
       placementFor,
       ready: [
         privateServiceAccess,
+        // Before any workload, because the first thing a collector's client
+        // does is resolve its name: a service that came up while this was
+        // half-applied would export to the public address for as long as its
+        // resolver cached it.
+        ...runAppRecords,
         cloudRunEgress,
         managedProxy,
         internal,

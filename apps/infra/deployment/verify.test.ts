@@ -546,7 +546,7 @@ test('rejects a public API config from a stale release', async () => {
 test('verifies a public API config that does not advertise an image list', async () => {
   // /api/config carries no supportedImages field yet (#1045), so comparing one
   // against it failed every apply that set BOXLITE_SYSTEM_IMAGES (#1119). The
-  // images below are what that variable used to resolve to; passing them must
+  // images below stand in for what that variable resolves to; passing them must
   // not reintroduce the assertion before #1045 ships.
   const verification = await verifyPublicDeployment({
     ...publicDeploymentOptions(async (url: any) =>
@@ -558,7 +558,7 @@ test('verifies a public API config that does not advertise an image list', async
             proxyTemplateUrl: 'https://proxy.dev.boxlite.ai',
           }),
     ),
-    expectedSupportedImages: [{ name: 'sandbaseai-hermes', ref: 'sam2026go/hermes-agent:boxlite-noexpose-20260726' }],
+    expectedSupportedImages: [{ name: 'tools', ref: 'example.test/tools:1' }],
   })
 
   assert.equal(verification.version, '0.9.7')

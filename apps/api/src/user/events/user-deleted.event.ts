@@ -5,10 +5,13 @@
  */
 
 import { EntityManager } from 'typeorm'
+import { TransactionalEvent } from '../../common/events/transactional.event'
 
-export class UserDeletedEvent {
+export class UserDeletedEvent extends TransactionalEvent {
   constructor(
-    public readonly entityManager: EntityManager,
+    entityManager: EntityManager,
     public readonly userId: string,
-  ) {}
+  ) {
+    super(entityManager)
+  }
 }

@@ -203,11 +203,50 @@ const AUTH_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
-const NETWORK_SCOPES: &[CommandScope] = &[CommandScope {
-    name: "tunnel",
-    globals: BOX_GLOBALS,
-    children: &[],
-}];
+const NETWORK_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "inbound",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "outbound",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "tunnel",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+];
+const SSH_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "configure",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "status",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "disable",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "configure-and-forward",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "forward",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+];
 const VOLUME_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "create",
@@ -310,6 +349,11 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         name: "network",
         globals: BOX_GLOBALS,
         children: NETWORK_SCOPES,
+    },
+    CommandScope {
+        name: "ssh",
+        globals: BOX_GLOBALS,
+        children: SSH_SCOPES,
     },
     CommandScope {
         name: "serve",
@@ -611,6 +655,9 @@ pub enum Commands {
 
     /// Manage box networking
     Network(crate::commands::network::NetworkArgs),
+
+    /// Configure, inspect, disable, or forward to guest SSH
+    Ssh(crate::commands::ssh::SshArgs),
 
     /// Start a long-running REST API server
     Serve(crate::commands::serve::ServeArgs),
@@ -1149,16 +1196,16 @@ pub struct NetworkFlags {
 
     /// Restrict TCP and UDP egress to the listed hosts/IPs (repeatable);
     /// everything else is refused at connect time. Implies network=enabled.
-    /// Patterns: exact host, "*.example.com", IP, or CIDR. Hostname rules need
-    /// TLS SNI / HTTP Host inspection, so a hostname-only list denies all UDP;
-    /// add the IP or CIDR to keep UDP open. Incompatible with `--network
-    /// disabled`.
+    /// Patterns: exact host, "*.example.com", IPv4, or IPv4 CIDR. Hostname
+    /// rules need TLS SNI / HTTP Host inspection, so a hostname-only list
+    /// denies all UDP; add the IP or CIDR to keep UDP open. Incompatible with
+    /// `--network disabled`.
     #[arg(long = "allow-net", value_name = "HOST")]
     pub allow_net: Vec<String>,
 
-    /// Inbound mode: "enabled" (services the box exposes are publicly
-    /// reachable) or "disabled" (default — private, unreachable from outside
-    /// the box).
+    /// Inbound mode: "enabled" (services the box exposes are reachable
+    /// through the remote proxy without sign-in) or "disabled" (default —
+    /// unreachable from outside the box).
     #[arg(long = "inbound", value_name = "MODE")]
     pub inbound: Option<String>,
 
@@ -1887,13 +1934,6 @@ mod tests {
             panic!("expected run");
         };
         assert_eq!(run.entrypoint.as_deref(), Some("/bin/sh"));
-
-        let cli = Cli::try_parse_from(["boxlite", "cp", "--no-include-parent", "box:/src", "/dst"])
-            .expect("inverse parent option parses");
-        let Commands::Cp(cp) = cli.command else {
-            panic!("expected cp");
-        };
-        assert!(cp.no_include_parent);
     }
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -2326,7 +2366,7 @@ mod tests {
             .expect("disabled is valid");
 
         assert!(matches!(opts.network, NetworkSpec::Disabled));
-        // Without --inbound, inbound stays private.
+        // Without --inbound, inbound stays disabled.
         assert!(matches!(opts.inbound_network, NetworkSpec::Disabled));
     }
 
@@ -2372,7 +2412,7 @@ mod tests {
     }
 
     #[test]
-    fn test_network_flags_inbound_disabled_sets_private() {
+    fn test_network_flags_inbound_disabled_sets_disabled() {
         // --inbound disabled alone (no --network/--allow-net) still applies,
         // and leaves outbound at its Enabled/full-access default.
         let mut opts = BoxOptions::default();
@@ -2652,7 +2692,9 @@ mod tests {
         let Commands::Network(network) = cli.command else {
             panic!("expected Commands::Network");
         };
-        let NetworkCommand::Tunnel(args) = network.command;
+        let NetworkCommand::Tunnel(args) = network.command else {
+            panic!("expected tunnel command");
+        };
         assert_eq!(args.target, "mybox");
         assert_eq!(args.port, 3000);
         assert!(args.listen.is_none());

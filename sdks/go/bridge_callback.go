@@ -282,6 +282,75 @@ func goBoxliteOnImageList(list *C.CImageInfoList, errPtr *C.CBoxliteError, userD
 	ch <- imageListResult{value: images}
 }
 
+//export goBoxliteOnImageGet
+func goBoxliteOnImageGet(detail *C.CImageDetail, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &detail, func(d **C.CImageDetail) {
+		if d != nil && *d != nil {
+			C.boxlite_free_image_detail(*d)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan imageDetailResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- imageDetailResult{err: err}
+		return
+	}
+	if detail == nil {
+		ch <- imageDetailResult{}
+		return
+	}
+	v := cImageDetailToGo(detail)
+	C.boxlite_free_image_detail(detail)
+	ch <- imageDetailResult{value: &v}
+}
+
+//export goBoxliteOnImageRemove
+func goBoxliteOnImageRemove(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
+// goBoxliteOnImageUsage copies the usage out during the callback: the C side
+// lends the pointer for the callback only.
+//
+//export goBoxliteOnImageUsage
+func goBoxliteOnImageUsage(usage *C.CImageUsage, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	// Claim before Value/Delete; see claimHandleForDispatch.
+	if !claimHandleForDispatch(h) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan imageUsageResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- imageUsageResult{err: err}
+		return
+	}
+	if usage == nil {
+		ch <- imageUsageResult{}
+		return
+	}
+	ch <- imageUsageResult{value: &ImageUsage{
+		Count:      uint64(usage.count),
+		Limit:      uint64(usage.limit),
+		KnownBytes: uint64(usage.known_bytes),
+	}}
+}
+
 // ─── Volume callbacks ──────────────────────────────────────────────────────
 
 // goBoxliteOnVolume delivers a single CVolumeInfo. Shared by Create and Get
@@ -349,6 +418,71 @@ func goBoxliteOnVolumeList(list *C.CVolumeInfoList, errPtr *C.CBoxliteError, use
 
 //export goBoxliteOnVolumeRemove
 func goBoxliteOnVolumeRemove(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
+//export goBoxliteOnRegistryCreate
+func goBoxliteOnRegistryCreate(login *C.CRegistryCredential, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &login, func(l **C.CRegistryCredential) {
+		if l != nil && *l != nil {
+			C.boxlite_free_registry_credential(*l)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan registryResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- registryResult{err: err}
+		return
+	}
+	if login == nil {
+		ch <- registryResult{}
+		return
+	}
+	v := cRegistryCredentialToGo(login)
+	C.boxlite_free_registry_credential(login)
+	ch <- registryResult{value: &v}
+}
+
+//export goBoxliteOnRegistryList
+func goBoxliteOnRegistryList(list *C.CRegistryCredentialList, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &list, func(l **C.CRegistryCredentialList) {
+		if l != nil && *l != nil {
+			C.boxlite_free_registry_credential_list(*l)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan registryListResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- registryListResult{err: err}
+		return
+	}
+	logins := convertRegistryCredentialList(list)
+	if list != nil {
+		C.boxlite_free_registry_credential_list(list)
+	}
+	ch <- registryListResult{value: logins}
+}
+
+//export goBoxliteOnRegistryRemove
+func goBoxliteOnRegistryRemove(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	deliverUnitResult(userData, errPtr)
 }
 
@@ -525,6 +659,44 @@ func goBoxliteOnTunnelForwarderClose(errPtr *C.CBoxliteError, userData unsafe.Po
 	deliverUnitResult(userData, errPtr)
 }
 
+// freeSSHStatus releases a status the native side handed to an SSH callback.
+// A variable so development tests can count releases.
+var freeSSHStatus = func(status *C.CSshStatus) { C.boxlite_free_ssh_status(status) }
+
+func freeSSHStatusPayload(status **C.CSshStatus) {
+	if *status != nil {
+		freeSSHStatus(*status)
+	}
+}
+
+// goBoxliteOnSSHStatus serves configure, status, and disable. The callback
+// owns the status, so every path frees it once: a zero or lost handle frees
+// without delivering, and a won claim copies it before checking the channel.
+//
+//export goBoxliteOnSSHStatus
+func goBoxliteOnSSHStatus(status *C.CSshStatus, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		freeSSHStatusPayload(&status)
+		return
+	}
+	if !claimOrFreePayload(h, &status, freeSSHStatusPayload) {
+		return
+	}
+	defer h.Delete()
+	result := sshStatusResult{err: errorFromCError(errPtr)}
+	if status != nil {
+		if result.err == nil {
+			value := sshStatusFromC(status)
+			result.value = &value
+		}
+		freeSSHStatus(status)
+	}
+	if ch, ok := h.Value().(chan sshStatusResult); ok {
+		ch <- result
+	}
+}
+
 // ─── Generic delivery helpers ──────────────────────────────────────────────
 
 // deliverUnitResult sends an error-only result to the channel referenced by
@@ -607,6 +779,16 @@ type imageListResult struct {
 	err   error
 }
 
+type imageDetailResult struct {
+	value *ImageDetail
+	err   error
+}
+
+type imageUsageResult struct {
+	value *ImageUsage
+	err   error
+}
+
 type volumeResult struct {
 	value *VolumeInfo
 	err   error
@@ -614,6 +796,16 @@ type volumeResult struct {
 
 type volumeListResult struct {
 	value []VolumeInfo
+	err   error
+}
+
+type registryResult struct {
+	value *RegistryCredential
+	err   error
+}
+
+type registryListResult struct {
+	value []RegistryCredential
 	err   error
 }
 
@@ -640,4 +832,9 @@ type runtimeMetricsResult struct {
 type executionWaitResult struct {
 	exitCode int
 	err      error
+}
+
+type sshStatusResult struct {
+	value *SSHStatus
+	err   error
 }

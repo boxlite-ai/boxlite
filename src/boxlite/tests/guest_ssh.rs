@@ -53,6 +53,7 @@ async fn runtime_ssh_shutdown_during_vm_startup() {
     let options = BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     };
     let runtime = BoxliteRuntime::new(options.clone()).unwrap();
     let mut box_options = common::alpine_opts();
@@ -186,6 +187,7 @@ async fn check_ssh_start_policy(
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
     let mut sandbox = runtime.create(options, None).await.unwrap();
@@ -395,6 +397,7 @@ async fn guest_ssh_exec_inherits_container_default_user() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
     let mut options = common::alpine_opts();
@@ -579,6 +582,7 @@ async fn guest_ssh_accounts_share_identity_and_file_permissions() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
     // The numeric case deliberately has no passwd entry. The named case
@@ -837,6 +841,7 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
     let mut runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
     let mut options = common::alpine_opts();
@@ -894,6 +899,7 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
         runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
+            ..Default::default()
         })
         .unwrap();
         sandbox = runtime.get("guest-ssh").await.unwrap().unwrap();
@@ -945,6 +951,8 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
         assert_eq!(checked_output(exec).await, b"ssh-exec-ok");
 
         let mut pty = client_command("ssh", &user_key, &known_hosts, port);
+        // Without TERM, OpenSSH sends an empty terminal type (as on CI runners).
+        pty.env_remove("TERM");
         pty.args(["-tt", "root@127.0.0.1", "test -t 0 && printf ssh-pty-ok"]);
         assert_eq!(checked_output(pty).await, b"ssh-pty-ok");
 
@@ -1113,6 +1121,7 @@ async fn runtime_ssh_control_and_recovered_handle() {
     let options = BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     };
     let mut runtime = BoxliteRuntime::new(options.clone()).unwrap();
     let mut box_options = common::alpine_opts();

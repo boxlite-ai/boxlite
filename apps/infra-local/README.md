@@ -6,13 +6,14 @@ BoxLite. One Python orchestrator (`compose`) drives both layers:
 - **L1 — 12 BoxLite microVM boxes**: postgres, redis, minio (+ a one-shot bucket
   init), registry, dex, jaeger, pgadmin, registry-ui, maildev, otel-collector, caddy —
   via the BoxLite SDK (`orchestrator.py` / `services.py`).
-- **L2 — 4 native macOS processes**: API (NestJS, `:3001`), Runner (Go, `:3003`),
-  Proxy (Go, `:4000`), Dashboard (Vite, `:3000`) — via `subprocess` supervision
-  (`native.py`).
+- **L2 — 5 native macOS processes**: API (NestJS, `:3001`), registry proxy (Go,
+  `:4100`), Runner (Go, `:3003`), Proxy (Go, `:4000`), Dashboard (Vite, `:3000`) —
+  via `subprocess` supervision (`native.py`).
 
 All generated state lives under one gitignored dir, `<repo>/.apps-local/`
 (`data/` volumes, `boxlite/` L1 SDK home, `boxlite-runner/` L3 home, `bin/`
-binaries, `logs/`).
+binaries, `logs/`, and `registry-secrets/`, where the API and the registry
+proxy keep registry passwords in plain files).
 
 ## Quick start
 
@@ -39,7 +40,7 @@ source of truth — `python -m compose --help`):
 | `make up [COMPONENTS="api runner"]` | ensure L1 boxes + start L2 (self-healing: installs deps, builds missing binaries, seeds) |
 | `make status` | one-screen L1 + L2 health |
 | `make down [ARGS=--all]` | stop L2 processes (`--all` also stops/removes L1 boxes; data kept) |
-| `make restart COMPONENTS="runner dex"` | restart L2 proc(s) (runner/proxy rebuild) **and/or** recreate L1 box(es) |
+| `make restart COMPONENTS="runner dex"` | restart L2 proc(s) (the Go ones — runner, proxy, registry-proxy — rebuild) **and/or** recreate L1 box(es) |
 | `make logs COMPONENT=api` | tail a component log (`all` for everything) |
 | `make reset [ARGS=--hard]` | wipe L2 runtime state (`--hard` also drops + rebuilds the schema) |
 | `make nuke` | tear down **everything** — destroy L1 boxes + wipe data + logs (cold start) |
@@ -88,12 +89,18 @@ relies on — read-write host volumes + host port mapping — is pinned by
 | All API calls `401` | `PROXY_API_KEY` empty in `apps/api/.env` | set it non-empty |
 | Runner: `Another BoxliteRuntime is already using directory` | a stale runner holds `.apps-local/boxlite-runner/.lock` | `lsof` the lock, kill the stale PID |
 | Any L1 box misbehaving | its stateful in-box process is wedged | `make restart COMPONENTS=<box>` |
-| "Create Box" from the UI is incomplete | image resolution is mid-rewrite upstream + the picker is PostHog flag-gated | known limitation; use `POST /api/box` directly |
+| "Create Box" from the UI only offers three images | the picker is hardcoded (`CreateBoxDialog.tsx:30-34`); a catalog-backed one is a later change | `POST /api/box` for any other ref |
 
-> **Box boot is unverified on this stack** — image resolution is mid-rewrite
-> upstream (`TODO(image-rewrite)` in `apps/api/src/box/services/box.service.ts`)
-> and the dashboard image picker was removed. L1 services, API, runner, auth, and
-> the dashboard all work.
+> **Box boot is unverified on this stack** — the UI picker offers only the three
+> curated images hardcoded in `CreateBoxDialog.tsx`, so any other ref goes
+> through the API. Image resolution itself is in place: a curated name resolves
+> from the curated set, a ref a registered login covers is routed through the
+> registry proxy, and any other is checked against the registry allowlist.
+> This stack sets no `BOXLITE_IMAGE_REGISTRY_ALLOWLIST`, so the API
+> falls back to the public registries and refuses the local registry at
+> `127.0.0.1:25000` — set the variable in `apps/api/.env` to boot a box from it.
+> (`INSECURE_REGISTRIES` in `compose/native.py` is the runner's own setting, not
+> this gate.) L1 services, API, runner, auth, and the dashboard all work.
 
 ## Layout
 

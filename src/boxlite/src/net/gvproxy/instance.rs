@@ -96,6 +96,7 @@ impl GvproxyInstance {
             .with_allow_net(spec.allow_net.clone())
             .with_secrets(secrets)
             .with_rate_limit(spec.rate_limit);
+        config.outbound_disabled = spec.outbound_disabled;
 
         if let (Some(cert), Some(key)) = (spec.ca_cert_pem.as_deref(), spec.ca_key_pem.as_deref()) {
             config = config.with_ca(cert.to_string(), key.to_string());

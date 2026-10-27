@@ -24,8 +24,8 @@ use crate::disk::Disk;
 use crate::event_listener::EventListener;
 #[cfg(target_os = "linux")]
 use crate::fs::BindMountHandle;
-use crate::litebox::BoxTunnel;
 use crate::litebox::copy::{CopyOptions, CopySourceKind};
+use crate::litebox::{BoxConnection, BoxTunnel, SshConfig, SshStatus};
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::net::NetworkBackend;
@@ -126,6 +126,7 @@ pub(crate) struct BoxImpl {
     /// Serializes disk-mutating snapshot/clone/export operations.
     /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
     pub(crate) disk_ops: tokio::sync::Mutex<()>,
+    network_updates: tokio::sync::Mutex<()>,
 
     /// Event listeners (from runtime options).
     pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
@@ -185,6 +186,7 @@ impl BoxImpl {
             layout,
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
+            network_updates: tokio::sync::Mutex::new(()),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
             watcher: std::sync::OnceLock::new(),
@@ -264,6 +266,12 @@ impl BoxImpl {
             network.published_ports = Some(bindings.to_vec());
         }
         info
+    }
+
+    pub(crate) fn refresh_network_policy(&self) -> BoxliteResult<()> {
+        let persisted = self.runtime.box_manager.update_box(&self.config.id)?;
+        self.state.write().outbound_policy = persisted.outbound_policy;
+        Ok(())
     }
 
     // ========================================================================
@@ -674,6 +682,7 @@ impl BoxImpl {
     }
 
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
+        let _network_update = self.network_updates.lock().await;
         let t0 = Instant::now();
 
         // Early exit if already stopped (idempotent, prevents double-counting)
@@ -884,7 +893,7 @@ impl BoxImpl {
             temp_tar.to_path_buf(),
             boxlite_shared::tar::PackContext {
                 follow_symlinks: opts.follow_symlinks,
-                include_parent: opts.include_parent,
+                include_parent: !boxlite_shared::tar::specifies_current_dir(host_src.as_os_str()),
             },
         )
         .await?;
@@ -956,7 +965,6 @@ impl BoxImpl {
             .download_tar(
                 container_src,
                 Some(self.container_id()),
-                opts.include_parent,
                 opts.follow_symlinks,
                 &temp_tar,
             )
@@ -1060,12 +1068,7 @@ impl BoxImpl {
         let live = self.live_state().await?;
         let mut files_iface = live.guest_session.files().await?;
         files_iface
-            .download_stream(
-                &container_src,
-                Some(&cid),
-                opts.include_parent,
-                opts.follow_symlinks,
-            )
+            .download_stream(&container_src, Some(&cid), opts.follow_symlinks)
             .await
     }
 
@@ -1253,8 +1256,18 @@ impl BoxImpl {
         // The returned cleanup_guard stays armed until we disarm it after all
         // operations succeed. If any operation fails, the guard's Drop will
         // cleanup the VM process and directory.
+        let mut state = state;
+        state.outbound_policy = self
+            .runtime
+            .box_manager
+            .update_box(&self.config.id)?
+            .outbound_policy;
         let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
-        let (live_state, mut cleanup_guard) = builder.build().await?;
+        let crate::litebox::init::BuiltBox {
+            live: live_state,
+            guard: mut cleanup_guard,
+            resolved_image,
+        } = builder.build().await?;
 
         // The box is up. If we adopted one whose init was already running, that
         // init needs no `Container.Start`; recording it now keeps
@@ -1310,6 +1323,8 @@ impl BoxImpl {
             // clears ExitCode on start too). The guest drops its matching
             // exit file in Container.Init.
             state.exit_code = None;
+
+            state.record_resolved_image(resolved_image);
 
             // Initialize health status if health check is configured
             if self.config.options.advanced.health_check.is_some() {
@@ -1549,6 +1564,7 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     }
 
     async fn info(&self) -> BoxliteResult<BoxInfo> {
+        self.refresh_network_policy()?;
         Ok(BoxImpl::info(self))
     }
 
@@ -1614,10 +1630,69 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         BoxImpl::export_box(self, options, dest).await
     }
+
+    async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
+        BoxImpl::ssh_configure(self, config).await
+    }
+
+    async fn ssh_status(&self) -> BoxliteResult<SshStatus> {
+        BoxImpl::ssh_status(self).await
+    }
+
+    async fn ssh_disable(&self) -> BoxliteResult<SshStatus> {
+        BoxImpl::ssh_disable(self).await
+    }
 }
 
 #[async_trait::async_trait]
 impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
+    async fn update_outbound(
+        &self,
+        policy: crate::runtime::options::OutboundNetworkConfig,
+    ) -> BoxliteResult<()> {
+        let _update = self.network_updates.lock().await;
+        if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
+            return Err(BoxliteError::InvalidState(
+                "outbound policy updates require a running box".into(),
+            ));
+        }
+        let backend = self.network().await?;
+        let lock_id = self
+            .state
+            .read()
+            .lock_id
+            .ok_or_else(|| BoxliteError::Internal("running box has no lock".into()))?;
+        let locker = self.runtime.lock_manager.retrieve(lock_id)?;
+        let _guard = loop {
+            if let Some(guard) = LockGuard::try_new(&*locker) {
+                break guard;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        let current = self.runtime.box_manager.update_box(&self.config.id)?;
+        if current.status != BoxStatus::Running {
+            return Err(BoxliteError::InvalidState(
+                "outbound policy updates require a running box".into(),
+            ));
+        }
+        let previous = backend.outbound().await?;
+        backend.set_outbound(&policy).await?;
+        if let Err(error) = self
+            .runtime
+            .box_manager
+            .save_outbound(&self.config.id, &policy)
+        {
+            if let Err(rollback) = backend.set_outbound(&previous).await {
+                return Err(BoxliteError::InvalidState(format!(
+                    "outbound policy persistence failed ({error}); rollback failed ({rollback}); live policy is uncertain, retry the complete update"
+                )));
+            }
+            return Err(error);
+        }
+        self.state.write().outbound_policy = Some(policy);
+        Ok(())
+    }
+
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
         let network = self
             .live_state()
@@ -1625,9 +1700,9 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
             .network
             .clone()
             .ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))?;
-        Ok(BoxTunnel::local(
-            network.tunnel(target).await?.into_owned_fd()?,
-        ))
+        Ok(BoxTunnel::new(None, async move {
+            BoxConnection::from_fd(network.tunnel(target).await?.into_owned_fd()?)
+        }))
     }
 }
 
@@ -1847,6 +1922,7 @@ mod tests {
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
+            ..Default::default()
         })
         .expect("create runtime");
         let (guest_session, server) = start_stub_guest(gate).await;
@@ -2087,6 +2163,7 @@ mod tests {
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
+            ..Default::default()
         })
         .expect("create runtime");
 
@@ -2258,6 +2335,7 @@ mod tests {
         let mut runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
+            ..Default::default()
         })
         .expect("create runtime");
         Arc::get_mut(&mut runtime)
@@ -2309,6 +2387,7 @@ mod tests {
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
+            ..Default::default()
         })
         .expect("create runtime");
         let requested = PortSpec {
@@ -2394,6 +2473,7 @@ mod tests {
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
+            ..Default::default()
         })
         .expect("create runtime");
 
@@ -2437,6 +2517,7 @@ mod tests {
         let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
+            ..Default::default()
         })
         .expect("create runtime");
 

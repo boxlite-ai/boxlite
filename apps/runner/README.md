@@ -33,7 +33,6 @@ the request path), see [`apps/README.md`](../README.md).
   - **File I/O** — tar-framed upload and download
   - **Per-box metrics** — CPU / memory / net / exec counters
   - **Runner info** — host CPU / memory / disk + service health
-  - **Toolbox proxy** — browser xterm.js over WebSocket
 - The background services spawned at startup — box state sync,
   metrics collector, v2 job poller, v2 healthcheck.
 - The complete REST surface (one consolidated table).
@@ -77,7 +76,6 @@ If you want the formal API schema, see
 │    boxlite_exec_attach.go  GET /attach (WebSocket)                       │
 │    boxlite_files.go        PUT/GET /files                                │
 │    boxlite_metrics.go      GET /metrics                                  │
-│    proxy.go                terminal preview (xterm.js + WS)              │
 │    info.go, health.go      /info, /                                      │
 │                                                                          │
 │  pkg/services/           BoxService, BoxSyncService              │
@@ -113,8 +111,13 @@ the in-process TTL caches under `pkg/cache/`.
 `cmd/runner/main.go` brings up the process in this order:
 
 1. **BoxLite runtime** is initialized via `boxlite.NewClient(...)`. This
-   loads the Rust core, opens `~/.boxlite/`, and is the single shared
-   handle to the VM hypervisor.
+   loads the Rust core, opens the BoxLite home, and is the single shared
+   handle to the VM hypervisor. The client resolves the home the way
+   boxlite-core would — `BOXLITE_HOME_DIR`, else `$BOXLITE_HOME`, else
+   `.boxlite` under `$HOME` (or the passwd home when `$HOME` is unset) —
+   passes it to core explicitly, and exposes it as `HomeDir()`, so the
+   rest of the runner (migration staging under `<home>/migrate`) reads the
+   same directory as the runtime.
 2. **Service singletons** are constructed and stashed on the
    `runner.GetInstance(...)` global: `BoxService`, `BackupInfoCache`,
    `ArtifactErrorCache`, `metrics.Collector`. Controllers later read them
@@ -155,9 +158,16 @@ crash handling live in the runtime, not the runner.
 | `POST` | `/boxes/:id/destroy` | `Destroy` | Tear down completely |
 | `POST` | `/boxes/:id/recover` | `Recover` | Bring an `error` box back via a named strategy |
 | `POST` | `/boxes/:id/is-recoverable` | `IsRecoverable` | Static check against `common.IsRecoverable(reason)` |
-| `POST` | `/boxes/:id/network-settings` | `UpdateNetworkSettings` | Set block-all / allow-list |
+| `POST` | `/boxes/:id/network-settings` | `UpdateNetworkSettings` | Set the outbound policy (`outboundEnabled` / `outboundAllowNet`) |
 | `POST` | `/boxes/:id/backup` | `CreateBackup` | Kick off async backup; updates `BackupInfoCache` |
 | `GET` | `/boxes/:id` | `Info` | Combined state + backup state + runtime version |
+
+`Create` and `Recover` take the outbound network policy as
+`outboundEnabled` and an `outboundAllowNet` entry list. `outboundEnabled` is
+required: a body without it, such as a job queued by an API that predates it,
+is rejected as an invalid argument before the runner mounts volumes, creates
+a box, or (for `Recover`) destroys the old one
+(`networkSpec` in [`pkg/boxlite/client.go`](pkg/boxlite/client.go)).
 
 `Info` is the only endpoint that fans out: it pulls live state from the
 runtime _and_ backup state from `BackupInfoCache`, then fetches the
@@ -441,28 +451,14 @@ durations, and network counters. All values come from
 `/info` combines:
 
 - A snapshot from `metrics.Collector.Collect(ctx)` — host CPU load
-  average, CPU/mem/disk %, summed allocated CPU/RAM/disk across running
-  boxes, artifact count, started box count.
+  average, CPU/mem %, summed allocated CPU/RAM across running boxes,
+  disk usage of the BoxLite home's filesystem, artifact count, started
+  box count.
 - `runner.InspectRunnerServices(ctx)` — pings the BoxLite runtime with
   a 2 s timeout and reports `boxlite: healthy|<err>`.
 
 The Prometheus endpoint is the standard `promhttp.Handler()` and exposes
 the counters maintained in `pkg/common/` (operation counts, etc.).
-
-### 7. Terminal preview
-
-`Any /boxes/:boxId/toolbox/*path` — the legacy route is kept for the
-dashboard terminal preview only:
-
-- **HTTP GET** — returns the embedded xterm.js page (HTML + CDN links
-  in `proxy.go`).
-- **WebSocket** — bridges browser keystrokes to a fresh `/bin/sh`
-  execution started via `r.Boxlite.StartExecution(...)`. Output frames
-  are sent as WebSocket text messages; input is read from the same
-  socket and written to the execution's stdin.
-
-This is a convenience surface for the dashboard, not the supported
-programmatic stdio channel — use `/attach` for that.
 
 ---
 
@@ -490,10 +486,16 @@ independent loops:
   smoothed CPU % without re-sampling on each request.
 - **Allocated resources snapshot** every
   `AllocatedResourcesSnapshotInterval` — queries `Boxlite.ListInfo()`
-  and sums the CPU/RAM/disk allocations across running boxes.
+  and sums the CPU/RAM allocations across running boxes.
 
 `Collect(ctx)` reads the current values with a short timeout and is
-called from both `/info` and the v2 healthcheck.
+called from both `/info` and the v2 healthcheck. Disk numbers come from
+one statfs of the filesystem holding the BoxLite home (`HomeDir()`),
+which is where boxes, images and bases live: `TotalDiskGiB` is its size,
+`DiskUsagePercentage` its use (`df`'s Use%), and `AllocatedDiskGiB` its
+used space (`df`'s Used) — not a sum of the boxes' requested sizes. A
+filesystem reporting zero capacity is an error, so the API never
+receives a `diskGiB` of 0.
 
 ### v2 job poller + executor
 
@@ -551,8 +553,7 @@ the Swagger UI (development only).
 | `POST` | `/boxes/:id/backup` | Async backup |
 | `POST` | `/boxes/:id/recover` | Recover from error state |
 | `POST` | `/boxes/:id/is-recoverable` | Check whether an error reason is recoverable |
-| `POST` | `/boxes/:id/network-settings` | Update block-all / allow-list |
-| `Any` | `/boxes/:id/toolbox/*path` | Terminal preview only |
+| `POST` | `/boxes/:id/network-settings` | Update the outbound policy |
 | `POST` | `/artifacts/pull` | Async pull (mirror + optional push) |
 | `POST` | `/artifacts/build` | Async build |
 | `GET` | `/artifacts/exists` | Local existence check |
@@ -593,6 +594,12 @@ Optional features are toggled by env vars:
 - `BOXLITE_API_VERSION=2` — spawn the long-poll + healthcheck loops.
 - `BOXLITE_MAX_SESSION_LIFETIME`, `BOXLITE_RECONNECT_GRACE`,
   `BOXLITE_SHUTDOWN_GRACE` — exec reaping timers.
+- `REGISTRY_PROXY_HOST`, `REGISTRY_PROXY_USERNAME`, `REGISTRY_PROXY_PASSWORD` —
+  pull an image whose registry credentials only the platform holds through the
+  [registry proxy](../image-service/README.md). The password is this runner's own
+  API key, so with a host set it defaults to `BOXLITE_RUNNER_TOKEN`, and the
+  username to `runner`. A proxy host also listed in `INSECURE_REGISTRIES` is
+  reached over HTTP.
 
 Cloud hosts use the [shared runner boot logic](../infra/mdeploy/stack/runner-boot.ts)
 with cloud-specific providers; the retained AWS stack has its own bootstrap path. For local
@@ -637,7 +644,7 @@ scripts/build/fix-go-symbols.sh target/debug/libboxlite.a
   - [`pkg/api/controllers/artifact.go`](pkg/api/controllers/artifact.go) — pull/build/inspect
   - [`pkg/api/controllers/boxlite_exec.go`](pkg/api/controllers/boxlite_exec.go) — exec create / signal / resize / status / legacy I/O
   - [`pkg/api/controllers/boxlite_exec_attach.go`](pkg/api/controllers/boxlite_exec_attach.go) — `/attach` WebSocket
-  - [`pkg/api/controllers/boxlite_files.go`](pkg/api/controllers/boxlite_files.go), [`boxlite_metrics.go`](pkg/api/controllers/boxlite_metrics.go), [`proxy.go`](pkg/api/controllers/proxy.go), [`info.go`](pkg/api/controllers/info.go)
+  - [`pkg/api/controllers/boxlite_files.go`](pkg/api/controllers/boxlite_files.go), [`boxlite_metrics.go`](pkg/api/controllers/boxlite_metrics.go), [`info.go`](pkg/api/controllers/info.go)
 
 - **Services / state**:
   - [`pkg/services/box.go`](pkg/services/box.go), [`sandbox_sync.go`](pkg/services/sandbox_sync.go)

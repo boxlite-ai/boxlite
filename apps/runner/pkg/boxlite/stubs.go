@@ -15,11 +15,18 @@ import (
 func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.RecoverBoxDTO) error {
 	c.logger.Info("recover box", "box", boxId)
 
+	// Check before Destroy: a request that cannot be recreated must not cost
+	// the box it was meant to recover.
+	createDto := recoverCreateDto(boxId, recoverDto)
+	if _, err := networkSpec(createDto); err != nil {
+		return err
+	}
+
 	if err := c.Destroy(ctx, boxId); err != nil {
 		c.logger.Warn("failed to destroy during recover", "error", err)
 	}
 
-	_, _, err := c.Create(ctx, recoverCreateDto(boxId, recoverDto))
+	_, _, err := c.Create(ctx, createDto)
 	return err
 }
 
@@ -38,17 +45,17 @@ func recoverCreateDto(boxId string, recoverDto dto.RecoverBoxDTO) dto.CreateBoxD
 		Env:              recoverDto.Env,
 		Volumes:          recoverDto.Volumes,
 		Secrets:          recoverDto.Secrets,
-		NetworkBlockAll:  recoverDto.NetworkBlockAll,
-		NetworkAllowList: recoverDto.NetworkAllowList,
+		OutboundEnabled:  recoverDto.OutboundEnabled,
+		OutboundAllowNet: recoverDto.OutboundAllowNet,
 		FromVolumeId:     recoverDto.FromVolumeId,
 	}
 }
 
-// UpdateNetworkSettings updates the network allowlist/blocklist for a box.
-// TODO: Implement when BoxLite Go SDK exposes network configuration.
+// UpdateNetworkSettings is the unsupported legacy partial allowlist/blocklist API.
+// Full outbound replacements use SetOutboundNetwork.
 func (c *Client) UpdateNetworkSettings(ctx context.Context, boxId string, settings dto.UpdateNetworkSettingsDTO) error {
 	c.logger.Warn("update network settings not yet implemented in BoxLite", "box", boxId)
-	return errdefs.ErrNotImplemented.WithMessage("live network settings update is not supported by the BoxLite Go SDK")
+	return errdefs.ErrNotImplemented.WithMessage("legacy network patches are unsupported; use the outbound policy update")
 }
 
 // GetDaemonVersion returns the runtime version for the legacy API field.

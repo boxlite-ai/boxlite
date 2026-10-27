@@ -28,20 +28,16 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
     return {
         /**
          * 
-         * @summary Get box ID from signed preview URL token
-         * @param {string} signedPreviewToken Signed preview URL token
-         * @param {number} port Port number to get box ID from signed preview URL token
+         * @summary Read the inbound mode of a box
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        getBoxIdFromSignedPreviewUrlToken: async (signedPreviewToken: string, port: number, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'signedPreviewToken' is not null or undefined
-            assertParamExists('getBoxIdFromSignedPreviewUrlToken', 'signedPreviewToken', signedPreviewToken)
-            // verify required parameter 'port' is not null or undefined
-            assertParamExists('getBoxIdFromSignedPreviewUrlToken', 'port', port)
-            const localVarPath = `/preview/{signedPreviewToken}/{port}/box-id`
-                .replace('{signedPreviewToken}', encodeURIComponent(String(signedPreviewToken)))
-                .replace('{port}', encodeURIComponent(String(port)));
+        getBoxInboundMode: async (boxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'boxId' is not null or undefined
+            assertParamExists('getBoxInboundMode', 'boxId', boxId)
+            const localVarPath = `/preview/{boxId}/inbound`
+                .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -104,78 +100,6 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
                 options: localVarRequestOptions,
             };
         },
-        /**
-         * 
-         * @summary Check if box is public
-         * @param {string} boxId ID of the box
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        isBoxPublic: async (boxId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxId' is not null or undefined
-            assertParamExists('isBoxPublic', 'boxId', boxId)
-            const localVarPath = `/preview/{boxId}/public`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        /**
-         * 
-         * @summary Check if box auth token is valid
-         * @param {string} boxId ID of the box
-         * @param {string} authToken Auth token of the box
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        isValidAuthToken: async (boxId: string, authToken: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'boxId' is not null or undefined
-            assertParamExists('isValidAuthToken', 'boxId', boxId)
-            // verify required parameter 'authToken' is not null or undefined
-            assertParamExists('isValidAuthToken', 'authToken', authToken)
-            const localVarPath = `/preview/{boxId}/validate/{authToken}`
-                .replace('{boxId}', encodeURIComponent(String(boxId)))
-                .replace('{authToken}', encodeURIComponent(String(authToken)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
     }
 };
 
@@ -187,16 +111,15 @@ export const PreviewApiFp = function(configuration?: Configuration) {
     return {
         /**
          * 
-         * @summary Get box ID from signed preview URL token
-         * @param {string} signedPreviewToken Signed preview URL token
-         * @param {number} port Port number to get box ID from signed preview URL token
+         * @summary Read the inbound mode of a box
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async getBoxIdFromSignedPreviewUrlToken(signedPreviewToken: string, port: number, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<string>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getBoxIdFromSignedPreviewUrlToken(signedPreviewToken, port, options);
+        async getBoxInboundMode(boxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<string>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getBoxInboundMode(boxId, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['PreviewApi.getBoxIdFromSignedPreviewUrlToken']?.[localVarOperationServerIndex]?.url;
+            const localVarOperationServerBasePath = operationServerMap['PreviewApi.getBoxInboundMode']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -212,33 +135,6 @@ export const PreviewApiFp = function(configuration?: Configuration) {
             const localVarOperationServerBasePath = operationServerMap['PreviewApi.hasBoxAccess']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
-        /**
-         * 
-         * @summary Check if box is public
-         * @param {string} boxId ID of the box
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async isBoxPublic(boxId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<boolean>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.isBoxPublic(boxId, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['PreviewApi.isBoxPublic']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         * 
-         * @summary Check if box auth token is valid
-         * @param {string} boxId ID of the box
-         * @param {string} authToken Auth token of the box
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async isValidAuthToken(boxId: string, authToken: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<boolean>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.isValidAuthToken(boxId, authToken, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['PreviewApi.isValidAuthToken']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
     }
 };
 
@@ -250,14 +146,13 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
     return {
         /**
          * 
-         * @summary Get box ID from signed preview URL token
-         * @param {string} signedPreviewToken Signed preview URL token
-         * @param {number} port Port number to get box ID from signed preview URL token
+         * @summary Read the inbound mode of a box
+         * @param {string} boxId ID of the box
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        getBoxIdFromSignedPreviewUrlToken(signedPreviewToken: string, port: number, options?: RawAxiosRequestConfig): AxiosPromise<string> {
-            return localVarFp.getBoxIdFromSignedPreviewUrlToken(signedPreviewToken, port, options).then((request) => request(axios, basePath));
+        getBoxInboundMode(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<string> {
+            return localVarFp.getBoxInboundMode(boxId, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -269,27 +164,6 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
         hasBoxAccess(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<boolean> {
             return localVarFp.hasBoxAccess(boxId, options).then((request) => request(axios, basePath));
         },
-        /**
-         * 
-         * @summary Check if box is public
-         * @param {string} boxId ID of the box
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        isBoxPublic(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<boolean> {
-            return localVarFp.isBoxPublic(boxId, options).then((request) => request(axios, basePath));
-        },
-        /**
-         * 
-         * @summary Check if box auth token is valid
-         * @param {string} boxId ID of the box
-         * @param {string} authToken Auth token of the box
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        isValidAuthToken(boxId: string, authToken: string, options?: RawAxiosRequestConfig): AxiosPromise<boolean> {
-            return localVarFp.isValidAuthToken(boxId, authToken, options).then((request) => request(axios, basePath));
-        },
     };
 };
 
@@ -299,14 +173,13 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
 export class PreviewApi extends BaseAPI {
     /**
      * 
-     * @summary Get box ID from signed preview URL token
-     * @param {string} signedPreviewToken Signed preview URL token
-     * @param {number} port Port number to get box ID from signed preview URL token
+     * @summary Read the inbound mode of a box
+     * @param {string} boxId ID of the box
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public getBoxIdFromSignedPreviewUrlToken(signedPreviewToken: string, port: number, options?: RawAxiosRequestConfig) {
-        return PreviewApiFp(this.configuration).getBoxIdFromSignedPreviewUrlToken(signedPreviewToken, port, options).then((request) => request(this.axios, this.basePath));
+    public getBoxInboundMode(boxId: string, options?: RawAxiosRequestConfig) {
+        return PreviewApiFp(this.configuration).getBoxInboundMode(boxId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -318,29 +191,6 @@ export class PreviewApi extends BaseAPI {
      */
     public hasBoxAccess(boxId: string, options?: RawAxiosRequestConfig) {
         return PreviewApiFp(this.configuration).hasBoxAccess(boxId, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Check if box is public
-     * @param {string} boxId ID of the box
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public isBoxPublic(boxId: string, options?: RawAxiosRequestConfig) {
-        return PreviewApiFp(this.configuration).isBoxPublic(boxId, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     * 
-     * @summary Check if box auth token is valid
-     * @param {string} boxId ID of the box
-     * @param {string} authToken Auth token of the box
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public isValidAuthToken(boxId: string, authToken: string, options?: RawAxiosRequestConfig) {
-        return PreviewApiFp(this.configuration).isValidAuthToken(boxId, authToken, options).then((request) => request(this.axios, this.basePath));
     }
 }
 

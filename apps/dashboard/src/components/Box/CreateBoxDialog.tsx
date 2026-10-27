@@ -16,22 +16,17 @@ import { boxHourlyPrice, formatPriceCents, type BoxSpec } from '@/lib/box-price'
 import { handleApiError } from '@/lib/error-handling'
 import { formatLifecycleSeconds, validateLifecyclePolicy, validateMounts, type BoxVolumeMount } from '@/lib/cloudBox'
 import { useUsagePricesQuery } from '@/hooks/queries/useUsagePricesQuery'
+import { useImagesQuery } from '@/hooks/queries/useImagesQuery'
 import { useVolumesQuery } from '@/hooks/queries/useVolumesQuery'
 import { VolumeState } from '@boxlite-ai/api-client'
 import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
 import { ChevronDown } from '@/components/ui/icon'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
 const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
-
-const SUPPORTED_BOX_IMAGES = [
-  { id: 'base', name: 'Base', ref: 'ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0', isDefault: true },
-  { id: 'python', name: 'Python', ref: 'ghcr.io/boxlite-ai/boxlite-agent-python:v0.1.0', isDefault: false },
-  { id: 'node', name: 'Node.js', ref: 'ghcr.io/boxlite-ai/boxlite-agent-node:v0.1.0', isDefault: false },
-] as const
 
 const DEFAULTS = {
   cpu: 1,
@@ -563,6 +558,7 @@ export const CreateBoxDialog = ({
   onOpenChange,
   onCreated,
   prefillVolume,
+  prefillImage,
 }: {
   className?: string
   /**
@@ -581,6 +577,8 @@ export const CreateBoxDialog = ({
    * selector to hand it — see MountRow above.
    */
   prefillVolume?: string
+  /** Image reference to start from, as the Images page hands it over from a row. */
+  prefillImage?: string
 }) => {
   const navigate = useNavigate()
   const [internalOpen, setInternalOpen] = useState(false)
@@ -591,7 +589,7 @@ export const CreateBoxDialog = ({
   const { selectedOrganization } = useSelectedOrganization()
   const createBoxMutation = useCreateBoxMutation()
   const { data: availableVolumes = [] } = useVolumesQuery()
-  const defaultImage = SUPPORTED_BOX_IMAGES.find((i) => i.isDefault) ?? SUPPORTED_BOX_IMAGES[0]
+  const { data: catalogImages = [] } = useImagesQuery()
 
   // Per-box ceilings for the current org (backend rejects a create above these).
   const limits = resolvePerBoxLimits(selectedOrganization)
@@ -604,7 +602,7 @@ export const CreateBoxDialog = ({
   const initialDisk = limits.disk == null ? DEFAULTS.disk : Math.min(DEFAULTS.disk, limits.disk)
 
   const [name, setName] = useState('')
-  const [imageRef, setImageRef] = useState<string>(defaultImage.ref)
+  const [imageRef, setImageRef] = useState('')
   const [cpu, setCpu] = useState(initialCpu)
   const [memory, setMemory] = useState(initialMemory)
   const [disk, setDisk] = useState(initialDisk)
@@ -634,7 +632,7 @@ export const CreateBoxDialog = ({
     if (!open || wasOpen) return
 
     setName('')
-    setImageRef(defaultImage.ref)
+    setImageRef(prefillImage ?? '')
     setCpu(initialCpu)
     setMemory(initialMemory)
     setDisk(initialDisk)
@@ -647,7 +645,7 @@ export const CreateBoxDialog = ({
     setSizePreset('small')
     setSubmitting(false)
     setCapped({ cpu: false, memory: false, disk: false })
-  }, [open, defaultImage.ref, initialCpu, initialMemory, initialDisk, prefillVolume])
+  }, [open, initialCpu, initialMemory, initialDisk, prefillVolume, prefillImage])
 
   useEffect(() => {
     if (!open) return
@@ -667,7 +665,20 @@ export const CreateBoxDialog = ({
     }))
   }, [open, cpu, memory, disk, limits.cpu, limits.memory, limits.disk])
 
-  const selectedImage = SUPPORTED_BOX_IMAGES.find((i) => i.ref === imageRef) ?? defaultImage
+  // What the catalog already holds, as references that can be typed back in.
+  // A curated image goes in under its short name — that is what the API
+  // accepts and what the docs use. An organization's own image goes in with
+  // its alias when exactly one is recorded, because that is the build it last
+  // booted; with none or several, the bare name is offered and the user
+  // finishes it, since guessing which alias they meant would silently pick one.
+  const imageSuggestions = useMemo(
+    () =>
+      catalogImages.map((image) => ({
+        ref: image.curated || image.aliases.length !== 1 ? image.name : `${image.name}:${image.aliases[0]}`,
+      })),
+    [catalogImages],
+  )
+
   const nameValid = !name || NAME_REGEX.test(name)
 
   // The two values the API takes, derived from the policy the user edits. The
@@ -718,7 +729,10 @@ export const CreateBoxDialog = ({
     try {
       const box = await createBoxMutation.mutateAsync({
         name: name.trim() || undefined,
-        image: imageRef || defaultImage.ref,
+        // Left out when blank so the API picks its own default. Sending a
+        // reference copied from here instead would pin the console to whichever
+        // curated image was current when this shipped.
+        image: imageRef.trim() || undefined,
         network: { mode: 'enabled' },
         resources: { cpu, memory, disk },
         autoStopIntervalSeconds,
@@ -757,7 +771,7 @@ export const CreateBoxDialog = ({
         <div className="flex min-h-0 flex-1 flex-col gap-[22px] overflow-y-auto px-4 py-5 sm:px-6 sm:py-6">
           {/* name + image — two short single-line controls; a full-width row
               each was pure vertical waste. */}
-          <div className="grid grid-cols-1 gap-[14px] sm:grid-cols-[1fr_150px]">
+          <div className="grid grid-cols-1 gap-[14px] sm:grid-cols-2">
             <div className="flex flex-col gap-[9px]">
               <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">Name</div>
               <input
@@ -778,26 +792,49 @@ export const CreateBoxDialog = ({
 
             <div className="flex flex-col gap-[9px]">
               <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">Image</div>
-              <DropdownMenu>
-                <DropdownMenuTrigger className="flex items-center justify-between border border-border bg-card px-[13px] py-[11px] font-mono text-[13px] text-foreground outline-none data-[state=open]:border-brand">
-                  <span>{selectedImage.name}</span>
-                  <ChevronDown className="size-3.5 text-muted-foreground" />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="start"
-                  className="min-w-[var(--radix-dropdown-menu-trigger-width)] font-mono text-[12px]"
-                >
-                  {SUPPORTED_BOX_IMAGES.map((img) => (
-                    <DropdownMenuItem
-                      key={img.id}
-                      className={cn('cursor-pointer', img.ref === imageRef && 'text-brand')}
-                      onClick={() => setImageRef(img.ref)}
-                    >
-                      {img.name}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
+              {/* Free text with the catalog as suggestions, not a closed list:
+                  any reference the operator's allowlist admits is valid here,
+                  and an image only enters the catalog after something has
+                  already booted from it — so a picker of known images could
+                  never offer the first one. */}
+              <div className="flex items-stretch border border-border bg-card focus-within:border-brand">
+                <input
+                  value={imageRef}
+                  onChange={(e) => setImageRef(e.target.value)}
+                  placeholder="Default image"
+                  aria-label="Image reference"
+                  className="w-full min-w-0 border-0 bg-transparent px-[13px] py-[11px] font-mono text-body text-foreground outline-none placeholder:text-muted-foreground"
+                />
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    aria-label="Choose a known image"
+                    className="flex shrink-0 items-center px-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground data-[state=open]:text-foreground"
+                  >
+                    <ChevronDown className="size-3.5" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="end"
+                    className="max-h-[260px] min-w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto font-mono text-meta"
+                  >
+                    {imageSuggestions.length === 0 ? (
+                      <DropdownMenuItem disabled>No images yet</DropdownMenuItem>
+                    ) : (
+                      imageSuggestions.map((suggestion) => (
+                        <DropdownMenuItem
+                          key={suggestion.ref}
+                          className={cn('cursor-pointer', suggestion.ref === imageRef && 'text-brand')}
+                          onClick={() => setImageRef(suggestion.ref)}
+                        >
+                          {suggestion.ref}
+                        </DropdownMenuItem>
+                      ))
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              <div className="font-mono text-meta leading-relaxed text-muted-foreground">
+                Optional — any reference your operator allows. The first box on a new image waits for it to be pulled.
+              </div>
             </div>
           </div>
 

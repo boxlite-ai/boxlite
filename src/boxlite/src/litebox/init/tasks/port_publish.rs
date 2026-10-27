@@ -525,6 +525,7 @@ mod tests {
 
         fn spec(&self) -> NetworkBackendSpec {
             NetworkBackendSpec {
+                outbound_disabled: false,
                 socket_path: PathBuf::from("/tmp/mock-net.sock"),
                 allow_net: Vec::new(),
                 secrets: Vec::new(),

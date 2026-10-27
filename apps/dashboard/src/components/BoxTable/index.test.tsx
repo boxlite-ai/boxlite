@@ -7,7 +7,7 @@
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { Box, BoxState } from '@boxlite-ai/api-client'
+import { Box, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
 import { BoxTable } from './index'
 import { type BoxTableProps } from './types'
 
@@ -230,6 +230,48 @@ describe('BoxTable pagination controls', () => {
     })
 
     expect(onPaginationChange).toHaveBeenCalledWith({ pageIndex: 2, pageSize: 25 })
+  })
+})
+
+describe('BoxTable first pull', () => {
+  let root: Root | null = null
+
+  beforeAll(() => {
+    ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  })
+
+  afterEach(() => {
+    act(() => root?.unmount())
+    root = null
+    document.body.innerHTML = ''
+  })
+
+  function renderRow(box: Box) {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    act(() => {
+      root = createRoot(host)
+      root.render(<BoxTable {...baseProps} data={[box]} />)
+    })
+  }
+
+  // A first pull is the one slow step the API reports; a box that sits in
+  // creating for a minute should say why rather than look stuck.
+  it('says a box is pulling its image while the API reports a first pull', () => {
+    renderRow({
+      ...makeBox('1'),
+      state: BoxState.CREATING,
+      progress: { phase: BoxProgressPhase.PREPARING_IMAGE, retryAfterMs: 5000 },
+    })
+
+    expect(document.body.textContent).toContain('PULLING IMAGE')
+  })
+
+  it('says a creating box is starting when no pull is reported', () => {
+    renderRow({ ...makeBox('1'), state: BoxState.CREATING })
+
+    expect(document.body.textContent).toContain('STARTING')
+    expect(document.body.textContent).not.toContain('PULLING IMAGE')
   })
 })
 

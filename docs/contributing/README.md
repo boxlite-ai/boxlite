@@ -32,6 +32,9 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-10-27 · [CLI guest SSH commands](investigations/cli-ssh-commands.md)
+- 2026-10-08 · [BoxLite skills in Claude Code](investigations/claude-code-plugin.md): describes the Claude adapter, shared package layout, and installation/acceptance checks.
+- 2026-10-08 · [CLI device authorization discovery](investigations/cli-device-authorization.md)
 - 2026-07-19 · [Reaper: one wait, one place](investigations/reaper-exit-slot.md)
 - 2026-07-15 · [Collapse `start_attached` into `attach` and `start`](investigations/collapse-start-attached.md)
 - 2026-07-14 · [Container init creation via the zygote](investigations/init-build-via-zygote.md)

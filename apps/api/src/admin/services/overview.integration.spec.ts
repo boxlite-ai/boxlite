@@ -165,6 +165,11 @@ describeIfDatabase('Admin overview projections (integration, real Postgres)', ()
       dataSource.getRepository(User),
       dataSource.getRepository(Box),
       dataSource.getRepository(BoxUsagePeriod),
+      {
+        get: () => {
+          throw new Error('Activation was not selected')
+        },
+      } as never,
     )
   }, 60_000)
 
@@ -259,6 +264,55 @@ describeIfDatabase('Admin overview projections (integration, real Postgres)', ()
       state: 'impacted',
       evidence: [expect.objectContaining({ boxId: 'box-broken01', summary: 'broken: error (desired started)' })],
     })
-    expect(detail?.usage).toEqual(expect.objectContaining({ computeSeconds: '0', storageByteSeconds: '0' }))
+    expect(detail).not.toHaveProperty('usage')
+    const expanded = await organizations.detail(organizationId, { memberLimit: 50, boxLimit: 50, includeUsage: true })
+    expect(expanded?.usage).toEqual(expect.objectContaining({ computeSeconds: '0', storageByteSeconds: '0' }))
+  })
+
+  it('paginates organizations without losing shared-millisecond rows and filters a half-open window', async () => {
+    const ids = [
+      '00000000-0000-4000-8000-000000000011',
+      '00000000-0000-4000-8000-000000000012',
+      '00000000-0000-4000-8000-000000000013',
+      '00000000-0000-4000-8000-000000000014',
+    ]
+    const times = [
+      '2026-03-01T00:00:00.123900Z',
+      '2026-03-01T00:00:00.123100Z',
+      '2026-03-02T00:00:00Z',
+      '2026-02-28T23:59:59.999999Z',
+    ]
+    for (let index = 0; index < ids.length; index++)
+      await dataSource.query(
+        `INSERT INTO organization (id, name, "createdBy", "createdAt") VALUES ($1, $2, $3, $4::timestamptz)`,
+        [ids[index], `Registration ${ids[1]}`, '00000000-0000-4000-8000-0000000000ff', times[index]],
+      )
+    const query = {
+      query: ids[1],
+      limit: 1,
+      createdFrom: '2026-03-01T00:00:00.000Z',
+      createdTo: '2026-03-02T00:00:00.000Z',
+    }
+    const first = await organizations.list(query)
+    const second = await organizations.list({ ...query, cursor: first.nextCursor as string })
+    expect([...first.items, ...second.items].map((row) => row.organizationId)).toEqual(ids.slice(0, 2))
+    expect(second.nextCursor).toBeNull()
+    expect(first.items[0]).toMatchObject({
+      createdAt: '2026-03-01T00:00:00.123Z',
+      createdBy: '00000000-0000-4000-8000-0000000000ff',
+      creator: null,
+    })
+    await expect(
+      organizations.list({ ...query, createdTo: undefined, cursor: first.nextCursor as string }),
+    ).rejects.toThrow('Invalid organization query')
+    const inclusive = await organizations.list({ ...query, createdFrom: query.createdTo, createdTo: undefined })
+    expect(inclusive.items.map((row) => row.organizationId)).toEqual([ids[2]])
+    const detail = await organizations.detail(ids[0], {
+      includeUsage: false,
+      memberLimit: 1,
+      boxLimit: 1,
+    })
+    expect(detail).toMatchObject({ createdBy: '00000000-0000-4000-8000-0000000000ff', creator: null })
+    expect(detail).not.toHaveProperty('usage')
   })
 })

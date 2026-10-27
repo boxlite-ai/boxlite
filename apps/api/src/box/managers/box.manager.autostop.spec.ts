@@ -7,6 +7,11 @@ import { BoxManager } from './box.manager'
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { recordBoxRequested } from '../utils/box-business-event.util'
+import { Context } from '../../common/context/context'
+import { PlatformReason } from '../../common/context/platform-reason.enum'
+
+jest.mock('../utils/box-business-event.util', () => ({ recordBoxRequested: jest.fn() }))
 
 const BOX_ID = 'box-1'
 const RUNNER_ID = 'runner-1'
@@ -36,6 +41,7 @@ function makeHarness(lastActivityAt: Date) {
   // result matters to the decision below it.
   const queryBuilder = {
     leftJoin: () => queryBuilder,
+    innerJoin: () => queryBuilder,
     where: () => queryBuilder,
     andWhere: () => queryBuilder,
     orderBy: () => queryBuilder,
@@ -66,11 +72,14 @@ function makeHarness(lastActivityAt: Date) {
     {} as never,
     {} as never,
     {} as never,
+    {} as never,
   )
   jest.spyOn(manager, 'syncInstanceState').mockResolvedValue(undefined)
 
   return { manager, updateWhere: boxRepository.updateWhere }
 }
+
+beforeEach(() => jest.mocked(recordBoxRequested).mockClear())
 
 describe('BoxManager.autostopCheck', () => {
   it('stops a box whose last activity is older than autoStop', async () => {
@@ -87,6 +96,7 @@ describe('BoxManager.autostopCheck', () => {
         }),
       }),
     )
+    expect(recordBoxRequested).toHaveBeenCalledWith('box.stop', BOX_ID, Context.platform(PlatformReason.AUTO_STOP))
   })
 
   it('leaves a box running while its activity is fresh', async () => {
@@ -95,5 +105,16 @@ describe('BoxManager.autostopCheck', () => {
     await manager.autostopCheck()
 
     expect(updateWhere).not.toHaveBeenCalled()
+    expect(recordBoxRequested).not.toHaveBeenCalled()
+  })
+})
+
+describe('BoxManager.autoDeleteCheck', () => {
+  it('records the delete request as the platform, for auto-delete', async () => {
+    const { manager } = makeHarness(new Date(0))
+
+    await manager.autoDeleteCheck()
+
+    expect(recordBoxRequested).toHaveBeenCalledWith('box.delete', BOX_ID, Context.platform(PlatformReason.AUTO_DELETE))
   })
 })

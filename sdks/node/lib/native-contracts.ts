@@ -22,9 +22,101 @@ export interface ImagePullResult {
   layerCount: number;
 }
 
+/** One build of an image. */
+export interface ImageVersion {
+  /** Manifest digest, such as `sha256:…`. */
+  digest: string;
+  /** Sum of the layer sizes the manifest declares; absent when unknown. */
+  sizeBytes?: number;
+  /** The reference that was pulled to get this build. */
+  sourceRef: string;
+  /** When this build was recorded, as an RFC 3339 string. */
+  recordedAt: string;
+  /** The image's aliases that point at this build. */
+  aliases: string[];
+  /** When a box last started from this build; absent when unknown. */
+  lastUsedAt?: string;
+  /**
+   * When a pull found this build gone from its registry; absent while it is
+   * not known to be gone.
+   */
+  upstreamMissingAt?: string;
+}
+
+/** An alias registration or historical binding change; versions named by digest. */
+export interface ImageAliasEvent {
+  alias: string;
+  /** The build the alias pointed at before; absent when the alias was new. */
+  fromDigest?: string;
+  toDigest: string;
+  /** Who recorded the alias; absent when a pull recorded it. */
+  actor?: string;
+  /** As an RFC 3339 string. */
+  recordedAt: string;
+}
+
+/** An image name and every build the runtime holds under it. */
+export interface ImageDetail {
+  /** Registry and repository without a tag, such as `docker.io/library/alpine`. */
+  name: string;
+  aliases: string[];
+  /** Provided by the server's operator rather than pulled by a box. */
+  curated: boolean;
+  /** Newest first. */
+  versions: ImageVersion[];
+  /** The latest alias history entries, newest first; empty on a local cache. */
+  history: ImageAliasEvent[];
+}
+
+/** Images held against the allowance, on a REST runtime. */
+export interface ImageUsage {
+  count: number;
+  limit: number;
+  /**
+   * Sum of the sizes the held builds' manifests declare; a layer two builds
+   * share counts for each.
+   */
+  knownBytes: number;
+}
+
+/**
+ * The images a runtime can boot from: the local cache on an embedded runtime,
+ * the server's catalog on a REST runtime.
+ */
 export interface ImageHandle {
+  readonly registries: RegistryHandle;
+  /** Pull into the local cache. A REST runtime refuses: creating a box pulls. */
   pull(reference: string): Promise<ImagePullResult>;
   list(): Promise<ImageInfo[]>;
+  /**
+   * Every build held under an image name, such as `docker.io/library/alpine`.
+   *
+   * @throws `not_found` when nothing is held under the name, and
+   * `invalid_argument` for a reference with a tag or digest.
+   */
+  get(name: string): Promise<ImageDetail>;
+  /**
+   * Stop holding an image name, every tag of it. The layers stay.
+   *
+   * @throws `not_found` and `invalid_argument` as {@link ImageHandle.get};
+   * on a REST runtime `invalid_state` while a box can still boot from it.
+   */
+  remove(name: string): Promise<void>;
+  /** Images held against the allowance. @throws `unsupported` locally. */
+  usage(): Promise<ImageUsage>;
+  /**
+   * Point a tag of an image name at the version with that digest; boxes
+   * already created keep theirs.
+   *
+   * @throws `unsupported` locally, and `invalid_argument` for a malformed
+   * name, tag or `sha256:` digest.
+   */
+  createAlias(
+    name: string,
+    alias: string,
+    digest: string,
+  ): Promise<ImageDetail>;
+  deleteAlias(name: string, alias: string): Promise<void>;
 }
 
 /** Metadata for a managed volume returned by the native runtime. */
@@ -76,6 +168,51 @@ export interface VolumeHandle {
   remove(id: string, force?: boolean | null): Promise<void>;
 }
 
+/** A registry login the server pulls private images with. Has no password. */
+export interface RegistryCredential {
+  /** UUID that {@link RegistryHandle.remove} takes. */
+  id: string;
+  registryHost: string;
+  /** Whole path segments ending in `/`; empty for the whole registry. */
+  repositoryPrefix: string;
+  username: string;
+  /** The user who added it; absent when the server does not know. */
+  createdBy?: string;
+  /** RFC 3339. */
+  createdAt: string;
+}
+
+/** A registry login to add. */
+export interface NewRegistryCredential {
+  /** The registry the login is for, such as `ghcr.io`. */
+  registryHost: string;
+  /** Whole path segments ending in `/`, such as `acme/`; omit for the whole registry. */
+  repositoryPrefix?: string;
+  username: string;
+  /** Password or access token. Sent once, never returned. */
+  password: string;
+}
+
+/** The server's registry logins. A local runtime has none: see {@link JsBoxlite.registries}. */
+export interface RegistryHandle {
+  /** Every login the organization holds, oldest first. */
+  list(): Promise<RegistryCredential[]>;
+  /**
+   * Add a login.
+   *
+   * @throws `already_exists` while one is held for the same registry and prefix.
+   */
+  create(credential: NewRegistryCredential): Promise<RegistryCredential>;
+  /**
+   * Remove a login by id.
+   *
+   * @throws `invalid_state`, naming the boxes, while a box still pulls through
+   * it; `not_found` for an unknown id; `invalid_argument` for an id that is
+   * not a UUID, before any request.
+   */
+  remove(id: string): Promise<void>;
+}
+
 export interface JsEnvVar {
   key: string;
   value: string;
@@ -122,7 +259,7 @@ export interface JsOutboundNetworkSpec {
 }
 
 export interface JsInboundNetworkSpec {
-  /** Inbound mode: "enabled" (publicly reachable) or "disabled" (private). */
+  /** Inbound mode: "enabled" (reachable without sign-in) or "disabled" (unreachable from outside). */
   mode: "enabled" | "disabled";
   /**
    * Not supported yet: a non-empty value is rejected. Exists for shape
@@ -403,9 +540,61 @@ export interface JsSnapshotHandle {
   restore(name: string): Promise<void>;
 }
 
+/** Certificate authority and required certificate principal for one login. */
+export interface JsSshCaConfig {
+  publicKey: string;
+  principal: string;
+}
+
+/** Credentials accepted for one SSH login (not a container OS identity). */
+export interface JsSshAccount {
+  login: string;
+  authorizedKeys?: string[];
+  ca?: JsSshCaConfig;
+}
+
+/** Complete guest SSH configuration. Keys are never persisted by the runtime. */
+export interface JsSshConfig {
+  listenAddress: string;
+  hostPrivateKey: string;
+  accounts: JsSshAccount[];
+}
+
+/** Guest listener state and public host identity; contains no credentials. */
+export interface JsSshStatus {
+  enabled: boolean;
+  /** Increments on each successful listener start. `bigint` keeps the full
+   *  64-bit generation exactly. */
+  generation: bigint;
+  listenAddress: string;
+  hostPublicKey: string;
+  hostKeyFingerprint: string;
+}
+
+/** Internal contract implemented by the native N-API SSH binding. */
+export interface JsSshHandle {
+  /** Validate and replace the configuration; the only operation that may
+   *  start the box. */
+  configure(config: JsSshConfig): Promise<JsSshStatus>;
+  /** Observe SSH state without starting the VM or its main command. */
+  status(): Promise<JsSshStatus>;
+  /** Stop SSH idempotently without starting the VM or its main command. */
+  disable(): Promise<JsSshStatus>;
+}
+
 export interface JsNetworkHandle {
+  updateInbound(spec: {
+    mode: "enabled" | "disabled";
+    allowNet?: string[];
+  }): Promise<void>;
+  updateOutbound(spec: {
+    mode: "enabled" | "disabled";
+    allowNet?: string[];
+  }): Promise<void>;
   /** Prepare a one-shot tunnel to a service port inside the box. */
   tunnel(port: number): Promise<NativeBoxTunnel>;
+  /** Withdraw public access to a service port; open connections stay open. */
+  revokeTunnel(port: number): Promise<void>;
 }
 
 export type SocketAddress =
@@ -452,6 +641,7 @@ export interface JsBox {
   ): Promise<JsExecution>;
   readonly snapshot: JsSnapshotHandle;
   readonly network: JsNetworkHandle;
+  readonly ssh: JsSshHandle;
   cloneBox(
     options?: JsCloneOptions | null,
     name?: string | null,
@@ -490,6 +680,12 @@ export interface JsBoxlite {
   metrics(): Promise<JsRuntimeMetrics>;
   readonly images: ImageHandle;
   readonly volumes: VolumeHandle;
+  /**
+   * The server's registry logins.
+   *
+   * @throws `unsupported` on a local runtime, which pulls with the logins in
+   * `imageRegistries` instead.
+   */
   remove(idOrName: string, force?: boolean | null): Promise<void>;
   close(): void;
   shutdown(timeout?: number | null): Promise<void>;

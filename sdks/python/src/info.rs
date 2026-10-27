@@ -493,6 +493,7 @@ mod tests {
             exit_code: None,
             started_at: None,
             last_activity_at: None,
+            resolved_image: None,
         }
     }
 

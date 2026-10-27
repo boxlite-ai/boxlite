@@ -1,0 +1,4 @@
+interface:
+  display_name: "BoxLite"
+  short_description: "Build, deploy and update BoxLite cloud apps"
+  default_prompt: "Use $boxlite to build or adapt an app, deploy it and verify its public URL."

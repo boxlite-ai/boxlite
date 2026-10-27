@@ -12,6 +12,6 @@ export const BoxEvents = {
   STARTED: 'box.started',
   STOPPED: 'box.stopped',
   DESTROYED: 'box.destroyed',
-  PUBLIC_STATUS_UPDATED: 'box.public-status.updated',
+  INBOUND_MODE_UPDATED: 'box.inbound-mode.updated',
   ORGANIZATION_UPDATED: 'box.organization.updated',
 } as const

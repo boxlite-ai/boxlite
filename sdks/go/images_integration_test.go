@@ -161,3 +161,44 @@ func TestImagesRejectedAfterRuntimeClose(t *testing.T) {
 		t.Fatalf("expected stopped error from Pull after Close, got: %v", err)
 	}
 }
+
+// localImages opens the image handle of a local runtime whose cache is empty.
+func localImages(t *testing.T) *Images {
+	t.Helper()
+	images, err := newImageTestRuntime(t).Images()
+	if err != nil {
+		t.Fatalf("Images: %v", err)
+	}
+	t.Cleanup(func() { _ = images.Close() })
+	return images
+}
+
+func TestImagesGetOfANameTheCacheDoesNotHoldIsNotFound(t *testing.T) {
+	_, err := localImages(t).Get(context.Background(), "quay.io/acme/app")
+
+	requireErrorCode(t, err, ErrNotFound, "quay.io/acme/app")
+}
+
+func TestImagesRemoveOfANameTheCacheDoesNotHoldIsNotFound(t *testing.T) {
+	err := localImages(t).Remove(context.Background(), "quay.io/acme/app")
+
+	requireErrorCode(t, err, ErrNotFound, "quay.io/acme/app")
+}
+
+func TestImagesRemoveRefusesATaggedReferenceWithTheNameToPass(t *testing.T) {
+	err := localImages(t).Remove(context.Background(), "quay.io/acme/app:v1")
+
+	requireErrorCode(t, err, ErrInvalidArgument, "such as 'quay.io/acme/app'")
+}
+
+func TestImagesUsageIsUnsupportedLocally(t *testing.T) {
+	_, err := localImages(t).Usage(context.Background())
+
+	requireErrorCode(t, err, ErrUnsupported, "")
+}
+
+func TestImagesCreateAliasIsUnsupportedLocally(t *testing.T) {
+	_, err := localImages(t).CreateAlias(context.Background(), "quay.io/acme/app", "stable", newDigest)
+
+	requireErrorCode(t, err, ErrUnsupported, "")
+}

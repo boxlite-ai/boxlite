@@ -20,6 +20,18 @@ import {
 import { ThrottlerException } from '@nestjs/throttler'
 import { FailedAuthTrackerService } from '../auth/failed-auth-tracker.service'
 
+const ADMIN_ERRORS: Record<number, [string, string]> = {
+  400: ['InvalidArgumentError', 'invalid_argument'],
+  401: ['AuthError', 'unauthenticated'],
+  403: ['AuthError', 'permission_denied'],
+  404: ['NotFoundError', 'not_found'],
+  409: ['InvalidStateError', 'invalid_state'],
+  422: ['InvalidArgumentError', 'invalid_argument'],
+  429: ['ResourceExhaustedError', 'resource_exhausted'],
+  502: ['UpstreamUnavailableError', 'upstream_unavailable'],
+  503: ['UpstreamUnavailableError', 'upstream_unavailable'],
+}
+
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name)
@@ -30,14 +42,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const ctx = host.switchToHttp()
     const response = ctx.getResponse<Response>()
     const request = ctx.getRequest<Request>()
+    const isAdminApi = /^\/(?:api\/)?v1\/organizations(?:\/|$)/.test(request.path)
 
     let statusCode: number
     let error: string
     let message: string
     let code: string | undefined
+    // The one structured field a failure may add. Forwarded rather than
+    // flattened because it is the same shape a successful box response
+    // publishes, and a caller that parses one should not need a second parser.
+    let progress: Record<string, unknown> | undefined
 
     // If the exception is a NotFoundException and the request path is not an API request, serve the dashboard index.html file
-    if (exception instanceof NotFoundException && !request.path.startsWith('/api/')) {
+    if (exception instanceof NotFoundException && !request.path.startsWith('/api/') && !isAdminApi) {
       const response = ctx.getResponse()
       response.sendFile(join(__dirname, '..', 'dashboard', 'index.html'))
       return
@@ -69,6 +86,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
           : (responseMessage as string) || exception.message
         const responseCode = (exceptionResponse as Record<string, unknown>).code
         code = typeof responseCode === 'string' ? responseCode : undefined
+        const responseProgress = (exceptionResponse as Record<string, unknown>).progress
+        progress =
+          typeof responseProgress === 'object' && responseProgress !== null && !Array.isArray(responseProgress)
+            ? (responseProgress as Record<string, unknown>)
+            : undefined
       }
 
       const retryAfterSeconds = (exception as { retryAfterSeconds?: unknown }).retryAfterSeconds
@@ -82,6 +104,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
       statusCode = HttpStatus.INTERNAL_SERVER_ERROR
     }
 
+    if (isAdminApi) {
+      const [type, code] = ADMIN_ERRORS[statusCode] ?? ['InternalError', 'internal']
+      const requestId = response.getHeader('X-Request-Id')
+      response
+        .status(statusCode)
+        .json({ error: { message, type, code, ...(typeof requestId === 'string' ? { request_id: requestId } : {}) } })
+      return
+    }
+
     response.status(statusCode).json({
       path: request.url,
       timestamp: new Date().toISOString(),
@@ -89,6 +120,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       error,
       message,
       ...(code ? { code } : {}),
+      ...(progress ? { progress } : {}),
     })
   }
 }

@@ -37,6 +37,11 @@ case in this suite is using the same fixtures and the same path.
 
 ## Prereqs
 
+`BOXLITE_E2E_CATALOG_IMAGE` accepts tagged, digest-pinned, and untagged
+references, including registry ports such as `registry.local:5000/acme/app`.
+The catalog tests retain the port when deriving the repository name and the
+deliberately unpullable test image.
+
 Set up via the bootstrap script (one-time per machine):
 
 ```bash
@@ -100,10 +105,43 @@ export BOXLITE_E2E_IMAGE=ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0
 # Skip local-only checks (journalctl, runner log):
 export BOXLITE_E2E_SKIP_PATH_VERIFY=1
 
+# Or keep path verification on a runner started by hand (a local stack on
+# macOS has no systemd journal): read its log file instead of journalctl.
+export BOXLITE_E2E_RUNNER_LOG=/path/to/runner.log
+
+# Image the catalog case boots, which must be on a host the API's allowlist
+# admits. Defaults to a small public one on quay.io, so a run needs no override:
+export BOXLITE_E2E_CATALOG_IMAGE=quay.io/libpod/alpine:latest
+
+# Two tags of one repository with different digests, the repository spelled
+# the same in both, which the tag case pulls and moves a tag between. Defaults
+# to two alpine releases on Docker Hub, so a run needs no override. Moving a
+# tag takes the write:images scope, which an API key made before that scope
+# existed does not have:
+export BOXLITE_E2E_TAG_IMAGE_OLD=docker.io/library/alpine:3.19
+export BOXLITE_E2E_TAG_IMAGE_NEW=docker.io/library/alpine:3.20
+
+# Only for a stack that predates the image catalog: skip that case instead of
+# failing. Without it a 404 on /images is treated as the regression it is:
+export BOXLITE_E2E_ALLOW_MISSING_CATALOG=1
+
+# The private image case runs only with a real private image and its login,
+# written with its host and a tag or digest. The prefix defaults to the
+# image's namespace. It adds its own login and refuses to start while the
+# organization already has one for that registry and prefix:
+export BOXLITE_E2E_PRIVATE_IMAGE=ghcr.io/acme/private-app:1
+export BOXLITE_E2E_PRIVATE_USERNAME=acme-bot
+export BOXLITE_E2E_PRIVATE_PASSWORD=...        # a token with read access only
+export BOXLITE_E2E_PRIVATE_PREFIX=acme/
+
 # CLI tests need a profile pointing at the remote API:
 export BOXLITE_E2E_PROFILE=p1
 export BOXLITE_E2E_CLI=/path/to/boxlite   # CLI binary built with REST support
 ```
+
+Private-image cleanup keeps its login record until deletion succeeds. If the
+removal step fails, teardown retries that login; a transient failure must not
+leave an untracked credential that prevents the next run.
 
 Then run the profile into `~/.boxlite/credentials.toml` so the CLI
 picks it up (one-time per machine):
@@ -131,6 +169,109 @@ pytest apps/e2e/cases/ -v --timeout=120
 For CI, store `BOXLITE_E2E_API_KEY` as a repository secret and pass it
 as an environment variable. No local bootstrap, Postgres, or runner
 services are needed — the remote stack provides everything.
+
+## The cloud legs (CI)
+
+`.github/workflows/e2e-cloud.yml` runs this suite against a deployed
+stage. It is dispatch-only, plus one call from `deploy-infra.yml`:
+
+| Stage | Target | Selection | Sweep |
+| --- | --- | --- | --- |
+| `dev` | `api.dev.boxlite.ai/api` | everything | yes |
+| `prod` | `api.boxlite.ai/api` | `-m smoke` | no |
+
+Each stage authenticates with its own repo secret — `BOXLITE_DEV_API_KEY` and
+`BOXLITE_PROD_API_KEY` — so a run only ever holds the key for the stage it
+targets.
+
+`smoke` marks the cases that are safe against a paying stage — one box at a
+time, no quota probing, no deliberate error storms. Mark a new case
+`@pytest.mark.smoke` only if it stays inside that budget.
+
+### What a green run does not cover
+
+Two limits worth knowing before reading a green dev run as proof:
+
+- The volume cases skip unless the stage's key carries volume permission —
+  `POST /v1/volumes` answers 403 without it, and dev's key did on 2026-09-22.
+  That takes the read-only-mount refusal with it, so that contract is pinned
+  but unexercised.
+- Short-exec stdout is dropped intermittently on a stage running without
+  #1569: the runner writes Close and drops TCP while the balancer is still
+  relaying the `101`, so a command that finishes before the client attaches
+  can return nothing with exit 0. `test_p0_6_exec_stdout_race.py` reports it.
+  Cases that grade a *negative* on stdout — "the secret is not in this dump" —
+  carry a sentinel so an empty stream fails instead of passing.
+
+### Known-broken on a cloud stage
+
+Three tunnel cases are `xfail(strict=True)` on a remote stage only:
+`test_python_sdk_tunnel_proxies_http_from_rest_box` and the Node driver's HTTP
+and stopped-box cases. On a cloud stage, a tunnel read that waits for the guest
+service to close the connection fails with "peer closed connection without
+sending TLS close_notify", while reads that stop at the expected bytes succeed
+(#1950). Which hop drops the TLS shutdown is not established, and no local run
+has shown it, so the mark is `TUNNEL_READ_TO_EOF_XFAIL` in `cases/conftest.py`,
+conditional on `STAGE_IS_REMOTE`. Strict means CI fails the day the stage stops
+failing, which is when the marks should come off; it cannot tell that cause
+from a later break in the same case. The half-close cases keep their own
+unconditional mark.
+
+`test_cli_run_foreground_streams_command_output` is marked the same conditional
+way for a different reason. `boxlite run
+<image> <cmd>` without `-d` is create → WS `/boxes/{id}/attach` → `POST
+/start`, and on a cloud stage that upgrade comes back a bare 503 whose body
+(`upstream connect error or disconnect/reset before headers`) is an envelope
+the API never writes — so it is the load balancing in front of the API that
+refuses, though which hop is not established. Every other CLI case detaches,
+so nothing else touched that socket and the failure was invisible to a green
+suite. A local stack has no load balancer in front of `boxlite-api` on `:3000`
+(its `:3001` proxy serves box previews, not API ingress), so the mark applies
+only when the stage host is remote; what a local stack does with the attached
+form has not been tested. The create lands before the 503, so the case names
+its box and removes it by name in `finally` — the id is never printed.
+
+### Boxes must not outlive their run
+
+`auto_remove=True` is a no-op over REST and the API defaults `auto_delete` to
+disabled, so a box whose teardown never ran stays in the org for good. That is
+what killed the last dev run before this was fixed — run 30787280531: 53
+failures, every one `Organization quota exceeded: disk limit exceeded (max
+512GB)`.
+
+Two things keep that from recurring:
+
+- `conftest.bound_box_lifetime` fills in `auto_stop` / `auto_delete` on every
+  box created through the SDK, and `conftest.with_bounded_lifetime` names and
+  bounds the cases that hand-build a REST body, so the stage reclaims a
+  stranded box within minutes. They differ in one respect: the SDK door
+  applies the pair or neither, because the SDK rejects `auto_delete` that does
+  not exceed `auto_stop`; a hand-built body never meets that rule, and the API
+  checks only the floors, so each window is filled on its own there.
+- `apps/e2e/sweep.py` clears what earlier runs left behind — boxes named
+  `e2e-<random>`, which both doors produce (`conftest.e2e_box_name`):
+
+  ```bash
+  python3 apps/e2e/sweep.py                     # report only
+  python3 apps/e2e/sweep.py --apply             # delete what it reports
+  python3 apps/e2e/sweep.py --idle-minutes 120  # narrower window
+  python3 apps/e2e/sweep.py --any-name          # ignore the name prefix
+  ```
+
+  It only sees the organization its credential belongs to, only considers
+  boxes idle for a day, and only ones carrying that prefix. The prefix is what
+  makes it safe to run unattended: a report against dev on 2026-09-21 listed
+  `pol599-repro` and four siblings — someone's investigation, idle for a day,
+  indistinguishable from a stranded box by age alone.
+
+  What that leaves uncovered, deliberately: the polyglot drivers
+  (`apps/e2e/sdks/`) and the CLI cases create boxes with neither the prefix
+  nor a lifetime, so no sweep that CI runs can reclaim one. The ones the
+  cloud legs run — Node and the CLI — remove their box in a `finally`, so
+  there this only bites when a run is killed mid-driver; the Go and C drivers
+  exit past their own cleanup, and both legs `--ignore` those cases.
+  Clearing anything left behind means `--any-name`, by a human who has read
+  the report first — which is why CI never passes it.
 
 ## Running against local stack
 
@@ -173,9 +314,11 @@ apps/e2e/
 ├── bootstrap.sh             # Install services (local stack only)
 ├── fixture_setup.py         # Register snapshots / quota / profile (local stack only)
 ├── run.sh                   # bootstrap + fixture_setup + pytest
+├── sweep.py                 # Reclaim boxes earlier runs stranded (cloud)
 ├── two_sided.sh             # Validates that test catches bug + PR fixes it
 ├── pytest.ini
 ├── lib/
+│   ├── catalog_boxes.py     # Boxes against the catalog: pull budget, report window
 │   ├── e2e_auth.py          # Auth context: API-key / OIDC, env vars / profile
 │   ├── images.py            # Curated ref derived from apps/box-images/VERSION
 │   └── path_verification.py # Helpers that prove SDK→API→Runner was the route
@@ -186,7 +329,12 @@ apps/e2e/
 └── cases/
     ├── conftest.py                  # rt / image / box fixtures (REST-only)
     ├── test_path_verification.py    # Meta-test: prove SDK→API→Runner path
+    ├── test_cloud_smoke.py          # /v1/me + /v1/config: the smoke core
     ├── test_lifecycle.py            # Box create / get_info / remove
+    ├── test_box_lifecycle_policy.py # auto_stop / auto_delete reaping
+    ├── test_box_metrics.py          # Per-box metrics through the runner
+    ├── test_volumes.py              # Managed volumes: CRUD + data reuse
+    ├── test_network_egress.py       # Outbound policy: block-all, allow_net
     ├── test_exec_*.py               # Exec stdout, attach, timeout
     ├── test_copy_roundtrip.py       # Copy in/out
     ├── test_cli_entry.py            # CLI smoke (run, exec, whoami)
@@ -195,6 +343,9 @@ apps/e2e/
     ├── test_node_coverage.py        # Node SDK exec, copy, errors
     ├── test_go_entry.py             # Go SDK smoke
     ├── test_go_coverage.py          # Go SDK exec options, copy, errors
+    ├── test_images_catalog.py       # Image catalog via rt.images: booting records it, remove drops it, admission refuses bad hosts
+    ├── test_images_private.py       # Private image through a login added with rt.images.registries
+    ├── test_images_aliases.py       # Alias creation refuses overwrite; explicit replacement affects new boxes
     ├── test_c_entry.py              # C SDK smoke
     └── test_c_coverage.py           # C SDK exec, errors
 ```

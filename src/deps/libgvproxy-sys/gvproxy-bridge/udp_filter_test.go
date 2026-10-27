@@ -47,6 +47,7 @@ const (
 type guestTap struct {
 	conn   net.Conn
 	frames chan []byte
+	policy *outboundPolicyController
 }
 
 // startNetwork builds the same virtual network gvproxy_create builds
@@ -113,6 +114,10 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 	if err != nil {
 		t.Fatalf("virtualnetwork.New: %v", err)
 	}
+	policy, err := newOutboundPolicyController(vn, tapConfig, cfg.GuestIP, seams.ca, seams.secretMatcher, outboundPolicy{Mode: "enabled", AllowNet: cfg.AllowNet})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var filter *AllowNetFilter
 	if len(cfg.AllowNet) > 0 {
@@ -140,7 +145,7 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 		_ = guestSide.Close()
 	})
 
-	tap := &guestTap{conn: guestSide, frames: make(chan []byte, 64)}
+	tap := &guestTap{conn: guestSide, frames: make(chan []byte, 64), policy: policy}
 	// Drain the gateway→guest direction: the switch writes ARP requests and
 	// replies synchronously over net.Pipe and would block without a reader.
 	go tap.readLoop()

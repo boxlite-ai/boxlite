@@ -265,10 +265,12 @@ export const gcpProgram =
         // the API with, so it is read from the one declaration of it.
         volumePrefix: config.storage.volumePrefix,
         managedClickHouse: stackEnvironment.managedClickHouse,
+        otelOpenapiEnabled: stackEnvironment.otelOpenapiEnabled,
         clickStackConsumer: stackEnvironment.clickStackConsumer,
       }),
       config,
       inputs: {
+        clickHouseRetentionHours: stackEnvironment.clickHouseRetentionHours,
         stage,
         tag: stackEnvironment.tag,
         domain: stackEnvironment.domain,

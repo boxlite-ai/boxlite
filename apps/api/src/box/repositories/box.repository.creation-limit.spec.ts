@@ -19,6 +19,7 @@ type TransactionCallback = (entityManager: ReturnType<typeof makeEntityManager>)
 
 function makeEntityManager(currentCount = 0) {
   return {
+    query: jest.fn().mockResolvedValue([]),
     count: jest.fn().mockResolvedValue(currentCount),
     insert: jest.fn().mockResolvedValue(undefined),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
@@ -58,14 +59,30 @@ function responseCode(error: BoxCreationLimitExceededError | BoxCreationAdmissio
   return (error.getResponse() as { code: string }).code
 }
 
+// The lock statement caps its own wait and restores the default lock_timeout
+// before the count and persist run.
+function expectAdmissionLock(entityManager: ReturnType<typeof makeEntityManager>, organizationId: string): void {
+  const lockCalls = entityManager.query.mock.calls.filter(([sql]) => String(sql).includes('pg_advisory_xact_lock'))
+  expect(lockCalls).toHaveLength(1)
+  const [sql, params] = lockCalls[0] as [string, unknown[]]
+  expect(sql.indexOf("set_config('lock_timeout', $1, true)")).toBeLessThan(sql.indexOf('pg_advisory_xact_lock($2'))
+  expect(sql.lastIndexOf('reset_val')).toBeGreaterThan(sql.indexOf('pg_advisory_xact_lock($2'))
+  expect(params).toEqual(['5000ms', expect.any(Number), organizationId])
+}
+
 describe('BoxRepository creation admission', () => {
-  it('counts and inserts with one SERIALIZABLE transactional manager', async () => {
+  it('counts and inserts under the organization advisory lock in one READ COMMITTED transaction', async () => {
     const { boxRepository, entityManager, transaction, cacheInvalidation } = makeRepository(1)
     const entity = box()
 
     await expect(boxRepository.insert(entity, 2)).resolves.toBe(entity)
 
-    expect(transaction).toHaveBeenCalledWith('SERIALIZABLE', expect.any(Function))
+    expect(transaction).toHaveBeenCalledWith('READ COMMITTED', expect.any(Function))
+    expectAdmissionLock(entityManager, entity.organizationId)
+    const lockCall = entityManager.query.mock.calls.findIndex(([sql]) => String(sql).includes('pg_advisory_xact_lock'))
+    expect(entityManager.query.mock.invocationCallOrder[lockCall]).toBeLessThan(
+      entityManager.count.mock.invocationCallOrder[0],
+    )
     expect(entityManager.count).toHaveBeenCalledWith(
       Box,
       expect.objectContaining({ where: expect.objectContaining({ organizationId: entity.organizationId }) }),
@@ -115,7 +132,8 @@ describe('BoxRepository creation admission', () => {
       maxCreatedBoxes: 1,
     })
 
-    expect(transaction).toHaveBeenCalledWith('SERIALIZABLE', expect.any(Function))
+    expect(transaction).toHaveBeenCalledWith('READ COMMITTED', expect.any(Function))
+    expectAdmissionLock(entityManager, organizationId)
     expect(entityManager.count).toHaveBeenCalledWith(
       Box,
       expect.objectContaining({ where: expect.objectContaining({ organizationId }) }),
@@ -124,31 +142,13 @@ describe('BoxRepository creation admission', () => {
     expect(entityManager.upsert).toHaveBeenCalledTimes(1)
   })
 
-  it('retries the complete count-and-write transaction after SQLSTATE 40001', async () => {
+  it('returns a retryable 503 when the admission lock wait times out', async () => {
     const { boxRepository, entityManager, transaction } = makeRepository(0)
-    let attempts = 0
-    transaction.mockImplementation(async (_isolation: string, callback: TransactionCallback) => {
-      const result = await callback(entityManager)
-      attempts++
-      if (attempts < 3) {
-        throw Object.assign(new Error('could not serialize access'), { code: '40001' })
+    entityManager.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('pg_advisory_xact_lock')) {
+        throw Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
       }
-      return result
-    })
-
-    await boxRepository.insert(box(), 3)
-
-    expect(transaction).toHaveBeenCalledTimes(3)
-    expect(entityManager.count).toHaveBeenCalledTimes(3)
-    expect(entityManager.insert).toHaveBeenCalledTimes(3)
-    expect(entityManager.upsert).toHaveBeenCalledTimes(3)
-  })
-
-  it('returns a retryable 503 after five serialization failures', async () => {
-    const { boxRepository, entityManager, transaction } = makeRepository(0)
-    transaction.mockImplementation(async (_isolation: string, callback: TransactionCallback) => {
-      await callback(entityManager)
-      throw Object.assign(new Error('could not serialize access'), { code: '40001' })
+      return []
     })
 
     const error = await boxRepository.insert(box(), 3).catch((caught) => caught)
@@ -157,10 +157,22 @@ describe('BoxRepository creation admission', () => {
     expect(responseCode(error)).toBe(BOX_CREATION_ADMISSION_UNAVAILABLE_CODE)
     expect(error.getStatus()).toBe(503)
     expect((error as unknown as { retryAfterSeconds?: number }).retryAfterSeconds).toBe(5)
-    expect(transaction).toHaveBeenCalledTimes(5)
+    expect(transaction).toHaveBeenCalledTimes(1)
+    expect(entityManager.insert).not.toHaveBeenCalled()
   })
 
-  it('does not retry database errors other than serialization failures', async () => {
+  it('propagates a lock timeout raised while persisting instead of reporting admission contention', async () => {
+    const { boxRepository, entityManager } = makeRepository(0)
+    const rowLockTimeout = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+    entityManager.insert.mockRejectedValue(rowLockTimeout)
+
+    const error = await boxRepository.insert(box(), 3).catch((caught) => caught)
+
+    expect(error).not.toBeInstanceOf(BoxCreationAdmissionUnavailableError)
+    expect(error).toBe(rowLockTimeout)
+  })
+
+  it('propagates other database errors without retrying', async () => {
     const { boxRepository, transaction } = makeRepository(0)
     transaction.mockRejectedValue(Object.assign(new Error('connection lost'), { code: '08006' }))
 
@@ -168,12 +180,13 @@ describe('BoxRepository creation admission', () => {
     expect(transaction).toHaveBeenCalledTimes(1)
   })
 
-  it('preserves the existing non-serializable transaction when admission is disabled', async () => {
+  it('preserves the plain transaction without the admission lock when admission is disabled', async () => {
     const { boxRepository, transaction, entityManager } = makeRepository()
 
     await boxRepository.insert(box())
 
     expect(transaction).toHaveBeenCalledWith(expect.any(Function))
+    expect(entityManager.query).not.toHaveBeenCalled()
     expect(entityManager.count).not.toHaveBeenCalled()
   })
 })

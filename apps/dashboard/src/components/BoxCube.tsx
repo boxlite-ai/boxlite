@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils'
  * Vertices (64×64): top face A(32,10) B(54,22) C(32,34) D(10,22); the two
  * visible side faces hang from D–C–B down to D'(10,44) C'(32,56) B'(54,44).
  */
-export type CubeState = 'empty' | 'building' | 'disposable' | 'persistent' | 'public' | 'error' | 'stopped'
+export type CubeState = 'empty' | 'building' | 'disposable' | 'persistent' | 'reachable' | 'error' | 'stopped'
 
 const TOP = 'M32 10L54 22L32 34L10 22Z'
 const LEFT = 'M10 22L32 34L32 56L10 44Z'
@@ -92,13 +92,13 @@ export function BoxCube({
           )}
           <path d={TOP} {...stroke} />
           <path d={LEFT} {...stroke} />
-          {state === 'public' ? (
+          {state === 'reachable' ? (
             // the right face is a screen: lit, and something is leaving through it
             <path d={RIGHT} fill="hsl(var(--brand) / 0.16)" stroke="currentColor" strokeWidth={1.5} />
           ) : (
             <path d={RIGHT} {...stroke} />
           )}
-          {detailed && state === 'public' && (
+          {detailed && state === 'reachable' && (
             <path d="M43 39L60 22M50 22H60V32" fill="none" stroke={brand} strokeWidth={2} strokeLinecap="round" />
           )}
           {detailed && state === 'disposable' && (

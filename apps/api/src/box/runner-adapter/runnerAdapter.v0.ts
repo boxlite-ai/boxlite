@@ -249,10 +249,14 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
-  async createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined> {
+  async createBox(
+    box: Box,
+    image: string,
+    metadata?: { [key: string]: string },
+  ): Promise<StartBoxResponse | undefined> {
     const response = await this.boxApiClient.create({
       id: box.id,
-      image: box.image ?? '',
+      image,
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,
@@ -269,8 +273,8 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         hosts: secret.hosts,
         placeholder: secret.placeholder,
       })),
-      networkBlockAll: box.networkBlockAll,
-      networkAllowList: box.networkAllowList,
+      outboundEnabled: box.outboundEnabled,
+      outboundAllowNet: box.outboundAllowNet ?? undefined,
       metadata,
       authToken: box.authToken,
       organizationId: box.organizationId,
@@ -312,14 +316,14 @@ export class RunnerAdapterV0 implements RunnerAdapter {
 
   async updateNetworkSettings(
     boxId: string,
-    networkBlockAll?: boolean,
-    networkAllowList?: string,
+    outboundEnabled?: boolean,
+    outboundAllowNet?: string[],
     networkLimitEgress?: boolean,
   ): Promise<void> {
     const updateNetworkSettingsDto: UpdateNetworkSettingsDTO = {
-      networkBlockAll: networkBlockAll,
-      networkAllowList: networkAllowList,
-      networkLimitEgress: networkLimitEgress,
+      outboundEnabled,
+      outboundAllowNet,
+      networkLimitEgress,
     }
 
     await this.boxApiClient.updateNetworkSettings(boxId, updateNetworkSettingsDto)
@@ -344,8 +348,8 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         mountPath: volume.mountPath,
         subpath: volume.subpath,
       })),
-      networkBlockAll: box.networkBlockAll,
-      networkAllowList: box.networkAllowList,
+      outboundEnabled: box.outboundEnabled,
+      outboundAllowNet: box.outboundAllowNet ?? undefined,
       errorReason: box.errorReason,
     }
     await this.boxApiClient.recover(box.id, recoverBoxDTO)

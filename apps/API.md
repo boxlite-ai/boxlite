@@ -14,8 +14,11 @@ The inventory is implementation-grounded:
   prefix applied in [`main.ts`](./api/src/main.ts).
 - Hosted BoxLite-compatible routes come from the controllers in
   [`boxlite-rest`](./api/src/boxlite-rest/). They are excluded from the product
-  OpenAPI document because their portable contract lives in
-  [`openapi/box.openapi.yaml`](../openapi/box.openapi.yaml).
+  OpenAPI document because their contracts live in [`openapi/box.openapi.yaml`](../openapi/box.openapi.yaml)
+  and, for cloud-only members and invitations, [`openapi/admin.openapi.yaml`](../openapi/admin.openapi.yaml).
+- The registry proxy's runner credential lookup is an internal service route.
+  It is excluded from the Cloud OpenAPI document and generated customer clients;
+  the proxy owns its request and response handling.
 - Runner, proxy, and collector routes come from their runtime registration in
   [`server.go`](./runner/pkg/api/server.go),
   [`proxy.go`](./proxy/pkg/proxy/proxy.go), and
@@ -34,7 +37,7 @@ The inventory is implementation-grounded:
 
 `openapi/box.openapi.yaml` also describes portable capabilities that the hosted
 service does not currently register, including snapshots, clone, export,
-import, images, and runtime-wide metrics. They are intentionally absent below;
+import, and runtime-wide metrics. They are intentionally absent below;
 `GET /api/v1/config` reports snapshots, clone, export, and import as disabled.
 
 ## Services at a glance
@@ -45,6 +48,7 @@ import, images, and runtime-wide metrics. They are intentionally absent below;
 | [Hosted BoxLite-compatible API](#hosted-boxlite-compatible-api)           | `apps/api`                   | `/api/v1`                                                                            | `3000`                   |
 | [Runner API](#runner-api)                                                 | `apps/runner`                | `/`                                                                                  | `3003`                   |
 | [Preview proxy API](#preview-proxy-api)                                   | `apps/proxy`                 | `proxy.<domain>`, `<port>-<box>.proxy.<domain>`                                      | `4000`                   |
+| [Registry proxy API](#registry-proxy-api)                                 | `apps/image-service`         | `/v2`                                                                                | `4100`                   |
 | [Telemetry collector API](#telemetry-collector-api)                       | `apps/otel-collector`        | OTLP/HTTP and health listeners                                                       | `4318`, `13133`, `13132` |
 | [Local development stack](#local-development-stack)                       | `apps/infra-local`           | `http://localhost:28080`                                                             | local host ports only    |
 | [Container-based local environment](#container-based-local-environment)   | `apps/scripts`               | containers on `5556`, `5432`, `6379`, `5001`; apps on `3000`, `3001`, `4000`, `8080` | local host ports only    |
@@ -56,6 +60,21 @@ OTLP and HTTP health ports come from
 [`settings.ts`](./infra/stack/settings.ts); the collector's gRPC health port
 comes from its own [`config.yaml`](./otel-collector/config.yaml). Where an
 in-code default differs, the section notes it.
+
+## Admin organization metadata
+
+These read-only views require system administrator authorization. Registration filters,
+creator semantics and live pagination are documented in [the API README](api/README.md#admin-organization-metadata).
+Existing JWT organization reads and the Admin-key `by-box-id` lookup already return creation
+fields; the existing admin routes now add cross-organization date filtering, coverage of
+organizations without Boxes, and opt-in sections. Registration fields are always returned;
+usage and activation are read only when explicitly included. Upgrade all producers before
+enabling consumers of this contract.
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| `GET` | `/api/admin/organizations` | Lists registration metadata, counts and impact without usage reads. |
+| `GET` | `/api/admin/organizations/{organizationId}` | Flat registration, member, Box and impact detail; `include=usage,activation` selects optional sections. |
 
 ## Control-plane API
 
@@ -81,10 +100,23 @@ serves and the events it emits are catalogued below alongside its routes.
 | `DELETE` | `/api/api-keys/{name}`          | Deletes the caller's API key by name.                          |
 | `DELETE` | `/api/api-keys/{userId}/{name}` | Deletes a named API key belonging to a specified user.         |
 
+Key creation takes an explicit `permissions` array. When authenticated with an API key,
+the requested permissions must be a subset of that key's permissions, including for
+owners and system admins; broader grants return 403 before a key is created.
+The user's existing grantability checks still apply. An owner using a user JWT
+can create a key with any supported permission.
+
+Both DELETE routes require `write:members` when authenticated with an API key,
+including owner/admin keys and revocation of the calling key itself. A
+`read:members` key cannot revoke any key. User JWTs retain their existing access:
+members can revoke their own keys; owners and admins can also revoke other users'
+keys within the selected organization. The scope does not bypass these user or
+organization boundaries.
+
 </details>
 
 <details>
-<summary><b>Users and authentication</b> · 10 routes</summary>
+<summary><b>Users and authentication</b> · 12 routes</summary>
 
 | Method   | Path                                                     | What it does                                   |
 | -------- | -------------------------------------------------------- | ---------------------------------------------- |
@@ -98,6 +130,8 @@ serves and the events it emits are catalogued below alongside its routes.
 | `DELETE` | `/api/users/linked-accounts/{provider}/{providerUserId}` | Unlinks an external account.                   |
 | `POST`   | `/api/users/mfa/sms/enroll`                              | Enrolls the user in SMS MFA.                   |
 | `GET`    | `/api/auth/end-session`                                  | Starts OIDC RP-initiated logout.               |
+| `POST`   | `/api/auth/link/adopt`                                   | Moves a linked account's data for the Action.  |
+| `GET`    | `/api/auth/link/status`                                  | Tells the Action whether BoxLite knows a user. |
 
 </details>
 
@@ -109,28 +143,28 @@ serves and the events it emits are catalogued below alongside its routes.
 | `GET`    | `/api/organizations`                                                     | Lists organizations available to the caller.             |
 | `POST`   | `/api/organizations`                                                     | Creates an organization.                                 |
 | `GET`    | `/api/organizations/{organizationId}`                                    | Gets an organization by ID.                              |
-| `GET`    | `/api/organizations/{organizationId}/referral-code`                      | Gets or initializes the organization's invitation code. |
+| `GET`    | `/api/organizations/{organizationId}/referral-code`                      | Gets or initializes the organization's invitation code.  |
 | `GET`    | `/api/organizations/{organizationId}/concurrency`                        | Gets a bounded concurrency timeline from usage periods.  |
 | `DELETE` | `/api/organizations/{organizationId}`                                    | Deletes an organization.                                 |
 | `PATCH`  | `/api/organizations/{organizationId}/name`                               | Changes an organization's name.                          |
 | `PATCH`  | `/api/organizations/{organizationId}/default-region`                     | Sets the organization's default region.                  |
-| `POST`   | `/api/organizations/{organizationId}/leave`                              | Removes the caller from the organization.                |
+| `POST`   | `/api/organizations/{organizationId}/leave`                              | Removes the caller and revokes their API keys here.      |
 | `POST`   | `/api/organizations/{organizationId}/suspend`                            | Suspends the organization.                               |
 | `POST`   | `/api/organizations/{organizationId}/unsuspend`                          | Restores a suspended organization.                       |
 | `GET`    | `/api/organizations/by-box-id/{boxId}`                                   | Resolves the organization that owns a box.               |
 | `POST`   | `/api/organizations/{organizationId}/box-default-limited-network-egress` | Changes the default limited-egress policy for new boxes. |
 | `PUT`    | `/api/organizations/{organizationId}/experimental-config`                | Replaces the organization's experimental configuration.  |
 | `GET`    | `/api/organizations/{organizationId}/users`                              | Lists organization members.                              |
-| `POST`   | `/api/organizations/{organizationId}/users/{userId}/access`              | Changes a member's organization access.                  |
-| `DELETE` | `/api/organizations/{organizationId}/users/{userId}`                     | Removes a member from the organization.                  |
+| `POST`   | `/api/organizations/{organizationId}/users/{userId}/access`              | Changes access; refuses to demote a default-org creator. |
+| `DELETE` | `/api/organizations/{organizationId}/users/{userId}`                     | Removes a member and revokes their API keys here.        |
 | `GET`    | `/api/organizations/invitations`                                         | Lists invitations addressed to the caller.               |
 | `GET`    | `/api/organizations/invitations/count`                                   | Counts invitations addressed to the caller.              |
 | `POST`   | `/api/organizations/invitations/{invitationId}/accept`                   | Accepts an organization invitation.                      |
 | `POST`   | `/api/organizations/invitations/{invitationId}/decline`                  | Declines an organization invitation.                     |
-| `GET`    | `/api/organizations/{organizationId}/invitations`                        | Lists the organization's pending invitations.            |
+| `GET`    | `/api/organizations/{organizationId}/invitations`                        | Lists pending invitations, including expired ones.       |
 | `POST`   | `/api/organizations/{organizationId}/invitations`                        | Creates an organization invitation.                      |
 | `PUT`    | `/api/organizations/{organizationId}/invitations/{invitationId}`         | Changes a pending invitation.                            |
-| `POST`   | `/api/organizations/{organizationId}/invitations/{invitationId}/cancel`  | Cancels a pending invitation.                            |
+| `POST`   | `/api/organizations/{organizationId}/invitations/{invitationId}/cancel`  | Cancels a pending invitation, even after expiry.          |
 
 </details>
 
@@ -154,7 +188,7 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Boxes and preview access</b> · 19 routes</summary>
+<summary><b>Boxes and preview access</b> · 16 routes</summary>
 
 | Method | Path                                                                    | What it does                                          |
 | ------ | ----------------------------------------------------------------------- | ----------------------------------------------------- |
@@ -165,19 +199,15 @@ serves and the events it emits are catalogued below alongside its routes.
 | `POST` | `/api/box/{boxIdOrName}/recover`                                        | Requests recovery of a box in an error state.         |
 | `PUT`  | `/api/box/{boxIdOrName}/labels`                                         | Replaces a box's labels.                              |
 | `PUT`  | `/api/box/{boxId}/state`                                                | Updates the control plane's recorded box state.       |
-| `POST` | `/api/box/{boxIdOrName}/public/{isPublic}`                              | Makes a box public or private.                        |
 | `POST` | `/api/box/{boxId}/last-activity`                                        | Records the box's latest activity time.               |
 | `POST` | `/api/box/{boxIdOrName}/autostop/{interval}`                            | Sets the box auto-stop interval.                      |
 | `POST` | `/api/box/{boxIdOrName}/autodelete/{interval}`                          | Sets the box auto-delete interval.                    |
-| `GET`  | `/api/box/{boxIdOrName}/ports/{port}/preview-url`                       | Returns the preview URL for a box port.               |
-| `GET`  | `/api/box/{boxIdOrName}/ports/{port}/signed-preview-url`                | Creates a signed preview URL for a box port.          |
-| `POST` | `/api/box/{boxIdOrName}/ports/{port}/signed-preview-url/{token}/expire` | Expires a signed preview URL token.                   |
 | `GET`  | `/api/box/{boxId}/toolbox-proxy-url`                                    | Returns the box toolbox proxy URL.                    |
-| `GET`  | `/api/preview/{boxId}/public`                                           | Reports whether a box is publicly reachable.          |
+| `POST` | `/api/box/{boxIdOrName}/attach-tickets`                                 | Issues a 30-second, single-use ticket for one `/v1` attach upgrade. |
+| `GET`  | `/api/preview/{boxId}/inbound`                                          | Reports a box's inbound mode (`enabled` or `disabled`) to the proxy. |
 | `GET`  | `/api/preview/{boxId}/tunnels/{port}`                                   | Checks an active public tunnel for the proxy.          |
-| `GET`  | `/api/preview/{boxId}/validate/{authToken}`                             | Validates a box preview authentication token.         |
+| `POST` | `/api/preview/{boxId}/ensure-ready`                                     | Wakes a stopped box for the proxy, by auto-resume rules. |
 | `GET`  | `/api/preview/{boxId}/access`                                           | Checks whether the caller may preview a box.          |
-| `GET`  | `/api/preview/{signedPreviewToken}/{port}/box-id`                       | Resolves a signed preview token and port to a box ID. |
 
 </details>
 
@@ -196,24 +226,58 @@ serves and the events it emits are catalogued below alongside its routes.
 </details>
 
 <details>
-<summary><b>Runners and jobs</b> · 14 routes</summary>
+<summary><b>Image catalog</b> · 6 routes</summary>
 
-| Method   | Path                           | What it does                                                   |
-| -------- | ------------------------------ | -------------------------------------------------------------- |
-| `GET`    | `/api/runners`                 | Lists runners.                                                 |
-| `POST`   | `/api/runners`                 | Registers a runner.                                            |
-| `GET`    | `/api/runners/me`              | Returns the authenticated runner's identity and configuration. |
-| `GET`    | `/api/runners/by-box/{boxId}`  | Resolves the runner assigned to a box.                         |
-| `GET`    | `/api/runners/{id}`            | Gets a runner by ID.                                           |
-| `GET`    | `/api/runners/{id}/full`       | Gets a runner with its full related data.                      |
-| `DELETE` | `/api/runners/{id}`            | Deletes a runner.                                              |
-| `PATCH`  | `/api/runners/{id}/scheduling` | Enables or disables scheduling onto a runner.                  |
-| `PATCH`  | `/api/runners/{id}/draining`   | Enables or disables runner draining.                           |
-| `POST`   | `/api/runners/healthcheck`     | Records or checks runner health.                               |
-| `GET`    | `/api/jobs`                    | Lists jobs assigned to the authenticated runner.               |
-| `GET`    | `/api/jobs/poll`               | Long-polls for work assigned to the runner.                    |
-| `GET`    | `/api/jobs/{jobId}`            | Gets a job by ID.                                              |
-| `POST`   | `/api/jobs/{jobId}/status`     | Reports job progress, success, or failure.                     |
+`upstreamMissingAt` records when a pull first found a version missing upstream.
+`null` means no pull has recorded that observation; it does not confirm current
+registry availability.
+
+List and detail responses expose aliases only for READY versions, matching the
+versions a box can resolve. Aliases of non-ready versions remain stored but are
+omitted from those responses.
+
+| Method   | Path                               | What it does                                                                                                                |
+| -------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/images`                      | Lists the organization's images together with the operator's curated set.                                                   |
+| `GET`    | `/api/images/usage`                | Counts held images against the limit and sums the sizes their versions declared.                                            |
+| `GET`    | `/api/images/{idOrRef}`            | Gets an image, its versions with their aliases, last-use and upstream-missing timestamps, and the last 100 alias events. |
+| `POST` | `/api/images/{idOrRef}/aliases` | Creates an alias for a ready version; existing names return 409, even for the same target. |
+| `DELETE` | `/api/images/{idOrRef}/aliases/{alias}` | Deletes only the alias; versions and existing boxes remain. |
+| `DELETE` | `/api/images/{idOrRef}`            | Removes the catalog entry, not the bytes, unless a box can still boot from it (409 lists the boxes).                        |
+
+</details>
+
+<details>
+<summary><b>Registry credentials</b> · 3 routes</summary>
+
+| Method   | Path                   | What it does                                                                          |
+| -------- | ---------------------- | ------------------------------------------------------------------------------------- |
+| `GET`    | `/api/images/registries`      | Lists the organization's private registry logins, without passwords.                  |
+| `POST`   | `/api/images/registries`      | Adds a login; the password is stored where the API cannot read it and never returned. |
+| `DELETE` | `/api/images/registries/{id}` | Removes a login, unless a box still pulls through it (409 lists the boxes).           |
+
+</details>
+
+<details>
+<summary><b>Runners and jobs</b> · 15 routes</summary>
+
+| Method   | Path                                   | What it does                                                   |
+| -------- | -------------------------------------- | -------------------------------------------------------------- |
+| `GET`    | `/api/runners`                         | Lists runners.                                                 |
+| `POST`   | `/api/runners`                         | Registers a runner.                                            |
+| `GET`    | `/api/runners/me`                      | Returns the authenticated runner's identity and configuration. |
+| `GET`    | `/api/runners/me/images/registry-credentials` | Internal registry-proxy lookup; excluded from customer OpenAPI and SDKs. |
+| `GET`    | `/api/runners/by-box/{boxId}`          | Resolves the runner assigned to a box.                         |
+| `GET`    | `/api/runners/{id}`                    | Gets a runner by ID.                                           |
+| `GET`    | `/api/runners/{id}/full`               | Gets a runner with its full related data.                      |
+| `DELETE` | `/api/runners/{id}`                    | Deletes a runner.                                              |
+| `PATCH`  | `/api/runners/{id}/scheduling`         | Enables or disables scheduling onto a runner.                  |
+| `PATCH`  | `/api/runners/{id}/draining`           | Enables or disables runner draining.                           |
+| `POST`   | `/api/runners/healthcheck`             | Records or checks runner health.                               |
+| `GET`    | `/api/jobs`                            | Lists jobs assigned to the authenticated runner.               |
+| `GET`    | `/api/jobs/poll`                       | Long-polls for work assigned to the runner.                    |
+| `GET`    | `/api/jobs/{jobId}`                    | Gets a job by ID.                                              |
+| `POST`   | `/api/jobs/{jobId}/status`             | Reports job progress, success, or failure.                     |
 
 </details>
 
@@ -304,7 +368,7 @@ release fetched over HTTPS.
 
 | Protocol                 | Path, topic, or event          | What it does                                                                                                                           |
 | ------------------------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Socket.IO over WebSocket | `/api/socket.io/`              | Authenticates a JWT or API key, joins user and organization rooms, and streams resource notifications.                                 |
+| Socket.IO over WebSocket | `/api/socket.io/`              | Authenticates a JWT or API key and joins the user room, plus the organization room for members only; removal ejects the member. |
 | Socket.IO event          | `box.created`                  | Notifies an organization that a box was created.                                                                                       |
 | Socket.IO event          | `box.state.updated`            | Notifies an organization that a box's observed state changed.                                                                          |
 | Socket.IO event          | `box.desired-state.updated`    | Notifies an organization that a box's desired state changed.                                                                           |
@@ -341,9 +405,38 @@ deployments (shared with the control-plane API)
 Most resource paths accept both an unprefixed form and an organization-prefixed
 form. The tables write that as `[/{prefix}]`; clients can discover their prefix
 through `GET /api/v1/me`. Except for configuration discovery, these routes use
-combined bearer authentication. The box and volume resource routes also apply
-organization authorization; identity discovery at `GET /api/v1/me` can return
-`path_prefix: null` for an authenticated user with no organization membership.
+combined bearer authentication, then organization authorization.
+
+Image and registry management routes also consume the organization's authenticated
+request quota, shared with `/api/images`, `/api/images/registries`, and other routes using
+that quota. Canonical and prefixed SDK paths use the same counter. After the quota
+is exhausted, requests return HTTP 429 with `Retry-After-authenticated` before
+catalog changes or registry credential operations run; switching API surfaces
+does not reset it.
+
+Resource permissions are enforced per route. A box mutation — create, start,
+stop, exec, signal, resize, execution kill, file transfer, WebSocket attach, an
+attach ticket, and the network routes — requires `write:boxes`; deleting a box requires
+`delete:boxes`. Box reads (list, get, head, execution status, metrics) carry no
+permission and are reached by any member, because the model has no `read:boxes`.
+Volume routes require `read:volumes`, `write:volumes`, or `delete:volumes` to
+match, image routes `read:images`, `write:images`, or `delete:images`, and
+registry login routes `read:registries`, `write:registries`, or
+`delete:registries`. Attaching a managed volume while creating a box is authorized
+independently of `write:boxes`: the caller must also hold `read:volumes` and
+`write:volumes`, so a box-only credential cannot reach another's volume data
+(GHSA-2qqv-7cwv-mj8h). A system admin and an interactive owner without an API key
+are not permission-bounded; every API key is bounded by the permissions it
+carries. The WebSocket `/attach` upgrade enforces `write:boxes` inline — an
+upgrade never passes through the organization guard — using the same admin and
+owner exemptions, so it resolves the caller's system role just as the HTTP path
+does. A browser, which cannot set `Authorization` on a WebSocket, instead sends a
+`?ticket=` bought from `POST /api/box/{boxIdOrName}/attach-tickets`. Spending it
+re-checks the ticket's credential the same way:
+the API key that bought it, which must still exist and be unexpired, or else
+its user. The attach URL may omit `{prefix}`; the ticket already names the organization.
+`GET /api/v1/me` can return `path_prefix: null` for an authenticated user with no
+organization membership.
 
 <details>
 <summary><b>Discovery</b> · 2 routes</summary>
@@ -378,14 +471,15 @@ organization authorization; identity discovery at `GET /api/v1/me` can return
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/exec`                       | Starts a command execution through the assigned runner. |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}`        | Gets execution status and exit information.             |
 | `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}`        | Kills an execution.                                     |
-| `WS`     | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}/attach` | Attaches a bidirectional WebSocket to an execution.     |
+| `WS`     | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}/attach` | Attaches a bidirectional WebSocket to an execution; a browser authenticates with `?ticket=`. |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}/signal` | Sends a signal to an execution.                         |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}/resize` | Resizes an execution's terminal.                        |
 | `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/files?path={path}`          | Uploads a tar stream into a box path.                   |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/files?path={path}`          | Downloads a box path as a tar stream.                   |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/metrics`                    | Returns metrics for one box without marking it active.  |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Returns the runner tunnel URI for a guest TCP port.     |
-| `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Makes a box public or private (needs `write:boxes`).    |
+| `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Revokes a port's public declaration; `204`, idempotent. |
+| `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Enables or disables a box's inbound access.             |
 
 The exec, signal, resize, files, and metrics handlers are registered as
 catch-all reverse proxies to the box's assigned runner; the methods shown are
@@ -402,6 +496,112 @@ the portable contract, which the runner's own route registration enforces.
 | `GET`    | `/api/v1[/{prefix}]/volumes`                            | Lists volumes in the organization.            |
 | `GET`    | `/api/v1[/{prefix}]/volumes/{volumeId}`                 | Gets a volume by ID.                          |
 | `DELETE` | `/api/v1[/{prefix}]/volumes/{volumeId}?force={boolean}` | Deletes a volume, optionally forcing removal. |
+
+</details>
+
+<details>
+<summary><b>Images</b> · 6 routes</summary>
+
+| Method   | Path                                          | What it does                                                                                           |
+| -------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `GET`    | `/api/v1[/{prefix}]/images`                   | Lists one row per reference the organization can boot from; curated images are left out.               |
+| `GET`    | `/api/v1[/{prefix}]/images/usage`             | Counts held images against the limit and sums the sizes their versions declared.                       |
+| `GET`    | `/api/v1[/{prefix}]/images/{name}`            | Gets an image: its versions with their aliases, last use and upstream state, and the last 100 alias events. |
+| `POST` | `/api/v1[/{prefix}]/images/{name}/aliases` | Creates an alias from `alias` and `digest`; existing names return `already_exists`. |
+| `DELETE` | `/api/v1[/{prefix}]/images/{name}/aliases/{alias}` | Removes only the alias; needs `write:images`. |
+| `DELETE` | `/api/v1[/{prefix}]/images/{name}`            | Removes the catalog entry, not the bytes, unless a box can still boot from it.                         |
+
+The same catalog as `/api/images`, in the box API's snake_case shapes and with
+versions named by digest, for SDK clients.
+
+</details>
+
+<details>
+<summary><b>Registries</b> · 3 routes</summary>
+
+| Method   | Path                                 | What it does                                                                     |
+| -------- | ------------------------------------ | -------------------------------------------------------------------------------- |
+| `GET`    | `/api/v1[/{prefix}]/images/registries`      | Lists the organization's private registry logins, without passwords.             |
+| `POST`   | `/api/v1[/{prefix}]/images/registries`      | Adds a login; a second one for the same registry and prefix is `already_exists`. |
+| `DELETE` | `/api/v1[/{prefix}]/images/registries/{id}` | Removes a login, unless a box still pulls through it (409 lists the boxes).      |
+
+The same logins as `/api/images/registries`, in the box API's snake_case shapes, for
+SDK clients.
+
+Credential deletion and private-image box persistence coordinate in PostgreSQL.
+If they overlap, the contending request returns 409 and can be retried. A box
+whose resolved proxy reference has lost its credential is also rejected before
+it is saved. Once a dependent box commits, deletion returns 409 with its ID.
+The dependency check reads candidate credentials once for the organization and
+registry host, then matches each box in memory using the longest repository prefix.
+
+</details>
+
+<details>
+<summary><b>Members and invitations</b> · 5 routes</summary>
+
+Contract: [`openapi/admin.openapi.yaml`](../openapi/admin.openapi.yaml). This cloud-only
+Admin API manages an organization's users and invitations. Ordinary scoped API keys
+and user JWTs can call it; a platform administrator account is not required.
+Dedicated Admin SDK methods are not yet available. Existing Cloud API SDK methods
+continue to manage organizations and invitations.
+
+| Method | Path | Required API-key scope | Membership rule |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/organizations/users` | `read:members` | Member |
+| `DELETE` | `/api/v1/organizations/users/{user_id}` | `write:members` | Owner |
+| `GET` | `/api/v1/organizations/invites` | `read:members` | Member |
+| `POST` | `/api/v1/organizations/invites` | `write:members` | Owner |
+| `DELETE` | `/api/v1/organizations/invites/{invite_id}` | `write:members` | Owner |
+
+The key selects its organization. JWT callers select an organization with
+`X-BoxLite-Organization-ID`, or use their default organization. Read and write
+scopes are independent; owner and platform-admin keys still need the declared
+scope. For example, create a restricted key through the Cloud API/SDK with
+`{"name":"member-reader","permissions":["read:members"]}`. It can list users and
+invites but cannot invite users or delegate a key with `write:members`.
+Console owner-created keys default to both member scopes.
+
+The unmerged Tenant routes and scope names are replaced directly. Previously
+stored tenant grants migrate to the equivalent member grants; keys without those
+grants do not gain them. Removing a user revokes their organization keys. The last
+owner and a user's personal/default organization membership remain protected.
+
+Both lists accept `pageSize` (1–1000, default 100) and `pageToken`. Responses contain
+`users` or `invites`, plus `next_page_token` when more records exist. Treat tokens
+as opaque and return them unchanged; they are bound to the organization and
+resource and never grant access. Lists use ascending resource IDs.
+
+Users have `type: "user"`, `id` (the same as `/v1/me`'s `sub`), `email`, `name`,
+`role`, and `added_at`. Email is `null` when absent or the user record is unavailable.
+Invites have `type: "invite"`, `id`, `email`, `role`, `status`, `added_at`, and
+`expires_at`. Lists include every state; pending invitations past their deadline
+appear as `expired`. Expired pending invitations can be cancelled but not accepted.
+
+Create an invitation with `{"email":"teammate@example.com","role":"owner"}`.
+The role is required and currently only `owner` is accepted. Optional `expires_at`
+must be in the future on initial creation; omission uses
+`ORGANIZATION_INVITATION_TTL_SECONDS`, default seven days. Unknown request fields
+are rejected. Clients should tolerate additional response fields.
+
+An optional UUID `Idempotency-Key` makes create-invite retries return the original
+201 response for 24 hours, scoped to the organization and acting user. A different
+payload with the same key returns 422; a concurrent in-progress request returns
+409 and may be retried. Replay works after cancellation or expiry and does not
+send another email. This guarantee applies to create-invite only; it does not
+change Box `/v1/config` capabilities. The email event is not a transactional outbox:
+a process crash after commit can still lose notification delivery.
+
+Admin errors use the shared Box shape, for example
+`{"error":{"message":"Forbidden resource","type":"AuthError","code":"permission_denied"}}`.
+All operations may return 429; respect `Retry-After` when present. Console Cloud
+API errors retain their existing flat shape.
+
+Invitees accept through the JWT-only Console endpoint
+`/api/organizations/invitations/{invitationId}/accept`. Acceptance requires the
+invited email and does not require member scopes or prior membership. Email links
+resolve `/dashboard/user/invitations` against `DASHBOARD_URL` and accept after
+sign-in. See [invitation link lifetime](./infra/docs/configuration.md#invitation-link-lifetime).
 
 </details>
 
@@ -428,7 +628,7 @@ runtime and its microVMs.
 </details>
 
 <details>
-<summary><b>Box lifecycle and toolbox</b> · 9 routes</summary>
+<summary><b>Box lifecycle</b> · 8 routes</summary>
 
 | Method | Path                               | What it does                                                                                    |
 | ------ | ---------------------------------- | ----------------------------------------------------------------------------------------------- |
@@ -440,7 +640,6 @@ runtime and its microVMs.
 | `POST` | `/boxes/{boxId}/recover`           | Recovers a local box.                                                                           |
 | `POST` | `/boxes/{boxId}/is-recoverable`    | Checks whether a local box can be recovered.                                                    |
 | `POST` | `/boxes/{boxId}/network-settings`  | Changes a local box's network settings.                                                         |
-| `ANY`  | `/boxes/{boxId}/toolbox/{path...}` | Serves the box web terminal (xterm.js page and WebSocket shell); other paths return `410 Gone`. |
 
 </details>
 
@@ -458,7 +657,7 @@ runtime and its microVMs.
 | `PUT`     | `/v1/boxes/{boxId}/files?path={path}`          | Uploads a tar stream into the local box.              |
 | `GET`     | `/v1/boxes/{boxId}/files?path={path}`          | Downloads a local box path as a tar stream.           |
 | `GET`     | `/v1/boxes/{boxId}/metrics`                    | Returns local box metrics.                            |
-| `CONNECT` | `/v1/boxes/{boxId}/network/tunnel?port={port}` | Opens a raw bidirectional TCP tunnel to a guest port. |
+| `CONNECT` | `/v1/boxes/{boxId}/network/tunnel?port={port}` | Opens a raw bidirectional TCP tunnel to a guest port; answers `409` with code `box_not_running` for a box that is not running, which the proxy uses to wake the box. |
 
 </details>
 
@@ -486,7 +685,35 @@ and tunnels them to guest ports is in [`proxy/README.md`](./proxy/README.md).
 | `GET`     | `proxy.<domain>/callback`                                  | Completes the OIDC preview authentication flow.                                                  |
 | `POST`    | `<any host>/accept-boxlite-preview-warning?redirect={url}` | Records preview-warning acceptance and redirects the browser.                                    |
 | `ANY`     | `<port>-<box>.proxy.<domain>/{path...}`                    | Reverse-proxies HTTP and WebSocket traffic to the selected box port after preview access checks. |
-| `CONNECT` | `<port>-<box>.proxy.<domain>`                              | Opens a bidirectional TCP tunnel through the runner; allowed for public boxes only.              |
+| `CONNECT` | `<port>-<box>.proxy.<domain>`                              | Opens a bidirectional TCP tunnel through the runner; allowed only with inbound enabled.               |
+
+</details>
+
+## Registry proxy API
+
+**Service:** `apps/image-service` (binary `cmd/registry-proxy`) · **Base path:**
+`/v2` · **Port:** `4100` in deployments (`REGISTRY_PROXY_PORT` environment
+variable) · **Reached:** from inside the stage's network only, at its own Cloud
+Run address over HTTP/2
+
+The pull half of the OCI distribution protocol, served so a runner can fetch an
+image whose registry credentials only the platform holds. The organization and
+the upstream registry ride in the repository name — `<org>/<host>/<repo…>` —
+because one proxy serves every registry and the path is what says which. A
+manifest is relayed byte for byte and a blob is streamed, so the digest a client
+verifies still covers what the upstream served. How callers are authenticated,
+which upstreams are reachable, and how redirects are judged is in
+[`image-service/README.md`](./image-service/README.md).
+
+<details>
+<summary><b>Registry proxy routes</b> · 4 routes</summary>
+
+| Method       | Path                                                  | What it does                                                                             |
+| ------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `GET`        | `/health`                                             | Reports registry proxy health and version.                                               |
+| `GET` `HEAD` | `/v2/`                                                | The distribution version check; answers an unauthenticated caller with a Basic challenge. |
+| `GET` `HEAD` | `/v2/{org}/{host}/{repository...}/manifests/{ref}`    | Relays the upstream manifest unmodified, with its digest and media type.                 |
+| `GET` `HEAD` | `/v2/{org}/{host}/{repository...}/blobs/{digest}`     | Streams the upstream blob, following a registry's redirect to a permitted address.        |
 
 </details>
 
@@ -586,14 +813,15 @@ a separate environment — see
 </details>
 
 <details>
-<summary><b>Application processes</b> · 4 processes</summary>
+<summary><b>Application processes</b> · 5 processes</summary>
 
-| Process     | Host port | Interface                                                                  |
-| ----------- | --------- | -------------------------------------------------------------------------- |
-| `api`       | `3001`    | Control-plane and hosted BoxLite-compatible APIs; probed at `/api/health`. |
-| `dashboard` | `3000`    | Vite dev server for the dashboard app.                                     |
-| `proxy`     | `4000`    | Preview proxy API (`PROXY_PORT`).                                          |
-| `runner`    | `3003`    | Runner API (`API_PORT`).                                                   |
+| Process          | Host port | Interface                                                                  |
+| ---------------- | --------- | -------------------------------------------------------------------------- |
+| `api`            | `3001`    | Control-plane and hosted BoxLite-compatible APIs; probed at `/api/health`. |
+| `dashboard`      | `3000`    | Vite dev server for the dashboard app.                                     |
+| `proxy`          | `4000`    | Preview proxy API (`PROXY_PORT`).                                          |
+| `registry-proxy` | `4100`    | Registry proxy API (`REGISTRY_PROXY_PORT`); probed at `/health`.           |
+| `runner`         | `3003`    | Runner API (`API_PORT`).                                                   |
 
 The local API listens on `3001` rather than the deployed `3000`, which the
 dashboard dev server uses; `BOXLITE_LOCAL_API_PORT` overrides it. This stack
@@ -635,9 +863,9 @@ container.
 | `proxy`     | `4000`    | Preview proxy API.                                          |
 | `runner`    | `8080`    | Runner API, left on the in-code default rather than `3003`. |
 
-These are the same four projects the boxed stack serves, on the same `3000`,
-`3001`, and `4000` host ports, so the two local environments cannot run at the
-same time.
+These are four of the five projects the boxed stack serves — all but the
+registry proxy — on the same `3000`, `3001`, and `4000` host ports, so the two
+local environments cannot run at the same time.
 
 </details>
 
@@ -651,14 +879,14 @@ is unset; the same document carries PostHog's key and host to the browser.
 <details>
 <summary><b>External interfaces</b> · 4 APIs, 2 SaaS integrations</summary>
 
-| Interface     | Client                                                                                 | Base URL source                  | What it covers                                                                                                                                                                                             |
-| ------------- | -------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Analytics API | [`libs/analytics-api-client`](./libs/analytics-api-client/), generated                 | `analyticsApiUrl`                | 8 routes: per-box and organization usage, aggregates, and charts, plus box logs, metrics, and traces.                                                                                                      |
-| Billing API   | [`billingApiClient.ts`](./dashboard/src/billing-api/billingApiClient.ts), hand-written | `billingApiUrl`                  | 20 routes: wallet and top-ups, plans, payment methods, invoices, usage series and prices, coupons, billing emails, portal and checkout URLs.                                                               |
+| Interface     | Client                                                                                  | Base URL source                  | What it covers                                                                                                                                                                                             |
+| ------------- | --------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Analytics API | [`libs/analytics-api-client`](./libs/analytics-api-client/), generated                  | `analyticsApiUrl`                | 8 routes: per-box and organization usage, aggregates, and charts, plus box logs, metrics, and traces.                                                                                                      |
+| Billing API   | [`billingApiClient.ts`](./dashboard/src/billing-api/billingApiClient.ts), hand-written  | `billingApiUrl`                  | 22 routes: wallet and top-ups, signup credit delivery, plans, payment methods, invoices, usage series and prices, coupons, billing emails, portal and checkout URLs.                                                               |
 | Box admission | [`commerce-box-limit.service.ts`](./api/src/boxlite-rest/commerce-box-limit.service.ts) | `billingApiUrl`                  | 2 server-side reads on Commerce: `GET /plan` and `GET /organization/{organizationId}/plan`, bearer `USAGE_EXPORT_TOKEN`, used by hosted CREATE BOX.                                                        |
-| Usage export  | [`api/src/usage/services`](./api/src/usage/services/), hand-written                    | `usageExport.url`                | 2 routes on the same Commerce service, server-side: `POST /internal/usage-events` and `POST /internal/allocation-snapshot`, bearer `USAGE_EXPORT_TOKEN`, which must equal Commerce's `USAGE_INGEST_TOKEN`. |
-| PostHog       | `posthog-js` in the dashboard; `posthog-node` in the API                               | `posthog.apiKey`, `posthog.host` | Browser product analytics; server-side `api_*` operation events from the global metrics interceptor, two `groupIdentify` calls, and feature-flag evaluation.                                               |
-| Pylon         | [`App.tsx`](./dashboard/src/App.tsx) widget, production builds only                    | `pylonAppId`                     | Outbound support-chat widget; it registers no route here.                                                                                                                                                  |
+| Usage export  | [`api/src/usage/services`](./api/src/usage/services/), hand-written                     | `usageExport.url`                | 2 routes on the same Commerce service, server-side: `POST /internal/usage-events` and `POST /internal/allocation-snapshot`, bearer `USAGE_EXPORT_TOKEN`, which must equal Commerce's `USAGE_INGEST_TOKEN`. |
+| PostHog       | `posthog-js` in the dashboard; `posthog-node` in the API                                | `posthog.apiKey`, `posthog.host` | Browser product analytics; server-side `api_*` operation events from the global metrics interceptor, two `groupIdentify` calls, and feature-flag evaluation.                                               |
+| Pylon         | [`App.tsx`](./dashboard/src/App.tsx) widget, production builds only                     | `pylonAppId`                     | Outbound support-chat widget; it registers no route here.                                                                                                                                                  |
 
 The analytics client is generated from
 [`swagger.json`](./libs/analytics-api-client/swagger.json). Its four telemetry

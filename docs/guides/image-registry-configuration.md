@@ -12,6 +12,41 @@ You can provide a list of custom registries. BoxLite will try to pull the image 
 
 **Fully qualified image references (e.g., `quay.io/prometheus/prometheus:v2.40.1`) always bypass this search mechanism and are pulled directly.**
 
+## TLS trust
+
+HTTPS pulls trust the operating system's certificate store in addition to the Mozilla roots bundled with BoxLite, as Docker does. A registry or a TLS-intercepting proxy signed by a private CA works once that CA is installed in the system store:
+
+- **Linux**: add the CA to the distribution's trust store (for example `/usr/local/share/ca-certificates/` and `update-ca-certificates` on Debian and Ubuntu).
+- **macOS**: add it to the System keychain and mark it trusted.
+- **Windows (WSL2)**: add it to the WSL distribution's trust store as on Linux; the Windows certificate store is not read.
+
+The store is read on every pull, so a newly installed CA applies without restarting the application. When `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, BoxLite reads only those locations in place of the system store; the bundled roots still apply. Certificates the store holds but rustls cannot parse are skipped. `skip_verify: true` disables verification for that registry, so no store is consulted.
+
+## Pull proxy
+
+By default, pulls use the application's `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables. To route pulls through a proxy without changing the whole process environment, set `image_registry_proxy` in the runtime options or the CLI `--config` file:
+
+```json
+{
+  "image_registry_proxy": {
+    "https_proxy": "http://user:password@proxy.corp.example:3128",
+    "no_proxy": "registry.local,10.0.0.0/8"
+  }
+}
+```
+
+| Setting | Behavior |
+| --- | --- |
+| unset | the environment variables apply |
+| `https_proxy` or `http_proxy` set | every proxy environment variable is ignored for pulls, `NO_PROXY` included |
+| `https_proxy` only | `transport: "http"` registries connect directly |
+| `no_proxy` without a proxy URL | rejected when the runtime is created |
+| a scheme other than `http://` or `https://`, or an invalid URL | rejected when the runtime is created |
+
+The proxy carries every pull request, including token exchanges and blob redirects to a CDN. `no_proxy` follows curl, not Docker: `*.corp.example` and `host:port` entries never match (write `.corp.example` or `corp.example` instead), and `localhost` is not bypassed unless listed. A TLS-intercepting proxy also needs its CA in the system store; see [TLS trust](#tls-trust).
+
+The setting covers image pulls only; traffic from inside a box does not use it. A CLI profile that targets a remote server ignores `--config`, so the server's own settings apply there.
+
 ## CLI configuration
 
 The CLI layers configuration sources with the following priority (from lowest to highest):

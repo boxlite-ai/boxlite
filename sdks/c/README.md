@@ -276,25 +276,93 @@ int main() {
 
 ### Runtime Image Management
 
+`boxlite_runtime_images()` returns the images a runtime can boot from: the
+local cache on a runtime from `boxlite_runtime_new()`, the server's catalog on
+a REST runtime. Pull is local only (a REST runtime pulls when a box is
+created) and usage is REST only. Each operation queues its work and calls back
+from `boxlite_runtime_drain()`:
+
 ```c
-CBoxliteImageHandle* images = NULL;
-
-if (boxlite_runtime_images(runtime, &images, &error) == Ok) {
-    CImagePullResult* pull = NULL;
-    if (boxlite_image_pull(images, "alpine:latest", &pull, &error) == Ok) {
-        printf("Pulled: %s (%d layers)\n", pull->reference, pull->layer_count);
-        boxlite_free_image_pull_result(pull);
-    }
-
-    CImageInfoList* list = NULL;
-    if (boxlite_image_list(images, &list, &error) == Ok) {
+static void on_list(CImageInfoList* list, CBoxliteError* error, void* done) {
+    if (error->code == Ok) {
         printf("Images: %d\n", list->count);
         boxlite_free_image_info_list(list);
+    }
+    *(int*)done = 1;
+}
+
+static void on_removed(CBoxliteError* error, void* done) {
+    if (error->code != Ok) {
+        fprintf(stderr, "remove failed: %s\n", error->message);
+    }
+    *(int*)done = 1;
+}
+
+CBoxliteImageHandle* images = NULL;
+if (boxlite_runtime_images(runtime, &images, &error) == Ok) {
+    int listed = 0;
+    if (boxlite_image_list(images, on_list, &listed, &error) == Ok) {
+        while (!listed && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
+        }
+    }
+
+    // A name, not a reference: "docker.io/library/alpine:3.20" is refused.
+    int removed = 0;
+    if (boxlite_image_remove(images, "docker.io/library/alpine", on_removed,
+                             &removed, &error) == Ok) {
+        while (!removed && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
+        }
     }
 
     boxlite_image_free(images);
 }
 ```
+
+`boxlite_image_get()` and `boxlite_image_create_alias()` deliver a `CImageDetail`
+(aliases, versions newest first, and alias history) and `boxlite_image_usage()` a
+`CImageUsage`. See
+[Images in the C reference](../../docs/reference/c/README.md#images) for each
+operation on each runtime.
+
+### Private Registry Logins
+
+On a REST runtime, `boxlite_image_registries()` returns the logins the
+server pulls private images with; a local runtime answers `Unsupported` and
+takes its logins from `image_registries` instead. The password is copied,
+sent once, and never returned.
+
+```c
+static void on_created(CRegistryCredential* login, CBoxliteError* error,
+                       void* user_data) {
+    if (error->code == Ok) {
+        printf("added %s for %s/%s\n", login->id, login->registry_host,
+               login->repository_prefix);
+        boxlite_free_registry_credential(login);
+    }
+    *(int*)user_data = 1;
+}
+
+CBoxliteRegistryHandle* registries = NULL;
+if (boxlite_image_registries(runtime, &registries, &error) == Ok) {
+    int done = 0;
+    if (boxlite_registry_create(registries, "ghcr.io", "acme/", "acme-bot",
+                                getenv("GHCR_TOKEN"), on_created, &done,
+                                &error) == Ok) {
+        while (!done && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
+        }
+    }
+    boxlite_registry_free(registries);
+}
+```
+
+See [Registries in the C reference](../../docs/reference/c/README.md#registries).
+
+### Guest SSH Control
+
+`boxlite_box_ssh_configure()`, `boxlite_box_ssh_status()`, and
+`boxlite_box_ssh_disable()` configure, query, and disable guest SSH through
+the Native API. See the [C SSH reference](../../docs/reference/c/README.md#guest-ssh-control)
+for configuration fields, callbacks, and `CSshStatus`.
 
 ---
 
@@ -508,6 +576,11 @@ BoxliteErrorCode boxlite_network_tunnel(
     CBoxNetworkHandle* network,
     uint16_t port,
     CBoxTunnelHandle** out_tunnel,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_network_revoke_tunnel(
+    CBoxNetworkHandle* network,
+    uint16_t port,
     CBoxliteError* out_error
 );
 BoxliteErrorCode boxlite_tunnel_uri(
@@ -744,6 +817,7 @@ make
    - `CBoxInfoList` → `boxlite_free_box_info_list()`
    - `CImagePullResult` → `boxlite_free_image_pull_result()`
    - `CImageInfoList` → `boxlite_free_image_info_list()`
+   - `CImageDetail` → `boxlite_free_image_detail()`
 
 4. **Handles have specific free functions**
    - `CBoxliteRuntime` → `boxlite_runtime_free()` (auto-frees all boxes)
@@ -923,6 +997,11 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
   queued; call `boxlite_runtime_drain()` to dispatch the callback. On success,
   the callback owns the `CBoxInfo *` and must release it with
   `boxlite_free_box_info()`.
+- `boxlite_copy_into`, `boxlite_copy_out` and `boxlite_copy_out_start` no
+  longer flatten a directory source. The C bindings - and the Go SDK built on
+  them - copied a directory's contents where the Rust, Python and Node SDKs
+  copied the directory itself; a directory is now copied under its own name.
+  End the source path with `/.` to copy only the contents, as before.
 - `boxlite_copy_in_start` takes a `BoxliteCopySourceKind source_kind` as its
   third argument instead of `bool source_is_dir`. Use
   `BoxliteCopySourceKindDir` for a directory tree,
@@ -1182,6 +1261,10 @@ cargo build -p boxlite-c
 
 **Testing:**
 See `sdks/c/tests/` for the test suite.
+
+- `make test:unit:ffi` runs the Rust-side FFI tests; `make test:unit:c` and `make test:integration:c` build and run the C tests. `FILTER=<pattern>` narrows each.
+- C integration tests pin `alpine:3.19`, which avoids drifting to the latest Alpine release line; the tag still receives patch updates, so it does not guarantee an immutable userland. `test_ssh_integration.c` pulls it through the same registry mirrors the Python and Node suites use.
+- `FREE_STR_CALLS` counts string frees across the whole test process. A Rust test that frees a counted FFI payload, or reads the counter, must hold `FREE_STR_LOCK` for as long as it does so, even if it never reads the counter. Without the lock, plain `cargo test` threads count its frees in another test's delta. nextest's process-per-test runs hide this.
 
 ---
 

@@ -47,6 +47,7 @@ export const awsStackProviders = ({
   dashboardDomain = null,
   artifactsBucket,
   managedClickHouse,
+  otelOpenapiEnabled = false,
 }: {
   stage: string
   region: string
@@ -63,6 +64,7 @@ export const awsStackProviders = ({
    * and one with `mode: managed` and no endpoint is refused by the provider.
    */
   managedClickHouse: { url: string; writerSecretArn: string; readerSecretArn: string } | null
+  otelOpenapiEnabled?: boolean
 }): StackProviders => {
   /*
    * One DNS adapter for every record this stack writes.
@@ -84,7 +86,7 @@ export const awsStackProviders = ({
     database: ({ network }) => awsDatabaseProvider({ network: binding(network) }),
     cache: ({ network }) => awsCacheProvider({ network: binding(network) }),
     clickhouse: ({ network }) =>
-      awsClickHouseProvider({ network: binding(network), region, managed: managedClickHouse }),
+      awsClickHouseProvider({ network: binding(network), region, managed: managedClickHouse, otelOpenapiEnabled }),
     mail: awsMailProvider({ region, dns }),
     collector: ({ host: where, clickhouse, dependsOn }) =>
       awsCollectorProvider({ host: host(where), clickhouse, dependsOn }),
@@ -93,6 +95,17 @@ export const awsStackProviders = ({
     api: ({ dependencies }) => awsApiProvider({ dependencies, dns, domain, dashboardDomain }),
     edge: ({ host: where, network, dependsOn }) =>
       awsEdgeProvider({ host: host(where), placement: placement(network.placementFor('proxy')), dns, dependsOn }),
+    /*
+     * Not deployed on this cloud, and said so rather than thrown.
+     *
+     * The registry proxy exists to pull images whose credentials only the
+     * platform holds, and the release that introduces it deploys it where the
+     * platform runs. A throw here would take a whole AWS stage down for a
+     * service nothing on it calls; the inactive handle deploys everything else
+     * and reports no proxy, which is the truth.
+     */
+    registryProxy: () => () => ({ active: false }),
+    registryCredentials: () => ({ active: false }),
     // 64 alphanumeric characters: the value travels through a systemd
     // EnvironmentFile and a JSON payload, and punctuation would drag quoting
     // rules into both.

@@ -5,20 +5,27 @@
 //! (zero regression); 401 fails without writing credentials; `whoami`
 //! reflects identity.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-/// Minimal HTTP/1.1 stub. `handler(method, path) -> (status, json_body)`.
+struct RecordedRequest {
+    method: String,
+    path: String,
+    body: String,
+}
+
+/// HTTP/1.1 stub that records each request before invoking the handler.
 /// One request per connection (`Connection: close`); a daemon thread serves
 /// sequential connections for the test's lifetime.
 struct Stub {
     port: u16,
+    requests: Arc<Mutex<Vec<RecordedRequest>>>,
 }
 
 impl Stub {
@@ -26,9 +33,19 @@ impl Stub {
     where
         H: Fn(&str, &str) -> (u16, String) + Send + Sync + 'static,
     {
+        Self::with_url(move |_| move |method: &str, path: &str, _body: &str| handler(method, path))
+    }
+
+    fn with_url<F, H>(factory: F) -> Self
+    where
+        F: FnOnce(String) -> H,
+        H: Fn(&str, &str, &str) -> (u16, String) + Send + Sync + 'static,
+    {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
         let port = listener.local_addr().unwrap().port();
-        let handler = Arc::new(handler);
+        let handler = Arc::new(factory(format!("http://127.0.0.1:{port}")));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded_requests = Arc::clone(&requests);
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
@@ -41,13 +58,20 @@ impl Stub {
                 if reader.read_line(&mut request_line).is_err() {
                     continue;
                 }
-                // Drain headers (we never need a body — all GETs).
+                // Consume the form body as well as headers for OAuth requests.
+                let mut content_length = 0;
                 loop {
                     let mut line = String::new();
                     match reader.read_line(&mut line) {
                         Ok(0) => break,
                         Ok(_) if line == "\r\n" || line == "\n" => break,
-                        Ok(_) => continue,
+                        Ok(_) => {
+                            if let Some(value) =
+                                line.to_ascii_lowercase().strip_prefix("content-length:")
+                            {
+                                content_length = value.trim().parse::<usize>().unwrap();
+                            }
+                        }
                         Err(_) => break,
                     }
                 }
@@ -57,7 +81,15 @@ impl Stub {
                 let raw_path = parts.next().unwrap_or("");
                 let path = raw_path.split('?').next().unwrap_or(raw_path);
 
-                let (status, body) = handler(method, path);
+                let mut request_body = vec![0; content_length];
+                reader.read_exact(&mut request_body).unwrap();
+                let request_body = String::from_utf8(request_body).unwrap();
+                recorded_requests.lock().unwrap().push(RecordedRequest {
+                    method: method.to_string(),
+                    path: path.to_string(),
+                    body: request_body.clone(),
+                });
+                let (status, body) = handler(method, path, &request_body);
                 let reason = match status {
                     200 => "OK",
                     401 => "Unauthorized",
@@ -73,7 +105,7 @@ impl Stub {
                 let _ = stream.flush();
             }
         });
-        Self { port }
+        Self { port, requests }
     }
 
     fn url(&self) -> String {
@@ -332,4 +364,234 @@ fn relative_home_environment_value_is_rejected_for_auth_too() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("must be an absolute path"));
+}
+
+fn device_stub(
+    advertised: bool,
+    device_error: Option<&'static str>,
+    token_error: Option<&'static str>,
+) -> Stub {
+    device_stub_with_refresh(advertised, device_error, token_error, false)
+}
+
+fn device_stub_with_refresh(
+    advertised: bool,
+    device_error: Option<&'static str>,
+    token_error: Option<&'static str>,
+    refresh: bool,
+) -> Stub {
+    Stub::with_url(move |base| {
+        move |method, path, body: &str| {
+            let device_path = if advertised {
+                "/oauth/device/code"
+            } else {
+                "/device/code"
+            };
+            match (method, path) {
+                ("GET", "/config") => (
+                    200,
+                    serde_json::json!({"oidc": {
+                        "issuer": format!("{base}/"), "clientId": "cli-test", "audience": "test-api"
+                    }})
+                    .to_string(),
+                ),
+                ("GET", "/.well-known/openid-configuration") => {
+                    let mut metadata = serde_json::json!({
+                        "issuer": format!("{base}/"), "authorization_endpoint": format!("{base}/authorize"),
+                        "token_endpoint": format!("{base}/oauth/token"), "jwks_uri": format!("{base}/jwks"),
+                        "response_types_supported": ["code"], "subject_types_supported": ["public"],
+                        "id_token_signing_alg_values_supported": ["RS256"]
+                    });
+                    if advertised {
+                        metadata["device_authorization_endpoint"] =
+                            format!("{base}{device_path}").into();
+                    }
+                    (200, metadata.to_string())
+                }
+                ("GET", "/jwks") => (200, r#"{"keys":[]}"#.into()),
+                ("POST", p) if p == device_path => {
+                    if let Some(error) = device_error {
+                        (403, serde_json::json!({"error": error, "error_description": "SENSITIVE_SERVER_DESCRIPTION"}).to_string())
+                    } else {
+                        (200, serde_json::json!({"device_code": "PRIVATE_DEVICE_CODE", "user_code": "TEST-1234",
+                        "verification_uri": format!("{base}/activate"), "expires_in": 30, "interval": 1}).to_string())
+                    }
+                }
+                ("POST", "/oauth/token") => {
+                    if let Some(error) = token_error {
+                        (400, serde_json::json!({"error": error, "error_description": "SENSITIVE_SERVER_DESCRIPTION"}).to_string())
+                    } else {
+                        let refreshing = body.contains("grant_type=refresh_token");
+                        if refreshing && !body.contains("refresh_token=PRIVATE_REFRESH_TOKEN") {
+                            return (400, r#"{"error":"invalid_grant"}"#.into());
+                        }
+                        (200, serde_json::json!({
+                            "access_token": if refreshing { "ROTATED_ACCESS_TOKEN" } else { "PRIVATE_ACCESS_TOKEN" },
+                            "refresh_token": if refreshing { "ROTATED_REFRESH_TOKEN" } else { "PRIVATE_REFRESH_TOKEN" },
+                            "token_type": "Bearer", "expires_in": if refresh && !refreshing { 1 } else { 3600 }
+                        }).to_string())
+                    }
+                }
+                ("GET", "/v1/me") => (200, PRINCIPAL_JSON.into()),
+                _ => (404, "wrong device endpoint".into()),
+            }
+        }
+    })
+}
+
+#[test]
+fn device_login_uses_discovered_endpoint_and_persists_session() {
+    let stub = device_stub(true, None, None);
+    let home = TempDir::new().unwrap();
+    auth_cmd(&home)
+        .args(["auth", "login", "--url", &stub.url(), "--method", "device"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("TEST-1234"));
+    let credentials = std::fs::read_to_string(creds_path(&home)).unwrap();
+    assert!(credentials.contains("PRIVATE_REFRESH_TOKEN"));
+    auth_cmd(&home)
+        .args(["auth", "whoami"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dev@acme.test"));
+}
+
+#[test]
+fn device_login_request_encodes_public_client_once() {
+    // Legacy discovery lets this reach the request-body check on pre-fix code.
+    let stub = device_stub(false, None, None);
+    let home = TempDir::new().unwrap();
+    auth_cmd(&home)
+        .args(["auth", "login", "--url", &stub.url(), "--method", "device"])
+        .assert()
+        .success();
+    let requests = stub.requests.lock().unwrap();
+    let request = requests
+        .iter()
+        .find(|request| request.method == "POST" && request.path == "/device/code")
+        .expect("CLI must request device authorization");
+    let form: Vec<_> = url::form_urlencoded::parse(request.body.as_bytes()).collect();
+    let values = |key: &str| {
+        form.iter()
+            .filter(|(name, _)| name == key)
+            .map(|(_, value)| value.as_ref())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(values("client_id"), ["cli-test"]);
+    assert_eq!(values("audience"), ["test-api"]);
+    let scopes = values("scope");
+    assert_eq!(scopes.len(), 1);
+    assert!(
+        scopes[0]
+            .split_whitespace()
+            .any(|scope| scope == "offline_access")
+    );
+    assert!(values("client_secret").is_empty());
+}
+
+#[test]
+fn device_login_keeps_legacy_dex_endpoint_when_not_advertised() {
+    let stub = device_stub(false, None, None);
+    let home = TempDir::new().unwrap();
+    auth_cmd(&home)
+        .args(["auth", "login", "--url", &stub.url(), "--method", "device"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn device_login_reports_client_and_grant_checks_without_server_description() {
+    let stub = device_stub(true, Some("unauthorized_client"), None);
+    let home = TempDir::new().unwrap();
+    auth_cmd(&home)
+        .args(["auth", "login", "--url", &stub.url(), "--method", "device"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("unauthorized_client")
+                .and(predicate::str::contains("public CLI client ID"))
+                .and(predicate::str::contains("Device Code grant"))
+                .and(predicate::str::contains("SENSITIVE_SERVER_DESCRIPTION").not()),
+        );
+    assert!(!creds_path(&home).exists());
+}
+
+#[test]
+fn device_login_denied_or_expired_does_not_save_or_leak_secrets() {
+    for error in ["access_denied", "expired_token"] {
+        let stub = device_stub(true, None, Some(error));
+        let home = TempDir::new().unwrap();
+        auth_cmd(&home)
+            .args(["auth", "login", "--url", &stub.url(), "--method", "device"])
+            .assert()
+            .failure()
+            .stderr(
+                predicate::str::contains(error)
+                    .and(predicate::str::contains("PRIVATE_DEVICE_CODE").not())
+                    .and(predicate::str::contains("SENSITIVE_SERVER_DESCRIPTION").not()),
+            );
+        assert!(!creds_path(&home).exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn device_login_ctrl_c_cancels_without_saving() {
+    let stub = device_stub(false, None, Some("authorization_pending"));
+    let home = TempDir::new().unwrap();
+    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+        .env("BOXLITE_HOME", home.path())
+        .env_remove("BOXLITE_API_KEY")
+        .env_remove("BOXLITE_REST_URL")
+        .args(["auth", "login", "--url", &stub.url(), "--method", "device"])
+        .stderr(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut output = String::new();
+    loop {
+        let mut line = String::new();
+        assert!(
+            stderr.read_line(&mut line).unwrap() > 0,
+            "login ended before instructions: {output}"
+        );
+        output.push_str(&line);
+        if line.contains("TEST-1234") {
+            break;
+        }
+    }
+    // Signal the actual CLI, after its user instructions have crossed stderr.
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-INT", &child.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    stderr.read_to_string(&mut output).unwrap();
+    assert!(!child.wait().unwrap().success());
+    assert!(output.contains("device login cancelled"), "{output}");
+    assert!(!creds_path(&home).exists());
+}
+
+#[test]
+fn device_session_refreshes_and_persists_rotated_tokens() {
+    let stub = device_stub_with_refresh(true, None, None, true);
+    let home = TempDir::new().unwrap();
+    auth_cmd(&home)
+        .args(["auth", "login", "--url", &stub.url(), "--method", "device"])
+        .assert()
+        .success();
+    auth_cmd(&home)
+        .args(["auth", "whoami"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dev@acme.test"));
+    let credentials = std::fs::read_to_string(creds_path(&home)).unwrap();
+    assert!(credentials.contains("ROTATED_ACCESS_TOKEN"));
+    assert!(credentials.contains("ROTATED_REFRESH_TOKEN"));
+    assert!(!credentials.contains("PRIVATE_REFRESH_TOKEN"));
 }

@@ -9,25 +9,35 @@ import { BoxModule } from '../box/box.module'
 import { AuthModule } from '../auth/auth.module'
 import { ApiKeyModule } from '../api-key/api-key.module'
 import { OrganizationModule } from '../organization/organization.module'
+import { UserModule } from '../user/user.module'
 import { BoxliteMeController } from './boxlite-me.controller'
 import { BoxliteConfigController } from './boxlite-config.controller'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
-import { BoxAutoResumeService } from './box-auto-resume.service'
 import { BoxliteVolumeController } from './boxlite-volume.controller'
+import { BoxliteImageController } from './boxlite-image.controller'
+import { ImageModule } from '../image/image.module'
+import { BoxliteRegistryController } from './boxlite-registry.controller'
+import { RegistryModule } from '../registry/registry.module'
+import { BoxliteMemberController } from './boxlite-member.controller'
+import { BoxliteInvitationController } from './boxlite-invitation.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 
 @Module({
-  imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule],
+  imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule, UserModule, ImageModule, RegistryModule],
   controllers: [
     BoxliteMeController,
     BoxliteConfigController,
     BoxliteBoxController,
     BoxliteProxyController,
     BoxliteVolumeController,
+    BoxliteRegistryController,
+    BoxliteImageController,
+    BoxliteMemberController,
+    BoxliteInvitationController,
   ],
-  providers: [BoxliteWsProxyService, BoxAutoResumeService, CommerceBoxLimitService],
+  providers: [BoxliteWsProxyService, CommerceBoxLimitService],
   exports: [BoxliteWsProxyService],
 })
 export class BoxliteRestModule {}

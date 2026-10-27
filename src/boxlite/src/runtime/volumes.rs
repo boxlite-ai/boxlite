@@ -22,6 +22,10 @@ use crate::volumes::VolumeInfo;
 ///
 /// Implemented by both `LocalRuntime` and the REST runtime. Both return
 /// `Unsupported` until a managed volume backend is wired up.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait VolumeBackend: Send + Sync {
     /// Create a volume, returning its server-assigned metadata (including id).

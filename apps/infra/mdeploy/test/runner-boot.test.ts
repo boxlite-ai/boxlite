@@ -12,13 +12,14 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { RUNNER_ENV_FILE, renderRunnerBoot, runnerApiUrl, type BootPlatform } from '../stack/runner-boot.ts'
+import { RUNNER_ENV_FILE, RUNNER_HOME, renderRunnerBoot, runnerApiUrl, type BootPlatform } from '../stack/runner-boot.ts'
 import { renderUnitEnvironmentPolicyScripts } from '../stack/runner-upgrade.ts'
 
 const platform = (overrides: Partial<BootPlatform> = {}): BootPlatform => ({
   hostAddress: 'HOST_IP=$(curl -s http://metadata/ip)',
   installVolumeMount: 'apt-get install -y some-volume-mount',
   prepareKvm: '',
+  prepareHome: '',
   startWrapper: null,
   unitEnvironment: {},
   ...overrides,
@@ -109,6 +110,24 @@ test('the KVM hook runs before the check that depends on it', () => {
   // as, and preparing it after the check would fail a host that was fine.
   const script = render({ platform: platform({ prepareKvm: 'usermod -aG kvm root' }) })
   assert.ok(script.indexOf('usermod -aG kvm root') < script.indexOf('/dev/kvm is absent'))
+})
+
+test('the home is put in place before the unit is enabled', () => {
+  // A unit started onto an empty directory writes box state to the boot disk,
+  // where a mount made afterwards would hide it.
+  const script = render({ platform: platform({ prepareHome: '# put the home in place' }) })
+  const hook = script.indexOf('# put the home in place')
+  assert.notEqual(hook, -1, 'the hook is not in the script')
+  assert.ok(hook < script.indexOf('systemctl enable boxlite-runner'), 'the unit is enabled before its home is in place')
+})
+
+test('the unit will not start without the mount its home is on', () => {
+  // A failed mount must stop the runner rather than leave it writing box state
+  // to the disk beneath; where the home is on the root disk this names only `/`.
+  const script = render()
+  const unit = script.slice(script.indexOf('[Unit]'), script.indexOf('[Service]'))
+  assert.match(unit, new RegExp(`^RequiresMountsFor=${RUNNER_HOME}$`, 'm'))
+  assert.match(script, new RegExp(`^BOXLITE_HOME_DIR=${RUNNER_HOME}$`, 'm'))
 })
 
 test('the unit reads its settings from a file, not from lines appended after [Install]', () => {
@@ -208,9 +227,16 @@ test('the policy compares against the exact line the boot script wrote', () => {
    * is the point: the test would not survive the two deriving it separately.
    */
   const apiUrl = 'https://api.boxlite.ai/'
+  // Carried verbatim where the address is not, so the two sides have one more
+  // way to disagree: a normalization added to either alone breaks the pairing.
+  const otlpUrl = 'http://collector:4318'
   const volumeBackend = 'gcs'
-  const script = render({ apiUrl, platform: platform({ unitEnvironment: { VOLUME_STORAGE_BACKEND: volumeBackend } }) })
-  const { validate } = renderUnitEnvironmentPolicyScripts({ apiUrl, volumeBackend })
+  const script = render({
+    apiUrl,
+    otlpUrl,
+    platform: platform({ unitEnvironment: { VOLUME_STORAGE_BACKEND: volumeBackend } }),
+  })
+  const { validate } = renderUnitEnvironmentPolicyScripts({ apiUrl, otlpUrl, volumeBackend })
 
   // The array the policy compares against, and only it: the block around it
   // carries a `printf '%s\\n'` that a looser read would pick up as a pinned line.
@@ -218,7 +244,11 @@ test('the policy compares against the exact line the boot script wrote', () => {
   const pinned = [...declared.matchAll(/'([^']+)'/g)].map((match) => match[1])
   assert.deepEqual(
     pinned,
-    [`BOXLITE_API_URL=${runnerApiUrl(apiUrl)}`, `VOLUME_STORAGE_BACKEND=${volumeBackend}`],
+    [
+      `BOXLITE_API_URL=${runnerApiUrl(apiUrl)}`,
+      `OTEL_EXPORTER_OTLP_ENDPOINT=${otlpUrl}`,
+      `VOLUME_STORAGE_BACKEND=${volumeBackend}`,
+    ],
     'the policy pins lines the boot script does not write',
   )
 

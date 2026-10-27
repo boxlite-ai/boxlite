@@ -4,8 +4,8 @@
  */
 
 import { useBoxPreviewUrlMutation } from '@/hooks/mutations/useBoxPreviewUrlMutation'
-import { useUpdateBoxPublicStatusMutation } from '@/hooks/mutations/useUpdateBoxPublicStatusMutation'
-import { Box } from '@boxlite-ai/api-client'
+import { useUpdateBoxInboundMutation } from '@/hooks/mutations/useUpdateBoxInboundMutation'
+import { Box, NetworkMode } from '@boxlite-ai/api-client'
 import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
 import { BoxNetworkPanel } from './BoxNetworkPanel'
@@ -14,29 +14,32 @@ import { BoxPreviewUrlDialog } from './BoxPreviewUrlDialog'
 /**
  * Wires the network section to the box APIs.
  *
- * Both server calls live in the hooks layer — `useUpdateBoxPublicStatusMutation`
+ * Both server calls live in the hooks layer — `useUpdateBoxInboundMutation`
  * (which also owns cache invalidation) and `useBoxPreviewUrlMutation` — so this
  * component issues no HTTP of its own and only orchestrates.
  */
 export function BoxNetworkSection({ box, canManage }: { box: Box; canManage: boolean }) {
-  const togglePublic = useUpdateBoxPublicStatusMutation()
+  const toggleInbound = useUpdateBoxInboundMutation()
   const previewUrl = useBoxPreviewUrlMutation()
 
   const [dialogOpen, setDialogOpen] = useState(false)
 
-  const setPublic = useCallback(
-    (next: boolean) => {
-      togglePublic.mutate(
-        { boxId: box.id, isPublic: next },
+  const setInbound = useCallback(
+    (mode: NetworkMode) => {
+      toggleInbound.mutate(
+        { boxId: box.id, mode },
         {
-          // Named for what actually changed: preview reachability, not the
+          // Named for what actually changed: tunnel reachability, not the
           // box as a whole.
-          onSuccess: () => toast.success(next ? 'Preview URLs are open to anyone' : 'Preview URLs require signing in'),
-          onError: () => toast.error('Could not change preview access'),
+          onSuccess: () =>
+            toast.success(
+              mode === NetworkMode.ENABLED ? 'Tunnel URLs are open to anyone' : 'Tunnel URLs require signing in',
+            ),
+          onError: () => toast.error('Could not change inbound access'),
         },
       )
     },
-    [box.id, togglePublic],
+    [box.id, toggleInbound],
   )
 
   const openDialog = useCallback(() => {
@@ -56,16 +59,15 @@ export function BoxNetworkSection({ box, canManage }: { box: Box; canManage: boo
   return (
     <>
       <BoxNetworkPanel
-        isPublic={box.public ?? false}
-        isPublicPending={togglePublic.isPending}
+        network={box.network}
+        inboundPending={toggleInbound.isPending}
         canManage={canManage}
-        onTogglePublic={setPublic}
+        onToggleInbound={setInbound}
         onGetUrl={openDialog}
       />
       <BoxPreviewUrlDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        isPublic={box.public ?? false}
         url={previewUrl.data}
         isFetching={previewUrl.isPending}
         error={previewUrl.isError ? 'Could not get a URL for that port.' : undefined}

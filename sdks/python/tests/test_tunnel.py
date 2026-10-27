@@ -39,10 +39,14 @@ class _FakeNetwork:
     def __init__(self, tunnel: _FakeTunnel) -> None:
         self.tunnel_value = tunnel
         self.ports: list[int] = []
+        self.revoked: list[int] = []
 
     async def tunnel(self, port: int) -> _FakeTunnel:
         self.ports.append(port)
         return self.tunnel_value
+
+    async def revoke_tunnel(self, port: int) -> None:
+        self.revoked.append(port)
 
 
 class _FakeForwarder:
@@ -178,3 +182,46 @@ def test_sync_tunnel_rejects_invalid_ports(port):
 
     with pytest.raises(ValueError, match="integer between 1 and 65535"):
         SyncNetworkHandle(Owner()).tunnel(port)
+
+
+@pytest.mark.asyncio
+async def test_revoke_tunnel_withdraws_the_port_on_a_stopped_box():
+    box = SimpleBox.__new__(SimpleBox)
+    box._started = False
+    box._box = _FakeBox(_FakeTunnel([], None))
+
+    await box.network.revoke_tunnel(3000)
+
+    assert box._box.network.revoked == [3000]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("port", [0, 65536, "3000", None])
+async def test_revoke_tunnel_rejects_invalid_ports(port):
+    box = SimpleBox.__new__(SimpleBox)
+    box._started = True
+    box._box = _FakeBox(_FakeTunnel([], None))
+
+    with pytest.raises(ValueError, match="integer between 1 and 65535"):
+        await box.network.revoke_tunnel(port)
+    assert box._box.network.revoked == []
+
+
+def test_sync_revoke_tunnel_withdraws_the_port():
+    pytest.importorskip("greenlet")
+    from boxlite.sync_api._network import SyncNetworkHandle
+
+    class Owner:
+        def __init__(self) -> None:
+            self.revoked: list[int] = []
+
+        def _revoke_tunnel(self, port):
+            self.revoked.append(port)
+
+    owner = Owner()
+    SyncNetworkHandle(owner).revoke_tunnel(3000)
+    assert owner.revoked == [3000]
+
+    with pytest.raises(ValueError, match="integer between 1 and 65535"):
+        SyncNetworkHandle(owner).revoke_tunnel(0)
+    assert owner.revoked == [3000]

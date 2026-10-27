@@ -4,10 +4,11 @@ and a no-op when its work is already done (or its tools are absent), so it is
 safe to call on every `up`.
 
 Why these exist (gaps `compose up` otherwise assumes are pre-handled):
-  • image pulls (L1 images, and any private box base) need registry auth or
-    they hit the anonymous Docker Hub rate limit / a private-ghcr 401 — the
-    BoxLite puller does NOT read ~/.docker/config.json, so creds must be
-    threaded in. The curated box base itself is public.
+  • the orchestrator's own image pulls (L1) take docker.io creds, when present,
+    to stay clear of the anonymous Docker Hub rate limit — the BoxLite puller
+    does NOT read ~/.docker/config.json, so they are threaded in. The runner
+    holds none and pulls every box image anonymously, so the box base must be
+    public, and it is.
   • the box base is pulled from the published multi-arch agent image
     (ghcr.io/boxlite-ai/boxlite-agent-base), which now carries linux/arm64 — so
     an arm64 Mac boots a usable box straight from ghcr, no local image build.
@@ -18,7 +19,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -54,33 +54,6 @@ def dockerhub_creds() -> tuple[str | None, str | None]:
     return _credstore_get("https://index.docker.io/v1/")
 
 
-def ghcr_creds() -> tuple[str | None, str | None]:
-    """(username, token) for ghcr.io. The curated agent images are public, so
-    these are optional; they are required only for a private image ref.
-    Resolution order, each per-developer (no shared
-    secret to distribute):
-      1. explicit env (GHCR_USERNAME/GHCR_TOKEN or BOXLITE_GHCR_*)
-      2. the GitHub CLI token (`gh auth token`) — its scope already covers
-         read:packages for whoever is logged in
-      3. Docker's credStore (populated by `docker login ghcr.io`)
-    (None, None) if none resolve."""
-    u = os.environ.get("GHCR_USERNAME") or os.environ.get("BOXLITE_GHCR_USER")
-    t = os.environ.get("GHCR_TOKEN") or os.environ.get("BOXLITE_GHCR_TOKEN")
-    if u and t:
-        return u, t
-    if shutil.which("gh"):
-        try:
-            token = subprocess.run(["gh", "auth", "token"], capture_output=True,
-                                   text=True, timeout=5).stdout.strip()
-            user = subprocess.run(["gh", "api", "user", "--jq", ".login"],
-                                  capture_output=True, text=True, timeout=5).stdout.strip()
-            if token and user:
-                return user, token
-        except Exception:
-            pass
-    return _credstore_get("ghcr.io")
-
-
 def _credstore_get(registry: str) -> tuple[str | None, str | None]:
     """Read (username, secret) for `registry` from Docker Desktop's credStore."""
     try:
@@ -107,26 +80,13 @@ def ensure_tools_on_path() -> None:
 
 
 def export_dockerhub_env() -> None:
-    """Put docker.io creds into os.environ under every name the stack reads:
-    the orchestrator (L1 SDK) and the Go runner (envconfig). No-op if absent."""
+    """Put docker.io creds into os.environ for the orchestrator (L1 SDK), so
+    its own pulls avoid the anonymous rate limit. Not for the runner: it holds
+    no registry credential and pulls every image anonymously. No-op if absent."""
     u, t = dockerhub_creds()
     if u and t:
         os.environ.setdefault("BOXLITE_DOCKERHUB_USER", u)
         os.environ.setdefault("BOXLITE_DOCKERHUB_TOKEN", t)
-        os.environ.setdefault("DOCKERHUB_USERNAME", u)
-        os.environ.setdefault("DOCKERHUB_TOKEN", t)
-
-
-def export_ghcr_env() -> None:
-    """Thread ghcr.io creds into os.environ under the names the runner reads
-    (GHCR_USERNAME/GHCR_TOKEN via envconfig) so it can pull a private image
-    ref. No-op if none resolve."""
-    u, t = ghcr_creds()
-    if u and t:
-        os.environ.setdefault("GHCR_USERNAME", u)
-        os.environ.setdefault("GHCR_TOKEN", t)
-        os.environ.setdefault("BOXLITE_GHCR_USER", u)
-        os.environ.setdefault("BOXLITE_GHCR_TOKEN", t)
 
 
 def ensure_shared_target() -> None:
@@ -214,17 +174,10 @@ def ensure_local_boxlite() -> None:
     )
 
 
-def resolve_agent_image() -> str | None:
+def resolve_agent_image() -> str:
     """The box base image ref to use as BOXLITE_SYSTEM_BASE_IMAGE.
 
-    The published agent image is multi-arch (linux/arm64 included), so the
-    runner pulls the host-matching arch straight from ghcr — no local build or
-    L1-registry push. Returns the remote ref when ghcr creds are available, else
-    None so the caller leaves the curated default in place — which is the same
-    multi-arch tag, and public, so an anonymous pull still succeeds."""
-    u, t = ghcr_creds()
-    if not (u and t):
-        print("  no ghcr.io creds (try `gh auth login` or `docker login ghcr.io`) — "
-              "using the curated default, which is public and pulls anonymously")
-        return None
+    The published agent image is multi-arch (linux/arm64 included) and public,
+    so the runner pulls the host-matching arch straight from ghcr, anonymously
+    like every other image — no local build, L1-registry push, or credential."""
     return REMOTE_AGENT_IMAGE

@@ -23,6 +23,9 @@ import { OrganizationUser } from '../organization/entities/organization-user.ent
 import { User } from '../user/user.entity'
 import { BoxUsagePeriod } from '../usage/entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../usage/entities/box-usage-period-archive.entity'
+import { AdminOrganizationActivationService } from './services/organization-activation.service'
+import { AdminUsageController } from './controllers/usage.controller'
+import { AdminUsageService } from './services/usage.service'
 
 @Module({
   imports: [
@@ -46,7 +49,12 @@ import { BoxUsagePeriodArchive } from '../usage/entities/box-usage-period-archiv
       BoxUsagePeriodArchive,
     ]),
   ],
-  controllers: [AdminRunnerController, AdminBoxController, AdminProviderController],
-  providers: [AdminOrganizationOverviewService, AdminPlatformOverviewService],
+  controllers: [AdminRunnerController, AdminBoxController, AdminProviderController, AdminUsageController],
+  providers: [
+    AdminOrganizationOverviewService,
+    AdminPlatformOverviewService,
+    AdminOrganizationActivationService,
+    AdminUsageService,
+  ],
 })
 export class AdminModule {}

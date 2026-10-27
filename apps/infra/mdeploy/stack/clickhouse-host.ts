@@ -2,12 +2,12 @@
 // Copyright (c) 2026 BoxLite AI
 
 import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { DEFAULT_CLICKHOUSE_RETENTION_HOURS } from '../../shared/clickhouse-retention.ts'
 
 export const CLICKHOUSE_IMAGE =
   'clickhouse/clickhouse-server@sha256:c67cd26ea87301f3115e5fa7822905bcbb89cbd81e52bdd1ab7a938d1d5b77d8'
 export const EC2_USER_DATA_MAX_BYTES = 16 * 1024
-export const CLICKHOUSE_RETENTION_HOURS = 72
 
 export interface ClickHouseUserDataInput {
   region: string
@@ -26,8 +26,21 @@ const schemaSource = [
 if (!schemaSource) throw new Error('clickhouse/otel-schema-v0.144.0.sql was not found')
 const schemaTemplate = readFileSync(schemaSource, 'utf8')
 
-export function renderClickHouseSchema() {
-  return schemaTemplate.replaceAll('__RETENTION_HOURS__', String(CLICKHOUSE_RETENTION_HOURS))
+export const OPENAPI_READER_USERNAME = 'otel_openapi_reader'
+
+/** Preserve an existing user's identity; the host substitutes only a SHA-256 hash. */
+export function renderClickHouseLogReaderSql() {
+  const username = OPENAPI_READER_USERNAME
+  const source = typeof schemaSource === 'string'
+    ? resolve(dirname(schemaSource), 'openapi-log-reader.sql')
+    : new URL('openapi-log-reader.sql', schemaSource)
+  return `CREATE USER IF NOT EXISTS "${username}" IDENTIFIED WITH sha256_hash BY '__PASSWORD_SHA256__';
+ALTER USER "${username}" IDENTIFIED WITH sha256_hash BY '__PASSWORD_SHA256__';
+${readFileSync(source, 'utf8').replaceAll('__LOG_READER__', `"${username}"`).replaceAll('__LOG_READER_PROFILE__', `"${username}_limits"`)}`
+}
+
+export function renderClickHouseSchema(retentionHours = DEFAULT_CLICKHOUSE_RETENTION_HOURS) {
+  return schemaTemplate.replaceAll('__RETENTION_HOURS__', String(retentionHours))
 }
 
 function shellLiteral(value: string) {

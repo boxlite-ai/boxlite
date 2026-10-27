@@ -31,6 +31,8 @@ export type ClickHouseRequest = {
   /** Only read when `mode` is self-hosted; a managed endpoint sizes itself. */
   instanceSize: 'small' | 'medium'
   dataGb: number
+  /** TTL of the telemetry tables, already resolved by the stack. */
+  retentionHours: number
 }
 
 /** One account's way in: never a password, always a reference and its version. */

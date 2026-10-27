@@ -13,6 +13,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Executor spawns processes.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub trait Executor: Send + Sync {
     /// Spawn process from ExecRequest.

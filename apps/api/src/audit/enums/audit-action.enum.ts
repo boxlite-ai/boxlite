@@ -27,7 +27,7 @@ export enum AuditAction {
   RESIZE = 'resize',
   REPLACE_LABELS = 'replace_labels',
   CREATE_BACKUP = 'create_backup',
-  UPDATE_PUBLIC_STATUS = 'update_public_status',
+  UPDATE_INBOUND_ACCESS = 'update_inbound_access',
   SET_AUTO_STOP_INTERVAL = 'set_auto_stop_interval',
   SET_AUTO_DELETE_INTERVAL = 'set_auto_delete_interval',
   GET_PORT_PREVIEW_URL = 'get_port_preview_url',

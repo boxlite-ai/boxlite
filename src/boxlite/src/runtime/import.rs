@@ -57,7 +57,9 @@ pub(crate) async fn import_box(
         .map_err(|e| BoxliteError::Internal(format!("Import install task panicked: {}", e)))??;
 
     let litebox = runtime
-        .provision_box(staging_dir, name, options, BoxStatus::Stopped)
+        // An archive carries the box's options but not what its image resolved
+        // to, so an imported box has no record until one is rebuilt.
+        .provision_box(staging_dir, name, options, BoxStatus::Stopped, None)
         .await?;
 
     tracing::info!(
@@ -97,6 +99,13 @@ fn options_from_manifest(
     options.sanitize().map_err(|error| {
         BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
     })?;
+    // The local runtime shares no typed mounts yet(TODO), so an archive that
+    // carries one is refused rather than stored and dropped at boot.
+    if !options.mounts.is_empty() {
+        return Err(BoxliteError::Unsupported(
+            "typed mounts are not supported by the local runtime yet".to_string(),
+        ));
+    }
 
     if policy == ArchiveImportPolicy::Trusted {
         return Ok(options);
@@ -411,6 +420,31 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
         assert!(error.to_string().contains("volume mounts"));
+    }
+
+    /// The local runtime shares no typed mounts yet, so an archive that carries
+    /// one is refused whoever imports it, rather than stored and later dropped.
+    #[test]
+    fn import_refuses_typed_mounts_until_the_local_runtime_shares_them() {
+        use crate::runtime::options::MountSpec;
+
+        for policy in [
+            ArchiveImportPolicy::Trusted,
+            ArchiveImportPolicy::UntrustedRemote,
+        ] {
+            let options = BoxOptions {
+                mounts: vec![MountSpec::bind_mount("/srv/data", "/data")],
+                ..Default::default()
+            };
+
+            let error = options_from_manifest(&v3_manifest(options), policy)
+                .expect_err("the local runtime shares no typed mounts yet");
+
+            assert!(
+                error.to_string().contains("typed mounts"),
+                "{policy:?}: {error}"
+            );
+        }
     }
 
     #[test]

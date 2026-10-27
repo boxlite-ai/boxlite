@@ -48,8 +48,8 @@ describe("copyIn / copyOut integration", { timeout: 120_000 }, () => {
     fs.writeFileSync(path.join(dirSrc, "a.txt"), "aaa\n");
     fs.writeFileSync(path.join(dirSrc, "b.txt"), "bbb\n");
 
-    // Default includeParent=true wraps contents under the source dir name,
-    // so copy to /root/ to get /root/dir-in/{a,b}.txt.
+    // A directory lands under its own name inside an existing destination,
+    // so copying to /root/ gives /root/dir-in/{a,b}.txt.
     await box.copyIn(dirSrc, "/root", { recursive: true });
 
     const lsResult = await box.exec("ls", "/root/dir-in");
@@ -57,7 +57,7 @@ describe("copyIn / copyOut integration", { timeout: 120_000 }, () => {
     expect(lsResult.stdout).toContain("b.txt");
 
     const dirDst = path.join(tmpDir, "dir-out");
-    // copyOut also wraps under dir-in/ by default
+    // copyOut nests under dir-in/ too
     await box.copyOut("/root/dir-in", dirDst, { recursive: true });
 
     expect(fs.readFileSync(path.join(dirDst, "dir-in", "a.txt"), "utf-8")).toBe(

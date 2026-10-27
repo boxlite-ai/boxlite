@@ -65,31 +65,31 @@ describe('supported image allowlist', () => {
   })
 
   it('appends BOXLITE_SYSTEM_IMAGES additions, resolvable by name or ref', () => {
-    process.env.BOXLITE_SYSTEM_IMAGES = 'hermes=sam2026go/hermes-agent:boxlite'
+    process.env.BOXLITE_SYSTEM_IMAGES = 'tools=ghcr.io/acme/tools:v1'
 
     expect(supportedImages()).toEqual([
       { name: 'base', ref: BASE_REF },
       { name: 'python', ref: PYTHON_REF },
       { name: 'node', ref: NODE_REF },
-      { name: 'hermes', ref: 'sam2026go/hermes-agent:boxlite' },
+      { name: 'tools', ref: 'ghcr.io/acme/tools:v1' },
     ])
-    expect(assertSupportedImage('hermes')).toBe('sam2026go/hermes-agent:boxlite')
-    expect(assertSupportedImage('sam2026go/hermes-agent:boxlite')).toBe('sam2026go/hermes-agent:boxlite')
+    expect(assertSupportedImage('tools')).toBe('ghcr.io/acme/tools:v1')
+    expect(assertSupportedImage('ghcr.io/acme/tools:v1')).toBe('ghcr.io/acme/tools:v1')
   })
 
   it('parses a multi-entry list, trimming whitespace and dropping empty entries', () => {
-    process.env.BOXLITE_SYSTEM_IMAGES = ' hermes = sam2026go/hermes-agent:boxlite , , foo=ghcr.io/acme/foo:1 '
+    process.env.BOXLITE_SYSTEM_IMAGES = ' tools = ghcr.io/acme/tools:v1 , , foo=ghcr.io/acme/foo:1 '
     expect(supportedImages().slice(3)).toEqual([
-      { name: 'hermes', ref: 'sam2026go/hermes-agent:boxlite' },
+      { name: 'tools', ref: 'ghcr.io/acme/tools:v1' },
       { name: 'foo', ref: 'ghcr.io/acme/foo:1' },
     ])
   })
 
   it('throws on a malformed BOXLITE_SYSTEM_IMAGES entry (missing name or ref)', () => {
-    process.env.BOXLITE_SYSTEM_IMAGES = 'sam2026go/hermes-agent:boxlite'
+    process.env.BOXLITE_SYSTEM_IMAGES = 'ghcr.io/acme/tools:v1'
     expect(() => supportedImages()).toThrow(/Invalid BOXLITE_SYSTEM_IMAGES entry/)
 
-    process.env.BOXLITE_SYSTEM_IMAGES = 'hermes='
+    process.env.BOXLITE_SYSTEM_IMAGES = 'tools='
     expect(() => supportedImages()).toThrow(/Invalid BOXLITE_SYSTEM_IMAGES entry/)
   })
 
@@ -97,6 +97,6 @@ describe('supported image allowlist', () => {
     expect(() => assertSupportedImage('alpine:3.23')).toThrow(BadRequestError)
     expect(() => assertSupportedImage('ghcr.io/evil/image:latest')).toThrow(BadRequestError)
     // an added image is unreachable once its env entry is gone
-    expect(() => assertSupportedImage('hermes')).toThrow(/Supported images: base \(.*boxlite-agent-base/)
+    expect(() => assertSupportedImage('tools')).toThrow(/Supported images: base \(.*boxlite-agent-base/)
   })
 })

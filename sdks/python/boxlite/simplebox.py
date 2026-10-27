@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING, Optional
 from .exec import ExecResult
 
 if TYPE_CHECKING:
-    from .boxlite import Boxlite, TunnelForwarder
+    from .boxlite import (
+        Boxlite,
+        InboundNetworkSpec,
+        OutboundNetworkSpec,
+        TunnelForwarder,
+    )
 
 logger = logging.getLogger("boxlite.simplebox")
 
@@ -50,14 +55,30 @@ class NetworkHandle:
     def __init__(self, box: "SimpleBox") -> None:
         self._owner = box
 
+    async def update_inbound(self, spec: "InboundNetworkSpec") -> None:
+        """Replace inbound policy on a started box."""
+        if not self._owner._started:
+            raise RuntimeError("Box not started; call await box.start() first.")
+        await self._owner._box.network.update_inbound(spec)
+
+    async def update_outbound(self, spec: "OutboundNetworkSpec") -> None:
+        """Replace outbound policy, including the entire allowlist."""
+        if not self._owner._started:
+            raise RuntimeError("Box not started; call await box.start() first.")
+        await self._owner._box.network.update_outbound(spec)
+
     async def tunnel(self, port: int) -> BoxTunnel:
-        """Establish and return a one-shot tunnel for a port inside the box."""
+        """Prepare a one-shot tunnel for a port inside the box."""
         if not self._owner._started:
             raise RuntimeError(
                 "Box not started. Use 'async with SimpleBox(...) as box:' "
                 "or call 'await box.start()' first."
             )
         return BoxTunnel(await self._owner._create_tunnel(port))
+
+    async def revoke_tunnel(self, port: int) -> None:
+        """Withdraw public access to a port; open connections are not closed."""
+        await self._owner._revoke_tunnel(port)
 
 
 class SimpleBox:
@@ -146,6 +167,14 @@ class SimpleBox:
         if not isinstance(port, int) or not 1 <= port <= 65535:
             raise ValueError("port must be an integer between 1 and 65535")
         return await self._box.network.tunnel(port)
+
+    async def _revoke_tunnel(self, port: int) -> None:
+        """Withdraw public access to a service port."""
+        if self._box is None:
+            raise RuntimeError("Box not created")
+        if not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ValueError("port must be an integer between 1 and 65535")
+        await self._box.network.revoke_tunnel(port)
 
     async def __aenter__(self):
         """Async context manager entry - creates or reuses an existing box.
@@ -343,7 +372,7 @@ class SimpleBox:
         )
 
     async def tunnel(self, port: int) -> BoxTunnel:
-        """Establish and return a one-shot tunnel for a port inside this box."""
+        """Prepare a one-shot tunnel for a port inside this box."""
         return await self.network.tunnel(port)
 
     async def metrics(self):
@@ -384,7 +413,6 @@ class SimpleBox:
         *,
         overwrite: bool = True,
         follow_symlinks: bool = False,
-        include_parent: bool = True,
     ) -> None:
         """
         Copy files/directories from host into the container.
@@ -394,7 +422,6 @@ class SimpleBox:
             container_dest: Destination path inside the container
             overwrite: If True, overwrite existing files (default: True)
             follow_symlinks: If True, follow symlinks when copying (default: False)
-            include_parent: If True, include parent directory in archive (default: True)
 
         Note:
             copy_in extracts files into the container rootfs layer. Destinations
@@ -424,6 +451,12 @@ class SimpleBox:
             Copy a directory::
 
                 await box.copy_in("/local/data/", "/app/data/")
+
+            Copy a directory's contents rather than the directory — end the
+            source with ``/.`` as ``docker cp`` does (build it as a string;
+            ``pathlib.Path`` drops the trailing ``.``)::
+
+                await box.copy_in("/local/data/.", "/app/data")
         """
         if not self._started:
             raise RuntimeError(
@@ -437,7 +470,6 @@ class SimpleBox:
             recursive=True,
             overwrite=overwrite,
             follow_symlinks=follow_symlinks,
-            include_parent=include_parent,
         )
         await self._box.copy_in(host_path, container_dest, opts)
 
@@ -448,7 +480,6 @@ class SimpleBox:
         *,
         overwrite: bool = True,
         follow_symlinks: bool = False,
-        include_parent: bool = True,
     ) -> None:
         """
         Copy files/directories from container to host.
@@ -458,7 +489,6 @@ class SimpleBox:
             host_dest: Destination path on the host filesystem
             overwrite: If True, overwrite existing files (default: True)
             follow_symlinks: If True, follow symlinks when copying (default: False)
-            include_parent: If True, include parent directory in archive (default: True)
 
         Note:
             copy_out reads the container rootfs layer. A source at or under a
@@ -478,6 +508,10 @@ class SimpleBox:
             Copy a directory::
 
                 await box.copy_out("/app/results/", "/local/results/")
+
+            Copy a directory's contents rather than the directory::
+
+                await box.copy_out("/app/results/.", "/local/results")
         """
         if not self._started:
             raise RuntimeError(
@@ -491,6 +525,5 @@ class SimpleBox:
             recursive=True,
             overwrite=overwrite,
             follow_symlinks=follow_symlinks,
-            include_parent=include_parent,
         )
         await self._box.copy_out(container_src, host_dest, opts)

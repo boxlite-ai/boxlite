@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
+import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
@@ -19,7 +20,11 @@ import { BoxError } from '../../exceptions/box-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
-import { assertSupportedImage } from '../constants/curated-images.constant'
+import { ImageAdmissionService } from '../../image/services/image-admission.service'
+import { ImagePreparationService } from '../../image/services/image-preparation.service'
+import { ImagePullFailureService } from '../../image/services/image-pull-failure.service'
+import { ImageResolverService } from '../../image/services/image-resolver.service'
+import { ImageRegistrarService, ReportedImage } from '../../image/services/image-registrar.service'
 import { BoxWarmPoolService } from './box-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { WarmPoolEvents } from '../constants/warmpool-events.constants'
@@ -37,9 +42,11 @@ import { OrganizationEvents } from '../../organization/constants/organization-ev
 import { OrganizationSuspendedBoxStoppedEvent } from '../../organization/events/organization-suspended-box-stopped.event'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { WarmPool } from '../entities/warm-pool.entity'
-import { BoxDto, BoxVolume } from '../dto/box.dto'
+import { BoxDto, BoxDtoReads, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
+import { NetworkMode } from '../enums/network-mode.enum'
+import { networkMode } from '../utils/network-policy.util'
 import { VolumeService } from './volume.service'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import {
@@ -49,15 +56,17 @@ import {
   DEFAULT_BOX_SORT_DIRECTION,
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
+import { recordBoxRequested, recordWarmPoolClaim } from '../utils/box-business-event.util'
+import { Context } from '../../common/context/context'
+import { PlatformReason } from '../../common/context/platform-reason.enum'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
-import { customAlphabet as customNanoid, nanoid, urlAlphabet } from 'nanoid'
+import { nanoid } from 'nanoid'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { validateMountPaths, validateSubpaths } from '../utils/volume-mount-path-validation.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { Job } from '../entities/job.entity'
 import { JobService } from './job.service'
 import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
-import { PortPreviewUrlDto, SignedPortPreviewUrlDto } from '../dto/port-preview-url.dto'
 import { RegionService } from '../../region/services/region.service'
 import { BoxCreatedEvent } from '../events/box-create.event'
 import { InjectRedis } from '@nestjs-modules/ioredis'
@@ -77,6 +86,8 @@ import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
+import { OutboundPolicy, setRunnerOutbound } from '../runner-adapter/network-policy'
+import { isCuratedSelector, withoutRegistryProxy } from '../../image/utils/image-ref.util'
 import {
   AUTO_DELETE_DISABLED,
   AUTO_STOP_DISABLED,
@@ -85,13 +96,15 @@ import {
   MIN_AUTO_STOP_SECONDS,
 } from '../constants/box-lifecycle.constants'
 
-// TODO(image-rewrite): resource defaults previously came from the removed image subsystem;
-// these mirror the Box entity column defaults until image resolution is rebuilt.
+// An image does not decide how large a box is. These once stood in for values
+// the removed image subsystem supplied, and resolution is back now without
+// them changing hands — deliberately, because the alternative is that rotating
+// an image silently resizes every box booted from it. They are the contract,
+// not a stopgap.
 const DEFAULT_BOX_CPU = 1
 const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
-const TERMINAL_PREVIEW_PORT = 22222
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
@@ -120,6 +133,11 @@ export class BoxService {
     @InjectRepository(Job)
     private readonly jobRepository: Repository<Job>,
     private readonly jobService: JobService,
+    private readonly imageAdmissionService: ImageAdmissionService,
+    private readonly imageResolverService: ImageResolverService,
+    private readonly imageRegistrarService: ImageRegistrarService,
+    private readonly imagePreparationService: ImagePreparationService,
+    private readonly imagePullFailureService: ImagePullFailureService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -165,12 +183,27 @@ export class BoxService {
   }
 
   async createForWarmPool(warmPoolItem: WarmPool): Promise<Box> {
+    // The far side of `requiresFreshBox`'s image rule. A warm box is created
+    // with no organization and handed to whichever one claims it, so a pool row
+    // naming a tenant's image would put that image's contents in front of
+    // another tenant. Logged as well as thrown: a top-up arrives as an event, and
+    // the loop that fires it collects rejections with `allSettled`, so a throw
+    // alone would leave an operator with a pool that silently never fills.
+    if (!isCuratedSelector(warmPoolItem.image)) {
+      const message = `Warm pool ${warmPoolItem.id} names '${warmPoolItem.image}', which is not a curated image`
+      this.logger.error(message)
+      throw new BoxError(message)
+    }
+
     const box = new Box(warmPoolItem.target)
 
     box.organizationId = BOX_WARM_POOL_UNASSIGNED_ORGANIZATION
 
     box.class = warmPoolItem.class
     box.image = warmPoolItem.image
+    // Asserted curated a few lines up, so this is not a second opinion — it is
+    // the same one, written down before the curated set can move under it.
+    box.imageIsOrgOwned = false
     //  TODO: default user should be configurable
     box.osUser = 'boxlite'
     box.env = warmPoolItem.env || {}
@@ -190,6 +223,7 @@ export class BoxService {
   async create(
     createBoxDto: CreateBoxDto,
     organization: Organization,
+    ctx: Context,
     options: BoxCreationOptions = {},
   ): Promise<BoxDto> {
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
@@ -197,9 +231,6 @@ export class BoxService {
     try {
       const boxClass = this.getValidatedOrDefaultClass(createBoxDto.class)
 
-      // TODO(image-rewrite): image resolution removed; boxes can no
-      // longer resolve an image at create time. Resource sizing falls back to request values
-      // (or Box entity defaults). Rebuild image resolution here.
       const cpu = createBoxDto.cpu ?? DEFAULT_BOX_CPU
       const mem = createBoxDto.memory ?? DEFAULT_BOX_MEM
       const disk = createBoxDto.disk ?? DEFAULT_BOX_DISK
@@ -207,12 +238,24 @@ export class BoxService {
       // Reject over-limit requests at the boundary (the "security option"
       // per-box ceilings) rather than persisting out-of-range values.
       assertWithinPerBoxLimits(cpu, mem, disk, organization)
-      // Restrict box creation to the supported pinned images; reject anything else
-      // at the request boundary (defaults undefined -> base image).
-      const image = assertSupportedImage(createBoxDto.image)
-      const needsFreshBox = requiresFreshBox(createBoxDto, organization)
-
       this.organizationService.assertOrganizationIsNotSuspended(organization)
+
+      // Admission decides whether this organization may boot from this image at
+      // all; it is the gate that replaced "curated images only". It runs after
+      // the suspension check, and before the resolver, so a refused image never
+      // reaches the catalog query.
+      await this.imageAdmissionService.assert(organization, createBoxDto.image)
+      // Resolution turns what the caller asked for into the ref a runner is
+      // given: the curated set answers its own selectors without a query, and
+      // anything else is looked up in this organization's catalog — pinned to
+      // the digest its catalog tag points at if the catalog knows it, passed
+      // through as typed if it does not, which is how an image gets pulled the
+      // first time. A repository the organization registered a login for is
+      // handed over either way as a registry proxy ref, so that is what
+      // `box.image` records for a private image.
+      const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
+      const image = resolvedImage.ref
+      const needsFreshBox = requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
@@ -252,7 +295,7 @@ export class BoxService {
           })
 
           if (warmPoolBox) {
-            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, options.maxCreatedBoxes)
+            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, ctx, options.maxCreatedBoxes)
           }
         }
       }
@@ -277,22 +320,23 @@ export class BoxService {
       box.labels = createBoxDto.labels || {}
 
       box.image = image
+      // The resolver decided this, against the curated set as it stood when the
+      // caller asked. Recomputing it later answers a different question.
+      box.imageIsOrgOwned = resolvedImage.isOrgOwned
       box.cpu = cpu
       box.gpu = gpu
       box.mem = mem
       box.disk = disk
 
-      // POL-205: an unset public value on the internal create DTO defaults private.
-      box.public = createBoxDto.public ?? false
+      // POL-205: unset inbound access on the internal create DTO defaults disabled.
+      box.inboundEnabled = createBoxDto.inboundEnabled ?? false
 
-      if (createBoxDto.networkBlockAll !== undefined) {
-        box.networkBlockAll = createBoxDto.networkBlockAll
-      } else if (organization.boxLimitedNetworkEgress) {
-        box.networkBlockAll = true
-      }
+      // An explicit request wins; otherwise the organization's limited-egress
+      // default decides.
+      box.outboundEnabled = createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress
 
-      if (createBoxDto.networkAllowList !== undefined) {
-        box.networkAllowList = this.resolveNetworkAllowList(createBoxDto.networkAllowList)
+      if (createBoxDto.outboundAllowNet !== undefined) {
+        box.outboundAllowNet = this.resolveOutboundAllowNet(createBoxDto.outboundAllowNet)
       }
 
       const lifecyclePolicy = this.resolveLifecyclePolicy({
@@ -314,14 +358,22 @@ export class BoxService {
       // falling back to "cozy-otter-{boxId}" if it collides with the per-org
       // @Unique(['organizationId', 'name']) constraint. Only the insert retries:
       // the chosen runner is still fine, it was the name that collided.
-      const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, () =>
-        createBoxDto.name
+      //
+      // The cold-pull budget is spent in here, once a runner is chosen and just
+      // before the insert: it has no way to give a slot back, so a create its
+      // own input or placement refuses must not spend one. Only the box limit
+      // and a name collision, which the insert itself settles, come after it.
+      const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
+        await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
+        return createBoxDto.name
           ? this.boxRepository.insert(box, options.maxCreatedBoxes)
           : persistWithGeneratedBoxName(box.id, (name) => {
               box.name = name
               return this.boxRepository.insert(box, options.maxCreatedBoxes)
-            }),
-      )
+            })
+      })
+
+      recordBoxRequested('box.create', insertedBox.id, ctx)
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
@@ -345,12 +397,13 @@ export class BoxService {
     warmPoolBox: Box,
     createBoxDto: CreateBoxDto,
     organization: Organization,
+    ctx: Context,
     maxCreatedBoxes?: number,
   ): Promise<BoxDto> {
     const now = new Date()
     const updateData: Partial<Box> = {
       // POL-205: same default as the fresh-box path — see the comment there.
-      public: createBoxDto.public ?? false,
+      inboundEnabled: createBoxDto.inboundEnabled ?? false,
       labels: createBoxDto.labels || {},
       organizationId: organization.id,
       createdAt: now,
@@ -365,12 +418,12 @@ export class BoxService {
     updateData.autoDelete = lifecyclePolicy.autoDelete
     updateData.autoResume = lifecyclePolicy.autoResume
 
-    if (createBoxDto.networkBlockAll !== undefined) {
-      updateData.networkBlockAll = createBoxDto.networkBlockAll
+    if (createBoxDto.outboundEnabled !== undefined) {
+      updateData.outboundEnabled = createBoxDto.outboundEnabled
     }
 
-    if (createBoxDto.networkAllowList !== undefined) {
-      updateData.networkAllowList = this.resolveNetworkAllowList(createBoxDto.networkAllowList)
+    if (createBoxDto.outboundAllowNet !== undefined) {
+      updateData.outboundAllowNet = this.resolveOutboundAllowNet(createBoxDto.outboundAllowNet)
     }
 
     if (!warmPoolBox.runnerId) {
@@ -402,6 +455,8 @@ export class BoxService {
       name: warmPoolBox.name,
       previousOrganizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
     })
+
+    recordWarmPoolClaim(updatedBox.id, ctx)
 
     // Treat this as a newly started box
     this.eventEmitter.emit(
@@ -781,33 +836,6 @@ export class BoxService {
     return box.region
   }
 
-  async getPortPreviewUrl(boxIdOrName: string, organizationId: string, port: number): Promise<PortPreviewUrlDto> {
-    if (port < 1 || port > 65535) {
-      throw new BadRequestError('Invalid port')
-    }
-
-    const proxyDomain = this.configService.getOrThrow('proxy.domain')
-    const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
-
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-    // Keep the established terminal hostname stable. Service previews use an
-    // encoded ID so mixed-case box IDs remain safe in DNS hostnames.
-    const previewBoxId = port === TERMINAL_PREVIEW_PORT ? box.id : encodeDirectPreviewBoxId(box.id)
-
-    let url = `${proxyProtocol}://${port}-${previewBoxId}.${proxyDomain}`
-
-    const region = await this.regionService.findOne(box.region, true)
-    if (region && region.proxyUrl) {
-      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${previewBoxId}.`)
-    }
-
-    return {
-      boxId: box.id,
-      url,
-      token: box.authToken,
-    }
-  }
-
   async getNetworkTunnelUrl(boxIdOrName: string, organizationId: string, port: number): Promise<string> {
     if (port < 1 || port > 65535) {
       throw new BadRequestError('Invalid port')
@@ -826,74 +854,7 @@ export class BoxService {
     return url
   }
 
-  /**
-   * Sign access to a box's listening port through the shared preview proxy.
-   * The hostname carries the guest port while clients use the proxy's public listener.
-   */
-  async getSignedPortPreviewUrl(
-    boxIdOrName: string,
-    organizationId: string,
-    port: number,
-    expiresInSeconds = 60,
-  ): Promise<SignedPortPreviewUrlDto> {
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      throw new BadRequestError('Invalid port')
-    }
-    if (expiresInSeconds < 1 || expiresInSeconds > 60 * 60 * 24) {
-      throw new BadRequestError('expiresInSeconds must be between 1 second and 24 hours')
-    }
-
-    const proxyDomain = this.configService.getOrThrow('proxy.domain')
-    const proxyProtocol = this.configService.getOrThrow('proxy.protocol')
-
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-
-    const token = customNanoid(urlAlphabet.replace('_', '').replace('-', ''))(16).toLocaleLowerCase()
-
-    const lockKey = `box:signed-preview-url-token:${port}:${token}`
-    await this.redis.setex(lockKey, expiresInSeconds, box.id)
-
-    let url = `${proxyProtocol}://${port}-${token}.${proxyDomain}`
-
-    const region = await this.regionService.findOne(box.region, true)
-    if (region && region.proxyUrl) {
-      // Insert port and box.id into the custom proxy URL
-      url = region.proxyUrl.replace(/(https?:\/)(\/)/, `$1/${port}-${token}.`)
-    }
-
-    return {
-      boxId: box.id,
-      port,
-      token,
-      url,
-    }
-  }
-
-  async getBoxIdFromSignedPreviewUrlToken(token: string, port: number): Promise<string> {
-    const lockKey = `box:signed-preview-url-token:${port}:${token}`
-    const boxId = await this.redis.get(lockKey)
-    if (!boxId) {
-      throw new ForbiddenException('Invalid or expired token')
-    }
-    return boxId
-  }
-
-  async expireSignedPreviewUrlToken(
-    boxIdOrName: string,
-    organizationId: string,
-    token: string,
-    port: number,
-  ): Promise<void> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-    if (!box) {
-      throw new NotFoundException(`Box with ID or name ${boxIdOrName} not found`)
-    }
-
-    const lockKey = `box:signed-preview-url-token:${port}:${token}`
-    await this.redis.del(lockKey)
-  }
-
-  async destroy(boxIdOrName: string, organizationId?: string): Promise<Box> {
+  async destroy(boxIdOrName: string, organizationId: string | undefined, ctx: Context): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
     if (box.pending) {
@@ -906,6 +867,8 @@ export class BoxService {
       updateData,
       whereCondition: { pending: box.pending, state: box.state },
     })
+
+    recordBoxRequested('box.delete', updatedBox.id, ctx)
 
     this.eventEmitter.emit(BoxEvents.DESTROYED, new BoxDestroyedEvent(updatedBox))
     return updatedBox
@@ -983,7 +946,7 @@ export class BoxService {
     return updated
   }
 
-  async stop(boxIdOrName: string, organizationId?: string, force?: boolean): Promise<Box> {
+  async stop(boxIdOrName: string, organizationId: string | undefined, ctx: Context, force?: boolean): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
     this.assertBoxNotErrored(box)
@@ -1009,6 +972,8 @@ export class BoxService {
       updateData,
       whereCondition: { pending: false, state: box.state },
     })
+
+    recordBoxRequested('box.stop', updatedBox.id, ctx)
 
     this.eventEmitter.emit(BoxEvents.STOPPED, new BoxStoppedEvent(updatedBox, force))
 
@@ -1067,11 +1032,11 @@ export class BoxService {
     return await this.start(box.id, organization)
   }
 
-  async updatePublicStatus(boxIdOrName: string, isPublic: boolean, organizationId?: string): Promise<Box> {
+  async updateInboundEnabled(boxIdOrName: string, inboundEnabled: boolean, organizationId?: string): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
     const updateData: Partial<Box> = {
-      public: isPublic,
+      inboundEnabled,
     }
 
     return await this.boxRepository.update(box.id, {
@@ -1098,19 +1063,32 @@ export class BoxService {
    * between "unknown" and "idle" decides whether a box is stopped.
    */
   async toBoxDto(box: Box): Promise<BoxDto> {
-    const [toolboxProxyUrl, lastActivityAt] = await this.resolveDtoMetadata(box)
-    return BoxDto.fromBox(box, toolboxProxyUrl, lastActivityAt)
+    const [toolboxProxyUrl, reads] = await this.resolveDtoMetadata(box)
+    return BoxDto.fromBox(box, toolboxProxyUrl, reads)
   }
 
-  /** The two out-of-entity values every conversion needs, read together. */
-  private async resolveDtoMetadata(box: Box): Promise<[string, Date | null]> {
-    return Promise.all([
+  /**
+   * The out-of-entity values every single-box conversion needs, read together.
+   * The preparation read is here rather than in {@link toBoxDto} alone because
+   * a caller polling a creating box reads it through
+   * {@link toBoxDtoWithExitCode}, and that is the caller progress is for.
+   */
+  private async resolveDtoMetadata(box: Box): Promise<[string, BoxDtoReads]> {
+    const [toolboxProxyUrl, lastActivityAt, preparing] = await Promise.all([
       this.resolveToolboxProxyUrl(box.region),
       this.boxActivityService.getLastActivityAt(box.id).catch((err) => {
         this.logger.warn(`Failed to read last activity for box ${box.id}: ${err}`)
         return null
       }),
+      // Degrades to absent for the same reason as the activity read: what the
+      // box is waiting on is commentary on the box, and losing it must not turn
+      // a successful create into a failed one.
+      this.imagePreparationService.preparingImage([box]).catch((err) => {
+        this.logger.warn(`Failed to read image preparation for box ${box.id}: ${err}`)
+        return new Set<string>()
+      }),
     ])
+    return [toolboxProxyUrl, { lastActivityAt, preparingImage: preparing.has(box.id) }]
   }
 
   /**
@@ -1128,11 +1106,11 @@ export class BoxService {
    * Only the two endpoints that answer a tenant's read use this.
    */
   async toBoxDtoWithExitCode(box: Box): Promise<BoxDto> {
-    const [[toolboxProxyUrl, lastActivityAt], exitCode] = await Promise.all([
+    const [[toolboxProxyUrl, reads], exitCode] = await Promise.all([
       this.resolveDtoMetadata(box),
       this.boxExitCodeService.getExitCode(box),
     ])
-    return BoxDto.fromBox(box, toolboxProxyUrl, lastActivityAt, exitCode)
+    return BoxDto.fromBox(box, toolboxProxyUrl, { ...reads, exitCode })
   }
 
   /**
@@ -1144,11 +1122,15 @@ export class BoxService {
    * client that needs it reads the box itself.
    */
   async toBoxDtos(boxes: Box[]): Promise<BoxDto[]> {
-    const [urlMap, activityMap] = await Promise.all([
+    const [urlMap, activityMap, preparing] = await Promise.all([
       this.resolveToolboxProxyUrls(boxes.map((s) => s.region)),
       this.boxActivityService.getLastActivityAtMany(boxes.map((s) => s.id)).catch((err) => {
         this.logger.warn(`Failed to read last activity for ${boxes.length} boxes: ${err}`)
         return new Map<string, Date>()
+      }),
+      this.imagePreparationService.preparingImage(boxes).catch((err) => {
+        this.logger.warn(`Failed to read image preparation for ${boxes.length} boxes: ${err}`)
+        return new Set<string>()
       }),
     ])
     return boxes.map((s) => {
@@ -1156,7 +1138,7 @@ export class BoxService {
       if (!url) {
         throw new NotFoundException(`Toolbox proxy URL not resolved for region ${s.region}`)
       }
-      return BoxDto.fromBox(s, url, activityMap.get(s.id))
+      return BoxDto.fromBox(s, url, { lastActivityAt: activityMap.get(s.id), preparingImage: preparing.has(s.id) })
     })
   }
 
@@ -1328,20 +1310,20 @@ export class BoxService {
 
   async updateNetworkSettings(
     boxIdOrName: string,
-    networkBlockAll?: boolean,
-    networkAllowList?: string,
+    outboundEnabled?: boolean,
+    outboundAllowNet?: string[],
     organizationId?: string,
   ): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
 
     const updateData: Partial<Box> = {}
 
-    if (networkBlockAll !== undefined) {
-      updateData.networkBlockAll = networkBlockAll
+    if (outboundEnabled !== undefined) {
+      updateData.outboundEnabled = outboundEnabled
     }
 
-    if (networkAllowList !== undefined) {
-      updateData.networkAllowList = this.resolveNetworkAllowList(networkAllowList)
+    if (outboundAllowNet !== undefined) {
+      updateData.outboundAllowNet = this.resolveOutboundAllowNet(outboundAllowNet)
     }
 
     const updatedBox = await this.boxRepository.update(box.id, { updateData, entity: box })
@@ -1351,22 +1333,69 @@ export class BoxService {
       const runner = await this.runnerService.findOne(box.runnerId)
       if (runner) {
         const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-        await runnerAdapter.updateNetworkSettings(box.id, networkBlockAll, networkAllowList)
+        await runnerAdapter.updateNetworkSettings(box.id, updateData.outboundEnabled, updateData.outboundAllowNet)
       }
     }
 
     return updatedBox
   }
 
+  async setOutboundNetwork(boxIdOrName: string, policy: OutboundPolicy, organizationId: string): Promise<Box> {
+    if (policy.mode === 'disabled' && policy.allow_net.length) {
+      throw new BadRequestError('disabled outbound cannot include allow_net')
+    }
+    const allowNet = this.resolveOutboundAllowNet(policy.allow_net) ?? []
+    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+    const resolved = { ...policy, allow_net: allowNet }
+    return this.boxRepository.replaceOutbound(box.id, organizationId, resolved, async (locked, next) => {
+      const runner = await this.runnerService.findOne(locked.runnerId)
+      if (!runner) throw new ConflictException('Box runner is unavailable')
+      await setRunnerOutbound(runner, locked.id, next)
+    })
+  }
+
   // used by internal services to update the state of a box to resolve domain and runner state mismatch
   // notably, when a box instance stops or errors on the runner, the domain state needs to be updated to reflect the actual state
-  async updateState(boxId: string, newState: BoxState, recoverable = false, errorReason?: string): Promise<void> {
+  async updateState(
+    boxId: string,
+    newState: BoxState,
+    recoverable = false,
+    errorReason?: string,
+    reportedImage?: ReportedImage,
+  ): Promise<void> {
     const box = await this.boxRepository.findOne({
       where: { id: boxId },
     })
 
     if (!box) {
       throw new NotFoundException(`Box with ID ${boxId} not found`)
+    }
+
+    // Before any state handling, and deliberately not inside it: this is a fact
+    // about the box's image, not a transition. The runner may well be telling
+    // us a state we already have — the control plane also learns a box is up by
+    // polling the runner — and the early returns below would drop the report.
+    //
+    // Only a report that says the box is up: a failed pull reports ERROR, and
+    // an image that never booted must not appear in the catalog as if it had.
+    // It is the report that is filtered, not the outcome — the state machine
+    // below may still refuse this transition, and a box that pulled an image
+    // and started it did so either way.
+    if (reportedImage && newState === BoxState.STARTED && box.image) {
+      try {
+        await this.imageRegistrarService.onBoxStarted(
+          box.organizationId,
+          { ref: box.image, isOrgOwned: boxImageIsOrgOwned(box), runnerId: box.runnerId },
+          reportedImage,
+        )
+      } catch (error) {
+        // A lost registration costs the next create one re-resolution, which
+        // is the documented trade; one refused for the image limit leaves the
+        // name unrecorded, so admission refuses the next create of it. Failing
+        // the state update instead would leave the control plane believing a
+        // running box is still starting.
+        this.logger.error(`Failed to register image for box ${boxId}: ${error}`)
+      }
     }
 
     if (box.state === newState) {
@@ -1417,8 +1446,10 @@ export class BoxService {
     }
 
     if (errorReason !== undefined) {
-      updateData.errorReason = errorReason
+      // The runner's words, which can name the registry proxy ref it pulled.
+      updateData.errorReason = withoutRegistryProxy(errorReason)
       if (newState === BoxState.ERROR) {
+        updateData.errorReason = await this.imagePullFailureService.reasonFor(box, updateData.errorReason)
         updateData.recoverable = recoverable
       }
     }
@@ -1464,7 +1495,9 @@ export class BoxService {
       return
     }
 
-    const destroyPromises = boxes.map((box) => this.destroy(box.id))
+    const destroyPromises = boxes.map((box) =>
+      this.destroy(box.id, undefined, Context.platform(PlatformReason.WARM_POOL)),
+    )
     const results = await Promise.allSettled(destroyPromises)
 
     // Log any failed box destructions
@@ -1475,7 +1508,7 @@ export class BoxService {
     })
   }
 
-  async isBoxPublic(boxId: string): Promise<boolean> {
+  async getInboundMode(boxId: string): Promise<NetworkMode> {
     const box = await this.boxRepository.findOne({
       where: { id: boxId },
     })
@@ -1484,12 +1517,12 @@ export class BoxService {
       throw new NotFoundException(`Box with ID ${boxId} not found`)
     }
 
-    return box.public
+    return networkMode(box.inboundEnabled)
   }
 
   @OnEvent(OrganizationEvents.SUSPENDED_BOX_STOPPED)
   async handleSuspendedBoxStopped(event: OrganizationSuspendedBoxStoppedEvent) {
-    await this.stop(event.boxId).catch((error) => {
+    await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSPENSION)).catch((error) => {
       //  log the error for now, but don't throw it as it will be retried
       this.logger.error(`Error stopping box from suspended organization. BoxId: ${event.boxId}: `, error)
     })
@@ -1527,14 +1560,15 @@ export class BoxService {
     return { autoStop, autoDelete, autoResume }
   }
 
-  private resolveNetworkAllowList(networkAllowList: string): string {
+  private resolveOutboundAllowNet(allowNet: string[]): string[] | undefined {
     try {
-      validateNetworkAllowList(networkAllowList)
+      validateNetworkAllowList(allowNet)
     } catch (error) {
       throw new BadRequestError(error instanceof Error ? error.message : 'Invalid network allow list')
     }
 
-    return networkAllowList
+    const entries = allowNet.map((entry) => entry.trim()).filter(Boolean)
+    return entries.length > 0 ? entries : undefined
   }
 
   private resolveVolumes(volumes: BoxVolume[]): BoxVolume[] {

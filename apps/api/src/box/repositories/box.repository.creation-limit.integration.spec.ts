@@ -5,13 +5,14 @@
 
 import { randomUUID } from 'node:crypto'
 import { DataSource, EntityManager, Repository } from 'typeorm'
+import { IsolationLevel } from 'typeorm/driver/types/IsolationLevel'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxState } from '../enums/box-state.enum'
-import { BoxCreationLimitExceededError } from '../errors/box-creation-limit.error'
-import { BoxRepository } from './box.repository'
+import { BoxCreationAdmissionUnavailableError, BoxCreationLimitExceededError } from '../errors/box-creation-limit.error'
+import { BoxRepository, CREATION_ADMISSION_LOCK_NAMESPACE } from './box.repository'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const schemaName = `box_creation_limit_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -34,28 +35,45 @@ function newBox(name: string, owner = organizationId): Box {
   return box
 }
 
+// Waits until another admission for the organization is queued on its advisory
+// lock. Gives up after a grace period, so an admission that never queues still
+// races the paused one instead of hanging the test.
+async function waitForQueuedAdmission(dataSource: DataSource, owner: string): Promise<void> {
+  const deadline = Date.now() + 2000
+  while (Date.now() < deadline) {
+    const [{ waiting }] = await dataSource.query(
+      `SELECT count(*)::int AS waiting FROM pg_locks
+       WHERE locktype = 'advisory' AND NOT granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+         AND classid::bigint = $2 AND objid::bigint = (hashtext($1)::bigint & 4294967295) AND objsubid = 2`,
+      [owner, CREATION_ADMISSION_LOCK_NAMESPACE],
+    )
+    if (waiting > 0) {
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+// Pauses the first admission right after its count until a competing admission
+// is waiting, so both compete for the final slot.
 function installInitialCountBarrier(dataSource: DataSource): jest.SpyInstance {
   const transaction = dataSource.transaction.bind(dataSource)
-  let initialCountCalls = 0
-  let releaseBarrier!: () => void
-  const barrier = new Promise<void>((resolve) => (releaseBarrier = resolve))
+  let paused = false
 
   return jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: unknown[]) => {
-    if (args[0] !== 'SERIALIZABLE' || typeof args[1] !== 'function') {
+    if (typeof args[0] !== 'string' || typeof args[1] !== 'function') {
       return transaction(args[0] as (entityManager: EntityManager) => Promise<unknown>)
     }
 
+    const isolation = args[0] as IsolationLevel
     const callback = args[1] as (entityManager: EntityManager) => Promise<unknown>
-    return transaction('SERIALIZABLE', async (entityManager) => {
+    return transaction(isolation, async (entityManager) => {
       const count = entityManager.count.bind(entityManager)
       entityManager.count = async (...countArgs: Parameters<EntityManager['count']>) => {
         const result = await count(...countArgs)
-        initialCountCalls++
-        if (initialCountCalls <= 2) {
-          if (initialCountCalls === 2) {
-            releaseBarrier()
-          }
-          await barrier
+        if (!paused) {
+          paused = true
+          await waitForQueuedAdmission(dataSource, organizationId)
         }
         return result
       }
@@ -159,6 +177,74 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
     } finally {
       barrier.mockRestore()
     }
+  })
+
+  it('lets a warm-pool assignment outwait a Box row lock held past the admission lock timeout', async () => {
+    const warmPoolBox = newBox('warm-locked', BOX_WARM_POOL_UNASSIGNED_ORGANIZATION)
+    warmPoolBox.state = BoxState.STARTED
+    warmPoolBox.pending = false
+    await boxes.insert(warmPoolBox)
+
+    // Stands in for updateWhere(): start/stop/sync hold this row lock.
+    const rowLockHolder = dataSource.createQueryRunner()
+    await rowLockHolder.connect()
+    await rowLockHolder.startTransaction()
+    try {
+      await rowLockHolder.manager.findOne(Box, { where: { id: warmPoolBox.id }, lock: { mode: 'pessimistic_write' } })
+
+      const assigning = repository.update(warmPoolBox.id, {
+        updateData: { organizationId, name: 'claimed-locked' },
+        entity: warmPoolBox,
+        maxCreatedBoxes: 1,
+      })
+      const settled = assigning.then(
+        () => undefined,
+        (error: unknown) => error,
+      )
+      const earlyFailure = await Promise.race([
+        settled,
+        new Promise((resolve) => setTimeout(() => resolve('still-waiting'), 6000)),
+      ])
+      expect(earlyFailure).toBe('still-waiting')
+
+      await rowLockHolder.commitTransaction()
+      await expect(assigning).resolves.toBeInstanceOf(Box)
+      expect(await boxes.countBy({ organizationId })).toBe(1)
+    } finally {
+      if (rowLockHolder.isTransactionActive) {
+        await rowLockHolder.rollbackTransaction()
+      }
+      await rowLockHolder.release()
+    }
+  }, 20_000)
+
+  it('returns the admission 503 once the advisory lock wait passes the admission lock timeout', async () => {
+    const lockHolder = dataSource.createQueryRunner()
+    await lockHolder.connect()
+    await lockHolder.startTransaction()
+    try {
+      await lockHolder.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
+        CREATION_ADMISSION_LOCK_NAMESPACE,
+        organizationId,
+      ])
+
+      await expect(repository.insert(newBox('blocked'), 1)).rejects.toBeInstanceOf(BoxCreationAdmissionUnavailableError)
+      expect(await boxes.countBy({ organizationId })).toBe(0)
+    } finally {
+      await lockHolder.rollbackTransaction()
+      await lockHolder.release()
+    }
+  }, 20_000)
+
+  it('admits a same-organization burst up to the limit without contention failures', async () => {
+    const burst = 50
+    const results = await Promise.allSettled(
+      Array.from({ length: burst }, (_, index) => repository.insert(newBox(`burst-${index}`), burst)),
+    )
+
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    expect(failures.map((failure) => (failure.reason as Error).name)).toEqual([])
+    expect(await boxes.countBy({ organizationId })).toBe(burst)
   })
 
   it.each(Object.values(BoxState))('applies the creation-count policy to state %s', async (state) => {

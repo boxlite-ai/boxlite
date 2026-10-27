@@ -9,10 +9,13 @@ use async_trait::async_trait;
 
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
-use crate::litebox::{AttachOptions, BoxCommand, BoxTunnel, Execution, LiteBox};
+use crate::litebox::{
+    AttachOptions, BoxCommand, BoxTunnel, Execution, LiteBox, SshConfig, SshStatus,
+};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
-    BoxArchive, BoxOptions, CloneOptions, ExportOptions, SnapshotOptions,
+    BoxArchive, BoxOptions, CloneOptions, ExportOptions, InboundNetworkConfig,
+    OutboundNetworkConfig, SnapshotOptions,
 };
 use crate::runtime::types::BoxInfo;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -26,6 +29,10 @@ use super::id::BoxID;
 ///
 /// This trait is `pub(crate)` — internal implementation detail.
 /// The public API (`BoxliteRuntime`) is unchanged.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait RuntimeBackend: Send + Sync {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox>;
@@ -69,6 +76,10 @@ pub(crate) trait RuntimeBackend: Send + Sync {
 ///
 /// Local backend is implemented directly by `BoxImpl`.
 /// REST backend delegates to HTTP API calls.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait BoxBackend: Send + Sync + Any {
     /// Owned downcast helper (`Arc` upcast), so callers can move the local
@@ -147,16 +158,53 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
     ) -> BoxliteResult<Vec<LiteBox>>;
 
     async fn export_box(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive>;
+
+    /// Replace the guest's SSH configuration (see [`crate::litebox::SshHandle`]).
+    async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus>;
+
+    /// Read the guest's SSH state without starting the box.
+    async fn ssh_status(&self) -> BoxliteResult<SshStatus>;
+
+    /// Stop the guest's SSH listener without starting the box.
+    async fn ssh_disable(&self) -> BoxliteResult<SshStatus>;
 }
 
 /// Backend abstraction for box network operations.
 ///
 /// Kept separate from `BoxBackend` so lifecycle/exec/file operations do not own
 /// network data-plane capabilities directly.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait BoxNetworkBackend: Send + Sync {
-    /// Establish a one-shot tunnel to a service port inside the box.
+    async fn update_inbound(&self, _config: InboundNetworkConfig) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support inbound policy updates".into(),
+        ))
+    }
+
+    async fn update_outbound(&self, _config: OutboundNetworkConfig) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support outbound policy updates".into(),
+        ))
+    }
+
+    /// Prepare a one-shot tunnel to a service port inside the box.
+    ///
+    /// Check here that the box can carry the tunnel and mint any public URI,
+    /// but open no connection: return a [`BoxTunnel::new`] whose future opens
+    /// it on `connect()`, so a port nothing listens on fails there.
     async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
+
+    /// Withdraw any public access `tunnel()` granted to `port`.
+    ///
+    /// A backend that publishes nothing, like the local one, has nothing to
+    /// withdraw. Connections already open are not closed.
+    async fn revoke_tunnel(&self, _port: u16) -> BoxliteResult<()> {
+        Ok(())
+    }
 }
 
 /// Backend abstraction for snapshot lifecycle operations on a box.
@@ -164,6 +212,10 @@ pub(crate) trait BoxNetworkBackend: Send + Sync {
 /// Kept separate from `BoxBackend` so lifecycle/exec/file operations can evolve
 /// independently from snapshot/clone/export behavior.
 #[allow(dead_code)] // Snapshots temporarily disabled; will be re-enabled
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait SnapshotBackend: Send + Sync {
     async fn create(&self, options: SnapshotOptions, name: &str) -> BoxliteResult<SnapshotInfo>;
@@ -189,6 +241,10 @@ pub(crate) trait SnapshotBackend: Send + Sync {
 /// defaults to `signal(id, SIGKILL)`. Splitting them lets callers ask for
 /// SIGINT/SIGTERM/SIGHUP without the request body being silently coerced
 /// to SIGKILL on the server side (the historical bug).
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait ExecBackend: Send + Sync {
     async fn signal(&mut self, execution_id: &str, signal: i32) -> BoxliteResult<()>;

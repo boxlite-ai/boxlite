@@ -45,7 +45,8 @@ const targets = {
     label: 'local dashboard + MSW mocks (no backend, no login)',
     // MSW intercepts requests in the browser; keep the keys its handlers read.
     extraEnv: {
-      VITE_BASE_API_URL: API_TARGETS.dev,
+      // ConfigProvider appends routes to this directly; match the handlers' base.
+      VITE_BASE_API_URL: `${API_TARGETS.dev}/api`,
       VITE_API_URL: `${API_TARGETS.dev}/api`,
       VITE_ENABLE_MOCKING: 'true',
     },

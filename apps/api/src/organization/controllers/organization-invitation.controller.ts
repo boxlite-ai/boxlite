@@ -133,7 +133,7 @@ export class OrganizationInvitationController {
     type: 'string',
   })
   async findPending(@Param('organizationId') organizationId: string): Promise<OrganizationInvitationDto[]> {
-    const invitations = await this.organizationInvitationService.findPending(organizationId)
+    const invitations = await this.organizationInvitationService.findPending(organizationId, { includeExpired: true })
     return invitations.map(OrganizationInvitationDto.fromOrganizationInvitation)
   }
 

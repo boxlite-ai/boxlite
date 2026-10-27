@@ -42,7 +42,29 @@ make test
 make test:integration:cli
 ```
 
-CLI tests are integration tests: they pull images, create boxes, and run real commands. They require a working VM environment (KVM on Linux or Hypervisor.framework on macOS). Tests use a shared test home (`/tmp/bl`), a global lock to avoid concurrent use, and pre-pulled images (`alpine:latest`, `python:alpine`) to reduce rate limits.
+### No-VM boundary tests vs VM integration tests
+
+The `serve` command has two test surfaces with different responsibilities:
+
+- **Inline unit modules** (`src/cli/src/commands/serve/mod.rs` `mod tests` and
+  its child `serve/tests/*.rs`) cover request shape, error mapping,
+  middleware, REST transport, and OpenAPI contracts without a VM:
+
+  ```bash
+  make test:unit:cli
+  ```
+
+- **Integration tests** (`src/cli/tests/*.rs`, e.g. `ssh_rest.rs`) run the
+  real `boxlite serve` process and a guest to verify VM-dependent behavior:
+
+  ```bash
+  make test:integration:cli FILTER=ssh_rest
+  ```
+
+The [CI coverage selection](../../../make/coverage.mk) includes CLI unit
+tests and the `auth` integration target, excluding VM suites such as `ssh_rest.rs`.
+
+VM integration tests pull images, create boxes, and run real commands. They require a working VM environment (KVM on Linux or Hypervisor.framework on macOS). Tests use a shared test home (`/tmp/bl`), a global lock to avoid concurrent use, and pre-pulled images (`alpine:latest`, `python:alpine`) to reduce rate limits.
 
 ### CLI test layout
 

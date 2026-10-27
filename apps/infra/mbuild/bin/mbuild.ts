@@ -20,8 +20,18 @@ import { loadConfig as loadStageConfig, type StageConfig } from 'mstage/config'
 import { loadBuildConfig, onlyArtifact, registryFor, type BuildConfig } from '../src/config.ts'
 import { assertTag, releaseTagFor, resolveRegistry } from '../src/address.ts'
 import { assertPromotable, coordinatesOf, type Coordinates } from '../src/coordinates.ts'
-import { NotPublishedError, promote, publish, ScanRefusedError, verifyPublished } from '../src/publish.ts'
+import {
+  AuditFailedError,
+  NotPublishedError,
+  promote,
+  publish,
+  ScanRefusedError,
+  verifyPublished,
+} from '../src/publish.ts'
 import { run } from '../src/run.ts'
+
+/** Every unsuccessful dependency audit stops publication without automatic retries. */
+const AUDIT_FAILED_EXIT = 65
 
 /**
  * The exit code a scan refusal reports.
@@ -258,6 +268,7 @@ const main = async (): Promise<number> => {
 
 /** Everything a caller branches on. Every other failure is a plain 1. */
 const exitCodeFor = (error: unknown): number => {
+  if (error instanceof AuditFailedError) return AUDIT_FAILED_EXIT
   if (error instanceof ScanRefusedError) return SCAN_REFUSED_EXIT
   if (error instanceof NotPublishedError) return NOT_PUBLISHED_EXIT
   return 1

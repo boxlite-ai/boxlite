@@ -6,6 +6,7 @@
 
 import { Box } from '../entities/box.entity'
 import { BoxDto } from './box.dto'
+import { NetworkMode } from '../enums/network-mode.enum'
 
 describe('BoxDto public identity', () => {
   it('exposes a single public id without a legacy boxId alias', () => {
@@ -34,7 +35,7 @@ describe('BoxDto main command exit code', () => {
     ['a main command ended by a signal', 137, 137],
     ['a main command that succeeded', 0, 0],
   ])('reports the exit code of %s', (_case, read, expected) => {
-    expect(BoxDto.fromBox(box(), 'https://proxy.invalid', null, read).exitCode).toBe(expected)
+    expect(BoxDto.fromBox(box(), 'https://proxy.invalid', { exitCode: read }).exitCode).toBe(expected)
   })
 
   // Absence is the only way to say "not recorded", and it has to survive
@@ -42,9 +43,66 @@ describe('BoxDto main command exit code', () => {
   // against. A runtime that recorded none and a runner that could not be read
   // both arrive here the same way, as nothing.
   it('omits the exit code when there is none', () => {
-    const dto = BoxDto.fromBox(box(), 'https://proxy.invalid', null, undefined)
+    const dto = BoxDto.fromBox(box(), 'https://proxy.invalid', { exitCode: undefined })
 
     expect(dto.exitCode).toBeUndefined()
     expect(JSON.parse(JSON.stringify(dto))).not.toHaveProperty('exitCode')
   })
+})
+
+describe('BoxDto image', () => {
+  const PROXY = 'registry-proxy-abc.a.run.app'
+
+  afterEach(() => {
+    delete process.env.REGISTRY_PROXY_HOST
+  })
+
+  // A box records the proxy ref its runner pulls. Handed back as-is, a caller
+  // creating another box from what it read would be refused for naming the
+  // proxy, and every SDK would show the proxy as the registry.
+  it('reads back the upstream ref of an image pulled through the registry proxy', () => {
+    process.env.REGISTRY_PROXY_HOST = PROXY
+    const box = new Box('us', 'private')
+    box.image = `${PROXY}/0aaa0000-0000-4000-8000-000000000001/ghcr.io/acme/app@sha256:${'a'.repeat(64)}`
+
+    expect(BoxDto.fromBox(box, 'https://proxy.invalid').image).toBe(`ghcr.io/acme/app@sha256:${'a'.repeat(64)}`)
+  })
+
+  it('reads back any other image as it was recorded', () => {
+    process.env.REGISTRY_PROXY_HOST = PROXY
+    const box = new Box('us', 'public')
+    box.image = 'quay.io/acme/app:v1'
+
+    expect(BoxDto.fromBox(box, 'https://proxy.invalid').image).toBe('quay.io/acme/app:v1')
+  })
+})
+
+describe('BoxDto network policy', () => {
+  function box(inboundEnabled: boolean, outboundEnabled: boolean, outboundAllowNet: string[] | null): Box {
+    const box = new Box('us', 'net')
+    box.id = 'box-1'
+    box.inboundEnabled = inboundEnabled
+    box.outboundEnabled = outboundEnabled
+    box.outboundAllowNet = outboundAllowNet
+    return box
+  }
+
+  // `network` is the only shape of the policy; the Daytona-era flags are gone.
+  it.each([
+    [true, true, ['api.openai.com', '10.0.0.0/8'], NetworkMode.ENABLED, NetworkMode.ENABLED],
+    [false, false, null, NetworkMode.DISABLED, NetworkMode.DISABLED],
+  ])(
+    'reports inbound %s and outbound %s only under network',
+    (inboundEnabled, outboundEnabled, allowNet, inbound, outbound) => {
+      const dto = BoxDto.fromBox(box(inboundEnabled, outboundEnabled, allowNet), 'https://proxy.invalid')
+
+      expect(dto.network).toEqual({
+        outbound: { mode: outbound, allow_net: allowNet ?? [] },
+        inbound: { mode: inbound, allow_net: [] },
+      })
+      expect(dto).not.toHaveProperty('public')
+      expect(dto).not.toHaveProperty('networkBlockAll')
+      expect(dto).not.toHaveProperty('networkAllowList')
+    },
+  )
 })

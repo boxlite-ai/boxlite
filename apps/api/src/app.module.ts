@@ -11,6 +11,7 @@ import { AppService } from './app.service'
 import { UserModule } from './user/user.module'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { BoxModule } from './box/box.module'
+import { RegistryModule } from './registry/registry.module'
 import { AuthModule } from './auth/auth.module'
 import { ServeStaticModule } from '@nestjs/serve-static'
 import { join } from 'path'
@@ -82,6 +83,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
           database: configService.getOrThrow('database.database'),
           autoLoadEntities: true,
           migrations: [join(__dirname, 'migrations/**/*-migration.{ts,js}')],
+          migrationsTransactionMode: 'each',
           migrationsRun: configService.get('runMigrations') || !configService.getOrThrow('production'),
           namingStrategy: new CustomNamingStrategy(),
           manualInitialization: configService.get('skipConnections'),
@@ -174,6 +176,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     AuthModule,
     UserModule,
     BoxModule,
+    RegistryModule,
     ScheduleModule.forRoot(),
     UsageModule,
     AnalyticsModule,

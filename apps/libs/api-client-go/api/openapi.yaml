@@ -2102,50 +2102,6 @@ paths:
       summary: Update box state
       tags:
       - box
-  /box/{boxIdOrName}/public/{isPublic}:
-    post:
-      operationId: updatePublicStatus
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Public status to set
-        explode: false
-        in: path
-        name: isPublic
-        required: true
-        schema:
-          type: boolean
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
-          description: Public status has been successfully updated
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Update public status
-      tags:
-      - box
   /box/{boxId}/last-activity:
     post:
       operationId: updateLastActivity
@@ -2268,150 +2224,6 @@ paths:
       summary: Set box auto-delete interval
       tags:
       - box
-  /box/{boxIdOrName}/ports/{port}/preview-url:
-    get:
-      operationId: getPortPreviewUrl
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Port number to get preview URL for
-        explode: false
-        in: path
-        name: port
-        required: true
-        schema:
-          type: number
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PortPreviewUrl"
-          description: Preview URL for the specified port
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get preview URL for a box port
-      tags:
-      - box
-  /box/{boxIdOrName}/ports/{port}/signed-preview-url:
-    get:
-      operationId: getSignedPortPreviewUrl
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Port number to get signed preview URL for
-        explode: false
-        in: path
-        name: port
-        required: true
-        schema:
-          type: integer
-        style: simple
-      - description: "Expiration time in seconds (default: 60 seconds)"
-        explode: true
-        in: query
-        name: expiresInSeconds
-        required: false
-        schema:
-          type: integer
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SignedPortPreviewUrl"
-          description: Signed preview URL for the specified port
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get signed preview URL for a box port
-      tags:
-      - box
-  /box/{boxIdOrName}/ports/{port}/signed-preview-url/{token}/expire:
-    post:
-      operationId: expireSignedPortPreviewUrl
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Port number to expire signed preview URL for
-        explode: false
-        in: path
-        name: port
-        required: true
-        schema:
-          type: integer
-        style: simple
-      - description: Token to expire signed preview URL for
-        explode: false
-        in: path
-        name: token
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          description: Signed preview URL has been expired
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Expire signed preview URL for a box port
-      tags:
-      - box
   /box/{boxId}/toolbox-proxy-url:
     get:
       operationId: getToolboxProxyUrl
@@ -2446,6 +2258,48 @@ paths:
         - profile
         - email
       summary: Get toolbox proxy URL for a box
+      tags:
+      - box
+  /box/{boxIdOrName}/attach-tickets:
+    post:
+      operationId: createAttachTicket
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: ID or name of the box
+        explode: false
+        in: path
+        name: boxIdOrName
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAttachTicket"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachTicket"
+          description: A single-use ticket for one attach upgrade to the execution
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get a one-time ticket for the attach WebSocket
       tags:
       - box
   /runners:
@@ -2749,9 +2603,9 @@ paths:
       summary: Runner healthcheck
       tags:
       - runners
-  /preview/{boxId}/public:
+  /preview/{boxId}/inbound:
     get:
-      operationId: isBoxPublic
+      operationId: getBoxInboundMode
       parameters:
       - description: ID of the box
         explode: false
@@ -2766,39 +2620,13 @@ paths:
           content:
             application/json:
               schema:
-                type: boolean
-          description: Public status of the box
-      summary: Check if box is public
-      tags:
-      - preview
-  /preview/{boxId}/validate/{authToken}:
-    get:
-      operationId: isValidAuthToken
-      parameters:
-      - description: ID of the box
-        explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Auth token of the box
-        explode: false
-        in: path
-        name: authToken
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                type: boolean
-          description: Box auth token validation status
-      summary: Check if box auth token is valid
+                enum:
+                - enabled
+                - disabled
+                type: string
+          description: "Inbound mode of the box: `enabled` means the proxy may serve\
+            \ its services without sign-in"
+      summary: Read the inbound mode of a box
       tags:
       - preview
   /preview/{boxId}/access:
@@ -2826,36 +2654,6 @@ paths:
         - profile
         - email
       summary: Check if user has access to the box
-      tags:
-      - preview
-  /preview/{signedPreviewToken}/{port}/box-id:
-    get:
-      operationId: getBoxIdFromSignedPreviewUrlToken
-      parameters:
-      - description: Signed preview URL token
-        explode: false
-        in: path
-        name: signedPreviewToken
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Port number to get box ID from signed preview URL token
-        explode: false
-        in: path
-        name: port
-        required: true
-        schema:
-          type: number
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                type: string
-          description: Box ID from signed preview URL token
-      summary: Get box ID from signed preview URL token
       tags:
       - preview
   /volumes:
@@ -3193,6 +2991,354 @@ paths:
       summary: Update job status
       tags:
       - jobs
+  /images/registries:
+    get:
+      operationId: listRegistryCredentials
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/RegistryCredential"
+                type: array
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List registry credentials
+      tags:
+      - registries
+    post:
+      description: "A login for a private registry. The password is stored where this\
+        \ API cannot read it back, and is never returned."
+      operationId: createRegistryCredential
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRegistryCredential"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistryCredential"
+          description: ""
+        "409":
+          description: A credential for this registry and prefix already exists
+        "501":
+          description: Private registries are not enabled in this deployment
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Add a registry credential
+      tags:
+      - registries
+  /images/registries/{id}:
+    delete:
+      operationId: deleteRegistryCredential
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: "The credential is gone, and its password is destroyed"
+        "404":
+          description: No such credential in this organization
+        "409":
+          description: Boxes that have not been destroyed still pull through it; their
+            ids are listed
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Remove a registry credential
+      tags:
+      - registries
+  /images:
+    get:
+      description: "The organization’s images together with the operator’s curated\
+        \ set, which every organization shares and none can delete."
+      operationId: listImages
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/Image"
+                type: array
+          description: The images this organization can boot from
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: List images
+      tags:
+      - images
+  /images/usage:
+    get:
+      description: "How many images this organization holds against its limit, and\
+        \ the total size its pulled versions declared."
+      operationId: getImageUsage
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageUsage"
+          description: Catalog usage for this organization
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get image usage
+      tags:
+      - images
+  /images/{idOrRef}:
+    delete:
+      description: "Removes the catalog entry, not the bytes: runners keep whatever\
+        \ they cached, and using the same reference again pulls it back as a new entry.\
+        \ A pull never moves a recorded tag, so this is how to pick up where a tag\
+        \ points upstream now; aliases for recorded versions are created and deleted\
+        \ explicitly."
+      operationId: deleteImage
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: "Catalog ID, or any reference that names the image — URL-encode\
+          \ a reference"
+        explode: false
+        in: path
+        name: idOrRef
+        required: true
+        schema:
+          example: quay.io%2Facme%2Fapp
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: The image is no longer in the catalog
+        "400":
+          description: Curated images belong to the operator and cannot be removed
+        "404":
+          description: No such image in this organization
+        "409":
+          description: Boxes that have not been destroyed can still boot from this
+            image
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Remove an image from the catalog
+      tags:
+      - images
+    get:
+      operationId: getImage
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: "Catalog ID, or any reference that names the image — URL-encode\
+          \ a reference, since it contains slashes"
+        explode: false
+        in: path
+        name: idOrRef
+        required: true
+        schema:
+          example: quay.io%2Facme%2Fapp
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageDetail"
+          description: Image details
+        "404":
+          description: No such image in this organization
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get image details
+      tags:
+      - images
+  /images/{idOrRef}/aliases:
+    post:
+      description: "Creates a catalog alias for a ready version. Existing aliases\
+        \ are refused, including the same binding. The upstream registry and existing\
+        \ boxes are unchanged."
+      operationId: createImageAlias
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: Catalog ID or URL-encoded image name
+        explode: false
+        in: path
+        name: idOrRef
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateImageAlias"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageDetail"
+          description: Image details including the new alias
+        "400":
+          description: "Invalid alias, target version or curated image"
+        "404":
+          description: No such image in this organization
+        "409":
+          description: The alias already exists
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Create an image alias
+      tags:
+      - images
+  /images/{idOrRef}/aliases/{alias}:
+    delete:
+      description: "Removes only the catalog binding. Versions, existing boxes and\
+        \ alias history remain."
+      operationId: deleteImageAlias
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: Catalog ID or URL-encoded image name
+        explode: false
+        in: path
+        name: idOrRef
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Catalog alias to delete
+        explode: false
+        in: path
+        name: alias
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: The alias was deleted
+        "404":
+          description: The image or alias does not exist
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Delete an image alias
+      tags:
+      - images
   /admin/runners:
     get:
       operationId: adminListRunners
@@ -3632,6 +3778,22 @@ paths:
           minimum: 1
           type: number
         style: form
+      - description: "Exclusive RFC 3339 instant, at most milliseconds."
+        explode: true
+        in: query
+        name: createdTo
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: "Inclusive RFC 3339 instant, at most milliseconds."
+        explode: true
+        in: query
+        name: createdFrom
+        required: false
+        schema:
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -3688,6 +3850,14 @@ paths:
           minimum: 1
           type: number
         style: form
+      - description: "Comma-separated usage,activation. Omit to read neither section."
+        explode: true
+        in: query
+        name: include
+        required: false
+        schema:
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -3706,6 +3876,142 @@ paths:
         - profile
         - email
       summary: Get organization operational detail
+      tags:
+      - admin
+  /admin/usage:
+    get:
+      operationId: adminQueryUsage
+      parameters:
+      - description: Optional 64 lowercase hex caller partition; never authentication.
+        explode: false
+        in: header
+        name: X-Usage-Snapshot-Owner
+        required: false
+        schema:
+          type: string
+        style: simple
+      - explode: true
+        in: query
+        name: cursor
+        required: false
+        schema:
+          maxLength: 2048
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      - explode: true
+        in: query
+        name: boxId
+        required: false
+        schema:
+          maxLength: 128
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: regionId
+        required: false
+        schema:
+          maxLength: 128
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: organizationId
+        required: false
+        schema:
+          format: uuid
+          type: string
+        style: form
+      - description: "One or two of organizationId,regionId,boxId, comma-separated."
+        explode: true
+        in: query
+        name: groupBy
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: "Comma-separated computeVcpuSeconds,storageByteSeconds,memoryGibSeconds."
+        explode: true
+        in: query
+        name: metrics
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: granularity
+        required: false
+        schema:
+          enum:
+          - window
+          - hour
+          - day
+          type: string
+        style: form
+      - description: "Exclusive RFC 3339 instant, no later than now."
+        explode: true
+        in: query
+        name: to
+        required: true
+        schema:
+          type: string
+        style: form
+      - description: "Inclusive RFC 3339 instant, at most milliseconds."
+        explode: true
+        in: query
+        name: from
+        required: true
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUsagePage"
+          description: ""
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUsageError"
+          description: Invalid query or cursor binding
+        "410":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUsageError"
+          description: Snapshot expired; restart the complete query
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUsageError"
+          description: Query exceeds a resource limit
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUsageError"
+          description: Database or snapshot cache unavailable
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Query recorded resource usage with fixed snapshot pagination
       tags:
       - admin
   /webhooks/organizations/{organizationId}/app-portal-access:
@@ -4583,6 +4889,12 @@ components:
             - write:runners
             - delete:runners
             - read:audit_logs
+            - read:images
+            - delete:images
+            - read:registries
+            - write:images
+            - read:members
+            - write:members
             type: string
           type: array
         expiresAt:
@@ -4638,6 +4950,12 @@ components:
             - write:runners
             - delete:runners
             - read:audit_logs
+            - read:images
+            - delete:images
+            - read:registries
+            - write:images
+            - read:members
+            - write:members
             type: string
           type: array
         expiresAt:
@@ -4698,6 +5016,12 @@ components:
             - write:runners
             - delete:runners
             - read:audit_logs
+            - read:images
+            - delete:images
+            - read:registries
+            - write:images
+            - read:members
+            - write:members
             type: string
           type: array
         lastUsedAt:
@@ -4765,6 +5089,12 @@ components:
             - write:runners
             - delete:runners
             - read:audit_logs
+            - read:images
+            - delete:images
+            - read:registries
+            - write:images
+            - read:members
+            - write:members
             type: string
           type: array
         isGlobal:
@@ -4912,16 +5242,15 @@ components:
         maxCpuPerBox: 6.027456183070403
         maxMemoryPerBox: 1.4658129805029452
         maxDiskPerBox: 5.962133916683182
-        templateDeactivationTimeoutMinutes: 5.637376656633329
         boxLimitedNetworkEgress: true
         defaultRegionId: defaultRegionId
-        authenticatedRateLimit: 2.3021358869347655
-        boxCreateRateLimit: 7.061401241503109
-        boxLifecycleRateLimit: 9.301444243932576
+        authenticatedRateLimit: 5.637376656633329
+        boxCreateRateLimit: 2.3021358869347655
+        boxLifecycleRateLimit: 7.061401241503109
         experimentalConfig: "{}"
-        authenticatedRateLimitTtlSeconds: 3.616076749251911
-        boxCreateRateLimitTtlSeconds: 2.027123023002322
-        boxLifecycleRateLimitTtlSeconds: 4.145608029883936
+        authenticatedRateLimitTtlSeconds: 9.301444243932576
+        boxCreateRateLimitTtlSeconds: 3.616076749251911
+        boxLifecycleRateLimitTtlSeconds: 2.027123023002322
       properties:
         id:
           description: Organization ID
@@ -4974,10 +5303,6 @@ components:
           type: number
         maxDiskPerBox:
           description: Max disk per box
-          type: number
-        templateDeactivationTimeoutMinutes:
-          default: 20160
-          description: Time in minutes before an unused template is deactivated
           type: number
         boxLimitedNetworkEgress:
           description: Box default network block all
@@ -5035,7 +5360,6 @@ components:
       - suspendedUntil
       - suspensionCleanupGracePeriodHours
       - suspensionReason
-      - templateDeactivationTimeoutMinutes
       - updatedAt
       type: object
     UpdateOrganizationName:
@@ -5173,6 +5497,12 @@ components:
             - write:runners
             - delete:runners
             - read:audit_logs
+            - read:images
+            - delete:images
+            - read:registries
+            - write:images
+            - read:members
+            - write:members
             type: string
           type: array
       required:
@@ -5215,6 +5545,12 @@ components:
             - write:runners
             - delete:runners
             - read:audit_logs
+            - read:images
+            - delete:images
+            - read:registries
+            - write:images
+            - read:members
+            - write:members
             type: string
           type: array
       required:
@@ -5660,6 +5996,57 @@ components:
       - provider
       - userId
       type: object
+    NetworkMode:
+      description: Whether the guest may reach out
+      enum:
+      - enabled
+      - disabled
+      type: string
+    OutboundNetworkSpec:
+      properties:
+        mode:
+          allOf:
+          - $ref: "#/components/schemas/NetworkMode"
+          description: Whether the guest may reach out
+        allow_net:
+          description: Outbound allowlist in force; empty means unrestricted egress
+          example:
+          - api.openai.com
+          - 10.0.0.0/8
+          items:
+            type: string
+          type: array
+      required:
+      - allow_net
+      - mode
+      type: object
+    InboundNetworkSpec:
+      properties:
+        mode:
+          allOf:
+          - $ref: "#/components/schemas/NetworkMode"
+          description: Whether exposed services are reachable through the proxy without
+            sign-in
+        allow_net:
+          description: Reserved; no layer enforces an inbound allowlist yet
+          example: []
+          items:
+            type: string
+          type: array
+      required:
+      - allow_net
+      - mode
+      type: object
+    NetworkInfo:
+      properties:
+        outbound:
+          $ref: "#/components/schemas/OutboundNetworkSpec"
+        inbound:
+          $ref: "#/components/schemas/InboundNetworkSpec"
+      required:
+      - inbound
+      - outbound
+      type: object
     BoxState:
       description: The state of the box
       enum:
@@ -5709,6 +6096,27 @@ components:
       - mountPath
       - volumeId
       type: object
+    BoxProgressPhase:
+      description: What this box is waiting on while it is being created
+      enum:
+      - preparing_image
+      type: string
+    BoxProgress:
+      properties:
+        phase:
+          allOf:
+          - $ref: "#/components/schemas/BoxProgressPhase"
+          description: What this box is waiting on while it is being created
+          example: preparing_image
+        retryAfterMs:
+          description: "Suggested wait before asking about this box again, in milliseconds.\
+            \ A hint, not a deadline"
+          example: 5000
+          type: number
+      required:
+      - phase
+      - retryAfterMs
+      type: object
     Box:
       example:
         id: aB3cD4eF5gH6
@@ -5719,9 +6127,7 @@ components:
           NODE_ENV: production
         labels:
           boxlite.io/public: "true"
-        public: false
-        networkBlockAll: false
-        networkAllowList: "192.168.1.0/16,10.0.0.0/24"
+        network: ""
         target: local
         image: boxlite/base
         cpu: 2
@@ -5750,6 +6156,7 @@ components:
         daemonVersion: 1.0.0
         runnerId: runner123
         toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
+        progress: ""
       properties:
         id:
           description: The public 12-character Box ID
@@ -5781,19 +6188,10 @@ components:
           example:
             boxlite.io/public: "true"
           type: object
-        public:
-          description: Whether the box http preview is public
-          example: false
-          type: boolean
-        networkBlockAll:
-          description: Whether to block all network access for the box
-          example: false
-          type: boolean
-        networkAllowList:
-          description: Comma-separated list of allowed CIDR network addresses for
-            the box
-          example: "192.168.1.0/16,10.0.0.0/24"
-          type: string
+        network:
+          allOf:
+          - $ref: "#/components/schemas/NetworkInfo"
+          description: The network policy in both directions
         target:
           description: The target environment for the box
           example: local
@@ -5897,6 +6295,12 @@ components:
           description: The toolbox proxy URL for the box
           example: https://proxy.app.boxlite.io/toolbox
           type: string
+        progress:
+          allOf:
+          - $ref: "#/components/schemas/BoxProgress"
+          description: "What a box still being created is waiting on. Absent once\
+            \ it has started, and absent while it is being created from an image that\
+            \ has already been pulled"
       required:
       - cpu
       - disk
@@ -5906,9 +6310,7 @@ components:
       - labels
       - memory
       - name
-      - networkBlockAll
       - organizationId
-      - public
       - target
       - toolboxProxyUrl
       - user
@@ -5924,9 +6326,7 @@ components:
             NODE_ENV: production
           labels:
             boxlite.io/public: "true"
-          public: false
-          networkBlockAll: false
-          networkAllowList: "192.168.1.0/16,10.0.0.0/24"
+          network: ""
           target: local
           image: boxlite/base
           cpu: 2
@@ -5955,6 +6355,7 @@ components:
           daemonVersion: 1.0.0
           runnerId: runner123
           toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
+          progress: ""
         - id: aB3cD4eF5gH6
           organizationId: organization123
           name: MyBox
@@ -5963,9 +6364,7 @@ components:
             NODE_ENV: production
           labels:
             boxlite.io/public: "true"
-          public: false
-          networkBlockAll: false
-          networkAllowList: "192.168.1.0/16,10.0.0.0/24"
+          network: ""
           target: local
           image: boxlite/base
           cpu: 2
@@ -5994,6 +6393,7 @@ components:
           daemonVersion: 1.0.0
           runnerId: runner123
           toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
+          progress: ""
         total: 0.8008281904610115
         page: 6.027456183070403
         totalPages: 1.4658129805029452
@@ -6036,6 +6436,8 @@ components:
         state: started
         errorReason: Failed to pull artifact image
         recoverable: true
+        imageDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+        imageSizeBytes: 123456789
       properties:
         state:
           description: The new state for the box
@@ -6063,60 +6465,17 @@ components:
           description: Whether the box is recoverable
           example: true
           type: boolean
+        imageDigest:
+          description: Registry digest of the image the box booted from
+          example: sha256:0000000000000000000000000000000000000000000000000000000000000000
+          type: string
+        imageSizeBytes:
+          description: "Declared on-registry size of that image, in bytes"
+          example: 123456789
+          format: int64
+          type: integer
       required:
       - state
-      type: object
-    PortPreviewUrl:
-      example:
-        boxId: "123456"
-        url: "https://{port}-{encodedBoxId}.{proxyDomain}"
-        token: ul67qtv-jl6wb9z5o3eii-ljqt9qed6l
-      properties:
-        boxId:
-          description: ID of the box
-          example: "123456"
-          type: string
-        url:
-          description: Preview url
-          example: "https://{port}-{encodedBoxId}.{proxyDomain}"
-          type: string
-        token:
-          description: Access token
-          example: ul67qtv-jl6wb9z5o3eii-ljqt9qed6l
-          type: string
-      required:
-      - boxId
-      - token
-      - url
-      type: object
-    SignedPortPreviewUrl:
-      example:
-        boxId: "123456"
-        port: 3000
-        token: jl6wb9z5o3eii
-        url: "https://{port}-{token}.{proxyDomain}"
-      properties:
-        boxId:
-          description: ID of the box
-          example: "123456"
-          type: string
-        port:
-          description: Port number of the signed preview URL
-          example: 3000
-          type: integer
-        token:
-          description: Token of the signed preview URL
-          example: jl6wb9z5o3eii
-          type: string
-        url:
-          description: Signed preview url
-          example: "https://{port}-{token}.{proxyDomain}"
-          type: string
-      required:
-      - boxId
-      - port
-      - token
-      - url
       type: object
     ToolboxProxyUrl:
       example:
@@ -6128,6 +6487,33 @@ components:
           type: string
       required:
       - url
+      type: object
+    CreateAttachTicket:
+      example:
+        executionId: executionId
+      properties:
+        executionId:
+          description: The execution the ticket may attach to
+          type: string
+      required:
+      - executionId
+      type: object
+    AttachTicket:
+      example:
+        ticket: ticket
+        expiresIn: 30
+      properties:
+        ticket:
+          description: "Single-use credential for the attach WebSocket, sent as its\
+            \ `ticket` query parameter"
+          type: string
+        expiresIn:
+          description: Seconds until the ticket expires
+          example: 30
+          type: number
+      required:
+      - expiresIn
+      - ticket
       type: object
     CreateRunner:
       example:
@@ -6899,6 +7285,447 @@ components:
       required:
       - status
       type: object
+    RegistryCredentialKind:
+      enum:
+      - basic
+      type: string
+    RegistryCredential:
+      example:
+        id: 123e4567-e89b-12d3-a456-426614174000
+        kind: basic
+        registryHost: ghcr.io
+        repositoryPrefix: acme/
+        username: acme-bot
+        createdBy: createdBy
+        createdAt: 2026-01-01T00:00:00.000Z
+      properties:
+        id:
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        kind:
+          allOf:
+          - $ref: "#/components/schemas/RegistryCredentialKind"
+          example: basic
+        registryHost:
+          example: ghcr.io
+          type: string
+        repositoryPrefix:
+          description: Empty for the whole registry
+          example: acme/
+          type: string
+        username:
+          example: acme-bot
+          type: string
+        createdBy:
+          description: The user who added it
+          nullable: true
+          type: string
+        createdAt:
+          example: 2026-01-01T00:00:00.000Z
+          type: string
+      required:
+      - createdAt
+      - createdBy
+      - id
+      - kind
+      - registryHost
+      - repositoryPrefix
+      - username
+      type: object
+    CreateRegistryCredential:
+      example:
+        registryHost: ghcr.io
+        repositoryPrefix: acme/
+        username: acme-bot
+        password: password
+      properties:
+        registryHost:
+          description: Registry the login is for
+          example: ghcr.io
+          type: string
+        repositoryPrefix:
+          default: ""
+          description: "Repositories it covers, as whole path segments ending in \"\
+            /\"; empty for the whole registry"
+          example: acme/
+          type: string
+        username:
+          description: Username the registry expects
+          example: acme-bot
+          type: string
+        password:
+          description: Password or access token. Never returned.
+          type: string
+          writeOnly: true
+      required:
+      - password
+      - registryHost
+      - username
+      type: object
+    Image:
+      example:
+        name: quay.io/acme/app
+        id: 123e4567-e89b-12d3-a456-426614174000
+        curated: false
+        curatedRef: curatedRef
+        aliases:
+        - v1
+        - latest
+        versionCount: 2
+        sizeBytes: 26214400
+        lastUsedAt: 2026-01-01T00:00:00.000Z
+        createdAt: 2026-01-01T00:00:00.000Z
+      properties:
+        name:
+          description: "What to pass as a box image to boot from this: the curated\
+            \ short name, or the upstream repository path"
+          example: quay.io/acme/app
+          type: string
+        id:
+          description: "Catalog row ID. Null for curated images, which are operator\
+            \ configuration rather than rows"
+          example: 123e4567-e89b-12d3-a456-426614174000
+          nullable: true
+          type: string
+        curated:
+          description: Whether this is one of the operator-provided images every organization
+            shares. Curated images cannot be deleted and do not count against the
+            organization limit
+          example: false
+          type: boolean
+        curatedRef:
+          description: "The exact reference a curated image resolves to. Null for\
+            \ catalog images, which resolve through their versions"
+          nullable: true
+          type: string
+          example: null
+        aliases:
+          description: "Aliases recorded for this image. Empty for curated images,\
+            \ whose reference the operator pins"
+          example:
+          - v1
+          - latest
+          items:
+            type: string
+          type: array
+        versionCount:
+          description: How many pulled manifest digests this image holds
+          example: 2
+          type: number
+        sizeBytes:
+          description: "Sum of the pulled versions’ declared sizes, in bytes. Layers\
+            \ shared between versions are counted once per version. Null for curated\
+            \ images, whose bytes this system never measured"
+          example: 26214400
+          nullable: true
+          type: number
+        lastUsedAt:
+          description: When a box last booted from this image
+          example: 2026-01-01T00:00:00.000Z
+          nullable: true
+          type: string
+        createdAt:
+          description: When this image first entered the catalog. Null for curated
+            images
+          example: 2026-01-01T00:00:00.000Z
+          nullable: true
+          type: string
+      required:
+      - aliases
+      - createdAt
+      - curated
+      - curatedRef
+      - id
+      - lastUsedAt
+      - name
+      - sizeBytes
+      - versionCount
+      type: object
+    ImageUsage:
+      example:
+        count: 3
+        limit: 20
+        knownBytes: 78643200
+      properties:
+        count:
+          description: Images this organization holds. Curated images are the operator’s
+            and are not counted
+          example: 3
+          type: number
+        limit:
+          description: How many images this organization may hold
+          example: 20
+          type: number
+        knownBytes:
+          description: "Sum of the declared sizes of every pulled version, in bytes.\
+            \ A lower bound on what is stored: it counts what the manifests said,\
+            \ and counts a layer once per version that references it"
+          example: 78643200
+          type: number
+      required:
+      - count
+      - knownBytes
+      - limit
+      type: object
+    ImageVersion:
+      example:
+        id: 123e4567-e89b-12d3-a456-426614174000
+        digest: sha256:4a1c2f...
+        sizeBytes: 26214400
+        sourceRef: quay.io/acme/app:v1
+        aliases:
+        - stable
+        lastUsedAt: 2026-01-01T00:00:00.000Z
+        upstreamMissingAt: 2026-01-02T00:00:00.000Z
+        createdAt: 2026-01-01T00:00:00.000Z
+      properties:
+        id:
+          description: Version ID
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+        digest:
+          description: OCI manifest digest this version was pulled at
+          example: sha256:4a1c2f...
+          type: string
+        sizeBytes:
+          description: "Sum of the layer sizes the manifest declared, in bytes"
+          example: 26214400
+          type: number
+        sourceRef:
+          description: "The reference the caller asked for, kept verbatim as provenance"
+          example: quay.io/acme/app:v1
+          type: string
+        aliases:
+          description: "Aliases that point at this version now, so a reference with\
+            \ one of them boots it"
+          example:
+          - stable
+          items:
+            type: string
+          type: array
+        lastUsedAt:
+          description: When a box last started from this version. Null when none has
+            since this was recorded
+          example: 2026-01-01T00:00:00.000Z
+          nullable: true
+          type: string
+        upstreamMissingAt:
+          description: "When a pull of this version first failed because its registry\
+            \ no longer has it. Runners that cached it still start it; elsewhere,\
+            \ create a new alias for a version the registry still has. Null while\
+            \ no pull has found it gone"
+          example: 2026-01-02T00:00:00.000Z
+          nullable: true
+          type: string
+        createdAt:
+          description: When this version was first recorded
+          example: 2026-01-01T00:00:00.000Z
+          type: string
+      required:
+      - aliases
+      - createdAt
+      - digest
+      - id
+      - lastUsedAt
+      - sizeBytes
+      - sourceRef
+      - upstreamMissingAt
+      type: object
+    ImageAliasEvent:
+      example:
+        aliasName: stable
+        fromVersionId: 123e4567-e89b-12d3-a456-426614174000
+        fromDigest: sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
+        toVersionId: 123e4567-e89b-12d3-a456-426614174001
+        toDigest: sha256:b5ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
+        actorId: auth0|6512bd43d9caa6e02c990b0a
+        createdAt: 2026-01-01T00:00:00.000Z
+      properties:
+        aliasName:
+          description: The alias that moved
+          example: stable
+          type: string
+        fromVersionId:
+          description: Version the alias pointed at before. Null when the alias did
+            not exist yet
+          example: 123e4567-e89b-12d3-a456-426614174000
+          nullable: true
+          type: string
+        fromDigest:
+          description: Previous digest in historical records. Null for alias creation
+          example: sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
+          nullable: true
+          type: string
+        toVersionId:
+          description: Version selected by the alias
+          example: 123e4567-e89b-12d3-a456-426614174001
+          type: string
+        toDigest:
+          description: Digest selected by the alias
+          example: sha256:b5ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
+          type: string
+        actorId:
+          description: Who created the alias. Null when a registry pull seeded it
+          example: auth0|6512bd43d9caa6e02c990b0a
+          nullable: true
+          type: string
+        createdAt:
+          description: When the alias was recorded
+          example: 2026-01-01T00:00:00.000Z
+          type: string
+      required:
+      - actorId
+      - aliasName
+      - createdAt
+      - fromDigest
+      - fromVersionId
+      - toDigest
+      - toVersionId
+      type: object
+    ImageDetail:
+      example:
+        name: quay.io/acme/app
+        id: 123e4567-e89b-12d3-a456-426614174000
+        curated: false
+        curatedRef: curatedRef
+        aliases:
+        - v1
+        - latest
+        versionCount: 2
+        sizeBytes: 26214400
+        lastUsedAt: 2026-01-01T00:00:00.000Z
+        createdAt: 2026-01-01T00:00:00.000Z
+        versions:
+        - id: 123e4567-e89b-12d3-a456-426614174000
+          digest: sha256:4a1c2f...
+          sizeBytes: 26214400
+          sourceRef: quay.io/acme/app:v1
+          aliases:
+          - stable
+          lastUsedAt: 2026-01-01T00:00:00.000Z
+          upstreamMissingAt: 2026-01-02T00:00:00.000Z
+          createdAt: 2026-01-01T00:00:00.000Z
+        - id: 123e4567-e89b-12d3-a456-426614174000
+          digest: sha256:4a1c2f...
+          sizeBytes: 26214400
+          sourceRef: quay.io/acme/app:v1
+          aliases:
+          - stable
+          lastUsedAt: 2026-01-01T00:00:00.000Z
+          upstreamMissingAt: 2026-01-02T00:00:00.000Z
+          createdAt: 2026-01-01T00:00:00.000Z
+        history:
+        - aliasName: stable
+          fromVersionId: 123e4567-e89b-12d3-a456-426614174000
+          fromDigest: sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
+          toVersionId: 123e4567-e89b-12d3-a456-426614174001
+          toDigest: sha256:b5ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
+          actorId: auth0|6512bd43d9caa6e02c990b0a
+          createdAt: 2026-01-01T00:00:00.000Z
+        - aliasName: stable
+          fromVersionId: 123e4567-e89b-12d3-a456-426614174000
+          fromDigest: sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
+          toVersionId: 123e4567-e89b-12d3-a456-426614174001
+          toDigest: sha256:b5ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4
+          actorId: auth0|6512bd43d9caa6e02c990b0a
+          createdAt: 2026-01-01T00:00:00.000Z
+      properties:
+        name:
+          description: "What to pass as a box image to boot from this: the curated\
+            \ short name, or the upstream repository path"
+          example: quay.io/acme/app
+          type: string
+        id:
+          description: "Catalog row ID. Null for curated images, which are operator\
+            \ configuration rather than rows"
+          example: 123e4567-e89b-12d3-a456-426614174000
+          nullable: true
+          type: string
+        curated:
+          description: Whether this is one of the operator-provided images every organization
+            shares. Curated images cannot be deleted and do not count against the
+            organization limit
+          example: false
+          type: boolean
+        curatedRef:
+          description: "The exact reference a curated image resolves to. Null for\
+            \ catalog images, which resolve through their versions"
+          nullable: true
+          type: string
+          example: null
+        aliases:
+          description: "Aliases recorded for this image. Empty for curated images,\
+            \ whose reference the operator pins"
+          example:
+          - v1
+          - latest
+          items:
+            type: string
+          type: array
+        versionCount:
+          description: How many pulled manifest digests this image holds
+          example: 2
+          type: number
+        sizeBytes:
+          description: "Sum of the pulled versions’ declared sizes, in bytes. Layers\
+            \ shared between versions are counted once per version. Null for curated\
+            \ images, whose bytes this system never measured"
+          example: 26214400
+          nullable: true
+          type: number
+        lastUsedAt:
+          description: When a box last booted from this image
+          example: 2026-01-01T00:00:00.000Z
+          nullable: true
+          type: string
+        createdAt:
+          description: When this image first entered the catalog. Null for curated
+            images
+          example: 2026-01-01T00:00:00.000Z
+          nullable: true
+          type: string
+        versions:
+          description: "Every pulled version, newest first"
+          items:
+            $ref: "#/components/schemas/ImageVersion"
+          type: array
+        history:
+          description: "Alias registration history, newest first and at most 100 events.\
+            \ Empty for curated images"
+          items:
+            $ref: "#/components/schemas/ImageAliasEvent"
+          type: array
+      required:
+      - aliases
+      - createdAt
+      - curated
+      - curatedRef
+      - history
+      - id
+      - lastUsedAt
+      - name
+      - sizeBytes
+      - versionCount
+      - versions
+      type: object
+    CreateImageAlias:
+      example:
+        alias: stable
+        versionId: 123e4567-e89b-12d3-a456-426614174000
+      properties:
+        alias:
+          description: New catalog alias; existing aliases are refused
+          example: stable
+          type: string
+        versionId:
+          description: Version to point the tag at. It must be a ready version of
+            this image
+          example: 123e4567-e89b-12d3-a456-426614174000
+          type: string
+      required:
+      - alias
+      - versionId
+      type: object
     AdminCreateRunner:
       example:
         regionId: regionId
@@ -7591,8 +8418,27 @@ components:
       - observedAt
       - runners
       type: object
+    AdminOrganizationCreator:
+      properties:
+        userId:
+          type: string
+        email:
+          description: "Current email, not necessarily the email at registration."
+          format: email
+          nullable: true
+          type: string
+        displayName:
+          type: string
+      required:
+      - displayName
+      - email
+      - userId
+      type: object
     AdminOrganizationOverview:
       example:
+        createdAt: 2000-01-23T04:56:07.000+00:00
+        createdBy: createdBy
+        creator: "{}"
         organizationId: organizationId
         name: name
         memberCount: 6.027456183070403
@@ -7600,6 +8446,20 @@ components:
         impactState: impacted
         observedAt: 2000-01-23T04:56:07.000+00:00
       properties:
+        createdAt:
+          description: Organization creation time.
+          format: date-time
+          type: string
+        createdBy:
+          description: Stored creator ID; account linking replaces it with the primary
+            user ID.
+          type: string
+        creator:
+          allOf:
+          - $ref: "#/components/schemas/AdminOrganizationCreator"
+          description: Current creator identity.
+          nullable: true
+          type: object
         organizationId:
           type: string
         name:
@@ -7618,6 +8478,9 @@ components:
           type: string
       required:
       - boxCount
+      - createdAt
+      - createdBy
+      - creator
       - impactState
       - memberCount
       - name
@@ -7629,13 +8492,19 @@ components:
         nextCursor: nextCursor
         limit: 16.93648099017413
         items:
-        - organizationId: organizationId
+        - createdAt: 2000-01-23T04:56:07.000+00:00
+          createdBy: createdBy
+          creator: "{}"
+          organizationId: organizationId
           name: name
           memberCount: 6.027456183070403
           boxCount: 1.4658129805029452
           impactState: impacted
           observedAt: 2000-01-23T04:56:07.000+00:00
-        - organizationId: organizationId
+        - createdAt: 2000-01-23T04:56:07.000+00:00
+          createdBy: createdBy
+          creator: "{}"
+          organizationId: organizationId
           name: name
           memberCount: 6.027456183070403
           boxCount: 1.4658129805029452
@@ -7858,8 +8727,39 @@ components:
       - periodStart
       - storageByteSeconds
       type: object
+    AdminOrganizationActivation:
+      properties:
+        organizationId:
+          format: uuid
+          type: string
+        lastBoxCreatedAt:
+          description: Maximum retained Box creation or warm-pool claim time; survives
+            Box deletion. Null means none was recorded; organizations older than tracking
+            only have retained creation times.
+          format: date-time
+          nullable: true
+          type: string
+        lastBoxModifiedAt:
+          description: "Maximum observed successful-start or accepted-deletion time;\
+            \ cleanup, stops and label edits do not advance it. Null means none was\
+            \ recorded since tracking began."
+          format: date-time
+          nullable: true
+          type: string
+        observedAt:
+          format: date-time
+          type: string
+      required:
+      - lastBoxCreatedAt
+      - lastBoxModifiedAt
+      - observedAt
+      - organizationId
+      type: object
     AdminOrganizationDetail:
       example:
+        createdAt: 2000-01-23T04:56:07.000+00:00
+        createdBy: createdBy
+        creator: "{}"
         organizationId: organizationId
         name: name
         members:
@@ -7908,8 +8808,23 @@ components:
           periodEnd: 2000-01-23T04:56:07.000+00:00
           computeSeconds: computeSeconds
           storageByteSeconds: storageByteSeconds
+        activation: "{}"
         observedAt: 2000-01-23T04:56:07.000+00:00
       properties:
+        createdAt:
+          description: Organization creation time.
+          format: date-time
+          type: string
+        createdBy:
+          description: Stored creator ID; account linking replaces it with the primary
+            user ID.
+          type: string
+        creator:
+          allOf:
+          - $ref: "#/components/schemas/AdminOrganizationCreator"
+          description: Current creator identity.
+          nullable: true
+          type: object
         organizationId:
           type: string
         name:
@@ -7922,16 +8837,275 @@ components:
           $ref: "#/components/schemas/AdminOrganizationImpact"
         usage:
           $ref: "#/components/schemas/AdminOrganizationUsage"
+        activation:
+          allOf:
+          - $ref: "#/components/schemas/AdminOrganizationActivation"
+          description: Only with include=activation.
+          nullable: true
+          type: object
         observedAt:
           format: date-time
           type: string
       required:
       - boxes
+      - createdAt
+      - createdBy
+      - creator
       - impact
       - members
       - name
       - observedAt
       - organizationId
+      type: object
+    AdminUsageQuery:
+      example:
+        from: 2000-01-23T04:56:07.000+00:00
+        to: 2000-01-23T04:56:07.000+00:00
+        granularity: window
+        metrics:
+        - computeVcpuSeconds
+        - computeVcpuSeconds
+        groupBy:
+        - organizationId
+        - organizationId
+        organizationId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        regionId: regionId
+        boxId: boxId
+      properties:
+        from:
+          format: date-time
+          type: string
+        to:
+          format: date-time
+          type: string
+        granularity:
+          enum:
+          - window
+          - hour
+          - day
+          type: string
+        metrics:
+          items:
+            enum:
+            - computeVcpuSeconds
+            - storageByteSeconds
+            - memoryGibSeconds
+            type: string
+          type: array
+        groupBy:
+          items:
+            enum:
+            - organizationId
+            - regionId
+            - boxId
+            type: string
+          maxItems: 2
+          minItems: 1
+          type: array
+        organizationId:
+          format: uuid
+          type: string
+        regionId:
+          maxLength: 128
+          type: string
+        boxId:
+          maxLength: 128
+          type: string
+      required:
+      - from
+      - granularity
+      - groupBy
+      - metrics
+      - to
+      type: object
+    AdminUsageCoverage:
+      example:
+        status: unknown
+        reason: usage_events_not_backfilled
+      properties:
+        status:
+          enum:
+          - unknown
+          type: string
+        reason:
+          enum:
+          - usage_events_not_backfilled
+          type: string
+      required:
+      - reason
+      - status
+      type: object
+    AdminUsageDimensions:
+      example:
+        organizationId: organizationId
+        regionId: regionId
+        boxId: boxId
+      properties:
+        organizationId:
+          type: string
+        regionId:
+          type: string
+        boxId:
+          type: string
+      type: object
+    AdminUsageValues:
+      example:
+        computeVcpuSeconds: computeVcpuSeconds
+        storageByteSeconds: storageByteSeconds
+        memoryGibSeconds: memoryGibSeconds
+      properties:
+        computeVcpuSeconds:
+          description: Recorded allocated vCPU-seconds as an exact decimal string.
+          type: string
+        storageByteSeconds:
+          description: Recorded allocated byte-seconds as an exact decimal string.
+          type: string
+        memoryGibSeconds:
+          description: Recorded allocated GiB-seconds as an exact decimal string.
+          type: string
+      type: object
+    AdminUsageItem:
+      example:
+        from: 2000-01-23T04:56:07.000+00:00
+        to: 2000-01-23T04:56:07.000+00:00
+        dimensions:
+          organizationId: organizationId
+          regionId: regionId
+          boxId: boxId
+        values:
+          computeVcpuSeconds: computeVcpuSeconds
+          storageByteSeconds: storageByteSeconds
+          memoryGibSeconds: memoryGibSeconds
+        sourcePeriodCount: 16017
+      properties:
+        from:
+          format: date-time
+          type: string
+        to:
+          format: date-time
+          type: string
+        dimensions:
+          $ref: "#/components/schemas/AdminUsageDimensions"
+        values:
+          $ref: "#/components/schemas/AdminUsageValues"
+        sourcePeriodCount:
+          maximum: 200000
+          minimum: 1
+          type: integer
+      required:
+      - dimensions
+      - from
+      - sourcePeriodCount
+      - to
+      - values
+      type: object
+    AdminUsagePage:
+      example:
+        queryId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        generatedAt: 2000-01-23T04:56:07.000+00:00
+        expiresAt: 2000-01-23T04:56:07.000+00:00
+        definitionVersion: resource-usage-v1
+        query:
+          from: 2000-01-23T04:56:07.000+00:00
+          to: 2000-01-23T04:56:07.000+00:00
+          granularity: window
+          metrics:
+          - computeVcpuSeconds
+          - computeVcpuSeconds
+          groupBy:
+          - organizationId
+          - organizationId
+          organizationId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          regionId: regionId
+          boxId: boxId
+        coverage:
+          status: unknown
+          reason: usage_events_not_backfilled
+        items:
+        - from: 2000-01-23T04:56:07.000+00:00
+          to: 2000-01-23T04:56:07.000+00:00
+          dimensions:
+            organizationId: organizationId
+            regionId: regionId
+            boxId: boxId
+          values:
+            computeVcpuSeconds: computeVcpuSeconds
+            storageByteSeconds: storageByteSeconds
+            memoryGibSeconds: memoryGibSeconds
+          sourcePeriodCount: 16017
+        - from: 2000-01-23T04:56:07.000+00:00
+          to: 2000-01-23T04:56:07.000+00:00
+          dimensions:
+            organizationId: organizationId
+            regionId: regionId
+            boxId: boxId
+          values:
+            computeVcpuSeconds: computeVcpuSeconds
+            storageByteSeconds: storageByteSeconds
+            memoryGibSeconds: memoryGibSeconds
+          sourcePeriodCount: 16017
+        nextCursor: nextCursor
+      properties:
+        queryId:
+          format: uuid
+          type: string
+        generatedAt:
+          format: date-time
+          type: string
+        expiresAt:
+          format: date-time
+          type: string
+        definitionVersion:
+          enum:
+          - resource-usage-v1
+          type: string
+        query:
+          $ref: "#/components/schemas/AdminUsageQuery"
+        coverage:
+          $ref: "#/components/schemas/AdminUsageCoverage"
+        items:
+          items:
+            $ref: "#/components/schemas/AdminUsageItem"
+          type: array
+        nextCursor:
+          nullable: true
+          type: string
+      required:
+      - coverage
+      - definitionVersion
+      - expiresAt
+      - generatedAt
+      - items
+      - nextCursor
+      - query
+      - queryId
+      type: object
+    AdminUsageError:
+      example:
+        statusCode: 6
+        code: invalid_usage_query
+        message: message
+      properties:
+        statusCode:
+          enum:
+          - 400
+          - 410
+          - 422
+          - 503
+          type: integer
+        code:
+          enum:
+          - invalid_usage_query
+          - usage_query_expired
+          - usage_query_too_large
+          - usage_source_unavailable
+          type: string
+        message:
+          type: string
+      required:
+      - code
+      - message
+      - statusCode
       type: object
     WebhookAppPortalAccess:
       example:

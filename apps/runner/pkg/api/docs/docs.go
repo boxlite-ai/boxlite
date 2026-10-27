@@ -636,7 +636,8 @@ const docTemplate = `{
             "required": [
                 "id",
                 "image",
-                "osUser"
+                "osUser",
+                "outboundEnabled"
             ],
             "properties": {
                 "authToken": {
@@ -687,12 +688,6 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
-                "networkAllowList": {
-                    "type": "string"
-                },
-                "networkBlockAll": {
-                    "type": "boolean"
-                },
                 "organizationId": {
                     "description": "Nullable for backward compatibility",
                     "type": "string"
@@ -702,6 +697,16 @@ const docTemplate = `{
                 },
                 "otelEndpoint": {
                     "type": "string"
+                },
+                "outboundAllowNet": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "outboundEnabled": {
+                    "description": "Outbound network policy. outboundEnabled is required: a request without\nit is rejected rather than started with a guessed policy.",
+                    "type": "boolean"
                 },
                 "regionId": {
                     "type": "string"
@@ -795,7 +800,8 @@ const docTemplate = `{
             "type": "object",
             "required": [
                 "errorReason",
-                "osUser"
+                "osUser",
+                "outboundEnabled"
             ],
             "properties": {
                 "cpuQuota": {
@@ -822,14 +828,18 @@ const docTemplate = `{
                     "type": "integer",
                     "minimum": 1
                 },
-                "networkAllowList": {
-                    "type": "string"
-                },
-                "networkBlockAll": {
-                    "type": "boolean"
-                },
                 "osUser": {
                     "type": "string"
+                },
+                "outboundAllowNet": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "outboundEnabled": {
+                    "description": "Outbound network policy. outboundEnabled is required: a request without\nit is rejected rather than started with a guessed policy.",
+                    "type": "boolean"
                 },
                 "secrets": {
                     "type": "array",
@@ -952,13 +962,16 @@ const docTemplate = `{
         "UpdateNetworkSettingsDTO": {
             "type": "object",
             "properties": {
-                "networkAllowList": {
-                    "type": "string"
-                },
-                "networkBlockAll": {
+                "networkLimitEgress": {
                     "type": "boolean"
                 },
-                "networkLimitEgress": {
+                "outboundAllowNet": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "outboundEnabled": {
                     "type": "boolean"
                 }
             }

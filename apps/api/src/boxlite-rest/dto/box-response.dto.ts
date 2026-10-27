@@ -5,6 +5,7 @@
  */
 
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
+import { NetworkInfoResponseDto } from '../../box/dto/network-info.dto'
 
 @ApiSchema({ name: 'Box' })
 export class BoxResponseDto {
@@ -106,6 +107,13 @@ export class BoxResponseDto {
     example: 137,
   })
   exit_code?: number
+
+  // Optional to match openapi/box.openapi.yaml, where older servers omit it.
+  @ApiPropertyOptional({
+    description: 'The effective network policy in both directions',
+    type: NetworkInfoResponseDto,
+  })
+  network?: NetworkInfoResponseDto
 }
 
 @ApiSchema({ name: 'ListBoxesResponse' })

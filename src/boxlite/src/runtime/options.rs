@@ -50,6 +50,47 @@ pub struct BoxliteOptions {
     /// ```
     #[serde(default)]
     pub image_registries: Vec<ImageRegistry>,
+    /// Proxy for image pulls.
+    ///
+    /// `None` (default) keeps reading `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`,
+    /// and `NO_PROXY` from the process environment. Box traffic never uses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_registry_proxy: Option<ImageRegistryProxy>,
+}
+
+/// Proxy settings for the registry requests made while pulling images.
+///
+/// Setting `http_proxy` or `https_proxy` replaces every proxy environment
+/// variable, `NO_PROXY` included. Invalid settings fail runtime creation.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageRegistryProxy {
+    /// Proxy URL (`http://` or `https://`) for `RegistryTransport::Http` registries.
+    pub http_proxy: Option<String>,
+    /// Proxy URL (`http://` or `https://`) for `RegistryTransport::Https` registries.
+    pub https_proxy: Option<String>,
+    /// Comma-separated hosts, domains, IPs, or CIDRs that bypass the proxy.
+    pub no_proxy: Option<String>,
+}
+
+impl fmt::Debug for ImageRegistryProxy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let redact = |url: &Option<String>| url.as_deref().map(redact_url_credentials);
+        f.debug_struct("ImageRegistryProxy")
+            .field("http_proxy", &redact(&self.http_proxy))
+            .field("https_proxy", &redact(&self.https_proxy))
+            .field("no_proxy", &self.no_proxy)
+            .finish()
+    }
+}
+
+/// Mask everything between `scheme://` and the last `@`, such as `user:password@`.
+fn redact_url_credentials(url: &str) -> String {
+    let start = url.find("://").map_or(0, |i| i + "://".len());
+    match url.rfind('@') {
+        Some(at) if at >= start => format!("{}***{}", &url[..start], &url[at..]),
+        _ => url.to_string(),
+    }
 }
 
 /// Registry host configuration for OCI image pulls.
@@ -175,6 +216,7 @@ impl Default for BoxliteOptions {
         Self {
             home_dir: default_home_dir(),
             image_registries: Vec::new(),
+            image_registry_proxy: None,
         }
     }
 }
@@ -239,6 +281,26 @@ mod registry_options_tests {
     }
 
     #[test]
+    fn image_registry_proxy_rejects_docker_spelling() {
+        // Docker's daemon.json spells it `https-proxy`; ignoring that key would
+        // leave pulls on the environment proxy without a word.
+        let config = json!({ "image_registry_proxy": { "https-proxy": "http://proxy:3128" } });
+        assert!(serde_json::from_value::<BoxliteOptions>(config).is_err());
+    }
+
+    #[test]
+    fn image_registry_proxy_debug_masks_credentials() {
+        let password = test_registry_password();
+        let url = format!("http://alice:{password}@proxy.corp:3128");
+        let config = json!({ "image_registry_proxy": { "https_proxy": url } });
+        let options: BoxliteOptions = serde_json::from_value(config).unwrap();
+
+        let debug = format!("{options:?}");
+        assert!(debug.contains("http://***@proxy.corp:3128"), "{debug}");
+        assert!(!debug.contains(&password), "{debug}");
+    }
+
+    #[test]
     fn options_reject_legacy_string_image_registries() {
         let result =
             serde_json::from_str::<BoxliteOptions>(r#"{"image_registries": ["docker.io"]}"#);
@@ -259,6 +321,7 @@ mod registry_options_tests {
                     .with_basic_auth("alice", password.as_str()),
                 ImageRegistry::https("registry.example.com").with_bearer_auth(token.as_str()),
             ],
+            ..Default::default()
         };
 
         let value = serde_json::to_value(options).unwrap();
@@ -331,12 +394,16 @@ pub struct BoxOptions {
     pub env: Vec<(String, String)>,
     pub rootfs: RootfsSpec,
     pub volumes: Vec<VolumeSpec>,
+    /// Typed mounts, kept apart from `volumes` so the `-v` shorthand keeps its
+    /// meaning. A runtime refuses the mounts it does not take rather than
+    /// dropping them.
+    pub mounts: Vec<MountSpec>,
     pub network: NetworkSpec,
     /// Inbound reachability of the services this box exposes. A sibling of
     /// `network` rather than a field inside it: the two directions are
     /// independent, and `network` keeps its pre-split meaning (egress
     /// only). Same type as `network` — both directions have identical
-    /// shape. Defaults to `Disabled` (private), unlike `network`.
+    /// shape. Defaults to `Disabled`, unlike `network`.
     #[serde(default = "NetworkSpec::disabled")]
     pub inbound_network: NetworkSpec,
     /// Explicit host publication for the local runtime.
@@ -396,7 +463,8 @@ pub struct BoxOptions {
 
     /// Override the image's ENTRYPOINT directive.
     ///
-    /// When set, completely replaces the image's ENTRYPOINT.
+    /// A nonempty value also discards the image's default CMD.
+    /// `[]` clears only ENTRYPOINT. Applies on first start and restart.
     /// Use with `cmd` to build the full command:
     ///   Final execution = entrypoint + cmd
     ///
@@ -407,8 +475,8 @@ pub struct BoxOptions {
 
     /// Override the image's CMD directive.
     ///
-    /// The image ENTRYPOINT is preserved; these args replace the image's CMD.
-    /// Final execution = image_entrypoint + cmd.
+    /// A nonempty value replaces the image's CMD; an empty value is treated as omitted.
+    /// Combined with the selected entrypoint to form the main command.
     ///
     /// Example: For `docker:dind` (ENTRYPOINT=["dockerd-entrypoint.sh"]),
     /// setting `cmd = vec!["--iptables=false"]` produces:
@@ -534,6 +602,7 @@ impl Default for BoxOptions {
             env: Vec::new(),
             rootfs: RootfsSpec::default(),
             volumes: Vec::new(),
+            mounts: Vec::new(),
             network: NetworkSpec::default(),
             inbound_network: NetworkSpec::disabled(),
             ports: Vec::new(),
@@ -567,6 +636,15 @@ impl BoxOptions {
         self.effective_auto_delete() > 0
     }
 
+    /// Validate options for a new box: [`Self::sanitize_common`] plus the
+    /// outbound rules `update_outbound` accepts, so every saved allowlist can be
+    /// re-sent or rolled back to. Start and import skip the rule check, keeping
+    /// boxes and archives saved by older releases usable.
+    pub(crate) fn sanitize_create(&self) -> BoxliteResult<()> {
+        self.sanitize_common()?;
+        OutboundNetworkConfig::from(&self.network).validate()
+    }
+
     /// Sanitize and validate options.
     ///
     /// Validates option combinations:
@@ -576,6 +654,7 @@ impl BoxOptions {
     /// - `advanced.capabilities` contains well-formed Linux capability names
     /// - `advanced.security.network_enabled=false` is not mistaken for a
     ///   guest-networking switch (it gates host jailer grants only)
+    /// - every mount in `mounts` fits its type
     pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
@@ -651,6 +730,10 @@ impl BoxOptions {
 
         for volume in &self.volumes {
             volume.validate()?;
+        }
+
+        for mount in &self.mounts {
+            mount.validate()?;
         }
 
         Ok(())
@@ -826,9 +909,8 @@ impl VolumeSpec {
 /// What a [`MountSpec`]'s `source` names.
 ///
 /// Spelled `"volume"` and `"bind"` on every surface that carries a mount: the
-/// CLI(TODO), the SDK(TODO), the REST wire(TODO) and persisted box config(TODO). One
-/// spelling everywhere is what lets a mount written for one surface be read unchanged on
-/// another.
+/// CLI(TODO), the SDK(TODO), the REST wire(TODO) and persisted box config. One spelling
+/// everywhere is what lets a mount written for one surface be read unchanged on another.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MountType {
@@ -881,8 +963,8 @@ impl std::str::FromStr for MountType {
     }
 }
 
-/// A typed mount, for `BoxOptions::mounts`(TODO): what to mount (`mount_type`
-/// and `source`), where (`target`) and how (`read_only`, `sub_path`).
+/// A mount from [`BoxOptions::mounts`]: what to mount (`mount_type` and
+/// `source`), where (`target`) and how (`read_only`, `sub_path`).
 ///
 /// The typed sibling of [`VolumeSpec`]. A `VolumeSpec` infers its origin from
 /// which field is set; a `MountSpec` states it. Build one with
@@ -947,8 +1029,8 @@ impl MountSpec {
     /// Reject a mount whose fields contradict its type.
     ///
     /// The constructors cannot build one, but the fields are public and the
-    /// SDKs fill them from caller input(TODO), so create runs this(TODO) for every
-    /// mount on both runtimes, before the options reach a backend.
+    /// SDKs fill them from caller input(TODO), so create runs this for every mount on
+    /// both runtimes, before the options reach a backend.
     pub fn validate(&self) -> BoxliteResult<()> {
         let mount_type = self.mount_type;
         let target = &self.target;
@@ -1032,10 +1114,52 @@ pub struct OutboundNetworkConfig {
     pub allow_net: Vec<String>,
 }
 
+impl OutboundNetworkConfig {
+    /// Validate a complete replacement before contacting the network backend.
+    pub fn validate(&self) -> boxlite_shared::errors::BoxliteResult<()> {
+        NetworkSpec::try_from(self.clone())?;
+        // Padding is trimmed, not rejected: gvproxy and the cloud API always
+        // accepted it.
+        for rule in self.allow_net.iter().map(|rule| rule.trim()) {
+            let valid = if rule.parse::<std::net::Ipv4Addr>().is_ok() {
+                true
+            } else if let Some((address, prefix)) = rule.split_once('/') {
+                address.parse::<std::net::Ipv4Addr>().is_ok()
+                    && !prefix.is_empty()
+                    && prefix.bytes().all(|c| c.is_ascii_digit())
+                    && prefix.parse::<u8>().is_ok_and(|bits| bits <= 32)
+            } else {
+                let hostname = rule.strip_prefix("*.").unwrap_or(rule);
+                !hostname.is_empty()
+                    && hostname.len() <= 253
+                    && !(hostname.split('.').count() == 4
+                        && hostname.bytes().all(|c| c.is_ascii_digit() || c == b'.'))
+                    && hostname.split('.').all(|label| {
+                        !label.is_empty()
+                            && label.len() <= 63
+                            && !label.starts_with('-')
+                            && !label.ends_with('-')
+                            && label
+                                .bytes()
+                                .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+                    })
+            };
+            if !valid {
+                return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                    format!(
+                        "invalid allow_net rule: {rule:?}; expected a hostname, wildcard hostname, IPv4 or IPv4 CIDR"
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Wire shape for the inbound direction, aligned field-for-field with
 /// [`OutboundNetworkConfig`]. `Enabled` means services the box exposes are
-/// publicly reachable; `Disabled` means they are private (unreachable from
-/// outside the box). `allow_net` exists for shape symmetry with outbound but
+/// reachable without sign-in; `Disabled` means they are unreachable from
+/// outside the box. `allow_net` exists for shape symmetry with outbound but
 /// is rejected when non-empty — no layer enforces an inbound allowlist yet.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1370,10 +1494,9 @@ mod tests {
         }
     }
 
-    /// `MountSpec` is persisted as box config(TODO) and is the shape the
-    /// SDK(TODO) and the wire(TODO) share, so its JSON is a contract: `type`
-    /// rather than the Rust field name, lowercase type names, and no key for an
-    /// unset `sub_path`.
+    /// `MountSpec` is persisted as box config and is the shape the SDK(TODO) and
+    /// the wire(TODO) share, so its JSON is a contract: `type` rather than the
+    /// Rust field name, lowercase type names, and no key for an unset `sub_path`.
     #[test]
     fn mount_spec_json_uses_the_type_key_and_omits_an_unset_sub_path() {
         let prefixed = MountSpec {
@@ -1404,8 +1527,16 @@ mod tests {
             .expect_err("the persisted spelling is lowercase only");
     }
 
-    /// Every field that contradicts the type is refused at create(TODO), with
-    /// the target in the message so a caller with several mounts can find it.
+    /// Boxes written before `mounts` existed have no such key in their config;
+    /// they must load with no mounts rather than fail to load.
+    #[test]
+    fn box_options_without_a_mounts_key_load_with_no_mounts() {
+        let options: BoxOptions = serde_json::from_str(r#"{"cpus":2}"#).unwrap();
+        assert!(options.mounts.is_empty());
+    }
+
+    /// Every field that contradicts the type is refused at create, with the
+    /// target in the message so a caller with several mounts can find it.
     #[test]
     fn mount_spec_validate_refuses_fields_that_contradict_the_type() {
         let refused = [
@@ -1458,6 +1589,28 @@ mod tests {
         ] {
             accepted.validate().expect("the mount fits its type");
         }
+    }
+
+    /// `sanitize_common` is where create reaches `MountSpec::validate`, so an
+    /// invalid mount anywhere in the list fails the whole box.
+    #[test]
+    fn box_options_sanitize_checks_every_mount() {
+        let options = BoxOptions {
+            mounts: vec![
+                MountSpec::bind_mount("/srv/data", "/data"),
+                MountSpec {
+                    source: None,
+                    ..MountSpec::volume_mount("run42", "/workspace")
+                },
+            ],
+            ..Default::default()
+        };
+
+        let message = options
+            .sanitize_common()
+            .expect_err("the second mount has no source")
+            .to_string();
+        assert!(message.contains("/workspace"), "{message}");
     }
 
     #[test]
@@ -2197,6 +2350,43 @@ mod tests {
             ),
             "expected InvalidArgument (→ HTTP 400), got {err:?}"
         );
+    }
+
+    /// Create must refuse rules that `update_outbound` refuses; otherwise a
+    /// box keeps an allowlist that can never be re-sent or rolled back to.
+    /// Start and import keep accepting them, so older saved boxes still run.
+    #[test]
+    fn test_sanitize_create_rejects_invalid_outbound_allow_net() {
+        // Padding was always accepted (gvproxy and the cloud API trim it), so
+        // create and update keep accepting it.
+        for rule in [" example.com ", "10.0.0.0/8 ", " *.example.com"] {
+            let opts = BoxOptions {
+                network: NetworkSpec::Enabled {
+                    allow_net: vec![rule.to_string()],
+                },
+                ..Default::default()
+            };
+            opts.sanitize_create()
+                .unwrap_or_else(|err| panic!("{rule:?}: padding must stay accepted: {err}"));
+        }
+        for rule in ["example.com:443", "a.com,b.com", "", "  ", "10.0.0.0/33"] {
+            let opts = BoxOptions {
+                network: NetworkSpec::Enabled {
+                    allow_net: vec![rule.to_string()],
+                },
+                ..Default::default()
+            };
+            opts.sanitize_persisted()
+                .unwrap_or_else(|err| panic!("{rule:?}: a saved box must still start: {err}"));
+            let err = opts.sanitize_create().unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    boxlite_shared::errors::BoxliteError::InvalidArgument(_)
+                ),
+                "{rule:?}: expected InvalidArgument, got {err:?}"
+            );
+        }
     }
 
     /// `VolumeSpec::managed_volume` and `VolumeSpec::bind_mount` cannot produce a mount

@@ -215,7 +215,7 @@ impl DestBefore {
     /// to make, and the destination itself when we made it. Directories the
     /// image already shipped are left alone whether the request names one
     /// (`copy_in("./x", "/usr/local/bin/")`) or the archive does
-    /// (`copy_in("./dist", "/usr/local")` carrying `bin/tool`) — handing either
+    /// (`copy_in("./dist/.", "/usr/local")` carrying `bin/tool`) — handing either
     /// to the box user is a permission change nobody asked for. Files are
     /// always ours, existing or not: extraction just overwrote them.
     fn created(&self, dest_root: &Path, entry_paths: &[PathBuf]) -> Vec<PathBuf> {
@@ -967,9 +967,8 @@ mod tests {
     ///
     /// A destination directory is the shape the *request* names; an entry
     /// directory is the shape the *archive* names, which
-    /// `copy_in("./dist", "/usr/local", include_parent=false)` produces. Only
-    /// the second was unguarded: `/usr/local/bin` is the image's, `bin/tool` is
-    /// ours.
+    /// `copy_in("./dist/.", "/usr/local")` produces. Only the second was
+    /// unguarded: `/usr/local/bin` is the image's, `bin/tool` is ours.
     #[test]
     fn directories_the_image_shipped_keep_their_owner() {
         let tmp = tempfile::tempdir().unwrap();

@@ -97,7 +97,11 @@ fmt\:check\:c:
 # (nx run-many format + root-level prettier over TS/JSON/YAML).
 fmt\:apps: _ensure-apps-deps
 	@echo "🔧 Formatting apps workspace..."
+ifneq ($(FILES),)
+	@cd apps && yarn prettier --write $(FILES)
+else
 	@cd apps && yarn format
+endif
 
 # apps/ has no `format:check` script; prettier --check over the same TS globs
 # `lint:ts` uses is the check counterpart.
@@ -194,17 +198,21 @@ fmt\:go:
 	@echo "🔧 Formatting Go code..."
 	@cd sdks/go && go fmt ./...
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && gofmt -w .
+	@cd apps/image-service && go fmt ./...
+	@cd apps/runner && gofmt -w .
 
 fmt\:check\:go:
 	@echo "🔍 Checking Go formatting..."
 	@cd sdks/go && test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && \
 		test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
+	@cd apps/image-service && test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
 
 lint\:go:
 	@echo "🔍 Linting Go code (vet)..."
 	@cd sdks/go && go vet -tags boxlite_dev ./...
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && go vet ./...
+	@cd apps/image-service && go vet ./...
 
 clippy: _ensure-python-deps
 	@echo "🔍 Running Rust clippy checks..."

@@ -38,6 +38,7 @@ export const queryKeys = {
 
     plan: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'plan'] as const,
     wallet: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'wallet'] as const,
+    signupCredit: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'signup-credit'] as const,
   },
   user: {
     all: ['users'] as const,
@@ -72,7 +73,23 @@ export const queryKeys = {
         ...(page !== undefined && perPage !== undefined ? [{ page, perPage }] : []),
       ] as const,
   },
-  // TODO(image-rewrite): template query keys removed with the image/template subsystem.
+  images: {
+    all: ['images'] as const,
+    list: (organizationId: string) => [...queryKeys.images.all, organizationId, 'list'] as const,
+    // One image can be cached under several keys: the route takes its id or any
+    // reference that names it.
+    details: (organizationId: string) => [...queryKeys.images.all, organizationId, 'detail'] as const,
+    detail: (organizationId: string, idOrRef: string) =>
+      [...queryKeys.images.details(organizationId), idOrRef] as const,
+    // Kept apart from the list rather than derived from it: the count is of
+    // the organization's own images, and the list also carries the curated set,
+    // which belongs to no organization and counts against no limit.
+    usage: (organizationId: string) => [...queryKeys.images.all, organizationId, 'usage'] as const,
+  },
+  registries: {
+    all: ['registries'] as const,
+    list: (organizationId: string) => [...queryKeys.registries.all, organizationId, 'list'] as const,
+  },
   volumes: {
     all: ['volumes'] as const,
     list: (organizationId: string) => [...queryKeys.volumes.all, organizationId, 'list'] as const,
@@ -98,7 +115,6 @@ export const queryKeys = {
     detail: (organizationId: string, boxId: string) =>
       [...queryKeys.boxes.all, organizationId, boxId, 'detail'] as const,
     runningCount: (organizationId: string) => [...queryKeys.boxes.all, organizationId, 'running-count'] as const,
-    terminalSession: (boxId: string) => [...queryKeys.boxes.all, boxId, 'terminal-session'] as const,
   },
   telemetry: {
     all: ['telemetry'] as const,

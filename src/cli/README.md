@@ -182,6 +182,38 @@ use. Executing invocations reject unsupported options; Clap's `--help` and
 | `--profile NAME` | REST-capable commands + `auth` | Named credential profile in `<BOXLITE_HOME>/credentials.toml`. Default `default`. Env: `BOXLITE_PROFILE`. |
 | `--path-prefix VALUE` | REST box/volume commands | Routing-slot value for `/v1/<prefix>/...`; overrides the selected profile. Env: `BOXLITE_REST_PATH_PREFIX`. |
 
+### Network policy updates
+
+```bash
+boxlite network inbound mybox enabled
+boxlite network outbound mybox enabled --allow-net '*.example.com'
+boxlite network outbound mybox enabled  # default empty list: unrestricted
+boxlite network outbound mybox disabled
+boxlite inspect mybox
+```
+
+The box and mode are required. Repeat `--allow-net` for multiple outbound rules.
+Omit `--allow-net` for the default empty list; `''` is rejected, as at create.
+Inbound accepts no list; disabled outbound accepts no `--allow-net`. Each command replaces
+one direction without retaining earlier rules. See [networking](../../docs/guides/networking.md#updating-a-running-box)
+for runtime support, connection lifetime and persistence.
+
+### Guest SSH
+
+```bash
+boxlite run -d --name dev alpine:latest tail -f /dev/null
+boxlite ssh configure-and-forward dev --host-key ./host_key --login alice \
+  --authorized-key ~/.ssh/id_ed25519.pub
+# stdout: tcp://127.0.0.1:52811   stderr: host key, fingerprint, connect hint
+ssh -p 52811 -l alice 127.0.0.1
+```
+
+`configure`, `status`, and `disable` print `SshStatus` JSON; `configure-and-forward`
+configures once and forwards, and `forward` forwards to SSH that is already enabled. The
+CLI never generates keys.
+See [`boxlite ssh`](../../docs/reference/cli/README.md#boxlite-ssh) for flags and the
+[SSH guide](../../docs/guides/ssh.md#cli) for lifecycle rules.
+
 ### `boxlite auth login`
 
 Log in to a BoxLite REST server. Supports three flows that all save to
@@ -248,13 +280,26 @@ echo "$KEY" | boxlite --profile local auth login --url http://localhost:8100 --a
 
 **Deployment-side setup (one-time, by the IdP admin):**
 
-Browser and device flows fail with "Callback URL mismatch" until the IdP
-knows about the CLI's loopback URL. For Auth0 see
-`apps/infra/README.md` "Callback URL mismatch" — add
-`http://127.0.0.1:5555/callback` to the SPA Application's
-**Allowed Callback URLs**. For Dex see `apps/dex/config.yaml` — the same
-URL goes under the `boxlite` static client's `redirectURIs`, plus
-`oauth2.deviceFlow: {}` at the top level for device flow.
+Browser PKCE login needs the loopback callback `http://127.0.0.1:5555/callback`
+registered in the client's **Allowed Callback URLs**. Device login does not use
+that callback. It uses the provider's discovered `device_authorization_endpoint`;
+older Dex deployments without this field retain the `/device/code` fallback.
+
+For Auth0, configure a public **Native** CLI application with the **Device Code**
+grant enabled. Enable **Refresh Token** for the client and **Allow Offline Access**
+for the target API to issue renewable sessions. Pass its public ID with
+`--client-id` if `/api/config` advertises the dashboard SPA application. Flags
+win over server values; `OIDC_CLIENT_ID` is a fallback, not an override for
+`/api/config`. Do not provide a client secret. An `unauthorized_client` error
+can mean an unknown/wrong client or a disabled grant: check the CLI client ID
+and issuer, then ask the IdP administrator to verify the Device Code grant.
+For Dex, enable `oauth2.deviceFlow: {}` in `apps/dex/config.yaml`.
+
+Device login prints the verification URL and one-time user code on stderr.
+Complete authorization in a browser while the CLI polls. Ctrl-C cancels polling;
+denied, expired, and cancelled attempts do not save a partial session. Retry
+`auth login` to obtain a new code. Server response descriptions and bodies are
+excluded from device-login errors to avoid exposing credentials.
 
 ### `boxlite auth logout`
 
@@ -346,7 +391,7 @@ silently restarting it, because restarting would run the command a second time.
 | `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--network <enabled\|disabled>` | | Outbound network mode (default `enabled`) |
-| `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IP, or CIDR; repeatable and implies enabled networking |
+| `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IPv4, or IPv4 CIDR; repeatable and implies enabled networking |
 | `--inbound <enabled\|disabled>` | | Inbound network mode (default `disabled`) |
 | `--net-tx-kbps KBPS` | | Cap what the box sends, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
 | `--net-rx-kbps KBPS` | | Cap what reaches the box, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
@@ -408,7 +453,7 @@ default, and `exec` still starts it on demand.
 | `--cap-add CAPABILITY` | | Add a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--cap-drop CAPABILITY` | | Drop a Linux capability (repeatable; accepts `CAP_` prefix or `ALL`) |
 | `--network <enabled\|disabled>` | | Outbound network mode (default `enabled`) |
-| `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IP, or CIDR; repeatable and implies enabled networking |
+| `--allow-net HOST` | | Restrict egress to an exact host, wildcard domain, IPv4, or IPv4 CIDR; repeatable and implies enabled networking |
 | `--inbound <enabled\|disabled>` | | Inbound network mode (default `disabled`) |
 | `--net-tx-kbps KBPS` | | Cap what the box sends, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
 | `--net-rx-kbps KBPS` | | Cap what reaches the box, in kilobits/sec; `0` or unset is uncapped. Local runtime only; verified on Linux |
@@ -516,11 +561,16 @@ Display detailed information on one or more boxes (JSON, YAML, or Go-style templ
 | `--latest` | `-l` | Inspect the most recently created box (cannot be used with BOX) |
 | `--format FMT` | `-f` | Output: `json`, `yaml`, or a Go template (e.g. `{{.State.Status}}`, `{{.Id}}`). Default: `json`. Table format is not supported. |
 
+`Network` holds both directions of the box's policy, `Outbound` and `Inbound`,
+each with `Mode` (`enabled` or `disabled`) and `AllowNet`. It is `null` when the
+runtime does not know the policy, such as a REST server that predates it.
+
 **Examples:**
 
 ```bash
 boxlite inspect mybox
 boxlite inspect -f '{{.State.Status}}' mybox
+boxlite inspect -f '{{.Network.Inbound.Mode}}' mybox
 boxlite inspect --latest -f yaml
 boxlite inspect box1 box2 -f json
 ```
@@ -542,19 +592,20 @@ Copy files or directories between host and box.
 
 **Usage:** `boxlite cp [OPTIONS] SRC DST`
 
-- **SRC / DST:** host path or `BOX:PATH` (e.g. `mybox:/app/data`).
+- **SRC / DST:** host path or `BOX:PATH` (e.g. `mybox:/app/data`). End a directory
+  `SRC` with `/.` to copy its contents rather than the directory itself, as `docker cp` does.
 
 | Option | Description |
 |--------|-------------|
 | `--follow-symlinks` | Follow symlinks when copying (local runtime only) |
 | `--no-overwrite` | Do not overwrite existing files (local runtime only) |
-| `--no-include-parent` | Copy directory contents without their parent (local runtime only) |
 
 **Examples:**
 
 ```bash
 boxlite cp ./local.txt mybox:/workspace/
 boxlite cp mybox:/app/out ./output
+boxlite cp ./dist/. mybox:/srv/www        # the contents of ./dist, not dist/ itself
 ```
 
 Paths at or under a mount inside the box are refused in both directions — `/tmp`,

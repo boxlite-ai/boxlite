@@ -36,13 +36,37 @@ import {
   GKE_SERVICE_CIDR,
   MANAGED_PROXY_CIDR,
   CLOUDRUN_EGRESS_CIDR,
+  PRIVATE_GOOGLE_ACCESS_ADDRESSES,
   PSC_NAT_CIDR,
   SUBNET_CIDR,
 } from '../stack/providers/gcp/network.ts'
-import { BOOT_DISK_TYPE, MACHINE as RUNNER_MACHINE } from '../stack/providers/gcp/runners.ts'
+import {
+  DATA_DISK,
+  DATA_DISK_DEVICE,
+  DISK_TYPE as RUNNER_DISK,
+  MACHINE as RUNNER_MACHINE,
+  PREPARE_HOME,
+} from '../stack/providers/gcp/runners.ts'
+import { RUNNER_HOME } from '../stack/runner-boot.ts'
 import { apiPrefixRouteRules } from '../stack/providers/gcp/api.ts'
 import { isMissingNeg } from '../stack/providers/gcp/edge.ts'
 import { instanceFor } from 'naming'
+import {
+  REGISTRY_PROXY_CONTROL_PLANE_VARIABLE,
+  REGISTRY_PROXY_HEALTH_PATH,
+  REGISTRY_PROXY_PORT,
+  REGISTRY_PROXY_PORT_VARIABLE,
+  REGISTRY_PROXY_HOST_VARIABLE,
+  REGISTRY_PROXY_UPSTREAM_HOSTS,
+  REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE,
+} from '../stack/registry-proxy.ts'
+import {
+  REGISTRY_SECRET_CREATE_PERMISSIONS,
+  REGISTRY_SECRET_PREFIX,
+  REGISTRY_SECRET_READ_ROLE,
+  REGISTRY_SECRET_WRITE_PERMISSIONS,
+} from '../stack/providers/gcp/registry-credentials.ts'
+import { REGISTRY_SECRET_STORE_VARIABLE } from '../stack/registry-credentials.ts'
 
 /*
  * The committed example, not this machine's stage file.
@@ -685,8 +709,10 @@ test('the telemetry database admits both of its callers, because both egress fro
    */
   assert.match(sourceOf('api'), /networkInterfaces: \[\{ subnetwork: placement\.egressSubnetwork \}\]/)
   assert.match(sourceOf('collector'), /networkInterfaces: \[\{ subnetwork: placement\.egressSubnetwork \}\]/)
-  // And nothing else reads it, so the address stays beside its clients.
-  for (const module of ['api', 'collector', 'runners', 'clickhouse', 'edge']) {
+  // And nothing else reads it, so the address stays beside its clients — and
+  // the registry proxy, a Cloud Run service that calls no VM, stays out of the
+  // range the runner and ClickHouse rules admit.
+  for (const module of ['api', 'collector', 'runners', 'clickhouse', 'edge', 'registry-proxy']) {
     const reads = (sourceOf(module).match(/placement\.egressSubnetwork/g) ?? []).length
     assert.equal(reads, module === 'api' || module === 'collector' ? 1 : 0, `${module} reads egressSubnetwork ${reads}x`)
   }
@@ -892,7 +918,7 @@ test('the hosts may read the staged binary, and only while one is being installe
   assert.match(source, /role: 'roles\/storage\.objectViewer'/)
   assert.match(source, /resource\.name\.startsWith\("projects\/_\/buckets\/\$\{artifactsBucket\}\/objects\/runner\/"\)/)
   // And the host waits for it: a boot script that fetched before the binding
-  // existed would download nothing, and that boot never happens again.
+  // existed would download nothing, and nothing retries it until the host restarts.
   assert.match(source, /dependsOn: \[\.\.\.dependsOn, \.\.\.staged\]/)
 })
 
@@ -939,7 +965,7 @@ test('the upgrade policy selects hosts by the label those hosts actually carry',
 
 test('a host that cannot be told the new control-plane name is converged to it', () => {
   /*
-   * `BOXLITE_API_URL` is written once, at first boot. `metadataStartupScript`
+   * `BOXLITE_API_URL` is written by the boot script, which never changes. `metadataStartupScript`
    * is in `ignoreChanges` and the instance is protected, so a stage that
    * changes its domain strands every host it already has: the public record is
    * renamed, the private zone is rebuilt under the new name, and the old one
@@ -1104,7 +1130,7 @@ test('every runner size is a family that can nest, and none is one that cannot',
 test('the boot disk is the one N4 attaches, and no Persistent Disk is asked for', () => {
   // N4 does not take Persistent Disk at all, so `pd-balanced` is a create-time
   // refusal rather than a slower disk.
-  assert.equal(BOOT_DISK_TYPE, 'hyperdisk-balanced')
+  assert.equal(RUNNER_DISK, 'hyperdisk-balanced')
   assert.equal(sourceOf('runners').includes("'pd-"), false)
 })
 
@@ -1116,7 +1142,7 @@ test('every GCE host in the bundle names a machine family and a disk that pair',
    * disk rather than the family that cannot take it.
    */
   const hosts = [
-    { module: 'runners', machines: Object.values(RUNNER_MACHINE), disk: BOOT_DISK_TYPE },
+    { module: 'runners', machines: Object.values(RUNNER_MACHINE), disk: RUNNER_DISK },
     { module: 'clickhouse', machines: Object.values(CLICKHOUSE_MACHINE), disk: CLICKHOUSE_DISK },
   ]
   for (const { module, machines, disk } of hosts) {
@@ -1128,10 +1154,74 @@ test('every GCE host in the bundle names a machine family and a disk that pair',
   }
 })
 
+test('every runner size states a data disk GCP will create and its machine can use', () => {
+  /*
+   * Hyperdisk Balanced bounds a disk's IOPS by its size and its throughput by its
+   * IOPS, and refuses a create outside them; an N4 caps what all of its Hyperdisk
+   * can draw together, and anything stated above that is billed and never reached.
+   * docs.cloud.google.com/compute/docs/disks/hd-types/hyperdisk-balanced and
+   * .../disks/hyperdisk-perf-limits.
+   */
+  const CAP: Record<string, { iops: number; throughputMiBps: number }> = {
+    'n4-standard-4': { iops: 30_000, throughputMiBps: 240 },
+    'n4-standard-8': { iops: 30_000, throughputMiBps: 480 },
+    'n4-standard-16': { iops: 80_000, throughputMiBps: 1_200 },
+  }
+  for (const [size, machine] of Object.entries(RUNNER_MACHINE)) {
+    const disk = DATA_DISK[size as keyof typeof DATA_DISK]
+    assert.ok(disk, `${size} has no data disk`)
+    const cap = CAP[machine]
+    assert.ok(cap, `no Hyperdisk cap is recorded for ${machine}`)
+    assert.ok(
+      disk.iops >= 3_000 && disk.iops <= Math.min(500 * disk.sizeGb, 160_000),
+      `${size}: ${disk.iops} IOPS is out of bounds for ${disk.sizeGb} GiB`,
+    )
+    assert.ok(
+      disk.throughputMiBps >= Math.max(140, disk.iops / 256) && disk.throughputMiBps <= Math.min(2_400, disk.iops / 4),
+      `${size}: ${disk.throughputMiBps} MiB/s is out of bounds for ${disk.iops} IOPS`,
+    )
+    assert.ok(
+      disk.iops <= cap.iops && disk.throughputMiBps <= cap.throughputMiBps,
+      `${size} states more than ${machine} can draw`,
+    )
+  }
+})
+
+test('a runner keeps box state on a disk no deploy shrinks, replaces or detaches', () => {
+  /*
+   * A disk grown online reads back larger than the size the code states: the
+   * provider replaces a disk whose size went down, and `protect` turns that into
+   * an error. The attachment is fixed at create because the provider applies any
+   * edit to one by detaching the disk from the running host.
+   */
+  const source = sourceOf('runners')
+  const disks = blocksOpenedBy(source, /new gcp\.compute\.Disk\(/g).map(withoutComments)
+  assert.equal(disks.length, 1, `expected one data disk per host, found ${disks.length}`)
+  const disk = disks[0] as string
+  assert.match(disk, /ignoreChanges: \['size', 'provisionedIops', 'provisionedThroughput'\]/)
+  assert.match(disk, /protect: true/)
+  assert.match(disk, /type: DISK_TYPE/)
+  assert.match(disk, /name: runnerDataDiskNameFor\(/)
+  const instances = blocksOpenedBy(source, /new gcp\.compute\.Instance\(/g).map(withoutComments)
+  assert.equal(instances.length, 1, `expected one host constructor, found ${instances.length}`)
+  const instance = instances[0] as string
+  assert.match(instance, /attachedDisks: \[\{ source: dataDisk\.id, deviceName: DATA_DISK_DEVICE \}\]/)
+  assert.match(instance, /ignoreChanges: \[[^\]]*'attachedDisks'[^\]]*\]/)
+})
+
+test('a host mounts the disk it was given, at the home the runner reads', () => {
+  // One device name for the attachment and the mount, one home for the mount
+  // and the runner: a second spelling of either is a host that never finds its
+  // disk, or a runner that writes beside it.
+  assert.match(PREPARE_HOME, new RegExp(`^DATA_DEVICE='/dev/disk/by-id/google-${DATA_DISK_DEVICE}'$`, 'm'))
+  assert.match(PREPARE_HOME, new RegExp(`^DATA_HOME='${RUNNER_HOME}'$`, 'm'))
+  assert.match(withoutComments(sourceOf('runners')), /prepareHome: PREPARE_HOME,/)
+})
+
 test('no minCpuPlatform is asked of a family that has exactly one', () => {
   // The floor N2 needed. On N4 naming an older platform is rejected rather than
   // read as a minimum already met. The argument, not the prose: the comment
-  // above `BOOT_DISK_TYPE` says why it is gone, and should keep saying so.
+  // above `DISK_TYPE` says why it is gone, and should keep saying so.
   assert.equal(/^\s*minCpuPlatform:/m.test(sourceOf('runners')), false)
 })
 
@@ -1493,6 +1583,56 @@ test('the fixed GKE and proxy ranges neither overlap nor collide with Private Se
   }
 })
 
+test('run.app answers privately, through Private Google Access', () => {
+  /*
+   * The silence this replaces: the collector's `run.app` name is a public
+   * address, `ingress: internal` is an ACL at Google's front end rather than a
+   * private endpoint, and the API reaches it with `PRIVATE_RANGES_ONLY` egress
+   * — which leaves a public destination on Cloud Run's own path. So every OTLP
+   * export from the API is refused with a 404 while the service looks healthy.
+   */
+  const source = sourceOf('network')
+
+  // Private, and bound to this network. A zone left public would divert
+  // `run.app` for readers far outside it.
+  assert.match(source, /dnsName: RUN_APP_ZONE,/)
+  assert.match(source, /visibility: 'private',/)
+  assert.match(source, /privateVisibilityConfig: \{ networks: \[\{ networkUrl: network\.id \}\] \}/)
+
+  // The apex carries the addresses and the wildcard points at the apex, which is
+  // the shape the Private Google Access guide prescribes for `run.app`.
+  assert.match(source, /name: RUN_APP_ZONE,\n\s+type: 'A',/)
+  assert.match(source, /rrdatas: PRIVATE_GOOGLE_ACCESS_ADDRESSES,/)
+  assert.match(source, /name: `\*\.\$\{RUN_APP_ZONE\}`,\n\s+type: 'CNAME',\n\s+ttl: 60,\n\s+rrdatas: \[RUN_APP_ZONE\],/)
+
+  // The addresses only answer through the network if the subnets the callers
+  // leave from have Private Google Access; both do, and both must keep it.
+  const withGoogleAccess = (source.match(/privateIpGoogleAccess: true,/g) ?? []).length
+  assert.equal(withGoogleAccess, 2, 'the workload subnet and the Cloud Run egress subnet both need Private Google Access')
+
+  // And workloads wait for the records, or one that starts early resolves the
+  // public address and keeps it for as long as its resolver caches it.
+  assert.match(source, /ready: \[\n\s+privateServiceAccess,\n(?:\s+\/\/.*\n)*\s+\.\.\.runAppRecords,/)
+})
+
+test('the run.app addresses are the private.googleapis.com range', () => {
+  /*
+   * `private.googleapis.com` is `199.36.153.8/30`, and the Private Google Access
+   * guide lists `*.run.app` on its row. An address outside that range is not a
+   * Private Google Access address at all, so `PRIVATE_RANGES_ONLY` would leave
+   * the API on its public path while the zone looked correct.
+   */
+  const privateRange = rangeOf('199.36.153.8/30')
+  const addresses = PRIVATE_GOOGLE_ACCESS_ADDRESSES.map((address) => rangeOf(`${address}/32`).first)
+  assert.equal(new Set(addresses).size, 4, 'all four private.googleapis.com addresses, once each')
+  for (const address of addresses) {
+    assert.ok(
+      address >= privateRange.first && address <= privateRange.last,
+      `${address} is outside private.googleapis.com (199.36.153.8/30)`,
+    )
+  }
+})
+
 test('the ClickStack publication is named what the console looks for', () => {
   /*
    * Two repositories meet at a string. Backoffice's preflight composes
@@ -1613,4 +1753,186 @@ test('the runner is fenced off one address, not off the internet, and only once 
   assert.match(source, /targetServiceAccounts: \[runnerAccount\]/)
   assert.equal(/destinationRanges: \['0\.0\.0\.0\/0'\]/.test(source), false, 'the deny covers the internet')
   assert.match(source, /\{ dependsOn: \[internalForwarding, internalRecord\] \}/)
+})
+
+// ── the registry proxy ──────────────────────────────────────────────────────
+
+test('the registry proxy is invocable by everyone, because its callers cannot carry an identity', () => {
+  /*
+   * A caller here is the runtime pulling an image, and the registry protocol's
+   * own Authorization header already carries the runner's Basic credential.
+   * There is no second header for a Google identity token, so a named invoker
+   * authorises nothing that ever calls — every service account reaches it and
+   * the runtime that matters is refused 403.
+   */
+  assert.match(sourceOf('registry-proxy'), /member: 'allUsers'/)
+})
+
+test('and its ingress is internal, which is the other half of that pair', () => {
+  /*
+   * With everyone as invoker, the ingress is the whole restriction. Widening it
+   * is a one-word edit that puts an authenticated relay on the internet, and no
+   * type or apply would object.
+   */
+  const ingress = /ingress: '([A-Z_]+)'/.exec(sourceOf('registry-proxy'))?.[1]
+  assert.ok(ingress, 'the registry proxy declares no ingress at all')
+  assert.ok(
+    ['INGRESS_TRAFFIC_INTERNAL_ONLY', 'INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER'].includes(ingress),
+    `allUsers may invoke the registry proxy and its ingress is ${ingress}; that pair is a public relay`,
+  )
+})
+
+test('the registry proxy may stream a response for an hour', () => {
+  /*
+   * A blob is one response and a large layer takes minutes. Cloud Run's default
+   * request deadline is five, and a pull cut off there fails with a truncated
+   * body rather than a timeout the runtime could recognise and retry.
+   */
+  assert.match(sourceOf('registry-proxy'), /timeout: '3600s'/)
+})
+
+test('the registry proxy is spoken to over HTTP/2', () => {
+  /*
+   * Cloud Run caps an HTTP/1 response at 32 MiB unless it is chunked, and a
+   * blob relayed with the upstream's own Content-Length is not. Over HTTP/1
+   * every layer past that size fails here and nowhere else — locally, in every
+   * test, it streams fine.
+   */
+  assert.match(sourceOf('registry-proxy'), /ports: \[\{ name: 'h2c', containerPort: REGISTRY_PROXY_PORT \}\]/)
+})
+
+test('the registry proxy runs as its own account, not the control plane’s', () => {
+  /*
+   * What it holds differs from what the API holds: it is the one process that
+   * reads registry credentials. An account shared with the API would hand the
+   * control plane that read too.
+   */
+  const index = readFileSync(fileURLToPath(new URL('../stack/providers/gcp/index.ts', import.meta.url)), 'utf8')
+  const wiring = /registryProxy: \(\{ network, dependsOn(?:, \w+)* \}\) =>[\s\S]*?\}\),/.exec(index)?.[0]
+  assert.ok(wiring, 'the GCP bundle wires no registry proxy')
+  assert.match(wiring, /placement: placement\(network, 'registry-proxy'\)/)
+  assert.doesNotMatch(wiring, /placement\(network, 'api'\)/)
+})
+
+test('the registry proxy’s contract matches the binary it deploys', () => {
+  /*
+   * The port, the control-plane variable and the health route are said twice:
+   * once in `stack/registry-proxy.ts`, once in the Go binary they describe.
+   * Each language checks its own half, and nothing checks that the halves
+   * agree — so a default changed on one side deploys a revision that never
+   * passes its first probe, or one that asks no control plane at all.
+   */
+  const service = fileURLToPath(new URL('../../../image-service/', import.meta.url))
+  const config = readFileSync(`${service}cmd/registry-proxy/config/config.go`, 'utf8')
+  const server = readFileSync(`${service}internal/proxy/server.go`, 'utf8')
+
+  assert.match(
+    config,
+    new RegExp(`envconfig:"${REGISTRY_PROXY_PORT_VARIABLE}" default:"${REGISTRY_PROXY_PORT}"`),
+    `the binary does not listen on ${REGISTRY_PROXY_PORT} by default under ${REGISTRY_PROXY_PORT_VARIABLE}`,
+  )
+  assert.match(
+    config,
+    new RegExp(`envconfig:"${REGISTRY_PROXY_CONTROL_PLANE_VARIABLE}"`),
+    `the binary does not read its control plane from ${REGISTRY_PROXY_CONTROL_PLANE_VARIABLE}`,
+  )
+  assert.match(
+    server,
+    new RegExp(`HealthPath = "${REGISTRY_PROXY_HEALTH_PATH}"`),
+    `the binary serves no health route at ${REGISTRY_PROXY_HEALTH_PATH}`,
+  )
+})
+
+test('the API can write registry passwords and cannot read one back', () => {
+  /*
+   * The API's half of the read/write split, as the permissions it is given.
+   * `versions.access` is the read. `setIamPolicy` would let it grant itself
+   * that read. `secrets.delete` would skip the seven days a destroyed version
+   * waits before the password is gone. None of the three may appear, and
+   * nothing beyond the three it calls may either.
+   */
+  const granted = [...REGISTRY_SECRET_CREATE_PERMISSIONS, ...REGISTRY_SECRET_WRITE_PERMISSIONS].sort()
+  assert.deepEqual(granted, [
+    'secretmanager.secrets.create',
+    'secretmanager.versions.add',
+    'secretmanager.versions.destroy',
+  ])
+
+  // Read out of each grant's own block, for the reason the runner test gives.
+  const grants = projectIamBlocks(withoutComments(sourceOf('api')))
+  const grantNamed = (suffix: string): string => {
+    const found = grants.filter((block) => block.includes(`ApiCapability\${index}${suffix}\``))
+    assert.equal(found.length, 1, `expected one ${suffix} grant, found ${found.length}`)
+    return found[0]
+  }
+  assert.match(grantNamed('Write'), /role: writeRole,[\s\S]*condition,/, 'the version writes are not bounded')
+  assert.doesNotMatch(grantNamed('Create'), /condition/, 'a create is authorized before the name exists')
+
+  assert.match(
+    sourceOf('registry-credentials'),
+    /resource\.name\.startsWith\("projects\/\$\{projectNumber\}\/secrets\/\$\{REGISTRY_SECRET_PREFIX\}"\)/,
+    'the condition no longer bounds the grant to the credentials\' secrets',
+  )
+})
+
+test('the API names its secrets and its store the way the stack grants them', () => {
+  /*
+   * The prefix and the store's variable are said twice, once here and once in
+   * the API. A prefix changed on one side leaves every write refused; a
+   * variable renamed on one side leaves private registries off with the grant
+   * still in place.
+   */
+  const api = fileURLToPath(new URL('../../../api/src/', import.meta.url))
+  const store = readFileSync(`${api}registry/stores/secret.store.ts`, 'utf8')
+  const configuration = readFileSync(`${api}config/configuration.ts`, 'utf8')
+
+  assert.match(store, new RegExp(`REGISTRY_SECRET_PREFIX = '${REGISTRY_SECRET_PREFIX}'`))
+  assert.match(configuration, new RegExp(`process\\.env\\.${REGISTRY_SECRET_STORE_VARIABLE}\\b`))
+  assert.match(store, /backend === 'gcp'/, 'the API no longer answers to the value the stack writes')
+})
+
+test('the registry proxy can read registry passwords and write none', () => {
+  /*
+   * The proxy's half of the split. `secretAccessor` is reading and nothing
+   * else; any other role here is a write the API's half was built to keep
+   * from a single process. Bound by the same prefix condition, so the stack's
+   * own secrets — the database password among them — stay out of reach.
+   */
+  assert.equal(REGISTRY_SECRET_READ_ROLE, 'roles/secretmanager.secretAccessor')
+
+  const grants = projectIamBlocks(withoutComments(sourceOf('registry-proxy')))
+  assert.equal(grants.length, 1, `expected the one read grant, found ${grants.length}`)
+  assert.match(grants[0], /role: registryCredentials\.binding\.readRole,/)
+  assert.match(grants[0], /condition: registryCredentials\.binding\.condition,/, 'the read is not bounded')
+})
+
+test('the proxy, the API and the runner read the same registries and the same host', () => {
+  /*
+   * Said four times: here, in the proxy's config, in the API's fallback, and
+   * in the runner's config. The stack writes both variables, so the defaults
+   * matter where it writes nothing — a local stack — and a mismatch there is a
+   * login the API accepts for a registry the proxy then refuses.
+   */
+  const service = fileURLToPath(new URL('../../../image-service/', import.meta.url))
+  const api = fileURLToPath(new URL('../../../api/src/', import.meta.url))
+  const runner = fileURLToPath(new URL('../../../runner/', import.meta.url))
+  // The hosts are compared as text, never built into a pattern: an unescaped
+  // `.` in `us.gcr.io` would also match `usXgcr.io`.
+  const proxyDefault = readFileSync(`${service}cmd/registry-proxy/config/config.go`, 'utf8').match(
+    new RegExp(`envconfig:"${REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE}" default:"([^"]*)"`),
+  )
+  assert.equal(proxyDefault?.[1], REGISTRY_PROXY_UPSTREAM_HOSTS.join(','))
+  const apiProxy = readFileSync(`${api}registry/utils/registry-proxy.util.ts`, 'utf8')
+  assert.match(apiProxy, new RegExp(`'${REGISTRY_PROXY_UPSTREAM_HOSTS_VARIABLE}'`))
+  // However the formatter wraps the array: the same hosts, in the same order.
+  const fallback = apiProxy.match(/FALLBACK_CREDENTIALED_HOSTS = \[([^\]]*)\]/)
+  assert.deepEqual(
+    [...(fallback?.[1] ?? '').matchAll(/'([^']*)'/g)].map((quoted) => quoted[1]),
+    REGISTRY_PROXY_UPSTREAM_HOSTS,
+  )
+  assert.match(apiProxy, new RegExp(`'${REGISTRY_PROXY_HOST_VARIABLE}'`))
+  assert.match(
+    readFileSync(`${runner}cmd/runner/config/config.go`, 'utf8'),
+    new RegExp(`envconfig:"${REGISTRY_PROXY_HOST_VARIABLE}"`),
+  )
 })

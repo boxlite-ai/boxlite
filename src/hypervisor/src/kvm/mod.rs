@@ -13,6 +13,12 @@ pub use kick::KvmVcpuHandle;
 mod memory;
 
 #[cfg(target_arch = "x86_64")]
+mod registers;
+
+#[cfg(target_arch = "x86_64")]
+mod features;
+
+#[cfg(target_arch = "x86_64")]
 mod vcpu;
 
 #[cfg(target_arch = "x86_64")]

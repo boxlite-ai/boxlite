@@ -37,6 +37,19 @@ pub struct ImageObject {
     blob_source: BlobSource,
 }
 
+/// What an image reference resolved to, as the registry identifies it.
+///
+/// Recorded with the box whose disk it built — see
+/// [`BoxInfo::resolved_image`](crate::runtime::types::BoxInfo::resolved_image)
+/// — so a caller that handed over a mutable tag can learn which build it got.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedImage {
+    /// The registry's digest — see [`ImageObject::manifest_digest`].
+    pub manifest_digest: String,
+    /// Declared on-registry size in bytes — see [`ImageObject::total_layer_size`].
+    pub total_layer_size: i64,
+}
+
 impl ImageObject {
     /// Create new ImageObject (internal use only)
     pub(super) fn new(reference: String, manifest: ImageManifest, blob_source: BlobSource) -> Self {
@@ -71,6 +84,34 @@ impl ImageObject {
     #[allow(dead_code)]
     pub fn config_digest(&self) -> &str {
         &self.manifest.config_digest
+    }
+
+    /// The registry's own digest for this image — what `<repo>@sha256:…` names.
+    ///
+    /// For a multi-platform image this is the platform-specific manifest's
+    /// digest, not the index's, because that is the one that identifies the
+    /// bytes this host actually pulled.
+    ///
+    /// Not [`Self::compute_image_digest`]: that one is a hash of the layer
+    /// digest list, used as a host-side base-disk cache key. The two are never
+    /// equal, and confusing them would publish a value no registry can resolve.
+    pub fn manifest_digest(&self) -> &str {
+        &self.manifest.manifest_digest
+    }
+
+    /// Sum of the layer sizes the manifest declared, in bytes.
+    ///
+    /// A layer whose size the manifest did not declare (`size <= 0`) counts as
+    /// zero rather than as itself: the total is reported as an approximate
+    /// on-registry size, and a negative sentinel would make it read as smaller
+    /// than the layers that are known.
+    pub fn total_layer_size(&self) -> i64 {
+        self.manifest
+            .layers
+            .iter()
+            .filter(|layer| layer.size > 0)
+            .map(|layer| layer.size)
+            .sum()
     }
 
     /// Get number of layers
@@ -344,10 +385,14 @@ mod tests {
     use tempfile::TempDir;
 
     fn layer(digest: &str) -> LayerInfo {
+        sized_layer(digest, 1)
+    }
+
+    fn sized_layer(digest: &str, size: i64) -> LayerInfo {
         LayerInfo {
             digest: digest.to_string(),
             media_type: "application/vnd.oci.image.layer.v1.tar+gzip".to_string(),
-            size: 1,
+            size,
         }
     }
 
@@ -384,6 +429,74 @@ mod tests {
             diff_ids,
         };
         ImageObject::new("test:image".to_string(), manifest, blob_source)
+    }
+
+    /// The value that goes into the catalog and gets handed back to a runner as
+    /// `<repo>@<digest>`. `compute_image_digest` is a host-side cache key over
+    /// the layer digest list; publishing that one instead would produce a ref no
+    /// registry can resolve, and both are `sha256:`-shaped strings on the same
+    /// type, so the inequality is asserted rather than assumed.
+    #[test]
+    fn manifest_digest_is_the_registry_digest_and_not_the_cache_key() {
+        let obj = object_with(
+            vec![layer(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )],
+            vec![],
+            local_bundle_blob_source(),
+        );
+
+        // The fixture gives the manifest and the config different digests, so
+        // this says which field is returned rather than only that one is.
+        assert_eq!(
+            obj.manifest_digest(),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        assert_ne!(obj.manifest_digest(), obj.config_digest());
+        assert_ne!(obj.manifest_digest(), obj.compute_image_digest());
+    }
+
+    #[test]
+    fn total_layer_size_adds_the_declared_sizes() {
+        let obj = object_with(
+            vec![
+                sized_layer(
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    100,
+                ),
+                sized_layer(
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    23,
+                ),
+            ],
+            vec![],
+            local_bundle_blob_source(),
+        );
+
+        assert_eq!(obj.total_layer_size(), 123);
+    }
+
+    /// `size <= 0` is the manifest saying it does not know, which is why the
+    /// download path skips size validation for those layers. Adding the
+    /// sentinel would report a total smaller than the layers that are known.
+    #[test]
+    fn total_layer_size_counts_an_undeclared_layer_as_zero() {
+        let obj = object_with(
+            vec![
+                sized_layer(
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    100,
+                ),
+                sized_layer(
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    -1,
+                ),
+            ],
+            vec![],
+            local_bundle_blob_source(),
+        );
+
+        assert_eq!(obj.total_layer_size(), 100);
     }
 
     // A config that declares a different number of diff_ids than there are layers

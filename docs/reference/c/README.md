@@ -44,6 +44,9 @@ The SDK provides two API styles:
   - [Network Tunnels](#network-tunnels)
   - [Command Execution](#command-execution)
   - [Discovery & Introspection](#discovery--introspection)
+  - [Images](#images)
+  - [Registries](#registries)
+  - [Guest SSH Control](#guest-ssh-control)
   - [Metrics](#metrics)
 - [Memory Management](#memory-management)
 - [Thread Safety](#thread-safety)
@@ -709,6 +712,11 @@ BoxliteErrorCode boxlite_network_tunnel(
     CBoxTunnelHandle** out_tunnel,
     CBoxliteError* out_error
 );
+BoxliteErrorCode boxlite_network_revoke_tunnel(
+    CBoxNetworkHandle* network,
+    uint16_t port,
+    CBoxliteError* out_error
+);
 BoxliteErrorCode boxlite_tunnel_uri(
     CBoxTunnelHandle* tunnel,
     char** out_uri,
@@ -752,6 +760,10 @@ Each `CBoxTunnelHandle` is one-shot. Choose `boxlite_tunnel_connect()` or
 `boxlite_tunnel_uri()` reports where a remotely served tunnel can be reached, as
 an allocated string the caller frees with `boxlite_free_string()`. It writes NULL
 for a local tunnel.
+
+`boxlite_network_revoke_tunnel()` withdraws the public URL of `port`. It is
+safe to repeat, leaves open connections running, and does nothing for a local
+box.
 
 `boxlite_tunnel_forward()` creates a TCP or Unix listener from the tunnel. Its
 wait and close callbacks are posted exactly once through the parent runtime's
@@ -1022,6 +1034,213 @@ alive until the completion has been drained.
 
 ---
 
+### Images
+
+`boxlite_runtime_images()` returns a `CBoxliteImageHandle*` for the images a
+runtime can boot from: the local cache on a runtime from
+`boxlite_runtime_new()`, the server's catalog on one from
+`boxlite_rest_runtime_new_with_options()`. List, get and remove run unchanged
+against either; pull is local only and usage REST only. Free the handle with
+`boxlite_image_free()`.
+
+| Function | Local runtime | REST runtime |
+|----------|---------------|--------------|
+| `boxlite_image_pull()` | Pulls into the cache | `Unsupported`: creating a box pulls |
+| `boxlite_image_list()` | One row per cached reference | Catalog alias and digest references |
+| `boxlite_image_get()` | The cache entries under the name | The catalog entry with its versions |
+| `boxlite_image_remove()` | Forgets the name; layers stay | Removes the catalog entry; `InvalidState` while a box can boot from it |
+| `boxlite_image_usage()` | `Unsupported` | `count`, `limit`, `known_bytes` |
+| `boxlite_image_create_alias()` | `Unsupported` | Creates a new alias; existing names conflict |
+| `boxlite_image_delete_alias()` | `Unsupported` | Removes only the named alias |
+
+```c
+BoxliteErrorCode boxlite_image_get(
+    CBoxliteImageHandle* handle,
+    const char* name,
+    CBoxImageGetCb cb,          // void (*)(CImageDetail*, CBoxliteError*, void*)
+    void* user_data,
+    CBoxliteError* out_error
+);
+
+BoxliteErrorCode boxlite_image_remove(
+    CBoxliteImageHandle* handle,
+    const char* name,
+    CBoxImageRemoveCb cb,       // void (*)(CBoxliteError*, void*)
+    void* user_data,
+    CBoxliteError* out_error
+);
+
+BoxliteErrorCode boxlite_image_usage(
+    CBoxliteImageHandle* handle,
+    CBoxImageUsageCb cb,        // void (*)(CImageUsage*, CBoxliteError*, void*)
+    void* user_data,
+    CBoxliteError* out_error
+);
+
+BoxliteErrorCode boxlite_image_create_alias(
+    CBoxliteImageHandle* handle,
+    const char* name,
+    const char* alias,
+    const char* digest,         // "sha256:" and 64 lowercase hex digits
+    CBoxImageGetCb cb,          // the image as it now is, as for a get
+    void* user_data,
+    CBoxliteError* out_error
+);
+```
+
+These operations follow the post-and-drain contract of the info functions: `Ok`
+means queued, and the callback runs in `boxlite_runtime_drain()`. `name` is
+an image name such as `"docker.io/library/alpine"`, copied before the call
+returns. A name the runtime does not hold reaches the callback as `NotFound`.
+A reference with a tag or digest (`"quay.io/acme/app:v1"`) reaches it as
+`InvalidArgument`, since a remove takes every alias of the name. Locally, a box
+built from a removed image reads the image's configuration from the registry
+when it next starts. `boxlite_image_create_alias()` copies `alias` and `digest` as it
+does `name`; an alias that does not use OCI tag syntax or a malformed digest
+reaches the callback as `InvalidArgument` before anything is sent.
+
+Alias creation returns `AlreadyExists` through the callback for every existing
+name, even when its digest matches. Explicit deletion uses the image-remove
+callback shape and removes no versions:
+
+```c
+BoxliteErrorCode boxlite_image_delete_alias(
+    CBoxliteImageHandle* handle, const char* name, const char* alias,
+    CBoxImageRemoveCb cb, void* user_data, CBoxliteError* out_error
+);
+```
+
+A catalog fills every field below; a local cache fills a version's `aliases` and
+leaves its optional times unset and `history` empty.
+
+| Type | Fields | Ownership |
+|------|--------|-----------|
+| `CImageDetail` | `name`, `aliases`/`aliases_count`, `curated` (non-zero for operator-provided images), `versions`/`versions_count` (newest first), `history`/`history_count` (alias registration history, newest first) | The callback owns it; free with `boxlite_free_image_detail()` |
+| `CImageVersion` | `digest`, `size_bytes` (valid when `has_size` is non-zero), `source_ref`, `recorded_at` (Unix seconds), `aliases`/`aliases_count`, `last_used_at` and `upstream_missing_at` (Unix seconds, valid when `has_last_used_at` / `has_upstream_missing_at` is non-zero) | Owned by its `CImageDetail` |
+| `CImageAliasEvent` | `alias`, `from_digest` (NULL for alias creation), `to_digest`, `actor` (NULL when a pull seeded the alias), `recorded_at` (Unix seconds) | Owned by its `CImageDetail` |
+| `CImageUsage` | `count`, `limit`, `known_bytes` | Borrowed for the callback; nothing to free |
+
+```c
+static void on_detail(CImageDetail* detail, CBoxliteError* error,
+                      void* user_data) {
+    int* done = user_data;
+    if (error->code == Ok) {
+        for (int i = 0; i < detail->versions_count; ++i) {
+            printf("%s %s\n", detail->name, detail->versions[i].digest);
+        }
+        boxlite_free_image_detail(detail);
+    } else {
+        fprintf(stderr, "get failed: %s\n", error->message);
+    }
+    *done = 1;
+}
+
+CBoxliteImageHandle* images = NULL;
+if (boxlite_runtime_images(runtime, &images, &error) == Ok) {
+    int done = 0;
+    if (boxlite_image_get(images, "docker.io/library/alpine", on_detail,
+                          &done, &error) == Ok) {
+        while (!done && boxlite_runtime_drain(runtime, -1, &error) >= 0) {
+        }
+    }
+    boxlite_image_free(images);
+}
+if (error.code != Ok) {
+    boxlite_error_free(&error);
+}
+```
+
+---
+
+### Registries
+
+`boxlite_image_registries()` returns a `CBoxliteRegistryHandle*` for the
+logins a REST server presents when it pulls a private image for a box. A
+runtime from `boxlite_runtime_new()` answers `Unsupported`: it pulls with the
+logins in its `image_registries` option instead. Free the handle with
+`boxlite_registry_free()`.
+
+```c
+BoxliteErrorCode boxlite_registry_list(
+    CBoxliteRegistryHandle* handle,
+    CBoxRegistryListCb cb,      // void (*)(CRegistryCredentialList*, CBoxliteError*, void*)
+    void* user_data,
+    CBoxliteError* out_error
+);
+
+BoxliteErrorCode boxlite_registry_create(
+    CBoxliteRegistryHandle* handle,
+    const char* registry_host,      // e.g. "ghcr.io"
+    const char* repository_prefix,  // e.g. "acme/"; NULL for the whole registry
+    const char* username,
+    const char* password,
+    CBoxRegistryCreateCb cb,    // void (*)(CRegistryCredential*, CBoxliteError*, void*)
+    void* user_data,
+    CBoxliteError* out_error
+);
+
+BoxliteErrorCode boxlite_registry_remove(
+    CBoxliteRegistryHandle* handle,
+    const char* id,
+    CBoxRegistryRemoveCb cb,    // void (*)(CBoxliteError*, void*)
+    void* user_data,
+    CBoxliteError* out_error
+);
+```
+
+All three follow the post-and-drain contract of the image functions. The
+strings are copied before the call returns, and the password is sent once and
+never returned. The callback receives `AlreadyExists` for a second login for
+the same registry and prefix, `InvalidState` (naming the boxes) for removing a
+login a box still pulls through, and `NotFound` for an unknown id. An id that
+is not a UUID reaches it as `InvalidArgument` without a request.
+
+| Type | Fields | Ownership |
+|------|--------|-----------|
+| `CRegistryCredential` | `id`, `registry_host`, `repository_prefix` (empty for the whole registry), `username`, `created_by` (NULL when unknown), `created_at` (Unix seconds); no password | From a create callback, owned; free with `boxlite_free_registry_credential()` |
+| `CRegistryCredentialList` | `items`/`count` | The callback owns it; free with `boxlite_free_registry_credential_list()` |
+
+Registry strings are non-null, except `created_by` when unknown. If any
+server-returned field contains an interior NUL byte, create and list callbacks
+receive `Internal` and no result. The SDK rejects the response without changing
+credential IDs; list conversion frees any entries already converted.
+
+---
+
+### Guest SSH control
+
+These operations take a `CBoxHandle*` and follow the existing Native API
+callback convention.
+
+| Function | Additional input | Callback |
+|----------|------------------|----------|
+| `boxlite_box_ssh_configure` | `const char* config_json` | `CBoxSshConfigureCb` |
+| `boxlite_box_ssh_status` | None | `CBoxSshStatusCb` |
+| `boxlite_box_ssh_disable` | None | `CBoxSshDisableCb` |
+
+All three callbacks receive `CSshStatus*`. Its corresponding release function
+is `boxlite_free_ssh_status()`; the existing [memory management rules](#memory-management)
+apply.
+
+| `CSshStatus` field | C type |
+|-------------------|--------|
+| `enabled` | `int` (non-zero when enabled) |
+| `generation` | `uint64_t` |
+| `listen_address` | `char*` |
+| `host_public_key` | `char*` |
+| `host_key_fingerprint` | `char*` |
+
+`config_json` must be UTF-8 JSON and only needs to remain valid for the call.
+Malformed JSON or non-UTF-8 input returns `InvalidArgument` with
+`invalid SSH configuration`, without echoing rejected values. Operation
+failures are reported through the callback.
+
+The configuration fields are `listen_address`, `host_private_key`, and
+`accounts` of `login`, `authorized_keys`, and optional `ca` with `public_key`
+and `principal`.
+
+---
+
 ### Metrics
 
 #### boxlite_runtime_metrics
@@ -1069,6 +1288,7 @@ BoxliteErrorCode boxlite_box_metrics(
    - `CBoxInfoList` → `boxlite_free_box_info_list()`
    - `CImagePullResult` → `boxlite_free_image_pull_result()`
    - `CImageInfoList` → `boxlite_free_image_info_list()`
+   - `CImageDetail` → `boxlite_free_image_detail()`
 
 4. **All cleanup functions are NULL-safe**
 
@@ -1244,6 +1464,23 @@ if (code != Ok) {
 | `boxlite_execute()` | Execute command |
 | `boxlite_list_info()` | Queue box list lookup |
 | `boxlite_get_info()` | Queue box info lookup by ID |
+| `boxlite_runtime_images()` | Get the image handle |
+| `boxlite_image_pull()` | Queue an image pull (local runtimes) |
+| `boxlite_image_list()` | Queue an image list |
+| `boxlite_image_get()` | Queue a read of an image name's builds |
+| `boxlite_image_remove()` | Queue removal of an image name |
+| `boxlite_image_usage()` | Queue a read of the image allowance (REST runtimes) |
+| `boxlite_image_create_alias()` | Create a catalog alias; existing names conflict (REST runtimes) |
+| `boxlite_image_delete_alias()` | Delete one catalog alias (REST runtimes) |
+| `boxlite_image_free()` | Free the image handle |
+| `boxlite_free_image_detail()` | Free an image detail |
+| `boxlite_image_registries()` | Get the registry login handle (REST runtimes) |
+| `boxlite_registry_list()` | Queue a list of registry logins |
+| `boxlite_registry_create()` | Queue adding a registry login |
+| `boxlite_registry_remove()` | Queue removing a registry login |
+| `boxlite_registry_free()` | Free the registry login handle |
+| `boxlite_free_registry_credential()` | Free a registry login |
+| `boxlite_free_registry_credential_list()` | Free a registry login list |
 | `boxlite_simple_new()` | Create simple box |
 | `boxlite_simple_run()` | Run command (simple) |
 | `boxlite_simple_free()` | Free simple box |

@@ -41,28 +41,84 @@ for (const path of ['sdks/go/README.md', 'sdks/python/README.md', 'sdks/node/REA
   })
 }
 
+test('SDK test documentation does not rebuild SDKs: sdks/python/tests/README.md', () => {
+  assert.deepEqual(testSuites(['sdks/python/tests/README.md']), [])
+})
+
+// The infra job runs the script tests on any tests/scripts change; that
+// directory's prose still builds no SDK.
+test('script test documentation selects only the infra suite: tests/scripts/README.md', () => {
+  assert.deepEqual(testSuites(['tests/scripts/README.md']), ['infra'])
+})
+
 for (const [path, expected] of [
   ['sdks/go/options.go', ['go']],
   ['apps/runner/cmd/runner/main.go', ['go']],
-  ['sdks/python/boxlite/options.py', ['python']],
+  ['sdks/python/boxlite/options.py', ['rust', 'python']],
+  ['sdks/python/boxlite/sync_api/_ssh.py', ['rust', 'python']],
+  ['sdks/python/tests/test_ssh_native_rest.py', ['rust', 'python']],
+  ['scripts/test/coverage-bindings.sh', ['rust', 'infra']],
+  ['tests/scripts/test_native_coverage.py', ['rust', 'infra']],
   ['sdks/node/lib/options.ts', ['node']],
   ['src/cli/src/main.rs', ['rust']],
-  ['make/coverage.mk', ['rust', 'python', 'node', 'go']],
+  ['src/vmm/src/vm.rs', ['rust', 'vmm']],
+  ['src/vmm/boot/kernel.lock', ['rust', 'vmm']],
+  ['make/coverage.mk', ['rust', 'vmm', 'python', 'node', 'go']],
   ['make/quality.mk', ['go']],
   ['.github/workflows/lint.yml', ['go', 'infra']],
+  ['openapi/box.openapi.yaml', ['rust', 'api']],
+  ['openapi/admin.openapi.yaml', ['rust', 'api']],
 ] as const) {
   test(`source and shared recipes retain their tests: ${path}`, () => {
     assert.deepEqual(testSuites(['docs/README.md', path]), [...expected])
   })
 }
 
-// Anything the `go` filter selects on must also reach the workflow that runs
+// Anything a suite filter selects on must also reach the workflow that runs
 // the filter, or a push to main changes the suite's inputs and tests nothing.
-for (const path of ['apps/runner/cmd/runner/main.go', 'apps/go.work', 'apps/go.work.sum']) {
-  test(`a push that selects the go suite reaches the Test workflow: ${path}`, () => {
+for (const path of ['apps/runner/cmd/runner/main.go', 'apps/go.work', 'apps/go.work.sum', 'openapi/box.openapi.yaml', 'openapi/admin.openapi.yaml']) {
+  test(`a push that selects a suite reaches the Test workflow: ${path}`, () => {
     assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
   })
 }
+
+// The rust job runs the external coverage collector; its inputs must also
+// reach the workflow on push, or a main-branch change tests nothing.
+for (const path of ['scripts/test/coverage-bindings.sh', 'tests/scripts/test_native_coverage.py']) {
+  test(`a push that selects the rust suite reaches the Test workflow: ${path}`, () => {
+    assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
+  })
+}
+
+// The nix job rebuilds the CLI in the flake dev shell; it must follow every
+// input of `make cli` there, including on push to main, and nothing else.
+for (const path of ['flake.nix', 'flake.lock', 'src/deps/libkrun-sys/build.rs', 'src/shared/build.rs',
+  'scripts/build/build-shim.sh', 'scripts/common.sh', 'scripts/setup/setup-common.sh', 'make/build.mk',
+  'Cargo.lock', 'rust-toolchain.toml', '.github/actions/sccache/action.yml']) {
+  test(`a change to a dev shell build input runs the nix job: ${path}`, () => {
+    assert.ok(testSuites([path]).includes('nix'))
+    assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
+  })
+}
+
+for (const path of ['docs/README.md', 'make/help.mk', 'src/deps/libkrun-sys/README.md', 'sdks/go/options.go']) {
+  test(`a change outside the dev shell build skips the nix job: ${path}`, () => {
+    assert.ok(!testSuites([path]).includes('nix'))
+  })
+}
+
+test('the nix job reports without blocking the required conclusion', () => {
+  const jobs = workflow('test.yml').jobs
+  assert.equal(jobs.nix.if, "needs.changes.outputs.nix == 'true'")
+  assert.ok(!jobs['test-conclusion'].needs.includes('nix'), 'nix stays non-blocking until it proves stable')
+  // The weekly run skips it: flake.lock pins its inputs. Dispatch still runs it.
+  for (const [event, expected] of [['schedule', false], ['workflow_dispatch', true]] as const) {
+    const selected = runInNewContext(jobs.changes.outputs.nix.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), {
+      github: { event_name: event }, steps: { filter: { outputs: {} } },
+    }, { timeout: 1000 })
+    assert.equal(selected, expected, event)
+  }
+})
 
 for (const [name, events] of [
   ['codeql.yml', ['pull_request', 'push']],
@@ -131,7 +187,54 @@ for (const result of ['skipped', 'success', 'failure', 'cancelled']) {
 }
 
 const coverageWorkflow: any = loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows/test.yml'), 'utf8'))
-const coverageSuites = ['rust', 'python', 'node', 'go', 'api', 'dashboard']
+const coverageSuites = ['rust', 'python', 'node', 'go', 'api', 'dashboard', 'plugins']
+
+for (const path of ['scripts/plugins/boxlite.py', 'scripts/plugins/.coveragerc',
+  'tests/plugins/test_boxlite_package.py', 'plugins/boxlite/skills/boxlite-setup/SKILL.md',
+  'plugins/boxlite/.codex-plugin/plugin.json', 'make/plugins.mk', '.agents/plugins/marketplace.json']) {
+  test(`plugin inputs select real coverage on PRs and main pushes: ${path}`, () => {
+    assert.deepEqual(testSuites([path]), ['plugins'])
+    assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
+  })
+}
+
+test('repository marketplace-only pushes reach plugin coverage workflow', () => {
+  assert.equal(acceptsFiles('test.yml', 'push', ['.agents/plugins/marketplace.json']), true)
+})
+
+test('plugin coverage runs on drafts and propagates report/upload failures', () => {
+  const jobs = coverageWorkflow.jobs
+  const job = jobs.plugins
+  assert.ok(job, 'plugin source changes need a real coverage job')
+  const evaluate = (expression: string, context: any) => runInNewContext(
+    expression.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), context, { timeout: 1000 })
+  for (const event of ['pull_request', 'push', 'merge_group', 'schedule', 'workflow_dispatch']) {
+    for (const selected of ['true', 'false']) {
+      const github = { event_name: event, event: { pull_request: { draft: true } } }
+      const output = String(evaluate(jobs.changes.outputs.plugins, { github, steps: { filter: { outputs: { plugins: selected } } } }))
+      assert.equal(evaluate(job.if, { github, needs: { changes: { outputs: { plugins: output } } } }),
+        selected === 'true' || event === 'schedule' || event === 'workflow_dispatch')
+    }
+  }
+  assert.ok(job.steps.some((step: any) => step.run === 'make plugin:boxlite:coverage'))
+  const upload = job.steps.find((step: any) => step.uses?.startsWith('codecov/codecov-action@'))
+  assert.equal(upload?.with?.files, 'target/coverage/plugins/coverage.xml')
+  assert.equal(upload.with.flags, 'plugins')
+  assert.equal(upload.with.use_oidc, true)
+  assert.equal(upload.with.disable_search, true)
+  assert.equal(upload.with.fail_ci_if_error, true)
+  assert.equal(upload.with.force, undefined)
+  assert.equal(job.permissions['id-token'], 'write')
+  const conclusion = jobs['test-conclusion']
+  assert.ok(conclusion.needs.includes('plugins'))
+  for (const result of ['success', 'skipped', 'failure', 'cancelled']) {
+    const needs = Object.fromEntries(conclusion.needs.map((name: string) => [name, { result: name === 'plugins' ? result : 'success' }]))
+    const script = conclusion.steps[0].run.replaceAll('${{ toJSON(needs) }}', JSON.stringify(needs))
+    const run = spawnSync('bash', ['-eo', 'pipefail', '-c', script], { encoding: 'utf8', timeout: 10_000 })
+    assert.equal(run.error, undefined)
+    assert.equal(run.status === 0, result === 'success' || result === 'skipped', run.stderr)
+  }
+})
 
 function selectsEmptyCoverage(outputs: Record<string, string>, result = 'success', event = 'pull_request') {
   const job = coverageWorkflow.jobs['coverage-empty']
@@ -212,6 +315,74 @@ test('Linux x64 KVM hardware coverage joins unit profiles before upload', () => 
   }
   assert.equal(steps[hardwareAt]['continue-on-error'], undefined,
     'missing hardware or failed tests must fail CI')
+})
+
+test('Linux x64 builds the kernel and runs the boot tests only for vmm changes, before upload', () => {
+  const steps = workflow('test.yml').jobs.rust.steps
+  const kernelAt = steps.findIndex((step: any) => step.id === 'vmm-kernel')
+  const bootAt = steps.findIndex((step: any) => step.run === 'make coverage:vmm:boot')
+  const uploadAt = steps.findIndex((step: any) => step.uses?.startsWith('codecov/codecov-action'))
+  assert.ok(kernelAt >= 0 && kernelAt < bootAt && bootAt < uploadAt,
+    'the kernel must be restored before the boot tests, which must add coverage before upload')
+  for (const at of [kernelAt, bootAt]) {
+    for (const target of ['linux-x64-gnu', 'linux-arm64-gnu', 'darwin-arm64']) {
+      for (const vmm of ['true', 'false']) {
+        const expression = steps[at].if.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+        const context = { matrix: { platform: { target } }, needs: { changes: { outputs: { vmm } } } }
+        assert.equal(runInNewContext(expression, context), target === 'linux-x64-gnu' && vmm === 'true',
+          `${steps[at].name} on ${target} with vmm=${vmm}`)
+      }
+    }
+  }
+  assert.equal(steps[bootAt]['continue-on-error'], undefined, 'failed boot tests must fail CI')
+})
+
+// tests/scripts drives these scripts through fakes; the infra job runs it.
+for (const path of ['scripts/ci/gcp-e2e-vm.sh', 'scripts/test/coverage-bindings.sh', 'tests/scripts/test_gcp_e2e_vm.py']) {
+  test(`a change to a script under tests/scripts runs those tests: ${path}`, () => {
+    assert.ok(testSuites([path]).includes('infra'))
+    assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
+  })
+}
+
+test('the infra job runs the script tests', () => {
+  assert.ok(workflow('test.yml').jobs.infra.steps.some((step: any) => step.run === 'make test:unit:scripts'))
+})
+
+// The check below only guards the ignore list if editing that list runs it.
+test('a change to codecov.yml selects the suite that checks codecov.yml', () => {
+  assert.ok(testSuites(['codecov.yml']).includes('infra'))
+})
+
+// Codecov rejects the empty upload with "Testable files changed" when a changed
+// file is not ignored, so every test source has to match an ignore glob. Select by
+// any path carrying "test" or "spec" as a word: deliberately wider than the globs,
+// so a suite named by a convention nobody has added yet fails here rather than on
+// Codecov. That width is paid for by naming the production files that carry those
+// words. picomatch approximates Codecov's matcher, which ships no library to
+// test against.
+test('every test source is ignored, so a test-only change still qualifies for the empty upload', () => {
+  const production = [
+    '.github/workflows/test.yml',                    // runs the suites, is not one
+    'apps/libs/api-client-go/model_inbound_network_spec.go',   // generated client model
+    'apps/libs/api-client-go/model_outbound_network_spec.go',  // generated client model
+    'apps/libs/api-client/src/models/inbound-network-spec.ts', // generated client model
+    'apps/libs/api-client/src/models/outbound-network-spec.ts', // generated client model
+    'make/test.mk',                                  // the recipes it calls
+    'scripts/setup/setup-test.sh',                   // installs test tooling
+    'sdks/go/images_cgo_test_support_dev.go',        // dev-tag cgo bridge, shipped
+    'sdks/go/info_cgo_test_support_dev.go',          // dev-tag cgo bridge, shipped
+    'src/boxlite/examples/disk_attachment_test.rs',  // an example, built as one
+    'src/guest/src/container/spec.rs',               // the OCI runtime spec
+  ]
+  const ignore: string[] = (loadYaml(readFileSync(join(REPO_ROOT, 'codecov.yml'), 'utf8')) as any).ignore
+  const tracked = spawnSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 << 20 })
+  assert.equal(tracked.status, 0, tracked.stderr)
+  const testSources = tracked.stdout.trim().split('\n')
+    .filter((path) => /(^|[^a-z0-9])(test|spec)s?([^a-z0-9]|$)/i.test(path) && !production.includes(path))
+  assert.ok(testSources.length > 100, `expected the repo's test sources, found ${testSources.length}`)
+  const testable = testSources.filter((path) => !ignore.some((pattern) => matches(pattern, path)))
+  assert.deepEqual(testable, [], 'these test sources would count as a testable change')
 })
 
 function cliUnitTests(runner: 'cargo' | 'nextest', exitCode = 0) {

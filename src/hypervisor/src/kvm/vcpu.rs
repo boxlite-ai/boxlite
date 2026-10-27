@@ -16,11 +16,11 @@ use crate::{Error, Result, VcpuExit};
 /// A Linux x86_64 vCPU bound to its creating thread.
 ///
 /// Creation leaves KVM's reset register state intact and reserves the kick
-/// signal on this worker until drop. Boot configuration follows in M1.
+/// signal on this worker until drop. The caller supplies entry registers.
 #[derive(Debug)]
 pub struct KvmVcpu {
     pub(super) fd: VcpuFd,
-    id: u32,
+    pub(super) id: u32,
     run_size: usize,
     pending_io: PendingIo,
     kick: WorkerSignal,
@@ -49,6 +49,8 @@ impl KvmVcpu {
     pub fn run(&mut self) -> Result<VcpuExit<'_>> {
         match self.fd.run().map(|_| ()) {
             Ok(()) => {}
+            // A vCPU waiting for INIT or SIPI returns this once it accepts one.
+            Err(error) if error.errno() == libc::EAGAIN => return Ok(VcpuExit::Interrupted),
             Err(error) if error.errno() == libc::EINTR => {
                 self.kick.drain().map_err(|source| Error::RunVcpu {
                     id: self.id,
@@ -103,6 +105,20 @@ impl crate::Vcpu for KvmVcpu {
 
     fn handle(&self) -> Self::Handle {
         Self::handle(self)
+    }
+}
+
+impl crate::X86Vcpu for KvmVcpu {
+    fn set_cpu_features(
+        &mut self,
+        cpuid: &[crate::X86CpuidEntry],
+        msrs: &[crate::X86Msr],
+    ) -> Result<()> {
+        Self::set_cpu_features(self, cpuid, msrs)
+    }
+
+    fn set_boot_registers(&mut self, state: &crate::X86BootRegisters) -> Result<()> {
+        Self::set_boot_registers(self, state)
     }
 }
 

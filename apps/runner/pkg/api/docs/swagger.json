@@ -583,7 +583,7 @@
     },
     "CreateBoxDTO": {
       "type": "object",
-      "required": ["id", "image", "osUser"],
+      "required": ["id", "image", "osUser", "outboundEnabled"],
       "properties": {
         "authToken": {
           "type": "string"
@@ -633,12 +633,6 @@
             "type": "string"
           }
         },
-        "networkAllowList": {
-          "type": "string"
-        },
-        "networkBlockAll": {
-          "type": "boolean"
-        },
         "organizationId": {
           "description": "Nullable for backward compatibility",
           "type": "string"
@@ -648,6 +642,16 @@
         },
         "otelEndpoint": {
           "type": "string"
+        },
+        "outboundAllowNet": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "outboundEnabled": {
+          "description": "Outbound network policy. outboundEnabled is required: a request without\nit is rejected rather than started with a guessed policy.",
+          "type": "boolean"
         },
         "regionId": {
           "type": "string"
@@ -732,7 +736,7 @@
     },
     "RecoverBoxDTO": {
       "type": "object",
-      "required": ["errorReason", "osUser"],
+      "required": ["errorReason", "osUser", "outboundEnabled"],
       "properties": {
         "cpuQuota": {
           "type": "integer",
@@ -758,14 +762,18 @@
           "type": "integer",
           "minimum": 1
         },
-        "networkAllowList": {
-          "type": "string"
-        },
-        "networkBlockAll": {
-          "type": "boolean"
-        },
         "osUser": {
           "type": "string"
+        },
+        "outboundAllowNet": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "outboundEnabled": {
+          "description": "Outbound network policy. outboundEnabled is required: a request without\nit is rejected rather than started with a guessed policy.",
+          "type": "boolean"
         },
         "secrets": {
           "type": "array",
@@ -883,13 +891,16 @@
     "UpdateNetworkSettingsDTO": {
       "type": "object",
       "properties": {
-        "networkAllowList": {
-          "type": "string"
-        },
-        "networkBlockAll": {
+        "networkLimitEgress": {
           "type": "boolean"
         },
-        "networkLimitEgress": {
+        "outboundAllowNet": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "outboundEnabled": {
           "type": "boolean"
         }
       }

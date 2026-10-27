@@ -57,7 +57,7 @@ describe('AuthModule JwtStrategy provider', () => {
       }),
     }
 
-    const strategy = await createJwtStrategy({} as any, oidcMetadataService as any, configService as any)
+    const strategy = await createJwtStrategy({} as any, oidcMetadataService as any, configService as any, {} as any)
 
     expect((strategy as any).options).toMatchObject({
       audience: 'https://dev.boxlite.ai/api',

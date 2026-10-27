@@ -22,6 +22,7 @@ RELEASE CHAIN (workflow_run)            build-c ──▶ build-go
                                                 └──▶ build-runner-binary
 
 RELEASE (release event)                 build-runtime · build-c · build-node · build-wheels
+                                        mbuild-release-on-release ──▶ mbuild-release (images, dev)
                                         apps/box-images/v* tag ──▶ release-box-images
 
 LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api-image
@@ -47,7 +48,7 @@ own.
 | `lint.yml` | push, PR, merge_group | — | Format and lint per language, plus the installer smoke test. `Lint (conclusion)` is the required check |
 | `test.yml` | push, PR, merge_group, weekly, dispatch | — | Lightweight draft checks; SDK tests and combined Rust/CLI coverage on ready PRs. Compact routine matrices and full weekly/manual matrices. Codecov requires 90% patch coverage |
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
-| `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs |
+| `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs. It regenerates through the `generate:api-client` targets, `apps/hack` post-steps included, so regenerate with those targets rather than the bare generator |
 | `author-review.yml` | PR (target), issue_comment, merge_group | — | Converts unacknowledged PRs to draft, posts author instructions, and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
 | `build-runtime.yml` | weekly, release, dispatch | — | Builds runtime/CLI artifacts and populates sccache together; publishes crates on release |
 | `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
@@ -58,11 +59,12 @@ own.
 | `build-apps-api-image.yml` | dispatch, `workflow_call` | yes | The `apps/api` image: build a commit, build a release, or promote one between stages. Retained legacy AWS path |
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
-| `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage. Run by `deploy-infra` after it applies |
+| `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: the whole suite on `dev`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
 | `mdeploy-all.yml` | dispatch | — | Current mdeploy orchestration for prepared GCP/AWS stages. A commit SHA builds for dev, and so does `#<number>` — a pull request, by the commit it would merge to; a release tag publishes into dev or promotes to prod, and is all prod accepts. Applies the stack itself |
 | `mbuild.yml` | `workflow_call` | call-only | The commit line's images, for a dev rollout. Callee only: nobody publishes a commit by hand |
 | `mbuild-release.yml` | dispatch, `workflow_call` | yes | The release line's images, tagged `v<X.Y.Z>-<sha>`: publish a version into dev, or promote it to prod. One job per artifact, and a version the target already holds is refused rather than skipped |
-| `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted EC2 runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
+| `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` to publish its application images into dev |
+| `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted GCP VM runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
 | `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | The only workflow that writes to GHCR |
 
@@ -81,6 +83,15 @@ workflow (including Go formatting), CodeQL, managed Code Quality, API tests and
 setup checks retain their existing selection. Workflow and infrastructure changes
 run `make test:apps:infra` in a separate, path-filtered job whose failures block
 `Test (conclusion)`.
+The `nix` job builds the CLI in the flake dev shell, with the runner's
+environment and Rust homes dropped, and boots `alpine:latest`. It runs when the
+flake or an input of `make cli` changes (Make recipes, build scripts,
+`src/deps/`, `build.rs`, Cargo manifests, the toolchain), or on manual
+dispatch; not weekly, because `flake.lock` pins its inputs. It is not yet in
+`Test (conclusion)`, so its failures show on the PR without blocking merge; it
+becomes required once it has proven stable. It compiles through sccache but
+does not cache `/nix/store`. Ubuntu still has `/usr/lib`, so it misses
+regressions that break only on NixOS.
 Marking a PR **Ready for review** triggers the SDK matrix and both Go analyzers
 without requiring another commit. When a user returns it to draft, the new run
 cancels the prior Test run and runs the lightweight selection. The author-review bot uses `GITHUB_TOKEN`;
@@ -97,8 +108,19 @@ and bypass change filters. Combined Rust and CLI coverage runs on all three plat
 non-VM integration tests and Linux guest tests. Codecov requires 90% coverage of changed lines
 and reports total coverage.
 
+`make coverage:bindings:external` runs `make test:unit:scripts` before collecting
+native SDK profiles. The infra job also runs `make test:unit:scripts` whenever
+`tests/scripts/` or a script it drives (`scripts/ci/`, `scripts/test/coverage-bindings.sh`)
+changes. A relative `CARGO_TARGET_DIR` is resolved from the repository
+root once, so Python and Node builds share the report's object directory.
+
 Linux x64 also runs the native KVM hardware tests and adds their profiles before
 the Rust coverage upload. Missing `/dev/kvm` access fails this qualification.
+When a change matches the `vmm` filter (the VMM and hypervisor crates, the kernel
+build and its Make recipes), and on the weekly and manual runs, the job also runs
+the VMM's real-kernel boot tests with `make coverage:vmm:boot`. It restores the
+pinned `vmlinux` from the Actions cache, keyed on the kernel pins and build
+script, or builds it with `make vmm:boot:host` on a miss.
 
 `Dashboard Tests` runs the dashboard's vitest suite on one Linux runner and
 uploads v8 coverage under the `dashboard` flag. `@nx/vite` infers the project's
@@ -114,6 +136,19 @@ checks the changed files before publishing a passing or failing status; the
 workflow never forces a pass. Failed file detection cannot select this path,
 and upload errors fail `Test (conclusion)`. Source changes still need reports
 and 90% patch coverage; missing reports fail the patch status.
+
+Plugin resources, `scripts/plugins`, `tests/plugins`, and their Make/CI inputs select
+the lightweight `Plugin package coverage` job, including on drafts. It measures
+package tests and real check/dist commands through `make plugin:boxlite:coverage`,
+saves the Cobertura XML as the `plugin-coverage` artifact, and uploads it with OIDC
+under the `plugins` carryforward flag. Selected plugin source cannot take the
+empty-upload path; package or upload failures block `Test (conclusion)`.
+
+The package validator requires onboarding to name a distributed, frontmatter-validated
+`skills/<name>/SKILL.md` inventory. Excluded caches and shipped reference files cannot
+serve as onboarding skills, even when both manifests name the same existing file or alias.
+Each onboarding regression restores original manifest bytes and removes its invalid resource
+before the next case, so leftover invalid state cannot mask a later failure.
 
 After verifying normal uploads and the skipped-coverage path on PRs and merge
 groups, require `codecov/patch` from the Codecov app in the main ruleset alongside
@@ -175,7 +210,7 @@ every consumer.
 | --- | --- | --- |
 | `ci-config` | 3 | config, lint, test |
 | `setup-rust` | 10 | build-c, build-node, build-runtime ×2, build-wheels, lint ×2, test ×3 |
-| `sccache` | 6 | build-c, build-node, build-runtime, build-wheels, lint, test |
+| `sccache` | 7 | build-c, build-node, build-runtime, build-wheels, lint, test ×2 |
 | `build-guest` | 4 | build-c, build-node, build-runtime, build-wheels |
 | `upload-to-release` | 5 | build-c, build-node, build-runner-binary, build-runtime, build-wheels |
 | `run-in-manylinux` | 3 | build-c, build-node, build-runtime |

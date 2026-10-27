@@ -18,10 +18,16 @@
 import type { BoxDesiredState } from './box-desired-state';
 // May contain unused imports in some cases
 // @ts-ignore
+import type { BoxProgress } from './box-progress';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { BoxState } from './box-state';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { BoxVolume } from './box-volume';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { NetworkInfo } from './network-info';
 
 export interface Box {
     /**
@@ -49,17 +55,9 @@ export interface Box {
      */
     'labels': { [key: string]: string; };
     /**
-     * Whether the box http preview is public
+     * The network policy in both directions
      */
-    'public': boolean;
-    /**
-     * Whether to block all network access for the box
-     */
-    'networkBlockAll': boolean;
-    /**
-     * Comma-separated list of allowed CIDR network addresses for the box
-     */
-    'networkAllowList'?: string;
+    'network'?: NetworkInfo;
     /**
      * The target environment for the box
      */
@@ -149,6 +147,10 @@ export interface Box {
      * The toolbox proxy URL for the box
      */
     'toolboxProxyUrl': string;
+    /**
+     * What a box still being created is waiting on. Absent once it has started, and absent while it is being created from an image that has already been pulled
+     */
+    'progress'?: BoxProgress;
 }
 
 export const BoxClassEnum = {

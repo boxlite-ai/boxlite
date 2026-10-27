@@ -1,7 +1,3 @@
-## TL;DR
-
-BoxLite runs isolated applications in lightweight virtual machines, locally or through a cloud control plane.
-
 <h1 align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/boxlite-banner-dark.png">
@@ -126,7 +122,7 @@ Installs to `$HOME/.local/bin/boxlite`, runtime embedded — no extra setup. Alt
 
 ```bash
 boxlite serve
-# Listening on 0.0.0.0:8100
+# Listening on 127.0.0.1:8100 (add --host 0.0.0.0 --api-key "$KEY" to expose it)
 ```
 
 ```bash

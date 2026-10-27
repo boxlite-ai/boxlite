@@ -134,6 +134,7 @@ async fn disabled_network_returns_no_network_config() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -152,6 +153,7 @@ async fn disabled_network_runs_without_eth0() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -188,6 +190,7 @@ async fn enabled_network_runs_with_eth0_and_host_alias_dns() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -438,6 +441,7 @@ async fn container_resolver_is_the_gateway() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -483,6 +487,7 @@ async fn unlisted_host_resolves_but_connection_is_refused() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -559,6 +564,7 @@ async fn wildcard_allows_subdomain_connection_not_other_domains() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -608,6 +614,7 @@ async fn empty_allowlist_allows_all() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -646,6 +653,7 @@ async fn tcp_filter_blocks_direct_ip_connection() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -702,6 +710,7 @@ async fn udp_filter_blocks_direct_ip_datagram() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -740,6 +749,7 @@ async fn udp_to_host_alias_blocked_by_restrictive_allowlist() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -779,6 +789,7 @@ async fn udp_reaches_host_alias_when_listed() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -813,6 +824,7 @@ async fn tcp_filter_sni_allows_https_to_allowed_host() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -848,6 +860,7 @@ async fn host_alias_resolves_to_dedicated_host_ip() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -870,6 +883,7 @@ async fn host_alias_reaches_host_loopback_service() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -899,6 +913,7 @@ async fn host_alias_blocked_by_restrictive_allowlist() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -941,6 +956,7 @@ async fn host_alias_reaches_host_loopback_service_when_listed() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 
@@ -974,6 +990,7 @@ async fn disabled_network_cannot_reach_host_virtual_ip() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        ..Default::default()
     })
     .unwrap();
 

@@ -10,6 +10,7 @@ Complete API reference for the BoxLite Node.js/TypeScript SDK.
 - [Runtime Management](#runtime-management)
 - [Box Handle](#box-handle)
 - [Network Tunnels](#network-tunnels)
+- [Guest SSH Control](#guest-ssh-control)
 - [Command Execution](#command-execution)
 - [Box Types](#box-types)
 - [Error Types](#error-types)
@@ -55,6 +56,8 @@ new JsBoxlite(options: JsOptions)
 | `metrics()` | `() => Promise<JsRuntimeMetrics>` | Get runtime metrics |
 | `remove()` | `(idOrName: string, force?: boolean) => Promise<void>` | Remove a box |
 | `close()` | `() => void` | Close runtime (no-op) |
+| `images` | getter `=> ImageHandle` | The images this runtime can boot from; see [`ImageHandle`](#imagehandle) |
+| `registries` | getter `=> RegistryHandle` | The server's registry logins; throws `unsupported` on a local runtime. See [`RegistryHandle`](#registryhandle) |
 
 #### Example
 
@@ -75,6 +78,87 @@ const box = await runtime.create({
 // List all boxes
 const boxes = await runtime.listInfo();
 boxes.forEach(info => console.log(`${info.id}: ${info.state.status}`));
+```
+
+---
+
+### `ImageHandle`
+
+The images a runtime can boot from: the local cache on an embedded runtime,
+the server catalog on a REST runtime. Registry credentials are accessed through
+`runtime.images.registries`.
+
+| Operation | Embedded runtime | REST runtime |
+|-----------|------------------|--------------|
+| `pull` | Pulls into the cache | Unsupported; creating a box pulls |
+| `list` | One row per cached reference | Catalog alias and digest references |
+| `get` | Cached versions under the name | Catalog versions, aliases and history |
+| `remove` | Forgets the name; layers stay | Removes the entry; refused while a box can boot from it |
+| `usage` | Unsupported | Image count, allowance and known bytes |
+| `createAlias()` | Unsupported | Creates a new alias for a ready digest; existing names conflict |
+| `deleteAlias()` | Unsupported | Removes only the named alias; absent names return NotFound |
+
+`get` and `remove` take an image name, without a tag or digest, such as
+`quay.io/acme/app`. Alias names use OCI tag syntax; creation takes the
+`sha256:` digest of a ready version recorded for that image.
+
+A registry tag belongs to the upstream registry. A BoxLite alias belongs to
+the runtime catalog and selects a recorded digest independently. A successful
+pull seeds an alias from the registry tag; it never overwrites an existing
+binding. Creating an alias never pushes a registry tag or pulls image bytes.
+
+Alias creation refuses every existing name, even for the same digest, with
+`AlreadyExists`. Delete the alias explicitly before creating it again. Deletion
+removes only the binding: versions and existing boxes keep their digests.
+Creation history remains available; deletion is recorded by the server audit log.
+
+Image details and versions expose `aliases`. Their `history` contains
+`ImageAliasEvent` records with `alias`, optional `from_digest`, `to_digest`,
+optional `actor` and `recorded_at`. A local cache mirrors its cached registry
+tags in `aliases`, leaves history empty and refuses alias writes.
+
+```typescript
+const detail = await runtime.images.get('quay.io/acme/app');
+await runtime.images.createAlias(detail.name, 'verified', detail.versions[0].digest);
+await runtime.images.deleteAlias(detail.name, 'verified');
+const logins = await runtime.images.registries.list();
+```
+
+The JavaScript event fields use `fromDigest`, `toDigest` and `recordedAt`.
+
+### `RegistryHandle`
+
+The logins a REST server presents when it pulls a private image for a box.
+Read it from the `runtime.images.registries` getter, which throws `unsupported` on a
+local runtime: that one pulls with the logins in `imageRegistries` instead.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `list()` | `() => Promise<RegistryCredential[]>` | Every login the organization holds, oldest first |
+| `create()` | `(credential: NewRegistryCredential) => Promise<RegistryCredential>` | Add a login; `already_exists` while one is held for the same registry and prefix |
+| `remove()` | `(id: string) => Promise<void>` | Remove a login; `invalid_state`, naming the boxes, while a box still pulls through it; `not_found` for an unknown id |
+
+| Type | Fields |
+|------|--------|
+| `NewRegistryCredential` | `registryHost`, `repositoryPrefix` (optional; whole path segments ending in `/`, omitted for the whole registry), `username`, `password` |
+| `RegistryCredential` | `id`, `registryHost`, `repositoryPrefix`, `username`, `createdBy` (absent when unknown), `createdAt` (RFC 3339) |
+
+The password goes up once and is never returned: `RegistryCredential` has no
+password field. `remove()` rejects an id that is not a UUID with
+`invalid_argument`, before any request.
+
+```typescript
+const runtime = JsBoxlite.rest(new BoxliteRestOptions({ url: 'http://localhost:8100' }));
+const login = await runtime.images.registries.create({
+  registryHost: 'ghcr.io',
+  repositoryPrefix: 'acme/',
+  username: 'acme-bot',
+  password: process.env.GHCR_TOKEN!,
+});
+const box = await runtime.create({ image: 'ghcr.io/acme/private-app:1' });
+for (const entry of await runtime.images.registries.list()) {
+  console.log(entry.registryHost, entry.repositoryPrefix, entry.username);
+}
 ```
 
 ---
@@ -218,6 +302,7 @@ Handle to a running or stopped box.
 | `id` | `string` | Unique box identifier (ULID) |
 | `name` | `string \| null` | User-defined name |
 | `network` | `JsNetworkHandle` | Box-scoped tunnel operations |
+| `ssh` | `JsSshHandle` | Configure, query, or disable guest SSH |
 
 #### Methods
 
@@ -294,6 +379,7 @@ live binding data yet, so box, get, or list info may report
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
 | Tunnel | `await box.network.tunnel(port)` | Prepare a one-shot `JsBoxTunnel` or `BoxTunnel` |
+| Revoke | `await box.network.revokeTunnel(port)` | Withdraw the port's public URL; open connections stay open |
 | Forward | `await tunnel.forward(listen)` | Return a listener-backed `TunnelForwarder` |
 | Inspect | `tunnel.uri(): string \| null` | Read the prepared public URL; `null` for a local box |
 | Connect | `await tunnel.connect()` | Consume the prepared tunnel into its connection |
@@ -308,6 +394,54 @@ Each tunnel is one-shot. Choose `connect()` or `forward()`; a forwarder opens
 fresh tunnels for additional clients. This differs from `ports`, which
 creates a persistent, local-only host listener that accepts repeated
 connections from ordinary host applications.
+
+---
+
+## Guest SSH control
+
+`JsBox` and `SimpleBox` expose `box.ssh`.
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Configure | `await box.ssh.configure(config)` | Apply `SshConfig` and return `SshStatus` |
+| Observe | `await box.ssh.status()` | Return `SshStatus` |
+| Disable | `await box.ssh.disable()` | Disable SSH and return `SshStatus` |
+
+```typescript
+interface SshConfig {
+  listenAddress: string;      // e.g. "0.0.0.0:2222"
+  hostPrivateKey: string;     // unencrypted OpenSSH host private key
+  accounts: SshAccount[];     // non-empty; each has a key or a CA
+}
+
+interface SshAccount {
+  login: string;              // 1-128 chars: [A-Za-z0-9._-]
+  authorizedKeys?: string[];  // OpenSSH public keys
+  ca?: SshCaConfig;           // certificate authority alternative
+}
+
+interface SshCaConfig {
+  publicKey: string;
+  principal: string;          // required certificate principal
+}
+
+interface SshStatus {
+  enabled: boolean;
+  generation: bigint;         // full u64 precision
+  listenAddress: string;
+  hostPublicKey: string;      // comment-free public host key
+  hostKeyFingerprint: string; // SHA-256 fingerprint
+}
+```
+
+On a `SimpleBox`, a first `configure` call lazily creates or fetches the box
+before validating the configuration: a wrong-typed configuration can leave the
+created box behind, but no SSH operation is sent for it. `status` and
+`disable` never start the VM.
+
+Invalid configuration field types report `InvalidArg` with the message
+`invalid SSH configuration`, without echoing rejected values. Other errors
+use the SDK's existing [error types](#error-types).
 
 ---
 
@@ -817,6 +951,26 @@ try {
 } catch (err) {
   if (err instanceof ParseError) {
     console.error('Failed to parse cursor position');
+  }
+}
+```
+
+### `errorCode(err)`
+
+A failure the native runtime reports is a plain `Error` whose message starts
+with the kind of failure. `errorCode` returns that kind's code, or `undefined`
+for any other error. The codes are the ones `BoxliteError::http()` gives
+(`src/shared/src/errors.rs`) and a REST server answers with, and the same as
+the `code` of Python's [runtime failure classes](../python/README.md#runtime-failures).
+
+```typescript
+import { errorCode } from 'boxlite';
+
+try {
+  await runtime.remove('no-such-box');
+} catch (err) {
+  if (errorCode(err) === 'not_found') {
+    // nothing to remove
   }
 }
 ```

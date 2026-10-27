@@ -7,8 +7,10 @@
 # - Rust: units and non-VM integration, with llvm-cov coverage
 # - Python: pytest with -m "not integration"
 # - Node.js: vitest unit project
-# - Go: SDK, networking bridge, and the runner; API: Jest with Postgres and Redis
+# - Go: SDK, networking bridge, the runner and the image service; API: Jest with Postgres and Redis
 # - Dashboard: vitest with jsdom, v8 coverage
+# - Plugins: Python package tests and real CLI check/dist commands
+# - Nix: the flake dev shell builds the CLI and boots a box (non-blocking)
 name: Test
 
 on:
@@ -33,11 +35,19 @@ on:
       - '.config/nextest.toml'
       - '.gitmodules'
       - 'scripts/setup/**'
+      - 'scripts/build/**'
+      - 'scripts/*.sh'
+      - 'scripts/ci/**'
+      - 'scripts/test/coverage-bindings.sh'
+      - 'tests/scripts/**'
       - 'Makefile'
       - 'make/**'
+      - 'flake.nix'
+      - 'flake.lock'
       - 'rust-toolchain.toml'
       - 'sdks/**'
       - 'apps/api/**'
+      - 'apps/image-service/**'
       - 'apps/dashboard/**'
       - 'apps/libs/api-client/**'
       - 'apps/runner/**'
@@ -58,6 +68,10 @@ on:
       - 'openapi/**'
       - 'codecov.yml'
       - '!**/*.md'
+      - 'plugins/boxlite/**'
+      - '.agents/plugins/marketplace.json'
+      - 'scripts/plugins/**'
+      - 'tests/plugins/**'
   # No path filter on pull_request: the `Test (conclusion)` job is a required
   # status check, so this workflow must run on EVERY PR and report it. A
   # path-skipped workflow leaves the required check stuck "Pending" → PR blocked.
@@ -95,8 +109,14 @@ jobs:
       go: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.go == 'true' }}
       api: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.api == 'true' }}
       dashboard: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.dashboard == 'true' }}
+      plugins: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.plugins == 'true' }}
       setup: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.setup == 'true' }}
       infra: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.infra == 'true' }}
+      # The real-kernel boot tests; the weekly run also refreshes main's kernel cache.
+      vmm: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.vmm == 'true' }}
+      # Not weekly: flake.lock and rust-toolchain.toml pin every input, so an
+      # unchanged tree only repeats the last build.
+      nix: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.nix == 'true' }}
     steps:
       - uses: actions/checkout@v5
       - name: Validate Makefile syntax
@@ -131,6 +151,12 @@ jobs:
               - 'sdks/c/src/**/!(*.md)'
               - 'sdks/c/build.rs'
               - 'sdks/python/src/**/!(*.md)'
+              # The rust job also runs the external collector, whose Python
+              # suite drives these bindings through a built extension.
+              - 'sdks/python/boxlite/**/!(*.md)'
+              - 'sdks/python/tests/**/!(*.md)'
+              - 'scripts/test/coverage-bindings.sh'
+              - 'tests/scripts/**/!(*.md)'
               - 'sdks/node/src/**/!(*.md)'
               - 'sdks/node/build.rs'
               - 'src/test-utils/**/!(*.md)'
@@ -144,6 +170,8 @@ jobs:
               - 'make/dev.mk'
               - 'make/test.mk'
               - 'make/coverage.mk'
+              - 'make/build.mk'
+              - 'scripts/build/build-vmm-boot.sh'
               - 'openapi/**/!(*.md)'
               - '**/Cargo.toml'
               - 'Cargo.lock'
@@ -155,6 +183,42 @@ jobs:
               - '.github/actions/setup-python/**/!(*.md)'
               - '.github/ci-config.json'
               - '.github/actions/ci-config/**/!(*.md)'
+              - '.github/workflows/test.yml'
+            # nix matches what `make cli` reads inside the flake dev shell.
+            nix:
+              - 'flake.nix'
+              - 'flake.lock'
+              - 'src/deps/**/!(*.md)'
+              - '.gitmodules'
+              - 'Makefile'
+              - 'make/vars.mk'
+              - 'make/build.mk'
+              - 'scripts/*.sh'
+              - 'scripts/build/**'
+              - 'scripts/setup/**'
+              - '**/build.rs'
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**/!(*.md)'
+              - '.github/actions/sccache/**/!(*.md)'
+              - '.github/workflows/test.yml'
+            # vmm selects the kernel build and the real-kernel boot tests inside
+            # the rust job, so rust must match every path listed here.
+            vmm:
+              - 'src/vmm/**/!(*.md)'
+              - 'src/hypervisor/**/!(*.md)'
+              - 'scripts/build/build-vmm-boot.sh'
+              - 'Makefile'
+              - 'make/vars.mk'
+              - 'make/build.mk'
+              - 'make/test.mk'
+              - 'make/coverage.mk'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**/!(*.md)'
+              - '.config/nextest.toml'
               - '.github/workflows/test.yml'
             python:
               - 'sdks/python/**/!(*.md)'
@@ -182,6 +246,7 @@ jobs:
             go:
               - 'sdks/go/**/!(*.md)'
               - 'src/deps/libgvproxy-sys/**/!(*.md)'
+              - 'apps/image-service/**/!(*.md)'
               - 'apps/runner/**/!(*.md)'
               - 'apps/go.work'
               - 'apps/go.work.sum'
@@ -205,6 +270,7 @@ jobs:
             api:
               - 'apps/api/**/!(*.md)'
               - 'openapi/box.openapi.yaml'
+              - 'openapi/admin.openapi.yaml'
               - 'apps/package.json'
               - 'apps/yarn.lock'
               - 'apps/nx.json'
@@ -219,6 +285,16 @@ jobs:
               - 'apps/nx.json'
               - 'codecov.yml'
               - '.github/workflows/test.yml'
+            plugins:
+              - '.agents/plugins/marketplace.json'
+              - 'plugins/boxlite/**'
+              - 'scripts/plugins/**'
+              - 'tests/plugins/**'
+              - 'Makefile'
+              - 'make/plugins.mk'
+              - 'codecov.yml'
+              - '.github/actions/setup-python/**/!(*.md)'
+              - '.github/workflows/test.yml'
             setup:
               - '.gitmodules'
               - 'scripts/setup/setup-submodules.sh'
@@ -232,6 +308,13 @@ jobs:
               - 'Makefile'
               - 'make/test.mk'
               - 'make/changes.mk'
+              # tests/scripts and the scripts it drives.
+              - 'tests/scripts/**'
+              - 'scripts/ci/**/!(*.md)'
+              - 'scripts/test/coverage-bindings.sh'
+              # The infra suite asserts Codecov's ignore list covers every test
+              # source, so a change to it has to run that suite.
+              - 'codecov.yml'
 
   infra:
     name: Workflow and infrastructure checks
@@ -250,6 +333,8 @@ jobs:
           cache-dependency-path: apps/infra/package-lock.json
       - name: Type-check and test infrastructure scripts and workflows
         run: make test:apps:infra
+      - name: Test CI and coverage scripts against fake tools
+        run: make test:unit:scripts
 
   # Merge core, shared, REST, CLI, native VMM and Linux guest coverage.
   # Codecov gates changed lines at 90% and reports total coverage separately.
@@ -304,6 +389,24 @@ jobs:
           BOXLITE_DEPS_STUB: "1"
         run: make coverage:lcov NEXTEST_PROFILE=ci
 
+      # The real-kernel boot tests need the pinned vmlinux; rebuild it only
+      # when its pins or build script change.
+      - name: Restore the VMM boot kernel
+        id: vmm-kernel
+        if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.vmm == 'true'
+        uses: actions/cache@v4
+        with:
+          path: target/vmm/boot/x86_64
+          key: vmm-kernel-${{ hashFiles('src/vmm/boot/kernel.lock', 'src/vmm/boot/kernel.config', 'scripts/build/build-vmm-boot.sh') }}
+
+      - name: Build the VMM boot kernel
+        if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.vmm == 'true' && steps.vmm-kernel.outputs.cache-hit != 'true'
+        timeout-minutes: 20
+        run: |
+          sudo apt-get install -y build-essential bc bison flex curl xz-utils libelf-dev \
+            gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
+          make vmm:boot:host
+
       - name: Enable KVM access for native hypervisor tests
         if: matrix.platform.target == 'linux-x64-gnu'
         run: sudo chmod a+rw /dev/kvm
@@ -312,6 +415,22 @@ jobs:
         if: matrix.platform.target == 'linux-x64-gnu'
         timeout-minutes: 5
         run: make coverage:vmm:kvm
+
+      - name: Run real-kernel boot tests with coverage
+        if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.vmm == 'true'
+        timeout-minutes: 5
+        run: make coverage:vmm:boot
+
+      - uses: actions/setup-node@v4
+        if: matrix.platform.target == 'linux-x64-gnu'
+        with:
+          node-version: '22'
+
+      - name: Measure native bindings through SDK callers
+        if: matrix.platform.target == 'linux-x64-gnu'
+        env:
+          BOXLITE_DEPS_STUB: '1'
+        run: make coverage:bindings:external
 
       - name: Run OpenAPI reference-server unit tests
         # Keyed on BoxliteError's Display text (src/shared/src/errors.rs, in this
@@ -327,6 +446,16 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           files: target/coverage/lcov.info
+          flags: rust-unit
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
+
+      - name: Upload external native binding coverage
+        if: matrix.platform.target == 'linux-x64-gnu'
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/native-sdk/lcov.info,target/coverage/python/coverage.xml
           flags: rust-unit
           use_oidc: true
           disable_search: true
@@ -461,7 +590,7 @@ jobs:
 
       - uses: ./.github/actions/sccache
 
-      - name: Run Go SDK, networking, and runner tests with coverage
+      - name: Run Go SDK, networking, runner and image-service tests with coverage
         run: make coverage:go
 
       # coverage:go has already built the native library needed by both analyzers.
@@ -479,7 +608,7 @@ jobs:
       - name: Upload Go coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: target/coverage/go-sdk.out,target/coverage/gvproxy.out,target/coverage/runner.out
+          files: target/coverage/go-sdk.out,target/coverage/gvproxy.out,target/coverage/runner.out,target/coverage/image-service.out
           flags: go
           use_oidc: true
           disable_search: true
@@ -544,6 +673,64 @@ jobs:
 
       - name: Test worktree submodule setup
         run: make test:setup:submodules
+
+  # The flake dev shell (docs/contributing/development/building.md) breaks when
+  # the flake, Make recipes, -sys crates or the toolchain change. Ubuntu still
+  # has /usr/lib, so a NixOS-only path regression passes here. Not yet in
+  # `Test (conclusion)`: it reports on the PR without blocking merges until it
+  # has proven stable.
+  nix:
+    name: Nix flake build
+    needs: changes
+    if: needs.changes.outputs.nix == 'true'
+    runs-on: ubuntu-latest
+    # A cold build took 27 minutes on 12 local cores; the runner has 4.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      # No /nix/store cache: it comes from the cache.nixos.org CDN, and
+      # restoring 3 GB from the Actions cache would save little.
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
+
+      - uses: ./.github/actions/sccache
+
+      - name: Check the flake
+        run: nix flake check
+
+      # Drop the runner's environment so preinstalled compilers cannot mask a
+      # tool missing from flake.nix. The flake puts $CARGO_HOME/bin first on
+      # PATH, where the runner preinstalls rustup, so both Rust homes start
+      # empty. sccache goes in by absolute path; when its setup failed the
+      # wrapper is unset and the build runs uncached.
+      - name: Build the CLI in the dev shell
+        run: |
+          export CARGO_HOME="$RUNNER_TEMP/cargo" RUSTUP_HOME="$RUNNER_TEMP/rustup"
+          if [ -n "${RUSTC_WRAPPER:-}" ]; then
+            RUSTC_WRAPPER="$(command -v "$RUSTC_WRAPPER")"
+            export RUSTC_WRAPPER
+          fi
+          nix develop --ignore-environment --keep HOME --keep USER \
+            --keep CARGO_HOME --keep RUSTUP_HOME --keep RUSTC_WRAPPER \
+            --keep CARGO_INCREMENTAL --keep SCCACHE_IGNORE_SERVER_IO_ERROR \
+            -c make cli
+
+      # The jailer runs bwrap, which Ubuntu 24.04's AppArmor blocks without the
+      # bwrap profile (docs/guides/troubleshooting.md); the runner is discarded.
+      - name: Enable KVM and unprivileged user namespaces
+        run: |
+          sudo chmod a+rw /dev/kvm
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Boot a box
+        timeout-minutes: 10
+        run: ./target/debug/boxlite run --rm alpine:latest echo ok
 
   # API tests need real Redis and Postgres services for integration coverage.
   api:
@@ -648,6 +835,38 @@ jobs:
           disable_search: true
           fail_ci_if_error: true
 
+  plugins:
+    name: Plugin package coverage
+    needs: changes
+    if: ${{ needs.changes.outputs.plugins == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-python
+      - name: Install coverage collector
+        run: python3 -m pip install coverage==7.13.5
+      - name: Measure plugin package tests and CLI commands
+        run: make plugin:boxlite:coverage
+      - name: Save plugin coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-coverage
+          path: target/coverage/plugins/coverage.xml
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload plugin coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/plugins/coverage.xml
+          flags: plugins
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
+
   # A skipped test job cannot publish Codecov's separately required status.
   # Validate the PR's changed files with Codecov instead of forcing a pass.
   coverage-empty:
@@ -661,7 +880,8 @@ jobs:
           needs.changes.outputs.node == 'false' &&
           needs.changes.outputs.go == 'false' &&
           needs.changes.outputs.api == 'false' &&
-          needs.changes.outputs.dashboard == 'false' }}
+          needs.changes.outputs.dashboard == 'false' &&
+          needs.changes.outputs.plugins == 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -683,7 +903,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [changes, infra, rust, python, node, go, setup, api, dashboard, guest_artifacts, coverage-empty]
+    needs: [changes, infra, rust, python, node, go, setup, api, dashboard, plugins, guest_artifacts, coverage-empty]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

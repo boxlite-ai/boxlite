@@ -164,9 +164,11 @@ export default $config({
         dashboardDomain: stackEnvironment.dashboardDomain,
         artifactsBucket,
         managedClickHouse: stackEnvironment.managedClickHouse,
+        otelOpenapiEnabled: stackEnvironment.otelOpenapiEnabled,
       }),
       config,
       inputs: {
+        clickHouseRetentionHours: stackEnvironment.clickHouseRetentionHours,
         stage: $app.stage,
         tag: stackEnvironment.tag,
         domain: stackEnvironment.domain,

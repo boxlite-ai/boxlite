@@ -23,6 +23,17 @@ info:
     transfer, service tunnels, and image management as a multi-tenant
     service.
 
+    ## Image API migration (breaking change)
+
+    The image catalog replaces the former pull and digest-ID operations.
+    `POST /{prefix}/images/pull` and `HEAD /{prefix}/images/{image_id}` are
+    removed. Create a box with an image reference to pull it. Replace the
+    former `GET /{prefix}/images/{image_id}` with
+    `GET /{prefix}/images/{image_name}`, using the URL-encoded registry and
+    repository as one path segment. The response is now ImageDetail with
+    versions; inspect their digests to check for a particular build.
+    Regenerate clients from this specification before upgrading servers.
+
     ## Design Principles
 
     This specification follows industry-standard HTTP API patterns:
@@ -134,6 +145,8 @@ tags:
     description: Container image management
   - name: Volumes
     description: Managed persistent volumes
+  - name: Registries
+    description: Logins the server pulls private images with
 
 # ===========================================================================
 # Paths
@@ -446,6 +459,84 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/ssh:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: configureSsh
+      summary: Configure guest SSH
+      description: |
+        Replaces the guest's complete SSH configuration; every accepted call
+        fully restarts the listener, so it must not be retried automatically.
+        May start a `configured` or resume a `stopped` box on the image's
+        default command; in those two states an explicit `cmd`/`entrypoint`
+        requires a prior start (a running box with an explicit command is
+        supported), and a stopped box with `auto_resume=false` returns 409. An
+        invalid configuration is rejected without changing the listener
+        already running.
+      tags: [Boxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SshConfig"
+      responses:
+        "200":
+          description: SSH enabled; the response describes the new listener
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SshStatus"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+    get:
+      operationId: getSshStatus
+      summary: Get guest SSH status
+      description: |
+        Observes the listener without starting the VM or its main command; a
+        valid `configured` or `stopped` box reports disabled status with
+        generation zero and empty identity fields.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Current SSH status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SshStatus"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+    delete:
+      operationId: disableSsh
+      summary: Disable guest SSH
+      description: Stops guest SSH and disconnects clients; idempotent, and never starts the VM or its main command.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: SSH disabled or already disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SshStatus"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   # -------------------------------------------------------------------------
   # Snapshot / Portability
@@ -978,6 +1069,9 @@ paths:
         Downloads files from the specified path inside the container
         as a tar archive. The box must be running.
 
+        A `path` ending in `/.` (`docker cp`'s spelling) asks for a
+        directory's contents rather than the directory itself.
+
         Transfer operates on the container's root filesystem. A source at or
         under a mount inside the container, or a directory containing one, is
         rejected with `400` — the archive would carry the underlying files
@@ -987,7 +1081,9 @@ paths:
         - name: path
           in: query
           required: true
-          description: Source path inside the container
+          description: |
+            Source path inside the container. End a directory with `/.` to
+            download its contents rather than the directory itself.
           schema:
             type: string
           example: /app/output
@@ -1042,7 +1138,7 @@ paths:
         - name: port
           in: query
           required: true
-          description: TCP port the service listens on inside the box; terminal port 22222 is reserved
+          description: TCP port the service listens on inside the box
           schema:
             type: integer
             minimum: 1
@@ -1061,6 +1157,35 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+    delete:
+      operationId: revokeTunnel
+      summary: Revoke a box service tunnel
+      description: |
+        Withdraws public access to one box port that `prepareTunnel`
+        opened. New requests and `CONNECT`s to its URI get `404` within
+        3 seconds; connections already open run until they close. Other
+        ports of the box are unaffected.
+
+        Safe to repeat, and succeeds for a port that was never opened.
+        Calling `prepareTunnel` again reopens the port at the same URI.
+      tags: [Network]
+      parameters:
+        - name: port
+          in: query
+          required: true
+          description: TCP port the service listens on inside the box
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 65535
+          example: 3000
+      responses:
+        "204":
+          description: The port is no longer public
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 
   /{prefix}/boxes/{box_id}/network/inbound:
     parameters:
@@ -1070,9 +1195,9 @@ paths:
       operationId: updateInboundNetwork
       summary: Change a box's inbound access
       description: |
-        Makes an existing box public (`enabled`) or private (`disabled`),
-        the policy `network.inbound` sets at create. `enabled` makes the
-        box's services reachable through the remote proxy without
+        Enables or disables inbound access to an existing box, the policy
+        `network.inbound` sets at create. `enabled` makes the box's
+        services reachable through the remote proxy without
         authentication. `prepareTunnel` follows the new mode at once; the
         proxy applies it to new connections once its visibility cache
         expires, and does not close connections already open.
@@ -1099,6 +1224,53 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/network/outbound:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    put:
+      operationId: updateOutboundNetwork
+      summary: Replace a running box's outbound policy
+      description: |
+        Replaces mode and the entire allow_net list without changing inbound.
+        Enabled with an omitted or empty list clears allowlist restrictions.
+        Disabled with a non-empty list is invalid. Requires a running box
+        created with a NIC; unsupported backends return an explicit error.
+
+        New TCP/UDP flows use the replacement allowlist. Existing flows retain
+        their policy. Disabled suspends NIC traffic, including DNS and inbound,
+        while preserving the control channel for re-enabling.
+
+        Success confirms application and persistence. Timeouts or failed
+        rollback can leave live and stored policy different; retry the full
+        replacement. GET box reports the last persisted policy.
+      tags: [Network]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OutboundNetworkSpec"
+      responses:
+        "200":
+          description: Applied outbound policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundNetworkSpec"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          description: Application or persistence failed; retry the complete policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   # -------------------------------------------------------------------------
   # Metrics
@@ -1145,83 +1317,229 @@ paths:
   # -------------------------------------------------------------------------
   # Images
   # -------------------------------------------------------------------------
-  /{prefix}/images/pull:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-    post:
-      operationId: pullImage
-      summary: Pull a container image
-      description: |
-        Pulls a container image from a registry and caches it locally.
-        Returns 200 with image info when the pull completes.
-      tags: [Images]
-      parameters:
-        - $ref: "#/components/parameters/idempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PullImageRequest"
-      responses:
-        "200":
-          description: Image pulled and cached
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ImageInfo"
-        "422":
-          $ref: "#/components/responses/UnprocessableEntityError"
-
   /{prefix}/images:
     parameters:
       - $ref: "#/components/parameters/prefix"
     get:
       operationId: listImages
-      summary: List cached images
-      description: Returns a paginated list of locally cached container images.
+      summary: List images
+      description: |
+        The images this deployment can boot from, one entry per reference:
+        each tag at the build it points to, and each build no tag points to
+        by its digest. A single-host server answers from its image cache; a
+        server shared between callers answers from the caller's catalog. A
+        server may answer every entry at once, leaving `next_page_token` out.
       tags: [Images]
       parameters:
         - $ref: "#/components/parameters/pageSize"
         - $ref: "#/components/parameters/pageToken"
       responses:
         "200":
-          description: List of cached images
+          description: Images the caller can boot from
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ListImagesResponse"
 
-  /{prefix}/images/{image_id}:
+  /{prefix}/images/usage:
     parameters:
       - $ref: "#/components/parameters/prefix"
-      - $ref: "#/components/parameters/imageId"
-
     get:
-      operationId: getImage
-      summary: Get image details
-      description: Returns metadata for a cached image by its manifest digest.
+      operationId: getImageUsage
+      summary: Get image usage
+      description: |
+        How many images the routing slot holds against the most it may hold.
+        A server with no such limit answers `UnsupportedError`.
       tags: [Images]
       responses:
         "200":
-          description: Image details
+          description: Images held and the limit
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ImageInfo"
+                $ref: "#/components/schemas/ImageUsage"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+
+  /{prefix}/images/{image_name}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/imageName"
+
+    get:
+      operationId: getImage
+      summary: Get an image
+      description: Every build held under an image name.
+      tags: [Images]
+      responses:
+        "200":
+          description: The image and its builds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageDetail"
         "404":
           $ref: "#/components/responses/NotFoundError"
 
-    head:
-      operationId: imageExists
-      summary: Check if an image is cached
-      description: Returns 204 if the image exists in the local cache, 404 if not.
+    delete:
+      operationId: removeImage
+      summary: Remove an image
+      description: |
+        Stop holding an image name, every tag of it. Layers are not deleted.
+        A server refuses with `InvalidStateError` while a box can still boot
+        from the image.
       tags: [Images]
       responses:
         "204":
-          description: Image exists
+          description: The image is no longer held
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
-          description: Image not found
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/images/{image_name}/aliases:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/imageName"
+    post:
+      operationId: createImageAlias
+      summary: Create an image alias
+      description: |
+        Create a catalog alias for a ready build of this image. Existing aliases
+        are refused with AlreadyExistsError, including an identical binding.
+        Delete an alias explicitly before creating it again. The registry and
+        existing boxes are unchanged, and nothing is pulled. A local runtime
+        without a catalog answers UnsupportedError.
+      tags: [Images]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateImageAliasRequest"
+      responses:
+        "201":
+          description: Image details including the created alias
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageDetail"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/images/{image_name}/aliases/{alias}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/imageName"
+      - $ref: "#/components/parameters/imageAlias"
+    delete:
+      operationId: deleteImageAlias
+      summary: Delete an image alias
+      description: |
+        Remove only this catalog binding. Versions, creation history, the
+        upstream registry and existing boxes remain unchanged. An absent image
+        or alias answers NotFoundError. Local runtimes answer UnsupportedError.
+      tags: [Images]
+      responses:
+        "204":
+          description: The alias was deleted
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+  # -------------------------------------------------------------------------
+  # Registries
+  # -------------------------------------------------------------------------
+  /{prefix}/images/registries:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+
+    get:
+      operationId: listRegistries
+      summary: List registry logins
+      description: |
+        The logins the server presents when it pulls a private image for a
+        box, oldest first. No login carries its password.
+      tags: [Registries]
+      responses:
+        "200":
+          description: The routing slot's registry logins
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListRegistriesResponse"
+
+    post:
+      operationId: createRegistry
+      summary: Add a registry login
+      description: |
+        The password is stored where the server cannot read it back, and is
+        never returned. A login is held per registry and prefix: a second one
+        for the same pair is refused with `AlreadyExistsError`. A server that
+        cannot pull private images answers `UnsupportedError`.
+      tags: [Registries]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRegistryRequest"
+      responses:
+        "201":
+          description: The login, without its password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistryCredential"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "409":
+          description: A login is already held for this registry and prefix
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  message: "A credential for ghcr.io/acme/ already exists; remove it before adding another"
+                  type: AlreadyExistsError
+                  code: already_exists
+        "501":
+          description: This server does not pull private images
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /{prefix}/images/registries/{registry_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/registryId"
+
+    delete:
+      operationId: removeRegistry
+      summary: Remove a registry login
+      description: |
+        Removes the login and destroys its password. A server refuses with
+        `InvalidStateError`, naming the boxes, while a box still pulls through
+        the login.
+      tags: [Registries]
+      responses:
+        "204":
+          description: The login is gone, and its password destroyed
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
 
 # ===========================================================================
 # Components
@@ -1248,7 +1566,8 @@ components:
 
           1. **BoxLite-issued** (always enabled). Dashboard-issued API keys
              (`blk_live_…` / `blk_test_…`) — long-lived, org-scoped,
-             survives teammate offboarding. Issued at
+             revoked when the member who created it leaves or is removed
+             from the organization. Issued at
              `https://app.boxlite.ai/settings/api-keys`.
           2. **Federated SSO / enterprise JWTs** (optional, per-deployment).
              JWTs issued by a configured enterprise IdP (Okta, Auth0,
@@ -1323,14 +1642,34 @@ components:
         type: string
       example: exec-01HJK5ABCDEF
 
-    imageId:
-      name: image_id
+    imageName:
+      name: image_name
       in: path
       required: true
-      description: Image manifest digest (e.g., `sha256:abc123...`)
+      description: |
+        Registry and repository, without a tag or digest. It has slashes, so
+        it is sent URL-encoded as one segment.
       schema:
         type: string
-      example: "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
+      example: "quay.io%2Facme%2Fapp"
+
+    imageAlias:
+      name: alias
+      in: path
+      required: true
+      description: Catalog alias to delete
+      schema:
+        type: string
+      example: stable
+
+    registryId:
+      name: registry_id
+      in: path
+      required: true
+      description: Server-assigned registry login identifier
+      schema:
+        type: string
+        format: uuid
 
     volumeId:
       name: volume_id
@@ -1617,8 +1956,7 @@ components:
           type: string
           description: Human-readable label. Optional.
         path_prefix:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: |
             Routing-slot value the client should substitute into the
             `{prefix}` URL parameter on box-scoped requests. Opaque
@@ -1647,9 +1985,8 @@ components:
             so under-scoped credentials surface immediately rather than
             at first use.
         expires_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
           description: |
             Optional expiry. `null` for long-lived dashboard-issued keys;
             ISO 8601 timestamp for rotating credentials.
@@ -1777,8 +2114,7 @@ components:
           maxLength: 128
           example: 01HJK4TNRPQSXYZ8WM6NCVT9R5
         name:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: User-defined name (unique within the routing-slot scope)
           example: my-box
         status:
@@ -1800,8 +2136,7 @@ components:
             activity, which is always the case for a server without an
             AutoStop sweeper.
         pid:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: VMM subprocess PID (null if not running)
         image:
           type: string
@@ -1863,6 +2198,25 @@ components:
             list. So absence in those responses says nothing either way: read
             the box itself to find out.
           example: 137
+        network:
+          $ref: "#/components/schemas/NetworkInfo"
+          description: |
+            The box's effective network policy, both directions. Absent from
+            a server that predates the field; a client then reports network
+            metadata as unknown rather than as any particular policy.
+
+    NetworkInfo:
+      type: object
+      description: |
+        Network policy as the server holds it. Mirrors the `network` of
+        `CreateBoxRequest` field for field, minus the deprecated flat
+        shape; `inbound.allow_net` is always empty today.
+      required: [outbound, inbound]
+      properties:
+        outbound:
+          $ref: "#/components/schemas/OutboundNetworkSpec"
+        inbound:
+          $ref: "#/components/schemas/InboundNetworkSpec"
 
     BoxStatus:
       type: string
@@ -1965,7 +2319,7 @@ components:
           $ref: "#/components/schemas/NetworkSpec"
           description: |
             Optional network policy. Omitting `network` defaults inbound
-            service access to `disabled` (private).
+            service access to `disabled`.
           default:
             inbound:
               mode: disabled
@@ -2165,8 +2519,9 @@ components:
           $ref: "#/components/schemas/InboundNetworkSpec"
           description: |
             Optional inbound service access policy. Omission means
-            `mode=disabled` (private), including for legacy flat network
-            requests. Send `mode=enabled` to make the box public.
+            `mode=disabled`, including for legacy flat network requests.
+            Send `mode=enabled` to let exposed services be reached without
+            sign-in.
           default:
             mode: disabled
         mode:
@@ -2221,8 +2576,9 @@ components:
           type: string
           enum: [enabled, disabled]
           description: |
-            `enabled` means service endpoints exposed from the box are publicly
-            reachable through the remote proxy. `disabled` means private.
+            `enabled` means service endpoints exposed from the box are
+            reachable through the remote proxy without sign-in. `disabled`
+            makes them unreachable through the proxy, even with a credential.
         allow_net:
           type: array
           items:
@@ -2338,8 +2694,7 @@ components:
           items:
             $ref: "#/components/schemas/Box"
         next_page_token:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: |
             Opaque token for next page. Null or absent if no more results.
 
@@ -2404,19 +2759,16 @@ components:
             - killed
             - timed_out
         exit_code:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Process exit code (null while running)
         started_at:
           type: string
           format: date-time
         duration_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Total execution duration in milliseconds
         error_message:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Diagnostic message if process died unexpectedly
 
     SignalRequest:
@@ -2444,6 +2796,86 @@ components:
           minimum: 1
           description: Terminal height in rows
           example: 40
+
+    SshConfig:
+      type: object
+      description: Complete replacement SSH configuration; never persisted or logged by the runtime.
+      required: [listen_address, host_private_key, accounts]
+      additionalProperties: false
+      properties:
+        listen_address:
+          type: string
+          description: Address the guest SSH listener binds.
+        host_private_key:
+          type: string
+          writeOnly: true
+          description: Unencrypted OpenSSH host private key; never returned.
+        accounts:
+          type: array
+          minItems: 1
+          description: Credentials accepted for SSH logins.
+          items:
+            $ref: "#/components/schemas/SshAccount"
+
+    SshAccount:
+      type: object
+      description: Credentials accepted for one SSH login (not a container OS identity).
+      required: [login]
+      additionalProperties: false
+      properties:
+        login:
+          type: string
+          description: SSH login name.
+        authorized_keys:
+          type: array
+          default: []
+          description: |
+            OpenSSH public keys for this login; defaults to empty, but the guest
+            requires a key or CA to accept the account.
+          items:
+            type: string
+        ca:
+          description: Optional certificate authority; null means keys only.
+          oneOf:
+            - $ref: "#/components/schemas/SshCaConfig"
+            - type: "null"
+
+    SshCaConfig:
+      type: object
+      description: Certificate authority and required certificate principal.
+      required: [public_key, principal]
+      additionalProperties: false
+      properties:
+        public_key:
+          type: string
+          description: OpenSSH public key of the certificate authority.
+        principal:
+          type: string
+          description: Certificate principal required for this account.
+
+    SshStatus:
+      type: object
+      description: |
+        Guest SSH listener state; contains no credentials. Every field is
+        required: never read a partial one as a disabled status.
+      required: [enabled, generation, listen_address, host_public_key, host_key_fingerprint]
+      properties:
+        enabled:
+          type: boolean
+          description: Whether the guest SSH listener is running.
+        generation:
+          type: integer
+          minimum: 0
+          description: Increments on each successful listener start.
+        listen_address:
+          type: string
+          description: Actual bound address; empty while disabled.
+        host_public_key:
+          type: string
+          description: Comment-free host public key; empty while disabled.
+        host_key_fingerprint:
+          type: string
+          description: SHA-256 host key fingerprint; empty while disabled.
 
     # =======================================================================
     # Network
@@ -2504,29 +2936,23 @@ components:
           type: integer
           description: Bytes received from box via stdout/stderr (monotonic)
         cpu_percent:
-          type: number
+          type: [number, "null"]
           format: float
-          nullable: true
           description: CPU usage percentage (0.0 - 100.0)
         memory_bytes:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Current memory usage in bytes
         network_bytes_sent:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Network bytes sent (host → guest)
         network_bytes_received:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Network bytes received (guest → host)
         network_tcp_connections:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Current ESTABLISHED TCP connections
         network_tcp_errors:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Total failed TCP connection attempts
         boot_timing:
           $ref: "#/components/schemas/BootTiming"
@@ -2536,36 +2962,28 @@ components:
       description: Stage-level initialization timing breakdown (milliseconds)
       properties:
         total_create_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Total time from create() to box ready
         guest_boot_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Time from subprocess spawn to guest agent ready
         filesystem_setup_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: "Stage 1: directory structure creation"
         image_prepare_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: "Stage 2: image pull and layer extraction"
         guest_rootfs_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: "Stage 3: guest rootfs bootstrap"
         box_config_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: "Stage 4: disk and network configuration"
         box_spawn_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: "Stage 5: subprocess spawn"
         container_init_ms:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: "Stage 6: container initialization inside guest"
 
     # =======================================================================
@@ -2573,7 +2991,7 @@ components:
     # =======================================================================
     ImageInfo:
       type: object
-      description: Cached container image metadata (maps to ImageInfo)
+      description: One reference a server holds (maps to ImageInfo)
       required: [reference, repository, tag, id, cached_at]
       properties:
         reference:
@@ -2595,20 +3013,123 @@ components:
         cached_at:
           type: string
           format: date-time
-          description: When the image was pulled into the local cache
+          description: When the build this reference names was recorded
         size_bytes:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           description: Image size in bytes
 
-    PullImageRequest:
+    ImageDetail:
       type: object
-      required: [reference]
+      description: An image name and every build held under it (maps to ImageDetail)
+      required: [name, aliases, curated, versions]
       properties:
-        reference:
+        name:
           type: string
-          description: Image reference to pull from registry
-          example: python:3.11-slim
+          description: Registry and repository, without a tag
+          example: quay.io/acme/app
+        aliases:
+          type: array
+          items:
+            type: string
+        curated:
+          type: boolean
+          description: Provided by the operator rather than recorded from a pull
+        versions:
+          type: array
+          description: Each build held, newest first
+          items:
+            $ref: "#/components/schemas/ImageVersion"
+        history:
+          type: array
+          description: |
+            Where each tag has pointed, newest first. A server may keep only
+            the most recent moves; one that keeps no catalog answers it empty.
+          items:
+            $ref: "#/components/schemas/ImageAliasEvent"
+
+    ImageVersion:
+      type: object
+      required: [digest, source_ref, recorded_at]
+      properties:
+        digest:
+          type: string
+          description: Manifest digest
+        size_bytes:
+          type: [integer, "null"]
+          description: Sum of the layer sizes the manifest declares, when known
+        source_ref:
+          type: string
+          description: The reference that was pulled to get this build
+        recorded_at:
+          type: string
+          format: date-time
+        aliases:
+          type: array
+          description: Tags that point at this build now
+          items:
+            type: string
+        last_used_at:
+          type: [string, "null"]
+          format: date-time
+          description: When a box last started from this build. Null when that is not known
+        upstream_missing_at:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            When a pull first found the build gone from its registry. Runners
+            that cached it still start it. Null while it is not known to be gone.
+
+    ImageAliasEvent:
+      type: object
+      description: One alias creation, including an alias seeded by a registry pull
+      required: [alias, to_digest, recorded_at]
+      properties:
+        alias:
+          type: string
+          example: stable
+        from_digest:
+          type: [string, "null"]
+          description: Build the tag pointed at before. Null when the tag did not exist yet
+        to_digest:
+          type: string
+          description: Build the tag points at from then on
+        actor:
+          type: [string, "null"]
+          description: Who moved the tag. Null when a pull recorded it
+        recorded_at:
+          type: string
+          format: date-time
+
+    CreateImageAliasRequest:
+      type: object
+      required: [alias, digest]
+      properties:
+        alias:
+          type: string
+          description: New catalog alias; existing names cannot be overwritten
+          pattern: "^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$"
+          example: stable
+        digest:
+          type: string
+          description: Manifest digest of a build the image holds
+          pattern: "^sha256:[a-f0-9]{64}$"
+          example: "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
+
+    ImageUsage:
+      type: object
+      required: [count, limit, known_bytes]
+      properties:
+        count:
+          type: integer
+          description: Images held
+        limit:
+          type: integer
+          description: Most images the routing slot may hold
+        known_bytes:
+          type: integer
+          description: |
+            Sum of the sizes the held builds' manifests declare. Not the bytes
+            stored: a layer two builds share is counted for each.
 
     ListImagesResponse:
       type: object
@@ -2619,6 +3140,69 @@ components:
           items:
             $ref: "#/components/schemas/ImageInfo"
         next_page_token:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Opaque token for next page
+
+    # =======================================================================
+    # Registries
+    # =======================================================================
+    CreateRegistryRequest:
+      type: object
+      required: [registry_host, username, password]
+      properties:
+        registry_host:
+          type: string
+          description: The registry the login is for; the server says which it takes logins for
+          example: ghcr.io
+        repository_prefix:
+          type: string
+          description: |
+            The repositories it covers, as whole path segments ending in `/`.
+            Omitted or empty for the whole registry.
+          maxLength: 255
+          example: acme/
+        username:
+          type: string
+          minLength: 1
+          maxLength: 255
+          example: acme-bot
+        password:
+          type: string
+          description: Password or access token. Never returned.
+          writeOnly: true
+          minLength: 1
+          maxLength: 8192
+
+    RegistryCredential:
+      type: object
+      description: A registry login. There is no password field.
+      required: [id, registry_host, repository_prefix, username, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        registry_host:
+          type: string
+          example: ghcr.io
+        repository_prefix:
+          type: string
+          description: Empty for the whole registry
+          example: acme/
+        username:
+          type: string
+          example: acme-bot
+        created_by:
+          type: [string, "null"]
+          description: The user who added it
+        created_at:
+          type: string
+          format: date-time
+
+    ListRegistriesResponse:
+      type: object
+      required: [registries]
+      properties:
+        registries:
+          type: array
+          items:
+            $ref: "#/components/schemas/RegistryCredential"

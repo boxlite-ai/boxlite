@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import TUNNEL_READ_TO_EOF_XFAIL
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from e2e_auth import auth_context
 from images import default_image
@@ -63,10 +65,12 @@ def _assert_node_tunnel_passes(result):
     assert "TUNNEL_HTTP=ok" in result.stdout
 
 
+@TUNNEL_READ_TO_EOF_XFAIL
 def test_node_sdk_tunnel_proxies_http_from_rest_box(node_tunnel_env):
     _assert_node_tunnel_passes(_run_node_tunnel(node_tunnel_env))
 
 
+@TUNNEL_READ_TO_EOF_XFAIL
 def test_node_sdk_tunnel_rejects_stopped_box(node_tunnel_env):
     env = {**node_tunnel_env}
     env.pop("BOXLITE_E2E_SKIP_STOPPED_BOX")

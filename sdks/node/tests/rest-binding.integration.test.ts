@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { JsBoxlite, BoxliteRestOptions } from "../lib/index.js";
+import { JsBoxlite, BoxliteRestOptions, errorCode } from "../lib/index.js";
 
 // `lib/index.ts` exposes the cross-SDK `BoxliteRestOptions` bag while the
 // native binding takes its own `BoxliteRestOptions` class (the
@@ -51,6 +51,28 @@ describe("native-class subclassing", () => {
       }
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+// What `errorCode` reads is the message the binding rejects with, so check it
+// on a rejection that really crossed the binding: a REST runtime refuses
+// `pull` before sending anything, since it pulls when a box is created.
+describe("errors thrown by the binding", () => {
+  test("carry the code errorCode reads", async () => {
+    const runtime = JsBoxlite.rest(
+      new BoxliteRestOptions({ url: "http://127.0.0.1:1" }),
+    );
+    try {
+      let thrown: unknown;
+      try {
+        await runtime.images.pull("alpine:latest");
+      } catch (err) {
+        thrown = err;
+      }
+      expect(errorCode(thrown)).toBe("unsupported");
+    } finally {
+      runtime.close();
     }
   });
 });

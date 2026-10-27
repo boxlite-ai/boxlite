@@ -46,7 +46,6 @@ import { OrganizationAuthContext } from '../../common/interfaces/auth-context.in
 import { RequiredOrganizationResourcePermissions } from '../../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
-import { PortPreviewUrlDto, SignedPortPreviewUrlDto } from '../dto/port-preview-url.dto'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
@@ -60,6 +59,8 @@ import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-r
 import { SkipThrottle } from '@nestjs/throttler'
 import { ThrottlerScope } from '../../common/decorators/throttler-scope.decorator'
 import { ToolboxProxyUrlDto } from '../dto/toolbox-proxy-url.dto'
+import { AttachTicketDto, CreateAttachTicketDto } from '../dto/attach-ticket.dto'
+import { ATTACH_TICKET_TTL_SECONDS, AttachTicketService } from '../services/attach-ticket.service'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
@@ -79,6 +80,7 @@ export class BoxController {
     private readonly runnerService: RunnerService,
     private readonly boxService: BoxService,
     @InjectRedis() private readonly redis: Redis,
+    private readonly attachTickets: AttachTicketService,
   ) {
     this.redisSubscriber = this.redis.duplicate()
     this.redisSubscriber.subscribe(BOX_EVENT_CHANNEL)
@@ -384,49 +386,13 @@ export class BoxController {
       updateStateDto.state,
       updateStateDto.recoverable,
       updateStateDto.errorReason,
+      // The two travel together; a report carrying a digest without a size is
+      // malformed, and recording 0 for it says the same thing a manifest that
+      // declared no layer sizes says.
+      updateStateDto.imageDigest !== undefined
+        ? { digest: updateStateDto.imageDigest, sizeBytes: updateStateDto.imageSizeBytes ?? 0 }
+        : undefined,
     )
-  }
-
-  @Post(':boxIdOrName/public/:isPublic')
-  @ApiOperation({
-    summary: 'Update public status',
-    operationId: 'updatePublicStatus',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiParam({
-    name: 'isPublic',
-    description: 'Public status to set',
-    type: 'boolean',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Public status has been successfully updated',
-    type: BoxDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  @UseGuards(BoxAccessGuard)
-  @Audit({
-    action: AuditAction.UPDATE_PUBLIC_STATUS,
-    targetType: AuditTarget.BOX,
-    targetIdFromRequest: (req) => req.params.boxIdOrName,
-    targetIdFromResult: (result: BoxDto) => result?.id,
-    requestMetadata: {
-      params: (req) => ({
-        isPublic: req.params.isPublic,
-      }),
-    },
-  })
-  async updatePublicStatus(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-    @Param('isPublic') isPublic: boolean,
-  ): Promise<BoxDto> {
-    const box = await this.boxService.updatePublicStatus(boxIdOrName, isPublic, authContext.organizationId)
-    return this.boxService.toBoxDto(box)
   }
 
   @Post(':boxId/last-activity')
@@ -558,8 +524,8 @@ export class BoxController {
   //   targetIdFromResult: (result: BoxDto) => result?.id,
   //   requestMetadata: {
   //     body: (req: TypedRequest<UpdateBoxNetworkSettingsDto>) => ({
-  //       networkBlockAll: req.body?.networkBlockAll,
-  //       networkAllowList: req.body?.networkAllowList,
+  //       outboundEnabled: req.body?.outboundEnabled,
+  //       outboundAllowNet: req.body?.outboundAllowNet,
   //     }),
   //   },
   // })
@@ -570,111 +536,12 @@ export class BoxController {
   // ): Promise<BoxDto> {
   //   const box = await this.boxService.updateNetworkSettings(
   //     boxIdOrName,
-  //     networkSettings.networkBlockAll,
-  //     networkSettings.networkAllowList,
+  //     networkSettings.outboundEnabled,
+  //     networkSettings.outboundAllowNet,
   //     authContext.organizationId,
   //   )
   //   return BoxDto.fromBox(box, '')
   // }
-
-  @Get(':boxIdOrName/ports/:port/preview-url')
-  @ApiOperation({
-    summary: 'Get preview URL for a box port',
-    operationId: 'getPortPreviewUrl',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiParam({
-    name: 'port',
-    description: 'Port number to get preview URL for',
-    type: 'number',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Preview URL for the specified port',
-    type: PortPreviewUrlDto,
-  })
-  @UseGuards(BoxAccessGuard)
-  async getPortPreviewUrl(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-    @Param('port') port: number,
-  ): Promise<PortPreviewUrlDto> {
-    return this.boxService.getPortPreviewUrl(boxIdOrName, authContext.organizationId, port)
-  }
-
-  @Get(':boxIdOrName/ports/:port/signed-preview-url')
-  @ApiOperation({
-    summary: 'Get signed preview URL for a box port',
-    operationId: 'getSignedPortPreviewUrl',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiParam({
-    name: 'port',
-    description: 'Port number to get signed preview URL for',
-    type: 'integer',
-  })
-  @ApiQuery({
-    name: 'expiresInSeconds',
-    required: false,
-    type: 'integer',
-    description: 'Expiration time in seconds (default: 60 seconds)',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Signed preview URL for the specified port',
-    type: SignedPortPreviewUrlDto,
-  })
-  @UseGuards(BoxAccessGuard)
-  async getSignedPortPreviewUrl(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-    @Param('port') port: number,
-    @Query('expiresInSeconds') expiresInSeconds?: number,
-  ): Promise<SignedPortPreviewUrlDto> {
-    return this.boxService.getSignedPortPreviewUrl(boxIdOrName, authContext.organizationId, port, expiresInSeconds)
-  }
-
-  @Post(':boxIdOrName/ports/:port/signed-preview-url/:token/expire')
-  @ApiOperation({
-    summary: 'Expire signed preview URL for a box port',
-    operationId: 'expireSignedPortPreviewUrl',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiParam({
-    name: 'port',
-    description: 'Port number to expire signed preview URL for',
-    type: 'integer',
-  })
-  @ApiParam({
-    name: 'token',
-    description: 'Token to expire signed preview URL for',
-    type: 'string',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Signed preview URL has been expired',
-  })
-  @UseGuards(BoxAccessGuard)
-  async expireSignedPortPreviewUrl(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-    @Param('port') port: number,
-    @Param('token') token: string,
-  ): Promise<void> {
-    await this.boxService.expireSignedPreviewUrlToken(boxIdOrName, authContext.organizationId, token, port)
-  }
 
   @Get(':boxId/toolbox-proxy-url')
   @ApiOperation({
@@ -695,6 +562,44 @@ export class BoxController {
   async getToolboxProxyUrl(@Param('boxId') boxId: string): Promise<ToolboxProxyUrlDto> {
     const url = await this.boxService.getToolboxProxyUrl(boxId)
     return new ToolboxProxyUrlDto(url)
+  }
+
+  // A browser cannot set `Authorization` on a WebSocket, so the dashboard trades
+  // its bearer here for a ticket the `/v1` attach upgrade accepts as `?ticket=`
+  // (see BoxliteWsProxyService). It lives on the cloud API, not the Box API,
+  // because only the cloud serves browsers. Requires write:boxes, like exec.
+  @Post(':boxIdOrName/attach-tickets')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Get a one-time ticket for the attach WebSocket',
+    operationId: 'createAttachTicket',
+  })
+  @ApiParam({
+    name: 'boxIdOrName',
+    description: 'ID or name of the box',
+    type: 'string',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'A single-use ticket for one attach upgrade to the execution',
+    type: AttachTicketDto,
+  })
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @UseGuards(BoxAccessGuard)
+  async createAttachTicket(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxIdOrName') boxIdOrName: string,
+    @Body() dto: CreateAttachTicketDto,
+  ): Promise<AttachTicketDto> {
+    const box = await this.boxService.findOneByIdOrName(boxIdOrName, authContext.organizationId)
+    const ticket = await this.attachTickets.issue({
+      userId: authContext.userId,
+      organizationId: authContext.organizationId,
+      boxId: box.id,
+      execId: dto.executionId,
+      apiKeyHash: authContext.apiKey?.keyHash,
+    })
+    return { ticket, expiresIn: ATTACH_TICKET_TTL_SECONDS }
   }
 
   // wait up to `timeoutSeconds` for the box to start; if it doesn’t, return current box

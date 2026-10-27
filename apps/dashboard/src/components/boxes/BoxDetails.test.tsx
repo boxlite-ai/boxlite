@@ -13,15 +13,22 @@ import BoxDetails from './BoxDetails'
 const mocks = vi.hoisted(() => ({
   box: undefined as unknown,
   volumes: [] as { id: string; name: string }[],
+  images: [] as { id: string | null; name: string; curated: boolean; curatedRef: string | null }[],
   boxRefetch: vi.fn(),
-  terminalRefetch: vi.fn(),
-  terminalReset: vi.fn(),
+  terminalMounts: vi.fn(),
   navigate: vi.fn(),
   setSearchParams: vi.fn(),
   mutateAsync: vi.fn(),
 }))
 
 vi.mock('react-router-dom', () => ({
+  Link: ({ to, children, className }: { to: string; children: unknown; className?: string }) => (
+    <a href={to} className={className}>
+      {children as never}
+    </a>
+  ),
+  generatePath: (path: string, params: Record<string, string>) =>
+    path.replace(/:(\w+)/g, (_match, key: string) => params[key] ?? ''),
   useNavigate: () => mocks.navigate,
   useParams: () => ({ boxId: 'box-1' }),
   useSearchParams: () => [new URLSearchParams(), mocks.setSearchParams],
@@ -90,15 +97,8 @@ vi.mock('@/hooks/queries/useVolumesQuery', () => ({
   useVolumesQuery: () => ({ data: mocks.volumes }),
 }))
 
-vi.mock('@/hooks/queries/useTerminalSessionQuery', () => ({
-  useTerminalSessionQuery: () => ({
-    data: { url: 'https://terminal.example/session-1', expiresAt: Date.now() + 300000 },
-    isLoading: false,
-    isError: false,
-    isFetching: false,
-    refetch: mocks.terminalRefetch,
-    reset: mocks.terminalReset,
-  }),
+vi.mock('@/hooks/queries/useImagesQuery', () => ({
+  useImagesQuery: () => ({ data: mocks.images }),
 }))
 
 vi.mock('@/hooks/mutations/useStartBoxMutation', () => ({
@@ -117,9 +117,15 @@ vi.mock('@/hooks/mutations/useDeleteBoxMutation', () => ({
   useDeleteBoxMutation: () => ({ isPending: false, mutateAsync: mocks.mutateAsync }),
 }))
 
-vi.mock('./BoxTerminalFrame', () => ({
-  BoxTerminalFrame: ({ sessionUrl }: { sessionUrl: string }) => <div data-testid="terminal-frame">{sessionUrl}</div>,
-}))
+vi.mock('./BoxTerminal', async () => {
+  const { useEffect } = await import('react')
+  return {
+    BoxTerminal: ({ boxId }: { boxId: string }) => {
+      useEffect(() => mocks.terminalMounts(), [])
+      return <div data-testid="terminal">{boxId}</div>
+    },
+  }
+})
 
 function makeRunningBox(): Box {
   return {
@@ -152,6 +158,7 @@ describe('BoxDetails refresh', () => {
   beforeEach(() => {
     mocks.box = makeRunningBox()
     mocks.volumes = []
+    mocks.images = []
     vi.clearAllMocks()
   })
 
@@ -179,9 +186,8 @@ describe('BoxDetails refresh', () => {
   it('reconnects an active terminal when the detail refresh button is clicked', async () => {
     await renderBoxDetails()
 
-    expect(mocks.terminalRefetch).not.toHaveBeenCalled()
-    const frameBeforeRefresh = document.querySelector('[data-testid="terminal-frame"]')
-    expect(frameBeforeRefresh).not.toBeNull()
+    expect(mocks.terminalMounts).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('[data-testid="terminal"]')).not.toBeNull()
 
     const refreshButton = document.querySelector<HTMLButtonElement>('button[title="refresh"]')
     expect(refreshButton).not.toBeNull()
@@ -192,8 +198,8 @@ describe('BoxDetails refresh', () => {
     await flushReactWork()
 
     expect(mocks.boxRefetch).toHaveBeenCalledTimes(1)
-    expect(mocks.terminalRefetch).toHaveBeenCalledTimes(1)
-    expect(document.querySelector('[data-testid="terminal-frame"]')).toBe(frameBeforeRefresh)
+    // A fresh mount is a fresh shell: the refresh reconnects.
+    expect(mocks.terminalMounts).toHaveBeenCalledTimes(2)
   })
 
   // The list page navigates here by id, so the name the user gave the box must
@@ -226,5 +232,41 @@ describe('BoxDetails refresh', () => {
     // Unresolvable handle degrades to the handle itself, not a blank label.
     expect(text).toContain('vol-deleted')
     expect(text).toContain('/data (acme)')
+  })
+  // A box stores the reference it was created with. Once a start has put that
+  // image in the catalog, the reference is how a reader gets to its versions.
+  it('links the image to its catalog entry once the catalog has it', async () => {
+    mocks.images = [{ id: 'img-agent', name: 'ghcr.io/acme/agent', curated: false, curatedRef: null }]
+    mocks.box = { ...(makeRunningBox() as object), image: 'ghcr.io/acme/agent:1.0' }
+
+    await renderBoxDetails()
+
+    const link = [...document.querySelectorAll('a')].find((a) => a.textContent === 'ghcr.io/acme/agent:1.0')
+    expect(link?.getAttribute('href')).toBe('/dashboard/images/img-agent')
+  })
+
+  // The API's reason for a private pull no credential covers names the fix;
+  // the page carries the way to it, with the registry already chosen.
+  it('offers to connect the registry a private pull was refused by', async () => {
+    mocks.box = {
+      ...(makeRunningBox() as object),
+      state: BoxState.ERROR,
+      image: 'quay.io/acme/tools:2',
+      errorReason:
+        "Failed to pull image 'quay.io/acme/tools:2': quay.io refused the pull (UNAUTHORIZED). The image is private or does not exist, and no registry login of the organization covers it.",
+    }
+
+    await renderBoxDetails()
+
+    const link = [...document.querySelectorAll('a')].find((a) => a.textContent?.includes('Connect a registry'))
+    expect(link?.getAttribute('href')).toBe('/dashboard/images/registries?connect=quay.io')
+  })
+
+  it('offers no registry for an error that is not a refused private pull', async () => {
+    mocks.box = { ...(makeRunningBox() as object), state: BoxState.ERROR, errorReason: 'Out of capacity' }
+
+    await renderBoxDetails()
+
+    expect(document.body.textContent).not.toContain('Connect a registry')
   })
 })

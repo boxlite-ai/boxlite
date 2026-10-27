@@ -113,6 +113,13 @@ export type RunnerRequest = {
   /** Where a host registers itself, and where it ships telemetry. */
   apiUrl: $util.Input<string>
   otlpUrl: $util.Input<string>
+  /**
+   * The registry proxy's host, where a runner presents its own key to pull a
+   * private image. Null on a cloud that runs no proxy. A field of its own
+   * rather than one of `environment`, because a host already running has to
+   * be converged onto it, and that path reads fields, not the boot script.
+   */
+  registryProxyHost: $util.Input<string> | null
   /** Values every host reads. */
   environment: Record<string, $util.Input<string>>
   /** Names it reads by reference: its own registration key, and the admin key. */
@@ -169,6 +176,24 @@ export const runnerPolicyName = ({ app, stage }: { app: string; stage: string })
 
 export const runnerNameFor = ({ app, stage, index }: { app: string; stage: string; index: number }): string =>
   index === 1 ? runnerNamePrefix({ app, stage }) : `${runnerNamePrefix({ app, stage })}-${index}`
+
+/**
+ * What a host's data disk is called: `<app>-<stage>-runner-data`, numbered as the host is.
+ *
+ * Its own artifact rather than the host's name plus a segment, because a grant
+ * to grow these disks would match this prefix, and a boot disk carries its
+ * host's name. A host's own suffix is only ever a number, so no host or boot
+ * disk of the stage starts with it.
+ */
+export const runnerDataDiskPrefix = ({ app, stage }: { app: string; stage: string }): string =>
+  instanceFor({ app, stage, artifact: 'runner-data' })
+
+/** The data disk of the host called `host`: the same number, under the data disk prefix. */
+export const runnerDataDiskNameFor = ({ app, stage, host }: { app: string; stage: string; host: string }): string => {
+  const hosts = runnerNamePrefix({ app, stage })
+  if (!host.startsWith(hosts)) throw new Error(`${host} is not a runner host of ${hosts}`)
+  return `${runnerDataDiskPrefix({ app, stage })}${host.slice(hosts.length)}`
+}
 
 export const RUNNER_PORT = 3003
 

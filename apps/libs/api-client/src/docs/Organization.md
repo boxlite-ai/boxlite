@@ -20,7 +20,6 @@ Name | Type | Description | Notes
 **maxCpuPerBox** | **number** | Max CPU per box | [default to undefined]
 **maxMemoryPerBox** | **number** | Max memory per box | [default to undefined]
 **maxDiskPerBox** | **number** | Max disk per box | [default to undefined]
-**templateDeactivationTimeoutMinutes** | **number** | Time in minutes before an unused template is deactivated | [default to 20160]
 **boxLimitedNetworkEgress** | **boolean** | Box default network block all | [default to undefined]
 **defaultRegionId** | **string** | Default region ID | [optional] [default to undefined]
 **authenticatedRateLimit** | **number** | Authenticated rate limit per minute | [default to undefined]
@@ -52,7 +51,6 @@ const instance: Organization = {
     maxCpuPerBox,
     maxMemoryPerBox,
     maxDiskPerBox,
-    templateDeactivationTimeoutMinutes,
     boxLimitedNetworkEgress,
     defaultRegionId,
     authenticatedRateLimit,

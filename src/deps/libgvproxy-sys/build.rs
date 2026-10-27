@@ -125,6 +125,11 @@ fn main() {
     // paths, so we add them explicitly for the linker to find libresolv.a.
     #[cfg(target_os = "linux")]
     {
+        // Non-FHS hosts such as Nix point this at a directory holding libresolv.a.
+        println!("cargo:rerun-if-env-changed=BOXLITE_LIBRESOLV_DIR");
+        if let Ok(dir) = env::var("BOXLITE_LIBRESOLV_DIR") {
+            println!("cargo:rustc-link-search=native={}", dir);
+        }
         let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
         // Debian/Ubuntu: /usr/lib/<triple>
         let gnu_triple = match arch.as_str() {

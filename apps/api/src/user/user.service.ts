@@ -16,6 +16,10 @@ import { UpdateUserDto } from './dto/update-user.dto'
 import { UserCreatedEvent } from './events/user-created.event'
 import { UserDeletedEvent } from './events/user-deleted.event'
 import { UserEmailVerifiedEvent } from './events/user-email-verified.event'
+import { recordOutcomes } from '../common/utils/business-event.util'
+import { Context } from '../common/context/context'
+
+const PG_UNIQUE_VIOLATION = '23505'
 
 @Injectable()
 export class UserService {
@@ -26,7 +30,8 @@ export class UserService {
     private readonly dataSource: DataSource,
   ) {}
 
-  async create(createUserDto: CreateUserDto): Promise<User> {
+  /** Records the user.registration events of the new user, started by ctx. */
+  async create(createUserDto: CreateUserDto, ctx: Context): Promise<User> {
     const defaultOrganizationDefaultRegionId =
       createUserDto.defaultOrganizationDefaultRegionId ?? createUserDto.personalOrganizationDefaultRegionId
     let user = new User()
@@ -45,13 +50,18 @@ export class UserService {
       user.role = createUserDto.role
     }
 
-    await this.dataSource.transaction(async (em) => {
-      user = await em.save(user)
-      await this.eventEmitter.emitAsync(
-        UserEvents.CREATED,
-        new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId),
-      )
-    })
+    await recordOutcomes(
+      { name: 'user.registration', correlationId: createUserDto.id, ctx },
+      () =>
+        this.dataSource.transaction(async (em) => {
+          user = await em.save(user)
+          await this.eventEmitter.emitAsync(
+            UserEvents.CREATED,
+            new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId),
+          )
+        }),
+      (error) => ((error as { code?: string })?.code === PG_UNIQUE_VIOLATION ? 'user_conflict' : 'internal'),
+    )
 
     return user
   }
@@ -89,10 +99,13 @@ export class UserService {
   }
 
   async remove(id: string): Promise<void> {
-    await this.dataSource.transaction(async (em) => {
+    const deletion = await this.dataSource.transaction(async (em) => {
       await em.delete(User, id)
-      await this.eventEmitter.emitAsync(UserEvents.DELETED, new UserDeletedEvent(em, id))
+      const event = new UserDeletedEvent(em, id)
+      await this.eventEmitter.emitAsync(UserEvents.DELETED, event)
+      return event
     })
+    await deletion.runAfterCommitTasks()
   }
 
   /**

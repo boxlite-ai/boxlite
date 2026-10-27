@@ -85,10 +85,10 @@ type OutboundNetworkSpec struct {
 
 // InboundNetworkSpec configures whether services running inside the box are
 // reachable from outside it. Aligned field-for-field with
-// OutboundNetworkSpec: ModeEnabled means publicly reachable, ModeDisabled
-// or an unset Mode means private. AllowNet exists for shape symmetry only —
-// no layer enforces an inbound allowlist yet, so a non-empty value is
-// rejected.
+// OutboundNetworkSpec: ModeEnabled means reachable without sign-in;
+// ModeDisabled or an unset Mode means unreachable from outside. AllowNet
+// exists for shape symmetry only — no layer enforces an inbound allowlist
+// yet, so a non-empty value is rejected.
 type InboundNetworkSpec struct {
 	Mode     NetworkMode
 	AllowNet []string

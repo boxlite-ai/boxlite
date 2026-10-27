@@ -12,6 +12,7 @@ jest.mock('../region/services/region.service', () => ({
 }))
 
 import { ApiKeyStrategy } from './api-key.strategy'
+import { generateApiKeyHash } from '../common/utils/api-key'
 
 const jwtToken = 'eyJhbGciOiJSUzI1NiJ9.eyJhdWQiOiJib3hsaXRlIn0.signature'
 
@@ -54,6 +55,32 @@ function createStrategy() {
 }
 
 describe('ApiKeyStrategy', () => {
+  it('translates historical cached grants without separating the revocation cache', async () => {
+    const { strategy, mocks } = createStrategy()
+    const key = `api-key:validation:${generateApiKeyHash('cached-key')}`
+    const cache = new Map([
+      [
+        key,
+        JSON.stringify({
+          userId: 'owner',
+          organizationId: 'org-1',
+          name: 'key',
+          permissions: ['read:tenant', 'write:tenant', 'write:boxes'],
+        }),
+      ],
+    ])
+    mocks.redis.get.mockImplementation(async (name: string) => cache.get(name) ?? null)
+    mocks.userService.findOne.mockResolvedValue({ id: 'owner', email: 'owner@example.com', role: 'user' })
+    const principal = await strategy.validate('cached-key')
+    expect(principal).toMatchObject({ apiKey: { permissions: ['read:members', 'write:members', 'write:boxes'] } })
+    expect(mocks.apiKeyService.getApiKeyByValue).not.toHaveBeenCalled()
+
+    // The unchanged invalidation key is also used by old API and identity-link instances.
+    cache.delete(key)
+    await expect(strategy.validate('cached-key')).resolves.toBeNull()
+    expect(mocks.apiKeyService.getApiKeyByValue).toHaveBeenCalledWith('cached-key')
+  })
+
   it('delegates JWT-shaped bearer tokens to the JWT strategy before reading API-key config', async () => {
     const { strategy, mocks } = createStrategy()
 

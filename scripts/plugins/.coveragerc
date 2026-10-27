@@ -1,0 +1,3 @@
+[run]
+include = scripts/plugins/*.py
+relative_files = True

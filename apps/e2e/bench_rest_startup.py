@@ -28,10 +28,14 @@ import statistics
 import subprocess
 import sys
 import time
+import uuid
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sweep import DEFAULT_NAME_PREFIX  # noqa: E402  — the prefix the sweep reclaims by
 
 sys.path.insert(0, str(Path(__file__).parent / "lib"))
 from e2e_auth import auth_context
@@ -55,8 +59,15 @@ def run_one(ctx, iteration: int) -> dict[str, float]:
 
     # 1. Create box (wall clock)
     t0 = time.monotonic()
+    # Named and time-bounded like every box the cases create
+    # (apps/e2e/cases/conftest.py): this script removes its box in a `finally`,
+    # but a killed run would otherwise strand one that nothing reclaims —
+    # `apps/e2e/sweep.py` only touches the `e2e-` prefix, and auto_delete is
+    # disabled by default on the server.
     _, body = api_request(ctx, "POST", "boxes", {
         "image": IMAGE, "cpus": 1, "memory_mib": 256, "disk_size_gb": 4,
+        "name": f"{DEFAULT_NAME_PREFIX}bench-{uuid.uuid4().hex[:8]}",
+        "auto_stop": 300, "auto_delete": 600,
     })
     t_create = time.monotonic() - t0
     bid = body["box_id"]

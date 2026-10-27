@@ -11,7 +11,7 @@ import { BoxMigration } from '../entities/box-migration.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
-import { Injectable, Logger, NotFoundException } from '@nestjs/common'
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { BoxConflictError } from '../errors/box-conflict.error'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { EventEmitter2 } from '@nestjs/event-emitter'
@@ -19,10 +19,16 @@ import { BaseRepository } from '../../common/repositories/base.repository'
 import { BoxEvents } from '../constants/box-events.constants'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { BoxDesiredStateUpdatedEvent } from '../events/box-desired-state-updated.event'
-import { BoxPublicStatusUpdatedEvent } from '../events/box-public-status-updated.event'
+import { BoxInboundModeUpdatedEvent } from '../events/box-inbound-mode-updated.event'
 import { BoxOrganizationUpdatedEvent } from '../events/box-organization-updated.event'
 import { BoxLookupCacheInvalidationService } from '../services/box-lookup-cache-invalidation.service'
 import { BoxCreationAdmissionUnavailableError, BoxCreationLimitExceededError } from '../errors/box-creation-limit.error'
+import { RegistryCredential } from '../../registry/entities/registry-credential.entity'
+import { registryProxyHost } from '../../registry/utils/registry-proxy.util'
+import { matchingCredential } from '../../registry/utils/matching-credential'
+import { parseImageRef, upstreamRefOf } from '../../image/utils/image-ref.util'
+import { OutboundPolicy } from '../runner-adapter/network-policy'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 
 // SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
 // acquire a lock.
@@ -38,15 +44,22 @@ const PG_LOCK_TIMEOUT_CODE = '55P03'
 // boxlite-proxy.controller.ts (PROXY_START_HINT_TIMEOUT_MS).
 const PROXY_START_LOCK_TIMEOUT_MS = 2000
 
-// SERIALIZABLE protects the count-and-write admission decision without a
-// per-organization mutex. PostgreSQL aborts one conflicting transaction with
-// SQLSTATE 40001; retry the whole decision, never only the write.
-const PG_SERIALIZATION_FAILURE_CODE = '40001'
-const CREATION_ADMISSION_MAX_ATTEMPTS = 5
-const CREATION_ADMISSION_BASE_BACKOFF_MS = 5
-const CREATION_ADMISSION_MAX_BACKOFF_MS = 40
-const CREATION_ADMISSION_JITTER_MS = 5
+// Same-organization admissions queue on a transaction-scoped advisory lock
+// keyed by the organization, so a burst waits instead of aborting. The lock
+// must come before the count, under READ COMMITTED: each statement then reads
+// a fresh snapshot that includes the previous holder's committed Box. Cap only
+// the advisory-lock wait, since a queued admission pins a pooled connection;
+// the count and persist keep the default lock_timeout.
+const CREATION_ADMISSION_LOCK_TIMEOUT_MS = 5000
+// First key of the two-key advisory lock: keeps this lock apart from other
+// advisory-lock uses. Each two-key advisory lock use takes its own value.
+export const CREATION_ADMISSION_LOCK_NAMESPACE = 0x424f5841 // 'BOXA'
 const CREATION_ADMISSION_RETRY_AFTER_SECONDS = 5
+
+// Facts updates hold an organization's facts row for one short statement, so a
+// longer wait means something else holds it. The Box write has already
+// committed; give up on the best-effort update rather than delay its response.
+const ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS = 1000
 
 const BOX_CREATION_LIMIT_EXCLUDED_STATES = [
   BoxState.ERROR,
@@ -59,9 +72,59 @@ const BOX_CREATION_LIMIT_EXCLUDED_STATES = [
 // A box the migration marker may claim, with the stamp its claim copies.
 type ParkedBox = { id: string; updatedAt: Date }
 
+// The fields of a Box before a write that decide its organization's activity.
+type OrganizationActivitySource = Pick<Box, 'organizationId' | 'state' | 'desiredState' | 'createdAt'>
+type OrganizationActivity = { createdAt: Date | null; modifiedAt: Date | null }
+
 @Injectable()
 export class BoxRepository extends BaseRepository<Box> {
   private readonly logger = new Logger(BoxRepository.name)
+
+  /** Serialize runtime application and persistence against concurrent box writes. */
+  async replaceOutbound(
+    id: string,
+    organizationId: string,
+    policy: OutboundPolicy,
+    apply: (box: Box, policy: OutboundPolicy) => Promise<void>,
+  ): Promise<Box> {
+    const updated = await this.manager.transaction(async (manager) => {
+      await manager.query("SET LOCAL lock_timeout = '5s'")
+      const box = await manager.findOne(Box, {
+        where: { id, organizationId },
+        lock: { mode: 'pessimistic_write' },
+        loadEagerRelations: false,
+      })
+      if (!box) throw new NotFoundException('Box not found')
+      if (box.state !== BoxState.STARTED || box.desiredState !== BoxDesiredState.STARTED || !box.runnerId) {
+        throw new ConflictException('Outbound policy updates require a running box')
+      }
+      const previous: OutboundPolicy = {
+        mode: box.outboundEnabled ? 'enabled' : 'disabled',
+        allow_net: box.outboundAllowNet ?? [],
+      }
+      await apply(box, policy)
+      const update = {
+        outboundEnabled: policy.mode === 'enabled',
+        outboundAllowNet: policy.allow_net.length ? policy.allow_net : null,
+      }
+      try {
+        await manager.update(Box, id, update)
+      } catch (error) {
+        try {
+          await apply(box, previous)
+        } catch {
+          throw new ConflictException(
+            'Outbound persistence and rollback failed; live policy is uncertain, retry the complete update',
+          )
+        }
+        throw error
+      }
+      Object.assign(box, update)
+      return box
+    })
+    this.invalidateLookupCacheOnUpdate(updated, updated)
+    return updated
+  }
 
   constructor(
     @InjectDataSource() dataSource: DataSource,
@@ -84,13 +147,42 @@ export class BoxRepository extends BaseRepository<Box> {
     box.enforceInvariants()
 
     await this.withCreationAdmission(box.organizationId, maxCreatedBoxes, async (entityManager) => {
+      await this.lockRegistryCredential(box, entityManager)
       await entityManager.insert(Box, box)
       await this.upsertLastActivity(entityManager, box.id, box.createdAt)
     })
 
     this.invalidateLookupCacheOnInsert(box)
+    await this.recordOrganizationActivity(box)
 
     return box
+  }
+
+  private async lockRegistryCredential(box: Box, manager: EntityManager): Promise<void> {
+    const proxy = registryProxyHost()
+    if (!proxy || !box.image?.startsWith(`${proxy}/${box.organizationId}/`)) return
+
+    const { host, repository } = parseImageRef(upstreamRefOf(box.image))
+    try {
+      // Shared until the box commits: deletion cannot pass its dependency
+      // check while this box is still invisible to other transactions.
+      const credentials = await manager
+        .getRepository(RegistryCredential)
+        .createQueryBuilder('credential')
+        .where('credential.organizationId = :organizationId', { organizationId: box.organizationId })
+        .andWhere('credential.registryHost = :host', { host })
+        .setLock('pessimistic_read')
+        .setOnLocked('nowait')
+        .getMany()
+      if (!matchingCredential(credentials, repository)) {
+        throw new ConflictException('Registry credential was removed during box creation; retry the request')
+      }
+    } catch (error) {
+      if ((error as { code?: string }).code === PG_LOCK_TIMEOUT_CODE) {
+        throw new ConflictException('Registry credential is being removed; retry box creation')
+      }
+      throw error
+    }
   }
 
   /**
@@ -159,6 +251,7 @@ export class BoxRepository extends BaseRepository<Box> {
 
     this.emitUpdateEvents(box, previousBox)
     this.invalidateLookupCacheOnUpdate(box, previousBox)
+    await this.recordOrganizationActivity(box, previousBox)
 
     return box
   }
@@ -172,58 +265,45 @@ export class BoxRepository extends BaseRepository<Box> {
       return this.dataSource.transaction(persist)
     }
 
-    for (let attempt = 0; attempt < CREATION_ADMISSION_MAX_ATTEMPTS; attempt++) {
-      try {
-        return await this.dataSource.transaction('SERIALIZABLE', async (entityManager) => {
-          const currentCount = await entityManager.count(Box, {
-            where: {
-              organizationId,
-              state: Not(In(BOX_CREATION_LIMIT_EXCLUDED_STATES)),
-            },
-          })
-          if (currentCount >= maxCreatedBoxes) {
-            throw new BoxCreationLimitExceededError(currentCount, maxCreatedBoxes)
-          }
+    return this.dataSource.transaction('READ COMMITTED', async (entityManager) => {
+      await this.acquireCreationAdmissionLock(entityManager, organizationId)
 
-          return persist(entityManager)
-        })
-      } catch (error) {
-        if (!this.isSerializationFailure(error)) {
-          throw error
-        }
-        if (attempt === CREATION_ADMISSION_MAX_ATTEMPTS - 1) {
-          throw new BoxCreationAdmissionUnavailableError(
-            'Box creation admission remained contended; retry the request',
-            CREATION_ADMISSION_RETRY_AFTER_SECONDS,
-          )
-        }
-
-        await this.waitBeforeAdmissionRetry(attempt)
+      const currentCount = await entityManager.count(Box, {
+        where: {
+          organizationId,
+          state: Not(In(BOX_CREATION_LIMIT_EXCLUDED_STATES)),
+        },
+      })
+      if (currentCount >= maxCreatedBoxes) {
+        throw new BoxCreationLimitExceededError(currentCount, maxCreatedBoxes)
       }
+
+      return persist(entityManager)
+    })
+  }
+
+  // One statement sets the wait cap, takes the lock, and restores the default,
+  // so only this lock wait can raise the admission 503. This relies on
+  // PostgreSQL evaluating select-list entries in order (ExecBuildProjectionInfo
+  // in src/backend/executor/execExpr.c); the docs leave expression order
+  // unspecified, so the real-Postgres integration spec checks both halves.
+  private async acquireCreationAdmissionLock(entityManager: EntityManager, organizationId: string): Promise<void> {
+    try {
+      await entityManager.query(
+        `SELECT set_config('lock_timeout', $1, true),
+                pg_advisory_xact_lock($2, hashtext($3)),
+                set_config('lock_timeout', (SELECT reset_val FROM pg_settings WHERE name = 'lock_timeout'), true)`,
+        [`${CREATION_ADMISSION_LOCK_TIMEOUT_MS}ms`, CREATION_ADMISSION_LOCK_NAMESPACE, organizationId],
+      )
+    } catch (error) {
+      if ((error as { code?: string }).code === PG_LOCK_TIMEOUT_CODE) {
+        throw new BoxCreationAdmissionUnavailableError(
+          'Box creation admission remained contended; retry the request',
+          CREATION_ADMISSION_RETRY_AFTER_SECONDS,
+        )
+      }
+      throw error
     }
-
-    throw new BoxCreationAdmissionUnavailableError(
-      'Box creation admission remained contended; retry the request',
-      CREATION_ADMISSION_RETRY_AFTER_SECONDS,
-    )
-  }
-
-  private isSerializationFailure(error: unknown): boolean {
-    return (
-      typeof error === 'object' &&
-      error !== null &&
-      'code' in error &&
-      (error as { code?: unknown }).code === PG_SERIALIZATION_FAILURE_CODE
-    )
-  }
-
-  private async waitBeforeAdmissionRetry(attempt: number): Promise<void> {
-    const exponentialBackoff = Math.min(
-      CREATION_ADMISSION_BASE_BACKOFF_MS * 2 ** attempt,
-      CREATION_ADMISSION_MAX_BACKOFF_MS,
-    )
-    const jitter = Math.floor(Math.random() * (CREATION_ADMISSION_JITTER_MS + 1))
-    await new Promise((resolve) => setTimeout(resolve, exponentialBackoff + jitter))
   }
 
   /**
@@ -246,7 +326,7 @@ export class BoxRepository extends BaseRepository<Box> {
   ): Promise<Box> {
     const { updateData, whereCondition } = params
 
-    return this.manager.transaction(async (entityManager) => {
+    const [updatedBox, previousBox] = await this.manager.transaction(async (entityManager) => {
       const whereClause = {
         ...whereCondition,
         id,
@@ -279,8 +359,11 @@ export class BoxRepository extends BaseRepository<Box> {
       this.emitUpdateEvents(box, previousBox)
       this.invalidateLookupCacheOnUpdate(box, previousBox)
 
-      return box
+      return [box, previousBox] as const
     })
+
+    await this.recordOrganizationActivity(updatedBox, previousBox)
+    return updatedBox
   }
 
   /**
@@ -463,6 +546,75 @@ export class BoxRepository extends BaseRepository<Box> {
   }
 
   /**
+   * Advances the organization's activation facts after a Box write has committed.
+   *
+   * It runs outside the Box transaction, so same-organization writes never queue
+   * on the facts row. The upsert is optimistic: it only moves a time forward, and
+   * Read Committed rechecks that against the newest row, so late or concurrent
+   * updates cannot move a time backwards. The foreign key rejects a deleted
+   * organization, so its facts are not recreated. A failure, including a facts-row
+   * lock wait past ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS, is logged and dropped:
+   * the Box write stands, and a later event supersedes the lost maximum.
+   */
+  private async recordOrganizationActivity(box: Box, previousBox?: OrganizationActivitySource): Promise<void> {
+    try {
+      const activity = this.organizationActivityOf(box, previousBox)
+      if (!activity) {
+        return
+      }
+      await this.manager.transaction(async (entityManager) => {
+        // SET takes a literal, so the constant is interpolated rather than bound.
+        await entityManager.query(`SET LOCAL lock_timeout = '${ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS}ms'`)
+        await entityManager.query(
+          `INSERT INTO organization_activation_facts AS facts ("organizationId", "lastBoxCreatedAt", "lastBoxModifiedAt")
+           VALUES ($1::uuid, $2::timestamptz, $3::timestamptz)
+           ON CONFLICT ("organizationId") DO UPDATE
+           SET "lastBoxCreatedAt" = GREATEST(facts."lastBoxCreatedAt", EXCLUDED."lastBoxCreatedAt"),
+             "lastBoxModifiedAt" = GREATEST(facts."lastBoxModifiedAt", EXCLUDED."lastBoxModifiedAt")
+           WHERE facts."lastBoxCreatedAt" IS DISTINCT FROM GREATEST(facts."lastBoxCreatedAt", EXCLUDED."lastBoxCreatedAt")
+             OR facts."lastBoxModifiedAt" IS DISTINCT FROM GREATEST(facts."lastBoxModifiedAt", EXCLUDED."lastBoxModifiedAt")`,
+          [box.organizationId, activity.createdAt, activity.modifiedAt],
+        )
+      })
+    } catch (error) {
+      this.logger.warn(
+        `Failed to record activity of box ${box.id} for organization ${box.organizationId}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
+  /**
+   * What a committed Box write contributes to its organization's facts, or null.
+   *
+   * Creation counts inserts and warm-pool claims; modification counts entering
+   * `started` and the first deletion request. Stops, label edits, repeated
+   * states, deletion completion and cleanup contribute nothing. Lifecycle times
+   * moved between real organizations stay with the source.
+   */
+  private organizationActivityOf(box: Box, previousBox?: OrganizationActivitySource): OrganizationActivity | null {
+    if (box.organizationId === BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
+      return null
+    }
+    if (!previousBox) {
+      return { createdAt: box.createdAt, modifiedAt: null }
+    }
+    if (previousBox.organizationId === BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
+      const claimKeptPoolCreation = box.createdAt.getTime() === previousBox.createdAt.getTime()
+      return {
+        createdAt: claimKeptPoolCreation ? box.updatedAt : box.createdAt,
+        modifiedAt: box.state === BoxState.STARTED ? box.updatedAt : null,
+      }
+    }
+    if (previousBox.organizationId !== box.organizationId) {
+      return null
+    }
+    const started = box.state === BoxState.STARTED && previousBox.state !== BoxState.STARTED
+    const deletionRequested =
+      box.desiredState === BoxDesiredState.DESTROYED && previousBox.desiredState !== BoxDesiredState.DESTROYED
+    return started || deletionRequested ? { createdAt: null, modifiedAt: box.updatedAt } : null
+  }
+
+  /**
    * Invalidates the box lookup cache for the inserted box.
    */
   private invalidateLookupCacheOnInsert(box: Box): void {
@@ -518,7 +670,7 @@ export class BoxRepository extends BaseRepository<Box> {
    */
   private emitUpdateEvents(
     updatedBox: Box,
-    previousBox: Pick<Box, 'state' | 'desiredState' | 'public' | 'organizationId'>,
+    previousBox: Pick<Box, 'state' | 'desiredState' | 'inboundEnabled' | 'organizationId'>,
   ): void {
     if (previousBox.state !== updatedBox.state) {
       this.eventEmitter.emit(
@@ -534,10 +686,10 @@ export class BoxRepository extends BaseRepository<Box> {
       )
     }
 
-    if (previousBox.public !== updatedBox.public) {
+    if (previousBox.inboundEnabled !== updatedBox.inboundEnabled) {
       this.eventEmitter.emit(
-        BoxEvents.PUBLIC_STATUS_UPDATED,
-        new BoxPublicStatusUpdatedEvent(updatedBox, previousBox.public, updatedBox.public),
+        BoxEvents.INBOUND_MODE_UPDATED,
+        new BoxInboundModeUpdatedEvent(updatedBox, previousBox.inboundEnabled, updatedBox.inboundEnabled),
       )
     }
 

@@ -23,10 +23,14 @@ for the intended cloud and deployment path.
 
 ## Service guides
 
+- [`api/README.md`](./api/README.md) — the control-plane API: business events and the
+  operation context that records who asked.
 - [`runner/README.md`](./runner/README.md) — the runner daemon: box lifecycle, execution and
   attach, files, and metrics.
 - [`proxy/README.md`](./proxy/README.md) — the preview proxy: preview hosts, authentication, and
   tunnels to guest ports.
+- [`image-service/README.md`](./image-service/README.md) — the registry proxy: how a runner pulls
+  an image whose registry credentials only the platform holds.
 
 ## API catalog
 

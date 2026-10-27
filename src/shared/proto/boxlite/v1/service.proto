@@ -603,11 +603,15 @@ message UploadResponse {
 //
 // The server will stream a tar archive containing the requested path.
 message DownloadRequest {
-  // Source path inside container rootfs (file or directory)
+  // Source path inside container rootfs (file or directory), as the caller
+  // wrote it. A trailing "/." (docker cp's "SRC/.") names a directory's
+  // contents.
   string src_path = 1;
   // Optional explicit container_id; if empty the server will pick the sole container
   string container_id = 2;
-  // If true, include parent directory entry in archive (docker cp semantics)
+  // For a directory source: true roots the archive at the directory itself
+  // ("name/"), false at its contents ("./"). The host sends false for a
+  // trailing "/." on src_path; the server packs by this field alone.
   bool include_parent = 3;
   // If true, follow symlinks when archiving
   bool follow_symlinks = 4;

@@ -6,6 +6,7 @@ Tests the error hierarchy and exception behavior.
 
 import pytest
 
+from boxlite import errors
 from boxlite.errors import BoxliteError, ExecError, ParseError, TimeoutError
 
 
@@ -135,6 +136,32 @@ class TestErrorHierarchy:
                 raise error
             except BoxliteError as e:
                 assert e is error
+
+
+NATIVE_ERRORS = errors._NativeError.__subclasses__()
+
+
+class TestNativeErrors:
+    """The classes a failure from the native runtime is raised as."""
+
+    def test_there_is_one_per_runtime_error_class(self):
+        # `BoxliteError::http()` (src/shared/src/errors.rs) names 18 classes.
+        assert len(NATIVE_ERRORS) == 18
+
+    @pytest.mark.parametrize("cls", NATIVE_ERRORS, ids=lambda cls: cls.__name__)
+    def test_is_caught_by_older_runtime_error_handlers(self, cls):
+        assert issubclass(cls, BoxliteError)
+        assert issubclass(cls, RuntimeError)
+
+    @pytest.mark.parametrize("cls", NATIVE_ERRORS, ids=lambda cls: cls.__name__)
+    def test_is_exported_from_the_package(self, cls):
+        import boxlite
+
+        assert getattr(boxlite, cls.__name__) is cls
+
+    def test_each_names_its_own_code(self):
+        codes = [cls.code for cls in NATIVE_ERRORS]
+        assert len(set(codes)) == len(codes), codes
 
 
 class TestErrorExports:

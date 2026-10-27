@@ -11,9 +11,7 @@ Name | Type | Description | Notes
 **user** | **string** | The user associated with the project | [default to undefined]
 **env** | **{ [key: string]: string; }** | Environment variables for the box | [default to undefined]
 **labels** | **{ [key: string]: string; }** | Labels for the box | [default to undefined]
-**_public** | **boolean** | Whether the box http preview is public | [default to undefined]
-**networkBlockAll** | **boolean** | Whether to block all network access for the box | [default to undefined]
-**networkAllowList** | **string** | Comma-separated list of allowed CIDR network addresses for the box | [optional] [default to undefined]
+**network** | [**NetworkInfo**](NetworkInfo.md) | The network policy in both directions | [optional] [default to undefined]
 **target** | **string** | The target environment for the box | [default to undefined]
 **image** | **string** | The image used for the box | [optional] [default to undefined]
 **cpu** | **number** | The CPU quota for the box | [default to undefined]
@@ -36,6 +34,7 @@ Name | Type | Description | Notes
 **daemonVersion** | **string** | The version of the daemon running in the box | [optional] [default to undefined]
 **runnerId** | **string** | The runner ID of the box | [optional] [default to undefined]
 **toolboxProxyUrl** | **string** | The toolbox proxy URL for the box | [default to undefined]
+**progress** | [**BoxProgress**](BoxProgress.md) | What a box still being created is waiting on. Absent once it has started, and absent while it is being created from an image that has already been pulled | [optional] [default to undefined]
 
 ## Example
 
@@ -49,9 +48,7 @@ const instance: Box = {
     user,
     env,
     labels,
-    _public,
-    networkBlockAll,
-    networkAllowList,
+    network,
     target,
     image,
     cpu,
@@ -74,6 +71,7 @@ const instance: Box = {
     daemonVersion,
     runnerId,
     toolboxProxyUrl,
+    progress,
 };
 ```
 

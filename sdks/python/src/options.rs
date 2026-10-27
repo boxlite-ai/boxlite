@@ -198,6 +198,9 @@ fn validate_registry_auth(username: &Option<String>, password: &Option<String>) 
 // Copy Options
 // ============================================================================
 
+/// Copy options. To copy a directory's contents rather than the directory,
+/// spell the source `SRC/.` (as `docker cp` does) — build it as a string, since
+/// `pathlib.Path` drops a trailing `/.`.
 #[pyclass(name = "CopyOptions")]
 #[derive(Clone, Debug)]
 pub struct PyCopyOptions {
@@ -207,27 +210,17 @@ pub struct PyCopyOptions {
     pub overwrite: bool,
     #[pyo3(get, set)]
     pub follow_symlinks: bool,
-    #[pyo3(get, set)]
-    pub include_parent: bool,
 }
 
 #[pymethods]
 impl PyCopyOptions {
     #[new]
-    #[pyo3(
-        signature = (
-            recursive = true,
-            overwrite = true,
-            follow_symlinks = false,
-            include_parent = true
-        )
-    )]
-    fn new(recursive: bool, overwrite: bool, follow_symlinks: bool, include_parent: bool) -> Self {
+    #[pyo3(signature = (recursive = true, overwrite = true, follow_symlinks = false))]
+    fn new(recursive: bool, overwrite: bool, follow_symlinks: bool) -> Self {
         Self {
             recursive,
             overwrite,
             follow_symlinks,
-            include_parent,
         }
     }
 }
@@ -238,7 +231,6 @@ impl From<PyCopyOptions> for CopyOptions {
             recursive: opt.recursive,
             overwrite: opt.overwrite,
             follow_symlinks: opt.follow_symlinks,
-            include_parent: opt.include_parent,
         }
     }
 }
@@ -276,10 +268,10 @@ pub(crate) struct PyOutboundNetworkSpec {
 /// Inbound network policy.
 ///
 /// Aligned field-for-field with `NetworkSpec`: `mode` accepts
-/// `"enabled"` (services the box exposes are publicly reachable) or
-/// `"disabled"` (private). `allow_net` exists for shape symmetry only — no
-/// layer enforces an inbound allowlist yet, so a non-empty value is
-/// rejected.
+/// `"enabled"` (services the box exposes are reachable without sign-in) or
+/// `"disabled"` (unreachable from outside). `allow_net` exists for shape
+/// symmetry only — no layer enforces an inbound allowlist yet, so a
+/// non-empty value is rejected.
 #[pyclass(name = "InboundNetworkSpec")]
 #[derive(Clone, Debug)]
 pub(crate) struct PyInboundNetworkSpec {
@@ -409,7 +401,7 @@ impl PyOutboundNetworkSpec {
 impl PyInboundNetworkSpec {
     /// Create an inbound network policy.
     ///
-    /// `mode` defaults to `"disabled"` (private) and `allow_net` defaults to
+    /// `mode` defaults to `"disabled"` and `allow_net` defaults to
     /// an empty allow list, meaning no host-based restriction.
     #[new]
     #[pyo3(signature = (mode="disabled".to_string(), allow_net=vec![]))]
@@ -1342,7 +1334,7 @@ mod tests {
         assert!(matches!(outbound, NetworkSpec::Enabled { .. }));
     }
 
-    /// A spec that only configures outbound leaves inbound private.
+    /// A spec that only configures outbound leaves inbound disabled.
     #[test]
     fn outbound_only_network_spec_keeps_inbound_disabled() {
         let (outbound, inbound) = <(NetworkSpec, NetworkSpec)>::try_from(PyNetworkSpec {

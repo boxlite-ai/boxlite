@@ -317,7 +317,7 @@ class TestCmdAndUserOptions:
         assert opts.cmd == ["--iptables=false", "--storage-driver=overlay2"]
 
     def test_cmd_empty_list(self):
-        """Test cmd with empty list (explicit override to no args)."""
+        """Test that options preserve an empty cmd list before command resolution."""
         opts = boxlite.BoxOptions(image="alpine:latest", cmd=[])
         assert opts.cmd == []
 

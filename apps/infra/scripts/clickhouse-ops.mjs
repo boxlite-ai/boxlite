@@ -15,8 +15,9 @@ const TABLES = [
   'otel_metrics_exponential_histogram',
 ]
 
-export function buildSelfHostedReadinessCommand({ region, adminSecretArn, writerSecretArn, readerSecretArn, expectedImage, schemaBase64, retentionHours }) {
+export function buildSelfHostedReadinessCommand({ region, adminSecretArn, writerSecretArn, readerSecretArn, expectedImage, schemaBase64, retentionHours, logReaderSecretArn, logReaderSqlBase64 }) {
   if (!region || !adminSecretArn || !writerSecretArn || !readerSecretArn || !expectedImage || !schemaBase64) throw new Error('all readiness inputs are required')
+  if (Boolean(logReaderSecretArn) !== Boolean(logReaderSqlBase64)) throw new Error('OpenAPI log reader requires both secret reference and SQL')
   const describeTables = TABLES.map(
     (table) =>
       `CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user boxlite_admin --query "DESCRIBE TABLE otel.${table}" >/dev/null`,
@@ -50,7 +51,12 @@ GRANT SELECT, INSERT, SHOW COLUMNS ON otel.* TO otel_writer;
 GRANT SELECT, SHOW COLUMNS ON otel.* TO otel_reader;
 ${reconcileTtl}
 SQL
-${describeTables}
+${logReaderSecretArn ? `LOG_READER_PASSWORD=$(aws secretsmanager get-secret-value --region ${shellLiteral(region)} --secret-id ${shellLiteral(logReaderSecretArn)} --query SecretString --output text)
+test -n "$LOG_READER_PASSWORD"
+LOG_READER_HASH=$(printf %s "$LOG_READER_PASSWORD" | sha256sum | cut -d' ' -f1)
+printf '%s' ${shellLiteral(logReaderSqlBase64)} | base64 -d | sed "s/__PASSWORD_SHA256__/$LOG_READER_HASH/g" | CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -i -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user boxlite_admin --multiquery
+unset LOG_READER_PASSWORD LOG_READER_HASH
+` : ''}${describeTables}
 test "$(CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user boxlite_admin --query "SELECT count() FROM system.tables WHERE database='otel' AND position(create_table_query, 'toIntervalHour(${retentionHours})') > 0")" = "7"
 CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user boxlite_admin --query "SHOW GRANTS FOR otel_writer" | grep -q 'SHOW COLUMNS'
 CLICKHOUSE_PASSWORD="$ADMIN_PASSWORD" docker exec -e CLICKHOUSE_PASSWORD boxlite-clickhouse clickhouse-client --user boxlite_admin --query "SHOW GRANTS FOR otel_reader" | grep -q 'SELECT'
@@ -209,6 +215,8 @@ function reconcile() {
     expectedImage: CLICKHOUSE_EXPECTED_IMAGE,
     schemaBase64: CLICKHOUSE_SCHEMA_BASE64,
     retentionHours: Number(CLICKHOUSE_RETENTION_HOURS),
+    logReaderSecretArn: process.env.CLICKHOUSE_OPENAPI_READER_SECRET_ARN,
+    logReaderSqlBase64: process.env.CLICKHOUSE_OPENAPI_READER_SQL_BASE64,
   })
   runSsmCommand({
     region: AWS_REGION,

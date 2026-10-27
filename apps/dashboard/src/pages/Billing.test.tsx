@@ -13,7 +13,10 @@ vi.mock('@/hooks/useConfig', () => ({
   useConfig: () => ({ billingApiUrl: 'https://billing.example.test' }),
 }))
 
-vi.mock('@/components/billing/BillingAlerts', () => ({ BillingAlerts: () => null }))
+vi.mock('@/components/billing/BillingAlerts', () => ({
+  BillingAlerts: () => null,
+  SignupCreditBanner: () => <div data-testid="signup-credit-banner">Signup credit banner</div>,
+}))
 vi.mock('@/components/billing/BalanceLowBanner', () => ({
   BalanceLowBanner: ({ onGoToWallet }: { onGoToWallet: () => void }) => (
     <button data-testid="critical-balance-banner" onClick={onGoToWallet}>
@@ -100,5 +103,18 @@ describe('Billing layout', () => {
       ;(banner as HTMLElement).click()
     })
     expect(document.querySelector('[data-testid="wallet-section"]')).not.toBeNull()
+  })
+
+  it('announces a pending signup credit on the Wallet tab only, above the wallet', () => {
+    root = createRoot(document.body.appendChild(document.createElement('div')))
+    act(() => root?.render(<Billing />))
+    expect(document.querySelector('[data-testid="signup-credit-banner"]')).toBeNull()
+
+    act(() => (document.querySelector('[data-testid="critical-balance-banner"]') as HTMLElement).click())
+    const signupBanner = document.querySelector('[data-testid="signup-credit-banner"]')
+    const wallet = document.querySelector('[data-testid="wallet-section"]')
+    expect(signupBanner).not.toBeNull()
+    expect(signupBanner?.compareDocumentPosition(wallet as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(signupBanner?.parentElement?.classList.contains('empty:hidden')).toBe(true)
   })
 })

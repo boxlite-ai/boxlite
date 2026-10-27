@@ -53,6 +53,12 @@ export const ApiKeyResponsePermissionsEnum = {
     WRITE_RUNNERS: 'write:runners',
     DELETE_RUNNERS: 'delete:runners',
     READ_AUDIT_LOGS: 'read:audit_logs',
+    READ_IMAGES: 'read:images',
+    DELETE_IMAGES: 'delete:images',
+    READ_REGISTRIES: 'read:registries',
+    WRITE_IMAGES: 'write:images',
+    READ_MEMBERS: 'read:members',
+    WRITE_MEMBERS: 'write:members',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 

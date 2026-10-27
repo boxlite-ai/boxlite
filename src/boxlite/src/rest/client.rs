@@ -280,6 +280,11 @@ impl ApiClient {
         self.send_no_content(builder).await
     }
 
+    pub async fn put_no_content<B: Serialize>(&self, path: &str, body: &B) -> BoxliteResult<()> {
+        self.send_no_content(self.http.put(self.url(path)).json(body))
+            .await
+    }
+
     pub async fn post_empty<T: DeserializeOwned>(&self, path: &str) -> BoxliteResult<T> {
         let builder = self.empty_post_request(path);
         self.send_json(builder).await
@@ -311,6 +316,12 @@ impl ApiClient {
     pub async fn delete(&self, path: &str) -> BoxliteResult<()> {
         let builder = self.http.delete(self.url(path));
         self.send_no_content(builder).await
+    }
+
+    /// `DELETE` a resource that answers with its resulting JSON state.
+    pub async fn delete_json<T: DeserializeOwned>(&self, path: &str) -> BoxliteResult<T> {
+        let builder = self.http.delete(self.url(path));
+        self.send_json(builder).await
     }
 
     pub async fn delete_with_query(&self, path: &str, query: &[(&str, &str)]) -> BoxliteResult<()> {
@@ -461,6 +472,17 @@ impl ApiClient {
             .header(reqwest::header::ACCEPT, "application/json");
         let descriptor: TunnelDescriptor = self.send_json(builder).await?;
         Ok(descriptor.uri)
+    }
+
+    /// Withdraw public access to a box service port.
+    pub(crate) async fn revoke_box_tunnel(
+        &self,
+        box_id: impl AsRef<str>,
+        port: u16,
+    ) -> BoxliteResult<()> {
+        let path = format!("/boxes/{}/network/tunnel", box_id.as_ref());
+        self.delete_with_query(&path, &[("port", &port.to_string())])
+            .await
     }
 
     /// Build an authorized file request bounded by the box lifetime.
@@ -880,9 +902,9 @@ mod tests {
     /// Our proxy answers this handshake with a verdict of its own and states
     /// it in plain text. Each refusal must keep the class its status names and
     /// the sentence the proxy wrote: a bad target is the caller's error, a
-    /// private box is an auth failure the CLI keys on, and a runner the proxy
-    /// could not reach is an upstream failure — never an intermediary's, since
-    /// the proxy plainly answered.
+    /// box with inbound access disabled is an auth failure the CLI keys on, and
+    /// a runner the proxy could not reach is an upstream failure — never an
+    /// intermediary's, since the proxy plainly answered.
     #[tokio::test]
     #[allow(clippy::result_large_err)]
     async fn connect_box_network_tunnel_keeps_the_proxys_own_verdict() {
@@ -895,7 +917,7 @@ mod tests {
             }),
             (
                 "403 Forbidden",
-                "box is not public",
+                "box inbound access is disabled",
                 |e| matches!(e, BoxliteError::Config(msg) if msg.starts_with("auth:")),
             ),
             ("502 Bad Gateway", "runner unavailable", |e| {

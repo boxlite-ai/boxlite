@@ -18,6 +18,7 @@ import { isRunnerContext } from '../../common/interfaces/runner-context.interfac
 import { isProxyContext } from '../../common/interfaces/proxy-context.interface'
 import { isRegionProxyContext } from '../../common/interfaces/region-proxy.interface'
 import { OR_GUARD_INNER_GUARDS } from '../../auth/or.guard'
+import { OrganizationResourcePermission } from '../enums/organization-resource-permission.enum'
 
 // Machine identities carry no organization — ApiKeyStrategy mints a bare
 // { role } context for the runner, the proxy and the region proxy — so
@@ -61,20 +62,16 @@ export class OrganizationResourceActionGuard extends OrganizationAccessGuard {
       return false
     }
 
+    // A system admin is not organization-scoped, so it is admitted here, before
+    // the `super.canActivate` result is consulted — even when the organization
+    // cannot be resolved. The policy helper repeats the check for its non-guard
+    // callers.
     if (authContext.role === SystemRole.ADMIN) {
       return true
     }
 
     if (!canActivate) {
       return false
-    }
-
-    if (!authContext.organizationUser) {
-      return false
-    }
-
-    if (authContext.organizationUser.role === OrganizationMemberRole.OWNER && !authContext.apiKey) {
-      return true
     }
 
     const requiredPermissions =
@@ -85,11 +82,7 @@ export class OrganizationResourceActionGuard extends OrganizationAccessGuard {
       return true
     }
 
-    const assignedPermissions = authContext.apiKey
-      ? new Set(authContext.apiKey.permissions)
-      : new Set(authContext.organizationUser.assignedRoles.flatMap((role) => role.permissions))
-
-    return requiredPermissions.every((permission) => assignedPermissions.has(permission))
+    return hasOrganizationResourcePermissions(authContext, requiredPermissions)
   }
 
   private handlerAllowsMachineResourceAccess(context: ExecutionContext, user: BaseAuthContext | undefined): boolean {
@@ -119,4 +112,32 @@ export class OrganizationResourceActionGuard extends OrganizationAccessGuard {
   private guardName(guard: unknown): string {
     return typeof guard === 'function' ? guard.name : ''
   }
+}
+
+// The fields the resource-permission policy reads, so a caller without a full
+// OrganizationAuthContext — the WS `/attach` path — can build a subject from the
+// user's system role, its membership, and its API key.
+export type OrganizationResourcePermissionSubject = Pick<
+  OrganizationAuthContext,
+  'role' | 'organizationUser' | 'apiKey'
+>
+
+// Single source of truth for "does this credential hold the required resource
+// permissions", shared by OrganizationResourceActionGuard, box volume-attach,
+// and the WS attach path so the three cannot drift.
+export function hasOrganizationResourcePermissions(
+  subject: OrganizationResourcePermissionSubject,
+  required: OrganizationResourcePermission[],
+): boolean {
+  if (subject.role === SystemRole.ADMIN) return true
+  if (!subject.organizationUser) return false
+  if (subject.organizationUser.role === OrganizationMemberRole.OWNER && !subject.apiKey) return true
+
+  const held = new Set(
+    subject.apiKey
+      ? subject.apiKey.permissions
+      : (subject.organizationUser.assignedRoles ?? []).flatMap((role) => role.permissions),
+  )
+
+  return required.every((permission) => held.has(permission))
 }

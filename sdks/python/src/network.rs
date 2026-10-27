@@ -9,7 +9,9 @@ use pyo3::types::PyBytes;
 use pyo3::types::PyType;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use crate::options::{PyInboundNetworkSpec, PyOutboundNetworkSpec};
 use crate::util::map_err;
+use boxlite::runtime::options::{InboundNetworkConfig, OutboundNetworkConfig};
 
 type ConnectionReader = boxlite::BoxReader;
 type ConnectionWriter = boxlite::BoxWriter;
@@ -112,6 +114,44 @@ pub(crate) struct PyBoxConnection {
 
 #[pymethods]
 impl PyNetworkHandle {
+    fn update_inbound<'py>(
+        &self,
+        py: Python<'py>,
+        spec: PyRef<'_, PyInboundNetworkSpec>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let config = InboundNetworkConfig {
+            mode: spec.mode.parse().map_err(map_err)?,
+            allow_net: spec.allow_net.clone(),
+        };
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle
+                .network()
+                .update_inbound(config)
+                .await
+                .map_err(map_err)
+        })
+    }
+
+    fn update_outbound<'py>(
+        &self,
+        py: Python<'py>,
+        spec: PyRef<'_, PyOutboundNetworkSpec>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let config = OutboundNetworkConfig {
+            mode: spec.mode.parse().map_err(map_err)?,
+            allow_net: spec.allow_net.clone(),
+        };
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle
+                .network()
+                .update_outbound(config)
+                .await
+                .map_err(map_err)
+        })
+    }
+
     fn tunnel<'py>(&self, py: Python<'py>, port: u16) -> PyResult<Bound<'py, PyAny>> {
         if port == 0 {
             return Err(pyo3::exceptions::PyValueError::new_err(
@@ -127,6 +167,13 @@ impl PyNetworkHandle {
             Ok(PyBoxTunnel {
                 handle: Mutex::new(Some(tunnel)),
             })
+        })
+    }
+
+    fn revoke_tunnel<'py>(&self, py: Python<'py>, port: u16) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle.network().revoke_tunnel(port).await.map_err(map_err)
         })
     }
 }
@@ -192,7 +239,7 @@ impl PyBoxTunnel {
     fn connect<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let tunnel = self.take()?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let (reader, writer) = tunnel.connect().map_err(map_err)?.into_split();
+            let (reader, writer) = tunnel.connect().await.map_err(map_err)?.into_split();
             Ok(PyBoxConnection {
                 reader: Arc::new(tokio::sync::Mutex::new(Some(reader))),
                 writer: Arc::new(tokio::sync::Mutex::new(Some(writer))),

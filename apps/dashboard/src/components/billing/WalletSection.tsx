@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { AutomaticTopUp } from '@/billing-api/types/OrganizationWallet'
+import { AutomaticTopUp, OrganizationWallet } from '@/billing-api/types/OrganizationWallet'
 import { AsciiButton, AsciiChip, BRAND, Panel, PanelNote, SectionTitle, SegmentedBar } from '@/components/ascii'
 import { BalanceThresholdBanner } from '@/components/billing/BalanceLowBanner'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
@@ -28,7 +28,7 @@ import {
   useOwnerWalletQuery,
 } from '@/hooks/queries/billingQueries'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { formatAmount } from '@/lib/utils'
+import { cn, formatAmount } from '@/lib/utils'
 import { ArrowUpRight } from '@/components/ui/icon'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { NumericFormat } from 'react-number-format'
@@ -60,6 +60,30 @@ export function topUpGate(amountDollars: number | undefined): { enabled: boolean
     return { enabled: false, reason: `Minimum top-up is $${MIN_TOP_UP_DOLLARS}.` }
   }
   return { enabled: true, reason: null }
+}
+
+/** No discount on the multiplier's numeric(5,4) grid, where basis points are exact. */
+const LIST_PRICE_BASIS_POINTS = 10_000
+
+/**
+ * The whole percent a top-up is discounted by, read from the wallet's
+ * multiplier: `'0.7000'` → `'30%'`. Fractions round down (`'0.8765'` →
+ * `'12%'`), so the label never exceeds the rate and never outgrows the
+ * ribbon. Integer basis points keep `'0.8000'` at 20%, where float math gives
+ * 19%. `null` means nothing to show: no discount, one under 1%, or a value
+ * outside (0, 1).
+ */
+export function topUpDiscountPercent(wallet: Pick<OrganizationWallet, 'usageChargeMultiplier'>): string | null {
+  const match = /^(\d+)(?:\.(\d{1,4}))?$/.exec(wallet.usageChargeMultiplier ?? '')
+  if (!match) {
+    return null
+  }
+  const paysBasisPoints = Number(match[1]) * LIST_PRICE_BASIS_POINTS + Number((match[2] ?? '').padEnd(4, '0'))
+  if (paysBasisPoints < 1 || paysBasisPoints >= LIST_PRICE_BASIS_POINTS) {
+    return null
+  }
+  const offPercent = Math.floor((LIST_PRICE_BASIS_POINTS - paysBasisPoints) / 100)
+  return offPercent > 0 ? `${offPercent}%` : null
 }
 
 /**
@@ -342,6 +366,7 @@ export function WalletSection() {
   const isBillingLoading = walletQuery.isLoading && billingPortalUrlQuery.isLoading
   const cardConnected = Boolean(wallet?.creditCardConnected)
   const topUp = topUpGate(selectedPreset ?? oneTimeTopUpAmount)
+  const topUpDiscount = wallet ? topUpDiscountPercent(wallet) : null
   // Read the indicator off the saved wallet, not the form: the form is
   // pre-filled with defaults, which would otherwise read as already on.
   const autoReloadActive =
@@ -468,15 +493,40 @@ export function WalletSection() {
                     className="w-full bg-transparent pl-1 tabular-nums text-foreground outline-none placeholder:text-muted-foreground sm:w-[86px]"
                   />
                 </span>
-                <AsciiButton
-                  variant="primary"
-                  onClick={handleTopUpWallet}
-                  disabled={!topUp.enabled || topUpWalletMutation.isPending}
-                  className="inline-flex w-full items-center justify-center gap-2 sm:ml-auto sm:w-auto"
-                >
-                  {topUpWalletMutation.isPending && <Spinner />}
-                  Top up →
-                </AsciiButton>
+                <div className="relative w-full sm:ml-auto sm:w-auto">
+                  <AsciiButton
+                    variant="primary"
+                    onClick={handleTopUpWallet}
+                    disabled={!topUp.enabled || topUpWalletMutation.isPending}
+                    className={cn('inline-flex w-full items-center justify-center gap-2', topUpDiscount && 'pr-14')}
+                  >
+                    {topUpWalletMutation.isPending && <Spinner />}
+                    Top up →
+                  </AsciiButton>
+                  {/* A sash across the button's right end. Its own box clips
+                      it to the button, so the wrapper clips nothing and the
+                      button's focus outline stays whole. It sits beside the
+                      button rather than inside it, so the button's name stays
+                      "Top up →", and clicks pass through it. At 35° the
+                      longest label, "99% OFF" (~42px), stands ~32px tall,
+                      inside the 33px button; at 45° it would stand 37px and
+                      lose its ends. pr-14 keeps the button's label clear of
+                      the band. The ink is the light theme's foreground in both
+                      themes: white brand-foreground measures 2.49:1 on the
+                      brand fill, which does not change with the theme, where
+                      this ink measures 7.30:1. */}
+                  {topUpDiscount && (
+                    <span className="pointer-events-none absolute inset-0 overflow-hidden">
+                      <span
+                        role="img"
+                        aria-label={`${topUpDiscount} off`}
+                        className="absolute right-[-12px] top-1/2 w-[80px] -translate-y-1/2 rotate-[35deg] whitespace-nowrap bg-brand py-[2px] text-center font-mono text-label font-bold leading-none tracking-normal text-[hsl(218_17%_9%)]"
+                      >
+                        {topUpDiscount} OFF
+                      </span>
+                    </span>
+                  )}
+                </div>
               </div>
               {topUp.reason && (
                 <p className="mt-3 font-mono text-[11px] leading-relaxed text-warning">{topUp.reason}</p>

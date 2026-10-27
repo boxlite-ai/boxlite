@@ -11,12 +11,18 @@
 
 import type { Invoice } from '@/billing-api/types/Invoice'
 import type { WalletTransaction } from '@/billing-api/types/WalletTransaction'
+import { catalogNameOf } from '@/lib/image-ref'
 import {
   type Box,
   BoxClassEnum,
   BoxDesiredState,
+  BoxProgressPhase,
   BoxState,
+  ImageDetail,
+  RegistryCredential,
+  RegistryCredentialKind,
   type BoxliteConfiguration,
+  NetworkMode,
   type Organization,
   type OrganizationUser,
   OrganizationUserRoleEnum,
@@ -87,7 +93,6 @@ export const MOCK_ORGANIZATION: Organization = {
   maxCpuPerBox: 8,
   maxMemoryPerBox: 16,
   maxDiskPerBox: 100,
-  templateDeactivationTimeoutMinutes: 0,
   boxLimitedNetworkEgress: false,
   authenticatedRateLimit: null,
   boxCreateRateLimit: null,
@@ -111,14 +116,16 @@ export const MOCK_ORGANIZATION_MEMBER: OrganizationUser = {
   updatedAt: nowDate,
 }
 
-function buildBox(overrides: Partial<Box> & Pick<Box, 'id' | 'name' | 'state'>): Box {
+export function buildBox(overrides: Partial<Box> & Pick<Box, 'id' | 'name' | 'state'>): Box {
   return {
     organizationId: MOCK_ORGANIZATION_ID,
     user: MOCK_USER.email,
     env: {},
     labels: {},
-    public: false,
-    networkBlockAll: false,
+    network: {
+      outbound: { mode: NetworkMode.ENABLED, allow_net: [] },
+      inbound: { mode: NetworkMode.DISABLED, allow_net: [] },
+    },
     target: 'mock',
     image: 'ghcr.io/boxlite-ai/boxlite-agent-base:mock',
     cpu: 1,
@@ -163,6 +170,42 @@ export const MOCK_BOXES: Box[] = [
     errorReason: 'Mock failure for UI testing',
     recoverable: true,
     image: 'ghcr.io/boxlite-ai/boxlite-agent-node:mock',
+  }),
+  // Boxes on a tenant image. Both block its removal: any box not destroyed
+  // does, stopped included (image-catalog.service.ts).
+  buildBox({
+    id: 'mock-box-agent-1',
+    name: 'agile-otter',
+    state: BoxState.STARTED,
+    createdAt: hoursAgo(1),
+    image: 'ghcr.io/acme/agent-runtime:v1.4.2',
+  }),
+  buildBox({
+    id: 'mock-box-agent-2',
+    name: 'quiet-heron',
+    state: BoxState.STOPPED,
+    desiredState: BoxDesiredState.STOPPED,
+    createdAt: daysAgo(2),
+    image: 'ghcr.io/acme/agent-runtime:v1.4.2',
+  }),
+  // A first pull in progress: the API reports it as `progress` while CREATING.
+  buildBox({
+    id: 'mock-box-pulling',
+    name: 'eager-lynx',
+    state: BoxState.CREATING,
+    createdAt: now,
+    image: 'docker.io/library/golang:1.23-alpine',
+    progress: { phase: BoxProgressPhase.PREPARING_IMAGE, retryAfterMs: 5000 },
+  }),
+  // A private pull refused: the API's own wording (image-pull-failure.service.ts).
+  buildBox({
+    id: 'mock-box-private',
+    name: 'shy-badger',
+    state: BoxState.ERROR,
+    createdAt: hoursAgo(3),
+    image: 'quay.io/acme/internal-tools:2.1',
+    errorReason:
+      "Failed to pull image 'quay.io/acme/internal-tools:2.1': quay.io refused the pull (UNAUTHORIZED). The image is private or does not exist, and no registry login of the organization covers it.",
   }),
 ]
 
@@ -388,4 +431,215 @@ export function buildWalletHistory(): WalletTransaction[] {
 export function newestFirst<T extends Invoice | WalletTransaction>(rows: T[]): T[] {
   const chargedOrCreated = (row: T) => ('chargedAt' in row ? row.chargedAt : row.createdAt)
   return [...rows].sort((left, right) => chargedOrCreated(right).localeCompare(chargedOrCreated(left)))
+}
+
+// Image catalog. Curated rows belong to the operator: no id, no versions, no
+// size, never deletable. Tenant rows are seeded by successful pulls; one is
+// still held by a box (delete answers 409), one has gone missing upstream.
+const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
+const HOUR = 3_600_000
+const DAY = 24 * HOUR
+const curated = (name: string) => ({
+  name,
+  id: null,
+  curated: true,
+  curatedRef: `ghcr.io/boxlite-ai/${name}:latest`,
+  aliases: [] as string[],
+  versionCount: 0,
+  sizeBytes: null,
+  lastUsedAt: null,
+  createdAt: null,
+})
+const MIB = 1024 * 1024
+const PY_V1 = 'sha256:3f1c9a0d6b7e2a4c8f5d1e0b9a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c'
+const PY_V2 = 'sha256:8a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e3f5a7b9c1d3e5f7a9b1c3d5e7f9a1b'
+const NODE_V1 = 'sha256:c0ffee00d15ea5e0ba5eba11deadbeefcafef00d0123456789abcdef01234567'
+const AGENT_V1 = 'sha256:5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed'
+
+export const MOCK_IMAGE_DETAILS: ImageDetail[] = [
+  { ...curated('base'), versions: [], history: [] },
+  { ...curated('python'), versions: [], history: [] },
+  { ...curated('node'), versions: [], history: [] },
+  {
+    name: 'docker.io/library/python',
+    id: 'img-python',
+    curated: false,
+    curatedRef: null,
+    aliases: ['3.14-slim-bookworm', '3.13-slim'],
+    versionCount: 2,
+    sizeBytes: 45 * MIB + 41 * MIB,
+    lastUsedAt: ago(2 * DAY),
+    createdAt: ago(9 * DAY),
+    versions: [
+      {
+        id: 'ver-py-2',
+        digest: PY_V2,
+        sizeBytes: 45 * MIB,
+        sourceRef: 'docker.io/library/python:3.14-slim-bookworm',
+        aliases: ['3.14-slim-bookworm'],
+        lastUsedAt: ago(2 * DAY),
+        upstreamMissingAt: null,
+        createdAt: ago(3 * DAY),
+      },
+      {
+        id: 'ver-py-1',
+        digest: PY_V1,
+        sizeBytes: 41 * MIB,
+        sourceRef: 'docker.io/library/python:3.13-slim',
+        aliases: ['3.13-slim'],
+        lastUsedAt: ago(8 * DAY),
+        upstreamMissingAt: null,
+        createdAt: ago(9 * DAY),
+      },
+    ],
+    history: [
+      {
+        aliasName: '3.14-slim-bookworm',
+        fromVersionId: null,
+        fromDigest: null,
+        toVersionId: 'ver-py-2',
+        toDigest: PY_V2,
+        actorId: null,
+        createdAt: ago(3 * DAY),
+      },
+      {
+        aliasName: '3.13-slim',
+        fromVersionId: null,
+        fromDigest: null,
+        toVersionId: 'ver-py-1',
+        toDigest: PY_V1,
+        actorId: null,
+        createdAt: ago(9 * DAY),
+      },
+    ],
+  },
+  {
+    name: 'ghcr.io/acme/agent-runtime',
+    id: 'img-agent',
+    curated: false,
+    curatedRef: null,
+    aliases: ['v1.4.2'],
+    versionCount: 1,
+    sizeBytes: 312 * MIB,
+    lastUsedAt: ago(20 * 60_000),
+    createdAt: ago(5 * DAY),
+    versions: [
+      {
+        id: 'ver-agent-1',
+        digest: AGENT_V1,
+        sizeBytes: 312 * MIB,
+        sourceRef: 'ghcr.io/acme/agent-runtime:v1.4.2',
+        aliases: ['v1.4.2'],
+        lastUsedAt: ago(20 * 60_000),
+        upstreamMissingAt: null,
+        createdAt: ago(5 * DAY),
+      },
+    ],
+    history: [],
+  },
+  {
+    name: 'docker.io/library/node',
+    id: 'img-node',
+    curated: false,
+    curatedRef: null,
+    aliases: ['22-alpine'],
+    versionCount: 1,
+    sizeBytes: 58 * MIB,
+    lastUsedAt: ago(6 * DAY),
+    createdAt: ago(12 * DAY),
+    versions: [
+      {
+        id: 'ver-node-1',
+        digest: NODE_V1,
+        sizeBytes: 58 * MIB,
+        sourceRef: 'docker.io/library/node:22-alpine',
+        aliases: ['22-alpine'],
+        lastUsedAt: ago(6 * DAY),
+        upstreamMissingAt: ago(HOUR * 5),
+        createdAt: ago(12 * DAY),
+      },
+    ],
+    history: [
+      {
+        aliasName: '22-alpine',
+        fromVersionId: null,
+        fromDigest: null,
+        toVersionId: 'ver-node-1',
+        toDigest: NODE_V1,
+        actorId: null,
+        createdAt: ago(12 * DAY),
+      },
+    ],
+  },
+]
+
+export const MOCK_IMAGE_LIMIT = 20
+
+export const MOCK_REGISTRY_CREDENTIALS: RegistryCredential[] = [
+  {
+    id: 'reg-ghcr-acme',
+    kind: RegistryCredentialKind.BASIC,
+    registryHost: 'ghcr.io',
+    repositoryPrefix: 'acme/',
+    username: 'acme-bot',
+    createdBy: 'mock-user',
+    createdAt: ago(5 * DAY),
+  },
+]
+
+/**
+ * What the API's registrar does when a box reaches STARTED: a tenant image
+ * enters the catalog under its normalised name, its first tag pinned; a
+ * known image gets its last start moved. Built-in images record nothing.
+ */
+export function registerImageFromBox(image: string) {
+  const name = catalogNameOf(image)
+  const builtIn = MOCK_IMAGE_DETAILS.find((i) => i.curated && (i.name === image || i.curatedRef === image))
+  if (builtIn) return
+  const existing = MOCK_IMAGE_DETAILS.find((i) => i.name === name)
+  const startedAt = new Date().toISOString()
+  if (existing) {
+    existing.lastUsedAt = startedAt
+    return
+  }
+  const tag = image.includes('@') ? null : (image.split('/').at(-1)?.split(':')[1] ?? 'latest')
+  const digest = `sha256:${Array.from({ length: 64 }, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('')}`
+  const versionId = `ver-${Math.abs(Date.now() % 100000000)}`
+  const sizeBytes = (40 + Math.floor(Math.random() * 200)) * MIB
+  MOCK_IMAGE_DETAILS.push({
+    name,
+    id: `img-${Math.abs(Date.now() % 100000000)}`,
+    curated: false,
+    curatedRef: null,
+    aliases: tag ? [tag] : [],
+    versionCount: 1,
+    sizeBytes,
+    lastUsedAt: startedAt,
+    createdAt: startedAt,
+    versions: [
+      {
+        id: versionId,
+        digest,
+        sizeBytes,
+        sourceRef: image,
+        aliases: tag ? [tag] : [],
+        lastUsedAt: startedAt,
+        upstreamMissingAt: null,
+        createdAt: startedAt,
+      },
+    ],
+    history: tag
+      ? [
+          {
+            aliasName: tag,
+            fromVersionId: null,
+            fromDigest: null,
+            toVersionId: versionId,
+            toDigest: digest,
+            actorId: null,
+            createdAt: startedAt,
+          },
+        ]
+      : [],
+  })
 }

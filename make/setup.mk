@@ -13,7 +13,11 @@ setup\:build:
 	@if [ "$$(uname)" = "Darwin" ]; then \
 		BOXLITE_SETUP_MODE=build bash $(SCRIPT_DIR)/setup/setup-macos.sh; \
 	elif [ "$$(uname)" = "Linux" ]; then \
-		if [ -f /etc/os-release ] && grep -q "manylinux" /etc/os-release 2>/dev/null; then \
+		if [ -f /etc/os-release ] && grep -q "^ID=nixos" /etc/os-release 2>/dev/null; then \
+			echo "❌ make setup does not install packages on NixOS"; \
+			echo "   Use the flake dev shell instead: nix develop -c make cli"; \
+			exit 1; \
+		elif [ -f /etc/os-release ] && grep -q "manylinux" /etc/os-release 2>/dev/null; then \
 			BOXLITE_SETUP_MODE=build bash $(SCRIPT_DIR)/setup/setup-manylinux.sh; \
 		elif [ -f /etc/os-release ] && grep -q "musllinux" /etc/os-release 2>/dev/null; then \
 			BOXLITE_SETUP_MODE=build bash $(SCRIPT_DIR)/setup/setup-musllinux.sh; \

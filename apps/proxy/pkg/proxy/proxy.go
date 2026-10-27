@@ -23,6 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/securecookie"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	"golang.org/x/sync/singleflight"
 
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
@@ -34,11 +35,8 @@ type RunnerInfo struct {
 	ApiKey string `json:"apiKey"`
 }
 
-const BOX_AUTH_KEY_HEADER = "X-BoxLite-Preview-Token"
-const BOX_AUTH_KEY_QUERY_PARAM = "BOXLITE_BOX_AUTH_KEY"
 const BOX_AUTH_COOKIE_NAME = "boxlite-box-auth-"
 const ACTIVITY_POLL_STOP_KEY = "boxlite-activity-poll-stop"
-const TERMINAL_PORT = "22222"
 
 type activityPollController struct {
 	done chan struct{}
@@ -69,10 +67,15 @@ type Proxy struct {
 	apiclient                  *apiclient.APIClient
 	runnerCache                common_cache.ICache[RunnerInfo]
 	boxRunnerCache             common_cache.ICache[RunnerInfo]
-	boxPublicCache             common_cache.ICache[bool]
+	boxInboundCache            common_cache.ICache[bool]
 	boxAuthKeyValidCache       common_cache.ICache[bool]
 	boxLastActivityUpdateCache common_cache.ICache[bool]
 	guestPortTransport         *http.Transport
+	wakeGroup                  singleflight.Group
+	guestPortGroup             singleflight.Group
+	// wakeDeadlines maps a box being woken to the end of its wake budget, so
+	// requests that arrive mid-wake join it.
+	wakeDeadlines sync.Map
 }
 
 func StartProxy(ctx context.Context, config *config.Config) error {
@@ -99,7 +102,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 		if err != nil {
 			return err
 		}
-		proxy.boxPublicCache, err = common_cache.NewRedisCache[bool](config.Redis, "proxy:box-public:")
+		proxy.boxInboundCache, err = common_cache.NewRedisCache[bool](config.Redis, "proxy:box-inbound:")
 		if err != nil {
 			return err
 		}
@@ -114,7 +117,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 	} else {
 		proxy.boxRunnerCache = common_cache.NewMapCache[RunnerInfo](ctx)
 		proxy.runnerCache = common_cache.NewMapCache[RunnerInfo](ctx)
-		proxy.boxPublicCache = common_cache.NewMapCache[bool](ctx)
+		proxy.boxInboundCache = common_cache.NewMapCache[bool](ctx)
 		proxy.boxAuthKeyValidCache = common_cache.NewMapCache[bool](ctx)
 		proxy.boxLastActivityUpdateCache = common_cache.NewMapCache[bool](ctx)
 	}

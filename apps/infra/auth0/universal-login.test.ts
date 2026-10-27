@@ -3,9 +3,9 @@
 
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import test from 'node:test'
 
@@ -27,6 +27,7 @@ import {
 const TARGET = {
   stage: 'dev',
   stackOrigin: 'https://dev.example.com',
+  apiOrigin: 'https://api.dev.example.com',
   publicOidcIssuer: 'https://auth.dev.example.com/',
   auth0TenantDomain: 'tenant.us.auth0.com',
 }
@@ -273,6 +274,7 @@ test('the file source discovers one complete prompt document per language and pr
       JSON.stringify({
         dev: {
           stackOrigin: TARGET.stackOrigin,
+          apiOrigin: TARGET.apiOrigin,
           publicOidcIssuer: TARGET.publicOidcIssuer,
           auth0TenantDomain: TARGET.auth0TenantDomain,
         },
@@ -312,35 +314,50 @@ test('the checked-in source binds dev to the reviewed stack, issuer, tenant, and
   assert.deepEqual(source.target, {
     stage: 'dev',
     stackOrigin: 'https://dev.boxlite.ai',
+    apiOrigin: 'https://api.dev.boxlite.ai',
     publicOidcIssuer: 'https://auth.dev.boxlite.ai/',
     auth0TenantDomain: 'dev-j60pjpmu6neaeaga.us.auth0.com',
   })
   assert.equal(
     source.theme.widget && (source.theme.widget as JsonObject).logo_url,
-    'https://dev.boxlite.ai/auth0/boxlite-light-ec0b1243.png',
+    'https://dev.boxlite.ai/auth0/boxlite-light-e912d3c8.png',
   )
   const copy = new Map(source.prompts.map((prompt) => [prompt.prompt, prompt.text]))
   assert.deepEqual([...copy.keys()].sort(), ['login', 'login-id', 'signup', 'signup-id'])
   // Identifier First serves login-id/signup-id, so both variants of each screen carry the same copy.
   for (const [prompt, title, description] of [
-    ['login-id', 'Welcome back', 'The cloud platform your agents run on'],
-    ['login', 'Welcome back', 'The cloud platform your agents run on'],
+    ['login-id', 'Start building on BoxLite', '$100 in free credits with your new account.'],
+    ['login', 'Start building on BoxLite', '$100 in free credits with your new account.'],
     ['signup-id', 'Welcome to BoxLite', 'Boxes your agents build in, and ship from.'],
     ['signup', 'Welcome to BoxLite', 'Boxes your agents build in, and ship from.'],
   ] as const) {
     assert.deepEqual(copy.get(prompt), { [prompt]: { title, description } })
   }
-  assert.equal(source.tenant.picture_url, 'https://dev.boxlite.ai/auth0/boxlite-black-12c2c991.png')
+  assert.equal(source.tenant.picture_url, 'https://dev.boxlite.ai/auth0/boxlite-black-3f7875da.png')
   assert.equal('_comment' in source.theme, false)
   assert.equal('_comment' in source.tenant, false)
+})
+
+test('the checked-in prod target checks stack identity on the prod API host', async () => {
+  const { target } = await new FileBrandingSource().load('prod')
+  const calls: string[] = []
+  const verifier = new HttpBrandingVerifier({
+    fetch: async (input) => {
+      calls.push(String(input))
+      return Response.json({ dashboardUrl: target.stackOrigin, oidc: { issuer: target.publicOidcIssuer } })
+    },
+  })
+
+  assert.deepEqual(await verifier.verify(target, []), ['stack identity', 'OIDC issuer'])
+  assert.deepEqual(calls, ['https://api.boxlite.ai/api/config'])
 })
 
 test('the dashboard ships only the documented content-addressed Auth0 assets', () => {
   const root = join(import.meta.dirname, '..', '..', 'dashboard', 'public', 'auth0')
   const expectedHashes = {
     'IBM-Plex-OFL-d741e57d.txt': 'd741e57d5f865e294df801f96b7b5161a88b211df65887e4358d271c9fc5fb4f',
-    'boxlite-black-12c2c991.png': '12c2c991a30c82b4c8cc5b1a2ca4f808add8e2645f82c309693385ef1b687c05',
-    'boxlite-light-ec0b1243.png': 'ec0b124340e956a6619e866809e2dad8e5f75e83e10a301c766ecdd81710f8e0',
+    'boxlite-black-3f7875da.png': '3f7875daa9a48723b208f68ac5bc59ed3d98c8d018443207ba16784ad5ccb656',
+    'boxlite-light-e912d3c8.png': 'e912d3c8c795ff341e94906af378b395f3c4bfd35e8e0259732374c8cff47100',
     'github-invertocat-white-ccd84c89.svg': 'ccd84c89b1056345608fc3489357f8acc7397e49a3cdc2d418b6c8016911d47b',
     'ibm-plex-mono-400-ba204497.woff2': 'ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350',
   }
@@ -505,4 +522,22 @@ test('the Auth0 adapter treats only an explicit 404 as an absent resource', asyn
     },
   })
   await assert.rejects(() => unauthorized.getDefaultTheme(TARGET), /unauthorized/)
+})
+
+test('the Auth0 adapter closes the CLI stdin, so a write never waits on it', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'boxlite-auth0-stdin-'))
+  const previousPath = process.env.PATH
+  // `auth0 api` reads a piped request body from stdin before it sends; this
+  // stand-in drains stdin the same way, so it answers only once stdin ends.
+  writeFileSync(join(directory, 'auth0'), "#!/bin/sh\ncat >/dev/null\nprintf '{}'\n")
+  chmodSync(join(directory, 'auth0'), 0o755)
+  process.env.PATH = `${directory}${delimiter}${previousPath ?? ''}`
+
+  try {
+    await new Auth0ManagementCli().putPromptText(TARGET, 'login', 'en', PROMPTS[0].text, AbortSignal.timeout(5_000))
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+    rmSync(directory, { recursive: true, force: true })
+  }
 })

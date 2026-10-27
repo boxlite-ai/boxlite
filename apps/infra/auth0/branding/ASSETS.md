@@ -12,8 +12,8 @@ into the dashboard build and Nest serves them through the stack domain.
 
 | Public file                            | Source                                                                  | SHA-256                                                            |
 | -------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `boxlite-light-ec0b1243.png`           | `apps/dashboard/src/assets/boxlite-light.png`                           | `ec0b124340e956a6619e866809e2dad8e5f75e83e10a301c766ecdd81710f8e0` |
-| `boxlite-black-12c2c991.png`           | `apps/dashboard/src/assets/boxlite-black.png`                           | `12c2c991a30c82b4c8cc5b1a2ca4f808add8e2645f82c309693385ef1b687c05` |
+| `boxlite-light-e912d3c8.png`           | `apps/dashboard/src/assets/boxlite-light.png`                           | `e912d3c8c795ff341e94906af378b395f3c4bfd35e8e0259732374c8cff47100` |
+| `boxlite-black-3f7875da.png`           | `apps/dashboard/src/assets/boxlite-black.png`                           | `3f7875daa9a48723b208f68ac5bc59ed3d98c8d018443207ba16784ad5ccb656` |
 | `ibm-plex-mono-400-ba204497.woff2`     | `@ibm/plex-mono@2.5.0` `fonts/complete/woff2/IBMPlexMono-Regular.woff2` | `ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350` |
 | `IBM-Plex-OFL-d741e57d.txt`            | `@ibm/plex-mono@2.5.0` `LICENSE.txt` (normalized text)                  | `d741e57d5f865e294df801f96b7b5161a88b211df65887e4358d271c9fc5fb4f` |
 | `github-invertocat-white-ccd84c89.svg` | `brand.github.com` `GitHub_Logos.zip` `SVG/GitHub_Invertocat_White.svg` | `ccd84c89b1056345608fc3489357f8acc7397e49a3cdc2d418b6c8016911d47b` |
@@ -62,3 +62,9 @@ When an asset changes, compute its full SHA-256, put the first eight characters
 in the filename, update this table and whichever of `branding/theme.json` or
 `branding/tenant.json` points at it, deploy the dashboard, then run
 `npm run auth0:universal-login -- preview --stage <name>`.
+
+The account link Form copies the theme's font and logo URLs when it is
+applied, so after changing either, also run `npm run auth0:configure-login`
+with `--replace-link-form` for each tenant, as the
+[operator doc](../../docs/identity-and-mail.md) shows; otherwise the link page
+keeps loading the old file.

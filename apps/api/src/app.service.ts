@@ -17,6 +17,8 @@ import { RunnerService } from './box/services/runner.service'
 import { RunnerAdapterFactory } from './box/runner-adapter/runnerAdapter'
 import { RegionType } from './region/enums/region-type.enum'
 import { RunnerState } from './box/enums/runner-state.enum'
+import { Context } from './common/context/context'
+import { PlatformReason } from './common/context/platform-reason.enum'
 
 export const BOXLITE_ADMIN_USER_ID = 'boxlite-admin'
 
@@ -159,12 +161,15 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
   private async initializeAdminUser(): Promise<void> {
     let user = await this.userService.findOne(BOXLITE_ADMIN_USER_ID)
     if (!user) {
-      user = await this.userService.create({
-        id: BOXLITE_ADMIN_USER_ID,
-        name: 'BoxLite Admin',
-        defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
-        role: SystemRole.ADMIN,
-      })
+      user = await this.userService.create(
+        {
+          id: BOXLITE_ADMIN_USER_ID,
+          name: 'BoxLite Admin',
+          defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
+          role: SystemRole.ADMIN,
+        },
+        Context.platform(PlatformReason.BOOTSTRAP),
+      )
     }
 
     const defaultOrg = await this.organizationService.findDefaultForUser(user.id)

@@ -1,12 +1,14 @@
 package controllers
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 
 	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
+	"github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 )
@@ -32,6 +34,11 @@ func BoxliteNetworkTunnel(logger *slog.Logger) gin.HandlerFunc {
 		}
 
 		guestConn, err := r.Boxlite.DialGuestPort(ctx.Request.Context(), boxID, uint16(port))
+		if errors.Is(err, boxlite.ErrBoxNotRunning) {
+			// The preview proxy keys its wake on this code.
+			ctx.JSON(http.StatusConflict, gin.H{"error": err.Error(), "code": "box_not_running"})
+			return
+		}
 		if err != nil {
 			logger.WarnContext(ctx.Request.Context(), "guest tunnel dial failed", "box", boxID, "port", port, "error", err)
 			ctx.JSON(http.StatusBadGateway, gin.H{"error": "guest tunnel unavailable"})

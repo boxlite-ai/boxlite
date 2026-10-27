@@ -16,7 +16,7 @@ import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import { SystemRole } from '../user/enums/system-role.enum'
 import { RunnerService } from '../box/services/runner.service'
-import { generateApiKeyHash } from '../common/utils/api-key'
+import { apiKeyValidationCacheKey, generateApiKeyHash } from '../common/utils/api-key'
 import { RegionService } from '../region/services/region.service'
 import { JWT_REGEX } from './constants/jwt-regex.constant'
 
@@ -187,6 +187,10 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
       if (cached) {
         this.logger.debug('Using cached API key validation')
         const apiKey = JSON.parse(cached)
+        // Preserve the shared revocation key while old cache entries age out after the scope migration.
+        apiKey.permissions = apiKey.permissions?.map((permission: string) =>
+          permission === 'read:tenant' ? 'read:members' : permission === 'write:tenant' ? 'write:members' : permission,
+        )
         // Parse Date fields from cached data
         if (apiKey.createdAt) {
           apiKey.createdAt = new Date(apiKey.createdAt)
@@ -207,7 +211,7 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
   }
 
   private generateValidationCacheKey(token: string): string {
-    return `api-key:validation:${generateApiKeyHash(token)}`
+    return apiKeyValidationCacheKey(generateApiKeyHash(token))
   }
 
   private generateUserCacheKey(userId: string): string {

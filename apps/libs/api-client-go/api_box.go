@@ -26,18 +26,17 @@ import (
 type BoxAPI interface {
 
 	/*
-	ExpireSignedPortPreviewUrl Expire signed preview URL for a box port
+	CreateAttachTicket Get a one-time ticket for the attach WebSocket
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxIdOrName ID or name of the box
-	@param port Port number to expire signed preview URL for
-	@param token Token to expire signed preview URL for
-	@return BoxAPIExpireSignedPortPreviewUrlRequest
+	@return BoxAPICreateAttachTicketRequest
 	*/
-	ExpireSignedPortPreviewUrl(ctx context.Context, boxIdOrName string, port int32, token string) BoxAPIExpireSignedPortPreviewUrlRequest
+	CreateAttachTicket(ctx context.Context, boxIdOrName string) BoxAPICreateAttachTicketRequest
 
-	// ExpireSignedPortPreviewUrlExecute executes the request
-	ExpireSignedPortPreviewUrlExecute(r BoxAPIExpireSignedPortPreviewUrlRequest) (*http.Response, error)
+	// CreateAttachTicketExecute executes the request
+	//  @return AttachTicket
+	CreateAttachTicketExecute(r BoxAPICreateAttachTicketRequest) (*AttachTicket, *http.Response, error)
 
 	/*
 	GetBox Get box details
@@ -124,34 +123,6 @@ type BoxAPI interface {
 	// GetBoxesForRunnerExecute executes the request
 	//  @return []Box
 	GetBoxesForRunnerExecute(r BoxAPIGetBoxesForRunnerRequest) ([]Box, *http.Response, error)
-
-	/*
-	GetPortPreviewUrl Get preview URL for a box port
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxIdOrName ID or name of the box
-	@param port Port number to get preview URL for
-	@return BoxAPIGetPortPreviewUrlRequest
-	*/
-	GetPortPreviewUrl(ctx context.Context, boxIdOrName string, port float32) BoxAPIGetPortPreviewUrlRequest
-
-	// GetPortPreviewUrlExecute executes the request
-	//  @return PortPreviewUrl
-	GetPortPreviewUrlExecute(r BoxAPIGetPortPreviewUrlRequest) (*PortPreviewUrl, *http.Response, error)
-
-	/*
-	GetSignedPortPreviewUrl Get signed preview URL for a box port
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxIdOrName ID or name of the box
-	@param port Port number to get signed preview URL for
-	@return BoxAPIGetSignedPortPreviewUrlRequest
-	*/
-	GetSignedPortPreviewUrl(ctx context.Context, boxIdOrName string, port int32) BoxAPIGetSignedPortPreviewUrlRequest
-
-	// GetSignedPortPreviewUrlExecute executes the request
-	//  @return SignedPortPreviewUrl
-	GetSignedPortPreviewUrlExecute(r BoxAPIGetSignedPortPreviewUrlRequest) (*SignedPortPreviewUrl, *http.Response, error)
 
 	/*
 	GetToolboxProxyUrl Get toolbox proxy URL for a box
@@ -267,87 +238,76 @@ type BoxAPI interface {
 
 	// UpdateLastActivityExecute executes the request
 	UpdateLastActivityExecute(r BoxAPIUpdateLastActivityRequest) (*http.Response, error)
-
-	/*
-	UpdatePublicStatus Update public status
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param boxIdOrName ID or name of the box
-	@param isPublic Public status to set
-	@return BoxAPIUpdatePublicStatusRequest
-	*/
-	UpdatePublicStatus(ctx context.Context, boxIdOrName string, isPublic bool) BoxAPIUpdatePublicStatusRequest
-
-	// UpdatePublicStatusExecute executes the request
-	//  @return Box
-	UpdatePublicStatusExecute(r BoxAPIUpdatePublicStatusRequest) (*Box, *http.Response, error)
 }
 
 // BoxAPIService BoxAPI service
 type BoxAPIService service
 
-type BoxAPIExpireSignedPortPreviewUrlRequest struct {
+type BoxAPICreateAttachTicketRequest struct {
 	ctx context.Context
 	ApiService BoxAPI
 	boxIdOrName string
-	port int32
-	token string
+	createAttachTicket *CreateAttachTicket
 	xBoxLiteOrganizationID *string
 }
 
+func (r BoxAPICreateAttachTicketRequest) CreateAttachTicket(createAttachTicket CreateAttachTicket) BoxAPICreateAttachTicketRequest {
+	r.createAttachTicket = &createAttachTicket
+	return r
+}
+
 // Use with JWT to specify the organization ID
-func (r BoxAPIExpireSignedPortPreviewUrlRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) BoxAPIExpireSignedPortPreviewUrlRequest {
+func (r BoxAPICreateAttachTicketRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) BoxAPICreateAttachTicketRequest {
 	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
 	return r
 }
 
-func (r BoxAPIExpireSignedPortPreviewUrlRequest) Execute() (*http.Response, error) {
-	return r.ApiService.ExpireSignedPortPreviewUrlExecute(r)
+func (r BoxAPICreateAttachTicketRequest) Execute() (*AttachTicket, *http.Response, error) {
+	return r.ApiService.CreateAttachTicketExecute(r)
 }
 
 /*
-ExpireSignedPortPreviewUrl Expire signed preview URL for a box port
+CreateAttachTicket Get a one-time ticket for the attach WebSocket
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxIdOrName ID or name of the box
- @param port Port number to expire signed preview URL for
- @param token Token to expire signed preview URL for
- @return BoxAPIExpireSignedPortPreviewUrlRequest
+ @return BoxAPICreateAttachTicketRequest
 */
-func (a *BoxAPIService) ExpireSignedPortPreviewUrl(ctx context.Context, boxIdOrName string, port int32, token string) BoxAPIExpireSignedPortPreviewUrlRequest {
-	return BoxAPIExpireSignedPortPreviewUrlRequest{
+func (a *BoxAPIService) CreateAttachTicket(ctx context.Context, boxIdOrName string) BoxAPICreateAttachTicketRequest {
+	return BoxAPICreateAttachTicketRequest{
 		ApiService: a,
 		ctx: ctx,
 		boxIdOrName: boxIdOrName,
-		port: port,
-		token: token,
 	}
 }
 
 // Execute executes the request
-func (a *BoxAPIService) ExpireSignedPortPreviewUrlExecute(r BoxAPIExpireSignedPortPreviewUrlRequest) (*http.Response, error) {
+//  @return AttachTicket
+func (a *BoxAPIService) CreateAttachTicketExecute(r BoxAPICreateAttachTicketRequest) (*AttachTicket, *http.Response, error) {
 	var (
 		localVarHTTPMethod   = http.MethodPost
 		localVarPostBody     interface{}
 		formFiles            []formFile
+		localVarReturnValue  *AttachTicket
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxAPIService.ExpireSignedPortPreviewUrl")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxAPIService.CreateAttachTicket")
 	if err != nil {
-		return nil, &GenericOpenAPIError{error: err.Error()}
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/box/{boxIdOrName}/ports/{port}/signed-preview-url/{token}/expire"
+	localVarPath := localBasePath + "/box/{boxIdOrName}/attach-tickets"
 	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"port"+"}", url.PathEscape(parameterValueToString(r.port, "port")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"token"+"}", url.PathEscape(parameterValueToString(r.token, "token")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
+	if r.createAttachTicket == nil {
+		return localVarReturnValue, nil, reportError("createAttachTicket is required and must be specified")
+	}
 
 	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{}
+	localVarHTTPContentTypes := []string{"application/json"}
 
 	// set Content-Type header
 	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
@@ -356,7 +316,7 @@ func (a *BoxAPIService) ExpireSignedPortPreviewUrlExecute(r BoxAPIExpireSignedPo
 	}
 
 	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{}
+	localVarHTTPHeaderAccepts := []string{"application/json"}
 
 	// set Accept header
 	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
@@ -366,21 +326,23 @@ func (a *BoxAPIService) ExpireSignedPortPreviewUrlExecute(r BoxAPIExpireSignedPo
 	if r.xBoxLiteOrganizationID != nil {
 		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
 	}
+	// body params
+	localVarPostBody = r.createAttachTicket
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
-		return nil, err
+		return localVarReturnValue, nil, err
 	}
 
 	localVarHTTPResponse, err := a.client.callAPI(req)
 	if err != nil || localVarHTTPResponse == nil {
-		return localVarHTTPResponse, err
+		return localVarReturnValue, localVarHTTPResponse, err
 	}
 
 	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
 	localVarHTTPResponse.Body.Close()
 	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
 	if err != nil {
-		return localVarHTTPResponse, err
+		return localVarReturnValue, localVarHTTPResponse, err
 	}
 
 	if localVarHTTPResponse.StatusCode >= 300 {
@@ -388,10 +350,19 @@ func (a *BoxAPIService) ExpireSignedPortPreviewUrlExecute(r BoxAPIExpireSignedPo
 			body:  localVarBody,
 			error: localVarHTTPResponse.Status,
 		}
-		return localVarHTTPResponse, newErr
+		return localVarReturnValue, localVarHTTPResponse, newErr
 	}
 
-	return localVarHTTPResponse, nil
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
 type BoxAPIGetBoxRequest struct {
@@ -1208,246 +1179,6 @@ func (a *BoxAPIService) GetBoxesForRunnerExecute(r BoxAPIGetBoxesForRunnerReques
 	}
 	if r.skipReconcilingBoxes != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "skipReconcilingBoxes", r.skipReconcilingBoxes, "form", "")
-	}
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{"application/json"}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	if r.xBoxLiteOrganizationID != nil {
-		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
-	}
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return localVarReturnValue, nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-	if err != nil {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: err.Error(),
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	return localVarReturnValue, localVarHTTPResponse, nil
-}
-
-type BoxAPIGetPortPreviewUrlRequest struct {
-	ctx context.Context
-	ApiService BoxAPI
-	boxIdOrName string
-	port float32
-	xBoxLiteOrganizationID *string
-}
-
-// Use with JWT to specify the organization ID
-func (r BoxAPIGetPortPreviewUrlRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) BoxAPIGetPortPreviewUrlRequest {
-	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
-	return r
-}
-
-func (r BoxAPIGetPortPreviewUrlRequest) Execute() (*PortPreviewUrl, *http.Response, error) {
-	return r.ApiService.GetPortPreviewUrlExecute(r)
-}
-
-/*
-GetPortPreviewUrl Get preview URL for a box port
-
- @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxIdOrName ID or name of the box
- @param port Port number to get preview URL for
- @return BoxAPIGetPortPreviewUrlRequest
-*/
-func (a *BoxAPIService) GetPortPreviewUrl(ctx context.Context, boxIdOrName string, port float32) BoxAPIGetPortPreviewUrlRequest {
-	return BoxAPIGetPortPreviewUrlRequest{
-		ApiService: a,
-		ctx: ctx,
-		boxIdOrName: boxIdOrName,
-		port: port,
-	}
-}
-
-// Execute executes the request
-//  @return PortPreviewUrl
-func (a *BoxAPIService) GetPortPreviewUrlExecute(r BoxAPIGetPortPreviewUrlRequest) (*PortPreviewUrl, *http.Response, error) {
-	var (
-		localVarHTTPMethod   = http.MethodGet
-		localVarPostBody     interface{}
-		formFiles            []formFile
-		localVarReturnValue  *PortPreviewUrl
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxAPIService.GetPortPreviewUrl")
-	if err != nil {
-		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/box/{boxIdOrName}/ports/{port}/preview-url"
-	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"port"+"}", url.PathEscape(parameterValueToString(r.port, "port")), -1)
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{"application/json"}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	if r.xBoxLiteOrganizationID != nil {
-		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
-	}
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return localVarReturnValue, nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-	if err != nil {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: err.Error(),
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	return localVarReturnValue, localVarHTTPResponse, nil
-}
-
-type BoxAPIGetSignedPortPreviewUrlRequest struct {
-	ctx context.Context
-	ApiService BoxAPI
-	boxIdOrName string
-	port int32
-	xBoxLiteOrganizationID *string
-	expiresInSeconds *int32
-}
-
-// Use with JWT to specify the organization ID
-func (r BoxAPIGetSignedPortPreviewUrlRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) BoxAPIGetSignedPortPreviewUrlRequest {
-	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
-	return r
-}
-
-// Expiration time in seconds (default: 60 seconds)
-func (r BoxAPIGetSignedPortPreviewUrlRequest) ExpiresInSeconds(expiresInSeconds int32) BoxAPIGetSignedPortPreviewUrlRequest {
-	r.expiresInSeconds = &expiresInSeconds
-	return r
-}
-
-func (r BoxAPIGetSignedPortPreviewUrlRequest) Execute() (*SignedPortPreviewUrl, *http.Response, error) {
-	return r.ApiService.GetSignedPortPreviewUrlExecute(r)
-}
-
-/*
-GetSignedPortPreviewUrl Get signed preview URL for a box port
-
- @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxIdOrName ID or name of the box
- @param port Port number to get signed preview URL for
- @return BoxAPIGetSignedPortPreviewUrlRequest
-*/
-func (a *BoxAPIService) GetSignedPortPreviewUrl(ctx context.Context, boxIdOrName string, port int32) BoxAPIGetSignedPortPreviewUrlRequest {
-	return BoxAPIGetSignedPortPreviewUrlRequest{
-		ApiService: a,
-		ctx: ctx,
-		boxIdOrName: boxIdOrName,
-		port: port,
-	}
-}
-
-// Execute executes the request
-//  @return SignedPortPreviewUrl
-func (a *BoxAPIService) GetSignedPortPreviewUrlExecute(r BoxAPIGetSignedPortPreviewUrlRequest) (*SignedPortPreviewUrl, *http.Response, error) {
-	var (
-		localVarHTTPMethod   = http.MethodGet
-		localVarPostBody     interface{}
-		formFiles            []formFile
-		localVarReturnValue  *SignedPortPreviewUrl
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxAPIService.GetSignedPortPreviewUrl")
-	if err != nil {
-		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/box/{boxIdOrName}/ports/{port}/signed-preview-url"
-	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"port"+"}", url.PathEscape(parameterValueToString(r.port, "port")), -1)
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-
-	if r.expiresInSeconds != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "expiresInSeconds", r.expiresInSeconds, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
@@ -2749,119 +2480,4 @@ func (a *BoxAPIService) UpdateLastActivityExecute(r BoxAPIUpdateLastActivityRequ
 	}
 
 	return localVarHTTPResponse, nil
-}
-
-type BoxAPIUpdatePublicStatusRequest struct {
-	ctx context.Context
-	ApiService BoxAPI
-	boxIdOrName string
-	isPublic bool
-	xBoxLiteOrganizationID *string
-}
-
-// Use with JWT to specify the organization ID
-func (r BoxAPIUpdatePublicStatusRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) BoxAPIUpdatePublicStatusRequest {
-	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
-	return r
-}
-
-func (r BoxAPIUpdatePublicStatusRequest) Execute() (*Box, *http.Response, error) {
-	return r.ApiService.UpdatePublicStatusExecute(r)
-}
-
-/*
-UpdatePublicStatus Update public status
-
- @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param boxIdOrName ID or name of the box
- @param isPublic Public status to set
- @return BoxAPIUpdatePublicStatusRequest
-*/
-func (a *BoxAPIService) UpdatePublicStatus(ctx context.Context, boxIdOrName string, isPublic bool) BoxAPIUpdatePublicStatusRequest {
-	return BoxAPIUpdatePublicStatusRequest{
-		ApiService: a,
-		ctx: ctx,
-		boxIdOrName: boxIdOrName,
-		isPublic: isPublic,
-	}
-}
-
-// Execute executes the request
-//  @return Box
-func (a *BoxAPIService) UpdatePublicStatusExecute(r BoxAPIUpdatePublicStatusRequest) (*Box, *http.Response, error) {
-	var (
-		localVarHTTPMethod   = http.MethodPost
-		localVarPostBody     interface{}
-		formFiles            []formFile
-		localVarReturnValue  *Box
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxAPIService.UpdatePublicStatus")
-	if err != nil {
-		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/box/{boxIdOrName}/public/{isPublic}"
-	localVarPath = strings.Replace(localVarPath, "{"+"boxIdOrName"+"}", url.PathEscape(parameterValueToString(r.boxIdOrName, "boxIdOrName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"isPublic"+"}", url.PathEscape(parameterValueToString(r.isPublic, "isPublic")), -1)
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{"application/json"}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	if r.xBoxLiteOrganizationID != nil {
-		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
-	}
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return localVarReturnValue, nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-	if err != nil {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: err.Error(),
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	return localVarReturnValue, localVarHTTPResponse, nil
 }

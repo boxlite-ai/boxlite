@@ -29,6 +29,7 @@ import { UserDeletedEvent } from '../../user/events/user-deleted.event'
 import { BoxState } from '../../box/enums/box-state.enum'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { OrganizationEvents } from '../constants/organization-events.constant'
+import { OrganizationUserRemovedEvent } from '../events/organization-user-removed.event'
 import { UserEmailVerifiedEvent } from '../../user/events/user-email-verified.event'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
@@ -690,6 +691,10 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
   @TrackJobExecution()
   async handleUserDeletedEvent(payload: UserDeletedEvent): Promise<void> {
     const organization = await this.findDefaultForUserWithEntityManager(payload.entityManager, payload.userId)
+    const removal = new OrganizationUserRemovedEvent(payload.entityManager, organization.id, payload.userId)
+    await this.eventEmitter.emitAsync(OrganizationEvents.USER_REMOVED, removal)
+    payload.afterCommit(() => removal.runAfterCommitTasks())
+
     const membersCount = await payload.entityManager.count(OrganizationUser, {
       where: {
         organizationId: organization.id,

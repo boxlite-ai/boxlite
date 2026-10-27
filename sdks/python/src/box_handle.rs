@@ -6,6 +6,7 @@ use crate::metrics::PyBoxMetrics;
 use crate::network::PyNetworkHandle;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions};
 use crate::snapshots::PySnapshotHandle;
+use crate::ssh::PySshHandle;
 use crate::util::map_err;
 use boxlite::{BoxCommand, CloneOptions, ExportOptions, LiteBox};
 use pyo3::prelude::*;
@@ -51,6 +52,14 @@ impl PyBox {
         PyNetworkHandle {
             handle: Arc::clone(&self.handle),
         }
+    }
+
+    /// Get the SSH control handle for this box.
+    ///
+    /// Usage: `await box.ssh.configure(config)`, `await box.ssh.status()`.
+    #[getter]
+    fn ssh(&self) -> PySshHandle {
+        PySshHandle::new(self.handle.ssh())
     }
 
     #[pyo3(signature = (command, args=None, env=None, tty=false, user=None, timeout_secs=None, cwd=None))]

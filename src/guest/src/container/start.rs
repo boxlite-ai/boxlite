@@ -248,13 +248,16 @@ pub(crate) fn create_container_with_stdio(
         .get()
         .expect("zygote not started")
         .build_init(spec, raw_fds)
-        .map_err(|e| {
-            BoxliteError::Internal(format!(
+        .map_err(|e| match e {
+            // The image cannot run the command: the caller's own mistake, which
+            // our ids and paths would only bury.
+            BoxliteError::InvalidArgument(_) => e,
+            e => BoxliteError::Internal(format!(
                 "Failed to create container {} at bundle {}: {}",
                 container_id,
                 bundle_path.display(),
                 e
-            ))
+            )),
         })?;
     drop(init_fds);
 

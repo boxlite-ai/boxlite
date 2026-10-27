@@ -2,7 +2,7 @@
 
 use crate::cli::GlobalFlags;
 use crate::formatter::{self, GtmplWithJson, OutputFormat, value_from_serde_json};
-use boxlite::{BoxInfo, BoxStateInfo};
+use boxlite::{BoxInfo, BoxStateInfo, NetworkInfo, NetworkMode};
 use clap::Args;
 use serde::Serialize;
 
@@ -46,6 +46,41 @@ struct InspectPresenter {
     cpus: u8,
     #[serde(rename = "Memory")]
     memory: u64,
+    /// Both directions of the network policy; `null` when the runtime does
+    /// not know it, such as a REST server that predates the field.
+    #[serde(rename = "Network")]
+    network: Option<InspectNetworkPresenter>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectNetworkPresenter {
+    #[serde(rename = "Outbound")]
+    outbound: InspectNetworkDirectionPresenter,
+    #[serde(rename = "Inbound")]
+    inbound: InspectNetworkDirectionPresenter,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectNetworkDirectionPresenter {
+    #[serde(rename = "Mode")]
+    mode: NetworkMode,
+    #[serde(rename = "AllowNet")]
+    allow_net: Vec<String>,
+}
+
+impl From<&NetworkInfo> for InspectNetworkPresenter {
+    fn from(network: &NetworkInfo) -> Self {
+        Self {
+            outbound: InspectNetworkDirectionPresenter {
+                mode: network.outbound.mode.clone(),
+                allow_net: network.outbound.allow_net.clone(),
+            },
+            inbound: InspectNetworkDirectionPresenter {
+                mode: network.inbound.mode.clone(),
+                allow_net: network.inbound.allow_net.clone(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -86,6 +121,7 @@ impl From<&BoxInfo> for InspectPresenter {
             },
             cpus: info.cpus,
             memory: info.memory_mib as u64 * 1024 * 1024,
+            network: info.network.as_ref().map(InspectNetworkPresenter::from),
         }
     }
 }
@@ -265,6 +301,7 @@ mod tests {
             exit_code: None,
             started_at,
             last_activity_at: None,
+            resolved_image: None,
         }
     }
 
@@ -285,6 +322,39 @@ mod tests {
 
         let value = serde_json::to_value(InspectPresenter::from(&inspect_info(None))).unwrap();
         assert!(value["State"]["StartedAt"].is_null());
+    }
+
+    #[test]
+    fn inspect_exposes_both_network_directions() {
+        use boxlite::{InboundNetworkInfo, NetworkInfo, NetworkMode, OutboundNetworkInfo};
+
+        let mut info = inspect_info(None);
+        info.network = Some(NetworkInfo::new(
+            OutboundNetworkInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: vec!["api.openai.com".into()],
+            },
+            InboundNetworkInfo {
+                mode: NetworkMode::Enabled,
+                allow_net: Vec::new(),
+            },
+            None,
+        ));
+
+        let value = serde_json::to_value(InspectPresenter::from(&info)).unwrap();
+        assert_eq!(
+            value["Network"],
+            serde_json::json!({
+                "Outbound": { "Mode": "enabled", "AllowNet": ["api.openai.com"] },
+                "Inbound": { "Mode": "enabled", "AllowNet": [] },
+            })
+        );
+
+        let value = serde_json::to_value(InspectPresenter::from(&inspect_info(None))).unwrap();
+        assert!(
+            value["Network"].is_null(),
+            "unknown policy must read as null, not as a default"
+        );
     }
 
     #[test]

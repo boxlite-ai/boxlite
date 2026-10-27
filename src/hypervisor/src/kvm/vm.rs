@@ -20,6 +20,7 @@ pub struct KvmVm {
     slots: Mutex<MemorySlots>,
     run_size: usize,
     kick_signal: i32,
+    cpuid: Vec<crate::X86CpuidEntry>,
 }
 
 impl KvmVm {
@@ -88,7 +89,13 @@ impl KvmVm {
             slots: Mutex::new(MemorySlots::new(kvm.get_nr_memslots(), page_size as usize)),
             run_size: kvm.get_vcpu_mmap_size().map_err(io::Error::from)?,
             kick_signal,
+            cpuid: super::features::supported_cpuid(&kvm)?,
         })
+    }
+
+    /// Host-supported CPUID values before the VMM applies guest topology/policy.
+    pub fn supported_cpuid(&self) -> &[crate::X86CpuidEntry] {
+        &self.cpuid
     }
 
     /// Creates a vCPU on the thread that will run it, in KVM's reset state.
@@ -184,6 +191,12 @@ impl crate::Vm for KvmVm {
 
     fn set_irq_line(&self, line: u32, level: bool) -> Result<()> {
         Self::set_irq_line(self, line, level)
+    }
+}
+
+impl crate::X86Vm for KvmVm {
+    fn supported_cpuid(&self) -> &[crate::X86CpuidEntry] {
+        Self::supported_cpuid(self)
     }
 }
 
@@ -306,6 +319,102 @@ mod tests {
         crate::Vcpu::complete_pending_io(&mut vcpu).unwrap();
         drop(vcpu);
         handle.kick().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn boot_registers_round_trip_through_kvm() {
+        use crate::{X86BootRegisters, X86Segment};
+
+        let vm = KvmVm::new().unwrap();
+        let mut vcpu = vm.create_vcpu(0).unwrap();
+        let code = X86Segment {
+            limit: u32::MAX,
+            selector: 8,
+            attributes: 0xa09b,
+            ..Default::default()
+        };
+        vcpu.set_boot_registers(&X86BootRegisters {
+            rip: 0x10_0200,
+            rsp: 0x8ff0,
+            rsi: 0x7000,
+            rflags: 2,
+            cr0: 0x8000_0001,
+            cr3: 0x9000,
+            cr4: 0x20,
+            efer: 0x500,
+            code,
+            data: X86Segment {
+                selector: 16,
+                attributes: 0xc093,
+                ..code
+            },
+            gdt_base: 0x500,
+            gdt_limit: 23,
+            ..Default::default()
+        })
+        .unwrap();
+        let regs = vcpu.fd.get_regs().unwrap();
+        assert_eq!(
+            (regs.rip, regs.rsp, regs.rsi, regs.rflags),
+            (0x10_0200, 0x8ff0, 0x7000, 2)
+        );
+        let special = vcpu.fd.get_sregs().unwrap();
+        assert_eq!(
+            (special.cr0, special.cr3, special.cr4, special.efer),
+            (0x8000_0001, 0x9000, 0x20, 0x500)
+        );
+        assert_eq!(
+            (special.cs.selector, special.cs.l, special.ds.selector),
+            (8, 1, 16)
+        );
+        assert_eq!((special.gdt.base, special.gdt.limit), (0x500, 23));
+        let fpu = vcpu.fd.get_fpu().unwrap();
+        assert_eq!(fpu.fcw, 0x37f);
+        // MXCSR is the seventh dword in the legacy SSE area of XSAVE.
+        assert_eq!(vcpu.fd.get_xsave().unwrap().region[6], 0x1f80);
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn cpu_features_round_trip_through_kvm() {
+        use crate::X86Msr;
+        use kvm_bindings::{KVM_MAX_CPUID_ENTRIES, Msrs, kvm_msr_entry};
+
+        let vm = KvmVm::new().unwrap();
+        let mut vcpu = vm.create_vcpu(0).unwrap();
+        let mut cpuid = vm.supported_cpuid().to_vec();
+        cpuid.iter_mut().find(|entry| entry.leaf == 1).unwrap().ecx |= 1 << 31;
+        vcpu.set_cpu_features(
+            &cpuid,
+            &[X86Msr {
+                index: 0x174,
+                value: 0x10,
+            }],
+        )
+        .unwrap();
+        let actual = vcpu.fd.get_cpuid2(KVM_MAX_CPUID_ENTRIES).unwrap();
+        let leaf = actual
+            .as_slice()
+            .iter()
+            .find(|entry| entry.function == 1)
+            .unwrap();
+        assert_ne!(leaf.ecx & (1 << 31), 0);
+        let mut msrs = Msrs::from_entries(&[kvm_msr_entry {
+            index: 0x174,
+            ..Default::default()
+        }])
+        .unwrap();
+        assert_eq!(vcpu.fd.get_msrs(&mut msrs).unwrap(), 1);
+        assert_eq!(msrs.as_slice()[0].data, 0x10);
+        assert!(matches!(
+            vcpu.set_cpu_features(&[], &[]),
+            Err(Error::ConfigureVcpu {
+                id: 0,
+                operation: "prepare CPUID",
+                ..
+            })
+        ));
     }
 
     #[test]

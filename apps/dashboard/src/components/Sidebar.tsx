@@ -17,6 +17,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
 import { Theme, useTheme } from '@/contexts/ThemeContext'
 import { RoutePath } from '@/enums/RoutePath'
+import { useOrganizations } from '@/hooks/useOrganizations'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { markJustLoggedOut } from '@/lib/auth-session'
 import { ONBOARDING_OPEN_EVENT } from '@/lib/onboarding-progress'
@@ -24,6 +25,7 @@ import { cn } from '@/lib/utils'
 import {
   BookOpen,
   Building2,
+  Check,
   ChevronDown,
   KeyRound,
   LogOut,
@@ -55,6 +57,7 @@ interface NavItem {
 // may see is decided in the page, not here.
 const PRIMARY_NAV_ITEMS: NavItem[] = [
   { label: 'Boxes', path: RoutePath.BOXES },
+  { label: 'Images', path: RoutePath.IMAGES },
   { label: 'Volumes', path: RoutePath.VOLUMES },
   { label: 'Billing', path: RoutePath.BILLING },
 ]
@@ -99,7 +102,7 @@ function ThemeMenuItems({ theme, setTheme }: { theme: Theme; setTheme: (theme: T
  * Top navigation bar (ASCII/terminal restyle). Named `Sidebar` for import compatibility;
  * it has always rendered as a top header. All data/command wiring is preserved — only the
  * presentation matches the new design (Nav.dc): a single 60px monospace bar with bordered
- * segments, a standalone organization switcher, and a profile menu.
+ * segments and a profile menu, which holds the organization switcher.
  */
 export function Sidebar({ isBannerVisible }: SidebarProps) {
   const posthog = usePostHog()
@@ -107,7 +110,8 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   const { user, signoutRedirect } = useAuth()
   const { pathname } = useLocation()
   const navigate = useNavigate()
-  const { selectedOrganization } = useSelectedOrganization()
+  const { selectedOrganization, onSelectOrganization } = useSelectedOrganization()
+  const { organizations } = useOrganizations()
 
   const primaryItems: NavItem[] = PRIMARY_NAV_ITEMS
 
@@ -163,7 +167,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
         className="flex shrink-0 items-center border-r border-border px-[30px] text-foreground"
         aria-label="BoxLite home"
       >
-        <LogoText className="h-[26px] w-auto" />
+        <LogoText className="h-[40px] w-auto" />
       </Link>
 
       {/* primary nav */}
@@ -226,6 +230,33 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
           <DropdownMenuSeparator />
           <ThemeMenuItems theme={theme} setTheme={setTheme} />
           <DropdownMenuSeparator />
+          {/* The selection persists in localStorage, so the chosen organization opens on the next login. */}
+          {organizations.length > 1 && (
+            <>
+              <DropdownMenuLabel className="font-mono text-[11px] font-normal uppercase tracking-[0.18em] text-muted-foreground">
+                Organizations
+              </DropdownMenuLabel>
+              {organizations.map((organization) => {
+                const isSelected = organization.id === selectedOrganization?.id
+                return (
+                  <DropdownMenuItem
+                    key={organization.id}
+                    className="cursor-pointer"
+                    onClick={() => {
+                      if (!isSelected) void onSelectOrganization(organization.id)
+                    }}
+                  >
+                    <Check className={cn('size-4', isSelected ? 'opacity-100' : 'opacity-0')} />
+                    <span className="truncate">{organization.name}</span>
+                    {organization.isDefaultForAuthenticatedUser && (
+                      <span className="ml-auto text-[11px] text-muted-foreground">Personal</span>
+                    )}
+                  </DropdownMenuItem>
+                )
+              })}
+              <DropdownMenuSeparator />
+            </>
+          )}
           {selectedOrganization && (
             <DropdownMenuItem asChild className="cursor-pointer">
               <Link to={RoutePath.SETTINGS}>

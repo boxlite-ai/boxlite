@@ -8,10 +8,10 @@ sessions.
 ## Quick Start
 
 ```bash
-boxlite serve                      # listen on 0.0.0.0:8100 (permissive)
+boxlite serve                      # listen on 127.0.0.1:8100 (permissive)
 boxlite serve --port 9090          # custom port
-boxlite serve --host 127.0.0.1    # bind localhost only
 boxlite serve --api-key dev-key    # require Bearer dev-key (else 401)
+boxlite serve --host 0.0.0.0 --api-key "$KEY"  # expose on the network (key required)
 ```
 
 Ctrl-C triggers graceful shutdown (`runtime.shutdown` with a 10 s timeout).
@@ -37,7 +37,7 @@ execute(ServeArgs, GlobalFlags)
   ├─ tokio::spawn(reaper_loop(state))       — orphan reaper + lifecycle sweep
   │                                            (30 s tick)
   │
-  ├─ build_router(state)                    — register 26 routes on axum::Router
+  ├─ build_router(state)                    — register the REST routes on axum::Router
   │
   ├─ TcpListener::bind(host:port)           — bind TCP socket
   │
@@ -74,7 +74,8 @@ execute(ServeArgs, GlobalFlags)
 │  └──────────────────────────────────────────────────┘  │
 │                                                        │
 │  Handlers:  config · boxes · executions                │
-│             files · metrics · snapshots · advanced     │
+│             files · metrics · snapshots · ssh          │
+│             advanced                                    │
 │                                                        │
 │  Background:  reaper_loop  (orphans + lifecycle sweep)  │
 └───────────────────────────────────────────────────────┘
@@ -103,6 +104,7 @@ by the request middleware and by client data frames on an attach.
 | `files`      | `handlers/files.rs`      | Tar-based file upload / download into / from boxes            |
 | `metrics`    | `handlers/metrics.rs`    | Runtime-level and per-box metrics                             |
 | `snapshots`  | `handlers/snapshots.rs`  | Snapshot CRUD + restore                                       |
+| `ssh`        | `handlers/ssh.rs`        | Guest SSH configure / status / disable                    |
 | `advanced`   | `handlers/advanced.rs`   | Clone, export, import                                         |
 
 ## Route Reference
@@ -119,7 +121,9 @@ All paths are relative to the server root (e.g. `http://localhost:8100`).
 **Auth.** With `--api-key <KEY>` (or `$BOXLITE_SERVE_API_KEY`) set, every
 route except `GET /v1/config` requires `Authorization: Bearer <KEY>`
 (constant-time match) and returns `401` otherwise. Without it the server is
-permissive (accepts any/no bearer) — the zero-config local-dev default.
+permissive (accepts any/no bearer) — the zero-config local-dev default. A
+permissive server only binds to loopback: `serve` refuses to start on any
+other `--host` (e.g. `0.0.0.0`) unless an API key is set.
 
 ### Box CRUD & Lifecycle
 
@@ -132,6 +136,27 @@ permissive (accepts any/no bearer) — the zero-config local-dev default.
 | DELETE | `/v1/boxes/{box_id}`          | `boxes::remove_box`  | Remove box (`?force=true`)    |
 | POST   | `/v1/boxes/{box_id}/start`    | `boxes::start_box`   | Start a stopped box           |
 | POST   | `/v1/boxes/{box_id}/stop`     | `boxes::stop_box`    | Stop a running box            |
+
+### Guest SSH
+
+| Method | Path                       | Handler              | Description                                  |
+|--------|----------------------------|----------------------|----------------------------------------------|
+| POST   | `/v1/boxes/{box_id}/ssh`   | `ssh::configure_ssh` | Replace SSH configuration; returns status    |
+| GET    | `/v1/boxes/{box_id}/ssh`   | `ssh::status_ssh`    | Read SSH status without starting the box     |
+| DELETE | `/v1/boxes/{box_id}/ssh`   | `ssh::disable_ssh`   | Disable SSH idempotently without starting it |
+
+`POST` takes the direct `SshConfig` JSON body (not a wrapper) with
+`Content-Type: application/json` and answers with `SshStatus`; every accepted
+configure fully restarts the guest listener, so neither server nor client
+retries it. A wrong content type, malformed JSON, a missing required field, or an
+unknown field at any level — configuration, account, or CA — is rejected with the
+fixed sanitized `400 invalid_argument` message before box resolution. `POST`
+resolves through the resume resolver (like exec); `GET` and
+`DELETE` resolve through the fetch resolver and never start the box. Only
+`POST` stamps the idle clock: after authentication succeeds, the common
+middleware records box activity before the body is parsed, so a rejected
+configure still counts. The
+[SSH guide](../../../../../docs/guides/ssh.md) owns the full contract.
 
 ### Command Execution
 
@@ -407,7 +432,7 @@ sets `reaping_kill` under one lock acquisition.
 | Flag     | Default   | Description              |
 |----------|-----------|--------------------------|
 | `--port` | `8100`    | TCP port to listen on    |
-| `--host` | `0.0.0.0` | Address to bind          |
+| `--host` | `127.0.0.1` | Address to bind; non-loopback requires `--api-key` |
 
 ### Internal Constants
 

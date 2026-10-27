@@ -128,8 +128,7 @@ test('derives the public deployment probes from the same deployment environment'
         PROXY_TEMPLATE_URL: 'https://preview.dev.boxlite.ai',
         OIDC_ISSUER_BASE_URL: 'https://tenant.auth0.com/',
         PUBLIC_OIDC_DOMAIN: 'https://auth.dev.boxlite.ai/',
-        BOXLITE_SYSTEM_IMAGES:
-          'sandbaseai-hermes=sam2026go/hermes-agent:boxlite-noexpose-20260726,tools=example.test/tools:1',
+        BOXLITE_SYSTEM_IMAGES: 'agent=example.test/agent:1,tools=example.test/tools:1',
       },
       '0.9.7',
     ),

@@ -50,7 +50,7 @@ func TestCacheErrorsDoNotLogPreviewCredentials(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte("true"))
+		_, _ = writer.Write([]byte(`"enabled"`))
 	}))
 	defer server.Close()
 
@@ -58,30 +58,28 @@ func TestCacheErrorsDoNotLogPreviewCredentials(t *testing.T) {
 	clientConfig.Servers[0].URL = server.URL
 	proxy := &Proxy{
 		apiclient:            apiclient.NewAPIClient(clientConfig),
-		boxPublicCache:       failingSetCache[bool]{},
+		boxInboundCache:      failingSetCache[bool]{},
 		boxAuthKeyValidCache: failingSetCache[bool]{},
 	}
-	signedToken := "signed-preview-token-secret"
+	boxID := "AbCdEf123456"
 	authKey := "auth-key-secret"
 
-	if _, err := proxy.getBoxPublic(context.Background(), signedToken); err != nil {
-		t.Fatalf("getBoxPublic() error = %v", err)
+	if _, err := proxy.getBoxInboundEnabled(context.Background(), boxID); err != nil {
+		t.Fatalf("getBoxInboundEnabled() error = %v", err)
 	}
 	// A rejection, because only rejections are cached -- an acceptance never reaches
 	// the failing Set and so would never produce the log line asserted below.
-	if _, err := proxy.validateAndCache(context.Background(), signedToken, authKey, func() (bool, error) {
+	if _, err := proxy.validateAndCache(context.Background(), boxID, authKey, func() (bool, error) {
 		return false, nil
 	}); err != nil {
 		t.Fatalf("validateAndCache() error = %v", err)
 	}
 
 	logs := output.String()
-	for _, secret := range []string{signedToken, authKey} {
-		if strings.Contains(logs, secret) {
-			t.Errorf("cache error log contains preview credential %q", secret)
-		}
+	if strings.Contains(logs, authKey) {
+		t.Errorf("cache error log contains preview credential %q", authKey)
 	}
-	for _, message := range []string{"Failed to set box public in cache", "Failed to set box auth key valid in cache"} {
+	for _, message := range []string{"Failed to set box inbound mode in cache", "Failed to set box auth key valid in cache"} {
 		if !strings.Contains(logs, message) {
 			t.Errorf("cache error log does not contain %q", message)
 		}
@@ -208,7 +206,7 @@ func TestGetProxyTargetReportsOutOfRangePublicPortAsBadRequest(t *testing.T) {
 	}
 
 	proxy := &Proxy{
-		boxPublicCache:             publicCache,
+		boxInboundCache:            publicCache,
 		boxLastActivityUpdateCache: activityCache,
 	}
 	request := httptest.NewRequest(http.MethodGet, "http://proxy.test/", nil)
@@ -438,5 +436,51 @@ func TestCachedInvalidAuthResultIsServedWithoutRevalidating(t *testing.T) {
 	}
 	if *isValid {
 		t.Error("validateAndCache() = true, want the cached rejection")
+	}
+}
+
+// The API answers the inbound route with a bare mode string. Only "enabled"
+// may skip authentication; "disabled" and an unknown box must both fall
+// through to the authenticated path.
+func TestGetBoxInboundEnabledParsesMode(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{name: "enabled", status: http.StatusOK, body: `"enabled"`, want: true},
+		{name: "disabled", status: http.StatusOK, body: `"disabled"`, want: false},
+		{name: "unknown box", status: http.StatusNotFound, body: `{"message":"not found"}`, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPath string
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				gotPath = request.URL.Path
+				writer.Header().Set("Content-Type", "application/json")
+				writer.WriteHeader(tc.status)
+				_, _ = writer.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			clientConfig := apiclient.NewConfiguration()
+			clientConfig.Servers[0].URL = server.URL
+			proxy := &Proxy{
+				apiclient:       apiclient.NewAPIClient(clientConfig),
+				boxInboundCache: common_cache.NewMapCache[bool](context.Background()),
+			}
+
+			got, err := proxy.getBoxInboundEnabled(context.Background(), "AbCdEf123456")
+			if err != nil {
+				t.Fatalf("getBoxInboundEnabled() error = %v", err)
+			}
+			if *got != tc.want {
+				t.Errorf("getBoxInboundEnabled() = %v, want %v", *got, tc.want)
+			}
+			if gotPath != "/preview/AbCdEf123456/inbound" {
+				t.Errorf("asked %q, want the inbound route", gotPath)
+			}
+		})
 	}
 }

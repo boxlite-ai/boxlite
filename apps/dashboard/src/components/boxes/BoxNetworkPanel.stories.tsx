@@ -5,6 +5,7 @@
 
 import type { Meta, StoryObj } from '@storybook/react'
 import { useState, type ReactNode } from 'react'
+import { NetworkMode, type NetworkInfo } from '@boxlite-ai/api-client'
 import { BoxNetworkPanel } from './BoxNetworkPanel'
 
 /**
@@ -64,34 +65,59 @@ type Story = StoryObj<typeof BoxNetworkPanel>
 
 const noop = () => {}
 
-/** The default: preview URLs require an organization sign-in. */
-export const Restricted: Story = {
-  name: '1 · Restricted to the organization',
-  args: { isPublic: false, canManage: true, onTogglePublic: noop, onGetUrl: noop },
+function network(
+  inbound: NetworkMode,
+  outbound: NetworkMode = NetworkMode.ENABLED,
+  allowNet: string[] = [],
+): NetworkInfo {
+  return { outbound: { mode: outbound, allow_net: allowNet }, inbound: { mode: inbound, allow_net: [] } }
+}
+
+/** The default: tunnel URLs require an organization sign-in. */
+export const InboundDisabled: Story = {
+  name: '1 · Inbound disabled',
+  args: { network: network(NetworkMode.DISABLED), canManage: true, onToggleInbound: noop, onGetUrl: noop },
 }
 
 /** Anonymous access, so the value is the only amber thing on the sheet. */
-export const Public: Story = {
-  name: '2 · Public',
-  args: { isPublic: true, canManage: true, onTogglePublic: noop, onGetUrl: noop },
+export const InboundEnabled: Story = {
+  name: '2 · Inbound enabled',
+  args: { network: network(NetworkMode.ENABLED), canManage: true, onToggleInbound: noop, onGetUrl: noop },
+}
+
+/** Egress narrowed to an allowlist, the longest outbound value. */
+export const OutboundAllowlist: Story = {
+  name: '3 · Outbound allowlist',
+  args: {
+    network: network(NetworkMode.DISABLED, NetworkMode.ENABLED, ['api.openai.com', '10.0.0.0/8']),
+    canManage: true,
+    onToggleInbound: noop,
+    onGetUrl: noop,
+  },
 }
 
 export const Saving: Story = {
-  name: '3 · Saving',
-  args: { isPublic: false, canManage: true, isPublicPending: true, onTogglePublic: noop, onGetUrl: noop },
+  name: '4 · Saving',
+  args: {
+    network: network(NetworkMode.DISABLED),
+    canManage: true,
+    inboundPending: true,
+    onToggleInbound: noop,
+    onGetUrl: noop,
+  },
 }
 
 /** Viewers see the state but get no control that changes exposure. */
 export const ReadOnlyViewer: Story = {
-  name: '4 · Viewer (read-only)',
-  args: { isPublic: true, canManage: false, onTogglePublic: noop, onGetUrl: noop },
+  name: '5 · Viewer (read-only)',
+  args: { network: network(NetworkMode.ENABLED), canManage: false, onToggleInbound: noop, onGetUrl: noop },
 }
 
 /** Click through the confirmation dialog without a backend. */
 export const Interactive: Story = {
-  name: '5 · Interactive (click through)',
+  name: '6 · Interactive (click through)',
   render: () => {
-    const [isPublic, setIsPublic] = useState(false)
-    return <BoxNetworkPanel isPublic={isPublic} canManage onTogglePublic={setIsPublic} onGetUrl={noop} />
+    const [inbound, setInbound] = useState<NetworkMode>(NetworkMode.DISABLED)
+    return <BoxNetworkPanel network={network(inbound)} canManage onToggleInbound={setInbound} onGetUrl={noop} />
   },
 }

@@ -19,8 +19,6 @@ import { useState } from 'react'
 export type BoxPreviewUrlDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** True while anyone with the URL can open it, i.e. the box is public. */
-  isPublic: boolean
   /** Resolved URL for the port last submitted, if any. */
   url?: string
   isFetching?: boolean
@@ -29,7 +27,7 @@ export type BoxPreviewUrlDialogProps = {
 }
 
 /**
- * Asks for a port and returns that port's preview URL.
+ * Asks for a port and returns a URL for it.
  *
  * The port has to be asked for: the console cannot enumerate what is listening
  * inside a guest. `POST /exec` returns only an `execution_id` and its output is
@@ -42,7 +40,6 @@ export type BoxPreviewUrlDialogProps = {
 export function BoxPreviewUrlDialog({
   open,
   onOpenChange,
-  isPublic,
   url,
   isFetching = false,
   error,
@@ -57,7 +54,7 @@ export function BoxPreviewUrlDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="font-mono sm:max-w-[600px]">
         <DialogHeader>
-          <DialogTitle>Get a preview URL</DialogTitle>
+          <DialogTitle>Get a URL</DialogTitle>
           <DialogDescription>Make sure a server is already listening on that port inside the box.</DialogDescription>
         </DialogHeader>
 
@@ -97,9 +94,10 @@ export function BoxPreviewUrlDialog({
             </div>
 
             {/* Who can use it matters at the moment of copying, which is here
-                rather than back on the sheet. */}
+                rather than back on the sheet. The dialog only opens with
+                inbound access enabled, so the answer is always the same. */}
             <p className="text-[11px] uppercase tracking-[1px] text-muted-foreground">
-              {isPublic ? 'anyone with this url can open it' : 'only your organization can open it'}
+              anyone with this url can open it
             </p>
 
             {/* Stated here because it cannot be diagnosed afterwards: the URL

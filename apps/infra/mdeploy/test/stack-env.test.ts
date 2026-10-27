@@ -4,6 +4,8 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { StackEnvError, readStackEnvironment } from '../src/stack-env.ts'
 import type { GroupDeclaration } from '../src/env.ts'
+import { assertAddressesAreNotSpent } from '../src/env.ts'
+import { parseBase } from 'mstage/config'
 
 const SHA = 'a'.repeat(40)
 const DIGEST = 'b'.repeat(64)
@@ -48,6 +50,28 @@ test('the dashboard stays on the stage domain unless the stage names another hos
   // it stays `api.<STACK_DOMAIN>`, which is what each runner is handed.
   assert.equal(read(complete).dashboardDomain, null)
   assert.equal(read({ ...complete, DASHBOARD_DOMAIN: 'app.dev.boxlite.ai' }).dashboardDomain, 'app.dev.boxlite.ai')
+})
+
+test('the OpenAPI reader uses only the fixed feature flag', () => {
+  for (const flag of [undefined, '', ' ', 'false', 'true', ' true ']) {
+    const result = read({ ...complete, OTEL_OPENAPI_ENABLED: flag })
+    assert.equal(result.otelOpenapiEnabled, flag?.trim() === 'true')
+    assert.ok(!('OTEL_OPENAPI_ENABLED' in result.apiEnvironment))
+  }
+  for (const flag of ['1', 'yes', 'TRUE', 'invalid']) {
+    assert.throws(() => read({ ...complete, OTEL_OPENAPI_ENABLED: flag }), /OTEL_OPENAPI_ENABLED/)
+  }
+})
+
+test('the manifest fingerprints the optional flag without exposing credential configuration', () => {
+  const path = new URL('../../mstage.env.json', import.meta.url).pathname
+  const config = { ...parseBase(path, readFileSync(path, 'utf8')), path }
+  assert.ok(config.envOptional.deploy?.includes('OTEL_OPENAPI_ENABLED'))
+  assert.ok(config.envSelectGroup[config.envDigest!.group]!.includes('OTEL_OPENAPI_ENABLED'))
+  for (const group of Object.values(config.envSelectGroup)) {
+    assert.ok(!group.some(key => key.startsWith('CLICKHOUSE_OPENAPI_LOG_READER')))
+  }
+  assert.doesNotThrow(() => assertAddressesAreNotSpent(config))
 })
 
 test('a key nothing supplies stops the deploy, named, before anything is built', () => {
@@ -116,6 +140,12 @@ test('a managed ClickHouse arrives whole or not at all', () => {
     CLICKHOUSE_READER_PASSWORD_SECRET_ARN: 'arn:reader',
   }).managedClickHouse
   assert.equal(managed?.url, 'https://clickhouse.invalid')
+})
+
+test('retention is read from the stage environment, or null when it set none', () => {
+  assert.equal(read(complete).clickHouseRetentionHours, null)
+  assert.equal(read({ ...complete, CLICKHOUSE_RETENTION_HOURS: '168' }).clickHouseRetentionHours, 168)
+  assert.throws(() => read({ ...complete, CLICKHOUSE_RETENTION_HOURS: '0' }), /positive.*integer/)
 })
 
 test('the ClickStack consumer is a service account or nobody', () => {

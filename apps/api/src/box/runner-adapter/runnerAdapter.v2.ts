@@ -113,14 +113,18 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     }
   }
 
-  async createBox(box: Box, metadata?: { [key: string]: string }): Promise<StartBoxResponse | undefined> {
-    if (!box.image) {
+  async createBox(
+    box: Box,
+    image: string,
+    metadata?: { [key: string]: string },
+  ): Promise<StartBoxResponse | undefined> {
+    if (!image) {
       throw new Error(`Box ${box.id} has no image; cannot create on runner`)
     }
 
     const payload = {
       id: box.id,
-      image: box.image,
+      image,
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,
@@ -142,8 +146,8 @@ export class RunnerAdapterV2 implements RunnerAdapter {
         hosts: secret.hosts,
         placeholder: secret.placeholder,
       })),
-      networkBlockAll: box.networkBlockAll,
-      networkAllowList: box.networkAllowList,
+      outboundEnabled: box.outboundEnabled,
+      outboundAllowNet: box.outboundAllowNet ?? undefined,
       metadata,
       authToken: box.authToken,
       organizationId: box.organizationId,
@@ -194,8 +198,8 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
   async updateNetworkSettings(
     _boxId: string,
-    _networkBlockAll?: boolean,
-    _networkAllowList?: string,
+    _outboundEnabled?: boolean,
+    _outboundAllowNet?: string[],
     _networkLimitEgress?: boolean,
   ): Promise<void> {
     throw new Error('Live network settings updates with runner API version 2 are not supported')
