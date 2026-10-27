@@ -94,6 +94,7 @@ pub(crate) struct ServerCapabilities {
     pub cache_volumes_enabled: bool,
     pub linux_capabilities_enabled: Option<bool>,
     pub snapshots_enabled: Option<bool>,
+    pub create_from_snapshot_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
     pub import_enabled: Option<bool>,
@@ -797,6 +798,8 @@ impl SnapshotResponse {
             id: self.id.clone(),
             box_id: self.box_id.clone(),
             name: self.name.clone(),
+            status: self.status.clone().unwrap_or_else(|| "ready".into()),
+            error: self.error.clone(),
             created_at: self.created_at,
             disk_info: crate::disk::DiskInfo {
                 base_path: String::new(),

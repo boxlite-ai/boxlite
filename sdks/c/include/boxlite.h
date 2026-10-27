@@ -174,6 +174,10 @@ typedef struct RestOptionsHandle RestOptionsHandle;
 // per-runtime event queue used by the post-and-drain callback API.
 typedef struct RuntimeHandle RuntimeHandle;
 
+// Opaque snapshot capability. Create/restore require a box-scoped handle;
+// list/get/remove use the scope chosen by the accessor.
+typedef struct SnapshotHandle SnapshotHandle;
+
 // Opaque long-lived listener handle.
 typedef struct TunnelForwarderHandle TunnelForwarderHandle;
 
@@ -728,6 +732,37 @@ typedef void (*CBoxSshStatusCb)(struct CSshStatus*, CBoxliteError*, void*);
 // SSH disable completion with the same ownership contract as SSH configure.
 typedef void (*CBoxSshDisableCb)(struct CSshStatus*, CBoxliteError*, void*);
 
+// Snapshot metadata. Strings are owned by this value; error may be null.
+// created_at is Unix seconds; disk sizes are bytes.
+typedef struct CSnapshotInfo {
+  char *id;
+  char *box_id;
+  char *name;
+  char *status;
+  char *error;
+  int64_t created_at;
+  uint64_t container_disk_bytes;
+  uint64_t size_bytes;
+} CSnapshotInfo;
+
+typedef struct CSnapshotInfoList {
+  struct CSnapshotInfo *items;
+  size_t count;
+} CSnapshotInfoList;
+
+typedef struct SnapshotHandle CBoxliteSnapshotHandle;
+
+// Snapshot metadata completion. Success transfers ownership; release with
+// boxlite_free_snapshot_info. A box-scoped missing lookup returns null without
+// an error; an organization lookup returns NotFound. Errors are callback-scoped.
+typedef void (*CBoxSnapshotInfoCb)(struct CSnapshotInfo*, CBoxliteError*, void*);
+
+// Snapshot list completion. Release the owned list with boxlite_free_snapshot_info_list.
+typedef void (*CBoxSnapshotListCb)(struct CSnapshotInfoList*, CBoxliteError*, void*);
+
+// Snapshot remove/restore completion. The error is borrowed during the callback.
+typedef void (*CBoxSnapshotOpCb)(CBoxliteError*, void*);
+
 // C ABI representation of volume metadata.
 //
 // `id` and `created_at` are non-null, heap-owned C strings. A standalone value
@@ -1026,6 +1061,12 @@ enum BoxliteErrorCode boxlite_get_or_create_box(CBoxliteRuntime *runtime,
                                                 CBoxGetOrCreateBoxCb cb,
                                                 void *user_data,
                                                 CBoxliteError *out_error);
+
+// Read the server-assigned name cached in this box handle. Null means unnamed.
+// Free a non-null result with boxlite_free_string.
+// # Safety
+// handle must be null or a live box handle with no concurrent free.
+char *boxlite_box_name(CBoxHandle *handle);
 
 enum BoxliteErrorCode boxlite_stop_box(CBoxHandle *handle,
                                        CBoxStopBoxCb cb,
@@ -1897,6 +1938,95 @@ enum BoxliteErrorCode boxlite_box_ssh_disable(CBoxHandle *handle,
 // `status` must be null or a pointer from an SSH callback that has not
 // already been freed.
 void boxlite_free_ssh_status(struct CSshStatus *status);
+
+// Release metadata returned by create/get. Null is accepted.
+// # Safety
+// info must be null or an unmodified, owned result not previously freed.
+void boxlite_free_snapshot_info(struct CSnapshotInfo *info);
+
+// Release an entire snapshot list. Entries must not be freed individually.
+// # Safety
+// list must be null or an unmodified, owned result not previously freed.
+void boxlite_free_snapshot_info_list(struct CSnapshotInfoList *list);
+
+// Obtain an organization-scoped snapshot handle. Does not contact the server.
+// # Safety
+// runtime/out_handle must be valid and non-null; out_error may be null.
+// The caller owns the handle and must call boxlite_snapshot_free.
+enum BoxliteErrorCode boxlite_runtime_snapshots(CBoxliteRuntime *runtime,
+                                                CBoxliteSnapshotHandle **out_handle,
+                                                CBoxliteError *out_error);
+
+// Obtain snapshots taken from one box; restore targets this box.
+// # Safety
+// box_handle/out_handle must be valid and non-null; out_error may be null.
+// The returned handle owns a reference to the box and must be freed separately.
+enum BoxliteErrorCode boxlite_box_snapshots(CBoxHandle *box_handle,
+                                            CBoxliteSnapshotHandle **out_handle,
+                                            CBoxliteError *out_error);
+
+// Release a snapshot handle; queued calls keep their own references.
+// # Safety
+// handle must be null or a live handle not previously freed. No concurrent access.
+void boxlite_snapshot_free(CBoxliteSnapshotHandle *handle);
+
+// Capture this box's disk, waiting for a ready snapshot. Null/blank name generates one.
+// # Safety
+// handle/cb must be valid and non-null; name is null or valid UTF-8 and is copied.
+// Callback fires only on runtime_drain. Its metadata must be freed by the caller.
+enum BoxliteErrorCode boxlite_snapshot_create(CBoxliteSnapshotHandle *handle,
+                                              const char *name,
+                                              CBoxSnapshotInfoCb cb,
+                                              void *user_data,
+                                              CBoxliteError *out_error);
+
+// List snapshots in this handle's scope. The callback owns the whole list.
+// # Safety
+// handle/cb must be valid and non-null; user_data must survive callback dispatch.
+enum BoxliteErrorCode boxlite_snapshot_list(CBoxliteSnapshotHandle *handle,
+                                            CBoxSnapshotListCb cb,
+                                            void *user_data,
+                                            CBoxliteError *out_error);
+
+// Get metadata by name (or ID on cloud servers). A missing box-scoped snapshot
+// returns null without error; organization lookups return NotFound.
+// # Safety
+// handle/snapshot/cb must be valid and non-null. snapshot is copied before return.
+enum BoxliteErrorCode boxlite_snapshot_get(CBoxliteSnapshotHandle *handle,
+                                           const char *snapshot,
+                                           CBoxSnapshotInfoCb cb,
+                                           void *user_data,
+                                           CBoxliteError *out_error);
+
+// Delete a snapshot. Nonzero force ignores absence, not permission or busy errors.
+// # Safety
+// handle/snapshot/cb must be valid and non-null. Strings are copied before return.
+enum BoxliteErrorCode boxlite_snapshot_remove(CBoxliteSnapshotHandle *handle,
+                                              const char *snapshot,
+                                              int force,
+                                              CBoxSnapshotOpCb cb,
+                                              void *user_data,
+                                              CBoxliteError *out_error);
+
+// Restore into this handle's box, waiting for the restore job to succeed.
+// # Safety
+// handle/snapshot/cb must be valid and non-null. Strings are copied before return.
+enum BoxliteErrorCode boxlite_snapshot_restore(CBoxliteSnapshotHandle *handle,
+                                               const char *snapshot,
+                                               CBoxSnapshotOpCb cb,
+                                               void *user_data,
+                                               CBoxliteError *out_error);
+
+// Create an independent cloud box from a ready snapshot and wait for startup.
+// # Safety
+// runtime/snapshot/opts/cb must be valid and non-null. opts is consumed on
+// successful queueing only. Callback ownership matches boxlite_create_box.
+enum BoxliteErrorCode boxlite_create_box_from_snapshot(CBoxliteRuntime *runtime,
+                                                       const char *snapshot,
+                                                       CBoxliteOptions *opts,
+                                                       CBoxCreateBoxCb cb,
+                                                       void *user_data,
+                                                       CBoxliteError *out_error);
 
 void boxlite_free_string(char *s);
 

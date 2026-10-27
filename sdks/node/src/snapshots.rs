@@ -17,6 +17,8 @@ pub struct JsSnapshotInfo {
     #[napi(js_name = "boxId")]
     pub box_id: String,
     pub name: String,
+    pub status: String,
+    pub error: Option<String>,
     #[napi(js_name = "createdAt")]
     pub created_at: i64,
     #[napi(js_name = "containerDiskBytes")]
@@ -31,6 +33,8 @@ impl From<SnapshotInfo> for JsSnapshotInfo {
             id: r.id,
             box_id: r.box_id,
             name: r.name,
+            status: r.status,
+            error: r.error,
             created_at: r.created_at,
             container_disk_bytes: r.disk_info.container_disk_bytes as i64,
             size_bytes: r.disk_info.size_bytes as i64,
@@ -52,14 +56,14 @@ impl JsSnapshotHandle {
     #[napi]
     pub async fn create(
         &self,
-        name: String,
+        name: Option<String>,
         options: Option<JsSnapshotOptions>,
     ) -> Result<JsSnapshotInfo> {
         let handle = Arc::clone(&self.handle);
         let options: SnapshotOptions = options.map(Into::into).unwrap_or_default();
         let info = handle
             .snapshots()
-            .create(options, &name)
+            .create(options, name.as_deref().unwrap_or(""))
             .await
             .map_err(map_err)?;
         Ok(JsSnapshotInfo::from(info))
@@ -96,6 +100,40 @@ impl JsSnapshotHandle {
     }
 }
 
+/// Organization snapshots, including those of deleted source boxes.
+#[napi]
+pub struct JsRuntimeSnapshotHandle {
+    pub(crate) handle: boxlite::runtime::RuntimeSnapshotHandle,
+}
+
+#[napi]
+impl JsRuntimeSnapshotHandle {
+    #[napi]
+    pub async fn list(&self) -> Result<Vec<JsSnapshotInfo>> {
+        Ok(self
+            .handle
+            .list()
+            .await
+            .map_err(map_err)?
+            .into_iter()
+            .map(JsSnapshotInfo::from)
+            .collect())
+    }
+
+    #[napi]
+    pub async fn get(&self, id_or_name: String) -> Result<JsSnapshotInfo> {
+        Ok(self.handle.get(&id_or_name).await.map_err(map_err)?.into())
+    }
+
+    #[napi]
+    pub async fn remove(&self, id_or_name: String, force: Option<bool>) -> Result<()> {
+        self.handle
+            .remove(&id_or_name, force.unwrap_or(false))
+            .await
+            .map_err(map_err)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,6 +145,8 @@ mod tests {
             box_id: "box-id".into(),
             name: "my-snap".into(),
             created_at: 1700000000,
+            status: "ready".into(),
+            error: None,
             disk_info: boxlite::DiskInfo {
                 base_path: "/bases/snap-1.qcow2".into(),
                 container_disk_bytes: 2048,
@@ -128,6 +168,8 @@ mod tests {
             id: "id".into(),
             box_id: "bid".into(),
             name: "n".into(),
+            status: "ready".into(),
+            error: None,
             created_at: 0,
             disk_info: boxlite::DiskInfo {
                 base_path: String::new(),

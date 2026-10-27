@@ -112,3 +112,10 @@ CTunnelForwarderCloseCb cbTunnelForwarderClose(void) { return (CTunnelForwarderC
 CBoxSshConfigureCb cbSSHConfigure(void) { return (CBoxSshConfigureCb)goBoxliteOnSSHStatus; }
 CBoxSshStatusCb cbSSHStatus(void) { return (CBoxSshStatusCb)goBoxliteOnSSHStatus; }
 CBoxSshDisableCb cbSSHDisable(void) { return (CBoxSshDisableCb)goBoxliteOnSSHStatus; }
+
+extern void goBoxliteOnSnapshotInfo(CSnapshotInfo *info, CBoxliteError *err, void *ud);
+extern void goBoxliteOnSnapshotList(CSnapshotInfoList *list, CBoxliteError *err, void *ud);
+extern void goBoxliteOnSnapshotOp(CBoxliteError *err, void *ud);
+CBoxSnapshotInfoCb cbSnapshotInfo(void) { return goBoxliteOnSnapshotInfo; }
+CBoxSnapshotListCb cbSnapshotList(void) { return goBoxliteOnSnapshotList; }
+CBoxSnapshotOpCb cbSnapshotOp(void) { return goBoxliteOnSnapshotOp; }

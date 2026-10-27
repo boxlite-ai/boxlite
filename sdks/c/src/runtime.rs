@@ -618,6 +618,29 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_value_event::<crate::CImageUsage>(result, user_data, cb),
+            RuntimeEvent::SnapshotInfo {
+                cb,
+                user_data,
+                result,
+            } => match result {
+                Ok(None) => cb(
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    user_data as *mut c_void,
+                ),
+                Ok(Some(info)) => dispatch_handle_event(Ok(info), user_data, cb),
+                Err(error) => dispatch_handle_event(Err(error), user_data, cb),
+            },
+            RuntimeEvent::SnapshotList {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event(result, user_data, cb),
+            RuntimeEvent::SnapshotOp {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
             RuntimeEvent::VolumeCreate {
                 cb,
                 user_data,
