@@ -6,8 +6,10 @@
 //! the same process must continue: same PID, start time, heap-only marker and
 //! execution, with its open and unlinked files and its DAX mapping of a
 //! share file intact, a counter that advances past the cut, and no write the
-//! source made after the cut. A cold boot, re-exec, source-home or
-//! image-cache fallback fails an assertion; nothing here skips.
+//! source made after the cut. Both networked shims must run the project's
+//! VMM seccomp filter on every thread. A cold boot, re-exec, source-home,
+//! image-cache fallback or skipped filter fails an assertion; nothing here
+//! skips.
 //!
 //! Run with `make test:checkpoint:acceptance`, which builds the guest helper
 //! (`tests/fixtures/checkpoint_helper.c`) and requires `/dev/kvm`, a runtime
@@ -333,6 +335,133 @@ fn assert_absent(path: &Path) {
     assert!(!path.exists(), "{} still exists", path.display());
 }
 
+/// What `jailer::seccomp::apply_vmm_filter` logs once `seccomp(TSYNC)`
+/// installed the project's VMM filter.
+const VMM_FILTER_APPLIED: &str = "VMM seccomp filter applied to all threads (TSYNC)";
+
+/// `(Seccomp, Seccomp_filters)` of one task, or `None` once it is gone.
+fn seccomp_state(task: &Path) -> Option<(u32, u32)> {
+    let status = std::fs::read_to_string(task.join("status")).ok()?;
+    let field = |name: &str| {
+        status
+            .lines()
+            .find_map(|l| l.strip_prefix(name)?.trim().parse().ok())
+            .unwrap_or_else(|| panic!("{}/status has no {name}", task.display()))
+    };
+    Some((field("Seccomp:"), field("Seccomp_filters:")))
+}
+
+/// The parent of every process, read from `/proc/*/stat`.
+fn process_parents() -> Vec<(u32, u32)> {
+    std::fs::read_dir("/proc")
+        .expect("read /proc")
+        .flatten()
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse().ok()?;
+            let stat = std::fs::read_to_string(entry.path().join("stat")).ok()?;
+            // `pid (comm) state ppid ...`; comm may hold spaces.
+            let ppid = stat.rsplit_once(')')?.1.split_whitespace().nth(1)?;
+            Some((pid, ppid.parse().ok()?))
+        })
+        .collect()
+}
+
+/// The `boxlite-shim` process below `launcher`, the box's recorded PID
+/// (bwrap's outer process).
+fn shim_process(launcher: u32) -> u32 {
+    let parents = process_parents();
+    let mut pending = vec![launcher];
+    while let Some(pid) = pending.pop() {
+        let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+        let program = cmdline.split(|b| *b == 0).next().unwrap_or_default();
+        if Path::new(std::str::from_utf8(program).unwrap_or_default()).ends_with("boxlite-shim") {
+            return pid;
+        }
+        pending.extend(parents.iter().filter(|(_, p)| *p == pid).map(|(c, _)| *c));
+    }
+    panic!("no boxlite-shim process below {launcher}")
+}
+
+/// Every thread of the box's shim runs the project's VMM filter, installed
+/// by the shim itself: nothing above the shim has a filter, each thread has
+/// exactly one, and the shim logged installing it. Threads started during
+/// the scan are scanned too; one may be skipped only once it is gone.
+async fn assert_vmm_filter_on_every_thread(home: &Path, litebox: &LiteBox) {
+    let launcher = litebox.info().await.expect("info").pid.expect("shim pid");
+    let shim = shim_process(launcher);
+    let parent = process_parents()
+        .into_iter()
+        .find_map(|(pid, ppid)| (pid == shim).then_some(ppid))
+        .expect("shim parent");
+    for ancestor in [
+        Path::new("/proc/self"),
+        &PathBuf::from(format!("/proc/{parent}")),
+    ] {
+        assert_eq!(
+            seccomp_state(ancestor).map(|(mode, _)| mode),
+            Some(0),
+            "{} must not carry a seccomp filter the shim could inherit",
+            ancestor.display()
+        );
+    }
+
+    let tasks = PathBuf::from(format!("/proc/{shim}/task"));
+    let mut checked = std::collections::BTreeMap::new();
+    loop {
+        let listed: Vec<u32> = std::fs::read_dir(&tasks)
+            .expect("shim tasks")
+            .flatten()
+            .filter_map(|e| e.file_name().to_str()?.parse().ok())
+            .filter(|tid| !checked.contains_key(tid))
+            .collect();
+        if listed.is_empty() {
+            break;
+        }
+        for tid in listed {
+            let task = tasks.join(tid.to_string());
+            let comm = std::fs::read_to_string(task.join("comm")).unwrap_or_default();
+            match seccomp_state(&task) {
+                Some(state) => assert_eq!(
+                    state,
+                    (2, 1),
+                    "shim {shim} thread {tid} ({}) is not under exactly one filter",
+                    comm.trim()
+                ),
+                None => assert!(
+                    tid != shim && !task.exists(),
+                    "shim {shim} thread {tid} is alive but unreadable"
+                ),
+            }
+            checked.insert(tid, comm.trim().to_owned());
+        }
+    }
+    assert!(
+        checked.contains_key(&shim) && checked.len() > 1,
+        "{checked:?}"
+    );
+    eprintln!("shim {shim}: VMM filter on every thread: {checked:?}");
+
+    let logs = home.join("boxes").join(litebox.id().as_str()).join("logs");
+    let log: String = std::fs::read_dir(&logs)
+        .unwrap_or_else(|e| panic!("{}: {e}", logs.display()))
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("boxlite-shim.log")
+        })
+        .map(|e| std::fs::read_to_string(e.path()).expect("shim log"))
+        .collect();
+    assert!(
+        log.contains(VMM_FILTER_APPLIED),
+        "the shim never logged its VMM filter"
+    );
+    assert!(
+        !log.contains("Seccomp disabled"),
+        "the shim skipped seccomp"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "real KVM acceptance; run with `make test:checkpoint:acceptance`"]
 async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
@@ -413,6 +542,9 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
             .all(|t| t.pid == pid && t.marker == marker)
     );
     let started = start_time(&source, pid).await;
+
+    // ── The networked source shim runs the project's VMM filter ──
+    assert_vmm_filter_on_every_thread(&source_home_path, &source).await;
 
     // ── Pause: an external share needs the writer assertion ──
     let refused = source.pause(PauseOptions::default()).await;
@@ -622,6 +754,8 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
     .await;
     assert_eq!(fetched, "checkpoint-network-ok");
     server.join().expect("server");
+    // The restored shim, including what the connection started, is filtered.
+    assert_vmm_filter_on_every_thread(&target_home.path, &restored).await;
 
     // The original execution still answers control: kill, then wait.
     attached.kill().await.expect("kill helper");

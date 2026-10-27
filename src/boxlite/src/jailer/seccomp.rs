@@ -465,13 +465,11 @@ mod tests {
         );
     }
 
+    /// Runs `probe` in a forked child under the embedded vmm filter and
+    /// returns the child's wait status: exit 0 when `probe` returns true,
+    /// death by SIGSYS when the filter traps one of its syscalls.
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    #[test]
-    fn test_vmm_filter_allows_time_syscall() {
-        // glibc's get_nprocs() calls time(NULL) during vCPU thread init; a
-        // missing `time` entry makes the vmm filter's `trap` default action
-        // SIGSYS-kill every thread. The raw syscall (not libc::time, which may
-        // resolve through the vDSO and bypass seccomp) must be allowed.
+    fn wait_status_under_vmm_filter(probe: impl FnOnce() -> bool) -> libc::c_int {
         let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/seccomp_filter.bpf"));
         let filters = deserialize_binary(&bytes[..]).expect("deserialize embedded filter");
         let vmm_filter = get_filter(&filters, SeccompRole::Vmm).expect("vmm filter present");
@@ -483,13 +481,7 @@ mod tests {
             if apply_filter(vmm_filter).is_err() {
                 unsafe { libc::_exit(2) };
             }
-            let ret =
-                unsafe { libc::syscall(libc::SYS_time, std::ptr::null_mut::<libc::time_t>()) };
-            // `time` is allowlisted: the raw syscall returns the current time
-            // (>= 0), not -1. `trap` would SIGSYS-kill the child before this
-            // point; guard the errno-returning case so a future default-action
-            // change can't let a blocked call exit 0 and pass.
-            unsafe { libc::_exit(i32::from(ret == -1)) };
+            unsafe { libc::_exit(i32::from(!probe())) };
         }
 
         let mut status = 0;
@@ -506,11 +498,107 @@ mod tests {
                 std::io::Error::last_os_error()
             );
         }
+        status
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn assert_exited_ok(status: libc::c_int, what: &str) {
         assert!(
             libc::WIFEXITED(status),
-            "child killed by signal {} (SIGSYS=31)",
+            "{what}: child killed by signal {} (SIGSYS=31)",
             libc::WTERMSIG(status)
         );
-        assert_eq!(libc::WEXITSTATUS(status), 0);
+        assert_eq!(libc::WEXITSTATUS(status), 0, "{what}");
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn assert_trapped(status: libc::c_int, what: &str) {
+        assert!(
+            libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == libc::SIGSYS,
+            "{what}: the vmm filter must trap it, child wait status {status:#x}"
+        );
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn test_vmm_filter_allows_time_syscall() {
+        // glibc's get_nprocs() calls time(NULL) during vCPU thread init; a
+        // missing `time` entry makes the vmm filter's `trap` default action
+        // SIGSYS-kill every thread. The raw syscall (not libc::time, which may
+        // resolve through the vDSO and bypass seccomp) must be allowed.
+        let status = wait_status_under_vmm_filter(|| {
+            let ret =
+                unsafe { libc::syscall(libc::SYS_time, std::ptr::null_mut::<libc::time_t>()) };
+            // `time` is allowlisted: the raw syscall returns the current time
+            // (>= 0), not -1. `trap` would SIGSYS-kill the child before this
+            // point; guard the errno-returning case so a future default-action
+            // change can't let a blocked call exit 0 and pass.
+            ret != -1
+        });
+        assert_exited_ok(status, "time");
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn test_vmm_filter_allows_network_and_guest_fallocate_but_traps_the_rest() {
+        use std::os::fd::AsRawFd;
+
+        // Networked VMs run under the vmm filter: gvproxy's Go dial reads the
+        // peer address after connect, and virtio-blk discard and virtio-fs
+        // FUSE_FALLOCATE pass a stock guest kernel's fallocate modes to the
+        // host. Any other mode, and exec, must still trap.
+        const GUEST_MODES: [libc::c_int; 5] = [
+            0,
+            libc::FALLOC_FL_KEEP_SIZE,
+            libc::FALLOC_FL_PUNCH_HOLE | libc::FALLOC_FL_KEEP_SIZE,
+            libc::FALLOC_FL_ZERO_RANGE,
+            libc::FALLOC_FL_ZERO_RANGE | libc::FALLOC_FL_KEEP_SIZE,
+        ];
+        let mut sockets = [0; 2];
+        let rc =
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sockets.as_mut_ptr()) };
+        assert_eq!(rc, 0, "socketpair: {}", std::io::Error::last_os_error());
+        let file = tempfile::tempfile().expect("temp file");
+        let fd = file.as_raw_fd();
+
+        let status = wait_status_under_vmm_filter(|| {
+            let mut peer: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+            let mut len = std::mem::size_of_val(&peer) as libc::socklen_t;
+            let connected =
+                unsafe { libc::getpeername(sockets[0], (&raw mut peer).cast(), &mut len) == 0 };
+            // The file system may not support a mode (EOPNOTSUPP); the call
+            // still reached the kernel, so the filter let it through.
+            connected
+                && GUEST_MODES.iter().all(|&mode| {
+                    let rc = unsafe { libc::fallocate(fd, mode, 0, 4096) };
+                    rc == 0
+                        || std::io::Error::last_os_error().raw_os_error() == Some(libc::EOPNOTSUPP)
+                })
+        });
+        assert_exited_ok(status, "getpeername and the guest fallocate modes");
+
+        for mode in [
+            libc::FALLOC_FL_COLLAPSE_RANGE,
+            libc::FALLOC_FL_INSERT_RANGE,
+            libc::FALLOC_FL_UNSHARE_RANGE,
+            libc::FALLOC_FL_PUNCH_HOLE,
+        ] {
+            let status =
+                wait_status_under_vmm_filter(|| unsafe { libc::fallocate(fd, mode, 0, 4096) } == 0);
+            assert_trapped(status, &format!("fallocate mode {mode:#x}"));
+        }
+        let status = wait_status_under_vmm_filter(|| {
+            let path = c"/bin/true";
+            let argv = [path.as_ptr(), std::ptr::null()];
+            let envp = [std::ptr::null()];
+            unsafe { libc::execve(path.as_ptr(), argv.as_ptr(), envp.as_ptr()) };
+            false
+        });
+        assert_trapped(status, "execve");
+
+        unsafe {
+            libc::close(sockets[0]);
+            libc::close(sockets[1]);
+        }
     }
 }

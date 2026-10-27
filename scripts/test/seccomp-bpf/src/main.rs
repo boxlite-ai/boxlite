@@ -42,8 +42,8 @@ fn compile(json: &str, arch: &str, thread: &str, out: &str) -> Result<(), String
 #[cfg(test)]
 mod tests {
     //! The production x86_64 VMM filters allow every syscall the virtio-fs
-    //! snapshot archive and pause path make, decided by running the compiled
-    //! BPF on each syscall number.
+    //! snapshot archive, pause path and a networked VM make, and trap escape
+    //! syscalls, decided by running the compiled BPF on each syscall number.
 
     use seccompiler::{sock_filter, TargetArch};
 
@@ -123,6 +123,52 @@ mod tests {
         ("clone3", 435, [0; 6]),
     ];
 
+    const FALLOC_FL_KEEP_SIZE: u64 = 0x01;
+    const FALLOC_FL_PUNCH_HOLE: u64 = 0x02;
+    const FALLOC_FL_COLLAPSE_RANGE: u64 = 0x08;
+    const FALLOC_FL_ZERO_RANGE: u64 = 0x10;
+    const FALLOC_FL_INSERT_RANGE: u64 = 0x20;
+    const FALLOC_FL_UNSHARE_RANGE: u64 = 0x40;
+
+    /// x86_64 numbers of what a networked VM adds to the VMM filter:
+    /// gvproxy's Go dial reads the peer after connect (net/fd_unix.go), and
+    /// virtio-blk discard and virtio-fs FUSE_FALLOCATE pass the fallocate
+    /// modes a stock guest kernel sends (fs/fuse/file.c, fs/open.c).
+    const NETWORKED_VM_SYSCALLS: &[(&str, u32, [u64; 6])] = &[
+        ("getpeername", 52, [0; 6]),
+        ("fallocate", 285, [0; 6]),
+        ("fallocate", 285, [0, FALLOC_FL_KEEP_SIZE, 0, 0, 0, 0]),
+        (
+            "fallocate",
+            285,
+            [0, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, 0, 0, 0, 0],
+        ),
+        ("fallocate", 285, [0, FALLOC_FL_ZERO_RANGE, 0, 0, 0, 0]),
+        (
+            "fallocate",
+            285,
+            [0, FALLOC_FL_ZERO_RANGE | FALLOC_FL_KEEP_SIZE, 0, 0, 0, 0],
+        ),
+    ];
+
+    /// x86_64 numbers a compromised VMM could use to leave its sandbox or
+    /// reshape host files beyond what a guest can ask for; they must trap.
+    const TRAPPED_SYSCALLS: &[(&str, u32, [u64; 6])] = &[
+        ("fallocate", 285, [0, FALLOC_FL_PUNCH_HOLE, 0, 0, 0, 0]),
+        ("fallocate", 285, [0, FALLOC_FL_COLLAPSE_RANGE, 0, 0, 0, 0]),
+        ("fallocate", 285, [0, FALLOC_FL_INSERT_RANGE, 0, 0, 0, 0]),
+        ("fallocate", 285, [0, FALLOC_FL_UNSHARE_RANGE, 0, 0, 0, 0]),
+        ("execve", 59, [0; 6]),
+        ("ptrace", 101, [0; 6]),
+        ("mount", 165, [0; 6]),
+        ("unshare", 272, [0; 6]),
+        ("open_by_handle_at", 304, [0; 6]),
+        ("setns", 308, [0; 6]),
+        ("process_vm_writev", 311, [0; 6]),
+        ("bpf", 321, [0; 6]),
+        ("execveat", 322, [0; 6]),
+    ];
+
     /// The classic BPF subset seccompiler emits, run on one seccomp_data.
     fn decide(program: &[sock_filter], nr: u32, args: [u64; 6]) -> u32 {
         let mut data = [0u8; 64];
@@ -175,6 +221,21 @@ mod tests {
             // reboot, and msync without MS_SYNC.
             assert_eq!(decide(&filter, 169, [0; 6]), RET_TRAP, "{target}: reboot");
             assert_eq!(decide(&filter, 26, [0; 6]), RET_TRAP, "{target}: msync");
+        }
+    }
+
+    #[test]
+    fn x86_64_vmm_filters_allow_networked_vm_syscalls_and_trap_escapes() {
+        for target in ["x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"] {
+            let filter = vmm_filter(target);
+            for &(name, nr, args) in NETWORKED_VM_SYSCALLS {
+                let decision = decide(&filter, nr, args);
+                assert_eq!(decision, RET_ALLOW, "{target}: {name} {args:x?}");
+            }
+            for &(name, nr, args) in TRAPPED_SYSCALLS {
+                let decision = decide(&filter, nr, args);
+                assert_eq!(decision, RET_TRAP, "{target}: {name} {args:x?}");
+            }
         }
     }
 

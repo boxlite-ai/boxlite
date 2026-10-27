@@ -4,7 +4,8 @@
 
 On Linux x86_64 with KVM, a box created with `--enable-checkpoint` can be paused, written to one
 checkpoint file and imported as a new box whose guest processes continue after `resume`. CLI and
-Rust only. Running on real KVM is **UNVERIFIED**.
+Rust only. Guest continuation, with the VMM seccomp filter on every shim thread, passed on one
+real Intel KVM host ([Verification status](#verification-status)).
 
 ```bash
 boxlite create --enable-checkpoint --name web -v /srv/data:/data alpine:latest \
@@ -129,13 +130,38 @@ new connections work.
 | Area | Status |
 |---|---|
 | CLI parsing, refusals and non-KVM runtime paths | unit tests |
-| x86_64 guest agent (static musl build) and its unit tests | built with `make guest`; unit tests pass in an emulated amd64 container except two that need `openat2`, which the emulator lacks |
-| Real guest continuation (`make test:checkpoint:acceptance`) | written and compiled for Linux x86_64; **UNVERIFIED**: not run on KVM |
-| x86_64 VMM seccomp filter with the checkpoint syscalls | **UNVERIFIED** at runtime: the filter is compiled and its decisions checked, but not installed on an x86_64 host |
-| virtio-fs DAX mappings in a real Linux guest, and FUSE DAX in the bundled guest kernel | **UNVERIFIED** |
+| x86_64 guest agent and its unit tests | `make test:unit:guest` (nextest, all tests) passes natively on Linux x86_64 |
+| Real guest continuation (`make test:checkpoint:acceptance`) | passed on one Linux x86_64 host with read/write `/dev/kvm` (Intel VT-x in a nested cloud VM, Ubuntu 24.04), real runtime (no `BOXLITE_DEPS_STUB`) |
+| virtio-fs DAX mappings in a real Linux guest, and FUSE DAX in the bundled guest kernel | passed in the same run: the share mounts `dax=always`, the checkpoint holds a file DAX mapping, and the restored helper keeps reading through it |
+| libkrun's share archive export/import, unprivileged, under bwrap and the production x86_64 VMM seccomp filter (`make test:snapshot:rootless`) | passed on the same host |
+| x86_64 VMM seccomp filter on the checkpoint KVM path (pause/export/import ioctls, vCPU and device save, gvproxy networking) | passed in the same acceptance run: the networked source shim and the restored shim each have exactly one filter on every thread, installed by the shim, after the restored box made a new TCP connection and a disk discard |
+| VMM seccomp on Linux aarch64 | **UNVERIFIED**; networked aarch64 VMs still run without the filter ([Security](../concepts/security.md)) |
+| Other CPUs (AMD, other Intel models) and hosts | **UNVERIFIED** |
 
 The acceptance test runs one box with a long-lived process holding a heap-only random marker, a
 counter, open and unlinked files on the disk and a volume, and a DAX mapping; it pauses, exports,
 destroys the box and its home, imports into an empty runtime and requires the same PID, marker and
 execution to continue. It needs `/dev/kvm`, `make runtime:debug` and registry access for
 `alpine:latest`.
+
+## Run KVM acceptance in a fork
+
+`.github/workflows/checkpoint-kvm.yml` runs on a push to the branch it names, on a GitHub-hosted
+Ubuntu 22.04 runner. On your own Linux x86_64 host, run the same make targets in this order:
+
+```bash
+make setup:build                    # then `source ~/.profile` if it just installed Go
+make runtime:debug                  # real dependencies: BOXLITE_DEPS_STUB must be unset
+make test:checkpoint:acceptance:build
+NEXTEST_PROFILE=ci make test:unit:guest   # the ci profile reports every failure, not only the first
+make -C src/deps/libkrun-sys/vendor/libkrun snapshot-test SNAPSHOT_FILTER=<test>   # with RUSTFLAGS=''
+BOXLITE_TEST_BWRAP=<bundled bwrap> make test:snapshot:rootless
+make test:checkpoint:acceptance SETUP_DONE=1
+```
+
+| Host prerequisite | Without it |
+|---|---|
+| Read/write `/dev/kvm` | `_ensure-kvm` fails |
+| `cargo-nextest` | `test:unit:guest` runs only three pure-logic modules |
+| `libseccomp-dev` (GitHub's runner image has it; `make setup:build` does not install it) | the guest test binary fails to link: `unable to find library -lseccomp` |
+| User namespaces for the bundled bwrap | with `kernel.apparmor_restrict_unprivileged_userns=1` (Ubuntu 24.04 default), both bwrap tests fail with `setting up uid map: Permission denied`. Load an AppArmor profile that allows `userns` for that bwrap path only (BoxLite prints one under `~/.boxlite/apparmor/`), point `BOXLITE_TEST_BWRAP` at the same path, and unload it afterwards |

@@ -175,9 +175,15 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<Op
     {
         use boxlite::jailer::seccomp;
 
+        // The aarch64 VMM filter has never run with gvproxy and lacks
+        // syscalls the x86_64 filter needs, so networked VMs there stay
+        // unfiltered until it is verified.
+        let network_filter_unverified =
+            cfg!(target_arch = "aarch64") && config.network_backend_spec.is_some();
+
         if config.security.jailer_enabled
             && config.security.seccomp_enabled
-            && config.network_backend_spec.is_none()
+            && !network_filter_unverified
         {
             tracing::info!(
                 box_id = %config.box_id,
@@ -193,7 +199,7 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<Op
         } else if config.security.jailer_enabled && config.security.seccomp_enabled {
             tracing::warn!(
                 box_id = %config.box_id,
-                "Seccomp disabled for network-enabled VM; gvproxy runs in-process and is not covered by the VMM syscall profile"
+                "Seccomp disabled for network-enabled VM on aarch64; its VMM syscall profile is unverified with gvproxy"
             );
         } else if config.security.jailer_enabled {
             tracing::warn!(

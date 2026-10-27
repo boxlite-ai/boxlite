@@ -92,8 +92,8 @@ jobs:
 
       # libkrun's share archive export and import as this unprivileged user,
       # under the bwrap the runtime built and embeds, and the production x86_64
-      # VMM seccomp filter. The checkpoint box above is networked, so the shim
-      # does not install that filter there.
+      # VMM seccomp filter. The acceptance step below runs that filter on its
+      # networked box too; these tests cover the share archive under it.
       - name: Rootless archive tests under seccomp
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:

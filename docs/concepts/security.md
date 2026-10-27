@@ -19,6 +19,22 @@ Provides OS-level isolation on top of hardware virtualization.
 - Privilege dropping (unprivileged user)
 - cgroups v2 for resource limits
 
+**Seccomp coverage (Linux):** with `seccomp_enabled`, the shim installs one VMM filter on all of
+its threads (TSYNC), including the in-process gvproxy network backend. Anything outside the
+allowlist raises `SIGSYS` and ends the box.
+
+| Architecture | Networked boxes | Boxes without network |
+|---|---|---|
+| x86_64 | filtered; verified on KVM | filtered |
+| aarch64 | **not filtered**: the aarch64 profile is unverified with gvproxy, and the shim logs a warning | filtered; **UNVERIFIED** |
+
+For networking and guest storage, the x86_64 filter allows two syscalls beyond the VMM core:
+
+- `getpeername`: Go's network dial calls it after every connect.
+- `fallocate`, modes 0, 1, 3, 16 and 17 only: virtio-blk discards and virtio-fs passes on the
+  guest's `fallocate`, and these are the only modes a stock guest kernel sends. Collapse, insert
+  and unshare trap.
+
 **macOS:**
 - sandbox-exec (Seatbelt) for kernel-enforced sandboxing
 - rlimits for resource constraints
