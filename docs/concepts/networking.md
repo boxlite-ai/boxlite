@@ -96,24 +96,42 @@ minutes on HTTP responses. Idle pages and established WebSockets have no respons
 on which to renew; reloading the token URL restores an expired browser session.
 See [proxy authentication](../../apps/proxy/README.md#authentication) for isolation and rollout.
 
+Every SDK takes the service's address as seen from the box plus tunnel options.
+The address replaces the bare port argument; visibility belongs in
+`TunnelOptions` rather than a separate boolean. C exposes a single
+`boxlite_network_tunnel` entry point with system socket storage and typed options.
+For now the IP must be loopback or the guest IP; both reach the box's
+guest address, so the service must listen on all interfaces or the guest IP.
+
 ```python
-tunnel = await box.network.tunnel(3000, is_public=False)
+tunnel = await box.network.tunnel(
+    ("127.0.0.1", 3000), boxlite.TunnelOptions(is_public=False)
+)
 print(tunnel.uri(), tunnel.is_public(), tunnel.token())  # Save the first token securely.
 forwarder = await tunnel.forward(boxlite.SocketAddress.tcp(port=8080))
 await forwarder.wait()
 ```
 
 ```typescript
-const tunnel = await box.network.tunnel(3000, false);
+import { SocketAddress } from "node:net";
+
+const tunnel = await box.network.tunnel(
+  new SocketAddress({ address: "127.0.0.1", port: 3000 }),
+  { isPublic: false },
+);
 console.log({ uri: tunnel.uri(), isPublic: tunnel.isPublic(), token: tunnel.token() });
 const forwarder = await tunnel.forward({ type: "tcp", host: "127.0.0.1", port: 8080 });
 await forwarder.wait();
 ```
 
-Go uses `network.Tunnel(ctx, 3000, false)` and `tunnel.Descriptor()`; Rust uses
-`network.tunnel(3000, TunnelOptions { is_public: false })`.
-C keeps `boxlite_network_tunnel` and adds `boxlite_network_tunnel_with_options`
-with `{"isPublic":false}` plus `boxlite_tunnel_descriptor` for the JSON result.
+Go uses `network.Tunnel(ctx, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 3000},
+boxlite.TunnelOptions{IsPublic: false})` and `tunnel.Descriptor()`; Rust uses
+`network.tunnel("127.0.0.1:3000".parse()?, TunnelOptions { is_public: false })`.
+C's `boxlite_network_tunnel` takes a system `sockaddr_storage` initialized with
+`boxlite_socket_address_parse()` and typed `BoxliteTunnelOptions { .is_public = false }`;
+`boxlite_tunnel_descriptor` returns the JSON result.
+Omitted options are public in Python, Node and C; Go's `DefaultTunnelOptions()`
+and Rust's `TunnelOptions::default()` are public.
 Private mode is rejected by local runtimes.
 
 Explicit host port publication is a separate local-runtime feature that owns a

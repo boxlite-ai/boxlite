@@ -179,7 +179,7 @@ is appropriate for browsers, database clients, and other programs that expect a
 normal host address.
 
 For SDK code that must work with local and remote runtimes, use
-`box.network.tunnel(port)` and open byte streams with `connect()`. A tunnel
+`box.network.tunnel(target, options)` and open byte streams with `connect()`. A tunnel
 can be consumed by `connect()` or by `forward()` to bind a local listener.
 Remote CLI users can run `boxlite network tunnel BOX PORT` to obtain the
 service URL. Inbound access is disabled by default; enable it with

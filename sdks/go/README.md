@@ -239,7 +239,7 @@ OCI `EXPOSE` metadata does not publish ports.
 The same route workflow works with local and remote runtimes:
 
 - `box.Network() (*Network, error)` returns box-scoped network operations.
-- `network.Tunnel(ctx, port, isPublic...) (*BoxTunnel, error)` prepares a tunnel; `Tunnel(ctx, 3000)` and `Tunnel(ctx, 3000, true)` are public, and `Tunnel(ctx, 3000, false)` requests private cloud access. More than one `isPublic` value is an error. `tunnel.URI()` and `tunnel.Descriptor()` stay readable after `Connect` or `Forward`.
+- `network.Tunnel(ctx, target, opts) (*BoxTunnel, error)` prepares a tunnel. `target` has the concrete standard-library type `*net.TCPAddr` whose IP is localhost or the guest IP for now; an empty IP means localhost. `boxlite.DefaultTunnelOptions()` is public, and `boxlite.TunnelOptions{IsPublic: false}` (also the zero value) requests private cloud access. `tunnel.URI()` and `tunnel.Descriptor()` stay readable after `Connect` or `Forward`.
 - `tunnel.Descriptor()` returns `URI`, `IsPublic`, and `Token` (full once, masked on later preparations).
 - `network.RevokeTunnel(ctx, port) error` withdraws the port's tunnel. It
   is safe to repeat and leaves open connections running.
@@ -303,7 +303,7 @@ runtime's lifetime.
   `Configure` automatically.
 - **Connecting:** SSH publishes no host port. Reach `ListenAddress`'s port
   with `WithPort(boxlite.PortSpec{Guest: 2222})` on a local runtime, or a
-  [service tunnel](#service-tunnels) such as `network.Tunnel(ctx, 2222)`.
+  [service tunnel](#service-tunnels) such as `network.Tunnel(ctx, &net.TCPAddr{Port: 2222}, boxlite.DefaultTunnelOptions())`.
 - **Native library:** SSH needs a `boxlite.h` and native library that export
   `boxlite_box_ssh_configure`, `_status`, and `_disable`. `cmd/setup` fetches
   the pair matching your module version; an older library fails to link.

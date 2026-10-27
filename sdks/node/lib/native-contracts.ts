@@ -1,3 +1,4 @@
+import type { SocketAddress as NativeSocketAddress } from "node:net";
 import type { CopyOptions } from "./copy.js";
 
 /**
@@ -591,14 +592,23 @@ export interface JsNetworkHandle {
     mode: "enabled" | "disabled";
     allowNet?: string[];
   }): Promise<void>;
-  /** Prepare a one-shot tunnel to a service port inside the box. */
-  tunnel(port: number, isPublic?: boolean): Promise<NativeBoxTunnel>;
+  /** Prepare a one-shot tunnel to a TCP service inside the box.
+   * Invalid argument types throw synchronously at the native boundary. */
+  tunnel(
+    target: NativeSocketAddress,
+    options?: TunnelOptions,
+  ): Promise<NativeBoxTunnel>;
   /** Revoke the tunnel for a service port; open connections stay open. */
   revokeTunnel(port: number): Promise<void>;
 }
 
 export type SocketAddress =
   { type: "tcp"; host?: string; port: number } | { type: "unix"; path: string };
+
+/** Access policy for a tunnel; `isPublic` defaults to true. */
+export interface TunnelOptions {
+  isPublic?: boolean;
+}
 
 export interface NativeTunnelForwarder {
   localAddr(): SocketAddress;

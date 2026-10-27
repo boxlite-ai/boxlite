@@ -25,7 +25,7 @@ use crate::event_listener::EventListener;
 #[cfg(target_os = "linux")]
 use crate::fs::BindMountHandle;
 use crate::litebox::copy::{CopyOptions, CopySourceKind};
-use crate::litebox::{BoxConnection, BoxTunnel, SshConfig, SshStatus};
+use crate::litebox::{BoxConnection, BoxTunnel, SshConfig, SshStatus, TunnelOptions};
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::net::NetworkBackend;
@@ -1693,7 +1693,12 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
         Ok(())
     }
 
-    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
+    async fn tunnel(&self, target: SocketAddr, options: TunnelOptions) -> BoxliteResult<BoxTunnel> {
+        if !options.is_public {
+            return Err(BoxliteError::Unsupported(
+                "private tunnels require a cloud runtime".into(),
+            ));
+        }
         let network = self
             .live_state()
             .await?

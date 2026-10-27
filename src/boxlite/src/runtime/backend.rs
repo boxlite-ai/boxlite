@@ -191,25 +191,17 @@ pub(crate) trait BoxNetworkBackend: Send + Sync {
         ))
     }
 
-    /// Prepare a one-shot tunnel to a service port inside the box.
+    /// Prepare a one-shot tunnel to a service inside the box under `options`.
+    /// `target` is already resolved to the guest address.
     ///
     /// Check here that the box can carry the tunnel and mint any public URI,
     /// but open no connection: return a [`BoxTunnel::new`] whose future opens
     /// it on `connect()`, so a port nothing listens on fails there.
-    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
-
-    async fn tunnel_with_options(
+    async fn tunnel(
         &self,
         target: SocketAddr,
         options: crate::litebox::TunnelOptions,
-    ) -> BoxliteResult<BoxTunnel> {
-        if !options.is_public {
-            return Err(BoxliteError::Unsupported(
-                "private tunnels require a cloud runtime".into(),
-            ));
-        }
-        self.tunnel(target).await
-    }
+    ) -> BoxliteResult<BoxTunnel>;
 
     /// Withdraw the tunnel declaration `tunnel()` made for `port`.
     ///

@@ -68,7 +68,7 @@ async def _wait_for_http_server(
                 f"HTTP server in box did not become ready; last result: {last_result}"
             )
         await asyncio.sleep(0.5)
-        tunnel = await box.network.tunnel(port)
+        tunnel = await box.network.tunnel(("127.0.0.1", port))
 
 
 def _host_for_uri(uri: str | None) -> str:
@@ -163,7 +163,7 @@ async def _binary_round_trip(box, port: int, connection_index: int) -> None:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + 20
     while True:
-        tunnel = await box.network.tunnel(port)
+        tunnel = await box.network.tunnel(("127.0.0.1", port))
         try:
             connection = await tunnel.connect()
             break
@@ -211,7 +211,7 @@ async def _wait_for_binary_server(box, port: int) -> None:
     deadline = loop.time() + 20
     last_error = "no connection attempt completed"
     while loop.time() < deadline:
-        tunnel = await box.network.tunnel(port)
+        tunnel = await box.network.tunnel(("127.0.0.1", port))
         connection = None
         try:
             connection = await tunnel.connect()
@@ -259,13 +259,13 @@ async def _assert_tunnel_uri_and_one_shot_connects(
     server = await _serve_marker_http(box, port, marker)
 
     try:
-        first_tunnel = await box.network.tunnel(port)
+        first_tunnel = await box.network.tunnel(("127.0.0.1", port))
         uri = first_tunnel.uri()
         assert_uri(uri)
 
         host = _host_for_uri(uri)
         first = await _wait_for_http_server(box, port, first_tunnel, host, marker)
-        second_tunnel = await box.network.tunnel(port)
+        second_tunnel = await box.network.tunnel(("127.0.0.1", port))
         second = await _http_get(second_tunnel, host, marker)
 
         assert marker in first, first[:200]

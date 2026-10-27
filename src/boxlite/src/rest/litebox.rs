@@ -602,16 +602,7 @@ impl BoxNetworkBackend for RestBox {
             .await
     }
 
-    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-        self.tunnel_with_options(target, TunnelOptions::default())
-            .await
-    }
-
-    async fn tunnel_with_options(
-        &self,
-        target: SocketAddr,
-        options: TunnelOptions,
-    ) -> BoxliteResult<BoxTunnel> {
+    async fn tunnel(&self, target: SocketAddr, options: TunnelOptions) -> BoxliteResult<BoxTunnel> {
         let descriptor = self.tunnel_endpoint(target, options).await?;
         let endpoint = descriptor.uri;
         let client = self.client.clone();
@@ -1432,6 +1423,9 @@ mod tests {
         Response as HandshakeResponse,
     };
     use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
+
+    /// A tunnel target as SDK callers write it.
+    const LOCAL_3000: &str = "127.0.0.1:3000";
 
     /// Pull the path out of an HTTP request line (`GET /v1/... HTTP/1.1`).
     fn request_path(head: &str) -> Option<String> {
@@ -2803,7 +2797,7 @@ mod tests {
 
         let network = crate::litebox::NetworkHandle::new(Arc::new(rest_box_for(port, "tun-box")));
         let tunnel = network
-            .tunnel(3000, TunnelOptions::default())
+            .tunnel(LOCAL_3000.parse().unwrap(), TunnelOptions::default())
             .await
             .unwrap();
         assert_eq!(
@@ -2869,7 +2863,7 @@ mod tests {
             });
             let network = crate::litebox::NetworkHandle::new(Arc::new(rest_box_for(port, "box1")));
             network
-                .tunnel(3000, options.unwrap_or_default())
+                .tunnel(LOCAL_3000.parse().unwrap(), options.unwrap_or_default())
                 .await
                 .unwrap();
             let (head, body) = server.await.unwrap();
@@ -2957,7 +2951,10 @@ mod tests {
         .unwrap();
         let network = crate::litebox::NetworkHandle::new(Arc::new(rest_box));
         let tunnel = network
-            .tunnel(3000, TunnelOptions { is_public: false })
+            .tunnel(
+                LOCAL_3000.parse().unwrap(),
+                TunnelOptions { is_public: false },
+            )
             .await
             .unwrap();
         assert!(!tunnel.is_public());
@@ -2990,7 +2987,10 @@ mod tests {
         assert!(!active.load(Ordering::SeqCst));
         forwarder.close().await.unwrap();
         network
-            .tunnel(3000, TunnelOptions { is_public: false })
+            .tunnel(
+                LOCAL_3000.parse().unwrap(),
+                TunnelOptions { is_public: false },
+            )
             .await
             .unwrap();
         assert_eq!(posts.load(Ordering::SeqCst), 2);

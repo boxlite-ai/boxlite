@@ -61,6 +61,7 @@ try:
         SshHandle,
         SshStatus,
         TunnelForwarder,
+        TunnelOptions,
         VolumeHandle,
         VolumeInfo,
     )
@@ -87,6 +88,7 @@ try:
         "SshHandle",
         "SshStatus",
         "TunnelForwarder",
+        "TunnelOptions",
         "NetworkInfo",
         "OutboundNetworkInfo",
         "InboundNetworkInfo",

@@ -634,3 +634,24 @@ Apache 2.0 - See [../../LICENSE](../../LICENSE)
 ---
 
 **Made with ❤️ by BoxLite Labs**
+
+## Service tunnels
+
+Use the built-in address from `node:net` to prepare a service tunnel:
+
+```typescript
+import { SocketAddress } from "node:net";
+
+const tunnel = await box.network.tunnel(
+  new SocketAddress({ address: "127.0.0.1", port: 3000 }),
+  { isPublic: false },
+);
+```
+
+Options default to public; private tunnels require a cloud runtime. IPv6 targets
+use `new SocketAddress({ address: "::1", family: "ipv6", port: 3000 })`.
+The target must have a nonzero port, a loopback or guest IP, and zero flowlabel.
+Bare ports and the old `{ type: "tcp", ... }` target are rejected. Invalid argument
+types can throw synchronously on the native network handle. TCP/Unix listener
+shapes remain available for `tunnel.forward(listen)`.
+See [private tunnels](../../docs/concepts/networking.md#private-cloud-tunnels).

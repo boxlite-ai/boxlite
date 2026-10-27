@@ -4,7 +4,9 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use boxlite::{BoxliteRuntime, LiteBox, SocketAddress, SshAccount, SshConfig, SshStatus};
+use boxlite::{
+    BoxliteRuntime, LiteBox, SocketAddress, SshAccount, SshConfig, SshStatus, TunnelOptions,
+};
 use clap::{Args, Subcommand};
 
 use crate::cli::GlobalFlags;
@@ -251,7 +253,10 @@ async fn forward(
     }
     let tunnel = sandbox
         .network()
-        .tunnel(tunnel_target(&status.listen_address)?)
+        .tunnel(
+            tunnel_target(&status.listen_address)?,
+            TunnelOptions::default(),
+        )
         .await?;
     forward_until_interrupted(tunnel, listen, |address| {
         eprintln!("SSH host key: {}", status.host_public_key);

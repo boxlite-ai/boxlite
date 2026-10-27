@@ -1,3 +1,4 @@
+import { SocketAddress } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("../lib/native.js", () => ({
@@ -22,8 +23,14 @@ describe("SimpleBox", () => {
       _box: { network: { tunnel: typeof prepare } };
     };
     box._box = { network: { tunnel: prepare } };
-    const tunnel = await box.tunnel(3000, false);
-    expect(prepare).toHaveBeenCalledWith(3000, false);
+    const tunnel = await box.tunnel(
+      new SocketAddress({ address: "127.0.0.1", port: 3000 }),
+      { isPublic: false },
+    );
+    expect(prepare).toHaveBeenCalledWith(
+      new SocketAddress({ address: "127.0.0.1", port: 3000 }),
+      { isPublic: false },
+    );
     expect(tunnel.isPublic()).toBe(false);
     expect(tunnel.token()).toBe("blt_service-issued-secret");
   });
@@ -42,9 +49,12 @@ describe("SimpleBox", () => {
     };
     box._box = { network: { tunnel: tunnelNative } };
 
-    const tunnel = await box.network.tunnel(3000);
+    const tunnel = await box.network.tunnel(new SocketAddress({ port: 3000 }));
     expect(tunnel.uri()).toBe("https://3000-box.proxy.example.test");
-    expect(tunnelNative).toHaveBeenCalledWith(3000, true);
+    expect(tunnelNative).toHaveBeenCalledWith(
+      new SocketAddress({ port: 3000 }),
+      undefined,
+    );
     expect(nativeTunnel.connect).not.toHaveBeenCalled();
 
     // Reading the address must leave the tunnel usable, not consume it.
@@ -60,7 +70,7 @@ describe("SimpleBox", () => {
     };
     box._box = { network: { tunnel: tunnelNative } };
 
-    const tunnel = await box.network.tunnel(3000);
+    const tunnel = await box.network.tunnel(new SocketAddress({ port: 3000 }));
     expect(tunnel.uri()).toBeNull();
   });
 
@@ -79,7 +89,7 @@ describe("SimpleBox", () => {
     };
     box._box = { network: { tunnel: async () => nativeTunnel } };
 
-    const tunnel = await box.network.tunnel(3000);
+    const tunnel = await box.network.tunnel(new SocketAddress({ port: 3000 }));
     const first = await tunnel.connect();
     expect(first).toBe(connection);
     await expect(tunnel.connect()).rejects.toThrow("already been consumed");
@@ -105,7 +115,7 @@ describe("SimpleBox", () => {
     };
     box._box = { network: { tunnel: async () => nativeTunnel } };
 
-    const tunnel = await box.network.tunnel(3000);
+    const tunnel = await box.network.tunnel(new SocketAddress({ port: 3000 }));
     const forwarder = await tunnel.forward(listen);
     expect(forward).toHaveBeenCalledWith(listen);
     expect(forwarder.localAddr()).toEqual({

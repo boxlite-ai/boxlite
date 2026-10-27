@@ -113,6 +113,7 @@ export {
   type InboundNetworkSpec,
   type OutboundNetworkSpec,
   type SocketAddress,
+  type TunnelOptions,
   type AdvancedBoxOptions,
   type ContainerCapabilities,
   type SimpleBoxOptions,

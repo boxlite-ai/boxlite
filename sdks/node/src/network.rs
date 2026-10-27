@@ -38,6 +38,54 @@ pub struct JsSocketAddress {
     pub path: Option<String>,
 }
 
+/// Access policy for `tunnel()`; an omitted field keeps its default.
+#[napi(object)]
+pub struct JsTunnelOptions {
+    pub is_public: Option<bool>,
+}
+
+/// Binding-only adapter: read node:net SocketAddress getters before spawning.
+pub struct TunnelTarget(SocketAddr);
+
+impl TypeName for TunnelTarget {
+    fn type_name() -> &'static str {
+        "SocketAddress"
+    }
+    fn value_type() -> napi::ValueType {
+        napi::ValueType::Object
+    }
+}
+
+impl ValidateNapiValue for TunnelTarget {}
+
+impl FromNapiValue for TunnelTarget {
+    unsafe fn from_napi_value(env: sys::napi_env, value: sys::napi_value) -> Result<Self> {
+        // SAFETY: napi validates the object and the lifetime of both handles.
+        let target = unsafe { Object::from_napi_value(env, value)? };
+        let address: String = target.get_named_property("address")?;
+        let family: String = target.get_named_property("family")?;
+        let port: f64 = target.get_named_property("port")?;
+        let flowlabel: f64 = target.get_named_property("flowlabel")?;
+        let ip = address
+            .parse::<IpAddr>()
+            .map_err(|_| Error::from_reason("tunnel target must use a numeric IP"))?;
+        if family != if ip.is_ipv4() { "ipv4" } else { "ipv6" } {
+            return Err(Error::from_reason(
+                "tunnel target family does not match its address",
+            ));
+        }
+        if !port.is_finite() || port.fract() != 0.0 || !(1.0..=u16::MAX as f64).contains(&port) {
+            return Err(Error::from_reason(
+                "tunnel target port must be an integer between 1 and 65535",
+            ));
+        }
+        if flowlabel != 0.0 {
+            return Err(Error::from_reason("tunnel target flowlabel must be zero"));
+        }
+        Ok(Self(SocketAddr::new(ip, port as u16)))
+    }
+}
+
 #[napi]
 pub struct JsTunnelForwarder {
     handle: TunnelForwarder,
@@ -186,6 +234,25 @@ mod tests {
         (runtime, network)
     }
 
+    fn localhost(port: u16) -> TunnelTarget {
+        TunnelTarget(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port))
+    }
+
+    #[test]
+    fn tunnel_refuses_a_target_outside_the_box() {
+        let tokio_rt = tokio::runtime::Runtime::new().unwrap();
+        let (url, bodies) = tunnel_cloud();
+        let (_runtime, network) = network_at(&tokio_rt, &url);
+        for target in [TunnelTarget("10.0.0.5:3000".parse().unwrap()), localhost(0)] {
+            assert!(tokio_rt.block_on(network.tunnel(target, None)).is_err());
+        }
+        assert!(
+            bodies
+                .recv_timeout(std::time::Duration::from_millis(200))
+                .is_err()
+        );
+    }
+
     /// `isPublic` is a new optional request field: omitted or at its default
     /// it stays off the wire; only a private tunnel sends it.
     #[test]
@@ -198,7 +265,12 @@ mod tests {
             (Some(true), ""),
             (Some(false), r#"{"isPublic":false}"#),
         ] {
-            tokio_rt.block_on(network.tunnel(3000, is_public)).unwrap();
+            let options = is_public.map(|is_public| JsTunnelOptions {
+                is_public: Some(is_public),
+            });
+            tokio_rt
+                .block_on(network.tunnel(localhost(3000), options))
+                .unwrap();
             let body = bodies
                 .recv_timeout(std::time::Duration::from_secs(10))
                 .unwrap();
@@ -214,7 +286,12 @@ mod tests {
         let (url, bodies) = tunnel_cloud();
         let (_runtime, network) = network_at(&tokio_rt, &url);
         let tunnel = tokio_rt
-            .block_on(network.tunnel(3000, Some(false)))
+            .block_on(network.tunnel(
+                localhost(3000),
+                Some(JsTunnelOptions {
+                    is_public: Some(false),
+                }),
+            ))
             .unwrap();
         bodies
             .recv_timeout(std::time::Duration::from_secs(10))
@@ -280,16 +357,23 @@ impl JsNetworkHandle {
             .map_err(map_err)
     }
 
-    #[napi]
-    pub async fn tunnel(&self, port: u16, is_public: Option<bool>) -> Result<JsBoxTunnel> {
-        if port == 0 {
-            return Err(Error::from_reason("tunnel port must be non-zero"));
-        }
+    // Reject primitive options before conversion can treat them as an empty object.
+    #[napi(
+        strict,
+        ts_args_type = "target: import('node:net').SocketAddress, options?: JsTunnelOptions"
+    )]
+    pub async fn tunnel(
+        &self,
+        target: TunnelTarget,
+        options: Option<JsTunnelOptions>,
+    ) -> Result<JsBoxTunnel> {
+        let target = target.0;
+        let is_public = options.and_then(|options| options.is_public);
         let tunnel = self
             .handle
             .network()
             .tunnel(
-                port,
+                target,
                 TunnelOptions {
                     is_public: is_public.unwrap_or(true),
                 },

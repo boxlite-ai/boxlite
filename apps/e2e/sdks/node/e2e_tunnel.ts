@@ -1,4 +1,5 @@
-// REST E2E driver for the Node SDK's public box.network.tunnel(port) API.
+import { SocketAddress } from "node:net";
+// REST E2E driver for the Node SDK's public box.network.tunnel(new SocketAddress({ port })) API.
 
 import { createHash, randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -25,7 +26,7 @@ async function requestOverTunnel(
   marker?: string,
   readDelay = 0,
 ): Promise<Buffer> {
-  const tunnel = await box.network.tunnel(port)
+  const tunnel = await box.network.tunnel(new SocketAddress({ port }))
   const uri = tunnel.uri()
   if (uri === null) {
     throw new Error('expected a public tunnel URL for the cloud box')
@@ -66,7 +67,7 @@ async function startService(box: SimpleBox, port: number, marker: string): Promi
 }
 
 async function websocketEcho(box: SimpleBox, port: number, marker: string): Promise<void> {
-  const socket = await (await box.network.tunnel(port)).connect()
+  const socket = await (await box.network.tunnel(new SocketAddress({ port }))).connect()
   const key = randomBytes(16).toString('base64')
   let response = Buffer.alloc(0)
   try {
@@ -146,7 +147,7 @@ async function main(): Promise<void> {
     await box.exec('true')
     const pids = await Promise.all(SERVICES.map(({ port, marker }) => startService(box, port, marker)))
     await waitForHttp(box, SERVICES[0].port, SERVICES[0].marker)
-    const preparedTunnel = await box.network.tunnel(SERVICES[0].port)
+    const preparedTunnel = await box.network.tunnel(new SocketAddress({ port: SERVICES[0].port }))
 
     const requests = SERVICES.flatMap((service) =>
       Array.from({ length: 3 }, () => waitForHttp(box, service.port, service.marker)),
@@ -198,7 +199,7 @@ async function main(): Promise<void> {
     )
     if (slow.length <= 2 * 1024 * 1024) throw new Error('slow response was truncated')
 
-    const cancelled = await (await box.network.tunnel(SERVICES[0].port)).connect()
+    const cancelled = await (await box.network.tunnel(new SocketAddress({ port: SERVICES[0].port }))).connect()
     await cancelled.close()
     await waitForHttp(box, SERVICES[0].port, SERVICES[0].marker)
     await Promise.all(
@@ -211,7 +212,7 @@ async function main(): Promise<void> {
     await box.exec('kill', [pids[0]])
     pids[0] = await startService(box, SERVICES[0].port, SERVICES[0].marker)
     await waitForHttp(box, SERVICES[0].port, SERVICES[0].marker)
-    const restartTunnel = await box.network.tunnel(SERVICES[0].port)
+    const restartTunnel = await box.network.tunnel(new SocketAddress({ port: SERVICES[0].port }))
     const restartSocket = await restartTunnel.connect()
     await restartSocket.write(Buffer.from('GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n'))
     let restarted = ''
@@ -272,7 +273,7 @@ async function main(): Promise<void> {
         await halfCloseBox.exec('true')
         await startService(halfCloseBox, SERVICES[0].port, SERVICES[0].marker)
         await waitForHttp(halfCloseBox, SERVICES[0].port, SERVICES[0].marker)
-        const halfCloseSocket = await (await halfCloseBox.network.tunnel(SERVICES[0].port)).connect()
+        const halfCloseSocket = await (await halfCloseBox.network.tunnel(new SocketAddress({ port: SERVICES[0].port }))).connect()
         await halfCloseSocket.write(Buffer.from('GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n'))
         await halfCloseSocket.shutdownWrite()
         let halfCloseResponse = ''

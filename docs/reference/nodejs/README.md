@@ -272,7 +272,7 @@ interface JsPortSpec {
 ```
 
 Port publication is available only with a local runtime. For code that should
-work with both local and remote runtimes, use `box.network.tunnel(port)`; each
+work with both local and remote runtimes, use `box.network.tunnel(new SocketAddress({ port }))`; each
 tunnel is one-shot; call `forward()` to consume it into a listener.
 OCI `EXPOSE` declarations do not publish host ports.
 
@@ -374,11 +374,16 @@ live binding data yet, so box, get, or list info may report
 
 ## Network tunnels
 
+Create targets with `new SocketAddress({ address: "127.0.0.1", port: 3000 })`
+from `node:net`; IPv6 also sets `family: "ipv6"`. Flowlabel must be zero.
+The old `{ type: "tcp", ... }` target is rejected; that shape remains a listener
+argument to `forward()`.
+
 `JsBox` and `SimpleBox` expose the same `box.network` workflow.
 
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
-| Tunnel | `await box.network.tunnel(port, isPublic = true)` | Prepare a `JsBoxTunnel` or `BoxTunnel`; pass `false` for a private cloud tunnel |
+| Tunnel | `await box.network.tunnel(target, options?)` | Prepare a `JsBoxTunnel` or `BoxTunnel`; `target` is `SocketAddress` imported from `node:net` (loopback or the guest IP), `options` is `{ isPublic?: boolean }`, public by default. Bare port and boolean arguments are rejected; invalid types throw synchronously on the native `JsBox.network` handle |
 | Token | `tunnel.token(): string \| null` | Full on creation, masked on later preparations; `isPublic()` reports the mode |
 | Revoke | `await box.network.revokeTunnel(port)` | Withdraw the port's tunnel; open connections stay open |
 | Forward | `await tunnel.forward(listen)` | Return a listener-backed `TunnelForwarder` |

@@ -6,11 +6,17 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+// localhost is a tunnel target as callers write it.
+func localhost(port int) *net.TCPAddr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port}
+}
 
 // newTunnelCloud fakes the cloud API for one box and records each tunnel
 // prepare body. CONNECT requests are accepted and held open, so a tunnel
@@ -71,15 +77,14 @@ func TestTunnelSendsIsPublicOnlyWhenPrivate(t *testing.T) {
 	}
 	defer network.Close()
 	for _, test := range []struct {
-		name     string
-		isPublic []bool
-		body     string
+		name string
+		opts TunnelOptions
+		body string
 	}{
-		{"omitted", nil, ""},
-		{"explicit default", []bool{true}, ""},
-		{"private", []bool{false}, `{"isPublic":false}`},
+		{"default", DefaultTunnelOptions(), ""},
+		{"private", TunnelOptions{IsPublic: false}, `{"isPublic":false}`},
 	} {
-		tunnel, err := network.Tunnel(context.Background(), 3000, test.isPublic...)
+		tunnel, err := network.Tunnel(context.Background(), localhost(3000), test.opts)
 		if err != nil {
 			t.Fatalf("%s: %v", test.name, err)
 		}
@@ -88,8 +93,27 @@ func TestTunnelSendsIsPublicOnlyWhenPrivate(t *testing.T) {
 		}
 		_ = tunnel.Close()
 	}
-	if _, err := network.Tunnel(context.Background(), 3000, false, true); err == nil {
-		t.Fatal("Tunnel accepted two isPublic values")
+	tunnel, err := network.Tunnel(context.Background(), &net.TCPAddr{IP: net.IPv6loopback, Port: 3000}, DefaultTunnelOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := <-bodies; body != "" {
+		t.Fatalf("IPv6 public tunnel sent body %q", body)
+	}
+	_ = tunnel.Close()
+	for _, target := range []*net.TCPAddr{
+		nil,
+		(*net.TCPAddr)(nil),
+		&net.TCPAddr{Port: 0},
+		&net.TCPAddr{Port: -1},
+		&net.TCPAddr{Port: 65536},
+		&net.TCPAddr{Port: 3000, Zone: "eth0"},
+		&net.TCPAddr{IP: net.IP{1, 2}, Port: 3000},
+		&net.TCPAddr{IP: net.IPv4(10, 0, 0, 5), Port: 3000},
+	} {
+		if _, err := network.Tunnel(context.Background(), target, DefaultTunnelOptions()); err == nil {
+			t.Fatalf("Tunnel accepted target %v outside the box", target)
+		}
 	}
 	select {
 	case body := <-bodies:
@@ -117,7 +141,7 @@ func TestConsumedTunnelStillReportsDescriptor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer network.Close()
-	tunnel, err := network.Tunnel(context.Background(), 3000, false)
+	tunnel, err := network.Tunnel(context.Background(), localhost(3000), TunnelOptions{IsPublic: false})
 	if err != nil {
 		t.Fatal(err)
 	}

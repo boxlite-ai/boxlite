@@ -321,7 +321,7 @@ ports=[
 - TCP is supported; UDP is rejected
 - Port publication is local-only and owns a listener that accepts repeated
   connections. For portable local/remote SDK code, use
-  `box.network.tunnel(port)`; each returned tunnel is one-shot.
+  `box.network.tunnel(target, options)`; each returned tunnel is one-shot.
 - OCI `EXPOSE` is metadata and does not publish a host port.
 - Port mappings are only for host → box traffic. Use
   `host.boxlite.internal:<port>` for box → host loopback traffic.

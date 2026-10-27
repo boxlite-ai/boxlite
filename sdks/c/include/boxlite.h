@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <sys/socket.h>
 
 // Maximum number of buffered events before producer tasks yield.
 #define QUEUE_CAPACITY 4096
@@ -560,11 +561,17 @@ typedef void (*CTunnelForwarderWaitCb)(CBoxliteError*, void*);
 // Tunnel forwarder close completion.
 typedef void (*CTunnelForwarderCloseCb)(CBoxliteError*, void*);
 
+// Access policy for tunnel creation. A NULL options pointer defaults to public.
+typedef struct BoxliteTunnelOptions {
+  bool is_public;
+} BoxliteTunnelOptions;
+
 typedef struct BoxTunnelHandle CBoxTunnelHandle;
 
 typedef uint32_t BoxliteSocketAddressKind;
 
-// Listener address. Input strings are borrowed for the duration of a call.
+// Socket address for a tunnel listener. Input strings are borrowed
+// for the duration of a call.
 typedef struct BoxliteSocketAddress {
   BoxliteSocketAddressKind kind;
   const char *host;
@@ -1163,6 +1170,13 @@ enum BoxliteErrorCode boxlite_box_network(CBoxHandle *handle,
                                           CBoxNetworkHandle **out_network,
                                           CBoxliteError *out_error);
 
+// Parse a numeric IPv4:port or [IPv6]:port into system socket storage.
+// No DNS lookup is performed. On error, `out_address` is unchanged.
+// Output storage is owned by the caller and needs no cleanup.
+enum BoxliteErrorCode boxlite_socket_address_parse(const char *address,
+                                                   struct sockaddr_storage *out_address,
+                                                   CBoxliteError *out_error);
+
 // Return a newly allocated canonical address string.
 enum BoxliteErrorCode boxlite_tunnel_forwarder_address(CTunnelForwarderHandle *forwarder,
                                                        char **out_address,
@@ -1184,22 +1198,24 @@ void boxlite_tunnel_forwarder_free(CTunnelForwarderHandle *forwarder);
 // Release a network handle. Accepts NULL and does not affect the box handle.
 void boxlite_network_free(CBoxNetworkHandle *network);
 
-// Prepare a one-shot tunnel to `port` in the box.
+// Prepare a one-shot tunnel to `target`, the service's TCP address as seen
+// from the box.
 //
+// `target` must point to a complete sockaddr_storage containing an AF_INET or
+// AF_INET6 address; do not cast a pointer to a smaller sockaddr_in/in6 object.
+// Use boxlite_socket_address_parse to initialize it. The IP must be loopback
+// or the guest IP, with a non-zero port and zero IPv6 scope/flow information.
+// Set options->is_public=false for private cloud access; NULL defaults to public.
+// Address and options are borrowed for this call only.
 // On success, `*out_tunnel` owns a handle that must be released with
-// `boxlite_tunnel_free`. Returns `InvalidArgument` for a null network/output
-// pointer or port zero, with details written to `out_error` when provided.
+// `boxlite_tunnel_free`. Returns `InvalidArgument` for a null
+// network/target/output pointer or an invalid target or options, with details
+// written to `out_error` when provided.
 enum BoxliteErrorCode boxlite_network_tunnel(CBoxNetworkHandle *network,
-                                             uint16_t port,
+                                             const struct sockaddr_storage *target,
+                                             const struct BoxliteTunnelOptions *options,
                                              CBoxTunnelHandle **out_tunnel,
                                              CBoxliteError *out_error);
-
-// Prepare a tunnel with JSON options (`{"isPublic":false}`); NULL defaults to public.
-enum BoxliteErrorCode boxlite_network_tunnel_with_options(CBoxNetworkHandle *network,
-                                                          uint16_t port,
-                                                          const char *options_json,
-                                                          CBoxTunnelHandle **out_tunnel,
-                                                          CBoxliteError *out_error);
 
 // Revoke the tunnel for `port` in the box.
 //

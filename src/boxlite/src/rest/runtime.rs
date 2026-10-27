@@ -205,7 +205,7 @@ impl BoxOptions {
         if !self.ports.is_empty() {
             return Err(BoxliteError::Unsupported(
                 "Host port publication (-p/ports) is local-only for remote runtimes. \
-                 Use box.network.tunnel(port) or `boxlite network tunnel BOX PORT` instead."
+                 Use box.network.tunnel(target, options) or `boxlite network tunnel BOX PORT` instead."
                     .to_string(),
             ));
         }

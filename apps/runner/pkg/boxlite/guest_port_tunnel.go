@@ -59,7 +59,7 @@ func (c *Client) DialGuestPort(ctx context.Context, boxID string, port uint16) (
 	}
 	defer network.Close()
 
-	tunnel, err := network.Tunnel(ctx, port)
+	tunnel, err := network.Tunnel(ctx, &net.TCPAddr{Port: int(port)}, boxlite.DefaultTunnelOptions())
 	if err != nil {
 		return nil, fmt.Errorf("prepare guest TCP tunnel to %s port %d: %w", boxID, port, err)
 	}

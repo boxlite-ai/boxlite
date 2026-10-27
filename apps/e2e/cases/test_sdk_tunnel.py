@@ -31,7 +31,7 @@ def tunnelable_box(image: str, **options) -> boxlite.BoxOptions:
 
 
 async def _get_over_tunnel(box: boxlite.Box, port: int, marker: bytes) -> bytes:
-    tunnel = await box.network.tunnel(port)
+    tunnel = await box.network.tunnel(("127.0.0.1", port))
     connection = await tunnel.connect()
     response = bytearray()
     try:
@@ -161,7 +161,7 @@ async def test_python_sdk_tunnel_proxies_http_from_rest_box(rt, image):
     try:
         pids = [await _start_service(box, port, marker) for port, marker in SERVICES]
         await _wait_for_http(box, *SERVICES[0])
-        prepared_tunnel = await box.network.tunnel(SERVICES[0][0])
+        prepared_tunnel = await box.network.tunnel(("127.0.0.1", SERVICES[0][0]))
 
         expected = [service for service in SERVICES for _ in range(3)]
         responses = await asyncio.gather(
@@ -182,7 +182,7 @@ async def test_python_sdk_tunnel_proxies_http_from_rest_box(rt, image):
 
         post_body = b"python-post" * 32768
         post_response = await _request(
-            await box.network.tunnel(SERVICES[0][0]),
+            await box.network.tunnel(("127.0.0.1", SERVICES[0][0])),
             b"POST / HTTP/1.0\r\nHost: tunnel.test\r\nContent-Length: "
             + str(len(post_body)).encode()
             + b"\r\n\r\n"
@@ -191,20 +191,20 @@ async def test_python_sdk_tunnel_proxies_http_from_rest_box(rt, image):
         assert hashlib.sha256(post_body).hexdigest().encode() in post_response
 
         large_response = await _request(
-            await box.network.tunnel(SERVICES[0][0]),
+            await box.network.tunnel(("127.0.0.1", SERVICES[0][0])),
             b"GET /large HTTP/1.0\r\nHost: tunnel.test\r\n\r\n",
         )
         assert len(large_response) > 2 * 1024 * 1024
-        await _websocket_echo(await box.network.tunnel(SERVICES[0][0]), SERVICES[0][1])
+        await _websocket_echo(await box.network.tunnel(("127.0.0.1", SERVICES[0][0])), SERVICES[0][1])
 
         slow_response = await _request(
-            await box.network.tunnel(SERVICES[0][0]),
+            await box.network.tunnel(("127.0.0.1", SERVICES[0][0])),
             b"GET /slow HTTP/1.0\r\nHost: tunnel.test\r\n\r\n",
             read_delay=1,
         )
         assert len(slow_response) > 2 * 1024 * 1024
 
-        cancelled = await (await box.network.tunnel(SERVICES[0][0])).connect()
+        cancelled = await (await box.network.tunnel(("127.0.0.1", SERVICES[0][0]))).connect()
         await cancelled.close()
         assert SERVICES[0][1] in await _wait_for_http(box, *SERVICES[0])
 
@@ -216,7 +216,7 @@ async def test_python_sdk_tunnel_proxies_http_from_rest_box(rt, image):
         pids[0] = await _start_service(box, *SERVICES[0])
         await _wait_for_http(box, *SERVICES[0])
         restart_response = await _request(
-            await box.network.tunnel(SERVICES[0][0]),
+            await box.network.tunnel(("127.0.0.1", SERVICES[0][0])),
             b"GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n",
         )
         assert SERVICES[0][1] in restart_response
@@ -242,7 +242,7 @@ async def test_python_sdk_tunnel_rejects_stopped_box(rt, image):
         # up front (POL-214) rather than handing back a URI that CONNECTs
         # successfully and then silently drops the stream.
         with pytest.raises(RuntimeError):
-            await asyncio.wait_for(box.network.tunnel(SERVICES[0][0]), timeout=10)
+            await asyncio.wait_for(box.network.tunnel(("127.0.0.1", SERVICES[0][0])), timeout=10)
     finally:
         await rt.remove(box.id, force=True)
 
@@ -281,7 +281,7 @@ async def test_python_sdk_tunnel_connect_wakes_stopped_box(rt, image):
             assert asyncio.get_running_loop().time() < deadline, "box never stopped"
             await asyncio.sleep(1)
 
-        tunnel = await box.network.tunnel(port)
+        tunnel = await box.network.tunnel(("127.0.0.1", port))
         assert await _box_status(rt, box.id) == "stopped"
 
         response = await _request(
@@ -304,7 +304,7 @@ async def test_python_sdk_tunnel_preserves_tcp_half_close(rt, image):
     try:
         await _start_service(box, *SERVICES[0])
         await _wait_for_http(box, *SERVICES[0])
-        connection = await (await box.network.tunnel(SERVICES[0][0])).connect()
+        connection = await (await box.network.tunnel(("127.0.0.1", SERVICES[0][0]))).connect()
         await connection.write(
             b"GET / HTTP/1.0\r\nHost: tunnel.test\r\nConnection: close\r\n\r\n",
         )

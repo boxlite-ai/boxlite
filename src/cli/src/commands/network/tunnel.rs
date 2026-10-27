@@ -73,7 +73,7 @@ pub async fn execute(args: TunnelArgs, global: &GlobalFlags) -> Result<()> {
     }
     let tunnel = network
         .tunnel(
-            args.port,
+            SocketAddr::new(Ipv4Addr::LOCALHOST.into(), args.port),
             TunnelOptions {
                 is_public: !args.private,
             },

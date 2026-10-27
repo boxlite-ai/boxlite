@@ -284,7 +284,7 @@ Configuration options for creating a box.
 - `network: NetworkSpec | None` - Structured network configuration
 - `ports: List[Tuple | Dict]` - Local TCP forwarding; omit `host_port` in a dict for automatic allocation
   - Protocol: `"tcp"`; UDP is rejected
-  - Portable local/remote code uses `box.network.tunnel(port, is_public=True)`;
+  - Portable local/remote code uses `box.network.tunnel(("127.0.0.1", port), TunnelOptions(is_public=True))`;
     pass `False` for a private cloud tunnel. Call `forward()` for a listener;
     connections reuse the declaration and cannot undo revocation. See
     [private tunnel examples](../../docs/concepts/networking.md#private-cloud-tunnels).

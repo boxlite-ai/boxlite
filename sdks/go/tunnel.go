@@ -246,10 +246,38 @@ func (n *Network) Close() error {
 	return nil
 }
 
-// Tunnel prepares a one-shot tunnel to a service port inside the box. The
-// tunnel is public unless isPublic is given as false; a private tunnel
-// requires a cloud runtime and is never downgraded to public.
-func (n *Network) Tunnel(ctx context.Context, port uint16, isPublic ...bool) (*BoxTunnel, error) {
+// TunnelOptions configures Network.Tunnel. The zero value requests a private
+// tunnel; use DefaultTunnelOptions for a public one.
+type TunnelOptions struct {
+	// IsPublic makes the tunnel reachable without credentials. A private
+	// tunnel requires a cloud runtime and is never downgraded to public.
+	IsPublic bool
+}
+
+// DefaultTunnelOptions returns the options for a public tunnel.
+func DefaultTunnelOptions() TunnelOptions {
+	return TunnelOptions{IsPublic: true}
+}
+
+// parseTunnelTarget reads a target: a *net.TCPAddr whose IP is localhost or
+// the guest IP. An empty IP means localhost.
+func parseTunnelTarget(address *net.TCPAddr) (string, uint16, error) {
+	if address == nil || address.Port < 0 || address.Port > 65535 {
+		return "", 0, fmt.Errorf("tunnel target must be a *net.TCPAddr")
+	}
+	if address.Zone != "" {
+		return "", 0, fmt.Errorf("tunnel target zones are not supported")
+	}
+	if len(address.IP) == 0 {
+		return "127.0.0.1", uint16(address.Port), nil
+	}
+	return address.IP.String(), uint16(address.Port), nil
+}
+
+// Tunnel prepares a one-shot tunnel to target, the service's TCP address as
+// seen from the box. For now target must be localhost or the guest IP, with a
+// non-zero port.
+func (n *Network) Tunnel(ctx context.Context, target *net.TCPAddr, opts TunnelOptions) (*BoxTunnel, error) {
 	if n == nil {
 		return nil, ErrRuntimeClosed
 	}
@@ -258,21 +286,23 @@ func (n *Network) Tunnel(ctx context.Context, port uint16, isPublic ...bool) (*B
 	if n.handle == nil {
 		return nil, ErrRuntimeClosed
 	}
-	if port == 0 {
-		return nil, fmt.Errorf("invalid tunnel port %d", port)
-	}
-	if len(isPublic) > 1 {
-		return nil, fmt.Errorf("tunnel takes at most one isPublic value, got %d", len(isPublic))
+	host, port, err := parseTunnelTarget(target)
+	if err != nil {
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	public := len(isPublic) == 0 || isPublic[0]
-	options := C.CString(fmt.Sprintf(`{"isPublic":%t}`, public))
-	defer C.free(unsafe.Pointer(options))
+	cAddress := C.CString(net.JoinHostPort(host, fmt.Sprint(port)))
+	defer C.free(unsafe.Pointer(cAddress))
+	var cTarget C.struct_sockaddr_storage
+	options := C.BoxliteTunnelOptions{is_public: C.bool(opts.IsPublic)}
 	var cTunnel *C.CBoxTunnelHandle
 	var cerr C.CBoxliteError
-	code := C.boxlite_network_tunnel_with_options(n.handle, C.uint16_t(port), options, &cTunnel, &cerr)
+	if code := C.boxlite_socket_address_parse(cAddress, &cTarget, &cerr); code != C.Ok {
+		return nil, freeError(&cerr)
+	}
+	code := C.boxlite_network_tunnel(n.handle, &cTarget, &options, &cTunnel, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
