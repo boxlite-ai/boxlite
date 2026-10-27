@@ -12,7 +12,9 @@ boxlite.BoxOptions(
 )
 ```
 
-**Range:** 1 to host CPU count
+**Range:** 1 to the host ceiling: the smallest of the CPUs the runtime may use
+(affinity and cgroup quota), the KVM per-VM vCPU limit, and the guest kernel
+limit of 16. Creating a box above the ceiling fails with `InvalidArgument`.
 
 **Behavior:**
 - Proportional scheduling (shares-based)
@@ -36,9 +38,10 @@ boxlite.BoxOptions(
 )
 ```
 
-**Range:** 128 to 65536 MiB (64 GiB)
+**Range:** 1 MiB up to host memory, or the runtime cgroup `memory.max` when
+it is lower. Creating a box above that fails with `InvalidArgument`.
 
-**Default:** 512 MiB
+**Default:** 1024 MiB
 
 **Behavior:**
 - Hard limit (box killed if exceeded)

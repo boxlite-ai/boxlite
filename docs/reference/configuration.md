@@ -171,7 +171,9 @@ Number of CPU cores allocated to the box.
 
 **Default:** 1
 
-**Range:** 1 to host CPU count
+**Range:** 1 to the host ceiling: the smallest of the CPUs the runtime may use
+(affinity and cgroup quota), the KVM per-VM vCPU limit, and the guest kernel
+limit of 16. Creating a box above the ceiling fails with `InvalidArgument`.
 
 **Example:**
 ```python
@@ -188,9 +190,10 @@ cpus=4  # 4 CPU cores
 
 Memory limit in mebibytes (MiB).
 
-**Default:** 512
+**Default:** 1024
 
-**Range:** 128 to 65536 (64 GiB)
+**Range:** 1 MiB up to host memory, or the runtime cgroup `memory.max` when
+it is lower. Creating a box above that fails with `InvalidArgument`.
 
 **Example:**
 ```python
