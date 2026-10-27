@@ -24,8 +24,7 @@ import { apiEnvironmentFrom } from './api-environment.ts'
 import { clickHouseRetentionHours } from '../../shared/clickhouse-retention.ts'
 import { OTEL_GROUP, PROXY_GROUP, RUNNER_GROUP, serviceSecretsFrom, splitServiceChannels, type GroupDeclaration } from './env.ts'
 import type { RunnerSlot } from '../stack/runners.ts'
-import { MAX_RUNNERS, RUNNER_NAME, runnerNameFor } from '../stack/runners.ts'
-import type { RunnerSettings } from './config.ts'
+import { runnerNameFor } from '../stack/runners.ts'
 import type { Cloud } from 'mstage/config'
 import { IMAGE_TAG } from 'mbuild/address'
 
@@ -45,6 +44,12 @@ const required = (environment: NodeJS.ProcessEnv, key: string, why: string): str
 
 const optional = (environment: NodeJS.ProcessEnv, key: string): string | null => environment[key]?.trim() || null
 
+/** At most this many hosts in one fleet, which is `runner/model/inventory.ts`'s own bound. */
+const MAX_RUNNERS = 100
+
+/** What the control plane accepts as a runner's registered name. */
+const RUNNER_NAME = /^[a-zA-Z0-9_.-]{2,255}$/
+
 /**
  * The fleet, as slots rather than as a count.
  *
@@ -58,26 +63,11 @@ const fleetFrom = ({
   environment,
   app,
   stage,
-  runners,
 }: {
   environment: NodeJS.ProcessEnv
   app: string
   stage: string
-  runners?: RunnerSettings
 }): RunnerSlot[] => {
-  if (runners?.instances) {
-    return runners.instances
-      .map(({ slot, name, ...resources }) => ({
-        resourceName: slot === 1 ? 'Runner' : `Runner-runner-${slot}`,
-        nameTag: runnerNameFor({ app, stage, index: slot }),
-        controlPlaneRunnerName: name,
-        ...resources,
-      }))
-      .sort(
-        (a, b) =>
-          Number(b.controlPlaneRunnerName === runners.primary) - Number(a.controlPlaneRunnerName === runners.primary),
-      )
-  }
   const raw = optional(environment, 'RUNNERS') ?? '1'
   if (!/^[1-9][0-9]*$/.test(raw) || Number(raw) > MAX_RUNNERS) {
     throw new StackEnvError(`RUNNERS must be a whole number from 1 to ${MAX_RUNNERS}; got ${JSON.stringify(raw)}`)
@@ -278,7 +268,6 @@ export const readStackEnvironment = ({
   stage,
   region,
   home,
-  runners,
 }: {
   environment: NodeJS.ProcessEnv
   /** Where `env.selectGroup` is declared: which keys are each service's own. */
@@ -289,7 +278,6 @@ export const readStackEnvironment = ({
   region: string
   /** Which cloud's secret store an address in `env.selectGroup.secret` names. */
   home: Cloud
-  runners?: RunnerSettings
 }): StackEnvironment => {
   const tag = required(environment, 'BOXLITE_IMAGE_TAG', 'a deploy names the exact commit it ships')
   // mbuild's constant, not a copy of it. The copy that used to live here was
@@ -323,7 +311,7 @@ export const readStackEnvironment = ({
     // `stack/mail.ts`. An empty string is the same answer, spelled by a store
     // that holds the key with nothing in it.
     senderDomain: optional(environment, 'MAIL_DOMAIN'),
-    runnerFleet: fleetFrom({ environment, app, stage, runners }),
+    runnerFleet: fleetFrom({ environment, app, stage }),
     managedClickHouse: managedClickHouseFrom(environment),
     clickHouseRetentionHours:
       optional(environment, 'CLICKHOUSE_RETENTION_HOURS') === null ? null : clickHouseRetentionHours(environment),

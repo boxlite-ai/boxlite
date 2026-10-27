@@ -45,36 +45,33 @@ AWS account identity comes from resolved credentials. GCP project identity is de
 
 ## Runner fleet sizing
 
-`deploy.runners.size` (`small`, `medium`, `large`) and `rootDiskGb` remain required defaults.
-Optional `dataDiskGb` sizes newly created GCP data disks; it defaults to 200 GiB.
-Disk settings accept whole GiB from 20 through 4000. AWS uses the root volume and rejects `dataDiskGb`.
-Changing a GCP disk setting does not resize an existing disk; see [data disk operations](gcp/runners.md#data-disk).
-
-For independently sized hosts, declare `instances` and a `primary` naming one member:
+`RUNNERS` in the encrypted stage environment controls the fleet count (1–100).
+`deploy.runners` in `.mstage.config.json` supplies the specifications for newly created hosts:
 
 ```json
 {
-  "size": "small",
+  "size": "large",
   "rootDiskGb": 100,
-  "primary": "default",
-  "instances": [
-    { "slot": 1, "name": "default" },
-    { "slot": 2, "name": "runner-2" },
-    { "slot": 3, "name": "runner-3", "size": "large", "dataDiskGb": 2048 }
-  ]
+  "dataDiskGb": 2048
 }
 ```
 
-Each instance inherits omitted size/disk settings. Slots are unique integers 1–100; names are
-unique control-plane names of 2–255 letters, digits, underscores, periods or hyphens.
-The fleet must contain 1–100 members. Slot 1 keeps resource `Runner`; slot N keeps
-`Runner-runner-N`. Never renumber surviving slots or rename their control-plane identities.
-The primary's name and token configure the API's default registration together.
+`size` selects the existing `small`, `medium` or `large` CPU/memory preset for the stage's cloud.
+`size` and `rootDiskGb` are required. Optional `dataDiskGb` sets a new GCP data disk's capacity;
+omitting it uses 200 GiB. Disk values are whole GiB from 20 through 4000.
+AWS stores box state on the root disk: configure `rootDiskGb` and omit `dataDiskGb`.
 
-Explicit instances replace `RUNNERS` and `DEFAULT_RUNNER_NAME` as fleet inputs. Without instances,
-those environment values retain their existing count/name behavior. Update both the local stage
-declaration and its CI copy before deploying from either path. Follow the
-[GCP replacement procedure](gcp/runners.md#replace-two-runners-with-one-larger-host) to remove older slots.
+Sizing changes apply only when a host is created. Existing hosts retain their recorded machine type
+and disk sizes, even when the creation defaults change. For example, increasing `RUNNERS` from 2
+to 3 with the GCP settings above creates runner-3 as `large` with a 100 GiB boot disk and a 2 TiB
+data disk; the original two hosts keep their sizing. Updating sizing without increasing the count
+does not resize hosts. Per-host `instances` and `primary` settings are rejected.
+
+Keep the stage declaration and its CI copy synchronized. Refresh deployment state after any
+out-of-band resource changes, then preview the expansion; existing VM and disk sizing must show
+no change. This follows [Pulumi's ignoreChanges semantics](https://www.pulumi.com/docs/iac/concepts/resources/options/ignorechanges/#how-ignorechanges-works).
+Binary and runtime-environment updates still follow the separate runner rollout procedure.
+See [scale out](runners.md#scale-out) for the count update and verification steps.
 
 ## Set application values
 

@@ -32,7 +32,6 @@ import { CreateRunnerResponseDto } from '../../box/dto/create-runner-response.dt
 import { RunnerDto } from '../../box/dto/runner.dto'
 import { RunnerService } from '../../box/services/runner.service'
 import { SystemRole } from '../../user/enums/system-role.enum'
-import { RunnerDrainStatusDto, UpdateRunnerDrainingDto } from '../../box/dto/runner-draining.dto'
 
 @ApiTags('admin')
 @Controller('admin/runners')
@@ -161,30 +160,6 @@ export class AdminRunnerController {
     @Body('unschedulable') unschedulable: boolean,
   ): Promise<void> {
     await this.runnerService.updateSchedulingStatus(id, unschedulable)
-  }
-
-  @Get(':id/draining')
-  @ApiOperation({ summary: 'Inspect runner drain progress', operationId: 'adminGetRunnerDrainStatus' })
-  @ApiResponse({ status: 200, type: RunnerDrainStatusDto })
-  async getDrainStatus(@Param('id', ParseUUIDPipe) id: string): Promise<RunnerDrainStatusDto> {
-    return this.runnerService.getDrainStatus(id)
-  }
-
-  @Patch(':id/draining')
-  @HttpCode(204)
-  @ApiOperation({ summary: 'Update runner draining status', operationId: 'adminUpdateRunnerDraining' })
-  @ApiResponse({ status: 204 })
-  @Audit({
-    action: AuditAction.UPDATE_DRAINING,
-    targetType: AuditTarget.RUNNER,
-    targetIdFromRequest: (req) => req.params.id,
-    requestMetadata: { body: (req: TypedRequest<UpdateRunnerDrainingDto>) => ({ draining: req.body?.draining }) },
-  })
-  async updateDrainingStatus(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: UpdateRunnerDrainingDto,
-  ): Promise<void> {
-    await this.runnerService.updateDrainingStatus(id, body.draining)
   }
 
   @Delete(':id')

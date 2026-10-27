@@ -1745,9 +1745,10 @@ test('every workflow that selects a deployment Environment does so from an allow
     // a runner itself, because a second job on one Environment is a second
     // wait on its reviewers — which is why mdeploy.yml and mrunner.yml are
     // gone. mbuild.yml is its commit line and mbuild-release.yml its release
-    // line. runner-drain binds the same Environment to request state changes.
-    // Pin the set so another workflow reaching these Environments is reviewed.
-    ['build-apps-api-image.yml', 'deploy-infra.yml', 'deploy-release.yml', 'mbuild-release.yml', 'mbuild.yml', 'mdeploy-all.yml', 'runner-drain.yml'],
+    // line. Listed here deliberately: the point of pinning the set is that a
+    // seventh deploy workflow is a reviewed addition rather than one that
+    // appeared.
+    ['build-apps-api-image.yml', 'deploy-infra.yml', 'deploy-release.yml', 'mbuild-release.yml', 'mbuild.yml', 'mdeploy-all.yml'],
     'the swept set no longer matches the deployment workflows',
   )
 })
@@ -1757,10 +1758,10 @@ test('every workflow that selects a deployment Environment does so from an allow
  *
  * Named rather than derived: which of them reaches `checkLogin` is a property
  * of the tools (`mdeploy/src/run.ts`, `runner-build.ts`, `runner-promote.ts`,
- * `runner-update.ts`, `runner-drain.ts`), and pinning the set makes another command a reviewed
+ * `runner-update.ts`), and pinning the set is what makes a sixth one a reviewed
  * addition rather than one that appeared.
  */
-const SESSION_CHECKING = /npm run (?:--silent )?(?:mstage login|mdeploy|runner:build|runner:promote|runner:update|runner:drain)\b/
+const SESSION_CHECKING = /npm run (?:--silent )?(?:mstage login|mdeploy|runner:build|runner:promote|runner:update)\b/
 
 test('every step that asks mstage for a session is given a token to answer with', () => {
   /*
@@ -1801,14 +1802,14 @@ test('every step that asks mstage for a session is given a token to answer with'
     }
   }
 
-  // Nine: mbuild's session check and mbuild-release's two; then the five in
+  // Eight: mbuild's session check and mbuild-release's two; then the five in
   // mdeploy-all's three tool-reaching jobs — `plan`'s `--check` read,
   // `build-runner`'s session check and its build, `deploy`'s session check and
-  // its apply; and runner-drain's state request.
+  // its apply.
   // The exact count, not a floor: a step that stops being swept is exactly the
   // drop this exists to catch, and one that appears is a tool call nobody
   // reviewed. Adding a legitimate one means changing this number with it.
-  assert.equal(checked, 9, `expected every session-checking step swept, saw ${checked}`)
+  assert.equal(checked, 8, `expected every session-checking step swept, saw ${checked}`)
 })
 
 test('API publishing builds once and promotes that exact image without rebuilding', () => {

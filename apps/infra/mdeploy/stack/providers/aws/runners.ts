@@ -118,7 +118,7 @@ export const awsRunnerProvider =
     dependsOn: any[]
   }): RunnerProvider =>
   (request: RunnerRequest): Runners => {
-    if (request.dataDiskGb !== undefined || request.fleet.some(({ slot }) => slot.dataDiskGb !== undefined)) {
+    if (request.dataDiskGb !== undefined) {
       throw new Error('AWS runners do not support dataDiskGb; configure rootDiskGb instead')
     }
     if (placement.exposure !== 'egress-only-public') {
@@ -230,7 +230,7 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
           slot.resourceName,
           {
             ami: ami.id,
-            instanceType: INSTANCE[slot.size ?? request.size],
+            instanceType: INSTANCE[request.size],
             // Public subnet, and the security group the network arranged is
             // what makes the address egress-only.
             subnetId: placement.subnets[0],
@@ -279,12 +279,12 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
                 platform,
               }),
             ),
-            rootBlockDevice: { volumeSize: slot.rootDiskGb ?? request.rootDiskGb, encrypted: true },
+            rootBlockDevice: { volumeSize: request.rootDiskGb, encrypted: true },
             tags: { Name: slot.nameTag, 'boxlite:control-plane-runner-name': slot.controlPlaneRunnerName },
           },
           {
-            // See the note at the top: a host holds state nothing else does.
-            ignoreChanges: ['ami', 'userDataBase64'],
+            // Creation defaults must not resize hosts that already hold boxes.
+            ignoreChanges: ['ami', 'userDataBase64', 'instanceType', 'rootBlockDevice.volumeSize'],
             protect: true,
             // The boot script reads the staged artifact with this role, and it
             // only ever runs once. Without the edge the host may be created

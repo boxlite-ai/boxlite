@@ -115,7 +115,6 @@ export default $config({
       stage: $app.stage,
       region: AWS_REGION,
       home: 'aws',
-      runners: config.runners,
     })
 
     const accountId = await aws.getCallerIdentity({}).then(({ accountId: id }) => id as string)

@@ -224,7 +224,6 @@ export const gcpProgram =
       stage,
       region,
       home: 'gcp',
-      runners: config.runners,
     })
 
     /*

@@ -400,7 +400,6 @@ udevadm trigger --name-match=kvm || true`,
     const assignments = request.fleet
 
     const instances = assignments.map(({ slot, token }) => {
-      const size = slot.size ?? request.size
       const userData = $resolve([
         request.apiUrl,
         request.otlpUrl,
@@ -455,9 +454,9 @@ udevadm trigger --name-match=kvm || true`,
           project,
           zone,
           type: DISK_TYPE,
-          size: slot.dataDiskGb ?? request.dataDiskGb ?? DATA_DISK[size].sizeGb,
-          provisionedIops: DATA_DISK[size].iops,
-          provisionedThroughput: DATA_DISK[size].throughputMiBps,
+          size: request.dataDiskGb ?? DATA_DISK[request.size].sizeGb,
+          provisionedIops: DATA_DISK[request.size].iops,
+          provisionedThroughput: DATA_DISK[request.size].throughputMiBps,
         },
         { ignoreChanges: ['size', 'provisionedIops', 'provisionedThroughput'], protect: true },
       )
@@ -468,11 +467,11 @@ udevadm trigger --name-match=kvm || true`,
           name: slot.nameTag,
           project,
           zone,
-          machineType: MACHINE[size],
+          machineType: MACHINE[request.size],
           // Explicitly, or the device is absent on a machine that can host it.
           advancedMachineFeatures: { enableNestedVirtualization: request.nestedVirtualization },
           bootDisk: {
-            initializeParams: { image: IMAGE, size: slot.rootDiskGb ?? request.rootDiskGb, type: DISK_TYPE },
+            initializeParams: { image: IMAGE, size: request.rootDiskGb, type: DISK_TYPE },
           },
           // Attached at create only: see `ignoreChanges` below.
           attachedDisks: [{ source: dataDisk.id, deviceName: DATA_DISK_DEVICE }],
@@ -541,7 +540,8 @@ udevadm trigger --name-match=kvm || true`,
           // fixed at create too, because the provider applies any edit to an
           // attachment by detaching the disk from the running host. A host created
           // before it existed never gets it until it is destroyed and recreated.
-          ignoreChanges: ['bootDisk', 'metadataStartupScript', 'attachedDisks'],
+          // Sizing defaults apply to newly added hosts; existing hosts retain their CPU/memory too.
+          ignoreChanges: ['machineType', 'bootDisk', 'metadataStartupScript', 'attachedDisks'],
           protect: true,
           // The read grant among them: a host whose boot script fetches the
           // staged object before the binding exists downloads nothing, and

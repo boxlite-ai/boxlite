@@ -3,23 +3,6 @@
 The NestJS control-plane service. See the [apps hub](../README.md) for how it fits with the
 other services and [`API.md`](../API.md) for its interfaces.
 
-## Generated clients
-
-Controller and DTO changes, including administrator endpoints such as runner
-drain, must include their generated TypeScript and Go clients. From `apps/`, run
-the same targets as [API client drift CI](../../.github/workflows/api-client-drift.yml):
-
-```bash
-yarn nx run api-client:generate:api-client
-yarn nx run api-client-go:generate:api-client
-yarn nx run analytics-api-client:generate:api-client
-```
-
-Use the generator version pinned in `apps/openapitools.json` and a local Redis
-instance for schema export. These targets apply required postprocessing; commit
-the resulting models, methods, schema, manifests and docs together. Repeat
-generation after committing: all three client directories must stay clean.
-
 ## Business events
 
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record

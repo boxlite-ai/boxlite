@@ -33,7 +33,7 @@ import type { AlarmRequest, AlarmThreshold } from '../stack/alarms.ts'
 import type { CacheRequest, CacheSize } from '../stack/cache.ts'
 import type { ClickHouseMode, ClickHouseRequest } from '../stack/clickhouse.ts'
 import type { DatabaseRequest, DatabaseSize } from '../stack/database.ts'
-import { MAX_RUNNERS, RUNNER_NAME, type RunnerResources, type RunnerSize } from '../stack/runners.ts'
+import type { RunnerRequest, RunnerSize } from '../stack/runners.ts'
 import type { StorageRequest } from '../stack/storage.ts'
 
 export class DeployConfigError extends Error {
@@ -43,11 +43,8 @@ export class DeployConfigError extends Error {
   }
 }
 
-export type RunnerInstanceSettings = Partial<RunnerResources> & { slot: number; name: string }
-export type RunnerSettings = RunnerResources & {
-  primary?: string
-  instances?: RunnerInstanceSettings[]
-}
+/** The runner settings a config file decides. The fleet and the binary do not. */
+export type RunnerSettings = Pick<RunnerRequest, 'size' | 'rootDiskGb' | 'dataDiskGb'>
 
 export type DeployConfig = {
   /** The stage file the block was read out of. */
@@ -246,42 +243,13 @@ const parseClickHouse = (
 
 const parseRunners = (raw: unknown, where: string, { partial }: { partial: boolean }): Partial<RunnerSettings> => {
   const block = assertObject(raw, where)
-  assertKeys(block, ['size', 'rootDiskGb', 'dataDiskGb', 'primary', 'instances'], where, { partial: true })
+  assertKeys(block, ['size', 'rootDiskGb', 'dataDiskGb'], where, { partial: true })
   const missing = ['size', 'rootDiskGb'].filter((key) => !(key in block))
-  if (!partial && missing.length) {
-    throw new DeployConfigError(`${where} must set ${missing.join(', ')}`)
-  }
+  if (!partial && missing.length) throw new DeployConfigError(`${where} must set ${missing.join(', ')}`)
   const parsed: Partial<RunnerSettings> = {}
   if ('size' in block) parsed.size = assertOneOf(block.size, RUNNER_SIZES, `${where}.size`)
   if ('rootDiskGb' in block) parsed.rootDiskGb = assertWholeNumber(block.rootDiskGb, `${where}.rootDiskGb`, DISK_BOUNDS)
   if ('dataDiskGb' in block) parsed.dataDiskGb = assertWholeNumber(block.dataDiskGb, `${where}.dataDiskGb`, DISK_BOUNDS)
-  if ('primary' in block) parsed.primary = assertPattern(block.primary, RUNNER_NAME, `${where}.primary`)
-  if ('instances' in block) {
-    if (!Array.isArray(block.instances) || block.instances.length < 1 || block.instances.length > MAX_RUNNERS) {
-      throw new DeployConfigError(`${where}.instances must contain 1-${MAX_RUNNERS} runners`)
-    }
-    parsed.instances = block.instances.map((raw, index) => {
-      const at = `${where}.instances[${index}]`
-      const instance = assertObject(raw, at)
-      assertKeys(instance, ['slot', 'name', 'size', 'rootDiskGb', 'dataDiskGb'], at, { partial: true })
-      const { slot, name, ...resources } = instance
-      return {
-        ...parseRunners(resources, at, { partial: true }),
-        slot: assertWholeNumber(slot, `${at}.slot`, { min: 1, max: MAX_RUNNERS }),
-        name: assertPattern(name, RUNNER_NAME, `${at}.name`),
-      }
-    })
-    for (const key of ['slot', 'name'] as const) {
-      if (new Set(parsed.instances.map((instance) => instance[key])).size !== parsed.instances.length) {
-        throw new DeployConfigError(`${where}.instances must have unique ${key} values`)
-      }
-    }
-    if (!parsed.instances.some((instance) => instance.name === parsed.primary)) {
-      throw new DeployConfigError(`${where}.primary must name a declared instance`)
-    }
-  } else if ('primary' in block) {
-    throw new DeployConfigError(`${where}.primary requires instances`)
-  }
   return parsed
 }
 

@@ -134,7 +134,6 @@ docs/RegistriesApi.md
 docs/RegistryCredential.md
 docs/RegistryCredentialKind.md
 docs/Runner.md
-docs/RunnerDrainStatusDto.md
 docs/RunnerFull.md
 docs/RunnerHealthMetrics.md
 docs/RunnerHealthcheck.md
@@ -154,7 +153,6 @@ docs/UpdateOrganizationMemberAccess.md
 docs/UpdateOrganizationName.md
 docs/UpdateOrganizationRole.md
 docs/UpdateRegion.md
-docs/UpdateRunnerDrainingDto.md
 docs/UsageApi.md
 docs/UsageConcurrencyPointDto.md
 docs/UsageConcurrencySeriesDto.md
@@ -267,7 +265,6 @@ models/region-type.ts
 models/region.ts
 models/registry-credential-kind.ts
 models/registry-credential.ts
-models/runner-drain-status-dto.ts
 models/runner-full.ts
 models/runner-health-metrics.ts
 models/runner-healthcheck.ts
@@ -287,7 +284,6 @@ models/update-organization-member-access.ts
 models/update-organization-name.ts
 models/update-organization-role.ts
 models/update-region.ts
-models/update-runner-draining-dto.ts
 models/usage-concurrency-point-dto.ts
 models/usage-concurrency-series-dto.ts
 models/user-public-key.ts

@@ -12,14 +12,12 @@ All URIs are relative to *http://localhost:3000*
 |[**adminGetOrganizationOverview**](#admingetorganizationoverview) | **GET** /admin/organizations/{organizationId} | Get organization operational detail|
 |[**adminGetRegion**](#admingetregion) | **GET** /admin/regions/{id} | Get region capacity and health|
 |[**adminGetRunnerById**](#admingetrunnerbyid) | **GET** /admin/runners/{id} | Get runner by ID|
-|[**adminGetRunnerDrainStatus**](#admingetrunnerdrainstatus) | **GET** /admin/runners/{id}/draining | Inspect runner drain progress|
 |[**adminListBoxesOverview**](#adminlistboxesoverview) | **GET** /admin/boxes | List boxes with placement and health|
 |[**adminListJobsOverview**](#adminlistjobsoverview) | **GET** /admin/jobs | List jobs with sanitized failure categories|
 |[**adminListOrganizationsOverview**](#adminlistorganizationsoverview) | **GET** /admin/organizations | List organization operational summaries|
 |[**adminListRegions**](#adminlistregions) | **GET** /admin/regions | List regions with capacity and health|
 |[**adminListRunners**](#adminlistrunners) | **GET** /admin/runners | List all runners|
 |[**adminRecoverBox**](#adminrecoverbox) | **POST** /admin/box/{boxId}/recover | Recover box from error state as an admin|
-|[**adminUpdateRunnerDraining**](#adminupdaterunnerdraining) | **PATCH** /admin/runners/{id}/draining | Update runner draining status|
 |[**adminUpdateRunnerScheduling**](#adminupdaterunnerscheduling) | **PATCH** /admin/runners/{id}/scheduling | Update runner scheduling status|
 
 # **adminCreateRunner**
@@ -437,56 +435,6 @@ const { status, data } = await apiInstance.adminGetRunnerById(
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
-# **adminGetRunnerDrainStatus**
-> RunnerDrainStatusDto adminGetRunnerDrainStatus()
-
-
-### Example
-
-```typescript
-import {
-    AdminApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new AdminApi(configuration);
-
-let id: string; //
-
-const { status, data } = await apiInstance.adminGetRunnerDrainStatus(
-    id
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **id** | [**string**] |  | |
-
-
-### Return type
-
-**RunnerDrainStatusDto**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** |  |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
 # **adminListBoxesOverview**
 > AdminBoxOverviewPage adminListBoxesOverview()
 
@@ -803,60 +751,6 @@ const { status, data } = await apiInstance.adminRecoverBox(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | Recovery initiated |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **adminUpdateRunnerDraining**
-> adminUpdateRunnerDraining(updateRunnerDrainingDto)
-
-
-### Example
-
-```typescript
-import {
-    AdminApi,
-    Configuration,
-    UpdateRunnerDrainingDto
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new AdminApi(configuration);
-
-let id: string; //
-let updateRunnerDrainingDto: UpdateRunnerDrainingDto; //
-
-const { status, data } = await apiInstance.adminUpdateRunnerDraining(
-    id,
-    updateRunnerDrainingDto
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **updateRunnerDrainingDto** | **UpdateRunnerDrainingDto**|  | |
-| **id** | [**string**] |  | |
-
-
-### Return type
-
-void (empty response body)
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: application/json
- - **Accept**: Not defined
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**204** |  |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
