@@ -355,8 +355,8 @@ fn build_path_access(
     }
 
     // Bind mounts from `BoxOptions::mounts`, by the same rules as the user
-    // volumes above: a directory is shared directly(TODO), so the VMM needs
-    // access to it; a single file is staged under shared_dir(TODO), which is
+    // volumes above: a directory is shared directly, so the VMM needs
+    // access to it; a single file is staged under shared_dir, which is
     // already granted, so its host siblings stay out of the sandbox. A volume
     // mount names no host path, and the local runtime refuses one before boot.
     for mount in mounts {
@@ -1183,7 +1183,7 @@ mod tests {
         assert_eq!(grant(Path::new("/does/not/exist")), None);
     }
 
-    /// Volumes and bind mounts are shared(TODO) into the same VM, so one call
+    /// Volumes and bind mounts are shared into the same VM, so one call
     /// has to grant the directories of both lists.
     #[test]
     fn test_build_path_access_grants_volumes_and_mounts_together() {
