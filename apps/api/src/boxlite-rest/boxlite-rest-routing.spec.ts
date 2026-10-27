@@ -331,9 +331,8 @@ describe('BoxLite REST routing', () => {
     expect(registries.delete).not.toHaveBeenCalled()
   })
 
-  it('matches websocket attach upgrades with or without a routing prefix', () => {
+  it('matches execution and main-session attach upgrades with or without a routing prefix', () => {
     const service = new BoxliteWsProxyService(
-      {} as any,
       {} as any,
       {} as any,
       {} as any,
@@ -344,6 +343,12 @@ describe('BoxLite REST routing', () => {
       {} as any,
     )
 
+    // `boxlite run` follows the box's main session, whose path names no execution.
+    expect(service.matchAttachPath('/api/v1/boxes/box-1/attach')).toEqual({ boxId: 'box-1' })
+    expect(service.matchAttachPath('/api/v1/default/boxes/box-1/attach?stdin=0')).toEqual({
+      boxId: 'box-1',
+      tenant: 'default',
+    })
     expect(service.matchAttachPath('/api/v1/boxes/box-1/executions/exec-1/attach')).toEqual({
       boxId: 'box-1',
       execId: 'exec-1',
@@ -357,7 +362,6 @@ describe('BoxLite REST routing', () => {
 
   it('does not route HTTP duplex tunnels through the websocket proxy', () => {
     const service = new BoxliteWsProxyService(
-      {} as any,
       {} as any,
       {} as any,
       {} as any,

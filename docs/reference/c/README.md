@@ -858,6 +858,38 @@ if (code == Ok) {
 
 ---
 
+#### boxlite_box_attach
+
+Attach to a session already in the box and return an execution handle.
+
+```c
+BoxliteErrorCode boxlite_box_attach(
+    CBoxHandle* handle,
+    const char* execution_id,         // NULL = the box's main command
+    int read_only,                    // non-zero = no stdin
+    CExecutionHandle** out_execution,
+    CBoxliteError* out_error
+);
+```
+
+With a `NULL` `execution_id` this follows the box's main command — the
+container init, which `run IMAGE COMMAND` starts. Attaching boots the box
+without running init, so attach before `boxlite_start_box` to see all of its
+output. Pass an execution id to reattach to an exec session instead; only a
+REST runtime serves that.
+
+A non-zero `read_only` attaches without stdin — docker's `--no-stdin` — and
+asks the server to refuse writes on the socket: `boxlite serve` does, the
+hosted platform does not. The returned handle takes the same output and exit
+callbacks, wait and kill as an exec's. Freeing it detaches without killing the
+session, where freeing an exec's handle kills a process still running. A
+writable attach still closes the session's stdin on the way out, as in every
+SDK ([#2045](https://github.com/boxlite-ai/boxlite/issues/2045)), so attach
+read-only to leave a command that reads stdin undisturbed; the connection stays
+open until the session ends or the runtime is freed.
+
+---
+
 #### Execution control
 
 ```c
@@ -1462,6 +1494,7 @@ if (code != Ok) {
 | `boxlite_box_info()` | Queue box info lookup |
 | `boxlite_box_metrics()` | Get box metrics |
 | `boxlite_execute()` | Execute command |
+| `boxlite_box_attach()` | Attach to a session in a box |
 | `boxlite_list_info()` | Queue box list lookup |
 | `boxlite_get_info()` | Queue box info lookup by ID |
 | `boxlite_runtime_images()` | Get the image handle |

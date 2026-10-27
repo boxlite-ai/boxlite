@@ -583,11 +583,11 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             cmd: js_opts.cmd,
             user: js_opts.user,
             // Not surfaced on JsBoxOptions yet: a TTY is only useful to a
-            // client that attaches to the main command, which this SDK cannot
-            // do until it grows `attach()` (see sdk-run-semantics-api.md).
-            // Python does surface it, because the reference server builds
-            // BoxOptions through PyBoxOptions and the REST wire schema carries
-            // `tty`; Node has no such caller yet.
+            // client that attaches to the main command, as `attach()` now
+            // does, and Node has no caller that wants one yet (see
+            // sdk-run-semantics-api.md). Python does surface it, because the
+            // reference server builds BoxOptions through PyBoxOptions and the
+            // REST wire schema carries `tty`.
             tty: false,
             secrets,
         })

@@ -35,15 +35,14 @@ import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
-import {
-  AUTO_RESUMABLE_STATES,
-  BoxAutoResumeService,
-} from '../box/services/box-auto-resume.service'
+import { AUTO_RESUMABLE_STATES, BoxAutoResumeService } from '../box/services/box-auto-resume.service'
 import { BoxState } from '../box/enums/box-state.enum'
 import { TunnelService } from '../box/services/tunnel.service'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
+// Existing sessions cannot survive a restart, and may be the box's init.
+const SESSION_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: false }
 const OBSERVATION_ONLY: ProxyActivityPolicy = { activity: false, autoResume: false }
 
 // Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product
@@ -100,7 +99,7 @@ export class BoxliteProxyController {
       req,
       res,
       next,
-      USER_OPERATION,
+      SESSION_OPERATION,
     )
   }
 
@@ -121,7 +120,7 @@ export class BoxliteProxyController {
       req,
       res,
       next,
-      USER_OPERATION,
+      SESSION_OPERATION,
     )
   }
 
@@ -141,7 +140,7 @@ export class BoxliteProxyController {
       req,
       res,
       next,
-      USER_OPERATION,
+      SESSION_OPERATION,
     )
   }
 
@@ -162,15 +161,15 @@ export class BoxliteProxyController {
       req,
       res,
       next,
-      USER_OPERATION,
+      SESSION_OPERATION,
     )
   }
 
-  // /executions/:execId/attach is a WebSocket-only route. Real WS upgrades
-  // bypass Express entirely and are handled by BoxliteWsProxyService via the
-  // `server.on('upgrade', ...)` hook registered in main.ts. Plain HTTP GETs
-  // to this path (callers that forgot the Upgrade headers) fall through to
-  // a NestJS 404, which is the correct answer.
+  // :boxId/attach and :boxId/executions/:execId/attach are WebSocket-only
+  // routes. Real WS upgrades bypass Express entirely and are handled by
+  // BoxliteWsProxyService via the `server.on('upgrade', ...)` hook registered
+  // in main.ts. Plain HTTP GETs to either path (callers that forgot the
+  // Upgrade headers) fall through to a NestJS 404, which is the correct answer.
 
   @All(':boxId/files')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
@@ -245,10 +244,7 @@ export class BoxliteProxyController {
     // Refuse at once a box the CONNECT could never wake. A box it can wake
     // gets its URI as it is: the proxy wakes it on the CONNECT, and waits for
     // the service to listen, so waking it here would only hold the caller.
-    if (
-      box.state !== BoxState.STARTED &&
-      (!box.autoResume || !AUTO_RESUMABLE_STATES.includes(box.state))
-    ) {
+    if (box.state !== BoxState.STARTED && (!box.autoResume || !AUTO_RESUMABLE_STATES.includes(box.state))) {
       throw new ConflictException(`Box ${boxId} is not running (state: ${box.state})`)
     }
 

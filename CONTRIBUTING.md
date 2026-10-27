@@ -95,7 +95,7 @@ components when their path-filtered jobs are skipped.
 
 The external binding collector rebuilds the native libraries with Rust
 instrumentation, then runs the C unit suite, Python unit tests, and the Node
-image catalog/registry and SSH REST transport loopback tests against them.
+image catalog, registry, attach, and SSH REST transport loopback tests against them.
 It uses a separate
 `target/native-sdk-coverage` build directory by default; CMake receives that
 library directory explicitly. CI uploads its Rust report alongside the core

@@ -678,6 +678,36 @@ paths:
           schema:
             $ref: '#/definitions/RunnerInfoResponseDTO'
       summary: Runner info
+  /v1/boxes/{boxId}/attach:
+    get:
+      parameters:
+        - description: Box ID
+          in: path
+          name: boxId
+          required: true
+          type: string
+      responses:
+        '101':
+          description: Switching Protocols
+          headers:
+            X-Boxlite-Execution-Id:
+              description: The main session's execution id
+              type: string
+        '404':
+          description: box not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        '409':
+          description: already attached, or the box cannot be attached to
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Attach to a box's main command session via WebSocket
+      tags:
+        - boxlite
   /v1/boxes/{boxId}/executions/{execId}/attach:
     get:
       parameters:

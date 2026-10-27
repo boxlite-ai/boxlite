@@ -105,6 +105,38 @@ impl JsBox {
         })
     }
 
+    /// Attach to a session in the box (docker shape).
+    ///
+    /// With no `executionId` this joins the box's main command — the container
+    /// init, which `run IMAGE COMMAND` starts. Attaching boots the box without
+    /// running init, so attach before `start()` to see all of its output.
+    ///
+    /// # Arguments
+    /// * `executionId` - Rejoin this exec session instead; only a REST runtime
+    ///   serves it (optional)
+    /// * `stdin` - `false` attaches read-only, docker's `--no-stdin` (optional,
+    ///   default: true)
+    #[napi]
+    pub async fn attach(
+        &self,
+        execution_id: Option<String>,
+        stdin: Option<bool>,
+    ) -> Result<JsExecution> {
+        let mut options = match execution_id {
+            Some(id) => boxlite::AttachOptions::execution(id),
+            None => boxlite::AttachOptions::main(),
+        };
+        if !stdin.unwrap_or(true) {
+            options = options.read_only();
+        }
+
+        let execution = self.handle.attach(options).await.map_err(map_err)?;
+
+        Ok(JsExecution {
+            execution: Arc::new(tokio::sync::Mutex::new(execution)),
+        })
+    }
+
     /// Get the snapshot handle for this box.
     #[napi(getter)]
     pub fn snapshot(&self) -> JsSnapshotHandle {
