@@ -285,7 +285,9 @@ creating a box posts to `/snapshots/{snapshot}/boxes`. The new box uses the
 snapshot's disk size and region, with ordinary defaults for other settings.
 Capability flags gate these actions. Memory snapshots and cross-runner snapshot
 copies remain unavailable. The [REST API contract](../API.md) describes admission
-and permissions. Deletion requires typing the snapshot's exact name.
+and permissions. Deletion requires typing the snapshot's exact name. Its dialog
+matches Volumes: an 11px muted monospace confirmation label highlights the name
+in foreground text, above a 13px monospace input and the Delete action.
 
 Creating snapshots refresh every five seconds until ready or failed. New boxes
 appear on Boxes, where their ordinary lifecycle shows creation progress and

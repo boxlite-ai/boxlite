@@ -261,11 +261,11 @@ describe('Snapshots page', () => {
     api.deleteSnapshot.mockRejectedValue(refusal(409, 'Snapshot checkpoint is being restored into a box'))
     await ready()
     await click(document.querySelector('[aria-label="Delete checkpoint"]')!)
-    expect(button('Delete snapshot')).toHaveProperty('disabled', true)
+    expect(button('Delete')).toHaveProperty('disabled', true)
     await fill('Confirm snapshot name', 'Checkpoint')
-    expect(button('Delete snapshot')).toHaveProperty('disabled', true)
+    expect(button('Delete')).toHaveProperty('disabled', true)
     await fill('Confirm snapshot name', 'checkpoint')
-    await click(button('Delete snapshot'))
+    await click(button('Delete'))
     await waitFor(() =>
       expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('is being restored into a box'),
     )
