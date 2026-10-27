@@ -100,8 +100,11 @@ export type RunnerBinary = {
 }
 
 export type RunnerRequest = {
+  /** Creation defaults; existing hosts retain their sizing in deployment state. */
   size: RunnerSize
   rootDiskGb: number
+  /** GCP data volume at creation; omitted retains the provider default. Unsupported on AWS. */
+  dataDiskGb?: number
   /**
    * Required, and named rather than assumed. See the note above: it is one flag
    * on AWS and three separate decisions on GCP.

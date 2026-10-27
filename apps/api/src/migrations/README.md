@@ -224,6 +224,26 @@ suite needs permission to create temporary databases. Run
 `make coverage:api FILTER='AddTenantScopes1792497600000|Admin organization storage'`.
 The suites clean their temporary databases or schemas and run in API CI.
 
+## Cloud per-box limits
+
+The pre-deploy `1793088000000-raise-default-box-limits-migration` sets organization
+defaults to 16 vCPU, 32 GiB memory and 100 GiB disk. It upgrades existing rows only
+when their complete quota tuple is `4/8/10`. Any other tuple, including partially
+customized or non-positive/unlimited values, stays unchanged. An explicit override
+equal to `4/8/10` is indistinguishable from the old default and is also upgraded.
+Repeated upgrades are harmless, and no box resources are changed.
+
+Rollback restores defaults for future organizations to `4/8/10`, but preserves
+all existing quotas: their later customizations cannot be reconstructed safely.
+Review any existing organization reductions separately. The user-facing sizes
+and units are in [Resource limits](../../../../docs/guides/resource-limits.md#cloud-sandbox-sizes).
+
+With the PostgreSQL environment variables described above, run
+`make test:apps:api FILTER=RaiseDefaultBoxLimits1793088000000` to check the
+baseline upgrade, preserved exceptions, repeated execution, rollback, serialized
+quotas and REST resource admission. This does not boot a maximum-size guest;
+validate that separately on a runner with capacity for 16 vCPU / 32 GiB / 100 GiB.
+
 ## Reverting Migrations
 
 CLI and application startup run pending migrations in `each` mode: each ordinary

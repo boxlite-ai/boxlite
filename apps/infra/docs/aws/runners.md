@@ -17,6 +17,9 @@ before the next host. `runner:update --host <name>[,<name>...]` can select hosts
 a failure stops subsequent updates. Updates verify artifact checksums and readiness,
 and already-converged hosts need no restart. Intentional release rollback needs `--allow-downgrade`.
 Hosts retain their disks and local box state and are protected against replacement/deletion.
+`deploy.runners.size` and `rootDiskGb` apply only to newly created hosts when `RUNNERS` grows.
+Existing hosts retain their instance type and root volume size. AWS uses the root volume for box state
+and rejects `dataDiskGb`; see [fleet sizing](../configuration.md#runner-fleet-sizing).
 
 ## Verify and recover
 

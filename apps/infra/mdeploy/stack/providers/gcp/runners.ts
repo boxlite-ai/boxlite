@@ -454,7 +454,7 @@ udevadm trigger --name-match=kvm || true`,
           project,
           zone,
           type: DISK_TYPE,
-          size: DATA_DISK[request.size].sizeGb,
+          size: request.dataDiskGb ?? DATA_DISK[request.size].sizeGb,
           provisionedIops: DATA_DISK[request.size].iops,
           provisionedThroughput: DATA_DISK[request.size].throughputMiBps,
         },
@@ -540,7 +540,8 @@ udevadm trigger --name-match=kvm || true`,
           // fixed at create too, because the provider applies any edit to an
           // attachment by detaching the disk from the running host. A host created
           // before it existed never gets it until it is destroyed and recreated.
-          ignoreChanges: ['bootDisk', 'metadataStartupScript', 'attachedDisks'],
+          // Sizing defaults apply to newly added hosts; existing hosts retain their CPU/memory too.
+          ignoreChanges: ['machineType', 'bootDisk', 'metadataStartupScript', 'attachedDisks'],
           protect: true,
           // The read grant among them: a host whose boot script fetches the
           // staged object before the binding exists downloads nothing, and

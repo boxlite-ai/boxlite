@@ -34,21 +34,21 @@ export class Organization {
 
   @Column({
     type: 'int',
-    default: 4,
+    default: 16,
     name: 'max_cpu_per_box',
   })
   maxCpuPerBox: number
 
   @Column({
     type: 'int',
-    default: 8,
+    default: 32,
     name: 'max_memory_per_box',
   })
   maxMemoryPerBox: number
 
   @Column({
     type: 'int',
-    default: 10,
+    default: 100,
     name: 'max_disk_per_box',
   })
   maxDiskPerBox: number

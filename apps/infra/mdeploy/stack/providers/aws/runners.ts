@@ -118,6 +118,9 @@ export const awsRunnerProvider =
     dependsOn: any[]
   }): RunnerProvider =>
   (request: RunnerRequest): Runners => {
+    if (request.dataDiskGb !== undefined) {
+      throw new Error('AWS runners do not support dataDiskGb; configure rootDiskGb instead')
+    }
     if (placement.exposure !== 'egress-only-public') {
       throw new Error(
         `The runner was placed as ${placement.exposure}; it pulls box images constantly and must ` +
@@ -280,8 +283,8 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
             tags: { Name: slot.nameTag, 'boxlite:control-plane-runner-name': slot.controlPlaneRunnerName },
           },
           {
-            // See the note at the top: a host holds state nothing else does.
-            ignoreChanges: ['ami', 'userDataBase64'],
+            // Creation defaults must not resize hosts that already hold boxes.
+            ignoreChanges: ['ami', 'userDataBase64', 'instanceType', 'rootBlockDevice.volumeSize'],
             protect: true,
             // The boot script reads the staged artifact with this role, and it
             // only ever runs once. Without the edge the host may be created

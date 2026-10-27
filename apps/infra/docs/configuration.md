@@ -43,6 +43,36 @@ Do not store passwords or API keys in this declaration: CI carries it as a varia
 AWS account identity comes from resolved credentials. GCP project identity is declared explicitly.
 `promoteFrom` does not copy configuration or promote artifacts during an ordinary deploy.
 
+## Runner fleet sizing
+
+`RUNNERS` in the encrypted stage environment controls the fleet count (1–100).
+`deploy.runners` in `.mstage.config.json` supplies the specifications for newly created hosts:
+
+```json
+{
+  "size": "large",
+  "rootDiskGb": 100,
+  "dataDiskGb": 2048
+}
+```
+
+`size` selects the existing `small`, `medium` or `large` CPU/memory preset for the stage's cloud.
+`size` and `rootDiskGb` are required. Optional `dataDiskGb` sets a new GCP data disk's capacity;
+omitting it uses 200 GiB. Disk values are whole GiB from 20 through 4000.
+AWS stores box state on the root disk: configure `rootDiskGb` and omit `dataDiskGb`.
+
+Sizing changes apply only when a host is created. Existing hosts retain their recorded machine type
+and disk sizes, even when the creation defaults change. For example, increasing `RUNNERS` from 2
+to 3 with the GCP settings above creates runner-3 as `large` with a 100 GiB boot disk and a 2 TiB
+data disk; the original two hosts keep their sizing. Updating sizing without increasing the count
+does not resize hosts. Per-host `instances` and `primary` settings are rejected.
+
+Keep the stage declaration and its CI copy synchronized. Refresh deployment state after any
+out-of-band resource changes, then preview the expansion; existing VM and disk sizing must show
+no change. This follows [Pulumi's ignoreChanges semantics](https://www.pulumi.com/docs/iac/concepts/resources/options/ignorechanges/#how-ignorechanges-works).
+Binary and runtime-environment updates still follow the separate runner rollout procedure.
+See [scale out](runners.md#scale-out) for the count update and verification steps.
+
 ## Set application values
 
 Run commands from `apps/infra` after [bootstrap](deployment.md#bootstrap-a-stage).

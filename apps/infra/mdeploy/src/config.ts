@@ -44,7 +44,7 @@ export class DeployConfigError extends Error {
 }
 
 /** The runner settings a config file decides. The fleet and the binary do not. */
-export type RunnerSettings = Pick<RunnerRequest, 'size' | 'rootDiskGb'>
+export type RunnerSettings = Pick<RunnerRequest, 'size' | 'rootDiskGb' | 'dataDiskGb'>
 
 export type DeployConfig = {
   /** The stage file the block was read out of. */
@@ -243,10 +243,13 @@ const parseClickHouse = (
 
 const parseRunners = (raw: unknown, where: string, { partial }: { partial: boolean }): Partial<RunnerSettings> => {
   const block = assertObject(raw, where)
-  assertKeys(block, ['size', 'rootDiskGb'] as const, where, { partial })
+  assertKeys(block, ['size', 'rootDiskGb', 'dataDiskGb'], where, { partial: true })
+  const missing = ['size', 'rootDiskGb'].filter((key) => !(key in block))
+  if (!partial && missing.length) throw new DeployConfigError(`${where} must set ${missing.join(', ')}`)
   const parsed: Partial<RunnerSettings> = {}
   if ('size' in block) parsed.size = assertOneOf(block.size, RUNNER_SIZES, `${where}.size`)
   if ('rootDiskGb' in block) parsed.rootDiskGb = assertWholeNumber(block.rootDiskGb, `${where}.rootDiskGb`, DISK_BOUNDS)
+  if ('dataDiskGb' in block) parsed.dataDiskGb = assertWholeNumber(block.dataDiskGb, `${where}.dataDiskGb`, DISK_BOUNDS)
   return parsed
 }
 
