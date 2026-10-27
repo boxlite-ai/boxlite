@@ -7,13 +7,26 @@ import { Logger } from '@nestjs/common'
 import { getServiceType } from './app-mode'
 import { Context } from '../context/context'
 
-export type BusinessEventName = 'user.registration' | 'user.login' | 'box.create' | 'box.stop' | 'box.delete'
+export type BusinessEventName =
+  | 'user.registration'
+  | 'user.login'
+  | 'org.active'
+  | 'box.create'
+  | 'box.start'
+  | 'box.stop'
+  | 'box.delete'
+  | 'box.exec'
+  | 'box.file_upload'
+  | 'tunnel.create'
 
 export interface BusinessEventBase {
   name: BusinessEventName
-  // The user id for a registration, the box id for a box event. Anything else
-  // about that entity, such as its organization, is read from its table.
+  // The user id for a user event or org.active, the box id for a box or tunnel event.
   correlationId: string
+  // The organization the event belongs to, so its activity can be counted per
+  // organization from the log alone. Absent on user.login, which spans organizations,
+  // and on a registration until its default organization exists.
+  organizationId?: string
   // Absent only on job outcome events: the runner reports after the request ends.
   ctx?: Context
 }
@@ -46,12 +59,14 @@ export function recordBusinessEvent(event: BusinessEvent): void {
 /**
  * Records an operation's whole event lifecycle: requested before op runs, then
  * success when it resolves or exception, categorized by classifyError, when it
- * throws. The error is rethrown.
+ * throws. The error is rethrown. organizationOf names the organization of an
+ * operation that creates it, so only its success can carry it.
  */
 export async function recordOutcomes<T>(
   event: BusinessEventBase,
   op: () => Promise<T>,
   classifyError: (error: unknown) => string,
+  organizationOf?: (result: T) => string | undefined,
 ): Promise<T> {
   recordBusinessEvent({ ...event, outcome: 'requested' })
   let result: T
@@ -61,7 +76,8 @@ export async function recordOutcomes<T>(
     recordBusinessEvent({ ...event, outcome: 'exception', exceptionType: classifyError(error) })
     throw error
   }
-  recordBusinessEvent({ ...event, outcome: 'success' })
+  const organizationId = organizationOf?.(result) ?? event.organizationId
+  recordBusinessEvent({ ...event, outcome: 'success', ...(organizationId ? { organizationId } : {}) })
   return result
 }
 
@@ -74,11 +90,21 @@ function toLogAttributes(event: BusinessEvent): Record<string, string> {
     'event.timestamp': new Date().toISOString(),
   }
 
+  if (event.organizationId) {
+    attributes['organization.id'] = event.organizationId
+  }
   if (event.ctx) {
     attributes['actor.kind'] = event.ctx.actorKind
   }
   if (event.ctx?.reason) {
     attributes['event.reason'] = event.ctx.reason
+  }
+  const actor = event.ctx?.actor
+  if (actor) {
+    attributes['user.id'] = actor.userId
+    attributes['auth.method'] = actor.authMethod
+    if (actor.clientSource) attributes['client.source'] = actor.clientSource
+    if (actor.sdkVersion) attributes['sdk.version'] = actor.sdkVersion
   }
   if (event.outcome === 'exception') {
     attributes['exception.type'] = event.exceptionType

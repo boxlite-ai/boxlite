@@ -373,7 +373,7 @@ export class BoxService {
             })
       })
 
-      recordBoxRequested('box.create', insertedBox.id, ctx)
+      recordBoxRequested('box.create', insertedBox, ctx)
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
@@ -456,7 +456,7 @@ export class BoxService {
       previousOrganizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
     })
 
-    recordWarmPoolClaim(updatedBox.id, ctx)
+    recordWarmPoolClaim(updatedBox, ctx)
 
     // Treat this as a newly started box
     this.eventEmitter.emit(
@@ -868,13 +868,13 @@ export class BoxService {
       whereCondition: { pending: box.pending, state: box.state },
     })
 
-    recordBoxRequested('box.delete', updatedBox.id, ctx)
+    recordBoxRequested('box.delete', updatedBox, ctx)
 
     this.eventEmitter.emit(BoxEvents.DESTROYED, new BoxDestroyedEvent(updatedBox))
     return updatedBox
   }
 
-  async start(boxIdOrName: string, organization: Organization): Promise<Box> {
+  async start(boxIdOrName: string, organization: Organization, ctx: Context): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
 
     const region = await this.regionService.findOne(box.region)
@@ -913,6 +913,8 @@ export class BoxService {
       whereCondition: { pending: false, state: box.state },
     })
 
+    recordBoxRequested('box.start', updatedBox, ctx)
+
     this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
 
     return updatedBox
@@ -937,6 +939,8 @@ export class BoxService {
     if (!updated) {
       return this.findOneByIdOrName(box.id, organization.id)
     }
+
+    recordBoxRequested('box.start', updated, Context.platform(PlatformReason.AUTO_RESUME))
 
     this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updated))
     this.eventEmitter.emit(
@@ -973,14 +977,14 @@ export class BoxService {
       whereCondition: { pending: false, state: box.state },
     })
 
-    recordBoxRequested('box.stop', updatedBox.id, ctx)
+    recordBoxRequested('box.stop', updatedBox, ctx)
 
     this.eventEmitter.emit(BoxEvents.STOPPED, new BoxStoppedEvent(updatedBox, force))
 
     return updatedBox
   }
 
-  async recover(boxIdOrName: string, organization: Organization): Promise<Box> {
+  async recover(boxIdOrName: string, organization: Organization, ctx: Context): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
 
     if (box.state !== BoxState.ERROR) {
@@ -1029,7 +1033,7 @@ export class BoxService {
 
     // Now that box is in STOPPED state, use the normal start flow
     // This handles state validation and event emission.
-    return await this.start(box.id, organization)
+    return await this.start(box.id, organization, ctx)
   }
 
   async updateInboundEnabled(boxIdOrName: string, inboundEnabled: boolean, organizationId?: string): Promise<Box> {

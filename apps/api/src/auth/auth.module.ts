@@ -17,6 +17,8 @@ import { TypedConfigModule } from '../config/typed-config.module'
 import { OidcMetadataService } from '../config/oidc-metadata.service'
 import { FailedAuthTrackerService } from './failed-auth-tracker.service'
 import { LoginEventRecorder } from './login-event.recorder'
+import { APP_INTERCEPTOR } from '@nestjs/core'
+import { OrganizationActivityInterceptor } from './organization-activity.interceptor'
 import { RegionModule } from '../region/region.module'
 import { LogoutController } from './logout.controller'
 import { AccountLinkController } from './account-link.controller'
@@ -76,6 +78,7 @@ import { AccountLinkService } from './account-link.service'
     },
     FailedAuthTrackerService,
     LoginEventRecorder,
+    { provide: APP_INTERCEPTOR, useClass: OrganizationActivityInterceptor },
   ],
   exports: [PassportModule, JwtStrategy, ApiKeyStrategy, FailedAuthTrackerService],
 })

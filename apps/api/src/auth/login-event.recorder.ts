@@ -51,6 +51,11 @@ export class LoginEventRecorder {
       return
     }
 
-    recordBusinessEvent({ name: 'user.login', outcome: 'success', correlationId: userId, ctx: Context.user() })
+    recordBusinessEvent({
+      name: 'user.login',
+      outcome: 'success',
+      correlationId: userId,
+      ctx: Context.user({ userId, authMethod: 'jwt' }),
+    })
   }
 }

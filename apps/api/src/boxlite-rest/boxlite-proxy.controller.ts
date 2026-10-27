@@ -35,16 +35,20 @@ import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
-import {
-  AUTO_RESUMABLE_STATES,
-  BoxAutoResumeService,
-} from '../box/services/box-auto-resume.service'
+import { AUTO_RESUMABLE_STATES, BoxAutoResumeService } from '../box/services/box-auto-resume.service'
 import { BoxState } from '../box/enums/box-state.enum'
 import { TunnelService } from '../box/services/tunnel.service'
+import { Box } from '../box/entities/box.entity'
+import { requestActor, UserContext } from '../common/decorators/user-context.decorator'
+import { Context } from '../common/context/context'
+import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
 const OBSERVATION_ONLY: ProxyActivityPolicy = { activity: false, autoResume: false }
+
+/** A proxied call that is a business operation: a command started, or files uploaded. */
+type ProxiedOperation = 'box.exec' | 'box.file_upload'
 
 // Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product
 // spec: @All() expands to the SEARCH verb, which OpenAPI 3.0 cannot express.
@@ -80,6 +84,7 @@ export class BoxliteProxyController {
       res,
       next,
       USER_OPERATION,
+      { operation: req.method === 'POST' ? 'box.exec' : undefined },
     )
   }
 
@@ -190,7 +195,7 @@ export class BoxliteProxyController {
       res,
       next,
       USER_OPERATION,
-      { proxyTimeoutMs: 0 },
+      { proxyTimeoutMs: 0, operation: req.method === 'PUT' ? 'box.file_upload' : undefined },
     )
   }
 
@@ -220,10 +225,18 @@ export class BoxliteProxyController {
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
     @Query('port', ParseIntPipe) port: number,
+    @UserContext() ctx: Context,
   ) {
     // findOneByIdOrName already 404s for a missing/destroyed box.
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+    return recordOutcomes(
+      { name: 'tunnel.create', correlationId: box.id, organizationId: box.organizationId, ctx },
+      () => this.openTunnel(box, boxId, port, authContext.organizationId),
+      (error) => (error instanceof ConflictException ? 'conflict' : 'internal'),
+    )
+  }
 
+  private async openTunnel(box: Box, boxId: string, port: number, organizationId: string): Promise<{ uri: string }> {
     // Tunnel URLs expose the box to the public internet, so only a box with
     // inbound access enabled can use one. Any other box is reached through
     // the authenticated API.
@@ -245,14 +258,11 @@ export class BoxliteProxyController {
     // Refuse at once a box the CONNECT could never wake. A box it can wake
     // gets its URI as it is: the proxy wakes it on the CONNECT, and waits for
     // the service to listen, so waking it here would only hold the caller.
-    if (
-      box.state !== BoxState.STARTED &&
-      (!box.autoResume || !AUTO_RESUMABLE_STATES.includes(box.state))
-    ) {
+    if (box.state !== BoxState.STARTED && (!box.autoResume || !AUTO_RESUMABLE_STATES.includes(box.state))) {
       throw new ConflictException(`Box ${boxId} is not running (state: ${box.state})`)
     }
 
-    const uri = await this.boxService.getNetworkTunnelUrl(boxId, authContext.organizationId, port)
+    const uri = await this.boxService.getNetworkTunnelUrl(boxId, organizationId, port)
     await this.tunnelService.declarePublic(box.id, port)
     return { uri }
   }
@@ -279,11 +289,15 @@ export class BoxliteProxyController {
     res: Response,
     next: NextFunction,
     policy: ProxyActivityPolicy,
-    opts?: { ws?: boolean; proxyTimeoutMs?: number },
+    opts?: { ws?: boolean; proxyTimeoutMs?: number; operation?: ProxiedOperation },
   ) {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     if (!box) {
       throw new NotFoundException(`Box ${boxId} not found`)
+    }
+
+    if (opts?.operation) {
+      this.recordProxiedOperation(opts.operation, box, req, res)
     }
 
     if (policy.activity) {
@@ -351,6 +365,30 @@ export class BoxliteProxyController {
     }
 
     return createProxyMiddleware(proxyOptions)(req, res, next)
+  }
+
+  /**
+   * Records the operation as requested now and its outcome when the response
+   * ends: the runner's (or a gateway error's) status decides success, and a
+   * client that disconnects first leaves an exception.
+   */
+  private recordProxiedOperation(name: ProxiedOperation, box: Box, req: Request, res: Response): void {
+    const event = {
+      name,
+      correlationId: box.id,
+      organizationId: box.organizationId,
+      ctx: Context.user(requestActor(req)),
+    }
+    recordBusinessEvent({ ...event, outcome: 'requested' })
+    let recorded = false
+    const finish = (exceptionType?: string) => {
+      if (recorded) return
+      recorded = true
+      if (exceptionType) recordBusinessEvent({ ...event, outcome: 'exception', exceptionType })
+      else recordBusinessEvent({ ...event, outcome: 'success' })
+    }
+    res.once('finish', () => finish(res.statusCode >= 400 ? `http_${res.statusCode}` : undefined))
+    res.once('close', () => finish('client_closed'))
   }
 
   private startActivityHeartbeat(boxId: string, autoStopSeconds: number): () => void {

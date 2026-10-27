@@ -58,13 +58,15 @@ function makeCreateService() {
   return service
 }
 
+const stoppedBox = { ...startedBox, state: BoxState.STOPPED, desiredState: BoxDesiredState.STOPPED }
+
 const requested = (name: string) =>
   jest.mocked(recordBusinessEvent).mock.calls.find(([event]) => event.name === name && event.outcome === 'requested')
 
 describe('BoxService business event actor', () => {
   beforeEach(() => jest.mocked(recordBusinessEvent).mockClear())
 
-  it('records the caller context on box.create', async () => {
+  it('records the caller context and the organization on box.create', async () => {
     const service = makeCreateService()
 
     await service.create({ name: 'fresh-box', image: 'base' } as any, { id: 'org-1' } as any, Context.user())
@@ -73,19 +75,79 @@ describe('BoxService business event actor', () => {
       name: 'box.create',
       outcome: 'requested',
       correlationId: expect.any(String),
+      organizationId: 'org-1',
       ctx: Context.user(),
     })
   })
 
-  it('records the caller context on box.stop and box.delete, without an organization', async () => {
+  it('records the caller context and the organization on box.stop and box.delete', async () => {
     const service = makeService()
 
     await service.stop('box-1', 'org-1', Context.user())
     await service.destroy('box-1', 'org-1', Context.user())
 
     for (const name of ['box.stop', 'box.delete']) {
-      expect(requested(name)?.[0]).toEqual({ name, outcome: 'requested', correlationId: 'box-1', ctx: Context.user() })
+      expect(requested(name)?.[0]).toEqual({
+        name,
+        outcome: 'requested',
+        correlationId: 'box-1',
+        organizationId: 'org-1',
+        ctx: Context.user(),
+      })
     }
+  })
+
+  it('records a start request by the calling user', async () => {
+    const service = makeService()
+    Object.assign(service as any, {
+      findOneByIdOrName: jest.fn().mockResolvedValue(stoppedBox),
+      regionService: { findOne: jest.fn().mockResolvedValue({ id: 'region-1' }) },
+      organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+    })
+    const ctx = Context.user({ userId: 'user-1', authMethod: 'jwt' })
+
+    await service.start('box-1', { id: 'org-1' } as any, ctx)
+
+    expect(requested('box.start')?.[0]).toEqual({
+      name: 'box.start',
+      outcome: 'requested',
+      correlationId: 'box-1',
+      organizationId: 'org-1',
+      ctx,
+    })
+  })
+
+  it('records a start the proxy triggers as the platform, for auto-resume', async () => {
+    const service = makeService()
+    Object.assign(service as any, {
+      findOneByIdOrName: jest.fn().mockResolvedValue(stoppedBox),
+      organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+      boxRepository: { conditionalStartForProxy: jest.fn().mockResolvedValue({ ...stoppedBox, pending: true }) },
+    })
+
+    await service.ensureStartedForProxy('box-1', { id: 'org-1' } as any)
+
+    expect(requested('box.start')?.[0]).toEqual({
+      name: 'box.start',
+      outcome: 'requested',
+      correlationId: 'box-1',
+      organizationId: 'org-1',
+      ctx: Context.platform(PlatformReason.AUTO_RESUME),
+    })
+  })
+
+  // Concurrent proxied calls race for one start; only the winner submits it.
+  it('records no start when another proxied call already started the box', async () => {
+    const service = makeService()
+    Object.assign(service as any, {
+      findOneByIdOrName: jest.fn().mockResolvedValue(stoppedBox),
+      organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+      boxRepository: { conditionalStartForProxy: jest.fn().mockResolvedValue(null) },
+    })
+
+    await service.ensureStartedForProxy('box-1', { id: 'org-1' } as any)
+
+    expect(requested('box.start')).toBeUndefined()
   })
 
   it('destroys warm-pool boxes on unschedulable runners as the platform, for the warm pool', async () => {

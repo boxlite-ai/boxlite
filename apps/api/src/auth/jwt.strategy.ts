@@ -116,7 +116,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
           // organization.defaultRegionId fail for every OIDC-created user.
           defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
         },
-        Context.user(),
+        Context.user({ userId, authMethod: 'jwt' }),
       )
       this.logger.debug(`Created new user with ID: ${userId}`)
     } else if (user.name === 'Unknown' || !user.email) {

@@ -48,9 +48,46 @@ describe('recordBusinessEvent', () => {
     recordBusinessEvent({ name: 'user.registration', outcome: 'requested', correlationId: 'user-1' })
 
     const [, attributes] = logSpy.mock.calls[0]
-    expect(attributes).not.toHaveProperty('actor.kind')
-    expect(attributes).not.toHaveProperty('event.reason')
-    expect(attributes).not.toHaveProperty('exception.type')
+    for (const key of ['actor.kind', 'event.reason', 'exception.type', 'organization.id', 'user.id', 'auth.method']) {
+      expect(attributes).not.toHaveProperty(key)
+    }
+  })
+
+  it('records the organization and the person behind a request, and how they called', () => {
+    recordBusinessEvent({
+      name: 'box.exec',
+      outcome: 'requested',
+      correlationId: 'box-1',
+      organizationId: 'org-1',
+      ctx: Context.user({ userId: 'user-1', authMethod: 'api_key', clientSource: 'sdk-python', sdkVersion: '0.9.0' }),
+    })
+
+    const [, attributes] = logSpy.mock.calls[0]
+    expect(attributes).toEqual(
+      expect.objectContaining({
+        'organization.id': 'org-1',
+        'actor.kind': 'user',
+        'user.id': 'user-1',
+        'auth.method': 'api_key',
+        'client.source': 'sdk-python',
+        'sdk.version': '0.9.0',
+      }),
+    )
+  })
+
+  it('leaves out client labels the caller did not send', () => {
+    recordBusinessEvent({
+      name: 'org.active',
+      outcome: 'success',
+      correlationId: 'user-1',
+      organizationId: 'org-1',
+      ctx: Context.user({ userId: 'user-1', authMethod: 'jwt' }),
+    })
+
+    const [, attributes] = logSpy.mock.calls[0]
+    expect(attributes['auth.method']).toBe('jwt')
+    expect(attributes).not.toHaveProperty('client.source')
+    expect(attributes).not.toHaveProperty('sdk.version')
   })
 
   it('records a user or admin actor without a reason', () => {
@@ -120,5 +157,30 @@ describe('recordOutcomes', () => {
     const [message, attributes] = errorSpy.mock.calls[0]
     expect(message).toBe('user.registration exception')
     expect(attributes).toEqual(expect.objectContaining({ 'actor.kind': 'admin', 'exception.type': 'user_conflict' }))
+  })
+
+  // A registration's organization exists only once the operation has created it.
+  it('records the organization the operation created on its success only', async () => {
+    await recordOutcomes(
+      event,
+      async () => ({ organizationId: 'org-1' }),
+      () => 'internal',
+      (result) => result.organizationId,
+    )
+
+    const [[, requested], [, success]] = logSpy.mock.calls
+    expect(requested).not.toHaveProperty('organization.id')
+    expect(success['organization.id']).toBe('org-1')
+  })
+
+  it('keeps the event organization when the operation names none', async () => {
+    await recordOutcomes(
+      { ...event, organizationId: 'org-1' },
+      async () => undefined,
+      () => 'internal',
+      () => undefined,
+    )
+
+    expect(logSpy.mock.calls.map(([, attributes]) => attributes['organization.id'])).toEqual(['org-1', 'org-1'])
   })
 })
