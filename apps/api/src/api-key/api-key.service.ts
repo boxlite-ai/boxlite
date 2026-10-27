@@ -24,6 +24,9 @@ import {
   generateApiKeyValue,
 } from '../common/utils/api-key'
 import { TypedConfigService } from '../config/typed-config.service'
+import { randomUUID } from 'crypto'
+import { Context } from '../common/context/context'
+import { mutationFailureType, recordOutcomes } from '../common/utils/business-event.util'
 
 @Injectable()
 export class ApiKeyService {
@@ -46,6 +49,22 @@ export class ApiKeyService {
   }
 
   async createApiKey(
+    organizationId: string,
+    userId: string,
+    name: string,
+    permissions: OrganizationResourcePermission[],
+    ctx: Context,
+    expiresAt?: Date,
+    apiKeyValue?: string,
+  ): Promise<{ apiKey: ApiKey; value: string }> {
+    return recordOutcomes(
+      { name: 'api_key.create', organizationId, correlationId: randomUUID(), ctx },
+      () => this.persistApiKey(organizationId, userId, name, permissions, expiresAt, apiKeyValue),
+      mutationFailureType,
+    )
+  }
+
+  private async persistApiKey(
     organizationId: string,
     userId: string,
     name: string,
@@ -88,6 +107,7 @@ export class ApiKeyService {
     name: string,
     permissions: OrganizationResourcePermission[],
     value: string,
+    ctx: Context,
     expiresAt?: Date,
   ): Promise<{ apiKey: ApiKey; value: string }> {
     const keyHash = generateApiKeyHash(value)
@@ -101,7 +121,7 @@ export class ApiKeyService {
       await this.deleteWithEntityManager(this.apiKeyRepository.manager, existingKey)
     }
 
-    return this.createApiKey(organizationId, userId, name, permissions, expiresAt, value)
+    return this.createApiKey(organizationId, userId, name, permissions, ctx, expiresAt, value)
   }
 
   async getApiKeys(organizationId: string, userId?: string): Promise<ApiKey[]> {

@@ -70,6 +70,9 @@ type Proxy struct {
 	boxInboundCache            common_cache.ICache[bool]
 	boxAuthKeyValidCache       common_cache.ICache[bool]
 	boxLastActivityUpdateCache common_cache.ICache[bool]
+	previewOpenCache           common_cache.ICache[bool]
+	previewOpenOnce            sync.Once
+	previewOpenGroup           singleflight.Group
 	guestPortTransport         *http.Transport
 	wakeGroup                  singleflight.Group
 	guestPortGroup             singleflight.Group
