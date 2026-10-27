@@ -28,10 +28,36 @@ use crate::runtime::volumes::VolumeBackend;
 use crate::volumes::VolumeInfo;
 
 pub(crate) struct RestRuntime {
-    client: ApiClient,
+    pub(super) client: ApiClient,
 }
 
 impl RestRuntime {
+    pub(super) async fn validate_create_options(&self, options: &BoxOptions) -> BoxliteResult<()> {
+        options.sanitize_remote()?;
+
+        // Validate only the caller's requested policy. An unset auto_stop means
+        // "no auto-stop", so it must not borrow the server's default here —
+        // otherwise a plain remove-on-stop box (`--rm` → auto_delete=1) is
+        // wrongly rejected by the ordering check before the request is even sent.
+        crate::runtime::types::BoxLifecyclePolicy {
+            auto_stop: options.auto_stop.unwrap_or(0),
+            auto_delete: options.auto_delete.unwrap_or(0),
+            auto_resume: options.auto_resume.unwrap_or(true),
+        }
+        .validate()?;
+
+        // A server that does not advertise the capability policy would accept
+        // the request and drop the field, silently granting default privileges.
+        // `Some` alone is the trigger, even an explicitly empty policy: the
+        // caller configured something, and a server that can't represent the
+        // concept at all can't be trusted to preserve that from a no-op value.
+        if options.advanced.capabilities().is_some() {
+            self.client.require_linux_capabilities_enabled().await?;
+        }
+
+        Ok(())
+    }
+
     pub fn new(config: &BoxliteRestOptions) -> BoxliteResult<Self> {
         let client = ApiClient::new(config)?;
         Ok(Self { client })
@@ -173,7 +199,7 @@ fn image_path(name: &str) -> String {
     format!("/images/{}", urlencoding::encode(name))
 }
 
-fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
+pub(super) fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
     let box_backend: Arc<dyn crate::runtime::backend::BoxBackend> = rest_box.clone();
     let network_backend: Arc<dyn crate::runtime::backend::BoxNetworkBackend> = rest_box.clone();
     let snapshot_backend: Arc<dyn crate::runtime::backend::SnapshotBackend> = rest_box;
@@ -315,27 +341,7 @@ impl BoxOptions {
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
-        options.sanitize_remote()?;
-
-        // Validate only the caller's requested policy. An unset auto_stop means
-        // "no auto-stop", so it must not borrow the server's default here —
-        // otherwise a plain remove-on-stop box (`--rm` → auto_delete=1) is
-        // wrongly rejected by the ordering check before the request is even sent.
-        crate::runtime::types::BoxLifecyclePolicy {
-            auto_stop: options.auto_stop.unwrap_or(0),
-            auto_delete: options.auto_delete.unwrap_or(0),
-            auto_resume: options.auto_resume.unwrap_or(true),
-        }
-        .validate()?;
-
-        // A server that does not advertise the capability policy would accept
-        // the request and drop the field, silently granting default privileges.
-        // `Some` alone is the trigger, even an explicitly empty policy: the
-        // caller configured something, and a server that can't represent the
-        // concept at all can't be trusted to preserve that from a no-op value.
-        if options.advanced.capabilities().is_some() {
-            self.client.require_linux_capabilities_enabled().await?;
-        }
+        self.validate_create_options(&options).await?;
 
         let req = CreateBoxRequest::from_options(&options, name);
         let resp: BoxResponse = self.client.post("/boxes", &req).await?;

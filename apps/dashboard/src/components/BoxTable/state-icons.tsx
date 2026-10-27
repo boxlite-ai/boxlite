@@ -33,6 +33,8 @@ export const STATE_ICONS: Record<BoxState | 'RECOVERY', React.ReactNode> = {
   [BoxState.ARCHIVING]: <Loader2 className="w-3 h-3 animate-spin" />,
   [BoxState.RESTORING]: <Loader2 className="w-3 h-3 animate-spin" />,
   [BoxState.RESIZING]: <Loader2 className="w-3 h-3 animate-spin" />,
+  [BoxState.EXPORTING]: <Loader2 className="w-3 h-3 animate-spin" />,
+  [BoxState.IMPORTING]: <Loader2 className="w-3 h-3 animate-spin" />,
   [BoxState.UNKNOWN_DEFAULT_OPEN_API]: <Square color="bg-muted-foreground/20" />,
   RECOVERY: <Square color="bg-yellow-600" />,
 }

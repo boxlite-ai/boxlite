@@ -18,6 +18,8 @@ describe('JobType', () => {
       'ROLLBACK_EXPORT_BOX',
       'ROLLBACK_IMPORT_BOX',
       'DISCARD_EXPORTED_BOX',
+      'CREATE_SNAPSHOT',
+      'RESTORE_SNAPSHOT',
     ])
   })
 })

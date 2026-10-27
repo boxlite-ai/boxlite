@@ -95,6 +95,9 @@ export const awsStorageProvider =
         ),
         credentialVending: { roleName, roleArn },
       },
+      // Reserved: the API has no S3 snapshot store yet, so this cloud keeps
+      // no snapshot bucket and the API reports snapshots off.
+      snapshots: { active: false },
       ready: [],
     }
   }

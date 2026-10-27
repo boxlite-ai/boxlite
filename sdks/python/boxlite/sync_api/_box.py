@@ -11,8 +11,8 @@ if TYPE_CHECKING:
     from ._boxlite import SyncBoxlite
     from ._execution import SyncExecution
     from ._network import SyncNetworkHandle
+    from ._snapshots import SyncSnapshotHandle
     from ._ssh import SyncSshHandle
-
 
 __all__ = ["SyncBox"]
 
@@ -81,6 +81,13 @@ class SyncBox:
     def name(self) -> str | None:
         """Get the box name (if set)."""
         return self._box.name
+
+    @property
+    def snapshot(self) -> "SyncSnapshotHandle":
+        from ._snapshots import SyncSnapshotHandle
+
+        self._runtime._require_started()
+        return SyncSnapshotHandle(self._runtime, self._box.snapshot)
 
     def start(self) -> None:
         """

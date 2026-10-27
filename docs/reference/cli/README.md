@@ -36,6 +36,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite network tunnel`](#boxlite-network-tunnel)
   - [`boxlite network inbound / outbound`](#boxlite-network-inbound--outbound)
   - [`boxlite serve`](#boxlite-serve)
+  - [`boxlite snapshot`](#boxlite-snapshot)
   - [`boxlite volume`](#boxlite-volume)
   - [`boxlite completion`](#boxlite-completion)
 - [Shared Flag Groups](#shared-flag-groups)
@@ -316,6 +317,7 @@ takes the command's exit code; `boxlite ps` shows it stopped and
 
 | Flag | Short | Description |
 |------|-------|-------------|
+| `--snapshot SNAPSHOT` | — | Create a running cloud box from a snapshot ID or name |
 | `--rootfs PATH` | — | Use a prepared rootfs path instead of pulling/resolving an image |
 | `--entrypoint EXEC` | — | Override the image entrypoint |
 | `--detach` | `-d` | Run in the background and print the box ID |
@@ -374,8 +376,11 @@ boxlite exec -e DEBUG=1 -w /app mybox -- pytest tests/
 
 - `boxlite create [OPTIONS] IMAGE [COMMAND...]`
 - `boxlite create [OPTIONS] --rootfs PATH [COMMAND...]`
+- `boxlite create [OPTIONS] --snapshot SNAPSHOT`
 
-Create a box without starting it. Prints the new box's ID to stdout.
+Image/rootfs creation makes a box without starting it. `--snapshot` creates a
+cloud box and waits for it to run. Both print the new box's ID to stdout.
+`--snapshot` conflicts with IMAGE and `--rootfs`; omit `--name` for a generated name.
 
 `COMMAND` is stored, not run — it becomes the box's main command (the container's
 init) when the box is next started, exactly as it would under `run`.
@@ -391,6 +396,7 @@ start it implicitly, because starting it runs that command. Start it deliberatel
 
 | Flag | Short | Description |
 |------|-------|-------------|
+| `--snapshot SNAPSHOT` | — | Create a running cloud box from a snapshot ID or name |
 | `--rootfs PATH` | — | Use a prepared rootfs path instead of pulling/resolving an image |
 | `--env KEY[=VALUE]` | `-e` | Set environment variables; a bare key inherits its host value (repeatable) |
 | `--workdir PATH` | `-w` | Working directory inside the box |
@@ -741,6 +747,37 @@ BOXLITE_SERVE_API_KEY="$KEY" boxlite serve --host 0.0.0.0
 
 ---
 
+### `boxlite snapshot`
+
+**Synopsis:** `boxlite snapshot <create|ls|get|rm|restore>`
+
+| Command | Usage | Result |
+|---|---|---|
+| `create` | `snapshot create BOX [--name NAME]` | Capture a disk; print the ready snapshot ID |
+| `ls` (`list`) | `snapshot ls [--box BOX] [-q \| --format FORMAT]` | Organization catalog or source-box filter; table/json/yaml |
+| `get` (`inspect`) | `snapshot get SNAPSHOT [--box BOX] [--format FORMAT]` | Metadata including source box, status, size, and error |
+| `rm` (`delete`) | `snapshot rm SNAPSHOT... [--box BOX] [--force]` | Delete; force ignores missing snapshots only |
+| `restore` | `snapshot restore SNAPSHOT --box TARGET` | Replace the target's disk; print its box ID after success |
+
+Cloud capture/restore require a stopped box. Without `--box`, management uses
+the organization catalog and survives source-box deletion. Cloud snapshots may
+be addressed by ID or name. Local snapshots use their box handle and name:
+`boxlite snapshot ls --box BOX`. Omitted/empty capture names are generated.
+Memory snapshots and cross-runner copies are not supported.
+
+Create a separate running box with `boxlite create --snapshot SNAPSHOT`.
+The snapshot supplies disk data and region; ordinary creation options supply
+other settings. See [completion and runtime support](../README.md#snapshot-sdk-and-cli).
+
+```bash
+boxlite stop source-box
+boxlite snapshot create source-box --name baseline
+boxlite snapshot ls --format json
+boxlite create --snapshot baseline --name worker --cpus 2
+boxlite snapshot restore baseline --box source-box
+boxlite snapshot rm baseline
+```
+
 ### `boxlite volume`
 
 **Synopsis:** `boxlite volume <create|ls|get|rm>`
@@ -984,19 +1021,19 @@ Image `EXPOSE` declarations remain metadata and do not open host listeners.
 ## Output formats
 
 The `--format` flag is shared across `list`, `images`, `inspect`, `stats`,
-`info`, `volume ls`, and `volume get`. Valid values come from
+`info`, `volume ls`, `volume get`, `snapshot ls`, and `snapshot get`. Valid values come from
 `OutputFormat::from_str` at `src/cli/src/formatter.rs:26`:
 
 | Format | Available on | Description |
 |--------|--------------|-------------|
-| `table` | `list`, `images`, `stats`, `volume ls`, `volume get` | Human-readable columnar layout |
-| `json` | `list`, `images`, `stats`, `inspect`, `info`, `volume ls`, `volume get` | Pretty-printed JSON (`serde_json::to_string_pretty`) |
-| `yaml` | `list`, `images`, `stats`, `inspect`, `info`, `volume ls`, `volume get` | YAML (`serde_yaml::to_string`) |
+| `table` | `list`, `images`, `stats`, `volume ls`, `volume get`, `snapshot ls`, `snapshot get` | Human-readable columnar layout |
+| `json` | `list`, `images`, `stats`, `inspect`, `info`, `volume ls`, `volume get`, `snapshot ls`, `snapshot get` | Pretty-printed JSON (`serde_json::to_string_pretty`) |
+| `yaml` | `list`, `images`, `stats`, `inspect`, `info`, `volume ls`, `volume get`, `snapshot ls`, `snapshot get` | YAML (`serde_yaml::to_string`) |
 | Go template | `inspect` only | Any `gtmpl` template, e.g. `'{{.State.Status}}'`; `{{json .Field}}` serializes a nested value |
 
 Defaults:
 
-- `list`, `images`, `stats`, `volume ls`, `volume get`: `table`
+- `list`, `images`, `stats`, `volume ls`, `volume get`, `snapshot ls`, `snapshot get`: `table`
 - `inspect`: `json`
 - `info`: `yaml`
 

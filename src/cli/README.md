@@ -163,6 +163,25 @@ token is rejected (`invalid_grant`) the CLI prompts you to re-run `auth login`.
 > exit codes, configuration file format), see the
 > [CLI Reference](../../docs/reference/cli/README.md).
 
+### Disk snapshots
+
+```bash
+boxlite stop source-box
+boxlite snapshot create source-box --name baseline
+boxlite snapshot ls                       # organization catalog
+boxlite snapshot ls --box source-box       # source-box filter
+boxlite create --snapshot baseline --name worker --cpus 2
+boxlite snapshot restore baseline --box source-box
+boxlite snapshot rm baseline
+```
+
+Cloud capture and restore require a stopped box. `create --snapshot` creates a
+new running box; restore replaces an existing box's disk. Omit `--name` to generate
+a name. Organization management and new-box creation require a capable REST
+server. Local snapshots remain accessible with `--box`. See the
+[snapshot command reference](../../docs/reference/cli/README.md#boxlite-snapshot)
+for aliases, formats, and error behavior.
+
 ### Global flags
 
 Place these options before the top-level command or after the complete command

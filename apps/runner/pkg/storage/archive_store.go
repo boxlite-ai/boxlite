@@ -16,9 +16,9 @@ import (
 // s3URIScheme prefixes an arcPath that names its own bucket.
 const s3URIScheme = "s3://"
 
-// ArchiveStore is the object-store leg of a box migration: the exporting runner
-// uploads the .boxlite archive, the importing runner downloads it, and whichever
-// runner finishes or rolls the migration back deletes it.
+// ArchiveStore is the object-store leg of moving a .boxlite archive: a
+// migration's exporting runner uploads it and its importing runner downloads
+// it; a snapshot is uploaded when taken and downloaded when restored.
 //
 // The arcPath addressing every object is chosen by the control plane and travels
 // in the job payload, so a redelivered job acts on the object its first delivery
@@ -27,6 +27,59 @@ type ArchiveStore interface {
 	Upload(ctx context.Context, arcPath, localPath string) error
 	Download(ctx context.Context, arcPath, localPath string) error
 	Remove(ctx context.Context, arcPath string) error
+}
+
+// SchemeArchiveStore hands each arcPath to the store its scheme names: gs:// to
+// Cloud Storage, s3:// or a bare key to S3. Either store may be absent — a GCP
+// runner has no S3 bucket — and an arcPath that needs the absent one fails its
+// job with the reason instead of the runner refusing to start.
+type SchemeArchiveStore struct {
+	GCS ArchiveStore
+	S3  ArchiveStore
+}
+
+func (s *SchemeArchiveStore) storeFor(arcPath string) (ArchiveStore, error) {
+	if strings.HasPrefix(arcPath, gcsURIScheme) {
+		if s.GCS == nil {
+			return nil, fmt.Errorf("no Cloud Storage archive store on this runner for %q", arcPath)
+		}
+		return s.GCS, nil
+	}
+	if s.S3 == nil {
+		return nil, fmt.Errorf("S3 archive store is not configured: set AWS_DEFAULT_BUCKET and the AWS credentials on this runner")
+	}
+	return s.S3, nil
+}
+
+// Check reports why arcPath cannot be served, if its backend is missing, so a
+// job can refuse before it does any work.
+func (s *SchemeArchiveStore) Check(arcPath string) error {
+	_, err := s.storeFor(arcPath)
+	return err
+}
+
+func (s *SchemeArchiveStore) Upload(ctx context.Context, arcPath, localPath string) error {
+	store, err := s.storeFor(arcPath)
+	if err != nil {
+		return err
+	}
+	return store.Upload(ctx, arcPath, localPath)
+}
+
+func (s *SchemeArchiveStore) Download(ctx context.Context, arcPath, localPath string) error {
+	store, err := s.storeFor(arcPath)
+	if err != nil {
+		return err
+	}
+	return store.Download(ctx, arcPath, localPath)
+}
+
+func (s *SchemeArchiveStore) Remove(ctx context.Context, arcPath string) error {
+	store, err := s.storeFor(arcPath)
+	if err != nil {
+		return err
+	}
+	return store.Remove(ctx, arcPath)
 }
 
 // S3ArchiveStore keeps migration archives as objects in a single S3 bucket.

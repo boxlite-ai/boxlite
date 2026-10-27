@@ -93,6 +93,10 @@ export const queryKeys = {
     all: ['volumes'] as const,
     list: (organizationId: string) => [...queryKeys.volumes.all, organizationId, 'list'] as const,
   },
+  snapshots: {
+    all: ['snapshots'] as const,
+    list: (organizationId: string) => [...queryKeys.snapshots.all, organizationId, 'list'] as const,
+  },
   audit: {
     all: ['audit'] as const,
     logs: (organizationId: string, params: AuditLogsQueryParams) =>

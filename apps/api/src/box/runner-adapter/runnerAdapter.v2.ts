@@ -10,6 +10,8 @@ import { Repository, IsNull } from 'typeorm'
 import { RunnerAdapter, RunnerInfo, RunnerBoxInfo, StartBoxResponse } from './runnerAdapter'
 import { Runner } from '../entities/runner.entity'
 import { Box } from '../entities/box.entity'
+import { BoxSnapshot } from '../entities/box-snapshot.entity'
+import { BoxSnapshotState } from '../enums/box-snapshot-state.enum'
 import { Job } from '../entities/job.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { JobType } from '../enums/job-type.enum'
@@ -122,8 +124,19 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       throw new Error(`Box ${box.id} has no image; cannot create on runner`)
     }
 
+    let snapshotArchiveUri: string | undefined
+    if (box.initialSnapshotId) {
+      const snapshot = await this.boxRepository.manager.findOneByOrFail(BoxSnapshot, {
+        id: box.initialSnapshotId,
+        organizationId: box.organizationId,
+        state: BoxSnapshotState.READY,
+      })
+      if (!snapshot.archiveUri) throw new Error('Snapshot has no archive to initialize the box')
+      snapshotArchiveUri = snapshot.archiveUri
+    }
     const payload = {
       id: box.id,
+      ...(snapshotArchiveUri ? { snapshotArchiveUri } : {}),
       image,
       osUser: box.osUser,
       cpuQuota: box.cpu,

@@ -271,6 +271,30 @@ await box.ssh.disable();
 See the [Node.js SSH reference](../../docs/reference/nodejs/README.md#guest-ssh-control)
 for configuration types, return values, and errors.
 
+### Disk Snapshots
+
+```typescript
+const source = (await runtime.get("source-box"))!;
+await source.stop();
+const snapshot = await source.snapshot.create(); // generated name; waits until ready
+const snapshots = await runtime.snapshots.list();
+const saved = await runtime.snapshots.get(snapshot.id);
+const child = await runtime.createFromSnapshot(saved.id, { cpus: 2 }, "worker");
+await runtime.snapshots.remove(saved.id);
+```
+
+These organization operations require a REST runtime with snapshot support.
+`source.snapshot.list/get/remove` retain the source-box scope, and
+`source.snapshot.restore(idOrName)` replaces that stopped box's disk.
+Box-scoped `get` returns `null` if missing; runtime `get` rejects with `not_found`.
+`runtime.snapshots.remove(idOrName, true)` ignores absence only. Capture accepts
+`create(name?, options?)`; omitting the name generates one, as does omitting the
+third argument to `createFromSnapshot`. Returned metadata includes `status`,
+optional `error`, source `boxId`, and disk sizes.
+
+See [snapshot contracts](../../docs/reference/README.md#snapshot-sdk-and-cli)
+for completion, options, and local-runtime support.
+
 ### Runtime Image Management
 
 `runtime.images` holds the images a runtime can boot from: the local cache on

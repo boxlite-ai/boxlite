@@ -382,6 +382,21 @@ udevadm trigger --name-match=kvm || true`,
       condition: volumeConditionFor(volumePrefix),
     })
 
+    /*
+     * Snapshot archives: a host uploads one on export and downloads one on
+     * restore, resolving Application Default Credentials as gcsfuse does. A
+     * binding on the one bucket, so it needs no condition, and object access
+     * only — `objectUser`, not admin. It includes delete, which a redelivered
+     * export needs to overwrite the archive it wrote before.
+     */
+    if (request.snapshotBucket) {
+      new gcp.storage.BucketIAMMember('RunnerSnapshotObjects', {
+        bucket: request.snapshotBucket,
+        role: 'roles/storage.objectUser',
+        member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
+      })
+    }
+
     const assignments = request.fleet
 
     const instances = assignments.map(({ slot, token }) => {

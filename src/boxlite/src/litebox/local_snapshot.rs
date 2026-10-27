@@ -154,7 +154,12 @@ impl LocalSnapshotBackend {
 #[async_trait::async_trait]
 impl crate::runtime::backend::SnapshotBackend for LocalSnapshotBackend {
     async fn create(&self, options: SnapshotOptions, name: &str) -> BoxliteResult<SnapshotInfo> {
-        self.snapshot_create(name, options).await
+        if name.trim().is_empty() {
+            let name = format!("snapshot-{}", crate::runtime::id::BoxIDMint::mint());
+            self.snapshot_create(&name, options).await
+        } else {
+            self.snapshot_create(name, options).await
+        }
     }
 
     async fn list(&self) -> BoxliteResult<Vec<SnapshotInfo>> {

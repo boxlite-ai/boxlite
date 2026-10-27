@@ -324,6 +324,38 @@ if (boxlite_runtime_images(runtime, &images, &error) == Ok) {
 [Images in the C reference](../../docs/reference/c/README.md#images) for each
 operation on each runtime.
 
+### Disk Snapshots
+
+`boxlite_box_snapshots(box, &handle, &error)` obtains a source-box handle;
+`boxlite_runtime_snapshots(runtime, &handle, &error)` obtains the cloud
+organization catalog. Free either with `boxlite_snapshot_free(handle)`.
+
+| Function | Scope and result |
+|---|---|
+| `boxlite_snapshot_create(handle, name, callback, data, &error)` | Box only; `NULL`/empty name generates one; callback receives ready `CSnapshotInfo` |
+| `boxlite_snapshot_list(handle, callback, data, &error)` | Either scope; callback receives `CSnapshotInfoList` |
+| `boxlite_snapshot_get(handle, id_or_name, callback, data, &error)` | Either scope; absent box snapshot is a null result without error; absent organization snapshot is `NotFound` |
+| `boxlite_snapshot_remove(handle, id_or_name, force, callback, data, &error)` | Either scope; force ignores absence only |
+| `boxlite_snapshot_restore(handle, id_or_name, callback, data, &error)` | Box only; replaces the stopped cloud target's disk |
+| `boxlite_create_box_from_snapshot(runtime, snapshot, options, callback, data, &error)` | Cloud only; callback receives a new running box; required options carries the optional box name |
+
+These functions use the native post-and-drain event queue. On accepted requests,
+callbacks run during `boxlite_runtime_drain`; immediate errors do not
+invoke the callback. Create options with `boxlite_options_new("alpine:latest", &options, &error)`;
+this default image is omitted from the snapshot request. Set a name with
+`boxlite_options_set_name` or leave it unset for a generated name.
+New-box creation consumes `options` only after
+synchronous validation succeeds. Free returned single records with
+`boxlite_free_snapshot_info`, and whole lists with
+`boxlite_free_snapshot_info_list`; do not free list entries individually. Free
+immediate `out_error` values with `boxlite_error_free`; callback error pointers
+are borrowed only for the callback duration. Metadata strings remain valid until
+the owning record/list is freed. `boxlite_box_name` returns an owned string
+(or null for an unnamed box); release it with `boxlite_free_string`.
+
+See [snapshot contracts](../../docs/reference/README.md#snapshot-sdk-and-cli)
+for metadata, completion, and supported runtimes.
+
 ### Private Registry Logins
 
 On a REST runtime, `boxlite_image_registries()` returns the logins the

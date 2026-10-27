@@ -78,7 +78,7 @@ describe('BoxliteProxyController', () => {
     ])
   })
 
-  it('revokes the port of the box the caller names, whatever its inbound mode or state', async () => {
+  it('revokes the port of the box the caller names, whatever its inbound mode, running or not', async () => {
     const { controller, boxService, tunnelService } = makeHarness()
     boxService.findOneByIdOrName.mockResolvedValue({
       id: 'box-uuid',
@@ -93,6 +93,19 @@ describe('BoxliteProxyController', () => {
     expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
     expect(tunnelService.revoke).toHaveBeenCalledWith('box-uuid', 3000)
   })
+
+  it.each(['exporting', 'importing'])(
+    'refuses to revoke a port while a snapshot job holds the box (%s)',
+    async (state) => {
+      const { controller, boxService, tunnelService } = makeHarness()
+      boxService.findOneByIdOrName.mockResolvedValue({ id: 'box-uuid', state, inboundEnabled: true })
+
+      await expect(controller.revokeNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
+        status: 409,
+      })
+      expect(tunnelService.revoke).not.toHaveBeenCalled()
+    },
+  )
 
   it('does not revoke anything for a box outside the organization', async () => {
     const { controller, boxService, tunnelService } = makeHarness()

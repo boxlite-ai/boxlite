@@ -518,8 +518,16 @@ export interface JsExecution {
   signal(signal: number): Promise<void>;
 }
 
+export interface RuntimeSnapshotHandle {
+  list(): Promise<JsSnapshotInfo[]>;
+  get(idOrName: string): Promise<JsSnapshotInfo>;
+  remove(idOrName: string, force?: boolean): Promise<void>;
+}
+
 export interface JsSnapshotInfo {
   id: string;
+  status: string;
+  error?: string;
   boxId: string;
   name: string;
   createdAt: number;
@@ -531,7 +539,7 @@ export type JsSnapshotOptions = Record<string, never>;
 
 export interface JsSnapshotHandle {
   create(
-    name: string,
+    name?: string | null,
     options?: JsSnapshotOptions | null,
   ): Promise<JsSnapshotInfo>;
   list(): Promise<JsSnapshotInfo[]>;
@@ -668,6 +676,12 @@ export interface JsGetOrCreateResult {
 }
 
 export interface JsBoxlite {
+  readonly snapshots: RuntimeSnapshotHandle;
+  createFromSnapshot(
+    snapshot: string,
+    options?: JsBoxOptions | null,
+    name?: string | null,
+  ): Promise<JsBox>;
   importBox(archivePath: string, name?: string | null): Promise<JsBox>;
   create(options: JsBoxOptions, name?: string | null): Promise<JsBox>;
   getOrCreate(

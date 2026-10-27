@@ -242,6 +242,33 @@ const VOLUME_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
+const SNAPSHOT_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "create",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "ls",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "get",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "rm",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "restore",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+];
 const COMMAND_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "run",
@@ -332,6 +359,11 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         name: "auth",
         globals: AUTH_GLOBALS,
         children: AUTH_SCOPES,
+    },
+    CommandScope {
+        name: "snapshot",
+        globals: BOX_GLOBALS,
+        children: SNAPSHOT_SCOPES,
     },
     CommandScope {
         name: "volume",
@@ -632,6 +664,9 @@ pub enum Commands {
 
     /// Manage named volumes on a REST server
     Volume(crate::commands::volume::VolumeArgs),
+
+    /// Capture, inspect, restore and delete disk snapshots.
+    Snapshot(crate::commands::snapshot::SnapshotArgs),
 
     /// Generate shell completion script (hidden from help)
     #[command(hide = true)]

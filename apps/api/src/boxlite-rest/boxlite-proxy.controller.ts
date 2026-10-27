@@ -40,6 +40,7 @@ import {
   BoxAutoResumeService,
 } from '../box/services/box-auto-resume.service'
 import { BoxState } from '../box/enums/box-state.enum'
+import { assertNoSnapshotOperation } from '../box/utils/box-state.util'
 import { TunnelService } from '../box/services/tunnel.service'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
@@ -258,7 +259,9 @@ export class BoxliteProxyController {
   }
 
   // Revoking needs neither inbound access nor a running box: it only withdraws
-  // the declaration, so a port stays revocable after either is turned off.
+  // the declaration, so a port stays revocable after either is turned off. A
+  // box a snapshot job holds refuses it like every other change; the box is
+  // stopped meanwhile, and the port can be revoked once the job settles.
   @Delete(':boxId/network/tunnel')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -268,6 +271,7 @@ export class BoxliteProxyController {
     @Query('port', ParseIntPipe) port: number,
   ): Promise<void> {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+    assertNoSnapshotOperation(box)
     await this.tunnelService.revoke(box.id, port)
   }
 

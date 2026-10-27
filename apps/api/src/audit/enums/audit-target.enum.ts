@@ -17,4 +17,5 @@ export enum AuditTarget {
   REGION = 'region',
   IMAGE = 'image',
   REGISTRY_CREDENTIAL = 'registry_credential',
+  SNAPSHOT = 'snapshot',
 }

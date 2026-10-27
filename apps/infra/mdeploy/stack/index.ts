@@ -441,6 +441,8 @@ export const deployStack = ({
     PROXY_PROTOCOL: inputs.proxyProtocol,
     PROXY_TEMPLATE_URL: inputs.proxyTemplateUrl,
     S3_DEFAULT_BUCKET: storage.name,
+    // Snapshots are on wherever the storage module keeps a bucket for them.
+    ...(storage.snapshots.active ? { BOX_SNAPSHOT_ARCHIVE_PREFIX: storage.snapshots.archivePrefix } : {}),
   }
   assertOneChannelPerName({
     workload: 'API',
@@ -562,6 +564,7 @@ export const deployStack = ({
     apiUrl: api.address,
     otlpUrl: collector.otlpUrl,
     registryProxyHost,
+    snapshotBucket: storage.snapshots.active ? storage.snapshots.bucket : null,
     environment: runnerEnvironment,
     secrets: inputs.runnerSecrets,
   })
@@ -589,10 +592,16 @@ export const deployStack = ({
  * List its own bucket, which is the boot probe; create, tag and delete the
  * volume buckets it owns, which is bounded by the storage module's prefix; vend
  * a scoped credential for one of them; read telemetry back, which exists only
- * where a stage keeps any; and write registry passwords it cannot read back,
- * which exists only where the registry proxy does. Nothing here names an ARN or
- * a role — the provider bundle expands each sentence into its cloud's own
- * grants.
+ * where a stage keeps any; write registry passwords it cannot read back, which
+ * exists only where the registry proxy does; and delete snapshot archives,
+ * which exists only where the storage module keeps a snapshot bucket. Nothing
+ * here names an ARN or a role — the provider bundle expands each sentence into
+ * its cloud's own grants.
+ *
+ * A provider names each grant by its place in this list, so a new capability
+ * goes last: inserted earlier, it would move the grants after it to new
+ * resources, and replacing a non-authoritative IAM member deletes the binding
+ * its replacement holds.
  */
 export const capabilitiesFor = ({
   storage,
@@ -609,5 +618,8 @@ export const capabilitiesFor = ({
   ...(clickhouse.active ? ([{ kind: 'read-telemetry', clickhouse }] as ApiCapability[]) : []),
   ...(registryCredentials.active
     ? ([{ kind: 'write-registry-credentials', store: registryCredentials }] as ApiCapability[])
+    : []),
+  ...(storage.snapshots.active
+    ? ([{ kind: 'manage-snapshot-archives', snapshots: storage.snapshots }] as ApiCapability[])
     : []),
 ]

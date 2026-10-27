@@ -16,6 +16,7 @@ use crate::images::{CImageDetail, CImageInfoList, CImagePullResult, CImageUsage}
 use crate::info::{CBoxInfo, CBoxInfoList};
 use crate::metrics::{CBoxMetrics, CRuntimeMetrics};
 use crate::registries::{CRegistryCredential, CRegistryCredentialList};
+use crate::snapshots::{CSnapshotInfo, CSnapshotInfoList};
 use crate::volumes::{CVolumeInfo, CVolumeInfoList};
 
 /// Maximum number of buffered events before producer tasks yield.
@@ -95,6 +96,10 @@ pub(crate) type CBoxGetOrCreateBoxFn =
 pub type CBoxExportCb = Option<extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxExportFn = extern "C" fn(*mut c_char, *mut crate::CBoxliteError, *mut c_void);
 
+/// Box restore-from-archive completion.
+pub type CBoxRestoreArchiveCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxRestoreArchiveFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
 /// Runtime import completion.
 pub type CRuntimeImportCb =
     Option<extern "C" fn(*mut crate::CBoxHandle, *mut crate::CBoxliteError, *mut c_void)>;
@@ -150,6 +155,22 @@ pub type CBoxImageUsageCb =
     Option<extern "C" fn(*mut CImageUsage, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxImageUsageFn =
     extern "C" fn(*mut CImageUsage, *mut crate::CBoxliteError, *mut c_void);
+
+/// Snapshot metadata completion. Success transfers ownership; release with
+/// boxlite_free_snapshot_info. A box-scoped missing lookup returns null without
+/// an error; an organization lookup returns NotFound. Errors are callback-scoped.
+pub type CBoxSnapshotInfoCb =
+    Option<extern "C" fn(*mut CSnapshotInfo, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxSnapshotInfoFn =
+    extern "C" fn(*mut CSnapshotInfo, *mut crate::CBoxliteError, *mut c_void);
+/// Snapshot list completion. Release the owned list with boxlite_free_snapshot_info_list.
+pub type CBoxSnapshotListCb =
+    Option<extern "C" fn(*mut CSnapshotInfoList, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxSnapshotListFn =
+    extern "C" fn(*mut CSnapshotInfoList, *mut crate::CBoxliteError, *mut c_void);
+/// Snapshot remove/restore completion. The error is borrowed during the callback.
+pub type CBoxSnapshotOpCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxSnapshotOpFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
 /// Volume create completion.
 ///
@@ -405,6 +426,11 @@ pub enum RuntimeEvent {
         user_data: usize,
         result: Result<CString, BoxliteError>,
     },
+    BoxRestoreArchive {
+        cb: CBoxRestoreArchiveFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
     RuntimeImport {
         cb: CRuntimeImportFn,
         user_data: usize,
@@ -454,6 +480,21 @@ pub enum RuntimeEvent {
         cb: CBoxImageUsageFn,
         user_data: usize,
         result: Result<CImageUsage, BoxliteError>,
+    },
+    SnapshotInfo {
+        cb: CBoxSnapshotInfoFn,
+        user_data: usize,
+        result: Result<Option<OwnedFfiPtr<CSnapshotInfo>>, BoxliteError>,
+    },
+    SnapshotList {
+        cb: CBoxSnapshotListFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CSnapshotInfoList>, BoxliteError>,
+    },
+    SnapshotOp {
+        cb: CBoxSnapshotOpFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
     },
     VolumeCreate {
         cb: CBoxVolumeCreateFn,

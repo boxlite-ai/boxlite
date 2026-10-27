@@ -265,6 +265,34 @@ The CLI captures `Principal.path_prefix` at login and caches it
 under the active profile, so subsequent `boxlite` commands route
 correctly without an extra flag.
 
+### Disk Snapshots
+
+On a REST runtime, capture a stopped box and create another box from its disk:
+
+```python
+source = await runtime.get("source-box")
+await source.stop()
+snapshot = await source.snapshot.create()  # generated name; waits until ready
+snapshots = await runtime.snapshots.list()  # organization catalog
+saved = await runtime.snapshots.get(snapshot.id)
+child = await runtime.create_from_snapshot(
+    saved.id, options=boxlite.BoxOptions(cpus=2), name="worker"
+)  # returns after the new box starts
+await runtime.snapshots.remove(saved.id)
+```
+
+`source.snapshot.list/get/remove` query only snapshots from that source;
+`source.snapshot.restore(id_or_name)` replaces the stopped box's disk.
+Box-scoped `get` returns `None` if missing; runtime `get` raises `NotFoundError`.
+Runtime `remove(id_or_name, force=True)` ignores absence only. Omit `name` on
+capture or new-box creation for a generated name. `SnapshotInfo` exposes `status`
+and optional `error` alongside disk sizes and source `box_id`.
+
+`SyncBoxlite` supports the same `snapshot`, `snapshots`, and
+`create_from_snapshot` calls inside its context manager, without `await`.
+See [snapshot contracts](../../docs/reference/README.md#snapshot-sdk-and-cli)
+for completion, options, and local-runtime support.
+
 ### Box Configuration
 
 #### `boxlite.BoxOptions`

@@ -582,7 +582,7 @@ let id: string; //Filter by partial Box ID or name match (optional) (default to 
 let name: string; //Filter by partial name match (optional) (default to undefined)
 let labels: string; //JSON encoded labels to filter by (optional) (default to undefined)
 let includeErroredDeleted: boolean; //Include results with errored state and deleted desired state (optional) (default to false)
-let states: Array<'creating' | 'restoring' | 'destroying' | 'started' | 'stopped' | 'starting' | 'stopping' | 'error' | 'unknown' | 'archived' | 'archiving' | 'resizing'>; //List of states to filter by (optional) (default to undefined)
+let states: Array<'creating' | 'restoring' | 'destroying' | 'started' | 'stopped' | 'starting' | 'stopping' | 'error' | 'unknown' | 'archived' | 'archiving' | 'resizing' | 'exporting' | 'importing'>; //List of states to filter by (optional) (default to undefined)
 let regions: Array<string>; //List of regions to filter by (optional) (default to undefined)
 let minCpu: number; //Minimum CPU (optional) (default to undefined)
 let maxCpu: number; //Maximum CPU (optional) (default to undefined)
@@ -629,7 +629,7 @@ const { status, data } = await apiInstance.listBoxesPaginated(
 | **name** | [**string**] | Filter by partial name match | (optional) defaults to undefined|
 | **labels** | [**string**] | JSON encoded labels to filter by | (optional) defaults to undefined|
 | **includeErroredDeleted** | [**boolean**] | Include results with errored state and deleted desired state | (optional) defaults to false|
-| **states** | **Array<&#39;creating&#39; &#124; &#39;restoring&#39; &#124; &#39;destroying&#39; &#124; &#39;started&#39; &#124; &#39;stopped&#39; &#124; &#39;starting&#39; &#124; &#39;stopping&#39; &#124; &#39;error&#39; &#124; &#39;unknown&#39; &#124; &#39;archived&#39; &#124; &#39;archiving&#39; &#124; &#39;resizing&#39;>** | List of states to filter by | (optional) defaults to undefined|
+| **states** | **Array<&#39;creating&#39; &#124; &#39;restoring&#39; &#124; &#39;destroying&#39; &#124; &#39;started&#39; &#124; &#39;stopped&#39; &#124; &#39;starting&#39; &#124; &#39;stopping&#39; &#124; &#39;error&#39; &#124; &#39;unknown&#39; &#124; &#39;archived&#39; &#124; &#39;archiving&#39; &#124; &#39;resizing&#39; &#124; &#39;exporting&#39; &#124; &#39;importing&#39;>** | List of states to filter by | (optional) defaults to undefined|
 | **regions** | **Array&lt;string&gt;** | List of regions to filter by | (optional) defaults to undefined|
 | **minCpu** | [**number**] | Minimum CPU | (optional) defaults to undefined|
 | **maxCpu** | [**number**] | Maximum CPU | (optional) defaults to undefined|

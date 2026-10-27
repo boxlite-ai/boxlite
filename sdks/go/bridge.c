@@ -14,6 +14,7 @@ extern void goBoxliteOnExit(int exit_code, void *ud);
 
 extern void goBoxliteOnCreateBox(CBoxHandle *box, CBoxliteError *err, void *ud);
 extern void goBoxliteOnBoxExport(char *archive_path, CBoxliteError *err, void *ud);
+extern void goBoxliteOnBoxRestoreArchive(CBoxliteError *err, void *ud);
 extern void goBoxliteOnRuntimeImport(CBoxHandle *box, CBoxliteError *err, void *ud);
 extern void goBoxliteOnGetOrCreateBox(CBoxHandle *box, bool created, CBoxliteError *err, void *ud);
 extern void goBoxliteOnGetBox(CBoxHandle *box, CBoxliteError *err, void *ud);
@@ -59,6 +60,9 @@ CBoxCreateBoxCb cbCreateBox(void) { return (CBoxCreateBoxCb)goBoxliteOnCreateBox
 CBoxExportCb cbBoxExport(void) {
     return (CBoxExportCb)goBoxliteOnBoxExport;
 }
+CBoxRestoreArchiveCb cbBoxRestoreArchive(void) {
+    return (CBoxRestoreArchiveCb)goBoxliteOnBoxRestoreArchive;
+}
 CRuntimeImportCb cbRuntimeImport(void) {
     return (CRuntimeImportCb)goBoxliteOnRuntimeImport;
 }
@@ -100,3 +104,10 @@ CExecutionSignalCb cbExecutionSignal(void) { return (CExecutionSignalCb)goBoxlit
 CExecutionResizeCb cbExecutionResize(void) { return (CExecutionResizeCb)goBoxliteOnExecutionResize; }
 CTunnelForwarderWaitCb cbTunnelForwarderWait(void) { return (CTunnelForwarderWaitCb)goBoxliteOnTunnelForwarderWait; }
 CTunnelForwarderCloseCb cbTunnelForwarderClose(void) { return (CTunnelForwarderCloseCb)goBoxliteOnTunnelForwarderClose; }
+
+extern void goBoxliteOnSnapshotInfo(CSnapshotInfo *info, CBoxliteError *err, void *ud);
+extern void goBoxliteOnSnapshotList(CSnapshotInfoList *list, CBoxliteError *err, void *ud);
+extern void goBoxliteOnSnapshotOp(CBoxliteError *err, void *ud);
+CBoxSnapshotInfoCb cbSnapshotInfo(void) { return goBoxliteOnSnapshotInfo; }
+CBoxSnapshotListCb cbSnapshotList(void) { return goBoxliteOnSnapshotList; }
+CBoxSnapshotOpCb cbSnapshotOp(void) { return goBoxliteOnSnapshotOp; }

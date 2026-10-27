@@ -17,7 +17,7 @@ import { BoxActivityService } from '../services/box-activity.service'
 
 import { RedisLockProvider, LockCode } from '../common/redis-lock.provider'
 
-import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION, SNAPSHOT_OPERATION_STATES } from '../constants/box.constants'
 
 import { BoxEvents } from '../constants/box-events.constants'
 import { BoxStoppedEvent } from '../events/box-stopped.event'
@@ -256,6 +256,12 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
         .andWhere('box."desiredState"::text IN (:...supportedDesiredStates)', {
           supportedDesiredStates: [BoxDesiredState.STARTED, BoxDesiredState.STOPPED, BoxDesiredState.DESTROYED],
         })
+        // A stopped box mid-snapshot differs from its desired state on purpose;
+        // its job's settlement brings it back. Deleting it is still synced.
+        .andWhere('NOT (box.state IN (:...snapshotStates) AND box."desiredState" = :snapshotDesiredState)', {
+          snapshotStates: SNAPSHOT_OPERATION_STATES,
+          snapshotDesiredState: BoxDesiredState.STOPPED,
+        })
         .orderBy('activity."lastActivityAt"', 'DESC', 'NULLS LAST')
 
       const stream = await queryBuilder.stream()
@@ -351,6 +357,11 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
         if (String(box.state) === String(box.desiredState)) {
           this.logger.warn(`Box ${boxId} is already in the desired state ${box.desiredState}, skipping sync`)
           // Break sync loop if box is already in the desired state.
+          break
+        }
+
+        if (SNAPSHOT_OPERATION_STATES.includes(box.state) && box.desiredState === BoxDesiredState.STOPPED) {
+          // The snapshot job's settlement, not this loop, ends the operation.
           break
         }
 

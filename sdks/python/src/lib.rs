@@ -93,6 +93,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCopyOptions>()?;
     m.add_class::<PySnapshotInfo>()?;
     m.add_class::<PySnapshotHandle>()?;
+    m.add_class::<crate::snapshots::PyRuntimeSnapshotHandle>()?;
     m.add_class::<PySnapshotOptions>()?;
     m.add_class::<PyExportOptions>()?;
     m.add_class::<PyCloneOptions>()?;

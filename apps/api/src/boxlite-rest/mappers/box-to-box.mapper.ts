@@ -98,6 +98,10 @@ function mapState(state: string | BoxState | undefined): string {
     case BoxState.DESTROYING:
     case BoxState.ARCHIVING:
       return 'stopping'
+    case BoxState.EXPORTING:
+      return 'exporting'
+    case BoxState.IMPORTING:
+      return 'importing'
     case BoxState.ERROR:
     case BoxState.UNKNOWN:
     default:

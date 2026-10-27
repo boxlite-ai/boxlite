@@ -30,17 +30,17 @@ Complete API documentation for each SDK:
 
 | Surface | Documentation | Description |
 |---------|---------------|-------------|
-| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 32 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images, registries |
+| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 39 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images, registries |
 | **Admin API** | [`openapi/admin.openapi.yaml`](../../openapi/admin.openapi.yaml) | Cloud-only contract for organization members and invitations, 4 paths, meant for the CLI and SDKs, which do not call it yet. Shares the Box API's host and credentials, but uses the hosted service's flat error response; local servers do not serve it |
 | **Reference server** | [`openapi/reference-server/`](../../openapi/reference-server/README.md) | A partial implementation used as a client test fixture, not a conformance target |
 
 The spec is the contract, not an inventory of any one server, and no
-implementation currently serves all 32 paths:
+implementation currently serves all 39 paths:
 
 | Server | Serves | Does not serve |
 |--------|--------|----------------|
-| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | registries, `network/tunnel`, `network/inbound`. Volume routes are registered but every operation answers `400 UnsupportedError`, as do `images/usage` and both alias write routes |
-| reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, and `DELETE …/executions/{exec_id}` (kill) |
+| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | registries, `network/tunnel`, `network/inbound`, `restores/{restore_id}`, the top-level `snapshots` routes. Volume routes are registered but every operation answers `400 UnsupportedError`, as do `images/usage` and both alias write routes |
+| reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, `DELETE …/executions/{exec_id}` (kill), `restores/{restore_id}`, and the top-level `snapshots` routes |
 
 Read each server's routes rather than either README — both under-report.
 `GET /config` does not close this gap: its feature flags (`tty_enabled`,
@@ -63,6 +63,49 @@ A deployed BoxLite platform also runs services of its own — control plane,
 runner, preview proxy, telemetry collector — catalogued separately in
 [`apps/API.md`](../../apps/API.md). Those are deployment internals, not part of
 the portable contract above.
+
+### Snapshot SDK and CLI
+
+Cloud disk snapshots belong to the organization. The runtime catalog lists,
+looks up, and deletes them even after their source box is removed. The box
+handle's catalog filters by the recorded source box; it remains useful for
+capture and source-specific queries. A deleted source box cannot be reopened.
+
+| Operation | Python | Node.js | Rust | Go | CLI |
+|---|---|---|---|---|---|
+| Capture a box | `box.snapshot.create(name=...)` | `box.snapshot.create(name?, options?)` | `box.snapshots().create(options, name)` | `box.Snapshots()` → `Create(ctx, name)` | `snapshot create BOX [--name NAME]` |
+| List/get/remove by source | `box.snapshot` | `box.snapshot` | `box.snapshots()` | `box.Snapshots()` | `snapshot ls/get/rm --box BOX` |
+| Organization list/get/remove | `runtime.snapshots` | `runtime.snapshots` | `runtime.snapshots()?` | `runtime.Snapshots()` | `snapshot ls/get/rm` |
+| New box from a snapshot | `runtime.create_from_snapshot(...)` | `runtime.createFromSnapshot(...)` | `runtime.create_from_snapshot(...)` | `runtime.CreateFromSnapshot(...)` | `create --snapshot SNAPSHOT` |
+| Replace an existing box's disk | `box.snapshot.restore(...)` | `box.snapshot.restore(...)` | `box.snapshots().restore(...)` | `box.Snapshots()` → `Restore(...)` | `snapshot restore SNAPSHOT --box BOX` |
+
+Python's `SyncBoxlite` exposes the same operations without `await`. C exposes
+`boxlite_runtime_snapshots` / `boxlite_box_snapshots`, typed metadata callbacks,
+and `boxlite_create_box_from_snapshot`; see its [ownership rules](../../sdks/c/README.md#disk-snapshots).
+
+- Cloud capture and restore require a stopped box. Only disk data is saved;
+  memory snapshots and cross-runner snapshot copies remain unsupported.
+- Omit a name (or pass an empty name) to generate one. Rust also provides
+  `create_unnamed(options)`; Go accepts `Create(ctx, "")`; C accepts `NULL`.
+  Explicit duplicate names remain errors.
+- Cloud lookups accept an ID or name. Box-scoped `get` returns no value for
+  absence; organization `get` raises `NotFound`, matching Volumes. `force` on
+  organization removal ignores only missing snapshots, not permission errors.
+- Metadata includes source box ID, name, Unix creation time, disk sizes,
+  `status` (`creating`, `ready`, or `failed`) and an optional failure `error`.
+  Older servers and local snapshots without these fields read as `ready`.
+- Capture waits for `ready`; restore waits for its operation to succeed; new-box
+  creation waits for the new box to be `running`. Failure is returned as an
+  error. Polling backs off from one to five seconds and stops after two hours.
+  A timeout or caller cancellation does not roll back work accepted by the server.
+- New-box creation uses the snapshot's disk and region. CPU, memory, environment,
+  mounts and other settings use ordinary creation defaults or explicit options;
+  source-box settings and secrets are not inherited. Do not supply an image or
+  rootfs path. Rust/C's implicit default image is ignored for this operation.
+- Local runtimes retain their existing box-scoped disk snapshots and automatic
+  quiescing during capture. The organization catalog and create-from-snapshot
+  require a cloud server advertising the corresponding capability; `boxlite serve`
+  does not implement these organization routes.
 
 ### Image API migration (breaking change)
 

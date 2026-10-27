@@ -19,6 +19,7 @@ import { ResourceType } from '../enums/resource-type.enum'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { BoxMigrationJobReceiver, isMigrationJobType } from './box-migration-job-receiver.service'
+import { BoxSnapshotSettler, isSnapshotJobType } from './box-snapshot-settler.service'
 import { ImagePullFailureService } from '../../image/services/image-pull-failure.service'
 
 /**
@@ -34,6 +35,7 @@ export class JobStateHandlerService {
     private readonly redisLockProvider: RedisLockProvider,
     private readonly boxMigrationJobReceiver: BoxMigrationJobReceiver,
     private readonly imagePullFailureService: ImagePullFailureService,
+    private readonly boxSnapshotSettler: BoxSnapshotSettler,
   ) {}
 
   /**
@@ -55,6 +57,13 @@ export class JobStateHandlerService {
     // concurrent start or stop of the same box is holding.
     if (isMigrationJobType(job.type)) {
       await this.boxMigrationJobReceiver.handleJobCompletion(job)
+      return
+    }
+
+    // A snapshot job holds no Redis lock either: its operation's row and the
+    // box's EXPORTING or IMPORTING state are what keep other work out.
+    if (isSnapshotJobType(job.type)) {
+      await this.boxSnapshotSettler.settle(job)
       return
     }
 
@@ -100,13 +109,16 @@ export class JobStateHandlerService {
       }
 
       if (box.desiredState !== BoxDesiredState.STARTED) {
+        if (box.initialSnapshotId && [JobStatus.COMPLETED, JobStatus.FAILED].includes(job.status)) {
+          await this.boxRepository.update(boxId, { updateData: { initialSnapshotId: null }, entity: box })
+        }
         this.logger.error(
           `Box ${boxId} is not in desired state STARTED for CREATE_BOX job ${job.id}. Desired state: ${box.desiredState}`,
         )
         return
       }
 
-      const updateData: Partial<Box> = {}
+      const updateData: Partial<Box> = box.initialSnapshotId ? { initialSnapshotId: null } : {}
 
       if (job.status === JobStatus.COMPLETED) {
         this.logger.debug(`CREATE_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
@@ -122,8 +134,9 @@ export class JobStateHandlerService {
         const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
         // Creating is where a box first pulls its image.
         updateData.errorReason =
-          (await this.imagePullFailureService.reasonFor(box, errorReason)) || 'Failed to create box'
-        updateData.recoverable = recoverable
+          (box.initialSnapshotId ? errorReason : await this.imagePullFailureService.reasonFor(box, errorReason)) ||
+          'Failed to create box'
+        updateData.recoverable = box.initialSnapshotId ? false : recoverable
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })

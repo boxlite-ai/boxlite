@@ -203,24 +203,27 @@ impl ApiClient {
         // own total timeout expiring after the headers landed, a reset
         // connection, a corrupt compressed body — never an internal bug.
         let bytes = resp.bytes().await.map_err(transport_error)?;
-        serde_json::from_slice::<T>(&bytes).map_err(|e| {
-            let preview = String::from_utf8_lossy(&bytes);
-            let preview = if preview.len() > 4096 {
-                format!(
-                    "{}… (truncated, {} bytes total)",
-                    &preview[..4096],
-                    bytes.len()
-                )
-            } else {
-                preview.into_owned()
-            };
-            BoxliteError::Internal(format!(
-                "failed to parse response: {} \n--- response body ({} bytes) ---\n{}\n--- end ---",
-                e,
-                bytes.len(),
-                preview
-            ))
-        })
+        parse_json_body(&bytes)
+    }
+
+    /// Send a request a server may answer with no body (it finished the work
+    /// before replying) or with a JSON record to follow up on (it did not).
+    async fn send_optional_json<T: DeserializeOwned>(
+        &self,
+        builder: RequestBuilder,
+    ) -> BoxliteResult<Option<T>> {
+        let builder = self.authorize(builder).await?;
+        let resp = builder.send().await.map_err(transport_error)?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return self.handle_error(status, resp).await;
+        }
+        let bytes = resp.bytes().await.map_err(transport_error)?;
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        parse_json_body(&bytes).map(Some)
     }
 
     /// Send a request and expect no response body (204).
@@ -290,9 +293,12 @@ impl ApiClient {
         self.send_json(builder).await
     }
 
-    pub async fn post_empty_no_content(&self, path: &str) -> BoxliteResult<()> {
+    pub async fn post_empty_for_optional_json<T: DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> BoxliteResult<Option<T>> {
         let builder = self.empty_post_request(path);
-        self.send_no_content(builder).await
+        self.send_optional_json(builder).await
     }
 
     pub async fn post_for_bytes<B: Serialize>(
@@ -534,6 +540,18 @@ impl ApiClient {
         ensure_capability("snapshots", capabilities.snapshots_enabled)
     }
 
+    pub async fn require_create_from_snapshot_enabled(&self) -> BoxliteResult<()> {
+        let capabilities = self.get_config().await?.capabilities.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "Remote server did not advertise snapshot box creation".into(),
+            )
+        })?;
+        ensure_capability(
+            "create_from_snapshot",
+            capabilities.create_from_snapshot_enabled,
+        )
+    }
+
     pub async fn require_linux_capabilities_enabled(&self) -> BoxliteResult<()> {
         // This gate protects a security policy, so a cached positive response
         // is insufficient after a server rollback or replacement. Recheck the
@@ -679,6 +697,29 @@ fn map_ws_error(err: tokio_tungstenite::tungstenite::Error) -> BoxliteError {
         };
     }
     BoxliteError::Network(format!("WS connect failed: {}", err))
+}
+
+/// Parse a response body, quoting it (truncated) in the error when it is not
+/// the JSON the caller expected.
+fn parse_json_body<T: DeserializeOwned>(bytes: &[u8]) -> BoxliteResult<T> {
+    serde_json::from_slice::<T>(bytes).map_err(|e| {
+        let preview = String::from_utf8_lossy(bytes);
+        let preview = if preview.len() > 4096 {
+            format!(
+                "{}… (truncated, {} bytes total)",
+                &preview[..4096],
+                bytes.len()
+            )
+        } else {
+            preview.into_owned()
+        };
+        BoxliteError::Internal(format!(
+            "failed to parse response: {} \n--- response body ({} bytes) ---\n{}\n--- end ---",
+            e,
+            bytes.len(),
+            preview
+        ))
+    })
 }
 
 fn ensure_capability(name: &str, enabled: Option<bool>) -> BoxliteResult<()> {

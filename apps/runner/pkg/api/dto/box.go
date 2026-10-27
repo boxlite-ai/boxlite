@@ -34,6 +34,8 @@ type CreateBoxDTO struct {
 	AuthToken        *string           `json:"authToken,omitempty"`
 	OtelEndpoint     *string           `json:"otelEndpoint,omitempty"`
 	SkipStart        *bool             `json:"skipStart,omitempty"`
+	// Local file prepared by the job executor, never accepted over HTTP.
+	SnapshotArchivePath string `json:"-" swaggerignore:"true"`
 
 	// Nullable for backward compatibility
 	OrganizationId *string `json:"organizationId,omitempty"`

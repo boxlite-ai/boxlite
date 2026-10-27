@@ -501,6 +501,20 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		boxDto.Image,
 	)
 
+	if boxDto.SnapshotArchivePath != "" {
+		info, err := bx.Info(ctx)
+		if err != nil {
+			return bx.ID(), "", err
+		}
+		// A completed job may be replayed after its callback was lost. Never
+		// replace a disk the child has already booted and written to.
+		if info.StartedAt.IsZero() {
+			if err := bx.RestoreFromArchive(ctx, boxDto.SnapshotArchivePath); err != nil {
+				return bx.ID(), "", fmt.Errorf("failed to initialize snapshot disk: %w", err)
+			}
+		}
+	}
+
 	// bx.Start must stay the last step of Create that can fail.
 	//
 	// A successful Start publishes StartedAt when BoxLite moves the box to Running,
@@ -661,8 +675,9 @@ func (c *Client) GetBoxInfo(ctx context.Context, boxId string) (models.BoxInfo, 
 	}
 
 	return models.BoxInfo{
-		BoxState: ToBoxState(info.State),
-		ExitCode: info.ExitCode,
+		BoxState:  ToBoxState(info.State),
+		StartedAt: info.StartedAt,
+		ExitCode:  info.ExitCode,
 	}, nil
 }
 

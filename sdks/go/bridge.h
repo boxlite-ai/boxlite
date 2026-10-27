@@ -13,6 +13,7 @@ extern CBoxExitCb cbExit(void);
 
 extern CBoxCreateBoxCb cbCreateBox(void);
 extern CBoxExportCb cbBoxExport(void);
+extern CBoxRestoreArchiveCb cbBoxRestoreArchive(void);
 extern CRuntimeImportCb cbRuntimeImport(void);
 extern CBoxGetOrCreateBoxCb cbGetOrCreateBox(void);
 extern CBoxGetBoxCb cbGetBox(void);
@@ -27,6 +28,9 @@ extern CBoxImageGetCb cbImageGet(void);
 extern CBoxImageRemoveCb cbImageRemove(void);
 extern CBoxImageUsageCb cbImageUsage(void);
 
+extern CBoxSnapshotInfoCb cbSnapshotInfo(void);
+extern CBoxSnapshotListCb cbSnapshotList(void);
+extern CBoxSnapshotOpCb cbSnapshotOp(void);
 extern CBoxVolumeCreateCb cbVolumeCreate(void);
 extern CBoxVolumeListCb cbVolumeList(void);
 extern CBoxVolumeGetCb cbVolumeGet(void);

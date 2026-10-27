@@ -17,6 +17,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [BoxliteRuntime](#boxliteruntime)
   - [ImageHandle](#imagehandle)
   - [RegistryHandle](#registryhandle)
+  - [Snapshot handles](#snapshot-handles)
   - [BoxliteOptions](#boxliteoptions)
 - [Box Handle](#box-handle)
   - [LiteBox](#litebox)
@@ -209,6 +210,30 @@ for login in registries.list().await? {
 }
 registries.remove(&login.id).await?;
 ```
+
+### Snapshot handles
+
+```rust
+let source_snapshots = source.snapshots();
+let saved = source_snapshots.create_unnamed(SnapshotOptions::default()).await?;
+let catalog = runtime.snapshots()?; // REST organization capability
+let snapshots = catalog.list().await?;
+let saved = catalog.get(&saved.id).await?;
+let child = runtime.create_from_snapshot(
+    &saved.id, BoxOptions { cpus: Some(2), ..Default::default() },
+    Some("worker".into()),
+).await?;
+catalog.remove(&saved.id, false).await?;
+```
+
+`source.snapshots().create(options, name)` remains available. `get` on a box
+returns `Option<SnapshotInfo>`; `RuntimeSnapshotHandle::get` returns `NotFound`
+for absence. Both scopes expose `list/get/remove`; only the box scope captures
+and restores. Runtime `remove(id_or_name, force)` ignores missing records only.
+Leave `BoxOptions::rootfs` at its default for `create_from_snapshot`; that
+implicit image is omitted from the request, and other images/rootfs paths are
+rejected. See [shared contracts](../README.md#snapshot-sdk-and-cli) for polling,
+metadata and local-runtime support.
 
 ### BoxliteOptions
 

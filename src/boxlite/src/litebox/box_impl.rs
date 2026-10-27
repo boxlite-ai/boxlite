@@ -1631,6 +1631,13 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         BoxImpl::export_box(self, options, dest).await
     }
 
+    async fn restore_from_archive(
+        &self,
+        archive: crate::runtime::options::BoxArchive,
+    ) -> BoxliteResult<()> {
+        BoxImpl::restore_from_archive(self, archive).await
+    }
+
     async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
         BoxImpl::ssh_configure(self, config).await
     }

@@ -188,11 +188,12 @@ func run() int {
 		}()
 
 		executorService, err := executor.NewExecutor(&executor.ExecutorConfig{
-			Logger:         logger,
-			Backend:        boxBackend,
-			Collector:      metricsCollector,
-			ArchiveStore:   migrationArchiveStore(cfg, logger),
-			MigrateWorkDir: migrationWorkDir(cfg, boxliteClient.HomeDir()),
+			Logger:          logger,
+			Backend:         boxBackend,
+			Collector:       metricsCollector,
+			ArchiveStore:    archiveStore(cfg, logger),
+			MigrateWorkDir:  migrationWorkDir(cfg, boxliteClient.HomeDir()),
+			SnapshotWorkDir: filepath.Join(boxliteClient.HomeDir(), "snapshot-work"),
 		})
 		if err != nil {
 			logger.Error("Failed to create executor service", "error", err)
@@ -263,14 +264,22 @@ func run() int {
 	}
 }
 
-// migrationArchiveStore builds the object-store client that box migration moves
-// archives through. It is optional on purpose: a runner deployed without a
-// bucket still serves every other job type, and a migration job that reaches it
-// fails with a configuration error the control plane can see, instead of the
-// runner refusing to start.
-func migrationArchiveStore(cfg *config.Config, logger *slog.Logger) storage.ArchiveStore {
+// archiveStore builds the object-store clients archives move through, chosen
+// per archive by its URI scheme: Cloud Storage for gs:// (snapshots), S3 for
+// the rest (migrations). Cloud Storage needs no configuration here — the
+// control plane names the bucket and the host's service account supplies the
+// credentials.
+func archiveStore(cfg *config.Config, logger *slog.Logger) storage.ArchiveStore {
+	return &storage.SchemeArchiveStore{GCS: &storage.GCSArchiveStore{}, S3: s3ArchiveStore(cfg, logger)}
+}
+
+// s3ArchiveStore builds the S3 client, or nil without a bucket. It is optional
+// on purpose: a runner deployed without one still serves every other job, and
+// an S3 archive job that reaches it fails with a configuration error the
+// control plane can see, instead of the runner refusing to start.
+func s3ArchiveStore(cfg *config.Config, logger *slog.Logger) storage.ArchiveStore {
 	if cfg.AWSDefaultBucket == "" {
-		logger.Warn("Box migration disabled: AWS_DEFAULT_BUCKET is not set")
+		logger.Warn("S3 archive store disabled: AWS_DEFAULT_BUCKET is not set")
 		return nil
 	}
 
@@ -282,7 +291,7 @@ func migrationArchiveStore(cfg *config.Config, logger *slog.Logger) storage.Arch
 		Bucket:          cfg.AWSDefaultBucket,
 	})
 	if err != nil {
-		logger.Warn("Box migration disabled: object store client unavailable", "error", err)
+		logger.Warn("S3 archive store disabled: object store client unavailable", "error", err)
 		return nil
 	}
 

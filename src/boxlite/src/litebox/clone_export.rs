@@ -243,6 +243,56 @@ impl BoxImpl {
     }
 }
 
+impl BoxImpl {
+    /// Replace this box's container disk with the one an archive carries.
+    ///
+    /// A stopped or never-started box qualifies. Installing the disk moves a
+    /// configured box to Stopped so its first start reuses that disk. The disk
+    /// lock excludes start, export and snapshots while it is replaced.
+    pub(crate) async fn restore_from_archive(
+        &self,
+        archive: crate::runtime::options::BoxArchive,
+    ) -> BoxliteResult<()> {
+        let t0 = Instant::now();
+        let _lock = self.disk_ops.lock().await;
+
+        let status = self.state.read().status;
+        if !matches!(status, BoxStatus::Stopped | BoxStatus::Configured) {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot restore box {} from an archive while it is {}; stop it first",
+                self.config.id,
+                status.as_str()
+            )));
+        }
+
+        let archive_path = archive.path().to_path_buf();
+        let layout = self.runtime.layout.clone();
+        let disks_dir = self.config.box_home.join("disks");
+        tokio::task::spawn_blocking(move || {
+            crate::runtime::import::replace_container_disk(&archive_path, &layout, &disks_dir)
+        })
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("Archive restore task panicked: {}", e)))??;
+
+        if status == BoxStatus::Configured {
+            let mut restored = self.state.read().clone();
+            restored.transition_to(BoxStatus::Stopped)?;
+            self.runtime
+                .box_manager
+                .save_box(&self.config.id, &restored)?;
+            *self.state.write() = restored;
+        }
+
+        tracing::info!(
+            box_id = %self.config.id,
+            elapsed_ms = t0.elapsed().as_millis() as u64,
+            "Restored box disk from archive"
+        );
+
+        Ok(())
+    }
+}
+
 /// Intermediate result from flatten phase, passed to finalize phase.
 struct FlattenResult {
     temp_dir: tempfile::TempDir,
@@ -344,4 +394,179 @@ fn do_export_finalize(
     );
 
     Ok(crate::runtime::options::BoxArchive::new(output_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
+    use crate::litebox::state::BoxState;
+    use crate::runtime::id::BoxIDMint;
+    use crate::runtime::import::{write_test_archive, write_test_disk};
+    use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions, RootfsSpec};
+    use crate::runtime::rt_impl::RuntimeImpl;
+    use crate::runtime::types::ContainerID;
+    use crate::vmm::VmmKind;
+    use chrono::Utc;
+    use tempfile::TempDir;
+
+    /// A box in `status` whose disks hold a container disk ending in
+    /// "original" and a guest rootfs overlay, plus an archive of a disk
+    /// ending in "restored".
+    struct RestoreTarget {
+        box_impl: BoxImpl,
+        disks_dir: std::path::PathBuf,
+        archive: std::path::PathBuf,
+        _home: TempDir,
+    }
+
+    impl RestoreTarget {
+        fn new(status: BoxStatus) -> Self {
+            let home = TempDir::new_in("/tmp").unwrap();
+            let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+                home_dir: home.path().join("runtime"),
+                image_registries: vec![],
+                ..Default::default()
+            })
+            .unwrap();
+            std::fs::create_dir_all(runtime.layout.temp_dir()).unwrap();
+
+            let id = BoxIDMint::mint();
+            let config = BoxConfig {
+                id: id.clone(),
+                name: None,
+                created_at: Utc::now(),
+                container: ContainerRuntimeConfig {
+                    id: ContainerID::new(),
+                },
+                options: BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    ..Default::default()
+                },
+                engine_kind: VmmKind::Libkrun,
+                box_home: runtime.layout.boxes_dir().join(id.as_str()),
+            };
+            let disks_dir = config.box_home.join("disks");
+            std::fs::create_dir_all(&disks_dir).unwrap();
+            write_test_disk(
+                &disks_dir.join(disk_filenames::CONTAINER_DISK),
+                None,
+                b"original",
+            );
+            std::fs::write(disks_dir.join(disk_filenames::GUEST_ROOTFS_DISK), b"guest").unwrap();
+
+            let archive_dir = home.path().join("archive");
+            std::fs::create_dir_all(&archive_dir).unwrap();
+            let archive = write_test_archive(&archive_dir, None, b"restored", None);
+
+            let mut state = BoxState::new();
+            state.status = status;
+            runtime.box_manager.add_box(&config, &state).unwrap();
+            let box_impl = BoxImpl::new(
+                config,
+                state,
+                runtime.clone(),
+                runtime.shutdown_token.child_token(),
+            );
+            Self {
+                box_impl,
+                disks_dir,
+                archive,
+                _home: home,
+            }
+        }
+
+        fn container_disk(&self) -> Vec<u8> {
+            std::fs::read(self.disks_dir.join(disk_filenames::CONTAINER_DISK)).unwrap()
+        }
+
+        fn has_guest_overlay(&self) -> bool {
+            self.disks_dir
+                .join(disk_filenames::GUEST_ROOTFS_DISK)
+                .exists()
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_swaps_the_archived_disk_into_a_stopped_box() {
+        let target = RestoreTarget::new(BoxStatus::Stopped);
+
+        target
+            .box_impl
+            .restore_from_archive(BoxArchive::new(&target.archive))
+            .await
+            .expect("a stopped box takes the archived disk");
+
+        assert!(target.container_disk().ends_with(b"restored"));
+        assert!(
+            !target.has_guest_overlay(),
+            "the guest rootfs overlay is rebuilt on the next start"
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_initializes_a_configured_box_without_starting_it() {
+        let target = RestoreTarget::new(BoxStatus::Configured);
+        std::fs::remove_dir_all(&target.disks_dir).unwrap();
+
+        target
+            .box_impl
+            .restore_from_archive(BoxArchive::new(&target.archive))
+            .await
+            .expect("a new box can receive its disk before first boot");
+
+        assert!(target.container_disk().ends_with(b"restored"));
+        let state = target.box_impl.state.read().clone();
+        assert_eq!(state.status, BoxStatus::Stopped);
+        assert!(state.started_at.is_none());
+        let persisted = target
+            .box_impl
+            .runtime
+            .box_manager
+            .update_box(&target.box_impl.config.id)
+            .unwrap();
+        assert_eq!(persisted.status, BoxStatus::Stopped);
+        assert!(persisted.started_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn restore_keeps_a_configured_box_uninitialized_on_invalid_archive() {
+        let target = RestoreTarget::new(BoxStatus::Configured);
+        std::fs::remove_dir_all(&target.disks_dir).unwrap();
+        std::fs::write(&target.archive, b"invalid archive").unwrap();
+
+        assert!(
+            target
+                .box_impl
+                .restore_from_archive(BoxArchive::new(&target.archive))
+                .await
+                .is_err()
+        );
+
+        assert!(!target.disks_dir.exists());
+        assert_eq!(target.box_impl.state.read().status, BoxStatus::Configured);
+    }
+
+    #[tokio::test]
+    async fn restore_refuses_an_active_box() {
+        for status in [BoxStatus::Running, BoxStatus::Stopping, BoxStatus::Paused] {
+            let target = RestoreTarget::new(status);
+
+            let error = target
+                .box_impl
+                .restore_from_archive(BoxArchive::new(&target.archive))
+                .await
+                .expect_err("an active box must not have its disk replaced");
+
+            assert!(
+                matches!(error, BoxliteError::InvalidState(_)),
+                "{status:?}: {error}"
+            );
+            assert!(
+                target.container_disk().ends_with(b"original"),
+                "{status:?}: the disk must be left alone"
+            );
+            assert!(target.has_guest_overlay(), "{status:?}");
+        }
+    }
 }

@@ -334,6 +334,7 @@ apps/e2e/
     ├── test_box_lifecycle_policy.py # auto_stop / auto_delete reaping
     ├── test_box_metrics.py          # Per-box metrics through the runner
     ├── test_volumes.py              # Managed volumes: CRUD + data reuse
+    ├── test_snapshots.py            # Snapshot outlives its box, restores into another
     ├── test_network_egress.py       # Outbound policy: block-all, allow_net
     ├── test_exec_*.py               # Exec stdout, attach, timeout
     ├── test_copy_roundtrip.py       # Copy in/out

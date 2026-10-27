@@ -31,6 +31,10 @@ type BoxBackend interface {
 	ExportBox(ctx context.Context, boxId, destDir string) (string, error)
 	ImportBox(ctx context.Context, boxId, archivePath string) error
 
+	// Snapshot restore — replace a stopped box's disk with an archive's,
+	// keeping the box itself; a failure leaves the original disk in place.
+	RestoreBoxFromArchive(ctx context.Context, boxId, archivePath string) error
+
 	// Health
 	Ping(ctx context.Context) error
 }
