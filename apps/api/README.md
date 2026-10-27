@@ -35,6 +35,9 @@ two-second request timeout. API Redis NX/EX 60 deduplicates across replicas; Red
 Forwarding continues on telemetry failure. Reloads collapse and delivery is best effort: this is neither a
 navigation count nor a visitor count, and it does not add to requested-operation totals.
 
+The preview marker is internal to the proxy/API exchange and is absent from the public OpenAPI parameters;
+ordinary heartbeat clients keep their existing signature and need no new header.
+
 At most 1,440 preview rows per continuously active box/day add 0.15552 GB over 400 days at 270 bytes/row.
 Before production, measure seven days of preview-active minutes and actual row sizes with other new events.
 Recheck the 20% storage budget as traffic grows; provision capacity or reduce retention before exceeding it.

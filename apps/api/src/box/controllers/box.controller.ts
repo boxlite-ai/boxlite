@@ -16,8 +16,9 @@ import {
   HttpCode,
   UseInterceptors,
   Put,
-  Headers,
+  Req,
 } from '@nestjs/common'
+import type { Request } from 'express'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { BoxService } from '../services/box.service'
 import {
@@ -418,9 +419,9 @@ export class BoxController {
   async updateLastActivity(
     @Param('boxId') boxId: string,
     @AuthContext() authContext: AuthContextType,
-    @Headers('x-boxlite-preview-open') previewOpen?: string,
+    @Req() request: Request,
   ): Promise<void> {
-    if (previewOpen === '1' && authContext && isProxyContext(authContext)) {
+    if (request.headers['x-boxlite-preview-open'] === '1' && authContext && isProxyContext(authContext)) {
       await this.boxService.updateLastActivityAt(boxId, new Date(), true)
       return
     }
