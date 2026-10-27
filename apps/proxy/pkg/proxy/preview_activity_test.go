@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -25,6 +26,10 @@ func TestPreviewActivityNavigation(t *testing.T) {
 			cancelled := make(chan struct{}, 100)
 			var count atomic.Int32
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/preview/AbCdEf123456/tunnels/3000/access" {
+					_ = json.NewEncoder(w).Encode(tunnelGrant{ID: "tunnel-1", BoxID: "AbCdEf123456", Port: 3000, IsPublic: true, Generation: 1})
+					return
+				}
 				if r.URL.Path == "/api/box/AbCdEf123456/last-activity" {
 					count.Add(1)
 					calls <- r
@@ -89,6 +94,8 @@ func TestPreviewActivityExcludesAssetsAndDeniedNavigations(t *testing.T) {
 				}
 				if dest == "document" {
 					w.WriteHeader(http.StatusNotFound)
+				} else if r.URL.Path == "/api/preview/AbCdEf123456/tunnels/3000/access" {
+					_ = json.NewEncoder(w).Encode(tunnelGrant{ID: "tunnel-1", BoxID: "AbCdEf123456", Port: 3000, IsPublic: true, Generation: 1})
 				} else {
 					w.WriteHeader(http.StatusOK)
 				}
@@ -99,8 +106,15 @@ func TestPreviewActivityExcludesAssetsAndDeniedNavigations(t *testing.T) {
 			ctx.Request = httptest.NewRequest(http.MethodGet, "http://3000-AbCdEf123456.proxy.test/", nil)
 			ctx.Request.Header.Set("Sec-Fetch-Mode", "navigate")
 			ctx.Request.Header.Set("Sec-Fetch-Dest", dest)
-			_, _ = proxy.GetProxyTarget(ctx)
+			target, err := proxy.GetProxyTarget(ctx)
 			stopActivityPoll(ctx)
+			if dest == "document" {
+				if err == nil || target != nil {
+					t.Fatal("denied navigation reached a proxy target")
+				}
+			} else if err != nil || target == nil {
+				t.Fatalf("asset request was not admitted: %v", err)
+			}
 			select {
 			case <-calls:
 				t.Fatal("non-navigation or denied request emitted presence")
