@@ -51,6 +51,8 @@ extern void goBoxliteOnExecutionResize(CBoxliteError *err, void *ud);
 extern void goBoxliteOnTunnelForwarderWait(CBoxliteError *err, void *ud);
 extern void goBoxliteOnTunnelForwarderClose(CBoxliteError *err, void *ud);
 
+extern void goBoxliteOnSSHStatus(CSshStatus *status, CBoxliteError *err, void *ud);
+
 CBoxStdoutCb cbStdout(void) { return (CBoxStdoutCb)goBoxliteOnStdout; }
 CBoxStderrCb cbStderr(void) { return (CBoxStderrCb)goBoxliteOnStderr; }
 CBoxExitCb cbExit(void) { return (CBoxExitCb)goBoxliteOnExit; }
@@ -100,3 +102,9 @@ CExecutionSignalCb cbExecutionSignal(void) { return (CExecutionSignalCb)goBoxlit
 CExecutionResizeCb cbExecutionResize(void) { return (CExecutionResizeCb)goBoxliteOnExecutionResize; }
 CTunnelForwarderWaitCb cbTunnelForwarderWait(void) { return (CTunnelForwarderWaitCb)goBoxliteOnTunnelForwarderWait; }
 CTunnelForwarderCloseCb cbTunnelForwarderClose(void) { return (CTunnelForwarderCloseCb)goBoxliteOnTunnelForwarderClose; }
+
+// All three SSH operations deliver one CSshStatus, so they share the
+// goBoxliteOnSSHStatus trampoline (cast to their distinct typedef).
+CBoxSshConfigureCb cbSSHConfigure(void) { return (CBoxSshConfigureCb)goBoxliteOnSSHStatus; }
+CBoxSshStatusCb cbSSHStatus(void) { return (CBoxSshStatusCb)goBoxliteOnSSHStatus; }
+CBoxSshDisableCb cbSSHDisable(void) { return (CBoxSshDisableCb)goBoxliteOnSSHStatus; }

@@ -659,6 +659,44 @@ func goBoxliteOnTunnelForwarderClose(errPtr *C.CBoxliteError, userData unsafe.Po
 	deliverUnitResult(userData, errPtr)
 }
 
+// freeSSHStatus releases a status the native side handed to an SSH callback.
+// A variable so development tests can count releases.
+var freeSSHStatus = func(status *C.CSshStatus) { C.boxlite_free_ssh_status(status) }
+
+func freeSSHStatusPayload(status **C.CSshStatus) {
+	if *status != nil {
+		freeSSHStatus(*status)
+	}
+}
+
+// goBoxliteOnSSHStatus serves configure, status, and disable. The callback
+// owns the status, so every path frees it once: a zero or lost handle frees
+// without delivering, and a won claim copies it before checking the channel.
+//
+//export goBoxliteOnSSHStatus
+func goBoxliteOnSSHStatus(status *C.CSshStatus, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		freeSSHStatusPayload(&status)
+		return
+	}
+	if !claimOrFreePayload(h, &status, freeSSHStatusPayload) {
+		return
+	}
+	defer h.Delete()
+	result := sshStatusResult{err: errorFromCError(errPtr)}
+	if status != nil {
+		if result.err == nil {
+			value := sshStatusFromC(status)
+			result.value = &value
+		}
+		freeSSHStatus(status)
+	}
+	if ch, ok := h.Value().(chan sshStatusResult); ok {
+		ch <- result
+	}
+}
+
 // ─── Generic delivery helpers ──────────────────────────────────────────────
 
 // deliverUnitResult sends an error-only result to the channel referenced by
@@ -794,4 +832,9 @@ type runtimeMetricsResult struct {
 type executionWaitResult struct {
 	exitCode int
 	err      error
+}
+
+type sshStatusResult struct {
+	value *SSHStatus
+	err   error
 }

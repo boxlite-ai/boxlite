@@ -51,4 +51,8 @@ extern CExecutionResizeCb cbExecutionResize(void);
 extern CTunnelForwarderWaitCb cbTunnelForwarderWait(void);
 extern CTunnelForwarderCloseCb cbTunnelForwarderClose(void);
 
+extern CBoxSshConfigureCb cbSSHConfigure(void);
+extern CBoxSshStatusCb cbSSHStatus(void);
+extern CBoxSshDisableCb cbSSHDisable(void);
+
 #endif // BOXLITE_GO_BRIDGE_H
