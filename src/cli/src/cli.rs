@@ -220,6 +220,33 @@ const NETWORK_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
+const SSH_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "configure",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "status",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "disable",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "configure-and-forward",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "forward",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+];
 const VOLUME_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "create",
@@ -322,6 +349,11 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         name: "network",
         globals: BOX_GLOBALS,
         children: NETWORK_SCOPES,
+    },
+    CommandScope {
+        name: "ssh",
+        globals: BOX_GLOBALS,
+        children: SSH_SCOPES,
     },
     CommandScope {
         name: "serve",
@@ -623,6 +655,9 @@ pub enum Commands {
 
     /// Manage box networking
     Network(crate::commands::network::NetworkArgs),
+
+    /// Configure, inspect, disable, or forward to guest SSH
+    Ssh(crate::commands::ssh::SshArgs),
 
     /// Start a long-running REST API server
     Serve(crate::commands::serve::ServeArgs),
