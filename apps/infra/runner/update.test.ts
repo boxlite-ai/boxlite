@@ -119,10 +119,8 @@ test('a build-mode upgrade installs the staged object, fetched with the instance
   assert.equal(upgrade.kind, 'build')
   assert.ok(script.includes(`${aws} "${object}" "$WORK/runner.tar.gz"`), 'fetches the tarball')
   assert.ok(script.includes(`${aws} "${object}.sha256"`), 'fetches the checksum sidecar')
-  assert.ok(
-    !script.includes(`curl --fail --silent --show-error --location --proto`),
-    'the artifact never comes over public HTTPS',
-  )
+  assert.ok(!script.includes('https://github.com/boxlite-ai/boxlite/releases/'), 'the runner artifact comes from S3')
+  assert.match(script, /libkrunfw-kernel-dind-x86_64\.bin/, 'the standalone kernel is downloaded separately')
   // SSM is the only channel that reaches a host whose user-data is ignored, so the payload has
   // to be able to install the CLI it is about to use.
   // Over the live payload: the string and the fetch below both survive a `#`, so the ordering
@@ -313,7 +311,7 @@ test('a stalled-but-healthy command reports the status it was stuck on', () => {
     () => waitForTerminalStatus([], 'i-1', { run, sleep: () => (sleeps += 1) }),
     /last status: InProgress/,
   )
-  assert.equal(sleeps, 359, 'does not sleep after the final poll')
+  assert.equal(sleeps, 419, 'does not sleep after the final poll')
 })
 
 test('a recovered transient poll error does not outlive the stall it preceded', () => {

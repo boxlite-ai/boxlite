@@ -10,6 +10,8 @@ use std::ptr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod kernel;
+
 extern "C" fn noop_shutdown_cb(_err: *mut FFIError, _ud: *mut c_void) {}
 extern "C" fn noop_image_pull_cb(
     _r: *mut crate::images::CImagePullResult,

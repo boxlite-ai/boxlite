@@ -14,6 +14,7 @@ import type { resolveRunnerInventory } from '../runner/model/inventory.js'
 import type { ApiResources } from './api.js'
 import type { FoundationResources } from './foundation.js'
 import { PORTS, RUNNER, envOr } from './settings.js'
+import { CLOUD_RUNNER_KERNEL, kernelDeployment } from '../runner/kernel.js'
 
 export interface RunnerInputs {
   foundation: FoundationResources
@@ -389,7 +390,7 @@ for (const { label, instance } of !deploysRunner
         RUNNER_ARTIFACT_BUCKET: artifactsBucketName,
         BOXLITE_ARTIFACT_REF: runnerArtifactSource.kind === 'build' ? (runnerArtifactSource.ref ?? '') : '',
       },
-      triggers: [runnerArtifactTrigger, instance.id],
+      triggers: [runnerArtifactTrigger, CLOUD_RUNNER_KERNEL.sha256, instance.id],
     },
     {
       // The artifact policy is a hard prerequisite, not a sibling: in build mode the payload
@@ -506,6 +507,8 @@ echo "runner tarball checksum verified (\$ACTUAL)"
 tar -xzf "${tarballPath}" -C /usr/local/bin/
 rm -f "${tarballPath}" /tmp/runner.sha256
 chmod +x /usr/local/bin/boxlite-runner
+
+${kernelDeployment().install}
 
 # Get host IP via IMDSv2
 IMDS_TOKEN=\$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")

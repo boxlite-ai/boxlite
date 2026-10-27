@@ -2,7 +2,10 @@
 
 Use a privileged guest for each Docker Engine. On Linux x86_64, the `v5.4.0`
 DinD release asset refreshed on 2026-10-23 includes built-in IPVS TCP/UDP,
-round-robin scheduling, conntrack netlink, xtables IPVS/u32 and VXLAN. Follow
+round-robin scheduling, conntrack netlink, xtables IPVS/u32 and VXLAN.
+[Cloud deployment](../../apps/infra/docs/runners.md#cloud-kernel) installs this
+standalone kernel and selects it through `BOXLITE_KERNEL_PATH`, without
+changing SDK or Runner package builds. For local firmware development, follow
 the [DinD build instructions](docker-in-docker.md#build-the-runtime) for
 prerequisites and replacing an older firmware cache, then package the release
 kernel through the normal runtime:
