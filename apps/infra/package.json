@@ -24,6 +24,7 @@
     "mbuild": "tsx --conditions=development mbuild/bin/mbuild.ts",
     "mdeploy": "tsx --conditions=development mdeploy/bin/mdeploy.ts",
     "runner:update": "tsx --conditions=development mdeploy/bin/runner-update.ts",
+    "runner:drain": "tsx --conditions=development mdeploy/bin/runner-drain.ts",
     "runner:build": "tsx --conditions=development mdeploy/bin/runner-build.ts",
   "runner:promote": "tsx --conditions=development mdeploy/bin/runner-promote.ts",
     "sst": "tsx deployment/sst.ts",

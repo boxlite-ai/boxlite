@@ -7,10 +7,16 @@
 import { Runner } from '../entities/runner.entity'
 import { RunnerState } from '../enums/runner-state.enum'
 import { RunnerService } from './runner.service'
+import { BoxMigration } from '../entities/box-migration.entity'
+import { Job } from '../entities/job.entity'
+import { Box } from '../entities/box.entity'
+import { In, Not } from 'typeorm'
+import { BoxMigrationState } from '../enums/box-migration-state.enum'
+import { JobStatus } from '../enums/job-status.enum'
 
 describe('RunnerService decommission verification', () => {
   const createService = (boxCount: number, checkCount: string | null = null) => {
-    const runner = { id: 'runner-1', draining: true, state: RunnerState.READY }
+    const runner = { id: 'runner-1', draining: true, unschedulable: true, state: RunnerState.READY, apiKey: 'secret' }
     const runnerRepository = {
       find: jest.fn().mockResolvedValue([runner]),
       findOne: jest.fn().mockResolvedValue(runner),
@@ -19,8 +25,8 @@ describe('RunnerService decommission verification', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
     }
     const boxRepository = { count: jest.fn().mockResolvedValue(boxCount) }
-    // Only the singleton cron guards still take a Redis lock; the two runner
-    // state writers serialise against each other with a FOR UPDATE row lock
+    // Only the singleton cron guards still take a Redis lock; lifecycle
+    // writers serialise against each other with a FOR UPDATE row lock
     // inside `dataSource.transaction`.
     const redisLockProvider = {
       lock: jest.fn().mockResolvedValue(true),
@@ -40,12 +46,14 @@ describe('RunnerService decommission verification', () => {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
       save: jest.fn(async (_entity: unknown, value: unknown) => value),
       query: jest.fn().mockResolvedValue(undefined),
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
     }
     const dataSource = {
       queryResultCache: undefined,
+      manager: { count: jest.fn(async (entity: unknown, options?: unknown) => (entity === Box ? boxRepository.count(options) : 0)) },
       transaction: jest.fn(async (cb: (em: typeof entityManager) => Promise<unknown>) => cb(entityManager)),
     }
-    const eventEmitter = { emit: jest.fn() }
+    const eventEmitter = { emit: jest.fn(), emitAsync: jest.fn() }
     const service = new RunnerService(
       runnerRepository as any,
       {} as any,
@@ -87,6 +95,81 @@ describe('RunnerService decommission verification', () => {
 
     expect(entityManager.update).toHaveBeenCalledWith(Runner, 'runner-1', { state: RunnerState.DECOMMISSIONED })
     expect(redis.del).toHaveBeenCalledWith('runner:draining-check:runner-1')
+  })
+
+  it.each([BoxMigration, Job])(
+    'keeps a runner while outstanding %p work remains after ownership moved',
+    async (entity) => {
+      const { service, redis, entityManager, dataSource } = createService(0, '2')
+      entityManager.count.mockImplementation(async (target: unknown) => (target === entity ? 1 : 0))
+      dataSource.manager.count.mockImplementation(async (target: unknown) => (target === entity ? 1 : 0))
+
+      await (service as any).handleCheckDecommissionRunners()
+
+      expect(entityManager.update).not.toHaveBeenCalled()
+      expect(redis.set).toHaveBeenCalledWith('runner:draining-check:runner-1', '0', 'EX', 600)
+    },
+  )
+
+  it.each([BoxMigration, Job])('rechecks outstanding %p work inside the retirement transaction', async (entity) => {
+    const { service, redis, entityManager } = createService(0, '2')
+    entityManager.count.mockImplementation(async (target: unknown) => (target === entity ? 1 : 0))
+    await (service as any).handleCheckDecommissionRunners()
+    expect(entityManager.findOne).toHaveBeenCalledWith(
+      Runner,
+      expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+    )
+    expect(entityManager.update).not.toHaveBeenCalled()
+    expect(redis.set).toHaveBeenCalledWith('runner:draining-check:runner-1', '0', 'EX', 600)
+  })
+
+  it.each([BoxMigration, Job])('refuses registration deletion while %p work remains', async (entity) => {
+    const { service, entityManager } = createService(0)
+    entityManager.count.mockImplementation(async (target: unknown) => (target === entity ? 1 : 0))
+    await expect(service.remove('runner-1')).rejects.toMatchObject({ status: 428 })
+    expect(entityManager.delete).not.toHaveBeenCalled()
+  })
+
+  it('reports both migration sides and runnable jobs without returning credentials', async () => {
+    const { service, dataSource } = createService(0)
+    dataSource.manager.count.mockImplementation(async (entity: unknown) =>
+      entity === BoxMigration ? 2 : entity === Job ? 3 : 1,
+    )
+    expect(await service.getDrainStatus('runner-1')).toEqual({
+      id: 'runner-1',
+      state: RunnerState.READY,
+      draining: true,
+      assignedBoxes: 1,
+      activeMigrations: 2,
+      pendingJobs: 3,
+    })
+    expect(dataSource.manager.count).toHaveBeenCalledWith(BoxMigration, {
+      where: [
+        { runnerId: 'runner-1', state: Not(BoxMigrationState.COMPLETED) },
+        { box: { runnerId: 'runner-1' }, state: Not(BoxMigrationState.COMPLETED) },
+      ],
+    })
+    expect(dataSource.manager.count).toHaveBeenCalledWith(Job, {
+      where: { runnerId: 'runner-1', status: In([JobStatus.PENDING, JobStatus.IN_PROGRESS]) },
+    })
+  })
+
+  it('deletes an empty unschedulable registration under the runner lock', async () => {
+    const { service, entityManager, eventEmitter } = createService(0)
+    await service.remove('runner-1')
+    expect(entityManager.findOne).toHaveBeenCalledWith(
+      Runner,
+      expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+    )
+    expect(entityManager.delete).toHaveBeenCalledWith(Runner, 'runner-1')
+    expect(eventEmitter.emitAsync).toHaveBeenCalled()
+  })
+
+  it('refuses deletion if scheduling was reenabled before the locked read', async () => {
+    const { service, entityManager } = createService(0)
+    entityManager.findOne.mockResolvedValue({ id: 'runner-1', unschedulable: false })
+    await expect(service.remove('runner-1')).rejects.toMatchObject({ status: 428 })
+    expect(entityManager.delete).not.toHaveBeenCalled()
   })
 
   it('does not inspect runners when another worker owns the verification lock', async () => {

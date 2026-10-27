@@ -88,7 +88,8 @@ an older runner would bind the volume read-write. Until such a runner is up, tho
 
 ## Scale out
 
-`RUNNERS` controls the declared fleet count. Set it in the encrypted stage store, update the digest,
+Without explicit `deploy.runners.instances`, `RUNNERS` controls the declared fleet count.
+Set it in the encrypted stage store, update the digest,
 and preview the same artifact selection you intend to deploy:
 
 ```bash
@@ -97,13 +98,79 @@ npm run mstage env set -- RUNNERS=2 --stage dev --digest
 
 Review that the diff creates the additional host without replacing existing hosts. Then apply and
 check registration, target version, capacity and a test box on the new host. Extra runners have
-individual registration tokens. Machine size and root disk size come from `deploy.runners` in the stage declaration;
-a GCP host's data disk is sized by its machine size.
+individual registration tokens. Machine size and root disk size come from `deploy.runners` in the stage declaration.
+GCP data disks default to 200 GiB and accept `dataDiskGb` at creation. Use
+[explicit instances](configuration.md#runner-fleet-sizing) for mixed sizes or to preserve a later slot during retirement.
 
 Scale-in is a separate retirement operation: reducing a count attempts to delete a protected host,
 and on GCP its protected data disk.
-Drain or migrate boxes and preserve required local data before designing a reviewed retirement.
+Use the drain API below and the [GCP retirement procedure](gcp/runners.md#replace-two-runners-with-one-larger-host).
 Do not disable protection merely to make an unexpected diff pass.
+
+## Drain and inspect progress
+
+### Request drain through GitHub Actions
+
+Deploy the API version that serves the drain endpoint first. Once
+[`runner-drain.yml`](../../../.github/workflows/runner-drain.yml) is available on the default branch,
+open **Actions → runner-drain → Run workflow**:
+
+| Input | Example | Meaning |
+| --- | --- | --- |
+| Branch | `main` | Production requires `main`; dev can use a branch containing the workflow. |
+| `stage` | `dev` | Selects the GitHub Environment and its stage configuration. |
+| `runner_names` | `default,runner-2` | Exact control-plane names, as shown by the admin runner list; not cloud VM names. |
+| `confirm` | `true` | Required when the stage declaration has `protect: true`. |
+
+The same dispatch from the GitHub CLI:
+
+```bash
+gh workflow run runner-drain.yml --ref main \
+  -f stage=dev -f runner_names=default,runner-2 -f confirm=true
+```
+
+The workflow restores `BOXLITE_MSTAGE_BOXLITE_APP_CONFIG` from the selected Environment and
+uses the existing cloud federation to read `STACK_DOMAIN`, `ADMIN_API_KEY`, and `DEFAULT_REGION_ID`
+(default `us`) from the encrypted stage store. It needs no additional GitHub secret.
+It shares `mdeploy-all`'s stage concurrency group. An active run is not cancelled; GitHub can replace
+an older pending dispatch when another is queued, so check which run actually executes.
+
+All names must resolve uniquely in that region before any write. The command then sends
+`draining: true` sequentially and finishes after HTTP 204 for each runner. **Success means requests
+were accepted, not that migration finished.** It does not poll progress, stop boxes, switch primary,
+edit fleet configuration, remove registrations, or delete hosts/disks.
+
+Unknown, ambiguous or already decommissioned targets fail preflight. If a later request fails,
+earlier accepted requests remain effective and appear in the log. Inspect API state before retrying
+a timeout; a request may have applied even when its response was lost. Repeating `true` can reset
+the backend's clean-check counter. Omit already decommissioned targets from subsequent requests.
+
+### Inspect or cancel through the API
+
+Administrators use `PATCH /api/admin/runners/<id>/draining` with `{"draining":true}` (HTTP 204).
+`GET /api/admin/runners/<id>/draining` returns an observation without credentials:
+
+```json
+{
+  "id": "<runner-uuid>",
+  "state": "ready",
+  "draining": true,
+  "assignedBoxes": 0,
+  "activeMigrations": 1,
+  "pendingJobs": 1
+}
+```
+
+Drain excludes new placement. Running boxes continue until stopped; stopped boxes use the existing
+export/import migration path. Restarting a box during migration can trigger rollback.
+Ownership moves before source cleanup, so `assignedBoxes: 0` alone does not establish completion.
+Unfinished migrations on either side and pending/in-progress jobs prevent decommissioning and registration deletion.
+
+Three consecutive clean cron checks, ten seconds apart, permit `state: "decommissioned"` after a final
+transactional recheck. All three counts must remain zero. The response is a snapshot, not a reservation
+or cloud-deletion authorization. Keep the source online until cleanup completes and recheck before removal.
+`PATCH` with `{"draining":false}` cancels drain before decommissioning; decommissioned runners reject it.
+Deleting the registration still requires `unschedulable: true`; draining alone does not set that field.
 
 ## Verify and recover
 

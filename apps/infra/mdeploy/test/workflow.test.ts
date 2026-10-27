@@ -75,7 +75,7 @@ test('both clouds can be federated, and each only when it is the one', () => {
  * with a message about a stale local session on a machine nobody signed in on
  * — far enough from the cause to be worth naming here.
  */
-const GCP_FEDERATING_WORKFLOWS = ['mdeploy-all.yml', 'mbuild.yml', 'mbuild-release.yml']
+const GCP_FEDERATING_WORKFLOWS = ['mdeploy-all.yml', 'mbuild.yml', 'mbuild-release.yml', 'runner-drain.yml']
 
 test('a GCP identity is federated by the action that also gives gcloud its own credential', () => {
   for (const name of GCP_FEDERATING_WORKFLOWS) {
@@ -85,7 +85,7 @@ test('a GCP identity is federated by the action that also gives gcloud its own c
       .filter((line) => !/^\s*#/.test(line))
       .join('\n')
     assert.match(runs, /uses: google-github-actions\/auth@v\d/, `${name} does not federate GCP`)
-    assert.match(runs, /npm run --silent mstage login/, `${name} does not ask mstage, so this test is checking nothing`)
+    assert.match(runs, /npm run --silent (?:mstage login|runner:drain)/, `${name} does not ask mstage, so this test is checking nothing`)
     // Installing the CLI is allowed; authenticating it a second time is not.
     for (const step of runs.split('setup-gcloud').slice(1)) {
       const inputs = step.slice(0, step.indexOf('\n      - ') >= 0 ? step.indexOf('\n      - ') : undefined)

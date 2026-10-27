@@ -26,6 +26,50 @@ const valid = {
 const parse = (overrides: Record<string, unknown> = {}) =>
   parseDeployConfig('/repo/apps/infra/mdeploy.config.json', JSON.stringify({ ...valid, ...overrides }))
 
+test('runner instances preserve explicit slots and independent disk sizes', () => {
+  const runners = {
+    size: 'small',
+    rootDiskGb: 100,
+    primary: 'default',
+    instances: [
+      { slot: 1, name: 'default' },
+      { slot: 2, name: 'runner-2' },
+      { slot: 3, name: 'runner-3', size: 'large', dataDiskGb: 2048 },
+    ],
+  }
+  assert.deepEqual(parse({ runners }).runners, runners)
+})
+
+test('explicit fleets reject ambiguous identities, missing primaries and invalid resources', () => {
+  const base = { size: 'small', rootDiskGb: 100, primary: 'runner-3', instances: [{ slot: 3, name: 'runner-3' }] }
+  for (const instances of [
+    [],
+    [{ slot: 0, name: 'runner-3' }],
+    [{ slot: 101, name: 'runner-3' }],
+    [{ slot: 3.5, name: 'runner-3' }],
+    [{ slot: 3, name: 'x' }],
+    [{ slot: 3, name: 'runner-3', size: 'huge' }],
+    [{ slot: 3, name: 'runner-3', dataDiskGb: 4001 }],
+    [{ slot: 3, name: 'runner-3', rootDiskGb: 0 }],
+    [{ slot: 3, name: 'runner-3', dataDiskGb: '2048' }],
+    [{ slot: 3, name: 'runner-3', typo: 1 }],
+    [
+      { slot: 3, name: 'runner-3' },
+      { slot: 3, name: 'runner-4' },
+    ],
+    [
+      { slot: 3, name: 'runner-3' },
+      { slot: 4, name: 'runner-3' },
+    ],
+  ])
+    assert.throws(() => parse({ runners: { ...base, instances } }), DeployConfigError)
+  for (const primary of [undefined, 'missing']) {
+    assert.throws(() => parse({ runners: { ...base, primary } }), /primary/)
+  }
+  assert.throws(() => parse({ runners: { size: 'small', rootDiskGb: 100, primary: 'default' } }), /requires instances/)
+  assert.throws(() => parse({ runners: { ...base, dataDiskGb: 19 } }), /dataDiskGb/)
+})
+
 test('the defaults have to be complete, because nothing else supplies them', () => {
   // A stage says only what differs, so a gap there is the point. A gap in the
   // defaults is a value nothing supplies, and the resource would be created
@@ -96,7 +140,10 @@ test('the prefix this refuses to vary is the one the API actually names', () => 
 })
 
 test('a size no provider answers to is refused here rather than at the apply', () => {
-  assert.throws(() => parse({ database: { ...valid.database, size: 'enormous' } }), /must be one of small, standard, medium/)
+  assert.throws(
+    () => parse({ database: { ...valid.database, size: 'enormous' } }),
+    /must be one of small, standard, medium/,
+  )
   assert.throws(() => parse({ runners: { size: 'tiny', rootDiskGb: 100 } }), /must be one of small, medium, large/)
 })
 
@@ -164,7 +211,11 @@ test('the stages differ where they are meant to, and each says so in full', () =
   assert.equal(blockFor('dev').database.protected, false, 'dev is deletable')
   assert.equal(blockFor('dev2').clickhouse.mode, 'disabled')
   assert.equal(blockFor('dev2').runners.size, 'small', 'the GCP stage runs a smaller fleet than AWS dev')
-  assert.equal(blockFor('dev2').runners.rootDiskGb, 50, 'a GCP boot disk holds the OS and the runner; boxes live on the data disk')
+  assert.equal(
+    blockFor('dev2').runners.rootDiskGb,
+    50,
+    'a GCP boot disk holds the OS and the runner; boxes live on the data disk',
+  )
   assert.equal(blockFor('dev').storage.versioning, true)
   assert.equal(blockFor('dev').runners.rootDiskGb, 100)
   assert.equal(blockFor('dev').runners.size, 'large', 'a runner has to be a machine family that can nest')

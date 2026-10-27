@@ -33,9 +33,18 @@ import type { RunnerArtifact } from './runner-binary.ts'
 import { instanceFor } from 'naming'
 
 export type RunnerSize = 'small' | 'medium' | 'large'
+export const MAX_RUNNERS = 100
+export const RUNNER_NAME = /^[a-zA-Z0-9_.-]{2,255}$/
+
+export type RunnerResources = {
+  size: RunnerSize
+  rootDiskGb: number
+  /** GCP data volume; omitted retains the provider default. Unsupported on AWS. */
+  dataDiskGb?: number
+}
 
 /** One host, as the control plane will know it. */
-export type RunnerSlot = {
+export type RunnerSlot = Partial<RunnerResources> & {
   /** The logical resource name. Stable, so a re-deploy updates rather than replaces. */
   resourceName: string
   /** What the machine is labelled with, for a person reading a console. */
@@ -99,9 +108,7 @@ export type RunnerBinary = {
   identity: string
 }
 
-export type RunnerRequest = {
-  size: RunnerSize
-  rootDiskGb: number
+export type RunnerRequest = RunnerResources & {
   /**
    * Required, and named rather than assumed. See the note above: it is one flag
    * on AWS and three separate decisions on GCP.

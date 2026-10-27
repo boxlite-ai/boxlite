@@ -118,6 +118,9 @@ export const awsRunnerProvider =
     dependsOn: any[]
   }): RunnerProvider =>
   (request: RunnerRequest): Runners => {
+    if (request.dataDiskGb !== undefined || request.fleet.some(({ slot }) => slot.dataDiskGb !== undefined)) {
+      throw new Error('AWS runners do not support dataDiskGb; configure rootDiskGb instead')
+    }
     if (placement.exposure !== 'egress-only-public') {
       throw new Error(
         `The runner was placed as ${placement.exposure}; it pulls box images constantly and must ` +
@@ -227,7 +230,7 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
           slot.resourceName,
           {
             ami: ami.id,
-            instanceType: INSTANCE[request.size],
+            instanceType: INSTANCE[slot.size ?? request.size],
             // Public subnet, and the security group the network arranged is
             // what makes the address egress-only.
             subnetId: placement.subnets[0],
@@ -276,7 +279,7 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
                 platform,
               }),
             ),
-            rootBlockDevice: { volumeSize: request.rootDiskGb, encrypted: true },
+            rootBlockDevice: { volumeSize: slot.rootDiskGb ?? request.rootDiskGb, encrypted: true },
             tags: { Name: slot.nameTag, 'boxlite:control-plane-runner-name': slot.controlPlaneRunnerName },
           },
           {

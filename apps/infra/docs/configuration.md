@@ -43,6 +43,39 @@ Do not store passwords or API keys in this declaration: CI carries it as a varia
 AWS account identity comes from resolved credentials. GCP project identity is declared explicitly.
 `promoteFrom` does not copy configuration or promote artifacts during an ordinary deploy.
 
+## Runner fleet sizing
+
+`deploy.runners.size` (`small`, `medium`, `large`) and `rootDiskGb` remain required defaults.
+Optional `dataDiskGb` sizes newly created GCP data disks; it defaults to 200 GiB.
+Disk settings accept whole GiB from 20 through 4000. AWS uses the root volume and rejects `dataDiskGb`.
+Changing a GCP disk setting does not resize an existing disk; see [data disk operations](gcp/runners.md#data-disk).
+
+For independently sized hosts, declare `instances` and a `primary` naming one member:
+
+```json
+{
+  "size": "small",
+  "rootDiskGb": 100,
+  "primary": "default",
+  "instances": [
+    { "slot": 1, "name": "default" },
+    { "slot": 2, "name": "runner-2" },
+    { "slot": 3, "name": "runner-3", "size": "large", "dataDiskGb": 2048 }
+  ]
+}
+```
+
+Each instance inherits omitted size/disk settings. Slots are unique integers 1–100; names are
+unique control-plane names of 2–255 letters, digits, underscores, periods or hyphens.
+The fleet must contain 1–100 members. Slot 1 keeps resource `Runner`; slot N keeps
+`Runner-runner-N`. Never renumber surviving slots or rename their control-plane identities.
+The primary's name and token configure the API's default registration together.
+
+Explicit instances replace `RUNNERS` and `DEFAULT_RUNNER_NAME` as fleet inputs. Without instances,
+those environment values retain their existing count/name behavior. Update both the local stage
+declaration and its CI copy before deploying from either path. Follow the
+[GCP replacement procedure](gcp/runners.md#replace-two-runners-with-one-larger-host) to remove older slots.
+
 ## Set application values
 
 Run commands from `apps/infra` after [bootstrap](deployment.md#bootstrap-a-stage).

@@ -400,6 +400,7 @@ udevadm trigger --name-match=kvm || true`,
     const assignments = request.fleet
 
     const instances = assignments.map(({ slot, token }) => {
+      const size = slot.size ?? request.size
       const userData = $resolve([
         request.apiUrl,
         request.otlpUrl,
@@ -454,9 +455,9 @@ udevadm trigger --name-match=kvm || true`,
           project,
           zone,
           type: DISK_TYPE,
-          size: DATA_DISK[request.size].sizeGb,
-          provisionedIops: DATA_DISK[request.size].iops,
-          provisionedThroughput: DATA_DISK[request.size].throughputMiBps,
+          size: slot.dataDiskGb ?? request.dataDiskGb ?? DATA_DISK[size].sizeGb,
+          provisionedIops: DATA_DISK[size].iops,
+          provisionedThroughput: DATA_DISK[size].throughputMiBps,
         },
         { ignoreChanges: ['size', 'provisionedIops', 'provisionedThroughput'], protect: true },
       )
@@ -467,11 +468,11 @@ udevadm trigger --name-match=kvm || true`,
           name: slot.nameTag,
           project,
           zone,
-          machineType: MACHINE[request.size],
+          machineType: MACHINE[size],
           // Explicitly, or the device is absent on a machine that can host it.
           advancedMachineFeatures: { enableNestedVirtualization: request.nestedVirtualization },
           bootDisk: {
-            initializeParams: { image: IMAGE, size: request.rootDiskGb, type: DISK_TYPE },
+            initializeParams: { image: IMAGE, size: slot.rootDiskGb ?? request.rootDiskGb, type: DISK_TYPE },
           },
           // Attached at create only: see `ignoreChanges` below.
           attachedDisks: [{ source: dataDisk.id, deviceName: DATA_DISK_DEVICE }],

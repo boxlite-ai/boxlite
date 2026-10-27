@@ -414,6 +414,7 @@ export const deployStack = ({
     // The first host's token, which is the one row the API seeds itself. Every
     // later host is registered explicitly — see `runner-registration.ts`.
     [API_RUNNER_TOKEN_VARIABLE]: defaultRunnerToken,
+    DEFAULT_RUNNER_NAME: fleet[0].slot.controlPlaneRunnerName,
     ...databaseEnvironment(database),
     ...cacheEnvironment(cache),
     ...mailEnvironment(mail),

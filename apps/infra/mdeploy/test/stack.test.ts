@@ -116,6 +116,20 @@ const fleetOf = (...names: string[]) =>
         },
   )
 
+test('the bootstrap runner name and token identify the same selected host', () => {
+  const { providers, seen } = bundle()
+  deployStack({
+    providers,
+    config,
+    inputs: inputs({
+      runnerFleet: fleetOf('runner-3'),
+      apiEnvironment: { DEFAULT_RUNNER_NAME: 'retired-runner' },
+    }),
+  })
+  assert.equal(seen.api.request.environment.DEFAULT_RUNNER_NAME, 'runner-3')
+  assert.equal(seen.api.request.environment.DEFAULT_RUNNER_API_KEY, 'minted:RunnerToken-runner-3')
+})
+
 const clickHouseFake = (active: boolean): ClickHouse =>
   active
     ? {

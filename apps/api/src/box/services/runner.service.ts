@@ -45,6 +45,11 @@ import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/r
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
 import { runnerBindsReadOnlyVolumes } from '../utils/runner-version.util'
+import { BoxMigration } from '../entities/box-migration.entity'
+import { BoxMigrationState } from '../enums/box-migration-state.enum'
+import { Job } from '../entities/job.entity'
+import { JobStatus } from '../enums/job-status.enum'
+import { RunnerDrainStatusDto } from '../dto/runner-draining.dto'
 
 @Injectable()
 export class RunnerService {
@@ -314,36 +319,53 @@ export class RunnerService {
   /**
    * @throws {NotFoundException} If the runner is not found.
    * @throws {HttpException} If the runner is not unschedulable.
-   * @throws {HttpException} If the runner has boxes associated with it.
+   * @throws {HttpException} If boxes, unfinished migrations or pending jobs remain.
    */
   async remove(id: string): Promise<void> {
-    const runner = await this.findOne(id)
-    if (!runner) {
-      throw new NotFoundException('Runner not found')
-    }
-
-    if (!runner.unschedulable) {
-      throw new HttpException(
-        'Cannot delete runner which is available for scheduling boxes',
-        HttpStatus.PRECONDITION_REQUIRED,
-      )
-    }
-
-    const boxCount = await this.boxRepository.count({
-      where: { runnerId: id, state: Not(In([BoxState.ARCHIVED, BoxState.DESTROYED])) },
-    })
-    if (boxCount > 0) {
-      throw new HttpException(
-        'Cannot delete runner which has boxes associated with it',
-        HttpStatus.PRECONDITION_REQUIRED,
-      )
-    }
-
     await this.dataSource.transaction(async (em) => {
+      const runner = await em.findOne(Runner, {
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+        loadEagerRelations: false,
+      })
+      if (!runner) throw new NotFoundException('Runner not found')
+      if (!runner.unschedulable) {
+        throw new HttpException(
+          'Cannot delete runner which is available for scheduling boxes',
+          HttpStatus.PRECONDITION_REQUIRED,
+        )
+      }
+      const work = await this.countOutstandingWork(id, em)
+      if (Object.values(work).some((count) => count > 0)) {
+        throw new HttpException(
+          'Cannot delete runner with assigned boxes, unfinished migrations or pending jobs',
+          HttpStatus.PRECONDITION_REQUIRED,
+        )
+      }
       await em.delete(Runner, id)
       await this.eventEmitter.emitAsync(RunnerEvents.DELETED, new RunnerDeletedEvent(em, id))
     })
     this.invalidateRunnerCache(id)
+  }
+
+  async getDrainStatus(id: string): Promise<RunnerDrainStatusDto> {
+    const runner = await this.findOneUncachedOrFail(id)
+    return { id: runner.id, state: runner.state, draining: runner.draining, ...(await this.countOutstandingWork(id)) }
+  }
+
+  private async countOutstandingWork(id: string, manager = this.dataSource.manager) {
+    const [assignedBoxes, activeMigrations, pendingJobs] = await Promise.all([
+      // Even destroyed boxes can still hold a runtime awaiting reconciliation.
+      manager.count(Box, { where: { runnerId: id } }),
+      manager.count(BoxMigration, {
+        where: [
+          { runnerId: id, state: Not(BoxMigrationState.COMPLETED) },
+          { box: { runnerId: id }, state: Not(BoxMigrationState.COMPLETED) },
+        ],
+      }),
+      manager.count(Job, { where: { runnerId: id, status: In([JobStatus.PENDING, JobStatus.IN_PROGRESS]) } }),
+    ])
+    return { assignedBoxes, activeMigrations, pendingJobs }
   }
 
   async updateRunnerHealth(
@@ -662,21 +684,14 @@ export class RunnerService {
       await Promise.allSettled(
         drainingRunners.map(async (runner) => {
           try {
-            // A box releases runnerId only after runtime destruction is confirmed.
-            // Treat every remaining assignment as a blocker, including boxes whose
-            // desired state is already DESTROYED but are still being reconciled.
-            const assignedBoxCount = await this.boxRepository.count({
-              where: {
-                runnerId: runner.id,
-              },
-            })
+            // Ownership can move before the source copy and migration jobs are cleaned up.
+            const work = await this.countOutstandingWork(runner.id)
 
             const redisKey = `runner:draining-check:${runner.id}`
 
-            if (assignedBoxCount > 0) {
-              // Reset counter while any box still references this runner.
+            if (Object.values(work).some((count) => count > 0)) {
               await this.redis.set(redisKey, '0', 'EX', 600) // 10 minute TTL
-              this.logger.debug(`Runner ${runner.id} still has ${assignedBoxCount} assigned boxes, reset counter`)
+              this.logger.debug(`Runner ${runner.id} still has outstanding work, reset counter`)
             } else {
               // Increment counter
               const currentCount = await this.redis.get(redisKey)
@@ -694,8 +709,7 @@ export class RunnerService {
                 // milliseconds after picking a runner, and this transition sits
                 // three 10s checks behind the drain that started it.
                 //
-                // Unbounded on purpose: the only conflicting holder is that one
-                // other writer, holding for a single read-modify-write.
+                // The other lifecycle writers hold this row for a short transaction.
                 const decommissioned = await this.dataSource.transaction(async (entityManager) => {
                   const currentRunner = await entityManager.findOne(Runner, {
                     where: { id: runner.id },
@@ -706,13 +720,9 @@ export class RunnerService {
                     return 'abandoned'
                   }
 
-                  const finalAssignedBoxCount = await entityManager.count(Box, {
-                    where: { runnerId: runner.id },
-                  })
-                  if (finalAssignedBoxCount > 0) {
-                    this.logger.warn(
-                      `Runner ${runner.id} received ${finalAssignedBoxCount} box assignments during decommission verification`,
-                    )
+                  const finalWork = await this.countOutstandingWork(runner.id, entityManager)
+                  if (Object.values(finalWork).some((count) => count > 0)) {
+                    this.logger.warn(`Runner ${runner.id} received work during decommission verification`)
                     return 'reset'
                   }
 
@@ -731,7 +741,7 @@ export class RunnerService {
                 }
               } else {
                 await this.redis.set(redisKey, count.toString(), 'EX', 600) // 10 minute TTL
-                this.logger.debug(`Runner ${runner.id} draining check passed (${count}/3), no boxes remain assigned`)
+                this.logger.debug(`Runner ${runner.id} draining check passed (${count}/3), no outstanding work`)
               }
             }
           } catch (e) {
@@ -755,7 +765,7 @@ export class RunnerService {
     // FOR UPDATE against the decommission transition: the save below writes the
     // whole entity, so without it the `state` read here could be written back
     // over a DECOMMISSIONED that landed in between. Assignments hold no lock on
-    // this row, so nothing else waits on this.
+    // this row; registration deletion also takes this lifecycle lock.
     const runner = await this.dataSource.transaction(async (entityManager) => {
       const current = await entityManager.findOne(Runner, {
         where: { id },
