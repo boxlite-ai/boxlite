@@ -44,6 +44,14 @@ const render = (overrides: Partial<Parameters<typeof renderRunnerBoot>[0]> = {})
     'base64',
   ).toString('utf8')
 
+test('cloud boot installs the standalone kernel before starting the runner', () => {
+  const script = render()
+  const install = script.indexOf('install_runner_kernel')
+  assert.ok(install >= 0, 'cloud boot did not install a kernel')
+  assert.ok(install < script.indexOf('systemctl start boxlite-runner'))
+  assert.match(script, /libkrunfw-kernel-dind-x86_64\.bin/)
+})
+
 test('the script fails fast, and logs where a person can find it', () => {
   const script = render()
   assert.match(script, /^#!\/bin\/bash/)
@@ -125,7 +133,8 @@ test('the unit will not start without the mount its home is on', () => {
   // A failed mount must stop the runner rather than leave it writing box state
   // to the disk beneath; where the home is on the root disk this names only `/`.
   const script = render()
-  const unit = script.slice(script.indexOf('[Unit]'), script.indexOf('[Service]'))
+  const unitStart = script.indexOf('[Unit]')
+  const unit = script.slice(unitStart, script.indexOf('[Service]', unitStart))
   assert.match(unit, new RegExp(`^RequiresMountsFor=${RUNNER_HOME}$`, 'm'))
   assert.match(script, new RegExp(`^BOXLITE_HOME_DIR=${RUNNER_HOME}$`, 'm'))
 })

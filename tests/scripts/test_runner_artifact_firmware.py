@@ -1,4 +1,4 @@
-"""Keep DinD firmware selected throughout the development artifact build."""
+"""Cloud kernel selection must not change development package builds."""
 
 import unittest
 from pathlib import Path
@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class RunnerArtifactFirmwareTest(unittest.TestCase):
-    def test_prepares_and_keeps_dind_source_for_both_native_builds(self):
+    def test_build_uses_the_default_firmware_dependency(self):
         dockerfile = ROOT / "apps/runner/packaging/dev-artifact.Dockerfile"
         instructions = "\n".join(
             line.strip()
@@ -16,8 +16,6 @@ class RunnerArtifactFirmwareTest(unittest.TestCase):
         )
         steps = [
             "RUN make setup:build guest",
-            "RUN python3 scripts/build/prepare_dind_firmware.py /work/.firmware/dind",
-            "ENV BOXLITE_LIBKRUNFW_SOURCE=/work/.firmware/dind",
             "RUN SKIP_GUEST_BUILD=1 make runtime",
             "cargo build --release -p boxlite-c",
         ]
@@ -27,8 +25,10 @@ class RunnerArtifactFirmwareTest(unittest.TestCase):
         self.assertEqual(
             positions,
             sorted(positions),
-            "Prepare firmware after setup and keep ENV set before both native builds",
+            "Build the runtime before the C SDK",
         )
+        self.assertNotIn("prepare_dind_firmware", instructions)
+        self.assertNotIn("BOXLITE_LIBKRUNFW_SOURCE", instructions)
 
 
 if __name__ == "__main__":

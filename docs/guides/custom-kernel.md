@@ -55,3 +55,41 @@ configuration. A later CLI `start` or `restart` therefore also needs
 `BOXLITE_EXPERIMENTAL=custom-kernel`; an SDK process must construct its runtime
 with the same explicit feature. The REST runtime rejects custom-kernel
 configuration even when the opt-in is present.
+
+## C and Go SDKs
+
+The local C constructor `boxlite_runtime_new_experimental` accepts the same
+comma-separated feature names as Rust. Pass `"custom-kernel"`, then set the
+absolute file path with `boxlite_advanced_options_set_kernel_path` and apply
+the advanced options with `boxlite_options_set_advanced`. The original
+`boxlite_runtime_new` constructor enables no experimental features. Neither
+constructor reads `BOXLITE_EXPERIMENTAL`.
+
+The Go SDK wraps these interfaces:
+
+```go
+rt, err := boxlite.NewRuntime(
+    boxlite.WithExperimentalFeatures("custom-kernel"),
+)
+if err != nil { return err }
+defer rt.Close()
+advanced, err := boxlite.NewAdvancedBoxOptions()
+if err != nil { return err }
+defer advanced.Close()
+if err := advanced.SetKernelPath("/opt/boxlite/kernel.bin"); err != nil {
+    return err
+}
+box, err := rt.Create(ctx, "alpine:3.21", boxlite.WithAdvancedOptions(advanced))
+```
+
+Formats are auto-detected. These bindings currently expose the kernel file
+only; Rust/CLI retain their additional initramfs and command-line options.
+Reconstructing the runtime to restart a custom-kernel Box requires the same
+feature opt-in. Files are staged per Box; changing the source file does not
+replace an existing Box's staged kernel. A trusted archive records the source
+path, so install that kernel on the destination before import.
+
+Runner operators can set `BOXLITE_KERNEL_PATH` to use this mechanism for new
+Boxes. The Runner handles the feature opt-in internally; `--kernel` remains a
+local CLI option, not a Runner argument. With no path configured, the Runner
+uses the ordinary bundled kernel.

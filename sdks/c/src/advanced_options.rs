@@ -6,6 +6,7 @@
 //! sandbox with `boxlite_advanced_options_set_security_enabled`, then apply it
 //! to a `CBoxliteOptions` via `boxlite_options_set_advanced`.
 
+use boxlite::experimental::custom_kernel::KernelOptions;
 use std::os::raw::{c_char, c_int};
 
 use boxlite::runtime::advanced_options::{
@@ -15,6 +16,36 @@ use boxlite::runtime::advanced_options::{
 use crate::CAdvancedBoxOptions;
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
 use crate::util::c_str_to_string;
+
+/// Set an absolute host kernel path (RC). The runtime must enable custom-kernel.
+/// Copies the path; invalid input leaves the previous option unchanged.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_advanced_options_set_kernel_path(
+    opts: *mut CAdvancedBoxOptions,
+    path: *const c_char,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    let result = (|| {
+        let handle = unsafe { opts.as_mut() }.ok_or_else(|| null_pointer_error("opts"))?;
+        let path = unsafe { c_str_to_string(path) }?;
+        let kernel = KernelOptions::new(path);
+        if !kernel.path.is_absolute() || !kernel.path.is_file() {
+            return Err(boxlite::BoxliteError::Config(
+                "custom kernel must be an absolute regular file".into(),
+            ));
+        }
+        handle.options.kernel = Some(kernel);
+        Ok(())
+    })();
+    match result {
+        Ok(()) => BoxliteErrorCode::Ok,
+        Err(error) => {
+            let code = crate::error::error_to_code(&error);
+            unsafe { write_error(out_error, error) };
+            code
+        }
+    }
+}
 
 /// Opaque handle wrapping an `AdvancedBoxOptions`. Allocated via
 /// `boxlite_advanced_options_new`, freed via `boxlite_advanced_options_free`.

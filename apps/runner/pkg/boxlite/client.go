@@ -36,12 +36,13 @@ type PulledImage struct {
 // Client wraps the BoxLite Go SDK to provide the same interface as the Docker client.
 // It manages VMs instead of containers, providing hardware-level isolation.
 type Client struct {
-	runtime *boxlite.Runtime
-	logger  *slog.Logger
-	homeDir string
-	cacheMu sync.Mutex
-	mu      sync.RWMutex
-	boxes   map[string]*boxlite.Box
+	runtime    *boxlite.Runtime
+	logger     *slog.Logger
+	homeDir    string
+	kernelPath string
+	cacheMu    sync.Mutex
+	mu         sync.RWMutex
+	boxes      map[string]*boxlite.Box
 	// What each freshly created box's image resolved to, until it has been
 	// reported once. Held in memory only: an entry lost to a runner restart is
 	// simply gone, and the control plane re-resolves on the next create.
@@ -67,6 +68,7 @@ type Client struct {
 type ClientConfig struct {
 	Logger                       *slog.Logger
 	HomeDir                      string
+	KernelPath                   string
 	InsecureRegistries           []string
 	RegistryProxy                RegistryProxy
 	AWSRegion                    string
@@ -298,11 +300,31 @@ var currentUser = user.Current
 
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
+	if config.KernelPath != "" {
+		if !filepath.IsAbs(config.KernelPath) {
+			return nil, fmt.Errorf("BOXLITE_KERNEL_PATH must be absolute")
+		}
+		info, err := os.Stat(config.KernelPath)
+		if err != nil {
+			return nil, fmt.Errorf("stat BOXLITE_KERNEL_PATH: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("BOXLITE_KERNEL_PATH must be a readable regular file")
+		}
+		file, err := os.Open(config.KernelPath)
+		if err != nil {
+			return nil, fmt.Errorf("open BOXLITE_KERNEL_PATH: %w", err)
+		}
+		file.Close()
+	}
 	homeDir, err := resolveHomeDir(config.HomeDir)
 	if err != nil {
 		return nil, err
 	}
 	opts := []boxlite.RuntimeOption{boxlite.WithHomeDir(homeDir)}
+	if config.KernelPath != "" {
+		opts = append(opts, boxlite.WithExperimentalFeatures("custom-kernel"))
+	}
 	logger := config.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -324,6 +346,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		runtime:             rt,
 		logger:              logger,
 		homeDir:             homeDir,
+		kernelPath:          config.KernelPath,
 		boxes:               make(map[string]*boxlite.Box),
 		pendingImageReports: make(map[string]PulledImage),
 		awsRegion:           config.AWSRegion,
@@ -450,14 +473,19 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithUser(boxDto.RunAsUser))
 	}
 
-	if boxDto.Privileged {
+	if boxDto.Privileged || c.kernelPath != "" {
 		advanced, advancedErr := boxlite.NewAdvancedBoxOptions()
 		if advancedErr != nil {
 			return "", "", advancedErr
 		}
 		defer advanced.Close()
-		if advancedErr = advanced.SetPrivileged(true); advancedErr != nil {
+		if advancedErr = advanced.SetPrivileged(boxDto.Privileged); advancedErr != nil {
 			return "", "", advancedErr
+		}
+		if c.kernelPath != "" {
+			if advancedErr = advanced.SetKernelPath(c.kernelPath); advancedErr != nil {
+				return "", "", advancedErr
+			}
 		}
 		opts = append(opts, boxlite.WithAdvancedOptions(advanced))
 	}

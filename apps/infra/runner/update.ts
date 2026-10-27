@@ -43,6 +43,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { kernelDeployment } from './kernel.ts'
 import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
@@ -55,25 +56,26 @@ const RUNNER_PORT = process.env.RUNNER_PORT || '3003'
 const NAME_TAG_PATTERN = 'boxlite-runner-*'
 // ~5 min at 10s apart — covers SSM agent registration on a freshly created instance.
 const SSM_REGISTRATION_ATTEMPTS = 30
-// ~30 min at 5s apart. This has to stay above the payload's own worst case: giving up first
+// ~35 min at 5s apart. This has to stay above the payload's own worst case: giving up first
 // would be worse than slow — nothing cancels an accepted SSM command, so the deployer would
 // report failure while the host went on to stop and swap the unit anyway. The bound the payload
 // can actually reach is derived below rather than guessed, so raising a fetch timeout that
 // crosses this line fails a test instead of stranding a fleet.
 const SSM_POLL_INTERVAL_SECONDS = 5
-const SSM_COMPLETION_ATTEMPTS = 360
+const SSM_COMPLETION_ATTEMPTS = 420
 
 // The payload's bounded steps, in seconds, taken from the timeouts it is actually emitted with.
 // Exported so the supervision budget above is checked against them rather than assumed.
 //
 // This is a floor, not the true worst case: the payload also runs apt-get, unzip and the AWS CLI
 // installer, none of which take a timeout, plus tar/sha256sum/systemctl. The window above keeps
-// roughly seventeen minutes of slack over this floor to cover them. Read it as "supervision must
+// twenty minutes of slack over this floor to cover them. Read it as "supervision must
 // exceed everything we can bound, with room for what we cannot".
 export const PAYLOAD_WORST_CASE_SECONDS = {
   awsCliInstall: 120,
   tarballFetch: 300,
   checksumFetch: 300,
+  kernelFetch: 120,
   readinessGate: 60,
 }
 export const ssmSupervisionSeconds = () => SSM_COMPLETION_ATTEMPTS * SSM_POLL_INTERVAL_SECONDS
@@ -257,7 +259,7 @@ fi
       : `# Build mode: no version ordering to guard, the requested commit is the requested commit.
 `
 
-  return `set -euo pipefail
+  const binary = `set -euo pipefail
 
 TARGET="${expectedVersion}"
 HEALTH="http://127.0.0.1:${runnerPort}/"
@@ -355,6 +357,7 @@ else
   exit 1
 fi
 `
+  return `set -euo pipefail\n(\n${binary}\n)\n${kernelDeployment().enforce}`
 }
 
 // ── one host ─────────────────────────────────────────────────────────────────

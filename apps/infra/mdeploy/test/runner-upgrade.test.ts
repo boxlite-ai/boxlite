@@ -29,6 +29,7 @@ import {
 } from '../stack/runner-upgrade.ts'
 import { upgradeRunner, type CommandResult } from '../src/upgrade-runners.ts'
 import { runnerApiUrl } from '../stack/runner-boot.ts'
+import { CLOUD_RUNNER_KERNEL } from '../../runner/kernel.ts'
 
 const REF = 'f'.repeat(40)
 const RELEASE = 'https://github.com/boxlite-ai/boxlite/releases/download/v0.10.0'
@@ -165,10 +166,14 @@ test('nothing unvalidated is interpolated into a script that runs as root', () =
   )
 })
 
-test('the trigger is the identity and the address it came from', () => {
+test('the trigger includes runner identity and the independent kernel digest', () => {
   // A fleet that re-ran the payload on every deploy would restart for nothing,
   // so the trigger is only what could change about the run.
-  assert.equal(upgradeTrigger({ identity: '0.10.0', binary: released }), `0.10.0:${TARBALL}`)
+  assert.equal(upgradeTrigger({ identity: '0.10.0', binary: released }), `0.10.0:${TARBALL}:${CLOUD_RUNNER_KERNEL.sha256}`)
+  assert.notEqual(
+    upgradeTrigger({ identity: '0.10.0', binary: released, kernel: { ...CLOUD_RUNNER_KERNEL, sha256: 'a'.repeat(64) } }),
+    upgradeTrigger({ identity: '0.10.0', binary: released }),
+  )
   assert.notEqual(
     upgradeTrigger({ identity: `0.10.0+${REF}`, binary: released }),
     upgradeTrigger({ identity: '0.10.0', binary: released }),
@@ -459,7 +464,7 @@ test('the policy scripts answer in the exit codes the agent grades them by', () 
 
   // Both guards report "nothing to do", and the mismatch path is the only 101.
   assert.equal(validate.match(/^\s*exit 100$/gm)?.length, 2, 'validate must answer 100 on both guards')
-  assert.match(validate, /echo "not serving [$]TARGET"\nexit 101\n$/, 'validate must end by asking for enforcement')
+  assert.match(validate, /echo "runner binary or kernel needs updating"\nexit 101\n$/, 'validate must end by asking for enforcement')
 
   // The work, graded the other way round.
   assert.match(enforce, /then exit 100; fi/, 'enforce must turn a clean run into 100')
@@ -650,14 +655,15 @@ test('the GCP policy resolves the endpoint rather than casting it', () => {
   assert.match(policy, /registryProxyHost: \(proxyHost as string\) \|\| null/, 'and so does the resolved proxy host')
 })
 
-test('a caller with no control-plane address converges only the binary', () => {
+test('a caller with no control-plane address converges binary and kernel without rewriting API settings', () => {
   // `runner:update` rolls a release by hand and never reads the stage's
   // environment, so it has no address to enforce — and inventing one would
   // rewrite a host from a value nobody supplied.
   const payload = renderHostConvergence(target())
   assert.doesNotMatch(payload, /converge_unit_environment/)
   assert.doesNotMatch(payload, /BOXLITE_API_URL/)
-  assert.match(payload, /upgrade_binary\n$/)
+  assert.match(payload, /upgrade_binary\n/)
+  assert.ok(payload.lastIndexOf('fetch_runner_kernel\n') > payload.indexOf('upgrade_binary\n'))
 })
 
 test('an AWS host is sent both halves, and the address is what re-sends them', () => {

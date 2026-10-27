@@ -16,8 +16,15 @@ import (
 type RuntimeOption func(*runtimeConfig)
 
 type runtimeConfig struct {
-	homeDir         string
-	imageRegistries []ImageRegistry
+	homeDir              string
+	imageRegistries      []ImageRegistry
+	experimentalFeatures []string
+}
+
+// WithExperimentalFeatures opts this local runtime into named RC features.
+// Unknown names fail at construction. This does not read BOXLITE_EXPERIMENTAL.
+func WithExperimentalFeatures(features ...string) RuntimeOption {
+	return func(c *runtimeConfig) { c.experimentalFeatures = append([]string(nil), features...) }
 }
 
 // RegistryTransport selects the transport used to contact an OCI registry.

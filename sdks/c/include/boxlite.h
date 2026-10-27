@@ -721,6 +721,12 @@ typedef void (*CBoxVolumeRemoveCb)(CBoxliteError*, void*);
 extern "C" {
 #endif // __cplusplus
 
+// Set an absolute host kernel path (RC). The runtime must enable custom-kernel.
+// Copies the path; invalid input leaves the previous option unchanged.
+enum BoxliteErrorCode boxlite_advanced_options_set_kernel_path(CAdvancedBoxOptions *opts,
+                                                               const char *path,
+                                                               struct FFIError *out_error);
+
 // Allocate a `CAdvancedBoxOptions` initialized to `AdvancedBoxOptions::default()`
 // (secure-by-default security profile, mount isolation off, no health check).
 //
@@ -1574,6 +1580,16 @@ enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,
                                           int image_registries_count,
                                           CBoxliteRuntime **out_runtime,
                                           CBoxliteError *out_error);
+
+// Create a local runtime with an explicit comma-separated RC feature allowlist
+// (for example, "custom-kernel"). Null enables none; unknown tokens fail.
+// Does not read BOXLITE_EXPERIMENTAL. Ownership matches boxlite_runtime_new.
+enum BoxliteErrorCode boxlite_runtime_new_experimental(const char *home_dir,
+                                                       const struct BoxliteImageRegistry *image_registries,
+                                                       int image_registries_count,
+                                                       const char *features,
+                                                       CBoxliteRuntime **out_runtime,
+                                                       CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_runtime_images(CBoxliteRuntime *runtime,
                                              CBoxliteImageHandle **out_handle,
