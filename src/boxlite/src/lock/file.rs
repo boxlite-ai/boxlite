@@ -122,35 +122,38 @@ impl LockManager for FileLockManager {
     fn allocate(&self) -> BoxliteResult<LockId> {
         let _guard = self.alloc_lock.lock().unwrap();
 
-        // Find next available ID
-        let id = self.next_available_id();
-        let path = self.lock_path(id);
+        loop {
+            // Find next available ID according to in-memory set
+            let id = self.next_available_id();
+            let path = self.lock_path(id);
 
-        // Create lock file with O_EXCL to atomically check and create
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::AlreadyExists {
-                    // Race condition - try again
-                    BoxliteError::Internal(format!("lock file already exists: {}", path.display()))
-                } else {
-                    BoxliteError::Storage(format!(
+            // Create lock file with O_EXCL to atomically check and create
+            match OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(file) => {
+                    drop(file);
+                    // Track allocation in memory
+                    self.allocated.write().unwrap().insert(id);
+                    return Ok(id);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // Another process allocated this ID on disk.
+                    // Record it in our in-memory set so next_available_id() advances.
+                    self.allocated.write().unwrap().insert(id);
+                }
+                Err(e) => {
+                    return Err(BoxliteError::Storage(format!(
                         "failed to create lock file {}: {}",
                         path.display(),
                         e
-                    ))
+                    )));
                 }
-            })?;
-
-        drop(file);
-
-        // Track allocation
-        self.allocated.write().unwrap().insert(id);
-
-        Ok(id)
+            }
+        }
     }
 
     fn retrieve(&self, id: LockId) -> BoxliteResult<Arc<dyn Locker>> {
@@ -502,5 +505,31 @@ mod tests {
         manager.free_all().unwrap();
 
         assert_eq!(manager.allocated_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_concurrent_process_allocate_race() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let lock_dir = temp_dir.path().join("locks");
+
+        let mgr1 = FileLockManager::new(&lock_dir).unwrap();
+        let mgr2 = FileLockManager::new(&lock_dir).unwrap();
+
+        // mgr1 allocates ID 0 on disk and tracks it locally
+        let id1 = mgr1.allocate().unwrap();
+        assert_eq!(id1, LockId(0));
+
+        // mgr2 has an empty local allocated set. When allocating,
+        // it encounters lock file 0 on disk, updates its local set,
+        // and retries to cleanly allocate ID 1.
+        let id2 = mgr2.allocate().unwrap();
+        assert_eq!(id2, LockId(1));
+
+        // Subsequent allocations on both managers succeed without collisions
+        let id3 = mgr1.allocate().unwrap();
+        assert_eq!(id3, LockId(2));
+
+        let id4 = mgr2.allocate().unwrap();
+        assert_eq!(id4, LockId(3));
     }
 }
