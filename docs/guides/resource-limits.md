@@ -2,6 +2,28 @@
 
 Configure and optimize box resource usage.
 
+## Cloud sandbox sizes
+
+Cloud organizations default to a per-box maximum of **16 vCPU, 32 GiB memory,
+and 100 GiB disk**. The console offers these sizes:
+
+| Size | vCPU | Memory | Disk |
+| --- | --- | --- | --- |
+| Small | 1 | 1 GiB | 10 GiB |
+| Medium | 2 | 4 GiB | 20 GiB |
+| Large | 4 | 8 GiB | 50 GiB |
+| Custom maximum | 16 | 32 GiB | 100 GiB |
+
+Your organization's configured limits take precedence. The console caps presets
+and Custom inputs at those limits and shows a contact-support hint when an input
+exceeds them. API and SDK requests above a limit are rejected. Raising a limit
+does not resize existing boxes; new boxes still need available runner capacity.
+
+Memory and disk use binary GiB. For example, the REST create fields for the
+default maximum are `cpus: 16`, `memory_mib: 32768`, and `disk_size_gb: 100`.
+These are Cloud organization quotas; local boxes use the host and runtime
+constraints described below.
+
 ## CPU configuration
 
 **Set CPU Count:**

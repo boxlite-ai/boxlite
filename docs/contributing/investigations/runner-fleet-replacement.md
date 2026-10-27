@@ -1,6 +1,6 @@
 ## TL;DR
 
-Add independently sized runners, then drain and retire older hosts without changing the survivor's identity.
+Raise sandbox limits and support independently sized runners with drain-safe retirement.
 
 ## Scope
 
@@ -18,9 +18,10 @@ Acceptance:
 - Migration cleanup and pending runner jobs prevent retirement and registration deletion.
 - No deployment, publication or cloud deletion is part of local implementation.
 
+The same PR also raises default sandbox quotas as described in the extension below.
 Non-goals: live VM migration, in-place resizing, a background cloud-resource
-deleter, changing sandbox quotas, or implementing resource reservation in the
-scheduler. Capacity and migration staging space remain rollout prerequisites.
+deleter, or implementing resource reservation in the scheduler. Capacity and
+migration staging space remain rollout prerequisites.
 
 ## Related work and lessons
 
@@ -120,7 +121,6 @@ the operator rechecks workload state before the separately reviewed cloud remova
 
 Run the applicable `make test:apps:infra`, `make test:apps:infra-config`, and API
 targets. Add meaningful updates to configuration and runner operations docs.
-Research is complete; implementation and validation have not started.
 
 ## Delivery slices
 
@@ -159,4 +159,23 @@ The CLI never queries drain counters or waits for migration. It neither creates 
 
 Exercise the CLI across its fetch boundary: exact target UUIDs and true payloads; region filtering; invalid or ambiguous targets cause zero writes; terminal targets, authorization failures, malformed responses, redirects and transport failures stop execution; partial success remains visible without further writes. Verify protected-stage refusal before cloud access. Workflow checks cover dispatch-only triggers, safe input wiring, shared concurrency, stage/branch gates and no deployment step. Run `make test:apps:infra`, mdeploy typechecking, and workflow lint locally; do not dispatch against live runners for validation.
 
-This extension is planned; its implementation and tests have not yet run.
+## Sandbox resource limits extension
+
+Default organizations allow 16 vCPU, 32 GiB memory and 100 GiB disk per box.
+The console already defines Small as 1/1/10, Medium as 2/4/20 and Large as 4/8/50;
+raising organization quotas makes the existing presets usable without new UI caps.
+Custom continues to read the organization response, and API admission uses the
+existing shared quota validator. Memory remains binary: 32 GiB is 32768 MiB.
+
+PostgreSQL [column defaults](https://www.postgresql.org/docs/current/ddl-alter.html#DDL-ALTER-COLUMN-DEFAULT)
+affect future inserts. A new pre-deploy migration therefore changes both defaults
+and existing organizations whose complete quota tuple is still 4/8/10. All other
+tuples remain unchanged, including partial overrides and unlimited values. There
+is no provenance marker to distinguish an explicit 4/8/10 override from the old
+default. Existing boxes retain their resources. Rollback restores future defaults
+only, preserving existing quotas because later customizations cannot be recovered.
+
+Real PostgreSQL tests cover default inserts, backfill, exceptions, repeat execution,
+rollback, serialization and REST admission. Console tests cover preset payloads,
+Custom boundaries and over-limit hints. A real maximum-size guest still requires
+validation on a runner with sufficient capacity; local tests do not establish it.
